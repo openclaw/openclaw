@@ -21,9 +21,8 @@ explicitly:
 pnpm test ui/src/e2e/team-scale-cold-load.e2e.test.ts --maxWorkers=1
 ```
 
-The selected agent has 300 sessions with a 200-row first page, 30 pinned dashboards
-outside that page, 34 owners, 120 people, six agent identities, six UI plugins,
-240 transcript messages, and 12 inline widgets. Six catalog-host events and twelve
+The selected agent has 300 root sessions plus 54 children, 24 cron sessions and 12 system sessions, with a 200-row shared first page, 30 pinned dashboards (two outside the first page), 34 owners, 120 people, six agent identities (one selected chip), seven UI plugins,
+240 transcript messages, 120 cron jobs across enabled, disabled, running and error states, and 12 inline widgets. Six catalog-host events and twelve
 full presence snapshots arrive individually. Catalog notifications exercise the data
 owner; the grouped agent roster does not display catalog rows. Widgets use the production sandbox
 host on a separate loopback listener. Plugins are small synthetic modules exercising
@@ -32,8 +31,10 @@ registration/loading, not replicas of any private plugin implementation.
 `--latency-ms` sets the inbound message delay (default 35 ms). `--frame-gap-ms`
 sets the minimum separation between Gateway message deliveries (default 4 ms).
 Concurrent requests remain concurrent; replies share one serialized wire.
-`--sidebar-view` selects `sessions` (default, with All owners selected) or `online`.
+`--sidebar-view` selects `sessions` (default, with Involving me selected) or `online`.
 Run both because current UI presents these inventories in separate sidebar views.
+The fixture uses the single-agent chip sidebar, matching the live boot query shape.
+The explicit churn scenarios retain their all-agent roster mode.
 The Online run also requires the saved sidebar view to survive the reload. If it
 returns to Sessions, the run fails instead of reporting Sessions measurements as
 Online measurements.
@@ -42,9 +43,17 @@ Online measurements.
 keep its build identity equal to the checkout head. This preserves a baseline
 bundle while production sources are edited.
 
-`--warm-reload --probe-dir /path/to/probes` explicitly flushes the selected transcript
-through its cache owner before each reload and verifies that session's persisted
-snapshot. The probe directory supplies `loaf-mutation.init.js` and
+Every measured reload flushes the selected transcript through its cache owner and
+verifies both its persisted snapshot and the sidebar's saved view. Current v8
+persistence trims the transcript to its last 80 messages (whole sequence groups may
+extend that bound), strips replay metadata and retains authoritative pagination.
+`snapshotSave` records database/projection versions, message count, sidebar shape
+and UTF-8 sizes. A missing cache or wrong saved view fails setup.
+
+`--route board|chat` selects a dashboard (default) or chat deep link for the same
+session. Chat measurements require inline content, without requiring a board frame.
+
+`--warm-reload --probe-dir /path/to/probes` adds cache/paint diagnostics. The probe directory supplies `loaf-mutation.init.js` and
 `ws-rpc-census.init.js`. The output records cache reads, cached transcript visibility,
 hello, live catch-up, enabled input, layout shifts, mutation batches, and retained
 row elements. Visibility and enabled-input milestones are DOM observations;
@@ -54,7 +63,7 @@ then collect separate traced runs for the storyboard and attribution.
 
 `--large-snapshot` expands the transcript to 1,100 synthetic messages (about 3 MB),
 including tool results and replay metadata. Combine it with `--warm-reload` to
-measure a large native IndexedDB restore. `snapshotSave` reports the persisted
+exercise a large live history with the current bounded IndexedDB restore. `snapshotSave` reports the persisted
 row count and UTF-8 bytes, synchronous serialization time, and total flush time
 for a save through the live cache owner before each reload.
 
@@ -178,3 +187,33 @@ missed. The largest source-attributed native getter is `scrollHeight` from
 `ui/src/components/scroll-state-observer.ts:19` (107–199 ms sampled self time).
 The Online attempt returned to Sessions after reload and is excluded from these
 numbers; the fixture E2E opens Online explicitly to verify all 120 people.
+
+## Live-shape fidelity
+
+The synthetic list owner applies each query's filters and pagination before
+projecting canonical compact/sidebar/dashboard fields. Owner-first prefixes follow
+the Gateway contract independently of the shared page offset. Derived titles and
+last-message previews use the protocol's enrichment bound. Compact cron requests
+page the inventory as 50/50/20; all seven synthetic plugins activate normally.
+The bench uses this owner for every query, including non-churn runs.
+
+Compare board and chat reload captures with sanitized live function/RPC inventories:
+
+```sh
+node scripts/control-ui-bench-fidelity.ts \
+  --board <board-artifacts> --board-live <mapped-board-profile.txt> --board-rpcs <board-method-counts.json> \
+  --chat <chat-artifacts> --chat-live <mapped-chat-profile.txt> --chat-rpcs <chat-method-counts.json> \
+  --analyzer <campaign-rig>/bench/cpuprof/cpuprof2.py --output <report-directory>
+```
+
+This reuses the campaign analyzer's source mapping and inclusive CPU accounting;
+it does not add a profiler. Keep raw profiles and adjacent build maps together, or
+pass `--board-assets`/`--chat-assets`. Live RPC JSON contains the complete sanitized
+method-to-count inventory. Private capture text and profile preambles are never
+included in the report. The report preserves each run's shares/counts, prints
+median and IQR, and exits nonzero unless at least 15 of the top 20 unique live app
+locations fall within 0.5–2× live share and every method is within ±1 in every run.
+Missing functions count as zero; same-line aliases use their maximum inclusive
+time. Inspect matching locations across revisions: semantic names bridge line
+shifts only when unambiguous. A failed fidelity gate is a measurement limitation,
+not evidence that an application optimization is ineffective.

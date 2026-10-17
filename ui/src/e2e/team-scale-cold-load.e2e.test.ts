@@ -1,5 +1,6 @@
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
+import { persistColdLoadWarmState } from "../../../scripts/lib/control-ui-bench-warm-state.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -47,7 +48,7 @@ suite.define(() => {
             localStorage.setItem(
               key,
               JSON.stringify({
-                sidebarAgentsMode: "roster",
+                sidebarAgentsMode: "chip",
                 railShortcuts: entries,
                 navigationByProfile: { "team-person-001": { railShortcuts: entries } },
               }),
@@ -101,7 +102,7 @@ suite.define(() => {
         expect(
           await sidebar.locator('.sidebar-rail [data-sidebar-entry^="session:"]').count(),
         ).toBe(30);
-        await sidebar.locator('[data-sidebar-entry="plugin:team-scale-6/overview"]').waitFor();
+        await sidebar.locator('[data-sidebar-entry="plugin:team-scale-7/overview"]').waitFor();
         await sidebar.locator('[data-navigation-view="online"]').click();
         await sidebar.locator('[data-online-user-id="team-person-120"]').waitFor();
         expect(await sidebar.locator("[data-online-user-id]").count()).toBe(120);
@@ -156,6 +157,27 @@ suite.define(() => {
           sampled.frames.every((frame) => frame.covered),
           JSON.stringify(sampled),
         ).toBe(true);
+
+        await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
+        await page.evaluate("globalThis.__name = (fn) => fn");
+        const warm = await page.evaluate(persistColdLoadWarmState, {
+          sessionKey: fixture.selectedSessionKey,
+          sidebarView: "online",
+        });
+        expect(warm).toMatchObject({
+          databaseVersion: 8,
+          projectionVersion: 3,
+          sidebarView: "online",
+          sidebarPeople: 120,
+        });
+        expect(warm.messages).toBeLessThanOrEqual(80);
+        expect(warm.messages).toBeGreaterThan(0);
+        await page.reload();
+        await sidebar.locator('[data-navigation-view="online"][aria-pressed="true"]').waitFor();
+        await sidebar.locator('[data-online-user-id="team-person-120"]').waitFor();
+        await page
+          .locator(".chat-pane__session-title-text", { hasText: "Project dashboard 1" })
+          .waitFor();
 
         const rosterRequests = await gateway.getRequests("sessions.list");
         expect(rosterRequests.some((request) => asRecord(request.params)?.limit === 200)).toBe(

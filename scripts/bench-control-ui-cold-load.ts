@@ -27,6 +27,7 @@ import {
   createStreamingReplyProbeInitScript,
 } from "../ui/src/test-helpers/control-ui-streaming-reply.ts";
 import { createControlUiTeamScaleFixture } from "../ui/src/test-helpers/control-ui-team-scale-fixture.ts";
+import { persistColdLoadWarmState } from "./lib/control-ui-bench-warm-state.ts";
 import {
   compareCpuTables,
   formatCpuTables,
@@ -234,6 +235,7 @@ const { values } = parseArgs({
     "latency-ms": { type: "string", default: "35" },
     "frame-gap-ms": { type: "string", default: "4" },
     "sidebar-view": { type: "string", default: "sessions" },
+    route: { type: "string", default: "board" },
     output: { type: "string", default: ".artifacts/control-ui-cold-load" },
   },
 });
@@ -272,6 +274,10 @@ const baselineCpu = values["cpu-profile-compare"]
     ])
   : undefined;
 const cpuRuns: Record<string, ColdLoadCpuTables[]> = {};
+const route = values.route;
+if (route !== "board" && route !== "chat") {
+  throw new Error("Expected route board or chat");
+}
 const runs = Number(values.runs);
 const latencyMs = Number(values["latency-ms"]);
 const frameGapMs = Number(values["frame-gap-ms"]);
@@ -327,9 +333,7 @@ const streamingReply = values["streaming-reply"] ? createControlUiStreamingReply
 const extraInitScripts = await Promise.all(
   values["init-script"].map((file) => readFile(file, "utf8")),
 );
-let sidebarLists = fixture.sidebarListChurn
-  ? createTeamScaleSidebarListOwner(fixture.sidebarListChurn)
-  : undefined;
+let sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
 let runTransfer: "full" | "delta" = sidebarRowTransfer === "delta" ? "delta" : "full";
 let browser: Browser | undefined;
 const results = [];
@@ -358,31 +362,32 @@ try {
         )
       ).join("\n") + `\nwindow.__readColdLoadRigProbes = ${readRigProbeSnapshot.toString()};`
     : "";
-  if (fixture.sidebarListChurn) {
-    await context.exposeBinding("__teamScaleList", (_source, params: Record<string, unknown>) => {
-      const { result, previousRows } = sidebarLists!.list(params);
-      const response =
-        params.rowMode === "sidebar"
-          ? {
-              ...result,
-              ...shareSidebarSessionRows(
-                result.sessions,
-                typeof params.ifRowsRevision === "string" ? params.ifRowsRevision : undefined,
-                runTransfer === "delta" && previousRows ? [previousRows] : undefined,
-              ),
-            }
-          : result;
-      sidebarLists!.recordWire(response);
-      return response;
-    });
-    await context.exposeBinding(
-      "__teamScaleMutate",
-      (
-        _source,
-        mutation: Parameters<ReturnType<typeof createTeamScaleSidebarListOwner>["apply"]>[0],
-      ) => sidebarLists!.apply(mutation),
-    );
-  }
+  await context.exposeBinding("__teamScaleList", (_source, params: Record<string, unknown>) => {
+    const { result, previousRows } = sidebarLists.list(params);
+    const response =
+      params.rowMode === "sidebar"
+        ? {
+            ...result,
+            ...shareSidebarSessionRows(
+              result.sessions,
+              typeof params.ifRowsRevision === "string" ? params.ifRowsRevision : undefined,
+              runTransfer === "delta" && previousRows ? [previousRows] : undefined,
+            ),
+          }
+        : result;
+    sidebarLists.recordWire(response);
+    return response;
+  });
+  await context.exposeBinding(
+    "__teamScaleMutate",
+    (
+      _source,
+      mutation: Parameters<ReturnType<typeof createTeamScaleSidebarListOwner>["apply"]>[0],
+    ) => sidebarLists.apply(mutation),
+  );
+  await context.exposeBinding("__teamScaleCronList", (_source, params: Record<string, unknown>) =>
+    fixture.listCronJobs(params),
+  );
   const errors: string[] = [];
   const harnessWarnings: string[] = [];
   page.on("pageerror", (error) => {
@@ -431,7 +436,7 @@ try {
     });
   }
   await page.addInitScript(
-    ({ key, pins }) => {
+    ({ key, pins, mode }) => {
       if (window !== window.top) {
         return;
       }
@@ -439,7 +444,7 @@ try {
         localStorage.setItem(
           key,
           JSON.stringify({
-            sidebarAgentsMode: "roster",
+            sidebarAgentsMode: mode,
             railShortcuts: pins,
             navigationByProfile: { "team-person-001": { railShortcuts: pins } },
           }),
@@ -449,13 +454,23 @@ try {
     {
       key: controlUiBundledSettingsStorageKey(server.baseUrl),
       pins: fixture.sidebarEntries,
+      mode:
+        values["sidebar-list-churn"] ||
+        values["sidebar-live-churn"] ||
+        values["session-event-churn"]
+          ? "roster"
+          : "chip",
     },
   );
   const warmProbes = values["warm-reload"] ? `\n(${warmReloadProbe.toString()})();` : "";
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top) return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\n${fixture.sidebarListChurn ? `window.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params)));` : ""}\n${createColdLoadProbeInitScript({ latencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes: !cpuProfile && !values["session-event-churn"] })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
+    content: `;(() => { if (window !== window.top) return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${createColdLoadProbeInitScript({ latencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes: !cpuProfile && !values["session-event-churn"] })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
   });
-  const url = controlUiSessionUrl(server.baseUrl, fixture.selectedSessionKey, "dashboard");
+  const url = controlUiSessionUrl(
+    server.baseUrl,
+    fixture.selectedSessionKey,
+    route === "board" ? "dashboard" : "chat",
+  );
   async function settle() {
     try {
       await page
@@ -465,25 +480,29 @@ try {
         .locator('.sidebar-rail [data-sidebar-entry^="session:"]')
         .nth(29)
         .waitFor({ state: "attached" });
-      await page.locator('[data-sidebar-entry="plugin:team-scale-6/overview"]').waitFor();
+      await page.locator('[data-sidebar-entry="plugin:team-scale-7/overview"]').waitFor();
       if (sidebarView === "online") {
         await page.locator('[data-online-user-id="team-person-120"]').waitFor();
       }
-      await page
-        .frameLocator(".board-widget__frame")
-        .frameLocator("iframe")
-        .getByText("Team metric 1", { exact: true })
-        .waitFor();
+      if (route === "board") {
+        await page
+          .frameLocator(".board-widget__frame")
+          .frameLocator("iframe")
+          .getByText("Team metric 1", { exact: true })
+          .waitFor();
+      }
       await page
         .frameLocator(".chat-tool-card__preview-frame")
         .last()
         .frameLocator("iframe")
         .getByText("Team metric 12", { exact: true })
         .waitFor();
-      await page.waitForFunction(() => {
-        const ready = Reflect.get(window, "__readWidgetReadiness")();
-        return ready.firstBoardReadyMs !== null;
-      });
+      if (route === "board") {
+        await page.waitForFunction(() => {
+          const ready = Reflect.get(window, "__readWidgetReadiness")();
+          return ready.firstBoardReadyMs !== null;
+        });
+      }
       await page.waitForFunction(
         (eventCount) => {
           const state = Reflect.get(window, "__coldLoad")?.read();
@@ -513,9 +532,7 @@ try {
   try {
     await page.locator("#sidebar-session-owner-title").click();
     await page
-      .locator(
-        `.sidebar-session-owner-filter [role="option"][data-value="${values["sidebar-list-churn"] ? "involving-me" : "all"}"]`,
-      )
+      .locator(`.sidebar-session-owner-filter [role="option"][data-value="involving-me"]`)
       .click();
   } catch (error) {
     await writeFile(
@@ -535,7 +552,6 @@ try {
   await settle();
   await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
   for (let run = 0; run < runs; run++) {
-    let snapshotSave: unknown;
     const cpuPhases: Record<string, ColdLoadCpuTables> = {};
     async function recordCpu(phase: string, profile: Parameters<typeof mapColdLoadCpuProfile>[0]) {
       const mapped = await mapColdLoadCpuProfile(profile, {
@@ -562,65 +578,11 @@ try {
       );
       return { ...mapped, summary };
     }
-    if (values["warm-reload"]) {
-      snapshotSave = await page
-        .locator(".chat-pane-cache__pane--active")
-        .evaluate(async (element, sessionKey) => {
-          const store = Reflect.get(element, "sessionSnapshotStore");
-          if (!store) {
-            throw new Error("Missing transcript snapshot owner");
-          }
-          const cache = Reflect.get(element, "chatMessagesBySession");
-          const entry = [...cache.entries()].find(([key]) => key.endsWith(`\u0000${sessionKey}`));
-          if (!entry) {
-            throw new Error("Missing live transcript snapshot");
-          }
-          store.write(entry[0], { ...entry[1].snapshot });
-          const writeStarted = performance.now();
-          const flushed = store.flush();
-          const serializeMs = performance.now() - writeStarted;
-          await flushed;
-          const writeMs = performance.now() - writeStarted;
-          const request = indexedDB.open("openclaw-chat-snapshots");
-          const database = await new Promise<IDBDatabase>((resolve, reject) => {
-            request.addEventListener("success", () => resolve(request.result), { once: true });
-            request.addEventListener(
-              "error",
-              () => reject(new Error("Cannot open transcript cache", { cause: request.error })),
-              { once: true },
-            );
-          });
-          try {
-            const read = database.transaction("snapshots").objectStore("snapshots").getAll();
-            const snapshots = await new Promise<unknown[]>((resolve, reject) => {
-              read.addEventListener("success", () => resolve(read.result), { once: true });
-              read.addEventListener(
-                "error",
-                () => reject(new Error("Cannot read transcript cache", { cause: read.error })),
-                { once: true },
-              );
-            });
-            const record = snapshots.find((value) => {
-              const key =
-                typeof value === "object" && value !== null
-                  ? Reflect.get(value, "sessionKey")
-                  : undefined;
-              return typeof key === "string" && key.endsWith(`\u0000${sessionKey}`);
-            });
-            if (!record) {
-              throw new Error("Warm reload requires the selected session's persisted transcript");
-            }
-            return {
-              serializeMs,
-              writeMs,
-              bytes: new TextEncoder().encode(JSON.stringify(record)).byteLength,
-              messages: Reflect.get(record, "snapshot").messages.length,
-            };
-          } finally {
-            database.close();
-          }
-        }, fixture.selectedSessionKey);
-    }
+    await page.evaluate("globalThis.__name = (fn) => fn");
+    const snapshotSave = await page.evaluate(persistColdLoadWarmState, {
+      sessionKey: fixture.selectedSessionKey,
+      sidebarView,
+    });
     runTransfer =
       sidebarRowTransfer === "delta" || (sidebarRowTransfer === "interleaved" && run % 2 === 1)
         ? "delta"
@@ -641,9 +603,7 @@ try {
         transferMode: "ReportEvents",
       });
     }
-    if (fixture.sidebarListChurn) {
-      sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListChurn);
-    }
+    sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
     await page.reload({ waitUntil: "domcontentloaded" });
     await settle();
     if (captureMs) {
@@ -1115,6 +1075,7 @@ try {
         bundleDir,
         fixture: fixture.counts,
         sidebarView,
+        route,
         streamingReply: values["streaming-reply"],
         sidebarListChurn: values["sidebar-list-churn"],
         sidebarLiveChurn: fixture.sidebarLiveChurn,

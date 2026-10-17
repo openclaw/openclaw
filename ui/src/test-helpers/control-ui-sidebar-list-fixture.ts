@@ -1,3 +1,17 @@
+import {
+  SESSION_DASHBOARD_ROW_FIELDS,
+  SESSION_ROW_DETAIL_FIELDS,
+  SESSION_SIDEBAR_ROW_FIELDS,
+} from "../../../packages/gateway-protocol/src/session-row-fields.ts";
+import {
+  SESSIONS_LIST_OWNER_LIMIT,
+  SESSIONS_LIST_TRANSCRIPT_LIMIT,
+} from "../../../src/shared/session-list-limits.ts";
+import {
+  isCronSessionDisplayKey,
+  isSubagentSessionRow,
+  isSystemCreatedSessionRow,
+} from "../../../src/shared/session-list-visibility.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { ControlUiMockPresenceUser } from "./control-ui-mock-presence.ts";
 
@@ -15,7 +29,7 @@ export type TeamScaleLiveEvent = {
   sessionMutation?: TeamScaleSessionMutation;
 };
 
-type TeamScaleSidebarListInventory = {
+export type TeamScaleSidebarListInventory = {
   rows: GatewaySessionRow[];
   viewerProfileId: string;
   now: number;
@@ -31,6 +45,7 @@ export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInven
     Object.freeze({ ...row, updatedAt: row.updatedAt ?? null });
   const rows = new Map(input.rows.map((row) => [row.key, admit(row)]));
   const previous = new Map<string, { rows: TeamScaleSidebarRow[]; revision: string }>();
+  const projections = new WeakMap<TeamScaleSidebarRow, Map<string, TeamScaleSidebarRow>>();
   const reads: Array<{
     params: Record<string, unknown>;
     changedRows: number;
@@ -43,7 +58,9 @@ export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInven
   let revision = 0;
   let ts = input.now;
   const ownedBy = (row: GatewaySessionRow, profileId: string) =>
-    row.owner?.actor.identity?.type === "profile" && row.owner.actor.identity.id === profileId;
+    row.owner?.actor.identity?.type === "profile"
+      ? row.owner.actor.identity.id === profileId
+      : row.owner?.actor.id === profileId;
   return {
     apply(mutation: TeamScaleSessionMutation | undefined) {
       for (const key of mutation?.removeKeys ?? []) {
@@ -91,10 +108,13 @@ export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInven
           if (query.excludeDock !== false && row.isDock === true) {
             return false;
           }
-          if (query.excludeSubagents && row.key.includes(":subagent:")) {
+          if (query.excludeSubagents && isSubagentSessionRow(row.key, row)) {
             return false;
           }
-          if (query.excludeCron && row.key.includes(":cron:")) {
+          if (query.excludeCron && isCronSessionDisplayKey(row.key)) {
+            return false;
+          }
+          if (query.excludeSystem && isSystemCreatedSessionRow(row)) {
             return false;
           }
           if (query.includeGlobal === false && row.kind === "global") {
@@ -105,7 +125,9 @@ export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInven
           }
           if (
             typeof query.spawnedBy === "string" &&
-            !row.childOwnerSessionKeys?.includes(query.spawnedBy)
+            !(row.childOwnerSessionKeys ?? [row.controlOwnerSessionKey ?? row.spawnedBy]).includes(
+              query.spawnedBy,
+            )
           ) {
             return false;
           }
@@ -122,10 +144,57 @@ export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInven
         query.ownerFirst && offset === 0
           ? eligible
               .filter((row) => ownedBy(row, input.viewerProfileId))
-              .slice(0, Math.min(limit, 60))
+              .slice(0, Math.min(limit, SESSIONS_LIST_OWNER_LIMIT))
           : [];
       const ownerKeys = new Set(owned.map((row) => row.key));
-      const selected = [...owned, ...shared.filter((row) => !ownerKeys.has(row.key))];
+      const selected = [...owned, ...shared.filter((row) => !ownerKeys.has(row.key))].map(
+        (row, index) => {
+          const enrich = index < SESSIONS_LIST_TRANSCRIPT_LIMIT + owned.length;
+          const includeDerivedTitles = query.includeDerivedTitles === true && enrich;
+          const includeLastMessage = query.includeLastMessage === true && enrich;
+          const projectionKey = JSON.stringify([
+            query.rowMode,
+            includeDerivedTitles,
+            includeLastMessage,
+          ]);
+          let views = projections.get(row);
+          if (!views) {
+            views = new Map();
+            projections.set(row, views);
+          }
+          let projected = views.get(projectionKey);
+          if (projected) {
+            return projected;
+          }
+          projected = { ...row };
+          if (!includeDerivedTitles) {
+            delete projected.derivedTitle;
+          }
+          if (!includeLastMessage) {
+            delete projected.lastMessagePreview;
+          }
+          if (query.rowMode === "sidebar" || query.rowMode === "dashboard") {
+            const fields =
+              query.rowMode === "sidebar"
+                ? SESSION_SIDEBAR_ROW_FIELDS
+                : SESSION_DASHBOARD_ROW_FIELDS;
+            for (const field of Object.keys(projected)) {
+              if (!fields.has(field)) {
+                Reflect.deleteProperty(projected, field);
+              }
+            }
+            projected.rowMode = query.rowMode;
+          } else if (query.rowMode === "compact") {
+            for (const field of SESSION_ROW_DETAIL_FIELDS) {
+              delete projected[field];
+            }
+            projected.rowMode = "compact";
+          }
+          Object.freeze(projected);
+          views.set(projectionKey, projected);
+          return projected;
+        },
+      );
       const prior = previous.get(key);
       const unchanged =
         prior !== undefined &&
@@ -139,7 +208,7 @@ export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInven
         { profileId: string; open: number; running: number }
       >();
       if (query.includeOwnerSessionCounts) {
-        for (const row of rows.values()) {
+        for (const row of eligible) {
           const identity = row.owner?.actor.identity;
           if (
             row.archived ||
