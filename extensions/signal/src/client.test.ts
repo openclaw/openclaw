@@ -20,6 +20,20 @@ let signalRpcRequest: typeof import("./client.js").signalRpcRequest;
 let streamSignalEvents: typeof import("./client.js").streamSignalEvents;
 
 const servers: http.Server[] = [];
+const rpc = (baseUrl: string, options: Partial<Parameters<typeof signalRpcRequest>[2]> = {}) =>
+  signalRpcRequest("version", undefined, { baseUrl, ...options });
+const stream = (baseUrl: string, options: Partial<Parameters<typeof streamSignalEvents>[0]> = {}) =>
+  streamSignalEvents({ baseUrl, onEvent: () => {}, ...options });
+const reply = (body: string | Buffer, status = 200) =>
+  withSignalServer((_req, res) => {
+    res.writeHead(status);
+    res.end(body);
+  });
+const sse = (body: string) =>
+  withSignalServer((_req, res) => {
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.end(body);
+  });
 
 async function withSignalServer(
   handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>,
@@ -130,81 +144,45 @@ describe("signalRpcRequest", () => {
     },
   );
 
-  it.each([{ bytes: [0xff] }])(
-    "rejects malformed UTF-8 bytes $bytes before JSON parsing",
-    async ({ bytes }) => {
-      const baseUrl = await withSignalServer((_req, res) => {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(
-          Buffer.concat([
-            Buffer.from('{"jsonrpc":"2.0","result":{"version":"'),
-            Buffer.from(bytes),
-            Buffer.from('"},"id":"test-id"}'),
-          ]),
-        );
-      });
+  it("rejects malformed UTF-8 bytes before JSON parsing", async () => {
+    const baseUrl = await reply(
+      Buffer.concat([
+        Buffer.from('{"jsonrpc":"2.0","result":{"version":"'),
+        Buffer.from([0xff]),
+        Buffer.from('"},"id":"test-id"}'),
+      ]),
+    );
+    await expect(rpc(baseUrl)).rejects.toBeInstanceOf(TypeError);
+  });
 
-      await expect(signalRpcRequest("version", undefined, { baseUrl })).rejects.toBeInstanceOf(
-        TypeError,
-      );
+  it.each([
+    {
+      body: "not-json",
+      status: 502,
+      error: {
+        message: "Signal RPC returned malformed JSON (status 502)",
+        cause: expect.any(SyntaxError),
+      },
     },
-  );
-
-  it("throws a wrapped error when RPC response JSON is malformed", async () => {
-    const baseUrl = await withSignalServer((_req, res) => {
-      res.writeHead(502, { "Content-Type": "text/plain" });
-      res.end("not-json");
-    });
-
-    let thrown: unknown;
-    try {
-      await signalRpcRequest("version", undefined, {
-        baseUrl,
-      });
-    } catch (error) {
-      thrown = error;
-    }
-
-    expect(thrown).toBeInstanceOf(Error);
-    if (!(thrown instanceof Error)) {
-      throw new Error("expected malformed JSON request to throw an Error");
-    }
-    expect(thrown.message).toBe("Signal RPC returned malformed JSON (status 502)");
-    expect(thrown.cause).toBeInstanceOf(SyntaxError);
+    {
+      body: '{"jsonrpc":"2.0","id":"test-id"}',
+      status: 200,
+      error: { message: "Signal RPC returned invalid response envelope (status 200)" },
+    },
+    {
+      body: "x".repeat(1_048_577),
+      status: 200,
+      error: { message: "Signal HTTP response exceeded size limit" },
+    },
+  ])("rejects invalid RPC responses: $error.message", async ({ body, status, error }) => {
+    const result = rpc(await reply(body, status));
+    await expect(result).rejects.toBeInstanceOf(Error);
+    await expect(result).rejects.toMatchObject(error);
   });
-
-  it("throws when RPC response envelope has neither result nor error", async () => {
-    const baseUrl = await withSignalServer((_req, res) => {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ jsonrpc: "2.0", id: "test-id" }));
-    });
-
-    await expect(
-      signalRpcRequest("version", undefined, {
-        baseUrl,
-      }),
-    ).rejects.toThrow("Signal RPC returned invalid response envelope (status 200)");
-  });
-
   it("rejects credentialed base URLs", async () => {
-    await expect(
-      signalRpcRequest("version", undefined, {
-        baseUrl: "http://user:pass@127.0.0.1:8080",
-      }),
-    ).rejects.toThrow("Signal base URL must not include credentials");
-  });
-
-  it("rejects oversized RPC responses", async () => {
-    const baseUrl = await withSignalServer((_req, res) => {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end("x".repeat(1_048_577));
-    });
-
-    await expect(
-      signalRpcRequest("version", undefined, {
-        baseUrl,
-      }),
-    ).rejects.toThrow("Signal HTTP response exceeded size limit");
+    await expect(rpc("http://user:pass@127.0.0.1:8080")).rejects.toThrow(
+      "Signal base URL must not include credentials",
+    );
   });
 
   it("uses an absolute deadline for slow-drip RPC responses", async () => {
@@ -216,32 +194,23 @@ describe("signalRpcRequest", () => {
       res.on("close", () => clearInterval(interval));
     });
 
-    await expect(
-      signalRpcRequest("version", undefined, {
-        baseUrl,
-        timeoutMs: 25,
-      }),
-    ).rejects.toThrow("Signal HTTP exceeded deadline after 25ms");
+    await expect(rpc(baseUrl, { timeoutMs: 25 })).rejects.toThrow(
+      "Signal HTTP exceeded deadline after 25ms",
+    );
   });
 });
 
 describe("signalCheck", () => {
   it("uses only the status when the unused response body is malformed UTF-8", async () => {
-    const baseUrl = await withSignalServer((_req, res) => {
-      res.writeHead(200);
-      res.end(Buffer.from([0xff]));
+    await expect(signalCheck(await reply(Buffer.from([0xff])))).resolves.toEqual({
+      ok: true,
+      status: 200,
+      error: null,
     });
-
-    await expect(signalCheck(baseUrl)).resolves.toEqual({ ok: true, status: 200, error: null });
   });
 
   it("returns an HTTP status failure for unhealthy checks", async () => {
-    const baseUrl = await withSignalServer((_req, res) => {
-      res.writeHead(503);
-      res.end("down");
-    });
-
-    await expect(signalCheck(baseUrl)).resolves.toEqual({
+    await expect(signalCheck(await reply("down", 503))).resolves.toEqual({
       ok: false,
       status: 503,
       error: "HTTP 503",
@@ -274,14 +243,8 @@ describe("streamSignalEvents", () => {
 
   it("propagates receive-handler failures to the stream", async () => {
     const appendError = new Error("durable append failed");
-    const baseUrl = await withSignalServer((_req, res) => {
-      res.writeHead(200, { "Content-Type": "text/event-stream" });
-      res.end('event: receive\ndata: {"envelope":{}}\n\n');
-    });
-
     await expect(
-      streamSignalEvents({
-        baseUrl,
+      stream(await sse('event: receive\ndata: {"envelope":{}}\n\n'), {
         onEvent: async () => {
           throw appendError;
         },
@@ -295,12 +258,7 @@ describe("streamSignalEvents", () => {
       res.end("down");
     });
 
-    await expect(
-      streamSignalEvents({
-        baseUrl,
-        onEvent: () => {},
-      }),
-    ).rejects.toMatchObject({
+    await expect(stream(baseUrl)).rejects.toMatchObject({
       message: "Signal SSE failed (503 Unavailable)",
       status: 503,
     });
@@ -311,13 +269,9 @@ describe("streamSignalEvents", () => {
       // Leave the request open without response headers.
     });
 
-    await expect(
-      streamSignalEvents({
-        baseUrl,
-        timeoutMs: 25,
-        onEvent: () => {},
-      }),
-    ).rejects.toThrow("Signal SSE connection timed out after 25ms");
+    await expect(stream(baseUrl, { timeoutMs: 25 })).rejects.toThrow(
+      "Signal SSE connection timed out after 25ms",
+    );
   });
 
   it("allows idle event streams to wait for abort when the deadline is disabled", async () => {
@@ -330,27 +284,14 @@ describe("streamSignalEvents", () => {
     abortTimer.unref?.();
 
     await expect(
-      streamSignalEvents({
-        baseUrl,
-        timeoutMs: 0,
-        abortSignal: abortController.signal,
-        onEvent: () => {},
-      }),
+      stream(baseUrl, { timeoutMs: 0, abortSignal: abortController.signal }),
     ).rejects.toMatchObject({ name: "AbortError", message: "Signal SSE aborted" });
   });
 
   it("rejects oversized SSE line buffers by byte size", async () => {
-    const baseUrl = await withSignalServer((_req, res) => {
-      res.writeHead(200, { "Content-Type": "text/event-stream" });
-      res.end(`data: ${"🙂".repeat(262_145)}`);
-    });
-
-    await expect(
-      streamSignalEvents({
-        baseUrl,
-        onEvent: () => {},
-      }),
-    ).rejects.toThrow("Signal SSE buffer exceeded size limit");
+    await expect(stream(await sse(`data: ${"🙂".repeat(262_145)}`))).rejects.toThrow(
+      "Signal SSE buffer exceeded size limit",
+    );
   });
 
   it("rejects oversized SSE events split across smaller data lines", async () => {
@@ -363,11 +304,6 @@ describe("streamSignalEvents", () => {
       res.end();
     });
 
-    await expect(
-      streamSignalEvents({
-        baseUrl,
-        onEvent: () => {},
-      }),
-    ).rejects.toThrow("Signal SSE event data exceeded size limit");
+    await expect(stream(baseUrl)).rejects.toThrow("Signal SSE event data exceeded size limit");
   });
 });

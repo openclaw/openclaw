@@ -15,21 +15,28 @@ const authored = {
   transport: { kind: "external-native" as const, url: "http://127.0.0.1:19962" },
   replyToMode: "off" as const,
 };
+const localUrl = "http://127.0.0.1:19963";
+const workId = "work-phone";
+const resolve = signalPlugin.config.resolveAccount;
+const setup = expectDefined(signalPlugin.setupContract, "registered setup contract");
+const write = expectDefined(
+  signalSetupAdapter.applyAccountConfig,
+  "registered Signal setup writer",
+);
+const disable = expectDefined(signalPlugin.config.setAccountEnabled, "registered enable writer");
+const remove = expectDefined(signalPlugin.config.deleteAccount, "registered delete writer");
 
 describe("Signal registered account entry points", () => {
-  it.each([
-    ["Default.", true],
-    ["Default.", false],
-  ] as const)(
-    "channels.add setupContract preserves default %s winner when restoring its number (restricted=%s)",
-    (key, restricted) => {
+  it.each([true, false])(
+    "channels.add setupContract preserves default winner when restoring its number (restricted=%s)",
+    (restricted) => {
       const cfg = signalConfig({
         replyToMode: "all",
         dmPolicy: "open",
         allowFrom: ["*"],
         transport: { kind: "external-native", url: "http://127.0.0.1:19961" },
         accounts: {
-          [key]: {
+          "Default.": {
             account: "+12025550123",
             ...(restricted
               ? {
@@ -43,7 +50,6 @@ describe("Signal registered account entry points", () => {
           "DEFAULT!": { account: "+12025550125", dmPolicy: "disabled" },
         },
       });
-      const setup = expectDefined(signalPlugin.setupContract, "registered setup contract");
       const next = setup.applyAccountConfig({
         cfg,
         accountId: "work",
@@ -53,7 +59,7 @@ describe("Signal registered account entry points", () => {
           httpUrl: "http://127.0.0.1:19962",
         },
       });
-      expect(signalPlugin.config.resolveAccount(next, "default")).toMatchObject({
+      expect(resolve(next, "default")).toMatchObject({
         enabled: !restricted,
         config: {
           account: "+12025550123",
@@ -65,19 +71,16 @@ describe("Signal registered account entry points", () => {
       expect(next.channels?.signal?.accounts?.["DEFAULT!"]).toEqual(
         cfg.channels?.signal?.accounts?.["DEFAULT!"],
       );
-      expect(signalPlugin.config.resolveAccount(next, "work").config).toMatchObject({
+      expect(resolve(next, "work").config).toMatchObject({
         dmPolicy: "open",
         allowFrom: ["*"],
       });
     },
   );
 
-  it.each([
-    [false, true],
-    [true, true],
-  ])(
-    "Doctor normalizeCompatibilityConfig keeps the exact default transport (managed=%s, aliasFirst=%s)",
-    async (managed, aliasFirst) => {
+  it.each([false, true])(
+    "Doctor normalizeCompatibilityConfig keeps the exact default transport (managed=%s)",
+    async (managed) => {
       const exact = {
         account: "+12025550124",
         ...(managed ? { httpPort: 18081 } : { httpUrl: "http://127.0.0.1:19962" }),
@@ -88,12 +91,10 @@ describe("Signal registered account entry points", () => {
       };
       const signal = {
         apiMode: "native",
-        accounts: aliasFirst
-          ? { "Default.": alias, default: exact }
-          : { default: exact, "Default.": alias },
+        accounts: { "Default.": alias, default: exact },
       };
       const result = normalizeCompatibilityConfig({ cfg: { channels: { signal } } });
-      expect(signalPlugin.config.resolveAccount(result.config, "default")).toMatchObject({
+      expect(resolve(result.config, "default")).toMatchObject({
         baseUrl: managed ? "http://127.0.0.1:18081" : "http://127.0.0.1:19962",
         config: { account: exact.account },
       });
@@ -104,23 +105,16 @@ describe("Signal registered account entry points", () => {
     },
   );
 
-  it.each(["+12025550123"])(
-    "channels.status config.resolveAccount and threading use an owned number with root %s",
-    (rootNumber) => {
-      const cfg: OpenClawConfig = {
-        channels: { signal: { account: rootNumber, accounts: { "Work Phone": authored } } },
-      };
-      expect(signalPlugin.config.listAccountIds(cfg)).toContain("work-phone");
-      expect(signalPlugin.config.resolveAccount(cfg, "work-phone")).toMatchObject({
-        configured: true,
-        baseUrl: authored.transport.url,
-        config: authored,
-      });
-      expect(signalPlugin.threading?.resolveReplyToMode?.({ cfg, accountId: "work-phone" })).toBe(
-        "off",
-      );
-    },
-  );
+  it("channels.status config.resolveAccount and threading use an owned number", () => {
+    const cfg = signalConfig({ account: "+12025550123", accounts: { "Work Phone": authored } });
+    expect(signalPlugin.config.listAccountIds(cfg)).toContain(workId);
+    expect(resolve(cfg, workId)).toMatchObject({
+      configured: true,
+      baseUrl: authored.transport.url,
+      config: authored,
+    });
+    expect(signalPlugin.threading?.resolveReplyToMode?.({ cfg, accountId: workId })).toBe("off");
+  });
 
   it.each([false, true])(
     "channels.add setup and config enable/delete update the selected stored key (collision=%s)",
@@ -132,45 +126,30 @@ describe("Signal registered account entry points", () => {
         },
       });
       const key = collision ? "work-phone" : "Work Phone";
-      const next = expectDefined(
-        signalSetupAdapter.applyAccountConfig?.({
-          cfg,
-          accountId: "work-phone",
-          input: { httpUrl: "http://127.0.0.1:19963", signalTransport: "external-native" },
-        }),
-        "registered Signal setup writer",
-      );
+      const next = write({
+        cfg,
+        accountId: workId,
+        input: { httpUrl: localUrl, signalTransport: "external-native" },
+      });
       expect(Object.keys(next.channels?.signal?.accounts ?? {})).toEqual(
         Object.keys(cfg.channels?.signal?.accounts ?? {}),
       );
       expect(next.channels?.signal?.accounts?.[key]).toMatchObject({
         account: collision ? "+12025550125" : authored.account,
-        transport: { kind: "external-native", url: "http://127.0.0.1:19963" },
+        transport: { kind: "external-native", url: localUrl },
         replyToMode: "off",
       });
-      const disabled = expectDefined(
-        signalPlugin.config.setAccountEnabled?.({
-          cfg: next,
-          accountId: "work-phone",
-          enabled: false,
-        }),
-        "registered Signal enable writer",
-      );
+      const disabled = disable({ cfg: next, accountId: workId, enabled: false });
       expect(disabled.channels?.signal?.accounts?.[key]?.enabled).toBe(false);
       if (collision) {
-        expect(() =>
-          signalPlugin.config.deleteAccount?.({ cfg: disabled, accountId: "work-phone" }),
-        ).toThrow('stored keys "work-phone" and "Work Phone"');
-        expect(signalPlugin.config.resolveAccount(disabled, "work-phone").config.account).toBe(
-          "+12025550125",
+        expect(() => remove({ cfg: disabled, accountId: workId })).toThrow(
+          'stored keys "work-phone" and "Work Phone"',
         );
+        expect(resolve(disabled, workId).config.account).toBe("+12025550125");
       } else {
-        const removed = expectDefined(
-          signalPlugin.config.deleteAccount?.({ cfg: disabled, accountId: "work-phone" }),
-          "registered Signal delete writer",
-        );
+        const removed = remove({ cfg: disabled, accountId: workId });
         expect(removed.channels?.signal?.accounts?.[key]).toBeUndefined();
-        expect(signalPlugin.config.resolveAccount(removed, "work-phone").configured).toBe(false);
+        expect(resolve(removed, workId).configured).toBe(false);
       }
     },
   );
@@ -184,14 +163,14 @@ describe("Signal registered account entry points", () => {
         },
       },
     });
-    const next = signalSetupAdapter.applyAccountConfig?.({
+    const next = write({
       cfg,
-      accountId: "work-phone",
-      input: { httpUrl: "http://127.0.0.1:19963" },
+      accountId: workId,
+      input: { httpUrl: localUrl },
     });
     expect(next?.channels?.signal?.accounts?.["Work Phone"]?.transport).toEqual({
       kind: "container",
-      url: "http://127.0.0.1:19963",
+      url: localUrl,
     });
   });
 
@@ -205,7 +184,7 @@ describe("Signal registered account entry points", () => {
       },
     });
     expect(() =>
-      signalSetupAdapter.applyAccountConfig?.({
+      write({
         cfg,
         accountId: "personal",
         input: {

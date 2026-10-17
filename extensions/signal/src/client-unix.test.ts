@@ -56,6 +56,16 @@ async function serve(onRequest: (request: Record<string, unknown>, socket: net.S
 function response(id: unknown, result: unknown) {
   return `${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`;
 }
+function notify(socket: net.Socket, result: unknown, subscription = 7) {
+  socket.write(
+    `${JSON.stringify({ jsonrpc: "2.0", method: "receive", params: { subscription, result } })}\n`,
+  );
+}
+const send = (
+  baseUrl: string,
+  message?: string,
+  options: Partial<Parameters<typeof signalRpcRequest>[2]> = {},
+) => signalRpcRequest("send", message ? { message } : undefined, { baseUrl, ...options });
 
 describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
   it.each([false, true])(
@@ -82,14 +92,9 @@ describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
       });
       const caller = new AbortController();
       const failure = new Error("Signal caller ended during preparation");
-      const sending = signalRpcRequest(
-        "send",
-        { message: "prepared" },
-        {
-          baseUrl,
-          assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-        },
-      ).then(
+      const sending = send(baseUrl, "prepared", {
+        assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+      }).then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),
       );
@@ -133,17 +138,10 @@ describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
       setImmediate(() => socket.write(bytes.subarray(split)));
     });
     await expect(
-      signalRpcRequest(
-        "send",
-        { message: "test" },
-        {
-          baseUrl,
-          assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-        },
-      ),
-    ).resolves.toEqual({
-      text: "héllo",
-    });
+      send(baseUrl, "test", {
+        assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+      }),
+    ).resolves.toEqual({ text: "héllo" });
     expect(requests).toEqual([
       expect.objectContaining({ jsonrpc: "2.0", method: "send", params: { message: "test" } }),
     ]);
@@ -165,14 +163,9 @@ describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
       });
 
     await expect(
-      signalRpcRequest(
-        "send",
-        { message: "pending" },
-        {
-          baseUrl,
-          assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-        },
-      ),
+      send(baseUrl, "pending", {
+        assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+      }),
     ).rejects.toThrow("Signal caller closed during socket preparation");
     expect(preparation).toHaveBeenCalledOnce();
     expect(requests).toHaveLength(0);
@@ -192,9 +185,7 @@ describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
     ["oversized frame", "x".repeat(129), /size limit/],
   ] as const)("rejects %s without falling back to HTTP", async (_name, reply, error) => {
     const { baseUrl } = await serve((_request, socket) => socket.end(reply));
-    await expect(
-      signalRpcRequest("send", undefined, { baseUrl, maxResponseBytes: 128 }),
-    ).rejects.toThrow(error);
+    await expect(send(baseUrl, undefined, { maxResponseBytes: 128 })).rejects.toThrow(error);
   });
 
   it.each([
@@ -212,7 +203,7 @@ describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
         `${JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code, message } })}\n`,
       ),
     );
-    await expect(signalRpcRequest("send", undefined, { baseUrl })).rejects.toMatchObject({
+    await expect(send(baseUrl)).rejects.toMatchObject({
       message: `Signal RPC ${code}: ${classification}`,
     });
   });
@@ -227,7 +218,7 @@ describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
       const opened = vi.fn();
       const pending =
         mode === "request"
-          ? signalRpcRequest("send", undefined, { baseUrl, timeoutMs: 30 })
+          ? send(baseUrl, undefined, { timeoutMs: 30 })
           : streamSignalEvents({ baseUrl, timeoutMs: 30, onStreamOpen: opened, onEvent: () => {} });
       await expect(pending).rejects.toThrow(/deadline/);
       expect(opened).not.toHaveBeenCalled();
@@ -239,7 +230,7 @@ describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
     const onRequest = vi.fn();
     const { baseUrl, dir } = await serve(onRequest);
     await chmod(dir, 0o755);
-    await expect(signalRpcRequest("send", { message: "private" }, { baseUrl })).rejects.toThrow();
+    await expect(send(baseUrl, "private")).rejects.toThrow();
     expect(onRequest).not.toHaveBeenCalled();
   });
 
@@ -255,9 +246,7 @@ describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
       });
       socket.write(response(request.id, 7));
       for (const result of [{ ...payload, account: "+15550000002" }, payload]) {
-        socket.write(
-          `${JSON.stringify({ jsonrpc: "2.0", method: "receive", params: { subscription: 7, result } })}\n`,
-        );
+        notify(socket, result);
       }
     });
     await expect(
@@ -286,9 +275,7 @@ describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
       expect(request.method).toBe("subscribeReceive");
       const timer = setTimeout(() => {
         socket.write(response(request.id, 7));
-        socket.write(
-          `${JSON.stringify({ jsonrpc: "2.0", method: "receive", params: { subscription: 7, result: payload } })}\n`,
-        );
+        notify(socket, payload);
       }, 30);
       socket.once("close", () => clearTimeout(timer));
     });
@@ -313,9 +300,7 @@ describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
     const { baseUrl } = await serve((request, socket) => {
       closed = once(socket, "close");
       socket.write(response(request.id, 0));
-      socket.write(
-        `${JSON.stringify({ jsonrpc: "2.0", method: "receive", params: { subscription: 0, result: { envelope: {} } } })}\n`,
-      );
+      notify(socket, { envelope: {} }, 0);
     });
     await expect(
       streamSignalEvents({
