@@ -12,6 +12,7 @@ import {
 } from "../../agents/auth-profiles/store-runtime.js";
 import { registerModelsCli } from "../../cli/models-cli.js";
 import { ensureConfigReady } from "../../cli/program/config-guard.js";
+import { agentsDeleteCommand } from "../../commands/agents.commands.delete.js";
 import { runStartupConfigPreflight } from "../../commands/startup-config-preflight.js";
 import { captureConfigHealthStateStore } from "../../config/io.health-state.js";
 import { resetConfigRuntimeState } from "../../config/runtime-snapshot.js";
@@ -70,6 +71,7 @@ describe.skipIf(!connection)("offline CLI on PostgreSQL", () => {
             meta: { migrations: { webhookListeners: true } },
           });
           vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+          const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
           vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
             throw new ExitError(code);
           });
@@ -80,6 +82,12 @@ describe.skipIf(!connection)("offline CLI on PostgreSQL", () => {
               runtime: defaultRuntime,
               commandPath: ["models", "auth", "paste-api-key"],
             });
+            await expect(
+              agentsDeleteCommand({ id: "main", force: true }, defaultRuntime),
+            ).rejects.toBeInstanceOf(ExitError);
+            expect(error).toHaveBeenCalledWith(
+              'Agent "main" owns the legacy shared auth store and cannot be deleted. Run openclaw doctor --fix to migrate shared auth, then retry.',
+            );
             const run = async (args: string[]) => {
               const program = new Command().enablePositionalOptions();
               registerModelsCli(program);
