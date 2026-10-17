@@ -184,7 +184,6 @@ describe("SwarmRosterHydrator", () => {
             .describe({ key: parent.key }, { refresh })
             .then(({ session }) => session ?? null),
         currentRows: () => (window === "warm new member" ? children : []),
-        onRows: () => undefined,
       });
       await vi.advanceTimersByTimeAsync(250);
       if (grows) {
@@ -275,7 +274,6 @@ describe("SwarmRosterHydrator", () => {
             .then(({ session }) => session ?? null),
         // Warm child presentation does not certify the fresh descriptor's counts.
         currentRows: () => children,
-        onRows: () => undefined,
       });
       await vi.advanceTimersByTimeAsync(250);
       childPage.resolve(result(children, 0, children.length));
