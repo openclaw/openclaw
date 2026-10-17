@@ -55,16 +55,14 @@ export function ChatThread(input: { props: ChatThreadProps; transcript: ChatTran
   let stopHistory: (() => void)[] = [];
   // Retained transcript roots can settle before refs; bind native input at the ref.
   onCleanup(() => stopHistory.forEach((stop) => stop()));
+  const paneId = createMemo(() => input.props.paneId);
   const search = createMemo(() =>
-    projectOwner(
-      getTranscriptState(input.props.paneId).search,
-      (owner) => owner.snapshot,
-      Object.is,
-    ),
+    projectOwner(getTranscriptState(paneId()).search, (owner) => owner.snapshot, Object.is),
   );
-  const current = createMemo(() =>
-    input.transcript.renderSession(input.props.sessionKey, (session) => {
-      const projection = projectChatTranscript(input.props, session, search().read());
+  const current = createMemo(() => {
+    const searchState = search().read();
+    return input.transcript.renderSession(input.props.sessionKey, (session) => {
+      const projection = projectChatTranscript(input.props, session, searchState);
       // Empty shells establish the baseline for first-submission animation.
       if (projection.isEmpty || projection.showLoadingSkeleton) {
         session.entryAnimations.sync(
@@ -75,8 +73,8 @@ export function ChatThread(input: { props: ChatThreadProps; transcript: ChatTran
         );
       }
       return { session, projection };
-    }),
-  );
+    });
+  });
   const showLoadingSkeleton = createMemo(() => current().projection.showLoadingSkeleton);
   const isEmpty = createMemo(() => current().projection.isEmpty);
   const searchOpen = createMemo(() => current().projection.searchOpen);
