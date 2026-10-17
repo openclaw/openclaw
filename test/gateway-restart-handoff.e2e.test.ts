@@ -4,6 +4,7 @@ import { statSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
 import type { GatewayClient } from "../src/gateway/client.js";
@@ -77,9 +78,7 @@ it.skipIf(process.platform !== "linux")(
           register(api) {
             api.registerService({
               id: ${JSON.stringify(SERVICE_ID)}, start() {},
-              stop() {
-                api.logger.info(${JSON.stringify(SERVICE_STOP)});
-              }
+              stop() { api.logger.info(${JSON.stringify(SERVICE_STOP)}); }
             });
           }
         };\n`,
@@ -164,10 +163,7 @@ it.skipIf(process.platform !== "linux")(
           "shutdown=41000ms",
           "TimeoutStopUSec=46000ms",
         );
-        const child = instance.child;
-        if (!child) {
-          throw new Error("Gateway exited before restart proof");
-        }
+        const child = expectDefined(instance.child, "Gateway process before restart proof");
         const closed = once(child, "close");
         const gateway = instance;
         const sessionKeys = Array.from(
@@ -215,9 +211,9 @@ it.skipIf(process.platform !== "linux")(
           await client.request("sessions.create", { agentId: "main", key });
         }
         const connection = client;
-        const accepted = await Promise.all(
-          sessionKeys.map((sessionKey, index) =>
-            connection.request<{ runId: string }>(
+        const runIds = await Promise.all(
+          sessionKeys.map(async (sessionKey, index) => {
+            const { runId } = await connection.request<{ runId: string }>(
               "chat.send",
               {
                 sessionKey,
@@ -226,13 +222,11 @@ it.skipIf(process.platform !== "linux")(
                 deliver: false,
               },
               { expectFinal: false },
-            ),
-          ),
+            );
+            expect(runId).toEqual(expect.any(String));
+            return runId;
+          }),
         );
-        const runIds = accepted.map((result) => {
-          expect(result.runId).toEqual(expect.any(String));
-          return result.runId;
-        });
         expect(new Set(runIds).size).toBe(6);
         await beforeExit(
           provider.ready,
@@ -287,15 +281,15 @@ it.skipIf(process.platform !== "linux")(
         expect(deadline, instance.logs()).toBeUndefined();
         expect(serviceStop, instance.logs()).toBeDefined();
         expect(serviceStop!.at).toBeLessThanOrEqual(exitedAt);
-        const [entrypoint] = await instance.entrypoint();
-        if (!entrypoint) {
-          throw new Error("Restart proof lost its Gateway artifact entrypoint");
-        }
+        const entrypoint = expectDefined(
+          (await instance.entrypoint())[0] || undefined,
+          "Gateway artifact entrypoint",
+        );
         const moduleUrl = pathToFileURL(path.resolve(entrypoint)).href;
-        const version = resolveVersionFromModuleUrl(moduleUrl);
-        if (!version) {
-          throw new Error("Restart proof cannot identify its Gateway artifact version");
-        }
+        const version = expectDefined(
+          resolveVersionFromModuleUrl(moduleUrl) || undefined,
+          "Gateway artifact version",
+        );
         // The seal binds the running artifact's version to the production seal policy.
         const artifactSchema = sqliteDatabaseSealSchemaFor("agent", version);
         const seal = readSqliteCleanCloseSeal(agentPath, statSync(agentPath, { bigint: true }));
@@ -356,10 +350,7 @@ it.skipIf(process.platform !== "linux")(
         observingRecovery = true;
         const successorStartedAt = Date.now();
         await instance.startGateway();
-        const successor = instance.child;
-        if (!successor) {
-          throw new Error("Successor exited before restart admission proof");
-        }
+        const successor = expectDefined(instance.child, "successor before restart admission proof");
         expect(successor.pid).not.toBe(child.pid);
         client = await connect();
         await client.request("sessions.subscribe", { agentId: "main" });

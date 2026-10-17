@@ -161,16 +161,6 @@ describe("Gateway hook concurrency", () => {
       );
       expect(modelServer.peak(), instance.logs()).toBeLessThanOrEqual(SHARED_BUDGET);
 
-      console.info(
-        `[capacity-group-fairness-trace] ${JSON.stringify({
-          afterOneHookRelease: "older-cron",
-          afterCronRelease: "later-hook",
-          peakProviderConcurrency: modelServer.peak(),
-          queuedOrder: ["cron", "later-hook"],
-          saturatedProviderRequests: SHARED_BUDGET,
-        })}`,
-      );
-
       modelServer.releaseAll();
       await expect(Promise.all(fairnessHooks)).resolves.toSatisfy((values: HookResponse[]) =>
         values.every((value) => value.status === 200),

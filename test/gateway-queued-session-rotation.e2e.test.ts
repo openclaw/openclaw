@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import type { IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { text } from "node:stream/consumers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatPendingInputsPage } from "../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
@@ -29,15 +29,6 @@ afterEach(async () => {
   await Promise.all(modelServers.splice(0).map((server) => server.stop()));
   await Promise.all(cleanupDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
-
-async function readJsonRequest(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  const body = Buffer.concat(chunks).toString("utf8");
-  return body ? (JSON.parse(body) as Record<string, unknown>) : {};
-}
 
 function createQueuedRotationConfig(fixtureDir: string, baseUrl: string): OpenClawConfig {
   const modelRef = "queued-rotation/queued-rotation";
@@ -72,7 +63,8 @@ async function startMockModelServer() {
     modelId: "queued-rotation",
     bindError: "mock model server did not bind",
     onRequest: async (req, res) => {
-      requests.push({ body: await readJsonRequest(req) });
+      const body = await text(req);
+      requests.push({ body: body ? (JSON.parse(body) as Record<string, unknown>) : {} });
       if (requests.length === 1) {
         await heldResponse.promise;
         if (res.destroyed) {

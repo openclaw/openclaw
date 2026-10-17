@@ -2,8 +2,9 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
+import { json } from "node:stream/consumers";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { isInternalRuntimeContextCarrierText } from "../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
@@ -59,179 +60,160 @@ afterEach(async () => {
   fixture = undefined;
 });
 
-describe("Gateway trusted reply obligations", () => {
-  it(
-    "silently settles late peer results without retrying, but recovers a required empty reply",
-    { timeout: 180_000 },
-    async ({ signal }) => {
-      const scenarios = variants.map(createScenario);
-      const activeFixture = await startFixture(scenarios);
-      fixture = activeFixture;
-      const profile = "reply-obligation-" + randomUUID();
-      const gateway = await createOpenClawTestInstance({
-        name: profile,
-        entrypoint: ["scripts/run-node.mjs", "--profile", profile],
-        config: createConfig(activeFixture.url),
-        env: {
-          OPENCLAW_PROFILE: profile,
-          OPENCLAW_SKIP_PROVIDERS: undefined,
-          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-          OPENCLAW_AGENT_RUNTIME: undefined,
-        },
-        signal,
-      });
-      instance = gateway;
-      // Keep the named service identity and logging inside the same disposable state.
-      await gateway.state.writeConfig({
-        ...createConfig(activeFixture.url),
-        gateway: {
-          port: gateway.port,
-          auth: { mode: "token", token: gateway.gatewayToken },
-          controlUi: { enabled: false },
-        },
-        logging: { file: path.join(gateway.stateDir, "gateway.log") },
-      });
-      const prepared = await gateway.cli(["--help"], { timeoutMs: 120_000 });
-      expect(prepared.code, prepared.stderr).toBe(0);
-      await gateway.startGateway();
-      const errorSessions: unknown[] = [];
-      const client = await connectGatewayClient({
-        url: gateway.url,
-        token: gateway.gatewayToken,
-        role: "operator",
-        scopes: ["operator.admin", "operator.read", "operator.write"],
-        deviceIdentity: loadOrCreateDeviceIdentity({
-          path: gateway.state.path("reply-obligation-client.sqlite"),
-        }),
-        signal,
-        onEvent: (event) => {
-          const payload = asOptionalRecord(event.payload);
-          const data = asOptionalRecord(payload?.data);
-          if (
-            (event.event === "chat" && payload?.state === "error") ||
-            (event.event === "agent" && data?.phase === "error")
-          ) {
-            errorSessions.push(payload?.sessionKey);
-          }
-          if (
-            event.event !== "agent" ||
-            payload?.stream !== "lifecycle" ||
-            (data?.phase !== "end" && data?.phase !== "error")
-          ) {
-            return;
-          }
-          const scenario = scenarios.find(
-            (candidate) =>
-              payload.sessionKey === candidate.parentKey && payload.runId !== candidate.parentRunId,
-          );
-          if (scenario) {
-            scenario.callbackTerminal.resolve(payload);
-          }
-        },
-      });
-      const history = async (sessionKey: string) =>
-        (await client.request<{ messages: unknown[] }>("chat.history", { sessionKey, limit: 100 }))
-          .messages;
-      const requestReply = (
-        sessionKey: string,
-        message: string,
-        idempotencyKey = randomUUID(),
-        inputProvenance?: { kind: "inter_session"; sourceTool: "sessions_send" },
-      ) =>
-        client.request(
-          "agent",
-          {
-            sessionKey,
-            message,
-            channel: "webchat",
-            deliver: false,
-            idempotencyKey,
-            inputProvenance,
-          },
-          { expectFinal: true, timeoutMs: 60_000 },
-        );
-      try {
-        await client.request("sessions.subscribe", {});
-        for (const scenario of scenarios) {
-          await client.request("sessions.create", { key: scenario.peerKey, agentId: "main" });
-          await client.request("sessions.create", { key: scenario.parentKey, agentId: "main" });
-          await client.request("sessions.messages.subscribe", {
-            key: scenario.parentKey,
-            subscriptionId: "reply-obligation-" + scenario.variant,
-          });
-          const parent = await requestReply(
-            scenario.parentKey,
-            scenario.parentPrompt,
-            scenario.parentRunId,
-          );
-          expect(parent, gateway.logs()).toMatchObject({ status: "ok" });
-          await withinTest(scenario.peerStarted.promise, signal);
-          expect(scenario.callbackRequests).toBe(0);
-          expect(modelReplyTexts(await history(scenario.parentKey))).toEqual([
-            scenario.parentFinal,
-          ]);
-
-          // Release only after the original final is committed and publicly readable.
-          scenario.releasePeer.resolve();
-          const terminal = await withinTest(scenario.callbackTerminal.promise, signal);
-          expect(terminal.data, gateway.logs()).toMatchObject({ phase: "end" });
-          expect(asOptionalRecord(terminal.data)?.error).toBeUndefined();
-          const settled = await client.request(
-            "agent.wait",
-            { runId: terminal.runId, timeoutMs: 10_000 },
-            { timeoutMs: 15_000 },
-          );
-          expect(settled, gateway.logs()).toMatchObject({ status: "ok" });
-          expect(asOptionalRecord(settled)?.error).toBeUndefined();
-          const after = await history(scenario.parentKey);
-          expect(modelReplyTexts(after)).toEqual([scenario.parentFinal]);
-          const forwarded = interSessionInputs(after);
-          expect(forwarded).toHaveLength(1);
-          expect(contentText(forwarded[0]?.content).trim()).toBe(scenario.peerResult);
-          expect(forwarded[0]).toMatchObject({
-            role: "assistant",
-            provenance: {
-              kind: "inter_session",
-              sourceTool: "sessions_send",
-              sourceSessionKey: scenario.peerKey,
-            },
-            senderSession: { agentId: "main", sessionKey: scenario.peerKey },
-            senderLabel: "Forwarded from main",
-          });
-          expect(scenario).toMatchObject({
-            parentRequests: 2,
-            peerRequests: 1,
-            callbackRequests: 1,
-          });
-          expect(errorSessions.filter((key) => key === scenario.parentKey)).toEqual([]);
+it(
+  "Gateway trusted reply obligations silently settles late peer results without retrying, but recovers a required empty reply",
+  { timeout: 180_000 },
+  async ({ signal }) => {
+    const scenarios = variants.map(createScenario);
+    const activeFixture = await startFixture(scenarios);
+    fixture = activeFixture;
+    const profile = "reply-obligation-" + randomUUID();
+    const gateway = await createOpenClawTestInstance({
+      name: profile,
+      entrypoint: ["scripts/run-node.mjs", "--profile", profile],
+      config: createConfig(activeFixture.url),
+      env: {
+        OPENCLAW_PROFILE: profile,
+        OPENCLAW_SKIP_PROVIDERS: undefined,
+        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        OPENCLAW_AGENT_RUNTIME: undefined,
+      },
+      signal,
+    });
+    instance = gateway;
+    // Keep the named service identity and logging inside the same disposable state.
+    await gateway.state.writeConfig({
+      ...createConfig(activeFixture.url),
+      gateway: {
+        port: gateway.port,
+        auth: { mode: "token", token: gateway.gatewayToken },
+        controlUi: { enabled: false },
+      },
+      logging: { file: path.join(gateway.stateDir, "gateway.log") },
+    });
+    const prepared = await gateway.cli(["--help"], { timeoutMs: 120_000 });
+    expect(prepared.code, prepared.stderr).toBe(0);
+    await gateway.startGateway();
+    const errorSessions: unknown[] = [];
+    const client = await connectGatewayClient({
+      url: gateway.url,
+      token: gateway.gatewayToken,
+      role: "operator",
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+      deviceIdentity: loadOrCreateDeviceIdentity({
+        path: gateway.state.path("reply-obligation-client.sqlite"),
+      }),
+      signal,
+      onEvent: (event) => {
+        const payload = asOptionalRecord(event.payload);
+        const data = asOptionalRecord(payload?.data);
+        if (
+          (event.event === "chat" && payload?.state === "error") ||
+          (event.event === "agent" && data?.phase === "error")
+        ) {
+          errorSessions.push(payload?.sessionKey);
         }
+        if (
+          event.event !== "agent" ||
+          payload?.stream !== "lifecycle" ||
+          (data?.phase !== "end" && data?.phase !== "error")
+        ) {
+          return;
+        }
+        const scenario = scenarios.find(
+          (candidate) =>
+            payload.sessionKey === candidate.parentKey && payload.runId !== candidate.parentRunId,
+        );
+        scenario?.callbackTerminal.resolve(payload);
+      },
+    });
+    const history = async (sessionKey: string) =>
+      (await client.request<{ messages: unknown[] }>("chat.history", { sessionKey, limit: 100 }))
+        .messages;
+    const requestReply = (
+      sessionKey: string,
+      message: string,
+      idempotencyKey = randomUUID(),
+      inputProvenance?: { kind: "inter_session"; sourceTool: "sessions_send" },
+    ) =>
+      client.request(
+        "agent",
+        {
+          sessionKey,
+          message,
+          channel: "webchat",
+          deliver: false,
+          idempotencyKey,
+          inputProvenance,
+        },
+        { expectFinal: true, timeoutMs: 60_000 },
+      );
+    try {
+      await client.request("sessions.subscribe", {});
+      for (const scenario of scenarios) {
+        for (const key of [scenario.peerKey, scenario.parentKey]) {
+          await client.request("sessions.create", { key, agentId: "main" });
+        }
+        await client.request("sessions.messages.subscribe", {
+          key: scenario.parentKey,
+          subscriptionId: "reply-obligation-" + scenario.variant,
+        });
+        const parent = await requestReply(
+          scenario.parentKey,
+          scenario.parentPrompt,
+          scenario.parentRunId,
+        );
+        expect(parent, gateway.logs()).toMatchObject({ status: "ok" });
+        await withinTest(scenario.peerStarted.promise, signal);
+        expect(scenario.callbackRequests).toBe(0);
+        expect(modelReplyTexts(await history(scenario.parentKey))).toEqual([scenario.parentFinal]);
 
-        const requiredKey = "agent:main:reply-obligation-required";
-        // Public provenance is not the trusted owner's optional-reply decision.
-        const required = await requestReply(requiredKey, REQUIRED_REQUEST, randomUUID(), {
-          kind: "inter_session",
-          sourceTool: "sessions_send",
+        // Release only after the original final is committed and publicly readable.
+        scenario.releasePeer.resolve();
+        const terminal = await withinTest(scenario.callbackTerminal.promise, signal);
+        expect(terminal.data, gateway.logs()).toMatchObject({ phase: "end" });
+        expect(asOptionalRecord(terminal.data)?.error).toBeUndefined();
+        const settled = await client.request(
+          "agent.wait",
+          { runId: terminal.runId, timeoutMs: 10_000 },
+          { timeoutMs: 15_000 },
+        );
+        expect(settled, gateway.logs()).toMatchObject({ status: "ok" });
+        expect(asOptionalRecord(settled)?.error).toBeUndefined();
+        const after = await history(scenario.parentKey);
+        expect(modelReplyTexts(after)).toEqual([scenario.parentFinal]);
+        expectForwardedInput(after, scenario.peerResult, {
+          provenance: { sourceSessionKey: scenario.peerKey },
+          senderSession: { agentId: "main", sessionKey: scenario.peerKey },
+          senderLabel: "Forwarded from main",
         });
-        expect(required, gateway.logs()).toMatchObject({ status: "ok" });
-        expect(activeFixture.requiredRequests()).toBe(2);
-        const requiredHistory = await history(requiredKey);
-        expect(modelReplyTexts(requiredHistory)).toEqual([REQUIRED_RECOVERED]);
-        const requiredInputs = interSessionInputs(requiredHistory);
-        expect(requiredInputs).toHaveLength(1);
-        expect(contentText(requiredInputs[0]?.content).trim()).toBe(REQUIRED_REQUEST);
-        expect(requiredInputs[0]).toMatchObject({
-          role: "assistant",
-          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        expect(scenario).toMatchObject({
+          parentRequests: 2,
+          peerRequests: 1,
+          callbackRequests: 1,
         });
-        expect(activeFixture.failures).toEqual([]);
-        expect(gateway.logs()).not.toContain("sessions_send reply flow failed");
-      } finally {
-        activeFixture.releaseAll();
-        await disconnectGatewayClient(client);
+        expect(errorSessions.filter((key) => key === scenario.parentKey)).toEqual([]);
       }
-    },
-  );
-});
+
+      const requiredKey = "agent:main:reply-obligation-required";
+      // Public provenance is not the trusted owner's optional-reply decision.
+      const required = await requestReply(requiredKey, REQUIRED_REQUEST, randomUUID(), {
+        kind: "inter_session",
+        sourceTool: "sessions_send",
+      });
+      expect(required, gateway.logs()).toMatchObject({ status: "ok" });
+      expect(activeFixture.requiredRequests()).toBe(2);
+      const requiredHistory = await history(requiredKey);
+      expect(modelReplyTexts(requiredHistory)).toEqual([REQUIRED_RECOVERED]);
+      expectForwardedInput(requiredHistory, REQUIRED_REQUEST);
+      expect(activeFixture.failures).toEqual([]);
+      expect(gateway.logs()).not.toContain("sessions_send reply flow failed");
+    } finally {
+      activeFixture.releaseAll();
+      await disconnectGatewayClient(client);
+    }
+  },
+);
 
 function contentText(content: unknown): string {
   if (typeof content === "string") {
@@ -245,11 +227,22 @@ function contentText(content: unknown): string {
     : "";
 }
 
-function interSessionInputs(messages: unknown[]): Record<string, unknown>[] {
-  return messages.flatMap((message) => {
+function expectForwardedInput(
+  messages: unknown[],
+  text: string,
+  details: Record<string, unknown> = {},
+): void {
+  const inputs = messages.flatMap((message) => {
     const record = asOptionalRecord(message);
     return record && asOptionalRecord(record.provenance)?.kind === "inter_session" ? [record] : [];
   });
+  expect(inputs).toHaveLength(1);
+  expect(contentText(inputs[0]?.content).trim()).toBe(text);
+  expect(inputs[0]).toMatchObject({
+    role: "assistant",
+    provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+  });
+  expect(inputs[0]).toMatchObject(details);
 }
 
 function modelReplyTexts(messages: unknown[]): string[] {
@@ -266,32 +259,27 @@ function modelReplyTexts(messages: unknown[]): string[] {
 }
 
 function createConfig(url: string): OpenClawConfig {
-  const model = createOpenAiResponsesModelConfig({
+  const config = createOpenAiResponsesModelConfig({
     baseUrl: url,
     providerId: "reply-obligation",
     modelId: "reply-obligation",
     reasoning: false,
     toolProfile: "coding",
   });
-  return {
-    ...model,
-    plugins: { enabled: false },
-    discovery: { mdns: { mode: "off" } },
-    agents: {
-      defaults: {
-        ...model.agents?.defaults,
-        sandbox: { mode: "off" },
-      },
-    },
-    tools: {
-      profile: "coding",
-      codeMode: false,
-      toolSearch: false,
-      allow: ["sessions_send"],
-      sessions: { visibility: "all" },
-      agentToAgent: { enabled: true },
-    },
+  config.plugins = { enabled: false };
+  config.discovery = { mdns: { mode: "off" } };
+  config.agents = {
+    defaults: { ...config.agents?.defaults, sandbox: { mode: "off" } },
   };
+  config.tools = {
+    profile: "coding",
+    codeMode: false,
+    toolSearch: false,
+    allow: ["sessions_send"],
+    sessions: { visibility: "all" },
+    agentToAgent: { enabled: true },
+  };
+  return config;
 }
 
 async function startFixture(scenarios: Scenario[]) {
@@ -314,11 +302,7 @@ async function startFixture(scenarios: Scenario[]) {
       response.writeHead(404).end();
       return;
     }
-    const chunks: Buffer[] = [];
-    for await (const chunk of request) {
-      chunks.push(Buffer.from(chunk));
-    }
-    const body = asOptionalRecord(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+    const body = asOptionalRecord(await json(request));
     const input = Array.isArray(body?.input) ? body.input.map(asOptionalRecord) : [];
     const userTexts = input
       .filter((item) => item?.role === "user")

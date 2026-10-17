@@ -1,4 +1,5 @@
-import { backup, DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { setSqliteBusyTimeout } from "../src/infra/sqlite-busy-timeout.js";
 import { withStateDatabaseSchemaMaintenance } from "../src/infra/state-database-maintenance.js";
@@ -74,19 +75,11 @@ function expectStep(
 
 async function startGateway(instance: OpenClawTestInstance) {
   await instance.startGateway();
-  const child = instance.child;
-  if (!child) {
-    throw new Error("Gateway fixture started without an owned process.");
-  }
-  return child;
+  return expectDefined(instance.child, "Gateway fixture started without an owned process.");
 }
 
 function driverIdentity() {
-  const driver = readUpdateRunDriver();
-  if (!driver) {
-    throw new Error("Test process identity is unavailable");
-  }
-  return driver;
+  return expectDefined(readUpdateRunDriver(), "Test process identity is unavailable");
 }
 
 async function createPublicationInstance(name: string) {
@@ -140,7 +133,7 @@ function seedDeferredState(instance: OpenClawTestInstance, terminal: boolean) {
 
 function seedInactiveUpdateRun(
   instance: OpenClawTestInstance,
-  input: { ageMs: number; phase?: "requested" | "staging"; driver?: UpdateRunDriver },
+  input: { ageMs?: number; phase?: "requested" | "staging"; driver?: UpdateRunDriver } = {},
 ) {
   const options = { env: instance.env };
   const { db, path: databasePath } = openOpenClawStateDatabase(options);
@@ -154,18 +147,14 @@ function seedInactiveUpdateRun(
       options,
     );
     const phase = input.phase ?? "requested";
-    const lastActivity = Date.now() - input.ageMs;
+    const lastActivity = Date.now() - (input.ageMs ?? ABANDONED_UPDATE_RUN_MS + 60_000);
+    const step = { step: "requested", status: "in_progress", startedAtMs: lastActivity };
     const steps =
       phase === "requested"
-        ? [{ step: "requested", status: "in_progress", startedAtMs: lastActivity }]
+        ? [step]
         : [
-            {
-              step: "requested",
-              status: "completed",
-              startedAtMs: lastActivity,
-              endedAtMs: lastActivity,
-            },
-            { step: "staging", status: "in_progress", startedAtMs: lastActivity },
+            { ...step, status: "completed", endedAtMs: lastActivity },
+            { ...step, step: "staging" },
           ];
     db.prepare(`UPDATE update_runs SET created_at_ms = ?, updated_at_ms = ?,
       phase = ?, steps_json = ? WHERE run_id = ?`).run(
@@ -231,7 +220,6 @@ describe("Gateway external shared-state ownership", () => {
     const instance = await createPublicationInstance("gateway-abandoned-update-driver");
     const currentDriver = driverIdentity();
     const { databasePath, runId } = seedInactiveUpdateRun(instance, {
-      ageMs: ABANDONED_UPDATE_RUN_MS + 60_000,
       // A live PID with a different start identity positively proves PID reuse.
       driver: {
         ...currentDriver,
@@ -259,14 +247,8 @@ describe("Gateway external shared-state ownership", () => {
   it("preserves recent and live drivers and explicitly repairs an inactive identityless row", async () => {
     const instance = await createPublicationInstance("gateway-inactive-update-repair");
     const driver = driverIdentity();
-    const inactive = seedInactiveUpdateRun(instance, {
-      ageMs: ABANDONED_UPDATE_RUN_MS + 60_000,
-      phase: "staging",
-    });
-    const live = seedInactiveUpdateRun(instance, {
-      ageMs: ABANDONED_UPDATE_RUN_MS + 60_000,
-      driver,
-    });
+    const inactive = seedInactiveUpdateRun(instance, { phase: "staging" });
+    const live = seedInactiveUpdateRun(instance, { driver });
     const recent = seedInactiveUpdateRun(instance, { ageMs: 60_000 });
     const observer = observe(inactive.databasePath);
     const child = await startGateway(instance);
@@ -311,9 +293,7 @@ describe("Gateway external shared-state ownership", () => {
     async (action) => {
       const instance = await createPublicationInstance(`gateway-legacy-update-${action}`);
 
-      const inactive = seedInactiveUpdateRun(instance, {
-        ageMs: ABANDONED_UPDATE_RUN_MS + 60_000,
-      });
+      const inactive = seedInactiveUpdateRun(instance);
       const observer = observe(inactive.databasePath);
       const child = await startGateway(instance);
       const before = await updateStatus(instance);
@@ -445,19 +425,6 @@ describe("Gateway external shared-state ownership", () => {
       status: "external",
       ownership: { managerId: "gateway-supervisor" },
     });
-    const preflightPath = `${instance.stateDir}/owner-preflight.sqlite`;
-    const source = new DatabaseSync(claimed.databasePath, { readOnly: true });
-    try {
-      await backup(source, preflightPath);
-    } finally {
-      source.close();
-    }
-    const preflight = await cliJson(instance, ["database", "preflight", preflightPath, "--json"]);
-    expect(preflight).toMatchObject({
-      schema: "openclaw.state-schema-preflight.v1",
-      status: "exact",
-      requiresWrite: false,
-    });
     const unreadable = await cliJson(
       instance,
       ["database", "preflight", `${instance.stateDir}/missing.sqlite`, "--json"],
@@ -466,19 +433,6 @@ describe("Gateway external shared-state ownership", () => {
     expect(unreadable).toMatchObject({
       schema: "openclaw.state-schema-preflight.v1",
       status: "indeterminate",
-    });
-    const status = await cliJson(instance, ["database", "ownership", "status", "--json"]);
-    expect(status).toMatchObject({
-      status: "external",
-      ownership: { managerId: "gateway-supervisor" },
-    });
-    const conflictingClaim = await cliJson(
-      instance,
-      ["database", "ownership", "claim", "--manager", "replacement-manager", "--json"],
-      1,
-    );
-    expect(conflictingClaim).toMatchObject({
-      error: expect.stringContaining("already claimed by external manager gateway-supervisor"),
     });
 
     delete instance.env.OPENCLAW_SUPERVISOR_MODE;

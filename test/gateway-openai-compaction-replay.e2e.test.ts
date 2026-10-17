@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
+import { json } from "node:stream/consumers";
 import { afterEach, expect, it } from "vitest";
 import { SessionManager } from "../src/agents/sessions/session-manager.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
@@ -157,11 +158,7 @@ async function startMockModelServer() {
     modelId: "replay-proof",
     bindError: "compaction replay model server did not bind",
     onRequest: async (request, response) => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
-      requests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as CapturedRequest);
+      requests.push((await json(request)) as CapturedRequest);
       writeModelResponse(response, requests.length);
     },
   });
