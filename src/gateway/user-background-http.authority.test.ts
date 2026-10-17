@@ -13,9 +13,11 @@ import { normalizeUserBackgroundImage } from "../state/user-background-image.js"
 import { getUserBackground, uploadUserBackground } from "../state/user-background.js";
 import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
+import type { ResolvedGatewayAuth } from "./auth.js";
 import { AUTH_TOKEN, createTestGatewayServer } from "./server-http.test-harness.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
+const JPEG = new Uint8Array([255, 216, 255, 217]);
 const profileWait = vi.hoisted(() => vi.fn<() => Promise<void>>());
 const imageWait = vi.hoisted(() => vi.fn<(image: Uint8Array | undefined) => Promise<void>>());
 // Hold the actual prepared bytes, not a fabricated authorization or reader result.
@@ -51,16 +53,79 @@ vi.mock("../config/io.js", async (importOriginal) => ({
 vi.mock("../state/user-background-image.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/user-background-image.js")>()),
   normalizeUserBackgroundImage: vi.fn(async () => ({
-    image: Buffer.from([255, 216, 255, 217]),
+    image: Buffer.from(JPEG),
     width: 1,
     height: 1,
   })),
 }));
 const directories = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("background-authority-"));
   profileWait.mockReset().mockResolvedValue(undefined);
   imageWait.mockReset().mockResolvedValue(undefined);
 });
+
+async function upload(profileId: string, imageBase64 = "fixture") {
+  const result = await uploadUserBackground(profileId, {
+    expectedAssetId: null,
+    expectedPreference: null,
+    imageBase64,
+  });
+  if (result.status !== "ok" || !result.asset) {
+    throw new Error("Missing background fixture");
+  }
+  return result.asset.assetId;
+}
+
+function barrier(image: boolean) {
+  const entered = createDeferred();
+  const release = createDeferred();
+  const hold = async () => {
+    entered.resolve();
+    await release.promise;
+  };
+  if (image) {
+    imageWait.mockImplementation(async (bytes) => {
+      expect(bytes).toEqual(JPEG);
+      await hold();
+    });
+  } else {
+    profileWait.mockImplementation(hold);
+  }
+  return {
+    release: () => release.resolve(),
+    entered: (response: Promise<Response>) =>
+      Promise.race([
+        entered.promise,
+        response.then((result) => {
+          throw new Error("Request completed before authority barrier: " + result.status);
+        }),
+      ]),
+  };
+}
+
+async function withServer(
+  getResolvedAuth: () => ResolvedGatewayAuth,
+  release: () => void,
+  run: (origin: string) => Promise<void>,
+) {
+  const server = createTestGatewayServer({
+    resolvedAuth: getResolvedAuth(),
+    overrides: { controlUiBasePath: "/control", getResolvedAuth, getRuntimeConfig },
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    await run("http://127.0.0.1:" + (server.address() as AddressInfo).port);
+  } finally {
+    release();
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+}
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
@@ -77,21 +142,13 @@ it.each([
 ])(
   "registered background HTTP read rechecks $change authority after $stage",
   async ({ change, stage }) => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("background-device-authority-"));
     let currentAuth = AUTH_TOKEN;
     let allowedOrigins = ["https://control.example.test"];
     vi.mocked(getRuntimeConfig).mockImplementation(() => ({
       gateway: { auth: currentAuth, trustedProxies: [], controlUi: { allowedOrigins } },
     }));
     const profile = ensureGatewayOwnerProfile("Background owner");
-    const uploaded = await uploadUserBackground(profile.id, {
-      expectedAssetId: null,
-      expectedPreference: null,
-      imageBase64: "fixture",
-    });
-    if (uploaded.status !== "ok" || !uploaded.asset) {
-      throw new Error("Missing background fixture");
-    }
+    const assetId = await upload(profile.id);
     const request = await requestDevicePairing({
       deviceId: "background-reader",
       publicKey: "fixture-key",
@@ -113,101 +170,63 @@ it.each([
     if (!token) {
       throw new Error("Missing paired credential fixture");
     }
-    const entered = createDeferred();
-    const release = createDeferred();
-    const hold = async () => {
-      entered.resolve();
-      await release.promise;
-    };
-    if (stage === "image preparation") {
-      imageWait.mockImplementation(async (image) => {
-        expect(image).toEqual(new Uint8Array([255, 216, 255, 217]));
-        await hold();
-      });
-    } else {
-      profileWait.mockImplementation(hold);
-    }
-    const server = createTestGatewayServer({
-      resolvedAuth: currentAuth,
-      overrides: {
-        controlUiBasePath: "/control",
-        getResolvedAuth: () => currentAuth,
-        getRuntimeConfig,
-      },
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const origin = "http://127.0.0.1:" + (server.address() as AddressInfo).port;
-    try {
-      const response = fetch(
-        origin + "/control/__openclaw__/users/background/" + uploaded.asset.assetId,
-        {
+    const wait = barrier(stage === "image preparation");
+    await withServer(
+      () => currentAuth,
+      wait.release,
+      async (origin) => {
+        const response = fetch(origin + "/control/__openclaw__/users/background/" + assetId, {
           headers: {
             Authorization: "Bearer " + token.token,
             Origin: change === "origin-revoked" ? "https://control.example.test" : origin,
           },
-        },
-      );
-      await Promise.race([
-        entered.promise,
-        response.then((result) => {
-          throw new Error("Request completed before " + stage + " barrier: " + result.status);
-        }),
-      ]);
-      if (change === "revoked") {
-        await revokeDeviceToken({ deviceId: "background-reader", role: "operator" });
-      } else if (change === "scope-reduced") {
-        // Narrow through the canonical locked store without changing the token bytes.
-        await withPairedDeviceRecords(undefined, (records) => {
-          const grant = records["background-reader"]?.tokens?.operator;
-          if (!grant) {
-            throw new Error("Missing admitted grant");
-          }
-          grant.scopes = [];
-          return { value: undefined, persist: true };
         });
-      } else if (change === "origin-revoked") {
-        allowedOrigins = [];
-      } else if (change === "gateway-rotated") {
-        currentAuth = { ...AUTH_TOKEN, token: "rotated-fixture-secret" };
-      }
-      release.resolve();
-      const result = await response;
-      // Explicit credentials still authorize the HTTP owner; CORS controls
-      // whether the browser may expose that response to the requesting origin.
-      if (change === "origin-revoked") {
-        expect(result.headers.get("access-control-allow-origin")).toBeNull();
-        expect(result.headers.get("access-control-allow-credentials")).toBeNull();
-      }
-      expect(result.status).toBe(change === "unchanged" || change === "origin-revoked" ? 200 : 401);
-      if (change === "unchanged" || change === "origin-revoked") {
-        expect(new Uint8Array(await result.arrayBuffer())).toEqual(
-          new Uint8Array([255, 216, 255, 217]),
+        await wait.entered(response);
+        if (change === "revoked") {
+          await revokeDeviceToken({ deviceId: "background-reader", role: "operator" });
+        } else if (change === "scope-reduced") {
+          // Narrow through the canonical locked store without changing the token bytes.
+          await withPairedDeviceRecords(undefined, (records) => {
+            const grant = records["background-reader"]?.tokens?.operator;
+            if (!grant) {
+              throw new Error("Missing admitted grant");
+            }
+            grant.scopes = [];
+            return { value: undefined, persist: true };
+          });
+        } else if (change === "origin-revoked") {
+          allowedOrigins = [];
+        } else if (change === "gateway-rotated") {
+          currentAuth = { ...AUTH_TOKEN, token: "rotated-fixture-secret" };
+        }
+        wait.release();
+        const result = await response;
+        // Explicit credentials still authorize the HTTP owner; CORS controls
+        // whether the browser may expose that response to the requesting origin.
+        if (change === "origin-revoked") {
+          expect(result.headers.get("access-control-allow-origin")).toBeNull();
+          expect(result.headers.get("access-control-allow-credentials")).toBeNull();
+        }
+        expect(result.status).toBe(
+          change === "unchanged" || change === "origin-revoked" ? 200 : 401,
         );
-      } else {
-        expect(result.headers.get("content-type")).not.toMatch(/^image\//);
-        expect(new Uint8Array(await result.arrayBuffer())).not.toEqual(
-          new Uint8Array([255, 216, 255, 217]),
-        );
-      }
-      if (stage === "image preparation") {
-        expect(imageWait).toHaveBeenCalledOnce();
-      }
-    } finally {
-      release.resolve();
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+        if (change === "unchanged" || change === "origin-revoked") {
+          expect(new Uint8Array(await result.arrayBuffer())).toEqual(JPEG);
+        } else {
+          expect(result.headers.get("content-type")).not.toMatch(/^image\//);
+          expect(new Uint8Array(await result.arrayBuffer())).not.toEqual(JPEG);
+        }
+        if (stage === "image preparation") {
+          expect(imageWait).toHaveBeenCalledOnce();
+        }
+      },
+    );
   },
 );
 
 it.each(["role-reduced", "profile-reassigned"] as const)(
   "registered background read withholds private bytes after %s",
   async (change) => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("background-role-authority-"));
     const auth = {
       mode: "trusted-proxy" as const,
       allowTailscale: false,
@@ -232,14 +251,7 @@ it.each(["role-reduced", "profile-reassigned"] as const)(
     };
     vi.mocked(getRuntimeConfig).mockImplementation(() => config);
     const profile = ensureProfileForEmail("reader@example.test");
-    const uploaded = await uploadUserBackground(profile.id, {
-      expectedAssetId: null,
-      expectedPreference: null,
-      imageBase64: "fixture",
-    });
-    if (uploaded.status !== "ok" || !uploaded.asset) {
-      throw new Error("Missing role fixture");
-    }
+    const assetId = await upload(profile.id);
     const foreignBytes = Buffer.from([255, 216, 17, 217]);
     const replacement =
       change === "profile-reassigned"
@@ -252,44 +264,14 @@ it.each(["role-reduced", "profile-reassigned"] as const)(
         width: 1,
         height: 1,
       });
-      const foreign = await uploadUserBackground(replacement.id, {
-        expectedAssetId: null,
-        expectedPreference: null,
-        imageBase64: "foreign-fixture",
-      });
-      if (foreign.status !== "ok" || !foreign.asset) {
-        throw new Error("Missing foreign profile fixture");
-      }
-      foreignAssetId = foreign.asset.assetId;
+      foreignAssetId = await upload(replacement.id, "foreign-fixture");
     }
-    const entered = createDeferred();
-    const release = createDeferred();
-    const hold = async () => {
-      entered.resolve();
-      await release.promise;
-    };
-    if (change === "profile-reassigned") {
-      imageWait.mockImplementation(async (image) => {
-        expect(image).toEqual(new Uint8Array([255, 216, 255, 217]));
-        await hold();
-      });
-    } else {
-      profileWait.mockImplementation(hold);
-    }
-    const server = createTestGatewayServer({
-      resolvedAuth: auth,
-      overrides: { controlUiBasePath: "/control", getResolvedAuth: () => auth, getRuntimeConfig },
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    try {
-      const response = fetch(
-        "http://127.0.0.1:" +
-          (server.address() as AddressInfo).port +
-          "/control/__openclaw__/users/background/" +
-          uploaded.asset.assetId,
-        {
+    const wait = barrier(change === "profile-reassigned");
+    await withServer(
+      () => auth,
+      wait.release,
+      async (origin) => {
+        const response = fetch(origin + "/control/__openclaw__/users/background/" + assetId, {
           headers: {
             "x-forwarded-for": "198.51.100.23",
             "x-forwarded-user": "reader@example.test",
@@ -297,44 +279,33 @@ it.each(["role-reduced", "profile-reassigned"] as const)(
             "x-openclaw-scopes": "operator.read",
             Origin: "https://control.example.test",
           },
-        },
-      );
-      await Promise.race([
-        entered.promise,
-        response.then((result) => {
-          throw new Error("Read finished before authority barrier: " + result.status);
-        }),
-      ]);
-      if (replacement) {
-        const reassigned = await linkCanonicalUserProfileEmail(
-          "reader@example.test",
-          replacement.id,
-        );
-        expect(reassigned.profile.id).toBe(replacement.id);
-        const current = await getUserBackground(profile.id);
-        expect(current).toMatchObject({ status: "ok", asset: { assetId: foreignAssetId } });
-      } else {
-        config = {
-          gateway: {
-            ...config.gateway,
-            roles: { default: "reader", definitions: { reader: { ...reader, scopes: [] } } },
-          },
-        };
-      }
-      release.resolve();
-      const result = await response;
-      expect(result.status).toBe(401);
-      expect(result.headers.get("content-type")).not.toMatch(/^image\//);
-      const responseBytes = new Uint8Array(await result.arrayBuffer());
-      expect(responseBytes).not.toEqual(new Uint8Array([255, 216, 255, 217]));
-      expect(responseBytes).not.toEqual(new Uint8Array(foreignBytes));
-      expect(replacement ? imageWait : profileWait).toHaveBeenCalledOnce();
-    } finally {
-      release.resolve();
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+        });
+        await wait.entered(response);
+        if (replacement) {
+          const reassigned = await linkCanonicalUserProfileEmail(
+            "reader@example.test",
+            replacement.id,
+          );
+          expect(reassigned.profile.id).toBe(replacement.id);
+          const current = await getUserBackground(profile.id);
+          expect(current).toMatchObject({ status: "ok", asset: { assetId: foreignAssetId } });
+        } else {
+          config = {
+            gateway: {
+              ...config.gateway,
+              roles: { default: "reader", definitions: { reader: { ...reader, scopes: [] } } },
+            },
+          };
+        }
+        wait.release();
+        const result = await response;
+        expect(result.status).toBe(401);
+        expect(result.headers.get("content-type")).not.toMatch(/^image\//);
+        const responseBytes = new Uint8Array(await result.arrayBuffer());
+        expect(responseBytes).not.toEqual(JPEG);
+        expect(responseBytes).not.toEqual(new Uint8Array(foreignBytes));
+        expect(replacement ? imageWait : profileWait).toHaveBeenCalledOnce();
+      },
+    );
   },
 );

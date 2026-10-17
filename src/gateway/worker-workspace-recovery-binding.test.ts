@@ -73,13 +73,8 @@ vi.mock("../infra/git-exec.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/git-exec.js")>();
   return {
     ...actual,
-    enqueueGitRefMutation: <T>(
-      cwd: string,
-      commonDirectory: string,
-      run: () => Promise<T>,
-      signal?: AbortSignal,
-    ) => {
-      const pending = actual.enqueueGitRefMutation(cwd, commonDirectory, run, signal);
+    enqueueGitRefMutation: <T>(...args: Parameters<typeof actual.enqueueGitRefMutation<T>>) => {
+      const pending = actual.enqueueGitRefMutation(...args);
       boundary.onRefMutationRequested?.();
       return pending;
     },
@@ -89,25 +84,14 @@ vi.mock("../infra/git-exec.js", async (importOriginal) => {
 vi.mock("../config/sessions/session-accessor.sqlite-scope.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../config/sessions/session-accessor.sqlite-scope.js")>();
-  type Write = typeof actual.runExclusiveSqliteSessionWrite;
   return {
     ...actual,
     runExclusiveSqliteSessionWrite: <T>(
-      scope: Parameters<Write>[0],
-      run: () => Promise<T>,
-      operation: Parameters<Write>[2],
-      diagnostics?: Parameters<Write>[3],
-      writer?: Parameters<Write>[4],
+      ...args: Parameters<typeof actual.runExclusiveSqliteSessionWrite<T>>
     ) => {
-      const pending = actual.runExclusiveSqliteSessionWrite(
-        scope,
-        run,
-        operation,
-        diagnostics,
-        writer,
-      );
+      const pending = actual.runExclusiveSqliteSessionWrite(...args);
       // Observe enqueueing without replacing the real writer or supplying its authority.
-      if (operation === "session.transcript.report") {
+      if (args[2] === "session.transcript.report") {
         boundary.onReportQueued?.();
       }
       return pending;
@@ -183,12 +167,11 @@ async function readCustomEvents(
   );
 }
 
-async function withRecovery(
-  options: { archived?: boolean },
-  verify: (fixture: Awaited<ReturnType<typeof createRecoveryFixture>>) => Promise<void>,
-) {
+type RecoveryFixture = Awaited<ReturnType<typeof createRecoveryFixture>>;
+
+async function withRecovery(verify: (fixture: RecoveryFixture) => Promise<void>) {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ workspaceDir }) => {
-    const fixture = await createRecoveryFixture(workspaceDir, options);
+    const fixture = await createRecoveryFixture(workspaceDir);
     try {
       await verify(fixture);
     } finally {
@@ -200,7 +183,7 @@ async function withRecovery(
   });
 }
 
-async function createRecoveryFixture(workspacePath: string, options: { archived?: boolean }) {
+async function createRecoveryFixture(workspacePath: string) {
   boundary.worktreePath = workspacePath;
   const initialized = await runCommandWithTimeout(["git", "-C", workspacePath, "init", "--quiet"], {
     timeoutMs: 10_000,
@@ -230,7 +213,6 @@ async function createRecoveryFixture(workspacePath: string, options: { archived?
       updatedAt: 1,
       lifecycleRevision: "retained-recovery-lifecycle",
       activeWriterRunId: "retained-recovery-writer",
-      ...(options.archived ? { archivedAt: 100 } : {}),
       worktree: { id: "recovery-worktree", branch: "synthetic", repoRoot: workspacePath },
     });
     await replaceTranscriptEvents(scope, [
@@ -341,6 +323,17 @@ async function createRecoveryFixture(workspacePath: string, options: { archived?
   return { a, b, configB, runtime, placements, environments, destroy, claim, onReconcile, base };
 }
 
+async function replaceRecoveryClaim({ placements, claim }: RecoveryFixture) {
+  await placements.clearLocalTurnClaimsAfterRestartAsync();
+  await placements.claimTurn({
+    ...REQUEST,
+    claimId: "replacement-claim",
+    runId: "replacement-run",
+    owner: claim.owner,
+  });
+  expect(placements.validateWorkspaceResultClaim(claim)).toBe(false);
+}
+
 describe("registered worker workspace recovery target binding", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
@@ -352,7 +345,7 @@ describe("registered worker workspace recovery target binding", () => {
   });
 
   it("clears only the prepared store when config changes to an identical session during recovery", async () => {
-    await withRecovery({}, async ({ a, b, configB, runtime, placements, onReconcile }) => {
+    await withRecovery(async ({ a, b, configB, runtime, placements, onReconcile }) => {
       const beforeB = await loadTranscriptEvents(b);
       expect(loadSessionEntryReadOnly(a)?.lifecycleRevision).toBe(
         loadSessionEntryReadOnly(b)?.lifecycleRevision,
@@ -371,7 +364,7 @@ describe("registered worker workspace recovery target binding", () => {
   it.each(["lifecycleRevision", "activeWriterRunId"] as const)(
     "keeps recovery debt when an in-process write changes %s before the next effect",
     async (field) => {
-      await withRecovery({}, async ({ a, runtime, placements, onReconcile }) => {
+      await withRecovery(async ({ a, runtime, placements, onReconcile }) => {
         const before = await loadTranscriptEvents(a);
         onReconcile.mockImplementation(async (request) => {
           if (request.source.kind !== "local" || !request.source.assertCurrent) {
@@ -396,138 +389,119 @@ describe("registered worker workspace recovery target binding", () => {
   );
 
   it("rejects a queued recovery report after durable claim replacement and keeps its recovery debt", async () => {
-    await withRecovery(
-      {},
-      async ({ a, runtime, placements, claim, onReconcile, base, destroy }) => {
-        const held = createDeferredCore();
-        const release = createDeferredCore();
-        const queued = createDeferredCore();
-        let blocker: Promise<void> | undefined;
-        onReconcile.mockImplementation(async (request) => {
-          await applyRecoveryResult(request, base);
-          blocker = runExclusiveSqliteSessionWrite(
-            { agentId: REQUEST.agentId, path: a.storePath },
-            async () => {
-              held.resolve();
-              await release.promise;
-            },
-            "session.transcript.batch",
-          );
-          await held.promise;
-          boundary.onReportQueued = () => queued.resolve();
-          throw new Error("Remote verification failed after the result was retained");
-        });
-        const recovering = runtime.dispatchService.reconcile("startup");
-        try {
-          await Promise.race([
-            queued.promise,
-            recovering.then(() => {
-              throw new Error("Recovery finished without queueing its transcript report");
-            }),
-          ]);
-          boundary.onReportQueued = undefined;
-          const pending = await placements.listPendingWorkspaceResultsAsync();
-          const journalOwners = await placements.listWorkspaceReconciliationOwners();
-          expect(pending).toHaveLength(1);
-          expect(journalOwners).toHaveLength(1);
-          const owner = journalOwners[0]!;
-          const journal = await placements.loadWorkspaceReconciliation(owner);
-          expect(journal?.appliedManifestRef).toBeDefined();
-          // Model a replacement owner after restart while this process waits on its writer.
-          await placements.clearLocalTurnClaimsAfterRestartAsync();
-          await placements.claimTurn({
-            ...REQUEST,
-            claimId: "replacement-claim",
-            runId: "replacement-run",
-            owner: claim.owner,
-          });
-          expect(placements.validateWorkspaceResultClaim(claim)).toBe(false);
-          release.resolve();
-          await recovering;
+    await withRecovery(async (fixture) => {
+      const { a, runtime, placements, onReconcile, base, destroy } = fixture;
+      const held = createDeferredCore();
+      const release = createDeferredCore();
+      const queued = createDeferredCore();
+      let blocker: Promise<void> | undefined;
+      onReconcile.mockImplementation(async (request) => {
+        await applyRecoveryResult(request, base);
+        blocker = runExclusiveSqliteSessionWrite(
+          { agentId: REQUEST.agentId, path: a.storePath },
+          async () => {
+            held.resolve();
+            await release.promise;
+          },
+          "session.transcript.batch",
+        );
+        await held.promise;
+        boundary.onReportQueued = () => queued.resolve();
+        throw new Error("Remote verification failed after the result was retained");
+      });
+      const recovering = runtime.dispatchService.reconcile("startup");
+      try {
+        await Promise.race([
+          queued.promise,
+          recovering.then(() => {
+            throw new Error("Recovery finished without queueing its transcript report");
+          }),
+        ]);
+        boundary.onReportQueued = undefined;
+        const pending = await placements.listPendingWorkspaceResultsAsync();
+        const journalOwners = await placements.listWorkspaceReconciliationOwners();
+        expect(pending).toHaveLength(1);
+        expect(journalOwners).toHaveLength(1);
+        const owner = journalOwners[0]!;
+        const journal = await placements.loadWorkspaceReconciliation(owner);
+        expect(journal?.appliedManifestRef).toBeDefined();
+        // Model a replacement owner after restart while this process waits on its writer.
+        await replaceRecoveryClaim(fixture);
+        release.resolve();
+        await recovering;
 
-          expect(await readCustomEvents(a, WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE)).toEqual([]);
-          expect(await placements.listPendingWorkspaceResultsAsync()).toEqual(pending);
-          expect(await placements.loadWorkspaceReconciliation(owner)).toEqual(journal);
-          const ref = await readRef(pending[0]!.stagedResultRef!);
-          expect(ref.code).toBe(0);
-          expect(await fs.readFile(path.join(boundary.worktreePath, "result.txt"), "utf8")).toBe(
-            "recoverable worker output\n",
-          );
-          expect(destroy).not.toHaveBeenCalled();
-        } finally {
-          boundary.onReportQueued = undefined;
-          release.resolve();
-          await blocker;
-          await recovering;
-        }
-      },
-    );
+        expect(await readCustomEvents(a, WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE)).toEqual([]);
+        expect(await placements.listPendingWorkspaceResultsAsync()).toEqual(pending);
+        expect(await placements.loadWorkspaceReconciliation(owner)).toEqual(journal);
+        const ref = await readRef(pending[0]!.stagedResultRef!);
+        expect(ref.code).toBe(0);
+        expect(await fs.readFile(path.join(boundary.worktreePath, "result.txt"), "utf8")).toBe(
+          "recoverable worker output\n",
+        );
+        expect(destroy).not.toHaveBeenCalled();
+      } finally {
+        boundary.onReportQueued = undefined;
+        release.resolve();
+        await blocker;
+        await recovering;
+      }
+    });
   });
 
   it("preserves a superseded conflict ref when its recovery claim changes behind the Git writer", async () => {
-    await withRecovery(
-      {},
-      async ({ a, runtime, placements, claim, onReconcile, base, destroy }) => {
-        const priorRef = "refs/openclaw/worker-results/previous-0";
-        await stageResult(priorRef, base);
-        const beforeRef = await readRef(priorRef);
-        expect(beforeRef.code).toBe(0);
-        const beforeTranscript = await loadTranscriptEvents(a);
-        const held = createDeferredCore();
-        const release = createDeferredCore();
-        const requested = createDeferredCore();
-        let blocker: Promise<void> | undefined;
-        onReconcile.mockImplementation(async () => {
-          blocker = enqueueGitRefMutation(boundary.worktreePath, ".git", async () => {
-            held.resolve();
-            await release.promise;
-          });
-          await held.promise;
-          boundary.onRefMutationRequested = () => requested.resolve();
+    await withRecovery(async (fixture) => {
+      const { a, runtime, placements, onReconcile, base, destroy } = fixture;
+      const priorRef = "refs/openclaw/worker-results/previous-0";
+      await stageResult(priorRef, base);
+      const beforeRef = await readRef(priorRef);
+      expect(beforeRef.code).toBe(0);
+      const beforeTranscript = await loadTranscriptEvents(a);
+      const held = createDeferredCore();
+      const release = createDeferredCore();
+      const requested = createDeferredCore();
+      let blocker: Promise<void> | undefined;
+      onReconcile.mockImplementation(async () => {
+        blocker = enqueueGitRefMutation(boundary.worktreePath, ".git", async () => {
+          held.resolve();
+          await release.promise;
         });
-        const recovering = runtime.dispatchService.reconcile("startup");
-        try {
-          await Promise.race([
-            requested.promise,
-            recovering.then(() => {
-              throw new Error("Recovery finished without requesting conflict ref retirement");
-            }),
-          ]);
-          boundary.onRefMutationRequested = undefined;
-          const pending = await placements.listPendingWorkspaceResultsAsync();
-          expect(pending).toHaveLength(1);
-          expect(pending[0]!.workspaceAcceptedAtMs).not.toBeNull();
-          await placements.clearLocalTurnClaimsAfterRestartAsync();
-          await placements.claimTurn({
-            ...REQUEST,
-            claimId: "replacement-claim",
-            runId: "replacement-run",
-            owner: claim.owner,
-          });
-          expect(placements.validateWorkspaceResultClaim(claim)).toBe(false);
-          release.resolve();
-          await recovering;
+        await held.promise;
+        boundary.onRefMutationRequested = () => requested.resolve();
+      });
+      const recovering = runtime.dispatchService.reconcile("startup");
+      try {
+        await Promise.race([
+          requested.promise,
+          recovering.then(() => {
+            throw new Error("Recovery finished without requesting conflict ref retirement");
+          }),
+        ]);
+        boundary.onRefMutationRequested = undefined;
+        const pending = await placements.listPendingWorkspaceResultsAsync();
+        expect(pending).toHaveLength(1);
+        expect(pending[0]!.workspaceAcceptedAtMs).not.toBeNull();
+        await replaceRecoveryClaim(fixture);
+        release.resolve();
+        await recovering;
 
-          const afterRef = await readRef(priorRef);
-          expect(afterRef.code).toBe(0);
-          expect(afterRef.stdout).toBe(beforeRef.stdout);
-          expect(await loadTranscriptEvents(a)).toEqual(beforeTranscript);
-          expect(await placements.listPendingWorkspaceResultsAsync()).toEqual(pending);
-          expect(placements.get(REQUEST.sessionId)?.turnClaim?.claimId).toBe("replacement-claim");
-          expect(destroy).not.toHaveBeenCalled();
-        } finally {
-          boundary.onRefMutationRequested = undefined;
-          release.resolve();
-          await blocker;
-          await recovering;
-        }
-      },
-    );
+        const afterRef = await readRef(priorRef);
+        expect(afterRef.code).toBe(0);
+        expect(afterRef.stdout).toBe(beforeRef.stdout);
+        expect(await loadTranscriptEvents(a)).toEqual(beforeTranscript);
+        expect(await placements.listPendingWorkspaceResultsAsync()).toEqual(pending);
+        expect(placements.get(REQUEST.sessionId)?.turnClaim?.claimId).toBe("replacement-claim");
+        expect(destroy).not.toHaveBeenCalled();
+      } finally {
+        boundary.onRefMutationRequested = undefined;
+        release.resolve();
+        await blocker;
+        await recovering;
+      }
+    });
   });
 
   it("keeps the result in custody when its captured source disappears instead of reporting into a replacement store", async () => {
     await withRecovery(
-      {},
       async ({ a, b, configB, runtime, placements, onReconcile, base, destroy }) => {
         const beforeB = await loadTranscriptEvents(b);
         const retired = `${a.storePath}.retired`;

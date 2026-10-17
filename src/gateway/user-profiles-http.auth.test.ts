@@ -33,6 +33,16 @@ const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   "base64",
 );
+const SHARED_SECRET = "test-shared-secret";
+const jsonResponse = (value: unknown) => new Response(JSON.stringify(value));
+const inputUrl = (input: string | URL | Request) =>
+  typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+function githubProfile(accountId: number, login: string, email: string) {
+  return syncGitHubIdentity({
+    identity: { accountId, login },
+    authenticationAlias: { kind: "email", email },
+  });
+}
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterAll(async () => {
     await closeStateDatabaseForTest();
@@ -40,9 +50,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   });
 });
 
-// Most cases cross real HTTP, auth, device pairing, profile storage and the UI loader.
-// Provider-backed cases use in-memory HTTP transport and stub external identity responses,
-// while retaining the production authorization handler, profile store and observed byte reader.
+// Stub only external identity I/O; retain real auth, pairing, profiles and the UI byte reader.
 describe("personal avatar HTTP authentication", () => {
   let server: Server;
   let origin: string;
@@ -93,7 +101,7 @@ describe("personal avatar HTTP authentication", () => {
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("personal-avatar-auth-"));
     cfg = {};
-    auth = { mode: "token", token: "test-shared-secret", allowTailscale: false };
+    auth = { mode: "token", token: SHARED_SECRET, allowTailscale: false };
     vi.spyOn(configIo, "getRuntimeConfig").mockImplementation(() => cfg);
     const profile = ensureGatewayOwnerProfile("Avatar test owner");
     expect(setAvatar(profile.id, PNG, "image/png").ok).toBe(true);
@@ -150,22 +158,24 @@ describe("personal avatar HTTP authentication", () => {
     async (source) => {
       const entered = createDeferredCore();
       const release = createDeferredCore();
+      const hold = async () => {
+        entered.resolve();
+        await release.promise;
+      };
       const createReader = profileAvatars.createProfileAvatarReader;
       vi.spyOn(profileAvatars, "createProfileAvatarReader").mockImplementation((id, options) => {
         const reader = createReader(id, options);
         return {
           async inspect() {
             if (source === "inspection") {
-              entered.resolve();
-              await release.promise;
+              await hold();
             }
             const prepared = await reader.inspect();
             return {
               ...prepared,
               avatar: source === "host" || source === "Gravatar" ? undefined : prepared.avatar,
               async loadBytes() {
-                entered.resolve();
-                await release.promise;
+                await hold();
                 return prepared.loadBytes();
               },
             };
@@ -174,30 +184,23 @@ describe("personal avatar HTTP authentication", () => {
       });
       if (source === "host") {
         vi.spyOn(hostAccountAvatar, "resolveHostAccountAvatar").mockImplementation(async () => {
-          entered.resolve();
-          await release.promise;
+          await hold();
           return { bytes: PNG, mime: "image/jpeg", sha256: "synthetic-avatar" };
         });
       } else if (source === "Gravatar") {
         vi.spyOn(hostAccountAvatar, "resolveHostAccountAvatar").mockResolvedValue(null);
-        const profile = syncGitHubIdentity({
-          identity: { accountId: 9871, login: "avatar-authority" },
-          authenticationAlias: { kind: "email", email: "avatar-authority@example.test" },
-        });
+        const profile = githubProfile(9871, "avatar-authority", "avatar-authority@example.test");
         avatarPath = `/api/users/${profile.id}/avatar`;
         const fetch = globalThis.fetch;
         vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-          const url =
-            typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-          if (url.startsWith("https://www.gravatar.com/avatar/")) {
-            entered.resolve();
-            await release.promise;
+          if (inputUrl(input).startsWith("https://www.gravatar.com/avatar/")) {
+            await hold();
             return new Response(PNG, { headers: { "content-type": "image/png" } });
           }
           return fetch(input, init);
         });
       }
-      const pending = request("test-shared-secret");
+      const pending = request(SHARED_SECRET);
       await entered.promise;
       auth = { ...auth, token: "replacement-token" };
       release.resolve();
@@ -213,28 +216,24 @@ describe("personal avatar HTTP authentication", () => {
   it.each(["password", "trusted-proxy"] as const)(
     "loads the saved personal photo with the connected credentials under %s auth",
     async (mode) => {
-      auth =
-        mode === "trusted-proxy"
-          ? {
-              mode,
-              password: "test-shared-secret",
-              trustedProxy: { userHeader: "x-auth-user" },
-              allowTailscale: false,
-            }
-          : { mode, [mode]: "test-shared-secret", allowTailscale: false };
+      auth = {
+        mode,
+        password: SHARED_SECRET,
+        allowTailscale: false,
+        ...(mode === "trusted-proxy" ? { trustedProxy: { userHeader: "x-auth-user" } } : {}),
+      };
       cfg = { gateway: { trustedProxies: ["127.0.0.1"] } };
       const { token } = await pairDevice();
-      expect((await request("test-shared-secret")).status).toBe(200);
+      expect((await request(SHARED_SECRET)).status).toBe(200);
       if (mode === "trusted-proxy") {
-        // A tunnel may use the configured local password; paired HTTP tokens
-        // must not bypass the proxy identity boundary on their own.
+        // Paired tokens alone must not bypass proxy identity, unlike the tunnel's local password.
         expect((await request(token)).status).toBe(401);
       }
       // The live hello credential wins even with saved shared credentials.
       const candidates = resolveControlUiAuthCandidates({
         hello: { auth: { deviceToken: token } },
-        settings: { token: mode === "trusted-proxy" ? "" : "test-shared-secret" },
-        password: "test-shared-secret",
+        settings: { token: mode === "trusted-proxy" ? "" : SHARED_SECRET },
+        password: SHARED_SECRET,
       });
       expect(candidates[0] === token).toBe(true);
       setAvatarGatewayOrigin(origin, candidates);
@@ -271,40 +270,30 @@ describe("personal avatar HTTP authentication", () => {
       },
     };
     const nativeFetch = globalThis.fetch;
-    const metadata = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            id: identity.id,
-            login: identity.id === 510 ? "person" : "person-work",
-          }),
-        ),
+    const metadata = vi.fn(async () =>
+      jsonResponse({
+        id: identity.id,
+        login: identity.id === 510 ? "person" : "person-work",
+      }),
     );
     vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const url = inputUrl(input);
       if (url.startsWith(accessOrigin)) {
-        return Promise.resolve(
-          new Response(JSON.stringify({ ...identity, idp: { type: "github" } })),
-        );
+        return Promise.resolve(jsonResponse({ ...identity, idp: { type: "github" } }));
       }
       if (url.startsWith("https://api.github.com/")) {
         return metadata();
       }
       return nativeFetch(input, init);
     });
-    const primary = syncGitHubIdentity({
-      identity: { accountId: 510, login: "person" },
-      authenticationAlias: { kind: "email", email: "personal@example.test" },
-    });
-    syncGitHubIdentity({
-      identity: { accountId: 511, login: "person-work" },
-      authenticationAlias: { kind: "email", email: "work@example.test" },
-    });
+    const primary = githubProfile(510, "person", "personal@example.test");
+    githubProfile(511, "person-work", "work@example.test");
     linkEmail("work@example.test", primary.id);
     setAvatar(primary.id, PNG, "image/png");
     setUserProfileRole(primary.id, "reader");
     avatarPath = "/api/users/" + primary.id + "/avatar";
     const readAvatar = vi.spyOn(profileAvatars, "createProfileAvatarReader");
+    const assertion = `header.${Buffer.from(JSON.stringify({ iss: accessOrigin })).toString("base64url")}.signature`;
     const send = async (email = identity.email) => {
       const req = new IncomingMessage(new Socket());
       Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1" });
@@ -312,10 +301,7 @@ describe("personal avatar HTTP authentication", () => {
       req.url = avatarPath;
       req.headers = {
         "cf-access-authenticated-user-email": email,
-        "cf-access-jwt-assertion":
-          "header." +
-          Buffer.from(JSON.stringify({ iss: accessOrigin })).toString("base64url") +
-          ".signature",
+        "cf-access-jwt-assertion": assertion,
         "x-forwarded-for": "203.0.113.10",
         "x-openclaw-scopes": "operator.read,operator.admin",
       };
@@ -418,7 +404,7 @@ describe("personal avatar HTTP authentication", () => {
     const { token } = await pairDevice();
     cfg = { gateway: { roles: { definitions: {} } } };
     expect((await request(token)).status).toBe(401);
-    expect((await request("test-shared-secret")).status).toBe(200);
+    expect((await request(SHARED_SECRET)).status).toBe(200);
   });
 
   it("does not spend the shared-secret failure budget on valid paired reads", async () => {
@@ -429,7 +415,7 @@ describe("personal avatar HTTP authentication", () => {
     );
     expect((await request(token)).status).toBe(200);
     expect((await request(token)).status).toBe(200);
-    expect((await request("test-shared-secret")).status).toBe(200);
+    expect((await request(SHARED_SECRET)).status).toBe(200);
     expect((await request("invalid-test-token")).status).toBe(401);
     expect((await request("invalid-test-token")).status).toBe(429);
   });

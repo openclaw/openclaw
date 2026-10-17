@@ -11,6 +11,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION, type ConnectParams } from "../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -59,10 +60,7 @@ export async function startWatchNodeHttpRuntime(
     ...(options?.rateLimiter ? { rateLimiter: options.rateLimiter } : {}),
     ...(options?.now ? { now: options.now } : {}),
   });
-  let resolveConnectHandled: () => void = () => undefined;
-  const connectHandled = new Promise<void>((resolve) => {
-    resolveConnectHandled = resolve;
-  });
+  const connectHandled = createDeferred();
   const requests: Array<Promise<PromiseSettledResult<void>[]>> = [];
   const server = createServer((req, res) => {
     const isConnect = req.url === "/api/nodes/watch/connect";
@@ -94,7 +92,7 @@ export async function startWatchNodeHttpRuntime(
           })
           .finally(() => {
             if (isConnect) {
-              resolveConnectHandled();
+              connectHandled.resolve();
             }
           }),
       ]),
@@ -125,7 +123,7 @@ export async function startWatchNodeHttpRuntime(
     connectedNodes,
     disconnectedNodes,
     runtime,
-    connectHandled,
+    connectHandled: connectHandled.promise,
     baseUrl: `http://127.0.0.1:${address.port}/api/nodes/watch`,
   };
 }
@@ -195,38 +193,39 @@ export async function readJson(response: Response): Promise<Record<string, unkno
   return (await response.json()) as Record<string, unknown>;
 }
 
-export async function connectWatchNode(params: {
-  baseUrl: string;
-  identity: ReturnType<typeof loadOrCreateDeviceIdentity>;
-  client?: Partial<ConnectParams["client"]>;
-  bootstrapToken?: string;
-  deviceToken?: string;
-  commands?: string[];
-  permissions?: ConnectParams["permissions"];
-}): Promise<Response> {
-  const challenge = await readJson(await fetch(`${params.baseUrl}/challenge`));
-  return await fetch(`${params.baseUrl}/connect`, {
+export function postWatchNode(url: string, body?: unknown, token?: unknown, headers = {}) {
+  return fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(
-      makeConnectParams({
-        identity: params.identity,
-        client: params.client,
-        nonce: String(challenge.nonce),
-        signedAt: Number(challenge.ts),
-        bootstrapToken: params.bootstrapToken,
-        deviceToken: params.deviceToken,
-        commands: params.commands,
-        permissions: params.permissions,
-      }),
-    ),
+    headers: {
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+      ...(token === undefined ? {} : { authorization: `Bearer ${String(token)}` }),
+      ...headers,
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
 }
 
-export function startPartialJsonRequest(params: { url: string; authorization: string }): {
-  request: ClientRequest;
-  response: Promise<{ statusCode: number; body: string }>;
-} {
+export async function connectWatchNode({
+  baseUrl,
+  ...params
+}: {
+  baseUrl: string;
+} & Pick<
+  Parameters<typeof makeConnectParams>[0],
+  "identity" | "client" | "bootstrapToken" | "deviceToken" | "commands" | "permissions"
+>): Promise<Response> {
+  const challenge = await readJson(await fetch(`${baseUrl}/challenge`));
+  return postWatchNode(
+    `${baseUrl}/connect`,
+    makeConnectParams({
+      ...params,
+      nonce: String(challenge.nonce),
+      signedAt: Number(challenge.ts),
+    }),
+  );
+}
+
+export function startPartialJsonRequest(params: { url: string; authorization: string }) {
   let request!: ClientRequest;
   const response = new Promise<{ statusCode: number; body: string }>((resolve, reject) => {
     request = httpRequest(
