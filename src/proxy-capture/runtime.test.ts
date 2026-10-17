@@ -97,6 +97,47 @@ async function waitForResponseSettled(): Promise<void> {
   }
 }
 
+function captureHttp(params: Parameters<typeof captureHttpExchange>[0]) {
+  captureHttpExchange(params, settings, deps);
+}
+
+function makeResponse(body = "{}", headers: Record<string, string> = {}) {
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "application/json", ...headers },
+  });
+}
+
+function captureFrame(params: Partial<Parameters<typeof captureWsEvent>[0]>) {
+  captureWsEvent(
+    {
+      url: "wss://chat.example.test/api/v4/websocket",
+      direction: "outbound",
+      kind: "ws-frame",
+      flowId: "mattermost-auth",
+      ...params,
+    },
+    settings,
+    deps,
+  );
+}
+
+async function captureResponse(response: Response) {
+  initializeDebugProxyCapture("test", settings, deps);
+  captureHttp({ url: "https://api.example.test/response", method: "GET", response });
+  await waitForResponseSettled();
+  finalizeDebugProxyCapture(settings, deps);
+  return events.find((event) => event.kind === "response");
+}
+
+async function expectTooLarge(response: Response) {
+  const captured = await captureResponse(response);
+  expect(captured).toMatchObject({ status: 200 });
+  expect(JSON.parse(String(captured?.metaJson))).toMatchObject({ bodyCapture: "too-large" });
+  expect(captured).not.toHaveProperty("dataText");
+  expect(events.some((event) => event.kind === "error")).toBe(false);
+}
+
 describe("debug proxy runtime", () => {
   beforeEach(() => {
     finalizeDebugProxyCapture(settings, deps);
@@ -214,31 +255,21 @@ describe("debug proxy runtime", () => {
     registerSecretValueForRedaction(secret);
     registerSecretValueForRedaction(pathSecret);
     initializeDebugProxyCapture("test", settings, deps);
-    captureHttpExchange(
-      {
-        url: `https://api.example.com/models/${encodeURIComponent(pathSecret)}?key=${encodeURIComponent(secret)}`,
-        method: "GET",
-        requestHeaders: {
-          Authorization: "Bot discord-token",
-          Cookie: "sid=session-token",
-          "x-api-key": "provider-key",
-          "content-type": "application/json",
-          "X-Routing-Target": "staging-private-route",
-          "x-safe": "visible",
-          "X-Managed": `Bearer ${secret}`,
-        },
-        meta: { sensitiveRequestHeaderNames: ["x-routing-target"] },
-        response: new Response("{}", {
-          status: 200,
-          headers: {
-            "content-type": "application/json",
-            "set-cookie": "sid=response-token",
-          },
-        }),
+    captureHttp({
+      url: `https://api.example.com/models/${encodeURIComponent(pathSecret)}?key=${encodeURIComponent(secret)}`,
+      method: "GET",
+      requestHeaders: {
+        Authorization: "Bot discord-token",
+        Cookie: "sid=session-token",
+        "x-api-key": "provider-key",
+        "content-type": "application/json",
+        "X-Routing-Target": "staging-private-route",
+        "x-safe": "visible",
+        "X-Managed": `Bearer ${secret}`,
       },
-      settings,
-      deps,
-    );
+      meta: { sensitiveRequestHeaderNames: ["x-routing-target"] },
+      response: makeResponse("{}", { "set-cookie": "sid=response-token" }),
+    });
     await new Promise((resolve) => {
       setImmediate(resolve);
     });
@@ -266,30 +297,16 @@ describe("debug proxy runtime", () => {
     const secret = 'mattermost-"capture\\secret\nline';
     registerSecretValueForRedaction(secret);
 
-    captureWsEvent(
-      {
-        url: `wss://chat.example.test/api/v4/websocket?token=${encodeURIComponent(secret)}`,
-        direction: "outbound",
-        kind: "ws-frame",
-        flowId: "mattermost-auth",
-        payload: JSON.stringify({ action: "authentication_challenge", data: { token: secret } }),
-        errorText: `failed with ${secret}`,
-        meta: { subsystem: "mattermost-websocket", detail: secret },
-      },
-      settings,
-      deps,
-    );
-    captureWsEvent(
-      {
-        url: "wss://chat.example.test/api/v4/websocket",
-        direction: "inbound",
-        kind: "ws-frame",
-        flowId: "mattermost-auth",
-        payload: Buffer.from(JSON.stringify({ echoedToken: secret })),
-      },
-      settings,
-      deps,
-    );
+    captureFrame({
+      url: `wss://chat.example.test/api/v4/websocket?token=${encodeURIComponent(secret)}`,
+      payload: JSON.stringify({ action: "authentication_challenge", data: { token: secret } }),
+      errorText: `failed with ${secret}`,
+      meta: { subsystem: "mattermost-websocket", detail: secret },
+    });
+    captureFrame({
+      direction: "inbound",
+      payload: Buffer.from(JSON.stringify({ echoedToken: secret })),
+    });
 
     const [outbound, inbound] = events;
     expect(outbound?.path).toBe("/api/v4/websocket?token=%5BREDACTED%5D");
@@ -313,17 +330,7 @@ describe("debug proxy runtime", () => {
       Buffer.from([0xfe]),
     ]);
 
-    captureWsEvent(
-      {
-        url: "wss://chat.example.test/api/v4/websocket",
-        direction: "outbound",
-        kind: "ws-frame",
-        flowId: "binary-auth",
-        payload,
-      },
-      settings,
-      deps,
-    );
+    captureFrame({ flowId: "binary-auth", payload });
 
     expect(events[0]?.dataText).toBe("[REDACTED BINARY PAYLOAD]");
     expect(events[0]?.dataText).not.toContain(secret);
@@ -341,23 +348,18 @@ describe("debug proxy runtime", () => {
       registerSecretValueForRedaction(contentTypeSecret);
       const requestHeaders = { "content-type": `application/json; token=${contentTypeSecret}` };
 
-      captureHttpExchange(
-        {
-          url: "https://api.example.test/v1/messages",
-          method: "POST",
-          requestHeaders: HeadersConstructor
-            ? new HeadersConstructor(requestHeaders)
-            : requestHeaders,
-          requestBody: JSON.stringify({ credential: secret }),
-          response: new Response(JSON.stringify({ echoedCredential: secret }), {
-            status: 200,
-            headers: { "content-type": `application/json; token=${contentTypeSecret}` },
-          }),
-          meta: { credential: secret },
-        },
-        settings,
-        deps,
-      );
+      captureHttp({
+        url: "https://api.example.test/v1/messages",
+        method: "POST",
+        requestHeaders: HeadersConstructor
+          ? new HeadersConstructor(requestHeaders)
+          : requestHeaders,
+        requestBody: JSON.stringify({ credential: secret }),
+        response: makeResponse(JSON.stringify({ echoedCredential: secret }), {
+          "content-type": `application/json; token=${contentTypeSecret}`,
+        }),
+        meta: { credential: secret },
+      });
       await waitForResponseSettled();
 
       const request = events.find((event) => event.kind === "request");
@@ -394,10 +396,7 @@ describe("debug proxy runtime", () => {
     vi.useFakeTimers();
     try {
       initializeDebugProxyCapture("test", settings, deps);
-      // Headers plus one chunk, then the remote stops without EOF. clone() tees
-      // the body, and a tee branch cancels only once both branches cancel or the
-      // source ends — so a capture read with no idle bound holds the caller's
-      // branch open for as long as the remote stays silent.
+      // A stalled tee holds caller cancellation open until capture cancels too.
       const upstream = new Response(
         new ReadableStream<Uint8Array>({
           start(controller) {
@@ -406,14 +405,8 @@ describe("debug proxy runtime", () => {
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
-      // Capture clones internally, exactly as the patched fetch does, so the
-      // caller keeps the branch this response already holds. Cloning here first
-      // would leave a third, unread branch that no one ever cancels.
-      captureHttpExchange(
-        { url: "https://api.example.com/stalls", method: "GET", response: upstream },
-        settings,
-        deps,
-      );
+      // Capture must own the only clone; a third unread branch would never cancel.
+      captureHttp({ url: "https://api.example.com/stalls", method: "GET", response: upstream });
 
       let cancellationSettled = false;
       void upstream.body
@@ -440,125 +433,28 @@ describe("debug proxy runtime", () => {
   });
 
   it("skips capturing the body when Content-Length exceeds the cap", async () => {
-    initializeDebugProxyCapture("test", settings, deps);
-    captureHttpExchange(
-      {
-        url: "https://api.openai.com/v1/files/big",
-        method: "GET",
-        response: new Response("{}", {
-          status: 200,
-          headers: {
-            "content-type": "application/json",
-            "content-length": String(32 * 1024 * 1024),
-          },
-        }),
-      },
-      settings,
-      deps,
-    );
-    await waitForResponseSettled();
-    finalizeDebugProxyCapture(settings, deps);
-
-    const response = events.find((event) => event.kind === "response");
-    expect(response).toBeDefined();
-    expect(response?.status).toBe(200);
-    // Metadata is recorded, but the oversized body is never buffered/persisted.
-    expect(JSON.parse(String(response?.metaJson))).toMatchObject({ bodyCapture: "too-large" });
-    expect(response).not.toHaveProperty("dataText");
-    expect(events.some((event) => event.kind === "error")).toBe(false);
+    await expectTooLarge(makeResponse("{}", { "content-length": String(32 * ONE_MIB) }));
   });
 
   it("skips capturing decimal Content-Length values above the safe integer range", async () => {
-    initializeDebugProxyCapture("test", settings, deps);
-    captureHttpExchange(
-      {
-        url: "https://api.openai.com/v1/files/huge",
-        method: "GET",
-        response: new Response("{}", {
-          status: 200,
-          headers: {
-            "content-type": "application/json",
-            "content-length": "9007199254740993",
-          },
-        }),
-      },
-      settings,
-      deps,
-    );
-    await waitForResponseSettled();
-    finalizeDebugProxyCapture(settings, deps);
-
-    const response = events.find((event) => event.kind === "response");
-    expect(JSON.parse(String(response?.metaJson))).toMatchObject({ bodyCapture: "too-large" });
-    expect(response).not.toHaveProperty("dataText");
-    expect(events.some((event) => event.kind === "error")).toBe(false);
-  });
-
-  it("streams non-decimal Content-Length values through the body cap", async () => {
-    initializeDebugProxyCapture("test", settings, deps);
-    captureHttpExchange(
-      {
-        url: "https://api.openai.com/v1/files/small",
-        method: "GET",
-        response: new Response("captured", {
-          status: 200,
-          headers: {
-            "content-type": "text/plain",
-            "content-length": "1e9",
-          },
-        }),
-      },
-      settings,
-      deps,
-    );
-    await waitForResponseSettled();
-    finalizeDebugProxyCapture(settings, deps);
-
-    const response = events.find((event) => event.kind === "response");
-    expect(response).toBeDefined();
-    expect(response?.dataText).toBe("captured");
-    expect(response?.metaJson).toBeUndefined();
-    expect(events.some((event) => event.kind === "error")).toBe(false);
+    await expectTooLarge(makeResponse("{}", { "content-length": "9007199254740993" }));
   });
 
   it("fails closed on chunked responses that stream past the cap", async () => {
-    initializeDebugProxyCapture("test", settings, deps);
-    // 20 MiB streamed without a Content-Length header: the bounded reader must
-    // cancel the clone at the cap and record metadata instead of buffering it.
-    captureHttpExchange(
-      {
-        url: "https://api.anthropic.com/v1/messages",
-        method: "POST",
-        response: makeStreamingResponse(20 * ONE_MIB),
-      },
-      settings,
-      deps,
-    );
-    await waitForResponseSettled();
-    finalizeDebugProxyCapture(settings, deps);
+    await expectTooLarge(makeStreamingResponse(20 * ONE_MIB));
+  });
 
-    const response = events.find((event) => event.kind === "response");
-    expect(response).toBeDefined();
-    expect(JSON.parse(String(response?.metaJson))).toMatchObject({ bodyCapture: "too-large" });
-    expect(response).not.toHaveProperty("dataText");
+  it("streams non-decimal Content-Length values through the body cap", async () => {
+    const captured = await captureResponse(
+      makeResponse("captured", { "content-type": "text/plain", "content-length": "1e9" }),
+    );
+    expect(captured).toMatchObject({ dataText: "captured" });
+    expect(captured?.metaJson).toBeUndefined();
     expect(events.some((event) => event.kind === "error")).toBe(false);
   });
 
   it("records Response-like status metadata when the Headers API is absent", async () => {
-    initializeDebugProxyCapture("test", settings, deps);
-    captureHttpExchange(
-      {
-        url: "https://api.openai.com/v1/no-headers-api",
-        method: "GET",
-        response: { status: 204 } as unknown as Response,
-      },
-      settings,
-      deps,
-    );
-    await waitForResponseSettled();
-    finalizeDebugProxyCapture(settings, deps);
-
-    const response = events.find((event) => event.kind === "response");
+    const response = await captureResponse({ status: 204 } as unknown as Response);
     expect(response?.status).toBe(204);
     expect(response?.contentType).toBeUndefined();
     expect(JSON.parse(String(response?.metaJson))).toMatchObject({ bodyCapture: "unavailable" });

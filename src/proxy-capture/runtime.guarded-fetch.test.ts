@@ -1,4 +1,5 @@
 import type { ServerResponse } from "node:http";
+import { text } from "node:stream/consumers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -24,8 +25,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function captureRoots() {
   const roots = [tempDirs.make("capture-guard-a-"), tempDirs.make("capture-guard-b-")];
-  const originalFetch = globalThis.fetch;
-  vi.stubGlobal("fetch", originalFetch);
+  vi.stubGlobal("fetch", globalThis.fetch);
   vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
   vi.stubEnv("OPENCLAW_DEBUG_PROXY_SESSION_ID", undefined);
   vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", undefined);
@@ -42,9 +42,7 @@ async function captureRoots() {
   const leases = [firstLease, secondLease];
   let closing: Promise<void> | undefined;
   return {
-    roots,
     settings,
-    leases,
     savedWrapper,
     readEvents: () =>
       Promise.all(
@@ -74,20 +72,16 @@ describe("guarded capture ownership", () => {
     const fixture = await captureRoots();
     try {
       await withServer(
-        (request, response) => {
-          const chunks: Buffer[] = [];
-          request.on("data", (chunk: Buffer) => chunks.push(chunk));
-          request.on("end", () => {
-            response.setHeader("content-type", "application/json");
-            response.end(
-              JSON.stringify({
-                method: request.method,
-                originalHeader: request.headers["x-original"],
-                overrideHeader: request.headers["x-override"],
-                body: Buffer.concat(chunks).toString(),
-              }),
-            );
-          });
+        async (request, response) => {
+          response.setHeader("content-type", "application/json");
+          response.end(
+            JSON.stringify({
+              method: request.method,
+              originalHeader: request.headers["x-original"],
+              overrideHeader: request.headers["x-override"],
+              body: await text(request),
+            }),
+          );
         },
         async (baseUrl) => {
           const request = new Request(`${baseUrl}/overrides`, {
@@ -165,11 +159,9 @@ describe("guarded capture ownership", () => {
         method: "GET",
         path: "/rejection",
         errorText: "caller abort [REDACTED]",
+        status: null,
       });
-      expect(event.status).toBeNull();
-      expect(JSON.parse(String(event.metaJson))).toMatchObject({
-        captureOrigin: "global-fetch",
-      });
+      expect(JSON.parse(String(event.metaJson))).toMatchObject({ captureOrigin: "global-fetch" });
     } finally {
       controller.abort();
       await fixture.close();

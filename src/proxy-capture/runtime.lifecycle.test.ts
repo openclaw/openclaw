@@ -139,6 +139,32 @@ function pendingResponse(chunks: Buffer[]) {
   return { response, controller: controller!, ...observePendingCapture(response, chunks.length) };
 }
 
+function storeFixture() {
+  const root = stateRoot();
+  const settings = captureSettings(root);
+  const store = new DebugProxyCaptureStore({ env: { OPENCLAW_STATE_DIR: root } });
+  const getStore = vi.fn(() => store);
+  return { settings, store, getStore, deps: { getStore } };
+}
+
+function captureResponse(
+  response: Response,
+  settings: DebugProxySettings,
+  deps: DebugProxyCaptureRuntimeDeps,
+  params: Partial<Parameters<typeof captureHttpExchange>[0]> = {},
+) {
+  captureHttpExchange(
+    { url: "https://example.test/pending", method: "GET", ...params, response },
+    settings,
+    deps,
+  );
+}
+
+function closeStore(store: DebugProxyCaptureStore) {
+  store.close();
+  closeOpenClawStateDatabaseByPath(store.dbPath);
+}
+
 describe("capture store lifecycle", () => {
   it.each([
     { storage: "shared", close: "direct" },
@@ -183,11 +209,7 @@ describe("capture store lifecycle", () => {
         sourceScope: "openclaw",
         sourceProcess: "fixture",
       });
-      captureHttpExchange(
-        { url: "https://example.test/pending", method: "GET", response: stream.response },
-        settings,
-        deps,
-      );
+      captureResponse(stream.response, settings, deps);
       await stream.pending;
       lease.release();
       expect(store.isClosed).toBe(false);
@@ -232,18 +254,14 @@ describe("capture store lifecycle", () => {
       recording.mockRestore();
       lease.release();
       sibling.release();
-      store.close();
-      closeOpenClawStateDatabaseByPath(store.dbPath);
+      closeStore(store);
     }
   });
 
   it.each(["error", "finalize"] as const)(
     "records one terminal through a pending-read %s race",
     async (mode) => {
-      const root = stateRoot();
-      const settings = captureSettings(root);
-      const store = new DebugProxyCaptureStore({ env: { OPENCLAW_STATE_DIR: root } });
-      const deps: DebugProxyCaptureRuntimeDeps = { getStore: () => store };
+      const { settings, store, deps } = storeFixture();
       const stream = pendingResponse([Buffer.from("prefix")]);
       const terminals: CaptureEventRecord[] = [];
       const done = createDeferredCore();
@@ -258,11 +276,7 @@ describe("capture store lifecycle", () => {
       registerSecretValueForRedaction("fixture-error-secret");
       const reason = new Error("fixture read failure: fixture-error-secret");
       try {
-        captureHttpExchange(
-          { url: "https://example.test/race", method: "GET", response: stream.response },
-          settings,
-          deps,
-        );
+        captureResponse(stream.response, settings, deps);
         await stream.pending;
         if (mode === "error") {
           stream.controller.error(reason);
@@ -289,8 +303,7 @@ describe("capture store lifecycle", () => {
         expect(terminals).toHaveLength(1);
       } finally {
         await stream.response.body?.cancel().catch(() => undefined);
-        store.close();
-        closeOpenClawStateDatabaseByPath(store.dbPath);
+        closeStore(store);
       }
     },
   );
@@ -298,11 +311,7 @@ describe("capture store lifecycle", () => {
   it.each(["event", "retired"] as const)(
     "settles sibling reads and closes after %s persistence fails",
     async (surface) => {
-      const root = stateRoot();
-      const settings = captureSettings(root);
-      const store = new DebugProxyCaptureStore({ env: { OPENCLAW_STATE_DIR: root } });
-      const getStore = vi.fn(() => store);
-      const deps: DebugProxyCaptureRuntimeDeps = { getStore };
+      const { settings, store, getStore, deps } = storeFixture();
       const streams = [
         pendingResponse([Buffer.from("one")]),
         pendingResponse([Buffer.from("two")]),
@@ -321,16 +330,7 @@ describe("capture store lifecycle", () => {
       });
       try {
         for (const [index, stream] of streams.entries()) {
-          captureHttpExchange(
-            {
-              url: "https://example.test/sibling",
-              method: "GET",
-              response: stream.response,
-              flowId: index === 0 ? "one" : "two",
-            },
-            settings,
-            deps,
-          );
+          captureResponse(stream.response, settings, deps, { flowId: index === 0 ? "one" : "two" });
         }
         await Promise.all(streams.map((stream) => stream.pending));
         if (surface === "retired") {
@@ -361,8 +361,7 @@ describe("capture store lifecycle", () => {
           await stream.response.body?.cancel();
           await stream.settled;
         }
-        store.close();
-        closeOpenClawStateDatabaseByPath(store.dbPath);
+        closeStore(store);
       }
     },
   );
@@ -464,8 +463,7 @@ describe("capture store lifecycle", () => {
         expect(events).toHaveLength(3);
         expect(events[0]).toMatchObject({ kind: "response", dataText: "prefix-two" });
       } finally {
-        reopened.close();
-        closeOpenClawStateDatabaseByPath(reopened.dbPath);
+        closeStore(reopened);
       }
     },
   );
@@ -490,17 +488,11 @@ describe("capture admission generation", () => {
     try {
       for (const [index, value] of settings.entries()) {
         selected = stores[index]!;
-        captureHttpExchange(
-          {
-            url: "https://example.test/identity",
-            method: "POST",
-            flowId: `database-${index}`,
-            requestBody: `request-${index}`,
-            response: streams[index]!.response,
-          },
-          value,
-          deps,
-        );
+        captureResponse(streams[index]!.response, value, deps, {
+          method: "POST",
+          flowId: `database-${index}`,
+          requestBody: `request-${index}`,
+        });
       }
       await Promise.all(streams.map((stream) => stream.pending));
       expect(
@@ -537,15 +529,7 @@ describe("capture admission generation", () => {
           dataText: `database-${index}`,
         });
         const recorded = recordings[index]!.mock.calls.length;
-        captureHttpExchange(
-          {
-            url: "https://example.test/delayed",
-            method: "GET",
-            response: new Response("late"),
-          },
-          settings[index],
-          deps,
-        );
+        captureResponse(new Response("late"), settings[index]!, deps);
         expect(recordings[index]).toHaveBeenCalledTimes(recorded);
         if (index === first) {
           expect(stores[second]!.isClosed).toBe(false);
@@ -562,8 +546,7 @@ describe("capture admission generation", () => {
         stream.controller.close();
         await stream.response.body?.cancel();
         await stream.settled;
-        stores[index]!.close();
-        closeOpenClawStateDatabaseByPath(stores[index]!.dbPath);
+        closeStore(stores[index]!);
       }
     }
   });

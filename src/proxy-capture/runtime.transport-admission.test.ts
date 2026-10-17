@@ -56,6 +56,37 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+function stubWorker(ready?: Promise<void>, acquired?: () => void) {
+  const committed = vi.fn<OpenClawStateWorkerLease["execute"]>().mockResolvedValue(undefined);
+  createWorkerLease.mockImplementation((_context, finalize) => {
+    const scope: Pick<OpenClawStateWorkerLease, "execute"> = {
+      execute: ready
+        ? (command, options) => ready.then(() => committed(command, options))
+        : committed,
+    };
+    let closing: Promise<void> | undefined;
+    acquired?.();
+    return {
+      ready: ready ?? Promise.resolve(),
+      execute: scope.execute,
+      runOperation: async (operation) => await operation(scope),
+      release: () => (closing ??= (ready ?? Promise.resolve()).then(() => finalize?.(scope))),
+      retire: async () => {},
+    };
+  });
+  return committed;
+}
+
+async function expectDiagnostic(finalize: () => void | Promise<void>, failure: Error) {
+  let diagnostic: unknown;
+  try {
+    await finalize();
+  } catch (error) {
+    diagnostic = error;
+  }
+  expect(collectNestedErrorCandidates(diagnostic)).toContain(failure);
+}
+
 it.each([
   { phase: "selection", outcome: "success" },
   { phase: "continuation", outcome: "failure" },
@@ -102,13 +133,7 @@ it.each([
       expect(transport).toHaveBeenCalledTimes(1);
       expect(own).toHaveBeenCalledTimes(phase === "selection" ? 0 : 1);
       expect(store.recordEvent).not.toHaveBeenCalled();
-      let diagnostic: unknown;
-      try {
-        finalizeDebugProxyCapture(settings, deps);
-      } catch (error) {
-        diagnostic = error;
-      }
-      expect(collectNestedErrorCandidates(diagnostic)).toContain(admissionFailure);
+      await expectDiagnostic(() => finalizeDebugProxyCapture(settings, deps), admissionFailure);
       expect(store.endSession).toHaveBeenCalledOnce();
     } finally {
       const scope = control.scope;
@@ -167,18 +192,7 @@ it.each(["fresh", "cached-worker", "saved-fetch"] as const)(
     stubGuardedCaptureEnv(`deferred-${mode}`);
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_REQUIRE", "1");
     const settings = resolveDebugProxySettings();
-    const committed = vi.fn<OpenClawStateWorkerLease["execute"]>().mockResolvedValue(undefined);
-    createWorkerLease.mockImplementation((_context, finalize) => {
-      const scope = { execute: committed };
-      let closing: Promise<void> | undefined;
-      return {
-        ready: Promise.resolve(),
-        execute: committed,
-        runOperation: async (operation) => await operation(scope),
-        release: () => (closing ??= Promise.resolve().then(() => finalize?.(scope))),
-        retire: async () => {},
-      };
-    });
+    const committed = stubWorker();
     const store = { upsertSession: vi.fn(), endSession: vi.fn(), recordEvent: vi.fn() };
     const transport = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
     const target: typeof globalThis = { ...globalThis, fetch: transport };
@@ -215,18 +229,9 @@ it.each(["fresh", "cached-worker", "saved-fetch"] as const)(
         }
       };
     }
-    const clearWrites = () => {
-      committed.mockClear();
-      createWorkerLease.mockClear();
-      store.upsertSession.mockClear();
-      store.recordEvent.mockClear();
-    };
-    const expectNoWrites = () => {
-      expect(committed).not.toHaveBeenCalled();
-      expect(createWorkerLease).not.toHaveBeenCalled();
-      expect(store.upsertSession).not.toHaveBeenCalled();
-      expect(store.recordEvent).not.toHaveBeenCalled();
-    };
+    const writes = [committed, createWorkerLease, store.upsertSession, store.recordEvent];
+    const clearWrites = () => writes.forEach((write) => write.mockClear());
+    const expectNoWrites = () => writes.forEach((write) => expect(write).not.toHaveBeenCalled());
     const expectWrites = () => {
       expect(committed.mock.calls.length + store.recordEvent.mock.calls.length).toBeGreaterThan(0);
     };
@@ -339,13 +344,7 @@ it.each([
       }
       expect(transport).toHaveBeenCalledTimes(1);
       expect(createWorkerLease).toHaveBeenCalledTimes(1);
-      let diagnostic: unknown;
-      try {
-        await finalizeDebugProxyCaptureAsync(settings);
-      } catch (error) {
-        diagnostic = error;
-      }
-      expect(collectNestedErrorCandidates(diagnostic)).toContain(preparationFailure);
+      await expectDiagnostic(() => finalizeDebugProxyCaptureAsync(settings), preparationFailure);
     } finally {
       // The controlled capture diagnostic must not mask a failed transport assertion.
       await finalizeDebugProxyCaptureAsync(settings).catch(() => undefined);
@@ -360,25 +359,7 @@ it.each(["success", "failure"] as const)(
     const settings = resolveDebugProxySettings();
     const ready = createDeferredCore();
     const acquired = createDeferredCore();
-    const committed = vi.fn<OpenClawStateWorkerLease["execute"]>().mockResolvedValue(undefined);
-    createWorkerLease.mockImplementation((_context, finalize) => {
-      const scope: Pick<OpenClawStateWorkerLease, "execute"> = {
-        execute: (command, options) => ready.promise.then(() => committed(command, options)),
-      };
-      let closing: Promise<void> | undefined;
-      const lease: OpenClawStateWorkerLease = {
-        ready: ready.promise,
-        execute: scope.execute,
-        runOperation: async (operation) => await operation(scope),
-        release: () =>
-          (closing ??= ready.promise.then(async () => {
-            await finalize?.(scope);
-          })),
-        retire: async () => {},
-      };
-      acquired.resolve();
-      return lease;
-    });
+    const committed = stubWorker(ready.promise, acquired.resolve);
     const transportFailure = new Error("synthetic cold-readiness transport rejection");
     const response = new Response(null, { status: 204 });
     const transport = vi.fn<typeof fetch>(async () => {
@@ -387,10 +368,7 @@ it.each(["success", "failure"] as const)(
       }
       return response;
     });
-    let completed:
-      | { kind: "success"; value: GuardedFetchResult }
-      | { kind: "failure"; error: unknown }
-      | undefined;
+    let completed: { value?: GuardedFetchResult; error?: unknown } | undefined;
     const operation = fetchWithSsrFGuard({
       url: "https://synthetic.invalid/cold-capture",
       fetchImpl: transport,
@@ -398,10 +376,10 @@ it.each(["success", "failure"] as const)(
       capture: { flowId: "cold-flow" },
     }).then(
       (value) => {
-        completed = { kind: "success", value };
+        completed = { value };
       },
       (error: unknown) => {
-        completed = { kind: "failure", error };
+        completed = { error };
       },
     );
     try {
@@ -410,49 +388,31 @@ it.each(["success", "failure"] as const)(
       await nextEventLoopTurn();
       expect(transport).toHaveBeenCalledTimes(1);
       expect(completed).toBeDefined();
-      if (!completed) {
-        throw new Error("Transport did not settle before worker readiness");
-      }
       if (outcome === "success") {
-        expect(completed.kind).toBe("success");
-        if (completed.kind !== "success") {
-          throw completed.error;
-        }
-        expect(completed.value.response).toBe(response);
-        expect(completed.value.response.status).toBe(204);
+        expect(completed?.error).toBeUndefined();
+        expect(completed?.value?.response).toBe(response);
+        expect(completed?.value?.response.status).toBe(204);
       } else {
-        expect(completed.kind).toBe("failure");
-        if (completed.kind !== "failure") {
-          throw new Error("Expected transport rejection");
-        }
-        expect(completed.error).toBe(transportFailure);
+        expect(completed).toEqual({ error: transportFailure });
       }
       expect(committed).not.toHaveBeenCalled();
       ready.resolve();
       await operation;
       await finalizeDebugProxyCaptureAsync(settings);
       const commands = committed.mock.calls.map(([command]) => command);
+      const payloadCommand = (event: Record<string, unknown>, data: Buffer) =>
+        expect.objectContaining({
+          type: "capture.recordEventWithPayload",
+          input: expect.objectContaining({
+            event: expect.objectContaining({ ...event, flowId: "cold-flow" }),
+            payload: expect.objectContaining({ data }),
+          }),
+        });
       expect(commands).toEqual([
         ...(outcome === "success"
           ? [
-              expect.objectContaining({
-                type: "capture.recordEventWithPayload",
-                input: expect.objectContaining({
-                  event: expect.objectContaining({ kind: "request", flowId: "cold-flow" }),
-                  payload: expect.objectContaining({ data: Buffer.from("cold request") }),
-                }),
-              }),
-              expect.objectContaining({
-                type: "capture.recordEventWithPayload",
-                input: expect.objectContaining({
-                  event: expect.objectContaining({
-                    kind: "response",
-                    flowId: "cold-flow",
-                    status: 204,
-                  }),
-                  payload: expect.objectContaining({ data: Buffer.alloc(0) }),
-                }),
-              }),
+              payloadCommand({ kind: "request" }, Buffer.from("cold request")),
+              payloadCommand({ kind: "response", status: 204 }, Buffer.alloc(0)),
             ]
           : [
               expect.objectContaining({
@@ -473,9 +433,7 @@ it.each(["success", "failure"] as const)(
       ready.resolve();
       await operation;
       try {
-        if (completed?.kind === "success") {
-          await completed.value.release();
-        }
+        await completed?.value?.release();
       } finally {
         await finalizeDebugProxyCaptureAsync(settings);
       }
