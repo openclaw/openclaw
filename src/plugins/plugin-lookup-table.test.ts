@@ -13,6 +13,7 @@ const { channels, disabledChannels, readManifests } = vi.hoisted(() => {
   return { channels: vi.fn(), disabledChannels: vi.fn(), readManifests: vi.fn() };
 });
 
+// mock-isolation: Synthetic presence signals keep lookup tests independent of channel runtimes.
 vi.mock("../channels/config-presence.js", () => ({
   hasMeaningfulChannelConfig: (value: unknown) =>
     Boolean(
