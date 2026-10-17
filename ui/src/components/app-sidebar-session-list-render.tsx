@@ -338,4 +338,3 @@ export function renderSessionListFrame(host: SidebarSessionListHost, body: JSX.E
   );
 }
 const SessionCatalog = renderSessionCatalog;
-export { SessionSection as renderSessionSection };

@@ -23,6 +23,8 @@ const repositoryScriptEntries = [
   "scripts/lib/plugin-npm-build-and-pack.mts!",
   // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.
   "scripts/generate-postgres-schema.mts!",
+  // ui:validators:gen/check compile canonical payload schemas into browser runtime guards.
+  "scripts/generate-control-ui-validators.mts!",
   // Immutable activation and release deployment launch this packaged entry by path.
   "gateway-prewarm.mjs!",
   "apps/linux/scripts/test-runtime-boundary.mjs!",

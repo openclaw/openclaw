@@ -178,13 +178,6 @@ export function preparePluginRunContextCleanup(): <T>(run: () => T) => T {
   return (run) => run();
 }
 
-export function withPluginRunContextCleanup<T>(
-  params: PluginRunContextSelection,
-  run: (clear: () => void) => T,
-): T {
-  return run(() => clearPluginRunContext(params));
-}
-
 export function clearPluginRunContext(params: PluginRunContextSelection): void {
   // Empty namespaces select all entries; set/get cannot address an empty key.
   const namespaceFilter = normalizePluginHostHookId(params.namespace) || undefined;

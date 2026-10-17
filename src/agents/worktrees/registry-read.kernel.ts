@@ -255,7 +255,7 @@ function getRegistryWorktreeProvisionedStateInDatabase(
     : undefined;
 }
 
-export function getRegistryWorktreeProvisionedChunkInDatabase(
+function getRegistryWorktreeProvisionedChunkInDatabase(
   db: EngineConnection,
   params: { worktreeId: string; path: string; chunkIndex: number },
 ): Uint8Array | undefined {

@@ -10,15 +10,19 @@ import {
 
 const loaders = {
   worktrees: async () => {
-    const [registry, templates, pending] = await Promise.all([
+    const [
+      { worktreeReadOperations },
+      { worktreeTemplateReadOperations },
+      { pendingWorktreeReadOperations },
+    ] = await Promise.all([
       import("../agents/worktrees/registry-read.kernel.js"),
       import("../agents/worktrees/template-registry.worker.js"),
       import("../agents/worktrees/pending-slots.worker.js"),
     ]);
     return {
-      ...registry.worktreeReadOperations,
-      ...templates.worktreeTemplateReadOperations,
-      ...pending.pendingWorktreeReadOperations,
+      ...worktreeReadOperations,
+      ...worktreeTemplateReadOperations,
+      ...pendingWorktreeReadOperations,
     };
   },
   agentProvenance: () =>
