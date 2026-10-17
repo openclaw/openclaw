@@ -74,6 +74,15 @@ function prompter(): WizardPrompter {
   return createWizardPrompter({ confirm: vi.fn(async () => true) }, { defaultSelect: "claude" });
 }
 
+function memoryPath(root: string) {
+  return path.join(root, "workspace", "MEMORY.md");
+}
+
+async function expectUnpromoted(root: string, currentConfig: { value: Record<string, unknown> }) {
+  await expect(fs.access(memoryPath(root))).rejects.toThrow();
+  expect(currentConfig.value).toEqual({});
+}
+
 function provider(params: {
   source: string;
   mutateDuringApply?: (ctx: MigrationProviderContext) => Promise<void>;
@@ -288,7 +297,6 @@ describe("transactional setup migration import", () => {
       expect(params.navigation).toMatchObject({ canGoBack: true });
       throw new WizardNavigationError("back");
     }) as WizardPrompter["select"];
-
     await expect(
       runImport({
         root,
@@ -297,19 +305,16 @@ describe("transactional setup migration import", () => {
         interactivePrompter: { ...prompter(), select },
       }),
     ).resolves.toEqual({ kind: "back" });
-    expect(currentConfig.value).toEqual({});
-    await expect(fs.access(path.join(root, "workspace", "MEMORY.md"))).rejects.toThrow();
+    await expectUnpromoted(root, currentConfig);
   });
 
   it("rejects deferred activation from providers without a retry-safe contract", async () => {
     const { root, source, currentConfig } = await createImportFixture();
     mocks.provider = provider({ source, deferred: true, retrySafeDeferred: false });
-
     await expect(runImport({ root, source, currentConfig })).rejects.toThrow(
       "does not declare retry-safe deferred apply",
     );
-    await expect(fs.access(path.join(root, "workspace", "MEMORY.md"))).rejects.toThrow();
-    expect(currentConfig.value).toEqual({});
+    await expectUnpromoted(root, currentConfig);
   });
 
   it.each([true, false])(
@@ -341,28 +346,25 @@ describe("transactional setup migration import", () => {
         },
       });
       const currentConfig = { value: {} };
-      const liveMemory = path.join(root, "workspace", "MEMORY.md");
+      const liveMemory = memoryPath(root);
       const liveDatabase = path.join(
         root,
-        "openclaw-state",
-        "agents",
-        "main",
-        "agent",
-        "openclaw-agent.sqlite",
+        "openclaw-state/agents/main/agent/openclaw-agent.sqlite",
       );
       let admitted = false;
       mocks.runEmbedded.mockImplementation(async (params) => {
-        expect(currentConfig.value).toEqual({});
-        await expect(fs.access(liveMemory)).rejects.toThrow();
+        await expectUnpromoted(root, currentConfig);
         await expect(fs.access(liveDatabase)).rejects.toThrow();
-        expect(params.agentId).toBe("main");
-        expect(params.provider).toBe("openai");
-        expect(params.model).toBe("gpt-5.6-sol");
+        expect(params).toMatchObject({
+          agentId: "main",
+          provider: "openai",
+          model: "gpt-5.6-sol",
+          sessionKey: expect.stringMatching(/^agent:main:setup-inference:/),
+          agentDir: expect.stringMatching(/\.openclaw-migration-state-[^/]+\/agents\/main\/agent$/),
+          authProfileStateMode: "read-only",
+          preparedModelRuntimeMode: "isolated-read-only",
+        });
         expect(params.agentHarnessRuntimeOverride).toBeUndefined();
-        expect(params.sessionKey).toMatch(/^agent:main:setup-inference:/);
-        expect(params.agentDir).toMatch(/\.openclaw-migration-state-[^/]+\/agents\/main\/agent$/);
-        expect(params.authProfileStateMode).toBe("read-only");
-        expect(params.preparedModelRuntimeMode).toBe("isolated-read-only");
         expect(resolveRunWorkspaceDir(params).agentId).toBe("main");
         expect(
           loadPersistedAuthProfileStoreAtDatabasePath(
@@ -396,7 +398,6 @@ describe("transactional setup migration import", () => {
           return result;
         },
       );
-
       const imported = runImport({ root, source, currentConfig });
       if (providerSucceeds) {
         await expect(imported).resolves.toEqual({
@@ -413,9 +414,8 @@ describe("transactional setup migration import", () => {
         ).toEqual(credential);
       } else {
         await expect(imported).rejects.toThrow("Imported inference was not verified.");
-        await expect(fs.access(liveMemory)).rejects.toThrow();
+        await expectUnpromoted(root, currentConfig);
         await expect(fs.access(liveDatabase)).rejects.toThrow();
-        expect(currentConfig.value).toEqual({});
       }
       expect(mocks.runEmbedded).toHaveBeenCalledOnce();
       expect(await fs.readFile(source, "utf8")).toBe("remember this\n");
@@ -433,12 +433,10 @@ describe("transactional setup migration import", () => {
         await fs.appendFile(source, "after\n", "utf8");
       },
     });
-
     await expect(runImport({ root, source, currentConfig })).rejects.toThrow(
       "Migration source changed before promotion",
     );
-    await expect(fs.access(path.join(root, "workspace", "MEMORY.md"))).rejects.toThrow();
-    expect(currentConfig.value).toEqual({});
+    await expectUnpromoted(root, currentConfig);
   });
 
   it("promotes while the live runtime state database changes during staged apply", async () => {
@@ -456,14 +454,10 @@ describe("transactional setup migration import", () => {
         });
       },
     });
-
     await expect(runImport({ root, source, currentConfig })).resolves.toEqual({
       kind: "no-imported-inference",
     });
-
-    expect(await fs.readFile(path.join(root, "workspace", "MEMORY.md"), "utf8")).toBe(
-      "remember this\n",
-    );
+    expect(await fs.readFile(memoryPath(root), "utf8")).toBe("remember this\n");
     expect(JSON.stringify(currentConfig.value)).not.toContain(".openclaw-migration-");
     expect(mocks.verify).not.toHaveBeenCalled();
     expect(listOpenClawRegisteredAgentDatabases({ env: liveEnv })).toEqual(
@@ -484,11 +478,10 @@ describe("transactional setup migration import", () => {
         await fs.writeFile(externalFile, "concurrent write\n", "utf8");
       },
     });
-
     await expect(runImport({ root, source, currentConfig })).rejects.toThrow(
       "Migration target changed before promotion",
     );
-    await expect(fs.access(path.join(root, "workspace", "MEMORY.md"))).rejects.toThrow();
+    await expect(fs.access(memoryPath(root))).rejects.toThrow();
     expect(await fs.readFile(externalFile, "utf8")).toBe("concurrent write\n");
   });
 
@@ -508,16 +501,14 @@ describe("transactional setup migration import", () => {
         return "migrated";
       },
     });
-
     await runImport({ root, source, currentConfig });
-
     expect(mocks.canonicalMutateConfigFile).toHaveBeenCalledOnce();
     expect(currentConfig.value).toMatchObject({ gateway: { port: 23456 } });
   });
 
   it("retries only deferred items that did not already activate", async () => {
     const { root, source, currentConfig } = await createImportFixture();
-    const liveMemory = path.join(root, "workspace", "MEMORY.md");
+    const liveMemory = memoryPath(root);
     const activationCalls: string[] = [];
     const initialProvider = provider({
       source,
@@ -531,7 +522,6 @@ describe("transactional setup migration import", () => {
     });
     const plan = vi.fn(initialProvider.plan);
     mocks.provider = { ...initialProvider, plan };
-
     await expect(runImport({ root, source, currentConfig })).resolves.toEqual({
       kind: "no-imported-inference",
     });
@@ -556,7 +546,6 @@ describe("transactional setup migration import", () => {
     await expect(runImport({ root, source, currentConfig })).resolves.toEqual({
       kind: "no-imported-inference",
     });
-
     expect(plan).toHaveBeenCalledOnce();
     expect(activationCalls).toEqual(["plugin:calendar", "plugin:drive", "plugin:drive"]);
     expect(await fs.readFile(liveMemory, "utf8")).toBe("remember this\n");
