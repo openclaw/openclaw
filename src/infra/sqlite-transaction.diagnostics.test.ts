@@ -1,8 +1,13 @@
-import path from "node:path";
 import { isMainThread, threadId } from "node:worker_threads";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTestDir } from "../test-helpers/temp-dir.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  expectSettledEntries,
+  readEntryIds as readEntries,
+  sqliteDiagnosticClock,
+  sqliteMaintenanceFixture,
+  spySqliteExec,
+  thrownBy,
+} from "./sqlite-maintenance-fixture.test-support.js";
 import { withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 import {
   runSqliteDeferredTransactionSync,
@@ -16,29 +21,11 @@ import {
   withSqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
 
-const openDatabases: Array<import("node:sqlite").DatabaseSync> = [];
+const resources = sqliteMaintenanceFixture();
+const createDatabase = resources.entries;
 
-function createDatabase(): import("node:sqlite").DatabaseSync {
-  const { DatabaseSync } = requireNodeSqlite();
-  const db = new DatabaseSync(":memory:");
-  db.exec("CREATE TABLE entries (id TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)");
-  openDatabases.push(db);
-  return db;
-}
-
-function readEntries(db: import("node:sqlite").DatabaseSync) {
-  return db
-    .prepare("SELECT id FROM entries ORDER BY id")
-    .all()
-    .map((row) => row.id);
-}
-
-function diagnosticClock() {
-  let now = 0;
-  vi.spyOn(Date, "now").mockImplementation(() => now);
-  return (elapsedMs: number) => {
-    now += elapsedMs;
-  };
+function fixture() {
+  return { db: createDatabase(), logger: { warn: vi.fn() }, advance: sqliteDiagnosticClock() };
 }
 
 function expectWarning(
@@ -54,69 +41,53 @@ function expectWarning(
 
 const thread = { isMainThread, pid: process.pid, threadId };
 
-afterEach(() => {
-  for (const db of openDatabases.splice(0)) {
-    if (db.isOpen) {
-      db.close();
-    }
-  }
-  vi.restoreAllMocks();
-});
-
 describe("SQLite transaction diagnostics", () => {
   it.each(["callback", "commit"])("attributes a metadata relay wait during %s", (stage) => {
-    const db = createDatabase();
-    const logger = { warn: vi.fn() };
-    const advance = diagnosticClock();
+    const { db, logger, advance } = fixture();
     const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
+    resources.retain(() => admission.finish());
     vi.spyOn(Atomics, "wait").mockImplementation(() => {
       expect(db.isTransaction).toBe(true);
       advance(1_000);
       admission.service();
       return "ok";
     });
-    const exec = db.exec.bind(db);
-    vi.spyOn(db, "exec").mockImplementation((sql) => {
+    spySqliteExec(db, (sql) => {
       if (sql === "COMMIT") {
         if (stage === "commit") {
           exchangeSqliteDatabaseAdmissions(admission.port, []);
         }
         advance(3);
       }
-      exec(sql);
     });
-    try {
-      withSqliteReaderOwner(
-        { operation: "session.actor.appendTranscriptEvent", ownerKind: "worker" },
-        () =>
-          runSqliteImmediateTransactionSync(
-            db,
-            () => {
-              if (stage === "callback") {
-                exchangeSqliteDatabaseAdmissions(admission.port, []);
-              }
-              db.prepare("INSERT INTO entries VALUES ('appended', 'tiny')").run();
-              advance(7);
-            },
-            { logger },
-          ),
-      );
-      expect(readEntries(db)).toEqual(["appended"]);
-      expectWarning(logger, "hold", {
-        callbackKind: "application-transaction",
-        elapsedMs: 1_010,
-        phases: {
-          prepareMs: 0,
-          beginMs: 0,
-          sqlMs: 7,
-          hostAdmissionWaitMs: 0,
-          databaseAdmissionWaitMs: 1_000,
-          commitMs: 3,
-        },
-      });
-    } finally {
-      admission.finish();
-    }
+    withSqliteReaderOwner(
+      { operation: "session.actor.appendTranscriptEvent", ownerKind: "worker" },
+      () =>
+        runSqliteImmediateTransactionSync(
+          db,
+          () => {
+            if (stage === "callback") {
+              exchangeSqliteDatabaseAdmissions(admission.port, []);
+            }
+            db.prepare("INSERT INTO entries VALUES ('appended', 'tiny')").run();
+            advance(7);
+          },
+          { logger },
+        ),
+    );
+    expect(readEntries(db)).toEqual(["appended"]);
+    expectWarning(logger, "hold", {
+      callbackKind: "application-transaction",
+      elapsedMs: 1_010,
+      phases: {
+        prepareMs: 0,
+        beginMs: 0,
+        sqlMs: 7,
+        hostAdmissionWaitMs: 0,
+        databaseAdmissionWaitMs: 1_000,
+        commitMs: 3,
+      },
+    });
   });
 
   it("waits for transaction admission before BEGIN and still refuses a revoked commit", () => {
@@ -141,25 +112,22 @@ describe("SQLite transaction diagnostics", () => {
       ["transaction", false],
       ["commit", true],
     ]);
-    expect(readEntries(db)).toEqual([]);
-    expect(db.isTransaction).toBe(false);
+    expectSettledEntries(db, []);
   });
 
   it("separates preparation, SQL, host wait and a failed COMMIT", () => {
-    const db = createDatabase();
-    const logger = { warn: vi.fn() };
-    const advance = diagnosticClock();
+    const { db, logger, advance } = fixture();
     const admission = createSqliteWorkerOperationAdmission((_request, grant) => {
       advance(350);
       grant();
     });
+    resources.retain(() => admission.finish());
     // Service the real private port at the native wait, without sleeping.
     vi.spyOn(Atomics, "wait").mockImplementation(() => {
       admission.service();
       return "ok";
     });
-    const exec = db.exec.bind(db);
-    vi.spyOn(db, "exec").mockImplementation((sql) => {
+    spySqliteExec(db, (sql) => {
       if (sql === "BEGIN IMMEDIATE") {
         advance(100);
       }
@@ -167,48 +135,42 @@ describe("SQLite transaction diagnostics", () => {
         advance(500);
         throw new Error("commit failed");
       }
-      exec(sql);
     });
-    try {
-      const run = () =>
-        withSqliteReaderOwner({ operation: "state.lease.renew", ownerKind: "worker" }, () => {
-          advance(200);
-          return withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
-            runSqliteImmediateTransactionSync(
-              db,
-              () => {
-                requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: null });
-                db.prepare("INSERT INTO entries VALUES ('committed', 'value')").run();
-                advance(50);
+    const run = () =>
+      withSqliteReaderOwner({ operation: "state.lease.renew", ownerKind: "worker" }, () => {
+        advance(200);
+        return withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
+          runSqliteImmediateTransactionSync(
+            db,
+            () => {
+              requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: null });
+              db.prepare("INSERT INTO entries VALUES ('committed', 'value')").run();
+              advance(50);
+            },
+            {
+              logger,
+              withCommit(commit) {
+                requestSqliteWorkerOperationAdmission({ stage: "commit", facts: null });
+                commit();
               },
-              {
-                logger,
-                withCommit(commit) {
-                  requestSqliteWorkerOperationAdmission({ stage: "commit", facts: null });
-                  commit();
-                },
-              },
-            ),
-          );
-        });
-      expect(run).toThrow("commit failed");
-      expect(readEntries(db)).toEqual([]);
-      expect(db.isTransaction).toBe(false);
-      expectWarning(logger, "hold", {
-        operation: "state.lease.renew",
-        elapsedMs: 1_250,
-        phases: {
-          prepareMs: 200,
-          beginMs: 100,
-          sqlMs: 50,
-          hostAdmissionWaitMs: 700,
-          databaseAdmissionWaitMs: 0,
-          commitMs: 500,
-        },
+            },
+          ),
+        );
       });
-    } finally {
-      admission.finish();
-    }
+    expect(run).toThrow("commit failed");
+    expectSettledEntries(db, []);
+    expectWarning(logger, "hold", {
+      operation: "state.lease.renew",
+      elapsedMs: 1_250,
+      phases: {
+        prepareMs: 200,
+        beginMs: 100,
+        sqlMs: 50,
+        hostAdmissionWaitMs: 700,
+        databaseAdmissionWaitMs: 0,
+        commitMs: 500,
+      },
+    });
   });
 
   it.each([
@@ -217,15 +179,9 @@ describe("SQLite transaction diagnostics", () => {
   ] as const)(
     "reports successful $mode steps at $elapsedMs ms with busyTimeoutMs=$busyTimeoutMs",
     ({ mode, busyTimeoutMs, elapsedMs }) => {
-      const logger = { warn: vi.fn() };
-      const advance = diagnosticClock();
-      const db = createDatabase();
+      const { db, logger, advance } = fixture();
       const location = vi.spyOn(db, "location");
-      const exec = db.exec.bind(db);
-      vi.spyOn(db, "exec").mockImplementation((sql) => {
-        exec(sql);
-        advance(elapsedMs);
-      });
+      spySqliteExec(db, undefined, () => advance(elapsedMs));
 
       const run =
         mode === "immediate" ? runSqliteImmediateTransactionSync : runSqliteDeferredTransactionSync;
@@ -287,12 +243,8 @@ describe("SQLite transaction diagnostics", () => {
     "preserves successful $mode transactions when $warningPolicy warnings throw",
     ({ mode, warningPolicy }) => {
       const db = createDatabase();
-      const advance = diagnosticClock();
-      const exec = db.exec.bind(db);
-      const execSpy = vi.spyOn(db, "exec").mockImplementation((sql) => {
-        exec(sql);
-        advance(1_500);
-      });
+      const advance = sqliteDiagnosticClock();
+      const execSpy = spySqliteExec(db, undefined, () => advance(1_500));
       let commitWarningObserved = false;
       const logger = {
         warn: vi.fn((message: string, meta?: Record<string, unknown>) => {
@@ -321,8 +273,7 @@ describe("SQLite transaction diagnostics", () => {
         ),
       ).toBe("committed");
       expect(commitWarningObserved).toBe(true);
-      expect(db.isTransaction).toBe(false);
-      expect(readEntries(db)).toEqual(["committed"]);
+      expectSettledEntries(db, ["committed"]);
       expect(withCommit).toHaveBeenCalledTimes(1);
       expect(execSpy.mock.calls.map(([sql]) => sql)).toEqual([
         mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN",
@@ -334,69 +285,51 @@ describe("SQLite transaction diagnostics", () => {
 
   it.each(["begin", "commit"] as const)(
     "preserves the native %s lock failure when its warning throws",
-    async (step) => {
-      await withTestDir({ prefix: "openclaw-sqlite-diagnostics-" }, async (dir) => {
-        const { DatabaseSync } = requireNodeSqlite();
-        const databasePath = path.join(dir, "locked.sqlite");
-        const db = new DatabaseSync(databasePath);
-        const blocker = new DatabaseSync(databasePath);
+    (step) => {
+      const databasePath = resources.file();
+      const db = resources.open(databasePath);
+      const blocker = resources.open(databasePath);
+      db.exec("PRAGMA busy_timeout = 0; CREATE TABLE entries (id TEXT PRIMARY KEY)");
+      blocker.exec(step === "begin" ? "BEGIN IMMEDIATE" : "BEGIN");
+      if (step === "commit") {
+        blocker.prepare("SELECT id FROM entries").all();
+      }
+      let nativeError: unknown;
+      const exec = db.exec.bind(db);
+      const execSpy = vi.spyOn(db, "exec").mockImplementation((sql) => {
         try {
-          db.exec("PRAGMA busy_timeout = 0; CREATE TABLE entries (id TEXT PRIMARY KEY)");
-          blocker.exec(step === "begin" ? "BEGIN IMMEDIATE" : "BEGIN");
-          if (step === "commit") {
-            blocker.prepare("SELECT id FROM entries").all();
-          }
-          let nativeError: unknown;
-          const exec = db.exec.bind(db);
-          const execSpy = vi.spyOn(db, "exec").mockImplementation((sql) => {
-            try {
-              exec(sql);
-            } catch (error) {
-              nativeError = error;
-              throw error;
-            }
-          });
-          const logger = {
-            warn: vi.fn(() => {
-              throw new Error("diagnostics failed");
-            }),
-          };
-          const operation = vi.fn(() => {
-            db.prepare("INSERT INTO entries VALUES ('uncommitted')").run();
-          });
-          let thrown: unknown;
-          try {
-            runSqliteImmediateTransactionSync(db, operation, { logger });
-          } catch (error) {
-            thrown = error;
-          }
-          expect(nativeError).toMatchObject({ code: "ERR_SQLITE_ERROR", errcode: 5 });
-          expect(thrown).toBe(nativeError);
-          expect(db.isTransaction).toBe(false);
-          expect(readEntries(db)).toEqual([]);
-          expect(operation).toHaveBeenCalledTimes(step === "begin" ? 0 : 1);
-          expect(execSpy.mock.calls.map(([sql]) => sql)).toEqual(
-            step === "begin" ? ["BEGIN IMMEDIATE"] : ["BEGIN IMMEDIATE", "COMMIT", "ROLLBACK"],
-          );
-          expect(logger.warn).toHaveBeenCalledTimes(1);
-        } finally {
-          blocker.close();
-          db.close();
+          exec(sql);
+        } catch (error) {
+          nativeError = error;
+          throw error;
         }
       });
+      const logger = {
+        warn: vi.fn(() => {
+          throw new Error("diagnostics failed");
+        }),
+      };
+      const operation = vi.fn(() => {
+        db.prepare("INSERT INTO entries VALUES ('uncommitted')").run();
+      });
+      const thrown = thrownBy(() => runSqliteImmediateTransactionSync(db, operation, { logger }));
+      expect(nativeError).toMatchObject({ code: "ERR_SQLITE_ERROR", errcode: 5 });
+      expect(thrown).toBe(nativeError);
+      expectSettledEntries(db, []);
+      expect(operation).toHaveBeenCalledTimes(step === "begin" ? 0 : 1);
+      expect(execSpy.mock.calls.map(([sql]) => sql)).toEqual(
+        step === "begin" ? ["BEGIN IMMEDIATE"] : ["BEGIN IMMEDIATE", "COMMIT", "ROLLBACK"],
+      );
+      expect(logger.warn).toHaveBeenCalledTimes(1);
     },
   );
 
   it("names a slow failed transaction holder after rollback closes its connection", () => {
-    const logger = { warn: vi.fn() };
-    const advance = diagnosticClock();
-    const db = createDatabase();
-    const exec = db.exec.bind(db);
-    vi.spyOn(db, "exec").mockImplementation((sql) => {
+    const { db, logger, advance } = fixture();
+    spySqliteExec(db, (sql) => {
       if (sql === "ROLLBACK") {
         throw new Error("rollback failed");
       }
-      exec(sql);
     });
     expect(() =>
       runSqliteImmediateTransactionSync(

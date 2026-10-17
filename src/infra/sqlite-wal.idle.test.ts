@@ -1,43 +1,19 @@
-import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createGatewaySchedulerClock } from "../test-utils/gateway-scheduler-clock.js";
-import { GatewayScheduler } from "./gateway-scheduler.js";
-import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  sqliteMaintenanceFixture,
+  sqliteSchedulerClock,
+} from "./sqlite-maintenance-fixture.test-support.js";
 import { configureSqliteWalMaintenance } from "./sqlite-wal.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const databases: ReturnType<typeof openNodeSqliteDatabase>[] = [];
-const owners: ReturnType<typeof configureSqliteWalMaintenance>[] = [];
-const counters: ReturnType<typeof trackSqliteStatementExecutions>[] = [];
+const resources = sqliteMaintenanceFixture();
 const tick = { maxPages: 0, checkpointMode: "PASSIVE" as const };
-
-function open(databasePath: string, readOnly = false) {
-  const db = openNodeSqliteDatabase(databasePath, { readOnly });
-  databases.push(db);
-  return db;
-}
-
-function maintain(
-  writer: ReturnType<typeof open>,
-  options: Parameters<typeof configureSqliteWalMaintenance>[1],
-) {
-  const owner = configureSqliteWalMaintenance(writer, options);
-  owners.push(owner);
-  return owner;
-}
-
-function countCheckpoints(writer: ReturnType<typeof open>) {
-  const counter = trackSqliteStatementExecutions(writer, ["checkpoint"], (sql) =>
-    /wal_checkpoint/iu.test(sql) ? "checkpoint" : null,
-  );
-  counters.push(counter);
-  return counter;
-}
+const open = (filename: string, readOnly = false) => resources.open(filename, { readOnly }, true);
+const maintain = resources.maintain;
+const countCheckpoints = (db: ReturnType<typeof open>) =>
+  resources.count(db, "checkpoint", /wal_checkpoint/iu);
 
 function fixture(options: Parameters<typeof configureSqliteWalMaintenance>[1] = {}) {
-  const databasePath = path.join(tempDirs.make("openclaw-wal-idle-"), "state.sqlite");
+  const databasePath = resources.file();
   const writer = open(databasePath);
   const maintenance = maintain(writer, { databasePath, ...options });
   writer.exec("CREATE TABLE events(value TEXT)");
@@ -45,26 +21,8 @@ function fixture(options: Parameters<typeof configureSqliteWalMaintenance>[1] = 
 }
 
 describe("idle WAL checkpoint ticks", () => {
-  afterEach(async () => {
-    for (const counter of counters.splice(0)) {
-      counter.restore();
-    }
-    for (const owner of owners.splice(0).toReversed()) {
-      await owner.stop();
-      owner.close();
-    }
-    for (const db of databases.splice(0).toReversed()) {
-      db.close();
-    }
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  });
-
   it("disarms clean ticks and keeps the first sibling write deadline through later writes", async () => {
-    const clock = createGatewaySchedulerClock(1_000);
-    const scheduler = new GatewayScheduler({ clock: clock.clock });
-    const originalScope = GatewayScheduler.prototype.scope.bind(scheduler);
-    vi.spyOn(GatewayScheduler.prototype, "scope").mockImplementation(() => originalScope());
+    const clock = sqliteSchedulerClock();
     const { writer, maintenance, sibling } = fixture();
     await clock.advanceBy(10_000);
     expect(maintenance.health?.state).toBe("complete");
@@ -190,9 +148,8 @@ describe("idle WAL checkpoint ticks", () => {
 
   it("keeps checkpointing untracked connections whose write revision is unknown", async () => {
     vi.useFakeTimers();
-    const databasePath = path.join(tempDirs.make("openclaw-wal-untracked-"), "state.sqlite");
-    const writer = new (requireNodeSqlite().DatabaseSync)(databasePath);
-    databases.push(writer);
+    const databasePath = resources.file();
+    const writer = resources.open(databasePath);
     maintain(writer, { databasePath });
     const statements = countCheckpoints(writer);
     await vi.advanceTimersByTimeAsync(30_000);
