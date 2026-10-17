@@ -7,6 +7,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { auditCompilerComparison } from "../../scripts/audit-compiler-comparison.mts";
+import {
+  captureCompilerComparisonOutput,
+  readCompilerComparisonMetrics,
+} from "../../scripts/lib/compiler-comparison-io.mts";
 
 const temporary: string[] = [];
 afterEach(() => {
@@ -17,6 +21,63 @@ afterEach(() => {
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const diagnostic =
   "src/commands/backup-record.ts(39,48): error TS2345: Argument of type 'string' is not assignable to parameter of type '\"failed\" | \"ok\"'.\n";
+
+describe("compiler-controlled metrics", () => {
+  it("bounds combined output before writing artifacts and preserves split UTF-8", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "compiler-output-"));
+    temporary.push(directory);
+    const file = path.join(directory, "stdout");
+    const fd = fs.openSync(file, "w");
+    try {
+      const output = captureCompilerComparisonOutput({ stdout: fd, stderr: fd });
+      output.accept(Buffer.from("ok"), "stdout");
+      expect(() => output.accept(Buffer.alloc(64 * 1024 * 1024), "stderr")).toThrow("64 MiB");
+      expect(fs.readFileSync(file, "utf8")).toBe("ok");
+      expect(output.finish()).toEqual({ stdout: "", stderr: "" });
+    } finally {
+      fs.closeSync(fd);
+    }
+    const output = captureCompilerComparisonOutput();
+    const bytes = Buffer.from("界");
+    output.accept(bytes.subarray(0, 1), "stdout");
+    output.accept(bytes.subarray(1), "stdout");
+    expect(output.finish().stdout).toBe("界");
+  });
+  it("reads numeric GNU time output and rejects oversized or malformed content", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "compiler-metrics-"));
+    temporary.push(directory);
+    const file = path.join(directory, "result");
+    fs.writeFileSync(file, "Command exited with non-zero status 1\n1.25 1 0.25 1024 1\n");
+    expect(readCompilerComparisonMetrics(file)).toEqual([1.25, 1, 0.25, 1024, 1]);
+    fs.writeFileSync(file, "0".repeat(4097));
+    expect(() => readCompilerComparisonMetrics(file)).toThrow("exceeds 4096");
+    fs.writeFileSync(file, "1 NaN 0 1024 0\n");
+    expect(() => readCompilerComparisonMetrics(file)).toThrow("Invalid compiler metrics");
+  });
+
+  it.skipIf(process.platform === "win32")("rejects a FIFO without waiting for a writer", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "compiler-metrics-"));
+    temporary.push(directory);
+    const fifo = path.join(directory, "fifo");
+    expect(spawnSync("mkfifo", [fifo]).status).toBe(0);
+    const module = new URL("../../scripts/lib/compiler-comparison-io.mts", import.meta.url);
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `import { readCompilerComparisonMetrics } from ${JSON.stringify(module.href)};
+       try { readCompilerComparisonMetrics(${JSON.stringify(fifo)}); process.exitCode = 1; }
+       catch (error) { if (!error.message.includes("regular file")) throw error; }`,
+      ],
+      { encoding: "utf8", timeout: 2000 },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    fs.symlinkSync(fifo, path.join(directory, "link"));
+    expect(() => readCompilerComparisonMetrics(path.join(directory, "link"))).toThrow();
+  });
+});
 
 function fixture(
   outcomes: Record<string, { exitCode: number; stdout: string }> = {
@@ -111,6 +172,68 @@ function fixture(
 }
 
 describe("compiler comparison artifact audit", () => {
+  it("does not lose a declared profile or reference when its entire batch is missing", () => {
+    const evidence = fixture();
+    const metadata = JSON.parse(
+      fs.readFileSync(path.join(evidence.directory, "metadata.json"), "utf8"),
+    );
+    const expectedSamples = evidence.rows.map((row) =>
+      [row.graph, row.mode, row.compiler, row.iteration].join("-"),
+    );
+    expectedSamples.push("core-single-threaded-reference-1");
+    evidence.write("metadata.json", { ...metadata, expectedSamples });
+    fs.mkdirSync(path.join(evidence.directory, "metrics"));
+    evidence.write("metrics/core-single-threaded-reference-1.json", {
+      wallSeconds: 1,
+      userSeconds: 1,
+      sysSeconds: 0,
+      peakRssKiB: 1024,
+      exitCode: 0,
+      processExitCode: 137,
+    });
+    const proofs = { ...evidence.proofs, reference: evidence.proofs.pinned };
+    evidence.write("input-parity.json", [{ graph: "core", proofs }]);
+    for (const label of ["config", "files"]) {
+      fs.copyFileSync(
+        path.join(evidence.directory, `core-pinned-${label}.txt`),
+        path.join(evidence.directory, `core-reference-${label}.txt`),
+      );
+    }
+    const result = auditCompilerComparison(evidence.directory);
+    expect(result.status).toBe("incomplete");
+    expect(result.missing).toContain("Planned sample missing: core-single-threaded-reference-1");
+    expect(result.typecheckPassed).toBe(false);
+  });
+
+  it("requires equal reference inputs for a planned collection", () => {
+    const evidence = fixture();
+    const metadata = JSON.parse(
+      fs.readFileSync(path.join(evidence.directory, "metadata.json"), "utf8"),
+    );
+    evidence.write("metadata.json", {
+      ...metadata,
+      expectedSamples: evidence.rows.map((row) =>
+        [row.graph, row.mode, row.compiler, row.iteration].join("-"),
+      ),
+    });
+    const different = "/libs/lib.es2022.d.ts\n/work/missing.ts\n";
+    evidence.write("input-parity.json", [
+      {
+        graph: "core",
+        proofs: {
+          ...evidence.proofs,
+          reference: { config: evidence.proofs.pinned.config, files: { sha256: hash(different) } },
+        },
+      },
+    ]);
+    fs.copyFileSync(
+      path.join(evidence.directory, "core-pinned-config.txt"),
+      path.join(evidence.directory, "core-reference-config.txt"),
+    );
+    fs.writeFileSync(path.join(evidence.directory, "core-reference-files.txt"), different);
+    expect(auditCompilerComparison(evidence.directory).comparisons[0]?.inputEqual).toBe(false);
+  });
+
   it("accepts complete passing samples and reports absent reference coverage", () => {
     const result = auditCompilerComparison(fixture().directory);
     expect(result.status).toBe("equivalent");

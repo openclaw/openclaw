@@ -41,6 +41,7 @@ export function auditCompilerComparison(directory: string) {
     groups: number;
     binarySha256: Record<Compiler, string>;
     libraryManifest: { name: string; sha256: string }[];
+    expectedSamples?: string[];
   };
   const inventory = JSON.parse(read("inventory.json")) as {
     inventory: Graph[];
@@ -50,7 +51,7 @@ export function auditCompilerComparison(directory: string) {
   };
   const parity = JSON.parse(read("input-parity.json")) as {
     graph: string;
-    proofs: Record<"pinned" | "candidate", Record<"config" | "files", { sha256: string }>>;
+    proofs: Record<Compiler, Record<"config" | "files", { sha256: string }>>;
   }[];
   const measurements = JSON.parse(read("measurements.json")) as Measurement[];
   assert.match(metadata.sourceHead, /^[a-f0-9]{40}$/u, "Invalid source identity");
@@ -91,6 +92,11 @@ export function auditCompilerComparison(directory: string) {
   }
 
   const missing: string[] = [];
+  const expected = metadata.expectedSamples;
+  if (expected) {
+    assert(expected.length > 0 && expected.every((id) => typeof id === "string"));
+    assert.equal(new Set(expected).size, expected.length, "Duplicate planned sample");
+  }
   const inputs = new Map<string, boolean>();
   assert.equal(
     new Set(parity.map((entry) => entry.graph)).size,
@@ -106,7 +112,10 @@ export function auditCompilerComparison(directory: string) {
     }
     let equal = true;
     for (const label of ["config", "files"] as const) {
-      const values = (["pinned", "candidate"] as const).map((compiler) => {
+      const compilers: Compiler[] = expected
+        ? ["pinned", "candidate", "reference"]
+        : ["pinned", "candidate"];
+      const values = compilers.map((compiler) => {
         const output = normalize(read(`${graph.name}-${compiler}-${label}.txt`));
         assert(output.length > 0, `Empty ${graph.name}/${compiler}/${label}`);
         assert.equal(digest(output), proof.proofs[compiler][label].sha256, "Input hash mismatch");
@@ -120,7 +129,7 @@ export function auditCompilerComparison(directory: string) {
         }
         return output;
       });
-      equal &&= values[0] === values[1];
+      equal &&= values.every((value) => value === values[0]);
     }
     inputs.set(graph.name, equal);
   }
@@ -147,6 +156,7 @@ export function auditCompilerComparison(directory: string) {
     }
     const key = `${row.graph}/${row.mode}`;
     const id = [row.graph, row.mode, row.compiler, row.iteration].join("-");
+    assert(!expected || expected.includes(id), `Unplanned sample ${id}`);
     assert(!iterations.has(id), `Duplicate sample ${id}`);
     iterations.add(id);
     assert(Array.isArray(row.flags) && row.flags.every((flag) => typeof flag === "string"));
@@ -182,6 +192,13 @@ export function auditCompilerComparison(directory: string) {
     const values = samples.get(sampleKey) ?? [];
     values.push({ exitCode: row.exitCode, stdout, stderr });
     samples.set(sampleKey, values);
+  }
+  // A declared control profile or reference must not vanish just because its
+  // entire batch failed before writing the first measurement.
+  for (const id of expected ?? []) {
+    if (!iterations.has(id)) {
+      missing.push(`Planned sample missing: ${id}`);
+    }
   }
 
   // Primary coverage is mandatory. Additional modes are scoped to those actually
@@ -249,7 +266,13 @@ export function auditCompilerComparison(directory: string) {
     libraryManifestSha256: digest(
       JSON.stringify(metadata.libraryManifest.toSorted((a, b) => (a.name < b.name ? -1 : 1))),
     ),
-    scope: { group: metadata.group, groups: metadata.groups, graphs: inventory.graphs },
+    scope: {
+      group: metadata.group,
+      groups: metadata.groups,
+      graphs: inventory.graphs,
+      plannedSamples: expected?.length ?? null,
+      referenceInputsVerified: Boolean(expected),
+    },
     status: missing.length
       ? "incomplete"
       : comparisons.every((row) => row.equivalent)
