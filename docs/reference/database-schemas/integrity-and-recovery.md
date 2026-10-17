@@ -154,7 +154,15 @@ After an agent schema migration, the schema owner registers the database while
 its verified connection is still open. Later opens in the same Doctor process
 can reuse that admission instead of repeating its full integrity scan. Migration
 integrity coverage follows the policy below; recovery backups and restart seal
-requirements remain unchanged.
+requirements remain unchanged. Standalone Doctor's version prelude revokes prior agent proof
+before checking the live source, then preserves that receipt through its
+committed version and additive schema phases. Only a full source verification
+can satisfy a later runtime full-integrity gate; a quick migration still needs
+that full check. Updater backups verify private images and do not supply a live
+source receipt; inline quick migrations also retain the later full-check requirement.
+A separate Doctor invocation continues to inspect current bytes. These are
+candidate-side changes; the installed updater still runs first
+under its own version's behavior.
 
 | When                                                   | Check                                                                                                                                                                                      |
 | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

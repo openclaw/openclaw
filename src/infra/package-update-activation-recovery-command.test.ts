@@ -37,8 +37,21 @@ it.skipIf(process.platform === "win32").each([false, true])(
   "recovers after private permission repair and preserves package integrity checks (changed=%s)",
   (changed) =>
     fixture.lifetime.run(async () => {
-      fixture.setup();
-      const prepared = await fixture.prepare();
+      const { root } = fixture.setup();
+      const packageModes = (directory: string, broaden: boolean) => {
+        for (const name of fs.readdirSync(directory)) {
+          const file = path.join(directory, name);
+          if (fs.lstatSync(file).isDirectory()) {
+            packageModes(file, broaden);
+          } else {
+            fs.chmodSync(file, broaden ? 0o650 : 0o600);
+          }
+        }
+        fs.chmodSync(directory, broaden ? 0o750 : 0o700);
+      };
+      const prepared = await fixture.prepare(() => {
+        packageModes(path.join(root, "stage/lib/node_modules/openclaw"), false);
+      });
       const journal = openPackageActivationJournal(prepared.anchor);
       const originalRename = fsp.rename;
       const interrupted = vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
@@ -72,6 +85,7 @@ it.skipIf(process.platform === "win32").each([false, true])(
         }
       };
       broadenPermissions();
+      packageModes(path.join(prepared.anchor, "candidate"), true);
       await expect(
         runPackageActivationRecovery(prepared.anchor, "repair", prepared.operationId),
       ).resolves.toMatchObject({ phase: "publication-complete" });
@@ -79,6 +93,9 @@ it.skipIf(process.platform === "win32").each([false, true])(
         expect(fs.statSync(file).mode & 0o777).toBe(mode);
       }
       expect(fs.readFileSync(prepared.launcher, "utf8")).toBe("candidate launcher\n");
+      expect(fs.statSync(path.join(prepared.packageRoot, "dist/index.js")).mode & 0o777).toBe(
+        0o600,
+      );
       expect(
         JSON.parse(fs.readFileSync(path.join(prepared.packageRoot, "package.json"), "utf8")),
       ).toMatchObject({ version: "2.0.0" });

@@ -235,6 +235,7 @@ type SessionCostReadParams = {
   requestRefresh?: boolean;
   maxPublicationWaitMs?: number;
   reportBudgetBytes?: number;
+  committedOnly?: boolean;
 };
 
 export async function loadSessionCostSummariesFromCache(params: SessionCostReadParams): Promise<{
@@ -263,11 +264,13 @@ async function loadCapturedSessionCostSummariesFromCache(
   prepared: PreparedUsageCostWorker,
 ): Promise<Extract<UsageCostWorkerResult, { kind: "sessions" }>> {
   const { databasePath, storePath } = prepared.location;
-  await flushPendingUsageCostRefresh(
-    prepared,
-    params.sessions.map((session) => session.sessionFile),
-    params.maxPublicationWaitMs,
-  );
+  if (!params.committedOnly) {
+    await flushPendingUsageCostRefresh(
+      prepared,
+      params.sessions.map((session) => session.sessionFile),
+      params.maxPublicationWaitMs,
+    );
+  }
   const pricingFingerprint = await resolveUsageCostPricingFingerprint(
     prepared.config,
     prepared.agentDir,
@@ -280,6 +283,7 @@ async function loadCapturedSessionCostSummariesFromCache(
     endMs: params.endMs,
     includeUntimestamped: params.includeUntimestamped,
     reportBudgetBytes: params.reportBudgetBytes,
+    committedOnly: params.committedOnly,
     dayBucket: resolveUsageCostWorkerDayBucket(params.dayBucket),
   });
   if (result.kind !== "sessions") {

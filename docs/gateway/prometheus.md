@@ -339,7 +339,8 @@ the request and existing response fields without changing the protocol payload.
 
 `openclaw_sessions_list_baseline_retirements_total{cause}` counts retirement
 events, not rows or the number of views cleared. Causes are `projection-revision`,
-`config`, `identity`, `selection-reset`, `view-evicted` (the 32-view limit), and
+`config`, `identity`, `selection-reset`, `view-evicted` (the 512-slot or 32 MiB
+estimated-retention limit), and
 `history-evicted` (the 32-generation limit). Only clears or evictions retaining
 sidebar rows or history count, including empty sidebar row lists. Selection-only
 and non-sidebar views do not count. When a read observes multiple invalidations,
