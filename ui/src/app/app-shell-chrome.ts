@@ -525,7 +525,7 @@ export class ShellChromeOwner {
     }
     const descriptor = lazyShellEvent(DEBUG_OVERLAY_REQUEST_EVENT, event);
     const overlay = host.elements.debugOverlay;
-    if (overlay) {
+    if (overlay?.isConnected) {
       this.clearPendingLazyAction(descriptor);
       if (descriptor.detail && "mode" in descriptor.detail) {
         overlay.open(readDebugOverlayMode(descriptor));
@@ -539,7 +539,7 @@ export class ShellChromeOwner {
         return;
       }
       const mounted = host.elements.debugOverlay;
-      if (!mounted) {
+      if (!mounted?.isConnected) {
         return;
       }
       const mode = this.pendingDebugOverlayMode;
@@ -576,23 +576,25 @@ export class ShellChromeOwner {
 
   private readonly handleKeyboardShortcutsRequest = (event: Event): void => {
     const descriptor = lazyShellEvent(KEYBOARD_SHORTCUTS_REQUEST_EVENT, event);
-    if (isOptionalElementDefined(KEYBOARD_SHORTCUTS_ELEMENT)) {
-      this.host.elements.keyboardShortcuts?.toggle();
+    const shortcuts = this.host.elements.keyboardShortcuts;
+    if (isOptionalElementDefined(KEYBOARD_SHORTCUTS_ELEMENT) && shortcuts?.isConnected) {
+      shortcuts.toggle();
       this.clearPendingLazyAction(descriptor);
       return;
     }
     this.requestLazyElement(KEYBOARD_SHORTCUTS_ELEMENT, descriptor);
   };
 
-  // Open overlays and editable controls own Escape before Settings.
+  // Only connected overlays and editable controls own Escape before Settings.
   shouldIgnoreSettingsEscape(event: KeyboardEvent): boolean {
     const host = this.host;
     const overlaySnapshot = host.context?.overlays.snapshot;
     if (
       (host.elements.commandPalette?.isConnected && host.elements.commandPalette.isOpen) ||
-      host.elements.keyboardShortcuts?.isOpen ||
+      (host.elements.keyboardShortcuts?.isConnected && host.elements.keyboardShortcuts.isOpen) ||
       overlaySnapshot?.devicePairSetupOpen ||
-      host.elements.approvalOverlay?.dialogOpen === true ||
+      (host.elements.approvalOverlay?.isConnected &&
+        host.elements.approvalOverlay.dialogOpen === true) ||
       document.openClawModalLayers?.size ||
       registryFor(document).stack.at(-1)?.open
     ) {
@@ -627,8 +629,9 @@ export class ShellChromeOwner {
   private readonly handleApprovalsOpen = (event: Event): void => {
     const host = this.host;
     const descriptor = lazyShellEvent(SHELL_APPROVALS_OPEN_EVENT, event);
-    if (isOptionalElementDefined(host.execApprovalElement)) {
-      host.elements.approvalOverlay?.show();
+    const overlay = host.elements.approvalOverlay;
+    if (isOptionalElementDefined(host.execApprovalElement) && overlay?.isConnected) {
+      overlay.show();
       this.clearPendingLazyAction(descriptor);
       return;
     }

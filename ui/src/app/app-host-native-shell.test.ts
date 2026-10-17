@@ -26,6 +26,8 @@ type ShellNavigationState = {
 };
 
 type ShellSettingsEscapeState = ShellKeyboardState & {
+  element: HTMLElement;
+  elements: ShellOwnedElements;
   lastWorkspaceLocation: { routeId: "usage"; pathname: string; search: string; hash: string };
   navDrawerOpen: boolean;
   routeState: { routeId: "appearance" };
@@ -178,32 +180,53 @@ describe("OpenClaw native shell", () => {
     expect(navigate).toHaveBeenCalledWith("appearance", undefined);
   });
 
-  it("restores the complete prior workspace URL when Escape leaves Settings", () => {
-    const navigate = vi.fn();
-    const shell = createShellOwner() as unknown as ShellSettingsEscapeState;
-    shell.runtime = {
-      context: {
-        navigate,
-        overlays: { snapshot: { devicePairSetupOpen: false } },
-      } as unknown as ApplicationContext,
-    };
-    shell.lastWorkspaceLocation = {
-      routeId: "usage",
-      pathname: "/usage",
-      search: "?agent=main",
-      hash: "#queue",
-    };
-    shell.navDrawerOpen = false;
-    shell.routeState = { routeId: "appearance" };
+  it.each(["none", "keyboardShortcuts", "approvalOverlay"] as const)(
+    "restores the complete prior workspace URL when Escape leaves Settings after %s detaches",
+    (surface) => {
+      const navigate = vi.fn();
+      const shell = createShellOwner() as unknown as ShellSettingsEscapeState;
+      shell.runtime = {
+        context: {
+          navigate,
+          overlays: { snapshot: { devicePairSetupOpen: false } },
+        } as unknown as ApplicationContext,
+      };
+      shell.lastWorkspaceLocation = {
+        routeId: "usage",
+        pathname: "/usage",
+        search: "?agent=main",
+        hash: "#queue",
+      };
+      shell.navDrawerOpen = false;
+      shell.routeState = { routeId: "appearance" };
 
-    shell.handleDocumentKeydown(new KeyboardEvent("keydown", { key: "Escape", cancelable: true }));
+      if (surface !== "none") {
+        const overlay = Object.assign(document.createElement("div"), {
+          isOpen: true,
+          dialogOpen: true,
+        });
+        Object.assign(shell.elements, { [surface]: overlay });
+        shell.element.append(overlay);
+        document.body.append(shell.element);
+        onTestFinished(() => shell.element.remove());
+        shell.handleDocumentKeydown(
+          new KeyboardEvent("keydown", { key: "Escape", cancelable: true }),
+        );
+        expect(navigate).not.toHaveBeenCalled();
+        overlay.remove();
+      }
 
-    expect(navigate).toHaveBeenCalledWith("usage", {
-      pathname: "/usage",
-      search: "?agent=main",
-      hash: "#queue",
-    });
-  });
+      shell.handleDocumentKeydown(
+        new KeyboardEvent("keydown", { key: "Escape", cancelable: true }),
+      );
+
+      expect(navigate).toHaveBeenCalledWith("usage", {
+        pathname: "/usage",
+        search: "?agent=main",
+        hash: "#queue",
+      });
+    },
+  );
 
   it("keeps the raw config editor unchanged when Escape is pressed", () => {
     const navigate = vi.fn();
