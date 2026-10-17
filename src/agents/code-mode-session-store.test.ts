@@ -1,4 +1,3 @@
-import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -18,7 +17,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function run(manager: SessionManager) {
+function run(manager = SessionManager.inMemory()) {
   const catalogRef: ToolSearchCatalogRef = {
     current: {
       entries: [],
@@ -32,6 +31,7 @@ function run(manager: SessionManager) {
   const runId = `run-${owners.length}`;
   bindCodeModeSessionStore(catalogRef, manager);
   return {
+    manager,
     catalogRef,
     cell: () =>
       createCodeModeSessionStoreAccess(
@@ -42,7 +42,7 @@ function run(manager: SessionManager) {
   };
 }
 
-async function saveCell(owner: ReturnType<typeof run>, key: string, value: unknown) {
+async function saveCell(owner: Pick<ReturnType<typeof run>, "cell">, key: string, value: unknown) {
   const cell = owner.cell();
   await cell.save(key, value, false);
   await cell.commit();
@@ -50,8 +50,7 @@ async function saveCell(owner: ReturnType<typeof run>, key: string, value: unkno
 
 describe("Code Mode session store", () => {
   it("appends one hidden entry per cell and replays writes, deletes, and provenance in the next run", async () => {
-    const manager = SessionManager.inMemory();
-    const first = run(manager);
+    const { manager, ...first } = run();
     const cell = first.cell();
     await cell.save("report", { title: "remote" }, true);
     await cell.save("draft", 1, false);
@@ -79,8 +78,7 @@ describe("Code Mode session store", () => {
   });
 
   it("replays only the selected branch, preserves earlier values through compaction, and forks that path", async () => {
-    const manager = SessionManager.inMemory();
-    const rootRun = run(manager);
+    const { manager, ...rootRun } = run();
     await saveCell(rootRun, "inherited", "root");
     const root = manager.getLeafId()!;
     rootRun.close();
@@ -113,8 +111,7 @@ describe("Code Mode session store", () => {
   });
 
   it("keeps the projection unchanged after failed persistence and admits a later cell", async () => {
-    const manager = SessionManager.inMemory();
-    const owner = run(manager);
+    const { manager, ...owner } = run();
     await saveCell(owner, "key", "original");
     const failed = owner.cell();
     await failed.save("key", "lost", true);
@@ -132,8 +129,7 @@ describe("Code Mode session store", () => {
   });
 
   it("rechecks total capacity in commit order when cells buffered against the same projection", async () => {
-    const manager = SessionManager.inMemory();
-    const owner = run(manager);
+    const { manager, ...owner } = run();
     const value = "x".repeat(256 * 1024 - 2);
     const seed = owner.cell();
     for (const key of ["a", "b", "c"]) {
@@ -155,8 +151,7 @@ describe("Code Mode session store", () => {
   });
 
   it("discards a completed cell's buffer when ownership closes before queued write admission", async () => {
-    const manager = SessionManager.inMemory();
-    const owner = run(manager);
+    const { manager, ...owner } = run();
     const entered = createDeferred();
     const release = createDeferred();
     bindCodeModeSessionStore(owner.catalogRef, manager, async (operation) => {
@@ -179,8 +174,7 @@ describe("Code Mode session store", () => {
   });
 
   it("retires old accesses on catalog restriction while keeping the session available to new cells", async () => {
-    const manager = SessionManager.inMemory();
-    const owner = run(manager);
+    const owner = run();
     await saveCell(owner, "retained", true);
     const old = owner.cell();
     await old.save("discarded", true, false);
@@ -189,13 +183,6 @@ describe("Code Mode session store", () => {
       name: "fixture",
       source: "openclaw",
       description: "Fixture tool",
-      tool: {
-        name: "fixture",
-        label: "Fixture",
-        description: "Fixture tool",
-        parameters: Type.Object({}),
-        execute: async () => ({ content: [], details: {} }),
-      },
     });
     restrictToolSearchCatalog({ catalogRef: owner.catalogRef, allowedToolNames: new Set() });
     await expect(old.load("retained")).rejects.toThrow("active session-bound run");
