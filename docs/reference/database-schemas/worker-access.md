@@ -2015,6 +2015,9 @@ Replica residency uses an approximate heap budget based on string lengths and
 object/slot overhead, without serializing postimages or transcript bodies just
 to count bytes. The 128-snapshot and 8 MiB LRU limits retain one oversized
 snapshot so its next reader can still reuse it.
+These limits count resident payloads, not live caller handles. Empty cells held
+by active callers remain until release and do not force freshly loaded snapshots
+out of the cache.
 If a receipt supersedes an in-flight read, that read uses the current replica.
 An empty replica permits one worker-read retry. A replacement before disclosure
 is reacquired once and authorized again; revoked authority still refuses the read.
