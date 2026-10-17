@@ -198,21 +198,24 @@ function applyBeaconTxt(beacon: GatewayBonjourBeacon, txt: Record<string, string
 }
 
 function parseDnsSdBrowse(stdout: string): string[] {
-  const instances = new Set<string>();
+  const instances = new Map<string, string>();
   for (const raw of stdout.split("\n")) {
-    const line = raw.trim();
-    if (!line || !line.includes(GATEWAY_SERVICE_TYPE)) {
+    const match = raw
+      .trim()
+      .match(/(?:^|\s)(Add|Rmv)\s+\S+\s+(\S+)\s+(\S+)\s+_openclaw-gw\._tcp\.?\s+(.+)$/);
+    if (!match?.[4]) {
       continue;
     }
-    if (!line.includes("Add")) {
-      continue;
-    }
-    const match = line.match(/_openclaw-gw\._tcp\.?\s+(.+)$/);
-    if (match?.[1]) {
-      instances.add(decodeDnsSdEscapes(match[1].trim()));
+    const instance = decodeDnsSdEscapes(match[4].trim());
+    // Removing one interface/domain must not remove another active advertisement.
+    const key = JSON.stringify([match[2], match[3], instance]);
+    if (match[1] === "Add") {
+      instances.set(key, instance);
+    } else {
+      instances.delete(key);
     }
   }
-  return Array.from(instances.values());
+  return Array.from(new Set(instances.values()));
 }
 
 function parseDnsSdResolve(stdout: string, instanceName: string): GatewayBonjourBeacon {

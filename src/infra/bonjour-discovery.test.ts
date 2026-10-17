@@ -113,6 +113,80 @@ describe("bonjour-discovery", () => {
     expect([...new Set(browseCalls.map((c) => c.timeoutMs))]).toEqual([1234]);
   });
 
+  it.each([
+    {
+      name: "removal before browse completion",
+      events: [
+        "12:00:00.000 Add 2 3 local. _openclaw-gw._tcp. Retired Gateway",
+        "12:00:00.001 Rmv 0 3 local. _openclaw-gw._tcp. Retired Gateway",
+        "12:00:00.002 Add 2 3 local. _openclaw-gw._tcp. Active Gateway",
+      ],
+      expected: ["Active Gateway"],
+    },
+    {
+      name: "removal followed by re-addition",
+      events: [
+        "Add 2 3 local. _openclaw-gw._tcp. Repeated Gateway",
+        "Rmv 0 3 local. _openclaw-gw._tcp. Repeated Gateway",
+        "Add 2 3 local. _openclaw-gw._tcp. Repeated Gateway",
+      ],
+      expected: ["Repeated Gateway"],
+    },
+    {
+      name: "removal on only one interface",
+      events: [
+        "Add 2 3 local. _openclaw-gw._tcp. Shared Gateway",
+        "Add 2 5 local. _openclaw-gw._tcp. Shared Gateway",
+        "Rmv 0 3 local. _openclaw-gw._tcp. Shared Gateway",
+      ],
+      expected: ["Shared Gateway"],
+    },
+    {
+      name: "removal on another domain",
+      events: [
+        "Add 2 3 local. _openclaw-gw._tcp. Shared Gateway",
+        "Rmv 0 3 other.example. _openclaw-gw._tcp. Shared Gateway",
+      ],
+      expected: ["Shared Gateway"],
+    },
+    {
+      name: "removal using a decoded instance name",
+      events: [
+        "Add 2 3 local. _openclaw-gw._tcp. Lab\\226\\128\\153s\\032Gateway",
+        "Rmv 0 3 local. _openclaw-gw._tcp. Lab’s Gateway",
+      ],
+      expected: [],
+    },
+    {
+      name: "removal-only event with Add in the instance name",
+      events: ["Rmv 0 3 local. _openclaw-gw._tcp. Address Gateway"],
+      expected: [],
+    },
+  ])("resolves only active Darwin instances after $name", async ({ events, expected }) => {
+    const resolved: string[] = [];
+    const run: typeof runCommandWithTimeout = async (argv) => {
+      if (argv[0] === "dns-sd" && argv[1] === "-B") {
+        return commandResult(events.join("\n"));
+      }
+      if (argv[0] === "dns-sd" && argv[1] === "-L") {
+        const instance = argv[2] ?? "";
+        resolved.push(instance);
+        return commandResult(
+          `${instance}._openclaw-gw._tcp. can be reached at gateway.local:18789`,
+        );
+      }
+      throw new Error(`unexpected argv: ${argv.join(" ")}`);
+    };
+
+    const beacons = await discoverGatewayBeacons({
+      platform: "darwin",
+      domains: ["local."],
+      run,
+    });
+    expect(resolved).toEqual(expected);
+    expect(beacons.map((beacon) => beacon.instanceName)).toEqual(expected);
+  });
+
   it.each(["darwin", "linux"] as const)(
     "rejects invalid advertised ports on %s",
     async (platform) => {
