@@ -130,6 +130,7 @@ export async function withPersonalToolTurn<T>(
     sessionKey?: string;
     sessionId?: string;
     runId?: string;
+    allowCollaborativeSteering?: boolean;
     admittedRunContext?: AdmittedRunContext;
     gatewayContextResolver?: GatewayContextResolver;
     controllerInput?: SessionControllerInput;
@@ -186,6 +187,12 @@ export async function withPersonalToolTurn<T>(
     senderIsOwner: true,
     clientCaps: ["ui-commands"],
     gatewayUiCommandTarget: params.owner.gatewayUiCommandTarget,
+    ...(params.allowCollaborativeSteering
+      ? {
+          messageProvider: "webchat",
+          conversationId: params.sessionKey ?? "agent:main:personal-tools",
+        }
+      : {}),
   });
   const mailboxClaim = params.controllerInput
     ? tryClaimSessionControllerTask(params.controllerInput)
@@ -298,7 +305,14 @@ export async function withPersonalToolTurn<T>(
             reject = options?.reject === true;
             return await queueCurrentReplyRunMessage(queued.sessionId, "Change my view", {
               isInboundUserMessage: true,
+              allowCollaborativeSteering: params.allowCollaborativeSteering,
               toolAuthorityOverlay: {
+                ...(params.allowCollaborativeSteering
+                  ? {
+                      messageProvider: queued.messageProvider,
+                      conversationId: queued.conversationId ?? undefined,
+                    }
+                  : {}),
                 operatorAuthority: authority(person, options?.scopes),
                 senderId: person.senderId,
                 senderName: person.name,

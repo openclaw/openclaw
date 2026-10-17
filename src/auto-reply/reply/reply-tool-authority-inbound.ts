@@ -18,6 +18,53 @@ import type { RuntimeMsgContext } from "../templating.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
 
+export function applyReplyToolAuthorityOverlay(
+  snapshot: ReplyToolAuthorityInput,
+  overlay: ReplyToolAuthorityOverlay,
+): ReplyToolAuthorityInput {
+  return {
+    ...snapshot,
+    originatingChannel: overlay.originatingChannel,
+    operatorAuthority: overlay.operatorAuthority,
+    toolsAllow: overlay.toolsAllow,
+    disableTools: overlay.disableTools,
+    forceRestartSafeTools: overlay.forceRestartSafeTools,
+    forceCodeModeTools: overlay.forceCodeModeTools,
+    run: {
+      ...snapshot.run,
+      requesterOrigin: undefined,
+      permissionMode: overlay.permissionMode,
+      toolOverrides: overlay.toolOverrides,
+      messageProvider: overlay.messageProvider,
+      chatType: overlay.chatType,
+      agentAccountId: overlay.agentAccountId,
+      conversationToolPolicy: overlay.conversationToolPolicy,
+      conversationId: overlay.conversationId,
+      messageThreadId: overlay.messageThreadId,
+      groupId: overlay.groupId,
+      groupChannel: overlay.groupChannel,
+      groupSpace: overlay.groupSpace,
+      memberRoleIds: overlay.memberRoleIds,
+      spawnedBy: overlay.spawnedBy,
+      senderId: overlay.senderId,
+      senderName: overlay.senderName,
+      senderUsername: overlay.senderUsername,
+      senderE164: overlay.senderE164,
+      senderIsOwner: overlay.senderIsOwner,
+      gitContributorProfileId: overlay.gitContributorProfileId,
+      inputProvenance: overlay.inputProvenance,
+      trustedInternalHandoff: overlay.trustedInternalHandoff,
+      scheduledToolPolicy: overlay.scheduledToolPolicy,
+      runtimePluginToolGrant: overlay.runtimePluginToolGrant,
+      traceAuthorized: overlay.traceAuthorized,
+      approvalReviewerDeviceId: overlay.approvalReviewerDeviceId,
+      clientCaps: overlay.clientCaps,
+      gatewayUiCommandTarget: overlay.gatewayUiCommandTarget,
+      toolBindings: overlay.toolBindings,
+    },
+  };
+}
+
 /** Projects current inbound facts against the active run's frozen authority snapshot. */
 export function resolveInboundReplyToolAuthorityOverlay(params: {
   ctx: RuntimeMsgContext;
@@ -98,53 +145,6 @@ export function resolveInboundConversationToolPolicy(params: {
     accountId: facts.agentAccountId,
     conversationPolicy: facts.conversationToolPolicy,
   });
-}
-
-export function applyReplyToolAuthorityOverlay(
-  snapshot: ReplyToolAuthorityInput,
-  overlay: ReplyToolAuthorityOverlay,
-): ReplyToolAuthorityInput {
-  return {
-    ...snapshot,
-    originatingChannel: overlay.originatingChannel,
-    operatorAuthority: overlay.operatorAuthority,
-    toolsAllow: overlay.toolsAllow,
-    disableTools: overlay.disableTools,
-    forceRestartSafeTools: overlay.forceRestartSafeTools,
-    forceCodeModeTools: overlay.forceCodeModeTools,
-    run: {
-      ...snapshot.run,
-      requesterOrigin: undefined,
-      permissionMode: overlay.permissionMode,
-      toolOverrides: overlay.toolOverrides,
-      messageProvider: overlay.messageProvider,
-      chatType: overlay.chatType,
-      agentAccountId: overlay.agentAccountId,
-      conversationToolPolicy: overlay.conversationToolPolicy,
-      conversationId: overlay.conversationId,
-      messageThreadId: overlay.messageThreadId,
-      groupId: overlay.groupId,
-      groupChannel: overlay.groupChannel,
-      groupSpace: overlay.groupSpace,
-      memberRoleIds: overlay.memberRoleIds,
-      spawnedBy: overlay.spawnedBy,
-      senderId: overlay.senderId,
-      senderName: overlay.senderName,
-      senderUsername: overlay.senderUsername,
-      senderE164: overlay.senderE164,
-      senderIsOwner: overlay.senderIsOwner,
-      gitContributorProfileId: overlay.gitContributorProfileId,
-      inputProvenance: overlay.inputProvenance,
-      trustedInternalHandoff: overlay.trustedInternalHandoff,
-      scheduledToolPolicy: overlay.scheduledToolPolicy,
-      runtimePluginToolGrant: overlay.runtimePluginToolGrant,
-      traceAuthorized: overlay.traceAuthorized,
-      approvalReviewerDeviceId: overlay.approvalReviewerDeviceId,
-      clientCaps: overlay.clientCaps,
-      gatewayUiCommandTarget: overlay.gatewayUiCommandTarget,
-      toolBindings: overlay.toolBindings,
-    },
-  };
 }
 
 /** Session sharing alone does not establish that two inputs belong to the same conversation. */

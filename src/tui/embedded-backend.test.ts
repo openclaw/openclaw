@@ -1692,16 +1692,13 @@ describe("EmbeddedTuiBackend", () => {
         await vi.waitFor(() => expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1));
         expect(agentCommandFromIngressMock.mock.calls[0]?.[0]).toMatchObject({ message: "first" });
         expect(events.some((event) => event.event === "agent")).toBe(false);
-        registeredListener?.({
+        const startEvent = {
           runId: "explicit-first",
           stream: "lifecycle",
           data: { phase: "start" },
-        });
-        registeredListener?.({
-          runId: "explicit-first",
-          stream: "lifecycle",
-          data: { phase: "start" },
-        });
+        };
+        registeredListener?.(startEvent);
+        registeredListener?.(startEvent);
         expect(events.filter((event) => event.event === "agent")).toEqual([
           expect.objectContaining({
             payload: expect.objectContaining({ data: { phase: "start", explicitFollowup: true } }),

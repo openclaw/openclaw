@@ -339,8 +339,6 @@ describe("tui command handlers", () => {
 
   it.each([
     { command: "/side check this", local: true },
-    { command: "/followup next task", local: true },
-    { command: "/followup next task", local: false },
     { command: "/not-a-real-command", local: true },
     { command: "/goal status", local: false },
     { command: "/model default", local: true },
@@ -364,25 +362,28 @@ describe("tui command handlers", () => {
   });
 
   it.each([true, false])(
-    "waits for actual local=%s followup admission before displaying queue feedback",
+    "forwards local=%s followups and reports only confirmed queue admission",
     async (local) => {
-      const send = createDeferred<{ runId: string; status: string }>();
-      const h = createTuiCommandHandlersHarness({
-        opts: { local },
-        sendChat: vi.fn(() => send.promise),
-      });
-      const pending = h.handleCommand("/followup next task");
-      expect(h.addSystem).not.toHaveBeenCalled();
-      send.resolve({ runId: "queued-followup", status: "queued" });
-      await pending;
-      if (local) {
-        expect(h.addSystem).toHaveBeenCalledWith(
-          "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
-        );
-      } else {
+      const queuedNotice =
+        "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.";
+      for (const status of [undefined, "queued"]) {
+        const send = createDeferred<{ runId: string; status?: string }>();
+        const h = createHarness({ opts: { local }, sendChat: vi.fn(() => send.promise) });
+        const pending = h.handleCommand("/followup next task");
         expect(h.addSystem).not.toHaveBeenCalled();
+        send.resolve({ runId: "followup", status });
+        await pending;
+        expectSendChatFields(h.sendChat, {
+          sessionKey: "agent:main:main",
+          message: "/followup next task",
+        });
+        expect(h.sendChat).toHaveBeenCalledOnce();
+        expectUnused(h.patchSession, h.runGoalCommand);
+        expect(h.runUsageCostCommand).not.toHaveBeenCalled();
+        expect(h.addSystem.mock.calls).toEqual(
+          local && status === "queued" ? [[queuedNotice]] : [],
+        );
       }
-      expect(h.patchSession).not.toHaveBeenCalled();
     },
   );
 

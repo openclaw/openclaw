@@ -158,7 +158,12 @@ export function withParticipantSessionToolsFixture(
       );
     }
     await withPersonalToolTurn(
-      { owner: alice, sessionKey: REQUESTER, sessionId: "session-tools-requester-id" },
+      {
+        owner: alice,
+        sessionKey: REQUESTER,
+        sessionId: "session-tools-requester-id",
+        allowCollaborativeSteering: true,
+      },
       async (turn) => {
         const runId = turn.runtimeIdentity.operationalRunInstance.runId;
         registerAgentRunContext(runId, {

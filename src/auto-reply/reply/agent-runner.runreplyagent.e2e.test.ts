@@ -149,11 +149,10 @@ function mockCallArgs(mock: ReturnType<typeof vi.fn>, label: string, callIndex =
 }
 
 function requireStoredSessionEntry(storePath: string, sessionKey = "main"): SessionEntry {
-  const entry = loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" });
-  if (!entry) {
-    throw new Error(`expected stored session entry for ${sessionKey}`);
-  }
-  return entry;
+  return expectDefined(
+    loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
+    `stored session entry for ${sessionKey}`,
+  );
 }
 
 function makeSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
@@ -400,11 +399,7 @@ function attachSourceTurnRecorder(params: {
 function requireBuiltChannelSourceTurnId(
   params: Parameters<typeof buildChannelSourceTurnId>[0],
 ): string {
-  const sourceTurnId = buildChannelSourceTurnId(params);
-  if (!sourceTurnId) {
-    throw new Error("test channel source turn id required");
-  }
-  return sourceTurnId;
+  return expectDefined(buildChannelSourceTurnId(params), "test channel source turn id");
 }
 
 describe("runReplyAgent active steering", () => {
@@ -1052,23 +1047,11 @@ describe("runReplyAgent active steering", () => {
       sessionKey: "main",
       storePath,
     });
-    const projectedUserRows = transcript.filter(
-      (entry): entry is { message: Record<string, unknown> } => {
-        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-          return false;
-        }
-        const message = (entry as { message?: unknown }).message;
-        return Boolean(
-          message &&
-          typeof message === "object" &&
-          !Array.isArray(message) &&
-          (message as { role?: unknown }).role === "user" &&
-          (message as { content?: unknown }).content === followupRun.prompt,
-        );
-      },
-    );
+    const projectedUserRows = transcript
+      .map(readTranscriptEventMessage)
+      .filter((message) => message?.role === "user" && message.content === followupRun.prompt);
     expect(projectedUserRows).toHaveLength(1);
-    expect(projectedUserRows[0]?.message).toMatchObject({
+    expect(projectedUserRows[0]).toMatchObject({
       __openclaw: {
         senderId: "user-42",
         senderName: "Ada",
@@ -2031,13 +2014,10 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionKey: "main",
       storePath,
     });
-    if (!sourceTurnId) {
-      throw new Error("test channel source turn id required");
-    }
     followupRun.userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
       input: {
         text: "custom default agent request",
-        idempotencyKey: sourceTurnId,
+        idempotencyKey: expectDefined(sourceTurnId, "test channel source turn id"),
         sender: { id: "sender-42", name: "Ada" },
       },
       target: {

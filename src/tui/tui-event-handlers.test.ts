@@ -153,13 +153,9 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   it.each([true, false])(
     "reports actual explicit followup starts only in local=%s mode",
     (localMode) => {
-      const { chatLog, handleAgentEvent } = createHandlersHarness({ localMode });
-      handleAgentEvent({ data: { phase: "start", explicitFollowup: true } });
-      if (localMode) {
-        expect(chatLog.addSystem).toHaveBeenCalledWith("Your followup has started.");
-      } else {
-        expect(chatLog.addSystem).not.toHaveBeenCalled();
-      }
+      const h = createHarness({ localMode });
+      h.agent(h.runId, { phase: "start", explicitFollowup: true });
+      expect(h.log.addSystem.mock.calls).toEqual(localMode ? [["Your followup has started."]] : []);
     },
   );
 

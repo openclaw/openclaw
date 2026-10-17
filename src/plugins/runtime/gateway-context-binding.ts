@@ -1,7 +1,4 @@
-import type {
-  GatewayContextResolver,
-  GatewayRequestContext,
-} from "../../gateway/server-methods/types.js";
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import {
   getGatewayContextBindingSlot,
   prepareGatewayContextBindingOwner,
@@ -94,34 +91,6 @@ export function bindGatewayContextResolver(
 export function getGatewayContextResolver(owner: object): GatewayContextResolver | undefined {
   const binding = getGatewayContextBinding(owner);
   return binding ? GatewayContextBinding.get(binding) : undefined;
-}
-
-// Freeze the admitted instance: a later resolver result is a replacement,
-// which retires this caller's routing authority instead of transferring it.
-export function captureGatewayContextResolver(
-  resolveGatewayContext: GatewayContextResolver | undefined,
-): GatewayContextResolver | undefined {
-  if (!resolveGatewayContext) {
-    return undefined;
-  }
-  let admittedContext: GatewayRequestContext | undefined;
-  try {
-    admittedContext = resolveGatewayContext();
-  } catch {
-    return () => undefined;
-  }
-  if (!admittedContext) {
-    return () => undefined;
-  }
-  const resolveAdmittedContext = () => {
-    try {
-      return resolveGatewayContext() === admittedContext ? admittedContext : undefined;
-    } catch {
-      return undefined;
-    }
-  };
-  bindGatewayContextResolver(resolveAdmittedContext, admittedContext.resolveGatewayContext);
-  return resolveAdmittedContext;
 }
 
 /** Follows explicit wrapper ownership without invoking any execution resolver. */
