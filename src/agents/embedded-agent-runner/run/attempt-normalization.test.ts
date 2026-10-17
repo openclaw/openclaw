@@ -25,128 +25,117 @@ const fixedStoreConfig = {
 };
 const sessionKey = "agent:main:main";
 const markerAfter = "sqlite:main:session-after:/tmp/sessions.json";
+const successor = { sessionIdUsed: "session-after", sessionFileUsed: markerAfter };
+const fixedStoreTarget = {
+  agentId: "ops",
+  sessionKey: "global",
+  storePath: fixedStoreConfig.session.store,
+};
 
 function makeSessionTarget(sessionId = "session-before", storePath = "/tmp/sessions.json") {
   return { agentId: "main", sessionId, sessionKey, storePath };
 }
 
-const sessionAccessorMocks = vi.hoisted(() => ({
-  patchSessionEntryCore:
-    vi.fn<typeof import("../../../config/sessions/session-accessor.js").patchSessionEntryCore>(),
-  updateSessionEntry: vi.fn(async () => undefined),
-}));
-const sessionReaderMocks = vi.hoisted(() => ({
-  readSessionEntrySummariesInWorker: vi.fn<SessionReader["readSessionEntrySummariesInWorker"]>(),
-  readSessionEntryInWorker: vi.fn<SessionReader["readSessionEntryInWorker"]>(),
-  withSessionEntryReadOnlyInWorker: vi.fn<SessionReader["withSessionEntryReadOnlyInWorker"]>(),
+const reads = vi.hoisted(() => ({
+  summaries: vi.fn<SessionReader["readSessionEntrySummariesInWorker"]>(),
+  entry: vi.fn<SessionReader["readSessionEntryInWorker"]>(),
+  withEntry: vi.fn<SessionReader["withSessionEntryReadOnlyInWorker"]>(),
 }));
 
-vi.mock("../../../config/sessions/session-entry-read-runtime.js", () => sessionReaderMocks);
-
-// mock-isolation: Normalization fixtures control transcript lookup and persistence without starting storage.
-vi.mock("../../../config/sessions/session-accessor.js", () => ({
-  findTranscriptEvent: vi.fn(async () => undefined),
-  ...sessionAccessorMocks,
+vi.mock("../../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntrySummariesInWorker: reads.summaries,
+  readSessionEntryInWorker: reads.entry,
+  withSessionEntryReadOnlyInWorker: reads.withEntry,
 }));
 
 beforeEach(() => {
-  sessionAccessorMocks.patchSessionEntryCore.mockReset().mockResolvedValue(null);
-  sessionAccessorMocks.updateSessionEntry.mockReset().mockResolvedValue(undefined);
-  sessionReaderMocks.readSessionEntrySummariesInWorker.mockReset().mockResolvedValue([]);
-  sessionReaderMocks.readSessionEntryInWorker.mockReset().mockResolvedValue(undefined);
-  sessionReaderMocks.withSessionEntryReadOnlyInWorker
-    .mockReset()
-    .mockImplementation(async (_scope, assertCurrent, consume) =>
-      consume({ ok: true, value: undefined }, { kind: "file", assertCurrent }),
-    );
+  reads.summaries.mockReset().mockResolvedValue([]);
+  reads.entry.mockReset().mockResolvedValue(undefined);
+  reads.withEntry.mockReset();
 });
 
-it.each([0, 2])(
-  "retains compaction facts when parent Stop arrives during persistence (%s ingress records)",
-  async (recordedCompactionCount) => {
-    const persistence = createDeferred();
-    const controller = new AbortController();
-    const generation = getAgentEventLifecycleGeneration();
-    const params = {
-      abortSignal: controller.signal,
-      prompt: "Stop while persisting",
-      runId: "normalization-stop",
-      sessionId: "normalization-stop",
-      sessionFile: "agent:main:normalization-stop",
-      timeoutMs: 30_000,
-      workspaceDir: "/tmp",
-    };
-    const laneController = createEmbeddedRunLaneController({
-      getParams: () => params,
-      getLifecycleGeneration: () => generation,
-      initialQueuedLifecycleGeneration: generation,
-      globalLane: "normalization-stop-global",
-      sessionLane: "normalization-stop-session",
-      setParams: vi.fn(),
-      setLifecycleGeneration: vi.fn(),
-    });
-    const cancelled = new Error("cancelled while user persistence was pending");
-    const contextRecoveryState = createEmbeddedRunContextRecoveryState();
-    contextRecoveryState.autoCompactionCount = recordedCompactionCount;
-    contextRecoveryState.lastCompactionTokensAfter = recordedCompactionCount > 0 ? 60 : undefined;
-    // Cancellation exits before model normalization; only the completed-attempt boundary is live.
-    const normalization = normalizeEmbeddedRunAttempt({
-      runInput: {
-        runParams: params,
-        laneController,
-      },
-      preparedRuntime: { snapshot: () => ({}) },
-      recordedCompactionCount,
-      dispatchedAttempt: {
-        rawAttempt: { compactionCount: 2, compactionTokensAfter: 40.9 },
-      },
-      sessionPromptState: {
-        activePrompt: { persisted: true },
-        waitForCurrentUserMessagePersistence: () => persistence.promise,
-      },
-      contextRecoveryState,
-    } as never);
+it.each([0, 2])("keeps compaction facts across Stop (%s)", async (recordedCompactionCount) => {
+  const persistence = createDeferred();
+  const controller = new AbortController();
+  const generation = getAgentEventLifecycleGeneration();
+  const params = {
+    abortSignal: controller.signal,
+    prompt: "Stop while persisting",
+    runId: "normalization-stop",
+    sessionId: "normalization-stop",
+    sessionFile: "agent:main:normalization-stop",
+    timeoutMs: 30_000,
+    workspaceDir: "/tmp",
+  };
+  const laneController = createEmbeddedRunLaneController({
+    getParams: () => params,
+    getLifecycleGeneration: () => generation,
+    initialQueuedLifecycleGeneration: generation,
+    globalLane: "normalization-stop-global",
+    sessionLane: "normalization-stop-session",
+    setParams: vi.fn(),
+    setLifecycleGeneration: vi.fn(),
+  });
+  const cancelled = new Error("cancelled while user persistence was pending");
+  const contextRecoveryState = createEmbeddedRunContextRecoveryState();
+  contextRecoveryState.autoCompactionCount = recordedCompactionCount;
+  contextRecoveryState.lastCompactionTokensAfter = recordedCompactionCount > 0 ? 60 : undefined;
+  // Cancellation exits before model normalization; only the completed-attempt boundary is live.
+  const normalization = normalizeEmbeddedRunAttempt({
+    runInput: { runParams: params, laneController },
+    preparedRuntime: { snapshot: () => ({}) },
+    recordedCompactionCount,
+    dispatchedAttempt: { rawAttempt: { compactionCount: 2, compactionTokensAfter: 40.9 } },
+    sessionPromptState: {
+      activePrompt: { persisted: true },
+      waitForCurrentUserMessagePersistence: () => persistence.promise,
+    },
+    contextRecoveryState,
+  } as never);
 
-    controller.abort(cancelled);
-    persistence.resolve();
-    await expect(normalization).rejects.toBe(cancelled);
-    expect(contextRecoveryState).toMatchObject({
-      autoCompactionCount: 2,
-      lastCompactionTokensAfter: recordedCompactionCount > 0 ? 60 : 40,
-    });
-  },
-);
+  controller.abort(cancelled);
+  persistence.resolve();
+  await expect(normalization).rejects.toBe(cancelled);
+  expect(contextRecoveryState).toMatchObject({
+    autoCompactionCount: 2,
+    lastCompactionTokensAfter: recordedCompactionCount > 0 ? 60 : 40,
+  });
+});
 
 describe("buildContextEngineCompactionSessionTarget", () => {
-  it("leaves the key absent when a marker has no stored mapping", async () => {
-    expect(
-      await buildContextEngineCompactionSessionTarget({
-        sessionFile: "sqlite:main:marker-session:/tmp/sessions.json",
-        sessionId: "stale-outer-session",
-      }),
-    ).toEqual({
-      agentId: "main",
-      sessionId: "marker-session",
-      storePath: "/tmp/sessions.json",
-    });
-  });
-
-  it("uses the explicit agent owner without inventing a session key", async () => {
-    expect(
-      await buildContextEngineCompactionSessionTarget({
+  it.each([
+    {
+      name: "explicit owner",
+      input: {
         agentId: "worker",
         config: {
-          agents: { ownership: "explicit", entries: { main: {}, worker: {} } },
+          agents: { ownership: "explicit" as const, entries: { main: {}, worker: {} } },
           session: { store: "/tmp/{agentId}/sessions.json" },
         },
-        sessionFile: "compat-session",
-        sessionId: "compat-session",
-      }),
-    ).toEqual({
-      agentId: "worker",
-      sessionId: "compat-session",
-      storePath: "/tmp/worker/sessions.json",
-    });
+        sessionFile: "compat",
+        sessionId: "compat",
+      },
+      expected: { agentId: "worker", sessionId: "compat", storePath: "/tmp/worker/sessions.json" },
+    },
+    {
+      name: "adopted session id",
+      input: {
+        sessionFile: "",
+        sessionId: "previous-session",
+        sessionTarget: { agentId: "main", sessionId: "adopted", storePath: "/tmp/sessions.json" },
+      },
+      expected: { agentId: "main", sessionId: "adopted", storePath: "/tmp/sessions.json" },
+    },
+    {
+      name: "marker over stale outer id",
+      input: {
+        sessionFile: "sqlite:main:marker:/tmp/sessions.json",
+        sessionId: "stale-outer",
+      },
+      expected: { agentId: "main", sessionId: "marker", storePath: "/tmp/sessions.json" },
+    },
+  ])("resolves $name without inventing a session key", async ({ input, expected }) => {
+    expect(await buildContextEngineCompactionSessionTarget(input)).toEqual(expected);
   });
 
   it("rejects a partial target that conflicts with the fixed-store owner", async () => {
@@ -156,31 +145,9 @@ describe("buildContextEngineCompactionSessionTarget", () => {
         sessionFile: "global",
         sessionId: "ops-session",
         sessionKey: "global",
-        sessionTarget: {
-          agentId: "research",
-          sessionId: "ops-session",
-          sessionKey: "global",
-        },
+        sessionTarget: { agentId: "research", sessionId: "ops-session", sessionKey: "global" },
       }),
     ).rejects.toThrow(/belongs to "ops"/u);
-  });
-
-  it("preserves an adopted session id without inventing a session key", async () => {
-    expect(
-      await buildContextEngineCompactionSessionTarget({
-        sessionFile: "",
-        sessionId: "previous-session",
-        sessionTarget: {
-          agentId: "main",
-          sessionId: "adopted-session",
-          storePath: "/tmp/sessions.json",
-        },
-      }),
-    ).toEqual({
-      agentId: "main",
-      sessionId: "adopted-session",
-      storePath: "/tmp/sessions.json",
-    });
   });
 });
 
@@ -237,66 +204,38 @@ describe("fixed-store session bootstrap", () => {
       sessionKey: "global",
     } as never);
 
-    expect(sessionReaderMocks.readSessionEntryInWorker).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "ops",
-        sessionKey: "global",
-        storePath: "/tmp/shared-sessions.json",
-      }),
+    expect(reads.entry).toHaveBeenCalledWith(
+      expect.objectContaining(fixedStoreTarget),
       expect.any(Function),
     );
   });
 
-  it("carries the resolved owner into quota-maintenance reads", async () => {
-    sessionReaderMocks.readSessionEntryInWorker.mockResolvedValueOnce({
-      sessionId: "ops-session",
-      updatedAt: 1,
-    });
-
+  it("carries the resolved owner and authority into quota-maintenance reads", async () => {
+    reads.entry.mockResolvedValueOnce({ sessionId: "ops-session", updatedAt: 1 });
     const assertCurrent = vi.fn();
-    const scope = {
-      agentId: "ops",
-      sessionKey: "global",
-      storePath: "/tmp/shared-sessions.json",
-    };
-    await loadAttemptSessionEntryAfterQuotaMaintenance(scope, assertCurrent);
-
-    expect(sessionReaderMocks.readSessionEntryInWorker).toHaveBeenCalledWith(scope, assertCurrent);
+    await loadAttemptSessionEntryAfterQuotaMaintenance(fixedStoreTarget, assertCurrent);
+    expect(reads.entry).toHaveBeenCalledWith(fixedStoreTarget, assertCurrent);
   });
 });
 
-describe("createEmbeddedRunSessionPromptState", () => {
-  it("keeps the admitted writer fence private across context-engine target adoption", async () => {
-    await using state = await createEmbeddedRunSessionPromptState({
-      runParams: {
-        agentId: "main",
-        prompt: "hello",
-        runId: "run-b",
-        sessionFile: sessionKey,
-        sessionId: "session-before",
-        sessionKey,
-        timeoutMs: 30_000,
-        workspaceDir: "/tmp",
-        sessionTarget: {
-          ...makeSessionTarget(),
-          expectedLifecycleRevision: "revision-a",
-          expectedWriterRunId: "run-b",
-        },
-      } as never,
-      lifecycleGeneration: "generation-a",
-      onInterrupt: () => {},
-      resolvedSessionKey: "agent:main:main",
-      sessionAgentId: "main",
-    });
-
-    state.sessionTarget = makeSessionTarget("session-after");
-
-    expect(state.sessionTarget).not.toHaveProperty("expectedWriterRunId");
-    expect(state.sessionWriterFence).toEqual({
-      expectedLifecycleRevision: "revision-a",
-      expectedWriterRunId: "run-b",
-    });
+it("keeps the admitted writer fence private across context-engine target adoption", async () => {
+  const fence = { expectedLifecycleRevision: "revision-a", expectedWriterRunId: "run-b" };
+  await using state = await createEmbeddedRunSessionPromptState({
+    runParams: {
+      sessionFile: sessionKey,
+      sessionId: "session-before",
+      sessionTarget: { ...makeSessionTarget(), ...fence },
+    } as never,
+    lifecycleGeneration: "generation-a",
+    onInterrupt: () => {},
+    resolvedSessionKey: "agent:main:main",
+    sessionAgentId: "main",
   });
+
+  state.sessionTarget = makeSessionTarget("session-after");
+
+  expect(state.sessionTarget).not.toHaveProperty("expectedWriterRunId");
+  expect(state.sessionWriterFence).toEqual(fence);
 });
 
 function promptState(storePath = "/tmp/sessions.json") {
@@ -336,21 +275,18 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
           }
         };
         const entry = { sessionId: "session-after", updatedAt: 2 };
-        sessionReaderMocks.readSessionEntrySummariesInWorker.mockImplementationOnce(async () => {
+        reads.summaries.mockImplementationOnce(async () => {
           await gate.promise;
           return [{ sessionKey: "agent:main:main", entry }];
         });
-        sessionReaderMocks.withSessionEntryReadOnlyInWorker.mockImplementationOnce(
-          async (_scope, _assertCurrent, consume) => {
-            await gate.promise;
-            return consume({ ok: true, value: entry }, { kind: "file", assertCurrent });
-          },
-        );
+        reads.withEntry.mockImplementationOnce(async (_scope, _assertCurrent, consume) => {
+          await gate.promise;
+          return consume({ ok: true, value: entry }, { kind: "file", assertCurrent });
+        });
         const pending = applyEmbeddedAttemptSessionIdentity({
           sessionPromptState: state,
           sessionIdUsed: "session-after",
-          sessionFileUsed:
-            kind === "marker" ? "sqlite:main:session-after:/tmp/sessions.json" : "agent:main:main",
+          sessionFileUsed: kind === "marker" ? markerAfter : sessionKey,
           assertCurrent,
         });
         expect(state.adoptSessionId).not.toHaveBeenCalled();
@@ -379,8 +315,8 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
           expect(state.sessionFile).toBe(previousFile);
           expect(state.sessionTarget.sessionId).toBe("session-before");
         }
-        sessionReaderMocks.readSessionEntrySummariesInWorker.mockReset();
-        sessionReaderMocks.withSessionEntryReadOnlyInWorker.mockReset();
+        reads.summaries.mockReset();
+        reads.withEntry.mockReset();
       }
     },
   );
@@ -393,7 +329,7 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
     };
     const started = createDeferred();
     const read = createDeferred<[]>();
-    sessionReaderMocks.readSessionEntrySummariesInWorker.mockImplementationOnce(() => {
+    reads.summaries.mockImplementationOnce(() => {
       started.resolve();
       return read.promise;
     });
@@ -406,11 +342,7 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
       },
       preparedRuntime: { snapshot: () => ({}) },
       dispatchedAttempt: {
-        rawAttempt: {
-          terminal: { kind: "ok" },
-          sessionIdUsed: "session-after",
-          sessionFileUsed: "sqlite:main:session-after:/tmp/sessions.json",
-        },
+        rawAttempt: { terminal: { kind: "ok" }, ...successor },
       },
       sessionPromptState: state,
       contextRecoveryState: createEmbeddedRunContextRecoveryState(),
@@ -424,7 +356,7 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
   });
 
   it("rebinds a legacy SQLite marker successor over the retained active entry", async () => {
-    sessionReaderMocks.readSessionEntrySummariesInWorker.mockResolvedValue([
+    reads.summaries.mockResolvedValue([
       { sessionKey: "agent:main:main", entry: { sessionId: "session-before", updatedAt: 1 } },
     ]);
     const state = promptState();
@@ -433,24 +365,20 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
     expect(state.sessionTarget).toEqual(makeSessionTarget("session-after"));
   });
 
-  it("rejects a legacy marker successor already mapped to another key", async () => {
-    sessionReaderMocks.readSessionEntrySummariesInWorker.mockResolvedValue([
-      { sessionKey: "agent:main:main", entry: { sessionId: "session-before", updatedAt: 1 } },
-      {
-        sessionKey: "agent:main:other",
-        entry: { sessionId: "session-after", updatedAt: 2 },
-      },
-    ]);
-    await expect(applyIdentity()).rejects.toThrow(
-      "successor target changed the active session binding",
-    );
-  });
-
-  it("rejects a legacy SQLite marker outside the active store", async () => {
-    await expect(
-      applyIdentity(promptState(), "sqlite:main:session-after:/tmp/other-sessions.json"),
-    ).rejects.toThrow("successor target changed the active session binding");
-  });
+  it.each([markerAfter, "sqlite:main:session-after:/tmp/other-sessions.json"])(
+    "rejects a successor mapped to another key or store: %s",
+    async (file) => {
+      if (file === markerAfter) {
+        reads.summaries.mockResolvedValue([
+          { sessionKey, entry: { sessionId: "session-before", updatedAt: 1 } },
+          { sessionKey: "agent:main:other", entry: { sessionId: "session-after", updatedAt: 2 } },
+        ]);
+      }
+      await expect(applyIdentity(promptState(), file)).rejects.toThrow(
+        "successor target changed the active session binding",
+      );
+    },
+  );
 
   it.each(["sqlite:other:session-after:/tmp/sessions.json", "agent:other:main"])(
     "rejects a cross-agent legacy successor identity: %s",

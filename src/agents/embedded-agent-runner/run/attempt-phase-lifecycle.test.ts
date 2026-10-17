@@ -40,6 +40,21 @@ import { completeEmbeddedAttemptAfterTurn } from "./attempt-finalize.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 
 const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-attempt-terminal-anchor-");
+const bootstrapCompletedEntry = expect.objectContaining({
+  type: "custom",
+  customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+});
+
+async function seedSession(
+  sessionId: string,
+  sessionKey = `agent:main:${sessionId}`,
+  file = "sessions.json",
+) {
+  const dir = tempDirs.make();
+  const target = { agentId: "main", sessionId, sessionKey, storePath: path.join(dir, file) };
+  await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
+  return { dir, target };
+}
 
 function streamInput(messages: unknown[] = [], currentAttemptAssistant?: unknown) {
   const runAbortDeadlineAtMs = Date.now() + 60_000;
@@ -115,8 +130,6 @@ function prepared(
       agentSession: { hookRunner },
       state: { prePromptMessageCount: 0 },
       contextGuards: { getAfterTurnCheckpoint: () => null },
-      cacheTrace: null,
-      anthropicPayloadLogger: null,
     },
   };
 }
@@ -129,8 +142,6 @@ function settled(
     promptError: null,
     sessionIdUsed,
     messagesSnapshot: [],
-    lastCallUsage: undefined,
-    promptCache: undefined,
     compactionOccurredThisAttempt: false,
     ...overrides,
   };
@@ -141,7 +152,25 @@ function prompt(transcriptLeafId: string | null = null) {
     yieldAborted: false,
     transcriptLeafId,
     promptStartedAt: Date.now(),
-    beforeAgentFinalizeRevisionReason: undefined,
+  };
+}
+
+function finalizationInput(preparedState: ReturnType<typeof prepared>) {
+  return {
+    agentDir: "/tmp/agent",
+    resolveActiveContextEnginePluginId: () => undefined,
+    setup: { effectiveWorkspace: "/tmp/workspace", sessionAgentId: "main" },
+    sessionLock: {
+      withOwnedTranscriptWrite: async <T>(operation: () => T | Promise<T>) => await operation(),
+    },
+    state: { terminal: { kind: "ok" } },
+    prepared: preparedState,
+    diagnostics: {
+      diagnosticTrace: {
+        traceId: "11111111111111111111111111111111",
+        spanId: "2222222222222222",
+      },
+    },
   };
 }
 
@@ -202,13 +231,7 @@ describe("embedded attempt phase lifecycle state", () => {
     const messages = [
       { role: "user", content: "Read a missing file." },
       modelAssistant,
-      {
-        role: "toolResult",
-        toolCallId: "outer-exec",
-        toolName: "exec",
-        isError: true,
-        content: [{ type: "text", text: "ENOENT" }],
-      },
+      makeTextToolResult("outer-exec", "exec", "ENOENT", true, 0),
     ];
     const { input } = streamInput(messages, modelAssistant);
     input.attempt.provider = "mock-openai";
@@ -230,14 +253,7 @@ describe("embedded attempt phase lifecycle state", () => {
   it.each(["complete", "missing admission", "missing terminal"] as const)(
     "handles %s candidate anchors without skipping later lifecycle work",
     async (boundary) => {
-      const dir = tempDirs.make();
-      const target = {
-        agentId: "main",
-        sessionId: "session-1",
-        sessionKey: "agent:main:main",
-        storePath: path.join(dir, "sessions.json"),
-      };
-      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const { dir, target } = await seedSession("session-1", "agent:main:main");
       const userMessage = { role: "user" as const, content: "hello", timestamp: 1 };
       const persistedUser = await appendTranscriptMessage(target, {
         cwd: dir,
@@ -259,28 +275,14 @@ describe("embedded attempt phase lifecycle state", () => {
         boundary === "missing terminal"
           ? SessionManager.inMemory(dir)
           : SessionManager.open(target, dir);
-      const terminalEntryId = sessionManager.appendMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "done" }],
-        api: "openai-responses",
-        provider: "openai",
-        model: "test-model",
-        usage: {
-          input: 1,
-          output: 1,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 2,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: 2,
-      });
+      const terminalEntryId = sessionManager.appendMessage(
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "done" }],
+          timestamp: 2,
+        }),
+      );
       const expectedTerminalAnchor = readActiveTranscriptEntryAnchor({
-        agentId: persistedUser.anchor.agentId,
-        sessionId: persistedUser.anchor.sessionId,
-        sessionKey: persistedUser.anchor.sessionKey,
-        storePath: persistedUser.anchor.storePath,
+        ...persistedUser.anchor,
         entryId: terminalEntryId,
       });
       if (boundary === "complete" && !expectedTerminalAnchor) {
@@ -295,6 +297,7 @@ describe("embedded attempt phase lifecycle state", () => {
       const onContextEngineTurnCandidate = vi.fn();
       await completeEmbeddedAttemptAfterTurn(
         {
+          ...finalizationInput(prepared(sessionManager)),
           attempt: {
             runId: "run-1",
             sessionId: target.sessionId,
@@ -317,15 +320,7 @@ describe("embedded attempt phase lifecycle state", () => {
             afterTurn,
             maintain,
           } as never,
-          agentDir: "/tmp/agent",
           resolveActiveContextEnginePluginId: () => "test",
-          setup: { effectiveWorkspace: "/tmp/workspace", sessionAgentId: "main" },
-          sessionLock: {
-            withOwnedTranscriptWrite: async (operation: () => unknown) => await operation(),
-          },
-          state: { terminal: { kind: "ok" } },
-          prepared: prepared(sessionManager),
-          diagnostics: { diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } as never },
         } as never,
         settled(target.sessionId, {
           messagesSnapshot: [{ role: "assistant", content: "done" }] as never,
@@ -351,20 +346,14 @@ describe("embedded attempt phase lifecycle state", () => {
       } else {
         expect(onContextEngineTurnCandidate).not.toHaveBeenCalled();
       }
-      expect(sessionManager.getEntries()).toContainEqual(
-        expect.objectContaining({
-          type: "custom",
-          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
-        }),
-      );
+      expect(sessionManager.getEntries()).toContainEqual(bootstrapCompletedEntry);
       expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledOnce();
       expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].skillExperienceReviewSource).toEqual(
         sessionManager.getSessionTarget()
           ? { ...sessionManager.getSessionTarget(), entryId: terminalEntryId }
           : undefined,
       );
-      expect(afterTurn).not.toHaveBeenCalled();
-      expect(maintain).not.toHaveBeenCalled();
+      expect([afterTurn.mock.calls, maintain.mock.calls]).toEqual([[], []]);
     },
   );
 
@@ -380,6 +369,12 @@ describe("embedded attempt phase lifecycle state", () => {
       hoisted.runAgentEndSideEffects.mockClear();
       await completeEmbeddedAttemptAfterTurn(
         {
+          ...finalizationInput(
+            prepared(SessionManager.inMemory(), false, [{ name: "skill_workshop" }], {
+              hasHooks: () => true,
+              runAgentEnd,
+            }),
+          ),
           attempt: {
             runId: "run-1",
             sessionId: "session-1",
@@ -389,30 +384,16 @@ describe("embedded attempt phase lifecycle state", () => {
             contextTokenBudget: 180_000,
             sessionFile: "/tmp/session.jsonl",
           } as never,
-          activeContextEngine: undefined,
-          agentDir: "/tmp/agent",
-          resolveActiveContextEnginePluginId: () => undefined,
-          setup: { effectiveWorkspace: "/tmp/workspace", sessionAgentId: "main" },
-          sessionLock: {
-            withOwnedTranscriptWrite: async (operation: () => unknown) => await operation(),
-          },
-          state: {
-            terminal: { kind: "ok" },
-          },
-          prepared: prepared(SessionManager.inMemory(), false, [{ name: "skill_workshop" }], {
-            hasHooks: () => true,
-            runAgentEnd,
-          }),
-          diagnostics: { diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } as never },
         } as never,
         settled("session-1", { promptError }) as never,
         prompt(),
       );
 
       expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledTimes(1);
-      const event = hoisted.runAgentEndSideEffects.mock.calls[0]?.[0]?.event;
-      expect(event).toMatchObject({ success: false });
-      expect(event?.error).toBe("provider failed");
+      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0]?.event).toMatchObject({
+        success: false,
+        error: "provider failed",
+      });
       expect(runAgentEnd).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ success: false }),
         expect.objectContaining({ runId: "run-1", sessionId: "session-1", sessionKey }),
@@ -433,14 +414,7 @@ describe("embedded attempt phase lifecycle state", () => {
   it.each(["blocked writes", "interrupted tool result"] as const)(
     "selects review evidence after the pre-turn boundary with %s",
     async (tail) => {
-      const dir = tempDirs.make();
-      const target = {
-        agentId: "main",
-        sessionId: "review-boundary",
-        sessionKey: "agent:main:review-boundary",
-        storePath: path.join(dir, "sessions.json"),
-      };
-      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const { dir, target } = await seedSession("review-boundary");
       const sessionManager = SessionManager.open(target, dir);
       let currentTurn = false;
       installSessionToolResultGuard(sessionManager, {
@@ -473,26 +447,20 @@ describe("embedded attempt phase lifecycle state", () => {
 
       await completeEmbeddedAttemptAfterTurn(
         {
+          ...finalizationInput(prepared(sessionManager, true, [{ name: "skill_workshop" }])),
           attempt: {
             runId: "reused-run-id",
             sessionId: target.sessionId,
             contextTokenBudget: 180_000,
           } as never,
-          activeContextEngine: undefined,
           agentDir: dir,
-          resolveActiveContextEnginePluginId: () => undefined,
           setup: { effectiveWorkspace: dir, sessionAgentId: "main" },
-          sessionLock: {
-            withOwnedTranscriptWrite: async (operation: () => unknown) => await operation(),
-          },
           state: {
             terminal:
               tail === "interrupted tool result"
                 ? { kind: "aborted", source: "external" }
                 : { kind: "ok" },
           },
-          prepared: prepared(sessionManager, true, [{ name: "skill_workshop" }]),
-          diagnostics: { diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } as never },
         } as never,
         settled(target.sessionId) as never,
         prompt(transcriptLeafId),
@@ -516,14 +484,7 @@ describe("embedded attempt phase lifecycle state", () => {
     "eligible completion",
     "abort while queued",
   ] as const)("settles %s behind a held agent writer", async (scenario) => {
-    const dir = tempDirs.make();
-    const target = {
-      agentId: "main",
-      sessionId: "after-turn",
-      sessionKey: "agent:main:after-turn",
-      storePath: path.join(dir, "openclaw-agent.sqlite"),
-    };
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const { dir, target } = await seedSession("after-turn", undefined, "openclaw-agent.sqlite");
     const sessionManager = SessionManager.open(target, dir);
     sessionManager.appendMessage({ role: "user", content: "synthetic after-turn", timestamp: 1 });
     const originalEntries = sessionManager.getEntries();
@@ -550,6 +511,7 @@ describe("embedded attempt phase lifecycle state", () => {
       await entered.promise;
       afterTurn = completeEmbeddedAttemptAfterTurn(
         {
+          ...finalizationInput(prepared(sessionManager, scenario !== "completion not requested")),
           attempt: {
             runId: "after-turn",
             contextTokenBudget: 180_000,
@@ -558,22 +520,13 @@ describe("embedded attempt phase lifecycle state", () => {
             sessionTarget: target,
             sessionFile: target.sessionKey,
           },
-          activeContextEngine: undefined,
           agentDir: dir,
-          resolveActiveContextEnginePluginId: () => undefined,
           setup: { effectiveWorkspace: dir, sessionAgentId: target.agentId },
           sessionLock: {
             withOwnedTranscriptWrite: <T>(operation: () => Promise<T> | T) =>
               lifecycle.withTranscriptWrite(operation),
           },
           state: executionState,
-          prepared: prepared(sessionManager, scenario !== "completion not requested"),
-          diagnostics: {
-            diagnosticTrace: {
-              traceId: "11111111111111111111111111111111",
-              spanId: "2222222222222222",
-            },
-          },
         } as never,
         settled(target.sessionId, {
           promptError: scenario === "prompt error" ? new Error("synthetic prompt error") : null,
@@ -605,10 +558,7 @@ describe("embedded attempt phase lifecycle state", () => {
       const entries = SessionManager.open(target, dir).getEntries();
       if (scenario === "eligible completion") {
         expect(entries).toHaveLength(originalEntries.length + 1);
-        expect(entries.at(-1)).toMatchObject({
-          type: "custom",
-          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
-        });
+        expect(entries.at(-1)).toEqual(bootstrapCompletedEntry);
       } else {
         expect(entries).toEqual(originalEntries);
       }

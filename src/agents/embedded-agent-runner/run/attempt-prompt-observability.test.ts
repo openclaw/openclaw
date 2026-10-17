@@ -2,8 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../../runtime/index.js";
 
 const hoisted = vi.hoisted(() => ({
-  buildAgentHookContextChannelFields: vi.fn(() => ({ channel: "discord" })),
-  buildAgentHookContextIdentityFields: vi.fn(() => ({ senderId: "sender-1" })),
   emitTrustedDiagnosticEvent: vi.fn(),
   hasHooks: vi.fn(() => true),
   log: { debug: vi.fn(), info: vi.fn(), isEnabled: vi.fn(() => false), warn: vi.fn() },
@@ -21,10 +19,6 @@ const hoisted = vi.hoisted(() => ({
 vi.mock("../../../infra/diagnostic-events.js", () => ({
   emitTrustedDiagnosticEvent: hoisted.emitTrustedDiagnosticEvent,
 }));
-vi.mock("../../../plugins/hook-agent-context.js", () => ({
-  buildAgentHookContextChannelFields: hoisted.buildAgentHookContextChannelFields,
-  buildAgentHookContextIdentityFields: hoisted.buildAgentHookContextIdentityFields,
-}));
 vi.mock("../../../trajectory/runtime.js", () => ({
   toTrajectoryToolDefinitions: hoisted.toTrajectoryToolDefinitions,
 }));
@@ -34,11 +28,11 @@ import { observeEmbeddedAttemptPrompt } from "./attempt-prompt-support.js";
 
 type PromptObservabilityInput = Parameters<typeof observeEmbeddedAttemptPrompt>[0];
 
-function createInput(overrides: Partial<PromptObservabilityInput> = {}): PromptObservabilityInput {
+function observe(overrides: Partial<PromptObservabilityInput> = {}, skipped = false) {
   const sessionMessages: AgentMessage[] = [
     { role: "user", content: [{ type: "text", text: "history" }], timestamp: 1 },
   ];
-  return {
+  const input: PromptObservabilityInput = {
     attempt: {
       messageChannel: "discord",
       modelId: "model-1",
@@ -78,11 +72,7 @@ function createInput(overrides: Partial<PromptObservabilityInput> = {}): PromptO
     transport: "sse",
     uncompactedEffectiveTools: [{ name: "visible-tool" }, { name: "deferred-tool" }],
     ...overrides,
-  } as PromptObservabilityInput;
-}
-
-function observe(overrides: Partial<PromptObservabilityInput> = {}, skipped = false) {
-  const input = createInput(overrides);
+  };
   expect(observeEmbeddedAttemptPrompt(input)).toEqual({ skipPromptSubmission: skipped });
   return input;
 }
@@ -96,11 +86,7 @@ function expectDispatch(stages: number, trajectory: number, hooks: number) {
 }
 
 describe("observeEmbeddedAttemptPrompt", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    hoisted.hasHooks.mockReturnValue(true);
-    hoisted.log.isEnabled.mockReturnValue(false);
-  });
+  beforeEach(() => vi.clearAllMocks());
 
   it("records the assembled prompt boundary and dispatches a cloned llm_input snapshot", () => {
     const input = observe();
@@ -146,14 +132,7 @@ describe("observeEmbeddedAttemptPrompt", () => {
   });
 
   it("marks a blank current prompt as skipped while preserving its compiled trace", () => {
-    const input = observe(
-      {
-        imageCount: 0,
-        llmBoundaryPromptForPrecheck: "   ",
-        promptForModel: "   ",
-      },
-      true,
-    );
+    const input = observe({ imageCount: 0, promptForModel: "   " }, true);
     expect(hoisted.recordTrajectoryEvent).toHaveBeenNthCalledWith(
       1,
       "context.compiled",
@@ -176,22 +155,19 @@ describe("observeEmbeddedAttemptPrompt", () => {
     expectDispatch(0, 0, 0);
   });
 
-  it.each([false, true])(
-    "does not read unused trajectory tool metadata (compacted=%s)",
-    (toolSearchCompacted) => {
-      const tool = {
-        get name(): string {
-          throw new Error("unrecorded tool metadata must not be read");
-        },
-      };
-      observe({
-        effectiveTools: [tool],
-        uncompactedEffectiveTools: [tool],
-        toolSearchCompacted,
-        trajectoryRecorder: null,
-      });
+  it.each([false, true])("ignores unrecorded tool metadata (compacted=%s)", (compacted) => {
+    const tool = {
+      get name(): string {
+        throw new Error("unrecorded tool metadata must not be read");
+      },
+    };
+    observe({
+      effectiveTools: [tool],
+      uncompactedEffectiveTools: [tool],
+      toolSearchCompacted: compacted,
+      trajectoryRecorder: null,
+    });
 
-      expectDispatch(2, 0, 1);
-    },
-  );
+    expectDispatch(2, 0, 1);
+  });
 });

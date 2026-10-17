@@ -10,6 +10,7 @@ import type {
 import type { prepareEmbeddedAttemptPromptPreflight } from "./attempt-prompt-preflight.js";
 import type { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import type { createPromptBuildToolPolicy } from "./attempt-prompt-support.js";
+import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   applyPromptToolsAllow: vi.fn(),
@@ -132,11 +133,8 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
     yieldDetected: false,
     yieldMessage: null as string | null,
   };
-  const activeSession = {
-    isCompacting: false,
-    messages: [],
-    agent: { state: { messages: [] }, streamFn: vi.fn() },
-  };
+  const agent = { state: { messages: [] }, streamFn: vi.fn() };
+  const activeSession = { isCompacting: false, messages: [], agent };
   const sessionManager = {
     getSessionTarget: () => undefined,
     getHeader: () => ({ version: 3 }),
@@ -148,9 +146,7 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
     order.push(stage);
     return result;
   };
-  const stopAcceptingSteerMessages = vi.fn(() => {
-    record("stop-steering", undefined);
-  });
+  const stopAcceptingSteerMessages = vi.fn(() => record("stop-steering", undefined));
 
   mocks.preparePromptAssembly.mockImplementation(async (input: AssemblyCall) => {
     order.push("assembly");
@@ -167,10 +163,8 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
   });
   mocks.preparePromptContext.mockImplementation(() =>
     record("context", {
-      aggregatePressureEngaged: false,
       contextTokenBudget: 32_000,
       currentUserTimestampOverride: { timestamp: 123, text: "hello" },
-      effectivePrompt: "hello",
       hookMessagesForCurrentPrompt: [],
       llmBoundaryPromptForPrecheck: pendingPrompt,
       prePromptMessageCount: 2,
@@ -193,11 +187,6 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
         data: "aW1hZ2U=",
         mimeType: "image/png",
       })),
-      imageFactIndexes: [null],
-      detectedRefs: [],
-      failedMediaCount: 0,
-      loadedCount: 1,
-      skippedCount: 0,
     }),
   );
   mocks.observePrompt.mockImplementation(() => record("observe", { skipPromptSubmission: false }));
@@ -224,13 +213,7 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
     sessionLock: {
       withOwnedTranscriptWrite: async <T>(operation: () => Promise<T> | T) => await operation(),
     },
-    setup: {
-      prepStages: { mark: vi.fn() },
-      effectiveFsWorkspaceOnly: false,
-      effectiveWorkspace: "/tmp/workspace",
-      sandbox: null,
-      sessionAgentId: "main",
-    },
+    setup: createAttemptSetupFixture(),
     diagnostics: { diagnosticTrace: {}, runTrace: {} },
     prepared: {
       sessionRuntime: {
@@ -238,20 +221,13 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
           activeSession,
           hookRunner: null,
           setActiveSessionSystemPrompt: vi.fn(),
-          settingsManager: {
-            getCompactionEnabled: () => true,
-            getCompactionReserveTokens: () => 77,
-          },
+          settingsManager: { getCompactionReserveTokens: () => 77 },
         },
         boundary: {
           includeBoundaryTimestamp: false,
           setCurrentUserTimestampOverride: vi.fn(),
         },
-        cacheTrace: null,
-        contextGuards: {
-          checkMidTurnPrecheck: vi.fn(),
-          takePendingMidTurnPrecheckRequest: () => undefined,
-        },
+        contextGuards: { takePendingMidTurnPrecheckRequest: () => undefined },
         preparedUserTurnMessage: {
           role: "user",
           content: "hello",
@@ -262,7 +238,6 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
         sessionPromptState: {},
         state: sessionRuntimeState,
         toolResultPromptProjectionState: {},
-        trajectoryRecorder: null,
         transcriptPolicy: { appendOnlyRuntimeContext: true },
         transport: {
           effectiveAgentTransport: "sse",
