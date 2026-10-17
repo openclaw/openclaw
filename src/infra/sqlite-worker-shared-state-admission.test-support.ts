@@ -80,20 +80,17 @@ export function registerSharedStateWorkerAdmissionTests(
     const other = acquireGatewayStateOwner({
       databasePath: createContext().admission.databasePath,
     });
-    const maintenance = createOpenClawDatabaseMaintenanceScope({
-      schemaMaintenance: true,
-      assertOwnerCurrent: owner.assertCurrent,
-      assertDatabaseAccess: owner.assertDatabaseAccess,
-    });
-    const wrongOwner = createOpenClawDatabaseMaintenanceScope({
-      schemaMaintenance: true,
-      assertOwnerCurrent: other.assertCurrent,
-      assertDatabaseAccess: other.assertDatabaseAccess,
-    });
-    const unbound = createOpenClawDatabaseMaintenanceScope({
-      schemaMaintenance: true,
-      assertOwnerCurrent: owner.assertCurrent,
-    });
+    const scopeFor = (authority: typeof owner, bound = true) =>
+      createOpenClawDatabaseMaintenanceScope({
+        schemaMaintenance: true,
+        assertOwnerCurrent: authority.assertCurrent,
+        ...(bound ? { assertDatabaseAccess: authority.assertDatabaseAccess } : {}),
+      });
+    const maintenance = scopeFor(owner);
+    const wrongOwner = scopeFor(other);
+    const unbound = scopeFor(owner, false);
+    const stored = (deviceId: string) =>
+      readDeviceAuthTokenObservationFromDatabase(database.db, { deviceId, role: "operator" }).entry;
     const stages: string[] = [];
     let lateOwner: ReturnType<typeof acquireGatewayStateOwner> | undefined;
     const write = (deviceId: string, beforeCommit?: () => void) =>
@@ -123,7 +120,7 @@ export function registerSharedStateWorkerAdmissionTests(
         runOpenClawStateWriteTransaction(
           ({ db }) =>
             storeDeviceAuthTokenInDatabase(db, {
-              deviceId: "sync-unrelated",
+              deviceId: "sync",
               role: "operator",
               token: "must-not-commit",
             }),
@@ -131,7 +128,7 @@ export function registerSharedStateWorkerAdmissionTests(
         ),
       ).toThrow("offline maintenance");
       await expect(write("unrelated")).rejects.toThrow("offline maintenance");
-      await expect(wrongOwner.run(() => write("wrong-owner"))).rejects.toThrow("does not own");
+      await expect(wrongOwner.run(() => write("wrong"))).rejects.toThrow("does not own");
       await expect(unbound.run(() => write("unbound"))).rejects.toThrow("does not own");
       expect(stages).toEqual([]);
       await expect(maintenance.run(() => write("accepted"))).resolves.toMatchObject({
@@ -141,38 +138,18 @@ export function registerSharedStateWorkerAdmissionTests(
         "no longer current",
       );
       await expect(
-        write("late-maintenance", () => {
+        write("late", () => {
           lateOwner = acquireGatewayStateOwner({ databasePath: database.path });
         }),
       ).rejects.toThrow("offline maintenance");
       lateOwner?.release();
-      expect(stages).toEqual([
-        "accepted:transaction",
-        "accepted:commit",
-        "revoked:transaction",
-        "revoked:commit",
-        "late-maintenance:transaction",
-        "late-maintenance:commit",
-      ]);
-      for (const deviceId of [
-        "sync-unrelated",
-        "unrelated",
-        "wrong-owner",
-        "unbound",
-        "revoked",
-        "late-maintenance",
-      ]) {
-        expect(
-          readDeviceAuthTokenObservationFromDatabase(database.db, { deviceId, role: "operator" })
-            .entry,
-        ).toBeNull();
+      expect(stages).toEqual(
+        ["accepted", "revoked", "late"].flatMap((id) => [`${id}:transaction`, `${id}:commit`]),
+      );
+      for (const deviceId of ["sync", "unrelated", "wrong", "unbound", "revoked", "late"]) {
+        expect(stored(deviceId)).toBeNull();
       }
-      expect(
-        readDeviceAuthTokenObservationFromDatabase(database.db, {
-          deviceId: "accepted",
-          role: "operator",
-        }).entry?.token,
-      ).toBe("synthetic-owner-token");
+      expect(stored("accepted")?.token).toBe("synthetic-owner-token");
     } finally {
       lateOwner?.release();
       owner.release();
@@ -224,11 +201,7 @@ export function registerSharedStateWorkerAdmissionTests(
         expect(
           await store.execute({
             type: "deviceAuth.read",
-            input: {
-              deviceId: input.deviceId,
-              role: input.role,
-              readOnly: true,
-            },
+            input: { deviceId: input.deviceId, role: input.role, readOnly: true },
           }),
         ).toMatchObject({
           entry: { token: input.token, role: input.role },
@@ -319,8 +292,10 @@ export function registerSharedStateWorkerAdmissionTests(
         });
         const follower = scope.execute(relayWrite(1));
         const [first, second] = await Promise.allSettled([head, follower]);
-        expect(first).toEqual({ status: "rejected", reason: stopped });
-        expect(second.status).toBe("fulfilled");
+        expect([first, second]).toEqual([
+          { status: "rejected", reason: stopped },
+          expect.objectContaining({ status: "fulfilled" }),
+        ]);
       },
       {
         createAdmission: () => {

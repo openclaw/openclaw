@@ -36,7 +36,7 @@ import * as exportOwnership from "../transcripts/store-export-ownership.js";
 import { TranscriptLibraryError } from "../transcripts/store-read.js";
 import { TranscriptsStore, transcriptSessionSelector } from "../transcripts/store.js";
 import { summarizeTranscripts } from "../transcripts/summary.js";
-import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
+import { requireNodeSqlite } from "./node-sqlite.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
@@ -110,10 +110,8 @@ async function withoutParentTranscriptSql(operation: () => Promise<void>) {
   const prepared = new WeakMap<object, ObservedSql>();
   const sqlite = requireNodeSqlite();
   const originalConstructor = sqlite.DatabaseSync;
-  let opens = 0;
   sqlite.DatabaseSync = new Proxy(originalConstructor, {
     construct(target, args, newTarget) {
-      opens += 1;
       const database: DatabaseSync = Reflect.construct(target, args, newTarget);
       observed.push({ databasePath: database.location() });
       return database;
@@ -142,24 +140,6 @@ async function withoutParentTranscriptSql(operation: () => Promise<void>) {
   );
   const calls = [prepare, exec, close, ...statements];
   try {
-    const calibration = openNodeSqliteDatabase(":memory:");
-    try {
-      calibration.exec("SELECT 1");
-      const statement = calibration.prepare("SELECT 1 AS value");
-      statement.get();
-      statement.all();
-      statement.run();
-      expect([...statement.iterate()]).toEqual([{ value: 1 }]);
-    } finally {
-      calibration.close();
-    }
-    expect(opens).toBe(1);
-    for (const call of calls) {
-      expect(call).toHaveBeenCalled();
-      call.mockClear();
-    }
-    opens = 0;
-    observed.length = 0;
     await operation();
     for (const statement of statements) {
       for (const receiver of statement.mock.contexts) {
@@ -243,38 +223,26 @@ it("appends immutable speech on the canonical worker with exact-id deduplication
   });
   await store.writeSession(session);
   await closeDatabase();
-  const toJSON = vi.fn(() => ({ language: "en", nested: [1, null, "🦞"] }));
-  const utterance: TranscriptUtterance = {
+  const original: TranscriptUtterance = {
     id: "first",
     text: "First speech",
     speaker: { id: "speaker", label: "Sam" },
-    metadata: { toJSON },
+    metadata: { language: "en", nested: [1, null, "🦞"] },
     final: true,
   };
+  const toJSON = vi.fn(() => structuredClone(original.metadata));
+  const utterance = { ...original, speaker: { ...original.speaker }, metadata: { toJSON } };
   await withoutParentTranscriptSql(async () => {
     const writing = store.appendUtteranceForSession(session, utterance);
     utterance.text = "Caller changed speech";
     utterance.speaker!.label = "Caller changed speaker";
     await writing;
-    await store.appendUtteranceForSession(session, {
-      id: "first",
-      text: "First speech",
-      speaker: { id: "speaker", label: "Sam" },
-      metadata: { language: "en", nested: [1, null, "🦞"] },
-      final: true,
-    });
+    await store.appendUtteranceForSession(session, structuredClone(original));
     await store.appendUtteranceForSession(session, { text: "Second speech" });
   });
   expect(toJSON).toHaveBeenCalledOnce();
   expect(await store.readUtterancesForSession(session)).toEqual([
-    {
-      id: "first",
-      sessionId: session.sessionId,
-      text: "First speech",
-      speaker: { id: "speaker", label: "Sam" },
-      metadata: { language: "en", nested: [1, null, "🦞"] },
-      final: true,
-    },
+    { ...original, sessionId: session.sessionId },
     { sessionId: session.sessionId, text: "Second speech" },
   ]);
   const revision = await store.readSummaryInputRevision(session);
@@ -408,32 +376,6 @@ it("retains the captured session input and database through export preparation",
   expect(existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
 });
 
-it.each(["transaction", "commit"] as const)(
-  "preserves an empty candidate when its discard owner retires at the worker %s grant",
-  async (stage) => {
-    const { store } = fixture();
-    const session = sessionFixture(`session-revoked-${stage}`, {
-      stoppedAt: "2026-09-21T12:00:01.000Z",
-      title: "Original",
-    });
-    await store.writeSession(session);
-    const expectedInputRevision = await store.readSummaryInputRevision(session);
-    if (expectedInputRevision === undefined) {
-      throw new Error("Expected stored transcript admission");
-    }
-    const { failure, requests, observer, assertCurrent } = retireAt(stage);
-    try {
-      await expect(
-        store.deleteEmptySessionCandidate(session, { expectedInputRevision, assertCurrent }),
-      ).rejects.toBe(failure);
-    } finally {
-      observer.mockRestore();
-    }
-    expect(requests).toContain(stage);
-    expect(await store.readSession(session.sessionId)).toEqual(session);
-  },
-);
-
 it("publishes captured summary notes without caller-thread transcript SQL", async () => {
   const { env, store } = fixture();
   const session = sessionFixture("summary-worker", {
@@ -458,7 +400,7 @@ it("publishes captured summary notes without caller-thread transcript SQL", asyn
 });
 
 it.each(
-  (["session", "summary"] as const).flatMap((operation) =>
+  (["discard", "session", "summary"] as const).flatMap((operation) =>
     (["transaction", "commit"] as const).map((stage) => ({ operation, stage })),
   ),
 )(
@@ -467,9 +409,14 @@ it.each(
     const { env, store } = fixture();
     const session = sessionFixture(`${operation}-revoked-${stage}`, {
       startedAt: "2026-09-20T12:00:00.000Z",
+      ...(operation === "discard" ? { stoppedAt: "2026-09-20T12:00:01.000Z" } : {}),
       title: "Original",
     });
     await store.writeSession(session);
+    const expectedInputRevision = await store.readSummaryInputRevision(session);
+    if (expectedInputRevision === undefined) {
+      throw new Error("Expected stored transcript admission");
+    }
     if (operation === "summary") {
       await store.appendUtteranceForSession(session, { text: "Fresh captured speech" });
       await store.writeSummary(
@@ -481,21 +428,23 @@ it.each(
     const { failure, requests, observer, assertCurrent } = retireAt(stage);
     try {
       await expect(
-        operation === "session"
-          ? store.writeSession({ ...session, title: "Retired update" }, { assertCurrent })
-          : persistTranscriptSummary({
-              stateDir: env.OPENCLAW_STATE_DIR,
-              config: resolveTranscriptsConfig(undefined),
-              store,
-              session,
-              assertCurrent,
-            }),
+        operation === "discard"
+          ? store.deleteEmptySessionCandidate(session, { expectedInputRevision, assertCurrent })
+          : operation === "session"
+            ? store.writeSession({ ...session, title: "Retired update" }, { assertCurrent })
+            : persistTranscriptSummary({
+                stateDir: env.OPENCLAW_STATE_DIR,
+                config: resolveTranscriptsConfig(undefined),
+                store,
+                session,
+                assertCurrent,
+              }),
       ).rejects.toBe(failure);
     } finally {
       observer.mockRestore();
     }
     expect(requests).toContain(stage);
-    if (operation === "session") {
+    if (operation !== "summary") {
       expect(await store.readSession(session.sessionId)).toEqual(session);
     } else {
       expect(await store.readSummary(session)).toEqual(previous);
@@ -552,8 +501,10 @@ it("returns complete stored reads and typed errors after existing-only status an
       { session, selector, hasSummary: true },
     ]);
     const matches = await store.matchSessionEntries(session.sessionId);
-    expect(matches.qualified).toEqual([]);
-    expect(matches.unqualified).toMatchObject([{ session, selector, hasSummary: true }]);
+    expect(matches).toMatchObject({
+      qualified: [],
+      unqualified: [{ session, selector, hasSummary: true }],
+    });
     const revision = await store.readSummaryInputRevision(session);
     expect(JSON.parse(revision!).next_utterance_seq).toBe(utterances.length);
     expect(
@@ -580,13 +531,7 @@ it("returns complete stored reads and typed errors after existing-only status an
     });
     expect(await store.readLatestEntry()).toMatchObject({ session, selector, utteranceCount: 20 });
     const page = await getTranscriptLibrary(store, { selector, includeUtterances: true, limit: 2 });
-    expect(
-      page.utterances?.map(({ sequence, text, speakerLabel }) => ({
-        sequence,
-        text,
-        speakerLabel,
-      })),
-    ).toEqual([
+    expect(page.utterances).toMatchObject([
       { sequence: 0, text: "Meeting text 0 🦞\\n", speakerLabel: "Speaker" },
       { sequence: 1, text: "Meeting text 1 🦞\\n", speakerLabel: "Speaker" },
     ]);

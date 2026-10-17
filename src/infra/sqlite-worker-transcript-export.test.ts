@@ -57,19 +57,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function storeFor(stateDir: string): TranscriptsStore {
-  return new TranscriptsStore(path.join(stateDir, "transcripts"), {
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  });
-}
-
-async function seedDigestRecovery(
-  stateDir: string,
-  count: number,
-  modified = false,
-  missingMetadata = false,
-) {
-  const store = storeFor(stateDir);
+async function seedDigestRecovery(count: number, modified = false, missingMetadata = false) {
+  const env = { ...process.env, OPENCLAW_STATE_DIR: suiteStateDir };
+  const store = new TranscriptsStore(path.join(suiteStateDir, "transcripts"), { env });
   const session: TranscriptSessionDescriptor = {
     sessionId: `digest-recovery-${++nextSessionId}`,
     title: "Captured title",
@@ -92,9 +82,7 @@ async function seedDigestRecovery(
   const original = await fs.readFile(artifacts.transcriptPath, "utf8");
   expect(jsonLines(original)).toEqual(storedUtterances(session.sessionId, utterances));
   const expectedHash = digest(original);
-  const database = openOpenClawStateDatabase({
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  }).db;
+  const { db: database, path: databasePath } = openOpenClawStateDatabase({ env });
   const readManifest = () => {
     const row = database
       .prepare(
@@ -129,6 +117,7 @@ async function seedDigestRecovery(
 
   return {
     store,
+    databasePath,
     session,
     utterances,
     artifacts,
@@ -139,7 +128,7 @@ async function seedDigestRecovery(
   };
 }
 
-async function captureStdout(run: () => Promise<void>): Promise<string> {
+async function runTranscriptsCli(args: string[]): Promise<string> {
   let output = "";
   const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
     chunk: string | Uint8Array,
@@ -148,19 +137,13 @@ async function captureStdout(run: () => Promise<void>): Promise<string> {
     return true;
   }) as typeof process.stdout.write);
   try {
-    await run();
+    const program = new Command().name("openclaw");
+    registerTranscriptsCli(program);
+    await program.parseAsync(["transcripts", ...args], { from: "user" });
     return output;
   } finally {
     writeSpy.mockRestore();
   }
-}
-
-async function runTranscriptsCli(args: string[]): Promise<string> {
-  return captureStdout(async () => {
-    const program = new Command().name("openclaw");
-    registerTranscriptsCli(program);
-    await program.parseAsync(["transcripts", ...args], { from: "user" });
-  });
 }
 
 async function afterFirstTranscriptArtifactWrite(
@@ -194,8 +177,8 @@ async function afterFirstTranscriptArtifactWrite(
 
 describe("transcript export digest worker", () => {
   it("preserves the published artifact when its lease is revoked after a temporary file write", async () => {
-    const { store, session, artifacts, original, expectedHash, readManifest } =
-      await seedDigestRecovery(suiteStateDir, 1);
+    const { store, databasePath, session, artifacts, original, expectedHash, readManifest } =
+      await seedDigestRecovery(1);
     await store.materializeSessionArtifacts(session, "metadata");
     expect(readManifest().manifest["transcript.jsonl"]).toBe(expectedHash);
     await store.appendUtteranceForSession(session, {
@@ -203,9 +186,6 @@ describe("transcript export digest worker", () => {
       text: "Speech saved after the acknowledged export",
     });
     const filesBefore = await fs.readdir(artifacts.sessionDir);
-    const databasePath = openOpenClawStateDatabase({
-      env: { OPENCLAW_STATE_DIR: suiteStateDir },
-    }).path;
     const foreign = new DatabaseSync(databasePath);
     const exportKey = transcriptSessionExportKey(session);
     let revoked = false;
@@ -240,16 +220,21 @@ describe("transcript export digest worker", () => {
   it.each(["append", "reset"] as const)(
     "keeps one artifact snapshot across a concurrent %s and refreshes the next export",
     async (change) => {
-      const { store, session, utterances, artifacts, original, expectedHash, readManifest } =
-        await seedDigestRecovery(suiteStateDir, 70);
+      const {
+        store,
+        databasePath,
+        session,
+        utterances,
+        artifacts,
+        original,
+        expectedHash,
+        readManifest,
+      } = await seedDigestRecovery(70);
       await store.materializeSessionArtifacts(session, "metadata");
       const added = { id: "after-snapshot", text: `Speech after ${change}` };
       let changed = false;
       const openSpy = await afterFirstTranscriptArtifactWrite(artifacts.sessionDir, async () => {
         if (change === "reset") {
-          const databasePath = openOpenClawStateDatabase({
-            env: { OPENCLAW_STATE_DIR: suiteStateDir },
-          }).path;
           const foreign = new DatabaseSync(databasePath);
           try {
             foreign.exec("PRAGMA foreign_keys = ON; BEGIN IMMEDIATE");
@@ -305,31 +290,17 @@ describe("transcript export digest worker", () => {
     "checks $name artifact recovery without caller-thread transcript rows",
     async ({ count, modified }) => {
       const { session, artifacts, expectedHash, expectedBytes, readManifest } =
-        await seedDigestRecovery(suiteStateDir, count, modified);
+        await seedDigestRecovery(count, modified);
 
-      const observed: string[] = [];
-      const observe = (sql: string) => {
-        if (/^select\b/iu.test(sql) && sql.includes('from "meeting_transcript_utterances"')) {
-          observed.push(sql);
-        }
-      };
-      // oxlint-disable-next-line typescript/unbound-method -- Preserve the intercepted native receiver.
-      const prepare = DatabaseSync.prototype.prepare;
-      const prepareSpy = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
-        this: DatabaseSync,
-        sql,
-      ) {
-        observe(sql);
-        return prepare.call(this, sql);
-      });
-      // Catch execution even when a preceding export has cached the native statement.
-      // oxlint-disable-next-line typescript/unbound-method -- Preserve the intercepted statement receiver.
+      const prepareSpy = vi.spyOn(DatabaseSync.prototype, "prepare");
+      const executed: string[] = [];
+      // oxlint-disable-next-line typescript/unbound-method -- Preserve the native receiver.
       const iterate = StatementSync.prototype.iterate;
       const iterateSpy = vi.spyOn(StatementSync.prototype, "iterate").mockImplementation(function (
         this: StatementSync,
         ...args
       ) {
-        observe(this.sourceSQL);
+        executed.push(this.sourceSQL);
         return iterate.apply(this, args);
       });
       try {
@@ -343,7 +314,14 @@ describe("transcript export digest worker", () => {
         const repaired = readManifest();
         expect(repaired.pending).toEqual([]);
         expect(repaired.manifest["transcript.jsonl"]).toBe(modified ? undefined : expectedHash);
-        expect(observed, "artifact recovery read transcript rows on the caller thread").toEqual([]);
+        const sql = [...prepareSpy.mock.calls.map(([query]) => query), ...executed];
+        expect(
+          sql.filter(
+            (query) =>
+              /^select\b/iu.test(query) && query.includes('from "meeting_transcript_utterances"'),
+          ),
+          "artifact recovery read transcript rows on the caller thread",
+        ).toEqual([]);
       } finally {
         prepareSpy.mockRestore();
         iterateSpy.mockRestore();
@@ -356,7 +334,6 @@ describe("transcript export digest worker", () => {
     async (change) => {
       const { store, session, utterances, artifacts, original, expectedHash, readManifest } =
         await seedDigestRecovery(
-          suiteStateDir,
           change === "append-after-digest" ? 70 : 2,
           false,
           change === "metadata-before-digest",

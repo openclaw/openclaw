@@ -61,19 +61,10 @@ async function openPeers(
   firstContext: OpenClawStateWorkerContext,
   peerContext: OpenClawStateWorkerContext,
 ) {
-  const messages = vi.spyOn(Worker.prototype, "postMessage");
-  try {
-    const first = await openClient(firstContext);
-    const peer = await openClient(peerContext);
-    expect(peer.actor).toBe(first.actor);
-    const worker = messages.mock.contexts.find((candidate) => candidate instanceof Worker);
-    if (!(worker instanceof Worker)) {
-      throw new Error("Expected the shared native worker");
-    }
-    return { first, peer, worker };
-  } finally {
-    messages.mockRestore();
-  }
+  const first = await openClient(firstContext);
+  const peer = await openClient(peerContext);
+  expect(peer.actor).toBe(first.actor);
+  return { first, peer, worker: first.worker };
 }
 
 const readContext = (context: OpenClawStateWorkerContext) =>
@@ -81,25 +72,7 @@ const readContext = (context: OpenClawStateWorkerContext) =>
 
 async function fixture() {
   const timers = vi.spyOn(globalThis, "setTimeout");
-  const open = async (context: OpenClawStateWorkerContext) => {
-    const messages = vi.spyOn(Worker.prototype, "postMessage");
-    try {
-      // Exercise native idle ownership without preparing the unrelated task-flow runtime.
-      const read = () =>
-        executeOpenClawStateWorker(context, {
-          type: "deviceAuth.read",
-          input: { deviceId: "idle-fixture:healthy", role: "operator", readOnly: false },
-        });
-      expect(await read()).toEqual(emptyRead);
-      const worker = messages.mock.contexts[0];
-      if (!(worker instanceof Worker)) {
-        throw new Error("Expected the canonical shared-state worker");
-      }
-      return { context, worker, read };
-    } finally {
-      messages.mockRestore();
-    }
-  };
+  const open = (context: OpenClawStateWorkerContext) => openClient(context, "idle-fixture:healthy");
   const first = await open(
     captureOpenClawStateWorkerContext({
       env: { OPENCLAW_STATE_DIR: dirs.make("openclaw-worker-idle-") },
@@ -184,17 +157,29 @@ const read = {
   input: { deviceId: "idle-fixture:idle-custody", role: "operator", readOnly: false },
 } as const;
 
-async function openClient(context: OpenClawStateWorkerContext) {
+async function openClient(
+  context: OpenClawStateWorkerContext,
+  deviceId: string = read.input.deviceId,
+) {
   const operations = vi.spyOn(sqliteWorkers, "runSqliteWorkerStoreOperation");
+  const messages = vi.spyOn(Worker.prototype, "postMessage");
+  const readDevice = () =>
+    executeOpenClawStateWorker(context, {
+      type: "deviceAuth.read",
+      input: { ...read.input, deviceId },
+    });
   try {
-    await readContext(context);
+    // Exercise native idle ownership without preparing the unrelated task-flow runtime.
+    expect(await readDevice()).toEqual(emptyRead);
     const store = operations.mock.calls.at(-1)?.[0];
-    if (!store) {
-      throw new Error("Expected the canonical shared-state client's operation");
+    const worker = messages.mock.contexts[0];
+    if (!store || !(worker instanceof Worker)) {
+      throw new Error("Expected the canonical shared-state client and native worker");
     }
-    return { store, actor: getSqliteWorkerActorIdentity(store) };
+    return { context, store, worker, read: readDevice, actor: getSqliteWorkerActorIdentity(store) };
   } finally {
     operations.mockRestore();
+    messages.mockRestore();
   }
 }
 
@@ -301,12 +286,10 @@ poolIt("joins expiring idle-client maintenance without retiring a healthy co-use
     expire();
     await expect(first.store.execute(read)).rejects.toMatchObject({ code: "closed" });
     expect(getSqliteWorkerActorIdentity(peer.store)).toBe(first.actor);
-    let idleClosed = false;
-    idleClosing = first.store.close().then(() => {
-      idleClosed = true;
-    });
+    const idleClosed = vi.fn();
+    idleClosing = first.store.close().then(idleClosed);
     await expect(readContext(peerContext)).resolves.toEqual(emptyRead);
-    expect(idleClosed).toBe(false);
+    expect(idleClosed).not.toHaveBeenCalled();
     expect(f.worker.threadId).not.toBe(-1);
 
     resume.resolve();
@@ -351,16 +334,8 @@ poolIt.each([undefined, "agent-resources", "shared-handles"] as const)(
       } else {
         await startAccepted();
       }
-      let closed = false;
-      closing = firstScope.close().then(
-        () => {
-          closed = true;
-        },
-        (error: unknown) => {
-          closed = true;
-          return error;
-        },
-      );
+      const closed = vi.fn();
+      closing = firstScope.close().then(closed, closed);
       await Promise.race([
         entered.promise,
         closing.then(() => {
@@ -368,12 +343,12 @@ poolIt.each([undefined, "agent-resources", "shared-handles"] as const)(
         }),
       ]);
       await nextTurn();
-      expect(closed).toBe(false);
+      expect(closed).not.toHaveBeenCalled();
       expect(getSqliteWorkerActorIdentity(peer.store) === first.actor).toBe(true);
 
       stopped = worker.terminate();
       await stopped;
-      expect(closed).toBe(false);
+      expect(closed).not.toHaveBeenCalled();
       await expect(peer.store.execute(read)).rejects.toMatchObject({ code: "unavailable" });
       resume.resolve();
       await expect(accepted).resolves.toBe("accepted callback completed");
@@ -475,10 +450,7 @@ poolIt("joins adopted actor custody instead of its earlier per-client failure", 
 
     // This first close releases its reference, then waits for the failed Worker's native exit.
     firstClosing = firstScope.close();
-    const firstOutcome = firstClosing.then(
-      () => ({ settled: true }),
-      (error: unknown) => ({ settled: true, error }),
-    );
+    const firstOutcome = Promise.allSettled([firstClosing]);
     await expect(first.store.execute(read)).rejects.toMatchObject({ code: "closed" });
     await nextTurn();
 
@@ -487,17 +459,10 @@ poolIt("joins adopted actor custody instead of its earlier per-client failure", 
     await expect(accepted).resolves.toBe("accepted callback completed");
     await expect(peer.store.execute(read)).rejects.toMatchObject({ code: "closed" });
     canonicalClosing = closeOpenClawStateDatabaseByPathAsync(firstContext.admission.databasePath);
-    let canonicalSettled = false;
-    const canonicalOutcome = canonicalClosing.then(
-      () => {
-        canonicalSettled = true;
-      },
-      () => {
-        canonicalSettled = true;
-      },
-    );
+    const canonicalSettled = vi.fn();
+    const canonicalOutcome = canonicalClosing.then(canonicalSettled, canonicalSettled);
     await nextTurn();
-    expect(canonicalSettled).toBe(false);
+    expect(canonicalSettled).not.toHaveBeenCalled();
     expect(worker.threadId).not.toBe(-1);
 
     allowNativeExit.resolve();
