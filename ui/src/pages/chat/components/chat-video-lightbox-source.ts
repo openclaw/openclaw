@@ -1,7 +1,7 @@
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
-import { ChatMediaSourceController } from "./chat-media-source.ts";
+import { ChatMediaSourceOwner } from "./chat-media-source.ts";
 import {
   observeChatMediaResourceSubscriber,
   releaseChatMediaResourceSubscriber,
@@ -28,7 +28,7 @@ export function videoLightboxItem(
     src: "",
     title: attachment.label,
     connectVideo: (media, notify, retryFailed = false) => {
-      const controller = new ChatMediaSourceController();
+      const controller = new ChatMediaSourceOwner();
       let active = true;
       let retryPending = retryFailed;
       const report = () => {
@@ -84,6 +84,7 @@ export function videoLightboxItem(
       const adopt = reportAfter(() => controller.applyPendingSource(media));
       const ended = reportAfter(() => controller.handleEnded(media));
       const error = reportAfter(() => controller.handleError(media));
+      // The selected lightbox media island owns native playback listeners until disconnect.
       media.addEventListener("loadedmetadata", metadata);
       media.addEventListener("play", adopt);
       media.addEventListener("seeking", adopt);

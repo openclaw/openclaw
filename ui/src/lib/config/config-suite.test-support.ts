@@ -23,18 +23,13 @@ afterEach(() => {
   transports.clear();
 });
 
-export function managedConfig(harness: ConfigHarness, suspend = false) {
+function managedConfig(harness: ConfigHarness, suspend = false) {
   capabilities.set(harness.runtimeConfig, suspend);
   return { ...harness, state: harness.runtimeConfig.state };
 }
 
 export function configHarness(request: ConfigRequest, suspend = false) {
   return managedConfig(createConfigCapabilityHarness(request), suspend);
-}
-
-export function disposeConfig(capability: ConfigHarness["runtimeConfig"]) {
-  capabilities.delete(capability);
-  capability.dispose();
 }
 
 export function expectFeedback(
@@ -93,15 +88,6 @@ export function configSnapshot(
   raw = JSON.stringify(config),
 ) {
   return { config, raw, hash, valid: true, issues: [] };
-}
-
-export function configRequest(
-  snapshot: ConfigSnapshot,
-  write: (method: string, params?: unknown) => unknown,
-) {
-  return vi.fn(async (method: string, params?: unknown) =>
-    method === "config.get" ? snapshot : write(method, params),
-  );
 }
 
 export async function expectStoredConfig(

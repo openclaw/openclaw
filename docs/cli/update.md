@@ -656,6 +656,14 @@ follow the recovery guidance for that installed release first.
 
 ## Database capture and recovery
 
+Candidate SQLite migrations use whole-database `quick_check`, full integrity
+checks of rewritten or re-indexed tables, and foreign-key checks by default.
+Use `openclaw update --full-integrity-check` for a full check of every table and
+index during migration. The default can miss index/table mismatches in untouched
+tables. An older installed updater keeps its own checks until candidate code
+runs and does not recognize the new flag. See
+[migration integrity checks](/install/updating#migration-integrity-checks).
+
 Updates preserve each store's physical engine. Before database mutation, the
 installed updater keeps the existing exact SQLite captures and captures each
 PostgreSQL store as an unsanitized SQLite export image plus its matching anchor
@@ -837,6 +845,7 @@ Use `openclaw update status` and Doctor for recovery guidance.
 | `--yes`                                          | Skip confirmation prompts (for example downgrade confirmation).                                                                                                                                                                                                                                                                                                   |
 | `--reapply-local-overrides`                      | Replay trusted local packaged `dist` edits when the new package has the same baseline. Otherwise preserve them for manual recovery.                                                                                                                                                                                                                               |
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes during post-update sync. This acknowledges the exact staged capability surface; it does not disable capability checks or establish future trust.                                                                                                                                                                 |
+| `--full-integrity-check`                         | Request full SQLite integrity checks during candidate migrations, including Doctor subprocesses. Also accepted by `update repair` and `update wizard`.                                                                                                                                                                                                            |
 
 There is no `--verbose` flag. Use `--dry-run` to preview planned actions,
 `--json` for machine-readable results, and `openclaw update status --json`

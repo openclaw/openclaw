@@ -2740,6 +2740,37 @@ describe("diagnostics-otel service", () => {
     expect(modelCallAttrs[3]).not.toHaveProperty("openclaw.model_call.usage.input_tokens");
   });
 
+  test("attributes auxiliary usage metrics and spans without changing ordinary usage labels", async () => {
+    await startServiceFixture(["traces", "metrics"]);
+
+    await emitAndFlush({
+      type: "model.usage",
+      ...MODEL_FIXTURE,
+      purpose: "session-activity-summary",
+      runtimeKind: "harness",
+      usage: { output: 3 },
+      costUsd: 0.01,
+    });
+    const attribution = {
+      "openclaw.purpose": "session-activity-summary",
+      "openclaw.runtime.kind": "harness",
+    };
+    expect(telemetryState.counters.get("openclaw.tokens")?.add).toHaveBeenCalledWith(
+      3,
+      expect.objectContaining(attribution),
+    );
+    expect(telemetryState.counters.get("openclaw.cost.usd")?.add).toHaveBeenCalledWith(
+      0.01,
+      expect.objectContaining(attribution),
+    );
+    expect(startedSpanOptions("openclaw.model.usage")?.attributes).toMatchObject(attribution);
+
+    await emitAndFlush({ type: "model.usage", ...MODEL_FIXTURE, usage: { output: 2 } });
+    const ordinary = telemetryState.counters.get("openclaw.tokens")?.add.mock.lastCall?.[1];
+    expect(ordinary).not.toHaveProperty("openclaw.purpose");
+    expect(ordinary).not.toHaveProperty("openclaw.runtime.kind");
+  });
+
   test("uses latest GenAI request and agent span shapes only when semconv opt-in is set", async () => {
     process.env.OTEL_SEMCONV_STABILITY_OPT_IN = "http,gen_ai_latest_experimental";
 

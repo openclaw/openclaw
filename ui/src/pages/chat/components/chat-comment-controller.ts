@@ -1,6 +1,7 @@
-import { createEffect, createMemo, onCleanup, onSettled } from "solid-js";
+import { createEffect, createMemo, onSettled } from "solid-js";
 import { focusWithoutTooltip } from "../../../components/tooltip.ts";
 import type { ChatAttachment, ChatSelectionAnnotation } from "../../../lib/chat/chat-types.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 import { releaseDisplacedChatAttachmentPayloads } from "../attachment-payload-store.ts";
@@ -270,14 +271,13 @@ export const ChatCommentController = defineSolidBridge<ChatCommentControllerProp
       }
     }
 
-    // Only the admitted comment set and read scope affect the editor lifetime.
+    // The imperative editor belongs to the admitted read scope and comment set.
     const readScope = createMemo(() => [view.props.readSignal, view.sessionKey] as const, {
       equals: (previous, next) => previous[0] === next[0] && previous[1] === next[1],
     });
     createEffect(readScope, ([signal]) => {
       retireEditor();
-      signal?.addEventListener("abort", retireEditor, { once: true });
-      return () => signal?.removeEventListener("abort", retireEditor);
+      return signal && listen(signal, "abort", retireEditor, { once: true });
     });
     const editingScope = createMemo(
       () => ({
@@ -294,6 +294,7 @@ export const ChatCommentController = defineSolidBridge<ChatCommentControllerProp
           previous.disabled === next.disabled,
       },
     );
+    // Close the imperative editor when its visible attachment stops being editable.
     createEffect(editingScope, ({ attachments, sessionKey, presented, disabled }) => {
       if (
         !presented ||
@@ -306,12 +307,12 @@ export const ChatCommentController = defineSolidBridge<ChatCommentControllerProp
     });
     onSettled(() => {
       root = host.closest(".chat-session-rail") ?? host.closest(".chat");
-      root?.addEventListener("openclaw-comment-action", handleCommentAction);
-    });
-    onCleanup(() => {
-      root?.removeEventListener("openclaw-comment-action", handleCommentAction);
-      root = null;
-      retireEditor();
+      const disconnect = root && listen(root, "openclaw-comment-action", handleCommentAction);
+      return () => {
+        disconnect?.();
+        root = null;
+        retireEditor();
+      };
     });
     return null;
   },

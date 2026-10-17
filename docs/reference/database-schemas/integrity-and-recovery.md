@@ -20,10 +20,11 @@ and cleanup; lazy loading changes code residency, not database ownership.
 
 Admission validates SQLite format, schema, required indexes, and required
 integrity once per physical database per process load, unless it can reuse a
-matching clean-close seal. The process shares admitted facts with all handles
-and worker isolates while a database remains open. Final close releases those
-in-memory payloads. Reopens reuse a matching seal without validation SQL; an
-uncheckpointed or failed close requires fresh admission. Current ownership, live write authority,
+matching clean-close seal. The process shares physical facts with all handles
+and worker isolates, including after final native close. Descriptor custody retains
+only facts explicitly marked for the process lifetime; row caches, active generations,
+and pathname bindings retire on final close. Reopens identify the physical file and
+reuse its facts without validation SQL. Seals provide reuse across process restarts. Current ownership, live write authority,
 row-cache freshness, and durable quarantine refusals remain separate checks.
 A seal never overrides a recorded corruption refusal. This includes
 quarantine-store format checks; existing indexed durable quarantine-row guards
@@ -32,6 +33,12 @@ facts too, across opens, scopes, requests, and idle close. Never add repeated
 format checks; remove them when touched. Identify replacement files by volume,
 inode, and birthtime with `fstat`, not SQL. Migration/repair owners publish new
 facts after their DDL; Doctor and explicit verification retain full checks.
+
+Independent read-only subprocesses do not share the Gateway's writer invalidations.
+Their local admission facts retire at final native close, even while the pooled
+process remains alive. Canonical auth reads can reuse the owner's compact schema
+projection. Paced page-cache readers keep their facts while their native handle
+remains open across steps.
 
 Each owned database can have a regular file named `<database>.seal` beside it,
 for example `openclaw.sqlite.seal`. The database admission owner writes this file
@@ -133,18 +140,25 @@ or validate seals. No database schema change is required for this seal format.
 
 After an agent schema migration, the schema owner registers the database while
 its verified connection is still open. Later opens in the same Doctor process
-can reuse that admission instead of repeating its full integrity scan. The
-pre-migration integrity check, recovery backups, and restart seal requirements
-remain unchanged.
+can reuse that admission instead of repeating its full integrity scan. Migration
+integrity coverage follows the policy below; recovery backups and restart seal
+requirements remain unchanged.
 
-| When                                             | Check                                                                                                                        |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| Startup with a matching, recent clean-close seal | Match checksum, schema identity, file metadata, and empty journals; reuse admitted facts without startup or post-ready scans |
-| Startup without a reusable seal                  | Run the normal full format, schema, canonical-index, integrity, and foreign-key validation                                   |
-| Same-process reopen or new worker                | Reuse live file-bound facts or a matching seal; retain current ownership and durable quarantine-row checks                   |
-| Before a pending migration                       | Run full integrity, foreign-key, role, schema, and index checks                                                              |
-| After a migration or repair                      | Verify changes and publish committed facts through the existing owner                                                        |
-| Doctor, backup verification, and compaction      | Run full checks before accepting or rewriting the database                                                                   |
+| When                                                   | Check                                                                                                                                                                                      |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Startup with a matching, recent clean-close seal       | Match checksum, schema identity, file metadata, and empty journals; reuse admitted facts without startup or post-ready scans                                                               |
+| Startup without a reusable seal                        | Run the normal full format, schema, canonical-index, integrity, and foreign-key validation                                                                                                 |
+| Same-process reopen or new worker                      | Reuse live file-bound facts or a matching seal; retain current ownership and durable quarantine-row checks                                                                                 |
+| Before a pending migration                             | Run whole-database quick integrity, full integrity of affected tables, and existing foreign-key, role, schema, and index checks; `--full-integrity-check` requests full database integrity |
+| After a migration or repair                            | Verify changes and publish committed facts through the existing owner                                                                                                                      |
+| Explicit verification, Doctor recovery, and compaction | Retain full checks before accepting or rewriting the database; ordinary Doctor migrations use the migration policy above                                                                   |
+
+The migration default does not compare every untouched index with its table.
+An index/table mismatch outside the declared migration scope therefore needs
+`--full-integrity-check` to be detected. Structural corruption still refuses
+migration through the whole-database quick check, and a quick result never
+publishes full-verification facts. See
+[migration integrity checks](/install/updating#migration-integrity-checks).
 
 Gateway agent inspections share a five-second foreground wait. Unfinished stores
 remain unavailable while the startup admission owner completes their inspection
@@ -238,9 +252,10 @@ Cleanup that needs another connection uses ordinary admission and invalidates
 the seal before writing again. A forced exit during a write still requires the admission gate.
 This changes no schema, update, or rollback contract.
 
-Native execution workers borrow host proof while another handle retains it, or
-reuse a matching seal after final close. The receiving opener rechecks the physical
-file identity and shared revocation cell; final close releases in-memory proof.
+Native execution workers reuse physical proof held by the admission owner, including
+after final close, or load a matching seal after process restart. The receiving opener
+checks the physical file identity and shared revocation cell. Final close releases
+row caches and active generations, while physical proof remains in descriptor custody.
 When native execution establishes the first runtime proof, it returns that proof
 through its existing admission so later cleanup workers can reuse it without a
 host SQLite open. The host accepts it only for the admitted physical file and

@@ -12,6 +12,7 @@ import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import "../../../components/tooltip.ts";
 import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import {
   orderSessionPullRequests,
   sessionPullRequestStateIcons,
@@ -83,7 +84,7 @@ export function hasChatPullRequests(props: ChatPullRequestsProps): boolean {
 function ChecksRow(props: { label: string; count: number; modifier: string }) {
   return (
     <Show when={props.count !== 0}>
-      <div class={`chat-pr__checks-row chat-pr__checks-row--${props.modifier}`}>
+      <div class={["chat-pr__checks-row", `chat-pr__checks-row--${props.modifier}`]}>
         <span class="chat-pr__checks-row-dot" aria-hidden="true" />
         <span class="chat-pr__checks-row-label">{props.label}</span>
         <span class="chat-pr__checks-row-count">{props.count}</span>
@@ -108,6 +109,7 @@ function Checks(props: {
   };
   const [revision, setRevision] = createSignal(0);
   const parentPresented = useContext(ContentPresentation);
+  // Observe the external presentation owner so nested CI polling parks with its pane.
   createEffect(
     () => props.presented,
     (value) => {
@@ -115,8 +117,7 @@ function Checks(props: {
         return undefined;
       }
       const changed = () => setRevision((current) => current + 1);
-      value.owner.addEventListener(PRESENTATION_CHANGED_EVENT, changed);
-      return () => value.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, changed);
+      return listen(value.owner, PRESENTATION_CHANGED_EVENT, changed);
     },
   );
   const presented = () => {
@@ -129,7 +130,7 @@ function Checks(props: {
       label={label()}
       showLabel={props.compact}
       checksState={checks()?.state ?? "none"}
-      presented={props.presented ?? true}
+      presented={presented()}
       dismissed={props.dismissed}
     >
       <div
@@ -368,7 +369,7 @@ function PullRequestRow(props: {
       : undefined;
   return (
     <article
-      class={props.owner.compact ? "chat-pr chat-pr--compact" : "chat-pr"}
+      class={["chat-pr", { "chat-pr--compact": props.owner.compact }]}
       data-state={props.pullRequest.state}
     >
       <a

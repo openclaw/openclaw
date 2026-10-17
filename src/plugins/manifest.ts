@@ -293,8 +293,9 @@ export function loadPluginManifest(
         : (normalizeOptionalString(raw.capabilityCatalogEntry) ?? ""),
     modelSupport: modelProviderNormalizers.normalizeManifestModelSupport(raw.modelSupport),
     modelCatalog,
+    // CLI backends own pricing policies as they own catalog rows: their usage needs an estimate too.
     modelPricing: modelProviderNormalizers.normalizeManifestModelPricing(raw.modelPricing, {
-      ownedProviders: new Set(providers),
+      ownedProviders: new Set([...providers, ...cliBackends]),
     }),
     modelIdNormalization: modelProviderNormalizers.normalizeManifestModelIdNormalization(
       raw.modelIdNormalization,

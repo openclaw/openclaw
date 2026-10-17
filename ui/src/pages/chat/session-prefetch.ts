@@ -4,6 +4,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import type { AgentCapability } from "../../lib/agents/index.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import {
@@ -80,6 +81,7 @@ function sessionActivityAt(row: GatewaySessionRow): number {
   return row.lastActivityAt ?? row.updatedAt ?? 0;
 }
 
+// Synchronous request/cache owner; the page adapter below owns its lifetime.
 class SessionPrefetcher {
   private connected = false;
   private snapshot: SessionPrefetchSnapshot | null = null;
@@ -88,6 +90,7 @@ class SessionPrefetcher {
   private delayDeadline: number | null = null;
   private running = false;
   private rescheduleDelayMs: number | null = null;
+  private stopVisibility: (() => void) | undefined;
 
   constructor(
     private readonly cache: ChatMessageCache,
@@ -99,14 +102,15 @@ class SessionPrefetcher {
       return;
     }
     this.connected = true;
-    document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    this.stopVisibility = listen(document, "visibilitychange", this.handleVisibilityChange);
     this.schedule();
   }
 
   disconnect(): void {
     this.connected = false;
     this.rescheduleDelayMs = null;
-    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+    this.stopVisibility?.();
+    this.stopVisibility = undefined;
     this.cancelScheduledWork();
   }
 
@@ -438,6 +442,7 @@ export function createSessionPrefetch(
       return;
     }
     const source = context;
+    // The shell owns these sibling panes, whose public host properties describe readiness.
     const panes = [...paneRoot.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].filter(
       (pane) => pane.closest("openclaw-app-shell") === paneRoot.closest("openclaw-app-shell"),
     );
@@ -493,10 +498,10 @@ export function createSessionPrefetch(
       paneRoot = root;
       paneListeners = new AbortController();
       const options = { signal: paneListeners.signal };
-      paneRoot.addEventListener(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, syncSnapshot, options);
-      paneRoot.addEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, syncSnapshot, options);
-      paneRoot.addEventListener("pointerover", handleNavigationIntent, options);
-      paneRoot.addEventListener("focusin", handleNavigationIntent, options);
+      listen(paneRoot, CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, syncSnapshot, options);
+      listen(paneRoot, CHAT_PANE_LIFECYCLE_CHANGED_EVENT, syncSnapshot, options);
+      listen(paneRoot, "pointerover", handleNavigationIntent, options);
+      listen(paneRoot, "focusin", handleNavigationIntent, options);
     }
     syncSnapshot();
   }

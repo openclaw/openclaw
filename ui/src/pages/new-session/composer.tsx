@@ -427,6 +427,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
   const placeholder = createComposerPlaceholder(options);
   // The input and its synchronous owner share one mounted lifetime.
   const textarea = untrack(() => options().textareaController);
+  // The textarea owner retires stale command requests and closes menus when its scope changes.
   createEffect(
     () =>
       [

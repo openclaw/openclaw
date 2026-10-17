@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import type { LobsterPetPaletteId } from "../../components/lobster-pet-contract.ts";
@@ -8,6 +8,7 @@ import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectLobsterdex } from "../../lib/reactive/events-browser.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { LobsterdexView, type LobsterdexCopyFeedback } from "./view.tsx";
 import "../../styles/settings.css";
@@ -24,14 +25,8 @@ export function LobsterdexPage() {
   let host!: HTMLElement;
   const cards = new Map<string, HTMLElement>();
   const context = useApplication();
-  const branding = projectOwner(
-    untrack(() => context.theme),
-    (theme) => theme.branding,
-    Object.is,
-  );
-  createEffect(
-    () => context.theme,
-    (source) => branding.replaceSource(source),
+  const branding = createMemo(() =>
+    projectOwner(context.theme, (theme) => theme.branding, Object.is),
   );
   const entries = projectLobsterdex();
   const [copyFeedback, setCopyFeedback] = createSignal<LobsterdexCopyFeedback | null>(null);
@@ -53,9 +48,9 @@ export function LobsterdexPage() {
         return;
       }
       card.classList.remove("lobsterdex-page__card--highlight");
-      card.removeEventListener("animationend", clearHighlight);
+      stopHighlight();
     };
-    card.addEventListener("animationend", clearHighlight);
+    const stopHighlight = listen(card, "animationend", { handleEvent: clearHighlight });
     card.classList.add("lobsterdex-page__card--highlight");
     let secondFrame = 0;
     const firstFrame = requestAnimationFrame(() => {
@@ -64,7 +59,7 @@ export function LobsterdexPage() {
     return () => {
       cancelAnimationFrame(firstFrame);
       cancelAnimationFrame(secondFrame);
-      card.removeEventListener("animationend", clearHighlight);
+      stopHighlight();
     };
   });
 
@@ -93,7 +88,7 @@ export function LobsterdexPage() {
         </section>
       </ShellLayoutBoundary>
       <SettingsWorkspace>
-        {branding.read().lobsterdex ? (
+        {branding().read().lobsterdex ? (
           <LobsterdexView
             entries={entries.read()}
             copyFeedback={copyFeedback()}

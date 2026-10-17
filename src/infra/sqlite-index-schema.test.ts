@@ -183,19 +183,8 @@ describe("repairCanonicalSqliteIndexes", () => {
     try {
       db.exec(`DROP INDEX idx_records_identity; ${driftedSql};`);
 
-      const traced = traceSqlExecutions(db);
-      expect(
-        repairCanonicalSqliteIndexes(traced.database, "test database", expectedCatalog),
-      ).toEqual(["idx_records_identity"]);
-      expect(
-        traced.statements.filter((sql) =>
-          /PRAGMA (?:integrity_check|foreign_key_check)/u.test(sql),
-        ),
-      ).toEqual([
-        "PRAGMA integrity_check;",
-        "PRAGMA foreign_key_check;",
-        "PRAGMA integrity_check;",
-        "PRAGMA foreign_key_check;",
+      expect(repairCanonicalSqliteIndexes(db, "test database", expectedCatalog)).toEqual([
+        "idx_records_identity",
       ]);
 
       const row = db

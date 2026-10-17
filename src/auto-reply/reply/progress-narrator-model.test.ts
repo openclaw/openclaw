@@ -69,6 +69,8 @@ describe("progress narration completion cancellation", () => {
         cfg,
         prepared: selected,
         input: { userMessage: "Check the fix", activityNotes: [], previousText: "" },
+        abortSignal: new AbortController().signal,
+        timeoutMs: 6_000,
       });
 
       expect(result.text).toBe(exhausted ? null : "Checking the requested fix.");
@@ -95,12 +97,13 @@ describe("progress narration completion cancellation", () => {
           previousText: "",
         },
         abortSignal: controller.signal,
+        timeoutMs: 6_000,
       });
 
       expect(complete).toHaveBeenCalledTimes(aborted ? 0 : 1);
       if (!aborted) {
         expect(complete).toHaveBeenCalledWith(
-          expect.objectContaining({ purpose: "progress-narration" }),
+          expect.objectContaining({ purpose: "progress-narration", timeoutMs: 6_000 }),
         );
       }
       expect(result.text).toBe(aborted ? null : "Working on the request.");

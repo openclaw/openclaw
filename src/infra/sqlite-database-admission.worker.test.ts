@@ -581,7 +581,7 @@ it("shares admission published after dispatch with existing isolates and revalid
     expect(replacement.sql.length).toBeGreaterThan(0);
     const sharedReplacement = await first!.execute({ type: "read", input: { path: location } });
     expect(sharedReplacement.values).toEqual([43]);
-    expect(sharedReplacement.sql).toEqual(replacement.sql);
+    expect(sharedReplacement.sql).toEqual([]);
 
     const holder = openNodeSqliteDatabase(location);
     admitSqliteSchema(holder);
@@ -681,8 +681,7 @@ it("shares facts with retained task workers across awaited host exchanges", asyn
     );
     const [firstAdmission, reused] = await Promise.all([family, exact]);
     expect(firstAdmission.sql.some((sql) => sql.includes("sqlite_schema"))).toBe(true);
-    // The first task may close its final handle before the second opens.
-    expect([[], firstAdmission.sql]).toContainEqual(reused.sql);
+    expect(reused.sql).toEqual([]);
 
     const nestedLocation = path.join(root, "nested.sqlite");
     createDatabase(nestedLocation, 3);
@@ -694,7 +693,7 @@ it("shares facts with retained task workers across awaited host exchanges", asyn
     expect(nested.sql.some((sql) => sql.includes("sqlite_schema"))).toBe(true);
     expect(nested.hostLookupMessages).toBe(0);
     const afterNested = await pools[1]!.run({ path: nestedLocation }, {});
-    expect(afterNested.sql).toEqual(nested.sql);
+    expect(afterNested.sql).toEqual([]);
 
     const missing = path.join(root, "unadmitted.sqlite");
     await expect(pools[0]!.run({ path: missing }, {})).rejects.toThrow(/host authority/);
@@ -705,7 +704,7 @@ it("shares facts with retained task workers across awaited host exchanges", asyn
     expect(existsSync(nestedCreated)).toBe(true);
     expect(created.sql.some((sql) => sql.includes("sqlite_schema"))).toBe(true);
     const afterCreation = await pools[1]!.run({ path: nestedCreated }, {});
-    expect(afterCreation.sql).toEqual(created.sql);
+    expect(afterCreation.sql).toEqual([]);
 
     const captured = path.join(root, "captured.sqlite");
     const uncaptured = path.join(root, "uncaptured.sqlite");

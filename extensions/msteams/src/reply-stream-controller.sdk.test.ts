@@ -34,6 +34,7 @@ const provider = createServer((request, response) => {
       ((scenario === "cancel-replacement" || scenario === "presentation-cancel") &&
         priorScenarioRequests > 0) ||
       (scenario === "presentation-close-failure" && activity.type === "message") ||
+      (scenario === "cancel-close" && activity.type === "message") ||
       (scenario === "presentation-timeout" && priorScenarioRequests === 2) ||
       (activity.text?.length ?? 0) > 4_000;
     const status = rejected ? 403 : 201;
@@ -247,6 +248,31 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
       messageId: "stream-cancel",
     });
     expect(requests.filter((request) => request.scenario === "cancel")).toHaveLength(2);
+  });
+
+  it("honors Stop discovered by the final HTTP send without redelivering text", async () => {
+    const { controller, firstAcknowledgement, stream } = createLoopbackController("cancel-close");
+    controller.onPartialReply({ text: acknowledgedPrefix });
+    await firstAcknowledgement;
+    expect(controller.preparePayload({ text: acknowledgedPrefix })).toBeUndefined();
+
+    await expect(controller.finalize()).resolves.toEqual({
+      visibleReplySent: true,
+      content: acknowledgedPrefix,
+      messageId: "stream-cancel-close",
+    });
+    expect(stream.canceled).toBe(true);
+    expect(controller.wasCanceled()).toBe(true);
+    expect(controller.preparePayload({ text: "must not send" })).toBeUndefined();
+    expect(
+      requests
+        .filter((request) => request.scenario === "cancel-close")
+        .map((request) => [request.type, request.status]),
+    ).toEqual([
+      ["typing", 201],
+      ["typing", 201],
+      ["message", 403],
+    ]);
   });
 
   it("replaces a divergent preview through the same real Teams stream", async () => {
