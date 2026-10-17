@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { completionModelDefinition } from "../agents/simple-completion.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runtimeToolSchemaCheck } from "../flows/doctor-tool-schema-check.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
@@ -116,17 +117,7 @@ export default {
             fixture: {
               api: "openai-completions",
               baseUrl: "http://127.0.0.1:1/v1",
-              models: [
-                {
-                  id: "local",
-                  name: "Local fixture",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128000,
-                  maxTokens: 8192,
-                },
-              ],
+              models: [completionModelDefinition({ id: "local" })],
             },
           },
         },
@@ -144,8 +135,8 @@ export default {
         { [pluginId]: { source: "clawhub", installPath: packageDir } },
         { config, env: state.env },
       );
-      const parent = createPluginCache();
-      const fresh = createPluginCache();
+      await using parent = createPluginCache();
+      await using fresh = createPluginCache();
       const readIndex = () => readPersistedInstalledPluginIndexRowSync({ env: state.env });
       const before = readIndex();
       expect(before).toBeDefined();
@@ -158,12 +149,11 @@ export default {
       });
       const check = {
         ...runtimeToolSchemaCheck,
-        detect(ctx: HealthCheckContext) {
-          return runtimeToolSchemaCheck.detect({
+        detect: (ctx: HealthCheckContext) =>
+          runtimeToolSchemaCheck.detect({
             ...ctx,
             runWithPluginMetadataSnapshot: prepared.run,
-          });
-        },
+          }),
       };
       contributions.resolve.mockResolvedValue([check]);
       const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
@@ -183,49 +173,45 @@ export default {
           await inspection.release();
         }
       };
-      try {
-        const exitCode = await withPluginCache(parent, () =>
-          runDoctorLintCli(createTestRuntime(), { json: true, onlyIds: [check.id] }),
-        );
-        const report = String(stdout.mock.calls.at(-1)?.[0]);
-        expect(exitCode, report).toBe(0);
-        expect(JSON.parse(report)).toMatchObject({ ok: true, checksRun: 1, findings: [] });
-        const [privateStateDir = "", binary = "", bytes = ""] = fs
-          .readFileSync(observedCapture, "utf8")
-          .split("\t");
-        expect(bytes).toBe("native fixture bytes");
-        expect(privateStateDir).not.toBe(state.stateDir);
-        const captureRoot = path.relative(fs.realpathSync(tmpdir()), binary).split(path.sep)[0];
-        expect(captureRoot).toMatch(/^openclaw-plugin-captures-[a-f0-9]{32}-/);
-        expect(binary.startsWith(`${fs.realpathSync(state.stateDir)}${path.sep}`)).toBe(false);
-        expect(binary.startsWith(`${privateStateDir}${path.sep}`)).toBe(false);
-        expect(fs.existsSync(privateStateDir)).toBe(false);
-        expect(fs.readFileSync(binary, "utf8")).toBe("native fixture bytes");
-        expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
+      const exitCode = await withPluginCache(parent, () =>
+        runDoctorLintCli(createTestRuntime(), { json: true, onlyIds: [check.id] }),
+      );
+      const report = String(stdout.mock.calls.at(-1)?.[0]);
+      expect(exitCode, report).toBe(0);
+      expect(JSON.parse(report)).toMatchObject({ ok: true, checksRun: 1, findings: [] });
+      const [privateStateDir = "", binary = "", bytes = ""] = fs
+        .readFileSync(observedCapture, "utf8")
+        .split("\t");
+      expect(bytes).toBe("native fixture bytes");
+      expect(privateStateDir).not.toBe(state.stateDir);
+      const captureRoot = path.relative(fs.realpathSync(tmpdir()), binary).split(path.sep)[0];
+      expect(captureRoot).toMatch(/^openclaw-plugin-captures-[a-f0-9]{32}-/);
+      expect(binary.startsWith(`${fs.realpathSync(state.stateDir)}${path.sep}`)).toBe(false);
+      expect(binary.startsWith(`${privateStateDir}${path.sep}`)).toBe(false);
+      expect(fs.existsSync(privateStateDir)).toBe(false);
+      expect(fs.readFileSync(binary, "utf8")).toBe("native fixture bytes");
+      expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
 
-        // Retirement retries pending receipts after lint has restored the caller's state view.
-        await settlePluginNativeAdmissions(parent);
-        expect.soft(readIndex()).toEqual(before);
-        await inspect(parent);
-        expect.soft((await retirePluginCache(parent)).failures).toEqual([]);
+      // Retirement retries pending receipts after lint has restored the caller's state view.
+      await settlePluginNativeAdmissions(parent);
+      expect.soft(readIndex()).toEqual(before);
+      await inspect(parent);
+      expect.soft((await retirePluginCache(parent)).failures).toEqual([]);
 
-        const persisted = await withPluginCache(fresh, () =>
-          readPersistedInstalledPluginIndex({ env: state.env }),
-        );
-        for (const plugin of persisted?.plugins ?? []) {
-          for (const receipt of Object.values(plugin.sourceAdmissions ?? {})) {
-            for (const native of Object.values(receipt.nativeArtifacts)) {
-              expect
-                .soft(native.capturedPath.startsWith(`${privateStateDir}${path.sep}`))
-                .toBe(false);
-              expect.soft(fs.existsSync(native.capturedPath)).toBe(true);
-            }
+      const persisted = await withPluginCache(fresh, () =>
+        readPersistedInstalledPluginIndex({ env: state.env }),
+      );
+      for (const plugin of persisted?.plugins ?? []) {
+        for (const receipt of Object.values(plugin.sourceAdmissions ?? {})) {
+          for (const native of Object.values(receipt.nativeArtifacts)) {
+            expect
+              .soft(native.capturedPath.startsWith(`${privateStateDir}${path.sep}`))
+              .toBe(false);
+            expect.soft(fs.existsSync(native.capturedPath)).toBe(true);
           }
         }
-        await inspect(fresh);
-      } finally {
-        await Promise.all([parent, fresh].map((cache) => retirePluginCache(cache)));
       }
+      await inspect(fresh);
     },
   );
 });
@@ -259,7 +245,6 @@ it("keeps native plugin captures alive after Doctor retires its private state sn
     };
     let first: ReturnType<typeof load> | undefined;
     let privateState = "";
-    let snapshotHasCaptures = false;
     contributions.resolve.mockResolvedValue([
       {
         id: runtimeToolSchemaCheck.id,
@@ -269,7 +254,7 @@ it("keeps native plugin captures alive after Doctor retires its private state sn
           privateState = process.env.OPENCLAW_STATE_DIR!;
           first = load();
           expect(first.read()).toBe("channel companion");
-          snapshotHasCaptures = fs.existsSync(path.join(privateState, "tmp", "plugin-captures"));
+          expect(fs.existsSync(path.join(privateState, "tmp", "plugin-captures"))).toBe(false);
           return [];
         },
       },
@@ -286,7 +271,6 @@ it("keeps native plugin captures alive after Doctor retires its private state sn
         expect(privateState).not.toBe(state.stateDir);
         expect(fs.existsSync(privateState)).toBe(false);
         expect(first?.read()).toBe("channel companion");
-        expect(snapshotHasCaptures).toBe(false);
         // Channel setup loads again after the inspection snapshot has retired.
         expect(load().read()).toBe("channel companion");
       });

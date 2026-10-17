@@ -29,7 +29,7 @@ vi.mock("../flows/doctor-health-contributions.js", async (importOriginal) => {
   return {
     ...actual,
     async resolveDoctorContributionHealthChecks() {
-      return actualChecks.filter((check) =>
+      return (await actual.resolveDoctorContributionHealthChecks()).filter((check) =>
         [
           "core/doctor/agent-database-admission",
           "core/doctor/gateway-config",
@@ -40,12 +40,6 @@ vi.mock("../flows/doctor-health-contributions.js", async (importOriginal) => {
     },
   };
 });
-
-const actualChecks = await (
-  await vi.importActual<typeof import("../flows/doctor-health-contributions.js")>(
-    "../flows/doctor-health-contributions.js",
-  )
-).resolveDoctorContributionHealthChecks();
 
 afterEach(() => {
   vi.restoreAllMocks();

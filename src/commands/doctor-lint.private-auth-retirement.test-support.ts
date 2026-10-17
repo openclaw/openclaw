@@ -39,11 +39,9 @@ export async function verifyDoctorLintPrivateAuthRetirement(
     const before = snapshotDoctorLintSqliteFamily(source.path);
     const sourceConfigPath = process.env.OPENCLAW_CONFIG_PATH;
     const openAuthReader = (filename: string) => {
-      const database = openNodeSqliteDatabase(filename);
-      try {
+      {
+        using database = openNodeSqliteDatabase(filename);
         database.exec("CREATE TABLE fixture AS SELECT 'unchanged' AS value");
-      } finally {
-        database.close();
       }
       const reader = acquireAuthProfileReadDatabase(filename, openSqliteReadOnlyDatabase);
       if (reader.status !== "readable") {
@@ -73,58 +71,52 @@ export async function verifyDoctorLintPrivateAuthRetirement(
       path: "synthetic.detector.path",
     };
     const closeError = `synthetic ${mode} retirement failure`;
-    installHealthChecks([
-      {
-        id: checkId,
-        kind: "core",
-        description: "inspects private runtime state",
-        async detect() {
-          writeConfigMachineState("doctorLint.synthetic.privateWrite", true);
-          const writer = openOpenClawStateDatabase();
-          const reader = openOpenClawStateReadConnection(writer.path, writer.path);
-          const admission = captureOpenClawStateDatabaseReadAdmission(writer.path);
-          privateState = writer;
-          privateRead = reader;
-          const privateStateDir = path.dirname(writer.path);
-          const privateAuthPath = path.join(privateStateDir, "private-auth.sqlite");
-          auth = openAuthReader(privateAuthPath);
-          if (windows) {
-            // Native Windows must reject unlinking the pooled reader, never skip this gate.
-            await expect(remove(privateAuthPath, { force: true })).rejects.toMatchObject(denied);
-            expect(auth.prepare("SELECT value FROM fixture").get()).toEqual(unchanged);
-            if (cleanupFailure) {
-              // Unowned handle blocks cleanup even after Doctor retires its handles.
-              blockerPath = path.join(privateStateDir, "held-cleanup.sqlite");
-              blocker = openNodeSqliteDatabase(blockerPath);
-              blocker.exec("CREATE TABLE fixture AS SELECT 1 AS value");
-            }
+    async function detect() {
+      writeConfigMachineState("doctorLint.synthetic.privateWrite", true);
+      const writer = openOpenClawStateDatabase();
+      const reader = openOpenClawStateReadConnection(writer.path, writer.path);
+      const admission = captureOpenClawStateDatabaseReadAdmission(writer.path);
+      privateState = writer;
+      privateRead = reader;
+      const privateStateDir = path.dirname(writer.path);
+      const privateAuthPath = path.join(privateStateDir, "private-auth.sqlite");
+      auth = openAuthReader(privateAuthPath);
+      if (windows) {
+        // Native Windows must reject unlinking the pooled reader, never skip this gate.
+        await expect(remove(privateAuthPath, { force: true })).rejects.toMatchObject(denied);
+        expect(auth.prepare("SELECT value FROM fixture").get()).toEqual(unchanged);
+        if (cleanupFailure) {
+          // Unowned handle blocks cleanup even after Doctor retires its handles.
+          blockerPath = path.join(privateStateDir, "held-cleanup.sqlite");
+          blocker = openNodeSqliteDatabase(blockerPath);
+          blocker.exec("CREATE TABLE fixture AS SELECT 1 AS value");
+        }
+      }
+      if (readerFailure) {
+        const close = vi.spyOn(auth, "close").mockImplementationOnce(() => {
+          throw new Error(closeError);
+        });
+        restoreAuthClose = () => close.mockRestore();
+      }
+      unregister = registerOpenClawStateDatabaseAsyncResource({
+        async close(identity) {
+          if (identity !== undefined && identity.key !== admission.identity.key) {
+            return;
           }
-          if (readerFailure) {
-            const close = vi.spyOn(auth, "close").mockImplementationOnce(() => {
-              throw new Error(closeError);
-            });
-            restoreAuthClose = () => close.mockRestore();
+          if (denyWriter) {
+            denyWriter = false;
+            throw new Error(closeError);
           }
-          unregister = registerOpenClawStateDatabaseAsyncResource({
-            async close(identity) {
-              if (identity !== undefined && identity.key !== admission.identity.key) {
-                return;
-              }
-              if (denyWriter) {
-                denyWriter = false;
-                throw new Error(closeError);
-              }
-              await Promise.resolve();
-              reader.close();
-            },
-          });
-          if (cleanupFailure) {
-            throw new Error("synthetic authoritative detector failure");
-          }
-          return readerFailure ? [detectorFinding] : [];
+          await Promise.resolve();
+          reader.close();
         },
-      },
-    ]);
+      });
+      if (cleanupFailure) {
+        throw new Error("synthetic authoritative detector failure");
+      }
+      return readerFailure ? [detectorFinding] : [];
+    }
+    installHealthChecks([{ id: checkId, kind: "core", description: checkId, detect }]);
     const remove = fs.promises.rm;
     const removal = vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
       const prefix = `${String(target)}${path.sep}`;
@@ -138,14 +130,10 @@ export async function verifyDoctorLintPrivateAuthRetirement(
           throw Object.assign(new Error(message), { code: "EPERM" });
         }
       }
-      try {
-        await remove(target, options);
-      } catch (error) {
-        if (windows) {
-          removalErrors.push(error);
-        }
+      return remove(target, options).catch((error: unknown) => {
+        removalErrors.push(error);
         throw error;
-      }
+      });
     });
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     try {

@@ -1,10 +1,12 @@
 import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as config from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDoctorUpdateBudget } from "../flows/doctor-update-budget.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 import type { DoctorHealthCheck } from "../flows/health-check-runner-types.js";
+import type { HealthFinding } from "../flows/health-checks.js";
 import { parseReleasedDoctorLintReport } from "../infra/test-fixtures/update-doctor-lint.v2026-9-5.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import {
@@ -28,17 +30,10 @@ const observed = vi.hoisted(() => ({
 }));
 const warning = (checkId: string, fields: object) =>
   expect.objectContaining({ checkId, severity: "warning", ...fields });
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    readConfigFileSnapshotWithPluginMetadata: async (
-      ...args: Parameters<typeof actual.readConfigFileSnapshotWithPluginMetadata>
-    ) => {
-      observed.runtimePreparations += 1;
-      return actual.readConfigFileSnapshotWithPluginMetadata(...args);
-    },
-  };
+const fleetWarning = (): HealthFinding => ({
+  checkId: "fixture/fleet-inspection",
+  severity: "warning",
+  message: "Synthetic optional plugin diagnostic.",
 });
 vi.mock("../flows/doctor-health-contributions.js", () => ({
   resolveDoctorContributionHealthChecks: async () => observed.coreChecks,
@@ -54,13 +49,7 @@ vi.mock("../flows/bundled-health-checks.js", async (importOriginal) => {
         id: "fixture/fleet-inspection",
         kind: "plugin",
         description: "Synthetic fleet inspection",
-        detect: async () => [
-          {
-            checkId: "fixture/fleet-inspection",
-            severity: "warning",
-            message: "Synthetic optional plugin diagnostic.",
-          },
-        ],
+        detect: async () => [fleetWarning()],
       });
       return [];
     },
@@ -69,9 +58,12 @@ vi.mock("../flows/bundled-health-checks.js", async (importOriginal) => {
 
 beforeEach(() => {
   clearHealthChecksForTest();
-  observed.coreChecks = [];
-  observed.runtimePreparations = 0;
-  observed.reports = 0;
+  Object.assign(observed, { coreChecks: [], runtimePreparations: 0, reports: 0 });
+  const readMetadata = config.readConfigFileSnapshotWithPluginMetadata;
+  vi.spyOn(config, "readConfigFileSnapshotWithPluginMetadata").mockImplementation((...args) => {
+    observed.runtimePreparations += 1;
+    return readMetadata(...args);
+  });
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -184,16 +176,14 @@ it.each([3, 480])(
   async (agentCount) => {
     const result = await runLintFixture(agentCount);
     const { report } = result;
-    expect(result.exitCode, result.stdout).toBe(0);
-    expect(report).toMatchObject({ ok: true, findings: [], checksRun: agentCount === 3 ? 2 : 0 });
+    expect(result, result.stdout).toMatchObject({
+      exitCode: 0,
+      report: { ok: true, findings: [], checksRun: agentCount === 3 ? 2 : 0 },
+    });
     expect(result.elapsedMs).toBeLessThan(298_000);
     expect(report.warnings).toEqual([
       agentCount === 3
-        ? {
-            checkId: "fixture/fleet-inspection",
-            severity: "warning",
-            message: "Synthetic optional plugin diagnostic.",
-          }
+        ? fleetWarning()
         : warning("core/doctor/lint-inspection", {
             errorCode: "update-inspection-deferred",
             requirement: "update-validation-budget",
@@ -203,23 +193,20 @@ it.each([3, 480])(
   },
 );
 
-it.each([
-  { driver: "2026.10.1+ (snapshot receipt)", snapshotReceipt: true },
-  { driver: "older (validating only)", snapshotReceipt: false },
-])(
-  "anchors lint after a slow snapshot and Doctor for $driver drivers",
-  async ({ snapshotReceipt }) => {
+it.each([true, false])(
+  "anchors lint after a slow snapshot and Doctor (snapshot receipt: %s)",
+  async (snapshotReceipt) => {
     // #170333: snapshot 122s + candidate-doctor 153s before lint started. The
     // copied ledger has no candidate-doctor-lint step; it ends at the snapshot.
     const result = await runLintFixture(3, {}, { snapshotReceipt, validationElapsedMs: 280_000 });
-    const { report, budgetResolvedAt } = result;
-    expect(result.exitCode, result.stdout).toBe(0);
-    expect(report.ok).toBe(true);
-    const { deferred } = result;
-    expect(report.checksRun).toBe(snapshotReceipt ? 2 : 0);
-    expect(result.budget?.source).toBe(
-      snapshotReceipt ? "validation-command" : "validation-ledger",
-    );
+    const { budgetResolvedAt, deferred } = result;
+    expect(result, result.stdout).toMatchObject({
+      exitCode: 0,
+      report: { ok: true, checksRun: snapshotReceipt ? 2 : 0 },
+      budget: {
+        source: snapshotReceipt ? "validation-command" : "validation-ledger",
+      },
+    });
     expect(result.budget?.commandStartedAtMs).toBe(
       snapshotReceipt ? budgetResolvedAt - 1_000 : undefined,
     );
@@ -301,24 +288,19 @@ it.each(["selected", "required-error"])(
       requiredContinuation.resolve();
       result = await pendingLint;
     }
-    expect(observed.reports).toBe(1);
-    const { report } = result;
     const deferred = mode !== "selected";
     const failed = mode === "required-error";
-    expect(result.exitCode, result.stdout).toBe(failed ? 1 : 0);
-    expect(report.ok).toBe(!failed);
-    expect(observed.runtimePreparations).toBe(deferred ? 0 : 1);
+    expect(observed).toMatchObject({ reports: 1, runtimePreparations: deferred ? 0 : 1 });
     expect(detected.toSorted()).toEqual(
       (mode === "selected" ? [runtimeCheckId] : required.map((check) => check.id)).toSorted(),
     );
-    expect(report.findings).toEqual(
+    expect(result, result.stdout).toMatchObject({
+      exitCode: failed ? 1 : 0,
+      report: { ok: !failed },
+    });
+    expect(result.report.findings).toEqual(
       failed
-        ? [
-            expect.objectContaining({
-              checkId: "core/doctor/finalize",
-              severity: "error",
-            }),
-          ]
+        ? [expect.objectContaining({ checkId: "core/doctor/finalize", severity: "error" })]
         : [],
     );
     expect(result.deferred).toEqual(
@@ -333,8 +315,10 @@ it.each(["selected", "required-error"])(
         : [],
     );
     if (deferred) {
-      expect(report.checksRun).toBe(required.length + 2);
-      expect(JSON.parse(result.stdout).checksSkipped).toBe(optional.length);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        checksRun: required.length + 2,
+        checksSkipped: optional.length,
+      });
       expect(result.elapsedMs).toBeLessThan(72_000);
     }
   },

@@ -32,7 +32,6 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
-import { captureEnv } from "../test-utils/env.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { DoctorLintCliOptions } from "./doctor-lint-options.js";
@@ -109,8 +108,6 @@ async function coreCheck(id: string) {
   return check;
 }
 
-const originalEnv = captureEnv(["HOME", "OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"]);
-
 beforeEach(() => {
   const privateControl = fs.realpathSync(handoffDirs.make("doctor-lint-handoff-"));
   handoffResolver = vi
@@ -126,30 +123,19 @@ beforeEach(() => {
   stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 });
 
-afterEach(async () => {
-  try {
-    await closeOpenClawStateDatabaseAsync();
-  } finally {
-    try {
-      closeOpenClawStateDatabaseForTest();
-    } finally {
-      try {
-        await cleanupSnapshotOperations();
-      } finally {
-        handoffResolver?.mockRestore();
-        stdout.mockRestore();
-        originalEnv.restore();
-      }
-    }
-  }
-});
+afterEach(() =>
+  closeOpenClawStateDatabaseAsync()
+    .finally(closeOpenClawStateDatabaseForTest)
+    .finally(cleanupSnapshotOperations)
+    .finally(() => {
+      handoffResolver?.mockRestore();
+      stdout.mockRestore();
+    }),
+);
 
 it("keeps retired device-auth detection scoped for --all", () =>
   withOpenClawTestState(
-    {
-      prefix: "openclaw-doctor-lint-device-auth-",
-      env: { OPENCLAW_TEST_FAST: "1", OPENCLAW_PROFILE: undefined },
-    },
+    { env: { OPENCLAW_TEST_FAST: "1", OPENCLAW_PROFILE: undefined } },
     async (state) => {
       await state.writeConfig({
         gateway: { mode: "local" },
@@ -175,9 +161,8 @@ it("keeps retired device-auth detection scoped for --all", () =>
       mocks.pairingReadState.mockClear();
       mocks.sqliteOpen.mockClear();
       const exitCode = await lint({ includeAllChecks: true });
-      const payload = report();
       expect(exitCode).toBe(1);
-      expect(payload.findings).toEqual(
+      expect(report().findings).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
             requirement: "device-auth-store-legacy-file",
@@ -205,7 +190,7 @@ it("keeps retired device-auth detection scoped for --all", () =>
   ));
 
 it("retains auth findings and source paths when mixed lint uses legacy-main shared auth", () =>
-  withOpenClawTestState({ prefix: "openclaw-doctor-lint-auth-" }, async (state) => {
+  withOpenClawTestState({}, async (state) => {
     const customDir = state.path("custom-agent");
     await state.writeConfig({
       gateway: { mode: "local" },
@@ -275,8 +260,7 @@ it("retains auth findings and source paths when mixed lint uses legacy-main shar
         expect(ownerDirs.map((dir) => inspectPersistedAuthProfileStoreRaw(dir))).toEqual(before);
       }
       expect(privateInspection).toHaveBeenCalledOnce();
-      expect(privateDatabase).toBeDefined();
-      expect(privateDatabase?.db.isOpen).toBe(false);
+      expect(privateDatabase).toMatchObject({ db: { isOpen: false } });
       expect(fs.existsSync(privateDatabase!.path)).toBe(false);
       expect(sourceDatabase.db.isOpen).toBe(true);
       expect(readConfigMachineState(privateWriteKey)).toBeUndefined();
@@ -302,7 +286,7 @@ it.each([
 it.each(["home", "state-only"] as const)(
   "keeps personal skill discovery scoped to the source profile (%s)",
   (layout) =>
-    withOpenClawTestState({ prefix: "openclaw-doctor-personal-skills-", layout }, async (state) => {
+    withOpenClawTestState({ layout }, async (state) => {
       await state.writeConfig({
         agents: { entries: { main: { workspace: state.workspaceDir } } },
         memory: { search: { enabled: false } },
@@ -317,105 +301,91 @@ it.each(["home", "state-only"] as const)(
       installChecks(check);
       await lint({ onlyIds: [check.id] });
       const { findings } = report();
+      const unavailable = expect.objectContaining({
+        severity: "warning",
+        message: "personal-probe is allowed but unavailable: bins: missing-personal-probe-bin.",
+      });
       expect(
         findings.filter(
           (finding: { path?: string }) => finding.path === "skills.entries.personal-probe.enabled",
         ),
-      ).toEqual(
-        layout === "home"
-          ? [
-              expect.objectContaining({
-                severity: "warning",
-                message:
-                  "personal-probe is allowed but unavailable: bins: missing-personal-probe-bin.",
-              }),
-            ]
-          : [],
-      );
+      ).toEqual(layout === "home" ? [unavailable] : []);
       expect(fs.existsSync(path.join(state.stateDir, "plugin-skills"))).toBe(false);
       expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
     }),
 );
 
 it.each([true, false])("checks source credentials during isolated lint (exists=%s)", (exists) =>
-  withOpenClawTestState(
-    { prefix: "openclaw-doctor-lint-credentials-", env: { OPENCLAW_TEST_FAST: "1" } },
-    async (state) => {
-      await state.writeConfig({
-        gateway: { mode: "local" },
-        channels: { telegram: { dmPolicy: "pairing" } },
-      });
-      fs.chmodSync(state.stateDir, 0o700);
-      fs.chmodSync(state.configPath, 0o600);
-      const credentials = path.join(state.stateDir, "credentials");
-      if (exists) {
-        fs.mkdirSync(credentials, { recursive: true, mode: 0o700 });
-      }
-      const check = await coreCheck("state-integrity");
-      let isolated = false;
-      installChecks(
-        check,
-        runtimeCheck(async (ctx: HealthCheckContext) => {
-          isolated = process.env.OPENCLAW_STATE_DIR !== state.stateDir;
-          if (!check.repair) {
-            throw new Error("state-integrity repair is missing");
-          }
-          const effects = exists
-            ? []
-            : [
-                {
-                  kind: "state",
-                  action: "would-create-runtime-state-dir",
-                  target: credentials,
-                  dryRunSafe: false,
-                },
-              ];
-          await expect(check.repair({ ...ctx, mode: "fix", dryRun: true }, [])).resolves.toEqual({
-            status: "repaired",
+  withOpenClawTestState({ env: { OPENCLAW_TEST_FAST: "1" } }, async (state) => {
+    await state.writeConfig({
+      gateway: { mode: "local" },
+      channels: { telegram: { dmPolicy: "pairing" } },
+    });
+    fs.chmodSync(state.stateDir, 0o700);
+    fs.chmodSync(state.configPath, 0o600);
+    const credentials = path.join(state.stateDir, "credentials");
+    if (exists) {
+      fs.mkdirSync(credentials, { recursive: true, mode: 0o700 });
+    }
+    const check = await coreCheck("state-integrity");
+    let isolated = false;
+    installChecks(
+      check,
+      runtimeCheck(async (ctx: HealthCheckContext) => {
+        isolated = process.env.OPENCLAW_STATE_DIR !== state.stateDir;
+        if (!check.repair) {
+          throw new Error("state-integrity repair is missing");
+        }
+        const effects = exists
+          ? []
+          : [
+              {
+                kind: "state",
+                action: "would-create-runtime-state-dir",
+                target: credentials,
+                dryRunSafe: false,
+              },
+            ];
+        for (const dryRun of [true, false]) {
+          await expect(check.repair({ ...ctx, mode: "fix", dryRun }, [])).resolves.toEqual({
+            status: dryRun ? "repaired" : "skipped",
+            ...(dryRun
+              ? {}
+              : { reason: "legacy doctor state integrity contribution owns state repairs" }),
             changes: [],
             effects,
           });
-          await expect(check.repair({ ...ctx, mode: "fix", dryRun: false }, [])).resolves.toEqual({
-            status: "skipped",
-            reason: "legacy doctor state integrity contribution owns state repairs",
-            changes: [],
-            effects,
-          });
-          return [];
-        }),
-      );
-      const readFileSync = fs.readFileSync;
-      const mountInfo = vi.spyOn(fs, "readFileSync");
-      try {
-        // Source isolation is independent of the temporary directory's backing filesystem.
-        mountInfo.mockImplementation(
-          (target, options?: fs.ReadFileSyncOptions | BufferEncoding | null) => {
-            if (target === "/proc/self/mountinfo" && options === "utf8") {
-              return "22 1 0:21 / / rw,relatime - ext4 /dev/sda1 rw";
-            }
-            return readFileSync(target, options);
-          },
-        );
-        await lint({ includeAllChecks: true });
-        const { findings } = report();
-        expect(isolated).toBe(true);
-        expect(findings).toEqual(
-          exists ? [] : [expect.objectContaining({ severity: "error", path: credentials })],
-        );
-        expect(fs.existsSync(credentials)).toBe(exists);
-      } finally {
-        mountInfo.mockRestore();
-      }
-    },
-  ),
+        }
+        return [];
+      }),
+    );
+    const readFileSync = fs.readFileSync;
+    using mountInfo = vi.spyOn(fs, "readFileSync");
+    // Source isolation is independent of the temporary directory's backing filesystem.
+    mountInfo.mockImplementation(
+      (target, options?: fs.ReadFileSyncOptions | BufferEncoding | null) => {
+        if (target === "/proc/self/mountinfo" && options === "utf8") {
+          return "22 1 0:21 / / rw,relatime - ext4 /dev/sda1 rw";
+        }
+        return readFileSync(target, options);
+      },
+    );
+    await lint({ includeAllChecks: true });
+    const { findings } = report();
+    expect(isolated).toBe(true);
+    expect(findings).toEqual(
+      exists ? [] : [expect.objectContaining({ severity: "error", path: credentials })],
+    );
+    expect(fs.existsSync(credentials)).toBe(exists);
+  }),
 );
 
 it("shares private bytes within each advisory report and refreshes the next report", () =>
-  withOpenClawTestState({ prefix: "openclaw-doctor-lint-source-wal-" }, async (state) => {
+  withOpenClawTestState({}, async (state) => {
     await state.writeConfig({ memory: { search: { enabled: false } } });
     const databasePath = resolveOpenClawStateSqlitePath(state.env);
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-    const writer = new DatabaseSync(databasePath);
+    using writer = new DatabaseSync(databasePath);
     const locations: string[] = [];
     const observed: unknown[] = [];
     installChecks(
@@ -435,30 +405,24 @@ it("shares private bytes within each advisory report and refreshes the next repo
         return [];
       }, "core/doctor/source-state-read"),
     );
-    try {
-      writer.exec(
-        "PRAGMA journal_mode = WAL; CREATE TABLE marker(value TEXT); INSERT INTO marker VALUES ('committed');",
-      );
-      const previousLocations = new Set<string>();
-      for (const value of ["committed", "updated"]) {
-        writer.prepare("UPDATE marker SET value = ?").run(value);
-        const before = snapshotDoctorLintSqliteFamily(databasePath);
-        locations.length = 0;
-        observed.length = 0;
-        await collectDoctorFindings(runtime);
-        expect(observed).toEqual(Array.from({ length: 3 }, () => [{ value }]));
-        const uniqueLocations = new Set(locations);
-        expect(uniqueLocations.size).toBe(1);
-        for (const location of uniqueLocations) {
-          expect(location).not.toBe(databasePath);
-          expect(previousLocations.has(location)).toBe(false);
-          expect(fs.existsSync(location)).toBe(false);
-          previousLocations.add(location);
-        }
-        expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
-      }
-    } finally {
-      writer.close();
+    writer.exec(
+      "PRAGMA journal_mode = WAL; CREATE TABLE marker(value TEXT); INSERT INTO marker VALUES ('committed');",
+    );
+    const previousLocations = new Set<string>();
+    for (const value of ["committed", "updated"]) {
+      writer.prepare("UPDATE marker SET value = ?").run(value);
+      const before = snapshotDoctorLintSqliteFamily(databasePath);
+      locations.length = 0;
+      observed.length = 0;
+      await collectDoctorFindings(runtime);
+      expect(observed).toEqual(Array.from({ length: 3 }, () => [{ value }]));
+      expect(new Set(locations).size).toBe(1);
+      const location = locations[0]!;
+      expect(location).not.toBe(databasePath);
+      expect(previousLocations.has(location)).toBe(false);
+      expect(fs.existsSync(location)).toBe(false);
+      previousLocations.add(location);
+      expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
     }
   }));
 
@@ -466,7 +430,7 @@ it("keeps runtime schema OAuth inspection off the writable source state", () =>
   verifyDoctorLintOAuthStateIsolation(runtime, (checks) => installChecks(...checks)));
 
 it("records cancelled OAuth inspection without using a token or writing source state", () =>
-  withOpenClawTestState({ prefix: "openclaw-doctor-lint-oauth-" }, async (state) => {
+  withOpenClawTestState({}, async (state) => {
     await state.writeConfig({});
     const identity = operatorMcpOAuthIdentity("oauth-proof", "https://mcp.example.test/rpc");
     await seedDoctorLintMcpToken(identity);
@@ -493,10 +457,8 @@ it("records cancelled OAuth inspection without using a token or writing source s
             },
             async () => {
               const acquire = leaseAcquisition.acquireOpenClawStateLease;
-              let acquisitionOutcome:
-                | Awaited<ReturnType<Parameters<typeof acquire>[0]["acquire"]>>
-                | undefined;
-              const acquisition = vi
+              let acquisitionOutcome: unknown;
+              using acquisition = vi
                 .spyOn(leaseAcquisition, "acquireOpenClawStateLease")
                 .mockImplementation((params) =>
                   acquire({
@@ -511,17 +473,14 @@ it("records cancelled OAuth inspection without using a token or writing source s
                     },
                   }),
                 );
-              try {
-                resolvedToken = await resolveMcpOAuthAccessToken({
-                  identity,
-                  acceptUnknownExpiry: true,
-                  signal: controller.signal,
-                });
-                return [];
-              } finally {
-                acquisition.mockRestore();
-                expect(acquisitionOutcome).toMatchObject({ kind: "held" });
-              }
+              resolvedToken = await resolveMcpOAuthAccessToken({
+                identity,
+                acceptUnknownExpiry: true,
+                signal: controller.signal,
+              });
+              expect(acquisition).toHaveBeenCalled();
+              expect(acquisitionOutcome).toMatchObject({ kind: "held" });
+              return [];
             },
           );
         }),

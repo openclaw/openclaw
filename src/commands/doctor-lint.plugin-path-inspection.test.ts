@@ -38,6 +38,7 @@ afterEach(() => {
 function fixture(prefix: string, publishConfig = false) {
   const root = tempDirs.make(prefix);
   const configPath = path.join(root, "openclaw.json");
+  const io = () => createConfigIO({ configPath, observe: false });
   const env = {
     OPENCLAW_STATE_DIR: path.join(root, "state"),
     OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
@@ -47,6 +48,7 @@ function fixture(prefix: string, publishConfig = false) {
   return {
     root,
     configPath,
+    io,
     env,
     configEnv: {
       ...env,
@@ -63,7 +65,7 @@ function fixture(prefix: string, publishConfig = false) {
       fs.writeFileSync(configPath, authored);
       return authored;
     },
-    snapshot: () => createConfigIO({ configPath, observe: false }).readConfigFileSnapshot(),
+    snapshot: () => io().readConfigFileSnapshot(),
     expectAuthored: (authored: string) =>
       expect(fs.readFileSync(configPath, "utf8")).toBe(authored),
   };
@@ -102,161 +104,148 @@ it.each([
   { pluginApi: "=2026.9.5", phase: "discovery" },
   { pluginApi: 20260905, phase: "discovery" },
   { pluginApi: "=2026.9.5", phase: "manifest registry" },
-])(
-  "preserves configured plugin selection when $phase rejects plugin API $pluginApi",
-  async ({ pluginApi, phase }) => {
-    const { root, env } = fixture("openclaw-plugin-compatibility-");
-    const pluginPath = path.join(root, "local-plugin");
-    const pluginId = "compatibility-fixture";
-    writePlugin(pluginPath, {
-      id: pluginId,
-      configSchema: { type: "object", properties: { retained: { type: "string" } } },
-    });
-    fs.writeFileSync(
-      path.join(pluginPath, "package.json"),
-      JSON.stringify({
-        name: pluginId,
-        version: "1.0.0",
-        type: "module",
-        openclaw: { extensions: ["./index.js"], compat: { pluginApi } },
-      }),
-    );
-    const config: OpenClawConfig = {
-      plugins: {
-        allow: [pluginId],
-        load: { paths: [pluginPath] },
-        entries: { [pluginId]: { enabled: true, config: { retained: "authored" } } },
-      },
+])("preserves rejected plugin policy ($phase, $pluginApi)", async ({ pluginApi, phase }) => {
+  const { root, env } = fixture("openclaw-plugin-compatibility-");
+  const pluginPath = path.join(root, "local-plugin");
+  const pluginId = "compatibility-fixture";
+  writePlugin(pluginPath, {
+    id: pluginId,
+    configSchema: { type: "object", properties: { retained: { type: "string" } } },
+  });
+  fs.writeFileSync(
+    path.join(pluginPath, "package.json"),
+    JSON.stringify({
+      name: pluginId,
+      version: "1.0.0",
+      type: "module",
+      openclaw: { extensions: ["./index.js"], compat: { pluginApi } },
+    }),
+  );
+  const config: OpenClawConfig = {
+    plugins: {
+      allow: [pluginId],
+      load: { paths: [pluginPath] },
+      entries: { [pluginId]: { enabled: true, config: { retained: "authored" } } },
+    },
+  };
+  await withEnvAsync({ ...env, OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.9.6" }, async () => {
+    const discovery = discoverConfiguredPluginLoadPaths({ loadPaths: [pluginPath] });
+    expect(discovery.candidates).toEqual([]);
+    let diagnostics = discovery.diagnostics;
+    if (phase === "manifest registry") {
+      const previous = discoverConfiguredPluginLoadPaths({
+        loadPaths: [pluginPath],
+        env: { ...process.env, OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.9.5" },
+      });
+      expect(previous.candidates).toHaveLength(1);
+      const registry = manifestRegistry.loadPluginManifestRegistryCore({
+        candidates: previous.candidates,
+        installRecords: {},
+      });
+      expect(registry.plugins).toEqual([]);
+      vi.spyOn(manifestRegistry, "loadPluginManifestRegistryCore").mockReturnValue(registry);
+      diagnostics = registry.diagnostics;
+    }
+    expect(maybeRepairStalePluginConfig(config)).toEqual({ config, changes: [] });
+    expectIncludes(diagnostics, { pluginId, level: "warn", configDisposition: "preserve" });
+  });
+});
+
+const blockedPaths = ["world-writable"];
+if (process.getuid && process.getuid() !== 0) {
+  blockedPaths.push("suspicious ownership");
+}
+it.skipIf(process.platform === "win32").each(blockedPaths)(
+  "preserves blocked plugin policy through publication (%s)",
+  async (block) => {
+    const f = fixture("openclaw-blocked-plugin-publication-");
+    const pluginId = "blocked-fixture";
+    const pluginPath = path.join(f.root, "directory-alias");
+    writePlugin(pluginPath, { id: pluginId, configSchema: { type: "object" } });
+    const entry = {
+      enabled: true,
+      hooks: { allowPromptInjection: false },
+      config: { nested: { retained: "authored" } },
     };
-    await withEnvAsync(
-      {
-        ...env,
-        OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.9.6",
-      },
-      async () => {
+    const config = f.config({
+      allow: [pluginId, "genuinely-absent"],
+      deny: [pluginId, "genuinely-absent"],
+      load: { paths: [pluginPath] },
+      entries: { [pluginId]: entry, "genuinely-absent": { enabled: true } },
+    });
+    f.write(config);
+    const ownerUid = fs.statSync(pluginPath).uid;
+    if (block === "world-writable") {
+      fs.chmodSync(pluginPath, 0o777);
+    } else {
+      // Override only discovery's invoking UID: spoofing process.getuid also changes
+      // unrelated secure-temp admission and does not create a real second OS user.
+      const discoverAll = pluginDiscovery.discoverOpenClawPlugins;
+      const discoverConfigured = pluginDiscovery.discoverConfiguredPluginLoadPaths;
+      vi.spyOn(pluginDiscovery, "discoverOpenClawPlugins").mockImplementation((params) =>
+        discoverAll({ ...params, ownershipUid: ownerUid + 1 }),
+      );
+      vi.spyOn(pluginDiscovery, "discoverConfiguredPluginLoadPaths").mockImplementation((params) =>
+        discoverConfigured({ ...params, ownershipUid: ownerUid + 1 }),
+      );
+    }
+    try {
+      await withEnvAsync(f.configEnv, async () => {
         const discovery = discoverConfiguredPluginLoadPaths({ loadPaths: [pluginPath] });
         expect(discovery.candidates).toEqual([]);
-        let diagnostics = discovery.diagnostics;
-        if (phase === "manifest registry") {
-          const previous = discoverConfiguredPluginLoadPaths({
-            loadPaths: [pluginPath],
-            env: { ...process.env, OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.9.5" },
-          });
-          expect(previous.candidates).toHaveLength(1);
-          const registry = manifestRegistry.loadPluginManifestRegistryCore({
-            candidates: previous.candidates,
-            installRecords: {},
-          });
-          expect(registry.plugins).toEqual([]);
-          vi.spyOn(manifestRegistry, "loadPluginManifestRegistryCore").mockReturnValue(registry);
-          diagnostics = registry.diagnostics;
+        expectIncludes(discovery.diagnostics, {
+          pluginId,
+          level: "warn",
+          message: expect.stringContaining(block),
+        });
+        expect(discovery.diagnostics.every((diagnostic) => !diagnostic.configDisposition)).toBe(
+          true,
+        );
+        const migration = await inspectPluginMigrationAvailability({
+          cfg: { ...config, plugins: { ...config.plugins, deny: [] } },
+          env: process.env,
+          installRecords: {},
+          deferInstallation: false,
+        });
+        expectIncludes(migration.pending, {
+          pluginId,
+          reason: expect.stringContaining("blocked"),
+          command: "openclaw doctor --fix",
+        });
+        expect(
+          migration.pending.find((pending) => pending.pluginId === pluginId)?.reason,
+        ).not.toContain("package is missing");
+        const repaired = maybeRepairStalePluginConfig(config);
+        const expectPolicy = (plugins: OpenClawConfig["plugins"]) => {
+          expect(plugins).toMatchObject({ allow: [pluginId], deny: [pluginId] });
+          expect(plugins?.entries?.[pluginId]).toEqual(entry);
+          expect(plugins?.entries?.["genuinely-absent"]).toBeUndefined();
+        };
+        expectPolicy(repaired.config.plugins);
+        const slots = { memory: pluginId, contextEngine: pluginId };
+        const slotted = { ...config, plugins: { ...config.plugins, slots } };
+        expect(maybeRepairStalePluginConfig(slotted).config.plugins?.slots).toEqual(slots);
+        await f.io().writeConfigFile(repaired.config);
+        expectPolicy(JSON.parse(fs.readFileSync(f.configPath, "utf8")).plugins);
+        if (block === "world-writable") {
+          fs.chmodSync(pluginPath, 0o755);
+        } else {
+          vi.mocked(pluginDiscovery.discoverOpenClawPlugins).mockRestore();
+          vi.mocked(pluginDiscovery.discoverConfiguredPluginLoadPaths).mockRestore();
         }
-        expect(maybeRepairStalePluginConfig(config)).toEqual({ config, changes: [] });
-        expectIncludes(diagnostics, { pluginId, level: "warn", configDisposition: "preserve" });
-      },
-    );
+        resetPluginCache();
+        expect(
+          discoverConfiguredPluginLoadPaths({ loadPaths: [pluginPath] }).candidates,
+        ).toHaveLength(1);
+      });
+    } finally {
+      fs.chmodSync(pluginPath, 0o755);
+    }
   },
 );
 
-it.skipIf(process.platform === "win32").each(
-  [
-    { block: "world-writable", skip: false },
-    { block: "suspicious ownership", skip: !process.getuid || process.getuid() === 0 },
-  ].filter(({ skip }) => !skip),
-)("preserves $block plugin policy through Doctor config publication", async ({ block }) => {
-  const f = fixture("openclaw-blocked-plugin-publication-");
-  const pluginId = "blocked-fixture";
-  const pluginPath = path.join(f.root, "directory-alias");
-  writePlugin(pluginPath, { id: pluginId, configSchema: { type: "object" } });
-  const entry = {
-    enabled: true,
-    hooks: { allowPromptInjection: false },
-    config: { nested: { retained: "authored" } },
-  };
-  const config = f.config({
-    allow: [pluginId, "genuinely-absent"],
-    deny: [pluginId, "genuinely-absent"],
-    load: { paths: [pluginPath] },
-    entries: { [pluginId]: entry, "genuinely-absent": { enabled: true } },
-  });
-  f.write(config);
-  const ownerUid = fs.statSync(pluginPath).uid;
-  if (block === "world-writable") {
-    fs.chmodSync(pluginPath, 0o777);
-  } else {
-    // Override only discovery's invoking UID: spoofing process.getuid also changes
-    // unrelated secure-temp admission and does not create a real second OS user.
-    const discoverAll = pluginDiscovery.discoverOpenClawPlugins;
-    const discoverConfigured = pluginDiscovery.discoverConfiguredPluginLoadPaths;
-    vi.spyOn(pluginDiscovery, "discoverOpenClawPlugins").mockImplementation((params) =>
-      discoverAll({ ...params, ownershipUid: ownerUid + 1 }),
-    );
-    vi.spyOn(pluginDiscovery, "discoverConfiguredPluginLoadPaths").mockImplementation((params) =>
-      discoverConfigured({ ...params, ownershipUid: ownerUid + 1 }),
-    );
-  }
-  try {
-    await withEnvAsync(f.configEnv, async () => {
-      const discovery = discoverConfiguredPluginLoadPaths({ loadPaths: [pluginPath] });
-      expect(discovery.candidates).toEqual([]);
-      expectIncludes(discovery.diagnostics, {
-        pluginId,
-        level: "warn",
-        message: expect.stringContaining(block),
-      });
-      expect(discovery.diagnostics.every((diagnostic) => !diagnostic.configDisposition)).toBe(true);
-      const migration = await inspectPluginMigrationAvailability({
-        cfg: { ...config, plugins: { ...config.plugins, deny: [] } },
-        env: process.env,
-        installRecords: {},
-        deferInstallation: false,
-      });
-      expectIncludes(migration.pending, {
-        pluginId,
-        reason: expect.stringContaining("blocked"),
-        command: "openclaw doctor --fix",
-      });
-      expect(
-        migration.pending.find((pending) => pending.pluginId === pluginId)?.reason,
-      ).not.toContain("package is missing");
-      const repaired = maybeRepairStalePluginConfig(config);
-      const expectedPolicy = { allow: [pluginId], deny: [pluginId] };
-      const expectPolicy = (plugins: OpenClawConfig["plugins"]) => {
-        expect(plugins).toMatchObject(expectedPolicy);
-        expect(plugins?.entries?.[pluginId]).toEqual(entry);
-        expect(plugins?.entries?.["genuinely-absent"]).toBeUndefined();
-      };
-      expectPolicy(repaired.config.plugins);
-      const slots = { memory: pluginId, contextEngine: pluginId };
-      expect(
-        maybeRepairStalePluginConfig({
-          ...config,
-          plugins: { ...config.plugins, slots },
-        }).config.plugins?.slots,
-      ).toEqual(slots);
-      await createConfigIO({ configPath: f.configPath, observe: false }).writeConfigFile(
-        repaired.config,
-      );
-      const persisted = JSON.parse(fs.readFileSync(f.configPath, "utf8"));
-      expectPolicy(persisted.plugins);
-      if (block === "world-writable") {
-        fs.chmodSync(pluginPath, 0o755);
-      } else {
-        vi.mocked(pluginDiscovery.discoverOpenClawPlugins).mockRestore();
-        vi.mocked(pluginDiscovery.discoverConfiguredPluginLoadPaths).mockRestore();
-      }
-      resetPluginCache();
-      expect(
-        discoverConfiguredPluginLoadPaths({ loadPaths: [pluginPath] }).candidates,
-      ).toHaveLength(1);
-    });
-  } finally {
-    fs.chmodSync(pluginPath, 0o755);
-  }
-});
-
 it.skipIf(process.platform === "win32")(
-  "preserves chmod-000 plugin config through Doctor and readiness",
+  "preserves chmod-000 config through Doctor and readiness",
   async () => {
     const f = fixture("openclaw-plugin-inspection-", true);
     const pluginPath = path.join(f.root, "private-plugins");
@@ -280,18 +269,17 @@ it.skipIf(process.platform === "win32")(
           source: pluginPath,
           message: expect.stringContaining("EACCES: permission denied"),
         });
-        const read = await f.snapshot();
         const failure = { errorCode: "EACCES", message: diagnostic.message };
         const guidance = `Fix permissions on ${pluginPath}, then run \`openclaw doctor --fix\`.`;
-        expect(read.valid).toBe(true);
-        expectIncludes(read.warnings, {
-          code: diagnostic.code,
-          ...failure,
+        expect(await f.snapshot()).toMatchObject({
+          valid: true,
+          warnings: expect.arrayContaining([
+            expect.objectContaining({ code: diagnostic.code, ...failure }),
+          ]),
         });
         expectUninspectedConfig(config);
         const reportText = await lintFinalConfig();
-        const report = JSON.parse(reportText);
-        expectIncludes(report.warnings, {
+        expectIncludes(JSON.parse(reportText).warnings, {
           requirement: diagnostic.code,
           ...failure,
           severity: "warning",
@@ -315,11 +303,7 @@ it.skipIf(process.platform === "win32")(
         expect(readiness).toMatchObject({
           status: "warning",
           warnings: [
-            expect.objectContaining({
-              reason: diagnostic.code,
-              ...failure,
-              guidance: [guidance],
-            }),
+            expect.objectContaining({ reason: diagnostic.code, ...failure, guidance: [guidance] }),
           ],
         });
         f.expectAuthored(authored);
@@ -362,32 +346,26 @@ it("preserves custom settings and reports a typed warning for missing load paths
   config.agents!.defaults!.models = { "custom-provider/model": {} };
   config.tools = { web: { search: { provider: "custom-search" } } };
   const authored = f.write(config);
-  await withEnvAsync(
-    {
-      ...f.configEnv,
-      OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "0",
-    },
-    async () => {
-      const read = await f.snapshot();
-      expect(read).toMatchObject({ issues: [], valid: true });
-      expectIncludes(read.warnings, {
-        path: "plugins.load.paths",
-        code: "configured-plugin-path-unavailable",
-        source: missingPath,
-      });
-      expectUninspectedConfig(config);
-      expect(repairStaleAgentModelRefs(config).config).toEqual(config);
-      const report = parseUpdateDoctorLintReport(await lintFinalConfig());
-      expectIncludes(report.warnings, {
-        requirement: "configured-plugin-path-unavailable",
-        severity: "warning",
-        source: missingPath,
-        fixHint: "openclaw doctor --fix",
-      });
-      expect(report.warnings.map((warning) => warning.message).join("\n")).toContain(
-        "Uninspected plugin configuration is preserved",
-      );
-      f.expectAuthored(authored);
-    },
-  );
+  await withEnvAsync({ ...f.configEnv, OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "0" }, async () => {
+    const read = await f.snapshot();
+    expect(read).toMatchObject({ issues: [], valid: true });
+    expectIncludes(read.warnings, {
+      path: "plugins.load.paths",
+      code: "configured-plugin-path-unavailable",
+      source: missingPath,
+    });
+    expectUninspectedConfig(config);
+    expect(repairStaleAgentModelRefs(config).config).toEqual(config);
+    const report = parseUpdateDoctorLintReport(await lintFinalConfig());
+    expectIncludes(report.warnings, {
+      requirement: "configured-plugin-path-unavailable",
+      severity: "warning",
+      source: missingPath,
+      fixHint: "openclaw doctor --fix",
+    });
+    expect(report.warnings.map((warning) => warning.message).join("\n")).toContain(
+      "Uninspected plugin configuration is preserved",
+    );
+    f.expectAuthored(authored);
+  });
 });

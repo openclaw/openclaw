@@ -3,11 +3,11 @@
 import { useDoctorLegacyConfigFixture } from "./doctor/shared/legacy-config-fixture.test-support.js";
 import { expect, it } from "vitest";
 import { applyLegacyDoctorMigrations } from "./doctor/shared/legacy-config-compat.js";
-import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
+import { normalizeCompatibilityConfigValues as normalizeConfig } from "./doctor/shared/legacy-config-core-migrate.js";
 
-function migrateContextBudgetThenNormalize(config: unknown) {
+function migrateConfig(config: unknown) {
   const early = applyLegacyDoctorMigrations(config, { sourceConfigBeforeMigrations: config });
-  const normalized = normalizeCompatibilityConfigValues(early.next ?? config);
+  const normalized = normalizeConfig(early.next ?? config);
   return {
     ...normalized,
     changes: [...early.changes, ...normalized.changes],
@@ -20,12 +20,11 @@ function ollamaConfig(
   provider: Record<string, unknown> = {},
   id = "ollama",
 ) {
-  const entries = models.map((model) => ({ id: "llama3.3", ...model }));
   const nextProvider = {
     baseUrl: "http://localhost:11434",
     api: "ollama",
     ...provider,
-    models: entries,
+    models: models.map((model) => ({ id: "llama3.3", ...model })),
   };
   return { models: { providers: { [id]: nextProvider } } };
 }
@@ -38,26 +37,12 @@ const preservedPrimary =
   "Preserved the implicit primary model in agents.defaults.model.primary (ollama/llama3.3).";
 const pinChange = (numCtx: number, id = "ollama") =>
   `Set models.providers.${id}.models[0].params.num_ctx to ${numCtx} for native Ollama compatibility.`;
-function expectStable(
-  result: ReturnType<typeof normalizeCompatibilityConfigValues>,
-  migrate = normalizeCompatibilityConfigValues,
-) {
+function expectStable(result: ReturnType<typeof normalizeConfig>, migrate = normalizeConfig) {
   const expected = structuredClone(result.config);
   const repeated = migrate(result.config);
   expect(repeated.config).toEqual(expected);
   expect(repeated.changes).toEqual([]);
 }
-function normalize(
-  models: Record<string, unknown>[],
-  provider: Record<string, unknown> = {},
-  legacy = false,
-  id = "ollama",
-) {
-  const migrate = legacy ? migrateContextBudgetThenNormalize : normalizeCompatibilityConfigValues;
-  const result = migrate(ollamaConfig(models, provider, id));
-  return { ...result, provider: result.config.models?.providers?.[id] };
-}
-
 useDoctorLegacyConfigFixture();
 
 it.each([
@@ -71,7 +56,7 @@ it.each([
     "localOllama",
   );
   const expected = structuredClone(input);
-  const result = normalizeCompatibilityConfigValues(input);
+  const result = normalizeConfig(input);
   expect(result.config).toEqual(expected);
   expect(result.changes).toEqual([]);
   expectStable(result);
@@ -80,29 +65,30 @@ it.each([
 it.each(["ollama", "openai-completions"] as const)(
   "migrates legacy Ollama siblings without pinning a current %s model",
   (api) => {
-    const result = normalize(
-      [
-        {
-          id: "current",
-          api,
-          contextWindow: 262_144,
-          contextTokens: 32_768,
-          params: { temperature: 0.2 },
-        },
-        { id: "legacy", contextWindow: 65_536 },
-        { id: "legacy-inherited", contextWindow: undefined, maxTokens: undefined },
-        {
-          id: "compatible",
-          api: "openai-completions",
-          contextWindow: 81920,
-          params: { temperature: 0.1 },
-        },
-      ],
-      { maxTokens: 8192 },
-      false,
-      "localOllama",
+    const result = normalizeConfig(
+      ollamaConfig(
+        [
+          {
+            id: "current",
+            api,
+            contextWindow: 262_144,
+            contextTokens: 32_768,
+            params: { temperature: 0.2 },
+          },
+          { id: "legacy", contextWindow: 65_536 },
+          { id: "legacy-inherited", contextWindow: undefined, maxTokens: undefined },
+          {
+            id: "compatible",
+            api: "openai-completions",
+            contextWindow: 81920,
+            params: { temperature: 0.1 },
+          },
+        ],
+        { maxTokens: 8192 },
+        "localOllama",
+      ),
     );
-    const { provider } = result;
+    const provider = result.config.models?.providers?.localOllama;
     expect(provider?.params).toBeUndefined();
     expect(provider?.models?.[0]).toMatchObject({
       id: "current",
@@ -120,18 +106,20 @@ it.each(["ollama", "openai-completions"] as const)(
 );
 
 it("keeps retired provider contextTokens usable without adding an Ollama num_ctx pin", () => {
-  const result = normalize(
-    [{ contextWindow: undefined }],
-    { contextTokens: 32_768, contextWindow: 262_144, maxTokens: 8192 },
-    true,
+  const result = migrateConfig(
+    ollamaConfig([{ contextWindow: undefined }], {
+      contextTokens: 32_768,
+      contextWindow: 262_144,
+      maxTokens: 8192,
+    }),
   );
-  const { provider } = result;
+  const provider = result.config.models?.providers?.ollama;
   expect(provider).not.toHaveProperty("contextTokens");
   expect(provider).not.toHaveProperty("contextWindow");
   expect(provider?.params).toBeUndefined();
   expect(provider?.models?.[0]).toMatchObject({ contextTokens: 32_768, contextWindow: 262_144 });
   expect(provider?.models?.[0]?.params).toBeUndefined();
-  expectStable(result, migrateContextBudgetThenNormalize);
+  expectStable(result, migrateConfig);
 });
 
 it.each([
@@ -146,8 +134,8 @@ it.each([
   ],
   ["localOllama", [{ contextWindow: 0, maxTokens: 24576 }], [{ num_ctx: 24576 }], 24576],
 ] as const)("sets native %s model budget params", (id, models, params, numCtx) => {
-  const res = normalize([...models], {}, false, id);
-  expect(res.provider?.models?.map((model) => model.params)).toEqual(params);
+  const res = normalizeConfig(ollamaConfig([...models], {}, id));
+  expect(res.config.models?.providers?.[id]?.models?.map((model) => model.params)).toEqual(params);
   expect(res.changes).toEqual([pinChange(numCtx, id)]);
 });
 
@@ -167,8 +155,8 @@ it.each([
   (_label, model, params, numCtx, baked) => {
     const models = model ? [model] : [];
     const expectedProviderParams = structuredClone(params);
-    const res = normalize(models, { contextWindow: 65536, params }, true);
-    const { provider } = res;
+    const res = migrateConfig(ollamaConfig(models, { contextWindow: 65536, params }));
+    const provider = res.config.models?.providers?.ollama;
     expect(provider).not.toHaveProperty("contextWindow");
     expect(provider?.params).toEqual(expectedProviderParams);
     expect(provider?.models?.map((entry) => entry.params)).toEqual(
@@ -197,25 +185,22 @@ it("keeps native Ollama params prototype-safe while setting num_ctx", () => {
     Object.defineProperty(params, "__proto__", { enumerable: true, value });
   const providerParams = ownProto({ temperature: 0.2 }, { think: "high" });
   const modelParams = ownProto({ top_p: 0.9 }, { keep_alive: "forever" });
-  const res = normalize(
-    [{ contextWindow: 32768, params: modelParams }],
-    { contextWindow: 65536, params: providerParams },
-    true,
+  const res = migrateConfig(
+    ollamaConfig([{ contextWindow: 32768, params: modelParams }], {
+      contextWindow: 65536,
+      params: providerParams,
+    }),
   );
-  const nextProviderParams = res.provider?.params;
-  const nextModelParams = res.provider?.models?.[0]?.params;
-  expect(Object.getPrototypeOf(nextProviderParams)).toBe(Object.prototype);
-  expect(Object.getPrototypeOf(nextModelParams)).toBe(Object.prototype);
-  expect(Object.getOwnPropertyDescriptor(nextProviderParams, "__proto__")?.value).toEqual({
-    think: "high",
-  });
-  expect(Object.getOwnPropertyDescriptor(nextModelParams, "__proto__")?.value).toEqual({
-    keep_alive: "forever",
-  });
-  expect(nextProviderParams?.think).toBeUndefined();
-  expect(nextModelParams?.keep_alive).toBeUndefined();
-  expect(nextProviderParams?.num_ctx).toBeUndefined();
-  expect(nextModelParams?.num_ctx).toBe(32768);
+  const provider = res.config.models?.providers?.ollama;
+  for (const [params, proto, leaked, numCtx] of [
+    [provider?.params, { think: "high" }, "think", undefined],
+    [provider?.models?.[0]?.params, { keep_alive: "forever" }, "keep_alive", 32768],
+  ] as const) {
+    expect(Object.getPrototypeOf(params)).toBe(Object.prototype);
+    expect(Object.getOwnPropertyDescriptor(params, "__proto__")?.value).toEqual(proto);
+    expect(params?.[leaked]).toBeUndefined();
+    expect(params?.num_ctx).toBe(numCtx);
+  }
 });
 
 it.each([false, true])(
@@ -226,9 +211,7 @@ it.each([false, true])(
       api: implicit ? undefined : "openai-completions",
       ...(implicit ? { contextWindow: 65536 } : {}),
     });
-    const res = implicit
-      ? migrateContextBudgetThenNormalize(input)
-      : normalizeCompatibilityConfigValues(input);
+    const res = implicit ? migrateConfig(input) : normalizeConfig(input);
     if (implicit) {
       expect(res.config.models?.providers?.ollama).not.toHaveProperty("contextWindow");
       expect(res.config.models?.providers?.ollama?.models).toEqual(
