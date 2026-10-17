@@ -38,6 +38,17 @@ const mockState = vi.hoisted(() => ({
   uploadMattermostFile: vi.fn(),
 }));
 
+function makeAccount(botToken: string, config = {}) {
+  return { accountId: "default", botToken, baseUrl: "https://mattermost.example.com", config };
+}
+
+function mockClient() {
+  mockState.createMattermostClient.mockImplementation(({ baseUrl, botToken }) => ({
+    baseUrl,
+    token: botToken,
+  }));
+}
+
 type MattermostPostParams = {
   channelId?: string;
   message?: string;
@@ -154,33 +165,6 @@ vi.mock("openclaw/plugin-sdk/markdown-table-runtime", () => ({
   resolveMarkdownTableMode: mockState.resolveMarkdownTableMode,
 }));
 
-vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
-  normalizeLowercaseStringOrEmpty: vi.fn((value: string | null | undefined) => {
-    if (typeof value !== "string") {
-      return "";
-    }
-    return value.trim().toLowerCase();
-  }),
-  normalizeOptionalString: vi.fn((value: string | null | undefined) => {
-    if (typeof value !== "string") {
-      return undefined;
-    }
-    const normalized = value.trim();
-    return normalized.length > 0 ? normalized : undefined;
-  }),
-  normalizeStringifiedOptionalString: vi.fn((value: unknown) => {
-    if (typeof value === "string") {
-      const normalized = value.trim();
-      return normalized.length > 0 ? normalized : undefined;
-    }
-    if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-      const normalized = String(value).trim();
-      return normalized.length > 0 ? normalized : undefined;
-    }
-    return undefined;
-  }),
-}));
-
 vi.mock("./accounts.js", () => ({
   resolveMattermostAccount: mockState.resolveMattermostAccount,
 }));
@@ -237,12 +221,7 @@ describe("sendMessageMattermost", () => {
     mockState.resolveMattermostAccount.mockReset();
     // Production caches are keyed by token; keep each test in its own real namespace.
     const cacheNamespace = `mattermost-cache-${defaultAccountSequence++}`;
-    mockState.resolveMattermostAccount.mockReturnValue({
-      accountId: "default",
-      botToken: cacheNamespace,
-      baseUrl: "https://mattermost.example.com",
-      config: {},
-    });
+    mockState.resolveMattermostAccount.mockReturnValue(makeAccount(cacheNamespace));
     mockState.loadOutboundMediaFromUrl.mockReset();
     mockState.createMattermostClient.mockReset();
     mockState.createMattermostDirectChannelWithRetry.mockReset();
@@ -254,10 +233,7 @@ describe("sendMessageMattermost", () => {
     mockState.fetchMattermostUserByUsername.mockReset();
     mockState.resolveMarkdownTableMode.mockClear();
     mockState.uploadMattermostFile.mockReset();
-    mockState.createMattermostClient.mockImplementation(({ baseUrl: clientBaseUrl, botToken }) => ({
-      baseUrl: clientBaseUrl,
-      token: botToken,
-    }));
+    mockClient();
     mockState.createMattermostPost.mockResolvedValue({ id: "post-1" });
     mockState.createMattermostDirectChannelWithRetry.mockResolvedValue({ id: "dm-channel-1" });
     mockState.fetchMattermostMe.mockResolvedValue({ id: "bot-user" });
@@ -360,12 +336,7 @@ describe("sendMessageMattermost", () => {
   });
 
   it("builds interactive button props when buttons are provided", async () => {
-    mockState.resolveMattermostAccount.mockReturnValue({
-      accountId: "default",
-      botToken: "bot-token",
-      baseUrl: "https://mattermost.example.com",
-      config: {},
-    });
+    mockState.resolveMattermostAccount.mockReturnValue(makeAccount("bot-token"));
 
     await sendMessageMattermost("channel:town-square", "Pick a model", {
       cfg: TEST_CFG,
@@ -388,12 +359,7 @@ describe("sendMessageMattermost", () => {
 
   it("falls back to a channel target when bare Mattermost id is not a user", async () => {
     const channelId = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
-    mockState.resolveMattermostAccount.mockReturnValue({
-      accountId: "default",
-      botToken: "bot-token",
-      baseUrl: "https://mattermost.example.com",
-      config: {},
-    });
+    mockState.resolveMattermostAccount.mockReturnValue(makeAccount("bot-token"));
     mockState.fetchMattermostUser.mockRejectedValueOnce(
       new Error("Mattermost API 404 Not Found: user not found"),
     );
@@ -444,21 +410,9 @@ describe("parseMattermostTarget", () => {
 });
 
 describe("sendMessageMattermost user-first resolution", () => {
-  function makeAccount(token: string, config = {}) {
-    return {
-      accountId: "default",
-      botToken: token,
-      baseUrl: "https://mattermost.example.com",
-      config,
-    };
-  }
-
   beforeEach(() => {
     vi.clearAllMocks();
-    mockState.createMattermostClient.mockImplementation(({ baseUrl: clientBaseUrl, botToken }) => ({
-      baseUrl: clientBaseUrl,
-      token: botToken,
-    }));
+    mockClient();
     mockState.createMattermostPost.mockResolvedValue({ id: "post-id" });
     mockState.createMattermostDirectChannelWithRetry.mockResolvedValue({ id: "dm-channel-id" });
     mockState.fetchMattermostMe.mockResolvedValue({ id: "bot-id" });
@@ -530,10 +484,7 @@ describe("sendMessageMattermost outbound cache bounds", () => {
       baseUrl,
       config: {},
     });
-    mockState.createMattermostClient.mockImplementation(({ baseUrl: clientBaseUrl, botToken }) => ({
-      baseUrl: clientBaseUrl,
-      token: botToken,
-    }));
+    mockClient();
     mockState.createMattermostPost.mockResolvedValue({ id: "post-id" });
     mockState.createMattermostDirectChannelWithRetry.mockImplementation(
       async (_client, userIds: string[]) => ({ id: `dm-${userIds[1]}` }),

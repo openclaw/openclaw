@@ -27,6 +27,26 @@ vi.mock("./interactions.js", () => ({
   buildButtonProps,
 }));
 
+type ResourceOptions = Parameters<typeof createMattermostMonitorResources>[0];
+const mediaClient = {
+  apiBaseUrl: "https://chat.example.com/api/v4",
+  baseUrl: "https://chat.example.com",
+  token: "bot-token",
+} as ResourceOptions["client"];
+
+function createResources(options: Partial<ResourceOptions> = {}) {
+  return createMattermostMonitorResources({
+    accountId: "default",
+    callbackUrl: "https://openclaw.test/callback",
+    client: {} as never,
+    logger: {},
+    mediaMaxBytes: 1024,
+    saveRemoteMedia: vi.fn(),
+    mediaKindFromMime: () => "document",
+    ...options,
+  });
+}
+
 describe("mattermost monitor resources", () => {
   it("omits an unusable unavailable attachment name", () => {
     expect(
@@ -92,16 +112,8 @@ describe("mattermost monitor resources", () => {
       fileName: "original screenshot.png",
     }));
 
-    const resources = createMattermostMonitorResources({
-      accountId: "default",
-      callbackUrl: "https://openclaw.test/callback",
-      client: {
-        apiBaseUrl: "https://chat.example.com/api/v4",
-        baseUrl: "https://chat.example.com",
-        token: "bot-token",
-      } as never,
-      logger: {},
-      mediaMaxBytes: 1024,
+    const resources = createResources({
+      client: mediaClient,
       saveRemoteMedia,
       mediaKindFromMime: () => "image",
     });
@@ -139,15 +151,8 @@ describe("mattermost monitor resources", () => {
       expect(requestPath).toBe("/files/file-audio/info");
       return { mime_type: "audio/mpeg", name: "private-unavailable-recording.mp3" };
     });
-    const resources = createMattermostMonitorResources({
-      accountId: "default",
-      client: {
-        apiBaseUrl: "https://chat.example.com/api/v4",
-        baseUrl: "https://chat.example.com",
-        request,
-      },
-      logger: {},
-      mediaMaxBytes: 1024,
+    const resources = createResources({
+      client: { ...mediaClient, request },
       saveRemoteMedia,
       mediaKindFromMime: (contentType?: string) =>
         contentType === "audio/mpeg" ? "audio" : contentType === "image/png" ? "image" : null,
@@ -155,29 +160,16 @@ describe("mattermost monitor resources", () => {
 
     await expect(resources.resolveMattermostMedia(["file-image", "file-audio"])).resolves.toEqual([
       { path: "/tmp/file.png", contentType: "image/png", kind: "image" },
-      {
-        contentType: "audio/mpeg",
-        fileName: "private-unavailable-recording.mp3",
-        kind: "audio",
-      },
+      { contentType: "audio/mpeg", fileName: "private-unavailable-recording.mp3", kind: "audio" },
     ]);
     expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("rejects unsafe file paths before media download", async () => {
     const saveRemoteMedia = vi.fn();
-    const resources = createMattermostMonitorResources({
-      accountId: "default",
-      callbackUrl: "https://openclaw.test/callback",
-      client: {
-        apiBaseUrl: "https://chat.example.com/api/v4",
-        baseUrl: "https://chat.example.com",
-        token: "test-token",
-      } as never,
-      logger: {},
-      mediaMaxBytes: 1024,
+    const resources = createResources({
+      client: { ...mediaClient, token: "test-token" },
       saveRemoteMedia,
-      mediaKindFromMime: () => "document",
     });
 
     await expect(
@@ -229,16 +221,12 @@ describe("mattermost monitor resources", () => {
           ssrfPolicy: { ...params.ssrfPolicy, dangerouslyAllowPrivateNetwork: true },
         });
 
-      const resources = createMattermostMonitorResources({
-        accountId: "default",
-        callbackUrl: "https://openclaw.test/callback",
+      const resources = createResources({
         client: {
           apiBaseUrl: `http://127.0.0.1:${address.port}/api/v4`,
           baseUrl: `http://127.0.0.1:${address.port}`,
           token: "bot-token",
         } as never,
-        logger: {},
-        mediaMaxBytes: 1024,
         saveRemoteMedia: saveRemoteMediaWithHeaderTimeout,
         mediaKindFromMime: (contentType) => (contentType ? "image" : null),
       });
@@ -260,36 +248,18 @@ describe("mattermost monitor resources", () => {
   });
 
   it("caches channel and user lookups and falls back to empty picker props", async () => {
-    fetchMattermostChannel.mockResolvedValue({ id: "chan-1", name: "town-square" });
-    fetchMattermostUser.mockResolvedValue({ id: "user-1", username: "alice" });
+    const channel = { id: "chan-1", name: "town-square" };
+    const user = { id: "user-1", username: "alice" };
+    fetchMattermostChannel.mockResolvedValue({ ...channel });
+    fetchMattermostUser.mockResolvedValue({ ...user });
     buildButtonProps.mockReturnValue(undefined);
 
-    const resources = createMattermostMonitorResources({
-      accountId: "default",
-      callbackUrl: "https://openclaw.test/callback",
-      client: {} as never,
-      logger: {},
-      mediaMaxBytes: 1024,
-      saveRemoteMedia: vi.fn(),
-      mediaKindFromMime: () => "document",
-    });
+    const resources = createResources();
 
-    await expect(resources.resolveChannelInfo("chan-1")).resolves.toEqual({
-      id: "chan-1",
-      name: "town-square",
-    });
-    await expect(resources.resolveChannelInfo("chan-1")).resolves.toEqual({
-      id: "chan-1",
-      name: "town-square",
-    });
-    await expect(resources.resolveUserInfo("user-1")).resolves.toEqual({
-      id: "user-1",
-      username: "alice",
-    });
-    await expect(resources.resolveUserInfo("user-1")).resolves.toEqual({
-      id: "user-1",
-      username: "alice",
-    });
+    await expect(resources.resolveChannelInfo("chan-1")).resolves.toEqual(channel);
+    await expect(resources.resolveChannelInfo("chan-1")).resolves.toEqual(channel);
+    await expect(resources.resolveUserInfo("user-1")).resolves.toEqual(user);
+    await expect(resources.resolveUserInfo("user-1")).resolves.toEqual(user);
 
     expect(fetchMattermostChannel).toHaveBeenCalledTimes(1);
     expect(fetchMattermostUser).toHaveBeenCalledTimes(1);
@@ -310,15 +280,7 @@ describe("mattermost monitor resources", () => {
     fetchMattermostUser
       .mockRejectedValueOnce(new Error("mattermost api unavailable"))
       .mockResolvedValueOnce({ id: "user-1" });
-    const resources = createMattermostMonitorResources({
-      accountId: "default",
-      callbackUrl: "https://openclaw.test/callback",
-      client: {} as never,
-      logger: {},
-      mediaMaxBytes: 1024,
-      saveRemoteMedia: vi.fn(),
-      mediaKindFromMime: () => "document",
-    });
+    const resources = createResources();
     await expect(resources.resolveUserInfo("user-1")).resolves.toBeNull();
     await expect(resources.resolveUserInfo("user-1")).resolves.toEqual({ id: "user-1" });
     expect(fetchMattermostUser).toHaveBeenCalledTimes(2);
@@ -326,15 +288,7 @@ describe("mattermost monitor resources", () => {
 
   it("bounds the channel cache without refreshing insertion order on reads", async () => {
     fetchMattermostChannel.mockImplementation(async (_client, id: string) => ({ id }));
-    const resources = createMattermostMonitorResources({
-      accountId: "default",
-      callbackUrl: "https://openclaw.test/callback",
-      client: {} as never,
-      logger: {},
-      mediaMaxBytes: 1024,
-      saveRemoteMedia: vi.fn(),
-      mediaKindFromMime: () => "document",
-    });
+    const resources = createResources();
     const resolve = resources.resolveChannelInfo;
 
     for (let index = 0; index < 1000; index += 1) {
@@ -353,14 +307,8 @@ describe("mattermost monitor resources", () => {
   it("proxies typing indicators to the mattermost client helper", async () => {
     const client = {} as never;
 
-    const resources = createMattermostMonitorResources({
-      accountId: "default",
-      callbackUrl: "https://openclaw.test/callback",
+    const resources = createResources({
       client,
-      logger: {},
-      mediaMaxBytes: 1024,
-      saveRemoteMedia: vi.fn(),
-      mediaKindFromMime: () => "document",
     });
 
     await resources.sendTypingIndicator("chan-1", "root-1");

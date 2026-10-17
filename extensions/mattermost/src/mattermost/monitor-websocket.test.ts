@@ -1,5 +1,5 @@
 // Mattermost tests cover monitor websocket plugin behavior.
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import net from "node:net";
 import type { AddressInfo } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -12,97 +12,37 @@ import {
 } from "./monitor-websocket.js";
 import { runWithReconnect } from "./reconnect.js";
 
-function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
-  let count = 0;
-  for (const item of items) {
-    if (predicate(item)) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
-class FakeWebSocket implements ReturnType<MattermostWebSocketFactory> {
-  public readonly sent: string[] = [];
-  public pingCalls = 0;
-  public closeCalls = 0;
-  public terminateCalls = 0;
-  private openListeners: Array<() => void> = [];
-  private messageListeners: Array<(data: Buffer) => void | Promise<void>> = [];
-  private pongListeners: Array<(data: Buffer) => void> = [];
-  private closeListeners: Array<(code: number, reason: Buffer) => void> = [];
-  private errorListeners: Array<(err: unknown) => void> = [];
-
-  on(event: "open", listener: () => void): void;
-  on(event: "message", listener: (data: Buffer) => void | Promise<void>): void;
-  on(event: "pong", listener: (data: Buffer) => void): void;
-  on(event: "close", listener: (code: number, reason: Buffer) => void): void;
-  on(event: "error", listener: (err: unknown) => void): void;
-  on(event: "open" | "message" | "pong" | "close" | "error", listener: unknown): void {
-    if (event === "open") {
-      this.openListeners.push(listener as () => void);
-      return;
-    }
-    if (event === "message") {
-      this.messageListeners.push(listener as (data: Buffer) => void | Promise<void>);
-      return;
-    }
-    if (event === "pong") {
-      this.pongListeners.push(listener as (data: Buffer) => void);
-      return;
-    }
-    if (event === "close") {
-      this.closeListeners.push(listener as (code: number, reason: Buffer) => void);
-      return;
-    }
-    this.errorListeners.push(listener as (err: unknown) => void);
-  }
-
+class FakeWebSocket extends EventEmitter implements ReturnType<MattermostWebSocketFactory> {
+  readonly sent: string[] = [];
+  pingCalls = 0;
+  closeCalls = 0;
+  terminateCalls = 0;
   ping(): void {
     this.pingCalls++;
   }
-
   send(data: string): void {
     this.sent.push(data);
   }
-
   close(): void {
     this.closeCalls++;
   }
-
   terminate(): void {
     this.terminateCalls++;
   }
-
   emitOpen(): void {
-    for (const listener of this.openListeners) {
-      listener();
-    }
+    this.emit("open");
   }
-
   emitMessage(data: Buffer): void {
-    for (const listener of this.messageListeners) {
-      void listener(data);
-    }
+    this.emit("message", data);
   }
-
   emitPong(data = Buffer.alloc(0)): void {
-    for (const listener of this.pongListeners) {
-      listener(data);
-    }
+    this.emit("pong", data);
   }
-
   emitClose(code: number, reason = ""): void {
-    const buffer = Buffer.from(reason, "utf8");
-    for (const listener of this.closeListeners) {
-      listener(code, buffer);
-    }
+    this.emit("close", code, Buffer.from(reason, "utf8"));
   }
-
   emitError(err: unknown): void {
-    for (const listener of this.errorListeners) {
-      listener(err);
-    }
+    this.emit("error", err);
   }
 }
 
@@ -116,7 +56,7 @@ const testRuntime = (): RuntimeEnv =>
   }) as RuntimeEnv;
 
 function createConnection(
-  socket: FakeWebSocket,
+  socket: FakeWebSocket | undefined,
   options: Partial<Parameters<typeof createMattermostConnectOnce>[0]> = {},
 ) {
   return createMattermostConnectOnce({
@@ -125,7 +65,7 @@ function createConnection(
     runtime: testRuntime(),
     nextSeq: () => 1,
     onPosted: async () => {},
-    webSocketFactory: () => socket,
+    ...(socket ? { webSocketFactory: () => socket } : {}),
     ...options,
   });
 }
@@ -160,21 +100,25 @@ async function startStalledWebSocketHandshakeServer(): Promise<{
   };
 }
 
+function startAuthenticated(connect: () => Promise<void>, socket: FakeWebSocket) {
+  const connected = connect();
+  socket.emitOpen();
+  socket.emitMessage(authOkFrame(1));
+  return connected;
+}
+
 describe("mattermost websocket monitor", () => {
   beforeEach(() => {
     vi.useRealTimers();
   });
 
   it("backs off across attempts when authentication never completes", async () => {
-    const connectOnce = createMattermostConnectOnce({
-      wsUrl: "wss://example.invalid/api/v4/websocket",
+    const connectOnce = createConnection(undefined, {
       botToken: "revoked-token",
-      runtime: testRuntime(),
       nextSeq: (() => {
         let seq = 1;
         return () => seq++;
       })(),
-      onPosted: async () => {},
       webSocketFactory: () => {
         const socket = new FakeWebSocket();
         queueMicrotask(() => {
@@ -243,15 +187,11 @@ describe("mattermost websocket monitor", () => {
     const patches: Array<Record<string, unknown>> = [];
     const sockets: FakeWebSocket[] = [];
 
-    const connectOnce = createMattermostConnectOnce({
-      wsUrl: "wss://example.invalid/api/v4/websocket",
-      botToken: "token",
-      runtime: testRuntime(),
+    const connectOnce = createConnection(undefined, {
       nextSeq: (() => {
         let seq = 1;
         return () => seq++;
       })(),
-      onPosted: async () => {},
       statusSink: (patch) => {
         patches.push(patch as Record<string, unknown>);
       },
@@ -290,8 +230,8 @@ describe("mattermost websocket monitor", () => {
       data: { token: "token" },
       seq: 1,
     });
-    expect(countMatching(patches, (patch) => patch.connected === true)).toBe(2);
-    expect(countMatching(patches, (patch) => patch.connected === false)).toBe(3);
+    expect(patches.filter((patch) => patch.connected === true).length).toBe(2);
+    expect(patches.filter((patch) => patch.connected === false).length).toBe(3);
     expect(patches).toContainEqual(expect.objectContaining({ lifecycle: "starting" }));
     expect(patches).toContainEqual(expect.objectContaining({ lifecycle: "recovering" }));
   });
@@ -329,10 +269,7 @@ describe("mattermost websocket monitor", () => {
           JSON.stringify({
             event: "posted",
             data: {
-              post: JSON.stringify({
-                id: "post-1",
-                message: "normal Mattermost post",
-              }),
+              post: JSON.stringify({ id: "post-1", message: "normal Mattermost post" }),
             },
           }),
         );
@@ -342,9 +279,8 @@ describe("mattermost websocket monitor", () => {
     });
 
     try {
-      await createMattermostConnectOnce({
+      await createConnection(undefined, {
         wsUrl: `ws://127.0.0.1:${address.port}`,
-        botToken: "token",
         runtime,
         nextSeq: () => 1,
         onPosted,
@@ -429,9 +365,7 @@ describe("mattermost websocket monitor", () => {
     const frame = Buffer.from(raw);
     const decode = vi.spyOn(frame, "toString");
 
-    const connected = connectOnce();
-    socket.emitOpen();
-    socket.emitMessage(authOkFrame(1));
+    const connected = startAuthenticated(connectOnce, socket);
     socket.emitMessage(
       Buffer.from(
         JSON.stringify({
@@ -458,14 +392,9 @@ describe("mattermost websocket monitor", () => {
   it("continues protocol keepalive when Mattermost responds with pong", async () => {
     vi.useFakeTimers();
     const socket = new FakeWebSocket();
-    const connectOnce = createConnection(socket, {
-      pingIntervalMs: 100,
-      pongTimeoutMs: 25,
-    });
+    const connectOnce = createConnection(socket, { pingIntervalMs: 100, pongTimeoutMs: 25 });
 
-    const connected = connectOnce();
-    socket.emitOpen();
-    socket.emitMessage(authOkFrame(1));
+    const connected = startAuthenticated(connectOnce, socket);
 
     await vi.advanceTimersByTimeAsync(100);
     expect(socket.pingCalls).toBe(1);
@@ -498,9 +427,7 @@ describe("mattermost websocket monitor", () => {
       pongTimeoutMs: 25,
     });
 
-    const connected = connectOnce();
-    socket.emitOpen();
-    socket.emitMessage(authOkFrame(1));
+    const connected = startAuthenticated(connectOnce, socket);
 
     await vi.advanceTimersByTimeAsync(0);
     expect(pollCount).toBe(1);
@@ -538,9 +465,7 @@ describe("mattermost websocket monitor", () => {
       healthCheckIntervalMs: 100,
     });
 
-    const connected = connectOnce();
-    socket.emitOpen();
-    socket.emitMessage(authOkFrame(1));
+    const connected = startAuthenticated(connectOnce, socket);
 
     await vi.advanceTimersByTimeAsync(0);
 
@@ -574,9 +499,7 @@ describe("mattermost websocket monitor", () => {
       healthCheckIntervalMs: 100,
     });
 
-    const connected = connectOnce();
-    socket.emitOpen();
-    socket.emitMessage(authOkFrame(1));
+    const connected = startAuthenticated(connectOnce, socket);
 
     await vi.advanceTimersByTimeAsync(0);
     expect(runtime.error).toHaveBeenCalledWith(
@@ -612,9 +535,7 @@ describe("mattermost websocket monitor", () => {
       healthCheckIntervalMs: 100,
     });
 
-    const connected = connectOnce();
-    socket.emitOpen();
-    socket.emitMessage(authOkFrame(1));
+    const connected = startAuthenticated(connectOnce, socket);
 
     await vi.advanceTimersByTimeAsync(0);
     expect(pollCount).toBe(1);
@@ -638,12 +559,10 @@ describe("mattermost websocket monitor", () => {
     const runtime = testRuntime();
     const reconnectDelays: number[] = [];
     const connectErrors: string[] = [];
-    const connectOnce = createMattermostConnectOnce({
+    const connectOnce = createConnection(undefined, {
       wsUrl: stalledServer.url,
-      botToken: "token",
       runtime,
       nextSeq: () => 1,
-      onPosted: async () => {},
       webSocketFactory: (url, options) => {
         expect(options.handshakeTimeout).toBe(30_000);
         return new WebSocket(url, {

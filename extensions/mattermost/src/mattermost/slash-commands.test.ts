@@ -27,6 +27,20 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
+const command = (
+  overrides: Partial<import("./slash-commands.js").MattermostCommandResponse> = {},
+) => ({
+  id: "cmd-1",
+  token: "tok-1",
+  team_id: "team-1",
+  creator_id: "bot-user",
+  trigger: "oc_status",
+  method: "P",
+  url: "http://gateway/callback",
+  auto_complete: true,
+  ...overrides,
+});
+
 describe("slash-commands", () => {
   async function registerSingleStatusCommand(
     requestImpl: (path: string, init?: RequestInit) => Promise<unknown>,
@@ -110,18 +124,7 @@ describe("slash-commands", () => {
   it("reuses existing command when trigger already points to callback URL", async () => {
     const request = vi.fn(async (path: string) => {
       if (path.startsWith("/commands?team_id=")) {
-        return [
-          {
-            id: "cmd-1",
-            token: "tok-1",
-            team_id: "team-1",
-            creator_id: "bot-user",
-            trigger: "oc_status",
-            method: "P",
-            url: "http://gateway/callback",
-            auto_complete: true,
-          },
-        ];
+        return [command()];
       }
       throw new Error(`unexpected request path: ${path}`);
     });
@@ -148,16 +151,7 @@ describe("slash-commands", () => {
         expect(body.description).toBe("x".repeat(127));
         expect(body.auto_complete_desc).toBe("x".repeat(127));
         expect(Buffer.byteLength(body.description, "utf8")).toBeLessThanOrEqual(128);
-        return {
-          id: "cmd-1",
-          token: "tok-1",
-          team_id: "team-1",
-          creator_id: "bot-user",
-          trigger: "oc_status",
-          method: MATTERMOST_SLASH_POST_METHOD,
-          url: "http://gateway/callback",
-          auto_complete: true,
-        };
+        return command();
       }
       throw new Error(`unexpected request path: ${path}`);
     });
@@ -172,16 +166,12 @@ describe("slash-commands", () => {
     const request = vi.fn(async (path: string, init?: { method?: string }) => {
       if (path.startsWith("/commands?team_id=")) {
         return [
-          {
+          command({
             id: "cmd-foreign-1",
             token: "tok-foreign-1",
-            team_id: "team-1",
             creator_id: "another-bot-user",
-            trigger: "oc_status",
-            method: "P",
             url: "http://foreign/callback",
-            auto_complete: true,
-          },
+          }),
         ];
       }
       if (init?.method === "POST" || init?.method === "PUT" || init?.method === "DELETE") {
@@ -198,18 +188,7 @@ describe("slash-commands", () => {
   it("updates owned commands when callback method drifts from POST", async () => {
     const request = vi.fn(async (path: string, init?: RequestInit) => {
       if (path.startsWith("/commands?team_id=")) {
-        return [
-          {
-            id: "cmd-1",
-            token: "tok-old",
-            team_id: "team-1",
-            creator_id: "bot-user",
-            trigger: "oc_status",
-            method: "G",
-            url: "http://gateway/callback",
-            auto_complete: true,
-          },
-        ];
+        return [command({ token: "tok-old", method: "G" })];
       }
       if (path === "/commands/cmd-1" && init?.method === "PUT") {
         expect(JSON.parse(typeof init.body === "string" ? init.body : "{}")).toEqual({
@@ -223,16 +202,7 @@ describe("slash-commands", () => {
           auto_complete_desc: "status",
           auto_complete_hint: undefined,
         });
-        return {
-          id: "cmd-1",
-          token: "tok-updated",
-          team_id: "team-1",
-          creator_id: "bot-user",
-          trigger: "oc_status",
-          method: MATTERMOST_SLASH_POST_METHOD,
-          url: "http://gateway/callback",
-          auto_complete: true,
-        };
+        return command({ token: "tok-updated" });
       }
       throw new Error(`unexpected request path: ${path}`);
     });
@@ -258,18 +228,7 @@ describe("slash-commands", () => {
       const method = init?.method ?? "GET";
       calls.push(`${method} ${url.replace("https://chat.example.com/api/v4", "")}`);
       if (method === "GET") {
-        return Response.json([
-          {
-            id: "cmd-1",
-            token: "tok-old",
-            team_id: "team-1",
-            creator_id: "bot-user",
-            trigger: "oc_status",
-            method: "G",
-            url: "http://gateway/callback",
-            auto_complete: true,
-          },
-        ]);
+        return Response.json([command({ token: "tok-old", method: "G" })]);
       }
       if (method === "PUT") {
         return Response.json({ message: "update rejected" }, { status: 500 });
@@ -283,19 +242,7 @@ describe("slash-commands", () => {
         });
         return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
       }
-      return Response.json(
-        {
-          id: "cmd-2",
-          token: "tok-new",
-          team_id: "team-1",
-          creator_id: "bot-user",
-          trigger: "oc_status",
-          method: MATTERMOST_SLASH_POST_METHOD,
-          url: "http://gateway/callback",
-          auto_complete: true,
-        },
-        { status: 201 },
-      );
+      return Response.json(command({ id: "cmd-2", token: "tok-new" }), { status: 201 });
     });
     const client = createMattermostClient({
       baseUrl: "https://chat.example.com",

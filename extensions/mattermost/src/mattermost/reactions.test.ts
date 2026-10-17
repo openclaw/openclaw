@@ -35,31 +35,39 @@ describe("mattermost reactions", () => {
     vi.restoreAllMocks();
   });
 
-  async function addReactionWithFetch(fetchMock: typeof fetch) {
-    fetchFixture.current = fetchMock;
-    return addMattermostReaction({
+  function reactionParams(overrides: Partial<Parameters<typeof addMattermostReaction>[0]> = {}) {
+    return {
       cfg: createMattermostTestConfig(cacheKey),
       postId: "POST1",
       emojiName: "thumbsup",
-      conversationReadOrigin: "direct-operator",
-    });
+      ...overrides,
+    };
+  }
+
+  const addReaction = (overrides: Parameters<typeof reactionParams>[0] = {}) =>
+    addMattermostReaction(reactionParams(overrides));
+  const delegatedReaction = (
+    authorizedTarget: string,
+    overrides: Parameters<typeof reactionParams>[0] = {},
+  ) => addReaction({ authorizedTarget, conversationReadOrigin: "delegated", ...overrides });
+  const removeReaction = (overrides: Parameters<typeof reactionParams>[0] = {}) =>
+    removeMattermostReaction(reactionParams(overrides));
+
+  function reactionFetch(
+    overrides: Partial<Parameters<typeof createMattermostReactionFetchMock>[0]> = {},
+  ) {
+    return (fetchFixture.current = createMattermostReactionFetchMock({
+      mode: "add",
+      postId: "POST1",
+      emojiName: "thumbsup",
+      ...overrides,
+    }));
   }
 
   it("binds delegated reactions to the authorized channel before mutation", async () => {
-    const fetchMock = (fetchFixture.current = createMattermostReactionFetchMock({
-      mode: "add",
-      postId: "POST1",
-      postChannelId: "CHANNEL1",
-      emojiName: "thumbsup",
-    }));
+    const fetchMock = reactionFetch({ postChannelId: "CHANNEL1" });
 
-    const result = await addMattermostReaction({
-      cfg: createMattermostTestConfig(cacheKey),
-      postId: "POST1",
-      emojiName: "thumbsup",
-      authorizedTarget: "channel:CHANNEL1",
-      conversationReadOrigin: "delegated",
-    });
+    const result = await delegatedReaction("channel:CHANNEL1");
 
     expect(result).toEqual({ ok: true });
     expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]))).toEqual([
@@ -70,20 +78,9 @@ describe("mattermost reactions", () => {
   });
 
   it("rejects crossed delegated channel posts before bot lookup or mutation", async () => {
-    const fetchMock = (fetchFixture.current = createMattermostReactionFetchMock({
-      mode: "add",
-      postId: "POST1",
-      postChannelId: "CHANNEL2",
-      emojiName: "thumbsup",
-    }));
+    const fetchMock = reactionFetch({ postChannelId: "CHANNEL2" });
 
-    const result = await addMattermostReaction({
-      cfg: createMattermostTestConfig(cacheKey),
-      postId: "POST1",
-      emojiName: "thumbsup",
-      authorizedTarget: "channel:CHANNEL1",
-      conversationReadOrigin: "delegated",
-    });
+    const result = await delegatedReaction("channel:CHANNEL1");
 
     expect(result).toEqual({
       ok: false,
@@ -93,18 +90,9 @@ describe("mattermost reactions", () => {
   });
 
   it("fails closed for an unspecified origin without a canonical target", async () => {
-    const fetchMock = (fetchFixture.current = createMattermostReactionFetchMock({
-      mode: "add",
-      postId: "POST1",
-      postChannelId: "CHANNEL1",
-      emojiName: "thumbsup",
-    }));
+    const fetchMock = reactionFetch({ postChannelId: "CHANNEL1" });
 
-    const result = await addMattermostReaction({
-      cfg: createMattermostTestConfig(cacheKey),
-      postId: "POST1",
-      emojiName: "thumbsup",
-    });
+    const result = await addReaction();
 
     expect(result).toEqual({
       ok: false,
@@ -114,23 +102,14 @@ describe("mattermost reactions", () => {
   });
 
   it("rejects delegated direct-message posts owned by another peer", async () => {
-    const fetchMock = (fetchFixture.current = createMattermostReactionFetchMock({
-      mode: "add",
-      postId: "POST1",
+    const fetchMock = reactionFetch({
       postChannelId: "DMCHANNEL",
       channelType: "D",
       channelName: "BOT123__OTHER123",
       userId: "BOT123",
-      emojiName: "thumbsup",
-    }));
-
-    const result = await addMattermostReaction({
-      cfg: createMattermostTestConfig(cacheKey),
-      postId: "POST1",
-      emojiName: "thumbsup",
-      authorizedTarget: "user:PEER123",
-      conversationReadOrigin: "delegated",
     });
+
+    const result = await delegatedReaction("user:PEER123");
 
     expect(result).toEqual({
       ok: false,
@@ -142,45 +121,27 @@ describe("mattermost reactions", () => {
   });
 
   it("binds delegated self-DM reactions without collapsing duplicate participant ids", async () => {
-    fetchFixture.current = createMattermostReactionFetchMock({
-      mode: "add",
-      postId: "POST1",
+    reactionFetch({
       postChannelId: "DMCHANNEL",
       channelType: "D",
       channelName: "BOT123__BOT123",
       userId: "BOT123",
-      emojiName: "thumbsup",
     });
 
-    const result = await addMattermostReaction({
-      cfg: createMattermostTestConfig(cacheKey),
-      postId: "POST1",
-      emojiName: "thumbsup",
-      authorizedTarget: "user:BOT123",
-      conversationReadOrigin: "delegated",
-    });
+    const result = await delegatedReaction("user:BOT123");
 
     expect(result).toEqual({ ok: true });
   });
 
   it("rejects another peer's DM when the delegated target is the bot itself", async () => {
-    const fetchMock = (fetchFixture.current = createMattermostReactionFetchMock({
-      mode: "add",
-      postId: "POST1",
+    const fetchMock = reactionFetch({
       postChannelId: "DMCHANNEL",
       channelType: "D",
       channelName: "BOT123__OTHER123",
       userId: "BOT123",
-      emojiName: "thumbsup",
-    }));
-
-    const result = await addMattermostReaction({
-      cfg: createMattermostTestConfig(cacheKey),
-      postId: "POST1",
-      emojiName: "thumbsup",
-      authorizedTarget: "user:BOT123",
-      conversationReadOrigin: "delegated",
     });
+
+    const result = await delegatedReaction("user:BOT123");
 
     expect(result).toEqual({
       ok: false,
@@ -192,20 +153,9 @@ describe("mattermost reactions", () => {
   });
 
   it("fails closed when delegated post metadata omits the provider channel", async () => {
-    const fetchMock = (fetchFixture.current = createMattermostReactionFetchMock({
-      mode: "add",
-      postId: "POST1",
-      postChannelId: null,
-      emojiName: "thumbsup",
-    }));
+    const fetchMock = reactionFetch({ postChannelId: null });
 
-    const result = await addMattermostReaction({
-      cfg: createMattermostTestConfig(cacheKey),
-      postId: "POST1",
-      emojiName: "thumbsup",
-      authorizedTarget: "channel:CHANNEL1",
-      conversationReadOrigin: "delegated",
-    });
+    const result = await delegatedReaction("channel:CHANNEL1");
 
     expect(result).toEqual({
       ok: false,
@@ -220,32 +170,22 @@ describe("mattermost reactions", () => {
     if (!defaultAccount || !workAccount) {
       throw new Error("expected Mattermost account fixtures");
     }
-    const innerFetch = createMattermostReactionFetchMock({
-      mode: "add",
-      postId: "POST1",
-      postChannelId: "CHANNEL1",
-      emojiName: "thumbsup",
-    });
+    const innerFetch = reactionFetch({ postChannelId: "CHANNEL1" });
     const fetchMock = (fetchFixture.current = vi.fn<typeof fetch>(async (url, init) => {
       expect(requestUrl(url)).toContain("https://work-account.chat.example.com/api/v4/");
       return await innerFetch(url, init);
     }));
 
-    const result = await addMattermostReaction({
+    const result = await addReaction({
       cfg: {
         channels: {
           mattermost: {
             enabled: true,
-            accounts: {
-              default: defaultAccount,
-              work: workAccount,
-            },
+            accounts: { default: defaultAccount, work: workAccount },
           },
         },
       },
       accountId: "work",
-      postId: "POST1",
-      emojiName: "thumbsup",
       authorizedTarget: "channel:CHANNEL1",
       conversationReadOrigin: "delegated",
     });
@@ -255,16 +195,9 @@ describe("mattermost reactions", () => {
   });
 
   it("preserves direct-operator crossed-post reactions without a provider metadata read", async () => {
-    const fetchMock = (fetchFixture.current = createMattermostReactionFetchMock({
-      mode: "add",
-      postId: "POST1",
-      emojiName: "thumbsup",
-    }));
+    const fetchMock = reactionFetch();
 
-    const result = await addMattermostReaction({
-      cfg: createMattermostTestConfig(cacheKey),
-      postId: "POST1",
-      emojiName: "thumbsup",
+    const result = await addReaction({
       authorizedTarget: "channel:DIFFERENT",
       conversationReadOrigin: "direct-operator",
     });
@@ -277,15 +210,12 @@ describe("mattermost reactions", () => {
   });
 
   it("returns a Result error when add reaction API call fails", async () => {
-    const fetchMock = (fetchFixture.current = createMattermostReactionFetchMock({
-      mode: "add",
-      postId: "POST1",
-      emojiName: "thumbsup",
+    reactionFetch({
       status: 500,
       body: { id: "err", message: "boom" },
-    }));
+    });
 
-    const result = await addReactionWithFetch(fetchMock);
+    const result = await addReaction({ conversationReadOrigin: "direct-operator" });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -307,12 +237,7 @@ describe("mattermost reactions", () => {
       return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
     }));
 
-    const result = await removeMattermostReaction({
-      cfg: createMattermostTestConfig(cacheKey),
-      postId: "POST1",
-      emojiName: "thumbsup",
-      conversationReadOrigin: "direct-operator",
-    });
+    const result = await removeReaction({ conversationReadOrigin: "direct-operator" });
 
     expect(result).toEqual({ ok: true });
     expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]))).toEqual([
@@ -323,25 +248,13 @@ describe("mattermost reactions", () => {
 
   it("caches the bot user id across reaction mutations", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
-    const fetchMock = (fetchFixture.current = createMattermostReactionFetchMock({
+    const fetchMock = reactionFetch({
       mode: "both",
-      postId: "POST1",
-      emojiName: "thumbsup",
-    }));
+    });
 
     const cfg = createMattermostTestConfig(cacheKey);
-    const addResult = await addMattermostReaction({
-      cfg,
-      postId: "POST1",
-      emojiName: "thumbsup",
-      conversationReadOrigin: "direct-operator",
-    });
-    const removeResult = await removeMattermostReaction({
-      cfg,
-      postId: "POST1",
-      emojiName: "thumbsup",
-      conversationReadOrigin: "direct-operator",
-    });
+    const addResult = await addReaction({ cfg, conversationReadOrigin: "direct-operator" });
+    const removeResult = await removeReaction({ cfg, conversationReadOrigin: "direct-operator" });
 
     const usersMeCalls = fetchMock.mock.calls.filter((call) =>
       requestUrl(call[0]).endsWith("/api/v4/users/me"),
@@ -351,14 +264,9 @@ describe("mattermost reactions", () => {
     expect(usersMeCalls).toHaveLength(1);
 
     vi.mocked(Date.now).mockReturnValue(1_800_000_600_001);
-    await expect(
-      addMattermostReaction({
-        cfg,
-        postId: "POST1",
-        emojiName: "thumbsup",
-        conversationReadOrigin: "direct-operator",
-      }),
-    ).resolves.toEqual({ ok: true });
+    await expect(addReaction({ cfg, conversationReadOrigin: "direct-operator" })).resolves.toEqual({
+      ok: true,
+    });
     expect(
       fetchMock.mock.calls.filter((call) => requestUrl(call[0]).endsWith("/api/v4/users/me")),
     ).toHaveLength(2);
