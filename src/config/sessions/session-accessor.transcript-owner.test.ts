@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { zstdCodec } from "../../infra/zstd-codec.js";
+import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { retainLegacyDefaultAgentId } from "../legacy.default-agent-owner.js";
@@ -409,7 +410,11 @@ it.each(["authority", "idempotency"] as const)(
           timestamp: 1,
         },
       });
-      using decode = vi.spyOn(zstdCodec, "decompress");
+      const codec = expectDefined(
+        resolveZstdCodec(),
+        "Transcript hold regression requires native zstd",
+      );
+      using decode = vi.spyOn(codec, "decompress");
       const guard = vi.fn(() => true);
       const committed = await persistTurn(scope, {
         expectedSessionId: scope.sessionId,

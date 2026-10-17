@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
-import { zstdCodec } from "../../infra/zstd-codec.js";
+import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { findAssistantTranscriptEventInDatabase } from "./session-accessor.sqlite-read.js";
 import type { SessionTranscriptEventMatch } from "./session-history-read.types.js";
 import { findTranscriptEventMatchingInDatabase } from "./session-transcript-match.js";
@@ -90,6 +90,10 @@ describe("persisted assistant transcript matching", () => {
   });
 
   it("decodes only selected compressed canonical candidates", () => {
+    const codec = resolveZstdCodec();
+    if (!codec) {
+      throw new Error("Transcript matching regression requires native zstd support");
+    }
     const event = {
       id: "old-answer",
       message: {
@@ -118,7 +122,7 @@ describe("persisted assistant transcript matching", () => {
         true,
       );
     }
-    const decode = vi.spyOn(zstdCodec, "decompress");
+    const decode = vi.spyOn(codec, "decompress");
     const sql = trackSqliteStatementExecutions(db, ["transcript"], (query) =>
       query.includes('from "transcript_events"') ? "transcript" : null,
     );

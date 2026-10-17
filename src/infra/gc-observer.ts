@@ -48,7 +48,7 @@ function drain(restart: boolean): void {
 
 /** One native sampler per isolate; never enqueue JavaScript in response to a GC. */
 export function observeGcSamples(publish: (samples: GcSample[]) => void): (() => void) | undefined {
-  if (process.versions.bun) {
+  if (typeof GCProfiler !== "function" || process.versions.bun) {
     return undefined;
   }
   if (profiler) {

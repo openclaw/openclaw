@@ -2454,8 +2454,9 @@ src/transcripts/store-sqlite.ts	2
 src/tts/openai-compatible-speech-provider.ts	1
 src/tts/tts-config.ts	4
 src/tts/tts-core.ts	1
+src/tts/tts-provider-resolution.ts	1
 src/tts/tts-request.ts	1
-src/tts/tts-settings.ts	1
+src/tts/tts-settings.ts	2
 src/tts/tts-telephony.ts	1
 src/tts/voice-models.ts	3
 src/tui/components/chat-log.ts	1

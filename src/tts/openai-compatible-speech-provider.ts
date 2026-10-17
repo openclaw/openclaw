@@ -153,7 +153,9 @@ export function createOpenAiCompatibleSpeechProvider<
   function normalizeConfig(
     rawConfig: Record<string, unknown>,
   ): OpenAiCompatibleSpeechProviderConfig<ExtraConfig> {
-    const raw = asOptionalRecord(asOptionalRecord(rawConfig.providers)?.[providerConfigKey]);
+    const raw =
+      asOptionalRecord(asOptionalRecord(rawConfig.providers)?.[providerConfigKey]) ??
+      asOptionalRecord(rawConfig[providerConfigKey]);
     return readProviderConfig(raw, {
       model: options.defaultModel,
       voice: options.defaultVoice,

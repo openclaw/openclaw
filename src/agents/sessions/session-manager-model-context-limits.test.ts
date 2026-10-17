@@ -7,7 +7,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { transcriptEventJsonSql } from "../../config/sessions/transcript-payload.js";
 import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import { zstdCodec } from "../../infra/zstd-codec.js";
+import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -180,7 +180,7 @@ it("applies the aggregate byte budget before hydrating omitted message bodies", 
     const full = source.buildSessionContext().messages;
     await verifyRead(() => {
       const hydrated = new Set<string>();
-      const decompress = vi.spyOn(zstdCodec, "decompress");
+      const decompress = vi.spyOn(resolveZstdCodec()!, "decompress");
       const parse = JSON.parse;
       const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
         for (const match of text.matchAll(/body-payload-\d+:/gu)) {
@@ -583,7 +583,7 @@ it.each(["sync", "async"])(
           return parse(text, reviver);
         });
         let selected: SessionManager;
-        const decompress = vi.spyOn(zstdCodec, "decompress");
+        const decompress = vi.spyOn(resolveZstdCodec()!, "decompress");
         try {
           selected =
             mode === "async"

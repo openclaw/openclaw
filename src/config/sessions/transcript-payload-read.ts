@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { sql, type RawBuilder } from "kysely";
 import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
-import { zstdCodec } from "../../infra/zstd-codec.js";
+import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 
 export const MAX_COMPRESSED_EVENT_BYTES = 4 * 1024 * 1024;
 export type TranscriptPayloadAlias = "transcript_events" | "event" | "te" | "parent";
@@ -34,7 +34,11 @@ function decodeCompressedTranscriptPayload(bytes: unknown, rawBytes: unknown): s
   ) {
     throw new Error("Invalid compressed transcript payload bounds");
   }
-  const decoded = zstdCodec.decompress(bytes, rawBytes);
+  const codec = resolveZstdCodec();
+  if (!codec) {
+    throw new Error("Cannot decode compressed transcript payload: this runtime lacks zstd support");
+  }
+  const decoded = codec.decompress(bytes, rawBytes);
   if (decoded.byteLength !== rawBytes) {
     throw new Error("Compressed transcript payload length does not match its recorded UTF-8 size");
   }

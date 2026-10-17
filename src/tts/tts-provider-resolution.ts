@@ -216,11 +216,14 @@ function resolveLazyProviderConfig(
   if (existing && !effectiveCfg) {
     return existing;
   }
+  const rawBaseConfig = config.rawConfig as Record<string, unknown> | undefined;
   const rawProviders = asNonArrayRecord(config.rawConfig?.providers);
-  const rawConfig = asProviderConfig(rawProviders[canonical]);
+  const rawConfig = asProviderConfig(rawProviders[canonical] ?? rawBaseConfig?.[canonical]);
   const resolvedProvider = provider ?? registry.getSpeechProvider(canonical, effectiveCfg);
-  let hasRawProviderConfig = Object.hasOwn(rawProviders, canonical);
-  let rawProviderConfig = rawProviders[canonical];
+  let hasRawProviderConfig =
+    Object.hasOwn(rawProviders, canonical) ||
+    (rawBaseConfig ? Object.hasOwn(rawBaseConfig, canonical) : false);
+  let rawProviderConfig = rawProviders[canonical] ?? rawBaseConfig?.[canonical];
   if (!hasRawProviderConfig) {
     for (const alias of resolvedProvider?.aliases ?? []) {
       const normalizedAlias = normalizeSpeechProviderId(alias);
@@ -230,6 +233,11 @@ function resolveLazyProviderConfig(
       if (Object.hasOwn(rawProviders, normalizedAlias)) {
         hasRawProviderConfig = true;
         rawProviderConfig = rawProviders[normalizedAlias];
+        break;
+      }
+      if (rawBaseConfig && Object.hasOwn(rawBaseConfig, normalizedAlias)) {
+        hasRawProviderConfig = true;
+        rawProviderConfig = rawBaseConfig[normalizedAlias];
         break;
       }
     }
@@ -245,13 +253,14 @@ function resolveLazyProviderConfig(
   const shouldInjectCanonicalProviderConfig =
     hasRawProviderConfig || Boolean(voiceModel) || Object.keys(rawProviders).length === 0;
   const rawConfigForProvider = {
-    ...config.rawConfig,
+    ...rawBaseConfig,
     providers: shouldInjectCanonicalProviderConfig
       ? {
           ...rawProviders,
           [canonical]: compatRawProviderConfig,
         }
       : rawProviders,
+    ...(shouldInjectCanonicalProviderConfig ? { [canonical]: compatRawProviderConfig } : {}),
   };
   const next =
     effectiveCfg && resolvedProvider?.resolveConfig

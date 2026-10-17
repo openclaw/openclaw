@@ -9,7 +9,7 @@ import {
 import { supportsNodeSqliteJsonb } from "../../infra/node-sqlite.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
-import { zstdCodec } from "../../infra/zstd-codec.js";
+import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { findSessionTranscriptHeader } from "./session-entry-codec.js";
 import {
@@ -349,7 +349,8 @@ export function prepareTranscriptPayload(
   ) {
     return identity;
   }
-  if (rawBytes < MIN_COMPRESS_BYTES) {
+  const codec = resolveZstdCodec();
+  if (!codec || rawBytes < MIN_COMPRESS_BYTES) {
     return identity;
   }
   const bytes = Buffer.from(eventJson, "utf8");
@@ -357,7 +358,7 @@ export function prepareTranscriptPayload(
   if (utf8Decoder.decode(bytes) !== eventJson) {
     return identity;
   }
-  const compressed = zstdCodec.compress(bytes, 1, true);
+  const compressed = codec.compress(bytes, 1, true);
   const maximumStoredBytes = rawBytes - Math.max(64, Math.ceil(rawBytes / 10));
   if (compressed.byteLength > maximumStoredBytes) {
     return identity;

@@ -20,7 +20,7 @@ import {
 } from "../config/sessions/transcript-payload.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { zstdCodec } from "../infra/zstd-codec.js";
+import { resolveZstdCodec } from "../infra/zstd-codec.js";
 import * as agentDatabase from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -231,7 +231,7 @@ describe("doctor SQLite session transcript label migration", () => {
       .prepare("SELECT * FROM transcript_events WHERE session_id = ? AND seq = 1")
       .get(SESSION_ID);
     expect(storedTool?.event_zstd).toBeInstanceOf(Uint8Array);
-    const decompress = vi.spyOn(zstdCodec, "decompress");
+    const decompress = vi.spyOn(resolveZstdCodec()!, "decompress");
     await runTranscriptLabelHealth(state, false);
     expect(decompress).not.toHaveBeenCalled();
     decompress.mockRestore();

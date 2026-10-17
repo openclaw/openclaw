@@ -286,7 +286,11 @@ export function enableConsoleCapture(): void {
     const forwardedConsoleCall = (...args: unknown[]) => {
       const formatted = util.format(...args);
       let routedLevel = level;
-      if (level === "error" && formatted.startsWith(NODE_PROCESS_WARNING_PREFIX)) {
+      if (
+        level === "error" &&
+        formatted.startsWith(NODE_PROCESS_WARNING_PREFIX) &&
+        typeof util.getCallSites === "function"
+      ) {
         const caller = util.getCallSites(2, { sourceMap: false })[1];
         if (
           caller?.functionName === "writeOut" &&

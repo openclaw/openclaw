@@ -8,7 +8,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { prepareTranscriptMessageAppend } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
 import { appendTranscriptMessageSnapshotSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
-import { zstdCodec } from "../../infra/zstd-codec.js";
+import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -56,12 +56,16 @@ it.each(["assistant", "toolResult"] as const)(
       const redactionHeld: boolean[] = [];
       const largeJsonHeld: boolean[] = [];
       const compressionHeld: boolean[] = [];
-      const compress = zstdCodec.compress;
+      const codec = resolveZstdCodec();
+      if (!codec) {
+        throw new Error("Writer preparation proof requires native zstd support");
+      }
+      const compress = codec.compress;
       const redact = transcriptRedact.sanitizeTranscriptMessage;
       const stringify = JSON.stringify;
       const parse = JSON.parse;
       const spies = [
-        vi.spyOn(zstdCodec, "compress").mockImplementation((...args) => {
+        vi.spyOn(codec, "compress").mockImplementation((...args) => {
           compressionHeld.push(db.isTransaction);
           return compress(...args);
         }),

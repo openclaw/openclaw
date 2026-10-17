@@ -6,16 +6,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { walkDirectorySync } from "@openclaw/fs-safe/walk";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-import { zstdCodec } from "../../infra/zstd-codec.js";
+import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
 export { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
+
+const zstdCodec = resolveZstdCodec();
 
 export function encodeSessionArchiveContent(content: string): {
   bytes: Buffer;
   suffix: "" | typeof SESSION_ARCHIVE_ZSTD_SUFFIX;
 } {
   const plain = Buffer.from(content, "utf8");
-  if (plain.length === 0) {
+  if (!zstdCodec || plain.length === 0) {
     return { bytes: plain, suffix: "" };
   }
   // Default zstd level (3) matches the ratio/speed point Codex uses for cold
@@ -27,12 +29,20 @@ export function readSessionArchiveContentSync(filePath: string): string {
   if (!filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
     return fs.readFileSync(filePath, "utf8");
   }
+  if (!zstdCodec) {
+    throw new Error(
+      `Cannot read compressed transcript archive ${filePath}: this runtime lacks node:zlib zstd support`,
+    );
+  }
   return zstdCodec.decompress(fs.readFileSync(filePath)).toString("utf8");
 }
 
 export function decodeSessionArchiveBytes(bytes: Uint8Array, compressed: boolean): string {
   if (!compressed) {
     return Buffer.from(bytes).toString("utf8");
+  }
+  if (!zstdCodec) {
+    throw new Error("Cannot decode compressed transcript archive: this runtime lacks zstd support");
   }
   return zstdCodec.decompress(Buffer.from(bytes)).toString("utf8");
 }

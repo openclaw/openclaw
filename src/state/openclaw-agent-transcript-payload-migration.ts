@@ -6,7 +6,7 @@ import {
 import { readSqliteTextEncoding } from "../infra/sqlite-schema-admission.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { extractSqliteTableSchema, quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
-import { zstdCodec } from "../infra/zstd-codec.js";
+import { resolveZstdCodec } from "../infra/zstd-codec.js";
 import { renewAgentDatabaseMaintenanceAuthorityIfPresent } from "./openclaw-agent-db-lease.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { withLegacyAgentStorageSchema } from "./openclaw-agent-storage-schema.js";
@@ -75,6 +75,7 @@ export function migrateTranscriptPayloadStorageInTransaction(database: DatabaseS
   assertTranscriptRebuildInputs(database);
   const utf8 = readSqliteTextEncoding(database) === "UTF-8";
   const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+  const codec = resolveZstdCodec();
   database.exec(
     extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, "transcript_events").replace(
       "IF NOT EXISTS transcript_events",
@@ -128,8 +129,9 @@ export function migrateTranscriptPayloadStorageInTransaction(database: DatabaseS
         navigation = payload.navigation_json;
         if (payload.event_zstd !== null) {
           if (
+            !codec ||
             payload.event_utf8_bytes === null ||
-            !zstdCodec.decompress(payload.event_zstd, payload.event_utf8_bytes).equals(bytes)
+            !codec.decompress(payload.event_zstd, payload.event_utf8_bytes).equals(bytes)
           ) {
             throw new Error("Transcript compression did not preserve canonical bytes");
           }

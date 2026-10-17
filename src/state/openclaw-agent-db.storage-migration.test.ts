@@ -4,7 +4,7 @@ import { decodeMemoryEmbedding } from "../../packages/memory-host-sdk/src/host/e
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { decodeUsageCostRollup } from "../infra/session-cost-usage-rollup-codec.js";
 import { createSessionUsageRollupData } from "../infra/session-cost-usage-rollup.js";
-import { zstdCodec } from "../infra/zstd-codec.js";
+import { resolveZstdCodec } from "../infra/zstd-codec.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { AGENT_DATABASE_MAINTENANCE_LEASE } from "./openclaw-agent-db-lease.js";
@@ -60,7 +60,11 @@ function seedHistoricalData(db: DatabaseSync) {
       VALUES(23, 'synthetic', 'model', 'provider-key', 'chunk-hash', '[1.0000000000000002,0.1]', 2, 20);
   `);
   const archive = Buffer.from('{"type":"message","id":"cold-message"}\n');
-  const compressedArchive = zstdCodec.compress(archive);
+  const codec = resolveZstdCodec();
+  if (!codec) {
+    throw new Error("Cold transcript fixture requires Zstd support");
+  }
+  const compressedArchive = codec.compress(archive);
   db.prepare(`INSERT INTO session_transcript_cold_archives
     (session_id, generation, archive_name, archive_sha256, event_count, raw_bytes, archive_bytes, last_seq, archived_at, storage, archive_blob)
     VALUES('cold', 'cold-generation', 'cold.jsonl.zst', ?, 1, ?, ?, 10, 21, 'sqlite', ?)`).run(
@@ -408,15 +412,19 @@ describe("agent schema 22 storage cutover", () => {
           ]);
           for (const [index, row] of rows.entries()) {
             if (row.event_zstd instanceof Uint8Array) {
+              const codec = resolveZstdCodec();
+              expect(codec).not.toBeNull();
               expect(
-                zstdCodec.decompress(row.event_zstd, Number(row.event_utf8_bytes)).toString("utf8"),
+                codec!.decompress(row.event_zstd, Number(row.event_utf8_bytes)).toString("utf8"),
               ).toBe(event);
               expect(row.event_json).toBeNull();
             } else {
               expect(row.bytes).toBe(before.events[index]?.bytes);
             }
           }
-          expect(rows[0]?.event_zstd instanceof Uint8Array).toBe(encoding === "UTF-8");
+          expect(rows[0]?.event_zstd instanceof Uint8Array).toBe(
+            encoding === "UTF-8" && resolveZstdCodec() !== null,
+          );
           const chunk = reader
             .prepare("SELECT chunk_rowid, embedding FROM memory_index_chunks WHERE id = 'chunk'")
             .get()!;

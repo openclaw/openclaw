@@ -8,6 +8,7 @@ import { isPathInside, isPathStrictlyInside } from "../infra/path-guards.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import {
   isPluginSourceModulePath,
+  supportsNativeModuleAliasHooks,
   useNodeModuleHooks,
   type BunPluginRuntime,
   type ResolveFilename,
@@ -363,7 +364,7 @@ function installResolver(): void {
   }
   const previousResolveFilename = moduleWithResolver[nodeResolveFilenameProperty];
   // Packaged runtimes without aliases must retain the runtime's native resolution path.
-  if (!previousResolveFilename) {
+  if (!previousResolveFilename || !supportsNativeModuleAliasHooks()) {
     installed = Boolean(bun);
     return;
   }

@@ -9,6 +9,7 @@ import {
   isNativeWebSearchAllowedByToolPolicy,
 } from "../../agents/codex-native-web-search-core.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createGoogleThinkingPayloadWrapper } from "../../llm/providers/stream-wrappers/google.js";
 import { createMinimaxThinkingDisabledWrapper } from "../../llm/providers/stream-wrappers/minimax.js";
 import {
   createSiliconFlowThinkingWrapper,
@@ -28,7 +29,6 @@ import { streamWithPayloadPatch } from "../../llm/providers/stream-wrappers/stre
 import type { SimpleStreamOptions } from "../../llm/types.js";
 import {
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
-  createGoogleThinkingPayloadWrapper,
   createThinkingOnlyFinalTextWrapper,
 } from "../../plugin-sdk/provider-stream-shared.js";
 import {

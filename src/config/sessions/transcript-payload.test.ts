@@ -8,7 +8,7 @@ import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infr
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
-import { zstdCodec } from "../../infra/zstd-codec.js";
+import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import {
   getMessageRangeReaders,
   parseActiveTranscriptMessageRow,
@@ -103,9 +103,13 @@ function readBody(database: DatabaseSync, seq: number, mode: "sql" | "row" = "sq
 }
 
 function compressedRecord(bytes: Uint8Array, rawBytes = bytes.byteLength): PayloadFixture {
+  const codec = resolveZstdCodec();
+  if (!codec) {
+    throw new Error("Transcript compression boundary tests require native zstd support");
+  }
   return {
     event_json: null,
-    event_zstd: zstdCodec.compress(bytes, 1, true),
+    event_zstd: codec.compress(bytes, 1, true),
     event_utf8_bytes: rawBytes,
     navigation_json: '{"type":"custom"}',
   };
@@ -401,7 +405,7 @@ describe("transcript payload storage boundary", () => {
     "projects selected payloads once with native role semantics: %s",
     (envelope) => {
       const database = openNodeSqliteDatabase(":memory:");
-      const decompress = vi.spyOn(zstdCodec, "decompress");
+      const decompress = vi.spyOn(resolveZstdCodec()!, "decompress");
       try {
         createTable(database);
         const fields =
