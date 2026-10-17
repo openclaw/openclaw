@@ -1,4 +1,3 @@
-// Check Deadcode Unused Files tests cover check deadcode unused files script behavior.
 import { spawn } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -35,6 +34,25 @@ class FakeKnipProcess extends EventEmitter {
   readonly stderr = new EventEmitter();
   readonly stdout = new EventEmitter();
   pid = 12345;
+}
+
+function runFakeKnip(child: FakeKnipProcess, options: Parameters<typeof runKnip>[1] = {}) {
+  return runKnip(KNIP_UNUSED_FILE_ARGS, {
+    spawnCommand: () => child,
+    writeStatus: () => {},
+    ...options,
+  });
+}
+
+function knipResult(overrides: Partial<Awaited<ReturnType<typeof runKnip>>>) {
+  return {
+    errorCode: undefined,
+    errorMessage: undefined,
+    output: "",
+    signal: null,
+    status: 0,
+    ...overrides,
+  };
 }
 
 function finishFakeProcess(
@@ -126,11 +144,7 @@ left-pad: package.json
   });
 
   it("accepts an empty compact report with zero unused files", () => {
-    expect(checkUnusedFiles("")).toStrictEqual({
-      files: [],
-      ok: true,
-      message: "",
-    });
+    expect(checkUnusedFiles("")).toStrictEqual({ files: [], ok: true, message: "" });
   });
 
   it("rejects a nonzero Knip exit even when no unused files were printed", () => {
@@ -190,18 +204,9 @@ Delete the files or model their real entrypoints in Knip.`,
       expect(calls[0]).toMatchObject({
         args: [
           pnpmExecPath,
-          "dlx",
-          "--package",
-          "knip@6.40.0",
-          "knip",
-          "--config",
-          "config/knip.config.ts",
-          "--production",
-          "--no-progress",
-          "--reporter",
-          "compact",
-          "--files",
-          "--no-config-hints",
+          ..."dlx --package knip@6.40.0 knip --config config/knip.config.ts --production --no-progress --reporter compact --files --no-config-hints".split(
+            " ",
+          ),
         ],
         command: "/test-node",
         options: {
@@ -210,13 +215,7 @@ Delete the files or model their real entrypoints in Knip.`,
           stdio: ["ignore", "pipe", "pipe"],
         },
       });
-      expect(result).toStrictEqual({
-        errorCode: undefined,
-        errorMessage: undefined,
-        output: "partial stdoutpartial stderr",
-        signal: null,
-        status: 0,
-      });
+      expect(result).toStrictEqual(knipResult({ output: "partial stdoutpartial stderr" }));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -226,12 +225,11 @@ Delete the files or model their real entrypoints in Knip.`,
     const statuses: string[] = [];
     const child = new FakeKnipProcess();
     await withFakeProcessSignals(child, async (kills) => {
-      const result = await runKnip(KNIP_UNUSED_FILE_ARGS, {
+      const result = await runFakeKnip(child, {
         heartbeatMs: 1,
         killGraceMs: FAKE_KNIP_KILL_GRACE_MS,
         maxBufferBytes: KNIP_MAX_BUFFER_BYTES,
         scanName: KNIP_UNUSED_FILE_SCAN_NAME,
-        spawnCommand: () => child,
         timeoutMs: 5,
         writeStatus: (message: string) => statuses.push(message),
       });
@@ -239,13 +237,14 @@ Delete the files or model their real entrypoints in Knip.`,
       expect(statuses.some((message) => message.includes("still running"))).toBe(true);
       expect(statuses.some((message) => message.includes("timed out"))).toBe(true);
       expect(kills).toEqual(["SIGTERM"]);
-      expect(result).toStrictEqual({
-        errorCode: "ETIMEDOUT",
-        errorMessage: expect.stringContaining("Knip production unused-file scan timed out"),
-        output: "",
-        signal: "SIGTERM",
-        status: null,
-      });
+      expect(result).toStrictEqual(
+        knipResult({
+          errorCode: "ETIMEDOUT",
+          errorMessage: expect.stringContaining("Knip production unused-file scan timed out"),
+          signal: "SIGTERM",
+          status: null,
+        }),
+      );
     });
   });
 
@@ -395,33 +394,22 @@ Delete the files or model their real entrypoints in Knip.`,
 
   it("keeps output delivered after process exit but before stdio close", async () => {
     const child = new FakeKnipProcess();
-    const resultPromise = runKnip(KNIP_UNUSED_FILE_ARGS, {
-      spawnCommand: () => child,
-      writeStatus: () => {},
-    });
+    const resultPromise = runFakeKnip(child);
 
     child.stdout.emit("data", "before-exit\n");
     child.emit("exit", 0, null);
     child.stdout.emit("data", "after-exit\n");
     child.emit("close", 0, null);
 
-    await expect(resultPromise).resolves.toStrictEqual({
-      errorCode: undefined,
-      errorMessage: undefined,
-      output: "before-exit\nafter-exit\n",
-      signal: null,
-      status: 0,
-    });
+    await expect(resultPromise).resolves.toStrictEqual(
+      knipResult({ output: "before-exit\nafter-exit\n" }),
+    );
   });
 
   it.each([1])("preserves split UTF-8 for interleaved Knip streams at byte %i", async (split) => {
     const child = new FakeKnipProcess();
     child.pid = 0;
-    const resultPromise = runKnip(KNIP_UNUSED_FILE_ARGS, {
-      maxBufferBytes: 8,
-      spawnCommand: () => child,
-      writeStatus: () => {},
-    });
+    const resultPromise = runFakeKnip(child, { maxBufferBytes: 8 });
     const stdout = Buffer.from("🦞");
     const stderr = Buffer.from("📦");
     child.stdout.emit("data", stdout.subarray(0, split));
@@ -442,11 +430,7 @@ Delete the files or model their real entrypoints in Knip.`,
     const child = new FakeKnipProcess();
     // This output-only child owns no OS process; the existing cap test covers signal delivery.
     child.pid = 0;
-    const resultPromise = runKnip(KNIP_UNUSED_FILE_ARGS, {
-      maxBufferBytes: 4,
-      spawnCommand: () => child,
-      writeStatus: () => {},
-    });
+    const resultPromise = runFakeKnip(child, { maxBufferBytes: 4 });
     const character = Buffer.from("🦞");
     child.stdout.emit("data", "ab");
     child.stdout.emit("data", character.subarray(0, 2));
@@ -464,23 +448,23 @@ Delete the files or model their real entrypoints in Knip.`,
   it("bounds captured Knip output", async () => {
     const child = new FakeKnipProcess();
     await withFakeProcessSignals(child, async (kills) => {
-      const resultPromise = runKnip(KNIP_UNUSED_FILE_ARGS, {
+      const resultPromise = runFakeKnip(child, {
         killGraceMs: FAKE_KNIP_KILL_GRACE_MS,
         maxBufferBytes: 4,
         scanName: KNIP_UNUSED_FILE_SCAN_NAME,
-        spawnCommand: () => child,
         timeoutMs: 1000,
-        writeStatus: () => {},
       });
       child.stdout.emit("data", "too much output");
 
-      await expect(resultPromise).resolves.toStrictEqual({
-        errorCode: "ENOBUFS",
-        errorMessage: "Knip production unused-file scan exceeded 4 output bytes",
-        output: "too ",
-        signal: "SIGTERM",
-        status: null,
-      });
+      await expect(resultPromise).resolves.toStrictEqual(
+        knipResult({
+          errorCode: "ENOBUFS",
+          errorMessage: "Knip production unused-file scan exceeded 4 output bytes",
+          output: "too ",
+          signal: "SIGTERM",
+          status: null,
+        }),
+      );
       expect(kills).toEqual(["SIGTERM"]);
     });
   });
@@ -502,12 +486,13 @@ Delete the files or model their real entrypoints in Knip.`,
       writeStatus: () => {},
     });
 
-    await expect(resultPromise).resolves.toStrictEqual({
-      errorCode: "ENOENT",
-      errorMessage: "spawn pnpm ENOENT",
-      output: "",
-      signal: null,
-      status: null,
-    });
+    await expect(resultPromise).resolves.toStrictEqual(
+      knipResult({
+        errorCode: "ENOENT",
+        errorMessage: "spawn pnpm ENOENT",
+        signal: null,
+        status: null,
+      }),
+    );
   });
 });

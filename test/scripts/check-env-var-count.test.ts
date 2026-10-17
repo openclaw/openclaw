@@ -7,10 +7,11 @@ import { withEnv } from "../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const budgetPath = "config/env-var-count-budget.txt";
 beforeEach(() => vi.stubEnv("GITHUB_ACTIONS", ""));
 afterEach(() => vi.unstubAllEnvs());
 
-function createRepo(files: Record<string, string> = {}) {
+function createRepo(files: Record<string, string> = {}, budget?: number) {
   const root = tempDirs.make("openclaw-env-count-");
   const git = (...args: string[]) =>
     execFileSync(
@@ -26,23 +27,27 @@ function createRepo(files: Record<string, string> = {}) {
   for (const [file, source] of Object.entries(files)) {
     write(file, source);
   }
-  return { root, git, write };
+  if (budget !== undefined) {
+    write(budgetPath, `${budget}\n`);
+  }
+  const commit = (message = "base") => {
+    git("add", ".");
+    git("commit", "-m", message);
+  };
+  return { root, git, write, commit };
 }
 
 describe("check-env-var-count", () => {
   it("warns on CI count growth while malformed budgets stay blocking", () => {
-    const { root, git, write } = createRepo({
-      "config/env-var-count-budget.txt": "0\n",
-    });
-    git("add", ".");
-    git("commit", "-m", "base");
+    const { root, commit, write } = createRepo({}, 0);
+    commit();
     write("src/runtime.ts", "process.env.OPENCLAW_CANARY;\n");
     expect(() => main(["--base", "HEAD"], root)).toThrow(/exceeds budget/u);
     vi.stubEnv("GITHUB_ACTIONS", "true");
     vi.stubEnv("GITHUB_STEP_SUMMARY", path.join(root, "summary.md"));
     expect(main(["--base", "HEAD"], root)).toBe(1);
     expect(fs.readFileSync(path.join(root, "summary.md"), "utf8")).toContain("exceeds budget");
-    write("config/env-var-count-budget.txt", "invalid\n");
+    write(budgetPath, "invalid\n");
     expect(() => main(["--base", "HEAD"], root)).toThrow(/non-negative integer/u);
   });
 
@@ -55,7 +60,7 @@ describe("check-env-var-count", () => {
   });
 
   it("collects distinct names from the whole selected snapshot without crossing file boundaries", () => {
-    const { root, git, write } = createRepo({
+    const { root, git, write, commit } = createRepo({
       ".gitignore": "src/ignored.ts\n",
       "src/partial.ts": "OPENCLAW_HEAD",
       "src/modified.ts": "OPENCLAW_OLD",
@@ -76,8 +81,7 @@ describe("check-env-var-count", () => {
       "src/runtime.json": "OPENCLAW_EXCLUDED",
       "ui/src/runtime.ts": "OPENCLAW_EXCLUDED",
     });
-    git("add", ".");
-    git("commit", "-m", "base");
+    commit();
     write("src/partial.ts", "OPENCLAW_INDEX");
     write("src/modified.ts", "OPENCLAW_MODIFIED");
     write("src/added.ts", "OPENCLAW_ADDED");
@@ -143,23 +147,21 @@ describe("check-env-var-count", () => {
   });
 
   it("fails closed when the base ref cannot be resolved", () => {
-    const { root } = createRepo({ "config/env-var-count-budget.txt": "0\n" });
+    const { root } = createRepo({}, 0);
     expect(() => main(["--base", "missing"], root)).toThrow(/Could not resolve/u);
   });
 
   it("rejects missing ancestry instead of skipping budget growth", () => {
     // Shallow clones and grafted agent checkouts resolve the base but truncate its history.
-    const { root, git, write } = createRepo({
-      "config/env-var-count-budget.txt": "1\n",
-      "src/runtime.ts": "process.env.OPENCLAW_ONLY;\n",
-    });
-    git("add", ".");
-    git("commit", "-m", "detached base");
+    const { root, git, write, commit } = createRepo(
+      { "src/runtime.ts": "process.env.OPENCLAW_ONLY;\n" },
+      1,
+    );
+    commit("detached base");
     // Name the base explicitly; init.defaultBranch varies by environment.
     git("branch", "-M", "severed-base");
     git("checkout", "--orphan", "severed");
-    git("add", ".");
-    git("commit", "-m", "severed history");
+    commit("severed history");
     expect(() => main(["--base", "severed-base"], root)).toThrow(
       /Could not resolve ratchet merge base/u,
     );
@@ -169,30 +171,27 @@ describe("check-env-var-count", () => {
     expect(() => main(["--base", "severed-base", "--no-merge-base"], root)).toThrow(
       /exceeds budget/u,
     );
-    write("config/env-var-count-budget.txt", "2\n");
+    write(budgetPath, "2\n");
     expect(() => main(["--base", "severed-base", "--no-merge-base"], root)).toThrow(/budget grew/u);
   });
 
   it("allows the initial budget only when its file is absent at a valid base", () => {
-    const { root, git, write } = createRepo({ "src/runtime.ts": "OPENCLAW_ONE" });
-    git("add", ".");
-    git("commit", "-m", "before budget");
-    write("config/env-var-count-budget.txt", "1\n");
+    const { root, commit, write } = createRepo({ "src/runtime.ts": "OPENCLAW_ONE" });
+    commit("before budget");
+    write(budgetPath, "1\n");
     expect(main(["--base", "HEAD"], root)).toBe(1);
   });
 
   it("compares against the fork budget when the base branch later shrinks", () => {
-    const { root, git, write } = createRepo({
-      "config/env-var-count-budget.txt": "2\n",
-      "src/runtime.ts": "process.env.OPENCLAW_ONE; process.env.OPENCLAW_TWO;\n",
-    });
-    git("add", ".");
-    git("commit", "-m", "base");
+    const { root, git, write, commit } = createRepo(
+      { "src/runtime.ts": "process.env.OPENCLAW_ONE; process.env.OPENCLAW_TWO;\n" },
+      2,
+    );
+    commit();
     git("branch", "release");
-    write("config/env-var-count-budget.txt", "1\n");
+    write(budgetPath, "1\n");
     write("src/runtime.ts", "process.env.OPENCLAW_ONE;\n");
-    git("add", ".");
-    git("commit", "-m", "shrink main");
+    commit("shrink main");
     git("branch", "moving-main");
     git("checkout", "release");
     expect(() => main(["--base", "moving-main"], root)).not.toThrow();
@@ -200,17 +199,12 @@ describe("check-env-var-count", () => {
 
   describe("staged budget enforcement", () => {
     it("compares staged budgets to the origin/main fork rather than local HEAD", () => {
-      const { root, git, write } = createRepo({
-        "config/env-var-count-budget.txt": "1\n",
-        "src/runtime.ts": "OPENCLAW_ONE",
-      });
-      git("add", ".");
-      git("commit", "-m", "fork");
+      const { root, git, write, commit } = createRepo({ "src/runtime.ts": "OPENCLAW_ONE" }, 1);
+      commit("fork");
       git("update-ref", "refs/remotes/origin/main", "HEAD");
-      write("config/env-var-count-budget.txt", "2\n");
+      write(budgetPath, "2\n");
       write("src/runtime.ts", "OPENCLAW_ONE OPENCLAW_TWO");
-      git("add", ".");
-      git("commit", "-m", "local budget increase");
+      commit("local budget increase");
       expect(() => main(["--staged"], root)).toThrow(/budget grew/u);
       expect(main(["--staged", "--base", "HEAD"], root)).toBe(2);
     });
@@ -225,21 +219,23 @@ describe("check-env-var-count", () => {
         error: /budget grew/u,
       },
     ])("checks $name", ({ base, budget, count, error }) => {
-      const { root, git, write } = createRepo({
-        "config/env-var-count-budget.txt": `${base}\n`,
-        "src/runtime.ts": Array.from({ length: base }, (_, index) => `OPENCLAW_BASE_${index}`).join(
-          "\n",
-        ),
-      });
-      git("add", ".");
-      git("commit", "-m", "base");
-      write("config/env-var-count-budget.txt", `${budget}\n`);
+      const { root, git, write, commit } = createRepo(
+        {
+          "src/runtime.ts": Array.from(
+            { length: base },
+            (_, index) => `OPENCLAW_BASE_${index}`,
+          ).join("\n"),
+        },
+        base,
+      );
+      commit();
+      write(budgetPath, `${budget}\n`);
       write(
         "src/runtime.ts",
         Array.from({ length: count }, (_, index) => `OPENCLAW_NEXT_${index}`).join("\n"),
       );
       git("add", ".");
-      write("config/env-var-count-budget.txt", "0\n");
+      write(budgetPath, "0\n");
       write("src/runtime.ts", "");
       expect(() => main(["--staged", "--base", "HEAD"], root)).toThrow(error);
     });

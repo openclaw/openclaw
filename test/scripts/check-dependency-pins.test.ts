@@ -1,4 +1,3 @@
-// Check Dependency Pins tests cover check dependency pins script behavior.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -21,6 +20,10 @@ function git(cwd: string, args: string[]) {
 
 function writeJson(filePath: string, value: unknown) {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function violations(file: string, section: string, specs: Record<string, string>) {
+  return Object.entries(specs).map(([name, spec]) => ({ file, section, name, spec }));
 }
 
 function stubHangingGit(cwd: string, stalledSubcommand: "ls-files" | "show") {
@@ -127,42 +130,22 @@ packageExtensions:
     git(dir, ["add", "package.json", "extensions/demo/package.json"]);
 
     expect(collectDependencyPinViolations(dir)).toEqual([
-      {
-        file: "extensions/demo/package.json",
-        section: "devDependencies",
-        name: "devCaret",
-        spec: "^4.5.6",
-      },
-      {
-        file: "extensions/demo/package.json",
-        section: "optionalDependencies",
-        name: "optionalTilde",
-        spec: "~7.8.9",
-      },
-      { file: "package.json", section: "dependencies", name: "caret", spec: "^1.2.3" },
-      { file: "package.json", section: "dependencies", name: "tilde", spec: "~1.2.3" },
-      { file: "package.json", section: "dependencies", name: "wildcard", spec: "*" },
-      { file: "package.json", section: "dependencies", name: "tag", spec: "latest" },
-      { file: "package.json", section: "dependencies", name: "broad", spec: ">=1 <2" },
-      {
-        file: "package.json",
-        section: "dependencies",
-        name: "malformedSemver",
-        spec: "01.2.3",
-      },
-      {
-        file: "package.json",
-        section: "dependencies",
-        name: "gitFloating",
-        spec: "github:owner/repo#main",
-      },
-      {
-        file: "package.json",
-        section: "dependencies",
-        name: "fragmentlessGitPath",
-        spec: "git+https://github.com/owner/repo/commit/0123456789abcdef0123456789abcdef01234567",
-      },
-      { file: "package.json", section: "dependencies", name: "invalidRemoval", spec: "-" },
+      ...violations("extensions/demo/package.json", "devDependencies", { devCaret: "^4.5.6" }),
+      ...violations("extensions/demo/package.json", "optionalDependencies", {
+        optionalTilde: "~7.8.9",
+      }),
+      ...violations("package.json", "dependencies", {
+        caret: "^1.2.3",
+        tilde: "~1.2.3",
+        wildcard: "*",
+        tag: "latest",
+        broad: ">=1 <2",
+        malformedSemver: "01.2.3",
+        gitFloating: "github:owner/repo#main",
+        fragmentlessGitPath:
+          "git+https://github.com/owner/repo/commit/0123456789abcdef0123456789abcdef01234567",
+        invalidRemoval: "-",
+      }),
     ]);
   });
 
@@ -228,18 +211,10 @@ packageExtensions:
     git(dir, ["add", "package.json", "pnpm-workspace.yaml"]);
 
     expect(collectDependencyPinViolations(dir)).toEqual([
-      {
-        file: "pnpm-workspace.yaml",
-        section: "overrides",
-        name: "floating",
-        spec: "^2.0.0",
-      },
-      {
-        file: "pnpm-workspace.yaml",
-        section: "packageExtensions.parent@1.0.0.dependencies",
-        name: "floating-child",
-        spec: "~4.0.0",
-      },
+      ...violations("pnpm-workspace.yaml", "overrides", { floating: "^2.0.0" }),
+      ...violations("pnpm-workspace.yaml", "packageExtensions.parent@1.0.0.dependencies", {
+        "floating-child": "~4.0.0",
+      }),
     ]);
   });
 });

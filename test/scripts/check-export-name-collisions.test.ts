@@ -17,6 +17,20 @@ function parseFixture(content: string, fileName = "source.ts") {
   return [fileName, parser.parseSourceFile(fileName, content)] as const;
 }
 
+function definitions(content: string, fileName = "src/runtime-facade.ts") {
+  return [...collectModuleExportNames(...parseFixture(content, fileName)).definitions];
+}
+
+async function writeSources(root: string, files: Record<string, string>) {
+  await Promise.all(
+    Object.entries(files).map(async ([file, source]) => {
+      const target = path.join(root, file);
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, source);
+    }),
+  );
+}
+
 describe("export name collision guard", () => {
   it("finds exported function and const definitions across modules", () => {
     expect(
@@ -193,9 +207,7 @@ describe("export name collision guard", () => {
       `,
     ];
     for (const content of forwarders) {
-      expect([
-        ...collectModuleExportNames(...parseFixture(content, "src/runtime-facade.ts")).definitions,
-      ]).toEqual([]);
+      expect(definitions(content)).toEqual([]);
     }
   });
 
@@ -218,15 +230,12 @@ describe("export name collision guard", () => {
     ).toEqual([{ name: "runThing", files: ["src/facade.ts", "src/runtime.ts"] }]);
   });
 
-  it.each([
-    [
-      "type-asserted namespace element alias",
-      'import * as runtime from "./inner.js";',
-      'export const runTask = (runtime["runTask"] as () => string);',
-    ],
-  ])("records %s as a re-export instead of a value definition", (_name, imported, declaration) => {
+  it("records a type-asserted namespace element alias as a re-export instead of a value definition", () => {
     const result = collectModuleExportNames(
-      ...parseFixture(`${imported}\n${declaration}`, "src/facade.ts"),
+      ...parseFixture(
+        'import * as runtime from "./inner.js";\nexport const runTask = (runtime["runTask"] as () => string);',
+        "src/facade.ts",
+      ),
     );
 
     expect([...result.exportedNames]).toEqual(["runTask"]);
@@ -237,48 +246,36 @@ describe("export name collision guard", () => {
     ]);
   });
 
-  it.each([["selector block", "runtime => { prepare(); return runtime.runThing; }"]])(
-    "keeps lazy binders with %s as definitions",
-    (_name, selector) => {
-      const content = `
+  it("keeps lazy binders with a selector block as definitions", () => {
+    const content = `
       import { createLazyRuntimeMethodBinder } from "./shared/lazy-runtime.js";
       const bind = createLazyRuntimeMethodBinder(loadRuntime);
-      export const runThing = bind(${selector});
+      export const runThing = bind(runtime => { prepare(); return runtime.runThing; });
     `;
-      expect([
-        ...collectModuleExportNames(...parseFixture(content, "src/runtime-facade.ts")).definitions,
-      ]).toEqual(["runThing"]);
-    },
-  );
+    expect(definitions(content)).toEqual(["runThing"]);
+  });
 
-  it.each([
-    {
-      name: "extra call",
-      body: `
-        prepare();
-        return resolveThingImpl(...args);
-      `,
-    },
-  ])("keeps $name wrappers as real definitions", ({ body }) => {
-    const result = collectModuleExportNames(
-      ...parseFixture(`
+  it("keeps extra call wrappers as real definitions", () => {
+    expect(
+      definitions(
+        `
       import { resolveThing as resolveThingImpl } from "./thing.js";
       export function resolveThing(...args: unknown[]) {
-        ${body}
+        prepare();
+        return resolveThingImpl(...args);
       }
-    `),
-    );
-    expect([...result.definitions]).toEqual(["resolveThing"]);
+    `,
+        "source.ts",
+      ),
+    ).toEqual(["resolveThing"]);
   });
 
   it("discovers JavaScript source collisions", async () => {
     await withTempDir("openclaw-export-collisions-", async (repoRoot) => {
-      const sourceRoot = path.join(repoRoot, "src");
-      await fs.mkdir(sourceRoot);
-      await Promise.all([
-        fs.writeFile(path.join(sourceRoot, "alpha.js"), "export const sharedValue = 1;\n"),
-        fs.writeFile(path.join(sourceRoot, "beta.mjs"), "export const sharedValue = 2;\n"),
-      ]);
+      await writeSources(repoRoot, {
+        "src/alpha.js": "export const sharedValue = 1;\n",
+        "src/beta.mjs": "export const sharedValue = 2;\n",
+      });
       expect(await collectRepositoryCollisions(repoRoot)).toEqual([
         { name: "sharedValue", files: ["src/alpha.js", "src/beta.mjs"] },
       ]);
@@ -302,26 +299,13 @@ describe("export name collision guard", () => {
 
   it("marks repository collisions exposed through a package-backed Plugin SDK module", async () => {
     await withTempDir("openclaw-export-collisions-sdk-", async (repoRoot) => {
-      await Promise.all([
-        fs.mkdir(path.join(repoRoot, "src/plugin-sdk"), { recursive: true }),
-        fs.mkdir(path.join(repoRoot, "packages"), { recursive: true }),
-      ]);
-      await Promise.all([
-        fs.writeFile(path.join(repoRoot, "src/one.ts"), "export const publicCollision = 1;\n"),
-        fs.writeFile(path.join(repoRoot, "src/two.ts"), "export function publicCollision() {}\n"),
-        fs.writeFile(
-          path.join(repoRoot, "src/plugin-sdk/public.ts"),
-          'export * from "./public-star.js";\n',
-        ),
-        fs.writeFile(
-          path.join(repoRoot, "src/plugin-sdk/public-star.ts"),
-          'export * from "../../packages/public.js";\n',
-        ),
-        fs.writeFile(
-          path.join(repoRoot, "packages/public.ts"),
-          "export const publicCollision = true;\n",
-        ),
-      ]);
+      await writeSources(repoRoot, {
+        "src/one.ts": "export const publicCollision = 1;\n",
+        "src/two.ts": "export function publicCollision() {}\n",
+        "src/plugin-sdk/public.ts": 'export * from "./public-star.js";\n',
+        "src/plugin-sdk/public-star.ts": 'export * from "../../packages/public.js";\n',
+        "packages/public.ts": "export const publicCollision = true;\n",
+      });
 
       expect(await collectRepositoryCollisions(repoRoot)).toEqual([
         {

@@ -119,6 +119,90 @@ function createWatchChildFixture(outputDir: string) {
   return { child, finish, onSignal, spawnChild };
 }
 
+type FindingsInput = Parameters<typeof collectGatewayWatchFindings>[0];
+function findings(
+  overrides: Partial<Omit<FindingsInput, "watchResult">> & {
+    watchResult?: Partial<FindingsInput["watchResult"]>;
+  },
+) {
+  const { watchResult, ...rest } = overrides;
+  return collectGatewayWatchFindings({
+    distRuntimeByteGrowth: 0,
+    distRuntimeFileGrowth: 0,
+    removedPaths: 0,
+    options: {
+      cpuFailMs: 8000,
+      cpuWarnMs: 1000,
+      distRuntimeByteGrowthMax: 2 * 1024 * 1024,
+      distRuntimeFileGrowthMax: 200,
+      windowMs: 10_000,
+    },
+    watchBuildReason: null,
+    watchTriggeredBuild: false,
+    ...rest,
+    watchResult: {
+      idleCpuMs: 0,
+      readyBeforeWindow: true,
+      spawnError: null,
+      timingFileMissing: false,
+      ...watchResult,
+    },
+  });
+}
+
+function expectHome(outputDir: string, retained: boolean) {
+  const home = fs.readFileSync(path.join(outputDir, "watch.home.txt"), "utf8").trim();
+  expect(fs.existsSync(home)).toBe(retained);
+}
+
+function expectStopped(child: WatchChildProcess) {
+  expect(child.exitCode).toBe(0);
+  expect(child.stdout.closed).toBe(true);
+  expect(child.stderr.closed).toBe(true);
+}
+
+function observedSleep(before: () => void = () => {}) {
+  let settled = false;
+  const sleep = vi.fn(async (ms: number, signal: AbortSignal) => {
+    before();
+    try {
+      await delay(ms, undefined, { signal });
+    } finally {
+      await delay(50);
+      settled = true;
+    }
+  });
+  return { sleep, expectSettled: () => expect(settled).toBe(true) };
+}
+
+function runWatch(
+  outputDir: string,
+  options: Partial<Parameters<typeof runTimedWatch>[0]>,
+  deps: Parameters<typeof runTimedWatch>[2] = {},
+) {
+  return runTimedWatch(
+    { readySettleMs: 0, readyTimeoutMs: 30_000, sigkillGraceMs: 1, windowMs: 10_000, ...options },
+    outputDir,
+    {
+      allocateLoopbackPort: async () => 19042,
+      ...deps,
+    },
+  );
+}
+
+function expectExit(
+  result: Awaited<ReturnType<typeof runTimedWatch>>,
+  code: number,
+  ready: boolean,
+) {
+  expect(result.exit).toEqual({ code, signal: null });
+  expect(result).toMatchObject({
+    exitedBeforeReady: !ready,
+    exitedBeforeStop: true,
+    readyBeforeWindow: ready,
+  });
+}
+
 describe("check-gateway-watch-regression", () => {
   it("parses timing and growth limits as strict non-negative integers", () => {
     expect(
@@ -176,29 +260,12 @@ describe("check-gateway-watch-regression", () => {
 
   it("detects byte growth in existing dist-runtime paths", () => {
     const distRuntimeByteGrowth = calculateDistRuntimeByteGrowth(100, 2_097_253);
-    const findings = collectGatewayWatchFindings({
+    const result = findings({
       distRuntimeByteGrowth,
-      distRuntimeFileGrowth: 0,
-      removedPaths: 0,
-      options: {
-        cpuFailMs: 8000,
-        cpuWarnMs: 1000,
-        distRuntimeByteGrowthMax: 2 * 1024 * 1024,
-        distRuntimeFileGrowthMax: 200,
-        windowMs: 10_000,
-      },
-      watchBuildReason: null,
-      watchResult: {
-        idleCpuMs: 0,
-        readyBeforeWindow: true,
-        spawnError: null,
-        timingFileMissing: false,
-      },
-      watchTriggeredBuild: false,
     });
 
     expect(distRuntimeByteGrowth).toBe(2_097_153);
-    expect(findings.failures).toContain(
+    expect(result.failures).toContain(
       "dist-runtime apparent byte growth 2097153 exceeded max 2097152",
     );
   });
@@ -220,21 +287,14 @@ describe("check-gateway-watch-regression", () => {
   ])(
     "rejects prebuilt artifact mutation: $reason / $removedPaths removed",
     ({ reason, removedPaths }) => {
-      const findings = collectGatewayWatchFindings({
+      const result = findings({
         distRuntimeByteGrowth: -1024,
-        distRuntimeFileGrowth: 0,
         removedPaths,
         options: parseArgs(["--skip-build"]),
         watchBuildReason: reason,
         watchTriggeredBuild: reason !== null,
-        watchResult: {
-          idleCpuMs: 0,
-          readyBeforeWindow: true,
-          spawnError: null,
-          timingFileMissing: false,
-        },
       });
-      expect(findings.failures).toEqual([
+      expect(result.failures).toEqual([
         removedPaths > 0
           ? "gateway:watch removed 2932 prebuilt artifact paths"
           : reason === "dirty_watched_tree"
@@ -347,8 +407,7 @@ describe("check-gateway-watch-regression", () => {
       sigkillGraceMs: 1,
       sigkillExitGraceMs: 100,
     };
-    const result = await runTimedWatch(options, outputDir, {
-      allocateLoopbackPort: async () => 19042,
+    const result = await runWatch(outputDir, options, {
       waitForGatewayReady: async () => ready,
       readProcessTreeCpuMs: readCpu,
       parseTimingFile: () => timing,
@@ -358,27 +417,21 @@ describe("check-gateway-watch-regression", () => {
     expect(result.readyBeforeWindow).toBe(ready);
     expect(result.idleCpuMs).toBe(idleCpuMs);
     expect(result.timing).toEqual(timing);
-    expect(child.exitCode).toBe(0);
-    expect(child.stdout.closed).toBe(true);
-    expect(child.stderr.closed).toBe(true);
-    const isolatedHomeDir = fs.readFileSync(path.join(outputDir, "watch.home.txt"), "utf8").trim();
-    expect(fs.existsSync(isolatedHomeDir)).toBe(false);
+    expectStopped(child);
+    expectHome(outputDir, false);
     expect(readCpu).toHaveBeenCalledTimes(ready ? 2 : 0);
     if (!ready) {
       expect(sleep).not.toHaveBeenCalled();
     }
-    const findings = collectGatewayWatchFindings({
-      distRuntimeByteGrowth: 0,
-      distRuntimeFileGrowth: 0,
-      removedPaths: 0,
+    const collected = findings({
       options,
       watchBuildReason: result.watchBuildReason,
       watchResult: result,
       watchTriggeredBuild: result.watchTriggeredBuild,
     });
-    expect(findings.failures).toEqual(failures);
-    expect(findings.warnings).toEqual([]);
-    expect(findings.limitViolations).toEqual(
+    expect(collected.failures).toEqual(failures);
+    expect(collected.warnings).toEqual([]);
+    expect(collected.limitViolations).toEqual(
       idleCpuMs !== null && idleCpuMs > options.cpuFailMs
         ? [
             {
@@ -392,65 +445,34 @@ describe("check-gateway-watch-regression", () => {
   });
 
   it("reports early gateway watch exit before readiness distinctly", () => {
-    const findings = collectGatewayWatchFindings({
-      distRuntimeByteGrowth: 0,
-      distRuntimeFileGrowth: 0,
-      removedPaths: 0,
-      options: {
-        cpuFailMs: 8000,
-        cpuWarnMs: 1000,
-        distRuntimeByteGrowthMax: 2 * 1024 * 1024,
-        distRuntimeFileGrowthMax: 200,
-        windowMs: 10_000,
-      },
-      watchBuildReason: null,
+    const result = findings({
       watchResult: {
         exit: { code: 1, signal: null },
         exitedBeforeReady: true,
-        idleCpuMs: 0,
         readyBeforeWindow: false,
-        spawnError: null,
-        timingFileMissing: false,
       },
-      watchTriggeredBuild: false,
     });
 
-    expect(findings.failures).toContain("gateway:watch exited before ready (code 1, signal null)");
-    expect(findings.failures).not.toContain(
+    expect(result.failures).toContain("gateway:watch exited before ready (code 1, signal null)");
+    expect(result.failures).not.toContain(
       "gateway:watch did not report ready before the idle CPU window",
     );
-    expect(findings.warnings).toEqual([]);
+    expect(result.warnings).toEqual([]);
   });
 
   it("reports gateway watch exit after readiness before the idle window completes", () => {
-    const findings = collectGatewayWatchFindings({
-      distRuntimeByteGrowth: 0,
-      distRuntimeFileGrowth: 0,
-      removedPaths: 0,
-      options: {
-        cpuFailMs: 8000,
-        cpuWarnMs: 1000,
-        distRuntimeByteGrowthMax: 2 * 1024 * 1024,
-        distRuntimeFileGrowthMax: 200,
-        windowMs: 10_000,
-      },
-      watchBuildReason: null,
+    const result = findings({
       watchResult: {
         exit: { code: 0, signal: null },
         exitedBeforeReady: false,
         exitedBeforeStop: true,
-        idleCpuMs: 0,
-        readyBeforeWindow: true,
-        spawnError: null,
-        timingFileMissing: false,
       },
-      watchTriggeredBuild: false,
     });
 
-    expect(findings.failures).toContain(
+    expect(result.failures).toContain(
       "gateway:watch exited before the idle CPU window completed (code 0, signal null)",
     );
-    expect(findings.warnings).toEqual([]);
+    expect(result.warnings).toEqual([]);
   });
 
   it("reports duplicate dist-runtime regression only for dist-runtime growth failures", () => {
@@ -538,17 +560,14 @@ describe("check-gateway-watch-regression", () => {
       const { child, finish, onSignal } = createWatchChildFixture(outputDir);
       onSignal.mockImplementation(() => {});
       const readCpu = vi.fn(() => 50_000);
-      const completion = runTimedWatch(
+      const completion = runWatch(
+        outputDir,
         {
-          readySettleMs: 0,
           readyTimeoutMs: 500,
-          sigkillGraceMs: 1,
           sigkillExitGraceMs: 25,
           windowMs: 1,
         },
-        outputDir,
         {
-          allocateLoopbackPort: async () => 19042,
           readProcessTreeCpuMs: readCpu,
         },
       );
@@ -563,10 +582,7 @@ describe("check-gateway-watch-regression", () => {
         expect(readCpu).toHaveBeenCalledTimes(2);
         expect(child.exitCode).toBeNull();
         expect(child.signalCode).toBeNull();
-        const isolatedHomeDir = fs
-          .readFileSync(path.join(outputDir, "watch.home.txt"), "utf8")
-          .trim();
-        expect(fs.existsSync(isolatedHomeDir)).toBe(true);
+        expectHome(outputDir, true);
         expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
       } finally {
         clearTimeout(rescue);
@@ -580,11 +596,10 @@ describe("check-gateway-watch-regression", () => {
     const outputDir = tempDirs.make("openclaw-gateway-watch-measurement-error-");
     const { child, finish } = createWatchChildFixture(outputDir);
     const measurementError = new Error("fixture CPU probe failed");
-    const completion = runTimedWatch(
-      { ...parseArgs(["--skip-build"]), sigkillGraceMs: 1, sigkillExitGraceMs: 100 },
+    const completion = runWatch(
       outputDir,
+      { ...parseArgs(["--skip-build"]), sigkillGraceMs: 1, sigkillExitGraceMs: 100 },
       {
-        allocateLoopbackPort: async () => 19042,
         waitForGatewayReady: async () => true,
         sleep: () => Promise.resolve(),
         readProcessTreeCpuMs: () => {
@@ -594,13 +609,8 @@ describe("check-gateway-watch-regression", () => {
     );
     try {
       await expect(completion).rejects.toBe(measurementError);
-      expect(child.exitCode).toBe(0);
-      expect(child.stdout.closed).toBe(true);
-      expect(child.stderr.closed).toBe(true);
-      const isolatedHomeDir = fs
-        .readFileSync(path.join(outputDir, "watch.home.txt"), "utf8")
-        .trim();
-      expect(fs.existsSync(isolatedHomeDir)).toBe(false);
+      expectStopped(child);
+      expectHome(outputDir, false);
     } finally {
       finish();
       await completion.catch(() => {});
@@ -639,17 +649,10 @@ describe("check-gateway-watch-regression", () => {
       let waitSignal: AbortSignal | undefined;
       let pendingWait: Promise<boolean> | undefined;
       let waitSettled = false;
-      const completion = runTimedWatch(
-        {
-          readySettleMs: 0,
-          readyTimeoutMs: 30_000,
-          sigkillGraceMs: 1,
-          sigkillExitGraceMs: 25,
-          windowMs: 1,
-        },
+      const completion = runWatch(
         outputDir,
+        { sigkillExitGraceMs: 25, windowMs: 1 },
         {
-          allocateLoopbackPort: async () => 19042,
           waitForGatewayReady: (_readText, timeoutMs, signal) => {
             phaseSignal = signal;
             waitSignal = signal
@@ -686,10 +689,7 @@ describe("check-gateway-watch-regression", () => {
         expect(waitSettled).toBe(true);
         expect(child.exitCode).toBeNull();
         expect(child.signalCode).toBeNull();
-        const isolatedHomeDir = fs
-          .readFileSync(path.join(outputDir, "watch.home.txt"), "utf8")
-          .trim();
-        expect(fs.existsSync(isolatedHomeDir)).toBe(true);
+        expectHome(outputDir, true);
       } finally {
         clearTimeout(rescue);
         rescueController.abort();
@@ -711,15 +711,7 @@ describe("check-gateway-watch-regression", () => {
   it("removes the isolated watch home after spawn failures", async () => {
     const outputDir = tempDirs.make("openclaw-gateway-watch-output-");
     const child = new WatchChildProcess();
-    let sleepSettled = false;
-    const sleep = vi.fn(async (ms: number, signal: AbortSignal) => {
-      try {
-        await delay(ms, undefined, { signal });
-      } finally {
-        await delay(50);
-        sleepSettled = true;
-      }
-    });
+    const { sleep, expectSettled } = observedSleep();
     const waitForGatewayReady = vi.fn(async () => false);
     const spawnChild = vi.mocked(spawn).mockImplementationOnce(() => {
       queueMicrotask(() => {
@@ -732,32 +724,20 @@ describe("check-gateway-watch-regression", () => {
     });
 
     try {
-      const result = await runTimedWatch(
-        {
-          readySettleMs: 0,
-          readyTimeoutMs: 0,
-          sigkillGraceMs: 1,
-          windowMs: 0,
-        },
+      const result = await runWatch(
         outputDir,
-        {
-          allocateLoopbackPort: async () => 19042,
-          sleep,
-          waitForGatewayReady,
-        },
+        { readyTimeoutMs: 0, windowMs: 0 },
+        { sleep, waitForGatewayReady },
       );
 
-      const isolatedHomeDir = fs
-        .readFileSync(path.join(outputDir, "watch.home.txt"), "utf8")
-        .trim();
       expect(result.spawnError).toBe("spawn failed");
-      expect(fs.existsSync(isolatedHomeDir)).toBe(false);
+      expectHome(outputDir, false);
       expect(fs.existsSync(path.join(outputDir, "watch.home.txt"))).toBe(true);
       expect(spawnChild.mock.calls[0]?.[2]?.env?.OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS).toBe(
         "0",
       );
       expect(waitForGatewayReady).not.toHaveBeenCalled();
-      expect(sleepSettled).toBe(true);
+      expectSettled();
     } finally {
       child.stdout.destroy();
       child.stderr.destroy();
@@ -843,15 +823,7 @@ console.log("readiness observer settled");
   it("stops waiting for readiness when the watch process exits early", async () => {
     const outputDir = tempDirs.make("openclaw-gateway-watch-output-");
     const { child, finish, onSignal, spawnChild } = createWatchChildFixture(outputDir);
-    let sleepSettled = false;
-    const sleep = vi.fn(async (ms: number, signal: AbortSignal) => {
-      try {
-        await delay(ms, undefined, { signal });
-      } finally {
-        await delay(50);
-        sleepSettled = true;
-      }
-    });
+    const { sleep, expectSettled } = observedSleep();
     const waitForGatewayReady = vi.fn(
       (_readText: () => string, timeoutMs: number, signal: AbortSignal) =>
         delay(timeoutMs, false, { signal }),
@@ -865,29 +837,12 @@ console.log("readiness observer settled");
     });
 
     try {
-      const result = await runTimedWatch(
-        {
-          readySettleMs: 0,
-          readyTimeoutMs: 30_000,
-          sigkillGraceMs: 1,
-          windowMs: 10_000,
-        },
-        outputDir,
-        {
-          allocateLoopbackPort: async () => 19042,
-          sleep,
-          waitForGatewayReady,
-        },
-      );
-
-      expect(result.exit).toEqual({ code: 1, signal: null });
-      expect(result.exitedBeforeReady).toBe(true);
-      expect(result.exitedBeforeStop).toBe(true);
-      expect(result.readyBeforeWindow).toBe(false);
+      const result = await runWatch(outputDir, {}, { sleep, waitForGatewayReady });
+      expectExit(result, 1, false);
       expect(result.spawnError).toBeNull();
       expect(fs.readFileSync(result.stderrPath, "utf8")).toContain("gateway startup failed");
       expect(waitForGatewayReady).not.toHaveBeenCalled();
-      expect(sleepSettled).toBe(true);
+      expectSettled();
       expect(onSignal).not.toHaveBeenCalled();
     } finally {
       child.stdout.destroy();
@@ -903,45 +858,27 @@ console.log("readiness observer settled");
     async ({ phase, readySettleMs }) => {
       const outputDir = tempDirs.make("openclaw-gateway-watch-output-");
       const { child, finish, onSignal } = createWatchChildFixture(outputDir);
-      let sleepSettled = false;
-      const sleep = vi.fn(async (ms: number, signal: AbortSignal) => {
-        queueMicrotask(() => finish());
-        try {
-          await delay(ms, undefined, { signal });
-        } finally {
-          await delay(50);
-          sleepSettled = true;
-        }
-      });
+      const { sleep, expectSettled } = observedSleep(() => queueMicrotask(() => finish()));
       const readProcessTreeCpuMs = phase === "idle" ? vi.fn(() => 12) : undefined;
 
       try {
-        const result = await runTimedWatch(
-          {
-            readySettleMs,
-            readyTimeoutMs: 30_000,
-            sigkillGraceMs: 1,
-            windowMs: 250,
-          },
+        const result = await runWatch(
           outputDir,
+          { readySettleMs, windowMs: 250 },
           {
-            allocateLoopbackPort: async () => 19042,
             ...(readProcessTreeCpuMs ? { readProcessTreeCpuMs } : {}),
             sleep,
             waitForGatewayReady: async () => true,
           },
         );
 
-        expect(result.exit).toEqual({ code: 0, signal: null });
-        expect(result.exitedBeforeReady).toBe(false);
-        expect(result.exitedBeforeStop).toBe(true);
-        expect(result.readyBeforeWindow).toBe(true);
+        expectExit(result, 0, true);
         expect(result.idleCpuMs).toBeNull();
         if (readProcessTreeCpuMs) {
           expect(readProcessTreeCpuMs).toHaveBeenCalledOnce();
         }
         expect(onSignal).not.toHaveBeenCalled();
-        expect(sleepSettled).toBe(true);
+        expectSettled();
       } finally {
         child.stdout.destroy();
         child.stderr.destroy();

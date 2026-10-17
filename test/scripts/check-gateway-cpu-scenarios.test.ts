@@ -1,4 +1,3 @@
-// Check Gateway Cpu Scenarios tests cover check gateway cpu scenarios script behavior.
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -29,6 +28,18 @@ function runCli(...args: string[]) {
 function expectNoNodeStack(stderr: string) {
   expect(stderr).not.toContain("Node.js");
   expect(stderr).not.toContain("\n    at ");
+}
+
+type RunParams = NonNullable<Parameters<typeof testing.runGatewayCpuScenarios>[1]>;
+function runScenario(outputDir: string, flags: string[], params: RunParams) {
+  return testing.runGatewayCpuScenarios(testing.parseArgs(["--output-dir", outputDir, ...flags]), {
+    silent: true,
+    ...params,
+  });
+}
+
+function writeReport(outputDir: string, file: string, report: unknown) {
+  writeFileSync(path.join(outputDir, file), `${JSON.stringify(report)}\n`);
 }
 
 function writeQaSuiteSummary(
@@ -154,25 +165,13 @@ describe("gateway CPU scenario guard", () => {
       env?: Record<string, string | undefined>;
     };
     const outputDir = makeTempRoot();
-    const startupOutput = path.join(outputDir, "gateway-startup-bench.json");
     const calls: SpawnCall[] = [];
-    const options = testing.parseArgs([
-      "--output-dir",
-      outputDir,
-      "--runs",
-      "1",
-      "--warmup",
-      "0",
-      "--skip-qa",
-    ]);
-
-    const result = await testing.runGatewayCpuScenarios(options, {
+    const result = await runScenario(outputDir, ["--runs", "1", "--warmup", "0", "--skip-qa"], {
       env: { ...process.env, PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "install" },
-      silent: true,
       spawnSync: (command: string, args: string[], opts?: Pick<SpawnSyncOptions, "env">) => {
         calls.push({ args, command, env: opts?.env });
         if (args.includes("scripts/bench-gateway-startup.ts")) {
-          writeFileSync(startupOutput, `${JSON.stringify({ results: [{ id: "default" }] })}\n`);
+          writeReport(outputDir, "gateway-startup-bench.json", { results: [{ id: "default" }] });
         }
         if (args.includes("scripts/bench-gateway-concurrency.ts")) {
           writeConcurrencyReport(outputDir);
@@ -188,31 +187,20 @@ describe("gateway CPU scenario guard", () => {
       "scripts/bench-gateway-startup.ts",
       "scripts/bench-gateway-concurrency.ts",
     ]);
-    expect(calls[1]?.args).toContain("scripts/bench-gateway-startup.ts");
-    expect(calls[2]?.args).toContain("scripts/bench-gateway-concurrency.ts");
-    expect(calls[0]?.env?.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN).toBe("false");
-    expect(calls[1]?.env?.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN).toBe("false");
-    expect(calls[2]?.env?.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN).toBe("false");
+    expect(calls.map((call) => call.env?.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN)).toEqual([
+      "false",
+      "false",
+      "false",
+    ]);
   });
 
   it("fails successful startup benches that write malformed reports", async () => {
     const outputDir = makeTempRoot();
     const startupOutput = path.join(outputDir, "gateway-startup-bench.json");
-    const options = testing.parseArgs([
-      "--output-dir",
-      outputDir,
-      "--runs",
-      "1",
-      "--warmup",
-      "0",
-      "--skip-qa",
-    ]);
-
-    const result = await testing.runGatewayCpuScenarios(options, {
-      silent: true,
+    const result = await runScenario(outputDir, ["--runs", "1", "--warmup", "0", "--skip-qa"], {
       spawnSync: (_command: string, args: string[]) => {
         if (args.includes("scripts/bench-gateway-startup.ts")) {
-          writeFileSync(startupOutput, `${JSON.stringify({ results: [] })}\n`);
+          writeReport(outputDir, "gateway-startup-bench.json", { results: [] });
         }
         return { status: 0 };
       },
@@ -229,10 +217,7 @@ describe("gateway CPU scenario guard", () => {
   it("fails startup build spawn errors and skips the startup bench", async () => {
     const outputDir = makeTempRoot();
     const calls: string[][] = [];
-    const options = testing.parseArgs(["--output-dir", outputDir, "--skip-qa"]);
-
-    const result = await testing.runGatewayCpuScenarios(options, {
-      silent: true,
+    const result = await runScenario(outputDir, ["--skip-qa"], {
       spawnSync: (_command: string, args: string[]) => {
         calls.push(args);
         return {
@@ -260,31 +245,26 @@ describe("gateway CPU scenario guard", () => {
     writeFileSync(path.join(pluginSdkDist, "qa-lab.js"), "export {};\n");
     writeFileSync(path.join(pluginSdkDist, "qa-runtime.js"), "export {};\n");
     const calls: Array<{ args: string[]; env?: Record<string, string | undefined> }> = [];
-    const options = testing.parseArgs([
-      "--output-dir",
+    const result = await runScenario(
       outputDir,
-      "--skip-startup",
-      "--qa-scenario",
-      "channel-chat-baseline",
-    ]);
-
-    const result = await testing.runGatewayCpuScenarios(options, {
-      cwd,
-      env: {
-        HOME: "/real/user/home",
-        OPENCLAW_CONFIG_PATH: "/real/user/.openclaw/openclaw.json",
-        OPENCLAW_HOME: "/real/user/home",
-        OPENCLAW_STATE_DIR: "/real/user/.openclaw",
+      ["--skip-startup", "--qa-scenario", "channel-chat-baseline"],
+      {
+        cwd,
+        env: {
+          HOME: "/real/user/home",
+          OPENCLAW_CONFIG_PATH: "/real/user/.openclaw/openclaw.json",
+          OPENCLAW_HOME: "/real/user/home",
+          OPENCLAW_STATE_DIR: "/real/user/.openclaw",
+        },
+        spawnSync: (_command: string, args: string[], opts?: Pick<SpawnSyncOptions, "env">) => {
+          calls.push({ args, env: opts?.env });
+          if (args.includes("openclaw") && args.includes("qa")) {
+            writeQaSuiteSummary(outputDir);
+          }
+          return { status: 0 };
+        },
       },
-      silent: true,
-      spawnSync: (_command: string, args: string[], opts?: Pick<SpawnSyncOptions, "env">) => {
-        calls.push({ args, env: opts?.env });
-        if (args.includes("openclaw") && args.includes("qa")) {
-          writeQaSuiteSummary(outputDir);
-        }
-        return { status: 0 };
-      },
-    });
+    );
 
     expect(result.exitCode).toBe(0);
     expect(result.summary.steps.map((step) => step.name)).toEqual([
@@ -305,23 +285,18 @@ describe("gateway CPU scenario guard", () => {
 
   it("fails successful QA commands that report failed scenarios", async () => {
     const outputDir = makeTempRoot();
-    const options = testing.parseArgs([
-      "--output-dir",
+    const result = await runScenario(
       outputDir,
-      "--skip-startup",
-      "--qa-scenario",
-      "channel-chat-baseline",
-    ]);
-
-    const result = await testing.runGatewayCpuScenarios(options, {
-      silent: true,
-      spawnSync: (_command: string, args: string[]) => {
-        if (args.includes("openclaw") && args.includes("qa")) {
-          writeQaSuiteSummary(outputDir, { failed: 1, passed: 0, total: 1 });
-        }
-        return { status: 0 };
+      ["--skip-startup", "--qa-scenario", "channel-chat-baseline"],
+      {
+        spawnSync: (_command: string, args: string[]) => {
+          if (args.includes("openclaw") && args.includes("qa")) {
+            writeQaSuiteSummary(outputDir, { failed: 1, passed: 0, total: 1 });
+          }
+          return { status: 0 };
+        },
       },
-    });
+    );
 
     expect(result.exitCode).toBe(1);
     expect(result.summary).toMatchObject({
@@ -332,39 +307,25 @@ describe("gateway CPU scenario guard", () => {
 
   it("fails when completed runs report hot gateway CPU observations", async () => {
     const outputDir = makeTempRoot();
-    const startupOutput = path.join(outputDir, "gateway-startup-bench.json");
-    const options = testing.parseArgs([
-      "--output-dir",
+    const result = await runScenario(
       outputDir,
-      "--skip-qa",
-      "--cpu-core-warn",
-      "0.9",
-      "--hot-wall-warn-ms",
-      "30000",
-    ]);
-
-    const result = await testing.runGatewayCpuScenarios(options, {
-      silent: true,
-      spawnSync: (_command: string, args: string[]) => {
-        if (args.includes("scripts/bench-gateway-startup.ts")) {
-          writeFileSync(
-            startupOutput,
-            `${JSON.stringify({
+      ["--skip-qa", "--cpu-core-warn", "0.9", "--hot-wall-warn-ms", "30000"],
+      {
+        spawnSync: (_command: string, args: string[]) => {
+          if (args.includes("scripts/bench-gateway-startup.ts")) {
+            writeReport(outputDir, "gateway-startup-bench.json", {
               results: [
                 {
                   id: "default",
-                  summary: {
-                    cpuCoreRatio: { max: 1.15 },
-                    readyzMs: { max: 45_000 },
-                  },
+                  summary: { cpuCoreRatio: { max: 1.15 }, readyzMs: { max: 45_000 } },
                 },
               ],
-            })}\n`,
-          );
-        }
-        return { status: 0 };
+            });
+          }
+          return { status: 0 };
+        },
       },
-    });
+    );
 
     expect(result.exitCode).toBe(1);
     expect(result.summary.observations).toEqual([

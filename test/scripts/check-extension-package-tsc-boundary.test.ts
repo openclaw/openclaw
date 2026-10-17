@@ -1,5 +1,4 @@
-// Check Extension Package Tsc Boundary tests cover check extension package tsc boundary script behavior.
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -76,6 +75,38 @@ function writeCanaryArtifacts(rootDir: string, extensionId = "demo") {
   fs.writeFileSync(canaryPath, "export {};\n", "utf8");
   fs.writeFileSync(tsconfigPath, '{ "extends": "./tsconfig.json" }\n', "utf8");
   return { canaryPath, tsconfigPath };
+}
+
+function expectCompile(result: SpawnSyncReturns<string>, status: number, ...output: string[]) {
+  expect(result.status, result.stdout + result.stderr).toBe(status);
+  for (const text of output) {
+    expect(status === 0 ? result.stdout : result.stderr).toContain(text);
+  }
+}
+
+async function failedStep(label: string, source: string) {
+  const failure: unknown = await runNodeStepAsync(label, ["--eval", source], 20_000).then(
+    () => {
+      throw new Error(`expected ${label} step to fail`);
+    },
+    (error: unknown) => error,
+  );
+  expect(failure).toBeInstanceOf(Error);
+  if (!(failure instanceof Error)) {
+    throw new Error("expected failed step to reject with an Error");
+  }
+  return failure;
+}
+
+function descendantScript(childPidPath: string) {
+  return [
+    fixtureReceiptClientSource(receipts.endpoint),
+    "import fs from 'node:fs';",
+    "process.on('SIGTERM', () => {});",
+    `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+    `sendReceipt(${JSON.stringify(childPidPath)}, 'ready');`,
+    "setInterval(() => {}, 1000);",
+  ].join("\n");
 }
 
 beforeEach(({ onTestFinished }) => {
@@ -188,8 +219,7 @@ describe("check-extension-package-tsc-boundary", () => {
       );
     const cold = run();
     expect(cold.error, cold.stderr).toBeUndefined();
-    expect(cold.status, cold.stdout + cold.stderr).toBe(0);
-    expect(cold.stdout).toContain("compiled plugins: 2");
+    expectCompile(cold, 0, "compiled plugins: 2");
     expect(cold.stdout.indexOf("] larger")).toBeLessThan(cold.stdout.indexOf("] demo"));
     const receipt = JSON.parse(
       fs.readFileSync(
@@ -198,15 +228,9 @@ describe("check-extension-package-tsc-boundary", () => {
       ),
     );
     expect(receipt.inputs.some((file: string) => file.endsWith("/demo/src/worker.ts"))).toBe(true);
-    const warm = run();
-    expect(warm.status, warm.stdout + warm.stderr).toBe(0);
-    expect(warm.stdout).toContain("compiled plugins: 0");
-    expect(warm.stdout).toContain("skipped plugins: 2");
+    expectCompile(run(), 0, "compiled plugins: 0", "skipped plugins: 2");
     write("test/new-unrelated.test.ts", 'export const unrelated: number = "invalid";\n');
-    const unrelated = run();
-    expect(unrelated.status, unrelated.stdout + unrelated.stderr).toBe(0);
-    expect(unrelated.stdout).toContain("compiled plugins: 0");
-    expect(unrelated.stdout).toContain("skipped plugins: 2");
+    expectCompile(run(), 0, "compiled plugins: 0", "skipped plugins: 2");
     write(
       "extensions/demo/package.json",
       JSON.stringify({
@@ -214,22 +238,17 @@ describe("check-extension-package-tsc-boundary", () => {
         exports: { ...demoPackage.exports, "./test-api.js": "./test-api.ts" },
       }),
     );
-    const exportedTestApi = run();
-    expect(exportedTestApi.status, exportedTestApi.stdout + exportedTestApi.stderr).toBe(1);
-    expect(exportedTestApi.stderr).toContain("TS2322");
+    expectCompile(run(), 1, "TS2322");
     write("extensions/demo/package.json", JSON.stringify(demoPackage));
     write("extensions/outside.ts", "export const outside = true;\n");
     write("extensions/demo/src/worker.ts", 'export { outside } from "../../outside.js";\n');
-    const escapingWorker = run();
-    expect(escapingWorker.status, escapingWorker.stdout + escapingWorker.stderr).toBe(1);
-    expect(escapingWorker.stderr).toContain("TS6059");
+    expectCompile(run(), 1, "TS6059");
     write("extensions/demo/src/worker.ts", "export const worker = true;\n");
     config.compilerOptions.paths["openclaw/plugin-sdk/*"] = ["../missing-sdk/*.d.ts"];
     write(pathsConfig, JSON.stringify(config));
     const changed = run();
     expect(changed.error, changed.stderr).toBeUndefined();
-    expect(changed.status, changed.stdout + changed.stderr).toBe(1);
-    expect(changed.stderr).toContain("TS2307");
+    expectCompile(changed, 1, "TS2307");
     expect(
       fs.existsSync(path.join(root, ".artifacts/extension-package-boundary/compile/demo.json")),
     ).toBe(false);
@@ -250,10 +269,11 @@ describe("check-extension-package-tsc-boundary", () => {
     processObject.emit("exit");
     teardown();
 
-    expect(fs.existsSync(demoA.canaryPath)).toBe(false);
-    expect(fs.existsSync(demoA.tsconfigPath)).toBe(false);
-    expect(fs.existsSync(demoB.canaryPath)).toBe(false);
-    expect(fs.existsSync(demoB.tsconfigPath)).toBe(false);
+    expect(
+      [demoA.canaryPath, demoA.tsconfigPath, demoB.canaryPath, demoB.tsconfigPath].map((file) =>
+        fs.existsSync(file),
+      ),
+    ).toEqual([false, false, false, false]);
   });
 
   it("parses extension boundary compile concurrency strictly", () => {
@@ -323,19 +343,12 @@ describe("check-extension-package-tsc-boundary", () => {
   });
 
   it("formats skipped compile progress concisely", () => {
-    expect(
-      formatSkippedCompileProgress({
-        skippedCount: 13,
-        totalCount: 97,
-      }),
-    ).toBe("skipped 13 fresh plugin compiles before running 84 stale plugin checks\n");
-
-    expect(
-      formatSkippedCompileProgress({
-        skippedCount: 97,
-        totalCount: 97,
-      }),
-    ).toBe("skipped 97 fresh plugin compiles\n");
+    expect(formatSkippedCompileProgress({ skippedCount: 13, totalCount: 97 })).toBe(
+      "skipped 13 fresh plugin compiles before running 84 stale plugin checks\n",
+    );
+    expect(formatSkippedCompileProgress({ skippedCount: 97, totalCount: 97 })).toBe(
+      "skipped 97 fresh plugin compiles\n",
+    );
   });
 
   it("formats the slowest plugin compiles in descending order", () => {
@@ -352,29 +365,15 @@ describe("check-extension-package-tsc-boundary", () => {
   });
 
   it("keeps full failure output on the thrown error for canary detection", async () => {
-    const failure = await runNodeStepAsync(
+    const failure = await failedStep(
       "demo-plugin",
       [
-        "--eval",
-        [
-          "console.log('src/plugins/contracts/rootdir-boundary-canary.ts');",
-          "for (let index = 1; index <= 45; index += 1) console.log(`stdout ${index}`);",
-          "console.error('TS6059');",
-          "process.exit(2);",
-        ].join(" "),
-      ],
-      20_000,
-    ).then(
-      () => {
-        throw new Error("expected demo-plugin step to fail");
-      },
-      (error: unknown) => error,
+        "console.log('src/plugins/contracts/rootdir-boundary-canary.ts');",
+        "for (let index = 1; index <= 45; index += 1) console.log(`stdout ${index}`);",
+        "console.error('TS6059');",
+        "process.exit(2);",
+      ].join(" "),
     );
-
-    expect(failure).toBeInstanceOf(Error);
-    if (!(failure instanceof Error)) {
-      throw new Error("expected failed canary step to reject with an Error");
-    }
     expect(failure.message).toContain("[... 6 earlier lines omitted ...]");
     const failureMetadata = failure as {
       elapsedMs?: unknown;
@@ -409,28 +408,14 @@ describe("check-extension-package-tsc-boundary", () => {
   });
 
   it("keeps async node step failure output bounded", async () => {
-    const failure = await runNodeStepAsync(
+    const failure = await failedStep(
       "noisy-plugin",
       [
-        "--eval",
-        [
-          "process.stdout.write('stdout-begin-' + 'x'.repeat(300000) + '-stdout-end');",
-          "process.stderr.write('stderr-begin-' + 'y'.repeat(300000) + '-stderr-end');",
-          "process.exitCode = 2;",
-        ].join("\n"),
-      ],
-      20_000,
-    ).then(
-      () => {
-        throw new Error("expected noisy-plugin step to fail");
-      },
-      (error: unknown) => error,
+        "process.stdout.write('stdout-begin-' + 'x'.repeat(300000) + '-stdout-end');",
+        "process.stderr.write('stderr-begin-' + 'y'.repeat(300000) + '-stderr-end');",
+        "process.exitCode = 2;",
+      ].join("\n"),
     );
-
-    expect(failure).toBeInstanceOf(Error);
-    if (!(failure instanceof Error)) {
-      throw new Error("expected failed noisy step to reject with an Error");
-    }
     expect(failure.message).toContain("[output truncated");
     expect(failure.message).toContain("stdout-end");
     expect(failure.message).toContain("stderr-end");
@@ -451,14 +436,7 @@ describe("check-extension-package-tsc-boundary", () => {
       tempRoots.add(root);
       const childPidPath = path.join(root, "child.pid");
       let childPid = 0;
-      const childScript = [
-        fixtureReceiptClientSource(receipts.endpoint),
-        "import fs from 'node:fs';",
-        "process.on('SIGTERM', () => {});",
-        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
-        `sendReceipt(${JSON.stringify(childPidPath)}, 'ready');`,
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
+      const childScript = descendantScript(childPidPath);
       const parentScript = [
         "const { spawn } = require('node:child_process');",
         `const child = spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
@@ -499,14 +477,7 @@ describe("check-extension-package-tsc-boundary", () => {
       const childPidPath = path.join(root, "child.pid");
       const abortAckPath = path.join(root, "abort.ack");
       let childPid = 0;
-      const childScript = [
-        fixtureReceiptClientSource(receipts.endpoint),
-        "import fs from 'node:fs';",
-        "process.on('SIGTERM', () => {});",
-        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
-        `sendReceipt(${JSON.stringify(childPidPath)}, 'ready');`,
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
+      const childScript = descendantScript(childPidPath);
       const parentScript = [
         "const { spawn } = require('node:child_process');",
         `const child = spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,

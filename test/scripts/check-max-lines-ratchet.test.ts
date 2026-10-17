@@ -63,6 +63,23 @@ function commitFixture(root: string, message = "base"): void {
   }
 }
 
+const baselinePath = "config/max-lines-baseline.txt";
+const suppression = "/* oxlint-disable max-lines */\n";
+function write(root: string, file: string, source: string) {
+  const target = path.join(root, file);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, source);
+}
+
+function makeRepo(files: Record<string, string>, message = "base") {
+  const root = tempDirs.make("openclaw-max-lines-", os.tmpdir());
+  for (const [file, source] of Object.entries(files)) {
+    write(root, file, source);
+  }
+  commitFixture(root, message);
+  return root;
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -109,21 +126,10 @@ describe("check-max-lines-ratchet", () => {
   });
 
   it("reports baseline growth as an advisory in GitHub Actions even when listed", () => {
-    const root = tempDirs.make("openclaw-max-lines-", os.tmpdir());
-    fs.mkdirSync(path.join(root, "config"), { recursive: true });
-    fs.mkdirSync(path.join(root, "src"), { recursive: true });
-    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\n");
-    fs.writeFileSync(
-      path.join(root, "src/a.ts"),
-      "/* oxlint-disable max-lines -- TODO: split. */\n",
-    );
-    commitFixture(root);
-
-    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\nsrc/b.ts\n");
-    fs.writeFileSync(
-      path.join(root, "src/b.ts"),
-      "/* oxlint-disable max-lines -- TODO: split. */\n",
-    );
+    const source = "/* oxlint-disable max-lines -- TODO: split. */\n";
+    const root = makeRepo({ [baselinePath]: "src/a.ts\n", "src/a.ts": source });
+    write(root, baselinePath, "src/a.ts\nsrc/b.ts\n");
+    write(root, "src/b.ts", source);
     git(root, ["add", "."]);
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.stubEnv("GITHUB_ACTIONS", "true");
@@ -136,35 +142,28 @@ describe("check-max-lines-ratchet", () => {
   });
 
   it("transfers grandfathered debt across a verified rename", () => {
-    const root = tempDirs.make("openclaw-max-lines-rename-", os.tmpdir());
-    fs.mkdirSync(path.join(root, "config"), { recursive: true });
-    fs.mkdirSync(path.join(root, "src"), { recursive: true });
-    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\n");
-    fs.writeFileSync(
-      path.join(root, "src/a.ts"),
-      "export const a = 1;\n/* oxlint-disable max-lines -- TODO: split. */\n",
-    );
-    commitFixture(root);
+    const root = makeRepo({
+      [baselinePath]: "src/a.ts\n",
+      "src/a.ts": "export const a = 1;\n/* oxlint-disable max-lines -- TODO: split. */\n",
+    });
     git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
 
     git(root, ["mv", "src/a.ts", "src/b.ts"]);
-    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/b.ts\n");
+    write(root, baselinePath, "src/b.ts\n");
 
     expect(main(root)).toBe(0);
   });
 
   it("compares an explicit moving base at the branch fork", () => {
-    const root = tempDirs.make("openclaw-max-lines-diverged-", os.tmpdir());
-    fs.mkdirSync(path.join(root, "config"), { recursive: true });
-    fs.mkdirSync(path.join(root, "src"), { recursive: true });
-    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\nsrc/b.ts\n");
-    fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable max-lines */\n");
-    fs.writeFileSync(path.join(root, "src/b.ts"), "/* oxlint-disable max-lines */\n");
-    commitFixture(root);
+    const root = makeRepo({
+      [baselinePath]: "src/a.ts\nsrc/b.ts\n",
+      "src/a.ts": suppression,
+      "src/b.ts": suppression,
+    });
     git(root, ["branch", "release"]);
 
-    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\n");
-    fs.writeFileSync(path.join(root, "src/b.ts"), "export const b = 1;\n");
+    write(root, baselinePath, "src/a.ts\n");
+    write(root, "src/b.ts", "export const b = 1;\n");
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "shrink main debt"]);
     git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
@@ -174,16 +173,11 @@ describe("check-max-lines-ratchet", () => {
   });
 
   it("rejects unavailable ancestry with an explicit prepared-base recovery", () => {
-    const root = tempDirs.make("openclaw-max-lines-disconnected-", os.tmpdir());
-    fs.mkdirSync(path.join(root, "config"), { recursive: true });
-    fs.mkdirSync(path.join(root, "src"), { recursive: true });
-    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\n");
-    fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable max-lines */\n");
-    commitFixture(root, "release");
+    const root = makeRepo({ [baselinePath]: "src/a.ts\n", "src/a.ts": suppression }, "release");
     git(root, ["branch", "-m", "release"]);
     git(root, ["checkout", "--orphan", "main"]);
-    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "");
-    fs.writeFileSync(path.join(root, "src/a.ts"), "export const a = 1;\n");
+    write(root, baselinePath, "");
+    write(root, "src/a.ts", "export const a = 1;\n");
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "disconnected main"]);
     git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
@@ -197,18 +191,12 @@ describe("check-max-lines-ratchet", () => {
   });
 
   it("checks staged content instead of unstaged worktree edits", () => {
-    const root = tempDirs.make("openclaw-max-lines-staged-", os.tmpdir());
-    fs.mkdirSync(path.join(root, "config"), { recursive: true });
-    fs.mkdirSync(path.join(root, "src"), { recursive: true });
-    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "");
-    fs.writeFileSync(path.join(root, "src/a.ts"), "export const a = 1;\n");
-    commitFixture(root);
-
-    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\n");
-    fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable */\n");
+    const root = makeRepo({ [baselinePath]: "", "src/a.ts": "export const a = 1;\n" });
+    write(root, baselinePath, "src/a.ts\n");
+    write(root, "src/a.ts", "/* oxlint-disable */\n");
     git(root, ["add", "."]);
-    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "");
-    fs.writeFileSync(path.join(root, "src/a.ts"), "export const a = 1;\n");
+    write(root, baselinePath, "");
+    write(root, "src/a.ts", "export const a = 1;\n");
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     expect(main(root, ["--staged", "--base", "HEAD"])).toBe(1);
@@ -226,20 +214,15 @@ describe("check-max-lines-ratchet", () => {
   });
 
   it("checks untracked sources and tolerates unstaged deletions", () => {
-    const root = tempDirs.make("openclaw-max-lines-worktree-", os.tmpdir());
-    fs.mkdirSync(path.join(root, "config"), { recursive: true });
-    fs.mkdirSync(path.join(root, "src"), { recursive: true });
-    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "");
-    fs.writeFileSync(path.join(root, "src/deleted.ts"), "export const deleted = true;\n");
-    commitFixture(root);
+    const root = makeRepo({
+      [baselinePath]: "",
+      "src/deleted.ts": "export const deleted = true;\n",
+    });
     git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
     fs.rmSync(path.join(root, "src/deleted.ts"));
     expect(main(root)).toBe(0);
 
-    fs.writeFileSync(
-      path.join(root, "src/untracked.ts"),
-      "// eslint-disable-next-line eslint/max-lines\n",
-    );
+    write(root, "src/untracked.ts", "// eslint-disable-next-line eslint/max-lines\n");
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     expect(main(root)).toBe(1);
