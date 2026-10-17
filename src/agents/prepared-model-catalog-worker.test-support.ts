@@ -17,8 +17,10 @@ import {
 import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { formatModelCatalogAuthLabel } from "./model-catalog-auth-labels.js";
 import { createModelCatalogDecisions } from "./model-catalog-decisions.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { materializePreparedModelCatalogOwner } from "./prepared-model-catalog.js";
 import {
@@ -27,11 +29,14 @@ import {
   getPreparedModelRuntimeAuthStore,
 } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
+import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import type {
   PreparedModelRuntimeOwner,
+  PreparedModelRuntimeInput,
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
+import { AuthStorage } from "./sessions/auth-storage.js";
 import {
   refreshNativeCatalogDuringBoundedRead,
   seedFixturePluginModelCatalog,
@@ -60,6 +65,32 @@ export const EXTERNAL_AUTH_PROFILE_ID = `${PROVIDER_ID}:external`;
 export const EXTERNAL_AUTH_PATH_ENV = "OPENCLAW_WORKER_EXTERNAL_AUTH_PATH";
 export const UNRELATED_PLUGIN_ID = "worker-catalog-unrelated";
 export const UNRELATED_PLUGIN_WORKER_MARKER_ENV = "OPENCLAW_WORKER_UNRELATED_PLUGIN_MARKER";
+
+export function catalogEntry(
+  id: string,
+  fields: Partial<ModelCatalogEntry> & { available?: boolean } = {},
+) {
+  return expect.objectContaining({ provider: PROVIDER_ID, id, ...fields });
+}
+
+export function makeCatalogAgentFacts(
+  input: PreparedModelRuntimeInput & { env: NodeJS.ProcessEnv },
+  overrides: Partial<Omit<PreparedModelRuntimeAgentFacts, "input" | "env">> = {},
+): PreparedModelRuntimeAgentFacts {
+  return {
+    input,
+    env: input.env,
+    authStore: { version: 1, profiles: {} },
+    credentials: {},
+    templateAuthStorage: AuthStorage.inMemory({}),
+    providerIds: [PROVIDER_ID],
+    configuredModelRefs: [],
+    configuredRuntimeModels: [],
+    runtimeCapabilityModels: [],
+    configuredGeneratedCatalogPluginIds: [],
+    ...overrides,
+  };
+}
 
 export function writeUnrelatedFixturePlugin(
   root: string,
@@ -355,6 +386,7 @@ export async function createCatalogFixture(
     codexNativeOwner?: boolean;
     codexNativeHomeScope?: "agent" | "user";
     builtPluginVersion?: string;
+    nativeCatalog?: boolean;
     asyncSyntheticAuth?: boolean;
     catalogControl?: boolean;
     reportCodexClientVersion?: boolean;
@@ -387,6 +419,15 @@ export async function createCatalogFixture(
         model: `${PROVIDER_ID}/sqlite-model`,
         models: {
           [`${PROVIDER_ID}/sqlite-model`]: { agentRuntime: { id: HARNESS_ID } },
+          ...(options?.nativeCatalog
+            ? {
+                [`${PROVIDER_ID}/account-scoped-model`]: { agentRuntime: { id: HARNESS_ID } },
+                [`${PROVIDER_ID}/configured-dynamic-model`]: { agentRuntime: { id: "openclaw" } },
+                [`${PROVIDER_ID}/unresolved-configured-model`]: {
+                  agentRuntime: { id: "openclaw" },
+                },
+              }
+            : {}),
           ...(options?.codexNativeOwner
             ? { "openai/gpt-5.4": { agentRuntime: { id: "codex" } } }
             : {}),
@@ -428,12 +469,16 @@ export async function createCatalogFixture(
             token: MATERIALIZED_SECRET,
             tokenRef: { source: "env", provider: "default", id: "SHARED_SECRET_REF" },
           },
-          "unrelated-provider:default": {
-            type: "api_key",
-            provider: "unrelated-provider",
-            key: UNRELATED_SECRET,
-            keyRef: { source: "env", provider: "default", id: "UNRELATED_SECRET_REF" },
-          },
+          ...(!options?.nativeCatalog
+            ? ({
+                "unrelated-provider:default": {
+                  type: "api_key",
+                  provider: "unrelated-provider",
+                  key: UNRELATED_SECRET,
+                  keyRef: { source: "env", provider: "default", id: "UNRELATED_SECRET_REF" },
+                },
+              } satisfies AuthProfileStore["profiles"])
+            : {}),
         },
         order: { [SHARED_AUTH_PROVIDER_ID]: [PROFILE_ID] },
       },
@@ -465,16 +510,14 @@ async function expectNativeHarnessModelsPublished(params: {
   setActivePluginRegistry(createEmptyPluginRegistry());
   try {
     expect(params.snapshot.modelCatalog.entries).toContainEqual(
-      expect.objectContaining({ provider: PROVIDER_ID, id: "configured-dynamic-model" }),
+      catalogEntry("configured-dynamic-model"),
     );
     const catalog = await refreshNativeCatalogDuringBoundedRead({
       ...params,
       harnessId: HARNESS_ID,
     });
     expect(catalog?.staticEntries).toContainEqual(
-      expect.objectContaining({
-        provider: PROVIDER_ID,
-        id: "configured-dynamic-model",
+      catalogEntry("configured-dynamic-model", {
         name: "Configured dynamic model",
       }),
     );
@@ -514,24 +557,16 @@ async function expectNativeHarnessModelsPublished(params: {
       preloadedOnly: true,
       catalogProjector: projector,
     });
-    expect(preparedModels.models).toContainEqual(
-      expect.objectContaining({
-        provider: PROVIDER_ID,
-        id: "account-scoped-model",
-        available: true,
-      }),
+    expect(preparedModels.models).toEqual(
+      expect.arrayContaining([
+        catalogEntry("account-scoped-model", { available: true }),
+        catalogEntry("configured-dynamic-model", {
+          name: "Configured dynamic model",
+          available: false,
+        }),
+      ]),
     );
-    expect(preparedModels.models).toContainEqual(
-      expect.objectContaining({
-        provider: PROVIDER_ID,
-        id: "configured-dynamic-model",
-        name: "Configured dynamic model",
-        available: false,
-      }),
-    );
-    expect(catalog.staticEntries).not.toContainEqual(
-      expect.objectContaining({ provider: PROVIDER_ID, id: "unresolved-configured-model" }),
-    );
+    expect(catalog.staticEntries).not.toContainEqual(catalogEntry("unresolved-configured-model"));
 
     const chatMetadata = createGatewayChatMetadataRuntime({
       getConfig: () => params.config,
@@ -549,11 +584,7 @@ async function expectNativeHarnessModelsPublished(params: {
     await chatMetadata.refresh();
     const metadata = await chatMetadata.read({ agentId: "main" });
     expect(metadata.models).toContainEqual(
-      expect.objectContaining({
-        provider: PROVIDER_ID,
-        id: "account-scoped-model",
-        available: true,
-      }),
+      catalogEntry("account-scoped-model", { available: true }),
     );
   } finally {
     restoreActivePluginRegistrySnapshot(previousRegistry);
@@ -567,59 +598,12 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
   const inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "provenance"> = {
     provenance: "standalone",
   };
-  const root = params.makeTempDir("openclaw-native-model-catalog-worker-");
-  const stateDir = path.join(root, "state");
-  const agentDir = path.join(stateDir, "agents", "main", "agent");
-  const workspaceDir = path.join(root, "workspace");
-  const marker = path.join(root, "worker-marker.txt");
-  fs.mkdirSync(agentDir, { recursive: true });
-  fs.mkdirSync(workspaceDir, { recursive: true });
-  const pluginFile = writeFixturePlugin({ root, spinMs: 0, nativeCatalog: true });
-  const config = {
-    agents: {
-      defaults: {
-        model: `${PROVIDER_ID}/sqlite-model`,
-        models: {
-          [`${PROVIDER_ID}/sqlite-model`]: { agentRuntime: { id: HARNESS_ID } },
-          [`${PROVIDER_ID}/account-scoped-model`]: { agentRuntime: { id: HARNESS_ID } },
-          [`${PROVIDER_ID}/configured-dynamic-model`]: { agentRuntime: { id: "openclaw" } },
-          [`${PROVIDER_ID}/unresolved-configured-model`]: { agentRuntime: { id: "openclaw" } },
-        },
-      },
-    },
-    plugins: {
-      allow: [PLUGIN_ID],
-      load: { paths: [pluginFile] },
-      entries: { [PLUGIN_ID]: { enabled: true } },
-    },
-  } satisfies OpenClawConfig;
-  const env = {
-    ...process.env,
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_WORKER_CATALOG_MARKER: marker,
-    [EXTERNAL_AUTH_PATH_ENV]: "",
-    [REF_ONLY_API_ENV]: "ref-only-api-secret-not-real",
-    [REF_ONLY_TOKEN_ENV]: "ref-only-token-secret-not-real",
-  };
-  await seedFixturePluginModelCatalog(agentDir, env, PLUGIN_ID, PROVIDER_ID);
-  replaceRuntimeAuthProfileStoreSnapshots([
-    {
-      agentDir,
-      store: {
-        version: 1,
-        profiles: {
-          [PROFILE_ID]: {
-            type: "token",
-            provider: SHARED_AUTH_PROVIDER_ID,
-            token: MATERIALIZED_SECRET,
-            tokenRef: { source: "env", provider: "default", id: "SHARED_SECRET_REF" },
-          },
-        },
-        order: { [SHARED_AUTH_PROVIDER_ID]: [PROFILE_ID] },
-      },
-    },
-  ]);
+  const { agentDir, workspaceDir, config, env } = await createCatalogFixture(
+    params.makeTempDir,
+    0,
+    { [EXTERNAL_AUTH_PATH_ENV]: "" },
+    { nativeCatalog: true },
+  );
   const input = {
     agentId: "main",
     agentDir,
@@ -658,21 +642,14 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
     metadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,
     snapshot: build.snapshot,
   });
-  expect(
-    inventoryOwner.catalogInventory?.catalog.entries.some(
-      (entry) => entry.id === "configured-dynamic-model",
-    ),
-  ).toBe(false);
-  expect(
-    inventoryOwner.catalogInventory?.catalog.routeVariants.some(
-      (entry) => entry.id === "configured-dynamic-model",
-    ),
-  ).toBe(false);
-  expect(
-    inventoryOwner.catalogInventory?.catalog.staticEntries?.some(
-      (entry) => entry.id === "configured-dynamic-model",
-    ),
-  ).toBe(false);
+  for (const key of ["entries", "routeVariants", "staticEntries"] as const) {
+    expect(
+      inventoryOwner.catalogInventory?.catalog[key]?.some(
+        (entry) => entry.id === "configured-dynamic-model",
+      ),
+      key,
+    ).toBe(false);
+  }
 }
 
 export function expectCatalogAuth(snapshot: PreparedModelRuntimeSnapshot, provider: string) {

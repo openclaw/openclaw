@@ -392,6 +392,32 @@ describe("prepared model catalog worker plugin scope", () => {
       loadGatewayModelCatalogSnapshot,
       logGateway: { debug: vi.fn(), warn: vi.fn() },
     });
+    const listModels = (
+      id: string,
+      params: Record<string, unknown>,
+      response: RespondFn = respond,
+    ) =>
+      expectDefined(
+        modelsHandlers["models.list"],
+        "models.list test invariant",
+      )({
+        req: { type: "req", id, method: "models.list", params },
+        params,
+        respond: response,
+        client: null,
+        isWebchatConnect: () => false,
+        context,
+      });
+    const expectPublishedModel = () =>
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          models: expect.arrayContaining([
+            expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
+          ]),
+        }),
+        undefined,
+      );
     if (selection.first !== "full") {
       expect(snapshot.authModes[HARNESS_ID]).toBeUndefined();
       const probePath = path.join(root, "synthetic-auth-probes.txt");
@@ -406,19 +432,7 @@ describe("prepared model catalog worker plugin scope", () => {
       // The first worker operation must enter through the registered scoped refresh.
       const params = { view: "all", provider: PROVIDER_ID, refresh: true };
       const previousCatalog = snapshot.readFullModelCatalog?.();
-      const refresh = Promise.resolve(
-        expectDefined(
-          modelsHandlers["models.list"],
-          "models.list test invariant",
-        )({
-          req: { type: "req", id: "models-list-cold-scoped", method: "models.list", params },
-          params,
-          respond: respond as RespondFn,
-          client: null,
-          isWebchatConnect: () => false,
-          context,
-        }),
-      );
+      const refresh = Promise.resolve(listModels("models-list-cold-scoped", params));
       if (selection.first === "held") {
         let settled = false;
         const observedRefresh = refresh.finally(() => {
@@ -439,17 +453,7 @@ describe("prepared model catalog worker plugin scope", () => {
           fs.rmSync(hold);
           const readStarted = performance.now();
           const readRespond = vi.fn();
-          await expectDefined(
-            modelsHandlers["models.list"],
-            "models.list test invariant",
-          )({
-            req: { type: "req", id: "models-list-during-refresh", method: "models.list" },
-            params: { view: "all" },
-            respond: readRespond as RespondFn,
-            client: null,
-            isWebchatConnect: () => false,
-            context,
-          });
+          await listModels("models-list-during-refresh", { view: "all" }, readRespond);
           const readMs = performance.now() - readStarted;
           expect(settled).toBe(false);
           const publicationStarted = performance.now();
@@ -535,26 +539,8 @@ describe("prepared model catalog worker plugin scope", () => {
       }
       await waitForPublication(previousCatalog);
       respond.mockClear();
-      await expectDefined(
-        modelsHandlers["models.list"],
-        "models.list test invariant",
-      )({
-        req: { type: "req", id: "models-list-scoped-published", method: "models.list" },
-        params: { view: "all", provider: PROVIDER_ID },
-        respond: respond as RespondFn,
-        client: null,
-        isWebchatConnect: () => false,
-        context,
-      });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          models: expect.arrayContaining([
-            expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
-          ]),
-        }),
-        undefined,
-      );
+      await listModels("models-list-scoped-published", { view: "all", provider: PROVIDER_ID });
+      expectPublishedModel();
       const probes = fs.readFileSync(probePath, "utf8").trim().split("\n");
       expect(probes).toContain(HARNESS_ID);
       expect(probes).not.toContain(UNRELATED_SYNTHETIC_AUTH_ID);
@@ -565,44 +551,11 @@ describe("prepared model catalog worker plugin scope", () => {
       respond.mockClear();
     }
     const previousCatalog = snapshot.readFullModelCatalog?.();
-    await expectDefined(
-      modelsHandlers["models.list"],
-      'modelsHandlers["models.list"] test invariant',
-    )({
-      req: {
-        type: "req",
-        id: "models-list-worker-scope",
-        method: "models.list",
-        params: { view: "all", refresh: true },
-      },
-      params: { view: "all", refresh: true },
-      respond: respond as RespondFn,
-      client: null,
-      isWebchatConnect: () => false,
-      context,
-    });
+    await listModels("models-list-worker-scope", { view: "all", refresh: true });
     await waitForPublication(previousCatalog);
     respond.mockClear();
-    await expectDefined(
-      modelsHandlers["models.list"],
-      "models.list test invariant",
-    )({
-      req: { type: "req", id: "models-list-full-published", method: "models.list" },
-      params: { view: "all" },
-      respond: respond as RespondFn,
-      client: null,
-      isWebchatConnect: () => false,
-      context,
-    });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        models: expect.arrayContaining([
-          expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
-        ]),
-      }),
-      undefined,
-    );
+    await listModels("models-list-full-published", { view: "all" });
+    expectPublishedModel();
     expect(fs.existsSync(unrelatedMarker)).toBe(false);
   });
 });

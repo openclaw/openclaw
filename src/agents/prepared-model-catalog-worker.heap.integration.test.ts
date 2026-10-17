@@ -11,17 +11,43 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import {
   createCatalogFixture,
+  makeCatalogAgentFacts,
   PLUGIN_ID,
   PROVIDER_ID,
 } from "./prepared-model-catalog-worker.test-support.js";
 import type {
+  PreparedModelCatalogWorkerInput,
   PreparedModelCatalogWorkerTask,
   PreparedModelWorkerResult,
 } from "./prepared-model-catalog-worker.types.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
 import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
 const { makeTempDir } = usePreparedCatalogWorkerFixtures();
+
+function createCatalogPool(env: NodeJS.ProcessEnv) {
+  return new WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>({
+    workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
+    maxWorkers: 1,
+    idleTimeoutMs: 0,
+    restartOnError: false,
+    workerOptions: {
+      resourceLimits: { maxOldGenerationSizeMb: 512 },
+      workerData: { sourceCaptureDirectory: makeTempDir("openclaw-catalog-heap-captures-") },
+      env,
+    },
+  });
+}
+
+function catalogTask(value: PreparedModelCatalogWorkerInput): PreparedModelCatalogWorkerTask {
+  return {
+    value,
+    request: {
+      kind: "catalog",
+      syntheticAuth: [],
+      clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: value.input.env }),
+    },
+  };
+}
 
 it("bounds catalog worker retention across repeated fleet preparations", async () => {
   const fixture = await createCatalogFixture(makeTempDir, 0);
@@ -77,57 +103,24 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
       },
     };
     return createPreparedModelCatalogWorkerInput({
-      agentFacts: {
-        input: {
-          agentId: "main",
-          agentDir: fixture.agentDir,
-          inheritedAuthDir: fixture.agentDir,
-          workspaceDir: fixture.workspaceDir,
-          config,
-          env: fixture.env,
-        },
+      agentFacts: makeCatalogAgentFacts({
+        agentId: "main",
+        agentDir: fixture.agentDir,
+        inheritedAuthDir: fixture.agentDir,
+        workspaceDir: fixture.workspaceDir,
+        config,
         env: fixture.env,
-        authStore: { version: 1, profiles: {} },
-        credentials: {},
-        templateAuthStorage: AuthStorage.inMemory({}),
-        providerIds: [PROVIDER_ID],
-        configuredModelRefs: [],
-        configuredRuntimeModels: [],
-        runtimeCapabilityModels: [],
-        configuredGeneratedCatalogPluginIds: [],
-      },
+      }),
       pluginMetadataSnapshot: metadata,
     });
   });
-  const pool = new WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>({
-    workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
-    maxWorkers: 1,
-    idleTimeoutMs: 0,
-    restartOnError: false,
-    workerOptions: {
-      resourceLimits: { maxOldGenerationSizeMb: 512 },
-      workerData: {
-        sourceCaptureDirectory: makeTempDir("openclaw-catalog-heap-captures-"),
-      },
-      env: fixture.env,
-    },
-  });
+  const pool = createCatalogPool(fixture.env);
   try {
     const hashes = new Map<number, string>();
     const count = Number(process.env.OPENCLAW_CATALOG_HEAP_ITERATIONS ?? 12);
     for (let index = 0; index < count; index++) {
       const revision = index % inputs.length;
-      const result = await pool.run(
-        {
-          value: inputs[revision]!,
-          request: {
-            kind: "catalog",
-            syntheticAuth: [],
-            clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: fixture.env }),
-          },
-        },
-        { timeoutMs: 30_000 },
-      );
+      const result = await pool.run(catalogTask(inputs[revision]!), { timeoutMs: 30_000 });
       expect(result.status).toBe("ok");
       if (result.status !== "ok" || result.kind !== "catalog") {
         throw new Error(JSON.stringify(result));
@@ -141,17 +134,7 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
       hashes.set(revision, hash);
     }
     // Reuse the last generation after its predecessor's retirement has completed.
-    await pool.run(
-      {
-        value: inputs[(count - 1) % inputs.length]!,
-        request: {
-          kind: "catalog",
-          syntheticAuth: [],
-          clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: fixture.env }),
-        },
-      },
-      { timeoutMs: 30_000 },
-    );
+    await pool.run(catalogTask(inputs[(count - 1) % inputs.length]!), { timeoutMs: 30_000 });
     const retained = JSON.parse(fs.readFileSync(fixture.marker, "utf8")) as {
       callbacks: number;
       controlCollected: boolean;
@@ -251,61 +234,28 @@ export function register(api) {
   };
   const input = (revision: number, workspaceDir = fixture.workspaceDir) =>
     createPreparedModelCatalogWorkerInput({
-      agentFacts: {
-        input: {
-          agentId: "main",
-          agentDir: fixture.agentDir,
-          inheritedAuthDir: fixture.agentDir,
-          workspaceDir,
-          config: {
-            ...config,
-            plugins: {
-              ...config.plugins,
-              entries: { [PLUGIN_ID]: { enabled: true, config: { revision } } },
-            },
+      agentFacts: makeCatalogAgentFacts({
+        agentId: "main",
+        agentDir: fixture.agentDir,
+        inheritedAuthDir: fixture.agentDir,
+        workspaceDir,
+        config: {
+          ...config,
+          plugins: {
+            ...config.plugins,
+            entries: { [PLUGIN_ID]: { enabled: true, config: { revision } } },
           },
-          env: fixture.env,
         },
         env: fixture.env,
-        authStore: { version: 1, profiles: {} },
-        credentials: {},
-        templateAuthStorage: AuthStorage.inMemory({}),
-        providerIds: [PROVIDER_ID],
-        configuredModelRefs: [],
-        configuredRuntimeModels: [],
-        runtimeCapabilityModels: [],
-        configuredGeneratedCatalogPluginIds: [],
-      },
+      }),
       pluginMetadataSnapshot: metadataForWorkspace(workspaceDir),
     });
-  const pool = new WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>({
-    workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
-    maxWorkers: 1,
-    idleTimeoutMs: 0,
-    restartOnError: false,
-    workerOptions: {
-      resourceLimits: { maxOldGenerationSizeMb: 512 },
-      workerData: { sourceCaptureDirectory: makeTempDir("openclaw-native-retention-captures-") },
-      env: fixture.env,
-    },
-  });
+  const pool = createCatalogPool(fixture.env);
   const request = (revision: number, workspaceDir?: string, rejectDiscovery = false) =>
-    pool.run(
-      {
-        value: input(revision, workspaceDir),
-        request: {
-          kind: "catalog",
-          syntheticAuth: [],
-          clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: fixture.env }),
-        },
-      },
-      {
-        timeoutMs: 30_000,
-        ...(rejectDiscovery
-          ? { onRequest: async () => ({ input: false, timeoutMs: 30_000 }) }
-          : {}),
-      },
-    );
+    pool.run(catalogTask(input(revision, workspaceDir)), {
+      timeoutMs: 30_000,
+      ...(rejectDiscovery ? { onRequest: async () => ({ input: false, timeoutMs: 30_000 }) } : {}),
+    });
   return {
     workspaceDir: fixture.workspaceDir,
     close: () => pool.close(),

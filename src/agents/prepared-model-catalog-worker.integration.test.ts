@@ -40,6 +40,8 @@ import {
   EXTERNAL_AUTH_PROFILE_ID,
   EXTERNAL_AUTH_PATH_ENV,
   createCatalogFixture,
+  catalogEntry,
+  makeCatalogAgentFacts,
   expectCatalogAuth,
   writeFixturePlugin,
 } from "./prepared-model-catalog-worker.test-support.js";
@@ -50,13 +52,11 @@ import {
   loadPreparedModelRuntimeAuth,
 } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
-import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 import {
   getPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
 import { withHeldCatalogOAuthRefresh } from "./test-helpers/prepared-model-catalog-oauth-fixture.js";
 import { createStaticCatalogSnapshotFixture } from "./test-helpers/prepared-model-catalog-static-fixture.js";
 import {
@@ -102,9 +102,7 @@ describe("prepared model catalog worker boundary", () => {
     expect(fixture.snapshot.pluginRegistry).toBeUndefined();
 
     const catalog = await loadCompletedFullCatalog(fixture.snapshot);
-    expect(catalog.entries).toContainEqual(
-      expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
-    );
+    expect(catalog.entries).toContainEqual(catalogEntry("plugin-generation-v1"));
   });
 
   it("preserves prepared catalog ownership across ambient environment changes", async () => {
@@ -159,9 +157,7 @@ describe("prepared model catalog worker boundary", () => {
       retireAfterTest(retainPreparedPluginGeneration(result.pluginGeneration));
       snapshot = result.snapshot;
       const modelCatalog = await loadCompletedFullCatalog(snapshot);
-      expect(modelCatalog.entries).toContainEqual(
-        expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
-      );
+      expect(modelCatalog.entries).toContainEqual(catalogEntry("plugin-generation-v1"));
       const auth = getPreparedModelFullCatalogAuth(modelCatalog)!;
       const candidate = { ...snapshot, ...auth, modelCatalog };
       const project = () =>
@@ -242,9 +238,7 @@ describe("prepared model catalog worker boundary", () => {
     const main = getPreparedModelRuntimeSnapshot(mainInput)!;
     const sibling = getPreparedModelRuntimeSnapshot(siblingInput)!;
     const catalog = await loadCompletedFullCatalog(main);
-    expect(catalog.entries).toContainEqual(
-      expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
-    );
+    expect(catalog.entries).toContainEqual(catalogEntry("plugin-generation-v1"));
     const authScope = { providerIds: [PROVIDER_ID] };
     await expect(loadPreparedModelRuntimeAuth(sibling, authScope)).resolves.toMatchObject({
       authStore: { profiles: { [EXTERNAL_AUTH_PROFILE_ID]: { access: "v1:A" } } },
@@ -325,9 +319,7 @@ describe("prepared model catalog worker boundary", () => {
     });
     expect(auth?.authStore.profiles[EXTERNAL_AUTH_PROFILE_ID]).toMatchObject({ access: "v1:A" });
     const catalog = await loadCompletedFullCatalog(fixture.snapshot);
-    expect(catalog.entries).toContainEqual(
-      expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
-    );
+    expect(catalog.entries).toContainEqual(catalogEntry("plugin-generation-v1"));
   });
 
   it("pairs full catalog native routes with exact-generation async auth", async () => {
@@ -477,10 +469,7 @@ describe("prepared model catalog worker boundary", () => {
     const catalog = await loadCompletedFullCatalog(fixture.snapshot);
 
     expect(catalog?.entries).toContainEqual(
-      expect.objectContaining({
-        provider: PROVIDER_ID,
-        id: "proof-refresh-1-sqlite-true-shared-true-unrelated-true",
-      }),
+      catalogEntry("proof-refresh-1-sqlite-true-shared-true-unrelated-true"),
     );
     expect(getPreparedModelFullCatalogAuth(catalog!)).toMatchObject({
       authStore: {
@@ -576,48 +565,21 @@ describe("prepared model catalog worker boundary", () => {
     writeDurableProfile(DURABLE_AUTH_KEY);
     const added = await projectModels();
     const addedCatalog = fixture.snapshot.readFullModelCatalog!();
-    expect(addedCatalog?.entries).toContainEqual(
-      expect.objectContaining({ provider: PROVIDER_ID, id: "post-startup-auth-model" }),
-    );
-    expect(getPreparedModelFullCatalogAuth(addedCatalog!)).toMatchObject({
-      authStore: {
-        profiles: {
-          [`${DURABLE_AUTH_PROVIDER_ID}:default`]: expect.objectContaining({
-            key: DURABLE_AUTH_KEY,
-          }),
-        },
-      },
-    });
+    expect(addedCatalog?.entries).toContainEqual(catalogEntry("post-startup-auth-model"));
+    const profileId = `${DURABLE_AUTH_PROVIDER_ID}:default`;
+    expect(
+      getPreparedModelFullCatalogAuth(addedCatalog!)?.authStore.profiles[profileId],
+    ).toMatchObject({ key: DURABLE_AUTH_KEY });
     expectCatalogAuth(fixture.snapshot, DURABLE_AUTH_PROVIDER_ID).toContain("post-sta...not-real");
-    expect(added).toMatchObject({
-      result: {
-        models: expect.arrayContaining([
-          expect.objectContaining({ id: "durable-model", available: true }),
-        ]),
-      },
-      projected: {
-        authStore: {
-          profiles: {
-            [`${DURABLE_AUTH_PROVIDER_ID}:default`]: expect.objectContaining({
-              key: DURABLE_AUTH_KEY,
-            }),
-          },
-        },
-      },
-    });
+    expect(added.result.models).toContainEqual(
+      expect.objectContaining({ id: "durable-model", available: true }),
+    );
+    expect(added.projected.authStore?.profiles[profileId]).toMatchObject({ key: DURABLE_AUTH_KEY });
 
     writeDurableProfile("second-key-not-real");
     const updated = await project();
     expectCatalogAuth(fixture.snapshot, DURABLE_AUTH_PROVIDER_ID).toContain("second-k...not-real");
-    expect(updated).toMatchObject({
-      authStore: {
-        profiles: {
-          [`${DURABLE_AUTH_PROVIDER_ID}:default`]: expect.objectContaining({
-            key: "second-key-not-real",
-          }),
-        },
-      },
-    });
+    expect(updated.authStore?.profiles[profileId]).toMatchObject({ key: "second-key-not-real" });
 
     const fullCatalog = fixture.snapshot.readFullModelCatalog?.();
     if (!fullCatalog) {
@@ -679,9 +641,7 @@ describe("prepared model catalog worker boundary", () => {
       expect.objectContaining({ id: "durable-model", available: false }),
     );
     expect(removed.projected.authStore).toBeDefined();
-    expect(
-      removed.projected.authStore?.profiles[`${DURABLE_AUTH_PROVIDER_ID}:default`],
-    ).toBeUndefined();
+    expect(removed.projected.authStore?.profiles[profileId]).toBeUndefined();
     fixture.supersede();
     await waitForWorkers({ requireCreated: true });
     expect(getPreparedModelFullCatalogAuth(fullCatalog)?.authStore).toBe(fullAuth.authStore);
@@ -714,18 +674,8 @@ describe("prepared model catalog worker boundary", () => {
     });
 
     const catalog = await fixture.snapshot.loadFullModelCatalog?.({ refresh: true });
-    expect(catalog?.entries).toContainEqual(
-      expect.objectContaining({
-        provider: PROVIDER_ID,
-        id: "plugin-generation-v1",
-      }),
-    );
-    expect(catalog?.entries).not.toContainEqual(
-      expect.objectContaining({
-        provider: PROVIDER_ID,
-        id: "plugin-generation-v2",
-      }),
-    );
+    expect(catalog?.entries).toContainEqual(catalogEntry("plugin-generation-v1"));
+    expect(catalog?.entries).not.toContainEqual(catalogEntry("plugin-generation-v2"));
     expect(
       getPreparedModelFullCatalogAuth(catalog!)?.authStore.profiles[EXTERNAL_AUTH_PROFILE_ID],
     ).toMatchObject({ access: "v1:B" });
@@ -864,9 +814,7 @@ describe("prepared model catalog worker boundary", () => {
 
       const outcomes = await Promise.allSettled([catalog, ...accepted]);
       expect(outcomes.filter((outcome) => outcome.status === "rejected")).toEqual([]);
-      expect((await catalog).entries).toContainEqual(
-        expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
-      );
+      expect((await catalog).entries).toContainEqual(catalogEntry("plugin-generation-v1"));
       fs.writeFileSync(fixture.externalAuthPath, "B", "utf8");
       const refreshedAuth = await loadPreparedModelRuntimeAuth(fixture.snapshot, {
         providerIds: [PROVIDER_ID],
@@ -876,10 +824,7 @@ describe("prepared model catalog worker boundary", () => {
       });
       const refreshedCatalog = await fixture.snapshot.loadFullModelCatalog!({ refresh: true });
       expect(refreshedCatalog.entries).toContainEqual(
-        expect.objectContaining({
-          provider: PROVIDER_ID,
-          id: "proof-refresh-2-sqlite-true-shared-true-unrelated-true",
-        }),
+        catalogEntry("proof-refresh-2-sqlite-true-shared-true-unrelated-true"),
       );
     } finally {
       fs.rmSync(barrier, { force: true });
@@ -911,18 +856,12 @@ describe("prepared model catalog worker boundary", () => {
       const [catalog, sharedCatalog] = await completion;
       expect(sharedCatalog).toBe(catalog);
       expect(catalog?.entries).toContainEqual(
-        expect.objectContaining({
-          provider: PROVIDER_ID,
-          id: "proof-refresh-1-sqlite-true-shared-true-unrelated-true",
-        }),
+        catalogEntry("proof-refresh-1-sqlite-true-shared-true-unrelated-true"),
       );
       await expect(fixture.snapshot.loadFullModelCatalog?.()).resolves.toBe(catalog);
       const refreshedCatalog = await fixture.snapshot.loadFullModelCatalog?.(refreshOptions);
       expect(refreshedCatalog?.entries).toContainEqual(
-        expect.objectContaining({
-          provider: PROVIDER_ID,
-          id: "proof-refresh-2-sqlite-true-shared-true-unrelated-true",
-        }),
+        catalogEntry("proof-refresh-2-sqlite-true-shared-true-unrelated-true"),
       );
       expect(fs.readFileSync(fixture.marker, "utf8")).toBe("start\ndone\nstart\ndone\n");
     } finally {
@@ -974,36 +913,23 @@ describe("prepared model catalog worker boundary", () => {
       },
     };
     const worker = createPreparedModelCatalogWorker({
-      agentFacts: {
-        input: {
+      agentFacts: makeCatalogAgentFacts(
+        {
           agentId: "main",
           agentDir: fixture.agentDir,
           workspaceDir: fixture.workspaceDir,
           config: fixture.config,
           env: fixture.env,
         },
-        env: fixture.env,
-        authStore,
-        credentials: {},
-        providerIds: [PROVIDER_ID],
-        configuredModelRefs: [],
-        configuredRuntimeModels: [],
-        runtimeCapabilityModels: [],
-        configuredGeneratedCatalogPluginIds: [],
-        templateAuthStorage: AuthStorage.inMemory({}),
-      } satisfies PreparedModelRuntimeAgentFacts,
+        { authStore },
+      ),
       pluginMetadataSnapshot: fixture.pluginMetadataSnapshot,
       isCurrent: fixture.isCurrent,
       retirementSignal: fixture.retirementSignal,
     });
     const { modelCatalog: catalog } = await worker.loadCatalog();
 
-    expect(catalog.entries).toContainEqual(
-      expect.objectContaining({
-        provider: PROVIDER_ID,
-        id: "ref-proof-api-true-token-true",
-      }),
-    );
+    expect(catalog.entries).toContainEqual(catalogEntry("ref-proof-api-true-token-true"));
   });
 });
 const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:default";
