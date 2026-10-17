@@ -420,7 +420,7 @@ export function SidebarPanel(props: SidebarPanelProps) {
   const markdownRef = markdownBlocksRef(markdownPresented);
   return (
     <div
-      class={fillHost() ? "sidebar-panel-host--fill" : ""}
+      class={{ "sidebar-panel-host--fill": fillHost() }}
       ref={markdownRef}
       onClick={(event) => props.onClick(event)}
       onKeyDown={(event) => props.onKeydown(event)}

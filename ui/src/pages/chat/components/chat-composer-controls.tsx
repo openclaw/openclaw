@@ -336,14 +336,22 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
   // This shape owns pointer capture. Keep it stable while dictation rerenders,
   // or replacing the button releases capture and cancels the active hold.
   return (
-    <span class={`chat-talk-control${holding() ? " chat-talk-control--holding" : ""}`}>
+    <span class={["chat-talk-control", { "chat-talk-control--holding": holding() }]}>
       <openclaw-tooltip prop:content={tooltip()}>
         <button
-          class={
+          class={[
+            "chat-send-btn",
             active()
-              ? "chat-send-btn chat-send-btn--dictating"
-              : `chat-send-btn chat-send-btn--voice${props.readDictation && !startsDictationDirectly() ? " chat-send-btn--hold-enabled" : ""}${arming() ? " chat-send-btn--dictation-arming" : ""}`
-          }
+              ? "chat-send-btn--dictating"
+              : [
+                  "chat-send-btn--voice",
+                  {
+                    "chat-send-btn--hold-enabled":
+                      props.readDictation && !startsDictationDirectly(),
+                    "chat-send-btn--dictation-arming": arming(),
+                  },
+                ],
+          ]}
           type="button"
           onPointerDown={(event: PointerEvent) => props.onDictationPointerDown?.(event)}
           onClick={(event: MouseEvent) => {
@@ -455,10 +463,16 @@ export function ComposerDictationStatus(props: {
     return (
       <div class="agent-chat__composer-status-stack">
         <div
-          class={`agent-chat__dictation-status${dictation.finalizing ? " agent-chat__dictation-status--finalizing" : ""}`}
+          class={[
+            "agent-chat__dictation-status",
+            { "agent-chat__dictation-status--finalizing": dictation.finalizing },
+          ]}
         >
           <span
-            class={`agent-chat__dictation-phase${!dictation.finalizing ? " agent-chat__dictation-phase--listening" : ""}`}
+            class={[
+              "agent-chat__dictation-phase",
+              { "agent-chat__dictation-phase--listening": !dictation.finalizing },
+            ]}
           >
             {dictation.finalizing
               ? t("chat.composer.dictationFinalizing")
@@ -550,7 +564,7 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
         </span>
       </Show>
       <button
-        class={`chat-send-btn chat-send-btn--send${props.sending ? " chat-send-btn--sending" : ""}`}
+        class={["chat-send-btn chat-send-btn--send", { "chat-send-btn--sending": props.sending }]}
         ref={primaryPointerDownRef(() => props.onPrimaryActionPointerDown)}
         onClick={(event) => props.onSend(event)}
         disabled={!hasSendableContent()}
@@ -564,7 +578,7 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
   );
   const TalkAction = (action: { camera?: boolean }) => (
     <openclaw-tooltip
-      class={action.camera ? undefined : "chat-mobile-talk-action"}
+      class={{ "chat-mobile-talk-action": !action.camera }}
       prop:content={
         action.camera
           ? cameraLabel()
@@ -572,7 +586,10 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
       }
     >
       <button
-        class={`chat-send-btn chat-send-btn--${action.camera ? "voice" : "talk-mode"}`}
+        class={[
+          "chat-send-btn",
+          action.camera ? "chat-send-btn--voice" : "chat-send-btn--talk-mode",
+        ]}
         type={action.camera ? undefined : "button"}
         ref={primaryPointerDownRef(() =>
           action.camera ? undefined : props.onPrimaryActionPointerDown,
@@ -636,7 +653,10 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
           <span class="chat-talk-control chat-talk-control--active">
             <openclaw-tooltip prop:content={t("chat.composer.stopVoiceInput")}>
               <button
-                class={`chat-send-btn chat-send-btn--voice-live${voiceErrored() ? " chat-send-btn--voice-error" : ""}`}
+                class={[
+                  "chat-send-btn chat-send-btn--voice-live",
+                  { "chat-send-btn--voice-error": voiceErrored() },
+                ]}
                 onClick={() => props.onToggleVoice?.()}
                 aria-label={t("chat.composer.stopVoiceInput")}
               >
