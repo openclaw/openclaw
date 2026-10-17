@@ -12,6 +12,40 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+function createInbox(
+  client: ConstructorParameters<typeof ReefInboxConnection>[0],
+  onEntries: ConstructorParameters<typeof ReefInboxConnection>[1] = async () => {},
+  options: ConstructorParameters<typeof ReefInboxConnection>[3] = {},
+  socket = new ControlledSocket(),
+) {
+  return new ReefInboxConnection(
+    client,
+    onEntries,
+    () => socket as unknown as WebSocketLike,
+    options,
+  );
+}
+
+function trackedInbox(client: ConstructorParameters<typeof ReefInboxConnection>[0]) {
+  const socket = new ControlledSocket();
+  const abort = new AbortController();
+  const states: string[] = [];
+  const errors: string[] = [];
+  const inbox = createInbox(
+    client,
+    undefined,
+    {
+      onState: (state) => states.push(state),
+      onError: (error) => {
+        errors.push(error.message);
+        abort.abort();
+      },
+    },
+    socket,
+  );
+  return { inbox, socket, abort, states, errors };
+}
+
 describe("ReefInboxConnection recovery", () => {
   it("keeps the highest cursor when direct drains finish persistence out of order", async () => {
     const requestedAfter: number[] = [];
@@ -21,19 +55,14 @@ describe("ReefInboxConnection recovery", () => {
       requestedAfter.push(Number(parseRequestUrl(input).searchParams.get("after")));
       return Response.json({ entries: [], cursor: requestedAfter.length === 1 ? 10 : 20 });
     });
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {},
-      () => new ControlledSocket() as unknown as WebSocketLike,
-      {
-        persistCursor: async (cursor) => {
-          if (cursor === 10) {
-            lowerStarted.resolve();
-            await lowerPersistence.promise;
-          }
-        },
+    const inbox = createInbox(client, undefined, {
+      persistCursor: async (cursor) => {
+        if (cursor === 10) {
+          lowerStarted.resolve();
+          await lowerPersistence.promise;
+        }
       },
-    );
+    });
     const lower = inbox.drain();
     try {
       await lowerStarted.promise;
@@ -60,20 +89,15 @@ describe("ReefInboxConnection recovery", () => {
         cursor: 8,
       });
     });
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {},
-      () => new ControlledSocket() as unknown as WebSocketLike,
-      {
-        initialCursor: 7,
-        persistCursor: async () => {
-          started.resolve();
-          if (fail) {
-            await persistence.promise;
-          }
-        },
+    const inbox = createInbox(client, undefined, {
+      initialCursor: 7,
+      persistCursor: async () => {
+        started.resolve();
+        if (fail) {
+          await persistence.promise;
+        }
       },
-    );
+    });
     const first = expect(inbox.drain()).rejects.toBe(failure);
     await started.promise;
     expect(requestedAfter).toEqual([7]);
@@ -101,7 +125,7 @@ describe("ReefInboxConnection recovery", () => {
       return Response.json({ entries, cursor: entries.at(-1)?.seq ?? after });
     });
     const abort = new AbortController();
-    const inbox = new ReefInboxConnection(
+    const inbox = createInbox(
       client,
       async ([entry]) => {
         attempts.push(entry!.seq);
@@ -110,12 +134,12 @@ describe("ReefInboxConnection recovery", () => {
         }
         completed.push(entry!.seq);
       },
-      () => socket as unknown as WebSocketLike,
       {
         initialCursor: 7,
         persistCursor: (cursor) => persisted.push(cursor),
         onError: (error) => errors.push(error.message),
       },
+      socket,
     );
 
     const running = inbox.start(abort.signal);
@@ -204,12 +228,11 @@ describe("ReefInboxConnection recovery", () => {
     const client = createClient(async () =>
       Response.json({ entries: [receiptEntry(9)], cursor: 8 }),
     );
-    const inbox = new ReefInboxConnection(
+    const inbox = createInbox(
       client,
       async (entries) => {
         processed.push(...entries.map((entry) => entry.seq));
       },
-      () => new ControlledSocket() as unknown as WebSocketLike,
       { initialCursor: 7, persistCursor: (cursor) => persisted.push(cursor) },
     );
 
@@ -234,13 +257,13 @@ describe("ReefInboxConnection recovery", () => {
       return Response.json({ entries: [], cursor: after });
     });
     const abort = new AbortController();
-    const inbox = new ReefInboxConnection(
+    const inbox = createInbox(
       client,
       async (entries) => {
         processed.push(...entries.map((entry) => entry.seq));
       },
-      () => socket as unknown as WebSocketLike,
       { persistCursor: (cursor) => persisted.push(cursor) },
+      socket,
     );
 
     const running = inbox.start(abort.signal);
@@ -270,11 +293,11 @@ describe("ReefInboxConnection recovery", () => {
       return Response.json({ entries: [], cursor: 0 });
     });
     const abort = new AbortController();
-    const inbox = new ReefInboxConnection(
+    const inbox = createInbox(
       client,
-      async () => {},
-      () => socket as unknown as WebSocketLike,
+      undefined,
       { onState: (state) => states.push(state) },
+      socket,
     );
 
     const running = inbox.start(abort.signal);
@@ -376,13 +399,12 @@ describe("ReefInboxConnection recovery", () => {
       Response.json({ entries: [receiptEntry(1)], cursor: 1 }),
     );
     const abort = new AbortController();
-    const inbox = new ReefInboxConnection(
+    const inbox = createInbox(
       client,
       async () => {
         handlerStarted.resolve();
         await handlerGate.promise;
       },
-      () => socket as unknown as WebSocketLike,
       {
         persistCursor: async (cursor) => {
           persistenceStarted.resolve();
@@ -390,6 +412,7 @@ describe("ReefInboxConnection recovery", () => {
           persisted.push(cursor);
         },
       },
+      socket,
     );
 
     let finished = false;
@@ -419,8 +442,6 @@ describe("ReefInboxConnection recovery", () => {
   });
 
   it("bounds live frames during catch-up and reconnects through REST on overflow", async () => {
-    const socket = new ControlledSocket();
-    const errors: string[] = [];
     const pullGate = createDeferred<void>();
     const pullStarted = createDeferred<void>();
     const client = createClient(async () => {
@@ -428,18 +449,7 @@ describe("ReefInboxConnection recovery", () => {
       await pullGate.promise;
       return Response.json({ entries: [], cursor: 0 });
     });
-    const abort = new AbortController();
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {},
-      () => socket as unknown as WebSocketLike,
-      {
-        onError: (error) => {
-          errors.push(error.message);
-          abort.abort();
-        },
-      },
-    );
+    const { inbox, socket, abort, errors } = trackedInbox(client);
 
     const running = inbox.start(abort.signal);
     try {
@@ -462,25 +472,10 @@ describe("ReefInboxConnection recovery", () => {
   });
 
   it("surfaces catch-up failures to channel diagnostics", async () => {
-    const socket = new ControlledSocket();
-    const states: string[] = [];
-    const errors: string[] = [];
-    const abort = new AbortController();
     const client = createClient(async () => {
       throw new Error("relay catch-up failed");
     });
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {},
-      () => socket as unknown as WebSocketLike,
-      {
-        onState: (state) => states.push(state),
-        onError: (error) => {
-          errors.push(error.message);
-          abort.abort();
-        },
-      },
-    );
+    const { inbox, socket, abort, states, errors } = trackedInbox(client);
 
     const running = inbox.start(abort.signal);
     socket.emit("open");

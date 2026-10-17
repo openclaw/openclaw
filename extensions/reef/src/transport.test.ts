@@ -1,7 +1,6 @@
 import { createPublicKey, verify as verifySignature } from "node:crypto";
 import { once } from "node:events";
 import http from "node:http";
-import type { AddressInfo } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
@@ -47,6 +46,45 @@ function pendingFriend(peer = "bob"): RelayFriend {
     x25519_pub: "C".repeat(43),
     key_epoch: 2,
   };
+}
+
+function expectFriendshipBody(init: RequestInit | undefined) {
+  expect(JSON.parse(new TextDecoder().decode(init?.body as Uint8Array))).toEqual({
+    peer: "bob",
+    accept: true,
+    expected_key_epoch: 2,
+    expected_ed25519_pub: "B".repeat(43),
+    expected_x25519_pub: "C".repeat(43),
+  });
+}
+
+function expectRedacted(error: unknown, secrets: string[]) {
+  expect(error).toMatchObject({
+    name: "ReefRelayError",
+    status: 401,
+    message: expect.stringContaining("relay rejected"),
+  });
+  for (const secret of secrets) {
+    expect((error as Error).message).not.toContain(secret);
+  }
+}
+
+async function listen(server: http.Server) {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Reef test server did not bind a TCP port");
+  }
+  return address.port;
+}
+
+async function closeServer(server: http.Server | WebSocketServer) {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
 }
 
 afterEach(() => {
@@ -270,13 +308,7 @@ describe("ReefTransportClient device authentication", () => {
       peer: "bob",
       status: "active",
     });
-    expect(JSON.parse(new TextDecoder().decode(calls[0]?.body as Uint8Array))).toEqual({
-      peer: "bob",
-      accept: true,
-      expected_key_epoch: 2,
-      expected_ed25519_pub: "B".repeat(43),
-      expected_x25519_pub: "C".repeat(43),
-    });
+    expectFriendshipBody(calls[0]);
   });
 
   it("diagnoses an outdated relay without retrying or downgrading the signed request", async () => {
@@ -300,13 +332,7 @@ describe("ReefTransportClient device authentication", () => {
         "The Reef relay is likely incompatible or outdated. Update OpenClaw and the Reef relay together, then approve the fresh pairing challenge again.",
     });
     expect(calls).toHaveLength(1);
-    expect(JSON.parse(new TextDecoder().decode(calls[0]?.body as Uint8Array))).toEqual({
-      peer: "bob",
-      accept: true,
-      expected_key_epoch: 2,
-      expected_ed25519_pub: "B".repeat(43),
-      expected_x25519_pub: "C".repeat(43),
-    });
+    expectFriendshipBody(calls[0]);
   });
 
   it("diagnoses an outdated OpenClaw client from the current relay response", async () => {
@@ -486,16 +512,8 @@ describe("ReefTransportClient credential redaction", () => {
         );
       });
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Reef credential redaction test server did not bind a TCP port");
-    }
-
-    const client = createClient(fetch, () => ts, `http://127.0.0.1:${address.port}`);
+    const port = await listen(server);
+    const client = createClient(fetch, () => ts, `http://127.0.0.1:${port}`);
     try {
       const tokenError = await client.authComplete(setupToken).catch((error: unknown) => error);
       const createHandleError = await client
@@ -504,35 +522,16 @@ describe("ReefTransportClient credential redaction", () => {
       const sessionError = await client.listOwnHandles(session).catch((error: unknown) => error);
       const signedError = await client.listFriends().catch((error: unknown) => error);
 
-      expect(tokenError).toMatchObject({ name: "ReefRelayError", status: 401 });
-      expect(createHandleError).toMatchObject({ name: "ReefRelayError", status: 401 });
-      expect(sessionError).toMatchObject({ name: "ReefRelayError", status: 401 });
-      expect(tokenError).toMatchObject({ message: expect.stringContaining("relay rejected") });
-      expect(createHandleError).toMatchObject({
-        message: expect.stringContaining("relay rejected"),
-      });
-      expect(sessionError).toMatchObject({ message: expect.stringContaining("relay rejected") });
-      expect(signedError).toMatchObject({
-        name: "ReefRelayError",
-        status: 401,
-        message: expect.stringContaining("relay rejected"),
-      });
-      expect((tokenError as Error).message).not.toContain(setupToken);
-      expect((createHandleError as Error).message).not.toContain(session);
-      expect((sessionError as Error).message).not.toContain(session);
-      expect((createHandleError as Error).message).not.toContain(sessionPrefix);
-      expect((createHandleError as Error).message).not.toContain(sessionSuffix);
-      expect((sessionError as Error).message).not.toContain(sessionPrefix);
-      expect((sessionError as Error).message).not.toContain(sessionSuffix);
+      expectRedacted(tokenError, [setupToken]);
+      expectRedacted(createHandleError, [session, sessionPrefix, sessionSuffix]);
+      expectRedacted(sessionError, [session, sessionPrefix, sessionSuffix]);
       expect(receivedAuthorization).toContain(`Bearer ${session}`);
       expect(receivedSignatures).toHaveLength(1);
       expect(receivedSignatures[0]).toBeTruthy();
-      expect((signedError as Error).message).not.toContain(receivedSignatures[0]);
+      expectRedacted(signedError, [receivedSignatures[0]!]);
       expect(receivedTokens).toContain(setupToken);
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeServer(server);
     }
   });
 
@@ -626,15 +625,7 @@ async function deliverInboxFrame(frame: string): Promise<{
     for (const socket of server.clients) {
       socket.terminate();
     }
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve();
-      });
-    });
+    await closeServer(server);
   }
   return { entries, states };
 }
@@ -662,13 +653,9 @@ describe("createReefWebSocket handshake deadline", () => {
     server.on("upgrade", () => {
       // Leave the HTTP upgrade pending until the client deadline aborts it.
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => resolve());
-    });
+    const port = await listen(server);
 
     try {
-      const { port } = server.address() as AddressInfo;
       const socket = createReefWebSocket(`ws://127.0.0.1:${port}`, {
         handshakeTimeoutMs: 50,
       }) as WebSocket;
