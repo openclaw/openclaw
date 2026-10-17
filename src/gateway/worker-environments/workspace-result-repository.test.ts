@@ -83,24 +83,20 @@ describe("repository workspace result ownership", () => {
       expect(execute).toHaveBeenCalledTimes(1);
       sql.expectIdle();
       await expect(
-        f.mutations.mutate({
-          ...sessionTarget,
-          assertCurrent: () => {},
-          mutate: async (assertCurrent) => {
-            assertCurrent();
-            sql.expectIdle();
-            // Repository binding is write-once; rollover changes the live session owner.
-            await patchSessionEntryCore(sessionTarget, () => ({
-              sessionId: `${SESSION_ID}-replacement`,
-            }));
-            expect(assertCurrent).toThrow("lost its exact session placement owner");
-            await expect(access.inspect("get", { path: "missing.txt", files: [] })).rejects.toThrow(
-              "owner changed",
-            );
-            expect(execute).toHaveBeenCalledTimes(1);
-            sql.expectIdle();
-            return { changed: false, value: undefined };
-          },
+        f.mutate(async (assertCurrent) => {
+          assertCurrent();
+          sql.expectIdle();
+          // Repository binding is write-once; rollover changes the live session owner.
+          await patchSessionEntryCore(sessionTarget, () => ({
+            sessionId: `${SESSION_ID}-replacement`,
+          }));
+          expect(assertCurrent).toThrow("lost its exact session placement owner");
+          await expect(access.inspect("get", { path: "missing.txt", files: [] })).rejects.toThrow(
+            "owner changed",
+          );
+          expect(execute).toHaveBeenCalledTimes(1);
+          sql.expectIdle();
+          return { changed: false, value: undefined };
         }),
       ).rejects.toThrow("lost its exact session placement owner");
       sql.expectIdle();
@@ -209,16 +205,12 @@ describe("repository workspace result ownership", () => {
           },
         );
         const admittedClaims = vi.spyOn(placements, "claimWorkspaceMutationResult");
-        saving = f.mutations
-          .mutate({
-            ...sessionTarget,
-            assertCurrent: () => {},
-            mutate: async (assertCurrent) => {
-              assertMutationCurrent = assertCurrent;
-              assertCurrent();
-              await fs.writeFile(path.join(f.remote, "editor.txt"), editorBytes);
-              return { changed: true, value: "saved" };
-            },
+        saving = f
+          .mutate(async (assertCurrent) => {
+            assertMutationCurrent = assertCurrent;
+            assertCurrent();
+            await fs.writeFile(path.join(f.remote, "editor.txt"), editorBytes);
+            return { changed: true, value: "saved" };
           })
           .then(
             (value) => ({ ok: true as const, value }),
@@ -408,13 +400,9 @@ describe("repository workspace result ownership", () => {
     expect(stageCosts[0]!.statements).toBe(0);
     expect(stageCosts[1]).toEqual(stageCosts[0]);
     const accepted = await f.store.get(f.repository.workspaceId);
-    await expect(
-      f.mutations.mutate({
-        ...sessionTarget,
-        assertCurrent: () => {},
-        mutate: async () => ({ changed: false, value: "unchanged" }),
-      }),
-    ).resolves.toBe("unchanged");
+    await expect(f.mutate(async () => ({ changed: false, value: "unchanged" }))).resolves.toBe(
+      "unchanged",
+    );
     expect(await f.store.get(f.repository.workspaceId)).toEqual(accepted);
     expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
@@ -423,16 +411,12 @@ describe("repository workspace result ownership", () => {
   it("recovers unknown editor writes through pending result custody", async () => {
     const f = await fixture("worker-turn");
     await expect(
-      f.mutations.mutate({
-        ...sessionTarget,
-        assertCurrent: () => {},
-        mutate: async () => {
-          await fs.writeFile(
-            path.join(f.remote, "uncertain.txt"),
-            "write completed before transport loss\n",
-          );
-          throw new Error("editor transport lost the acknowledgement");
-        },
+      f.mutate(async () => {
+        await fs.writeFile(
+          path.join(f.remote, "uncertain.txt"),
+          "write completed before transport loss\n",
+        );
+        throw new Error("editor transport lost the acknowledgement");
       }),
     ).rejects.toThrow("lost the acknowledgement");
     expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
@@ -470,26 +454,16 @@ describe("repository workspace result ownership", () => {
       const competing = vi.fn(async () => ({ changed: false, value: "unexpected" }));
       if (firstOwner === "publisher") {
         await placements.withRepositoryWorkspaceReservation(sessionTarget, async (assertOwned) => {
-          await expect(
-            f.mutations.mutate({
-              ...sessionTarget,
-              assertCurrent: () => {},
-              mutate: competing,
-            }),
-          ).rejects.toThrow("being published");
+          await expect(f.mutate(competing)).rejects.toThrow("being published");
           assertOwned();
         });
       } else {
-        await f.mutations.mutate({
-          ...sessionTarget,
-          assertCurrent: () => {},
-          mutate: async (assertCurrent) => {
-            await expect(
-              placements.withRepositoryWorkspaceReservation(sessionTarget, competing),
-            ).rejects.toBeInstanceOf(SessionWorkspaceReservationBusyError);
-            assertCurrent();
-            return { changed: false, value: "unchanged" };
-          },
+        await f.mutate(async (assertCurrent) => {
+          await expect(
+            placements.withRepositoryWorkspaceReservation(sessionTarget, competing),
+          ).rejects.toBeInstanceOf(SessionWorkspaceReservationBusyError);
+          assertCurrent();
+          return { changed: false, value: "unchanged" };
         });
       }
       expect(competing).not.toHaveBeenCalled();
@@ -509,13 +483,9 @@ describe("repository workspace result ownership", () => {
       discardPreparedStagedResult: async () => {},
     });
     await expect(
-      f.mutations.mutate({
-        ...sessionTarget,
-        assertCurrent: () => {},
-        mutate: async () => {
-          await fs.writeFile(path.join(f.remote, "unaccepted.txt"), "save requires a checkpoint\n");
-          return { changed: true, value: "saved" };
-        },
+      f.mutate(async () => {
+        await fs.writeFile(path.join(f.remote, "unaccepted.txt"), "save requires a checkpoint\n");
+        return { changed: true, value: "saved" };
       }),
     ).rejects.toThrow("not durably accepted");
     expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBe(
@@ -530,32 +500,26 @@ describe("repository workspace result ownership", () => {
     const f = await fixture("worker-turn");
     const activeTurn = await f.beginTurn("running-turn");
     const mutate = vi.fn(async () => ({ changed: true, value: "unexpected" }));
-    await expect(
-      f.mutations.mutate({ ...sessionTarget, assertCurrent: () => {}, mutate }),
-    ).rejects.toThrow("active turn claim");
+    await expect(f.mutate(mutate)).rejects.toThrow("active turn claim");
     expect(mutate).not.toHaveBeenCalled();
     await placements.acceptWorkspaceResult(activeTurn.turnClaim);
     await placements.completeWorkspaceResultAndReleaseTurn(activeTurn.turnClaim);
 
     await expect(
-      f.mutations.mutate({
-        ...sessionTarget,
-        assertCurrent: () => {},
-        mutate: async () => {
-          await fs.writeFile(path.join(f.remote, "interrupted.txt"), "must remain recoverable\n");
-          await expect(
-            placements.startDrain({
-              sessionId: SESSION_ID,
-              environmentId: activeTurn.placement.environmentId,
-              ownerEpoch: activeTurn.placement.activeOwnerEpoch,
-              expectedGeneration: activeTurn.placement.generation,
-            }),
-          ).rejects.toThrow("pending cloud workspace result");
-          const claim = projectWorkerSessionTurnClaim(placements.get(SESSION_ID)!);
-          expect(claim).toBeDefined();
-          await placements.startWorkspaceResultDrain(claim!);
-          return { changed: true, value: "unaccepted" };
-        },
+      f.mutate(async () => {
+        await fs.writeFile(path.join(f.remote, "interrupted.txt"), "must remain recoverable\n");
+        await expect(
+          placements.startDrain({
+            sessionId: SESSION_ID,
+            environmentId: activeTurn.placement.environmentId,
+            ownerEpoch: activeTurn.placement.activeOwnerEpoch,
+            expectedGeneration: activeTurn.placement.generation,
+          }),
+        ).rejects.toThrow("pending cloud workspace result");
+        const claim = projectWorkerSessionTurnClaim(placements.get(SESSION_ID)!);
+        expect(claim).toBeDefined();
+        await placements.startWorkspaceResultDrain(claim!);
+        return { changed: true, value: "unaccepted" };
       }),
     ).rejects.toThrow("lost its exact session placement owner");
     expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBe(
@@ -579,13 +543,9 @@ describe("repository workspace result ownership", () => {
     await fs.writeFile(path.join(f.remote, "second.txt"), "second turn\n");
     await f.finishTurn(await f.beginTurn("second"));
     await f.finishTurn(await f.beginTurn("read-only"));
-    await f.mutations.mutate({
-      ...sessionTarget,
-      assertCurrent: () => {},
-      mutate: async () => {
-        await fs.writeFile(path.join(f.remote, "editor.txt"), "editor save\n");
-        return { changed: true, value: undefined };
-      },
+    await f.mutate(async () => {
+      await fs.writeFile(path.join(f.remote, "editor.txt"), "editor save\n");
+      return { changed: true, value: undefined };
     });
     await f.stop(sessionTarget);
     expect(placements.get(SESSION_ID)?.state).toBe("reclaimed");
@@ -598,12 +558,7 @@ describe("repository workspace result ownership", () => {
     await withSessionRepositoryCheckpoint(
       { workspaceId: f.repository.workspaceId },
       async (snapshot) => {
-        expect(snapshot.changedEntries.map((entry) => entry.path)).toEqual([
-          "editor.txt",
-          "first.txt",
-          "second.txt",
-          "setup.txt",
-        ]);
+        expect(snapshot.changedEntries.map((entry) => entry.path)).toEqual([...expected.keys()]);
         for (const entry of snapshot.changedEntries) {
           expect(await fs.readFile(path.join(snapshot.stagingRoot, entry.path), "utf8")).toBe(
             expected.get(entry.path),

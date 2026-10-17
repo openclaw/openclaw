@@ -15,7 +15,7 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
 import type { NodeWorkerWorkspaceRetainEntry } from "../../worker/node-workspace-retain-protocol.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
@@ -395,34 +395,13 @@ describe("concurrent worker workspace results", () => {
         const identity = { sessionId, sessionKey: `agent:main:${sessionId}`, agentId: "main" };
         const transcriptTarget = { ...sessionTarget, ...identity };
         await upsertSessionEntryCore(transcriptTarget, { sessionId, updatedAt: Date.now() });
-        seedAttachedPlacementEnvironment(database, {
+        const placement = await advancePlacementFixtureToActive(placements, database, identity, {
           environmentId,
-          sessionId,
           ownerEpoch: 1,
+          remoteWorkspaceDir: `/worker/${sessionId}`,
+          workspaceBaseManifestRef: base.manifestRef,
+          seedEnvironment: "before-dispatch",
         });
-        let placement = await placements.startDispatch(identity);
-        for (const transition of [
-          { from: "requested", to: "provisioning", patch: { environmentId } },
-          { from: "provisioning", to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
-          {
-            from: "syncing",
-            to: "starting",
-            patch: {
-              remoteWorkspaceDir: `/worker/${sessionId}`,
-              workspaceBaseManifestRef: base.manifestRef,
-            },
-          },
-          { from: "starting", to: "active", patch: { activeOwnerEpoch: 1 } },
-        ] as const) {
-          placement = await placements.transition({
-            ...transition,
-            sessionId,
-            expectedGeneration: placement.generation,
-          });
-        }
-        if (placement.state !== "active") {
-          throw new Error("expected active placement");
-        }
         const turnClaim = await placements.claimTurn({
           ...identity,
           owner: { kind: "worker", environmentId, ownerEpoch: 1 },

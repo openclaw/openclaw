@@ -1,7 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
@@ -44,13 +44,14 @@ function createPreparedSsh(): PreparedWorkerSsh {
 
 function createWorkspaceActions(
   run: (argv: string[], options: CommandOptions) => Promise<SpawnResult>,
+  waitForPrepared?: () => Promise<PreparedWorkerSsh>,
 ) {
   const prepared = createPreparedSsh();
   return createWorkerWorkspaceActions({
     bundleHash: "a".repeat(64),
     environmentId: "worker:test",
     ownerSignal: new AbortController().signal,
-    waitForPrepared: async () => prepared,
+    waitForPrepared: waitForPrepared ?? (async () => prepared),
     runner: { run },
     tasks: new Set(),
   });
@@ -62,17 +63,10 @@ describe("worker workspace command transport retry", () => {
     async (transportRetry) => {
       const run = vi.fn(async () => result());
       let current = true;
-      const actions = createWorkerWorkspaceActions({
-        bundleHash: "a".repeat(64),
-        environmentId: "worker:test",
-        ownerSignal: new AbortController().signal,
-        waitForPrepared: async () => {
-          await Promise.resolve();
-          current = false;
-          return createPreparedSsh();
-        },
-        runner: { run },
-        tasks: new Set(),
+      const actions = createWorkspaceActions(run, async () => {
+        await Promise.resolve();
+        current = false;
+        return createPreparedSsh();
       });
       await expect(
         actions.runWorkspaceCommand({
@@ -90,10 +84,7 @@ describe("worker workspace command transport retry", () => {
   );
 
   it("runs never commands once without changing the selected port", async () => {
-    // Pin the clock: the impl derives the dispatch timeout from a
-    // performance.now() deadline, so real elapsed ms between admission and
-    // dispatch would turn the exact 777 assertion below into a loaded-runner
-    // flake.
+    // Pin the deadline so loaded runners still prove the exact dispatch budget.
     vi.spyOn(performance, "now").mockReturnValue(1_000);
     const run = vi.fn(async (argv: string[], _options: CommandOptions) =>
       argv.at(-1)?.includes("never-command") ? result(255) : result(),
@@ -109,8 +100,6 @@ describe("worker workspace command transport retry", () => {
     ).resolves.toMatchObject({ code: 255, termination: "exit" });
     expect(run).toHaveBeenCalledOnce();
     expect(sshArgvPort(run.mock.calls[0]![0])).toBe(2222);
-    // The pinned clock makes the derived dispatch timeout deterministic; a
-    // less-than bound would also accept zero and mask a broken deadline.
     expect(run.mock.calls[0]![1].timeoutMs).toBe(777);
 
     await actions.runWorkspaceCommand({
@@ -146,6 +135,25 @@ describe("worker workspace command transport retry", () => {
 
 describe("bounded inbound workspace transfer", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  function transfer(
+    destinationRoot: string,
+    runTask: Parameters<typeof runBoundedInboundRsync>[0]["runTask"],
+    limits: { entryLimit?: number; totalByteLimit?: number } = {},
+  ) {
+    return runBoundedInboundRsync({
+      argv: ["rsync"],
+      destinationRoot,
+      entryLimit: 10,
+      totalByteLimit: 100,
+      ownerSignal: new AbortController().signal,
+      runTask,
+      timeoutMs: 10_000,
+      ...limits,
+    });
+  }
 
   it.each(["active", "completed"] as const)(
     "tolerates a disappearing temporary manifest only during an active transfer (%s)",
@@ -155,7 +163,7 @@ describe("bounded inbound workspace transfer", () => {
       const finalManifest = path.join(destinationRoot, "manifest.json");
       await fs.writeFile(temporaryManifest, "manifest");
       const renamed = createDeferred();
-      const transfer = createDeferred<SpawnResult>();
+      const completed = createDeferred<SpawnResult>();
       const originalLstatSync = fsSync.lstatSync.bind(fsSync);
       vi.spyOn(fsSync, "lstatSync").mockImplementation((target, options) => {
         if (String(target) === temporaryManifest) {
@@ -166,40 +174,27 @@ describe("bounded inbound workspace transfer", () => {
         return originalLstatSync(target, options);
       });
       let transferSignal: AbortSignal | undefined;
-      vi.useFakeTimers();
-      try {
-        const operation = runBoundedInboundRsync({
-          argv: ["rsync"],
-          destinationRoot,
-          entryLimit: 10,
-          totalByteLimit: 100,
-          ownerSignal: new AbortController().signal,
-          runTask: async (_argv, { signal }) => {
-            transferSignal = signal;
-            signal?.addEventListener("abort", () => transfer.reject(signal.reason), { once: true });
-            return transferState === "active" ? await transfer.promise : result();
-          },
-          timeoutMs: 10_000,
+      const operation = transfer(destinationRoot, async (_argv, { signal }) => {
+        transferSignal = signal;
+        signal?.addEventListener("abort", () => completed.reject(signal.reason), { once: true });
+        return transferState === "active" ? await completed.promise : result();
+      });
+      const outcome = operation.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      if (transferState === "active") {
+        await vi.advanceTimersByTimeAsync(25);
+        await renamed.promise;
+        completed.resolve(result());
+        await expect(outcome).resolves.toEqual({ value: result() });
+      } else {
+        await expect(outcome).resolves.toMatchObject({
+          error: { code: "not-found", cause: { code: "ENOENT", path: temporaryManifest } },
         });
-        const outcome = operation.then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        );
-        if (transferState === "active") {
-          await vi.advanceTimersByTimeAsync(25);
-          await renamed.promise;
-          transfer.resolve(result());
-          await expect(outcome).resolves.toEqual({ value: result() });
-        } else {
-          await expect(outcome).resolves.toMatchObject({
-            error: { code: "not-found", cause: { code: "ENOENT", path: temporaryManifest } },
-          });
-        }
-        expect(transferSignal?.aborted).toBe(false);
-        await expect(fs.readFile(finalManifest, "utf8")).resolves.toBe("manifest");
-      } finally {
-        vi.useRealTimers();
       }
+      expect(transferSignal?.aborted).toBe(false);
+      await expect(fs.readFile(finalManifest, "utf8")).resolves.toBe("manifest");
     },
   );
 
@@ -215,73 +210,47 @@ describe("bounded inbound workspace transfer", () => {
       }
       return originalLstatSync(target, options);
     });
-    vi.useFakeTimers();
     let transferSignal: AbortSignal | undefined;
     let settled = false;
-    try {
-      const operation = runBoundedInboundRsync({
-        argv: ["rsync"],
-        destinationRoot,
-        entryLimit: 10,
-        totalByteLimit: 100,
-        ownerSignal: new AbortController().signal,
-        runTask: async (_argv, { signal }) => {
-          transferSignal = signal;
-          await new Promise<void>((resolve) => {
-            signal?.addEventListener("abort", () => resolve(), { once: true });
-          });
-          settled = true;
-          throw new Error("transfer cancelled");
-        },
-        timeoutMs: 10_000,
+    const operation = transfer(destinationRoot, async (_argv, { signal }) => {
+      transferSignal = signal;
+      await new Promise<void>((resolve) => {
+        signal?.addEventListener("abort", () => resolve(), { once: true });
       });
-      const failed = expect(operation).rejects.toBe(scanError);
-      await vi.advanceTimersByTimeAsync(25);
-      await failed;
-      expect(transferSignal?.aborted).toBe(true);
-      expect(settled).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
+      settled = true;
+      throw new Error("transfer cancelled");
+    });
+    const failed = expect(operation).rejects.toBe(scanError);
+    await vi.advanceTimersByTimeAsync(25);
+    await failed;
+    expect(transferSignal?.aborted).toBe(true);
+    expect(settled).toBe(true);
   });
 
   it("aborts an in-flight transfer when the destination crosses quota", async () => {
     const destinationRoot = tempDirs.make("openclaw-rsync-quota-");
     await fs.writeFile(path.join(destinationRoot, "oversized"), "over quota");
     let transferSignal: AbortSignal | undefined;
-    vi.useFakeTimers();
-    try {
-      const runTask = vi.fn(async (_argv: string[], options: CommandOptions) => {
-        transferSignal = options.signal;
-        return await new Promise<SpawnResult>((_resolve, reject) => {
-          const abort = () => {
-            const reason = options.signal?.reason;
-            reject(reason instanceof Error ? reason : new Error("aborted"));
-          };
-          options.signal?.addEventListener("abort", abort, { once: true });
-          if (options.signal?.aborted) {
-            abort();
-          }
-        });
+    const runTask = vi.fn(async (_argv: string[], options: CommandOptions) => {
+      transferSignal = options.signal;
+      return await new Promise<SpawnResult>((_resolve, reject) => {
+        const abort = () => {
+          const reason = options.signal?.reason;
+          reject(reason instanceof Error ? reason : new Error("aborted"));
+        };
+        options.signal?.addEventListener("abort", abort, { once: true });
+        if (options.signal?.aborted) {
+          abort();
+        }
       });
+    });
 
-      const failed = expect(
-        runBoundedInboundRsync({
-          argv: ["rsync"],
-          destinationRoot,
-          entryLimit: 10,
-          totalByteLimit: 1,
-          ownerSignal: new AbortController().signal,
-          runTask,
-          timeoutMs: 10_000,
-        }),
-      ).rejects.toThrow("inbound transfer exceeds");
-      await vi.advanceTimersByTimeAsync(25);
-      await failed;
-      expect(transferSignal?.aborted).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
+    const failed = expect(
+      transfer(destinationRoot, runTask, { totalByteLimit: 1 }),
+    ).rejects.toThrow("inbound transfer exceeds");
+    await vi.advanceTimersByTimeAsync(25);
+    await failed;
+    expect(transferSignal?.aborted).toBe(true);
   });
 
   it.each(["bytes", "entries"])(
@@ -294,14 +263,9 @@ describe("bounded inbound workspace transfer", () => {
       };
 
       await expect(
-        runBoundedInboundRsync({
-          argv: ["rsync"],
-          destinationRoot,
+        transfer(destinationRoot, runTask, {
           entryLimit: limit === "entries" ? 0 : 10,
           totalByteLimit: limit === "bytes" ? 1 : 100,
-          ownerSignal: new AbortController().signal,
-          runTask,
-          timeoutMs: 10_000,
         }),
       ).rejects.toThrow("inbound transfer exceeds");
     },

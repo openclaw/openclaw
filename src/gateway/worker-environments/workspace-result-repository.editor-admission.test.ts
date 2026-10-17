@@ -73,19 +73,18 @@ describe("repository workspace editor admission", () => {
         admit(request, grant);
       });
       try {
-        const saving = f.mutations.mutate({
-          ...sessionTarget,
-          assertCurrent: () => {
-            if (revoked) {
-              throw new Error("repository editor authority closed");
-            }
-          },
-          mutate: async (assertCurrent) => {
+        const saving = f.mutate(
+          async (assertCurrent) => {
             assertCurrent();
             await fs.writeFile(path.join(f.remote, "editor.txt"), editorBytes);
             return { changed: true, value: "saved" };
           },
-        });
+          () => {
+            if (revoked) {
+              throw new Error("repository editor authority closed");
+            }
+          },
+        );
         if (authority === "revoked") {
           await expect(saving).rejects.toThrow("repository editor authority closed");
         } else {
@@ -213,14 +212,10 @@ describe("repository workspace editor admission", () => {
         await predecessorHeld.promise;
         return updateManifest(...args);
       });
-    const saving = f.mutations.mutate({
-      ...sessionTarget,
-      assertCurrent: () => {},
-      mutate: async (assertCurrent) => {
-        assertCurrent();
-        await fs.writeFile(path.join(f.remote, "queued-editor.txt"), editorBytes);
-        return { changed: true, value: "saved" };
-      },
+    const saving = f.mutate(async (assertCurrent) => {
+      assertCurrent();
+      await fs.writeFile(path.join(f.remote, "queued-editor.txt"), editorBytes);
+      return { changed: true, value: "saved" };
     });
     void saving.catch(() => {});
     try {

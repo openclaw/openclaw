@@ -264,6 +264,12 @@ export function useRepositoryWorkspaceResultFixture() {
       resolveWorkspace,
       workspaceOperations,
     });
+    function mutate<T>(
+      operation: (assertCurrent: () => void) => Promise<{ changed: boolean; value: T }>,
+      assertCurrent = () => {},
+    ) {
+      return mutations.mutate({ ...sessionTarget, assertCurrent, mutate: operation });
+    }
     const stop = createWorkerPlacementReclaim({
       placements,
       environments,
@@ -282,6 +288,7 @@ export function useRepositoryWorkspaceResultFixture() {
       finishTurn,
       workspaceOperations,
       mutations,
+      mutate,
       stop,
       environments,
       resolveWorkspace,

@@ -31,6 +31,26 @@ afterEach(async () => {
 
 const manifestRef = (raw: string) => `sha256:${createHash("sha256").update(raw).digest("hex")}`;
 
+function corruptBatch(
+  repository: string,
+  corrupt: (bytes: Buffer) => Buffer,
+  matches = (args: string[]) => args.includes("--batch"),
+) {
+  const runBuffered = commandRuntime.runCommandBuffered;
+  const transform = vi.fn(corrupt);
+  vi.spyOn(commandRuntime, "runCommandBuffered").mockImplementation(async (argv, options) => {
+    const result = await runBuffered(argv, options);
+    if (
+      argv[argv.indexOf("-C") + 1] === repository &&
+      matches(argv.slice(argv.indexOf("-C") + 2))
+    ) {
+      return { ...result, stdout: transform(Buffer.from(result.stdout)) };
+    }
+    return result;
+  });
+  return transform;
+}
+
 async function git(root: string, args: string[]) {
   const result = await commandRuntime.runCommandWithTimeout(
     ["git", "-c", "core.longpaths=true", "-C", root, ...args],
@@ -139,6 +159,8 @@ async function stagedFixture(
     currentManifestRef: manifestRef(currentManifestRaw),
   });
   return {
+    read: (use: Parameters<typeof withStagedWorkerWorkspaceResult>[1]) =>
+      withStagedWorkerWorkspaceResult({ root: repository, stagedResultRef }, use),
     repository,
     stagedResultRef,
     publishedRef,
@@ -190,29 +212,26 @@ it.each([
       return await symlink(...args);
     });
     let stagingRoot = "";
-    await withStagedWorkerWorkspaceResult(
-      { root: fixture.repository, stagedResultRef: fixture.stagedResultRef },
-      async (snapshot) => {
-        stagingRoot = snapshot.stagingRoot;
-        for (const entry of snapshot.changedEntries) {
-          const target = path.join(stagingRoot, entry.path);
-          if (entry.type === "symlink") {
-            expect(await fs.readlink(target)).toBe(entry.target);
-          } else {
-            // Node compares Buffer bytes without Vitest's per-byte object traversal.
-            assert.deepStrictEqual(await fs.readFile(target), fixture.files.get(entry.path));
-            if (process.platform !== "win32") {
-              expect((await fs.stat(target)).mode & 0o777).toBe(entry.mode);
-            }
+    await fixture.read(async (snapshot) => {
+      stagingRoot = snapshot.stagingRoot;
+      for (const entry of snapshot.changedEntries) {
+        const target = path.join(stagingRoot, entry.path);
+        if (entry.type === "symlink") {
+          expect(await fs.readlink(target)).toBe(entry.target);
+        } else {
+          // Node compares Buffer bytes without Vitest's per-byte object traversal.
+          assert.deepStrictEqual(await fs.readFile(target), fixture.files.get(entry.path));
+          if (process.platform !== "win32") {
+            expect((await fs.stat(target)).mode & 0o777).toBe(entry.mode);
           }
         }
-        expect(
-          materialized.filter((target) => target.startsWith(stagingRoot + path.sep)).toSorted(),
-        ).toEqual(
-          snapshot.changedEntries.map((entry) => path.join(stagingRoot, entry.path)).toSorted(),
-        );
-      },
-    );
+      }
+      expect(
+        materialized.filter((target) => target.startsWith(stagingRoot + path.sep)).toSorted(),
+      ).toEqual(
+        snapshot.changedEntries.map((entry) => path.join(stagingRoot, entry.path)).toSorted(),
+      );
+    });
     await expect(fs.stat(stagingRoot)).rejects.toMatchObject({ code: "ENOENT" });
     expect(
       gitReads.length,
@@ -253,15 +272,7 @@ it.each(["oid", "type", "size", "digest", "truncated", "trailing"] as const)(
   "rejects a batch with invalid %s before writing staged files and cleans its temporary directory",
   async (corruption) => {
     const fixture = await stagedFixture(0);
-    const runBuffered = commandRuntime.runCommandBuffered;
-    let corrupted = 0;
-    vi.spyOn(commandRuntime, "runCommandBuffered").mockImplementation(async (argv, options) => {
-      const result = await runBuffered(argv, options);
-      if (argv[argv.indexOf("-C") + 1] !== fixture.repository || !argv.includes("--batch")) {
-        return result;
-      }
-      corrupted++;
-      const bytes = Buffer.from(result.stdout);
+    const corrupted = corruptBatch(fixture.repository, (bytes) => {
       const headerEnd = bytes.indexOf(0x0a);
       expect(headerEnd).toBeGreaterThan(0);
       let stdout = bytes;
@@ -288,19 +299,14 @@ it.each(["oid", "type", "size", "digest", "truncated", "trailing"] as const)(
           stdout = Buffer.concat([bytes, Buffer.from([0])]);
           break;
       }
-      return { ...result, stdout };
+      return stdout;
     });
     const temporary = vi.spyOn(fs, "mkdtemp");
     const writes = vi.spyOn(fs, "writeFile");
     const links = vi.spyOn(fs, "symlink");
     const use = vi.fn(async () => {});
-    await expect(
-      withStagedWorkerWorkspaceResult(
-        { root: fixture.repository, stagedResultRef: fixture.stagedResultRef },
-        use,
-      ),
-    ).rejects.toThrow("payload");
-    expect(corrupted).toBe(1);
+    await expect(fixture.read(use)).rejects.toThrow("payload");
+    expect(corrupted).toHaveBeenCalledOnce();
     expect(use).not.toHaveBeenCalled();
     expect(writes).not.toHaveBeenCalled();
     expect(links).not.toHaveBeenCalled();
@@ -317,52 +323,30 @@ it.skipIf(process.platform === "win32")(
   "authenticates symlink blobs before creating links",
   async () => {
     const fixture = await stagedFixture(0);
-    const runBuffered = commandRuntime.runCommandBuffered;
-    let corrupted = 0;
-    vi.spyOn(commandRuntime, "runCommandBuffered").mockImplementation(async (argv, options) => {
-      const result = await runBuffered(argv, options);
-      if (argv[argv.indexOf("-C") + 1] !== fixture.repository || !argv.includes("--batch")) {
-        return result;
-      }
-      const stdout = Buffer.from(result.stdout);
+    const corrupted = corruptBatch(fixture.repository, (stdout) => {
       const target = stdout.indexOf(fixture.binaryPath);
       expect(target).toBeGreaterThan(0);
       stdout[target] = stdout[target]! ^ 1;
-      corrupted++;
-      return { ...result, stdout };
+      return stdout;
     });
     const links = vi.spyOn(fs, "symlink");
-    await expect(
-      withStagedWorkerWorkspaceResult(
-        { root: fixture.repository, stagedResultRef: fixture.stagedResultRef },
-        async () => {},
-      ),
-    ).rejects.toThrow("payload is invalid: current-link");
-    expect(corrupted).toBe(1);
+    await expect(fixture.read(async () => {})).rejects.toThrow("payload is invalid: current-link");
+    expect(corrupted).toHaveBeenCalledOnce();
     expect(links).not.toHaveBeenCalled();
   },
 );
 
 it("authenticates the singleton blob returned by checkpoint previews", async () => {
   const fixture = await stagedFixture(0);
-  const runBuffered = commandRuntime.runCommandBuffered;
-  let corrupted = 0;
-  vi.spyOn(commandRuntime, "runCommandBuffered").mockImplementation(async (argv, options) => {
-    const result = await runBuffered(argv, options);
-    const args = argv.slice(argv.indexOf("-C") + 2);
-    if (
-      argv[argv.indexOf("-C") + 1] !== fixture.repository ||
-      args[0] !== "cat-file" ||
-      args[1] !== "--batch"
-    ) {
-      return result;
-    }
-    const stdout = Buffer.from(result.stdout);
-    const contentStart = stdout.indexOf(0x0a) + 1;
-    stdout[contentStart] = stdout[contentStart]! ^ 0xff;
-    corrupted++;
-    return { ...result, stdout };
-  });
+  const corrupted = corruptBatch(
+    fixture.repository,
+    (stdout) => {
+      const contentStart = stdout.indexOf(0x0a) + 1;
+      stdout[contentStart] = stdout[contentStart]! ^ 0xff;
+      return stdout;
+    },
+    (args) => args[0] === "cat-file" && args[1] === "--batch",
+  );
   await expect(
     runGitWorkerOperation({
       type: "workspace.artifacts",
@@ -373,5 +357,5 @@ it("authenticates the singleton blob returned by checkpoint previews", async () 
       },
     }),
   ).rejects.toThrow("payload is invalid");
-  expect(corrupted).toBe(1);
+  expect(corrupted).toHaveBeenCalledOnce();
 });
