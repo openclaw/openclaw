@@ -37,16 +37,11 @@ const wizardTestMocks = vi.hoisted(() => {
       },
     ),
     resolveGatewayPort: vi.fn(),
-    createClackPrompter: vi.fn(),
     note: vi.fn(),
-    printWizardHeader: vi.fn(),
     probeGatewayReachable: vi.fn(),
     waitForGatewayReachable: vi.fn(async () => ({ ok: true })),
     resolveAdvertisedControlUiLinks: vi.fn(),
-    resolveControlUiLinks: vi.fn(),
     resolveLocalControlUiProbeLinks: vi.fn(),
-    inspectWindowsGatewayFirewall: vi.fn(),
-    summarizeExistingConfig: vi.fn(),
     healthCommand: vi.fn(),
     maybeInstallDaemon: vi.fn<typeof import("./configure.daemon.js").maybeInstallDaemon>(),
     promptAuthConfig: vi.fn(),
@@ -154,7 +149,6 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../infra/windows-gateway-firewall-diagnostics.js", () => ({
-  inspectWindowsGatewayFirewall: wizardTestMocks.inspectWindowsGatewayFirewall,
   formatWindowsGatewayFirewallGuidance: (params: { bind?: string }) =>
     params.bind === "lan"
       ? [
@@ -163,9 +157,7 @@ vi.mock("../infra/windows-gateway-firewall-diagnostics.js", () => ({
       : [],
 }));
 
-vi.mock("../wizard/clack-prompter.js", () => ({
-  createClackPrompter: wizardTestMocks.createClackPrompter,
-}));
+vi.mock("../wizard/clack-prompter.js", () => ({ createClackPrompter: () => ({}) }));
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: wizardTestMocks.note }));
 
@@ -174,12 +166,10 @@ vi.mock("./onboard-helpers.js", () => ({
   applyWizardMetadata: (cfg: OpenClawConfig) => cfg,
   ensureWorkspaceAndSessions: wizardTestMocks.ensureWorkspaceAndSessions,
   guardCancel: wizardTestMocks.guardCancel,
-  printWizardHeader: wizardTestMocks.printWizardHeader,
   probeGatewayReachable: wizardTestMocks.probeGatewayReachable,
   resolveAdvertisedControlUiLinks: wizardTestMocks.resolveAdvertisedControlUiLinks,
-  resolveControlUiLinks: wizardTestMocks.resolveControlUiLinks,
   resolveLocalControlUiProbeLinks: wizardTestMocks.resolveLocalControlUiProbeLinks,
-  summarizeExistingConfig: wizardTestMocks.summarizeExistingConfig,
+  summarizeExistingConfig: () => "",
   waitForGatewayReachable: wizardTestMocks.waitForGatewayReachable,
 }));
 
@@ -237,7 +227,6 @@ export { runConfigureWizard, wizardTestMocks };
 export function setupWizardTestDefaults() {
   wizardTestMocks.isTerminalInteractive.mockReturnValue(true);
   committedConfigFiles.clear();
-  wizardTestMocks.assertConfigPathForWrite.mockImplementation(() => {});
   wizardTestMocks.resolvePluginContributionOwners.mockReturnValue(["firecrawl"]);
   wizardTestMocks.resolveSearchProviderOptions.mockReturnValue([{ id: "firecrawl" }]);
   wizardTestMocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) => ({
@@ -249,7 +238,6 @@ export function setupWizardTestDefaults() {
     config: cfg,
     port: 18789,
   }));
-  wizardTestMocks.guardCancel.mockImplementation((value: unknown) => value);
   wizardTestMocks.setupPluginConfig.mockImplementation(async ({ config }) => config);
   wizardTestMocks.setupSkills.mockImplementation(async (config) => config);
 }
@@ -261,24 +249,12 @@ export function setupBaseWizardTestState(config: OpenClawConfig = {}) {
   wizardTestMocks.readConfigFileSnapshot.mockResolvedValue({ ...EMPTY_CONFIG_SNAPSHOT, config });
   wizardTestMocks.resolveGatewayPort.mockReturnValue(18789);
   wizardTestMocks.probeGatewayReachable.mockResolvedValue({ ok: false });
-  wizardTestMocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
-  wizardTestMocks.resolveLocalControlUiProbeLinks.mockReturnValue({
+  const links = {
     httpUrl: "http://127.0.0.1:18789/",
     wsUrl: "ws://127.0.0.1:18789",
-  });
-  wizardTestMocks.resolveAdvertisedControlUiLinks.mockResolvedValue({
-    httpUrl: "http://127.0.0.1:18789/",
-    wsUrl: "ws://127.0.0.1:18789",
-  });
-  wizardTestMocks.inspectWindowsGatewayFirewall.mockResolvedValue({
-    applies: false,
-    severity: "info",
-    code: "windows_firewall_not_applicable",
-    message: "Windows LAN firewall diagnostics do not apply.",
-    details: [],
-  });
-  wizardTestMocks.summarizeExistingConfig.mockReturnValue("");
-  wizardTestMocks.createClackPrompter.mockReturnValue({});
+  };
+  wizardTestMocks.resolveLocalControlUiProbeLinks.mockReturnValue({ ...links });
+  wizardTestMocks.resolveAdvertisedControlUiLinks.mockResolvedValue({ ...links });
 }
 
 export function queueWizardTestPrompts(params: {
@@ -291,6 +267,4 @@ export function queueWizardTestPrompts(params: {
   wizardTestMocks.clackSelect.mockImplementation(async () => selectQueue.shift());
   wizardTestMocks.clackConfirm.mockImplementation(async () => confirmQueue.shift());
   wizardTestMocks.clackText.mockResolvedValue(params.text ?? "");
-  wizardTestMocks.clackIntro.mockResolvedValue(undefined);
-  wizardTestMocks.clackOutro.mockResolvedValue(undefined);
 }

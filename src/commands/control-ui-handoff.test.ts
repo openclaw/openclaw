@@ -5,7 +5,7 @@ import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:https";
 import type { Socket } from "node:net";
 import path from "node:path";
-import type { PeerCertificate } from "node:tls";
+import type { PeerCertificate, checkServerIdentity } from "node:tls";
 import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
@@ -26,7 +26,6 @@ afterEach(async () => {
   vi.useRealTimers();
   await tempDirs.cleanup();
 });
-type GuardedDocumentRequest = Parameters<typeof fetchConfiguredLocalOriginWithSsrFGuard>[0];
 
 function guardedResponse(
   status = 200,
@@ -40,8 +39,6 @@ function guardedResponse(
   };
 }
 
-const htmlHead = () => guardedResponse();
-
 const mockFetch = () => vi.spyOn(fetchGuard, "fetchConfiguredLocalOriginWithSsrFGuard");
 const probe = (options: Partial<Parameters<typeof waitForControlUiDocument>[0]> = {}) =>
   waitForControlUiDocument({ url: documentUrl, ...options });
@@ -51,15 +48,6 @@ const unavailable = {
   reason: "Control UI dashboard is unavailable (HTTP 503).",
   status: 503,
 };
-
-function requireDirectTlsConnect(request: GuardedDocumentRequest): Record<string, unknown> {
-  if (request.dispatcherPolicy?.mode !== "direct" || !request.dispatcherPolicy.connect) {
-    throw new Error("expected pinned Gateway TLS options");
-  }
-  return request.dispatcherPolicy.connect;
-}
-
-const ambientPassword = ["ambient", "password"].join("-");
 
 it("keeps plaintext custom browser and exact-base-path document URLs on loopback", async () => {
   const target = await resolveControlUiHandoffTarget({
@@ -73,8 +61,8 @@ it("keeps plaintext custom browser and exact-base-path document URLs on loopback
     },
     env: {},
   });
-  expect(target.links.httpUrl).toBe(documentUrl);
   expect(target).toMatchObject({
+    links: { httpUrl: documentUrl },
     documentUrl,
     probeUrl: "ws://10.0.0.5:18789/dashboard",
     loopbackAliasHost: "10.0.0.5",
@@ -89,7 +77,7 @@ it("blocks implicit token failure", async () => {
         auth: { token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" } },
       },
     },
-    env: { OPENCLAW_GATEWAY_TOKEN: "ambient-token", OPENCLAW_GATEWAY_PASSWORD: ambientPassword },
+    env: { OPENCLAW_GATEWAY_TOKEN: "ambient-token", OPENCLAW_GATEWAY_PASSWORD: "ambient-password" },
   });
   expect(target).toMatchObject({ authMode: "password", includeTokenInUrl: false });
   expect(target["gatewayAuthHandoff"]).toBeUndefined();
@@ -106,25 +94,21 @@ it.runIf(openssl)(
     const csrPath = path.join(root, "leaf.csr");
     await fs.writeFile(keyPath, TEST_TLS_KEY_PEM, { mode: 0o600 });
     await fs.writeFile(caPath, TEST_TLS_CERT_PEM);
-    const run = promisify(execFile);
-    await run(
-      openssl!,
-      ["req", "-new", "-key", keyPath, "-subj", "/CN=gateway.test", "-out", csrPath],
-      { timeout: 10_000 },
-    );
-    await run(
-      openssl!,
-      [
-        ["x509", "-req"],
-        ["-in", csrPath],
-        ["-CA", caPath],
-        ["-CAkey", keyPath],
-        ["-set_serial", "2"],
-        ["-days", "1"],
-        ["-out", certPath],
-      ].flat(),
-      { timeout: 10_000 },
-    );
+    const run = (command: string[], flags: Record<string, string>) =>
+      promisify(execFile)(
+        openssl!,
+        [...command, ...Object.entries(flags).flatMap(([key, value]) => [`-${key}`, value])],
+        { timeout: 10_000 },
+      );
+    await run(["req", "-new"], { key: keyPath, subj: "/CN=gateway.test", out: csrPath });
+    await run(["x509", "-req"], {
+      in: csrPath,
+      CA: caPath,
+      CAkey: keyPath,
+      set_serial: "2",
+      days: "1",
+      out: certPath,
+    });
     const cert = await fs.readFile(certPath, "utf8");
     await fs.unlink(keyPath);
     await fs.unlink(caPath);
@@ -150,7 +134,7 @@ it.runIf(openssl)(
 );
 
 it("probes the exact HTML document without credentials or redirects", async () => {
-  const response = htmlHead();
+  const response = guardedResponse();
   const fetch = mockFetch().mockResolvedValue(response);
   await expect(probe()).resolves.toEqual({ ready: true });
   expect(fetch).toHaveBeenCalledWith(
@@ -166,51 +150,66 @@ it("probes the exact HTML document without credentials or redirects", async () =
   expect(response.release).toHaveBeenCalledOnce();
 });
 
-it("retries only explicitly preparing dashboards before starting the handoff clock", async () => {
+it.each(["ready", "timeout", "immediate"])("handles preparing dashboards: %s", async (outcome) => {
   vi.useFakeTimers();
   vi.setSystemTime(0);
   const preparing = preparingResponse();
-  const ready = htmlHead();
-  const fetch = mockFetch().mockResolvedValueOnce(preparing).mockResolvedValueOnce(ready);
+  const ready = guardedResponse();
+  const fetch = mockFetch().mockResolvedValueOnce(preparing);
+  if (outcome === "ready") {
+    fetch.mockResolvedValueOnce(ready);
+  } else {
+    fetch.mockImplementation(async () => preparingResponse());
+  }
   const onPending = vi.fn();
-  const pending = probe({ onPending });
+  const pending = probe({ onPending, timeoutMs: 2_500, waitForPending: outcome !== "immediate" });
   await vi.runAllTimersAsync();
-  await expect(pending).resolves.toEqual({ ready: true });
-  expect(Date.now()).toBe(1_000);
-  expect(fetch).toHaveBeenCalledTimes(2);
-  expect(onPending).toHaveBeenCalledOnce();
+  const expected =
+    outcome === "ready"
+      ? { ready: true }
+      : {
+          ready: false,
+          reason:
+            outcome === "immediate"
+              ? "Control UI assets are still preparing."
+              : "Control UI assets did not finish preparing in time.",
+          ...(outcome === "immediate" ? { status: 503 } : {}),
+        };
+  await expect(pending).resolves.toEqual(expected);
+  expect(Date.now()).toBe(outcome === "ready" ? 1_000 : outcome === "timeout" ? 2_500 : 0);
+  expect(fetch).toHaveBeenCalledTimes(outcome === "ready" ? 2 : outcome === "timeout" ? 3 : 1);
+  expect(onPending).toHaveBeenCalledTimes(outcome === "immediate" ? 0 : 1);
   expect(preparing.release).toHaveBeenCalledOnce();
-  expect(ready.release).toHaveBeenCalledOnce();
+  expect(ready.release).toHaveBeenCalledTimes(outcome === "ready" ? 1 : 0);
 });
 
-it("fails immediately for JSON consumers while assets are preparing", async () => {
-  const preparing = preparingResponse();
-  const fetch = mockFetch().mockResolvedValue(preparing);
-  const onPending = vi.fn();
-  await expect(probe({ waitForPending: false, onPending })).resolves.toEqual({
-    ready: false,
-    reason: "Control UI assets are still preparing.",
-    status: 503,
-  });
-  expect(fetch).toHaveBeenCalledOnce();
-  expect(onPending).not.toHaveBeenCalled();
-});
-
-it("keeps the observed HTTP failure when the diagnostic request fails", async () => {
-  const head = guardedResponse(503, {});
-  const fetch = mockFetch()
-    .mockResolvedValueOnce(head)
-    .mockRejectedValueOnce(new Error("diagnostic request failed"));
-  await expect(probe()).resolves.toEqual(unavailable);
-  expect(fetch.mock.calls.map(([request]) => request.init?.method)).toEqual(["HEAD", "GET"]);
-  expect(head.release).toHaveBeenCalledOnce();
-});
+it.each(["fails", "becomes HTML"])(
+  "keeps the HTTP failure when diagnostics %s",
+  async (outcome) => {
+    const head = guardedResponse(503, {});
+    const fetch = mockFetch().mockResolvedValueOnce(head);
+    if (outcome === "fails") {
+      fetch.mockRejectedValueOnce(new Error("diagnostic request failed"));
+    } else {
+      fetch.mockResolvedValueOnce(
+        guardedResponse(
+          200,
+          { "content-type": "text/html" },
+          "<html>private-looking UI content</html>",
+        ),
+      );
+    }
+    await expect(probe()).resolves.toEqual(unavailable);
+    expect(fetch.mock.calls.map(([request]) => request.init?.method)).toEqual(["HEAD", "GET"]);
+    expect(head.release).toHaveBeenCalledOnce();
+  },
+);
 
 it.each(["complete", "broken"] as const)(
   "preserves a real HTTP failure with a %s diagnostic body",
   async (body) => {
     const methods: string[] = [];
-    const responses: Array<{ method: string; status: number }> = [];
+    const responses: string[] = [];
     const releases: string[] = [];
     const diagnosticSocket = createDeferredCore<Socket>();
     const diagnosticClosed = createDeferredCore();
@@ -233,7 +232,7 @@ it.each(["complete", "broken"] as const)(
         mockFetch().mockImplementation(async (request) => {
           const guarded = await fetchConfiguredLocalOriginWithSsrFGuard(request);
           const method = String(request.init?.method);
-          responses.push({ method, status: guarded.response.status });
+          responses.push(`${method}:${guarded.response.status}`);
           if (method === "GET" && body === "broken") {
             // Fault the real body only after guarded fetch has delivered its headers.
             (await diagnosticSocket.promise).destroy();
@@ -260,41 +259,13 @@ it.each(["complete", "broken"] as const)(
           status: 503,
         });
         expect(methods).toEqual(["HEAD", "GET"]);
-        expect(responses).toEqual([
-          { method: "HEAD", status: 503 },
-          { method: "GET", status: 503 },
-        ]);
+        expect(responses).toEqual(["HEAD:503", "GET:503"]);
         // Observe release and socket closure before the server fixture teardown.
         expect(releases).toEqual(["GET", "HEAD"]);
       });
     });
   },
 );
-
-it("does not expose HTML when a terminal failure becomes ready during diagnostic fetch", async () => {
-  const head = guardedResponse(503, {});
-  const repaired = guardedResponse(
-    200,
-    { "content-type": "text/html" },
-    "<html>private-looking UI content</html>",
-  );
-  mockFetch().mockResolvedValueOnce(head).mockResolvedValueOnce(repaired);
-  await expect(probe()).resolves.toEqual(unavailable);
-});
-
-it("bounds the independent preparing deadline", async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(0);
-  const fetch = mockFetch().mockImplementation(async () => preparingResponse());
-  const pending = probe({ timeoutMs: 2_500 });
-  await vi.runAllTimersAsync();
-  await expect(pending).resolves.toEqual({
-    ready: false,
-    reason: "Control UI assets did not finish preparing in time.",
-  });
-  expect(Date.now()).toBe(2_500);
-  expect(fetch).toHaveBeenCalledTimes(3);
-});
 
 it("trusts the public certificate and rejects a different peer without reading a server CA", async () => {
   const root = await tempDirs.make("openclaw-tls-owner-dashboard-");
@@ -303,9 +274,7 @@ it("trusts the public certificate and rejects a different peer without reading a
   const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256
     .replaceAll(":", "")
     .toLowerCase();
-  const fetch = mockFetch().mockImplementation(async (_request: GuardedDocumentRequest) =>
-    htmlHead(),
-  );
+  const fetch = mockFetch().mockImplementation(async () => guardedResponse());
   const options = {
     url: "https://127.0.0.1:32123/dashboard/",
     tlsConfig: { enabled: true, certPath },
@@ -316,28 +285,18 @@ it("trusts the public certificate and rejects a different peer without reading a
       tlsConfig: { ...options.tlsConfig, caPath: path.join(root, "absent-ca.pem") },
     }),
   ).resolves.toEqual({ ready: true, tlsFingerprint: fingerprint });
-  const [request] = fetch.mock.calls[0] ?? [];
-  if (!request) {
-    throw new Error("expected dashboard TLS request");
+  const request = fetch.mock.calls[0]?.[0];
+  if (request?.dispatcherPolicy?.mode !== "direct" || !request.dispatcherPolicy.connect) {
+    throw new Error("expected pinned Gateway TLS options");
   }
-  const connect = requireDirectTlsConnect(request);
+  const connect = request.dispatcherPolicy.connect;
   expect(connect.ca).toBe(TEST_TLS_CERT_PEM);
   expect(connect).not.toHaveProperty("rejectUnauthorized");
-  const check = connect.checkServerIdentity as (
-    hostname: string,
-    certificate: PeerCertificate,
-  ) => Error | undefined;
+  const check = connect.checkServerIdentity as typeof checkServerIdentity;
   expect(check("127.0.0.1", { fingerprint256: fingerprint } as PeerCertificate)).toBeUndefined();
-  expect(check("127.0.0.1", { fingerprint256: "cd".repeat(32) } as PeerCertificate)).toEqual(
-    new Error("Gateway TLS certificate fingerprint mismatch."),
-  );
-  fetch.mockImplementation(async () => {
-    const mismatch = check("127.0.0.1", { fingerprint256: "cd".repeat(32) } as PeerCertificate);
-    if (mismatch) {
-      throw mismatch;
-    }
-    return htmlHead();
-  });
+  const mismatch = check("127.0.0.1", { fingerprint256: "cd".repeat(32) } as PeerCertificate);
+  expect(mismatch).toEqual(new Error("Gateway TLS certificate fingerprint mismatch."));
+  fetch.mockRejectedValue(mismatch);
   await expect(waitForControlUiDocument(options)).resolves.toEqual({
     ready: false,
     reason: "Control UI dashboard is unavailable: Gateway TLS certificate fingerprint mismatch.",

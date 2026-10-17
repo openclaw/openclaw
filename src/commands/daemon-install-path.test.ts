@@ -133,17 +133,9 @@ it.each([false, true])(
       existingEnvironment: {
         PATH: managed
           ? "/custom/go/bin:/usr/bin"
-          : [
-              ".",
-              "/tmp/evil",
-              "/proc/self/cwd/evil-bin",
-              "/proc/thread-self/cwd/evil-bin",
-              "/proc/12345/cwd/evil-bin",
-              "/proc/self/root/evil-bin",
-              `${process.cwd()}/evil-bin`,
-              "/custom/go/bin",
-              "/usr/bin",
-            ].join(path.delimiter),
+          : `.|/tmp/evil|/proc/self/cwd/evil-bin|/proc/thread-self/cwd/evil-bin|/proc/12345/cwd/evil-bin|/proc/self/root/evil-bin|${process.cwd()}/evil-bin|/custom/go/bin|/usr/bin`
+              .split("|")
+              .join(path.delimiter),
         GOBIN: "/Users/test/.local/gopath/bin",
         BLOGWATCHER_HOME: "/Users/test/.blogwatcher",
         GOPATH: "/Users/test/.local/gopath",
@@ -165,91 +157,53 @@ it.each([false, true])(
   },
 );
 
-it.each<
-  PathCase & {
-    home?: string;
-    platform?: NodeJS.Platform;
-    setup?: () => void;
-  }
->([
-  {
-    name: "stale version-manager paths",
-    nextPath: "/usr/local/bin:/usr/bin:/bin",
-    existingPath: [
-      ...[
-        ".volta/bin",
-        ".asdf/shims",
-        ".nvm/current/bin",
-        ".local/share/fnm/aliases/default/bin",
-        ".local/share/fnm/current/bin",
-        ".fnm/aliases/default/bin",
-        ".fnm/current/bin",
-        ".local/share/pnpm",
-      ].map((suffix) => `/Users/testuser/${suffix}`),
-      "/opt/pnpm/bin",
-      "/custom/go/bin",
-      "/usr/bin",
-    ].join(path.delimiter),
-    expectedPath: "/usr/local/bin:/bin:/custom/go/bin:/usr/bin",
-  },
-  {
-    name: "symlinks into temporary directories",
-    nextPath: "/managed/bin:/usr/bin",
-    existingPath: "/opt/safe/bin:/opt/safe/missing-bin:/custom/go/bin:/usr/bin",
-    expectedPath: "/managed/bin:/custom/go/bin:/usr/bin",
-    setup: () => {
+const stalePaths = [
+  ...".volta/bin:.asdf/shims:.nvm/current/bin:.local/share/fnm/aliases/default/bin:.local/share/fnm/current/bin:.fnm/aliases/default/bin:.fnm/current/bin:.local/share/pnpm"
+    .split(":")
+    .map((suffix) => `/Users/testuser/${suffix}`),
+  "/opt/pnpm/bin",
+  "/custom/go/bin",
+  "/usr/bin",
+].join(path.delimiter);
+const launchAgentPath =
+  "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+type DropCase = PathCase & {
+  options: { home?: string; platform?: NodeJS.Platform; symlinks?: boolean };
+};
+it.each<DropCase>`
+  name                                                  | nextPath                          | existingPath                                                                                                                                                         | expectedPath                                     | options
+  ${"stale version-manager paths"}                      | ${"/usr/local/bin:/usr/bin:/bin"} | ${stalePaths}                                                                                                                                                        | ${"/usr/local/bin:/bin:/custom/go/bin:/usr/bin"} | ${{}}
+  ${"symlinks into temporary directories"}              | ${"/managed/bin:/usr/bin"}        | ${"/opt/safe/bin:/opt/safe/missing-bin:/custom/go/bin:/usr/bin"}                                                                                                     | ${"/managed/bin:/custom/go/bin:/usr/bin"}        | ${{ symlinks: true }}
+  ${"workspace paths when HOME equals the install cwd"} | ${"/managed/bin:/usr/bin"}        | ${`${process.cwd()}/evil-bin:/custom/go/bin:/usr/bin`}                                                                                                               | ${"/managed/bin:/custom/go/bin:/usr/bin"}        | ${{ home: process.cwd() }}
+  ${"existing paths for macOS LaunchAgents"}            | ${launchAgentPath}                | ${"/Users/test/.volta/bin:/Users/test/.asdf/shims:/Users/test/Library/Application Support/fnm/aliases/default/bin:/Users/test/Library/pnpm:/custom/go/bin:/usr/bin"} | ${launchAgentPath}                               | ${{ platform: "darwin" }}
+`(
+  "drops $name",
+  async ({ options: { home, platform, symlinks }, nextPath, existingPath, expectedPath }) => {
+    if (symlinks) {
       vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) => {
         const value = String(candidate);
-        if (value === "/opt/safe/bin") {
-          return "/tmp/evil/bin";
-        }
-        if (value === "/opt/safe") {
-          return "/tmp/evil";
-        }
         if (value === "/opt/safe/missing-bin") {
           throw Object.assign(new Error("missing"), { code: "ENOENT" });
         }
-        return value;
+        return value === "/opt/safe" || value === "/opt/safe/bin"
+          ? value.replace("/opt/safe", "/tmp/evil")
+          : value;
       });
-    },
+    }
+    mocks.buildServiceEnvironment.mockReturnValue({
+      HOME: home ?? "/from-service",
+      OPENCLAW_PORT: "3000",
+      PATH: nextPath,
+      TMPDIR: "/tmp",
+    });
+    const plan = await buildPlan({
+      env: { HOME: home ?? tmpDir },
+      platform: platform ?? "linux",
+      existingEnvironment: { PATH: existingPath },
+    });
+    expect(plan.environment.PATH).toBe(expectedPath);
   },
-  {
-    name: "workspace paths when HOME equals the install cwd",
-    home: process.cwd(),
-    nextPath: "/managed/bin:/usr/bin",
-    existingPath: `${process.cwd()}/evil-bin:/custom/go/bin:/usr/bin`,
-    expectedPath: "/managed/bin:/custom/go/bin:/usr/bin",
-  },
-  {
-    name: "existing paths for macOS LaunchAgents",
-    platform: "darwin",
-    nextPath: "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-    existingPath: [
-      "/Users/test/.volta/bin",
-      "/Users/test/.asdf/shims",
-      "/Users/test/Library/Application Support/fnm/aliases/default/bin",
-      "/Users/test/Library/pnpm",
-      "/custom/go/bin",
-      "/usr/bin",
-    ].join(path.delimiter),
-    expectedPath:
-      "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-  },
-])("drops $name", async ({ setup, home, platform, nextPath, existingPath, expectedPath }) => {
-  setup?.();
-  mocks.buildServiceEnvironment.mockReturnValue({
-    HOME: home ?? "/from-service",
-    OPENCLAW_PORT: "3000",
-    PATH: nextPath,
-    TMPDIR: "/tmp",
-  });
-  const plan = await buildPlan({
-    env: { HOME: home ?? tmpDir },
-    platform: platform ?? "linux",
-    existingEnvironment: { PATH: existingPath },
-  });
-  expect(plan.environment.PATH).toBe(expectedPath);
-});
+);
 
 it.each<PathCase>`
   name                                                           | existingPath                                                        | nextPath                                                            | expectedPath
