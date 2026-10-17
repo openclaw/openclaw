@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   createGatewaySchedulerClock,
@@ -48,14 +49,6 @@ import {
   startStandingIntentMaintenance,
 } from "./standing-intents.js";
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
 const pending: Promise<unknown>[] = [];
 const releases: Array<() => void> = [];
 const writerDrains: Array<() => Promise<unknown>> = [];
@@ -73,8 +66,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
         resetPluginRuntimeStateForTest();
       }
       // Worker lease retirement still needs its original shared-state file.
-      await closeOpenClawAgentDatabasesAsync();
-      closeOpenClawAgentDatabasesForTest();
+      await closeAgents();
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       cleanup();
@@ -112,8 +104,8 @@ async function holdWriter(beforeRelease?: () => void, beforeLock?: () => Promise
     entry: { sessionId: target.sessionId, updatedAt: Date.now() },
   });
   await beforeLock?.();
-  const entered = deferred();
-  const finish = deferred();
+  const entered = createDeferred<void>();
+  const finish = createDeferred<void>();
   releases.push(finish.resolve);
   const done = keep(
     runOpenClawAgentWriteAdmission(database, async () => {
@@ -191,6 +183,41 @@ async function expectWaiting(work: Promise<unknown>, entered: Promise<void>) {
     setImmediate(resolve);
   });
   expect(settled).toBe(false);
+}
+
+async function closeAgents(directory?: string) {
+  await closeOpenClawAgentDatabasesAsync(directory);
+  closeOpenClawAgentDatabasesForTest();
+}
+
+function withDatabase<T>(filename: string, read: (db: DatabaseSync) => T) {
+  const db = new DatabaseSync(filename, { readOnly: true });
+  try {
+    return read(db);
+  } finally {
+    db.close();
+  }
+}
+const rowCount = (db: DatabaseSync) =>
+  db.prepare("SELECT COUNT(*) AS count FROM standing_intents").get()?.count;
+const storedStatus = (db: DatabaseSync, id: string) =>
+  db.prepare("SELECT status FROM standing_intents WHERE id = ?").get(id)?.status;
+const intentArgs = (
+  action: string,
+  id: string,
+  description = "Check the migration.",
+  keyword = "migration",
+) => ({ action, id, description, triggerKeywords: [keyword] });
+const promptHook = (runner: NonNullable<ReturnType<typeof getGlobalHookRunner>>) =>
+  runner.runBeforePromptBuild({ prompt: "launch", messages: [] }, { ...context, trigger: "user" });
+
+function maintenance() {
+  const clock = createGatewaySchedulerClock(1_000);
+  const gateway = createTestGatewayScheduler(clock.clock);
+  const scheduler = createTestPluginServiceScheduler(gateway);
+  const warn = vi.fn();
+  const stop = startStandingIntentMaintenance({ agentIds: ["main"], scheduler, warn });
+  return { clock, gateway, scheduler, warn, stop };
 }
 
 async function seed(expired = false) {
@@ -294,14 +321,7 @@ async function registeredIntentTool(assertInvocationCurrent?: () => void) {
 
 describe("standing-intent admitted operations", () => {
   it("reuses service-owned absence without hiding a queued creation or another agent", async () => {
-    const clock = createGatewaySchedulerClock(1_000);
-    const gateway = createTestGatewayScheduler(clock.clock);
-    const scheduler = createTestPluginServiceScheduler(gateway);
-    const stop = startStandingIntentMaintenance({
-      agentIds: ["main"],
-      scheduler,
-      warn: vi.fn(),
-    });
+    const { clock, gateway, scheduler, stop } = maintenance();
     const open = vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2");
     try {
       await clock.wake();
@@ -355,13 +375,8 @@ describe("standing-intent admitted operations", () => {
       nowMs: 0,
       expiresAt: 500,
     });
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    const clock = createGatewaySchedulerClock(1_000);
-    const gateway = createTestGatewayScheduler(clock.clock);
-    const scheduler = createTestPluginServiceScheduler(gateway);
-    const warn = vi.fn();
-    const stop = startStandingIntentMaintenance({ agentIds: ["main"], scheduler, warn });
+    await closeAgents();
+    const { clock, gateway, scheduler, warn, stop } = maintenance();
     try {
       await clock.wake();
       expect(readStored(expired.id)?.status).toBe("expired");
@@ -423,12 +438,10 @@ describe("standing-intent admitted operations", () => {
       });
       const held = await holdWriter();
       const work = keep(
-        tool.execute("revoked-intent-call", {
-          action,
-          id: existing.id,
-          description: "Must not persist",
-          triggerKeywords: ["revocation"],
-        }),
+        tool.execute(
+          "revoked-intent-call",
+          intentArgs(action, existing.id, "Must not persist", "revocation"),
+        ),
       );
       await expectWaiting(work, held.entered);
       current = false;
@@ -436,20 +449,11 @@ describe("standing-intent admitted operations", () => {
       await expect(work).rejects.toThrow("owner revoked");
       await held.drain();
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-      await closeOpenClawAgentDatabasesAsync();
-      closeOpenClawAgentDatabasesForTest();
-      const reopened = new DatabaseSync(databasePath);
-      try {
-        expect(
-          reopened.prepare("SELECT status FROM standing_intents WHERE id = ?").get(existing.id)
-            ?.status,
-        ).toBe("armed");
-        expect(
-          reopened.prepare("SELECT COUNT(*) AS count FROM standing_intents").get()?.count,
-        ).toBe(1);
-      } finally {
-        reopened.close();
-      }
+      await closeAgents();
+      withDatabase(databasePath, (db) => {
+        expect(storedStatus(db, existing.id)).toBe("armed");
+        expect(rowCount(db)).toBe(1);
+      });
     },
   );
 
@@ -499,14 +503,7 @@ describe("standing-intent admitted operations", () => {
       const existing = await seed();
       const tool = await registeredIntentTool();
       const held = await holdWriter();
-      const work = keep(
-        tool.execute("intent-call", {
-          action,
-          id: existing.id,
-          description: "Check the migration.",
-          triggerKeywords: ["migration"],
-        }),
-      );
+      const work = keep(tool.execute("intent-call", intentArgs(action, existing.id)));
       await expectWaiting(work, held.entered);
       const observation = observeStandingIntentHostSql();
       let result: Awaited<typeof work>;
@@ -524,22 +521,13 @@ describe("standing-intent admitted operations", () => {
           : { intent: { description: "Check the migration." } },
       );
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-      await closeOpenClawAgentDatabasesAsync();
-      closeOpenClawAgentDatabasesForTest();
-      const reopened = new DatabaseSync(databasePath);
-      try {
-        expect(
-          reopened.prepare("SELECT COUNT(*) AS count FROM standing_intents").get()?.count,
-        ).toBe(action === "create" ? 2 : 1);
+      await closeAgents();
+      withDatabase(databasePath, (db) => {
+        expect(rowCount(db)).toBe(action === "create" ? 2 : 1);
         if (action === "cancel") {
-          expect(
-            reopened.prepare("SELECT status FROM standing_intents WHERE id = ?").get(existing.id)
-              ?.status,
-          ).toBe("cancelled");
+          expect(storedStatus(db, existing.id)).toBe("cancelled");
         }
-      } finally {
-        reopened.close();
-      }
+      });
       expectNoHostStandingIntentSql(observation);
     },
   );
@@ -557,12 +545,7 @@ describe("standing-intent admitted operations", () => {
           senderId: "owner",
         });
         const work = keep(
-          execute("intent-call", {
-            action,
-            id: existing.id,
-            description: "Check migration.",
-            triggerKeywords: ["migration"],
-          }),
+          execute("intent-call", intentArgs(action, existing.id, "Check migration.")),
         );
         await expectWaiting(work, held.entered);
         held.release();
@@ -583,12 +566,7 @@ describe("standing-intent admitted operations", () => {
     const existing = await seed();
     const { runner } = await registerHooks();
     const held = await holdWriter();
-    const work = keep(
-      runner.runBeforePromptBuild(
-        { prompt: "launch", messages: [] },
-        { ...context, trigger: "user" },
-      ),
-    );
+    const work = keep(promptHook(runner));
     await expectWaiting(work, held.entered);
     expect(readStored(existing.id)?.fire_count).toBe(0);
     const observation = observeStandingIntentHostSql();
@@ -598,8 +576,7 @@ describe("standing-intent admitted operations", () => {
     } finally {
       observation.restore();
     }
-    expect(readStored(existing.id)?.fire_count).toBe(1);
-    expect(readStored(existing.id)?.status).toBe("done");
+    expect(readStored(existing.id)).toMatchObject({ fire_count: 1, status: "done" });
     expectNoHostStandingIntentSql(observation);
   });
 
@@ -609,12 +586,7 @@ describe("standing-intent admitted operations", () => {
     const fault = failStandingIntentWrites("match");
     try {
       const held = await holdWriter();
-      const work = keep(
-        runner.runBeforePromptBuild(
-          { prompt: "launch", messages: [] },
-          { ...context, trigger: "user" },
-        ),
-      );
+      const work = keep(promptHook(runner));
       held.release();
       expect((await work)?.prependContext).toBeUndefined();
       expect(readStored(existing.id)?.fire_count).toBe(0);
@@ -657,12 +629,7 @@ describe("standing-intent admitted operations", () => {
     const held = await holdWriter(undefined, () => closeOpenClawAgentDatabasesAsync(stateDir));
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
-      const hookWork = keep(
-        runner.runBeforePromptBuild(
-          { prompt: "launch", messages: [] },
-          { ...context, trigger: "user" },
-        ),
-      );
+      const hookWork = keep(promptHook(runner));
       await expectWaiting(hookWork, held.entered);
       const liveCaller = keep(listStandingIntents({ agentId: "main" }));
       await expectWaiting(liveCaller, held.entered);
@@ -685,15 +652,13 @@ describe("standing-intent admitted operations", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", replacementState);
     const replacement = await seed();
     const replacementPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
+    await closeAgents();
 
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const original = await seed();
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const retiredPath = `${databasePath}.retired`;
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
+    await closeAgents();
     const originalStat = fs.statSync(databasePath);
     const replacementStat = fs.statSync(replacementPath);
     expect([replacementStat.dev, replacementStat.ino]).not.toEqual([
@@ -714,21 +679,17 @@ describe("standing-intent admitted operations", () => {
     held.release();
     await expect(work).rejects.toThrow("Agent database target changed before write admission");
     await held.done;
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
+    await closeAgents();
 
     for (const { filename, expectedId } of [
       { filename: retiredPath, expectedId: original.id },
       { filename: databasePath, expectedId: replacement.id },
     ]) {
-      const reopened = new DatabaseSync(filename, { readOnly: true });
-      try {
-        expect(
-          reopened.prepare("SELECT id, status, fire_count FROM standing_intents").all(),
-        ).toEqual([{ id: expectedId, status: "armed", fire_count: 0 }]);
-      } finally {
-        reopened.close();
-      }
+      withDatabase(filename, (db) => {
+        expect(db.prepare("SELECT id, status, fire_count FROM standing_intents").all()).toEqual([
+          { id: expectedId, status: "armed", fire_count: 0 },
+        ]);
+      });
     }
   });
 
@@ -757,12 +718,8 @@ describe("standing-intent admitted operations", () => {
   it("serializes concurrent matching inside the original fire-budget transaction", async () => {
     const existing = await seed();
     const held = await holdWriter();
-    const first = keep(
-      Promise.resolve(matchStandingIntents({ agentId: "main", prompt: "launch" })),
-    );
-    const second = keep(
-      Promise.resolve(matchStandingIntents({ agentId: "main", prompt: "launch" })),
-    );
+    const first = keep(matchStandingIntents({ agentId: "main", prompt: "launch" }));
+    const second = keep(matchStandingIntents({ agentId: "main", prompt: "launch" }));
     await expectWaiting(first, held.entered);
     held.release();
     const results = await Promise.all([first, second]);
@@ -773,7 +730,7 @@ describe("standing-intent admitted operations", () => {
   it("retains the admitted database identity when the ambient state path changes", async () => {
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const held = await holdWriter();
-    const work = keep(Promise.resolve(seed()));
+    const work = keep(seed());
     await expectWaiting(work, held.entered);
     const replacementState = tempDirs.make("standing-intent-other-state-");
     vi.stubEnv("OPENCLAW_STATE_DIR", replacementState);
@@ -781,17 +738,13 @@ describe("standing-intent admitted operations", () => {
     held.release();
     const created = await work;
     expect(fs.existsSync(otherPath)).toBe(false);
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    const reopened = new DatabaseSync(databasePath);
-    try {
+    await closeAgents();
+    withDatabase(databasePath, (db) => {
       expect(
-        reopened.prepare("SELECT description FROM standing_intents WHERE id = ?").get(created.id)
+        db.prepare("SELECT description FROM standing_intents WHERE id = ?").get(created.id)
           ?.description,
       ).toBe("Confirm the rollback owner.");
-    } finally {
-      reopened.close();
-    }
+    });
     expect(path.dirname(databasePath).startsWith(stateDir)).toBe(true);
   });
 });

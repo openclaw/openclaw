@@ -36,9 +36,70 @@ import {
 import { bindSqliteWorkerBackend } from "./standing-intents.worker.js";
 
 function createStandingIntent(
-  params: Omit<Parameters<typeof createStandingIntentRaw>[0], "creatorSender">,
+  params: Partial<Omit<Parameters<typeof createStandingIntentRaw>[0], "creatorSender">>,
 ) {
-  return createStandingIntentRaw({ ...params, creatorSender: "owner-sender" });
+  return createStandingIntentRaw({
+    agentId: "main",
+    description: "Review the release.",
+    triggerKeywords: ["release"],
+    ...params,
+    creatorSender: "owner-sender",
+  });
+}
+
+const list = (nowMs: number) => listStandingIntents({ agentId: "main", nowMs });
+const matchIntent = (params: Omit<Parameters<typeof matchStandingIntents>[0], "agentId">) =>
+  matchStandingIntents({ agentId: "main", ...params });
+const database = () =>
+  requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
+async function closeAgents() {
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+}
+function executor(options: Partial<Parameters<typeof createStandingIntentExecutor>[0]> = {}) {
+  return createStandingIntentExecutor({
+    agentId: "main",
+    provider: "qa-channel",
+    senderId: "owner-1",
+    ...options,
+  });
+}
+const createArgs = (options: Record<string, unknown> = {}) => ({
+  action: "create",
+  description: "Review the release.",
+  triggerKeywords: ["release"],
+  ...options,
+});
+function intentRow(id: string, createdAt = 1_000, expiresAt = 10_000, maxFires = 1, cooldown = 0) {
+  return {
+    id,
+    description: "Review the release.",
+    trigger_keywords: '["release"]',
+    trigger_embedding: null,
+    channel_scope: null,
+    sender_scope: null,
+    creator_sender: "owner-sender",
+    status: "armed" as const,
+    expires_at: expiresAt,
+    max_fires: maxFires,
+    fire_count: 0,
+    cooldown_seconds: cooldown,
+    last_fired_at: null,
+    created_at: createdAt,
+    source_session_id: null,
+  };
+}
+function workerContext(db: ReturnType<typeof database>) {
+  const context = {
+    database: db,
+    refuseCommit: false,
+    admit(stage: "transaction" | "commit") {
+      if (stage === "commit" && context.refuseCommit) {
+        throw new Error("test commit refused");
+      }
+    },
+  };
+  return context;
 }
 
 function parseToolJson(
@@ -62,8 +123,7 @@ describe("standing intents", () => {
   });
 
   afterEach(async () => {
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
+    await closeAgents();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
@@ -72,26 +132,13 @@ describe("standing intents", () => {
 
   it("reuses lifecycle deadlines across bindings and invalidates them on writes and rollback", async () => {
     const intent = await createStandingIntent({
-      agentId: "main",
-      description: "Review the release.",
-      triggerKeywords: ["release"],
       nowMs: 1_000,
       expiresAt: 10_000,
       cooldownSeconds: 1,
       maxFires: 3,
     });
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
-    let refuseCommit = false;
-    const context = {
-      database: db,
-      admit(stage: "transaction" | "commit") {
-        if (stage === "commit" && refuseCommit) {
-          throw new Error("test commit refused");
-        }
-      },
-    };
+    await closeAgents();
+    const context = workerContext(database());
     let worker = bindSqliteWorkerBackend(undefined, context);
     worker.execute({ type: "sweep", input: { nowMs: 1_000 } });
     await worker.close();
@@ -111,11 +158,11 @@ describe("standing intents", () => {
     expect(worker.execute({ type: "list", input: { nowMs: 2_999 } })).toMatchObject({
       value: [{ id: intent.id, status: "fired" }],
     });
-    refuseCommit = true;
+    context.refuseCommit = true;
     expect(() => worker.execute({ type: "sweep", input: { nowMs: 3_000 } })).toThrow(
       "test commit refused",
     );
-    refuseCommit = false;
+    context.refuseCommit = false;
     expect(worker.execute({ type: "list", input: { nowMs: 3_000 } })).toMatchObject({
       value: [{ id: intent.id, status: "armed" }],
     });
@@ -123,21 +170,8 @@ describe("standing intents", () => {
       value: [{ id: intent.id, status: "expired" }],
     });
     const row = {
-      id: "replacement",
+      ...intentRow("replacement", 11_000, 12_000, 3, 1),
       description: "Review another release.",
-      trigger_keywords: '["release"]',
-      trigger_embedding: null,
-      channel_scope: null,
-      sender_scope: null,
-      creator_sender: "owner-sender",
-      status: "armed" as const,
-      expires_at: 12_000,
-      max_fires: 3,
-      fire_count: 0,
-      cooldown_seconds: 1,
-      last_fired_at: null,
-      created_at: 11_000,
-      source_session_id: null,
     };
     worker.execute({ type: "create", input: row });
     expect(worker.execute({ type: "list", input: { nowMs: 12_000 } })).toMatchObject({
@@ -174,40 +208,14 @@ describe("standing intents", () => {
     await worker.close();
   });
   it("skips empty match transactions without hiding creates, cancellation, or rolled-back expiry", async () => {
-    await listStandingIntents({ agentId: "main", nowMs: 1_000 });
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
-    let refuseCommit = false;
-    const context = {
-      database: db,
-      admit(stage: "transaction" | "commit") {
-        if (stage === "commit" && refuseCommit) {
-          throw new Error("test commit refused");
-        }
-      },
-    };
+    await list(1_000);
+    await closeAgents();
+    const context = workerContext(database());
     let worker = bindSqliteWorkerBackend(undefined, context);
     const match = (prompt = "release", nowMs = 1_000) =>
       worker.execute({ type: "match", input: prepareStandingIntentMatch({ prompt, nowMs })! });
     const empty = { value: [], nextDueAt: Infinity };
-    const row = {
-      id: "release",
-      description: "Review the release.",
-      trigger_keywords: '["release"]',
-      trigger_embedding: null,
-      channel_scope: null,
-      sender_scope: null,
-      creator_sender: "owner-sender",
-      status: "armed" as const,
-      expires_at: 10_000,
-      max_fires: 1,
-      fire_count: 0,
-      cooldown_seconds: 0,
-      last_fired_at: null,
-      created_at: 1_000,
-      source_session_id: null,
-    };
+    const row = intentRow("release");
     expect(match()).toEqual(empty);
     await worker.close();
     worker = bindSqliteWorkerBackend(undefined, context);
@@ -228,9 +236,9 @@ describe("standing intents", () => {
       expect(observation.queries).toHaveLength(reads);
 
       worker.execute({ type: "create", input: { ...row, id: "rollback" } });
-      refuseCommit = true;
+      context.refuseCommit = true;
       expect(() => match("release", 10_000)).toThrow("test commit refused");
-      refuseCommit = false;
+      context.refuseCommit = false;
       expect(match()).toMatchObject({
         value: [{ id: "rollback", status: "done", fireCount: 1 }],
       });
@@ -242,25 +250,22 @@ describe("standing intents", () => {
 
   it("retains first-use schema after a failed create and retries without duplicate intents", async () => {
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
+    const db = database();
     db.exec("DROP TABLE standing_intents; DROP TABLE standing_intents_fts");
     expect(
       db.prepare("SELECT name FROM sqlite_schema WHERE name GLOB '*standing_intents*'").all(),
     ).toEqual([]);
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
+    await closeAgents();
 
     await expect(
       createStandingIntent({
-        agentId: "main",
         description: "Mention the migration rehearsal.",
         triggerKeywords: ["migration rehearsal"],
         maxFires: 0,
         nowMs: 1_000,
       }),
     ).rejects.toThrow("CHECK constraint failed: max_fires > 0");
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
+    await closeAgents();
 
     // Inspect durable state without an agent open that could repair the schema.
     const reopened = openNodeSqliteDatabase(databasePath, { readOnly: true });
@@ -281,7 +286,6 @@ describe("standing intents", () => {
     }
 
     const created = await createStandingIntent({
-      agentId: "main",
       description: "Mention the migration rehearsal.",
       triggerKeywords: ["migration rehearsal"],
       maxFires: 1,
@@ -289,14 +293,13 @@ describe("standing intents", () => {
     });
     expect(
       (
-        await matchStandingIntents({
-          agentId: "main",
+        await matchIntent({
           prompt: "migration rehearsal",
           nowMs: 2_000,
         })
       ).map((intent) => intent.id),
     ).toEqual([created.id]);
-    const stored = await listStandingIntents({ agentId: "main", nowMs: 2_000 });
+    const stored = await list(2_000);
     expect(stored.map((intent) => intent.id)).toEqual([created.id]);
     expect(stored[0]).toMatchObject({ status: "done", fireCount: 1 });
   });
@@ -307,19 +310,9 @@ describe("standing intents", () => {
     ["5", 5],
     [undefined, 3],
   ])("creates an intent with maxFires=%j", async (maxFires, expected) => {
-    const execute = createStandingIntentExecutor({
-      agentId: "main",
-      provider: "qa-channel",
-      senderId: "owner-1",
-    });
+    const execute = executor();
     const result = parseToolJson(
-      await execute("create-integer-options", {
-        action: "create",
-        description: "Review the release.",
-        triggerKeywords: ["release"],
-        maxFires,
-        cooldownSeconds: "0",
-      }),
+      await execute("create-integer-options", createArgs({ maxFires, cooldownSeconds: "0" })),
     );
     expect(result.intent).toMatchObject({ maxFires: expected, cooldownSeconds: 0 });
     expect(await listStandingIntents({ agentId: "main" })).toMatchObject([
@@ -336,19 +329,10 @@ describe("standing intents", () => {
     ["maxFires", "9007199254740992", "positive"],
     ["cooldownSeconds", "-1", "non-negative"],
   ])("rejects invalid %s=%s with an integer error", async (field, value, range) => {
-    const execute = createStandingIntentExecutor({
-      agentId: "main",
-      provider: "qa-channel",
-      senderId: "owner-1",
-    });
-    await expect(
-      execute("create-invalid-integer", {
-        action: "create",
-        description: "Review the release.",
-        triggerKeywords: ["release"],
-        [field]: value,
-      }),
-    ).rejects.toThrow(`${field} must be a ${range} integer`);
+    const execute = executor();
+    await expect(execute("create-invalid-integer", createArgs({ [field]: value }))).rejects.toThrow(
+      `${field} must be a ${range} integer`,
+    );
   });
 
   it("injects owner-created intents and skips rows without a known creator", async () => {
@@ -367,8 +351,7 @@ describe("standing intents", () => {
     ).intent as { id: string };
     expect(
       (
-        await matchStandingIntents({
-          agentId: "main",
+        await matchIntent({
           prompt: "owner signal",
           channel: "qa-dm-5",
           provider: "qa-channel",
@@ -378,7 +361,7 @@ describe("standing intents", () => {
       ).map((intent) => intent.id),
     ).toEqual([created.id]);
 
-    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
+    const db = database();
     const insertUnknownCreator = db.prepare(
       `INSERT INTO standing_intents (
         id, description, trigger_keywords, trigger_embedding, channel_scope, sender_scope,
@@ -405,8 +388,7 @@ describe("standing intents", () => {
     );
 
     expect(
-      await matchStandingIntents({
-        agentId: "main",
+      await matchIntent({
         prompt: "missing creator signal and unknown creator signal",
         nowMs: Date.now(),
       }),
@@ -435,8 +417,7 @@ describe("standing intents", () => {
     });
     expect(conversationResult.message).toContain("Intent is armed for this conversation.");
     expect(
-      await matchStandingIntents({
-        agentId: "main",
+      await matchIntent({
         prompt: "conversation reminder",
         channel: "QA-DM-5",
         provider: "qa-channel",
@@ -475,8 +456,7 @@ describe("standing intents", () => {
 
     expect(await listStandingIntents({ agentId: "main" })).toEqual([]);
     expect(
-      await matchStandingIntents({
-        agentId: "main",
+      await matchIntent({
         prompt: "identity free",
         provider: "qa-channel",
         channel: "unrelated-room",
@@ -487,7 +467,6 @@ describe("standing intents", () => {
 
   it("keeps provider, conversation, sender, and account identities namespaced", async () => {
     await createStandingIntent({
-      agentId: "main",
       description: "Account-scoped reminder.",
       triggerKeywords: ["account reminder"],
       channelScope: encodeStandingIntentChannelScope({
@@ -505,39 +484,18 @@ describe("standing intents", () => {
       nowMs: 1_000,
     });
 
-    expect(
-      await matchStandingIntents({
-        agentId: "main",
+    const accountMatch = (channel: string, accountId: string, nowMs: number) =>
+      matchIntent({
         prompt: "account reminder",
-        channel: "other-room",
+        channel,
         provider: "slack",
-        accountId: "work",
+        accountId,
         senderId: "alice",
-        nowMs: 2_000,
-      }),
-    ).toHaveLength(0);
-    expect(
-      await matchStandingIntents({
-        agentId: "main",
-        prompt: "account reminder",
-        channel: "slack",
-        provider: "slack",
-        accountId: "personal",
-        senderId: "alice",
-        nowMs: 3_000,
-      }),
-    ).toHaveLength(0);
-    expect(
-      await matchStandingIntents({
-        agentId: "main",
-        prompt: "account reminder",
-        channel: "slack",
-        provider: "slack",
-        accountId: "work",
-        senderId: "alice",
-        nowMs: 4_000,
-      }),
-    ).toHaveLength(1);
+        nowMs,
+      });
+    expect(await accountMatch("other-room", "work", 2_000)).toHaveLength(0);
+    expect(await accountMatch("slack", "personal", 3_000)).toHaveLength(0);
+    expect(await accountMatch("slack", "work", 4_000)).toHaveLength(1);
   });
 
   it("accepts chatId-only interactive contexts", () => {
@@ -554,21 +512,18 @@ describe("standing intents", () => {
   it("matches late prompt terms in the kernel without stale FTS rows starving an armed intent", async () => {
     for (let index = 0; index < 33; index += 1) {
       const stale = await createStandingIntent({
-        agentId: "main",
         description: `Stale deployment intent ${index}.`,
         triggerKeywords: ["deployment"],
         nowMs: index,
       });
       await cancelStandingIntent({ agentId: "main", id: stale.id });
       await createStandingIntent({
-        agentId: "main",
         description: `Phrase decoy ${index}.`,
         triggerKeywords: [`deployment decoy${index}`],
         nowMs: index,
       });
     }
     const active = await createStandingIntent({
-      agentId: "main",
       description: "Use the current deployment intent.",
       triggerKeywords: ["deployment needle"],
       maxFires: 1,
@@ -577,9 +532,8 @@ describe("standing intents", () => {
     const prefix = Array.from({ length: 40 }, (_, index) => `word${index}`).join(" ");
 
     // Reopen so cached statements from setup cannot bypass the execution counter.
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
+    await closeAgents();
+    const db = database();
     const prepare = db.prepare.bind(db);
     let reads = 0;
     const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql) => {
@@ -622,11 +576,11 @@ describe("standing intents", () => {
     } finally {
       prepareSpy.mockRestore();
     }
-    expect(
-      (await listStandingIntents({ agentId: "main", nowMs: 1_000 })).find(
-        (intent) => intent.id === active.id,
-      ),
-    ).toMatchObject({ status: "done", fireCount: 1, lastFiredAt: 1_000 });
+    expect((await list(1_000)).find((intent) => intent.id === active.id)).toMatchObject({
+      status: "done",
+      fireCount: 1,
+      lastFiredAt: 1_000,
+    });
   });
 
   it("does not consume fire budgets for intents that do not fit hidden context", async () => {
@@ -662,7 +616,6 @@ describe("standing intents", () => {
 
   it("uses anti-nagging defaults and bounds hidden injection", async () => {
     const intent = await createStandingIntent({
-      agentId: "main",
       description: "x".repeat(500),
       triggerKeywords: ["bounded"],
       nowMs: 1_000,
