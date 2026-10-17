@@ -340,28 +340,7 @@ export async function startOrResumeThread(
     ) {
       stageBindingReplacement("rotating a host-policy-restricted thread binding");
     }
-    // A runtime plugin tool grant marks the turn with `pluginHarnessToolPolicyScope: "turn"`, which
-    // makes `isTransientCodexRestrictedTurn` true even when the conversation's native tool surface
-    // is already restricted by host policy. When the stored binding records that same restricted
-    // baseline, this turn admits the same surface, so the compatibility/attestation checks below
-    // decide reuse; discarding the binding here would start a fresh unbound thread on every such
-    // turn of one conversation.
-    // Other transient triggers describe a genuinely narrower admitted surface and must still
-    // isolate: `requireWorkspaceOnly` turns tools off (`run-attempt-runtime.ts`), `disableTools`
-    // does so directly, and both change what the turn is allowed to do.
-    const turnScopeOnlyRestriction =
-      params.params.pluginHarnessToolPolicyScope === "turn" &&
-      params.params.requireWorkspaceOnly !== true &&
-      params.params.disableTools !== true;
-    const persistentSameRestriction =
-      restrictedToolSurface &&
-      binding?.nativeToolPolicyRestricted === true &&
-      (turnScopeOnlyRestriction || !transientNativeToolRestriction);
-    if (
-      binding?.threadId &&
-      (transientNativeToolRestriction || transientWebSearchRestriction) &&
-      !persistentSameRestriction
-    ) {
+    if (binding?.threadId && (transientNativeToolRestriction || transientWebSearchRestriction)) {
       assertCodexBindingMayBeReplaced(
         binding,
         "starting a turn-restricted thread",

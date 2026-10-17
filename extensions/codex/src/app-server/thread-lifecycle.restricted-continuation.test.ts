@@ -272,6 +272,7 @@ describe("persistent restricted Codex continuation", () => {
     { restriction: "disabled tools", patch: { disableTools: true } },
     { restriction: "host-only delegation", patch: { delegationCapability: "host_only" } },
     { restriction: "workspace-only work", patch: { requireWorkspaceOnly: true } },
+    { restriction: "turn policy", patch: { pluginHarnessToolPolicyScope: "turn" } },
     {
       restriction: "temporary empty allowlist",
       patch: { toolsAllow: [], pluginHarnessToolPolicyScope: "turn" },
@@ -310,32 +311,6 @@ describe("persistent restricted Codex continuation", () => {
       expect(read()?.threadId).toBe(durable.threadId);
     },
   );
-
-  it("reuses the durable owner when the only turn difference is a narrower turn scope", async () => {
-    // `pluginHarnessToolPolicyScope: "turn"` alone does not narrow a conversation whose native
-    // tool surface is already restricted by host policy — both the durable turn and this one are
-    // equally restricted, so the attested durable thread is the correct owner. (This is the
-    // #174678 fix; the sibling parameterized case above covers the restrictions that genuinely
-    // isolate, each of which changes the admitted tool surface.)
-    const { fixture, common, attempt, read } = await createFixture();
-    const durable = await startOrResumeThread({ ...common, params: attempt });
-    const previous = read();
-    await fixture.endTurn(durable.threadId);
-    const sameSurface = await startOrResumeThread({
-      ...common,
-      params: { ...attempt, pluginHarnessToolPolicyScope: "turn", runId: "temporary" },
-    });
-    expect(sameSurface).toMatchObject({
-      threadId: durable.threadId,
-      lifecycle: { action: "resumed" },
-    });
-    expect(sameSurface.lifecycle.preserveExistingBinding).toBeUndefined();
-    expect(read()).toEqual(previous);
-    expect(fixture.request.mock.calls.filter(([method]) => method === "thread/start")).toHaveLength(
-      1,
-    );
-    await sameSurface.liveThreadOwnership?.release(sameSurface.threadId);
-  });
 
   it.each(["legacy", "native restoration", "temporary"] as const)(
     "keeps the bound local provider through %s",
@@ -470,67 +445,6 @@ describe("persistent restricted Codex continuation", () => {
     });
     expect(next).toMatchObject({ threadId: first.threadId, lifecycle: { action: "resumed" } });
     expect(next.lifecycle.preserveExistingBinding).toBeUndefined();
-  });
-
-  it.each(["warm", "cold"] as const)(
-    "reuses an attested host-policy-restricted owner across turns that carry a turn-scoped grant for a %s owner",
-    async (mode) => {
-      // A runtime plugin tool grant sets `pluginHarnessToolPolicyScope: "turn"`, which makes
-      // `isTransientCodexRestrictedTurn` true even though the conversation's native tool surface is
-      // *persistently* restricted by host policy (`pluginHarnessToolPolicyRestricted: true`). The
-      // stored binding already records that same restricted baseline and is attested
-      // (`restrictedThreadConfigFingerprint`), so `restrictedResumeCandidate` is set above and the
-      // turn must reach the normal compatibility/attestation reuse path rather than starting an
-      // unbound transient thread on every such turn.
-      const { fixture, common, attempt, read, idle } = await createFixture();
-      const first = await startOrResumeThread(common);
-      expect(read()).toMatchObject({
-        threadId: first.threadId,
-        nativeToolPolicyRestricted: true,
-        restrictedThreadConfigFingerprint: expect.any(String),
-      });
-      await idle(first, mode);
-      const previous = read();
-      const granted = await startOrResumeThread({
-        ...common,
-        params: { ...attempt, pluginHarnessToolPolicyScope: "turn", runId: "turn-granted" },
-      });
-      expect(granted).toMatchObject({
-        threadId: first.threadId,
-        lifecycle: { action: "resumed" },
-      });
-      expect(granted.lifecycle.preserveExistingBinding).toBeUndefined();
-      expect(read()).toEqual(previous);
-      expect(
-        fixture.request.mock.calls.filter(([method]) => method === "thread/start"),
-      ).toHaveLength(1);
-      await granted.liveThreadOwnership?.release(granted.threadId);
-    },
-  );
-
-  it("still isolates a turn-scoped narrowing of an unrestricted conversation", async () => {
-    // Counter-case guard: an unrestricted durable binding narrowed for one turn must keep its
-    // existing isolation, and must not be rewritten by the narrowing.
-    const { fixture, common, attempt, read } = await createFixture();
-    const ordinary = {
-      ...common,
-      nativeCodeModeEnabled: true,
-      params: { ...attempt, pluginHarnessToolPolicyRestricted: false },
-    };
-    const durable = await startOrResumeThread(ordinary);
-    const previous = read();
-    await fixture.endTurn(durable.threadId);
-    const narrowed = await startOrResumeThread({
-      ...ordinary,
-      params: {
-        ...ordinary.params,
-        pluginHarnessToolPolicyScope: "turn",
-        runId: "narrowed",
-      },
-    });
-    expect(narrowed.lifecycle.preserveExistingBinding).toBe(true);
-    expect(narrowed.threadId).not.toBe(durable.threadId);
-    expect(read()).toEqual(previous);
   });
 
   it("persists and resumes an empty allowlist from conversation policy", async () => {
