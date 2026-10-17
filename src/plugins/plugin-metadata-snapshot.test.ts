@@ -439,8 +439,10 @@ describe("plugin metadata snapshot", () => {
   });
 
   it("reuses an adopted snapshot across config objects until a lifecycle owner replaces it", () => {
-    const config = { plugins: { entries: { demo: { enabled: true } } } };
-    const compatibleConfig = { plugins: { entries: { demo: { enabled: false } } } };
+    // Activation-only config can share default discovery; a custom path cannot.
+    const load = { paths: ["/custom/plugins"] };
+    const config = { plugins: { load, entries: { demo: { enabled: true } } } };
+    const compatibleConfig = { plugins: { load, entries: { demo: { enabled: false } } } };
     const index = makeIndex();
     index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
     mockRegistrySnapshot(index);
