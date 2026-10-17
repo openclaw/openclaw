@@ -313,6 +313,7 @@ export function renderSidebarSessionMenuForMenus(
         cloudWorkerStopAction: session().cloudWorkerStopAction,
       }),
       ...(!access.allowed ? { "assign-owner": access.reason } : {}),
+      ...(!host.connected ? { plugin: t("sessionsView.actionRequiresConnection") } : {}),
     };
   });
   return (
@@ -347,7 +348,7 @@ export function renderSidebarSessionMenuForMenus(
       lastActive={batchRows() ? "" : formatSidebarTimestamp(session().updatedAt)}
       anchor={menu}
       trigger={menus.triggers.get("session") ?? null}
-      disabled={!host.connected}
+      disabled={false}
       actionDisabledReasons={actionDisabledReasons()}
       navigationAllowed={Boolean(context())}
       copyMarkdownAllowed={canCopySessionMarkdown(context()?.gateway.snapshot)}

@@ -107,6 +107,7 @@ function ChatFooterContent(input: ChatViewInput) {
               approval: input.props.inlineApproval!,
               sourceSession: input.frame.approvalSourceSession,
               busy: input.props.approvalBusy === true,
+              connected: input.props.connected,
               canGrant: input.props.approvalCanGrant,
               error: input.props.approvalErrors?.get(input.props.inlineApproval!.id) ?? null,
               variant: "inline",

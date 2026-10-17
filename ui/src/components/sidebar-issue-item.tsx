@@ -36,6 +36,7 @@ export function renderSidebarMentionItem(params: {
   mention: MentionInboxItem;
   context: Pick<ApplicationContext, "basePath">;
   dismissing: boolean;
+  canDismiss: boolean;
   onDismiss: () => void;
   onNavigate: ApplicationContext["navigate"];
 }) {
@@ -80,6 +81,7 @@ export function renderSidebarMentionItem(params: {
             }
             onDismiss={params.onDismiss}
             dismissing={params.dismissing}
+            dismissDisabled={!params.canDismiss}
             body={
               <>
                 {mention().excerpt ? (
@@ -135,6 +137,7 @@ export function renderSidebarApprovalItem(params: {
     <SidebarApprovalRow
       approval={params.approval}
       busy={snapshot().approvalBusy}
+      connected={params.context.gateway.snapshot.phase === "connected"}
       canGrant={snapshot().approvalCanGrant}
       error={snapshot().approvalErrors.get(params.approval.id) ?? null}
       openSessionHref={sessionTarget()?.href}

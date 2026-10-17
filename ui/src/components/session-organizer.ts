@@ -448,8 +448,15 @@ export class SessionOrganizer {
   }
 
   async createSessionGroup(sessions: readonly SidebarRecentSession[] = []): Promise<void> {
+    const scope = this.deps.sessionData.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
+    const signal = this.deps.sessionData.sessionDraftSignal;
     const dialog = await this.loadDialog(import("./input-dialog.ts"));
     await dialog?.showInputDialog({
+      signal,
+      gateway: scope.gateway,
       title: t("sessionsView.newGroupTitle"),
       label: t("sessionsView.newGroupPrompt"),
       submitLabel: t("sessionsView.newGroupCreate"),
@@ -493,38 +500,44 @@ export class SessionOrganizer {
     if (!scope) {
       return;
     }
+    const signal = this.deps.sessionData.sessionDraftSignal;
     const dialog = await this.loadDialog(import("./input-dialog.ts"));
-    if (!this.deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-      return;
-    }
     // requireChange holds the submit closed on the name the group already has,
     // so the only rename that reaches the Gateway is one that changes something.
-    const next = await dialog?.showInputDialog({
-      signal: scope.signal,
+    await dialog?.showInputDialog({
+      signal,
+      gateway: scope.gateway,
       title: t("sessionsView.renameGroupTitle", { group }),
       label: t("sessionsView.groupNameLabel"),
       defaultValue: group,
       requireValue: true,
       requireChange: true,
+      submit: async (next) => {
+        const currentScope = this.deps.sessionData.beginSessionMutation();
+        if (!currentScope) {
+          return t("sessionsView.actionRequiresConnection");
+        }
+        const operations = await this.loadOperations(currentScope);
+        if (
+          !operations ||
+          !(await operations.renameSessionGroup(this.deps, group, next, currentScope))
+        ) {
+          return this.deps.sessionData.isSessionMutationScopeCurrent(currentScope)
+            ? (this.deps.sessionData.sessionMutationError ?? t("sessionsView.renameGroupFailed"))
+            : t("sessionsView.renameSessionStale");
+        }
+        // Collapse keys follow only a confirmed Gateway rename.
+        const from = `category:${group}`;
+        if (this.collapsedSessionSections.has(from)) {
+          const collapsed = new Set(this.collapsedSessionSections);
+          collapsed.delete(from);
+          collapsed.add(`category:${next}`);
+          this.saveCollapsedSessionSections(collapsed);
+        }
+        this.notify();
+        return null;
+      },
     });
-    if (!next) {
-      return;
-    }
-    const operations = await this.loadOperations(scope);
-    if (operations) {
-      if (!(await operations.renameSessionGroup(this.deps, group, next, scope))) {
-        return;
-      }
-      // Collapse keys follow only a confirmed Gateway rename. A stale completion
-      // must not rewrite storage owned by the replacement connection.
-      const from = `category:${group}`;
-      if (this.collapsedSessionSections.has(from)) {
-        const collapsed = new Set(this.collapsedSessionSections);
-        collapsed.delete(from);
-        collapsed.add(`category:${next}`);
-        this.saveCollapsedSessionSections(collapsed);
-      }
-    }
   }
 
   deleteSessionGroupFromMenu(group: string): Promise<void> {

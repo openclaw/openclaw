@@ -312,6 +312,10 @@ export abstract class ChatPaneStateOwner {
     this.headerSessionMutationAbortController.abort();
     this.headerSessionMutationAbortController = new AbortController();
   }
+  protected retireHeaderSessionDrafts(): void {
+    this.headerSessionDraftAbortController.abort();
+    this.headerSessionDraftAbortController = new AbortController();
+  }
   draft?: string;
   focusComposer = false;
   dashboardExpanded = false;
@@ -467,6 +471,7 @@ export abstract class ChatPaneStateOwner {
   // across a reconnect or pane teardown dismiss itself, matching
   // SessionDataController's own epoch-scoped controller for the sidebar.
   protected headerSessionMutationAbortController = new AbortController();
+  protected headerSessionDraftAbortController = new AbortController();
 
   protected headerRenameValue = "";
   protected headerPlatform: string | null = null;

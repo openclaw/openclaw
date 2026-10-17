@@ -39,6 +39,7 @@ export type ExecApprovalCardProps = {
   approval: ExecApprovalRequest;
   sourceSession?: GatewaySessionRow;
   busy: boolean;
+  connected: boolean;
   canGrant: boolean;
   error: string | null;
   variant: "inline" | "modal";
@@ -50,6 +51,7 @@ export type ExecApprovalCardProps = {
 export type SidebarApprovalRowProps = {
   approval: ExecApprovalRequest;
   busy: boolean;
+  connected: boolean;
   canGrant: boolean;
   error: string | null;
   openSessionHref?: string;
@@ -330,7 +332,7 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
                       decision: label(),
                       command: command(),
                     })}
-                    disabled={props.busy || !props.canGrant || expired()}
+                    disabled={!props.connected || props.busy || !props.canGrant || expired()}
                     onClick={(event: Event) => props.onDecision(event, approval().id, decision)}
                   >
                     {label()}
@@ -350,7 +352,7 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
               </a>
             ) : undefined}
           </div>
-          {!props.canGrant ? (
+          {props.connected && !props.canGrant ? (
             <div class="sidebar-approval-row__message" role={grantError() ? "alert" : "note"}>
               {reviewOnlyMessage()}
             </div>
@@ -425,7 +427,7 @@ function ExecApprovalCardContent(props: ExecApprovalCardProps) {
       {active().kind === "exec" && !decisions().includes("allow-always") ? (
         <div class="exec-approval-warning">{t("execApproval.allowAlwaysUnavailable")}</div>
       ) : undefined}
-      {!props.canGrant ? (
+      {props.connected && !props.canGrant ? (
         <div
           class={grantError() ? "exec-approval-error" : "exec-approval-warning"}
           role={grantError() ? "alert" : "note"}
@@ -450,9 +452,9 @@ function ExecApprovalCardContent(props: ExecApprovalCardProps) {
             class={decisionClass(decision)}
             type="button"
             aria-label={label()}
-            disabled={props.busy || !props.canGrant}
+            disabled={!props.connected || props.busy || !props.canGrant}
             title={
-              props.variant === "modal" && props.canGrant
+              props.variant === "modal" && props.connected && props.canGrant
                 ? `${label()} (${decisionShortcut(decision)})`
                 : label()
             }

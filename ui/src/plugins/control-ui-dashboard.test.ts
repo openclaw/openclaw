@@ -122,6 +122,7 @@ describe("Plugin session dashboard", () => {
       const context = {
         agentSelection: { state: { selectedId: "main" } },
         gateway: {
+          subscribe: () => () => undefined,
           snapshot: {
             phase: "connected",
             hello: {
@@ -217,7 +218,7 @@ describe("Plugin session dashboard", () => {
     expect(element.querySelector("openclaw-board-view")).not.toBeNull();
   });
 
-  it("updates mounted dashboard controls immediately when gateway permissions change", async () => {
+  it("updates mounted dashboard controls immediately when gateway permissions or connectivity change", async () => {
     const { client, request } = createClient([
       widget({
         name: "pending-status",
@@ -265,6 +266,15 @@ describe("Plugin session dashboard", () => {
     expect(board.canMutate).toBe(true);
     expect(board.canGrant).toBe(true);
     expect(allow.disabled).toBe(false);
+
+    element.connected = false;
+    await element.updateComplete;
+    await board.updateComplete;
+    await board.querySelector("openclaw-board-widget-cell")?.updateComplete;
+    expect(element.querySelector("openclaw-board-view")).toBe(board);
+    expect(board.canMutate).toBe(false);
+    expect(board.canGrant).toBe(false);
+    expect(allow.disabled).toBe(true);
     expect(request).toHaveBeenCalledOnce();
   });
 

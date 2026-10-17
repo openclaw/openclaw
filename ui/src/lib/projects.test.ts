@@ -32,7 +32,7 @@ function harness() {
       auth: {
         role: "operator",
         scopes: ["operator.read", "operator.write"],
-        recoveryScope: "principal-a",
+        recoveryScope: "test-recovery-scope",
       },
     },
     sessionKey: "agent:main:first",
@@ -91,6 +91,24 @@ function harness() {
 }
 
 describe("registered project catalog", () => {
+  it("keeps registered projects while offline and awaiting reconnect refresh", async () => {
+    const h = harness();
+    await h.store.refresh();
+    const hello = h.snapshot.hello;
+    h.snapshot.phase = "reconnecting";
+    h.snapshot.hello = null;
+    h.emit();
+    expect(h.store.snapshot.result?.projects).toEqual([project]);
+    const refreshed = createDeferred<ProjectsListResult>();
+    h.request.mockReturnValue(refreshed.promise);
+    h.snapshot.phase = "connected";
+    h.snapshot.hello = hello;
+    h.emit();
+    expect(h.store.snapshot.result?.projects).toEqual([project]);
+    refreshed.resolve({ projects: [] });
+    await h.store.refresh();
+    expect(h.store.snapshot.result?.projects).toEqual([]);
+  });
   it("retires project facts on config publication and reads the current GitHub host", async () => {
     const h = harness();
     await h.store.refresh();

@@ -322,6 +322,7 @@ describe("chat pane approval requester identity", () => {
       }),
     };
     const state = pane.initialize(context);
+    state.connected = true;
     state.sessionKey = host.key;
     const now = Date.now();
     state.chatSessionApprovalQueue = projectSessionApprovalReplay(
@@ -406,7 +407,9 @@ describe("chat pane approval requester identity", () => {
           .soft(card?.querySelector('[role="note"]')?.textContent?.trim())
           .toBe(t("execApproval.requestedBySession", { session: title }));
       }
-      container.querySelector<HTMLButtonElement>(".exec-approval-actions .primary")!.click();
+      const allow = container.querySelector<HTMLButtonElement>(".exec-approval-actions .primary")!;
+      expect(allow.disabled).toBe(false);
+      allow.click();
       expect(decideApproval).toHaveBeenCalledExactlyOnceWith("allow-once", approval.id, approval);
     } finally {
       cancelChatStreamRenderFrame(state);

@@ -15,6 +15,13 @@ import { peekModelCatalog } from "../../lib/model-catalog-store.ts";
 import { page, type ModelProvidersRouteData } from "./route.ts";
 
 const modelMethods = ["models.authStatus", "models.list"];
+const modelsHello = {
+  ...GATEWAY_STORE_TEST_HELLO,
+  auth: { role: "operator", scopes: ["operator.read"] },
+  snapshot: {
+    presence: [{ ts: 1, instanceId: "models-route-client", user: { id: "models-route-user" } }],
+  },
+};
 const roster = {
   defaultId: "main",
   mainKey: "main",
@@ -37,12 +44,14 @@ function responseFor(method: string): unknown {
 }
 
 function createModelsRouter(selectedId: string | null = "main") {
-  const store = createGatewayStoreTestStore();
+  const store = createGatewayStoreTestStore({
+    clientOptions: { instanceId: "models-route-client" },
+  });
   store.gateway.start();
   const request = vi
     .spyOn(store.gateway.snapshot.client!, "request")
     .mockImplementation(async (method) => responseFor(method));
-  store.current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+  store.current().opts.onHello?.({ ...modelsHello });
   // Match bootstrap's subscription order; the roster publishes before selection reconciles.
   const agents = createAgentCapability(store.gateway);
   const chatSelection = createAgentSelectionCapability(store.gateway, agents);
@@ -98,13 +107,13 @@ async function replaceOwner(harness: ModelsHarness, change: OwnerChange) {
   } else if (change === "hello") {
     const admitted = harness.gateway.snapshot;
     harness.current().opts.onClose?.({ code: 1012, reason: "restart", willRetry: true });
-    harness.current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+    harness.current().opts.onHello?.({ ...modelsHello });
     expect(harness.gateway.snapshot.client).toBe(admitted.client);
     expect(harness.gateway.snapshot.hello).not.toBe(admitted.hello);
   } else if (change === "client") {
     harness.gateway.connect();
     harness.current().request.mockImplementation(async (method) => responseFor(method));
-    harness.current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+    harness.current().opts.onHello?.({ ...modelsHello });
   } else {
     harness.selection.set("research");
   }
@@ -152,7 +161,7 @@ describe("Models route admission", () => {
       await loading;
       expect(modelCalls()).toEqual([]);
       if (gateway.snapshot.phase !== "connected") {
-        harness.current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+        harness.current().opts.onHello?.({ ...modelsHello });
       }
       await router.revalidate(context, "model-providers");
       expect(router.getState().matches[0]?.data).toMatchObject({

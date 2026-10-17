@@ -405,6 +405,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             prop:props={{
               queue: view().overlaySnapshot.approvalQueue,
               busy: view().overlaySnapshot.approvalBusy,
+              connected: view().gatewayConnected,
               canGrant: view().overlaySnapshot.approvalCanGrant,
               errors: view().overlaySnapshot.approvalErrors,
               onDecision: (

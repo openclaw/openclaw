@@ -132,7 +132,7 @@ describe("AppSidebar group mutation collapsed state", () => {
     ["group-defaults", "replacement"],
     ["rename-group", "reconnect"],
     ["group-defaults", "reconnect"],
-  ])("retires an open %s dialog on %s", async (action, transition) => {
+  ])("keeps the correct owner for an open %s dialog on %s", async (action, transition) => {
     const client = () =>
       ({
         request: vi.fn(async (method: string) => {
@@ -186,6 +186,16 @@ describe("AppSidebar group mutation collapsed state", () => {
     await sidebar.updateComplete;
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     await vi.dynamicImportSettled();
+    if (transition === "reconnect" && action === "rename-group") {
+      await waitForFast(() =>
+        expect(harness.groupsRename).toHaveBeenCalledExactlyOnceWith("Alpha", "Beta"),
+      );
+      await waitForFast(() =>
+        expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull(),
+      );
+      expect(replacement.groupsRename).not.toHaveBeenCalled();
+      return;
+    }
     expect(harness.groupsRename).not.toHaveBeenCalled();
     expect(harness.groupsUpdate).not.toHaveBeenCalled();
     expect(replacement.groupsRename).not.toHaveBeenCalled();
@@ -226,8 +236,15 @@ describe("AppSidebar group mutation collapsed state", () => {
     });
     await renameGroupThroughDialog(sidebar, "Beta");
     await waitForFast(() => expect(harness.groupsRename).toHaveBeenCalledWith("Alpha", "Beta"));
-    await Promise.resolve();
-    await Promise.resolve();
+    await waitForFast(() =>
+      expect(
+        document.body.querySelector("openclaw-modal-dialog [role=alert]")?.textContent,
+      ).toContain("rename failed"),
+    );
+    expect(
+      document.body.querySelector<HTMLInputElement>('openclaw-modal-dialog input[name="value"]')
+        ?.value,
+    ).toBe("Beta");
 
     expect(localStorage.getItem(COLLAPSED_STORAGE_KEY)).toBe(JSON.stringify(["category:Alpha"]));
   });
@@ -260,8 +277,15 @@ describe("AppSidebar group mutation collapsed state", () => {
     gatewayHarness.publish({ phase: "stopped" });
     gatewayHarness.publish({ phase: "connected" });
     resolveRename("stale");
-    await Promise.resolve();
-    await Promise.resolve();
+    await waitForFast(() =>
+      expect(
+        document.body.querySelector("openclaw-modal-dialog [role=alert]")?.textContent,
+      ).toContain("Connection changed"),
+    );
+    expect(
+      document.body.querySelector<HTMLInputElement>('openclaw-modal-dialog input[name="value"]')
+        ?.value,
+    ).toBe("Beta");
 
     expect(localStorage.getItem(COLLAPSED_STORAGE_KEY)).toBe(JSON.stringify(["category:Alpha"]));
   });

@@ -29,6 +29,7 @@ import {
   resolveApprovalRequest,
   type ExecApprovalPromptState,
 } from "./exec-approval.ts";
+import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
 import {
@@ -62,6 +63,7 @@ export function createApplicationOverlays(
   const listeners = new Set<(next: ApplicationOverlaySnapshot) => void>();
   let disposed = false;
   let activeClient = gateway.snapshot.client;
+  let presentationScopeKey = gatewayPresentationScope(gateway).key;
   let connectedSource: NonNullable<typeof activeClient> | null = null; // Retries start a new source epoch.
   let connectedEpoch = 0;
   let operatorAccess = readGatewayOperatorAccess(gateway.snapshot);
@@ -93,7 +95,9 @@ export function createApplicationOverlays(
       ...updates.snapshot,
       approvalQueue: promptState.execApprovalQueue,
       approvalBusy: promptState.execApprovalBusy,
-      approvalCanGrant: readGatewayOperatorAccess(gateway.snapshot).canGrantApprovals,
+      approvalCanGrant:
+        gateway.snapshot.phase === "connected" &&
+        readGatewayOperatorAccess(gateway.snapshot).canGrantApprovals,
       approvalErrors: new Map(promptState.execApprovalErrors),
       ...readDevicePairSetupSnapshot(devicePairSetupState),
     };
@@ -135,10 +139,16 @@ export function createApplicationOverlays(
 
   const synchronizeGateway = (next: ApplicationGateway["snapshot"]) => {
     const previousClient = activeClient;
+    const nextScopeKey = gatewayPresentationScope(gateway).key;
+    const identityChanged = previousClient !== next.client || presentationScopeKey !== nextScopeKey;
+    presentationScopeKey = nextScopeKey;
     const connected = next.phase === "connected";
     const nextConnectedSource = connected ? next.client : null;
-    const connectedSourceChanged = connectedSource !== nextConnectedSource;
+    const connectedSourceChanged = connectedSource !== nextConnectedSource || identityChanged;
     const accessTransition = readOverlayOperatorAccessTransition(operatorAccess, next);
+    if (connectedSourceChanged || accessTransition.reviewChanged) {
+      refreshApprovals.cancel();
+    }
     operatorAccess = accessTransition.access;
     if (accessTransition.reviewChanged) {
       approvalAccessGeneration += 1;
@@ -174,7 +184,7 @@ export function createApplicationOverlays(
     promptState.client = next.client;
     devicePairSetupState.client = next.client;
     devicePairSetupState.connected = connected;
-    if (previousClient !== next.client || !connected) {
+    if (identityChanged || !connected) {
       approvalDecision = null;
       pairingPendingCount.invalidate({ clear: true });
       closeDevicePairSetupState(devicePairSetupState);
@@ -182,17 +192,20 @@ export function createApplicationOverlays(
     if (connected && !operatorAccess.canReviewApprovals) {
       approvalDecision = null;
     }
-    if (!connected || !next.client || !operatorAccess.canReviewApprovals) {
+    if (identityChanged || !next.client || !operatorAccess.canReviewApprovals) {
       promptState.execApprovalQueue = [];
-      promptState.execApprovalBusy = false;
       promptState.execApprovalErrors.clear();
       clearExecApprovalTimers(promptState);
+    }
+    if (!connected || identityChanged || !operatorAccess.canReviewApprovals) {
+      promptState.execApprovalBusy = false;
     }
     if (!connected || !next.client) {
       if (next.phase !== "reload-required" && !next.client) {
         connectedEpoch = 0;
       }
       updates.synchronizeGateway(next);
+      publish();
       return;
     }
     const connectedClient = next.client;
@@ -214,7 +227,7 @@ export function createApplicationOverlays(
       operatorAccess.canReviewApprovals
     ) {
       void runConnectionBootstrap("approvals", () =>
-        refreshApprovals(connectedClient, connectedEpoch, approvalAccessGeneration),
+        refreshApprovals.refresh(connectedClient, connectedEpoch, approvalAccessGeneration),
       ).catch(() => undefined);
     }
   };
@@ -337,7 +350,7 @@ export function createApplicationOverlays(
           const currentClient = activeClient;
           const epoch = connectedEpoch;
           if (currentClient && isCurrentOperation()) {
-            await refreshApprovals(currentClient, epoch);
+            await refreshApprovals.refresh(currentClient, epoch);
           }
           return;
         }
@@ -390,6 +403,7 @@ export function createApplicationOverlays(
     dispose() {
       disposed = true;
       approvalDecision = null;
+      refreshApprovals.cancel();
       updates.dispose();
       pairingPendingCount.invalidate();
       closeDevicePairSetupState(devicePairSetupState);

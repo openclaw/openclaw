@@ -40,6 +40,7 @@ function renderCard(request: ExecApprovalRequest, variant: "inline" | "modal" = 
         props: {
           approval: request,
           busy: false,
+          connected: true,
           canGrant: true,
           error: null,
           variant,
@@ -82,6 +83,7 @@ describe("exec approval card", () => {
         createComponent(SidebarApprovalRow, {
           approval: approval({ expiresAtMs: 2_000 }),
           busy: false,
+          connected: true,
           canGrant: true,
           error: null,
           onDecision,
@@ -171,7 +173,13 @@ describe("exec approval card", () => {
         expect(id).toBe(request.id);
         return resolveApprovalRequest(client, request, decision);
       });
-      const props = { approval: request, busy: false, canGrant: true, error: null };
+      const props = {
+        approval: request,
+        busy: false,
+        connected: true,
+        canGrant: true,
+        error: null,
+      };
       mountSolid(
         () =>
           variant === "sidebar"

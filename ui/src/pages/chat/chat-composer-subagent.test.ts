@@ -490,7 +490,7 @@ it.each([
       expect(state.sessionsResult.sessions[0]).toBe(historyRow);
       expect(historyRow?.model).toBe("primary-model");
       retireChatMetadataRequests(state);
-      expect(state.chatModelCatalogInitialized).toBe(!restricted);
+      expect(state.chatModelCatalogInitialized).toBe(false);
     } finally {
       catalog.resolve({ models: [] });
       await pending;

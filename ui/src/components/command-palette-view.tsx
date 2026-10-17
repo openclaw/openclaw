@@ -74,6 +74,7 @@ export type CommandPaletteProps = {
   primaryModelSearch: boolean;
   modelSearchError: string | null;
   sessionSearchPending: boolean;
+  remoteSearchOffline: boolean;
   catalogSearchPending: boolean;
   sessionSearchFailed: boolean;
   sessionSearchPartial: boolean;
@@ -278,6 +279,7 @@ function PaletteSearch(props: {
   const results = createMemo(() => resolvePaletteResults(current()));
   const notices = () =>
     [
+      current().remoteSearchOffline ? t("palette.searchOffline") : null,
       current().sessionSearchFailed
         ? t("palette.searchFailed")
         : current().sessionSearchIndexing
@@ -295,6 +297,7 @@ function PaletteSearch(props: {
     Boolean(current().searchQuery.trim()) &&
     !current().sessionSearchPending &&
     !current().catalogSearchPending &&
+    !current().remoteSearchOffline &&
     !current().modelSearchError &&
     !current().sessionSearchFailed &&
     !current().sessionSearchPartial &&

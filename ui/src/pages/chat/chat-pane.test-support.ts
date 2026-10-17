@@ -28,6 +28,7 @@ import {
   handleQuestionPromptEvent,
 } from "../../app/question-prompt.ts";
 import { loadSettings } from "../../app/settings.ts";
+import type { SidebarSessionMutationResult } from "../../components/app-sidebar-session-types.ts";
 import type { MarkdownRenderOptions } from "../../components/markdown-render-options.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
@@ -241,7 +242,10 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   headerRenameSession: Pick<GatewaySessionRow, "key" | "sessionId" | "label"> | null;
   headerRenameValue: string;
   beginHeaderRename: (row: GatewaySessionRow) => void;
-  handleHeaderSessionAction: (action: HeaderMenuAction, row: GatewaySessionRow) => Promise<void>;
+  handleHeaderSessionAction: (
+    action: HeaderMenuAction,
+    row: GatewaySessionRow,
+  ) => Promise<SidebarSessionMutationResult | void>;
   onboarding: boolean;
   cancelHeaderRename: () => void;
   commitHeaderRename: () => void;

@@ -11,7 +11,7 @@ export function readOverlayOperatorAccessTransition(
   previous: OverlayOperatorAccess,
   snapshot: ApplicationGateway["snapshot"],
 ) {
-  const access = readGatewayOperatorAccess(snapshot);
+  const access = snapshot.phase === "connected" ? readGatewayOperatorAccess(snapshot) : previous;
   return {
     access,
     reviewChanged: previous.canReviewApprovals !== access.canReviewApprovals,
@@ -82,29 +82,51 @@ export function createOverlayApprovalRefresher(params: {
   isDisposed: () => boolean;
   publish: () => void;
 }) {
-  return async (
+  let generation = 0;
+  let retryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  const cancel = () => {
+    generation += 1;
+    if (retryTimer !== null) {
+      globalThis.clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+  };
+  const refresh = async (
     client: GatewayBrowserClient,
     epoch = params.getConnectedEpoch(),
     reviewGeneration = params.getReviewGeneration(),
   ) => {
-    if (
-      !params.canReview() ||
-      reviewGeneration !== params.getReviewGeneration() ||
-      !readGatewayOperatorAccess(params.gateway.snapshot).canReviewApprovals
-    ) {
-      return;
-    }
-    const applied = await refreshPendingApprovalQueue(params.state, {
-      isCurrentClient: (requestClient) =>
-        requestClient === client &&
-        epoch === params.getConnectedEpoch() &&
-        reviewGeneration === params.getReviewGeneration() &&
-        params.canReview() &&
-        readGatewayOperatorAccess(params.gateway.snapshot).canReviewApprovals &&
-        params.isCurrentClient(client),
-    });
-    if (applied && !params.isDisposed()) {
+    cancel();
+    const refreshGeneration = generation;
+    let retryDelayMs = 1_000;
+    const isCurrent = () =>
+      refreshGeneration === generation &&
+      !params.isDisposed() &&
+      epoch === params.getConnectedEpoch() &&
+      reviewGeneration === params.getReviewGeneration() &&
+      params.canReview() &&
+      readGatewayOperatorAccess(params.gateway.snapshot).canReviewApprovals &&
+      params.isCurrentClient(client);
+    const run = async () => {
+      if (!isCurrent()) {
+        return;
+      }
+      const complete = await refreshPendingApprovalQueue(params.state, {
+        isCurrentClient: (requestClient) => requestClient === client && isCurrent(),
+      });
+      if (!isCurrent()) {
+        return;
+      }
       params.publish();
-    }
+      if (!complete) {
+        retryTimer = globalThis.setTimeout(() => {
+          retryTimer = null;
+          void run();
+        }, retryDelayMs);
+        retryDelayMs = Math.min(retryDelayMs * 2, 4_000);
+      }
+    };
+    await run();
   };
+  return { refresh, cancel };
 }

@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   createApplicationGateway,
@@ -159,7 +160,27 @@ afterEach(() => {
 });
 
 describe("MemoryImportPage", () => {
-  it("hides stale plans after roster failures until Refresh retries them", async () => {
+  it("shows the disconnected explanation on a cold offline load and opens the workspace on reconnect", async () => {
+    const request = vi.fn(async () => createPlan());
+    const context = createContext(request);
+    context.gateway.snapshot.phase = "stopped";
+    const page = await mountPage(context);
+
+    expect(page.textContent).toContain("Connect to the gateway to import memory.");
+    expect(page.querySelector(".memory-import")).toBeNull();
+    expect(page.textContent).not.toContain("Memory import requires operator.admin access.");
+    expect(request).not.toHaveBeenCalled();
+
+    context.gateway.snapshot.phase = "connected";
+    context.notify();
+    await waitForMemoryImport(() =>
+      expect(page.querySelector("[data-test-id='memory-import-provider-button']")).not.toBeNull(),
+    );
+    expect(page.textContent).not.toContain("Connect to the gateway to import memory.");
+    expect(page.textContent).toContain("/tmp/openclaw-research");
+  });
+
+  it("retains a loaded plan after roster refresh failure and retries the roster on Refresh", async () => {
     const roster = createDeferredCore<unknown>();
     const request = vi.fn((method: string) =>
       method === "agents.list" ? roster.promise : Promise.resolve(createPlan()),
@@ -202,9 +223,8 @@ describe("MemoryImportPage", () => {
       );
       await agents.refreshList();
       flush();
-      expect(page.textContent).toContain("Agent roster unavailable");
-      expect(page.querySelector("[data-test-id='memory-import-provider-button']")).toBeNull();
-      expect(page.textContent).not.toContain("/tmp/openclaw-research");
+      expect(page.querySelector("[data-test-id='memory-import-provider-button']")).not.toBeNull();
+      expect(page.textContent).toContain("/tmp/openclaw-research");
       expect(
         request.mock.calls.filter(([method]) => method === "migrations.memory.plan"),
       ).toHaveLength(1);
@@ -219,9 +239,7 @@ describe("MemoryImportPage", () => {
       [...page.querySelectorAll<HTMLButtonElement>("button")]
         .find((button) => button.textContent?.trim() === "Refresh")
         ?.click();
-      await waitForMemoryImport(() =>
-        expect(page.querySelector("[data-test-id='memory-import-provider-button']")).not.toBeNull(),
-      );
+      await waitForMemoryImport(() => expect(page.textContent).toContain("/tmp/openclaw-writer"));
       expect(request.mock.calls.filter(([method]) => method === "agents.list")).toHaveLength(4);
       expect(request).toHaveBeenLastCalledWith(
         "migrations.memory.plan",
@@ -387,31 +405,158 @@ describe("MemoryImportPage", () => {
     expect(retryApply).toEqual(firstApply);
   });
 
-  it("clears confirmation state across a gateway disconnect", async () => {
+  it("retains selections, dates, previews and confirmation across a same-client reconnect", async () => {
+    const plan = createPlan();
+    plan.providers[0]!.items.push({
+      ...plan.providers[0]!.items[0]!,
+      id: "memory:codex:other.md",
+      details: { collectionId: "other", collectionLabel: "Other", relativePath: "other.md" },
+    });
     const request = vi.fn(async (method: string, params: { agentId?: string }) => {
       if (method === "migrations.memory.plan") {
-        return createPlan(params.agentId ?? "research");
+        return { ...plan, agentId: params.agentId ?? "research" };
+      }
+      if (method === "memory.sessionBackfill.preview") {
+        return {
+          days: 1,
+          candidates: 1,
+          staged: 0,
+          perDay: [{ day: "2026-07-01", candidateCount: 1, sample: ["Retained preview"] }],
+        };
       }
       throw new Error(`unexpected method: ${method}`);
     });
     const context = createContext(request);
     const page = await mountPage(context);
-
+    await waitForMemoryImport(() =>
+      expect(
+        page.querySelectorAll(".memory-import__collection input[type='checkbox']"),
+      ).toHaveLength(2),
+    );
+    page
+      .querySelectorAll<HTMLInputElement>(".memory-import__collection input[type='checkbox']")[1]!
+      .click();
+    const date = page.querySelector<HTMLInputElement>("input[type='date']")!;
+    date.value = "2026-07-01";
+    date.dispatchEvent(new Event("input", { bubbles: true }));
+    page.querySelector<HTMLButtonElement>("[data-test-id='memory-backfill-preview']")!.click();
+    await waitForMemoryImport(() => expect(page.textContent).toContain("Retained preview"));
     await openImportConfirmation(page);
 
     context.gateway.snapshot.phase = "stopped";
+    context.gateway.snapshot.hello = null;
     context.notify();
     flush();
     flush();
-    expect(page.querySelector("[data-test-id='memory-import-confirm']")).toBeNull();
+    expect(
+      page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.disabled,
+    ).toBe(true);
+    expect(page.querySelector<HTMLInputElement>("input[type='date']")?.value).toBe("2026-07-01");
+    expect(page.textContent).toContain("Retained preview");
+
+    context.gateway.snapshot.phase = "connected";
+    context.notify();
+    await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(3));
+    await waitForMemoryImport(() =>
+      expect(
+        page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.disabled,
+      ).toBe(false),
+    );
+    expect(
+      [
+        ...page.querySelectorAll<HTMLInputElement>(
+          ".memory-import__collection input[type='checkbox']",
+        ),
+      ].map((input) => input.checked),
+    ).toEqual([true, false]);
+    expect(page.querySelector<HTMLInputElement>("input[type='date']")?.value).toBe("2026-07-01");
+    expect(page.textContent).toContain("Retained preview");
+
+    page
+      .querySelector<HTMLButtonElement>(".memory-import__confirm button:not([data-test-id])")!
+      .click();
+    page.querySelector<HTMLButtonElement>("[data-test-id='memory-backfill-rollback']")!.click();
+    flush();
+    context.gateway.snapshot.phase = "reconnecting";
+    context.notify();
+    flush();
+    expect(
+      page.querySelector<HTMLButtonElement>("[data-test-id='memory-backfill-rollback-confirm']")
+        ?.disabled,
+    ).toBe(true);
+    context.gateway.snapshot.phase = "connected";
+    context.notify();
+    await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(4));
+    expect(page.querySelector("[data-test-id='memory-backfill-rollback-confirm']")).not.toBeNull();
 
     const replacementClient = { request } as unknown as GatewayBrowserClient;
     context.gateway.snapshot.client = replacementClient;
     context.gateway.snapshot.phase = "connected";
     context.notify();
-    await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(5));
     expect(page.querySelector("[data-test-id='memory-import-confirm']")).toBeNull();
+    expect(page.querySelector("[data-test-id='memory-backfill-rollback-confirm']")).toBeNull();
+    expect(page.querySelector<HTMLInputElement>("input[type='date']")?.value).toBe("");
+    expect(page.textContent).not.toContain("Retained preview");
+
+    context.gateway.snapshot.hello = gatewayHelloForMethods([], ["operator.read"]);
+    context.notify();
+    await waitForMemoryImport(() => expect(page.querySelector(".memory-import")).toBeNull());
+    expect(page.textContent).not.toContain("/tmp/openclaw-research");
   });
+
+  it.each(["account", "recovery"] as const)(
+    "retires protected plans and drafts when the same client's %s identity changes",
+    async (identity) => {
+      const replacementPlan = createDeferredCore<ReturnType<typeof createPlan>>();
+      let planRequests = 0;
+      const request = vi.fn((method: string) => {
+        if (method === "migrations.memory.plan") {
+          planRequests += 1;
+          return planRequests === 1 ? Promise.resolve(createPlan()) : replacementPlan.promise;
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const context = createContext(request);
+      context.gateway.snapshot.selfUser = { id: "first", name: "First" };
+      const hello = gatewayHelloForMethods(["memory.sessionBackfill.preview"]);
+      context.gateway.snapshot.hello = {
+        ...hello,
+        auth: { ...hello.auth, recoveryScope: "first" },
+      };
+      const page = await mountPage(context);
+      await openImportConfirmation(page);
+      const date = page.querySelector<HTMLInputElement>("input[type='date']")!;
+      date.value = "2026-07-01";
+      date.dispatchEvent(new Event("input", { bubbles: true }));
+      const confirm = page.querySelector<HTMLButtonElement>(
+        "[data-test-id='memory-import-confirm']",
+      )!;
+
+      if (identity === "account") {
+        context.gateway.snapshot.selfUser = { id: "second", name: "Second" };
+      } else {
+        context.gateway.snapshot.hello = {
+          ...hello,
+          auth: { ...hello.auth, recoveryScope: "second" },
+        };
+      }
+      context.notify();
+      // A retained button cannot submit the previous identity's confirmation before rendering catches up.
+      confirm.click();
+      expect(request.mock.calls.every(([method]) => method === "migrations.memory.plan")).toBe(
+        true,
+      );
+      await waitForMemoryImport(() => expect(planRequests).toBe(2));
+      expect(page.querySelector("[data-test-id='memory-import-confirm']")).toBeNull();
+      expect(page.querySelector<HTMLInputElement>("input[type='date']")?.value).toBe("");
+      expect(page.textContent).not.toContain("/tmp/openclaw-research");
+      replacementPlan.resolve(createPlan());
+      await waitForMemoryImport(() =>
+        expect(page.querySelector("[data-test-id='memory-import-provider-button']")).not.toBeNull(),
+      );
+    },
+  );
 
   it.each(["disconnect", "roster loss"] as const)(
     "preserves an attempted import key across %s",
@@ -445,20 +590,20 @@ describe("MemoryImportPage", () => {
 
       if (interruption === "disconnect") {
         context.gateway.snapshot.phase = "stopped";
-        context.gateway.snapshot.client = null;
       } else {
         context.agents.state.agentsList = null;
         context.agents.state.agentsError = "Agent roster unavailable";
       }
       context.notify();
       flush();
-      expect(page.querySelector("[data-test-id='memory-import-confirm']")).toBeNull();
+      expect(
+        page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.disabled ??
+          true,
+      ).toBe(true);
       finishFirstApply(result);
       await Promise.resolve();
 
       if (interruption === "disconnect") {
-        const replacementClient = { request } as unknown as GatewayBrowserClient;
-        context.gateway.snapshot.client = replacementClient;
         context.gateway.snapshot.phase = "connected";
       } else {
         context.agents.state.agentsList = roster;

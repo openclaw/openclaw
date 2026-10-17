@@ -221,6 +221,13 @@ describe("chat pane header state", () => {
 
       result.sessions = [];
       landCatalogWrite();
+      await vi.waitFor(() =>
+        expect(document.body.querySelector("openclaw-modal-dialog [role=alert]")).not.toBeNull(),
+      );
+      expect((await waitForInputDialog()).value).toBe("Projects");
+      document.body
+        .querySelector<HTMLButtonElement>('openclaw-modal-dialog button[type="button"]')
+        ?.click();
       await pending;
 
       expect(patch).not.toHaveBeenCalled();

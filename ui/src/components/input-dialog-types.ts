@@ -1,3 +1,5 @@
+import type { ApplicationGateway } from "../app/gateway.ts";
+
 export type InputDialogOptions = {
   title: string;
   label?: string;
@@ -5,6 +7,8 @@ export type InputDialogOptions = {
   submitLabel?: string;
   cancelLabel?: string;
   signal?: AbortSignal;
+  /** Keep the draft editable while Gateway-backed submission is unavailable. */
+  gateway?: ApplicationGateway;
   /**
    * Trims the value and blocks submission while it is empty. Callers that treat
    * an empty entry as meaningful (clearing a custom session label) leave this

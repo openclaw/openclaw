@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   installMockGateway,
   pauseVirtualClock,
@@ -86,12 +87,23 @@ suite.define(() => {
       });
       await expect.poll(() => current.locator(".activity-current-work__row").count()).toBe(1);
       await gateway.setOnline(false);
-      await current
-        .getByText("Connect to the Gateway to load active sessions.", { exact: true })
-        .waitFor();
-      expect(await current.locator(".activity-current-work__row").count()).toBe(0);
+      await waitForControlUiGatewayReconnecting(page);
+      expect(await current.getByText("Check documentation links", { exact: true }).count()).toBe(1);
+      expect(await current.locator(".activity-current-work__row").count()).toBe(1);
+      expect(
+        await current
+          .getByText("Connect to the Gateway to load active sessions.", { exact: true })
+          .count(),
+      ).toBe(0);
       await gateway.setMethodResponse("sessions.list", listing([]));
+      const previousReads = await gateway.deferNext("sessions.list", { activeOnly: true });
       await gateway.setOnline(true);
+      await gateway.waitForRequest("sessions.list", {
+        after: previousReads,
+        match: { activeOnly: true },
+      });
+      expect(await current.getByText("Check documentation links", { exact: true }).count()).toBe(1);
+      await gateway.resolveDeferred("sessions.list", listing([]), { match: { activeOnly: true } });
       await current.getByText("No active sessions.", { exact: true }).waitFor();
       expect(await current.locator(".activity-current-work__row").count()).toBe(0);
       await page.clock.install();

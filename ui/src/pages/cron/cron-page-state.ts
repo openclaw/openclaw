@@ -11,6 +11,7 @@ import {
   cancelCronEdit,
   createInitialCronState,
   hasCronFormErrors,
+  invalidateCronMutation,
   invalidateCronRefresh,
   loadCronJobsPage,
   loadCronStatus,
@@ -166,17 +167,31 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         gateway.invalidate();
       }
       const nextAvailable = isGatewayAvailable(snapshot);
-      if (first || changed) {
+      if (changed) {
+        invalidateCronMutation(cron);
+      }
+      if (first || presentationChanged || cron.client !== snapshot.client) {
         resetGatewayState(snapshot);
-      } else if (!readGatewayOperatorAccess(snapshot).canAdmin) {
+      } else if (changed) {
+        invalidateCronRefresh(cron);
+        cron.client = snapshot.client;
+        cron.connected = snapshot.phase === "connected";
+        runTranscript.reconnect();
+        heartbeatScratchRequest += 1;
+        if (!cron.cronEditingJob && !cron.cronCreateOpen) {
+          routeSelection.requested = false;
+        }
+      }
+      if (snapshot.phase === "connected" && !readGatewayOperatorAccess(snapshot).canAdmin) {
         clearHeartbeatScratch();
         deliveryDirectory.clear();
       }
-      if (!hasOperatorReadAccess(snapshot.hello?.auth ?? null)) {
+      if (snapshot.phase === "connected" && !hasOperatorReadAccess(snapshot.hello?.auth ?? null)) {
+        resetGatewayState(snapshot);
         cron.cronJobsError = formatMissingOperatorReadScopeMessage("scheduled tasks");
       }
       if (snapshot.phase === "connected" && (first || changed)) {
-        ensureInitialData();
+        ensureInitialData(true);
       } else if (!first && !gatewayAvailable && nextAvailable && previousConnected) {
         ensureInitialData(true);
       }
@@ -356,10 +371,16 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       }
     }
     if (routeData?.jobId && client && cron.connected && !routeSelection.requested) {
+      const connectionScope = gateway.capture();
       void runCronTask((current) =>
         routeSelection.resolve(
           current,
-          () => active && host().isConnected && cron === current,
+          () =>
+            active &&
+            host().isConnected &&
+            cron === current &&
+            connectionScope !== null &&
+            gateway.isCurrent(connectionScope),
           (job, runId) => selectJob(job, runId),
         ),
       );
@@ -403,6 +424,10 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     if (!client || !agentId || !isGatewayAvailable(context().gateway.snapshot)) {
       return;
     }
+    const connectionScope = gateway.capture();
+    if (!connectionScope) {
+      return;
+    }
     stopModelSuggestions ??= subscribeModelCatalogCache(client, (update) => {
       if (!active || cron.client !== client || update.type !== "invalidated") {
         return;
@@ -420,6 +445,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     const isCurrent = () =>
       active &&
       cron === cronState &&
+      gateway.isCurrent(connectionScope) &&
       modelSuggestionsRequest === request &&
       context().agentSelection.state.selectedId === agentId;
     try {

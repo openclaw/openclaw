@@ -1,5 +1,6 @@
 import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/server-capabilities.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import {
   hasOperatorApprovalsAccess,
   hasOperatorReadAccess,
@@ -283,7 +284,10 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           isGatewayMethodAdvertised(gateway, "board.widget.put") === true));
     const client = gateway?.client;
     if (this.boardProviderLifecycleConnected && client && available) {
-      const key = boardProviderCacheKey(session);
+      const presentationScope = this.context
+        ? gatewayPresentationScope(this.context.gateway)
+        : undefined;
+      const key = JSON.stringify([presentationScope?.key, boardProviderCacheKey(session)]);
       if (this.boardProviderLease?.cacheKey !== key) {
         this.releaseBoardProviderLease();
         this.boardProviderLease = {
@@ -295,6 +299,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
             canPinMcpApps,
             canMutate,
             canGrant,
+            presentationScope,
           ),
           cacheKey: key,
         };
