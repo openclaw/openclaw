@@ -1,4 +1,3 @@
-// Tests /learn prompt rewriting, defaults, standards, and availability gating.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -43,35 +42,23 @@ function buildLearnParams(
   cfg: OpenClawConfig = {},
 ): HandleCommandsParams {
   const loadedConfig = createCanonicalAgentConfigFixture(cfg).config;
-  return {
-    ...buildCommandTestParams(commandBodyNormalized, {
-      ...loadedConfig,
-      models: loadedConfig.models ?? testModels(),
-    }),
-    ctx: {
+  const params = buildCommandTestParams(
+    commandBodyNormalized,
+    { ...loadedConfig, models: loadedConfig.models ?? testModels() },
+    {
       Provider: INTERNAL_MESSAGE_CHANNEL,
       Surface: INTERNAL_MESSAGE_CHANNEL,
-      CommandSource: "text",
-      Body: commandBodyNormalized,
-      RawBody: commandBodyNormalized,
-      CommandBody: commandBodyNormalized,
-      BodyForCommands: commandBodyNormalized,
       BodyForAgent: commandBodyNormalized,
-      BodyStripped: commandBodyNormalized,
     },
-    command: {
-      commandBodyNormalized,
-      isAuthorizedSender: true,
-      senderIsOwner: true,
-      senderId: "tester",
-      channel: INTERNAL_MESSAGE_CHANNEL,
-      channelId: INTERNAL_MESSAGE_CHANNEL,
-      surface: INTERNAL_MESSAGE_CHANNEL,
-      ownerList: [],
-      rawBodyNormalized: commandBodyNormalized,
-    },
+  );
+  Object.assign(params.command, {
+    isAuthorizedSender: true,
+    senderIsOwner: true,
+    senderId: "tester",
+  });
+  return {
+    ...params,
     directives: {},
-    agentId: "main",
     sessionKey: "agent:main:webchat:test",
     provider: "openai",
     model: "gpt-5.5",
@@ -87,33 +74,18 @@ async function expectUnavailable(params: HandleCommandsParams) {
 afterEach(() => cliBackendsTesting.resetDepsForTest());
 
 describe("learn command", () => {
-  it("uses isolated workshop availability in a global session", async () => {
-    const params = buildLearnParams("/learn", {
-      session: { scope: "global" },
-      agents: {
-        entries: {
-          direct: { sandbox: { mode: "off" } },
-          isolated: { sandbox: { mode: "all" } },
-        },
-      },
-    });
-    params.agentId = "isolated";
-    params.sessionKey = "global";
-
-    await expectUnavailable(params);
-    expect(params.ctx.BodyForAgent).toBe("/learn");
-  });
-
   it.each([
-    { mode: "all", denyWorkshop: false },
-    { mode: "off", denyWorkshop: true },
+    { scope: "global", mode: "all", denyWorkshop: false },
+    { scope: "per-sender", mode: "all", denyWorkshop: false },
+    { scope: "per-sender", mode: "off", denyWorkshop: true },
   ] as const)(
-    "preserves an independent policy owner with sandbox mode $mode and workshop denied $denyWorkshop",
-    async ({ mode, denyWorkshop }) => {
+    "preserves the $scope policy owner with sandbox=$mode and workshop denied=$denyWorkshop",
+    async ({ scope, mode, denyWorkshop }) => {
       const params = buildLearnParams("/learn", {
+        ...(scope === "global" ? { session: { scope } } : {}),
         agents: {
           entries: {
-            main: { sandbox: { mode: "off" } },
+            [scope === "global" ? "direct" : "main"]: { sandbox: { mode: "off" } },
             isolated: {
               sandbox: { mode },
               tools: { deny: denyWorkshop ? ["skill_workshop"] : [] },
@@ -121,25 +93,25 @@ describe("learn command", () => {
           },
         },
       });
-      params.ctx.RuntimePolicySessionKey = "agent:isolated:webchat:test";
-
+      if (scope === "global") {
+        params.agentId = "isolated";
+        params.sessionKey = "global";
+      } else {
+        params.ctx.RuntimePolicySessionKey = "agent:isolated:webchat:test";
+      }
       await expectUnavailable(params);
+      expect(params.ctx.BodyForAgent).toBe("/learn");
     },
   );
 
-  it("keeps the workshop available for owner WebChat under a wildcard sender policy", async () => {
+  it.each([true, false])("applies wildcard sender policy for WebChat owner=%s", async (owner) => {
     const params = buildLearnParams("/learn", wildcardPolicy);
-
-    const result = await handleLearnCommand(params, true);
-
-    expect(result?.shouldContinue).toBe(true);
-  });
-
-  it("keeps the wildcard sender policy for non-owner WebChat", async () => {
-    const params = buildLearnParams("/learn", wildcardPolicy);
-    params.command.senderIsOwner = false;
-
-    await expectUnavailable(params);
+    params.command.senderIsOwner = owner;
+    if (owner) {
+      expect((await handleLearnCommand(params, true))?.shouldContinue).toBe(true);
+    } else {
+      await expectUnavailable(params);
+    }
   });
 
   it("replies without continuing when the runtime tool allowlist is empty", async () => {
@@ -161,9 +133,7 @@ describe("learn command", () => {
       return handleLearnCommand(params, true);
     };
 
-    beforeEach(() => {
-      undoWorkshopReview.mockReset();
-    });
+    beforeEach(() => undoWorkshopReview.mockReset());
 
     it("reverts the review as the user and lists what it restored and archived", async () => {
       undoWorkshopReview.mockResolvedValue({

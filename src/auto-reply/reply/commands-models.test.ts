@@ -17,12 +17,13 @@ import {
   createModelsTestOwner,
   setFastModelsCliBackendDeps,
 } from "./commands-models.test-support.js";
-import type { HandleCommandsParams } from "./commands-types.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
 let authStore: AuthProfileStore;
 let authModes: PreparedAgentCredentialModes;
 let providerOutcomes: ProviderCatalogOutcome[];
+let catalog: ModelCatalogEntry[];
+let metadataSnapshot: PluginMetadataSnapshot;
 const openAIPlatformRoute = {
   api: "openai-responses",
   baseUrl: "https://api.openai.com/v1",
@@ -34,13 +35,9 @@ const defaultCatalog: ModelCatalogEntry[] = [
   { ...openAIPlatformRoute, provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
   { provider: "google", id: "gemini-2.0-flash", name: "Gemini Flash" },
 ];
-type CatalogParams = Parameters<
-  typeof preparedCatalog.loadPublishedPreparedModelCatalogOwnerSnapshot
->[0];
+type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 
-function configWithDefaults(
-  defaults: NonNullable<OpenClawConfig["agents"]>["defaults"] = {},
-): OpenClawConfig {
+function configWithDefaults(defaults: AgentDefaults = {}): OpenClawConfig {
   return {
     agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" }, ...defaults } },
   };
@@ -75,13 +72,6 @@ function setCredentials(providers: string[]) {
   authModes = Object.fromEntries(providers.map((provider) => [provider, "api_key" as const]));
 }
 
-const modelCatalogMocks = vi.hoisted(() => ({
-  loadModelCatalog: vi.fn<(params: CatalogParams) => ModelCatalogEntry[]>(),
-}));
-const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn());
-const pluginMetadataMocks = vi.hoisted(() => ({
-  getCurrent: vi.fn<() => PluginMetadataSnapshot>(),
-}));
 const MODELS_ADD_DEPRECATED_TEXT =
   "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
 
@@ -91,13 +81,12 @@ vi.mock("../../agents/model-auth-label.js", () => ({
 }));
 
 vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
-  normalizeProviderModelIdWithRuntime: (params: unknown) =>
-    normalizeProviderModelIdWithRuntimeMock(params),
+  normalizeProviderModelIdWithRuntime: () => undefined,
 }));
 
 vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/current-plugin-metadata-snapshot.js")>()),
-  getCurrentPluginMetadataSnapshot: pluginMetadataMocks.getCurrent,
+  getCurrentPluginMetadataSnapshot: () => metadataSnapshot,
 }));
 
 beforeEach(() => {
@@ -108,13 +97,12 @@ beforeEach(() => {
       if (!params?.config) {
         throw new Error("The browse fixture requires its captured config");
       }
-      const entries = modelCatalogMocks.loadModelCatalog(params);
-      const baseOwner = createModelsTestOwner(params.config, entries, params);
+      const baseOwner = createModelsTestOwner(params.config, catalog, params);
       const owner = {
         ...baseOwner,
         authModes,
         modelCatalog: { ...baseOwner.modelCatalog, providerOutcomes },
-        metadataSnapshot: pluginMetadataMocks.getCurrent(),
+        metadataSnapshot,
       };
       bindPreparedModelRuntimeAuth(owner, { store: authStore });
       return owner;
@@ -122,72 +110,49 @@ beforeEach(() => {
   );
   setFastModelsCliBackendDeps();
   providerOutcomes = [];
-  modelCatalogMocks.loadModelCatalog.mockReset().mockReturnValue([...defaultCatalog]);
-  normalizeProviderModelIdWithRuntimeMock.mockReset();
-  pluginMetadataMocks.getCurrent.mockReset().mockReturnValue(
-    createPluginMetadataSnapshotFixture({
-      plugins: ["anthropic", "xai", "refresh", "access", "cancel", "choice"].map((id) => ({
-        id,
-        providerAuthChoices: [
-          {
-            provider: id,
-            method: "device-code",
-            choiceId: `${id}-device-code`,
-            choiceLabel: id,
-            appGuidedAuth: "device-code",
-            credentialOnly: true,
-            channelLogin: {},
-          },
-        ],
-      })),
-    }),
-  );
+  catalog = [...defaultCatalog];
+  metadataSnapshot = createPluginMetadataSnapshotFixture({
+    plugins: ["anthropic", "xai", "refresh", "access", "cancel", "choice"].map((id) => ({
+      id,
+      providerAuthChoices: [
+        {
+          provider: id,
+          method: "device-code",
+          choiceId: `${id}-device-code`,
+          choiceLabel: id,
+          appGuidedAuth: "device-code",
+          credentialOnly: true,
+          channelLogin: {},
+        },
+      ],
+    })),
+  });
   setCredentials(["anthropic", "google", "openai"]);
   setActivePluginRegistry(createModelsTestRegistry());
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
-  vi.useRealTimers();
   cliBackendsTesting.resetDepsForTest();
 });
 
-function buildParams(
-  commandBodyNormalized: string,
-  cfgOverrides: Partial<OpenClawConfig> = {},
-  surface = "discord",
-): HandleCommandsParams {
-  const cfg = { ...configWithDefaults(), commands: { text: true }, ...cfgOverrides };
-  const params = buildCommandTestParams(commandBodyNormalized, cfg, {
+function runModels(command: string, defaults?: AgentDefaults, surface = "discord") {
+  const cfg = { ...configWithDefaults(defaults), commands: { text: true } };
+  const params = buildCommandTestParams(command, cfg, {
     Provider: surface,
     Surface: surface,
     From: "user-1",
     To: "bot",
   });
-  return {
-    ...params,
-    provider: "anthropic",
-    model: "claude-opus-4-5",
-    sessionKey: "agent:main:discord:direct:user-1",
-    command: {
-      ...params.command,
-      isAuthorizedSender: true,
-      senderIsOwner: true,
-      senderId: "user-1",
-      channel: surface,
-      channelId: "channel-1",
-      surface,
-      ownerList: [],
+  return handleModelsCommand(
+    {
+      ...params,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      sessionKey: "agent:main:discord:direct:user-1",
     },
-  };
-}
-
-function runModels(
-  command: string,
-  defaults?: NonNullable<OpenClawConfig["agents"]>["defaults"],
-  surface = "discord",
-) {
-  return handleModelsCommand(buildParams(command, configWithDefaults(defaults), surface), true);
+    true,
+  );
 }
 
 describe("handleModelsCommand", () => {
@@ -230,7 +195,7 @@ describe("handleModelsCommand", () => {
 
   it("offers supported setup for unauthenticated anthropic", async () => {
     setCredentials([]);
-    modelCatalogMocks.loadModelCatalog.mockReturnValue([]);
+    catalog = [];
     const result = await runModels("/models anthropic", { model: { primary: "anthropic/chat" } });
     expectText(result?.reply?.text, "Sign-in needed", "Connect with /login anthropic.");
   });
@@ -250,17 +215,9 @@ describe("handleModelsCommand", () => {
   });
 
   it.each([
-    {
-      failure: "rejected",
-      label: "Sign-in failed",
-      recovery: "Sign in again with /login anthropic.",
-    },
-    {
-      failure: "cooldown",
-      label: "Temporarily unavailable",
-      recovery: "Try again later or choose another model.",
-    },
-  ])("renders captured $failure credential state", async ({ failure, label, recovery }) => {
+    ["rejected", "Sign-in failed", "Sign in again with /login anthropic."],
+    ["cooldown", "Temporarily unavailable", "Try again later or choose another model."],
+  ])("renders captured %s credential state", async (failure, label, recovery) => {
     setCredentials(["anthropic"]);
     authModes = {};
     if (failure === "rejected") {
@@ -272,18 +229,16 @@ describe("handleModelsCommand", () => {
         anthropic: { cooldownUntil: Date.now() + 60_000, cooldownReason: "rate_limit" },
       };
     }
-    const params = buildParams("/models anthropic", {}, "telegram");
-    const result = await handleModelsCommand(params, true);
+    const result = await runModels("/models anthropic", {}, "telegram");
     expectText(result?.reply?.text, label, recovery);
-    params.command.commandBodyNormalized = "/models";
-    const menu = await handleModelsCommand(params, true);
+    const menu = await runModels("/models", {}, "telegram");
     expect(menu?.reply?.channelData).toMatchObject({
       telegram: { buttons: [[{ text: "anthropic", callback_data: "models:anthropic" }]] },
     });
   });
 
   it("does not offer an OpenAI row with a conflicting API and endpoint", async () => {
-    modelCatalogMocks.loadModelCatalog.mockReturnValue([
+    catalog = [
       {
         provider: "openai",
         id: "gpt-5.5",
@@ -291,7 +246,7 @@ describe("handleModelsCommand", () => {
         api: "openai-chatgpt-responses",
         baseUrl: "https://api.openai.com/v1",
       },
-    ]);
+    ];
 
     const data = await buildPreparedModelsProviderData(configWithDefaults());
 
@@ -299,13 +254,13 @@ describe("handleModelsCommand", () => {
   });
 
   it("does not re-add the default provider when provider visibility is restricted", async () => {
-    modelCatalogMocks.loadModelCatalog.mockReturnValue([
+    catalog = [
       { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
       { ...openAIPlatformRoute, provider: "openai", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
       { ...openAIPlatformRoute, provider: "openai", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
       { provider: "vllm", id: "llama-local", name: "Llama Local" },
       { provider: "vllm", id: "qwen3-local", name: "Qwen3 Local" },
-    ]);
+    ];
     setCredentials(["anthropic", "openai", "vllm"]);
 
     const result = await runModels("/models", { models: { "openai/*": {}, "vllm/*": {} } });
@@ -316,7 +271,7 @@ describe("handleModelsCommand", () => {
   });
 
   it("honors explicit all browse when listing CLI runtime models", async () => {
-    modelCatalogMocks.loadModelCatalog.mockReturnValue([
+    catalog = [
       { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
       { provider: "claude-cli", id: "claude-sonnet-4-6", name: "Claude Sonnet (CLI)" },
       {
@@ -325,7 +280,7 @@ describe("handleModelsCommand", () => {
         name: "Claude Opus (CLI)",
         status: "deprecated",
       },
-    ]);
+    ];
     setCredentials(["anthropic", "claude-cli"]);
     const config = configWithDefaults({
       model: { primary: "anthropic/claude-sonnet-4-6" },
@@ -343,11 +298,11 @@ describe("handleModelsCommand", () => {
   });
 
   it("keeps the menuonly provider picker browse-only", async () => {
-    modelCatalogMocks.loadModelCatalog.mockReturnValue([
+    catalog = [
       ...defaultCatalog.slice(0, 2),
       { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus (CLI)" },
       ...defaultCatalog.slice(2),
-    ]);
+    ];
     setCredentials(["anthropic", "claude-cli", "google", "openai"]);
     const result = await runModels("/models", {}, "menuonly");
     expect(result?.reply?.channelData).toEqual({
@@ -364,11 +319,11 @@ describe("handleModelsCommand", () => {
   });
 
   it("does not list bare fallback models under the default provider when catalog ownership is unique", async () => {
-    modelCatalogMocks.loadModelCatalog.mockReturnValue([
+    catalog = [
       { provider: "openai", id: "gpt-5.4", name: "GPT-5.4" },
       { provider: "deepseek", id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
       { provider: "deepseek", id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
-    ]);
+    ];
     const cfg = configWithDefaults({
       model: {
         primary: "openai/gpt-5.4",
