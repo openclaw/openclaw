@@ -150,7 +150,7 @@ function submitProjection(session: TestSession, input: Partial<Submission>) {
 }
 
 function promptImages(buffer: Buffer): ImageContent[] {
-  return finalizeRuntimePromptImages([
+  return finalizeRuntimePromptImages<ImageContent>([
     {
       image: { type: "image", data: buffer.toString("base64"), mimeType: "image/png" },
       factIndex: 0,
