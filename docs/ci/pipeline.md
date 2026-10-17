@@ -417,9 +417,17 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `c45839085e6ceaf9e4d217507c5e0ddbb6132147` with WebKit
+The pinned build pairs Bun `b76e4b4e6725dfc84eadc67059753a389e4b1c54` with WebKit
 `01f208ae7a87661e7503f514c946a37bc76ad1d1` in prerelease
-`openclaw-v1.4.3-20261015-c45839085e-webkit-01f208ae7a`.
+`openclaw-v1.4.3-20261017-b76e4b4e67-webkit-01f208ae7a`.
+This build preserves `DONT_CONTEXTIFY` global receiver identity for jsdom, keeps
+`availableParallelism()` independent of `navigator`, and fixes `SourceMap.findOrigin()`
+coordinates. It registers `fs.watch` callbacks on the returned watcher, treats
+`ENOTDIR` as no entry for non-throwing stat calls, settles IPC send callbacks after
+peer disconnect, and binds `FileHandle.close()` to its handle. Exiting Workers close
+their owned file handles and tracked descriptors. A per-Worker hash set avoids
+quadratic descriptor tracking during file open/close workloads. Corked HTTP responses
+use the socket's Writable queue; the uncorked fast path is unchanged.
 This build sends TLS SNI only for an explicit, nonempty `servername`, completes
 missing cached function bytecode in place, and uses GreedyDual-Size eviction at
 the same 256 MiB per-VM cache budget. Completed Workers release user listeners
