@@ -132,7 +132,7 @@ it.each([
   });
 });
 
-it.each(["foo/bar", "..", ".manifest.json", "receipt<final>.jpg", ""])(
+it.each(["foo/bar", "..", ".manifest.json", "receipt<final>.jpg", "", "foo\nbar"])(
   "rejects invalid attachment name %j",
   async (name) => {
     const result = await spawnWithName(name);
@@ -140,17 +140,12 @@ it.each(["foo/bar", "..", ".manifest.json", "receipt<final>.jpg", ""])(
       status: "error",
       error: expect.stringMatching(/attachments_invalid_name/),
     });
+    if (name.includes("\n")) {
+      expect(result.error).not.toContain(name);
+      expect(result.error).not.toMatch(/[\u0085\u009B\u2028\u2029\u202E]/);
+    }
   },
 );
-
-it("name with newline returns attachments_invalid_name", async () => {
-  const name = "foo\nbar";
-  const result = await spawnWithName(name);
-  expect(result.status).toBe("error");
-  expect(result.error).toMatch(/attachments_invalid_name/);
-  expect(result.error).not.toContain(name);
-  expect(result.error).not.toMatch(/[\u0085\u009B\u2028\u2029\u202E]/);
-});
 
 it("rejects a raw-valid path list whose wrapped prompt exceeds the budget", async () => {
   // Raw path stays under 4096; wrapper label/tags push the rendered block over.

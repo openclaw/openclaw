@@ -1,4 +1,3 @@
-import os from "node:os";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
@@ -139,14 +138,9 @@ it("inherits incognito storage ownership without contributor attribution", async
     },
   });
   const patches: Record<string, unknown>[] = [];
-  updateStore.mockImplementation(
-    async (_path: string, mutate: (store: Record<string, Record<string, unknown>>) => unknown) => {
-      const updated: Record<string, Record<string, unknown>> = {};
-      await mutate(updated);
-      patches.push(...Object.values(updated));
-      return updated;
-    },
-  );
+  installSessionStoreCaptureMock(updateStore, {
+    onStore: (updated) => patches.push(...Object.values(updated)),
+  });
   const result = await spawn({}, { agentSessionKey: parent });
   expect(result.status).toBe("accepted");
   expect(result.childSessionKey).toMatch(/^agent:main:subagent:incognito-/u);
@@ -175,40 +169,37 @@ it("keeps explicit cwd separate from the target agent workspace and Gateway para
   expect(request("agent")?.params).not.toHaveProperty("cwd");
 });
 
-it.each([false, true])(
-  "keeps a restricted same-agent helper's tools and root (sandboxed=%s)",
-  async (sandboxed) => {
-    sandboxStatus.mockReturnValue({ sandboxed });
-    const result = await spawn(
-      { agentId: "main" },
-      {
-        ...context,
-        inheritedToolPolicySource: "sender",
-        inheritedToolAllowlist: ["read", "sessions_spawn", ""],
-        inheritedToolDenylist: ["bash", "exec", "read", ""],
-        sessionPermissionPolicy: { mode: "read-only", root: "/tmp/requester-workspace/project" },
-      },
-    );
-    expect(result.status).toBe("accepted");
-    expect(store[result.childSessionKey!]).toMatchObject({
-      spawnedWorkspaceDir: "/tmp/requester-workspace",
-      ...(sandboxed ? {} : { spawnedCwd: "/tmp/requester-workspace/project" }),
-      sessionRoot: "/tmp/requester-workspace/project",
-      permissionMode: "read-only",
+it.each([false, true])("inherits sender tools/root (sandboxed=%s)", async (sandboxed) => {
+  sandboxStatus.mockReturnValue({ sandboxed });
+  const result = await spawn(
+    { agentId: "main" },
+    {
+      ...context,
       inheritedToolPolicySource: "sender",
-      inheritedToolAllow: ["read", "sessions_spawn"],
-      inheritedToolDeny: ["exec", "read"],
-      inheritedToolPolicyVersion: 1,
-    });
-    if (sandboxed) {
-      expect(store[result.childSessionKey!]).not.toHaveProperty("spawnedCwd");
-    }
-    expect(request("agent")?.params.sessionKey).toBe(result.childSessionKey);
-  },
-);
+      inheritedToolAllowlist: ["read", "sessions_spawn", ""],
+      inheritedToolDenylist: ["bash", "exec", "read", ""],
+      sessionPermissionPolicy: { mode: "read-only", root: "/tmp/requester-workspace/project" },
+    },
+  );
+  expect(result.status).toBe("accepted");
+  expect(store[result.childSessionKey!]).toMatchObject({
+    spawnedWorkspaceDir: "/tmp/requester-workspace",
+    ...(sandboxed ? {} : { spawnedCwd: "/tmp/requester-workspace/project" }),
+    sessionRoot: "/tmp/requester-workspace/project",
+    permissionMode: "read-only",
+    inheritedToolPolicySource: "sender",
+    inheritedToolAllow: ["read", "sessions_spawn"],
+    inheritedToolDeny: ["exec", "read"],
+    inheritedToolPolicyVersion: 1,
+  });
+  if (sandboxed) {
+    expect(store[result.childSessionKey!]).not.toHaveProperty("spawnedCwd");
+  }
+  expect(request("agent")?.params.sessionKey).toBe(result.childSessionKey);
+});
 
 it.each([{ agentId: "ops" }, { cwd: "/tmp" }, { worktree: true }])(
-  "refuses a restricted helper that changes its agent or root: %j",
+  "refuses sender-restricted selection: %j",
   async (selection) => {
     const result = await spawn(selection, { ...context, inheritedToolPolicySource: "sender" });
     expect(result).toMatchObject({
@@ -253,23 +244,20 @@ it.each(["lightweight", "timer-safe TTL"] as const)("prepares %s context", async
 });
 
 it.each([
-  { thread: undefined, guidance: "thread: true" },
-  { thread: true, guidance: "not running on a channel" },
-])(
-  "names usable alternatives for session mode with thread=$thread",
-  async ({ thread, guidance }) => {
-    const result = await spawn(
-      { mode: "session", thread, context: "isolated" },
-      { agentSessionKey: "agent:main:main", agentChannel: "webchat" },
-    );
-    expect(result.status).toBe("error");
-    if (result.status === "error") {
-      expect(result.error).toContain(guidance);
-      expect(result.error).toContain('mode="run"');
-      expect(result.error).not.toContain("sessions_send");
-    }
-  },
-);
+  [undefined, "thread: true"],
+  [true, "not running on a channel"],
+] as const)("suggests session alternatives (thread=%s)", async (thread, guidance) => {
+  const result = await spawn(
+    { mode: "session", thread, context: "isolated" },
+    { agentSessionKey: "agent:main:main", agentChannel: "webchat" },
+  );
+  expect(result.status).toBe("error");
+  if (result.status === "error") {
+    expect(result.error).toContain(guidance);
+    expect(result.error).toContain('mode="run"');
+    expect(result.error).not.toContain("sessions_send");
+  }
+});
 
 it.each([
   [
@@ -314,39 +302,34 @@ it("persists leaf capabilities below the depth limit independently of maxConcurr
   });
 });
 
-it.each(["user", "auto"] as const)(
-  "persists a %s-selected model separately from its auth profile",
-  async (source) => {
-    const model = "openai/gpt-5.6-luna@openai:test-profile";
-    if (source === "auto") {
-      defaults({ workspace: os.tmpdir(), subagents: { model } });
-    }
-    const result = await spawn(source === "user" ? { model } : {}, {
-      ...mainContext,
-      agentChannel: "guildchat",
-    });
-    expect(result).toMatchObject({
-      status: "accepted",
-      resolvedModel: "openai/gpt-5.6-luna",
-    });
-    const entry = persistedModel("openai", "gpt-5.6-luna", source);
-    expect(entry).toMatchObject({
-      authProfileOverride: "openai:test-profile",
-      authProfileOverrideSource: "user",
-    });
-    if (source === "auto") {
-      expect(entry).toMatchObject({
-        modelOverrideFallbackOriginProvider: "openai",
-        modelOverrideFallbackOriginModel: "gpt-5.6-luna",
-      });
-    }
-  },
-);
+it.each(["user", "auto"] as const)("separates %s model from auth profile", async (source) => {
+  const resolvedModel = "openai/gpt-5.6-luna";
+  const model = `${resolvedModel}@openai:test-profile`;
+  if (source === "auto") {
+    defaults({ subagents: { model } });
+  }
+  const result = await spawn(source === "user" ? { model } : {}, {
+    ...mainContext,
+    agentChannel: "guildchat",
+  });
+  expect(result).toMatchObject({ status: "accepted", resolvedModel });
+  const entry = persistedModel("openai", "gpt-5.6-luna", source);
+  expect(entry).toMatchObject({
+    authProfileOverride: "openai:test-profile",
+    authProfileOverrideSource: "user",
+    ...(source === "auto"
+      ? {
+          modelOverrideFallbackOriginProvider: "openai",
+          modelOverrideFallbackOriginModel: "gpt-5.6-luna",
+        }
+      : {}),
+  });
+});
 
 it.each([
   { source: "active", model: "custom/model" },
   { source: "persisted", model: "middle" },
-])("preserves the $source resolved model $model in child state", async ({ source, model }) => {
+])("preserves $source model $model", async ({ source, model }) => {
   const [{ createPluginMetadataSnapshotFixture }, { withPluginRuntimeGenerationScope }] =
     await Promise.all([
       import("../../../plugins/plugin-metadata.test-support.js"),
@@ -391,7 +374,6 @@ it.each([
   async (_name, model, parentMode, override, savedModel, expected) => {
     defaults(
       {
-        workspace: os.tmpdir(),
         model: { primary: "custom/model-a" },
         models: {
           "custom/model-a": { alias: "same-model", params: { fastMode: true } },

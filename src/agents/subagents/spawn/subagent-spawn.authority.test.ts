@@ -1,7 +1,7 @@
 import "./subagent-spawn-model.mocks.shared.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import { installSpawnAuthorityFixture, waitForSubagentCleanupCompleted } from "./subagent-spawn.authority.test-support.js";
+import { installSpawnAuthorityFixture, waitForSubagentCleanupCompleted, observeSubagentRun } from "./subagent-spawn.authority.test-support.js";
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
@@ -26,9 +26,8 @@ import {
 } from "../../../sessions/session-lifecycle-admission.js";
 import { observeSessionWorkAdmissionDrain } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import {
-  createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
-  prepareAgentRunAdmission,
+  prepareSystemAgentRunAdmission,
 } from "../../admitted-run-context.js";
 import { copyAgentToolMetadata } from "../../agent-tool-metadata.js";
 import { finalizeAgentTools } from "../../agent-tools.finalize.js";
@@ -247,15 +246,12 @@ describe("pending spawn invocation authority", () => {
         }
       });
       const cancellation = abortParent(context);
-      const freshAdmission = prepareAgentRunAdmission({
+      const freshAdmission = prepareSystemAgentRunAdmission(
         cfg,
-        operationalRunInstance: createOperationalRunInstanceRef("fresh-b"),
-        facts: {
-          runId: "fresh-b",
-          agentId: "main",
-          ingress: { kind: "system", boundary: "spawn-authority-test", state: "present" },
-        },
-      });
+        "fresh-b",
+        "main",
+        "spawn-authority-test",
+      );
       let fresh: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
       const freshInterrupted = vi.fn();
       const dispatch = vi.fn();
@@ -470,13 +466,7 @@ describe("pending spawn invocation authority", () => {
         cancellation,
         "Cancellation returned before drain",
       );
-      const accepted = createDeferred<typeof entry>();
-      const stopObservingAcceptance = subscribeSubagentRunChanges("persistence", () => {
-        const current = subagentRuns.get("accepted-task-run");
-        if (current) {
-          accepted.resolve(current);
-        }
-      });
+      const accepted = observeSubagentRun("accepted-task-run");
       try {
         response.resolve();
         const acceptedEntry = await awaitGateBeforeSettlement(
@@ -495,7 +485,7 @@ describe("pending spawn invocation authority", () => {
         expect(getSubagentRunRuntimeKey(acceptedEntry)).toBe(runtimeOwner);
         expect(subagentRuns.has(entry.runId)).toBe(false);
       } finally {
-        stopObservingAcceptance();
+        accepted.stop();
       }
       lease?.release();
       const result = await cancellation;

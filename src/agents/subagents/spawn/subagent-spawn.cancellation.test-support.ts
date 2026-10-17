@@ -51,15 +51,7 @@ export function registerNativeCancellationCases<
   parentRunId: string;
   assertNoModelExecution: () => void;
 }) {
-  const {
-    createBoundParent,
-    createBoundGateway,
-    closeBoundGateway,
-    throwBoundFailures,
-    parentSessionKey,
-    parentRunId,
-    assertNoModelExecution,
-  } = options;
+  const { parentSessionKey, parentRunId } = options;
   it.for([
     "before interruption",
     "after interruption",
@@ -68,7 +60,7 @@ export function registerNativeCancellationCases<
   ] as const)(
     "separates native stop acceptance from caller revocation %s",
     async (transition, { signal }) => {
-      const bound = await createBoundParent();
+      const bound = await options.createBoundParent();
       const { createGatewaySubagentRuntime } =
         await import("../../../gateway/server-plugin-subagent-runtime.js");
       const context = bound.context as unknown as GatewayRequestContext;
@@ -76,7 +68,7 @@ export function registerNativeCancellationCases<
       const scoped = <T>(work: () => T) =>
         withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect: () => false }, work);
       const wait = <T>(work: PromiseLike<T>) => withinTest(work, signal);
-      const register = (runId: string, sessionKey: string, ownerKey: string, task: string) =>
+      const register = (runId: string, sessionKey: string, ownerKey: string) =>
         scoped(() =>
           registerSubagentRun({
             runId,
@@ -89,7 +81,7 @@ export function registerNativeCancellationCases<
             requesterSessionKey: ownerKey,
             controllerSessionKey: ownerKey,
             requesterDisplayKey: ownerKey,
-            task,
+            task: runId,
             cleanup: "keep",
             expectsCompletionMessage: false,
           }),
@@ -109,7 +101,7 @@ export function registerNativeCancellationCases<
       });
       const api = plugins.createApi(plugin, { config: bound.cfg });
       setActivePluginRegistry(plugins.registry);
-      const { runtime } = await createBoundGateway(bound);
+      const { runtime } = await options.createBoundGateway(bound);
       const requester = "agent:main:telegram:direct:native-cancellation";
       const nextRunId = "native-cancellation-ancestor-next";
       const targetKey = "agent:main:subagent:native-cancellation-target";
@@ -173,7 +165,7 @@ export function registerNativeCancellationCases<
       };
       onTestFinished(retireFixture);
       const settleRootWork = observeRootWork();
-      await register(parentRunId, parentSessionKey, requester, "Own the selected native task");
+      await register(parentRunId, parentSessionKey, requester);
       const ancestor = subagentRuns.get(parentRunId)!;
       api.on("before_dispatch", async () => {
         await api.runtime.subagent.run({
@@ -208,7 +200,7 @@ export function registerNativeCancellationCases<
             operatorRoleActor: { kind: "system" },
           },
         );
-        await register(targetRunId, targetKey, parentSessionKey, "Selected native task");
+        await register(targetRunId, targetKey, parentSessionKey);
         const target = expectDefined(context.chatAbortControllers.get(targetRunId), "target run");
         const onAbort = vi.fn(() => entered.resolve());
         target.controller.signal.addEventListener("abort", onAbort, { once: true });
@@ -334,7 +326,7 @@ export function registerNativeCancellationCases<
               taskCancellationAccepted: true,
             },
           });
-          assertNoModelExecution();
+          options.assertNoModelExecution();
         } else {
           // Revocation refuses the caller result even when the native owner already
           // accepted the stop; the registry assertions below prove that settlement.
@@ -345,7 +337,7 @@ export function registerNativeCancellationCases<
             accepted ? "killed" : "running",
           );
           expect(subagentRuns.get(targetRunId)?.killIntent).toBeUndefined();
-          assertNoModelExecution();
+          options.assertNoModelExecution();
           releaseTerminal.resolve();
         }
       } catch (error) {
@@ -366,13 +358,13 @@ export function registerNativeCancellationCases<
           retireFixture();
         }
         await pendingSettled;
-        failures.push(...(await closeBoundGateway(bound, runtime, targetRunId)));
+        failures.push(...(await options.closeBoundGateway(bound, runtime, targetRunId)));
         try {
           await settleRootWork(true);
         } catch (error) {
           failures.push(error);
         }
-        throwBoundFailures(failures);
+        options.throwBoundFailures(failures);
       }
     },
   );

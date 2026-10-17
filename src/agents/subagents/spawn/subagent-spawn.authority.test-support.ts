@@ -47,20 +47,32 @@ vi.mock("../../runtime-plugins.js", () => ({
 }));
 vi.mock("../../../gateway/call.js", { spy: true });
 
-export async function waitForSubagentCleanupCompleted(entry: SubagentRunRecord) {
-  const completed = createDeferred();
+export function observeSubagentRun(
+  runId: string,
+  matches: (entry: SubagentRunRecord) => boolean = () => true,
+) {
+  const completed = createDeferred<SubagentRunRecord>();
   const inspect = () => {
-    const current = subagentRuns.get(entry.runId);
-    if (isSameSubagentRun(current, entry) && typeof current?.cleanupCompletedAt === "number") {
-      completed.resolve();
+    const current = subagentRuns.get(runId);
+    if (current && matches(current)) {
+      completed.resolve(current);
     }
   };
-  const unsubscribe = subscribeSubagentRunChanges("persistence", inspect);
+  const stop = subscribeSubagentRunChanges("persistence", inspect);
+  inspect();
+  return { promise: completed.promise, stop };
+}
+
+export async function waitForSubagentCleanupCompleted(entry: SubagentRunRecord) {
+  const observed = observeSubagentRun(
+    entry.runId,
+    (current) =>
+      isSameSubagentRun(current, entry) && typeof current.cleanupCompletedAt === "number",
+  );
   try {
-    inspect();
-    await completed.promise;
+    await observed.promise;
   } finally {
-    unsubscribe();
+    observed.stop();
   }
 }
 
@@ -198,18 +210,13 @@ export function installSpawnAuthorityFixture() {
   let stateDir = "";
   let pluginSnapshot: ReturnType<typeof plugins.captureActivePluginRegistrySnapshot>;
   const settle = () => settleSubagentRegistryPersistenceWork();
-  const writeSession = (
-    sessionKey: string,
-    defaultSessionId: string,
-    agentId = "main",
-    lifecycleRevision?: string,
-  ) =>
+  const writeSession = (key: string, id: string, agentId = "main", revision?: string) =>
     writeSubagentSessionEntry({
       stateDir,
       agentId,
-      sessionKey,
-      defaultSessionId,
-      lifecycleRevision,
+      sessionKey: key,
+      defaultSessionId: id,
+      lifecycleRevision: revision,
     });
   async function configure(cfg: ReturnType<typeof config.getRuntimeConfig>) {
     await writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify(cfg));
@@ -304,15 +311,12 @@ export function installSpawnAuthorityFixture() {
         sendRecoveryNotice: unexpectedRecovery,
       } satisfies GatewayRecoveryRuntime,
     });
-    const admission = runContext.prepareAgentRunAdmission({
+    const admission = runContext.prepareSystemAgentRunAdmission(
       cfg,
-      operationalRunInstance: runContext.createOperationalRunInstanceRef(parentRunId),
-      facts: {
-        runId: parentRunId,
-        agentId: "main",
-        ingress: { kind: "system", boundary: "spawn-authority-test", state: "present" },
-      },
-    });
+      parentRunId,
+      "main",
+      "spawn-authority-test",
+    );
     const parent = registerChatAbortController({
       chatAbortControllers: context.chatAbortControllers,
       runId: parentRunId,

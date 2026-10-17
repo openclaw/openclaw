@@ -13,11 +13,10 @@ const registerRun = vi.fn();
 const resolveEngine = vi.fn();
 const startQueuedRun = vi.fn();
 let spawn: typeof import("./subagent-spawn.js").spawnSubagentDirect;
-let createCallbacks: typeof import("./subagent-spawn-collector.js").createCollectorLaunchCallbacks;
-let resetScheduler: () => void;
-let isActive: typeof import("../swarm/swarm-scheduler.js").isSwarmRunActive;
-let tryBeginSuspension: typeof import("../../../process/gateway-work-admission.js").tryBeginGatewaySuspendAdmission;
-let outsideRoot: typeof import("../../../process/gateway-work-admission.js").runOutsideGatewayRootWorkAdmission;
+let collector: typeof import("./subagent-spawn-collector.js");
+let scheduler: typeof import("../swarm/swarm-scheduler.js");
+let schedulerTesting: (typeof import("../swarm/swarm-scheduler.test-support.js"))["testing"];
+let admission: typeof import("../../../process/gateway-work-admission.js");
 
 beforeAll(async () => {
   ({ spawnSubagentDirect: spawn } = await loadSubagentSpawnModuleForTest({
@@ -30,20 +29,14 @@ beforeAll(async () => {
         tools: { swarm: { enabled: true, maxConcurrent: 1 } },
       }),
   }));
-  ({ createCollectorLaunchCallbacks: createCallbacks } =
-    await import("./subagent-spawn-collector.js"));
-  ({
-    testing: { reset: resetScheduler },
-  } = await import("../swarm/swarm-scheduler.test-support.js"));
-  ({ isSwarmRunActive: isActive } = await import("../swarm/swarm-scheduler.js"));
-  ({
-    tryBeginGatewaySuspendAdmission: tryBeginSuspension,
-    runOutsideGatewayRootWorkAdmission: outsideRoot,
-  } = await import("../../../process/gateway-work-admission.js"));
+  collector = await import("./subagent-spawn-collector.js");
+  ({ testing: schedulerTesting } = await import("../swarm/swarm-scheduler.test-support.js"));
+  scheduler = await import("../swarm/swarm-scheduler.js");
+  admission = await import("../../../process/gateway-work-admission.js");
 });
 
 beforeEach(() => {
-  resetScheduler();
+  schedulerTesting.reset();
   registerRun.mockReset();
   startQueuedRun.mockReset().mockReturnValue(true);
   resolveEngine.mockReset();
@@ -57,7 +50,7 @@ beforeEach(() => {
     );
 });
 
-afterEach(() => resetScheduler());
+afterEach(() => schedulerTesting.reset());
 
 function expectCalls(count: number, ...mocks: { mock: { calls: readonly unknown[] } }[]) {
   for (const mock of mocks) {
@@ -66,11 +59,8 @@ function expectCalls(count: number, ...mocks: { mock: { calls: readonly unknown[
 }
 
 function observe(promise: Promise<unknown>) {
-  const state = { completed: false };
-  const markCompleted = () => {
-    state.completed = true;
-  };
-  return { state, settled: promise.then(markCompleted, markCompleted) };
+  const completed = vi.fn();
+  return { completed, settled: promise.then(completed, completed) };
 }
 
 const spawnCollector = (task: string) =>
@@ -105,14 +95,12 @@ function claimFixture() {
 }
 
 function callbackFixture(f: ReturnType<typeof claimFixture>, failure?: Error) {
-  const launch = vi.fn(async () => {
-    if (failure) {
-      throw failure;
-    }
-    return { response: { runId: "original", status: "accepted" } };
-  });
+  const launch = vi.fn(async () => ({ response: { runId: "original", status: "accepted" } }));
+  if (failure) {
+    launch.mockRejectedValue(failure);
+  }
   const cleanup = vi.fn(async () => ({ attachmentsRemoved: true, sessionDeleted: true }));
-  const callbacks = createCallbacks({
+  const callbacks = collector.createCollectorLaunchCallbacks({
     childRunId: "original",
     childSessionKey: "agent:main:subagent:original",
     requesterSessionKey: "agent:main:main",
@@ -152,17 +140,17 @@ async function nextTurn() {
 it("keeps one collector launch pending through reversible Gateway suspension", async () => {
   const f = claimFixture();
   f.release();
-  const suspension = tryBeginSuspension(() => {});
+  const suspension = admission.tryBeginGatewaySuspendAdmission(() => {});
   if (!suspension) {
     throw new Error("Expected a fresh suspension admission");
   }
   expect(suspension.commit()).toBe(true);
   const { launch, cleanup, callbacks } = callbackFixture(f);
-  const first = outsideRoot(() => callbacks.start());
+  const first = admission.runOutsideGatewayRootWorkAdmission(() => callbacks.start());
   const observed = observe(first);
   try {
     await nextTurn();
-    expect(observed.state.completed).toBe(false);
+    expect(observed.completed).not.toHaveBeenCalled();
     expect(launch).not.toHaveBeenCalled();
     expect(suspension.release()).toBe(true);
     await first;
@@ -212,7 +200,7 @@ it("settles a stopped activation through its retained scope before retiring the 
   try {
     expect(result.status).toBe("accepted");
     await vi.waitFor(() => expect(f.settle).toHaveBeenCalledOnce());
-    expect(isActive(result.runId!)).toBe(true);
+    expect(scheduler.isSwarmRunActive(result.runId!)).toBe(true);
     expect(f.rollback).not.toHaveBeenCalled();
     expect(
       callGateway.mock.calls.some(
@@ -220,7 +208,7 @@ it("settles a stopped activation through its retained scope before retiring the 
       ),
     ).toBe(false);
     settled.resolve();
-    await vi.waitFor(() => expect(isActive(result.runId!)).toBe(false));
+    await vi.waitFor(() => expect(scheduler.isSwarmRunActive(result.runId!)).toBe(false));
     expect(f.settle).toHaveBeenCalledOnce();
     expect(f.rollback).not.toHaveBeenCalled();
   } finally {
@@ -228,42 +216,40 @@ it("settles a stopped activation through its retained scope before retiring the 
   }
 });
 
-it("retains the actual spawn activation handoff through a provisional claim", async () => {
-  const f = claimFixture();
-  const registered = createDeferred();
-  registerOwnedEngine(f, () => registered.resolve());
-  const pending = spawnCollector("preserve prepared collector");
-  const observed = observe(pending);
-  try {
-    await registered.promise;
-    await nextTurn();
-    expect(observed.state.completed).toBe(false);
-    expectCalls(0, f.rollback, f.dispose);
-    expect(callGateway.mock.calls.some(([request]) => request.method === "agent")).toBe(false);
-    f.release();
-    expect((await pending).status).toBe("accepted");
-    await vi.waitFor(() => expect(startQueuedRun).toHaveBeenCalledOnce());
-    expect(f.rollback).not.toHaveBeenCalled();
-  } finally {
-    f.release();
-    await pending;
-  }
-});
-
-it("retains collector failure cleanup through a provisional claim", async () => {
-  const f = claimFixture();
-  const { launch, cleanup, callbacks } = callbackFixture(f);
-  const pending = Promise.resolve(callbacks.onStartFailure(new Error("launch refused")));
-  const observed = observe(pending);
-  try {
-    await nextTurn();
-    expect(observed.state.completed).toBe(false);
-    expectCalls(0, launch, cleanup, f.rollback, f.settle);
-    f.release();
-    await pending;
-    expectCalls(1, cleanup, f.settle);
-  } finally {
-    f.release();
-    await observed.settled;
-  }
-});
+it.each(["activation", "failure cleanup"])(
+  "retains %s through a provisional claim",
+  async (phase) => {
+    const f = claimFixture();
+    const registered = createDeferred();
+    registerOwnedEngine(f, () => registered.resolve());
+    const { launch, cleanup, callbacks } = callbackFixture(f);
+    const activating = phase === "activation";
+    const pending = activating
+      ? spawnCollector("preserve prepared collector")
+      : Promise.resolve(callbacks.onStartFailure(new Error("launch refused")));
+    const observed = observe(pending);
+    try {
+      if (activating) {
+        await registered.promise;
+      }
+      await nextTurn();
+      expect(observed.completed).not.toHaveBeenCalled();
+      expectCalls(0, f.rollback, ...(activating ? [f.dispose] : [launch, cleanup, f.settle]));
+      if (activating) {
+        expect(callGateway.mock.calls.some(([request]) => request.method === "agent")).toBe(false);
+      }
+      f.release();
+      const result = await pending;
+      if (activating) {
+        expect(result).toMatchObject({ status: "accepted" });
+        await vi.waitFor(() => expect(startQueuedRun).toHaveBeenCalledOnce());
+        expectCalls(0, f.rollback);
+      } else {
+        expectCalls(1, cleanup, f.settle);
+      }
+    } finally {
+      f.release();
+      await observed.settled;
+    }
+  },
+);

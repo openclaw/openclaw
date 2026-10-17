@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import {
   registerContextEngineInRegistry,
@@ -16,6 +16,7 @@ import type { SubagentRegistrationScope } from "../registry/subagent-registry.ty
 import {
   loadSubagentSpawnModuleForTest,
   createSubagentSpawnTestConfig,
+  createSubagentRegistrationScopeForTest,
 } from "./subagent-spawn.test-helpers.js";
 
 function createGate() {
@@ -173,16 +174,13 @@ describe("spawn context-engine resource custody", () => {
       const disposal = createGate();
       let claimed = true;
       const fixture = engineFixture({ dispose: disposal.wait });
-      const scope = {
+      const scope = createSubagentRegistrationScopeForTest({
         waitForClaim: () => (claimed ? claim.wait() : undefined),
-        waitForRetirementPublication: () => undefined,
         canLaunch: () => false,
-        canCleanupSession: () => true,
-        canAcceptLaunch: () => true,
         canAbortAcceptedRun: () => false,
         canRetireReservation: () => false,
         settleFailedLaunch: vi.fn(async () => {}),
-      } satisfies SubagentRegistrationScope;
+      });
       registerRun.mockImplementation(
         async (
           { runId }: { runId: string },
@@ -293,18 +291,12 @@ describe("spawn context-engine resource custody", () => {
         throw new Error("cleanup failed");
       },
     });
-    handleAgent(async () => {
-      throw new Error("launch failed");
-    });
+    handleAgent(() => Promise.reject(new Error("launch failed")));
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    let settled = false;
-    const operation = spawnChild().finally(() => {
-      settled = true;
-    });
+    const operation = spawnChild();
     try {
       // A task turn also completes on the original defect, without entering cleanup.
-      await Promise.race([disposal.entered, operation]);
-      expect.soft(settled).toBe(false);
+      await awaitGateBeforeSettlement(disposal.entered, operation, "Spawn settled before disposal");
       expect.soft(fixture.database.isOpen).toBe(true);
       disposal.release();
       expect(await operation).toMatchObject({ status: "error", error: "launch failed" });
@@ -329,9 +321,7 @@ describe("spawn context-engine resource custody", () => {
         },
       });
       if (outcome === "failure") {
-        handleAgent(async () => {
-          throw new Error("launch failed");
-        });
+        handleAgent(() => Promise.reject(new Error("launch failed")));
       }
       try {
         const result = await spawnChild("retained-preparation");
@@ -429,12 +419,8 @@ describe("spawn context-engine resource custody", () => {
       if (mode === "withdrawal") {
         const hold = scheduler.holdQueuedSwarmRun(result.runId!);
         expect(hold?.withdraw()).toBe(true);
-        let released = false;
-        const release = Promise.resolve(hold?.release()).then(() => {
-          released = true;
-        });
-        await Promise.race([disposal.entered, release]);
-        expect.soft(released).toBe(false);
+        const release = Promise.resolve(hold?.release());
+        await awaitGateBeforeSettlement(disposal.entered, release, "Hold released before disposal");
         expect(fixture.database.isOpen).toBe(true);
         disposal.release();
         await release;
