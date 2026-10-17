@@ -323,6 +323,7 @@ function createReadTransport(
     authority: OpenClawStateReadAuthority,
     expectedIdentity?: string,
     snapshotRoot?: string,
+    postgresSnapshot?: string,
   ) => {
     const inContext = AsyncLocalStorage.snapshot();
     let task: ReadTask | undefined;
@@ -372,6 +373,7 @@ function createReadTransport(
         checkFreshAdmission,
         expectedIdentity,
         snapshotRoot,
+        postgresSnapshot,
         command: { ...readCommand },
       };
       const pool = readPool(state, ownsAdmission(), awaitedOnly);
@@ -475,6 +477,7 @@ function createReadTransport(
       authority,
       source.expectedIdentity,
       source.snapshotRoot,
+      source.postgresSnapshot,
     ).operation;
   const startClose = (): RetainedOperation<void> => {
     closed = true;

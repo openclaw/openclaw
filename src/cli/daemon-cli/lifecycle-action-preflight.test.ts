@@ -2,10 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot, resetConfigRuntimeState } from "../../config/config.js";
+import { resetDatabaseEngineSelectionForTest } from "../../infra/database-engine/context.test-support.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { getServiceActionPreflightFailure } from "./lifecycle-action-preflight.js";
 
 afterEach(() => {
+  resetDatabaseEngineSelectionForTest();
   resetConfigRuntimeState();
   vi.unstubAllEnvs();
 });
@@ -31,6 +33,28 @@ async function withIsolatedLifecycleState(
 }
 
 describe("getServiceActionPreflightFailure", () => {
+  it("reports an unresolved candidate database without opening fallback state before restart", async () => {
+    await withIsolatedLifecycleState(async ({ configPath }) => {
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          database: {
+            engine: "postgres",
+            postgres: {
+              connection: { source: "env", provider: "default", id: "MISSING_RESTART_DSN" },
+            },
+          },
+          plugins: { enabled: false },
+        }),
+      );
+      delete process.env.MISSING_RESTART_DSN;
+      resetDatabaseEngineSelectionForTest();
+      expect(await getServiceActionPreflightFailure("restart")).toMatchObject({
+        message: expect.stringContaining("SecretRef is unresolved"),
+      });
+    });
+  });
+
   // A retired credential file no longer blocks the service: the Gateway boots and
   // marks that auth owner configured-unavailable, so one stale file cannot keep
   // every other channel and provider offline.

@@ -27,6 +27,9 @@ const database = {
 
 const recoveryOwnerCommands = [
   ["agent", "--agent", "main", "--message", "hello"],
+  ["gateway", "restart"],
+  ["daemon", "restart"],
+  ["node", "restart"],
   ["gateway", "stop", "--force"],
   ["daemon", "stop", "--force"],
   ["gateway", "uninstall"],

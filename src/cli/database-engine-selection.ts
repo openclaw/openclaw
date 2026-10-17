@@ -55,7 +55,10 @@ const OWNED_DATABASE_SELECTION = new Set([
   "memory rem-harness",
   "memory rem-backfill",
   "memory session-backfill",
-  // Service removal/shutdown must work when the invoking shell lacks DB credentials.
+  // Installed-service control retains its lifecycle owner's invalid-config recovery.
+  "gateway restart",
+  "daemon restart",
+  "node restart",
   "gateway stop",
   "daemon stop",
   "gateway uninstall",

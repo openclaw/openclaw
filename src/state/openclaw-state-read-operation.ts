@@ -55,6 +55,7 @@ export type OpenClawStateReadCompletion =
 type Selection = {
   pathname: string;
   snapshot?: {
+    postgresSnapshot?: string;
     location: string;
     cleanClose?: boolean;
     cleanupRoot?: string;
@@ -391,7 +392,7 @@ export function startOpenClawStateReadOperation(
   }
 
   function query() {
-    if ((!snapshot && !prepared) || snapshot?.cleanClose) {
+    if ((!snapshot && !prepared) || snapshot?.cleanClose || snapshot?.postgresSnapshot) {
       expectedIdentity = context.admission.identity.key;
     }
     if (prepared) {
@@ -416,6 +417,7 @@ export function startOpenClawStateReadOperation(
           checkFreshAdmission: !borrowed,
           expectedIdentity,
           snapshotRoot: prepared?.cleanupRoot ?? snapshot?.cleanupRoot,
+          postgresSnapshot: selection.snapshot?.postgresSnapshot,
         },
         authority,
       ),

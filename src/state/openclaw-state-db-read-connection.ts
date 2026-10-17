@@ -47,6 +47,7 @@ import {
   admitStateSchemaFacts,
   type StateSchemaContentVersionRowReader,
 } from "./openclaw-state-db-schema-version.js";
+import { postgresStateReadSnapshot } from "./openclaw-state-postgres-snapshot-context.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
 
 export type OpenClawStateReadConnection = {
@@ -279,7 +280,19 @@ export function readOpenClawStateReadOnlyLocation<T>(
       result = {
         status: "available",
         value: isPostgresSqlConnection(opened.database.db)
-          ? opened.database.db.runTransaction(read, undefined, true)
+          ? opened.database.db.runTransaction(
+              () => {
+                const snapshot = postgresStateReadSnapshot.getStore();
+                if (snapshot?.path === pathname) {
+                  opened.database.db.exec(
+                    `SET TRANSACTION SNAPSHOT '${snapshot.snapshot.replaceAll("'", "''")}'`,
+                  );
+                }
+                return read();
+              },
+              undefined,
+              true,
+            )
           : read(),
       };
     } catch (error) {

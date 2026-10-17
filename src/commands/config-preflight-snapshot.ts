@@ -165,15 +165,16 @@ export async function readConfigSnapshotBeforeEngineSelection(
   env: NodeJS.ProcessEnv = process.env,
   options: { isolateEnv?: boolean } = {},
 ): Promise<ConfigFileSnapshot> {
+  const readEnv = options.isolateEnv === false ? env : cloneEnvWithPlatformSemantics(env);
   const read = () =>
-    readConfigFileSnapshot({
+    createConfigIO({
+      env: readEnv,
       observe: false,
-      isolateEnv: options.isolateEnv ?? true,
       pluginValidation: "core-only",
-    });
+    }).readConfigFileSnapshot();
   let snapshot = await read();
   // One-shot config env may select another target before storage becomes process-stable.
-  while (options.isolateEnv === false && snapshot.path !== resolveConfigPath(env)) {
+  while (snapshot.path !== resolveConfigPath(readEnv)) {
     snapshot = await read();
   }
   return snapshot;
@@ -184,13 +185,15 @@ export async function readConfigSnapshotForEngineSelection(
   env: NodeJS.ProcessEnv = process.env,
   options: { isolateEnv?: boolean } = {},
 ): Promise<ConfigFileSnapshot> {
-  const snapshot = await readConfigSnapshotBeforeEngineSelection(env, options);
+  const readEnv = options.isolateEnv === false ? env : cloneEnvWithPlatformSemantics(env);
+  const snapshot = await readConfigSnapshotBeforeEngineSelection(readEnv, { isolateEnv: false });
   if (
     !isConfigReadFailure(snapshot) &&
     !snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
   ) {
     installDatabaseEngineSelection(
-      getDatabaseEngineSelection() ?? (await resolveDatabaseEngineSelection(snapshot.config, env)),
+      getDatabaseEngineSelection() ??
+        (await resolveDatabaseEngineSelection(snapshot.config, readEnv)),
     );
   }
   return snapshot;

@@ -37,6 +37,7 @@ import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-s
 import {
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
+  withExistingOpenClawStateDatabaseReadOnly,
   withOpenClawStateDatabaseReadSnapshot,
 } from "./openclaw-state-db-readonly.js";
 import {
@@ -70,6 +71,79 @@ const legacyWriteIndexesSql = `
 `;
 
 describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
+  it("retains one discovery generation across awaited, nested and native reads", async () => {
+    const directory = tempDirs.make("state-composite-snapshot-postgres-");
+    const pathname = path.join(directory, "state.sqlite");
+    const options = { path: pathname, env: { ...process.env, OPENCLAW_STATE_DIR: directory } };
+    installDatabaseEngineSelection({
+      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+      postgres: { connection: connection!, schemaPrefix: "state_composite_snapshot" },
+    });
+    const writer = new pg.Client({ connectionString: connection });
+    await writer.connect();
+    let namespace: string | undefined;
+    const stateKey = "discovery.generation";
+    const read = async (current = false) =>
+      (
+        await executeExistingOpenClawStateRead(
+          options,
+          { type: "tui.lastSession.read", stateKey },
+          { current },
+        )
+      )?.row?.value_json;
+    try {
+      namespace = withEngineStoreAdmission(() =>
+        runOpenClawStateWriteTransaction(({ db }) => {
+          db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(
+            stateKey,
+            "before",
+            1,
+          );
+          return getPostgresPhysicalFacts(db)?.namespace;
+        }, options),
+      );
+      expect(namespace).toBeDefined();
+      const anchor = fs.readFileSync(pathname);
+      await withOpenClawStateDatabaseReadSnapshot(async () => {
+        expect(await read()).toBe("before");
+        await writer.query(
+          `UPDATE "${namespace}".config_machine_state SET value_json = $1 WHERE state_key = $2`,
+          ["after", stateKey],
+        );
+        expect(await read()).toBe("before");
+        await withOpenClawStateDatabaseReadSnapshot(async () => {
+          expect(await read()).toBe("before");
+          expect(
+            withEngineStoreAdmission(() =>
+              withExistingOpenClawStateDatabaseReadOnly(
+                ({ db }) =>
+                  db
+                    .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+                    .get(stateKey)?.value_json,
+                options,
+              ),
+            ),
+          ).toBe("before");
+        }, options);
+        expect(await read(true)).toBe("after");
+      }, options);
+      expect(await read()).toBe("after");
+      expect(fs.readFileSync(pathname)).toEqual(anchor);
+      expect(fs.readdirSync(directory)).toEqual(["state.sqlite"]);
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      retireSqliteDatabaseAdmissionForPath(pathname);
+      resetDatabaseEngineSelectionForTest();
+      try {
+        if (namespace) {
+          await writer.query(`DROP SCHEMA "${namespace}" CASCADE`);
+        }
+      } finally {
+        await writer.end();
+      }
+    }
+  });
+
   it("reads an existing PostgreSQL store while another connection reserves its SQLite anchor", async () => {
     const directory = tempDirs.make("state-anchor-reader-postgres-");
     const pathname = path.join(directory, "state.sqlite");
