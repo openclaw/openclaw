@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveOpenClawReferencePaths } from "./docs-path.js";
 import { createSandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { createRemoteShellSandboxFsBridge } from "./sandbox/remote-fs-bridge.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -70,6 +71,7 @@ describe("resolveOpenClawReferencePaths", () => {
   it.each([
     ["unmounted", null, null],
     ["workspace", "/workspace/docs", "/workspace"],
+    ["remote", "/remote/workspace/docs", "/remote/workspace"],
     ["read-only", "/agent/docs", "/agent"],
     ["bind", "/reference", null],
     ["shadow", null, "/workspace"],
@@ -86,7 +88,7 @@ describe("resolveOpenClawReferencePaths", () => {
     if (scenario === "bind") {
       await writeDocsJson(workspace);
     }
-    const workspaceDir = scenario === "workspace" || scenario === "shadow" ? root : workspace;
+    const workspaceDir = ["workspace", "remote", "shadow"].includes(scenario) ? root : workspace;
     const sandbox = createSandboxTestContext({
       overrides: {
         workspaceDir,
@@ -103,7 +105,18 @@ describe("resolveOpenClawReferencePaths", () => {
               : [],
       },
     });
-    if (scenario !== "no-bridge") {
+    if (scenario === "remote") {
+      sandbox.fsBridge = createRemoteShellSandboxFsBridge({
+        sandbox,
+        runtime: {
+          remoteWorkspaceDir: "/remote/workspace",
+          remoteAgentWorkspaceDir: "/remote/agent",
+          async runRemoteShellScript() {
+            throw new Error("Reference discovery must not execute remote commands");
+          },
+        },
+      });
+    } else if (scenario !== "no-bridge") {
       sandbox.fsBridge = createSandboxFsBridge({
         sandbox: {
           ...sandbox,

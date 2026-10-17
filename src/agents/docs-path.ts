@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import { resolveSandboxPathMapping } from "./path-policy.js";
 import type { SandboxContext } from "./sandbox/types.js";
 
 export const OPENCLAW_DOCS_URL = "https://docs.openclaw.ai";
@@ -33,9 +34,17 @@ export async function resolveOpenClawReferencePaths(
     }
     try {
       const hostPath = fs.realpathSync(directory);
-      const resolved = params.sandbox.fsBridge?.resolvePath({ filePath: hostPath });
-      // A shadow mount can resolve successfully while exposing a different directory.
-      return resolved?.hostPath && fs.realpathSync(resolved.hostPath) === hostPath
+      const bridge = params.sandbox.fsBridge;
+      if (!bridge) {
+        return null;
+      }
+      const resolved = bridge.resolvePath({ filePath: hostPath });
+      const mappings = bridge.pathMappings;
+      // Remote bridges expose projections, not host paths; shadows must still match the source.
+      const backingPath = mappings
+        ? resolveSandboxPathMapping(mappings, resolved.containerPath)?.hostPath
+        : resolved.hostPath;
+      return backingPath && fs.realpathSync(backingPath) === hostPath
         ? resolved.containerPath
         : null;
     } catch {
