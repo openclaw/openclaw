@@ -17,18 +17,21 @@ const state = await setupAgentRunnerExecutionTestState();
 
 const providerLoginPresentation = (command: string) => ({
   blocks: [
-    {
-      type: "buttons",
-      buttons: [
-        {
-          label: "Sign in",
-          action: { type: "command", command },
-        },
-      ],
-    },
+    { type: "buttons", buttons: [{ label: "Sign in", action: { type: "command", command } }] },
   ],
 });
 const PROVIDER_LOGIN_PRESENTATION = providerLoginPresentation("/login openai");
+
+async function runFailure(error: unknown, params = createMinimalRunAgentTurnParams()) {
+  state.runEmbeddedAgentMock.mockRejectedValueOnce(error);
+  const executeAgentTurn = await getExecuteAgentTurnForTest();
+  const result = await executeAgentTurn(params);
+  expect(result.kind).toBe("final");
+  if (result.kind !== "final") {
+    throw new Error("expected final auth failure");
+  }
+  return result.payload;
+}
 
 describe("executeAgentTurn: authentication failures", () => {
   it("preserves OAuth profile guidance through fallback summaries", async () => {
@@ -49,39 +52,24 @@ describe("executeAgentTurn: authentication failures", () => {
     const summaryError = createTestFallbackSummaryError({
       message: "All models failed",
       attempts: [
-        {
-          provider: "openai",
-          model: "gpt-5.5",
-          error: "OpenAI OAuth failed",
-          reason: "auth",
-        },
+        { provider: "openai", model: "gpt-5.5", error: "OpenAI OAuth failed", reason: "auth" },
       ],
       soonestCooldownExpiry: null,
       cause: failoverError,
     });
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(summaryError);
+    const payload = await runFailure(summaryError);
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
-
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toContain("--profile-id 'openai:user@example.com'");
-      expect(result.payload.presentation).toEqual(PROVIDER_LOGIN_PRESENTATION);
-    }
+    expect(payload.text).toContain("--profile-id 'openai:user@example.com'");
+    expect(payload.presentation).toEqual(PROVIDER_LOGIN_PRESENTATION);
   });
 
   it("omits OAuth profile ids from group reauth guidance", async () => {
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+    const payload = await runFailure(
       new OAuthRefreshFailureError({
         provider: "openai",
         profileId: "openai:user@example.com",
         message: "invalid_grant",
       }),
-    );
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(
       createMinimalRunAgentTurnParams({
         sessionCtx: {
           Provider: "whatsapp",
@@ -91,56 +79,32 @@ describe("executeAgentTurn: authentication failures", () => {
       }),
     );
 
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toContain("openclaw models auth login --provider openai");
-      expect(result.payload.text).not.toContain("user@example.com");
-      expect(result.payload.presentation).toEqual(PROVIDER_LOGIN_PRESENTATION);
-    }
+    expect(payload.text).toContain("openclaw models auth login --provider openai");
+    expect(payload.text).not.toContain("user@example.com");
+    expect(payload.presentation).toEqual(PROVIDER_LOGIN_PRESENTATION);
   });
 
-  it.each([["xai", "/login xai"]])(
-    "keeps disabled %s OAuth profiles actionable on later turns",
-    async (provider, command) => {
-      state.runEmbeddedAgentMock.mockRejectedValueOnce(
-        new FailoverError("All OpenAI auth profiles are unavailable", {
-          reason: "auth_permanent",
-          provider,
-          model: "fixture-model",
-          authMode: "oauth",
-          authProfileFailure: { allInCooldown: true },
-        }),
-      );
-
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
-
-      expect(result.kind).toBe("final");
-      if (result.kind === "final") {
-        expect(result.payload.text).toContain(command);
-        expect(result.payload.presentation).toEqual(providerLoginPresentation(command));
-      }
-    },
-  );
-
-  it.each([
-    {
-      label: "transient OpenAI refresh failures",
-      error: new OAuthRefreshFailureError({
-        provider: "openai",
-        message: "temporary upstream issue",
+  it("keeps disabled xai OAuth profiles actionable on later turns", async () => {
+    const payload = await runFailure(
+      new FailoverError("All OpenAI auth profiles are unavailable", {
+        reason: "auth_permanent",
+        provider: "xai",
+        model: "fixture-model",
+        authMode: "oauth",
+        authProfileFailure: { allInCooldown: true },
       }),
-    },
-  ])("does not offer provider login for $label", async ({ error }) => {
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(error);
+    );
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
+    expect(payload.text).toContain("/login xai");
+    expect(payload.presentation).toEqual(providerLoginPresentation("/login xai"));
+  });
 
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.presentation).toBeUndefined();
-    }
+  it("does not offer provider login for transient OpenAI refresh failures", async () => {
+    const payload = await runFailure(
+      new OAuthRefreshFailureError({ provider: "openai", message: "temporary upstream issue" }),
+    );
+
+    expect(payload.presentation).toBeUndefined();
   });
 
   it("surfaces Agent SDK OAuth session expiry in Discord channels", async () => {
@@ -155,10 +119,8 @@ describe("executeAgentTurn: authentication failures", () => {
     if (!error) {
       throw new Error("expected CLI output failure");
     }
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(error);
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(
+    const payload = await runFailure(
+      error,
       createMinimalRunAgentTurnParams({
         sessionCtx: {
           Provider: "discord",
@@ -169,36 +131,24 @@ describe("executeAgentTurn: authentication failures", () => {
       }),
     );
 
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toBe(
-        "⚠️ Your model provider needs a new login. Send `/login` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `claude auth login && openclaw models auth login --provider anthropic --method cli` on the gateway.",
-      );
-      expect(result.payload.presentation).toEqual(providerLoginPresentation("/login"));
-    }
+    expect(payload.text).toBe(
+      "⚠️ Your model provider needs a new login. Send `/login` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `claude auth login && openclaw models auth login --provider anthropic --method cli` on the gateway.",
+    );
+    expect(payload.presentation).toEqual(providerLoginPresentation("/login"));
   });
 
   it("surfaces typed missing API-key auth guidance without parsing the message", async () => {
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new MissingProviderAuthError("openai", {
-        mode: "api-key",
-        source: "env: OPENAI_API_KEY",
-      }),
+    const payload = await runFailure(
+      new MissingProviderAuthError("openai", { mode: "api-key", source: "env: OPENAI_API_KEY" }),
     );
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
-
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toBe(
-        "⚠️ Couldn't connect to OpenAI. Run `openclaw doctor --fix`, then try again. If it still fails, open Models in the Control UI or run `openclaw configure`.",
-      );
-    }
+    expect(payload.text).toBe(
+      "⚠️ Couldn't connect to OpenAI. Run `openclaw doctor --fix`, then try again. If it still fails, open Models in the Control UI or run `openclaw configure`.",
+    );
   });
 
   it("formats auth-profile failover copy from typed FailoverError metadata", async () => {
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+    const payload = await runFailure(
       new FailoverError("Auth profile failover exhausted for provider openai", {
         reason: "auth",
         provider: "openai",
@@ -208,21 +158,15 @@ describe("executeAgentTurn: authentication failures", () => {
       }),
     );
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
-
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toContain("Couldn't sign in to openai.");
-      expect(result.payload.text).toContain("openclaw configure");
-      expect(result.payload.text).not.toContain("invalid_grant");
-      expect(result.payload.text).not.toContain("Auth profile failover exhausted");
-    }
+    expect(payload.text).toContain("Couldn't sign in to openai.");
+    expect(payload.text).toContain("openclaw configure");
+    expect(payload.text).not.toContain("invalid_grant");
+    expect(payload.text).not.toContain("Auth profile failover exhausted");
   });
 
   it("renders bounded recovery when the selected auth profile is unavailable", async () => {
     state.isInternalMessageChannelMock.mockReturnValue(true);
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+    const payload = await runFailure(
       new FailoverError('Codex app-server auth profile "openai:private" was not found', {
         reason: "auth",
         provider: "openai",
@@ -233,55 +177,39 @@ describe("executeAgentTurn: authentication failures", () => {
       }),
     );
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
-
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toBe(
-        "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.",
-      );
-      expect(result.payload.text).not.toContain("openai:private");
-      expect(result.payload.text).not.toContain("arbitrary plugin detail");
-      expect(result.payload.text).not.toContain("/login");
-      expect(result.payload.presentation).toBeUndefined();
-    }
+    expect(payload.text).toBe(
+      "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.",
+    );
+    expect(payload.text).not.toContain("openai:private");
+    expect(payload.text).not.toContain("arbitrary plugin detail");
+    expect(payload.text).not.toContain("/login");
+    expect(payload.presentation).toBeUndefined();
   });
 
   it("falls back to a generic provider message for unsafe missing-key provider ids", async () => {
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+    const payload = await runFailure(
       new ProviderAuthError(
         "missing-provider-auth",
         "openai`\nrm -rf /",
         'No API key found for provider "openai`\nrm -rf /".',
       ),
+      createRunAgentTurnParams(createFollowupRun()),
     );
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
-
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toBe(
-        "⚠️ This AI service isn't set up yet. Sign in under Models in the Control UI or run `openclaw configure`.",
-      );
-    }
+    expect(payload.text).toBe(
+      "⚠️ This AI service isn't set up yet. Sign in under Models in the Control UI or run `openclaw configure`.",
+    );
   });
 
   it("falls back to a generic reauth command when the provider in the OAuth error is unsafe", async () => {
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+    const payload = await runFailure(
       new OAuthRefreshFailureError({ provider: "openai`\nrm -rf /", message: "invalid_grant" }),
+      createRunAgentTurnParams(createFollowupRun()),
     );
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
-
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toBe(
-        "⚠️ Your model provider needs a new login. Send `/login` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `openclaw models auth login` on the gateway.",
-      );
-      expect(result.payload.presentation).toEqual(providerLoginPresentation("/login"));
-    }
+    expect(payload.text).toBe(
+      "⚠️ Your model provider needs a new login. Send `/login` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `openclaw models auth login` on the gateway.",
+    );
+    expect(payload.presentation).toEqual(providerLoginPresentation("/login"));
   });
 });

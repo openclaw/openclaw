@@ -44,9 +44,7 @@ const staleCfg = {
   runtimeFresh: false,
   skills: {
     entries: {
-      whisper: {
-        apiKey: { source: "env" as const, provider: "default", id: "OPENAI_API_KEY" },
-      },
+      whisper: { apiKey: { source: "env" as const, provider: "default", id: "OPENAI_API_KEY" } },
     },
   },
 };
@@ -93,9 +91,7 @@ vi.mock("./reply-threading.js", async () => {
 vi.mock("./reply-media-paths.js", () => ({
   createReplyMediaContext: (...args: unknown[]) => {
     createReplyMediaContextMock(...args);
-    return {
-      normalizePayload: createReplyMediaPathNormalizerMock(...args),
-    };
+    return { normalizePayload: createReplyMediaPathNormalizerMock(...args) };
   },
   createReplyMediaPathNormalizer: (...args: unknown[]) =>
     createReplyMediaPathNormalizerMock(...args),
@@ -188,41 +184,16 @@ function createDirectRuntimeReplyParams({
   return { followupRun, resolvedQueue, replyParams };
 }
 
-function requireResolveQueuedReplyExecutionConfigCall(index = 0) {
-  const call = resolveQueuedReplyExecutionConfigMock.mock.calls[index] as
-    | [
-        unknown,
-        {
-          originatingChannel?: string;
-          messageProvider?: string;
-        },
-      ]
-    | undefined;
-  if (!call) {
-    throw new Error(`resolveQueuedReplyExecutionConfig call ${index} missing`);
-  }
-  return call;
-}
-
-type MockCallSource = {
-  mock: {
-    calls: unknown[][];
-  };
-};
-
-function requireMaintenanceCall(mock: MockCallSource, name: string, index = 0) {
-  const call = mock.mock.calls[index]?.[0] as
-    | {
-        cfg?: unknown;
-        followupRun?: unknown;
-        sessionKey?: string;
-        runtimePolicySessionKey?: string;
-      }
-    | undefined;
-  if (!call) {
-    throw new Error(`${name} call ${index} missing`);
-  }
-  return call;
+async function createStoredReply(tempDir: string, overrides: Partial<SessionEntry> = {}) {
+  const params = createDirectRuntimeReplyParams();
+  const sessionKey = "agent:main:telegram:default:direct:test";
+  const sessionEntry: SessionEntry = { sessionId: "session-1", updatedAt: 1, ...overrides };
+  const storePath = join(tempDir, "sessions.json");
+  const scope = { agentId: "main", sessionId: sessionEntry.sessionId, sessionKey, storePath };
+  const sessionStore = { [sessionKey]: sessionEntry };
+  await replaceSessionEntry(scope, sessionEntry);
+  Object.assign(params.replyParams, { sessionKey, storePath, sessionEntry, sessionStore });
+  return { ...params, sessionKey, sessionEntry, sessionStore, scope };
 }
 
 type PreflightParams = Parameters<
@@ -249,11 +220,9 @@ describe("runReplyAgent runtime config", () => {
     runMemoryFlushIfNeededMock.mockReset();
     executeAgentTurnMock.mockReset();
     enqueueFollowupRunMock.mockReset();
-    compactEmbeddedAgentSessionMock.mockReset().mockResolvedValue({
-      ok: true,
-      compacted: true,
-      result: { tokensAfter: 42 },
-    });
+    compactEmbeddedAgentSessionMock
+      .mockReset()
+      .mockResolvedValue({ ok: true, compacted: true, result: { tokensAfter: 42 } });
     runEmbeddedAgentMock.mockReset().mockResolvedValue({ payloads: [], meta: {} });
 
     resolveQueuedReplyExecutionConfigMock.mockResolvedValue(freshCfg);
@@ -282,24 +251,20 @@ describe("runReplyAgent runtime config", () => {
     await expect(runReplyAgent(replyParams)).rejects.toBe(sentinelError);
 
     expect(followupRun.run.config).toBe(freshCfg);
-    const [configArg, configContextArg] = requireResolveQueuedReplyExecutionConfigCall();
+    const [configArg, configContextArg] = resolveQueuedReplyExecutionConfigMock.mock.calls[0];
     expect(configArg).toBe(staleCfg);
     expect(configContextArg).toMatchObject({
       originatingChannel: "telegram",
       messageProvider: "telegram",
     });
     expect(resolveReplyToModeMock).toHaveBeenCalledWith(freshCfg, "telegram", "default", "dm");
-    const preflightCall = requireMaintenanceCall(
-      runSessionCompactionIfNeededMock,
-      "runSessionCompactionIfNeeded",
-    );
-    expect(preflightCall.sessionKey).toBe("agent:main:main");
-    expect(preflightCall.runtimePolicySessionKey).toBe(runtimePolicySessionKey);
-    expect(preflightCall.cfg).toBe(freshCfg);
-    const memoryCall = requireMaintenanceCall(runMemoryFlushIfNeededMock, "runMemoryFlushIfNeeded");
-    expect(memoryCall.sessionKey).toBe("agent:main:main");
-    expect(memoryCall.runtimePolicySessionKey).toBe(runtimePolicySessionKey);
-    expect(memoryCall.cfg).toBe(freshCfg);
+    for (const mock of [runSessionCompactionIfNeededMock, runMemoryFlushIfNeededMock]) {
+      expect(mock.mock.calls[0]?.[0]).toMatchObject({
+        sessionKey: "agent:main:main",
+        runtimePolicySessionKey,
+      });
+      expect(mock.mock.calls[0]?.[0].cfg).toBe(freshCfg);
+    }
   });
 
   it("continues the main reply after a recorded memory-flush failure", async () => {
@@ -346,22 +311,15 @@ describe("runReplyAgent runtime config", () => {
     });
     try {
       await withTestDir({ prefix: "openclaw-direct-runtime-" }, async (tempDir) => {
-        const { replyParams, followupRun } = createDirectRuntimeReplyParams();
-        const sessionKey = "agent:main:telegram:default:direct:test";
-        const sessionEntry: SessionEntry = {
-          sessionId: "session-1",
-          lifecycleRevision: "before-maintenance",
-          updatedAt: 1,
-          totalTokens: 100,
-          totalTokensFresh: true,
-          totalTokensVersion: 1,
-          compactionCount: 4,
-          memoryFlush: { kind: "failed", failureCount: 2 },
-        };
-        const sessionStore = { [sessionKey]: sessionEntry };
-        const storePath = join(tempDir, "sessions.json");
-        const scope = { agentId: "main", sessionId: sessionEntry.sessionId, sessionKey, storePath };
-        await replaceSessionEntry(scope, sessionEntry);
+        const { replyParams, followupRun, sessionKey, sessionEntry, sessionStore, scope } =
+          await createStoredReply(tempDir, {
+            lifecycleRevision: "before-maintenance",
+            totalTokens: 100,
+            totalTokensFresh: true,
+            totalTokensVersion: 1,
+            compactionCount: 4,
+            memoryFlush: { kind: "failed", failureCount: 2 },
+          });
         const olderMessage = { role: "user", content: "Remember the older marker: amber-orchid" };
         const messages = [
           olderMessage,
@@ -379,10 +337,6 @@ describe("runReplyAgent runtime config", () => {
         followupRun.run.workspaceDir = tempDir;
         followupRun.run.provider = "anthropic";
         followupRun.run.model = "claude-sonnet-4-6";
-        replyParams.sessionKey = sessionKey;
-        replyParams.storePath = storePath;
-        replyParams.sessionEntry = sessionEntry;
-        replyParams.sessionStore = sessionStore;
         resolveQueuedReplyExecutionConfigMock.mockResolvedValue(
           withTestModelContextTokens({
             cfg: { agents: { defaults: { compaction: { notifyUser: true } } } },
@@ -440,20 +394,11 @@ describe("runReplyAgent runtime config", () => {
       );
       runSessionCompactionIfNeededMock.mockImplementation(memory.runSessionCompactionIfNeeded);
       await withTestDir({ prefix: "openclaw-preflight-heartbeat-" }, async (tempDir) => {
-        const { replyParams, followupRun } = createDirectRuntimeReplyParams({
-          shouldFollowup: false,
-          isActive: false,
-        });
-        const sessionKey = "agent:main:telegram:default:direct:test";
-        const sessionEntry: SessionEntry = {
-          sessionId: "session-1",
-          updatedAt: 1,
+        const { replyParams, followupRun, sessionEntry } = await createStoredReply(tempDir, {
           totalTokens: 95_000,
           totalTokensFresh: true,
           totalTokensVersion: 1,
-        };
-        const storePath = join(tempDir, "sessions.json");
-        await replaceSessionEntry({ agentId: "main", sessionKey, storePath }, sessionEntry);
+        });
         followupRun.run.provider = "anthropic";
         followupRun.run.model = "claude-sonnet-4-6";
         const abort = new AbortController();
@@ -469,10 +414,6 @@ describe("runReplyAgent runtime config", () => {
         };
         followupRun.turnAdoptionLifecycle = lifecycle;
         replyParams.opts = { turnAdoptionLifecycle: lifecycle, onReplyOperationOwned };
-        replyParams.sessionKey = sessionKey;
-        replyParams.sessionEntry = sessionEntry;
-        replyParams.sessionStore = { [sessionKey]: sessionEntry };
-        replyParams.storePath = storePath;
         resolveQueuedReplyExecutionConfigMock.mockResolvedValue(
           withTestModelContextTokens({
             cfg: {},
@@ -539,20 +480,11 @@ describe("runReplyAgent runtime config", () => {
       });
       try {
         await withTestDir({ prefix: "openclaw-memory-heartbeat-" }, async (tempDir) => {
-          const { replyParams, followupRun } = createDirectRuntimeReplyParams({
-            shouldFollowup: false,
-            isActive: false,
-          });
-          const sessionKey = "agent:main:telegram:default:direct:test";
-          const sessionEntry: SessionEntry = {
-            sessionId: "session-1",
-            updatedAt: 1,
+          const { replyParams, followupRun } = await createStoredReply(tempDir, {
             totalTokens: testCase.totalTokens,
             totalTokensFresh: true,
             totalTokensVersion: 1,
-          };
-          const storePath = join(tempDir, "sessions.json");
-          await replaceSessionEntry({ agentId: "main", sessionKey, storePath }, sessionEntry);
+          });
           followupRun.run.workspaceDir = tempDir;
           followupRun.run.provider = "anthropic";
           followupRun.run.model = "claude-sonnet-4-6";
@@ -564,10 +496,6 @@ describe("runReplyAgent runtime config", () => {
           };
           followupRun.turnAdoptionLifecycle = lifecycle;
           replyParams.opts = { turnAdoptionLifecycle: lifecycle };
-          replyParams.sessionKey = sessionKey;
-          replyParams.sessionEntry = sessionEntry;
-          replyParams.sessionStore = { [sessionKey]: sessionEntry };
-          replyParams.storePath = storePath;
           const cfg = withTestModelContextTokens({
             cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
             followupRun,
@@ -629,10 +557,7 @@ describe("runReplyAgent runtime config", () => {
       compactionCount: 4,
     };
     replyParams.sessionEntry = sessionEntry;
-    runMemoryFlushIfNeededMock.mockResolvedValue({
-      sessionEntry,
-      outcome: "exhausted",
-    });
+    runMemoryFlushIfNeededMock.mockResolvedValue({ sessionEntry, outcome: "exhausted" });
     runSessionCompactionIfNeededMock.mockImplementation(async (params: PreflightParams) => {
       expect(params.sessionEntry?.sessionId).toBe("session-1");
       const checkpointed = await runRequiredCheckpoint(params);
@@ -712,15 +637,9 @@ describe("runReplyAgent runtime config", () => {
   });
 
   it("delivers known pre-run OAuth refresh failures instead of dropping the reply", async () => {
-    const { replyParams } = createDirectRuntimeReplyParams({
-      shouldFollowup: false,
-      isActive: false,
-    });
+    const { replyParams } = createDirectRuntimeReplyParams();
     runSessionCompactionIfNeededMock.mockRejectedValue(
-      new OAuthRefreshFailureError({
-        provider: "openai",
-        message: "refresh_token_invalidated",
-      }),
+      new OAuthRefreshFailureError({ provider: "openai", message: "refresh_token_invalidated" }),
     );
     const delivered = vi.fn<(payload: ReplyPayload, kind: ReplyDispatchKind) => void>();
     const dispatcher = createReplyDispatcher({
@@ -752,12 +671,7 @@ describe("runReplyAgent runtime config", () => {
       blocks: [
         {
           type: "buttons",
-          buttons: [
-            {
-              label: "Sign in",
-              action: { type: "command", command: "/login openai" },
-            },
-          ],
+          buttons: [{ label: "Sign in", action: { type: "command", command: "/login openai" } }],
         },
       ],
     });
@@ -772,12 +686,7 @@ describe("runReplyAgent runtime config", () => {
     "keeps the user turn after a failed required preflight only for a $source source",
     async ({ revokeDuring, kept }) => {
       await withTestDir({ prefix: "openclaw-preflight-user-turn-" }, async (tempDir) => {
-        const { replyParams, followupRun } = createDirectRuntimeReplyParams();
-        const sessionKey = "agent:main:telegram:default:direct:test";
-        const sessionEntry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
-        const storePath = join(tempDir, "sessions.json");
-        const scope = { agentId: "main", sessionId: sessionEntry.sessionId, sessionKey, storePath };
-        await replaceSessionEntry(scope, sessionEntry);
+        const { replyParams, followupRun, sessionEntry, scope } = await createStoredReply(tempDir);
         await appendTranscriptMessage(scope, { message: { role: "user", content: "earlier" } });
         let revoked = false;
         const input = {
@@ -809,10 +718,6 @@ describe("runReplyAgent runtime config", () => {
             }
           },
         });
-        replyParams.sessionKey = sessionKey;
-        replyParams.storePath = storePath;
-        replyParams.sessionEntry = sessionEntry;
-        replyParams.sessionStore = { [sessionKey]: sessionEntry };
         runSessionCompactionIfNeededMock.mockImplementation(async () => {
           revoked = revokeDuring === "preflight";
           throw new Error("Preflight compaction required but failed: summarization_failed");
