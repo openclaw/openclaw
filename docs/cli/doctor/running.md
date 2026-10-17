@@ -21,6 +21,10 @@ must still check the process exit status: `Doctor complete.` records completion
 of the checks, but a subsequent crash remains a failed candidate-Doctor step
 during an update.
 
+SIGINT and SIGTERM cancel Doctor's preparation before it stops a Gateway or
+starts repairs. If repair already owns state, Doctor settles its admitted work
+and restores any service it stopped before exiting.
+
 If a native SQLite snapshot request fails, Doctor exits with an error even when
 an optional check defers its work. Resolve the reported snapshot or filesystem
 failure before retrying; a deferred check does not certify a successful inspection.
