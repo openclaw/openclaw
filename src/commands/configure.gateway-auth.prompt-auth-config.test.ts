@@ -25,19 +25,14 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../agents/auth-profiles.js", () => ({
   persistAuthProfileBatch: vi.fn(async () => {}),
-  ensureAuthProfileStore: vi.fn(() => ({
-    version: 1,
-    profiles: {},
-  })),
+  ensureAuthProfileStore: vi.fn(() => ({ version: 1, profiles: {} })),
 }));
 
 vi.mock("./auth-choice-prompt.js", () => ({
   promptAuthChoiceGrouped: mocks.promptAuthChoiceGrouped,
 }));
 
-vi.mock("./auth-choice.apply.js", () => ({
-  applyAuthChoice: mocks.applyAuthChoice,
-}));
+vi.mock("./auth-choice.apply.js", () => ({ applyAuthChoice: mocks.applyAuthChoice }));
 
 vi.mock("../plugins/provider-auth-choice-preference.js", () => ({
   resolvePreferredProviderForAuthChoice: mocks.resolvePreferredProviderForAuthChoice,
@@ -141,10 +136,7 @@ describe("promptAuthConfig", () => {
       config: {
         agents: {
           defaults: {
-            model: {
-              primary: "openai/gpt-5.5",
-              fallbacks: ["mini"],
-            },
+            model: { primary: "openai/gpt-5.5", fallbacks: ["mini"] },
             models: {
               "openai/gpt-5.5": { alias: "GPT" },
               "openai/gpt-5.4-mini": { alias: "mini" },
@@ -164,11 +156,7 @@ describe("promptAuthConfig", () => {
         label: "OpenAI",
         auth: [],
         wizard: {
-          setup: {
-            modelAllowlist: {
-              allowedKeys: ["openai/gpt-5.5", "openai/gpt-5.4-mini"],
-            },
-          },
+          setup: { modelAllowlist: { allowedKeys: ["openai/gpt-5.5", "openai/gpt-5.4-mini"] } },
         },
       },
       method: { id: "setup-token", label: "setup-token", kind: "token" },
@@ -287,24 +275,10 @@ describe("promptAuthConfig", () => {
     });
   });
 
-  it.each<{
-    name: string;
-    defaultModel?: AgentModelConfig;
-    agentModel?: AgentModelConfig;
-    override: boolean;
-  }>([
-    { name: "no recommendation", override: false },
-    {
-      name: "initialize legacy agent",
-      agentModel: { fallbacks: ["agent/fallback"] },
-      override: true,
-    },
-    {
-      name: "initialize shared primary",
-      defaultModel: { fallbacks: ["shared/fallback"] },
-      override: true,
-    },
-  ])("provider auth: $name", async ({ defaultModel, agentModel, override }) => {
+  it.each(["none", "agent", "shared"] as const)("provider auth: initialize %s", async (owner) => {
+    const override = owner !== "none";
+    const agentModel = owner === "agent" ? { fallbacks: ["agent/fallback"] } : undefined;
+    const defaultModel = owner === "shared" ? { fallbacks: ["shared/fallback"] } : undefined;
     const recommended = "configure-provider/recommended";
     const method: ProviderAuthMethod = {
       id: "api-key",
@@ -320,11 +294,7 @@ describe("promptAuthConfig", () => {
               models: { [recommended]: { alias: "Recommended" } },
             },
           },
-          models: {
-            providers: {
-              "configure-provider": providerModels("recommended"),
-            },
-          },
+          models: { providers: { "configure-provider": providerModels("recommended") } },
         },
       }),
     };
@@ -354,20 +324,15 @@ describe("promptAuthConfig", () => {
     );
     const result = await promptAuthConfig(config, makeRuntime(), noopPrompter, target);
 
-    const initializesPrimary = override;
-    const initializesAgent = initializesPrimary && agentModel !== undefined;
-    const expectedAgentModel =
-      typeof agentModel === "string" ? { primary: agentModel } : agentModel;
+    const initializesAgent = owner === "agent";
     expect(resolveAgentEffectiveModelPrimary(result, "ops")).toBe(
       override ? recommended : undefined,
     );
     expect(result.agents?.entries?.OPS?.model).toEqual(
-      initializesAgent ? { ...expectedAgentModel, primary: recommended } : expectedAgentModel,
+      initializesAgent ? { ...agentModel, primary: recommended } : agentModel,
     );
     expect(result.agents?.defaults?.model).toEqual(
-      initializesPrimary && !initializesAgent
-        ? { ...(typeof defaultModel === "object" ? defaultModel : {}), primary: recommended }
-        : defaultModel,
+      owner === "shared" ? { ...defaultModel, primary: recommended } : defaultModel,
     );
     expect(result.agents?.entries?.OPS?.modelPolicy?.allow).toEqual([
       "shared/available",
@@ -377,30 +342,14 @@ describe("promptAuthConfig", () => {
     expect(result.agents?.entries?.ops).toBeUndefined();
   });
 
-  it.each<
-    [
-      name: string,
-      explicit: boolean,
-      defaultModel: AgentModelConfig | undefined,
-      agentModel: AgentModelConfig | undefined,
-      expectedModel: AgentModelConfig,
-    ]
-  >([
-    [
-      "initialize shared primary",
-      false,
-      { fallbacks: ["anthropic/sonnet-4.6"] },
-      undefined,
-      { primary: "custom/llama3", fallbacks: ["anthropic/sonnet-4.6"] },
-    ],
-    [
-      "inherit shared primary",
-      true,
-      { primary: "openai/gpt-5.6-luna" },
-      { fallbacks: ["anthropic/sonnet-4.6"] },
-      { fallbacks: ["anthropic/sonnet-4.6"] },
-    ],
-  ])("custom provider: %s", async (_name, explicit, defaultModel, agentModel, expectedModel) => {
+  it.each([false, true])("custom provider: explicit ownership=%s", async (explicit) => {
+    const defaultModel = explicit
+      ? { primary: "openai/gpt-5.6-luna" }
+      : { fallbacks: ["anthropic/sonnet-4.6"] };
+    const agentModel = explicit ? { fallbacks: ["anthropic/sonnet-4.6"] } : undefined;
+    const expectedModel = explicit
+      ? { fallbacks: ["anthropic/sonnet-4.6"] }
+      : { primary: "custom/llama3", fallbacks: ["anthropic/sonnet-4.6"] };
     mocks.promptAuthChoiceGrouped.mockResolvedValue("custom-api-key");
     const server = createServer((_req, res) => {
       res.writeHead(200, { "content-type": "application/json" });

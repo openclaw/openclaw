@@ -1,11 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import type { WizardSection } from "./configure.shared.js";
 import {
-  createWizardTestRuntime as createRuntime,
   queueWizardTestPrompts as queueWizardPrompts,
   runConfigureWizard,
   setupWizardTestDefaults,
@@ -27,8 +25,8 @@ function configure(sections?: WizardSection[]) {
 }
 
 type Gateway = NonNullable<OpenClawConfig["gateway"]>;
-function localGateway(auth: Gateway["auth"] = {}, extra: Partial<Gateway> = {}) {
-  setupBaseWizardState({ gateway: { mode: "local", auth, ...extra } });
+function localGateway(auth: Gateway["auth"] = {}) {
+  setupBaseWizardState({ gateway: { mode: "local", auth } });
 }
 function remoteGateway(remote: Gateway["remote"]) {
   const config: OpenClawConfig = {
@@ -43,24 +41,27 @@ function remoteGateway(remote: Gateway["remote"]) {
 const secretRef = (id: string) => ({ source: "env" as const, provider: "default", id });
 const noted = (title: string) =>
   mocks.note.mock.calls.findLast(([, heading]) => heading === title)?.[0];
-function recordSectionWrites(port: number) {
+function expectRequest(mock: unknown, fields: Record<string, unknown>) {
+  expect(mock).toHaveBeenCalledWith(expect.objectContaining(fields));
+}
+function eventRecorder() {
   const events: string[] = [];
-  mocks.promptAuthConfig.mockImplementation(async (cfg: OpenClawConfig) => {
-    events.push("model");
-    return cfg;
-  });
-  mocks.promptGatewayConfig.mockImplementation(async (cfg: OpenClawConfig) => {
-    events.push("gateway");
-    return { config: cfg, port };
-  });
-  mocks.setupChannels.mockImplementation(async (cfg: OpenClawConfig) => {
-    events.push("channels");
-    return cfg;
-  });
-  mocks.writeConfigFile.mockImplementation(async () => {
-    events.push("commit");
-  });
-  return events;
+  function record<T>(event: string, result: T) {
+    events.push(event);
+    return result;
+  }
+  return { events, record };
+}
+function recordSectionWrites(port: number) {
+  const recorder = eventRecorder();
+  const { record } = recorder;
+  mocks.promptAuthConfig.mockImplementation(async (cfg: OpenClawConfig) => record("model", cfg));
+  mocks.promptGatewayConfig.mockImplementation(async (cfg: OpenClawConfig) =>
+    record("gateway", { config: cfg, port }),
+  );
+  mocks.setupChannels.mockImplementation(async (cfg: OpenClawConfig) => record("channels", cfg));
+  mocks.writeConfigFile.mockImplementation(async () => record("commit", undefined));
+  return recorder;
 }
 
 describe("runConfigureWizard", () => {
@@ -78,26 +79,21 @@ describe("runConfigureWizard", () => {
     mocks.resolveGatewayPort.mockReturnValue(18991);
     mocks.probeGatewayReachable.mockResolvedValueOnce({ ok: true });
     queue("local", "configure");
-    const events = recordSectionWrites(18991);
-    maybeInstallDaemon.mockImplementationOnce(async () => {
-      events.push("daemon");
-      return "succeeded";
-    });
+    const { events, record } = recordSectionWrites(18991);
+    maybeInstallDaemon.mockImplementationOnce(async () => record("daemon", "succeeded"));
     await configure(["daemon", "channels", "gateway", "model"]);
 
     expect(events).toEqual(["model", "gateway", "channels", "commit", "daemon"]);
-    expect(maybeInstallDaemon).toHaveBeenCalledWith(expect.objectContaining({ port: 18991 }));
+    expectRequest(maybeInstallDaemon, { port: 18991 });
     expect(mocks.clackText).not.toHaveBeenCalled();
-    expect(mocks.probeGatewayReachable).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "ws://127.0.0.1:18991", timeoutMs: 300 }),
-    );
+    expectRequest(mocks.probeGatewayReachable, { url: "ws://127.0.0.1:18991", timeoutMs: 300 });
 
     expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
   });
 
   it("commits every interactive section before running the next section", async () => {
     queue("local", "model", "gateway", "channels", "configure", "__continue");
-    const events = recordSectionWrites(18789);
+    const { events } = recordSectionWrites(18789);
     await configure();
 
     expect(events).toEqual(["model", "commit", "gateway", "commit", "channels", "commit"]);
@@ -106,25 +102,19 @@ describe("runConfigureWizard", () => {
 
   it.each([
     { outcome: "succeeded", completion: "Daemon setup completed." },
-    {
-      outcome: "failed",
-      completion: "Configuration unchanged, but daemon setup failed.",
-    },
+    { outcome: "failed", completion: "Configuration unchanged, but daemon setup failed." },
     { outcome: "skipped", completion: "Daemon setup skipped." },
   ] as const)(
     "reports startup reachability after daemon $outcome",
     async ({ outcome, completion }) => {
-      setupBaseWizardState({ gateway: { mode: "local" } });
+      localGateway();
       queue("local");
       maybeInstallDaemon.mockResolvedValueOnce(outcome);
       mocks.waitForGatewayReachable.mockResolvedValueOnce({ ok: false });
 
       await configure(["daemon"]);
 
-      expect(mocks.note).toHaveBeenCalledWith(
-        expect.stringContaining("Gateway: not detected"),
-        "Control UI",
-      );
+      expect(noted("Control UI")).toContain("Gateway: not detected");
       expect(mocks.clackOutro).toHaveBeenCalledWith(completion);
       if (outcome !== "succeeded") {
         expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
@@ -133,7 +123,7 @@ describe("runConfigureWizard", () => {
   );
 
   it("observes fresh startup after an interactive health check followed by daemon setup", async () => {
-    setupBaseWizardState({ gateway: { mode: "local" } });
+    localGateway();
     queue("local", "health", "daemon", "__continue");
     maybeInstallDaemon.mockResolvedValueOnce("succeeded");
     mocks.waitForGatewayReachable
@@ -143,14 +133,10 @@ describe("runConfigureWizard", () => {
     await withMockedPlatform("linux", () => configure());
 
     expect(noted("Control UI")).toContain("Gateway: reachable");
-    expect(mocks.waitForGatewayReachable).toHaveBeenCalledTimes(2);
-    expect(mocks.waitForGatewayReachable).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ deadlineMs: 15_000 }),
-    );
-    expect(mocks.waitForGatewayReachable).toHaveBeenLastCalledWith(
-      expect.objectContaining({ deadlineMs: 45_000, probeTimeoutMs: 10_000 }),
-    );
+    expect(mocks.waitForGatewayReachable.mock.calls).toMatchObject([
+      [{ deadlineMs: 15_000 }],
+      [{ deadlineMs: 45_000, probeTimeoutMs: 10_000 }],
+    ]);
   });
 
   it("keeps remote password health when the configured token ref is unresolved", async () => {
@@ -163,13 +149,11 @@ describe("runConfigureWizard", () => {
 
     await configure(["health"]);
 
-    expect(mocks.waitForGatewayReachable).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: remoteConfig.gateway?.remote?.url,
-        config: remoteConfig,
-        originScopedDeviceAuth: true,
-      }),
-    );
+    expectRequest(mocks.waitForGatewayReachable, {
+      url: remoteConfig.gateway?.remote?.url,
+      config: remoteConfig,
+      originScopedDeviceAuth: true,
+    });
     expect(mocks.healthCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         config: remoteConfig,
@@ -191,12 +175,10 @@ describe("runConfigureWizard", () => {
 
   it("skips remote health when a configured SecretRef is unresolved", async () => {
     remoteGateway({ token: secretRef("MISSING_REMOTE_TOKEN") });
-    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "ambient-password" }, async () => {
-      await configure(["health"]);
-    });
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "ambient-password");
+    await configure(["health"]);
 
-    const authNote = mocks.note.mock.calls.find(([, title]) => title === "Gateway auth")?.[0];
-    expect(authNote).toContain("Health check skipped");
+    expect(noted("Gateway auth")).toContain("Health check skipped");
     expect(mocks.healthCommand).not.toHaveBeenCalled();
     expect(mocks.clackOutro).toHaveBeenCalledWith(
       "Remote gateway configured; health check skipped.",
@@ -209,7 +191,8 @@ describe("runConfigureWizard", () => {
       tlsFingerprint: "ab".repeat(32),
       token: "token",
     });
-    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "env-password" }, () => configure(["gateway"]));
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "env-password");
+    await configure(["gateway"]);
     expect(written().gateway?.remote).toEqual(config.gateway?.remote);
     expect(mocks.probeGatewayReachable).toHaveBeenCalledWith({
       url: "wss://gateway.example.test",
@@ -227,10 +210,13 @@ describe("runConfigureWizard", () => {
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
     await configure(["gateway"]);
 
-    const probeRequests = mocks.probeGatewayReachable.mock.calls.map(([request]) => request);
-    const localProbe = probeRequests.find((request) => request.url === "ws://127.0.0.1:18789");
-    expect(localProbe?.token).toBe("configured-token");
-    expect(localProbe?.password).toBe("configured-password");
+    const localProbe = mocks.probeGatewayReachable.mock.calls
+      .map(([request]) => request)
+      .find((request) => request.url === "ws://127.0.0.1:18789");
+    expect(localProbe).toMatchObject({
+      token: "configured-token",
+      password: "configured-password",
+    });
   });
 
   it("uses resolved SecretRef auth for local gateway and health probes", async () => {
@@ -238,17 +224,11 @@ describe("runConfigureWizard", () => {
     queue("local");
     maybeInstallDaemon.mockResolvedValueOnce("succeeded");
 
-    await withEnvAsync(
-      { OPENCLAW_GATEWAY_TOKEN: "ambient-token", WIZARD_GATEWAY_TOKEN: "configured-token" },
-      () => withMockedPlatform("win32", () => configure(["gateway", "daemon", "health"])),
-    );
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "ambient-token");
+    vi.stubEnv("WIZARD_GATEWAY_TOKEN", "configured-token");
+    await withMockedPlatform("win32", () => configure(["gateway", "daemon", "health"]));
 
-    expect(mocks.probeGatewayReachable).toHaveBeenCalledWith(
-      expect.objectContaining({ token: "configured-token", timeoutMs: 300 }),
-    );
-    expect(mocks.waitForGatewayReachable).toHaveBeenCalledWith(
-      expect.objectContaining({ token: "configured-token" }),
-    );
+    expectRequest(mocks.probeGatewayReachable, { token: "configured-token", timeoutMs: 300 });
     expect(mocks.waitForGatewayReachable).toHaveBeenLastCalledWith(
       expect.objectContaining({
         url: "ws://127.0.0.1:18789",
@@ -263,54 +243,37 @@ describe("runConfigureWizard", () => {
     );
   });
 
-  it("visibly skips local probes when a configured SecretRef is unavailable", async () => {
-    localGateway({ mode: "password", password: secretRef("MISSING_WIZARD_PASSWORD") });
-    queue("local");
-
-    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "ambient-password" }, () =>
-      configure(["gateway", "health"]),
-    );
-
-    expect(mocks.probeGatewayReachable).not.toHaveBeenCalled();
-    expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
-    expect(mocks.healthCommand).not.toHaveBeenCalled();
-
-    expect(noted("Control UI")).toContain("Gateway: auth unavailable (check skipped)");
-  });
-
-  it("never retries an old password after the newly configured SecretRef fails", async () => {
-    localGateway({ mode: "password", password: "previous-password" });
-    queue("local");
-    mocks.promptGatewayConfig.mockImplementationOnce(async (cfg: OpenClawConfig) => ({
-      config: {
-        ...cfg,
-        gateway: {
-          ...cfg.gateway,
-          auth: {
-            mode: "password",
-            password: secretRef("MISSING_WIZARD_PASSWORD"),
-          },
-        },
-      },
-      port: 18789,
-    }));
-
-    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "ambient-password" }, () =>
-      configure(["gateway"]),
-    );
-
-    expect(mocks.probeGatewayReachable).toHaveBeenCalledOnce();
-    expect(noted("Control UI")).toContain("Gateway: auth unavailable (check skipped)");
-  });
+  it.each([false, true])(
+    "skips unavailable local auth (replacing old password: %s)",
+    async (replace) => {
+      const auth: Gateway["auth"] = {
+        mode: "password",
+        password: secretRef("MISSING_WIZARD_PASSWORD"),
+      };
+      localGateway(replace ? { mode: "password", password: "previous-password" } : auth);
+      queue("local");
+      if (replace) {
+        mocks.promptGatewayConfig.mockImplementationOnce(async (cfg: OpenClawConfig) => ({
+          config: { ...cfg, gateway: { ...cfg.gateway, auth } },
+          port: 18789,
+        }));
+      }
+      vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "ambient-password");
+      await configure(replace ? ["gateway"] : ["gateway", "health"]);
+      expect(mocks.probeGatewayReachable).toHaveBeenCalledTimes(replace ? 1 : 0);
+      expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
+      expect(mocks.healthCommand).not.toHaveBeenCalled();
+      expect(noted("Control UI")).toContain("Gateway: auth unavailable (check skipped)");
+    },
+  );
 
   it("exits with code 1 on direct cancellation", async () => {
-    const runtime = createRuntime();
     mocks.guardCancel.mockImplementationOnce((_value, _runtime, exitCode) => {
       expect(exitCode).toBe(1);
       throw new WizardCancelledError();
     });
     await runConfigureWizard({});
-    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
@@ -331,20 +294,14 @@ describe("runConfigureWizard", () => {
     async (section) => {
       setupBaseWizardState({ gateway: { mode: "remote" } });
       queueWizardPrompts({ select: ["local", section, "__continue"], confirm: [], text: "18789" });
-      const events: string[] = [];
-      mocks.writeConfigFile.mockImplementationOnce(async () => {
-        events.push("commit");
-      });
+      const { events, record } = eventRecorder();
+      mocks.writeConfigFile.mockImplementationOnce(async () => record("commit", undefined));
       if (section === "health") {
-        mocks.waitForGatewayReachable.mockImplementationOnce(async () => {
-          events.push("health");
-          return { ok: false };
-        });
+        mocks.waitForGatewayReachable.mockImplementationOnce(async () =>
+          record("health", { ok: false }),
+        );
       } else {
-        maybeInstallDaemon.mockImplementationOnce(async () => {
-          events.push("daemon");
-          return "failed";
-        });
+        maybeInstallDaemon.mockImplementationOnce(async () => record("daemon", "failed"));
       }
       await configure();
       expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
