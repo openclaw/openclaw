@@ -824,112 +824,60 @@ it.each(["denied", "empty"])("preserves Doctor's refusal for foreign Linux %s ar
   expect(inspectOtherOpenClawProcesses()).toHaveProperty("error");
 });
 
+type WindowsRow = ReturnType<
+  typeof import("./windows-process-census.js").readWindowsProcessCensus
+>[number];
+function handoffCase(
+  name: string,
+  facts: Omit<WindowsRow, "pid">,
+  outcome: "clear" | "match" | "unverified",
+  options: { sid?: string; legacy?: boolean; parents?: WindowsRow[] } = {},
+) {
+  return {
+    name,
+    facts,
+    matching: outcome === "match",
+    unverified: outcome === "unverified",
+    sid: "S-1-5-21-100",
+    legacy: false,
+    parents: [],
+    ...options,
+  };
+}
+const child = (parentPid: number, startIdentity: string) => ({ parentPid, startIdentity });
+const deniedFacts = { accessDenied: true } as const;
 it.each([
-  {
-    name: "denied unrelated process, same account",
-    sid: "S-1-5-21-100",
-    facts: { accessDenied: true },
-    matching: false,
-    unverified: false,
-  },
-  {
-    name: "denied process, different account",
-    sid: "S-1-5-21-200",
-    facts: { accessDenied: true },
-    matching: false,
-    unverified: true,
-  },
-  {
-    name: "denied process, unknown caller",
-    sid: undefined,
-    facts: { accessDenied: true },
-    matching: false,
-    unverified: true,
-  },
-  {
-    name: "denied process, legacy record",
-    sid: "S-1-5-21-100",
-    legacy: true,
-    facts: { accessDenied: true },
-    matching: false,
-    unverified: true,
-  },
-  {
-    name: "unexplained missing identity",
-    sid: "S-1-5-21-100",
-    facts: {},
-    matching: false,
-    unverified: true,
-  },
-  {
-    name: "protected unrelated process",
-    sid: "S-1-5-21-100",
-    facts: { parentPid: peer + 10, startIdentity: "100" },
-    matching: false,
-    unverified: false,
-  },
-  {
-    name: "pre-handoff process with reused parent PID",
-    sid: "S-1-5-21-100",
-    facts: { parentPid: launcher, startIdentity: "100" },
-    matching: false,
-    unverified: false,
-  },
-  {
-    name: "readable unrelated process from another account",
-    sid: "S-1-5-21-200",
-    facts: { parentPid: peer + 10, startIdentity: "100" },
-    matching: false,
-    unverified: false,
-  },
-  {
-    name: "descendant born in the same millisecond",
-    sid: "S-1-5-21-100",
-    facts: { parentPid: launcher, startIdentity: "200" },
-    matching: true,
-    unverified: false,
-  },
-  {
-    name: "unreadable descendant",
-    sid: "S-1-5-21-100",
-    facts: { parentPid: launcher, startIdentity: "300" },
-    matching: true,
-    unverified: false,
-  },
-  {
-    name: "surviving worker with an exited intermediate parent",
-    sid: "S-1-5-21-100",
-    facts: { parentPid: peer + 10, startIdentity: "300" },
-    matching: false,
-    unverified: true,
-  },
-  {
-    name: "surviving worker whose parent PID now denies access",
-    sid: "S-1-5-21-100",
-    facts: { parentPid: peer + 10, startIdentity: "300" },
+  handoffCase("denied same account", deniedFacts, "clear"),
+  handoffCase("denied other account", deniedFacts, "unverified", { sid: "S-1-5-21-200" }),
+  handoffCase("denied unknown caller", deniedFacts, "unverified", { sid: undefined }),
+  handoffCase("denied legacy record", deniedFacts, "unverified", { legacy: true }),
+  handoffCase("missing identity", {}, "unverified"),
+  handoffCase("protected unrelated process", child(peer + 10, "100"), "clear"),
+  handoffCase("reused parent PID", child(launcher, "100"), "clear"),
+  handoffCase("readable other account", child(peer + 10, "100"), "clear", { sid: "S-1-5-21-200" }),
+  handoffCase("same-millisecond descendant", child(launcher, "200"), "match"),
+  handoffCase("unreadable descendant", child(launcher, "300"), "match"),
+  handoffCase("exited intermediate parent", child(peer + 10, "300"), "unverified"),
+  handoffCase("access-denied parent PID", child(peer + 10, "300"), "unverified", {
     parents: [{ pid: peer + 10, accessDenied: true }],
-    matching: false,
-    unverified: true,
-  },
-  {
-    name: "readable descendant",
-    sid: "S-1-5-21-100",
-    facts: {
-      parentPid: launcher,
-      startIdentity: "300",
+  }),
+  handoffCase(
+    "readable descendant",
+    {
+      ...child(launcher, "300"),
       commandLine: "node worker.js",
       cwd: "C:\\app",
     },
-    matching: true,
-    unverified: false,
-  },
-  {
-    name: "positive artifact evidence on denied row",
-    sid: "S-1-5-21-100",
-    facts: { accessDenied: true, commandLine: "node --id=update-run-123" },
-    matching: true,
-    unverified: false,
-  },
+    "match",
+  ),
+  handoffCase(
+    "artifact evidence on denied row",
+    {
+      ...deniedFacts,
+      commandLine: "node --id=update-run-123",
+    },
+    "match",
+  ),
 ])(
   "Windows handoff repair census: $name",
   ({ sid, facts, matching, unverified, legacy, parents }) => {
