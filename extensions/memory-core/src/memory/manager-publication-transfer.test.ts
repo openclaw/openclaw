@@ -322,15 +322,14 @@ describe("bounded memory publication transfer", () => {
   });
 
   it.each(["success", "stale", "begin", "write", "transaction", "commit"] as const)(
-    "settles a single-statement source refresh through %s",
+    "settles an atomic source refresh through %s",
     async (fault) => {
       const owner = await createOwner();
       const db = fixtureWriter(owner);
       db.exec(`INSERT INTO memory_index_sources(path, source, hash, mtime, size)
         VALUES ('sessions/current', 'sessions', 'old', 1, 1)`);
-      const stages: string[] = [];
+      const revision = readMemoryDatabaseRevision(db);
       const backend = await createBackend(owner, (stage) => {
-        stages.push(stage);
         expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
         if (fault === stage) {
           throw new Error(`refused ${stage}`);
@@ -343,7 +342,6 @@ describe("bounded memory publication transfer", () => {
       const locker =
         fault === "begin" ? sqliteRuntime.openNodeSqliteDatabase(db.location()!) : undefined;
       locker?.exec("BEGIN IMMEDIATE");
-      const exec = vi.spyOn(db, "exec");
       try {
         const outcome = backend.execute({
           type: "source.refresh",
@@ -360,22 +358,11 @@ describe("bounded memory publication transfer", () => {
             ? { ok: true, value: fault === "success" }
             : { ok: false, entered: fault !== "begin", committed: false },
         );
-        expect(stages).toEqual(
-          fault === "transaction" ? ["transaction"] : ["transaction", "commit"],
-        );
-        expect(
-          exec.mock.calls.filter(([sql]) => sql === "PRAGMA busy_timeout = 5000"),
-        ).toHaveLength(fault === "transaction" || fault === "commit" ? 0 : 1);
-        expect(
-          exec.mock.calls.filter(([sql]) =>
-            /^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/u.test(sql),
-          ),
-        ).toEqual([]);
         expect(db.isTransaction).toBe(false);
         expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
         expect(sourceHash(db)).toEqual({ hash: fault === "success" ? "new" : "old" });
+        expect(readMemoryDatabaseRevision(db)).toBe(revision + (fault === "success" ? 1 : 0));
       } finally {
-        exec.mockRestore();
         locker?.exec("ROLLBACK");
         locker?.close();
       }

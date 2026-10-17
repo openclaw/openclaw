@@ -580,7 +580,7 @@ export async function checkAgentPostgresBehavior(client: Client): Promise<void> 
       `SELECT ${byteExpression} AS bytes FROM trajectory_runtime_events`,
     );
     console.log(
-      "agent: SQLite/PostgreSQL trigger parity (10 triggers, no-op/key move/bulk/cascade/rollback) and translated index/CHECK behavior verified",
+      "agent: SQLite/PostgreSQL trigger parity (4 triggers, no-op/key move/bulk/cascade/rollback) and translated index/CHECK behavior verified",
     );
   } finally {
     sqlite.close();
