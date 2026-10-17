@@ -8,15 +8,25 @@ import {
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 import {
-  measureDiagnosticsTimelineSpan,
-  measureDiagnosticsTimelineSpanSync,
-  withDiagnosticsTimelineObserver,
+  measureDiagnosticsTimelineSpan as measureSpan,
+  measureDiagnosticsTimelineSpanSync as measureSpanSync,
+  withDiagnosticsTimelineObserver as observeTimeline,
 } from "../../infra/diagnostics-timeline.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { startChatSendDiagnostics } from "./chat-send-diagnostics.js";
 
 let previousDiagnostics: boolean;
 let clock: number;
+function createDiagnostics(info = vi.fn()) {
+  return { info, diagnostics: startChatSendDiagnostics({ info }) };
+}
+function expectLog(info: ReturnType<typeof vi.fn>, message: string) {
+  expect(info).toHaveBeenCalledExactlyOnceWith(message);
+}
+function at(time: number, action?: () => unknown) {
+  clock = time;
+  return action?.();
+}
 beforeEach(() => {
   previousDiagnostics = areDiagnosticsEnabledForProcess();
   setDiagnosticsEnabledForProcess(false);
@@ -31,17 +41,13 @@ afterEach(() => {
 test.each([999.9, 1_000])(
   "slow sends remain visible at the 1s threshold with diagnostics disabled (%sms)",
   (elapsedMs) => {
-    const log = { info: vi.fn() };
-    const diagnostics = startChatSendDiagnostics(log);
+    const { info, diagnostics } = createDiagnostics();
     diagnostics.scope("authority");
-    clock = elapsedMs;
-    diagnostics[Symbol.dispose]();
+    at(elapsedMs, () => diagnostics[Symbol.dispose]());
     if (elapsedMs < 1_000) {
-      expect(log.info).not.toHaveBeenCalled();
+      expect(info).not.toHaveBeenCalled();
     } else {
-      expect(log.info).toHaveBeenCalledExactlyOnceWith(
-        "slow chat send 1000ms stage=request authority=1000ms",
-      );
+      expectLog(info, "slow chat send 1000ms stage=request authority=1000ms");
     }
   },
 );
@@ -54,35 +60,30 @@ test.each(["startup", "steer", "queued"] as const)(
     const stop = onTrustedInternalDiagnosticEvent((event) => events.push(event), {
       include: ["diagnostic.phase.completed"],
     });
-    const log = { info: vi.fn() };
+    const { info, diagnostics } = createDiagnostics();
     try {
-      const diagnostics = startChatSendDiagnostics(log);
       const request = diagnostics.scope("persist")!;
-      clock = 10;
-      request.mark("response");
+      at(10, () => request.mark("response"));
       const snapshot = diagnostics.scope("snapshot")!;
-      clock = 15;
-      request.finish();
+      at(15, request.finish);
       diagnostics.acknowledge(stage === "queued" ? "startup" : stage);
       diagnostics[Symbol.dispose]();
       const parallel = diagnostics.scope("snapshot")!;
-      clock = 815;
-      parallel.finish();
-      clock = 1_215;
-      snapshot.mark("dispatch");
-      clock = 1_415;
+      at(815, parallel.finish);
+      at(1_215, () => snapshot.mark("dispatch"));
+      at(1_415);
       diagnostics.finish({
         isSteered: () => false,
         isEnqueued: () => stage === "queued",
         isTerminal: () => false,
       });
       expect(events).toEqual([]);
-      expect(log.info).toHaveBeenCalledExactlyOnceWith(
+      expectLog(
+        info,
         `slow chat send 1400ms stage=${stage} ack=15ms snapshot=2000ms dispatch=200ms`,
       );
 
-      clock = 4_000;
-      snapshot.mark("effects");
+      at(4_000, () => snapshot.mark("effects"));
       snapshot.finish();
       diagnostics.acknowledge();
       diagnostics.finish();
@@ -95,7 +96,7 @@ test.each(["startup", "steer", "queued"] as const)(
         { name: "chat.send.snapshot", durationMs: 2_000, details: { stage } },
         { name: "chat.send.dispatch", durationMs: 200, details: { stage } },
       ]);
-      expect(log.info).toHaveBeenCalledOnce();
+      expect(info).toHaveBeenCalledOnce();
     } finally {
       stop();
     }
@@ -103,13 +104,12 @@ test.each(["startup", "steer", "queued"] as const)(
 );
 
 test("logging failures preserve the send error and retire unfinished scopes", () => {
-  const log = {
-    info: vi.fn(() => {
+  const { info, diagnostics } = createDiagnostics(
+    vi.fn(() => {
       throw new Error("synthetic diagnostic sink failure");
     }),
-  };
+  );
   const originalError = new Error("synthetic append failure");
-  const diagnostics = startChatSendDiagnostics(log);
   const scope = diagnostics.scope("persist")!;
   expect(() => {
     try {
@@ -119,17 +119,13 @@ test("logging failures preserve the send error and retire unfinished scopes", ()
       diagnostics.finish();
     }
   }).toThrow(originalError);
-  clock = 3_000;
-  scope.finish();
+  at(3_000, scope.finish);
   diagnostics.finish();
-  expect(log.info).toHaveBeenCalledExactlyOnceWith(
-    "slow chat send 1500ms stage=request persist=1500ms",
-  );
+  expectLog(info, "slow chat send 1500ms stage=request persist=1500ms");
 });
 
 test("lexical detail scopes stop on failure without extending later request time", async () => {
-  const log = { info: vi.fn() };
-  const diagnostics = startChatSendDiagnostics(log);
+  const { info, diagnostics } = createDiagnostics();
   const resume = createDeferredCore();
   const failure = new Error("synthetic owner failure");
   const pending = (async () => {
@@ -141,49 +137,40 @@ test("lexical detail scopes stop on failure without extending later request time
   const rejected = expect(pending).rejects.toBe(failure);
   resume.resolve();
   await rejected;
-  clock = 1_200;
-  diagnostics.finish();
-  expect(log.info).toHaveBeenCalledExactlyOnceWith(
-    "slow chat send 1200ms stage=request detail.persist.stage=400ms",
-  );
+  at(1_200, diagnostics.finish);
+  expectLog(info, "slow chat send 1200ms stage=request detail.persist.stage=400ms");
 });
 
 test("startup spans stay request-owned and include unfinished parents without timeline logging", async () => {
-  const firstLog = { info: vi.fn() };
-  const secondLog = { info: vi.fn() };
-  const first = startChatSendDiagnostics(firstLog);
-  const second = startChatSendDiagnostics(secondLog);
+  const { info: firstLog, diagnostics: first } = createDiagnostics();
+  const { info: secondLog, diagnostics: second } = createDiagnostics();
   const resume = createDeferredCore();
   first.acknowledge();
   second.acknowledge();
-  const parent = withDiagnosticsTimelineObserver(first.observeSpan, () =>
-    measureDiagnosticsTimelineSpan("reply.init_session_state", async () => {
+  const parent = observeTimeline(first.observeSpan, () =>
+    measureSpan("reply.init_session_state", async () => {
       await resume.promise;
-      measureDiagnosticsTimelineSpanSync(
-        "agent.prepare",
-        () => {
-          clock = 1_100;
-        },
-        { attributes: { stage: "attempt.tool_catalog" } },
-      );
+      measureSpanSync("agent.prepare", () => at(1_100), {
+        attributes: { stage: "attempt.tool_catalog" },
+      });
       first.finish();
     }),
   );
   clock = 1_000;
-  withDiagnosticsTimelineObserver(second.observeSpan, () =>
-    measureDiagnosticsTimelineSpanSync("reply.ensure_workspace", () => {
-      clock = 1_020;
-    }),
+  observeTimeline(second.observeSpan, () =>
+    measureSpanSync("reply.ensure_workspace", () => at(1_020)),
   );
   second.finish();
   resume.resolve();
   await parent;
   // A span finishing after startup cannot reopen or append to the completed report.
   first.finish();
-  expect(firstLog.info).toHaveBeenCalledExactlyOnceWith(
+  expectLog(
+    firstLog,
     "slow chat send 1100ms stage=startup ack=0ms detail.attempt.tool_catalog=80ms detail.reply.init_session_state=1100ms",
   );
-  expect(secondLog.info).toHaveBeenCalledExactlyOnceWith(
+  expectLog(
+    secondLog,
     "slow chat send 1020ms stage=startup ack=0ms detail.reply.ensure_workspace=20ms",
   );
 });
@@ -193,18 +180,14 @@ test("span observer failures preserve synchronous and asynchronous results and e
   const observer = () => {
     throw new Error("observer failure");
   };
-  expect(
-    withDiagnosticsTimelineObserver(observer, () =>
-      measureDiagnosticsTimelineSpanSync("sync", () => 42),
-    ),
-  ).toBe(42);
+  expect(observeTimeline(observer, () => measureSpanSync("sync", () => 42))).toBe(42);
   await expect(
-    withDiagnosticsTimelineObserver(
+    observeTimeline(
       () => () => {
         throw new Error("finish failure");
       },
       () =>
-        measureDiagnosticsTimelineSpan("async", async () => {
+        measureSpan("async", async () => {
           throw failure;
         }),
     ),

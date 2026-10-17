@@ -29,6 +29,15 @@ import type { GatewayClient } from "./types.js";
 
 type ChatDispatchParams = Parameters<typeof chatDispatch.startChatDispatch>[0];
 
+async function runningReply(params: Parameters<typeof admitReplyTurn>[0]) {
+  const admitted = await admitReplyTurn(params);
+  if (admitted.status !== "owned" || !admitted.databaseClaim) {
+    throw new Error("fixture requires a real physical database admission");
+  }
+  admitted.operation.setPhase("running");
+  return admitted.operation;
+}
+
 it.each([
   "compaction",
   "active-compaction",
@@ -73,18 +82,12 @@ it.each([
       if (scenario === "foreign-store") {
         await replaceSessionEntry(predecessorScope, entry);
       }
-      const previousAdmission = await admitReplyTurn({
+      const predecessor = await runningReply({
         ...predecessorScope,
         sessionId: initialSessionId,
         kind: "visible",
         resetTriggered: false,
       });
-      if (previousAdmission.status !== "owned" || !previousAdmission.databaseClaim) {
-        throw new Error("fixture requires the predecessor's real physical database admission");
-      }
-      const predecessor = previousAdmission.operation;
-      predecessor.setPhase("running");
-
       const client: GatewayClient = {
         connId: "compaction-handoff-client",
         authenticatedUserProfile: {
@@ -208,18 +211,13 @@ it.each([
           owned.admission.activeRunAbort.controller.abort();
         }
         if (scenario === "successive-compactions") {
-          const successorAdmission = await admitReplyTurn({
+          successor = await runningReply({
             ...scope,
             sessionId: nextSessionId,
             expectedSessionId: nextSessionId,
             kind: "visible",
             resetTriggered: false,
           });
-          if (successorAdmission.status !== "owned" || !successorAdmission.databaseClaim) {
-            throw new Error("fixture requires the successor's real physical database admission");
-          }
-          successor = successorAdmission.operation;
-          successor.setPhase("running");
         }
         releasePreparation.resolve();
         if (successor) {
@@ -253,15 +251,14 @@ it.each([
             payload: { runId, status: "ok" },
           });
           const transcript = await loadTranscriptEvents({ ...scope, sessionId: finalSessionId });
-          expect(
-            transcript.filter(
-              (event) =>
-                isRecord(event) &&
-                event.type === "message" &&
-                isRecord(event.message) &&
-                event.message.role === "user",
-            ),
-          ).toHaveLength(1);
+          const users = transcript.filter(
+            (event) =>
+              isRecord(event) &&
+              event.type === "message" &&
+              isRecord(event.message) &&
+              event.message.role === "user",
+          );
+          expect(users).toHaveLength(1);
         } else {
           expect(resolver).not.toHaveBeenCalled();
           expect(originalRegistration.sessionId).toBe(initialSessionId);

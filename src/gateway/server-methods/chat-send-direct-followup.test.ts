@@ -8,10 +8,7 @@ import {
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { COMMAND_ADMISSION_OWNER } from "../../agents/agent-command-admission-owner.js";
 import { runWithAgentCommandRecoveryOwner } from "../../agents/agent-command-recovery-owner.js";
-import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../../agents/embedded-agent-runner/runs.js";
+import * as runs from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -20,16 +17,10 @@ import { withFullRuntimeReplyConfig } from "../../auto-reply/reply/get-reply-fas
 import * as replyRunHelpers from "../../auto-reply/reply/get-reply-run-helpers.js";
 import { clearFollowupQueueForTest } from "../../auto-reply/reply/queue.test-helpers.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.registry.js";
-import {
-  loadSessionEntry,
-  patchSessionEntryCore,
-} from "../../config/sessions/session-accessor.sqlite-entry.js";
+import * as sessions from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { listSessionPendingInputs } from "../../config/sessions/session-pending-input-history.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-} from "../../infra/agent-run-registry.js";
+import * as runAuthority from "../../infra/agent-run-registry.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import * as sessionAdmission from "../../sessions/session-lifecycle-admission.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
@@ -51,29 +42,33 @@ it.for([false, true])(
   "preserves chat.send behind a direct announce (tool_authority_mismatch, cancel=%s)",
   async (cancel, { signal }) => {
     const reason = "tool_authority_mismatch";
+    const wait = <T>(pending: PromiseLike<T>) => withinTest(pending, signal);
     const waitForGate = (...args: Parameters<typeof awaitGateBeforeSettlement>) =>
-      withinTest(awaitGateBeforeSettlement(...args), signal);
-    const actualRuns = await vi.importActual<
-      typeof import("../../agents/embedded-agent-runner/runs.js")
-    >("../../agents/embedded-agent-runner/runs.js");
+      wait(awaitGateBeforeSettlement(...args));
+    const actualRuns = await vi.importActual<typeof runs>(
+      "../../agents/embedded-agent-runner/runs.js",
+    );
     const embeddedRuntime = await replyRunHelpers.loadEmbeddedAgentRuntime();
     const runtimeLoader = vi
       .spyOn(replyRunHelpers, "loadEmbeddedAgentRuntime")
       .mockResolvedValue({ ...embeddedRuntime, ...actualRuns });
     const fixture = await createFixture({ preserveContent: true });
+    const { scope, context, params: sendParams, client } = fixture;
+    const pendingStates = async () =>
+      (await listSessionPendingInputs(scope)).items.map((input) => input.state);
     fixture.activeRun?.complete();
-    fixture.params.queueMode = "steer";
-    fixture.params.idempotencyKey = `direct-followup-${reason}-${cancel}`;
+    sendParams.queueMode = "steer";
+    sendParams.idempotencyKey = `direct-followup-${reason}-${cancel}`;
     runtime.execute.mockReset();
 
-    const config = withFullRuntimeReplyConfig(fixture.context.getRuntimeConfig());
+    const config = withFullRuntimeReplyConfig(context.getRuntimeConfig());
     config.messages = {
       ...config.messages,
       queue: { mode: "steer", debounceMsByChannel: { webchat: 0 } },
     };
-    fixture.context.getRuntimeConfig = () => config;
+    context.getRuntimeConfig = () => config;
     const instance = createOperationalRunInstanceRef("announce:v1:synthetic-child");
-    const authority = claimAgentRunDelegatedAuthority(instance);
+    const authority = runAuthority.claimAgentRunDelegatedAuthority(instance);
     const injected = vi.fn(async () => {});
     const handle = {
       ...createEmbeddedRunHandle({
@@ -91,18 +86,18 @@ it.for([false, true])(
     const settled = createDeferred();
     const consumed: string[] = [];
     let recorder: UserTurnTranscriptRecorder | undefined;
-    const directStarted = createDeferred();
+    const directReady = createDeferred();
     const releaseDirect = createDeferred();
-    const cleanupStarted = createDeferred();
+    const cleanupReady = createDeferred();
     const releaseCleanup = createDeferred();
-    const waitingForCommand = createDeferred();
+    const commandBlocked = createDeferred();
     const readOwnerRelease = sessionAdmission.getSessionWorkAdmissionOwnerRelease;
     const ownerObserver = vi
       .spyOn(sessionAdmission, "getSessionWorkAdmissionOwnerRelease")
       .mockImplementation((params) => {
         const pending = readOwnerRelease(params);
         if (params.owner === COMMAND_ADMISSION_OWNER && pending) {
-          waitingForCommand.resolve();
+          commandBlocked.resolve();
         }
         return pending;
       });
@@ -132,13 +127,11 @@ it.for([false, true])(
     runtime.execute.mockImplementation(async ({ followupRun, opts }) => {
       const runId = expectDefined(opts?.runId, "followup run ID");
       opts?.onAgentRunStart?.(runId);
-      await expectDefined(
-        followupRun.userTurnTranscriptRecorder,
-        "input recorder",
-      ).persistApproved();
+      const input = expectDefined(followupRun.userTurnTranscriptRecorder, "input recorder");
+      await input.persistApproved();
       consumed.push(followupRun.prompt);
       started.resolve();
-      await withinTest(release.promise, signal);
+      await wait(release.promise);
       return successfulChatTurn(runId, "Followup answered.");
     });
     let command: Promise<void> | undefined;
@@ -147,18 +140,18 @@ it.for([false, true])(
         lifecycleGeneration,
         mode: "claim",
         opts: { message: "Synthetic subagent completion", runId: instance.runId },
-        prepare: async () => ({ ...fixture.scope, sessionAgentId: "main", isNewSession: false }),
+        prepare: async () => ({ ...scope, sessionAgentId: "main", isNewSession: false }),
         run: async () => {
           // The command producer records this fence before starting a direct embedded run.
-          await patchSessionEntryCore(fixture.scope, () => ({
+          await sessions.patchSessionEntryCore(scope, () => ({
             status: undefined,
             abortedLastRun: false,
             restartRecoveryRuns: [{ runId: instance.runId, lifecycleGeneration }],
           }));
           await withGatewayToolCallerIdentity(
             {
-              agentId: fixture.scope.agentId,
-              sessionKey: fixture.scope.sessionKey,
+              agentId: scope.agentId,
+              sessionKey: scope.sessionKey,
               operationalRunInstance: instance,
               embeddedRunToolAuthorityBinding: () => ({
                 source: "attempt",
@@ -167,23 +160,23 @@ it.for([false, true])(
                 projectAsync: async () => "human-tools",
               }),
             },
-            () => setActiveEmbeddedRun(fixture.scope.sessionId, handle, fixture.scope.sessionKey),
+            () => runs.setActiveEmbeddedRun(scope.sessionId, handle, scope.sessionKey),
           );
-          directStarted.resolve();
-          await withinTest(releaseDirect.promise, signal);
-          clearActiveEmbeddedRun(fixture.scope.sessionId, handle);
-          cleanupStarted.resolve();
-          await withinTest(releaseCleanup.promise, signal);
-          await patchSessionEntryCore(fixture.scope, () => ({
+          directReady.resolve();
+          await wait(releaseDirect.promise);
+          runs.clearActiveEmbeddedRun(scope.sessionId, handle);
+          cleanupReady.resolve();
+          await wait(releaseCleanup.promise);
+          await sessions.patchSessionEntryCore(scope, () => ({
             restartRecoveryRuns: undefined,
             status: "done",
           }));
         },
       });
       void command.catch(() => {});
-      await withinTest(directStarted.promise, signal);
-      expect(replyRunRegistry.get(fixture.scope.sessionKey)).toBeUndefined();
-      expect(loadSessionEntry(fixture.scope)).toMatchObject({
+      await wait(directReady.promise);
+      expect(replyRunRegistry.get(scope.sessionKey)).toBeUndefined();
+      expect(sessions.loadSessionEntry(scope)).toMatchObject({
         abortedLastRun: false,
         restartRecoveryRuns: [{ runId: instance.runId, lifecycleGeneration }],
       });
@@ -198,45 +191,38 @@ it.for([false, true])(
         dispatched.promise,
         "Dispatch returned without queue custody",
       );
-      expect(fixture.context.chatQueuedTurns.has(fixture.params.idempotencyKey)).toBe(true);
-      await withinTest(dispatched.promise, signal);
+      expect(context.chatQueuedTurns.has(sendParams.idempotencyKey)).toBe(true);
+      await wait(dispatched.promise);
       await waitForGate(
-        waitingForCommand.promise,
+        commandBlocked.promise,
         settled.promise,
         "Queued input was abandoned while its direct predecessor still owned execution",
       );
       expect(consumed).toEqual([]);
       expect(injected).not.toHaveBeenCalled();
       if (cancel) {
-        const params = {
-          sessionKey: fixture.scope.sessionKey,
-          runId: fixture.params.idempotencyKey,
-        };
+        const abortParams = { sessionKey: scope.sessionKey, runId: sendParams.idempotencyKey };
         const respond = vi.fn<RespondFn>();
         await handleChatAbortRequest({
-          params,
-          req: { type: "req", id: "stop-queued-input", method: "chat.abort", params },
-          client: fixture.client,
-          context: fixture.context,
+          params: abortParams,
+          req: { type: "req", id: "stop-queued-input", method: "chat.abort", params: abortParams },
+          client,
+          context,
           respond,
           isWebchatConnect: () => true,
         });
         expect(respond).toHaveBeenCalledWith(true, {
           ok: true,
           aborted: true,
-          runIds: [params.runId],
+          runIds: [abortParams.runId],
         });
-        await withinTest(settled.promise, signal);
+        await wait(settled.promise);
         await expectDefined(recorder, "queued input recorder").waitForPendingInputSettlement?.();
-        expect(
-          (await listSessionPendingInputs(fixture.scope)).items.map((input) => input.state),
-        ).toEqual(["cancelled"]);
+        expect(await pendingStates()).toEqual(["cancelled"]);
       }
       releaseDirect.resolve();
-      await withinTest(cleanupStarted.promise, signal);
-      expect(
-        (await listSessionPendingInputs(fixture.scope)).items.map((input) => input.state),
-      ).toEqual([cancel ? "cancelled" : "queued"]);
+      await wait(cleanupReady.promise);
+      expect(await pendingStates()).toEqual([cancel ? "cancelled" : "queued"]);
       expect(consumed).toEqual([]);
       releaseCleanup.resolve();
       await command;
@@ -245,18 +231,18 @@ it.for([false, true])(
         return;
       }
       await waitForGate(started.promise, settled.promise, "Followup settled without running");
-      expect(consumed).toEqual([expect.stringContaining(fixture.params.message)]);
+      expect(consumed).toEqual([expect.stringContaining(sendParams.message)]);
       release.resolve();
-      await withinTest(settled.promise, signal);
-      expect((await listSessionPendingInputs(fixture.scope)).total).toBe(0);
+      await wait(settled.promise);
+      expect((await listSessionPendingInputs(scope)).total).toBe(0);
     } finally {
-      clearActiveEmbeddedRun(fixture.scope.sessionId, handle);
-      releaseAgentRunDelegatedAuthority(authority);
+      runs.clearActiveEmbeddedRun(scope.sessionId, handle);
+      runAuthority.releaseAgentRunDelegatedAuthority(authority);
       release.resolve();
       releaseDirect.resolve();
       releaseCleanup.resolve();
       await command?.catch(() => {});
-      clearFollowupQueueForTest(fixture.scope.sessionKey);
+      clearFollowupQueueForTest(scope.sessionKey);
       await fixture.cleanup();
       rejected.mockRestore();
       runtimeLoader.mockRestore();
