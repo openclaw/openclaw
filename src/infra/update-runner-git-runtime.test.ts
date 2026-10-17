@@ -25,19 +25,31 @@ import {
   writeRuntime,
   expectFile,
   readText,
+  writeFixtureTree,
 } from "./update-runner-git-candidate.test-support.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
+
+const removeTree = (target: string) => fs.rm(target, { recursive: true, force: true });
+const inode = async (target: string) => (await fs.lstat(target, { bigint: true })).ino;
+const entries = async (target: string) =>
+  (await fs.readdir(target, { recursive: true })).toSorted();
+async function initCandidate(candidate: string, ignored = "node_modules/\ndist/\ndist-runtime/\n") {
+  const result = await runCommandWithTimeout(
+    ["git", "-C", candidate, "init", "--initial-branch=main"],
+    { timeoutMs: 5000 },
+  );
+  expect(result.code, result.stderr).toBe(0);
+  await writeFixtureTree(candidate, { ".gitignore": ignored });
+}
 
 describe("Git runtime promotion", () => {
   let directory: string;
   let root: string;
 
   async function writeCheckout(checkout: string, sha: string) {
-    await fs.mkdir(path.join(checkout, "packages", "runtime"), { recursive: true });
-    await fs.writeFile(
-      path.join(checkout, "packages", "runtime", "index.js"),
-      "module.exports = require('./node_modules/nested.cjs');",
-    );
+    await writeFixtureTree(checkout, {
+      "packages/runtime/index.js": "module.exports = require('./node_modules/nested.cjs');",
+    });
     await writeRuntime(checkout, sha, path.join(directory, "shared-store"), "node_modules/.pnpm");
   }
 
@@ -50,21 +62,14 @@ describe("Git runtime promotion", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(directory, { recursive: true, force: true });
+    vi.restoreAllMocks();
+    await removeTree(directory);
   });
 
   async function createCandidate() {
     const candidateRoot = path.join(directory, "candidate-scope", "worktree");
     await writeCheckout(candidateRoot, "candidate");
-    const initialized = await runCommandWithTimeout(
-      ["git", "-C", candidateRoot, "init", "--initial-branch=main"],
-      { timeoutMs: 5000 },
-    );
-    expect(initialized.code, initialized.stderr).toBe(0);
-    await fs.writeFile(
-      path.join(candidateRoot, ".gitignore"),
-      "node_modules/\ndist/\ndist-runtime/\n",
-    );
+    await initCandidate(candidateRoot);
     return candidateRoot;
   }
 
@@ -82,7 +87,7 @@ describe("Git runtime promotion", () => {
   async function activate(candidateRoot: string) {
     const promotion = await preparePromotion(candidateRoot);
     // Activation must stand alone after the disposable candidate has gone.
-    await fs.rm(path.dirname(candidateRoot), { recursive: true, force: true });
+    await removeTree(path.dirname(candidateRoot));
     await promotion.activate();
     await promotion.cleanup();
   }
@@ -123,28 +128,24 @@ describe("Git runtime promotion", () => {
     });
     const hostPlatform = process.platform;
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    let promotion: Awaited<ReturnType<typeof preparePromotion>>;
-    try {
-      promotion = await prepareGitRuntimePromotion(
-        root,
-        candidateRoot,
-        async (argv, options) => {
-          platform.mockReturnValue(hostPlatform);
-          try {
-            return await runCommandWithTimeout(argv, options);
-          } finally {
-            platform.mockReturnValue("win32");
-          }
-        },
-        5000,
-        path.dirname(candidateRoot),
-      );
-    } finally {
-      platform.mockRestore();
-      copySpy.mockRestore();
-      junctionSpy.mockRestore();
-    }
-    await fs.rm(path.dirname(candidateRoot), { recursive: true, force: true });
+    const promotion = await prepareGitRuntimePromotion(
+      root,
+      candidateRoot,
+      async (argv, options) => {
+        platform.mockReturnValue(hostPlatform);
+        try {
+          return await runCommandWithTimeout(argv, options);
+        } finally {
+          platform.mockReturnValue("win32");
+        }
+      },
+      5000,
+      path.dirname(candidateRoot),
+    );
+    platform.mockRestore();
+    copySpy.mockRestore();
+    junctionSpy.mockRestore();
+    await removeTree(path.dirname(candidateRoot));
     await promotion.activate();
     expect((await fs.lstat(path.join(root, relative))).isSymbolicLink()).toBe(true);
     expect(await fs.realpath(path.join(root, relative))).toBe(root);
@@ -158,7 +159,7 @@ describe("Git runtime promotion", () => {
       const candidateRoot = await createCandidate();
       const destination = path.join(root, "dist");
       if (!previous) {
-        await fs.rm(destination, { recursive: true, force: true });
+        await removeTree(destination);
       }
       const promotion = await preparePromotion(candidateRoot);
       await promotion.activate();
@@ -177,18 +178,15 @@ describe("Git runtime promotion", () => {
           revoked = true;
         }
       });
-      try {
-        await expect(
-          promotion.restore(() => {
-            if (revoked) {
-              throw new Error("restoration authority lost");
-            }
-          }),
-        ).rejects.toThrow("restoration authority lost");
-      } finally {
-        renameSpy.mockRestore();
-        removeSpy.mockRestore();
-      }
+      await expect(
+        promotion.restore(() => {
+          if (revoked) {
+            throw new Error("restoration authority lost");
+          }
+        }),
+      ).rejects.toThrow("restoration authority lost");
+      renameSpy.mockRestore();
+      removeSpy.mockRestore();
       // A completed destination is no longer rollback-owned, even if admission then fails.
       if (!previous) {
         await fs.mkdir(destination);
@@ -226,7 +224,7 @@ describe("Git runtime promotion", () => {
         assertDestination(destination);
       });
       const destination = path.join(root, "dist");
-      const original = await fs.lstat(destination, { bigint: true });
+      const original = await inode(destination);
       const rename = fs.rename.bind(fs);
       const activationError = new Error("candidate rename refused");
       let previous: string | undefined;
@@ -255,52 +253,48 @@ describe("Git runtime promotion", () => {
         }
         return result;
       });
-      try {
-        const failure: unknown = await promotion.activate().catch((error: unknown) => error);
-        expect(previous).toBeDefined();
-        if (outcome === "uncertain") {
-          expect(failure).toBe(uncertainty);
-          await expect(promotion.restore()).rejects.toBe(uncertainty);
-          await expect(promotion.cleanup()).rejects.toBe(uncertainty);
-          expect(renameSpy.mock.calls).toHaveLength(renamedAtUncertainty);
-          expect((await fs.lstat(previous!, { bigint: true })).ino).toBe(original.ino);
-          return;
-        }
-        if (outcome === "absent") {
-          expect(failure).toBe(activationError);
-          expect((await fs.lstat(destination, { bigint: true })).ino).toBe(original.ino);
-        } else {
-          const retained = outcome === "retained-replaced" ? `${previous!}.operator` : previous!;
-          expect((await fs.lstat(retained, { bigint: true })).ino).toBe(original.ino);
-          if (outcome === "retained-replaced") {
-            const foreign = await fs.lstat(previous!, { bigint: true });
-            await expect(promotion.restore()).rejects.toThrow();
-            await promotion.cleanup();
-            expect((await fs.lstat(retained, { bigint: true })).ino).toBe(original.ino);
-            expect((await fs.lstat(previous!, { bigint: true })).ino).toBe(foreign.ino);
-            await fs.rmdir(previous!);
-            await rename(retained, previous!);
-          } else if (outcome === "foreign") {
-            const foreign = await fs.lstat(destination, { bigint: true });
-            await expect(promotion.restore()).rejects.toThrow();
-            expect((await fs.lstat(destination, { bigint: true })).ino).toBe(foreign.ino);
-            await promotion.cleanup();
-            expect((await fs.lstat(previous!, { bigint: true })).ino).toBe(original.ino);
-            await fs.rmdir(destination);
-          } else {
-            await expect(promotion.restore()).rejects.toThrow("source authority lost");
-            await expect(promotion.cleanup()).rejects.toThrow("source authority lost");
-            await expect(fs.lstat(destination)).rejects.toMatchObject({ code: "ENOENT" });
-            current = true;
-          }
-          expect(failure).toMatchObject({ errors: [activationError, expect.any(Error)] });
-        }
-        await promotion.restore();
-        await expectRuntime(root, "original");
-        await promotion.cleanup();
-      } finally {
-        renameSpy.mockRestore();
+      const failure: unknown = await promotion.activate().catch((error: unknown) => error);
+      expect(previous).toBeDefined();
+      if (outcome === "uncertain") {
+        expect(failure).toBe(uncertainty);
+        await expect(promotion.restore()).rejects.toBe(uncertainty);
+        await expect(promotion.cleanup()).rejects.toBe(uncertainty);
+        expect(renameSpy.mock.calls).toHaveLength(renamedAtUncertainty);
+        expect(await inode(previous!)).toBe(original);
+        return;
       }
+      if (outcome === "absent") {
+        expect(failure).toBe(activationError);
+        expect(await inode(destination)).toBe(original);
+      } else {
+        const retained = outcome === "retained-replaced" ? `${previous!}.operator` : previous!;
+        expect(await inode(retained)).toBe(original);
+        if (outcome === "retained-replaced") {
+          const foreign = await inode(previous!);
+          await expect(promotion.restore()).rejects.toThrow();
+          await promotion.cleanup();
+          expect(await inode(retained)).toBe(original);
+          expect(await inode(previous!)).toBe(foreign);
+          await fs.rmdir(previous!);
+          await rename(retained, previous!);
+        } else if (outcome === "foreign") {
+          const foreign = await inode(destination);
+          await expect(promotion.restore()).rejects.toThrow();
+          expect(await inode(destination)).toBe(foreign);
+          await promotion.cleanup();
+          expect(await inode(previous!)).toBe(original);
+          await fs.rmdir(destination);
+        } else {
+          await expect(promotion.restore()).rejects.toThrow("source authority lost");
+          await expect(promotion.cleanup()).rejects.toThrow("source authority lost");
+          await expect(fs.lstat(destination)).rejects.toMatchObject({ code: "ENOENT" });
+          current = true;
+        }
+        expect(failure).toMatchObject({ errors: [activationError, expect.any(Error)] });
+      }
+      await promotion.restore();
+      await expectRuntime(root, "original");
+      await promotion.cleanup();
     },
   );
 
@@ -312,11 +306,11 @@ describe("Git runtime promotion", () => {
       if (phase === "prepare") {
         await fs.rename(path.join(root, "packages"), outside);
         await fs.symlink(outside, path.join(root, "packages"), "junction");
-        const before = (await fs.readdir(outside, { recursive: true })).toSorted();
+        const before = await entries(outside);
         await expect(preparePromotion(candidateRoot, assertDestination)).rejects.toThrow(
           "symbolic link",
         );
-        expect((await fs.readdir(outside, { recursive: true })).toSorted()).toEqual(before);
+        expect(await entries(outside)).toEqual(before);
         // Restore the fixture's physical depth before resolving its relative dependency links.
         await fs.unlink(path.join(root, "packages"));
         await fs.rename(outside, path.join(root, "packages"));
@@ -330,8 +324,7 @@ describe("Git runtime promotion", () => {
       }
       const heldPackages = path.join(directory, "held-packages");
       const outsideModules = path.join(outside, "runtime", "node_modules");
-      await fs.mkdir(outsideModules, { recursive: true });
-      await fs.writeFile(path.join(outsideModules, "operator.cjs"), "outside content\n");
+      await writeFixtureTree(outsideModules, { "operator.cjs": "outside content\n" });
       await fs.rename(path.join(root, "packages"), heldPackages);
       await fs.symlink(outside, path.join(root, "packages"), "junction");
 
@@ -360,37 +353,27 @@ describe("Git runtime promotion", () => {
     const candidateRoot = await createCandidate();
     const modules = path.join(candidateRoot, "node_modules");
     if (layout === "missing" || layout === "cycle") {
-      await fs.mkdir(path.join(modules, ".vite"));
-      await fs.writeFile(path.join(modules, ".vite", "content"), "retained");
+      await writeFixtureTree(modules, { ".vite/content": "retained" });
       const target = layout === "cycle" ? "unresolved" : "missing";
       await fs.symlink(target, path.join(modules, "unresolved"));
       await activate(candidateRoot);
-      expect(await fs.readlink(path.join(root, "node_modules", "unresolved"))).toBe(target);
-      await expectFile(path.join(root, "node_modules", ".vite", "content"), "retained");
+      expect(await fs.readlink(path.join(root, "node_modules/unresolved"))).toBe(target);
+      await expectFile(path.join(root, "node_modules/.vite/content"), "retained");
       await expectRuntime(root, "candidate");
       return;
     }
     const payload = path.join(modules, layout === "dependency" ? ".vite" : "payload");
-    await fs.mkdir(payload, { recursive: true });
-    await fs.writeFile(path.join(payload, "index.cjs"), "module.exports = 'retained';\n");
+    await writeFixtureTree(payload, { "index.cjs": "module.exports = 'retained';\n" });
     if (layout === "dependency") {
       await fs.symlink(payload, path.join(modules, "linked-runtime"), "junction");
       // Once retained, this cache's own link must keep the second cache too.
-      await fs.mkdir(path.join(modules, ".cache", "jiti"), { recursive: true });
-      await fs.writeFile(
-        path.join(modules, ".cache", "jiti", "value.cjs"),
-        "module.exports = 'nested';\n",
-      );
-      await fs.symlink(
-        path.join(modules, ".cache", "jiti"),
-        path.join(payload, "nested"),
-        "junction",
-      );
+      const nested = path.join(modules, ".cache/jiti");
+      await writeFixtureTree(nested, { "value.cjs": "module.exports = 'nested';\n" });
+      await fs.symlink(nested, path.join(payload, "nested"), "junction");
     } else if (layout === "cache-link") {
       await fs.symlink(payload, path.join(modules, ".vite"), "junction");
     } else {
-      await fs.mkdir(path.join(payload, "jiti"));
-      await fs.writeFile(path.join(payload, "jiti", "index.cjs"), "module.exports = 'retained';\n");
+      await writeFixtureTree(payload, { "jiti/index.cjs": "module.exports = 'retained';\n" });
       await fs.symlink(payload, path.join(modules, ".cache"), "junction");
     }
     await activate(candidateRoot);
@@ -412,7 +395,7 @@ describe("Git runtime promotion", () => {
     expect(probe.stdout.trim()).toBe("retained");
     if (layout === "dependency") {
       expect(
-        await readText(path.join(root, "node_modules", "linked-runtime", "nested", "value.cjs")),
+        await readText(path.join(root, "node_modules/linked-runtime/nested/value.cjs")),
       ).toContain("nested");
     }
     await expectRuntime(root, "candidate");
@@ -441,17 +424,14 @@ describe("Git runtime promotion", () => {
       await fs.symlink(payload, storePath, "junction");
     }
     if (replacedRoot) {
-      const candidateRuntime = path.join(candidateRoot, replacedRoot);
-      await fs.mkdir(candidateRuntime, { recursive: true });
-      await fs.writeFile(path.join(candidateRuntime, "candidate.cjs"), "module.exports = 1;\n");
+      await writeFixtureTree(path.join(candidateRoot, replacedRoot), {
+        "candidate.cjs": "module.exports = 1;\n",
+      });
     }
     if (store === ".artifacts/checkout") {
       await fs.symlink(directory, path.join(root, ".artifacts"), "junction");
     }
-    await runCommandWithTimeout(["git", "-C", candidateRoot, "init", "--initial-branch=main"], {
-      timeoutMs: 5000,
-    });
-    await fs.writeFile(path.join(candidateRoot, ".gitignore"), "node_modules/\ndist/\n");
+    await initCandidate(candidateRoot, "node_modules/\ndist/\n");
     await fs.writeFile(
       path.join(modules, ".modules.yaml"),
       JSON.stringify({ virtualStoreDir: path.relative(modules, storePath) }),
