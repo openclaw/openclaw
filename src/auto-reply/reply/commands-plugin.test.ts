@@ -271,7 +271,7 @@ describe("handlePluginCommand", () => {
     expect(response?.reply?.text).toBe(
       JSON.stringify({ compacted: true, tokensBefore: 900, tokensAfter: 321 }),
     );
-    expect(params.sessionStore[sessionKey]).toMatchObject({
+    expect(expectDefined(params.sessionStore, "session store")[sessionKey]).toMatchObject({
       compactionCount: 1,
       totalTokens: 321,
       totalTokensFresh: true,
