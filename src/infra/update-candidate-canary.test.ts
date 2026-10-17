@@ -168,7 +168,10 @@ describe("update candidate canary", () => {
         nodeRunner,
       });
       expect(result.status).toBe("ok");
-      expect(result.steps[0]?.warnings).toEqual(warnings);
+      expect(result.steps[0]?.warnings).toEqual([
+        ...warnings,
+        expect.stringContaining("The update deadline limits each update check to 3 s"),
+      ]);
       expect(mocks.snapshot.mock.calls[0]?.[0]).toEqual([
         nodeRunner,
         ...runtimeArgs,
@@ -189,14 +192,30 @@ describe("update candidate canary", () => {
   registerCanaryProgressWorkerTests(() => root, mocks, admission);
 
   it.each([
-    ["snapshot", 32 * 1024 ** 2, 30_000, 300_001, "ok"],
-    ["doctor", 0, undefined, 31 * 60_000, "error"],
-    ["doctor", 400 * 1024 ** 2, undefined, 400_000, "ok"],
-    ["doctor", 2 * 1024 ** 3, undefined, 31 * 60_000, "ok"],
-    ["doctor", 2 * 1024 ** 3, 30 * 60_000, 31 * 60_000, "error"],
+    [
+      "snapshot",
+      32 * 1024 ** 2,
+      30_000,
+      300_001,
+      "ok",
+      "The update deadline limits each update check to 30 s, below the automatic 340 s allowance for this state.",
+    ],
+    ["doctor", 0, undefined, 31 * 60_000, "error", undefined],
+    ["doctor", 400 * 1024 ** 2, undefined, 400_000, "ok", undefined],
+    ["doctor", 2 * 1024 ** 3, undefined, 31 * 60_000, "ok", undefined],
+    // 2 GiB allows 300 s plus 40 s per 32 MiB: 2860 s for each check.
+    [
+      "doctor",
+      2 * 1024 ** 3,
+      30 * 60_000,
+      31 * 60_000,
+      "error",
+      "The update deadline limits each update check to 1800 s, below the automatic 2860 s allowance for this state.",
+    ],
+    ["doctor", 2 * 1024 ** 3, 60 * 60_000, 31 * 60_000, "ok", undefined],
   ] as const)(
     "keeps the %s budget separate for %i state bytes and an explicit %s deadline",
-    async (stage, sqliteBytes, timeoutMs, elapsedMs, expectedStatus) => {
+    async (stage, sqliteBytes, timeoutMs, elapsedMs, expectedStatus, expectedWarning) => {
       databasePath = path.join(root, "budget.sqlite");
       await fs.writeFile(databasePath, "");
       await fs.truncate(databasePath, sqliteBytes);
@@ -251,6 +270,15 @@ describe("update candidate canary", () => {
         if (stage === "snapshot") {
           expect(result.durationMs).toBeGreaterThanOrEqual(elapsedMs);
           await expectRemoved(childEnv.OPENCLAW_STATE_DIR!);
+        }
+        const report = renderUpdateRunReport(
+          updateRunReportInputFromResult({ ...result, mode: "git", root }),
+          { markdownLimit: Infinity },
+        ).markdown;
+        if (expectedWarning) {
+          expect(report).toContain(`Warning: ${expectedWarning}`);
+        } else {
+          expect(report).not.toContain("update deadline");
         }
       } finally {
         clock.mockRestore();

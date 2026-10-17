@@ -16,7 +16,7 @@ import {
 import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
-import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
+import { resolveUpdateCanaryBudget } from "./update-candidate-canary-budget.js";
 import {
   buildUpdateCanaryCommands,
   type UpdateCanaryCommand,
@@ -282,13 +282,18 @@ export async function validateUpdateCandidateCanary(params: {
       onProgress: params.onProgress,
       migrationPolicy: params.migrationPolicy,
     });
+    const { budget, warnings: budgetWarnings } = resolveUpdateCanaryBudget(
+      rehearsal.stateDir,
+      rehearsal.snapshotCapacity,
+      params.timeoutMs,
+    );
     // Copying private state has its own size/progress budget; preserve the
     // runtime validation budget after large snapshots finish.
     const snapshotStep: UpdateStepResult = {
       ...currentStep(0),
       snapshotCapacity: rehearsal.snapshotCapacity,
       diagnostics: rehearsal.snapshotDiagnostics,
-      warnings: rehearsal.snapshotWarnings,
+      warnings: [...(rehearsal.snapshotWarnings ?? []), ...budgetWarnings],
     };
     await recordStep(snapshotStep);
     env = { ...rehearsal.env };
@@ -302,13 +307,6 @@ export async function validateUpdateCandidateCanary(params: {
       continuationEntry,
       migrationPolicy: params.migrationPolicy,
     });
-    // Each fresh process may inspect the private state again, including the Gateway.
-    const processBudget = resolveSqliteInspectionBudget(
-      "update validation",
-      copiedStateDir,
-      rehearsal.snapshotCapacity.sqliteBytes + (rehearsal.snapshotCapacity.pluginBytes ?? 0),
-    ).timeoutMs;
-    const budget = Math.max(1, params.timeoutMs ?? processBudget);
     let deadline = 0;
     let workDeadline = 0;
     const startBudget = () => {
