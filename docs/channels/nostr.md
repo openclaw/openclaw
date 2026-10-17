@@ -114,7 +114,9 @@ Notes:
 - **open**: public inbound DMs (requires `allowFrom: ["*"]`).
 - **disabled**: ignore inbound DMs.
 
-Pairing approval notifications require a running Nostr account. If the account is stopped, approval still succeeds, but the CLI or Gateway reports that notification failed. Start the account before requesting a notification.
+Gateway pairing approval notifications require a running Nostr account. If the account is stopped, approval still succeeds, but the Gateway reports that notification failed.
+
+The CLI's `pairing approve nostr ... --notify` cannot access the Gateway's Nostr connection, so notification fails even when the account is running. Pairing approval still succeeds; use a Gateway client to request an approval notification.
 
 Enforcement notes:
 
