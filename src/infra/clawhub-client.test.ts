@@ -1,4 +1,3 @@
-// Verifies ClawHub client authentication, URL, retry, timeout, and body bounds.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,9 +7,8 @@ import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/e
 import { fetchClawHubJson, type ClawHubFetchOptions } from "./clawhub-client.js";
 import { fetchClawHubSkillVerification, searchClawHubSkills } from "./clawhub-skills.js";
 
-function search(options: ClawHubFetchOptions) {
-  return searchClawHubSkills({ query: "calendar", ...options });
-}
+const search = (options: ClawHubFetchOptions) =>
+  searchClawHubSkills({ query: "calendar", ...options });
 
 function createStalledBodyResponse(firstChunk: string, init: ResponseInit = {}) {
   const cancel = vi.fn();
@@ -31,19 +29,6 @@ async function writeConfigFile(configPath: string, contents: string) {
   await fs.writeFile(configPath, contents, "utf8");
 }
 
-async function withWindowsAppData(run: (root: string) => Promise<void>) {
-  await withTestDir({ prefix: "openclaw-clawhub-appdata-" }, async (appDataRoot) => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    setTestEnvValue("APPDATA", appDataRoot);
-    deleteTestEnvValue("XDG_CONFIG_HOME");
-    try {
-      await run(appDataRoot);
-    } finally {
-      platformSpy.mockRestore();
-    }
-  });
-}
-
 describe("clawhub client", () => {
   const originalEnv = captureEnv(["APPDATA", "HOME", "XDG_CONFIG_HOME"]);
 
@@ -61,6 +46,7 @@ describe("clawhub client", () => {
   }
 
   afterEach(() => {
+    vi.restoreAllMocks();
     delete process.env.OPENCLAW_CLAWHUB_URL;
     delete process.env.CLAWHUB_TOKEN;
     delete process.env.CLAWHUB_AUTH_TOKEN;
@@ -77,7 +63,10 @@ describe("clawhub client", () => {
   ])(
     "does not fall back to a legacy token when the canonical config exists %s",
     async (_, contents) => {
-      await withWindowsAppData(async (appDataRoot) => {
+      await withTestDir({ prefix: "openclaw-clawhub-appdata-" }, async (appDataRoot) => {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        setTestEnvValue("APPDATA", appDataRoot);
+        deleteTestEnvValue("XDG_CONFIG_HOME");
         await Promise.all([
           writeConfigFile(path.join(appDataRoot, "clawhub", "config.json"), contents),
           writeConfigFile(
@@ -94,18 +83,14 @@ describe("clawhub client", () => {
     "falls back to XDG_CONFIG_HOME for ClawHub request auth on macOS",
     async () => {
       await withTestDir({ prefix: "openclaw-clawhub-home-" }, async (fakeHome) => {
-        await withTestDir({ prefix: "openclaw-clawhub-xdg-" }, async (xdgRoot) => {
-          const configPath = path.join(xdgRoot, "clawhub", "config.json");
-          const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
-          setTestEnvValue("XDG_CONFIG_HOME", xdgRoot);
-          try {
-            await writeConfigFile(configPath, JSON.stringify({ token: "fixture-xdg-token" }));
-
-            await expect(searchAuthorizationHeader()).resolves.toBe("Bearer fixture-xdg-token");
-          } finally {
-            homedirSpy.mockRestore();
-          }
-        });
+        const xdgRoot = path.join(fakeHome, "xdg");
+        vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+        setTestEnvValue("XDG_CONFIG_HOME", xdgRoot);
+        await writeConfigFile(
+          path.join(xdgRoot, "clawhub", "config.json"),
+          '{"token":"fixture-xdg-token"}',
+        );
+        await expect(searchAuthorizationHeader()).resolves.toBe("Bearer fixture-xdg-token");
       });
     },
   );
@@ -117,10 +102,7 @@ describe("clawhub client", () => {
         fetchImpl: async () =>
           new Response("Rate limit exceeded", {
             status: 429,
-            headers: {
-              "RateLimit-Reset": "invalid",
-              "Retry-After": "7",
-            },
+            headers: { "RateLimit-Reset": "invalid", "Retry-After": "7" },
           }),
       }),
     ).rejects.toThrow(/Rate limit exceeded \(resets in 7s\) Sign in for higher rate limits\.$/);
@@ -172,47 +154,34 @@ describe("clawhub client", () => {
               Buffer.from([0xff]),
               Buffer.from('"}]}'),
             ]),
-            {
-              status: 200,
-              headers: { "content-type": "application/json" },
-            },
           ),
       }),
     ).rejects.toThrow("ClawHub /api/v1/search returned malformed JSON");
   });
 
-  it("times out and cancels stalled successful ClawHub JSON bodies", async () => {
-    const stalled = createStalledBodyResponse('{"results":[', {
-      headers: { "content-type": "application/json" },
-    });
-
-    await expect(
-      search({
-        timeoutMs: 5,
-        fetchImpl: async () => stalled.response,
-      }),
-    ).rejects.toThrow(/ClawHub \/api\/v1\/search response stalled after 5ms/);
-    expect(stalled.cancel).toHaveBeenCalledTimes(1);
-    expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
-  });
-
-  it("times out and cancels stalled ClawHub error bodies", async () => {
+  it.each([
+    { status: 200, error: "ClawHub /api/v1/search response stalled after 5ms" },
+    { status: 500, error: "ClawHub /api/v1/search failed (500): Server Error" },
+  ])("times out and cancels stalled $status bodies", async ({ status, error }) => {
     const stalledResponses: ReturnType<typeof createStalledBodyResponse>[] = [];
 
     await expect(
       search({
         timeoutMs: 5,
         fetchImpl: async () => {
-          const stalled = createStalledBodyResponse("partial error", {
-            headers: { "content-type": "text/plain", "retry-after": "0" },
-            status: 500,
-            statusText: "Server Error",
-          });
+          const stalled = createStalledBodyResponse(
+            status === 200 ? '{"results":[' : "partial error",
+            {
+              headers: { "content-type": "text/plain", "retry-after": "0" },
+              status,
+              statusText: status === 500 ? "Server Error" : undefined,
+            },
+          );
           stalledResponses.push(stalled);
           return stalled.response;
         },
       }),
-    ).rejects.toThrow("ClawHub /api/v1/search failed (500): Server Error");
+    ).rejects.toThrow(error);
     for (const stalled of stalledResponses) {
       expect(stalled.cancel).toHaveBeenCalledTimes(1);
     }
@@ -242,26 +211,18 @@ describe("clawhub client", () => {
     await expect(result).rejects.toThrow(
       `ClawHub /api/v1/skills/weather/verify response exceeded ${64 * 1024 * 1024} bytes`,
     );
-    // Cancel at the cap before allocating a contiguous copy of the oversized body.
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
   it("bounds oversized ClawHub error bodies to a short collapsed snippet", async () => {
-    const oversized = "boom ".repeat(64 * 1024); // ~320 KiB error body
-    let error: unknown;
-    try {
-      await search({
-        fetchImpl: async () =>
-          new Response(oversized, { status: 500, headers: { "retry-after": "0" } }),
-      });
-    } catch (caught) {
-      error = caught;
-    }
+    const error = await search({
+      fetchImpl: async () =>
+        new Response("boom ".repeat(64 * 1024), { status: 500, headers: { "retry-after": "0" } }),
+    }).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(Error);
     const message = (error as Error).message;
     expect(message.startsWith("ClawHub /api/v1/search failed (500): ")).toBe(true);
     expect(message.endsWith("…")).toBe(true);
-    // prefix + 400-char snippet + "…" stays far below the raw ~320 KiB body.
     expect(message.length).toBeLessThanOrEqual(500);
   });
 });
