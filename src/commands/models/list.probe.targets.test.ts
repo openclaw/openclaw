@@ -12,35 +12,15 @@ let mockStore: AuthProfileStore;
 let mockAgentStore: AuthProfileStore | undefined;
 const loadModelCatalogMock = vi.fn<() => Promise<ModelCatalogEntry[]>>(async () => []);
 
-const resolveAuthProfileEligibilityMock = vi.fn<
-  () => { eligible: boolean; reasonCode: "invalid_expires" | "ok" }
->(() => ({
-  eligible: false,
-  reasonCode: "invalid_expires",
-}));
+const resolveAuthProfileEligibilityMock =
+  vi.fn<() => { eligible: boolean; reasonCode: "invalid_expires" | "ok" }>();
 const resolveSecretRefStringMock = vi.fn(async () => "resolved-secret");
-type ProviderAuthInput = { cfg: OpenClawConfig; provider: string };
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
   readPreparedModelCatalog: loadModelCatalogMock,
 }));
-vi.mock("../../agents/model-auth.js", () => ({
-  hasSyntheticLocalProviderAuthConfig: ({ cfg, provider }: ProviderAuthInput) => {
-    const configured = cfg.models?.providers?.[provider];
-    return (
-      provider === "ollama" &&
-      configured?.api === "ollama" &&
-      configured.apiKey === undefined &&
-      configured.baseUrl === "http://127.0.0.1:11434"
-    );
-  },
-  hasUsableCustomProviderApiKey: (cfg: OpenClawConfig, provider: string) => {
-    const raw = cfg.models?.providers?.[provider]?.apiKey;
-    if (provider === "ollama") {
-      return raw === "ollama-local";
-    }
-    return typeof raw === "string" && raw.trim().length > 0 && raw !== "ollama-local";
-  },
+vi.mock("../../agents/model-auth.js", async () => ({
+  ...(await import("../../agents/model-auth-provider-config.js")),
   resolveEnvApiKey: (
     provider: string,
     _env?: NodeJS.ProcessEnv,
@@ -68,49 +48,16 @@ vi.mock("../../agents/model-auth.js", () => ({
         }
       : null;
   },
-  resolveProviderEntryApiKeyProfileReference: (params: {
-    cfg: OpenClawConfig;
-    provider: string;
-    store: AuthProfileStore;
-  }) => {
-    const raw = params.cfg.models?.providers?.[params.provider]?.apiKey;
-    if (params.provider === "ollama") {
-      return { kind: raw === "ollama-local" ? "marker" : "none" };
-    }
-    if (typeof raw !== "string") {
-      return { kind: "none" };
-    }
-    const profile = params.store.profiles[raw];
-    return profile
-      ? { kind: "profile", profileId: raw, profile, mode: profile.type }
-      : { kind: "literal", apiKey: raw, source: "models.json" };
-  },
   resolveProviderEntryApiKeyBinding: async () => ({ kind: "profile-unresolved" }),
-  resolveUsableCustomProviderApiKey: ({ cfg, provider }: ProviderAuthInput) =>
-    provider === "ollama" && cfg.models?.providers?.[provider]?.apiKey === "ollama-local"
-      ? { apiKey: "ollama-local", source: "models.json (local marker)" }
-      : null,
 }));
 vi.mock("../../agents/provider-auth-aliases.js", () => ({
   resolveProviderIdForAuth: (provider: string) =>
     provider === "byteplus-plan" ? "byteplus" : provider,
 }));
-vi.mock("../../agents/model-selection.js", () => {
-  const normalizeProviderId = (value: string) =>
-    value.trim().toLowerCase() === "z.ai" || value.trim().toLowerCase() === "z-ai"
-      ? "zai"
-      : value.trim().toLowerCase();
-  return {
-    normalizeProviderId,
-    findNormalizedProviderValue: (record: Record<string, unknown> | undefined, provider: string) =>
-      Object.entries(record ?? {}).find(([key]) => normalizeProviderId(key) === provider)?.[1],
-    parseModelRef: (raw: string, defaultProvider: string) => {
-      const [provider, ...modelParts] = raw.includes("/") ? raw.split("/") : [defaultProvider, raw];
-      const model = modelParts.join("/");
-      return provider && model ? { provider: normalizeProviderId(provider), model } : null;
-    },
-  };
-});
+vi.mock("../../agents/model-selection.js", async () => ({
+  ...(await import("../../agents/model-selection-normalize.js")),
+  ...(await import("../../agents/model-ref-shared.js")),
+}));
 vi.mock("../../secrets/resolve.js", () => ({
   resolveSecretRefString: resolveSecretRefStringMock,
 }));
@@ -122,20 +69,11 @@ vi.mock("./shared.js", () => ({
   formatMs: (ms: number) => `${ms}ms`,
 }));
 
-vi.mock("../../agents/auth-profiles.js", () => ({
-  externalCliDiscoveryScoped: (params: Record<string, unknown> = {}) => ({
-    mode: "scoped",
-    ...params,
-  }),
+vi.mock("../../agents/auth-profiles.js", async () => ({
+  ...(await import("../../agents/auth-profiles/external-cli-discovery.js")),
+  ...(await import("../../agents/auth-profiles/profile-list.js")),
   ensureAuthProfileStore: (agentDir?: string) =>
     agentDir === "/tmp/coder-agent" && mockAgentStore ? mockAgentStore : mockStore,
-  listProfilesForProvider: (store: AuthProfileStore, provider: string) =>
-    Object.entries(store.profiles)
-      .filter(
-        ([, profile]) =>
-          typeof profile.provider === "string" && profile.provider.toLowerCase() === provider,
-      )
-      .map(([profileId]) => profileId),
   resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
   resolveAuthProfileEligibility: resolveAuthProfileEligibilityMock,
 }));
@@ -252,11 +190,8 @@ function directTarget(boundValue: string, source: "env" | "models.json", label: 
 
 function profileError(reasonCode: string, error: string) {
   return {
-    provider: "anthropic",
+    ...profileTarget("anthropic:default"),
     model: "anthropic/claude-sonnet-4-6",
-    profileId: "anthropic:default",
-    label: "anthropic:default",
-    source: "profile",
     mode: "token",
     status: "unknown",
     reasonCode,
@@ -269,9 +204,8 @@ describe("buildProbeTargets", () => {
     mockStore = profileStore();
     mockAgentStore = undefined;
     loadModelCatalogMock.mockReset().mockResolvedValue([]);
-    resolveAuthProfileEligibilityMock.mockClear();
     resolveSecretRefStringMock.mockReset().mockResolvedValue("resolved-secret");
-    resolveAuthProfileEligibilityMock.mockReturnValue({
+    resolveAuthProfileEligibilityMock.mockReset().mockReturnValue({
       eligible: false,
       reasonCode: "invalid_expires",
     });

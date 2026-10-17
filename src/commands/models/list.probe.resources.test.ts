@@ -142,14 +142,10 @@ it.each([
     await state.writeAuthProfiles({
       version: 1,
       profiles: { [profileId]: credential },
-      ...(oauth
-        ? {}
-        : {
-            lastGood: { [profileProvider]: profileId },
-            usageStats: {
-              [profileId]: { cooldownUntil: 1, cooldownReason: "rate_limit", errorCount: 2 },
-            },
-          }),
+      lastGood: oauth ? undefined : { [profileProvider]: profileId },
+      usageStats: oauth
+        ? undefined
+        : { [profileId]: { cooldownUntil: 1, cooldownReason: "rate_limit", errorCount: 2 } },
     });
     if (oauth) {
       writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env: state.env });
@@ -255,9 +251,7 @@ it.each([
       }
       const authAfter = readAuth();
       if (oauth === "expired") {
-        expect(refreshCount).toBe(1);
-        expect(refreshOwnerFenced).toBe(true);
-        expect(refreshPeerFenced).toBe(true);
+        expect([refreshCount, refreshOwnerFenced, refreshPeerFenced]).toEqual([1, true, true]);
         expect(authAfter?.profiles[profileId]).toEqual(rotatedOAuth);
         expect(authAfter?.usageStats).toEqual(authBefore?.usageStats);
         expect(
@@ -323,8 +317,7 @@ it("releases direct state ownership before propagating a rejected no-tail operat
       ),
     ).rejects.toBe(original);
     expect(fs.existsSync(path.join(lockDir, "gateway.state.lock"))).toBe(false);
-    expect(signals.listenerCount("SIGINT")).toBe(0);
-    expect(signals.listenerCount("SIGTERM")).toBe(0);
+    expect(signals.eventNames()).toEqual([]);
   } finally {
     await state.cleanup();
   }
