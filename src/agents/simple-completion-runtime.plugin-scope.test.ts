@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getModelCompletionTransport } from "../llm/model-runtime-binding.js";
 import { streamSimple } from "../llm/stream.js";
@@ -41,6 +42,85 @@ import {
 import type { SimpleCompletionModelResolver } from "./simple-completion-scope.js";
 
 const tempRoots = createSyncSuiteTempRootTracker("openclaw-simple-completion-plugin-scope");
+type PluginFixture = ReturnType<typeof createColdPluginFixture>;
+const completionContext = () => ({
+  messages: [{ role: "user" as const, content: "Complete", timestamp: 1 }],
+});
+function fixtureEnv(tempRoot: string) {
+  return {
+    ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: tempRoots.makeTempDir() }),
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
+  };
+}
+function fixtureConfig(
+  fixture: PluginFixture,
+  baseUrl: string,
+  provider: Partial<ModelProviderConfig> = {},
+  others: PluginFixture[] = [],
+): OpenClawConfig {
+  const plugins = [fixture, ...others];
+  return {
+    agents: {
+      defaults: { workspace: fixture.rootDir, model: `${fixture.providerId}/selected-model` },
+    },
+    models: {
+      providers: {
+        [fixture.providerId]: {
+          api: "openai-completions",
+          baseUrl,
+          models: [
+            {
+              id: "selected-model",
+              name: "Selected",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 8192,
+              maxTokens: 1024,
+            },
+          ],
+          ...provider,
+        },
+      },
+    },
+    plugins: {
+      load: { paths: plugins.map((plugin) => plugin.rootDir) },
+      slots: { memory: "none" },
+      entries: Object.fromEntries(plugins.map((plugin) => [plugin.pluginId, { enabled: true }])),
+    },
+  };
+}
+async function listen(server: ReturnType<typeof createServer>) {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.removeListener("error", reject);
+      resolve();
+    });
+  });
+}
+function serverOrigin(server: ReturnType<typeof createServer>) {
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Missing completion fixture port");
+  }
+  return `http://127.0.0.1:${address.port}`;
+}
+async function close(server: ReturnType<typeof createServer>) {
+  server.closeAllConnections();
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+function completionChunk(id: string, text: string) {
+  return `data: ${JSON.stringify({
+    id,
+    object: "chat.completion.chunk",
+    model: "selected-model",
+    choices: [{ index: 0, delta: { content: text }, finish_reason: "stop" }],
+  })}\n\ndata: [DONE]\n\n`;
+}
 
 function createTransportOwnerFixture(
   rootDir: string,
@@ -196,24 +276,9 @@ module.exports = {
           );
           return;
         }
-        response.end(
-          `data: ${JSON.stringify({
-            id: "plugin-auth-response",
-            object: "chat.completion.chunk",
-            model: "selected-model",
-            choices: [
-              { index: 0, delta: { content: "plugin-owned completion" }, finish_reason: "stop" },
-            ],
-          })}\n\ndata: [DONE]\n\n`,
-        );
+        response.end(completionChunk("plugin-auth-response", "plugin-owned completion"));
       });
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => {
-          server.removeListener("error", reject);
-          resolve();
-        });
-      });
+      await listen(server);
       let preparedResource: AsyncDisposable | undefined;
       const readAgentStore = vi.fn(async () => {
         throw new Error("agent auth storage unavailable");
@@ -222,50 +287,15 @@ module.exports = {
       let restoreDns: (() => void) | undefined;
       let dnsRevoked = false;
       try {
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          throw new Error("Missing completion fixture port");
-        }
         const cfg: OpenClawConfig = {
-          agents: {
-            defaults: {
-              workspace: selected.rootDir,
-              model: `${selected.providerId}/selected-model`,
-            },
-          },
+          ...fixtureConfig(selected, `${serverOrigin(server)}/v1`, {
+            api: stream?.startsWith("google") ? "google-generative-ai" : "openai-completions",
+          }),
           auth: { order: { [selected.providerId]: ["missing-agent-profile"] } },
-          models: {
-            providers: {
-              [selected.providerId]: {
-                api: stream?.startsWith("google") ? "google-generative-ai" : "openai-completions",
-                baseUrl: `http://127.0.0.1:${address.port}/v1`,
-                models: [
-                  {
-                    id: "selected-model",
-                    name: "Selected",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 8192,
-                    maxTokens: 1024,
-                  },
-                ],
-              },
-            },
-          },
-          plugins: {
-            load: { paths: [selected.rootDir] },
-            slots: { memory: "none" },
-            entries: { [selected.pluginId]: { enabled: true } },
-          },
         };
         await withEnvAsync(
           {
-            ...createColdPluginHermeticEnv(tempRoot, {
-              bundledPluginsDir: tempRoots.makeTempDir(),
-            }),
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-            OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
+            ...fixtureEnv(tempRoot),
             OPENCLAW_SECRET_SENTINELS: plaintext ? "off" : undefined,
           },
           async () => {
@@ -340,18 +370,21 @@ module.exports = {
               assertCurrent: () => {},
               warn: vi.fn(),
               complete: async (current) => {
-                const context = {
-                  messages: [{ role: "user" as const, content: "Complete", timestamp: 1 }],
-                };
                 if (stream === "builtin" || stream === "plugin") {
                   if (!preparedStream) {
                     throw new Error("Missing retained provider stream");
                   }
                   return await (
-                    await preparedStream(current.model, context, { apiKey: current.auth.apiKey })
+                    await preparedStream(current.model, completionContext(), {
+                      apiKey: current.auth.apiKey,
+                    })
                   ).result();
                 }
-                return completeWithPreparedSimpleCompletionModel({ ...current, cfg, context });
+                return completeWithPreparedSimpleCompletionModel({
+                  ...current,
+                  cfg,
+                  context: completionContext(),
+                });
               },
             }).catch((error: unknown) => ({
               stopReason: "error",
@@ -385,10 +418,7 @@ module.exports = {
         restoreStoreRead?.();
         restoreDns?.();
         await preparedResource?.[Symbol.asyncDispose]();
-        server.closeAllConnections();
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        await close(server);
       }
     },
   );
@@ -468,11 +498,7 @@ module.exports = {
         };
       },
     );
-    const env = {
-      ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: tempRoots.makeTempDir() }),
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
-    };
+    const env = fixtureEnv(tempRoot);
 
     let acquiredResource: AsyncDisposable | undefined;
     try {
@@ -551,66 +577,16 @@ module.exports = {
           request.headers.authorization,
         ].join("|");
         response.writeHead(200, { "content-type": "text/event-stream" });
-        response.end(
-          `data: ${JSON.stringify({
-            id: "completion-owner-response",
-            object: "chat.completion.chunk",
-            model: "selected-model",
-            choices: [{ index: 0, delta: { content: text }, finish_reason: "stop" }],
-          })}\n\ndata: [DONE]\n\n`,
-        );
+        response.end(completionChunk("completion-owner-response", text));
       });
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => {
-          server.removeListener("error", reject);
-          resolve();
-        });
-      });
+      await listen(server);
       try {
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          throw new Error("Completion owner fixture did not expose a TCP port");
-        }
-        const configFor = (fixture: typeof selected): OpenClawConfig => ({
-          agents: {
-            defaults: { workspace: fixture.rootDir, model: `${fixture.providerId}/selected-model` },
-          },
-          models: {
-            providers: {
-              [fixture.providerId]: {
-                api: "openai-completions",
-                apiKey: "fixture-auth-source",
-                baseUrl: `http://127.0.0.1:${address.port}/v1`,
-                models: [
-                  {
-                    id: "selected-model",
-                    name: "Selected",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 8192,
-                    maxTokens: 1024,
-                  },
-                ],
-              },
-            },
-          },
-          plugins: {
-            load: { paths: [fixture.rootDir, unrelated.rootDir] },
-            slots: { memory: "none" },
-            entries: {
-              [fixture.pluginId]: { enabled: true },
-              [unrelated.pluginId]: { enabled: true },
-            },
-          },
-        });
+        const configFor = (fixture: PluginFixture) =>
+          fixtureConfig(fixture, `${serverOrigin(server)}/v1`, { apiKey: "fixture-auth-source" }, [
+            unrelated,
+          ]);
         const cfg = configFor(selected);
-        const env = {
-          ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: tempRoots.makeTempDir() }),
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
-        };
+        const env = fixtureEnv(tempRoot);
         await withEnvAsync(env, async () => {
           const input = {
             config: cfg,
@@ -740,10 +716,7 @@ module.exports = {
           }
         });
       } finally {
-        server.closeAllConnections();
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        await close(server);
       }
     },
   );
@@ -766,69 +739,21 @@ module.exports = {
         return;
       }
       response.writeHead(200, { "content-type": "text/event-stream" });
-      response.end(
-        `data: ${JSON.stringify({
-          id: "managed-completion-response",
-          object: "chat.completion.chunk",
-          model: "selected-model",
-          choices: [{ index: 0, delta: { content: "done" }, finish_reason: "stop" }],
-        })}\n\ndata: [DONE]\n\n`,
-      );
+      response.end(completionChunk("managed-completion-response", "done"));
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        server.removeListener("error", reject);
-        resolve();
-      });
-    });
+    await listen(server);
     try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Managed completion fixture did not expose a TCP port");
-      }
-      const origin = `http://127.0.0.1:${address.port}`;
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: { workspace: selected.rootDir, model: `${selected.providerId}/selected-model` },
+      const origin = serverOrigin(server);
+      const cfg = fixtureConfig(selected, `${origin}/v1`, {
+        apiKey: "fixture-auth-source",
+        localService: {
+          command: process.execPath,
+          args: ["--version"],
+          healthUrl: `${origin}/health`,
+          idleStopMs: 1,
         },
-        models: {
-          providers: {
-            [selected.providerId]: {
-              api: "openai-completions",
-              apiKey: "fixture-auth-source",
-              baseUrl: `${origin}/v1`,
-              localService: {
-                command: process.execPath,
-                args: ["--version"],
-                healthUrl: `${origin}/health`,
-                idleStopMs: 1,
-              },
-              models: [
-                {
-                  id: "selected-model",
-                  name: "Selected",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 8192,
-                  maxTokens: 1024,
-                },
-              ],
-            },
-          },
-        },
-        plugins: {
-          load: { paths: [selected.rootDir] },
-          slots: { memory: "none" },
-          entries: { [selected.pluginId]: { enabled: true } },
-        },
-      };
-      const env = {
-        ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: tempRoots.makeTempDir() }),
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
-      };
+      });
+      const env = fixtureEnv(tempRoot);
       await withEnvAsync(env, async () => {
         const prepared = await acquireSimpleCompletionModelForAgent({
           cfg,
@@ -850,27 +775,19 @@ module.exports = {
         expect(getModelProviderLocalServiceReconciler(completionTransport)).toBeTypeOf("function");
         if (failReconciliation) {
           fs.writeFileSync(selected.reconcileFailureMarker, "fail", "utf8");
-          await expect(
-            completeWithPreparedSimpleCompletionModel({
-              model: prepared.model,
-              auth: prepared.auth,
-              cfg,
-              context: { messages: [{ role: "user", content: "Complete", timestamp: 1 }] },
-            }),
-          ).resolves.toMatchObject({ stopReason: "error", content: [] });
-        } else {
-          await expect(
-            completeWithPreparedSimpleCompletionModel({
-              model: prepared.model,
-              auth: prepared.auth,
-              cfg,
-              context: { messages: [{ role: "user", content: "Complete", timestamp: 1 }] },
-            }),
-          ).resolves.toMatchObject({
-            stopReason: "stop",
-            content: [{ type: "text", text: "done" }],
-          });
         }
+        await expect(
+          completeWithPreparedSimpleCompletionModel({
+            model: prepared.model,
+            auth: prepared.auth,
+            cfg,
+            context: completionContext(),
+          }),
+        ).resolves.toMatchObject(
+          failReconciliation
+            ? { stopReason: "error", content: [] }
+            : { stopReason: "stop", content: [{ type: "text", text: "done" }] },
+        );
       });
       const reloadIndex = requestPaths.indexOf("/models?reload=1");
       const modelRequestIndex = requestPaths.findIndex(
@@ -885,10 +802,7 @@ module.exports = {
       }
     } finally {
       await preparedResource?.[Symbol.asyncDispose]();
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await close(server);
     }
   });
 });
