@@ -47,10 +47,9 @@ export function createGatewayPresenceObserver(options: {
     const request = {};
     recovery = request;
     // Applying any newer snapshot or changing hello retires this request token.
-    const isCurrent = () => recovery === request;
     void options.requestSnapshot().then(
       (snapshot) => {
-        if (!isCurrent()) {
+        if (recovery !== request) {
           return;
         }
         recovery = undefined;
@@ -62,7 +61,7 @@ export function createGatewayPresenceObserver(options: {
         }
       },
       (error: unknown) => {
-        if (isCurrent()) {
+        if (recovery === request) {
           recovery = undefined;
           options.onError(error);
         }
@@ -103,42 +102,43 @@ export function createGatewayPresenceObserver(options: {
           Array.isArray(update.upsert) &&
           Array.isArray(update.remove) &&
           Array.isArray(update.order) &&
-          update.upsert.every(
-            (entry) =>
-              entry &&
-              typeof entry.key === "string" &&
-              ("presence" in entry
-                ? entry.presence
-                : entry.set &&
-                  typeof entry.set === "object" &&
-                  !Array.isArray(entry.set) &&
-                  Array.isArray(entry.unset) &&
-                  entry.unset.every((field) => typeof field === "string")),
-          ) &&
-          update.remove.every((key) => typeof key === "string") &&
-          update.order.every((key) => typeof key === "string")
+          update.remove.every((key) => typeof key === "string")
         ) {
           const next = new Map(rows);
           for (const key of update.remove) {
             next.delete(key);
           }
-          let complete = true;
-          for (const entry of update.upsert) {
-            if ("presence" in entry) {
-              next.set(entry.key, entry.presence);
-            } else {
-              const before = next.get(entry.key);
-              if (!before) {
-                complete = false;
-                break;
-              }
-              const row: PresenceEntry & Record<string, unknown> = { ...before, ...entry.set };
-              for (const field of entry.unset) {
-                delete row[field];
-              }
-              next.set(entry.key, row);
+          const complete = update.upsert.every((entry) => {
+            const key = entry?.key;
+            if (typeof key !== "string") {
+              return false;
             }
-          }
+            if ("presence" in entry) {
+              if (!entry.presence) {
+                return false;
+              }
+              next.set(key, entry.presence);
+              return true;
+            }
+            const before = next.get(key);
+            const { set, unset } = entry;
+            if (
+              !before ||
+              !set ||
+              typeof set !== "object" ||
+              Array.isArray(set) ||
+              !Array.isArray(unset) ||
+              !unset.every((field) => typeof field === "string")
+            ) {
+              return false;
+            }
+            const row: PresenceEntry & Record<string, unknown> = { ...before, ...set };
+            for (const field of unset) {
+              delete row[field];
+            }
+            next.set(key, row);
+            return true;
+          });
           if (
             complete &&
             new Set(update.order).size === next.size &&
