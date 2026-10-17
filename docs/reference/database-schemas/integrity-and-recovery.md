@@ -159,7 +159,7 @@ before checking the live source, then preserves that receipt through its
 committed version and additive schema phases. Only a full source verification
 can satisfy a later runtime full-integrity gate; a quick migration still needs
 that full check. Updater backups verify private images and do not supply a live
-source receipt; inline quick migrations also retain the later full-check requirement.
+full source receipt; inline quick migrations also retain the later full-check requirement.
 A separate Doctor invocation continues to inspect current bytes. These are
 candidate-side changes; the installed updater still runs first
 under its own version's behavior.
@@ -187,6 +187,16 @@ migration through the whole-database quick check, and a quick result never
 publishes full-verification facts. Recorded corruption still requires full
 verification before its quarantine is cleared. See
 [migration integrity checks](/install/updating#migration-integrity-checks).
+
+Within the same exclusive Doctor maintenance operation, a recovery-free raw
+backup can supply the pre-mutation QUICK proof once: capture must compare the
+private bytes with the source, and the source must remain unchanged until
+migration admission. Pending writes or recovery data prevent reuse. The
+transformed backup is verified independently, and touched tables still receive
+scoped FULL checks after migration, followed by foreign-key checks. This does not
+supply a runtime FULL receipt or change explicit `--full-integrity-check` behavior.
+The optimization runs in the candidate; the installed updater retains its own
+version's capture and verification behavior.
 
 Canonical index repair checks each rebuilt table and its indexes once after
 DDL, instead of scanning the whole database again. Its source integrity check
