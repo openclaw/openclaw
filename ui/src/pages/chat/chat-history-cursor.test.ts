@@ -9,16 +9,13 @@ import { extractText } from "../../lib/chat/message-extract.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
+import { event, toolEvent } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { admitStoredChatComposerQueueItem } from "./composer-persistence.ts";
-import {
-  getChatSessionProjection,
-  readChatSessionProjectionScope,
-  reduceChatSessionProjection,
-} from "./history-merge.ts";
+import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import {
   applyChatCacheSnapshot,
@@ -26,7 +23,6 @@ import {
   readChatSessionSnapshot,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
-import type { AgentEventPayload } from "./tool-stream-contract.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
 function createState(handler: (params?: unknown) => unknown) {
@@ -53,19 +49,12 @@ const sessionInfo = (overrides: Partial<GatewaySessionRow> = {}): GatewaySession
   updatedAt: 2,
   ...overrides,
 });
-const persisted = (row: unknown, messageId: string, messageSeq: number, extra = {}) => ({
+const persisted = (row: ReturnType<typeof message>, extra = {}) => ({
   message: row,
-  messageId,
-  messageSeq,
+  messageId: row["__openclaw"].id,
+  messageSeq: row["__openclaw"].seq,
   ...extra,
 });
-const agentEvent = (
-  runId: string,
-  seq: number,
-  ts: number,
-  stream: AgentEventPayload["stream"],
-  data: AgentEventPayload["data"],
-): AgentEventPayload => ({ runId, seq, ts, stream, data, sessionKey: "main" });
 function delta<T>(cursor: string, messages: T[], row: Partial<GatewaySessionRow> = {}) {
   return { kind: "delta", deltaCursor: cursor, messages, sessionInfo: sessionInfo(row) };
 }
@@ -74,6 +63,9 @@ const fallback = (text: string, itemId: string) => ({
   replacementText: text,
   source: "segment",
 });
+const toolCall = (id: string, name: string) => ({ type: "toolCall", id, name, arguments: {} });
+const cachedSnapshot = (state: ReturnType<typeof createState>) =>
+  readChatSessionSnapshot(state.chatMessagesBySession!, state, { sessionKey: state.sessionKey });
 
 function seedCachedHistory(
   state: ReturnType<typeof createState>,
@@ -107,12 +99,7 @@ describe("chat history cursor revalidation", () => {
     const cached = message("user", "First turn", "user-1", 1);
     const reply = message("assistant", "New reply", "answer-2", 2);
     const handler = vi.fn(async (params?: unknown) =>
-      delta(
-        "cursor-2",
-        asOptionalRecord(params)?.cursor === "cursor-1"
-          ? [{ message: reply, messageId: "answer-2", messageSeq: 2 }]
-          : [],
-      ),
+      delta("cursor-2", asOptionalRecord(params)?.cursor === "cursor-1" ? [persisted(reply)] : []),
     );
     const first = createState(handler);
     const second = createState(handler);
@@ -168,18 +155,14 @@ describe("chat history cursor revalidation", () => {
       timestamp: 2000,
     };
     const handler = vi.fn(async (): Promise<unknown> =>
-      delta(
-        "cursor-4",
-        [persisted(aliceFinal, "alice-final", 4, { sessionKey, runId: "alice-run" })],
-        {
-          key: sessionKey,
-          activeLeafEntryId: "alice-final",
-          updatedAt: 2000,
-          hasActiveRun: false,
-          status: "done",
-          lastRunId: "alice-run",
-        },
-      ),
+      delta("cursor-4", [persisted(aliceFinal, { sessionKey, runId: "alice-run" })], {
+        key: sessionKey,
+        activeLeafEntryId: "alice-final",
+        updatedAt: 2000,
+        hasActiveRun: false,
+        status: "done",
+        lastRunId: "alice-run",
+      }),
     );
     const state = createState(handler);
     state.sessionKey = sessionKey;
@@ -192,12 +175,7 @@ describe("chat history cursor revalidation", () => {
           senderId: "alice-profile",
           senderName: "Alice Proof",
         }),
-        message(
-          "assistant",
-          [{ type: "toolCall", id: "exec-call", name: "exec", arguments: {} }],
-          "alice-tool-call",
-          2,
-        ),
+        message("assistant", [toolCall("exec-call", "exec")], "alice-tool-call", 2),
         {
           role: "toolResult",
           toolCallId: "exec-call",
@@ -233,8 +211,8 @@ describe("chat history cursor revalidation", () => {
         runId: state.chatRunId,
         messages: state.chatMessages,
         queue: state.chatQueue,
-        toolMessages: state.chatToolMessages ?? [],
-        streamSegments: state.chatStreamSegments ?? [],
+        toolMessages: state.chatToolMessages,
+        streamSegments: state.chatStreamSegments,
         stream: state.chatStream,
         streamStartedAt: state.chatStreamStartedAt,
         showToolCalls: true,
@@ -255,28 +233,17 @@ describe("chat history cursor revalidation", () => {
     expect(renderedBobMessages()).toHaveLength(1);
 
     const persistedBob = {
-      role: "user",
-      content: queued.text,
-      timestamp: queued.createdAt,
-      idempotencyKey: `${sendRunId}:user`,
-      __openclaw: {
-        id: "bob-user",
-        seq: 5,
+      ...message("user", queued.text, "bob-user", 5, {
         idempotencyKey: `${sendRunId}:user`,
         senderId: "bob-profile",
         senderName: "Bob Proof",
         recordTimestampMs: 2500,
-      },
-    };
-    const persistedPayload = {
-      sessionKey,
-      clientRunId: sendRunId,
-      message: persistedBob,
-      messageId: "bob-user",
-      messageSeq: 5,
+      }),
+      timestamp: queued.createdAt,
+      idempotencyKey: `${sendRunId}:user`,
     };
     handler.mockResolvedValueOnce(
-      delta("cursor-5", [persistedPayload], {
+      delta("cursor-5", [persisted(persistedBob, { sessionKey, clientRunId: sendRunId })], {
         key: sessionKey,
         activeLeafEntryId: "bob-user",
         updatedAt: 2500,
@@ -316,7 +283,7 @@ describe("chat history cursor revalidation", () => {
 
     await loadChatHistory(state);
 
-    const current = getChatSessionProjection(state, readChatSessionProjectionScope(state));
+    const current = getChatSessionProjection(state);
     expect(current.scope.activeLeafEntryId).toBe("next-leaf");
     expect(current.runs).toBe(projection.runs);
   });
@@ -332,25 +299,16 @@ describe("chat history cursor revalidation", () => {
         status: "completed",
       },
     ];
-    const cached = message(
-      "assistant",
-      [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
-      "assistant-tool",
-      1,
-    );
-    const replayed = message(
-      "assistant",
-      [
-        { type: "toolCall", id: "call-1", name: "read", arguments: {} },
-        { type: "toolResult", toolCallId: "call-1", text: "file contents" },
-      ],
-      "assistant-tool",
-      1,
-    );
+    const call = toolCall("call-1", "read");
+    const cached = message("assistant", [call], "assistant-tool", 1);
+    const replayed = {
+      ...cached,
+      content: [call, { type: "toolResult", toolCallId: "call-1", text: "file contents" }],
+    };
     const response = createDeferred<Record<string, unknown>>();
     const handler = vi.fn(() => response.promise);
     const state = createState(handler);
-    const cache = seedCachedHistory(state, [cached], "cursor-1");
+    seedCachedHistory(state, [cached], "cursor-1");
 
     const load = loadChatHistory(state);
 
@@ -359,14 +317,14 @@ describe("chat history cursor revalidation", () => {
       expect.objectContaining({ cursor: "cursor-1", sessionKey: "main" }),
     );
     response.resolve({
-      ...delta("cursor-2", [persisted(replayed, "assistant-tool", 1, { sessionKey: "main" })]),
+      ...delta("cursor-2", [persisted(replayed, { sessionKey: "main" })]),
       activity: [{ messageId: "assistant-tool", items }],
     });
     await load;
 
     const hydrated = { ...replayed, activity: items };
     expect(state.chatMessages).toEqual([hydrated]);
-    expect(readChatSessionSnapshot(cache, state, { sessionKey: state.sessionKey })).toMatchObject({
+    expect(cachedSnapshot(state)).toMatchObject({
       deltaCursor: "cursor-2",
       messages: [hydrated],
     });
@@ -384,7 +342,7 @@ describe("chat history cursor revalidation", () => {
       }),
     );
     const state = createState(handler);
-    const cache = seedCachedHistory(state, [cached], "cursor-1");
+    seedCachedHistory(state, [cached], "cursor-1");
 
     await loadChatHistory(state);
 
@@ -392,13 +350,11 @@ describe("chat history cursor revalidation", () => {
     expect(state.chatRunError?.summary).toContain(
       "Check the Gateway network connection and retry.",
     );
-    expect(
-      readChatSessionSnapshot(cache, state, { sessionKey: state.sessionKey })?.deltaCursor,
-    ).toBe("cursor-2");
+    expect(cachedSnapshot(state)?.deltaCursor).toBe("cursor-2");
 
     const reply = message("assistant", "Recovery completed.", "retry-answer", 2);
     handler.mockResolvedValueOnce(
-      delta("cursor-3", [persisted(reply, "retry-answer", 2, { runId: "run-retry" })], {
+      delta("cursor-3", [persisted(reply, { runId: "run-retry" })], {
         updatedAt: 3,
         status: "done",
         hasActiveRun: false,
@@ -440,17 +396,12 @@ describe("chat history cursor revalidation", () => {
           text: "",
           startedAt: 900,
           events: [
-            agentEvent("run-live", 1, 900, "item", {
+            event(1, "item", {
               kind: "preamble",
               itemId: "preamble-restored",
               progressText: "Checking the workspace",
             }),
-            agentEvent("run-live", 2, 1_000, "tool", {
-              toolCallId: "call-restored",
-              name: "read",
-              phase: "start",
-              args: { path: "README.md" },
-            }),
+            toolEvent("call-restored"),
           ],
         },
       }));
@@ -499,12 +450,7 @@ describe("chat history cursor revalidation", () => {
         openclawStreamFallback: fallback(text, "item-1"),
       };
       // Intermediate Codex rows carry producer ownership in metadata, without a terminal run envelope.
-      const payload = {
-        sessionKey: "main",
-        message: commentary,
-        messageId: "commentary",
-        messageSeq: 2,
-      };
+      const payload = persisted(commentary, { sessionKey: "main" });
       const handler = vi.fn(async () =>
         delta("cursor-2", [payload], {
           updatedAt: 3,
@@ -515,12 +461,15 @@ describe("chat history cursor revalidation", () => {
       const state = createState(handler);
       seedCachedHistory(state, [prompt], "cursor-1");
       state.chatRunId = runId;
-      const preamble = (seq: number) =>
-        agentEvent(runId, seq, 2, "item", {
+      const preamble = (seq: number) => ({
+        ...event(seq, "item", {
           kind: "preamble",
           itemId: "item-1",
           progressText: text,
-        });
+        }),
+        runId,
+        ts: 2,
+      });
       handleAgentEvent(state, preamble(1));
       applySessionMessagePayload(state, payload, true, { kind: "live", activeRunId: runId });
       expect(state.chatMessages).toEqual([prompt, commentary]);
@@ -562,19 +511,11 @@ describe("chat history cursor revalidation", () => {
   it("clears a rejected cursor before falling back to a full tail fetch", async () => {
     const cached = message("user", "cached", "cached-user", 1);
     const fresh = message("assistant", "fresh", "fresh-assistant", 2);
-    const owner: { state?: ReturnType<typeof createState>; cache?: ChatMessageCache } = {};
     const handler = vi
       .fn()
       .mockImplementationOnce(async () => ({ kind: "reset" }))
       .mockImplementationOnce(async () => {
-        if (!owner.state || !owner.cache) {
-          throw new Error("missing seeded cursor owner");
-        }
-        expect(
-          readChatSessionSnapshot(owner.cache, owner.state, {
-            sessionKey: owner.state.sessionKey,
-          })?.deltaCursor,
-        ).toBeUndefined();
+        expect(cachedSnapshot(state)?.deltaCursor).toBeUndefined();
         return {
           messages: [cached, fresh],
           deltaCursor: "cursor-fresh",
@@ -582,9 +523,7 @@ describe("chat history cursor revalidation", () => {
         };
       });
     const state = createState(handler);
-    const cache = seedCachedHistory(state, [cached], "cursor-stale");
-    owner.state = state;
-    owner.cache = cache;
+    seedCachedHistory(state, [cached], "cursor-stale");
 
     await loadChatHistory(state);
 
@@ -592,8 +531,6 @@ describe("chat history cursor revalidation", () => {
     expect(handler.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ cursor: "cursor-stale" }));
     expect(handler.mock.calls[1]?.[0]).not.toHaveProperty("cursor");
     expect(state.chatMessages).toEqual([cached, fresh]);
-    expect(
-      readChatSessionSnapshot(cache, state, { sessionKey: state.sessionKey })?.deltaCursor,
-    ).toBe("cursor-fresh");
+    expect(cachedSnapshot(state)?.deltaCursor).toBe("cursor-fresh");
   });
 });

@@ -15,7 +15,6 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import {
   createReactiveDraftHarness,
-  createSlashRerenderHarness,
   getComposerTextarea,
   inputDraft,
   inputDraftAtEnd,
@@ -101,8 +100,8 @@ describe("chat composer suggestion accessibility", () => {
   });
 
   it.each(["/", "/tools "])("keeps %s options accessible while navigating and closing", (draft) => {
-    const harness = createSlashRerenderHarness();
-    let container = harness.inputAndRender(harness.container, draft);
+    const { container } = createReactiveDraftHarness();
+    inputDraft(container, draft);
 
     const wrapper = container.querySelector<HTMLElement>(".agent-chat__composer-combobox");
     const textarea = getComposerTextarea(container);
@@ -127,7 +126,6 @@ describe("chat composer suggestion accessibility", () => {
     expect(listbox?.querySelector(`#${initialActiveId}`)?.getAttribute("role")).toBe("option");
 
     keydownComposer(container, "ArrowDown");
-    container = harness.renderCurrent();
 
     const nextActiveId = expectDefined(activeId(container), "active descendant");
     const activeOption = container.querySelector(`#${nextActiveId}`);
@@ -148,7 +146,7 @@ describe("chat composer suggestion accessibility", () => {
             .join(" ");
     expect(announcementText).toBe(expectedAnnouncement);
 
-    container = harness.inputAndRender(container, "plain message");
+    inputDraft(container, "plain message");
 
     expect(container.querySelector(".slash-menu")).toBeNull();
     expectAbsent(getComposerTextarea(container), "aria-expanded", "aria-activedescendant");
@@ -161,8 +159,8 @@ describe("chat composer suggestion accessibility", () => {
       makeCommand("pair-device", "Pair a specific device.", "standard", "session"),
       makeCommand("openclaw", "Run the setup and repair helper.", "essential", "tools"),
     ]);
-    const harness = createSlashRerenderHarness();
-    let container = harness.inputAndRender(harness.container, "/pair");
+    const { container } = createReactiveDraftHarness();
+    inputDraft(container, "/pair");
 
     expect(optionNames(container)).toEqual(["/pair", "/pair-device", "/openclaw"]);
     expect(
@@ -172,13 +170,11 @@ describe("chat composer suggestion accessibility", () => {
     ).toEqual(["Tools", "Session", "Tools"]);
 
     keydownComposer(container, "ArrowDown");
-    container = harness.renderCurrent();
     const options = container.querySelectorAll<HTMLElement>(".slash-menu [role='option']");
     expect(options[1]?.id).toBe(activeId(container));
     expect(options[1]?.getAttribute("aria-selected")).toBe("true");
 
     keydownComposer(container, "Enter");
-    container = harness.renderCurrent();
     expect(getComposerTextarea(container).value).toBe("/pair-device ");
     expect(container.querySelector(".slash-menu")).toBeNull();
   });
@@ -210,8 +206,8 @@ describe("chat composer suggestion accessibility", () => {
     clearCommand.descriptionKey = "common.health";
     await i18n.setLocale("zh-CN");
     try {
-      const harness = createSlashRerenderHarness();
-      const container = harness.inputAndRender(harness.container, "/clear");
+      const { container } = createReactiveDraftHarness();
+      inputDraft(container, "/clear");
 
       const status = menu(container, "slash-active-announcement");
       expect(status?.textContent?.trim()).toBe(`/clear ${t("common.health")}`);

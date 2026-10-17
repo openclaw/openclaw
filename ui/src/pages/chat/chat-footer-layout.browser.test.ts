@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import type { Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
@@ -39,6 +40,24 @@ const composerFooter = (input: string, context = "") =>
     "chat-footer > agent-chat__composer-shell",
     `${context}<div class="agent-chat__input">${input}</div>`,
   );
+const style = (page: Page, selector: string, property: string, pseudo: string | null = null) =>
+  page
+    .locator(selector)
+    .evaluate((node, css) => getComputedStyle(node, css.pseudo).getPropertyValue(css.property), {
+      property,
+      pseudo,
+    });
+const setHtml = (page: Page, selector: string, content: string) =>
+  page.locator(selector).evaluate((node, html) => {
+    node.innerHTML = html;
+  }, content);
+const hitTest = (page: Page, selector: string, point: { x: number; y: number }) =>
+  page
+    .locator(selector)
+    .evaluate(
+      (node, coordinates) => node.contains(document.elementFromPoint(coordinates.x, coordinates.y)),
+      point,
+    );
 
 // Playwright types generic trace records as string dictionaries, while Chromium
 // sends structured arguments. Validate the records this regression relies on.
@@ -141,14 +160,8 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
       expect(footerReattachments).toEqual([]);
 
       // The fix must retain height queries, not just avoid their invalidations.
-      const fadeDisplay = () =>
-        page
-          .locator(".chat-footer")
-          .evaluate((footer) => getComputedStyle(footer, "::before").display);
-      const editorCap = () =>
-        page
-          .locator("textarea")
-          .evaluate((editor) => Number.parseFloat(getComputedStyle(editor).maxHeight));
+      const fadeDisplay = () => style(page, ".chat-footer", "display", "::before");
+      const editorCap = () => style(page, "textarea", "max-height").then(Number.parseFloat);
       expect(await fadeDisplay()).not.toBe("none");
       const tallEditorCap = await editorCap();
       await page.setViewportSize({ width: 1200, height: 260 });
@@ -207,23 +220,13 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
           <div class="chat-thread" style="width: 500px; height: 200px; --accent: rgb(255, 0, 0);">
             ${nest(
               "chat-thread-inner chat-thread-inner--virtual > chat-virtual-sizer > chat-virtual-block",
-              `
-                  <div class="chat-virtual-row" data-focused-row>
-                    <div class="chat-group assistant chat-group--with-footer">
-                      <div class="chat-group-messages"><div class="chat-bubble">Message</div></div>
-                      <div class="chat-group-footer">
-                        <div class="chat-group-footer__meta">
-                          <button class="msg-meta__summary" type="button">
-                            <span class="chat-group-timestamp" style="width: 18px;">6m ago</span>
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="chat-virtual-row" style="height: 40px;">
-                    <div>The next message begins here.</div>
-                  </div>
-            `,
+              `<div class="chat-virtual-row" data-focused-row>${nest(
+                "chat-group assistant chat-group--with-footer",
+                `${nest("chat-group-messages > chat-bubble", "Message")}${nest(
+                  "chat-group-footer > chat-group-footer__meta",
+                  '<button class="msg-meta__summary" type="button"><span class="chat-group-timestamp" style="width:18px">6m ago</span></button>',
+                )}`,
+              )}</div><div class="chat-virtual-row" style="height:40px"><div>Next message</div></div>`,
             )}
           </div>
         </body></html>`,
@@ -266,18 +269,20 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
           const context = canvas.getContext("2d")!;
           context.drawImage(image, 0, 0);
           const pixels = context.getImageData(0, 0, image.width, image.height).data;
-          const firstRowBelow = Math.ceil((rowBottom - clipTop) * deviceScaleFactor);
           let widestRun = 0;
-          for (let y = firstRowBelow; y < image.height; y += 1) {
+          for (
+            let y = Math.ceil((rowBottom - clipTop) * deviceScaleFactor);
+            y < image.height;
+            y++
+          ) {
             let currentRun = 0;
             for (let x = 0; x < image.width; x += 1) {
               const offset = (y * image.width + x) * 4;
-              if (pixels[offset]! > 240 && pixels[offset + 1]! < 20 && pixels[offset + 2]! < 20) {
-                currentRun += 1;
-                widestRun = Math.max(widestRun, currentRun);
-              } else {
-                currentRun = 0;
-              }
+              currentRun =
+                pixels[offset]! > 240 && pixels[offset + 1]! < 20 && pixels[offset + 2]! < 20
+                  ? currentRun + 1
+                  : 0;
+              widestRun = Math.max(widestRun, currentRun);
             }
           }
           return widestRun;
@@ -342,24 +347,20 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
 
         const geometry = async () =>
           await page.evaluate(() => {
+            const element = (selector: string) => document.querySelector<HTMLElement>(selector)!;
             const rect = (selector: string) => {
-              const bounds = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
-              return {
-                bottom: bounds.bottom,
-                height: bounds.height,
-                top: bounds.top,
-                width: bounds.width,
-              };
+              const {
+                bottom,
+                top,
+                height: h,
+                width: w,
+              } = element(selector).getBoundingClientRect();
+              return { bottom, top, height: h, width: w };
             };
-            const footer = document
-              .querySelector<HTMLElement>(".chat-footer")!
-              .getBoundingClientRect();
-            const threadElement = document.querySelector<HTMLElement>(".chat-thread")!;
+            const footer = element(".chat-footer").getBoundingClientRect();
+            const threadElement = element(".chat-thread");
             const thread = threadElement.getBoundingClientRect();
-            const fade = getComputedStyle(
-              document.querySelector<HTMLElement>(".chat-footer")!,
-              "::before",
-            );
+            const fade = getComputedStyle(element(".chat-footer"), "::before");
             return {
               composer: rect(".agent-chat__composer-shell"),
               conversation: rect(".chat-main__conversation"),
@@ -380,22 +381,14 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
           const content = document.createElement("span");
           content.className = "chat-composer-lit-content";
           content.style.display = "contents";
-          for (const child of Array.from(node.children)) {
-            if (child !== notices) {
-              content.append(child);
-            }
-          }
+          content.append(...Array.from(node.children).filter((child) => child !== notices));
           node.prepend(content);
-          const recovery = document.createElement("openclaw-chat-outbox-recovery");
-          recovery.style.display = "contents";
-          content.append(recovery);
-          const noticeContent = document.createElement("span");
-          noticeContent.className = "chat-composer-lit-content";
-          noticeContent.style.display = "contents";
-          const attention = document.createElement("openclaw-chat-child-attention");
-          attention.style.display = "contents";
-          noticeContent.append(attention);
-          notices.append(noticeContent);
+          content.insertAdjacentHTML(
+            "beforeend",
+            '<openclaw-chat-outbox-recovery style="display:contents"></openclaw-chat-outbox-recovery>',
+          );
+          notices.innerHTML =
+            '<span class="chat-composer-lit-content" style="display:contents"><openclaw-chat-child-attention style="display:contents"></openclaw-chat-child-attention></span>';
         });
         await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
         expect(await page.locator(".agent-chat__composer-notices").isVisible()).toBe(false);
@@ -404,14 +397,16 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         expect(before.fadeInsetLeft).toBeGreaterThanOrEqual(before.scrollbarSize);
         expect(before.fadeInsetRight).toBeGreaterThanOrEqual(before.scrollbarSize);
         expect(before.thread.bottom).toBeLessThanOrEqual(before.footer.top);
-        await page.locator(".chat-topbar-notices").evaluate((node) => {
-          node.innerHTML =
-            '<div class="chat-composer-neighbor-card chat-cloud-disk-space-notice">Disk space low</div>';
-        });
-        await page.locator(".agent-chat__composer-notices").evaluate((node) => {
-          node.innerHTML =
-            '<span class="chat-composer-lit-content" style="display:contents"><div class="chat-composer-neighbor-card chat-error">Model unavailable</div></span>';
-        });
+        await setHtml(
+          page,
+          ".chat-topbar-notices",
+          '<div class="chat-composer-neighbor-card chat-cloud-disk-space-notice">Disk space low</div>',
+        );
+        await setHtml(
+          page,
+          ".agent-chat__composer-notices",
+          '<span class="chat-composer-lit-content" style="display:contents"><div class="chat-composer-neighbor-card chat-error">Model unavailable</div></span>',
+        );
         await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
         expect(await page.getByText("Disk space low").isVisible()).toBe(true);
         expect(await page.getByText("Model unavailable").isVisible()).toBe(true);
@@ -441,27 +436,16 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
           expect(pullRequest.bottom).toBeLessThanOrEqual(notices.top);
           await page.getByRole("link", { name: "PR #42" }).click({ trial: true });
         }
-        const position = (selector: string) =>
-          page.locator(selector).evaluate((node) => getComputedStyle(node).position);
+        const position = (selector: string) => style(page, selector, "position");
         expect(await position(".chat-topbar-notices")).toBe("absolute");
         const header = await getBoundingBox(page, ".chat-pane__header");
-        const overlayTops = await Promise.all(
-          [".chat-topbar-notices", ".chat-gutter-stack", ".app-toast"].map(async (selector) => ({
-            selector,
-            top: (await getBoundingBox(page, selector)).y,
-          })),
-        );
-        if (label.startsWith("mobile")) {
-          for (const overlay of overlayTops) {
-            expect(overlay.top, overlay.selector).toBeGreaterThanOrEqual(header.y + header.height);
+        for (const selector of [".chat-topbar-notices", ".chat-gutter-stack", ".app-toast"]) {
+          const top = (await getBoundingBox(page, selector)).y;
+          if (label.startsWith("mobile") || selector === ".app-toast") {
+            expect(top, selector).toBeGreaterThanOrEqual(header.y + header.height);
+          } else if (selector === ".chat-topbar-notices") {
+            expect(top).toBeCloseTo(header.y + header.height + 8, 0);
           }
-        } else {
-          expect(
-            overlayTops.find((overlay) => overlay.selector === ".chat-topbar-notices")?.top,
-          ).toBeCloseTo(header.y + header.height + 8, 0);
-          expect(
-            overlayTops.find((overlay) => overlay.selector === ".app-toast")?.top,
-          ).toBeGreaterThanOrEqual(header.y + header.height);
         }
 
         await page.locator(".agent-chat__input").evaluate((node) => {
@@ -508,24 +492,12 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         } else if (rectsOverlap(optionBounds, noticeBounds)) {
           optionPoint = overlapCenter(optionBounds, noticeBounds);
         }
-        expect(
-          await option.evaluate((node, point) => {
-            const hit = document.elementFromPoint(point.x, point.y);
-            return node.contains(hit) ? "option" : hit?.className;
-          }, optionPoint),
-        ).toBe("option");
+        expect(await hitTest(page, ".slash-menu-item", optionPoint)).toBe(true);
         await page.mouse.click(optionPoint.x, optionPoint.y);
         expect(await option.getAttribute("data-selected")).toBe("true");
         await page.locator(".slash-menu").evaluate((node) => node.remove());
         const noticePoint = center(noticeBounds);
-        expect(
-          await page
-            .locator(".chat-error")
-            .evaluate(
-              (node, point) => node.contains(document.elementFromPoint(point.x, point.y)),
-              noticePoint,
-            ),
-        ).toBe(true);
+        expect(await hitTest(page, ".chat-error", noticePoint)).toBe(true);
         const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
         if (artifactDir) {
           await mkdir(artifactDir, { recursive: true });

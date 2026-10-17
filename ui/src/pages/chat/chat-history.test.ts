@@ -5,18 +5,18 @@ import { missingScopeErrorShape } from "../../../../packages/gateway-protocol/sr
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsRewindResult } from "../../api/types.ts";
-import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
 import { loadOlderChatHistoryPage, requestChatSessionSnapshot } from "./chat-history-request.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import {
-  activeHistory as emptyActiveHistory,
+  activeHistory,
+  emit,
+  message as textMessage,
   type TestState,
 } from "./chat-history.inflight.test-support.ts";
-import { loadChatHistory, type ChatEventPayload } from "./chat-history.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import type { ChatState } from "./chat-state-contract.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import { getChatSessionProjection, publishChatSessionProjection } from "./history-merge.ts";
 import { handleChatDraftChange } from "./input-history.ts";
@@ -27,20 +27,17 @@ import {
   type ChatMessageCache,
 } from "./session-message-cache.ts";
 
-function createState(history: ChatHistoryResult) {
+function host(history: ChatHistoryResult | (() => ChatHistoryResult | Promise<ChatHistoryResult>)) {
   const state = makeChatHost({ sessionKey: "main", requestHandlers: { "chat.history": history } });
+  onTestFinished(() => reconcileChatRunLifecycle(state, { clearRunStatus: true }));
+  return state;
+}
+function createState(history: ChatHistoryResult) {
+  const state = host(history);
   vi.spyOn(state.sessions, "reconcileMutation").mockResolvedValue({ status: "refreshed" });
   vi.spyOn(state.sessions, "reconcileRunTerminal").mockReturnValue(false);
   vi.spyOn(state.sessions, "listBranches").mockResolvedValue([]);
-  return Object.assign(state, {
-    connectionEpoch: 1,
-    requestUpdate: vi.fn(),
-  });
-}
-function activeHistory(runId: string) {
-  const history = emptyActiveHistory(runId);
-  history.inFlightRun!.text = "intentionally ignored on web";
-  return history;
+  return Object.assign(state, { connectionEpoch: 1, requestUpdate: vi.fn() });
 }
 const message = (role: "assistant" | "user", text: string, metadata?: Record<string, unknown>) => ({
   role,
@@ -49,26 +46,17 @@ const message = (role: "assistant" | "user", text: string, metadata?: Record<str
 });
 function withSessions<T extends object>(history: ChatHistoryResult, methods: T) {
   const state = createState(history);
-  return Object.assign(state, {
-    sessions: Object.assign(state.sessions, {
-      refreshReplacement: vi.fn(async () => null),
-      ...methods,
-    }),
-  });
+  return Object.assign(state, { sessions: Object.assign(state.sessions, methods) });
 }
 function cached(state: TestState, messages = state.chatMessages) {
   const cache: ChatMessageCache = new Map();
   state.chatMessagesBySession = cache;
-  cacheChatSessionSnapshot(
-    cache,
-    state,
-    { sessionKey: state.sessionKey },
-    {
-      messages,
-      pagination: { hasMore: false, completeSnapshot: true },
-      sessionId: "old-session",
-    },
-  );
+  const snapshot = {
+    messages,
+    pagination: { hasMore: false, completeSnapshot: true },
+    sessionId: "old-session",
+  };
+  cacheChatSessionSnapshot(cache, state, { sessionKey: state.sessionKey }, snapshot);
   return () => readChatMessagesFromCache(cache, state, { sessionKey: state.sessionKey });
 }
 function publishLive(
@@ -87,24 +75,19 @@ function publishLive(
 function rewindState(history: ChatHistoryResult, response: Promise<SessionsRewindResult>) {
   const state = withSessions(history, { rewind: vi.fn(() => response) });
   return Object.assign(state, {
-    handleChatDraftChange: vi.fn((next: string, mentions?: ChatState["chatMentions"]) =>
-      handleChatDraftChange(state, next, mentions),
-    ),
+    handleChatDraftChange: vi.fn(handleChatDraftChange.bind(null, state)),
   });
 }
 const rewind = (state: ReturnType<typeof rewindState>) =>
   rewindChatHistory(state, "user-entry", new ChatAttachmentReadLifecycle(() => {}));
 const previous = { key: "agent:main:previous", agentId: null };
 const selected = { key: "agent:main:next", agentId: null };
-function subscriptionState(
-  unsubscribeMessages: ReturnType<typeof vi.fn>,
-  subscribeMessages = vi.fn(async () => selected),
-) {
+function subscriptionState(unsubscribeMessages: ReturnType<typeof vi.fn>) {
+  const subscribeMessages = vi.fn(async () => selected);
   return Object.assign(withSessions({ messages: [] }, { subscribeMessages, unsubscribeMessages }), {
     sessionKey: selected.key,
     chatSessionMessageSubscriptionRequestedKey: previous.key,
     chatSessionMessageSubscription: previous,
-    sessionsError: null as string | null,
   });
 }
 
@@ -374,8 +357,10 @@ it("clears live projection ownership after history access is denied", async () =
 
 it("materializes live commentary when history replaces active tool activity", async () => {
   const result = { role: "toolResult", toolCallId: "call-1", content: "tool output", timestamp: 3 };
+  const history = activeHistory("run-live");
+  history.inFlightRun!.text = "intentionally ignored on web";
   const state = createState({
-    ...activeHistory("run-live"),
+    ...history,
     messages: [{ role: "user", content: "do it", timestamp: 1 }, result],
   });
   state.chatRunId = "run-live";
@@ -418,34 +403,12 @@ describe("chat history run errors", () => {
     details,
     __openclaw: { id: "failure", seq: 1, runId: "run" },
   });
-  function host(
-    history: ChatHistoryResult | (() => ChatHistoryResult | Promise<ChatHistoryResult>),
-  ) {
-    const state = makeChatHost({
-      sessionKey: "main",
-      requestHandlers: { "chat.history": history },
-    });
-    onTestFinished(() => reconcileChatRunLifecycle(state, { clearRunStatus: true }));
-    return state;
-  }
-  function emit(
-    state: ReturnType<typeof host>,
-    runId: string,
-    event: Omit<ChatEventPayload, "sessionKey" | "runId">,
-  ) {
-    handleChatGatewayEvent(state, { sessionKey: "main", runId, ...event });
-  }
-  const reply = (content: string): ChatEventPayload => ({
-    state: "final",
-    message: { role: "assistant", content },
-  });
-  const turn = (
-    role: string,
-    content: string,
-    id: string,
-    seq: number,
-    idempotencyKey: string,
-  ) => ({ role, content, __openclaw: { id, seq, idempotencyKey } });
+  const terminal = (content: string, failed = false) =>
+    failed
+      ? { state: "error" as const, errorMessage: content }
+      : { state: "final" as const, message: { role: "assistant", content } };
+  const turn = (role: string, content: string, id: string, seq: number, idempotencyKey: string) =>
+    textMessage(role, content, { id, seq, idempotencyKey });
 
   it("retires a recovered failure after a newer successful history and rejects its stale replay", async () => {
     const first = turn("user", "Start working", "first", 1, "run:user");
@@ -478,29 +441,18 @@ describe("chat history run errors", () => {
   });
 
   it.each([
-    { snapshotStatus: "failed", newerState: "failed", requestOrder: "before" },
-    { snapshotStatus: "done", newerState: "completed", requestOrder: "after" },
+    ["failed", "before"],
+    ["done", "after"],
   ] as const)(
-    "keeps newer $newerState over $snapshotStatus history requested $requestOrder it",
-    async ({ snapshotStatus, newerState, requestOrder }) => {
+    "keeps newer terminal state over %s history requested %s it",
+    async (snapshotStatus, requestOrder) => {
       const response = createDeferred<ChatHistoryResult>();
       const state = host(() => response.promise);
-      emit(
-        state,
-        "2",
-        snapshotStatus === "done"
-          ? reply("Old reply")
-          : { state: "error", errorMessage: "Old failure" },
-      );
+      const failed = snapshotStatus === "failed";
+      emit(state, "2", terminal(failed ? "Old failure" : "Old reply", failed));
       let loading = requestOrder === "before" ? loadChatHistory(state) : undefined;
       emit(state, "1", { state: "delta", deltaText: "New reply" });
-      emit(
-        state,
-        "1",
-        newerState === "completed"
-          ? reply("New reply")
-          : { state: "error", errorMessage: "Current full diagnostic" },
-      );
+      emit(state, "1", terminal(failed ? "Current full diagnostic" : "New reply", failed));
       const currentError = state.chatRunError;
       loading ??= loadChatHistory(state);
       response.resolve({
@@ -508,7 +460,7 @@ describe("chat history run errors", () => {
         sessionInfo: row({
           status: snapshotStatus,
           lastRunId: "2",
-          lastRunError: snapshotStatus === "failed" ? "Old failure" : undefined,
+          lastRunError: failed ? "Old failure" : undefined,
         }),
       });
       await loading;
@@ -536,7 +488,7 @@ describe("chat history run errors", () => {
     const response = createDeferred<ChatHistoryResult>();
     const state = host(() => response.promise);
     emit(state, "run", { state: "delta" });
-    emit(state, "run", reply("Delivered answer"));
+    emit(state, "run", terminal("Delivered answer"));
     const loading = loadChatHistory(state);
     emit(state, "run", { state: "error", errorMessage: "Full late diagnostic after delivery" });
     const diagnostic = state.chatRunError;
@@ -553,14 +505,11 @@ describe("chat history run errors", () => {
   it("retains a newer-run diagnostic when a completed run delivers another final", () => {
     const state = host({ messages: [] });
     emit(state, "run", { state: "delta" });
-    emit(state, "run", reply("First answer"));
-    emit(state, "newer-run", {
-      state: "error",
-      errorMessage: "Diagnostic that must remain visible",
-    });
+    emit(state, "run", terminal("First answer"));
+    emit(state, "newer-run", terminal("Diagnostic that must remain visible", true));
     const diagnostic = state.chatRunError;
     expect(diagnostic?.summary).toContain("Diagnostic that must remain visible");
-    emit(state, "run", reply("Late answer"));
+    emit(state, "run", terminal("Late answer"));
     expect(state.chatMessages).toContainEqual(expect.objectContaining({ content: "Late answer" }));
     expect(state.chatRunId).toBeNull();
     expect(state.chatRunError).toEqual(diagnostic);
