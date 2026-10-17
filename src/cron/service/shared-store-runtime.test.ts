@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { type ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -30,10 +31,7 @@ afterEach(async () => {
 
 const log = { debug() {}, info() {}, warn() {}, error() {} };
 
-function createDisabledService(
-  storePath: string,
-  extra: Partial<CronServiceDeps> = {},
-): CronService {
+function createDisabledService(storePath: string, extra: Partial<CronServiceDeps> = {}) {
   return new CronService({
     scheduler: createTestGatewayScheduler(),
     cronEnabled: false,
@@ -41,9 +39,7 @@ function createDisabledService(
     log,
     enqueueSystemEvent() {},
     requestHeartbeat() {},
-    async runIsolatedAgentJob() {
-      return { status: "ok" as const, summary: "unused" };
-    },
+    runIsolatedAgentJob: async () => ({ status: "ok", summary: "unused" }),
     ...extra,
   });
 }
@@ -127,6 +123,22 @@ async function readJob(storePath: string, id: string) {
   return (await loadCronStore(storePath)).jobs.find((job) => job.id === id);
 }
 
+async function seedTarget(suffix: string) {
+  const { storePath } = await makeStorePath();
+  const cron = createDisabledService(storePath);
+  const target = await addTarget(cron, suffix);
+  cron.stop();
+  return { storePath, target };
+}
+
+async function rewritePeer(storePath: string, id: string, patch: Partial<CronJobCreate>) {
+  const store = await loadCronStore(storePath);
+  const job = store.jobs.find((candidate) => candidate.id === id);
+  assert(job, "missing peer target");
+  Object.assign(job, patch);
+  await saveCronStore(storePath, store);
+}
+
 describe("scheduler-disabled shared-store mutations", () => {
   it("cannot overwrite runtime committed by a scheduler process", async () => {
     const cases = await Promise.all(
@@ -177,27 +189,16 @@ describe("scheduler-disabled shared-store mutations", () => {
   }, 90_000);
 
   it("rejects a stale config mutation instead of overwriting its peer", async () => {
-    const { storePath } = await makeStorePath();
-    const seed = createDisabledService(storePath);
-    const target = await addTarget(seed, "config-conflict");
-    seed.stop();
+    const { storePath, target } = await seedTarget("config-conflict");
 
     const cron = createDisabledService(storePath, {
-      async listConfiguredChannels() {
-        return [];
-      },
+      listConfiguredChannels: async () => [],
     });
     const persist = serviceStore.persistCronJobMutation;
     const admission = vi
       .spyOn(serviceStore, "persistCronJobMutation")
       .mockImplementationOnce(async (params) => {
-        const peerStore = await loadCronStore(storePath);
-        const peerTarget = peerStore.jobs.find((job) => job.id === target.id);
-        if (!peerTarget) {
-          throw new Error("missing peer target");
-        }
-        peerTarget.name = "peer-update";
-        await saveCronStore(storePath, peerStore);
+        await rewritePeer(storePath, target.id, { name: "peer-update" });
         return persist(params);
       });
     try {
@@ -216,18 +217,9 @@ describe("scheduler-disabled shared-store mutations", () => {
   });
 
   it("rejects deleting a row whose config a peer rewrote", async () => {
-    const { storePath } = await makeStorePath();
-    const cron = createDisabledService(storePath);
-    const target = await addTarget(cron, "delete-conflict");
-    cron.stop();
+    const { storePath, target } = await seedTarget("delete-conflict");
     const baseline = await loadCronStore(storePath);
-    const peerStore = structuredClone(baseline);
-    const peerTarget = peerStore.jobs.find((job) => job.id === target.id);
-    if (!peerTarget) {
-      throw new Error("missing peer delete target");
-    }
-    peerTarget.description = "peer rewrite";
-    await saveCronStore(storePath, peerStore);
+    await rewritePeer(storePath, target.id, { description: "peer rewrite" });
 
     await expect(
       saveCronJobsStoreChanges(storePath, baseline, { version: 1, jobs: [] }),

@@ -116,17 +116,14 @@ describe("startup run repair auto-disable", () => {
     const restored = restore({
       entry: {
         ...entry,
-        ...(completionStatus === undefined ? {} : { completionStatus }),
+        completionStatus,
         deliveryStatus,
         failureNotificationDelivery,
       },
     });
 
     expect(restored?.shouldDelete).toBe(completionStatus === "succeeded");
-    expect(job.state).toMatchObject({
-      lastRunStatus: "ok",
-      consecutiveErrors: 0,
-    });
+    expect(job.state).toMatchObject({ lastRunStatus: "ok", consecutiveErrors: 0 });
     if (!restored?.shouldDelete) {
       expect(job.enabled).toBe(false);
     }
@@ -172,7 +169,7 @@ describe("startup run repair auto-disable", () => {
     expect(deferredNotifications).toHaveLength(1);
   });
 
-  it.each(["ts"] as const)("ignores finalized startup history with an invalid %s", () => {
+  it("ignores finalized startup history with an invalid timestamp", () => {
     const { state, job, entry, restore } = repairFixture(
       "invalid-history",
       "2026-08-01T16:00:00.000Z",

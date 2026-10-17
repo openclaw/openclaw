@@ -1,4 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core";
+import assert from "node:assert/strict";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createCronRegressionState,
@@ -37,6 +37,16 @@ import {
 } from "./runtime-publication.js";
 
 const runtimeStoreFixtures = setupCronRegressionFixtures({ prefix: "cron-runtime-store-" });
+const makeJob = (id: string, nowMs: number, nextRunAtMs = nowMs) =>
+  createDueIsolatedJob({ id, nowMs, nextRunAtMs });
+
+async function seedJobs(jobs: CronStoredJob[]) {
+  const { storePath } = runtimeStoreFixtures.makeStorePath();
+  await saveCronStore(storePath, { version: 1, jobs });
+  const db = openOpenClawStateDatabase().db;
+  const storeKey = cronStoreKey(storePath);
+  return { storePath, db, storeKey };
+}
 
 function trackCronRowReads() {
   return trackSqliteStatementExecutions(
@@ -56,7 +66,7 @@ describe("cron runtime row publication", () => {
 
   it("publishes committed wake transitions once while tracking topology and suppressed slots", () => {
     const now = Date.now();
-    const job = createDueIsolatedJob({ id: "published-wake", nowMs: now, nextRunAtMs: now });
+    const job = makeJob("published-wake", now);
     const onEvent = vi.fn();
     const state = createCronRegressionState({
       storePath: "/tmp/cron-published-wake.json",
@@ -98,10 +108,9 @@ describe("cron runtime row publication", () => {
   });
 
   it("materializes only selected jobs and authority while preserving ordered, exact targets", async () => {
-    const { storePath } = runtimeStoreFixtures.makeStorePath();
     const now = Date.now();
     const jobs: CronStoredJob[] = Array.from({ length: 128 }, (_, index) => ({
-      ...createDueIsolatedJob({ id: `row-${index}`, nowMs: now, nextRunAtMs: now }),
+      ...makeJob(`row-${index}`, now),
       description: "d".repeat(512),
       runtimeAuthority: {
         version: 1,
@@ -111,32 +120,25 @@ describe("cron runtime row publication", () => {
       },
     }));
     jobs.push({ ...jobs[0]!, id: "replacement-\ufffd" });
-    await saveCronStore(storePath, { version: 1, jobs });
-    const database = openOpenClawStateDatabase().db;
-    const storeKey = cronStoreKey(storePath);
-    database
-      .prepare(
-        "UPDATE cron_jobs SET state_json = 'invalid' WHERE store_key = ? AND job_id IN (?, ?)",
-      )
-      .run(storeKey, "row-0", "row-4");
-    database
-      .prepare(
-        "UPDATE cron_job_runtime_authorities SET authority_json = '{}' WHERE store_key = ? AND job_id IN (?, ?)",
-      )
-      .run(storeKey, "row-1", "row-8");
-    database
-      .prepare(
-        "UPDATE cron_jobs SET agent_id = 'research', job_json = json_set(job_json, '$.authoredNote', 'preserve me') WHERE store_key = ? AND job_id IN (?, ?)",
-      )
-      .run(storeKey, "row-2", "row-9");
-    database
-      .prepare(
-        "UPDATE cron_jobs SET job_json = json_remove(job_json, '$.enabled') WHERE store_key = ? AND job_id = ?",
-      )
-      .run(storeKey, "row-9");
-    const before = database
-      .prepare("SELECT * FROM cron_jobs WHERE store_key = ? ORDER BY sort_order")
-      .all(storeKey);
+    const { storePath, db, storeKey } = await seedJobs(jobs);
+    const patch = (table: string, assignment: string, ...ids: string[]) =>
+      db
+        .prepare(
+          `UPDATE ${table} SET ${assignment} WHERE store_key = ? AND job_id IN (${ids.map(() => "?")})`,
+        )
+        .run(storeKey, ...ids);
+    patch("cron_jobs", "state_json = 'invalid'", "row-0", "row-4");
+    patch("cron_job_runtime_authorities", "authority_json = '{}'", "row-1", "row-8");
+    patch(
+      "cron_jobs",
+      "agent_id = 'research', job_json = json_set(job_json, '$.authoredNote', 'preserve me')",
+      "row-2",
+      "row-9",
+    );
+    patch("cron_jobs", "job_json = json_remove(job_json, '$.enabled')", "row-9");
+    const rows = () =>
+      db.prepare("SELECT * FROM cron_jobs WHERE store_key = ? ORDER BY sort_order").all(storeKey);
+    const before = rows();
     const materializedIds = ["row-2", "row-4", "row-8", "row-9", "replacement-\ufffd"];
     const materializedRows = before.filter(
       (row) => typeof row.job_id === "string" && materializedIds.includes(row.job_id),
@@ -144,9 +146,7 @@ describe("cron runtime row publication", () => {
     expect(materializedRows.map((row) => row.job_id)).toEqual(materializedIds);
     let payloadBytes = 0;
     for (const row of materializedRows) {
-      if (typeof row.job_json !== "string" || typeof row.state_json !== "string") {
-        throw new Error("Expected persisted cron JSON TEXT in the fixture.");
-      }
+      assert(typeof row.job_json === "string" && typeof row.state_json === "string");
       payloadBytes += Buffer.byteLength(row.job_json) + Buffer.byteLength(row.state_json);
     }
     // Allow short row metadata without fetching another copy of each description.
@@ -164,9 +164,9 @@ describe("cron runtime row publication", () => {
     const reads = trackCronRowReads();
     let committed: string[];
     try {
-      const result = runOpenClawStateWriteTransaction(({ db }) =>
+      const result = runOpenClawStateWriteTransaction(({ db: database }) =>
         mutateCronRuntimeRowsInDatabase({
-          database: db,
+          database,
           storeKey,
           jobIds: new Set(targets),
           mutate: ({ jobs: current }) => {
@@ -194,9 +194,7 @@ describe("cron runtime row publication", () => {
     } finally {
       reads.restore();
     }
-    const after = database
-      .prepare("SELECT * FROM cron_jobs WHERE store_key = ? ORDER BY sort_order")
-      .all(storeKey);
+    const after = rows();
     const grantDefinitionProjection = (row: Record<string, unknown>) => ({
       revision: row.grant_definition_revision,
       generation: row.grant_definition_generation,
@@ -204,18 +202,11 @@ describe("cron runtime row publication", () => {
     });
     expect(after.map(grantDefinitionProjection)).toEqual(before.map(grantDefinitionProjection));
     for (const jobId of ["row-2", "row-9"]) {
-      const beforeRow = expectDefined(
-        before.find((row) => row.job_id === jobId),
-        "before row",
-      );
-      const afterRow = expectDefined(
-        after.find((row) => row.job_id === jobId),
-        "after row",
-      );
+      const beforeRow = before.find((row) => row.job_id === jobId);
+      const afterRow = after.find((row) => row.job_id === jobId);
+      assert(beforeRow && afterRow);
       expect(afterRow.agent_id).toBe("research");
-      if (typeof beforeRow.job_json !== "string" || typeof afterRow.job_json !== "string") {
-        throw new Error("Expected persisted cron definitions.");
-      }
+      assert(typeof beforeRow.job_json === "string" && typeof afterRow.job_json === "string");
       expect(afterRow.job_json).toBe(
         jobId === "row-9"
           ? JSON.stringify({ ...JSON.parse(beforeRow.job_json), enabled: false })
@@ -227,7 +218,7 @@ describe("cron runtime row publication", () => {
       before.filter((row) => !committed.includes(row.job_id as string)),
     );
     expect(
-      database
+      db
         .prepare(
           "SELECT job_id, recovery_required FROM cron_job_runtime_authorities WHERE store_key = ? AND job_id IN (?, ?) ORDER BY job_id",
         )
@@ -247,9 +238,9 @@ describe("cron runtime row publication", () => {
     const emptyReads = trackCronRowReads();
     try {
       expect(
-        runOpenClawStateWriteTransaction(({ db }) =>
+        runOpenClawStateWriteTransaction(({ db: database }) =>
           mutateCronRuntimeRowsInDatabase({
-            database: db,
+            database,
             storeKey,
             jobIds: new Set(),
             mutate: ({ jobs: current }) => ({ value: current.size }),
@@ -263,12 +254,9 @@ describe("cron runtime row publication", () => {
   });
 
   it("bounds receipt reads to the exact job and omits a malformed target", async () => {
-    const { storePath } = runtimeStoreFixtures.makeStorePath();
     const now = Date.now();
-    const jobs = Array.from({ length: 128 }, (_, index) =>
-      createDueIsolatedJob({ id: `receipt-row-${index}`, nowMs: now, nextRunAtMs: now }),
-    );
-    await saveCronStore(storePath, { version: 1, jobs });
+    const jobs = Array.from({ length: 128 }, (_, index) => makeJob(`receipt-row-${index}`, now));
+    const { storePath, db } = await seedJobs(jobs);
     const job = jobs[64]!;
     const prepared = prepareCronRunReceiptClaim({
       observed: undefined,
@@ -278,15 +266,12 @@ describe("cron runtime row publication", () => {
       startedAtMs: now,
     });
     const reads = trackCronRowReads();
-    const handle = runOpenClawStateWriteTransaction(({ db }) =>
-      claimCronRunReceiptInDatabaseForTest({
-        database: db,
-        prepared,
-      }),
+    const handle = runOpenClawStateWriteTransaction(({ db: database }) =>
+      claimCronRunReceiptInDatabaseForTest({ database, prepared }),
     );
     try {
       const readFacts = () =>
-        readCronRunReceiptCurrentFactsInDatabase(openOpenClawStateDatabase().db, {
+        readCronRunReceiptCurrentFactsInDatabase(db, {
           type: "cron.currentReceipt",
           handle,
           includeJob: true,
@@ -294,9 +279,10 @@ describe("cron runtime row publication", () => {
         });
       expect(readFacts().receipt?.receiptId).toBe(handle.receiptId);
       expect(reads.rowCounts.jobs).toBeLessThanOrEqual(2);
-      openOpenClawStateDatabase()
-        .db.prepare("UPDATE cron_jobs SET job_json = '{}' WHERE store_key = ? AND job_id = ?")
-        .run(handle.storeKey, job.id);
+      db.prepare("UPDATE cron_jobs SET job_json = '{}' WHERE store_key = ? AND job_id = ?").run(
+        handle.storeKey,
+        job.id,
+      );
       expect(readFacts().job).toBeUndefined();
       expect(reads.rowCounts.jobs).toBeLessThanOrEqual(3);
     } finally {
@@ -306,13 +292,8 @@ describe("cron runtime row publication", () => {
   });
 
   it("hands persisted authority to the runner and records its revocation failure", async () => {
-    const store = runtimeStoreFixtures.makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
-    const job: CronStoredJob = createDueIsolatedJob({
-      id: "manual-run-runtime-authority",
-      nowMs: dueAt,
-      nextRunAtMs: dueAt,
-    });
+    const job: CronStoredJob = makeJob("manual-run-runtime-authority", dueAt);
     job.schedule = { kind: "every", everyMs: 60_000, anchorMs: dueAt };
     const runtimeAuthority = {
       version: 1 as const,
@@ -321,7 +302,7 @@ describe("cron runtime row publication", () => {
       payload: { auth: { managedRequirementsFingerprint: "f".repeat(64) } },
     };
     job.runtimeAuthority = runtimeAuthority;
-    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    const { storePath, storeKey } = await seedJobs([job]);
 
     const error = "Scheduled runtime authority was revoked. Reauthorize this automation.";
     const runIsolatedAgentJob = vi.fn().mockRejectedValue(new AgentHarnessPreflightError(error));
@@ -329,7 +310,7 @@ describe("cron runtime row publication", () => {
     const cron = new CronService({
       scheduler: createTestGatewayScheduler(),
       cronEnabled: true,
-      storePath: store.storePath,
+      storePath,
       log: noopLogger,
       nowMs: () => dueAt,
       enqueueSystemEvent: vi.fn(),
@@ -350,12 +331,12 @@ describe("cron runtime row publication", () => {
       );
       expect(
         readCronRunHistoryPageForTests({
-          storeKey: cronStoreKey(store.storePath),
+          storeKey,
           jobId: job.id,
           limit: 1,
         }).entries,
       ).toMatchObject([{ jobId: job.id, status: "error", error }]);
-      expect((await loadCronStore(store.storePath)).jobs).toMatchObject([
+      expect((await loadCronStore(storePath)).jobs).toMatchObject([
         {
           id: job.id,
           enabled: true,
@@ -372,17 +353,9 @@ describe("cron runtime row publication", () => {
     vi.useFakeTimers();
     const now = Date.parse("2026-08-13T18:00:00.000Z");
     vi.setSystemTime(now);
-    const resident = createDueIsolatedJob({
-      id: "resident-job",
-      nowMs: now,
-      nextRunAtMs: now + 120_000,
-    });
+    const resident = makeJob("resident-job", now, now + 120_000);
     resident.enabled = false;
-    const imported = createDueIsolatedJob({
-      id: "sibling-imported-job",
-      nowMs: now,
-      nextRunAtMs: now + 60_000,
-    });
+    const imported = makeJob("sibling-imported-job", now, now + 60_000);
     const state = createCronRegressionState({
       storePath: "/tmp/runtime-store-import.json",
       nowMs: () => now,
