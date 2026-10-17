@@ -11,9 +11,9 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
+import { projectCronSessionEntry } from "../../config/sessions/session-entry-patch-operation.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -60,14 +60,12 @@ function makeCronSession(
   } as MutableCronSession;
 }
 
-/**
- * Guarded-persist seam backed by an in-memory persisted row, mirroring the
- * accessor contract: `update` sees the freshest persisted entry (undefined
- * when absent), may throw to reject a stale claim, and its return is committed.
- */
+/** In-memory adapter for the same closed operation used by the session writer. */
 function makeGuardedPersistSessionEntry(persistedStore: Record<string, SessionEntry>) {
   return vi.fn<CronSessionRowWriter>(async (params) => {
-    persistedStore[params.sessionKey] = params.update(persistedStore[params.sessionKey]);
+    const entry = projectCronSessionEntry(params.operation, persistedStore[params.sessionKey]);
+    persistedStore[params.sessionKey] = entry;
+    return entry;
   });
 }
 
@@ -177,11 +175,12 @@ describe("createPersistCronSessionEntry", () => {
         sessionKey,
         storePath: rowStorePath,
         resetBoundary,
-        update,
+        operation,
       }) => {
         if (!resetBoundary) {
           throw new Error("expected a pending cron reset boundary");
         }
+        let entry = operation.next;
         await applySessionEntryLifecycleMutation({
           activeSessionKey: sessionKey,
           agentId: "main",
@@ -190,11 +189,13 @@ describe("createPersistCronSessionEntry", () => {
             {
               sessionKey,
               resetBoundary,
-              buildEntry: ({ currentEntry }) => update(currentEntry),
+              buildEntry: ({ currentEntry }) =>
+                (entry = projectCronSessionEntry(operation, currentEntry)),
             },
           ],
           skipMaintenance: true,
         });
+        return entry;
       },
     })();
 
@@ -509,7 +510,7 @@ describe("createPersistCronSessionEntry", () => {
         cronSession,
         agentSessionKey: "agent:main:cron:completed",
         workspaceDir: "/tmp/workspace",
-        persistSessionEntry: vi.fn(async () => {}),
+        persistSessionEntry: vi.fn<CronSessionRowWriter>(async ({ operation }) => operation.next),
       });
 
       const reads = observeHostDataSql();
@@ -534,85 +535,6 @@ describe("createPersistCronSessionEntry", () => {
       });
     },
   );
-
-  it("does not let an older concurrent run reclaim a persisted lifecycle revision", async () => {
-    const sessionKey = "agent:main:session";
-    const initialSessionEntry = makeSessionEntry({ lifecycleRevision: "initial-revision" });
-    const persistedStore: Record<string, SessionEntry> = {
-      [sessionKey]: initialSessionEntry,
-    };
-    const makeConcurrentSession = (lifecycleRevision: string): MutableCronSession =>
-      ({
-        ...makeCronSession(
-          makeSessionEntry({
-            lifecycleRevision,
-            label: lifecycleRevision,
-          }),
-        ),
-        initialSessionEntry,
-        lifecycleRevision,
-      }) as MutableCronSession;
-    const persistSessionEntry = makeGuardedPersistSessionEntry(persistedStore);
-    const olderSession = makeConcurrentSession("older-revision");
-    const newerSession = makeConcurrentSession("newer-revision");
-    const persistOlder = createPersistCronSessionEntry({
-      cronSession: olderSession,
-      agentSessionKey: sessionKey,
-      workspaceDir: "/tmp/workspace",
-      persistSessionEntry,
-    });
-    const persistNewer = createPersistCronSessionEntry({
-      cronSession: newerSession,
-      agentSessionKey: sessionKey,
-      workspaceDir: "/tmp/workspace",
-      persistSessionEntry,
-    });
-
-    await persistNewer();
-    await expect(persistOlder()).rejects.toThrow(
-      `Session "${sessionKey}" changed while starting work. Retry.`,
-    );
-
-    expect(persistedStore[sessionKey]).toStrictEqual(newerSession.sessionEntry);
-    expect(olderSession.store[sessionKey]).toBeUndefined();
-  });
-
-  it("does not replace a lifecycle revision while its owner is admitted", async () => {
-    const sessionKey = "agent:main:session";
-    const storePath = "/tmp/sessions-active-lifecycle.json";
-    const activeRevision = crypto.randomUUID();
-    const nextRevision = crypto.randomUUID();
-    const activeEntry = makeSessionEntry({ lifecycleRevision: activeRevision });
-    const persistedStore: Record<string, SessionEntry> = { [sessionKey]: activeEntry };
-    const nextSession = {
-      ...makeCronSession(makeSessionEntry({ lifecycleRevision: nextRevision })),
-      initialSessionEntry: activeEntry,
-      lifecycleRevision: nextRevision,
-      storePath,
-    } as MutableCronSession;
-    const persistNext = createPersistCronSessionEntry({
-      cronSession: nextSession,
-      agentSessionKey: sessionKey,
-      workspaceDir: "/tmp/workspace",
-      persistSessionEntry: makeGuardedPersistSessionEntry(persistedStore),
-    });
-    const activeLease = await beginSessionWorkAdmission({
-      scope: storePath,
-      identities: [`cron-lifecycle-revision:${activeRevision}`],
-      assertAllowed: () => {},
-    });
-
-    try {
-      await expect(persistNext()).rejects.toThrow(
-        `Session "${sessionKey}" changed while starting work. Retry.`,
-      );
-      expect(persistedStore[sessionKey]).toBe(activeEntry);
-    } finally {
-      activeLease.release();
-    }
-    await expect(persistNext()).resolves.toBeUndefined();
-    expect(persistedStore[sessionKey]).toStrictEqual(nextSession.sessionEntry);
-  });
 
   it("claims an initial row after a benign concurrent same-generation field write", async () => {
     // Repro for the session-store claim race: under a large, busy store a
@@ -864,7 +786,9 @@ describe("createPersistCronSessionEntry", () => {
         sessionFile: "/tmp/bound-session-rotated.jsonl",
       },
     });
-    const persistSessionEntry = vi.fn(async () => {});
+    const persistSessionEntry = vi.fn<CronSessionRowWriter>(
+      async ({ operation }) => operation.next,
+    );
 
     expect(changed).toBe(true);
     const persist = createPersistCronSessionEntry({
@@ -882,18 +806,6 @@ describe("createPersistCronSessionEntry", () => {
       usageFamilySessionIds: ["bound-session", "bound-session-rotated"],
       updatedAt: 1000,
       systemSent: true,
-    });
-    expect(persistSessionEntry).toHaveBeenCalledWith({
-      storePath: "/tmp/sessions.json",
-      sessionKey: "agent:main:telegram:direct:42",
-      fallbackEntry: {
-        sessionId: "bound-session-rotated",
-        usageFamilyKey: "agent:main:telegram:direct:42",
-        usageFamilySessionIds: ["bound-session", "bound-session-rotated"],
-        updatedAt: 1000,
-        systemSent: true,
-      },
-      update: expect.any(Function),
     });
   });
 });
