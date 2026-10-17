@@ -1,12 +1,14 @@
-import path from "node:path";
 import { expect, it } from "vitest";
 import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
-  captureUiProof,
-  captureUiProofEnabled,
+  button as roleButton,
+  menuItem,
+  visible,
+} from "./session-management.compact.test-support.ts";
+import {
   activateSelfRemovingControl,
   createSessionManagementE2eSuite,
   installMockGateway,
@@ -16,73 +18,85 @@ import {
 
 const suite = createSessionManagementE2eSuite(true);
 
+const basicOptions = {
+  locale: "en-US",
+  serviceWorkers: "block",
+} satisfies import("playwright").BrowserContextOptions;
+
+const desktopOptions = {
+  locale: "en-US",
+  serviceWorkers: "block",
+  viewport: { height: 900, width: 1280 },
+} satisfies import("playwright").BrowserContextOptions;
+
 suite.define(() => {
   it.each(["delete", "archive"] as const)(
     "recovers an offline workspace for sidebar %s only after loss consent",
     async (action) => {
-      const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-      const page = await context.newPage();
-      const main = sessionRow("agent:main:main", "Main", 2);
-      const target = sessionRow("agent:main:offline-workspace", "Offline workspace", 1);
-      const method = action === "delete" ? "sessions.delete" : "sessions.patch";
-      const gateway = await installMockGateway(page, {
-        featureMethods: [...defaultControlUiFeatureMethods, "sessions.move"],
-        methodResponses: {
-          "sessions.delete": { ok: true, deleted: true },
-          "sessions.list": sessionsListResponse([main, target]),
-        },
-        sessionArchiveFiltering: true,
-        sessionKey: main.key,
-      });
-      const row = page.locator(`.sidebar-recent-session[data-session-key="${target.key}"]`);
-      const openRecovery = async (after: number) => {
-        await gateway.deferNext(method, { key: target.key });
-        await row.waitFor({ state: "visible" });
-        await row.hover();
-        await row.click({ button: "right" });
-        if (action === "delete") {
-          await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
-        }
-        await activateSelfRemovingControl(
-          page.locator("openclaw-session-menu").getByRole("menuitem", {
-            name: action === "delete" ? "Delete…" : "Archive session",
-          }),
-        );
-        if (action === "delete") {
-          const confirmation = await waitForConfirmModal(page);
-          await confirmation.getByRole("button", { name: "Delete", exact: true }).click();
-        }
-        await gateway.waitForRequest(method, { after, match: { key: target.key } });
-        await gateway.rejectDeferred(method, {
-          code: "UNAVAILABLE",
-          message: "Reconnect the device to preserve its workspace.",
-          details: {
-            code: "SESSION_WORKSPACE_RECOVERY_REQUIRED",
-            cause: "device_offline",
-            recoveryAction: "continue_on_gateway",
-            sessionId: target.sessionId,
-            source: { generation: 5, environmentId: "offline-device", ownerEpoch: 70 },
+      return suite.withPage(basicOptions, async ({ page }) => {
+        const main = sessionRow("agent:main:main", "Main", 2);
+        const target = sessionRow("agent:main:offline-workspace", "Offline workspace", 1);
+        const method = action === "delete" ? "sessions.delete" : "sessions.patch";
+        const gateway = await installMockGateway(page, {
+          featureMethods: [...defaultControlUiFeatureMethods, "sessions.move"],
+          methodResponses: {
+            "sessions.delete": { ok: true, deleted: true },
+            "sessions.list": sessionsListResponse([main, target]),
           },
+          sessionArchiveFiltering: true,
+          sessionKey: main.key,
         });
-        const recovery = await waitForConfirmModal(page);
-        await recovery.getByRole("button", { name: `Discard changes and ${action}` }).waitFor();
-        await expect
-          .poll(() => recovery.textContent())
-          .toContain("Reconnect it to keep those changes");
-        return recovery;
-      };
-      try {
+        const row = page.locator(`.sidebar-recent-session[data-session-key="${target.key}"]`);
+        const openRecovery = async (after: number) => {
+          await gateway.deferNext(method, { key: target.key });
+          await visible(row);
+          await row.hover();
+          await row.click({ button: "right" });
+          if (action === "delete") {
+            await menuItem(page, "Advanced").click();
+          }
+          await activateSelfRemovingControl(
+            menuItem(
+              page.locator("openclaw-session-menu"),
+              action === "delete" ? "Delete…" : "Archive session",
+              false,
+            ),
+          );
+          if (action === "delete") {
+            const confirmation = await waitForConfirmModal(page);
+            await roleButton(confirmation, "Delete").click();
+          }
+          await gateway.waitForRequest(method, { after, match: { key: target.key } });
+          await gateway.rejectDeferred(method, {
+            code: "UNAVAILABLE",
+            message: "Reconnect the device to preserve its workspace.",
+            details: {
+              code: "SESSION_WORKSPACE_RECOVERY_REQUIRED",
+              cause: "device_offline",
+              recoveryAction: "continue_on_gateway",
+              sessionId: target.sessionId,
+              source: { generation: 5, environmentId: "offline-device", ownerEpoch: 70 },
+            },
+          });
+          const recovery = await waitForConfirmModal(page);
+          await roleButton(recovery, `Discard changes and ${action}`, false).waitFor();
+          await expect
+            .poll(() => recovery.textContent())
+            .toContain("Reconnect it to keep those changes");
+          return recovery;
+        };
+
         await page.goto(`${suite.server.baseUrl}chat`);
         const cancelled = await openRecovery(0);
-        await cancelled.getByRole("button", { name: "Cancel", exact: true }).click();
+        await roleButton(cancelled, "Cancel").click();
         await cancelled.waitFor({ state: "detached" });
-        await row.waitFor({ state: "visible" });
+        await visible(row);
         expect(await gateway.getRequests("sessions.move")).toEqual([]);
         await expectRequestCountStable(gateway, method, 1, undefined, { key: target.key });
 
         const confirmed = await openRecovery(1);
         await gateway.deferNext("sessions.move");
-        await confirmed.getByRole("button", { name: `Discard changes and ${action}` }).click();
+        await roleButton(confirmed, `Discard changes and ${action}`, false).click();
         expect(await gateway.waitForRequest("sessions.move")).toMatchObject({
           params: {
             key: target.key,
@@ -102,9 +116,7 @@ suite.define(() => {
         await expectRequestCountStable(gateway, method, 3, undefined, { key: target.key });
         expect(await gateway.getRequests("sessions.move")).toHaveLength(1);
         expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
-      } finally {
-        await context.close();
-      }
+      });
     },
   );
 
@@ -119,19 +131,17 @@ suite.define(() => {
     const noOp = "agent:main:no-op";
     const replacement = "agent:main:replacement";
     const keys = [...retired, sibling, noOp, replacement];
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.delete": { ok: true, deleted: true },
-        "sessions.list": sessionsListResponse(
-          keys.map((key, index) => sessionRow(key, key, index)),
-        ),
-      },
-      sessionKey: "agent:main:main",
-    });
+    return suite.withPage(basicOptions, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.delete": { ok: true, deleted: true },
+          "sessions.list": sessionsListResponse(
+            keys.map((key, index) => sessionRow(key, key, index)),
+          ),
+        },
+        sessionKey: "agent:main:main",
+      });
 
-    try {
       await page.goto(`${suite.server.baseUrl}sessions`);
       const applicationHandle = await getControlUiContextHandle(page);
       await page.waitForFunction((application) => {
@@ -201,6 +211,34 @@ suite.define(() => {
             ? sessions.delete(targets[0]!, { agentId: "main" })
             : sessions.deleteMany(targets.map((key) => ({ key, agentId: "main" })));
         }, sessionKeys);
+      const readDrafts = (sessionKeys: string[]) =>
+        page.evaluate(
+          async ({ store, keys: targets, scopeOwner }) => {
+            const local = JSON.parse(sessionStorage.getItem(scopeOwner.storageKey) ?? "{}") as {
+              sessions?: Record<string, { draft?: string; queue?: unknown[] }>;
+            };
+            return Object.fromEntries(
+              await Promise.all(
+                targets.map(async (key) => {
+                  const scopeKey = `${key}\u0000agent:main`;
+                  const localDraft = local.sessions?.[scopeKey];
+                  const durable = await store.readDurableComposerDraft({
+                    ...scopeOwner,
+                    scopeKey: `chat:v3:${scopeKey}`,
+                  });
+                  return [
+                    key,
+                    {
+                      local: Boolean(localDraft?.draft || localDraft?.queue?.length),
+                      durable: durable.status === "found" ? durable.draft.text : durable.status,
+                    },
+                  ];
+                }),
+              ),
+            );
+          },
+          { store: draftStore, keys: sessionKeys, scopeOwner: owner },
+        );
 
       await expect(deleteSessions([retired[0]!])).resolves.toMatchObject({ deleted: true });
       await expect(deleteSessions(retired.slice(1, 3))).resolves.toMatchObject({
@@ -249,27 +287,7 @@ suite.define(() => {
       await expect(replacementDelete).resolves.toMatchObject({ deleted: true });
 
       await expect
-        .poll(() =>
-          page.evaluate(
-            async ({ store, key, scopeOwner }) => {
-              const storageKey = scopeOwner.storageKey;
-              const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
-                sessions?: Record<string, { draft?: string; queue?: unknown[] }>;
-              };
-              const scopeKey = `${key}\u0000agent:main`;
-              const localDraft = local.sessions?.[scopeKey];
-              const durable = await store.readDurableComposerDraft({
-                ...scopeOwner,
-                scopeKey: `chat:v3:${scopeKey}`,
-              });
-              return {
-                local: Boolean(localDraft?.draft || localDraft?.queue?.length),
-                durable: durable.status === "found" ? durable.draft.text : durable.status,
-              };
-            },
-            { store: draftStore, key: replacement, scopeOwner: owner },
-          ),
-        )
+        .poll(async () => (await readDrafts([replacement]))[replacement])
         .toEqual({ local: false, durable: "not-found" });
 
       await page.evaluate(
@@ -310,35 +328,7 @@ suite.define(() => {
       );
 
       await expect
-        .poll(() =>
-          page.evaluate(
-            async ({ store, sessionKeys, scopeOwner }) => {
-              const local = JSON.parse(sessionStorage.getItem(scopeOwner.storageKey) ?? "{}") as {
-                sessions?: Record<string, { draft?: string; queue?: unknown[] }>;
-              };
-              return Object.fromEntries(
-                await Promise.all(
-                  sessionKeys.map(async (key) => {
-                    const scopeKey = `${key}\u0000agent:main`;
-                    const localDraft = local.sessions?.[scopeKey];
-                    const durable = await store.readDurableComposerDraft({
-                      ...scopeOwner,
-                      scopeKey: `chat:v3:${scopeKey}`,
-                    });
-                    return [
-                      key,
-                      {
-                        local: Boolean(localDraft?.draft || localDraft?.queue?.length),
-                        durable: durable.status === "found" ? durable.draft.text : durable.status,
-                      },
-                    ];
-                  }),
-                ),
-              );
-            },
-            { store: draftStore, sessionKeys: keys, scopeOwner: owner },
-          ),
-        )
+        .poll(() => readDrafts(keys))
         .toEqual({
           [retired[0]!]: { local: false, durable: "not-found" },
           [retired[1]!]: { local: false, durable: "not-found" },
@@ -352,9 +342,7 @@ suite.define(() => {
           },
         });
       await applicationHandle.dispose();
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("keeps bulk deletion fenced to the session selected before confirmation", async () => {
@@ -365,43 +353,26 @@ suite.define(() => {
     const replacement = sessionRow(key, "Replacement session", 2, {
       sessionId: "replacement-session",
     });
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-      recordVideo: captureUiProofEnabled
-        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
-        : undefined,
-    });
-    const page = await context.newPage();
-    const proofVideo = page.video();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.delete": { ok: true, deleted: true },
-        "sessions.list": sessionsListResponse([original]),
-      },
-      sessionKey: "agent:main:main",
-    });
+    return suite.withPage(desktopOptions, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.delete": { ok: true, deleted: true },
+          "sessions.list": sessionsListResponse([original]),
+        },
+        sessionKey: "agent:main:main",
+      });
 
-    try {
       await page.goto(`${suite.server.baseUrl}sessions`);
       const replacementLabel = page.locator(".sessions-table").getByText("Replacement session", {
         exact: true,
       });
       await page.getByRole("checkbox", { name: `Select session: ${key}` }).check();
-      await page.locator(".data-table-bulk-bar").getByRole("button", { name: "Delete" }).click();
+      await roleButton(page.locator(".data-table-bulk-bar"), "Delete", false).click();
       const confirmModal = await waitForConfirmModal(page);
-      await captureUiProof(
-        suite,
-        page,
-        "sessions-bulk-delete-original-confirm.png",
-        confirmModal.locator("dialog"),
-        [confirmModal.getByRole("button", { name: "Delete", exact: true })],
-      );
 
       await gateway.setSessionsListResponse(sessionsListResponse([replacement]));
       await gateway.deferNext("sessions.delete");
-      await confirmModal.getByRole("button", { name: "Delete", exact: true }).click();
+      await roleButton(confirmModal, "Delete").click();
 
       const request = await gateway.waitForRequest("sessions.delete");
       expect(request).toMatchObject({
@@ -424,67 +395,42 @@ suite.define(() => {
         false,
       );
       expect(await gateway.getRequests("sessions.delete")).toHaveLength(1);
-      await captureUiProof(suite, page, "sessions-bulk-delete-replacement-protected.png");
-    } finally {
-      await context.close();
-      if (proofVideo) {
-        await proofVideo.saveAs(path.join(suite.artifactDir, "sessions-bulk-delete-replaced.webm"));
-      }
-    }
+    });
   });
 
   it("rejects deleting a same-key replacement after the in-app confirm", async () => {
     const key = "agent:main:research";
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-      recordVideo: captureUiProofEnabled
-        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
-        : undefined,
-    });
-    const page = await context.newPage();
-    const proofVideo = page.video();
-    // Playwright auto-dismisses native dialogs, which is exactly how a
-    // bridge-less WebView behaves. Deleting must not depend on one.
-    const nativeDialogs: string[] = [];
-    page.on("dialog", (dialog) => {
-      nativeDialogs.push(dialog.message());
-      void dialog.dismiss();
-    });
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.delete": { ok: true, deleted: true },
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
-          sessionRow(key, "Research notes", Date.parse("2026-07-01T15:00:00.000Z")),
-        ]),
-      },
-      sessionKey: "agent:main:main",
-    });
+    return suite.withPage(desktopOptions, async ({ page }) => {
+      // Playwright auto-dismisses native dialogs, which is exactly how a
+      // bridge-less WebView behaves. Deleting must not depend on one.
+      const nativeDialogs: string[] = [];
+      page.on("dialog", (dialog) => {
+        nativeDialogs.push(dialog.message());
+        void dialog.dismiss();
+      });
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.delete": { ok: true, deleted: true },
+          "sessions.list": sessionsListResponse([
+            sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
+            sessionRow(key, "Research notes", Date.parse("2026-07-01T15:00:00.000Z")),
+          ]),
+        },
+        sessionKey: "agent:main:main",
+      });
 
-    try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
-      await row.waitFor({ state: "visible", timeout: 10_000 });
+      await visible(row, 10_000);
       await row.hover();
       await row.click({ button: "right" });
-      await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
-      await page
-        .locator("openclaw-session-menu")
-        .getByRole("menuitem", { name: "Delete…" })
-        .click();
+      await menuItem(page, "Advanced").click();
+      await menuItem(page.locator("openclaw-session-menu"), "Delete…", false).click();
 
       const confirmModal = await waitForConfirmModal(page);
-      await captureUiProof(
-        suite,
-        page,
-        "sidebar-delete-session-confirm.png",
-        confirmModal.locator("dialog"),
-        [confirmModal.getByRole("button", { name: "Delete", exact: true })],
-      );
+
       await gateway.deferNext("sessions.delete");
-      await confirmModal.getByRole("button", { name: "Delete", exact: true }).evaluate((button) => {
+      await roleButton(confirmModal, "Delete").evaluate((button) => {
         if (!(button instanceof HTMLButtonElement)) {
           throw new Error("expected delete confirmation button");
         }
@@ -506,68 +452,48 @@ suite.define(() => {
         .poll(() => visibleError.textContent())
         .toContain("changed before deletion. Retry.");
       expect(await visibleError.textContent()).not.toContain("GatewayRequestError");
-      await row.waitFor({ state: "visible" });
-      await captureUiProof(suite, page, "sidebar-delete-session-replaced-error.png");
+      await visible(row);
+
       expect(nativeDialogs).toEqual([]);
-    } finally {
-      await context.close();
-      if (proofVideo) {
-        await proofVideo.saveAs(
-          path.join(suite.artifactDir, "sidebar-delete-session-replaced.webm"),
-        );
-      }
-    }
+    });
   });
 
   it("shows the preserved worktree reason before offering forced removal", async () => {
     const key = "agent:main:snapshot-failed";
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-      recordVideo: captureUiProofEnabled
-        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
-        : undefined,
-    });
-    const page = await context.newPage();
-    const proofVideo = page.video();
-    const gateway = await installMockGateway(page, {
-      featureMethods: [...defaultControlUiFeatureMethods, "worktrees.remove"],
-      methodResponses: {
-        "sessions.delete": {
-          ok: true,
-          key,
-          deleted: true,
-          archived: [],
-          worktreePreserved: {
-            id: "wt-snapshot-failed",
-            branch: "openclaw/snapshot-failed",
-            path: "/worktrees/snapshot-failed",
-            reason: "snapshot-failed",
+    return suite.withPage(desktopOptions, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "worktrees.remove"],
+        methodResponses: {
+          "sessions.delete": {
+            ok: true,
+            key,
+            deleted: true,
+            archived: [],
+            worktreePreserved: {
+              id: "wt-snapshot-failed",
+              branch: "openclaw/snapshot-failed",
+              path: "/worktrees/snapshot-failed",
+              reason: "snapshot-failed",
+            },
           },
+          "sessions.list": sessionsListResponse([
+            sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
+            sessionRow(key, "Snapshot failed", Date.parse("2026-07-01T15:00:00.000Z")),
+          ]),
         },
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
-          sessionRow(key, "Snapshot failed", Date.parse("2026-07-01T15:00:00.000Z")),
-        ]),
-      },
-      sessionKey: "agent:main:main",
-    });
+        sessionKey: "agent:main:main",
+      });
 
-    try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
-      await row.waitFor({ state: "visible", timeout: 10_000 });
+      await visible(row, 10_000);
       await row.hover();
       await row.click({ button: "right" });
-      await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
-      await page
-        .locator("openclaw-session-menu")
-        .getByRole("menuitem", { name: "Delete…" })
-        .click();
+      await menuItem(page, "Advanced").click();
+      await menuItem(page.locator("openclaw-session-menu"), "Delete…", false).click();
 
       const deleteModal = await waitForConfirmModal(page);
-      await deleteModal.getByRole("button", { name: "Delete", exact: true }).click();
+      await roleButton(deleteModal, "Delete").click();
       await gateway.waitForRequest("sessions.delete");
 
       const worktreeModal = await waitForConfirmModal(page);
@@ -575,22 +501,9 @@ suite.define(() => {
         .poll(() => worktreeModal.textContent())
         .toContain("OpenClaw could not create a safety snapshot");
       await expect.poll(() => worktreeModal.textContent()).toContain("Remove?");
-      await captureUiProof(
-        suite,
-        page,
-        "sidebar-delete-preserved-snapshot-failed.png",
-        worktreeModal.locator("dialog"),
-        [worktreeModal.getByRole("button", { name: "Cancel", exact: true })],
-      );
-      await worktreeModal.getByRole("button", { name: "Cancel", exact: true }).click();
+
+      await roleButton(worktreeModal, "Cancel").click();
       expect(await gateway.getRequests("worktrees.remove")).toHaveLength(0);
-    } finally {
-      await context.close();
-      if (proofVideo) {
-        await proofVideo.saveAs(
-          path.join(suite.artifactDir, "sidebar-delete-preserved-snapshot-failed.webm"),
-        );
-      }
-    }
+    });
   });
 });

@@ -1,17 +1,14 @@
-import path from "node:path";
 import { expect, it } from "vitest";
 import {
-  captureControlUiE2eFailureDiagnostics,
   controlUiBundledSettingsStorageKey,
   navigateToControlUiSession,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { button, menuItem, sessionPatch } from "./session-management.compact.test-support.ts";
 import {
   activateSelfRemovingControl,
-  captureUiProof,
-  captureUiProofEnabled,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
@@ -31,16 +28,10 @@ const archived = sessionRow(
 );
 
 async function confirmDelete(page: import("playwright").Page) {
-  await page
-    .locator("openclaw-modal-dialog")
-    .last()
-    .getByRole("button", { name: "Delete", exact: true })
-    .click();
+  await button(page.locator("openclaw-modal-dialog").last(), "Delete").click();
 }
 
-async function openArchivedPage(operatorScopes: string[]) {
-  const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-  const page = await context.newPage();
+async function openArchivedPage(page: import("playwright").Page, operatorScopes: string[]) {
   const gateway = await installMockGateway(page, {
     featureMethods: ["chat.metadata", "chat.startup", "sessions.delete"],
     operatorScopes,
@@ -51,10 +42,10 @@ async function openArchivedPage(operatorScopes: string[]) {
     },
   });
   await page.goto(`${suite.server.baseUrl}sessions?status=archived`);
-  await page.getByRole("button", { name: "Filters" }).click();
-  const deleteAll = page.getByRole("button", { name: /Delete all archived/ });
+  await button(page, "Filters", false).click();
+  const deleteAll = button(page, /Delete all archived/, false);
   await deleteAll.waitFor();
-  return { context, deleteAll, gateway, page };
+  return { deleteAll, gateway };
 }
 
 suite.define(() => {
@@ -63,42 +54,33 @@ suite.define(() => {
     { scope: "operator.sessions.write", name: "SESSION_WRITE", canOrganize: true },
   ])(
     "$name reads shared history and limits organization to existing owned sessions",
-    async ({ scope, name, canOrganize }) => {
-      const viewport = { width: 1280, height: 900 };
-      const context = await suite.browser.newContext({
-        ...createControlUiE2eContextOptions(),
-        viewport,
-        ...(captureUiProofEnabled
-          ? { recordVideo: { dir: suite.artifactDir, size: viewport } }
-          : {}),
-      });
-      const page = await context.newPage();
-      const video = page.video();
-      const timestamp = Date.parse("2026-09-20T12:00:00.000Z");
-      const shared = sessionRow("agent:main:shared-notes", "Shared notes", timestamp, {
-        sharingRole: "member",
-        visibility: "shared",
-      });
-      const own = sessionRow("agent:main:my-notes", "My workspace", timestamp - 60_000, {
-        sharingRole: "owner",
-        visibility: "shared",
-      });
-      const gateway = await installMockGateway(page, {
-        operatorScopes: [scope],
-        sessionKey: shared.key,
-        sessions: [shared, own],
-        sessionArchiveFiltering: true,
-        agentModel: "openai/gpt-5.5",
-        models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true }],
-        presenceUsers: [{ self: true, id: "scope-reader", name: "Session reader" }],
-        historyMessages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "Recorded project notes remain readable." }],
-          },
-        ],
-      });
-      try {
+    async ({ scope, canOrganize }) => {
+      return suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const timestamp = Date.parse("2026-09-20T12:00:00.000Z");
+        const shared = sessionRow("agent:main:shared-notes", "Shared notes", timestamp, {
+          sharingRole: "member",
+          visibility: "shared",
+        });
+        const own = sessionRow("agent:main:my-notes", "My workspace", timestamp - 60_000, {
+          sharingRole: "owner",
+          visibility: "shared",
+        });
+        const gateway = await installMockGateway(page, {
+          operatorScopes: [scope],
+          sessionKey: shared.key,
+          sessions: [shared, own],
+          sessionArchiveFiltering: true,
+          agentModel: "openai/gpt-5.5",
+          models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true }],
+          presenceUsers: [{ self: true, id: "scope-reader", name: "Session reader" }],
+          historyMessages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Recorded project notes remain readable." }],
+            },
+          ],
+        });
+
         const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
         const historyText = activePane
           .getByRole("paragraph")
@@ -116,20 +98,11 @@ suite.define(() => {
         await historyText.waitFor();
         await ownRow.click({ button: "right" });
         await rename.waitFor();
-        await captureUiProof(
-          suite,
-          page,
-          `${name}-owned-menu.png`,
-          menu.locator(".session-menu__panel"),
-          [rename, archive],
-        );
+
         await page.keyboard.press("Escape");
         await navigateToControlUiSession(page, shared.key);
         await historyText.waitFor();
-        await captureUiProof(suite, page, `${name}-shared-history.png`, activePane, [
-          historyText,
-          composer,
-        ]);
+
         await page.evaluate((url) => {
           history.pushState(null, "", url);
           dispatchEvent(new PopStateEvent("popstate"));
@@ -152,19 +125,16 @@ suite.define(() => {
           .locator(".session-details-toggle")
           .click();
         await detailsLabel.waitFor();
-        await captureUiProof(suite, page, `${name}-owned-details.png`, detailsLabel);
+
         expect(await detailsLabel.isEditable()).toBe(canOrganize);
         if (canOrganize) {
           await detailsLabel.fill("List workspace");
           await detailsLabel.press("Tab");
-          await waitForPatch(
-            gateway,
-            (params) => params.key === own.key && params.label === "List workspace",
-          );
+          await sessionPatch(gateway, own.key, { label: "List workspace" });
           const listRow = page.locator(".session-data-row").filter({ hasText: "List workspace" });
-          await listRow.getByRole("button", { name: "Open session menu", exact: true }).click();
-          await menu.getByRole("menuitem", { name: "Mark as unread", exact: true }).click();
-          await waitForPatch(gateway, (params) => params.key === own.key && params.unread === true);
+          await button(listRow, "Open session menu").click();
+          await menuItem(menu, "Mark as unread").click();
+          await sessionPatch(gateway, own.key, { unread: true });
         }
         await navigateToControlUiSession(page, shared.key);
         await historyText.waitFor();
@@ -212,7 +182,7 @@ suite.define(() => {
           await permission.click({ force: true });
           expect(await activePane.locator(".chat-controls__model-picker[open]").count()).toBe(0);
         }
-        const sharing = activePane.getByRole("button", { name: "Session sharing", exact: true });
+        const sharing = button(activePane, "Session sharing");
         expect((await sharing.count()) > 0 && !(await sharing.isDisabled())).toBe(false);
         await ownRow.click({ button: "right" });
         await rename.waitFor();
@@ -225,10 +195,10 @@ suite.define(() => {
           await unread.click();
           await unreadBadge.waitFor();
           await activePane.locator(".chat-header-session-menu__trigger").click();
-          await activePane
-            .locator("openclaw-chat-header-session-menu")
-            .getByRole("menuitem", { name: "Mark as read", exact: true })
-            .click();
+          await menuItem(
+            activePane.locator("openclaw-chat-header-session-menu"),
+            "Mark as read",
+          ).click();
           await activePane.locator(".chat-header-session-menu__panel").waitFor({ state: "hidden" });
           await unreadBadge.waitFor({ state: "hidden" });
           await ownRow.click({ button: "right" });
@@ -236,33 +206,27 @@ suite.define(() => {
         } else {
           await unread.click({ force: true });
         }
-        const moveToGroup = menu.getByRole("menuitem", { name: "Move to group" });
+        const moveToGroup = menuItem(menu, "Move to group", false);
         expect(await moveToGroup.getAttribute("disabled")).not.toBeNull();
         await moveToGroup.click({ force: true });
         await openSessionMenuSubmenu(page, "Advanced");
-        const appearance = menu.getByRole("menuitem", { name: "Icon & color", exact: true });
+        const appearance = menuItem(menu, "Icon & color");
         expect(await appearance.getAttribute("disabled")).not.toBeNull();
         await appearance.click({ force: true });
         await page.keyboard.press("ArrowLeft");
         if (canOrganize) {
           await rename.click();
           await submitInputDialog(page, "Organized workspace");
-          await waitForPatch(
-            gateway,
-            (params) => params.key === own.key && params.label === "Organized workspace",
-          );
+          await sessionPatch(gateway, own.key, { label: "Organized workspace" });
           await expect.poll(() => ownRow.textContent()).toContain("Organized workspace");
           await ownRow.hover();
-          await ownRow.getByRole("button", { name: "Pin session", exact: true }).click();
-          await ownRow.getByRole("button", { name: "Unpin session", exact: true }).waitFor();
+          await button(ownRow, "Pin session").click();
+          await button(ownRow, "Unpin session").waitFor();
           await ownRow.click({ button: "right" });
           await activateSelfRemovingControl(archive);
-          await waitForPatch(
-            gateway,
-            (params) => params.key === own.key && params.archived === true,
-          );
-          await page.getByRole("button", { name: "Undo", exact: true }).waitFor();
-          await captureUiProof(suite, page, `${name}-owned-archived.png`);
+          await sessionPatch(gateway, own.key, { archived: true });
+          await button(page, "Undo").waitFor();
+
           await page.evaluate((url) => {
             history.pushState(null, "", url);
             dispatchEvent(new PopStateEvent("popstate"));
@@ -272,42 +236,30 @@ suite.define(() => {
             .locator(".session-data-row")
             .filter({ hasText: "Organized workspace" });
           await archivedRow.waitFor();
-          await archivedRow.getByRole("button", { name: "Open session menu", exact: true }).click();
+          await button(archivedRow, "Open session menu").click();
           await openSessionMenuSubmenu(page, "Advanced");
           const remove = menu.locator('[data-value="delete"]');
           await remove.waitFor();
           expect(await remove.getAttribute("disabled")).not.toBeNull();
           await remove.click({ force: true });
-          await captureUiProof(
-            suite,
-            page,
-            `${name}-archived-controls.png`,
-            menu.locator(".session-menu__panel"),
-            [remove, archive],
-          );
+
           await page.keyboard.press("ArrowLeft");
           await activateSelfRemovingControl(archive);
-          await waitForPatch(
-            gateway,
-            (params) => params.key === own.key && params.archived === false,
-          );
+          await sessionPatch(gateway, own.key, { archived: false });
           await archivedRow.waitFor({ state: "detached" });
           await navigateToControlUiSession(page, own.key);
           await historyText.waitFor();
           await expect.poll(() => ownRow.textContent()).toContain("Organized workspace");
-          await captureUiProof(suite, page, `${name}-owned-restored.png`, activePane, [
-            historyText,
-          ]);
         } else {
           await rename.click({ force: true });
           await archive.click({ force: true });
           await page.keyboard.press("Escape");
           await ownRow.hover();
-          const pin = ownRow.getByRole("button", { name: "Pin session", exact: true });
+          const pin = button(ownRow, "Pin session");
           // Personal navigation remains available without shared-session mutation authority.
           expect(await pin.isDisabled()).toBe(false);
           await pin.click();
-          await ownRow.getByRole("button", { name: "Unpin session", exact: true }).waitFor();
+          await button(ownRow, "Unpin session").waitFor();
         }
         const pinRef = `session:${own.key}`;
         await expect
@@ -369,27 +321,16 @@ suite.define(() => {
               ]
             : [],
         );
-      } catch (error) {
-        await captureControlUiE2eFailureDiagnostics(page, {
-          error: error instanceof Error ? error : new Error(String(error)),
-          label: `session-read-organization-${name}`,
-        });
-        throw error;
-      } finally {
-        await context.close();
-        if (video) {
-          await video.saveAs(path.join(suite.artifactDir, `${name}-read-organization.webm`));
-        }
-      }
+      });
     },
   );
 
   it("lets write-scoped operators delete archived sessions with archivedOnly", async () => {
-    const { context, deleteAll, gateway, page } = await openArchivedPage([
-      "operator.read",
-      "operator.write",
-    ]);
-    try {
+    return suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const { deleteAll, gateway } = await openArchivedPage(page, [
+        "operator.read",
+        "operator.write",
+      ]);
       await expect.poll(() => deleteAll.isEnabled()).toBe(true);
       await deleteAll.click();
       await confirmDelete(page);
@@ -401,19 +342,15 @@ suite.define(() => {
           key: archived.key,
         },
       });
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("keeps archived deletion disabled for read-scoped operators", async () => {
-    const { context, deleteAll, gateway } = await openArchivedPage(["operator.read"]);
-    try {
+    return suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const { deleteAll, gateway } = await openArchivedPage(page, ["operator.read"]);
       await expect.poll(() => deleteAll.isDisabled()).toBe(true);
       await deleteAll.click({ force: true });
       expect(await gateway.getRequests("sessions.delete")).toHaveLength(0);
-    } finally {
-      await context.close();
-    }
+    });
   });
 });

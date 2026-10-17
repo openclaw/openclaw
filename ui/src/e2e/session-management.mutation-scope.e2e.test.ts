@@ -1,15 +1,14 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
-  installMutationScopeDiagnostics,
-  logMutationScopeRequests,
-} from "./session-management.mutation-scope.test-support.ts";
+  button,
+  menuItem,
+  switchAgent,
+  visible,
+} from "./session-management.compact.test-support.ts";
 import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
@@ -30,99 +29,90 @@ suite.define(() => {
   ] as const)(
     "keeps $filter rows, pagination, and updates after another agent's $operation settles",
     async ({ operation, filter }) => {
-      const artifactDir = createControlUiE2eArtifactDir("session-mutation-scope");
-      const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-      const page = await context.newPage();
-      await page.clock.install();
-      const original = sessionRow("agent:main:rename-cross-agent", "Original name", 3);
-      const batch = [original, sessionRow("agent:main:batch-sibling", "Batch sibling", 2)];
-      const mainRows = [sessionRow("agent:main:main", "Main", 1), ...batch];
-      const pageSize = SIDEBAR_SESSION_ROSTER_LIMIT;
-      const researchRows = [
-        sessionRow("agent:research:main", "Research", pageSize + 4),
-        sessionRow("agent:research:first", "Research first", pageSize + 3),
-        sessionRow("agent:research:second", "Research second", 2),
-      ];
-      // Scheduled sessions occupy the server page while normal sidebar filters hide them.
-      const scheduledRows = Array.from({ length: pageSize - 2 }, (_, index) =>
-        sessionRow(
-          `agent:research:cron:history-${index}`,
-          `Scheduled session ${index}`,
-          pageSize + 2 - index,
-        ),
-      );
-      const researchInventory = [
-        researchRows[0]!,
-        researchRows[1]!,
-        ...scheduledRows,
-        researchRows[2]!,
-      ];
-      const retainedLimit = researchInventory.length + 1;
-      const pageResponse = (rows: typeof researchRows, offset: number, limit: number) => {
-        const pageRows = rows.slice(offset, offset + limit);
-        const nextOffset = offset + pageRows.length;
-        const hasMore = nextOffset < rows.length;
-        return {
-          ...sessionsListResponse(pageRows, {
-            offset,
-            totalCount: rows.length,
-            hasMore,
-            nextOffset: hasMore ? nextOffset : null,
-          }),
-          limitApplied: limit,
+      return suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        await page.clock.install();
+        const original = sessionRow("agent:main:rename-cross-agent", "Original name", 3);
+        const batch = [original, sessionRow("agent:main:batch-sibling", "Batch sibling", 2)];
+        const mainRows = [sessionRow("agent:main:main", "Main", 1), ...batch];
+        const pageSize = SIDEBAR_SESSION_ROSTER_LIMIT;
+        const researchRows = [
+          sessionRow("agent:research:main", "Research", pageSize + 4),
+          sessionRow("agent:research:first", "Research first", pageSize + 3),
+          sessionRow("agent:research:second", "Research second", 2),
+        ];
+        // Scheduled sessions occupy the server page while normal sidebar filters hide them.
+        const scheduledRows = Array.from({ length: pageSize - 2 }, (_, index) =>
+          sessionRow(
+            `agent:research:cron:history-${index}`,
+            `Scheduled session ${index}`,
+            pageSize + 2 - index,
+          ),
+        );
+        const researchInventory = [
+          researchRows[0]!,
+          researchRows[1]!,
+          ...scheduledRows,
+          researchRows[2]!,
+        ];
+        const retainedLimit = researchInventory.length + 1;
+        const pageResponse = (rows: typeof researchRows, offset: number, limit: number) => {
+          const pageRows = rows.slice(offset, offset + limit);
+          const nextOffset = offset + pageRows.length;
+          const hasMore = nextOffset < rows.length;
+          return {
+            ...sessionsListResponse(pageRows, {
+              offset,
+              totalCount: rows.length,
+              hasMore,
+              nextOffset: hasMore ? nextOffset : null,
+            }),
+            limitApplied: limit,
+          };
         };
-      };
-      const responseFor = (rows: typeof researchRows) => ({
-        cases: [
-          ...[pageSize, retainedLimit].map((offset) => ({
-            match: { agentId: "research", offset },
-            response: pageResponse(rows, offset, pageSize),
-          })),
-          ...[retainedLimit, retainedLimit + 1].map((limit) => ({
-            match: { agentId: "research", limit },
-            response: pageResponse(rows, 0, limit),
-          })),
-          {
-            match: { agentId: "research" },
-            response: pageResponse(rows, 0, pageSize),
+        const responseFor = (rows: typeof researchRows) => ({
+          cases: [
+            ...[pageSize, retainedLimit].map((offset) => ({
+              match: { agentId: "research", offset },
+              response: pageResponse(rows, offset, pageSize),
+            })),
+            ...[retainedLimit, retainedLimit + 1].map((limit) => ({
+              match: { agentId: "research", limit },
+              response: pageResponse(rows, 0, limit),
+            })),
+            {
+              match: { agentId: "research" },
+              response: pageResponse(rows, 0, pageSize),
+            },
+            { response: sessionsListResponse(mainRows) },
+          ],
+        });
+        const gateway = await installMockGateway(page, {
+          sessions: [...mainRows, ...researchInventory],
+          sessionKey: original.key,
+          sessionArchiveFiltering: true,
+          methodResponses: {
+            "agents.list": {
+              agents: [
+                { id: "main", name: "Main" },
+                { id: "research", name: "Research" },
+              ],
+              defaultId: "main",
+              mainKey: "main",
+              scope: "agent",
+            },
+            "sessions.list": responseFor(researchInventory),
           },
-          { response: sessionsListResponse(mainRows) },
-        ],
-      });
-      const gateway = await installMockGateway(page, {
-        sessions: [...mainRows, ...researchInventory],
-        sessionKey: original.key,
-        sessionArchiveFiltering: true,
-        methodResponses: {
-          "agents.list": {
-            agents: [
-              { id: "main", name: "Main" },
-              { id: "research", name: "Research" },
-            ],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
-          "sessions.list": responseFor(researchInventory),
-        },
-      });
-      const sidebar = page.locator("openclaw-app-sidebar");
-      const rowFor = (key: string) =>
-        sidebar.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
-      const capture = (stage: string) =>
-        page.screenshot({ path: path.join(artifactDir, `${stage}.png`) });
-      const selectResearchAgent = async () => {
-        await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-        await sidebar
-          .locator(".sidebar-agent-menu")
-          .getByRole("menuitem", { name: "Research", exact: true })
-          .click();
-      };
-      let researchHistory: { url: string; connections: number } | null = null;
-      try {
+        });
+        const sidebar = page.locator("openclaw-app-sidebar");
+        const rowFor = (key: string) =>
+          sidebar.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+
+        const selectResearchAgent = () => switchAgent(sidebar, "Research");
+        let researchHistory: { url: string; connections: number } | null = null;
+
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, original.key));
-        await rowFor(original.key).waitFor({ state: "visible" });
-        await installMutationScopeDiagnostics(page, { operation, filter });
+        await visible(rowFor(original.key));
+
         if (operation === "rename" && filter === "All") {
           // A submitted sidebar rename owns its modal until the response settles.
           // Prepare real same-document history so browser navigation can change
@@ -139,11 +129,11 @@ suite.define(() => {
               (url.pathname === researchPath || url.pathname.startsWith(`${researchPath}/`)) &&
               url.search === "",
           );
-          await rowFor(researchRows[1]!.key).waitFor({ state: "visible" });
+          await visible(rowFor(researchRows[1]!.key));
           researchHistory = { url: page.url(), connections };
           await page.goBack();
           await page.waitForURL(originalUrl);
-          await rowFor(original.key).waitFor({ state: "visible" });
+          await visible(rowFor(original.key));
         }
         if (filter === "All") {
           if (operation === "rename") {
@@ -160,11 +150,9 @@ suite.define(() => {
         if (operation === "rename") {
           if (filter === "All") {
             await rowFor(original.key).click({ button: "right" });
-            await page.getByRole("menuitem", { name: "Rename…", exact: true }).click();
+            await menuItem(page, "Rename…").click();
           } else {
-            await page
-              .getByRole("button", { name: "Rename session Original name", exact: true })
-              .click();
+            await button(page, "Rename session Original name").click();
           }
           const input = page.locator(
             filter === "All"
@@ -189,10 +177,11 @@ suite.define(() => {
             await rowFor(row.key).click({ modifiers: ["Alt"] });
           }
           await rowFor(original.key).click({ button: "right" });
-          await page
-            .locator("openclaw-session-menu")
-            .getByRole("menuitem", { name: "Archive 2", exact: true })
-            .waitFor({ state: "visible" });
+          await visible(
+            page
+              .locator("openclaw-session-menu")
+              .getByRole("menuitem", { name: "Archive 2", exact: true }),
+          );
           await page.keyboard.press("A");
           const request = await gateway.waitForRequest(method);
           expect(request.params).toMatchObject({
@@ -211,11 +200,9 @@ suite.define(() => {
         } else {
           await selectResearchAgent();
         }
-        await rowFor(researchRows[1]!.key).waitFor({ state: "visible" });
-        await sidebar
-          .getByRole("button", { name: "Load more sessions", exact: true })
-          .waitFor({ state: "visible" });
-        await capture("before-mutation-response");
+        await visible(rowFor(researchRows[1]!.key));
+        await visible(sidebar.getByRole("button", { name: "Load more sessions", exact: true }));
+
         const listsBefore = (
           await gateway.getRequests("sessions.list", { agentId: "main", includeGlobal: true })
         ).length;
@@ -245,13 +232,13 @@ suite.define(() => {
             .poll(() => page.locator(".app-toast").textContent())
             .toContain("Archived 2 sessions");
         }
-        await capture("after-mutation-response");
+
         if (filter === "All") {
           expect(await gateway.getRequests("sessions.list", filteredMatch)).toHaveLength(
             filteredReadsBefore,
           );
         }
-        await rowFor(researchRows[1]!.key).waitFor({ state: "visible" });
+        await visible(rowFor(researchRows[1]!.key));
         const newRow = sessionRow(
           "agent:research:new-after-completion",
           "Research new after completion",
@@ -278,25 +265,21 @@ suite.define(() => {
           match: researchMatch,
           after: readsBeforeEvent,
         });
-        await rowFor(newRow.key).waitFor({ state: "visible" });
-        await capture("after-selected-agent-update");
-        await sidebar.getByRole("button", { name: "Load more sessions", exact: true }).click();
+        await visible(rowFor(newRow.key));
+
+        await button(sidebar, "Load more sessions").click();
         await gateway.waitForRequest("sessions.list", {
           match: { agentId: "research", offset: pageSize },
         });
-        await rowFor(researchRows[2]!.key).waitFor({ state: "visible" });
-        await capture("after-pagination");
-        await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-        await sidebar
-          .locator(".sidebar-agent-menu")
-          .getByRole("menuitem", { name: "Main", exact: true })
-          .click();
+        await visible(rowFor(researchRows[2]!.key));
+
+        await switchAgent(sidebar, "Main");
         if (operation === "rename") {
           await expect.poll(() => rowFor(original.key).textContent()).toContain("Renamed original");
         } else if (filter === "Active") {
           await expect.poll(() => rowFor(original.key).count()).toBe(0);
         } else {
-          await rowFor(original.key).waitFor({ state: "visible" });
+          await visible(rowFor(original.key));
         }
         // An older conversation discovered while away must extend even a retained page window.
         const olderRow = sessionRow("agent:research:older", "Research older conversation", 1);
@@ -309,11 +292,7 @@ suite.define(() => {
         });
         const readsBeforeReturn = (await gateway.getRequests("sessions.list", researchMatch))
           .length;
-        await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-        await sidebar
-          .locator(".sidebar-agent-menu")
-          .getByRole("menuitem", { name: "Research", exact: true })
-          .click();
+        await selectResearchAgent();
         const returnedList = await gateway.waitForRequest("sessions.list", {
           match: researchMatch,
           after: readsBeforeReturn,
@@ -321,13 +300,13 @@ suite.define(() => {
         expect(returnedList.params).toMatchObject({
           limit: filter === "All" ? pageSize : retainedLimit,
         });
-        await rowFor(newRow.key).waitFor({ state: "visible" });
+        await visible(rowFor(newRow.key));
         await expect.poll(() => rowFor(olderRow.key).count()).toBe(0);
-        await sidebar.getByRole("button", { name: "Load more sessions", exact: true }).click();
+        await button(sidebar, "Load more sessions").click();
         if (filter === "All" && operation === "rename") {
-          await rowFor(researchRows[2]!.key).waitFor({ state: "visible" });
-          await rowFor(olderRow.key).waitFor({ state: "visible" });
-          await capture("retained-before-invalidation");
+          await visible(rowFor(researchRows[2]!.key));
+          await visible(rowFor(olderRow.key));
+
           const readsBeforeInvalidation = (await gateway.getRequests("sessions.list", refreshMatch))
             .length;
           await pauseVirtualClock(page);
@@ -351,12 +330,11 @@ suite.define(() => {
                 .count(),
             )
             .toBe(0);
-          await capture("retained-after-invalidation");
         }
-        await rowFor(researchRows[2]!.key).waitFor({ state: "visible" });
-        await rowFor(olderRow.key).waitFor({ state: "visible" });
+        await visible(rowFor(researchRows[2]!.key));
+        await visible(rowFor(olderRow.key));
         if (filter === "All" && operation === "rename") {
-          await rowFor(researchRows[1]!.key).waitFor({ state: "visible" });
+          await visible(rowFor(researchRows[1]!.key));
           const readsBeforeRemoval = (await gateway.getRequests("sessions.list", refreshMatch))
             .length;
           await gateway.setMethodResponse(
@@ -377,34 +355,10 @@ suite.define(() => {
           });
           expect(refresh.params).toMatchObject({ limit: retainedLimit + 1 });
           await rowFor(researchRows[1]!.key).waitFor({ state: "hidden" });
-          await rowFor(researchRows[2]!.key).waitFor({ state: "visible" });
-          await rowFor(olderRow.key).waitFor({ state: "visible" });
-          await capture("retained-after-membership-removal");
+          await visible(rowFor(researchRows[2]!.key));
+          await visible(rowFor(olderRow.key));
         }
-      } finally {
-        await capture("final-state");
-        const listRequests = await gateway.getRequests("sessions.list");
-        logMutationScopeRequests(listRequests, { operation, filter });
-        await writeFile(
-          path.join(artifactDir, "observations.json"),
-          JSON.stringify(
-            {
-              url: page.url(),
-              rows: await sidebar.locator(".sidebar-recent-session").allTextContents(),
-              listRequests: listRequests.map(({ params }) => params),
-              patchRequests: (await gateway.getRequests("sessions.patch")).map(
-                ({ params }) => params,
-              ),
-              batchRequests: (await gateway.getRequests("sessions.patchMany")).map(
-                ({ params }) => params,
-              ),
-            },
-            null,
-            2,
-          ),
-        );
-        await context.close();
-      }
+      });
     },
   );
 });

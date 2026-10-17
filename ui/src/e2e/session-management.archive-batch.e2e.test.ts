@@ -2,9 +2,9 @@ import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { button, menuItem, visible } from "./session-management.compact.test-support.ts";
 import {
   activateSelfRemovingControl,
-  captureUiProof,
   controlUiSessionPath,
   createSessionManagementE2eSuite,
   installMockGateway,
@@ -23,34 +23,32 @@ suite.define(() => {
     "Undo without restore events",
     "Undo with failed refresh",
   ] as const)("reconciles batch archive acknowledgements with %s", async (scenario) => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
-    const batchKeys = ["agent:main:batch-a", "agent:main:batch-b", "agent:main:batch-c"] as const;
-    const batchRows = [
-      sessionRow(batchKeys[0], "Batch A", baseTime - 1_000, {
-        pinned: true,
-        pinnedAt: baseTime - 1_000,
-      }),
-      sessionRow(batchKeys[1], "Batch B", baseTime - 2_000, {
-        hasActiveRun: true,
-        status: "running",
-      }),
-      sessionRow(batchKeys[2], "Batch C", baseTime - 3_000),
-    ];
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["sessions.patchMany"],
-      methodResponses: {
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:main", "Main", baseTime),
-          ...batchRows,
-        ]),
-      },
-      sessionArchiveFiltering: true,
-      sessionKey: "agent:main:main",
-    });
+    return suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+      const batchKeys = ["agent:main:batch-a", "agent:main:batch-b", "agent:main:batch-c"] as const;
+      const batchRows = [
+        sessionRow(batchKeys[0], "Batch A", baseTime - 1_000, {
+          pinned: true,
+          pinnedAt: baseTime - 1_000,
+        }),
+        sessionRow(batchKeys[1], "Batch B", baseTime - 2_000, {
+          hasActiveRun: true,
+          status: "running",
+        }),
+        sessionRow(batchKeys[2], "Batch C", baseTime - 3_000),
+      ];
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["sessions.patchMany"],
+        methodResponses: {
+          "sessions.list": sessionsListResponse([
+            sessionRow("agent:main:main", "Main", baseTime),
+            ...batchRows,
+          ]),
+        },
+        sessionArchiveFiltering: true,
+        sessionKey: "agent:main:main",
+      });
 
-    try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const sidebar = page.locator("openclaw-app-sidebar");
       const rowFor = (key: string) =>
@@ -68,9 +66,9 @@ suite.define(() => {
           },
           batchKeys[0],
         );
-      await rowFor(batchKeys[0]).waitFor({ state: "visible", timeout: 10_000 });
+      await visible(rowFor(batchKeys[0]), 10_000);
       for (const key of batchKeys.slice(1)) {
-        await rowFor(key).waitFor({ state: "visible" });
+        await visible(rowFor(key));
       }
       expect(await readPinnedSessionState()).toEqual({
         archived: false,
@@ -78,11 +76,7 @@ suite.define(() => {
         pinnedAt: baseTime - 1_000,
       });
       // A legacy shared pin is not a personal navigation preference.
-      expect(
-        await rowFor(batchKeys[0])
-          .getByRole("button", { name: "Pin session", exact: true })
-          .count(),
-      ).toBe(1);
+      expect(await button(rowFor(batchKeys[0]), "Pin session").count()).toBe(1);
       const listCountBeforeBatch = (await gateway.getRequests("sessions.list", rosterMatch)).length;
 
       for (const key of batchKeys) {
@@ -90,34 +84,29 @@ suite.define(() => {
       }
       await rowFor(batchKeys[0]).click({ button: "right" });
       const batchMenu = page.locator("openclaw-session-menu");
-      const archiveItem = batchMenu.getByRole("menuitem", {
-        name: `Archive ${batchKeys.length}`,
-      });
-      await archiveItem.waitFor({ state: "visible", timeout: 10_000 });
+      const archiveItem = menuItem(batchMenu, `Archive ${batchKeys.length}`, false);
+      await visible(archiveItem, 10_000);
       expect(await archiveItem.isDisabled()).toBe(false);
-      expect(
-        await batchMenu.getByRole("menuitem", { name: `Delete ${batchKeys.length}…` }).isDisabled(),
-      ).toBe(true);
-      await captureUiProof(suite, page, "sidebar-multi-select-archive-menu.png");
+      expect(await menuItem(batchMenu, `Delete ${batchKeys.length}…`, false).isDisabled()).toBe(
+        true,
+      );
+
       await page.keyboard.press("A");
       let confirm = await waitForConfirmModal(page);
       await confirm.getByText("This selection contains active work.", { exact: false }).waitFor();
-      await captureUiProof(suite, page, "sidebar-multi-select-archive-confirm.png");
+
       expect(await gateway.getRequests("sessions.patchMany")).toEqual([]);
       if (scenario === "refreshed") {
-        await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+        await button(confirm, "Cancel").click();
         for (const key of batchKeys) {
-          await rowFor(key).waitFor({ state: "visible" });
+          await visible(rowFor(key));
         }
         expect(await gateway.getRequests("sessions.patchMany")).toEqual([]);
         await rowFor(batchKeys[0]).click({ button: "right" });
-        await page
-          .locator("openclaw-session-menu")
-          .getByRole("menuitem", { name: "Archive 3" })
-          .click();
+        await menuItem(page.locator("openclaw-session-menu"), "Archive 3", false).click();
         confirm = await waitForConfirmModal(page);
       }
-      await confirm.getByRole("button", { name: "Archive 3", exact: true }).click();
+      await button(confirm, "Archive 3").click();
 
       const patchMany = await gateway.waitForRequest("sessions.patchMany");
       for (const key of batchKeys) {
@@ -125,7 +114,7 @@ suite.define(() => {
       }
       expect(await page.locator(".app-toast").count()).toBe(0);
       expect(await gateway.getRequests("sessions.patchMany")).toHaveLength(1);
-      await captureUiProof(suite, page, "sidebar-multi-select-archive-pending.png");
+
       if (scenario !== "refreshed") {
         await gateway.deferNext("sessions.list", rosterMatch);
       }
@@ -175,9 +164,7 @@ suite.define(() => {
       }
       const toast = page.locator(".app-toast");
       await expect.poll(() => toast.textContent()).toContain("Archived 3 sessions");
-      if (scenario === "failed refresh" || scenario === "Undo with failed refresh") {
-        await captureUiProof(suite, page, "batch-archive-failed-readback.png");
-      }
+
       for (const key of batchKeys) {
         await expect.poll(() => rowFor(key).count()).toBe(0);
       }
@@ -193,7 +180,7 @@ suite.define(() => {
       } else {
         await expect.poll(() => page.locator("[data-sidebar-session-error]").count()).toBe(0);
       }
-      await captureUiProof(suite, page, "sidebar-multi-select-archive-settled.png");
+
       if (scenario === "refreshed") {
         await page.waitForTimeout(500);
         expect((await gateway.getRequests("sessions.list", rosterMatch)).length).toBe(
@@ -207,7 +194,7 @@ suite.define(() => {
           .length;
         await gateway.deferNext("sessions.patchMany");
         await gateway.deferNext("sessions.list", rosterMatch);
-        await activateSelfRemovingControl(toast.getByRole("button", { name: "Undo", exact: true }));
+        await activateSelfRemovingControl(button(toast, "Undo"));
         const undo = await gateway.waitForRequest("sessions.patchMany", { after: 1 });
         expect(requireRecord(undo.params)).toEqual({
           targets: patchManyParams.targets,
@@ -242,29 +229,20 @@ suite.define(() => {
         } else {
           await gateway.resolveDeferred("sessions.list");
         }
-        try {
-          for (const key of batchKeys) {
-            await expect.poll(() => rowFor(key).count()).toBe(1);
-          }
-          await expect.poll(readPinnedSessionState).toMatchObject({
-            archived: false,
-            pinned: false,
-            pinnedAt: undefined,
-          });
-          expect(
-            await rowFor(batchKeys[0])
-              .getByRole("button", { name: "Pin session", exact: true })
-              .count(),
-          ).toBe(1);
-          expect(await gateway.getRequests("sessions.patchMany")).toHaveLength(2);
-          expect(await gateway.getRequests("sessions.patch")).toEqual([]);
-          expect(new URL(page.url()).pathname).toBe(controlUiSessionPath("agent:main:main"));
-        } finally {
-          await captureUiProof(suite, page, "batch-archive-undo-without-events.png");
+
+        for (const key of batchKeys) {
+          await expect.poll(() => rowFor(key).count()).toBe(1);
         }
+        await expect.poll(readPinnedSessionState).toMatchObject({
+          archived: false,
+          pinned: false,
+          pinnedAt: undefined,
+        });
+        expect(await button(rowFor(batchKeys[0]), "Pin session").count()).toBe(1);
+        expect(await gateway.getRequests("sessions.patchMany")).toHaveLength(2);
+        expect(await gateway.getRequests("sessions.patch")).toEqual([]);
+        expect(new URL(page.url()).pathname).toBe(controlUiSessionPath("agent:main:main"));
       }
-    } finally {
-      await context.close();
-    }
+    });
   });
 });
