@@ -124,6 +124,8 @@ A timed one-shot job that is disabled after a permanent failure or exhausted ret
 
 Repeated failures with the same cause form one incident and do not send repeated alerts, even after the cooldown expires or the Gateway restarts. A changed cause or destination can send a new alert after the cooldown. A successful run clears the incident and its cooldown without sending a notification, so the next failure can alert again; the recovery stays visible in automation history. Skipped runs and unknown delivery outcomes do not establish recovery. A successful quiet trigger check can recover a trigger failure, but cannot establish that a previously failed payload has recovered.
 
+If the host clock moves backward and the saved alert timestamp is now in the future, that timestamp does not suppress an otherwise eligible alert for a changed incident. The new alert records the current time and starts a fresh cooldown. Repeated failures in the same incident remain deduplicated.
+
 Startup recovery reconciles incidents from saved run outcomes without sending historical notifications. A saved successful run clears the old incident even if its job-state update was interrupted, so a later recurrence can alert again.
 
 Failure notification routes resolve in this order:
