@@ -239,6 +239,30 @@ describe("exec foreground failures", () => {
     },
   );
 
+  it("does not report an exit with no captured exit code as a completed run", async () => {
+    // A supervisor that observes an exit without any status (PTY hosts that
+    // close without reporting one) labels the reason "exit" with a null code.
+    // No exit code is not evidence of success.
+    mockSpawn({ reason: "exit", exitCode: null, exitSignal: null });
+    const tool = fullExec();
+
+    const result = await tool.execute("call-exit-without-code", {
+      command: "echo never-runs",
+      host: "gateway",
+    });
+
+    const text = requireTextContent(result);
+    expect(text).toContain("Command aborted before exit code was captured");
+    const details = requireFailedDetails(result.details);
+    expect(details).toMatchObject({
+      status: "failed",
+      exitCode: null,
+      failureKind: "aborted",
+      exitReason: "exit",
+      timedOut: false,
+    });
+  });
+
   it("returns a failed result for unavailable explicit host workdirs before launching", async () => {
     const missingWorkdir = path.join(
       os.tmpdir(),
