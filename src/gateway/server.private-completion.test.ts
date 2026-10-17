@@ -1,5 +1,6 @@
 // Real Gateway admission and SQLite receipts with a controlled agent command.
 import path from "node:path";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
@@ -172,7 +173,7 @@ describe("private subagent completion processing receipts", () => {
     expect((await rpcReq(ws, "sessions.messages.subscribe", { key: sessionKey })).ok).toBe(true);
     const frames: unknown[] = [];
     const followupDelivery: Array<boolean | undefined> = [];
-    ws.on("message", (frame) => frames.push(JSON.parse(frame.toString())));
+    ws.on("message", (frame) => frames.push(JSON.parse(rawDataToString(frame))));
     const privateText = "Internal review note after the permitted message-tool update";
     const publicText = "The next ordinary answer is visible";
     agentCommandMock.mockImplementation(async (input) => {
@@ -205,9 +206,9 @@ describe("private subagent completion processing receipts", () => {
       });
       emitAgentEvent({ runId: currentRunId, stream: "lifecycle", data: { phase: "end" } });
       return {
-        payloads: [{ text }],
+        payloads: [{ text, mediaUrl: null }],
         meta: { durationMs: 1, terminalReply: { disposition: "visible", text } },
-      } satisfies EmbeddedAgentRunResult;
+      } satisfies Awaited<ReturnType<typeof agentCommandMock>>;
     });
     expect(await dispatch()).toMatchObject({ status: "ok" });
     const nextRunId = `ordinary-after-${runId}`;
