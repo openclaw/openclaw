@@ -1,12 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
-import type { DatabaseSync, StatementSync as NativeStatement } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
@@ -132,49 +131,11 @@ it.for(["cold", "warm-cap", "removal"] as const)(
       vi.spyOn(maintenanceKick, "kickSessionEntryMaintenanceAfterWrite").mockImplementation(
         (request) => observation.run(true, () => kick(request)),
       );
-      const { DatabaseSync, StatementSync } = requireNodeSqlite();
-      const emptyCounts = { prepare: 0, exec: 0, get: 0, all: 0, run: 0, iterate: 0 };
-      const counts = { ...emptyCounts };
-      const preparedSql: string[] = [];
-      const executedSql: string[] = [];
-      // oxlint-disable-next-line typescript/unbound-method -- Forward the native operation with its exact database receiver.
-      const originalPrepare = DatabaseSync.prototype.prepare;
-      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(
-        new Proxy(originalPrepare, {
-          apply(target, receiver: DatabaseSync, args) {
-            if (observation.getStore()) {
-              counts.prepare += 1;
-              preparedSql.push(args[0]);
-            }
-            return Reflect.apply(target, receiver, args);
-          },
-        }),
-      );
-      // oxlint-disable-next-line typescript/unbound-method -- Forward the native operation with its exact database receiver.
-      const originalExec = DatabaseSync.prototype.exec;
-      const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(
-        new Proxy(originalExec, {
-          apply(target, receiver: DatabaseSync, args) {
-            if (observation.getStore()) {
-              counts.exec += 1;
-            }
-            return Reflect.apply(target, receiver, args);
-          },
-        }),
-      );
-      const statements = (["get", "all", "run", "iterate"] as const).map((method) => {
-        const original = StatementSync.prototype[method];
-        return vi.spyOn(StatementSync.prototype, method).mockImplementation(
-          new Proxy(original, {
-            apply(target, receiver: NativeStatement, args) {
-              if (observation.getStore()) {
-                counts[method] += 1;
-                executedSql.push(receiver.sourceSQL);
-              }
-              return Reflect.apply(target, receiver, args);
-            },
-          }),
-        );
+      const parentSql: string[] = [];
+      const sql = observeHostDataSql((query) => {
+        if (observation.getStore()) {
+          parentSql.push(query);
+        }
       });
       const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
         capture: () => (scenario === "warm-cap" ? [protectedEntry.sessionKey] : []),
@@ -189,19 +150,16 @@ it.for(["cold", "warm-cap", "removal"] as const)(
           return await racePromiseWithAbortSignal(completed, signal);
         } finally {
           unregister();
-          prepare.mockRestore();
-          exec.mockRestore();
-          statements.forEach((spy) => spy.mockRestore());
+          sql.restore();
         }
       })();
-      console.info("automatic-maintenance parent SQL", { scenario, ...counts });
       expect(
-        [...preparedSql, ...executedSql].filter((query) =>
+        parentSql.filter((query) =>
           /(?:from|update|into) "(?:session_nodes|session_transcript_archives)"/iu.test(query),
         ),
       ).toEqual([]);
       if (!remove) {
-        expect(counts).toEqual(emptyCounts);
+        expect(parentSql).toEqual([]);
       }
       expect(planningPhases).toEqual(["prepared", "planning"]);
       expect(workerThreadIds[0]).toBeGreaterThan(0);
