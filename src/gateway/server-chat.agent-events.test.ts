@@ -1356,6 +1356,12 @@ describe("agent event handler", () => {
   it("does not duplicate tool events to clients subscribed by run and session", async () => {
     const runId = "provider-tool";
     const sessionKey = "session-dedupe";
+    loadGatewaySessionRow.mockReturnValue({
+      key: sessionKey,
+      sessionId: "session-dedupe-id",
+      label: "Tool session",
+      lastAssistantMessage: "Previous answer",
+    });
     const h = createHarness({ resolveSessionKeyForRun: () => sessionKey });
     h.register(runId, sessionKey, "client-tool", { agentId: "work" });
     registerAgentRunContext(runId, { sessionKey, verboseLevel: "off" });
@@ -1385,6 +1391,18 @@ describe("agent event handler", () => {
       ["agent", "client-tool", "work", new Set(["conn-overlap", "conn-run-only"])],
       ["session.tool", "client-tool", "work", new Set(["conn-session-only"])],
     ]);
+    const mirror = h.broadcastToConnIds.mock.calls.find(([event]) => event === "session.tool")?.[1];
+    expect(mirror).toMatchObject({
+      sessionKey,
+      runId: "client-tool",
+      agentId: "work",
+      stream: "tool",
+      data: { phase: "start", args: { command: "echo hi" } },
+    });
+    // Roster publications own metadata; live tool mirrors carry only tool activity.
+    expect(mirror).not.toHaveProperty("session");
+    expect(mirror).not.toHaveProperty("label");
+    expect(mirror).not.toHaveProperty("lastAssistantMessage");
   });
 
   it("suppresses heartbeat tool events for Control UI and verbose node subscribers", async () => {

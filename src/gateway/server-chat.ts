@@ -1393,15 +1393,10 @@ export function createAgentEventHandler({
           sessionSubscribers.delete(connId);
         }
         if (sessionSubscribers.size > 0) {
-          broadcastToConnIds(
-            "session.tool",
-            {
-              ...agentPayload,
-              ...buildSessionEventSnapshot(sessionKey, undefined, sessionAgentId),
-            },
-            sessionSubscribers,
-            { dropIfSlow: true, liveText: liveTextDelivery(chatRunState, clientRunId) },
-          );
+          broadcastToConnIds("session.tool", agentPayload, sessionSubscribers, {
+            dropIfSlow: true,
+            liveText: liveTextDelivery(chatRunState, clientRunId),
+          });
         }
       }
     } else {
