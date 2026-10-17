@@ -313,9 +313,9 @@ it("preserves a terminal receipt recorded under the interrupted continuation's s
 
     expect(await markOrphans({ stateDir: state.stateDir })).toEqual({ marked: 0, skipped: 0 });
     const saved = loadSessionEntry(target);
+    expect(saved?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(saved?.mainRestartRecovery).toBeUndefined();
     expect(saved).toMatchObject({
-      restartRecoveryDeliveryRunId: undefined,
-      mainRestartRecovery: undefined,
       restartRecoveryTerminalRunIds: ["completed-source", runId],
       restartRecoveryTerminalDeliveryEvidence: [
         expect.objectContaining({ runId: "completed-source", transcriptRunId: runId }),
