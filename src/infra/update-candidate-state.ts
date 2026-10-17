@@ -85,13 +85,15 @@ type CandidateStateDatabase = Pick<
   "agent_databases" | "agent_database_leases" | "state_leases"
 >;
 
-const UpdateCandidateStateInventorySchema = z
-  .array(z.tuple([z.string(), StateDatabaseDiscoverySchema]))
-  .transform((entries) => new Map(entries));
 export const UpdateCandidateSnapshotInventorySchema = z.object({
-  databases: UpdateCandidateStateInventorySchema,
+  databases: z
+    .array(z.tuple([z.string(), StateDatabaseDiscoverySchema]))
+    .transform((entries) => new Map(entries)),
   pluginBytes: z.number().nonnegative(),
   pluginPlan: z.literal(UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME),
+  // The installed driver budgets the candidate worker's copy lifecycle.
+  // Omission retains the larger allowance used by released older workers.
+  snapshotSpace: z.literal("single-generation").optional(),
   // Published candidate workers before named snapshot warnings omit this field.
   warnings: z.array(z.string()).default([]),
 });

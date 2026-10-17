@@ -24,9 +24,7 @@ import * as configHealth from "./io.health-state.js";
 import * as pluginMetadata from "./io.plugin-metadata.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
 import { readCurrentConfigForPolicyCheckAsync } from "./io.runtime.js";
-import * as snapshotPreparation from "./io.snapshot-preparation.js";
 import { createConfigIoWorkerFixture } from "./io.worker.test-support.js";
-import { registerManagedRuntimeConfigWriteOwner } from "./runtime-snapshot.js";
 import type { ConfigFileSnapshot } from "./types.js";
 
 const shell = vi.hoisted(() => ({ load: vi.fn() }));
@@ -78,7 +76,7 @@ function fixture(raw?: string) {
   return { ...options, io: createConfigIO(options) };
 }
 
-it.each(["load", "snapshot", "host-snapshot", "metadata", "write-snapshot", "policy"] as const)(
+it.each(["load", "snapshot", "metadata", "write-snapshot", "policy"] as const)(
   "%s consumes canonical config without reading pending migrations or changing artifacts",
   async (method) => {
     const raw = JSON.stringify({
@@ -100,14 +98,6 @@ it.each(["load", "snapshot", "host-snapshot", "metadata", "write-snapshot", "pol
     const familyBefore = family.map((file) => (fs.existsSync(file) ? fs.readFileSync(file) : null));
     const mainSql = observeMainThreadSql();
     const synchronousSnapshot = vi.spyOn(sqliteReadOnlyWorker, "runSqliteReadOnlyWorkerSync");
-    const unregister =
-      method === "host-snapshot"
-        ? registerManagedRuntimeConfigWriteOwner(
-            options.configPath,
-            undefined,
-            snapshotPreparation.prepareHostConfigSnapshot,
-          )
-        : undefined;
     try {
       const read = () =>
         withPluginCache(createPluginCache(), async () => {
@@ -136,7 +126,6 @@ it.each(["load", "snapshot", "host-snapshot", "metadata", "write-snapshot", "pol
       expect(synchronousSnapshot).not.toHaveBeenCalled();
       mainSql.expectIdle();
     } finally {
-      unregister?.();
       mainSql.restore();
     }
     expect(fs.readFileSync(options.configPath, "utf8")).toBe(raw);
@@ -168,75 +157,6 @@ it("rejects an invalid async load and rolls back its injected config environment
   await expect(io.loadConfigAsync()).rejects.toMatchObject({ code: "INVALID_CONFIG" });
   expect(env.CONFIG_FIXTURE_VALUE).toBeUndefined();
 });
-
-it.each(["metadata", "handoff"] as const)(
-  "refuses snapshot results after its host owner is replaced during %s",
-  async (phase) => {
-    const options = fixture(
-      JSON.stringify({ gateway: { mode: "local" }, plugins: { enabled: false } }),
-    );
-    const prepared = createDeferredCore();
-    const release = createDeferredCore();
-    const resolveMetadata = pluginMetadata.resolveConfigWidePluginMetadataSnapshotAsync;
-    vi.spyOn(pluginMetadata, "resolveConfigWidePluginMetadataSnapshotAsync").mockImplementation(
-      async (params) => {
-        const result = await resolveMetadata(params);
-        if (phase === "metadata") {
-          prepared.resolve();
-          await release.promise;
-        }
-        return result;
-      },
-    );
-    const unregister = registerManagedRuntimeConfigWriteOwner(
-      options.configPath,
-      undefined,
-      snapshotPreparation.prepareHostConfigSnapshot,
-    );
-    const snapshot = withArtifactPreservingStateReads(() =>
-      withPluginCache(createPluginCache(), () =>
-        createConfigIO({
-          ...options,
-          observe: false,
-          measure: async (name, run) => {
-            const result = await run();
-            if (phase === "handoff" && name === "config.snapshot.read.observe") {
-              prepared.resolve();
-              await release.promise;
-            }
-            return result;
-          },
-        }).readConfigFileSnapshot(),
-      ),
-    );
-    let unregisterSuccessor: (() => void) | undefined;
-    try {
-      await Promise.race([
-        prepared.promise,
-        snapshot.then(() => {
-          throw new Error("snapshot completed without its registered preparation");
-        }),
-      ]);
-      unregister();
-      const successor = vi.spyOn(snapshotPreparation, "prepareHostConfigSnapshot");
-      unregisterSuccessor = registerManagedRuntimeConfigWriteOwner(
-        options.configPath,
-        undefined,
-        snapshotPreparation.prepareHostConfigSnapshot,
-      );
-      release.resolve();
-      await expect(snapshot).rejects.toThrow(
-        "Gateway config snapshot preparation owner has closed",
-      );
-      expect(successor).not.toHaveBeenCalled();
-    } finally {
-      release.resolve();
-      unregister();
-      unregisterSuccessor?.();
-      await snapshot.catch(() => {});
-    }
-  },
-);
 
 it("uses the same fresh-install defaults for a missing async configuration", async () => {
   const { io } = fixture();

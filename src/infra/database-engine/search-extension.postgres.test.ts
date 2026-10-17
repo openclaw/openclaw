@@ -16,7 +16,16 @@ import { openEngineStore, readEngineAnchor } from "./open.js";
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const dirs = useAutoCleanupTempDirTracker(afterAll);
-const tables = ["notes", "archive", "broken", "nested", "drift", "keywords", "keywords_archive"];
+const tables = [
+  "notes",
+  "archive",
+  "broken",
+  "nested",
+  "nested_archive",
+  "drift",
+  "keywords",
+  "keywords_archive",
+];
 const schema: StoreSchema = {
   id: "search_extension",
   version: 1,
@@ -316,6 +325,9 @@ describe.skipIf(!connection)("PostgreSQL search extension admission", () => {
       expect(() =>
         db.runTransaction(() => {
           const admitted = admitStoreSearch(db, selected, { extension: "nested-search" });
+          admitStoreSearch(db, textSchema("nested_archive"), {
+            extension: "nested-archive-search",
+          });
           expect(
             executeSqliteQuerySync(
               db,
@@ -341,7 +353,13 @@ describe.skipIf(!connection)("PostgreSQL search extension admission", () => {
           )
           .get()?.definitions,
       ).not.toEqual(expect.stringContaining("nested-search"));
-      const readmitted = admitStoreSearch(db, selected, { extension: "nested-search" });
+      const readmitted = db.runTransaction(() => {
+        const search = admitStoreSearch(db, selected, { extension: "nested-search" });
+        admitStoreSearch(db, textSchema("nested_archive"), {
+          extension: "nested-archive-search",
+        });
+        return search;
+      });
       expect(
         executeSqliteQuerySync(
           db,
@@ -350,6 +368,11 @@ describe.skipIf(!connection)("PostgreSQL search extension admission", () => {
           ),
         ).rows,
       ).toEqual([{ id: "kept" }]);
+      const definitions = db
+        .prepare("SELECT search_extensions::text AS definitions FROM openclaw_schema_meta")
+        .get()?.definitions;
+      expect(definitions).toEqual(expect.stringContaining("nested-search"));
+      expect(definitions).toEqual(expect.stringContaining("nested-archive-search"));
     });
   });
 

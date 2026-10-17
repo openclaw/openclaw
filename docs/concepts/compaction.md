@@ -20,6 +20,11 @@ Built-in compaction summarizes the older history in one model request, whatever 
 
 The full conversation history stays on disk. Compaction only changes what the model sees on the next turn.
 
+OpenAI Responses native compaction and checkpoint replay follow
+[context-engine compaction ownership](/concepts/context-engine#provider-compaction-ownership),
+including legacy defaults, explicit opt-in, and handling of preexisting checkpoints
+when switching engines.
+
 For direct OpenAI API-key sessions, the `/responses/compact` endpoint can return
 a canonical window of retained messages followed by an encrypted checkpoint.
 OpenClaw preserves that entire window, including retained assistant messages,

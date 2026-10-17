@@ -66,7 +66,6 @@ export function createSettledExecution(finalText = ""): {
       resolved: { provider: "anthropic", model: "claude" },
       fallback: { exhausted: false, attempts: [] },
       autoCompactionCount: 0,
-      didLogHeartbeatStrip: false,
     },
   };
 }

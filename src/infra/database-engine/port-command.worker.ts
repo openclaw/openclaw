@@ -219,10 +219,6 @@ async function stage(
           compare(await inspectPostgres(db, descriptor, task), verification);
           return;
         }
-        await preflight(
-          { operation: "preflight", config: task.config, probe: true, namespace: task.namespace },
-          assertCurrent,
-        );
         using image = openNodeSqliteDatabase(task.sourcePath, {
           readOnly: true,
           readBigInts: true,
@@ -243,10 +239,10 @@ async function stage(
         throw error;
       }
       // COMMIT may have succeeded despite a lost reply; the fresh connection below decides.
+      await withDatabasePortConnection(task.config, async (db) =>
+        compare(await inspectPostgres(db, descriptor, task), verification),
+      );
     }
-    await withDatabasePortConnection(task.config, async (db) =>
-      compare(await inspectPostgres(db, descriptor, task), verification),
-    );
     assertCurrent();
     await fs.writeFile(task.targetPath, "", { flag: "wx", mode: 0o600 });
     using anchor = openNodeSqliteDatabase(task.targetPath);
