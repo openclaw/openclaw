@@ -75,7 +75,12 @@ async function openSkills(page: Page) {
 
 async function waitForMenuFocusHandoff(page: Page, menu: Locator, view: string) {
   await expect.poll(() => menu.getAttribute("data-view")).toBe(view);
-  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      }),
+  );
 }
 
 suite.define(() => {
