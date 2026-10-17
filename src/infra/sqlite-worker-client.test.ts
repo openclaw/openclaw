@@ -62,7 +62,6 @@ it("attributes queued commands without changing wire bytes or exposing private c
   const cases = [
     ["audit.writer.process", "audit.writer.process"],
     ["audit.writer.prune", "audit.writer.prune"],
-    ["database.inspectIdle", "database.inspectIdle"],
     ["stateLease.renew", "stateLease.renew"],
     ["capture.recordEventWithPayload", "capture"],
     ["workerInference.complete", "workerInference"],

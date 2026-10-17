@@ -1,25 +1,18 @@
 import { expect, it } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
-import { SolidPanelController, usePanelController } from "./solid-panel-controller.ts";
+import { SolidPanelOwner, usePanelOwner } from "./solid-panel-owner.ts";
 
 it("keeps panel state synchronous and resolves its render fence after the DOM commit", async () => {
   const container = document.createElement("section");
   document.body.append(container);
-  let panel!: SolidPanelController & { value: number };
-  const lifecycle: string[] = [];
+  let panel!: SolidPanelOwner & { value: number };
   const mounted = mountSolid(
     () => {
-      panel = Object.assign(new SolidPanelController(container), {
+      panel = Object.assign(new SolidPanelOwner(container), {
         value: 0,
       });
-      panel.addController({
-        hostConnected: () => lifecycle.push("connected"),
-        hostUpdate: () => lifecycle.push("prepare"),
-        hostUpdated: () => lifecycle.push("commit"),
-        hostDisconnected: () => lifecycle.push("disconnected"),
-      });
-      usePanelController(panel);
+      usePanelOwner(panel);
       return <output>{panel.read().value}</output>;
     },
     { container },
@@ -27,7 +20,6 @@ it("keeps panel state synchronous and resolves its render fence after the DOM co
   flush();
   await panel.updateComplete;
   expect(panel.isConnected).toBe(true);
-  expect(lifecycle[0]).toBe("connected");
   expect(mounted.container.textContent).toBe("0");
   panel.value = 7;
   panel.invalidate();
@@ -37,18 +29,15 @@ it("keeps panel state synchronous and resolves its render fence after the DOM co
   flush();
   await committed;
   expect(mounted.container.textContent).toBe("7");
-  expect(lifecycle.indexOf("prepare")).toBeLessThan(lifecycle.indexOf("commit"));
   mounted.unmount();
   container.remove();
-  expect(lifecycle.filter((phase) => phase === "connected")).toHaveLength(1);
-  expect(lifecycle.at(-1)).toBe("disconnected");
   expect(panel.isConnected).toBe(false);
 });
 
 it("commits an update requested by the panel's committed-DOM callback", async () => {
   const container = document.createElement("section");
   document.body.append(container);
-  const panel = Object.assign(new SolidPanelController(container), { value: 0 });
+  const panel = Object.assign(new SolidPanelOwner(container), { value: 0 });
   panel.updated = () => {
     if (panel.value === 1) {
       panel.value = 2;
@@ -57,7 +46,7 @@ it("commits an update requested by the panel's committed-DOM callback", async ()
   };
   const mounted = mountSolid(
     () => {
-      usePanelController(panel);
+      usePanelOwner(panel);
       return <output>{panel.read().value}</output>;
     },
     { container },
@@ -74,10 +63,10 @@ it("commits an update requested by the panel's committed-DOM callback", async ()
 it("settles a pending update when its view is disposed", async () => {
   const container = document.createElement("section");
   document.body.append(container);
-  const panel = Object.assign(new SolidPanelController(container), { value: 0 });
+  const panel = Object.assign(new SolidPanelOwner(container), { value: 0 });
   const mounted = mountSolid(
     () => {
-      usePanelController(panel);
+      usePanelOwner(panel);
       return <output>{panel.read().value}</output>;
     },
     { container },

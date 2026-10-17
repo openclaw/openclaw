@@ -121,7 +121,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
     const hostValue = host();
     const sessionValue = session();
     return displayValue?.catalogMenu
-      ? hostValue.sidebarMenus.catalogMenu.isOpenFor(displayValue.catalogMenu.key)
+      ? hostValue.sidebarMenus.catalogMenuView.isOpenFor(displayValue.catalogMenu.key)
       : hostValue.sidebarMenus.sessionMenu?.session.key === sessionValue.key;
   });
   const color = createMemo(() => normalizeSessionColorValue(session().color ?? ""));

@@ -15,7 +15,8 @@ import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-run
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import * as commandTextModule from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseCustomId, serializePayload, type MessagePayload } from "../internal/discord.js";
+import { parseCustomId } from "../internal/components.base.js";
+import { serializePayload, type MessagePayload } from "../internal/discord.js";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { resolveDiscordChannelContext } from "./agent-components-context.js";
 import * as modelPickerPreferencesModule from "./model-picker-preferences.js";

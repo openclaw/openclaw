@@ -110,7 +110,7 @@ function mountPanel(
   panel.available = true;
   panel.page = panel.fullscreen = panel.embedded = options.page === true;
   // Initialize the bridge before observing restore writes made during mount.
-  panel.requestUpdate();
+  panel.invalidate();
   const sessions = terminalSessionsForTest(panel);
   const mountedPanel = { panel, sessions };
   mounted.push(mountedPanel);
