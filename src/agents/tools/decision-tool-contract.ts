@@ -39,6 +39,7 @@ export const DecisionEvaluateInput = Type.Unsafe({
   required: ["state", "questions"],
   properties: {
     contractVersion: {
+      type: "integer",
       const: 2,
       description:
         "Use 2 for tagged state and native question types; omit for legacy text/JSON state.",
