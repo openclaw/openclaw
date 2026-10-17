@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import * as codexRuntimePlugin from "../commands/codex-runtime-plugin-install.js";
@@ -125,20 +123,19 @@ it.each([
         },
       },
       async (state) => {
-        const installPath = state.statePath("npm", "node_modules", "@openclaw", "codex");
-        await fs.mkdir(installPath, { recursive: true });
-        for (const [name, content] of Object.entries({
-          "package.json": JSON.stringify({
-            name: "@openclaw/codex",
-            version: "2026.10.2",
-            dependencies: { "@fixture/missing-dependency": "1.0.0" },
-            openclaw: { extensions: ["./index.js"] },
-          }),
-          "index.js": "export {};",
-          "openclaw.plugin.json": JSON.stringify({ id: "codex", configSchema: { type: "object" } }),
-        })) {
-          await fs.writeFile(path.join(installPath, name), content);
-        }
+        const packageDir = "npm/node_modules/@openclaw/codex";
+        const installPath = state.statePath(packageDir);
+        await state.writeJson(`${packageDir}/package.json`, {
+          name: "@openclaw/codex",
+          version: "2026.10.2",
+          dependencies: { "@fixture/missing-dependency": "1.0.0" },
+          openclaw: { extensions: ["./index.js"] },
+        });
+        await state.writeText(`${packageDir}/index.js`, "export {};");
+        await state.writeJson(`${packageDir}/openclaw.plugin.json`, {
+          id: "codex",
+          configSchema: { type: "object" },
+        });
         const cfg: OpenClawConfig = {
           agents: { defaults: { models: { "openai/fixture": { agentRuntime: { id: "codex" } } } } },
           plugins: { entries: { codex: { enabled: true } } },
@@ -213,10 +210,7 @@ it.each([
           }
           return value;
         });
-        const settled = checked.then(
-          (value) => ({ ok: true as const, value }),
-          (error: unknown) => ({ ok: false as const, error }),
-        );
+        const settled = checked.catch(() => {});
         try {
           await awaitGateBeforeSettlement(
             entered.promise,
@@ -225,17 +219,15 @@ it.each([
           );
           revoked = revoke;
           release.resolve();
-          const outcome = await settled;
+          if (revoke) {
+            await expect(checked).rejects.toBeInstanceOf(SetupInferenceCancelledError);
+          } else {
+            expect(await checked).not.toHaveProperty("error");
+          }
           const persisted = await records.readPersistedInstalledPluginIndexInstallRecordsAsync();
           expect(persisted?.codex?.integrity).toBe(
             revoke ? "sha512-before-repair" : "sha512-after-repair",
           );
-          expect(outcome).toMatchObject(
-            revoke ? { ok: false, error: expect.any(SetupInferenceCancelledError) } : { ok: true },
-          );
-          if (outcome.ok) {
-            expect(outcome.value).not.toHaveProperty("error");
-          }
         } finally {
           release.resolve();
           await settled;

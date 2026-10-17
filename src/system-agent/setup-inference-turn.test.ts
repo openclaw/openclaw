@@ -3,17 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
 import { FailoverError } from "../agents/failover-error.js";
-import {
-  createPluginMetadataSnapshot,
-  makeRegistry,
-} from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  createAgentEventHandler,
-  createChatRunState,
-  createSessionEventSubscriberRegistry,
-  createSessionMessageSubscriberRegistry,
-} from "../gateway/server-chat.js";
+import { createAgentEventTestHarness } from "../gateway/server-chat.agent-events.test-harness.js";
 import {
   emitAgentEvent,
   onAgentEventForRun,
@@ -22,6 +13,7 @@ import {
 import { clearAgentRunContext, getAgentRunContext } from "../infra/agent-run-registry.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -233,11 +225,7 @@ describe("setup inference plugin ownership", () => {
     const pluginRegistry = createEmptyPluginRegistry();
     const route = embeddedRoute();
     const { binding } = await createSystemAgentVerifiedInferenceTestFixture(route.sourceConfig);
-    const metadataSnapshot = createPluginMetadataSnapshot({
-      config: route.runConfig,
-      manifestRegistry: makeRegistry([]),
-      workspaceDir: "/tmp/openclaw-workspace",
-    });
+    const metadataSnapshot = createEmptyPluginMetadataSnapshot("/tmp/openclaw-workspace");
     const probingRegistry = createEmptyPluginRegistry();
     setPluginRuntimeLoadContext(
       probingRegistry,
@@ -321,36 +309,20 @@ describe("setup probe projection", () => {
     async (phase) => {
       const route = embeddedRoute("openclaw");
       const events: AgentEventRuntimePayload[] = [];
-      const [broadcast, broadcastToConnIds, nodeSendToSession] = [
-        vi.fn(),
-        vi.fn(),
-        vi.fn(),
-      ] as const;
       const persistLifecycle = vi.fn(async () => undefined);
-      const chatRunState = createChatRunState();
-      const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
-      const handler = createAgentEventHandler({
-        broadcast,
-        broadcastToConnIds,
-        nodeSendToSession,
-        nodeHasSessionSubscribers: () => false,
-        agentRunSeq: new Map(),
-        chatRunState,
-        resolveSessionKeyForRun: () => undefined,
-        clearAgentRunContext,
-        toolEventRecipients: chatRunState.toolEventRecipients,
-        sessionEventSubscribers: createSessionEventSubscriberRegistry(),
-        sessionMessageSubscribers,
+      const gateway = createAgentEventTestHarness({
         persistGatewaySessionLifecycleEventForEvent: persistLifecycle,
         lifecycleErrorRetryGraceMs: 0,
       });
+      gateway.nodeHasSessionSubscribers.mockReturnValue(false);
+      gateway.clearAgentRunContext.mockImplementation(clearAgentRunContext);
       let runId: string | undefined;
       let unsubscribe = () => {};
       try {
         vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async (params) => {
           runId = params.runId;
           unsubscribe = onAgentEventForRun(params.runId, (event) => events.push(event));
-          sessionMessageSubscribers.subscribe("probe-viewer", params.sessionKey!);
+          gateway.sessionMessageSubscribers.subscribe("probe-viewer", params.sessionKey!);
           emitAgentEvent({
             runId: params.runId,
             sessionKey: params.sessionKey,
@@ -383,15 +355,18 @@ describe("setup probe projection", () => {
 
         // Gateway delivery can consume retained events after the producer has cleaned up.
         for (const event of events) {
-          await handler(event);
+          await gateway.handler(event);
         }
-        [broadcast, broadcastToConnIds, nodeSendToSession, persistLifecycle].forEach((delivery) =>
-          expect(delivery).not.toHaveBeenCalled(),
-        );
+        [
+          gateway.broadcast,
+          gateway.broadcastToConnIds,
+          gateway.nodeSendToSession,
+          persistLifecycle,
+        ].forEach((delivery) => expect(delivery).not.toHaveBeenCalled());
       } finally {
         unsubscribe();
-        await handler.dispose();
-        chatRunState.clear();
+        await gateway.handler.dispose();
+        gateway.chatRunState.clear();
         if (runId) {
           clearAgentRunContext(runId);
         }

@@ -256,17 +256,13 @@ describe("setup inference discovery deadline", () => {
   });
 
   it("waits for the worker's saved credentials before publishing candidates", async () => {
-    const requested = createDeferred();
-    const loaded = createDeferred<AuthProfileStore>();
-    fixture.loadAuthProfileStore.mockImplementationOnce(() => {
-      requested.resolve();
-      return loaded.promise;
-    });
+    const loaded = pendingProbe<AuthProfileStore>();
+    fixture.loadAuthProfileStore.mockImplementationOnce(() => loaded.run());
     const onPartial = vi.fn();
     const detection = detectWithProvider(async () => null, [], { onPartial });
-    await requested.promise;
+    await loaded.started;
     expect(onPartial).not.toHaveBeenCalled();
-    loaded.resolve(
+    loaded.result.resolve(
       savedStore(savedSetup("fixture/worker-model", true), "worker", "fixture-worker-key"),
     );
     const result = await detection;
@@ -318,16 +314,13 @@ describe("setup inference discovery deadline", () => {
         expect(partials.every((partial) => partial.candidates.length === 0)).toBe(true);
         expect(result).toMatchObject({ manualProviders: [], prepareOptions: [] });
       }
-      expect(result.candidates.some((candidate) => candidate.kind === "existing-model")).toBe(
-        eligible,
-      );
-      expect(result.candidates.some((candidate) => candidate.kind.startsWith("saved-auth:"))).toBe(
-        eligible,
-      );
+      expect([
+        result.candidates.some(({ kind }) => kind === "existing-model"),
+        result.candidates.some(({ kind }) => kind.startsWith("saved-auth:")),
+      ]).toEqual([eligible, eligible]);
       expect(result).toMatchObject({ configuredModel: "fixture/saved-model", setupComplete: true });
       if (unavailable) {
-        expect(result.candidates).toEqual([]);
-        expect(result.authOptions.map((option) => option.id)).toEqual(["custom-api-key"]);
+        expect(result).toMatchObject({ candidates: [], authOptions: [{ id: "custom-api-key" }] });
         expect(detect).not.toHaveBeenCalled();
       }
     },
@@ -352,14 +345,11 @@ describe("setup inference discovery deadline", () => {
   });
 
   it("keeps manual setup available when loading a saved sign-in stalls", async () => {
-    const loading = createDeferred();
+    const loading = pendingProbe<never>();
     fixture.loadAuthProfileStore.mockReturnValue(savedStore(undefined));
-    fixture.withSetupProviderAuthMethod.mockImplementation(() => {
-      loading.resolve();
-      return new Promise(() => {});
-    });
+    fixture.withSetupProviderAuthMethod.mockImplementation(() => loading.run());
     const detection = detectWithProvider(async () => null);
-    await loading.promise;
+    await loading.started;
     await vi.advanceTimersByTimeAsync(30_000);
     const result = await detection;
     expect(result.candidates).toEqual([]);

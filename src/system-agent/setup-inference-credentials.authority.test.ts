@@ -56,11 +56,7 @@ function authChoice(
 it.each([false, true])("fences credential writes after OAuth lock (revoked=%s)", async (revoke) => {
   await withOpenClawTestState({ label: "setup-credential-authority" }, async (state) => {
     const config: OpenClawConfig = { agents: { entries: { main: {} } } };
-    const existing = {
-      type: "api_key" as const,
-      provider: "fixture",
-      key: "existing-fixture-key",
-    };
+    const existing = { type: "api_key" as const, provider: "fixture", key: "existing-fixture-key" };
     await state.writeAuthProfiles({ version: 1, profiles: { "fixture:existing": existing } });
     const lockEntered = createDeferred();
     const releaseLock = createDeferred();
@@ -93,10 +89,7 @@ it.each([false, true])("fences credential writes after OAuth lock (revoked=%s)",
       beforePersistentEffect,
       beforeWrite: () => throwIfSetupInferenceCancelled({ isCancelled: () => revoked }),
     });
-    const settled = saving.then(
-      (value) => ({ ok: true as const, value }),
-      (error: unknown) => ({ ok: false as const, error }),
-    );
+    const settled = saving.catch(() => undefined);
     try {
       await awaitGateBeforeSettlement(
         lockEntered.promise,
@@ -106,22 +99,16 @@ it.each([false, true])("fences credential writes after OAuth lock (revoked=%s)",
       expect(beforePersistentEffect).toHaveBeenCalledOnce();
       revoked = revoke;
       releaseLock.resolve();
-      const outcome = await settled;
+      await settled;
       const stored = (await loadAuthProfileStoreWithoutExternalProfilesAsync(state.agentDir()))
         .profiles;
       if (revoke) {
-        expect(outcome).toMatchObject({
-          ok: false,
-          error: expect.any(SetupInferenceCancelledError),
-        });
+        await expect(saving).rejects.toBeInstanceOf(SetupInferenceCancelledError);
         expect(stored).toEqual({ "fixture:existing": existing });
       } else {
         expect(stored["fixture:existing"]).toEqual(existing);
-        expect(outcome.ok).toBe(true);
-        if (!outcome.ok) {
-          throw outcome.error;
-        }
-        expect(stored[outcome.value.profile.profileId]).toMatchObject({
+        const saved = await saving;
+        expect(stored[saved.profile.profileId]).toMatchObject({
           type: "oauth",
           provider: "openai",
           access: "synthetic-codex-access",
@@ -251,29 +238,17 @@ process.exit(1);
     setup.config.models.providers.meta = {
       baseUrl: proxy,
       api: "openai-responses",
-      models: [
-        {
-          ...templateModel,
-          id: "muse-spark-1.3",
-          name: "Muse Spark 1.3",
-        },
-      ],
+      models: [{ ...templateModel, id: "muse-spark-1.3", name: "Muse Spark 1.3" }],
     };
     const before = `${JSON.stringify(setup.config, null, 2)}\n`;
     await fs.writeFile(setup.configPath, before);
     clearConfigCache();
+    const login = async () => ({ profiles: [], defaultModel: candidate, agentRuntimeId: "muse" });
     const provider: ProviderPlugin = {
       id: "meta",
       pluginId: "meta",
       label: "Meta",
-      auth: [
-        {
-          id: "fixture-login",
-          label: "Muse Code",
-          kind: "device_code",
-          run: async () => ({ profiles: [], defaultModel: candidate, agentRuntimeId: "muse" }),
-        },
-      ],
+      auth: [{ id: "fixture-login", label: "Muse Code", kind: "device_code", run: login }],
     };
     setup.deps.resolvePluginProviders = () => [provider];
     setup.deps.resolveManifestProviderAuthChoice = () =>

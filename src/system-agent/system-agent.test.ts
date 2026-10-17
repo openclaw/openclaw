@@ -207,12 +207,10 @@ describe("runSystemAgent", () => {
       },
       true,
     );
+    const run = runner(runtime, verified);
 
     await expect(
-      runner(
-        runtime,
-        verified,
-      )({
+      run({
         message: "the bridge looks sleepy, restart it",
         yes: true,
         planWithAssistant: async () => ({ command: "restart gateway" }),
@@ -272,12 +270,10 @@ describe("runSystemAgent", () => {
       },
       true,
     );
+    const run = runner(runtime, verified);
 
     await expect(
-      runner(
-        runtime,
-        verified,
-      )({
+      run({
         message: "explain the current setup",
         planWithAssistant: async () => {
           currentConfig = changedConfig;

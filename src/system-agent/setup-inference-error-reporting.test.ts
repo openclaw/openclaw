@@ -56,9 +56,6 @@ const guidance = "Run `openclaw onboard` to connect and live-test AI first.";
 
 async function observeScenario(scenario: Scenario, json: boolean) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-error-reporting-140392-"));
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const exits: number[] = [];
   const phases: string[] = [];
   const tempDirs: string[] = [];
   const marker = `dependency-${scenario}-reason-140392`;
@@ -71,12 +68,10 @@ async function observeScenario(scenario: Scenario, json: boolean) {
       throw fault;
     }
   };
-  const renderedRuntime: RuntimeEnv = {
-    log: (...args) => stdout.push(args.map(String).join(" ")),
-    error: (...args) => stderr.push(args.map(String).join(" ")),
-    exit: (code) => {
-      exits.push(code);
-    },
+  const output = {
+    log: vi.fn<RuntimeEnv["log"]>(),
+    error: vi.fn<RuntimeEnv["error"]>(),
+    exit: vi.fn<RuntimeEnv["exit"]>(),
   };
   const policy = { redactSensitive: "off", redactPatterns: ["PR140392_PRIVATE_[A-Z]+"] };
   vi.spyOn(loggingConfig, "readLoggingConfig").mockReturnValue(policy);
@@ -170,11 +165,13 @@ async function observeScenario(scenario: Scenario, json: boolean) {
           inferenceMocks.runGuidedOnboarding.mockReset().mockResolvedValue(undefined);
           await runSystemAgentWithInference(
             json ? { json: true } : { message: "status", interactive: false },
-            renderedRuntime,
+            output,
           );
         });
       },
     );
+    const stdout = output.log.mock.calls.map((args) => args.map(String).join(" "));
+    const stderr = output.error.mock.calls.map((args) => args.map(String).join(" "));
     expect(inferenceMocks.runGuidedOnboarding).not.toHaveBeenCalled();
     expect(tempDirs).toHaveLength(scenario === "capture" ? 0 : 1);
     for (const dir of tempDirs) {
@@ -182,7 +179,7 @@ async function observeScenario(scenario: Scenario, json: boolean) {
     }
     const success = scenario === "success";
     expect(inferenceMocks.runSystemAgent).toHaveBeenCalledTimes(success ? 1 : 0);
-    expect(exits).toEqual(success ? [] : [1]);
+    expect(output.exit.mock.calls.map(([code]) => code)).toEqual(success ? [] : [1]);
     const phaseCount = scenario === "capture" ? 1 : success || scenario === "callback" ? 4 : 3;
     expect(phases).toEqual(["capture", "probe", "runtime-load", "callback"].slice(0, phaseCount));
     if (scenario === "success") {
@@ -205,9 +202,9 @@ async function observeScenario(scenario: Scenario, json: boolean) {
     } else {
       expect(stdout).toEqual([]);
       expect(stderr).toHaveLength(1);
-      const output = expectDefined(stderr[0], "text error");
-      expect(output.endsWith(`\n${guidance}`)).toBe(true);
-      message = output.slice(0, -guidance.length - 1);
+      const text = expectDefined(stderr[0], "text error");
+      expect(text.endsWith(`\n${guidance}`)).toBe(true);
+      message = text.slice(0, -guidance.length - 1);
     }
     expect(message.startsWith("OpenClaw requires working inference: ")).toBe(true);
     expect(message).not.toContain(syntheticToken);

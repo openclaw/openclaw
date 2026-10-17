@@ -100,12 +100,7 @@ it.each([
       },
       ...(phase === "first-agent" ? {} : { entries: { main: { workspace } } }),
     },
-    gateway: {
-      mode: "local",
-      bind: "loopback",
-      tailscale: { mode: "off" },
-      auth: { mode: "token", token: "synthetic-setup-token" },
-    },
+    gateway: { mode: "local", auth: { token: "synthetic-setup-token" } },
   };
   const pause = async () => {
     if (paused) {

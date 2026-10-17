@@ -19,7 +19,10 @@ import { ensureOnboardingAgent } from "../commands/onboard-agent.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { clearConfigCache, readConfigFileSnapshot as readSnapshot } from "../config/config.js";
 import { resolveAgentModelPrimaryValue as primaryModel } from "../config/model-input.js";
-import { computeDeclaredSurfaceHash } from "../plugins/capability-summary.js";
+import {
+  computeDeclaredSurfaceHash,
+  mergePluginDeclaredSurfaces,
+} from "../plugins/capability-summary.js";
 import { persistProviderAuthProfilesAfterLogin } from "../plugins/provider-auth-persistence.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
@@ -93,12 +96,11 @@ describe("setup activation credentials and configuration", () => {
   it("isolates utility activation from the primary model", async () => {
     const setup = await fixture({ modelTarget: "utility", primaryModel: "stable/working-model" });
     const result = await setup.activate();
-    expect(result).toMatchObject({ ok: true });
+    expect(result).toMatchObject({ ok: true, modelTarget: "utility", modelRef });
     const saved = await readSnapshot();
     expect(saved.sourceConfig.agents?.defaults?.model).toEqual(
       setup.config.agents?.defaults?.model,
     );
-    expect(result).toMatchObject({ modelTarget: "utility", modelRef });
     expect(saved.sourceConfig.agents?.defaults?.utilityModel).toContain(modelRef);
     expect(setup.run.mock.calls[0]?.[0]).toMatchObject({
       provider: "openai",
@@ -253,18 +255,7 @@ describe("setup activation credentials and configuration", () => {
       const setup = await fixture({ codex: true });
       const resolveMetadata = setup.resolvePluginMetadataSnapshot.getMockImplementation();
       assert.ok(resolveMetadata);
-      const acceptedSurface = {
-        channels: [],
-        providers: [],
-        tools: [],
-        contracts: [],
-        hooks: [],
-        mcpServers: [],
-        cliCommands: [],
-        cliBackends: [],
-        skills: [],
-        dangerousConfigFlags: [],
-      };
+      const acceptedSurface = mergePluginDeclaredSurfaces([]);
       setup.resolvePluginMetadataSnapshot.mockImplementation((params) => {
         const metadata = resolveMetadata(params);
         return {
@@ -632,16 +623,9 @@ describe("setup activation credentials and configuration", () => {
       originalProfileId,
     ]);
     expect(store.profiles[originalProfileId]).toEqual(originalCredential);
-    expect(setup.readProfile()?.[1]).toEqual(
-      expect.objectContaining({
-        ...credential,
-        setup: expect.objectContaining({ replacement: true }),
-      }),
-    );
+    expect(setup.readProfile()?.[1]).toMatchObject({ ...credential, setup: { replacement: true } });
     const saved = setup.readProfile();
-    if (!saved) {
-      throw new Error("The rejected replacement was not saved");
-    }
+    assert.ok(saved, "The rejected replacement was not saved");
     const [savedId, savedCredential] = saved;
     expect(savedId).not.toBe(originalProfileId);
     expect(
@@ -665,9 +649,7 @@ describe("setup activation credentials and configuration", () => {
     const snapshot = await readSnapshot();
     const route = await resolveConfiguredRoute(snapshot.runtimeConfig ?? snapshot.config);
     expect(route?.authProfileId).toBe(originalProfileId);
-    if (!route) {
-      throw new Error("The original configured route disappeared after replacement rejection");
-    }
+    assert.ok(route, "The original configured route disappeared after replacement rejection");
     const auth = await setup.resolveAuth({
       provider: route.provider,
       cfg: route.runConfig,
@@ -714,9 +696,7 @@ describe("setup activation credentials and configuration", () => {
     );
     expect(saved).toMatchObject({ modelRef, credentials: true });
     expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
-    if (!saved) {
-      throw new Error("Setup did not discover the persisted sign-in");
-    }
+    assert.ok(saved, "Setup did not discover the persisted sign-in");
     const result = await setup.activate(saved.kind);
 
     expect(result).toMatchObject({ ok: true, modelRef });
@@ -843,13 +823,12 @@ describe("setup activation error boundaries", () => {
       const activation = setup.activate("api-key", true, {
         apiKey: submitted,
         signal: controller.signal,
-        ...(phase === "deferred"
-          ? {
-              onActivationCompletion: (completion: () => Promise<boolean>) => {
+        onActivationCompletion:
+          phase === "deferred"
+            ? (completion) => {
                 complete = completion;
-              },
-            }
-          : {}),
+              }
+            : undefined,
       });
       let operation: Promise<unknown> = activation;
       if (phase === "deferred") {
