@@ -7,6 +7,10 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { renderTerminalBufferText } from "../../gateway/terminal/buffer-text.js";
+import {
+  TERMINAL_READ_DEFAULT_MAX_CHARS,
+  TERMINAL_READ_MAX_PAGE_CHARS,
+} from "../../gateway/terminal/session-limits.js";
 import type { TerminalAgentActionOutcome } from "../../gateway/terminal/session-manager.types.js";
 import { getActiveAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import type { ExecMode } from "../../infra/exec-approvals.js";
@@ -25,6 +29,7 @@ import {
 import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
+  readNonNegativeIntegerParam,
   readPositiveIntegerParam,
   readToolStringParam,
   ToolInputError,
@@ -42,6 +47,19 @@ const TerminalToolSchema = Type.Object(
     data: Type.Optional(Type.String({ description: "Exact terminal input" })),
     cols: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_DIMENSION })),
     rows: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_DIMENSION })),
+    cursor: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        description: "Read output from this offset; omit for the most recent output",
+      }),
+    ),
+    maxChars: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        maximum: TERMINAL_READ_MAX_PAGE_CHARS,
+        description: "Page size in UTF-16 code units",
+      }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -61,7 +79,18 @@ const TerminalListSessionSchema = Type.Object(
 
 const TerminalToolOutputSchema = Type.Union([
   Type.Object({ sessions: Type.Array(TerminalListSessionSchema) }, { additionalProperties: false }),
-  Type.Object({ sessionId: Type.String(), text: Type.String() }, { additionalProperties: false }),
+  Type.Object(
+    {
+      sessionId: Type.String(),
+      text: Type.String(),
+      startCursor: Type.Integer({ minimum: 0 }),
+      cursor: Type.Integer({ minimum: 0 }),
+      endCursor: Type.Integer({ minimum: 0 }),
+      truncated: Type.Boolean(),
+      hasMore: Type.Boolean(),
+    },
+    { additionalProperties: false },
+  ),
   Type.Object({ ok: Type.Literal(true) }, { additionalProperties: false }),
 ]);
 
@@ -112,7 +141,7 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
     label: "Terminal",
     name: "terminal",
     description:
-      "Manage terminals the operator opened from this chat's Control UI panel. list discovers shared terminals; read returns a buffer snapshot; resize and close manage an existing terminal; input requires one-time operator approval unless the execution policy permits unrestricted access.",
+      "Manage terminals the operator opened from this chat's Control UI panel. list discovers shared terminals; read returns a page of buffered output plus cursors — recent output by default, passing the returned cursor back reads only what arrived since, and an earlier cursor pages back while it is still retained: startCursor is that page's absolute offset in the stream (zero only at the very start, not proof that older output survives), truncated means the requested cursor predates retained output and that output cannot be recovered, and hasMore means output followed the page; resize and close manage an existing terminal; input requires one-time operator approval unless the execution policy permits unrestricted access.",
     parameters: TerminalToolSchema,
     outputSchema: TerminalToolOutputSchema,
     execute: async (toolCallId, rawArgs, signal) => {
@@ -151,11 +180,26 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
 
       const sessionId = readToolStringParam(params, "sessionId", { required: true });
       if (action === "read") {
-        const raw = manager.snapshotAgent(owner, sessionId);
-        if (raw === undefined) {
+        const page = manager.readAgentPage(owner, sessionId, {
+          cursor: readNonNegativeIntegerParam(params, "cursor"),
+          maxChars:
+            readPositiveIntegerParam(params, "maxChars", {
+              max: TERMINAL_READ_MAX_PAGE_CHARS,
+              message: `maxChars must be an integer from 1 to ${TERMINAL_READ_MAX_PAGE_CHARS}`,
+            }) ?? TERMINAL_READ_DEFAULT_MAX_CHARS,
+        });
+        if (page === undefined) {
           throw new ToolInputError(TERMINAL_UNAVAILABLE_MESSAGE);
         }
-        return jsonResult({ sessionId, text: renderTerminalBufferText(raw) });
+        return jsonResult({
+          sessionId,
+          text: renderTerminalBufferText(page.raw),
+          startCursor: page.startCursor,
+          cursor: page.nextCursor,
+          endCursor: page.endCursor,
+          truncated: page.truncated,
+          hasMore: page.hasMore,
+        });
       }
       if (action === "resize") {
         return terminalActionResult(
