@@ -1,6 +1,3 @@
-/**
- * Local gateway request-context tests.
- */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -42,6 +39,40 @@ type PublishedOwnerSnapshot = Awaited<
 
 const asPublishedOwner = (value: PublishedModelCatalogOwnerCandidate): PublishedOwnerSnapshot =>
   value as unknown as PublishedOwnerSnapshot;
+
+function modelFixture(agentId: string, prefix: string) {
+  const agentDir = `/tmp/${prefix}-agent`;
+  const workspaceDir = `/tmp/${prefix}-workspace`;
+  const cfg: OpenClawConfig = {
+    agents: { entries: { [agentId]: { agentDir, workspace: workspaceDir } } },
+  };
+  const candidate: PublishedModelCatalogOwnerCandidate = {
+    catalogOwner: { agentId, workspaceDir },
+    agentId,
+    agentDir,
+    workspaceDir,
+    config: cfg,
+    observationConfig: cfg,
+    isCurrent: () => true,
+    authModes: {},
+    authStore: { version: 1, profiles: {} },
+    metadataSnapshot: createPluginMetadataSnapshotFixture(),
+    modelCatalog: { entries: [], routeVariants: [] },
+  };
+  return { cfg, candidate };
+}
+
+function withConfig<T>(cfg: OpenClawConfig, run: () => T) {
+  return withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => cfg }, run);
+}
+
+function localContext() {
+  const context = getPluginRuntimeGatewayRequestScope()?.context;
+  if (!context) {
+    throw new Error("expected local gateway request context");
+  }
+  return context;
+}
 
 describe("local gateway request context", () => {
   it("keeps local RPC available without claiming Gateway routing or readiness", async () => {
@@ -108,116 +139,57 @@ describe("local gateway request context", () => {
 
   it("binds typed agent turns to the embedded context", async () => {
     const cfg = {};
-    await withLocalGatewayRequestScope(
-      { deps: {} as CliDeps, getRuntimeConfig: () => cfg },
-      async () => {
-        const context = getPluginRuntimeGatewayRequestScope()?.context;
-        if (!context) {
-          throw new Error("expected local gateway request context");
-        }
-        const payload = { runId: "local-turn", status: "accepted" };
-        createAgentTurnService.mockReturnValue({
-          startTurn: async ({ io }) => io.emitAcceptance([true, payload, undefined]),
-          prepareWaitForTurn: vi.fn(),
-          waitForTurn: vi.fn(),
-        });
+    await withConfig(cfg, async () => {
+      const context = localContext();
+      const payload = { runId: "local-turn", status: "accepted" };
+      createAgentTurnService.mockReturnValue({
+        startTurn: async ({ io }) => io.emitAcceptance([true, payload, undefined]),
+        prepareWaitForTurn: vi.fn(),
+        waitForTurn: vi.fn(),
+      });
 
-        await expect(
-          dispatchGatewayMethodInProcess(
-            "agent",
-            { message: "local turn", idempotencyKey: "local-turn" },
-            { forceSyntheticClient: true, operatorRoleActor: { kind: "system" } },
-          ),
-        ).resolves.toEqual(payload);
-        expect(createAgentTurnService).toHaveBeenCalledWith(
-          expect.objectContaining({ context }),
-          expect.any(Function),
-        );
-      },
-    );
+      await expect(
+        dispatchGatewayMethodInProcess(
+          "agent",
+          { message: "local turn", idempotencyKey: "local-turn" },
+          { forceSyntheticClient: true, operatorRoleActor: { kind: "system" } },
+        ),
+      ).resolves.toEqual(payload);
+      expect(createAgentTurnService).toHaveBeenCalledWith(
+        expect.objectContaining({ context }),
+        expect.any(Function),
+      );
+    });
   });
 
   it("defaults local model catalog snapshot reads to read-only", async () => {
-    const cfg = {
-      agents: {
-        entries: {
-          worker: {
-            agentDir: "/tmp/local-model-catalog-agent",
-            workspace: "/tmp/local-model-catalog-workspace",
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const { cfg, candidate } = modelFixture("worker", "local-model-catalog");
     const loadOwner = vi
       .spyOn(preparedModelCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot")
-      .mockResolvedValue(
-        asPublishedOwner({
-          catalogOwner: { agentId: "worker", workspaceDir: "/tmp/local-model-catalog-workspace" },
-          agentId: "worker",
-          agentDir: "/tmp/local-model-catalog-agent",
-          workspaceDir: "/tmp/local-model-catalog-workspace",
-          config: cfg,
-          observationConfig: cfg,
-          isCurrent: () => true,
-          authModes: {},
-          authStore: { version: 1, profiles: {} },
-          metadataSnapshot: createPluginMetadataSnapshotFixture(),
-          modelCatalog: { entries: [], routeVariants: [] },
-        }),
-      );
+      .mockResolvedValue(asPublishedOwner(candidate));
 
-    await withLocalGatewayRequestScope(
-      {
-        deps: {} as CliDeps,
-        getRuntimeConfig: () => cfg,
-      },
-      async () => {
-        const context = getPluginRuntimeGatewayRequestScope()?.context;
-        if (!context) {
-          throw new Error("expected local gateway request context");
-        }
-        const snapshot = await context.loadGatewayModelCatalogSnapshot({ agentId: "worker" });
-        expect(snapshot).toMatchObject({
-          agentId: "worker",
-          workspaceDir: "/tmp/local-model-catalog-workspace",
-        });
-      },
-    );
+    await withConfig(cfg, async () => {
+      const context = localContext();
+      const snapshot = await context.loadGatewayModelCatalogSnapshot({ agentId: "worker" });
+      expect(snapshot).toMatchObject({
+        agentId: "worker",
+        workspaceDir: "/tmp/local-model-catalog-workspace",
+      });
+    });
 
     expect(loadOwner).toHaveBeenCalledWith({ agentId: "worker", config: cfg, readOnly: true });
     loadOwner.mockRestore();
   });
 
   it("refreshes local models.list auth after login and logout", async () => {
-    const cfg = {
-      agents: {
-        entries: {
-          main: {
-            agentDir: "/tmp/local-model-auth-agent",
-            workspace: "/tmp/local-model-auth-workspace",
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const { cfg, candidate: base } = modelFixture("main", "local-model-auth");
     const model = {
       provider: "local-auth-provider",
       id: "local-auth-model",
       name: "Local auth model",
       api: "openai-completions" as const,
     };
-    const candidate = {
-      catalogOwner: { agentId: "main", workspaceDir: "/tmp/local-model-auth-workspace" },
-      agentId: "main",
-      agentDir: "/tmp/local-model-auth-agent",
-      workspaceDir: "/tmp/local-model-auth-workspace",
-      config: cfg,
-      observationConfig: cfg,
-      isCurrent: () => true,
-      authModes: {},
-      authStore: { version: 1 as const, profiles: {} },
-      metadataSnapshot: createPluginMetadataSnapshotFixture(),
-      modelCatalog: { entries: [model], routeVariants: [model] },
-    } satisfies PublishedModelCatalogOwnerCandidate;
+    const candidate = { ...base, modelCatalog: { entries: [model], routeVariants: [model] } };
     const refreshAuth = vi
       .fn()
       .mockResolvedValueOnce({
@@ -251,7 +223,7 @@ describe("local gateway request context", () => {
       });
 
     const list = () =>
-      withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => cfg }, () =>
+      withConfig(cfg, () =>
         dispatchGatewayMethodInProcessRaw("models.list", { view: "configured", refresh: true }),
       );
     const loggedIn = await list();
@@ -284,29 +256,7 @@ describe("local gateway request context", () => {
   });
 
   it("uses the prepared local owner without starting a catalog load", async () => {
-    const cfg = {
-      agents: {
-        entries: {
-          main: {
-            agentDir: "/tmp/local-model-timeout-agent",
-            workspace: "/tmp/local-model-timeout-workspace",
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const candidate = {
-      catalogOwner: { agentId: "main", workspaceDir: "/tmp/local-model-timeout-workspace" },
-      agentId: "main",
-      agentDir: "/tmp/local-model-timeout-agent",
-      workspaceDir: "/tmp/local-model-timeout-workspace",
-      config: cfg,
-      observationConfig: cfg,
-      isCurrent: () => true,
-      authModes: {},
-      authStore: { version: 1 as const, profiles: {} },
-      metadataSnapshot: createPluginMetadataSnapshotFixture(),
-      modelCatalog: { entries: [], routeVariants: [] },
-    } satisfies PublishedModelCatalogOwnerCandidate;
+    const { cfg, candidate } = modelFixture("main", "local-model-timeout");
     const loadOwner = vi
       .spyOn(preparedModelCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot")
       .mockImplementation(() => new Promise(() => {}));
@@ -315,9 +265,8 @@ describe("local gateway request context", () => {
       .spyOn(preparedModelCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot")
       .mockReturnValue({ ...asPublishedOwner(candidate), recheckNativeLogin });
 
-    const result = await withLocalGatewayRequestScope(
-      { deps: {} as CliDeps, getRuntimeConfig: () => cfg },
-      () => dispatchGatewayMethodInProcessRaw("models.list", { view: "default" }),
+    const result = await withConfig(cfg, () =>
+      dispatchGatewayMethodInProcessRaw("models.list", { view: "default" }),
     );
 
     expect(result).toMatchObject({ ok: true, payload: { models: [] } });
@@ -364,18 +313,12 @@ describe("local gateway request context", () => {
           }),
         ],
       });
-      await withLocalGatewayRequestScope(
-        { deps: {} as CliDeps, getRuntimeConfig: () => cfg },
-        async () => {
-          const context = getPluginRuntimeGatewayRequestScope()?.context;
-          if (!context) {
-            throw new Error("expected local gateway request context");
-          }
-          await expect(
-            context.cron.removeAgentJobsTransactional("worker", async () => "committed"),
-          ).resolves.toBe("committed");
-        },
-      );
+      await withConfig(cfg, async () => {
+        const context = localContext();
+        await expect(
+          context.cron.removeAgentJobsTransactional("worker", async () => "committed"),
+        ).resolves.toBe("committed");
+      });
       expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([
         "agentless-system-job",
       ]);
@@ -390,40 +333,19 @@ describe("local gateway request context", () => {
 it("keeps standalone embedded RPC available inside its session admission", async () => {
   const { beginSessionWorkAdmission } = await import("../sessions/session-lifecycle-admission.js");
   const cfg = { agents: { defaults: {} } };
-  await withLocalGatewayRequestScope(
-    { deps: {} as CliDeps, getRuntimeConfig: () => cfg },
-    async () => {
-      const before = await dispatchGatewayMethodInProcessRaw("agent.identity.get", {
-        agentId: "main",
-      });
-      expect(before.ok).toBe(true);
-      expect(before.payload).toMatchObject({ agentId: "main" });
-      const admission = await beginSessionWorkAdmission({
-        scope: "local-rpc-admission-regression",
-        identities: ["agent:main:local-rpc"],
-        assertAllowed: () => {},
-      });
-      try {
-        let response: Awaited<ReturnType<typeof dispatchGatewayMethodInProcessRaw>> | undefined;
-        let error: unknown;
-        await admission.run(async () => {
-          try {
-            response = await dispatchGatewayMethodInProcessRaw("agent.identity.get", {
-              agentId: "main",
-            });
-          } catch (caught) {
-            error = caught;
-          }
-        });
-        const observed = {
-          beforeOk: before.ok,
-          duringOk: response?.ok,
-          error: error instanceof Error ? error.message : error,
-        };
-        expect(observed).toEqual({ beforeOk: true, duringOk: true, error: undefined });
-      } finally {
-        admission.release();
-      }
-    },
-  );
+  await withConfig(cfg, async () => {
+    const readIdentity = () =>
+      dispatchGatewayMethodInProcessRaw("agent.identity.get", { agentId: "main" });
+    await expect(readIdentity()).resolves.toMatchObject({ ok: true, payload: { agentId: "main" } });
+    const admission = await beginSessionWorkAdmission({
+      scope: "local-rpc-admission-regression",
+      identities: ["agent:main:local-rpc"],
+      assertAllowed: () => {},
+    });
+    try {
+      await admission.run(() => expect(readIdentity()).resolves.toMatchObject({ ok: true }));
+    } finally {
+      admission.release();
+    }
+  });
 });

@@ -1,9 +1,8 @@
 import { X509Certificate } from "node:crypto";
 import { once } from "node:events";
 import { readFile, unlink, writeFile } from "node:fs/promises";
-import { createServer as createHttpServer, type ServerResponse } from "node:http";
+import { createServer as createHttpServer, type Server, type ServerResponse } from "node:http";
 import { createServer } from "node:https";
-import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
@@ -13,9 +12,33 @@ import { loadGatewayTlsServerRuntime } from "../infra/tls/gateway.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { PROXY_FIXTURE_CERTIFICATE } from "../test-helpers/proxy-tls-fixture.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { createConfiguredGatewayLocalProbe } from "./local-http-probe.js";
+import {
+  createConfiguredGatewayLocalProbe,
+  type ConfiguredGatewayLocalProbe,
+} from "./local-http-probe.js";
 
 const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
+
+async function listen(server: Server) {
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Expected an ephemeral TCP listener");
+  }
+  return address.port;
+}
+
+async function close(server: Server) {
+  server.closeAllConnections();
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
+function readHealth(probe: ConfiguredGatewayLocalProbe, port: number) {
+  return probe.requestHttp({ host: "127.0.0.1", port, pathname: "/healthz", timeoutMs: 1000 });
+}
 
 test("probes local TLS directly under a managed proxy while enforcing its certificate pin", async () => {
   await withTestDir({ prefix: "openclaw-local-http-probe-" }, async (directory) => {
@@ -32,33 +55,29 @@ test("probes local TLS directly under a managed proxy while enforcing its certif
         response.end(JSON.stringify({ ready: request.url === "/readyz" }));
       },
     );
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address() as AddressInfo;
+    const port = await listen(server);
     const proxy = await startProxy({
       proxyUrl: "http://127.0.0.1:1",
     });
 
     try {
-      const probe = createConfiguredGatewayLocalProbe({
-        gateway: { tls: { enabled: true, autoGenerate: false, certPath, keyPath } },
-      });
       const config = {
         gateway: { tls: { enabled: true, autoGenerate: false, certPath, keyPath } },
       };
+      const probe = createConfiguredGatewayLocalProbe(config);
       await expect(
         waitForGatewayHttpReadiness({
           attempts: 1,
           config,
           deadlineAt: performance.now() + 1_000,
           delayMs: 0,
-          port: address.port,
+          port,
         }),
       ).resolves.toEqual({ healthz: 200, readyz: 200 });
       expect(paths).toEqual(expect.arrayContaining(["/healthz", "/readyz"]));
       for (const host of ["0.0.0.0", "::", "127.0.0.1"]) {
         await expect(
-          probe.requestHttp({ host, pathname: "/readyz", port: address.port, timeoutMs: 1_000 }),
+          probe.requestHttp({ host, pathname: "/readyz", port, timeoutMs: 1_000 }),
         ).resolves.toMatchObject({ statusCode: 200, body: JSON.stringify({ ready: true }) });
       }
       const mismatchedCertPath = path.join(directory, "mismatched-cert.pem");
@@ -70,27 +89,20 @@ test("probes local TLS directly under a managed proxy while enforcing its certif
         mismatchedProbe.requestHttp({
           host: "127.0.0.1",
           pathname: "/readyz",
-          port: address.port,
+          port,
           timeoutMs: 1_000,
         }),
       ).resolves.toBeNull();
     } finally {
       await proxy?.stop();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await close(server);
     }
   });
 });
 
 test("cancels pending readiness requests when the repair budget expires", async () => {
   const server = createHttpServer();
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected an ephemeral TCP listener");
-  }
+  const port = await listen(server);
   const controller = new AbortController();
   const aborted = new Error("repair-budget");
   try {
@@ -99,7 +111,7 @@ test("cancels pending readiness requests when the repair budget expires", async 
       attempts: 3,
       deadlineAt: performance.now() + 60_000,
       delayMs: 500,
-      port: address.port,
+      port,
       signal: controller.signal,
     });
     const rejected = expect(pending).rejects.toBe(aborted);
@@ -107,10 +119,7 @@ test("cancels pending readiness requests when the repair budget expires", async 
     controller.abort(aborted);
     await rejected;
   } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+    await close(server);
   }
 });
 
@@ -124,17 +133,7 @@ test("keeps a WebSocket-first verified pin scoped to its endpoint", async () => 
       }),
     );
     try {
-      const ports = await Promise.all(
-        servers.map(async (server) => {
-          server.listen(0, "127.0.0.1");
-          await once(server, "listening");
-          const address = server.address();
-          if (!address || typeof address === "string") {
-            throw new Error("Expected an ephemeral TLS listener");
-          }
-          return address.port;
-        }),
-      );
+      const ports = await Promise.all(servers.map(listen));
       const [firstPort, secondPort] = ports;
       if (firstPort === undefined || secondPort === undefined) {
         throw new Error("Expected two TLS listener ports");
@@ -148,36 +147,15 @@ test("keeps a WebSocket-first verified pin scoped to its endpoint", async () => 
       });
       await unlink(certPath);
       expect(await probe.resolveWebSocketTarget(firstPort)).toEqual(first);
-      expect(
-        await probe.requestHttp({
-          host: "127.0.0.1",
-          port: firstPort,
-          pathname: "/healthz",
-          timeoutMs: 1000,
-        }),
-      ).toMatchObject({ statusCode: 200 });
+      expect(await readHealth(probe, firstPort)).toMatchObject({ statusCode: 200 });
       expect(await probe.resolveWebSocketTarget(secondPort)).toBeNull();
-      expect(
-        await probe.requestHttp({
-          host: "127.0.0.1",
-          port: secondPort,
-          pathname: "/healthz",
-          timeoutMs: 1000,
-        }),
-      ).toBeNull();
+      expect(await readHealth(probe, secondPort)).toBeNull();
       expect(
         await createConfiguredGatewayLocalProbe(config).resolveWebSocketTarget(firstPort),
       ).toBeNull();
       expect(await probe.resolveWebSocketTarget(firstPort)).toEqual(first);
     } finally {
-      await Promise.all(
-        servers.map(async (server) => {
-          server.closeAllConnections();
-          await new Promise<void>((resolve) => {
-            server.close(() => resolve());
-          });
-        }),
-      );
+      await Promise.all(servers.map(close));
     }
   });
 });
@@ -218,14 +196,8 @@ test.each([
           }
         },
       );
-      server.listen(0, "127.0.0.1");
-      await once(server, "listening");
+      const port = await listen(server);
       try {
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          throw new Error("Expected an ephemeral TLS listener");
-        }
-        const port = address.port;
         const probe = createConfiguredGatewayLocalProbe({
           gateway: { tls: { enabled: true, certPath } },
         });
@@ -266,10 +238,7 @@ test.each([
           tlsFingerprint: replacement.fingerprintSha256,
         });
       } finally {
-        server.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        });
+        await close(server);
       }
     });
   },

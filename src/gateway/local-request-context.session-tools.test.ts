@@ -78,6 +78,12 @@ vi.mock("../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: async () => {},
 }));
 
+const mainSession = (sessionKey: string) => loadSessionEntry({ agentId: "main", sessionKey });
+const localContext = () => expectDefined(getPluginRuntimeGatewayRequestScope()?.context, "Gateway");
+const draftMessages = {
+  messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })],
+};
+
 describe("built-in session tool role authority", () => {
   let runtimeSetup: Promise<unknown>[] = [];
   beforeAll(() => {
@@ -106,9 +112,7 @@ describe("built-in session tool role authority", () => {
       const read = (sessionKey: string, user?: string) =>
         history.execute("participant-history", { sessionKey, user });
       const expectDraft = async (user?: string) =>
-        expect((await read(PARTICIPANT_DRAFT, user)).details).toMatchObject({
-          messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })],
-        });
+        expect((await read(PARTICIPANT_DRAFT, user)).details).toMatchObject(draftMessages);
 
       await expectDraft();
       expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
@@ -160,15 +164,11 @@ describe("built-in session tool role authority", () => {
           user,
         });
       await expect(patch(bob.profileId)).rejects.toThrow("session is draft for this connection");
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: PARTICIPANT_DRAFT })?.label,
-      ).toBeUndefined();
+      expect(mainSession(PARTICIPANT_DRAFT)?.label).toBeUndefined();
       await expect(patch(alice.profileId)).resolves.toMatchObject({
         details: { status: "updated", sessionKey: PARTICIPANT_DRAFT },
       });
-      expect(loadSessionEntry({ agentId: "main", sessionKey: PARTICIPANT_DRAFT })?.label).toBe(
-        "Selected participant write",
-      );
+      expect(mainSession(PARTICIPANT_DRAFT)?.label).toBe("Selected participant write");
 
       turn.revoke(bob.profileId);
       await expect(read(PARTICIPANT_SHARED, bob.profileId)).rejects.toThrow(/Bob's access changed/);
@@ -204,7 +204,7 @@ describe("built-in session tool role authority", () => {
     "rejects %s when another participant steers during preparation",
     async (surface) => {
       await withParticipantSessionToolsFixture(async ({ cfg, turn, alice, bob }) => {
-        const context = expectDefined(getPluginRuntimeGatewayRequestScope()?.context, "Gateway");
+        const context = localContext();
         const steer = vi
           .fn(async () => undefined)
           .mockImplementationOnce(async () => {
@@ -249,9 +249,7 @@ describe("built-in session tool role authority", () => {
               user: alice.profileId,
             })
           ).details,
-        ).toMatchObject({
-          messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })],
-        });
+        ).toMatchObject(draftMessages);
       });
     },
   );
@@ -260,9 +258,7 @@ describe("built-in session tool role authority", () => {
     await withParticipantSessionToolsFixture(async ({ turn, bob }) => {
       const read = (sessionKey: string) =>
         dispatchGatewayMethodInProcess("chat.history", { sessionKey, agentId: "main" });
-      await expect(read(PARTICIPANT_DRAFT)).resolves.toMatchObject({
-        messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })],
-      });
+      await expect(read(PARTICIPANT_DRAFT)).resolves.toMatchObject(draftMessages);
       expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
       await expect(read(REQUESTER)).resolves.toMatchObject({ sessionKey: REQUESTER });
       await expect(read(REQUESTER.replace("agent:main:", ""))).resolves.toMatchObject({
@@ -294,10 +290,7 @@ describe("built-in session tool role authority", () => {
           idempotencyKey: "unselected-transcript-override",
         }),
       ).rejects.toThrow(/Several people have steered this turn/);
-      const context = getPluginRuntimeGatewayRequestScope()?.context;
-      if (!context) {
-        throw new Error("expected local Gateway context");
-      }
+      const context = localContext();
       const custody = await captureAgentHarnessCompletionCustody(
         createAgentHarnessCompletionScope({ requesterSessionKey: REQUESTER }),
       );
@@ -313,9 +306,7 @@ describe("built-in session tool role authority", () => {
           runtime.recovery.dispatchSessionMethod("chat.history", {
             sessionKey: PARTICIPANT_DRAFT,
           }),
-        ).resolves.toMatchObject({
-          messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })],
-        });
+        ).resolves.toMatchObject(draftMessages);
         context.readChatStartupProjection = async () => {
           turn.complete();
           return undefined;
@@ -415,7 +406,7 @@ describe("built-in session tool role authority", () => {
         }));
       onTestFinished(() => runtimeChoice.mockRestore());
       await withSessionToolsFixture(async (cfg) => {
-        const context = expectDefined(getPluginRuntimeGatewayRequestScope()?.context, "Gateway");
+        const context = localContext();
         let current = true;
         context.loadGatewayModelCatalogSnapshot = async () => {
           if (lifetime === "retired") {
@@ -539,7 +530,7 @@ describe("built-in session tool role authority", () => {
           if (typeof childKey !== "string") {
             throw new Error("expected created child session key");
           }
-          const child = loadSessionEntry({ agentId: "main", sessionKey: childKey });
+          const child = mainSession(childKey);
           if (!child) {
             throw new Error("expected persisted child session");
           }
@@ -577,7 +568,7 @@ describe("built-in session tool role authority", () => {
     "visible-spawn rollback protects the admitted child generation (%s)",
     async (generation) => {
       await withSessionToolsFixture(async (cfg) => {
-        const context = expectDefined(getPluginRuntimeGatewayRequestScope()?.context, "Gateway");
+        const context = localContext();
         let current = true;
         let childKey: string | undefined;
         let successor: ReturnType<typeof loadSessionEntry>;
@@ -608,7 +599,7 @@ describe("built-in session tool role authority", () => {
           } else if (generation === "reset") {
             await callInProcessGatewayTool("sessions.reset", { key: childKey });
           }
-          successor = loadSessionEntry({ agentId: "main", sessionKey: childKey });
+          successor = mainSession(childKey);
           if (!successor) {
             throw new Error("expected persisted child before rollback");
           }
@@ -667,7 +658,7 @@ describe("built-in session tool role authority", () => {
           if (registeredRun) {
             expect.soft(registeredRun.controller.signal.aborted).toBe(generation === "active");
           }
-          expect(loadSessionEntry({ agentId: "main", sessionKey: childKey })).toEqual(
+          expect(mainSession(childKey)).toEqual(
             generation === "unchanged" || generation === "active" ? undefined : successor,
           );
         } finally {
@@ -728,14 +719,10 @@ describe("built-in session tool role authority", () => {
             },
           ),
       );
-      expect(loadSessionEntry({ agentId: "main", sessionKey: TARGET })?.label).toBe(
-        "Foreground owner",
-      );
+      expect(mainSession(TARGET)?.label).toBe("Foreground owner");
       released.resolve();
       await handoff.pending;
-      expect(loadSessionEntry({ agentId: "main", sessionKey: TARGET })?.label).toBe(
-        "Detached owner",
-      );
+      expect(mainSession(TARGET)?.label).toBe("Detached owner");
     });
   });
 
@@ -743,7 +730,7 @@ describe("built-in session tool role authority", () => {
     "settles self-archive with live source authority after caller closure (%s)",
     async (caller) => {
       await withSessionToolsFixture(async (cfg) => {
-        const context = expectDefined(getPluginRuntimeGatewayRequestScope()?.context, "Gateway");
+        const context = localContext();
         const client = roleClient("write");
         const profile = expectDefined(client.authenticatedUserProfile, "operator profile");
         const { sessionKey, sessionId } = await seedSessionToolsFixtureSession({
@@ -829,7 +816,7 @@ describe("built-in session tool role authority", () => {
               )
             : invoke());
           expect(result.details).toMatchObject({ status: "scheduled", sessionKey });
-          expect(loadSessionEntry({ agentId: "main", sessionKey })?.archivedAt).toBeUndefined();
+          expect(mainSession(sessionKey)?.archivedAt).toBeUndefined();
           if (caller === "revoked device") {
             invalidateGatewayDeviceRevocation(context, "archive-device", "operator");
           }
@@ -840,14 +827,14 @@ describe("built-in session tool role authority", () => {
         }
         if (caller === "revoked device") {
           await expect(settled.promise).rejects.toThrow(/authority.*no longer active/);
-          expect(loadSessionEntry({ agentId: "main", sessionKey })?.archivedAt).toBeUndefined();
+          expect(mainSession(sessionKey)?.archivedAt).toBeUndefined();
           return;
         }
         await settled.promise;
         await archived.promise;
         await sourceReleased.promise;
         expect(readGatewayDeviceSourceAuthority(source.isCurrent)?.()).toBe(false);
-        expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
+        expect(mainSession(sessionKey)).toMatchObject({
           sessionId,
           archivedAt: expect.any(Number),
         });
@@ -859,7 +846,7 @@ describe("built-in session tool role authority", () => {
     "%s does not commit when its caller closes during request authorization",
     async (method) => {
       await withSessionToolsFixture(async (cfg) => {
-        const context = expectDefined(getPluginRuntimeGatewayRequestScope()?.context, "Gateway");
+        const context = localContext();
         const patchParams = (label: string) =>
           method === "sessions.patch"
             ? { key: TARGET, label }
@@ -875,7 +862,7 @@ describe("built-in session tool role authority", () => {
             agentToolCaller: { agentId: "main", sessionKey: REQUESTER },
           });
         const persisted = () => {
-          const entry = loadSessionEntry({ agentId: "main", sessionKey: TARGET });
+          const entry = mainSession(TARGET);
           return method === "sessions.assignOwner" ? entry?.owner?.actor.id : entry?.label;
         };
         await request(before);
@@ -938,9 +925,7 @@ describe("built-in session tool role authority", () => {
               pinned: true,
             }),
           ).rejects.toThrow(/not visible/i);
-          expect(
-            loadSessionEntry({ agentId: "main", sessionKey: TARGET })?.archivedAt,
-          ).toBeUndefined();
+          expect(mainSession(TARGET)?.archivedAt).toBeUndefined();
           return;
         }
         // Keep archive in the same reproduction even if discovery regresses to an empty result.
@@ -955,7 +940,7 @@ describe("built-in session tool role authority", () => {
         await expect(archive()).resolves.toMatchObject({
           details: { status: "updated", sessionKey: TARGET },
         });
-        expect(loadSessionEntry({ agentId: "main", sessionKey: TARGET })).toMatchObject({
+        expect(mainSession(TARGET)).toMatchObject({
           sessionId: TARGET_ID,
           archivedAt: expect.any(Number),
         });
@@ -1018,7 +1003,7 @@ describe("built-in session tool role authority", () => {
           ).rejects.toThrow(/missing scope: operator.write/i);
         },
       );
-      expect(loadSessionEntry({ agentId: "main", sessionKey: TARGET })?.archivedAt).toBeUndefined();
+      expect(mainSession(TARGET)?.archivedAt).toBeUndefined();
     });
   });
 });
