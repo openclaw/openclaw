@@ -54,6 +54,21 @@ describe("embedded sandbox reporting", () => {
   it("maps sandbox context into prompt information", () => {
     expect(buildEmbeddedSandboxInfo(sandbox())).toEqual(promptInfo);
   });
+  it("carries the agent workspace root only while its mount is projected", () => {
+    expect(buildEmbeddedSandboxInfo(sandbox({ workspaceAccess: "ro" }))).toMatchObject({
+      workspaceAccess: "ro",
+      agentWorkspaceMount: "/agent",
+      agentWorkspaceDir: "/tmp/openclaw-workspace",
+    });
+    expect(
+      buildEmbeddedSandboxInfo(
+        sandbox({ workspaceAccess: "rw", workspaceDir: "/tmp/openclaw-workspace" }),
+      )?.agentWorkspaceDir,
+    ).toBeUndefined();
+    expect(
+      buildEmbeddedSandboxInfo(sandbox({ workspaceAccess: "none" }))?.agentWorkspaceDir,
+    ).toBeUndefined();
+  });
   it("never advertises host execution for a required sandbox", () => {
     expect(
       buildEmbeddedSandboxInfo(sandbox({ required: true }), {

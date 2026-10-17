@@ -104,6 +104,15 @@ export type SandboxSelectedMount = ManagedWorkspaceMount & {
   source: "workspace" | "agent" | "bind" | "protectedSkill";
 };
 
+/** True when the agent workspace is projected into the sandbox as a readable mount. */
+export function isAgentWorkspaceMounted(params: {
+  workspaceDir: string;
+  agentWorkspaceDir: string;
+  workspaceAccess: SandboxWorkspaceAccess;
+}): boolean {
+  return params.workspaceAccess !== "none" && params.workspaceDir !== params.agentWorkspaceDir;
+}
+
 /** Resolves Gateway-local sources before the container lifecycle selects daemon paths. */
 export function resolveWorkspaceMounts(params: {
   workspaceDir: string;
@@ -123,7 +132,7 @@ export function resolveWorkspaceMounts(params: {
     },
   ];
 
-  if (workspaceAccess !== "none" && workspaceDir !== agentWorkspaceDir) {
+  if (isAgentWorkspaceMounted({ workspaceDir, agentWorkspaceDir, workspaceAccess })) {
     mounts.push({
       hostPath: agentWorkspaceDir,
       containerPath: SANDBOX_AGENT_WORKSPACE_MOUNT,

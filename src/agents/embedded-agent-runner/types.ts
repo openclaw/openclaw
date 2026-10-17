@@ -340,6 +340,8 @@ export type EmbeddedSandboxInfo = {
   containerWorkspaceDir?: string;
   workspaceAccess?: "none" | "ro" | "rw";
   agentWorkspaceMount?: string;
+  /** Host root of the read-only agent workspace mount; present only while projected. */
+  agentWorkspaceDir?: string;
   browserBridgeUrl?: string;
   hostBrowserAllowed?: boolean;
   elevated?: {

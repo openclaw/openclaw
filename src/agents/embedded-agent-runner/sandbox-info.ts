@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.js";
 import { withPreparedExecDefaults } from "../exec-defaults.preparation.js";
 import type { resolveSandboxContext } from "../sandbox.js";
+import { isAgentWorkspaceMounted } from "../sandbox/workspace-mounts.js";
 import {
   withPreparedToolConstruction,
   type ToolConstructionPreparationOptions,
@@ -101,6 +102,13 @@ export function buildEmbeddedSandboxInfo(
     containerWorkspaceDir: sandbox.containerWorkdir,
     workspaceAccess: sandbox.workspaceAccess,
     agentWorkspaceMount: sandbox.workspaceAccess === "ro" ? "/agent" : undefined,
+    ...(isAgentWorkspaceMounted({
+      workspaceDir: sandbox.workspaceDir,
+      agentWorkspaceDir: sandbox.agentWorkspaceDir,
+      workspaceAccess: sandbox.workspaceAccess,
+    })
+      ? { agentWorkspaceDir: sandbox.agentWorkspaceDir }
+      : {}),
     browserBridgeUrl: sandbox.browser?.bridgeUrl,
     hostBrowserAllowed: sandbox.browserAllowHostControl,
     ...(elevatedConfigured
