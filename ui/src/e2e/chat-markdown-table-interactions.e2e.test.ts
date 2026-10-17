@@ -418,10 +418,12 @@ ${overflowTable}`,
         ],
         featureMethods: ["chat.metadata", "chat.startup", "chat.history", "chat.send"],
         sessionTranscripts: Object.fromEntries(
-          [
-            [alphaKey, betaKey, "history-alpha", "Alpha"],
-            [betaKey, alphaKey, "history-beta", "Beta"],
-          ].map(([key, other, id, name]) => [
+          (
+            [
+              [alphaKey, betaKey, "history-alpha", "Alpha"],
+              [betaKey, alphaKey, "history-beta", "Beta"],
+            ] as const
+          ).map(([key, other, id, name]) => [
             key,
             {
               messages: [

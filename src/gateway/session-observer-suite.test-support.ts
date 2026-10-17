@@ -29,7 +29,7 @@ export function useObserverSuite() {
   });
   return {
     activeHarnesses,
-    createHarness(options?: HarnessOptions) {
+    createHarness: (options?: HarnessOptions) => {
       const harness = createBaseHarness(options);
       activeHarnesses.add(harness);
       return harness;

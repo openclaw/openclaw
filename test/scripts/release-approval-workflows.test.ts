@@ -93,10 +93,10 @@ it.each([
   const job = requireJob(workflow, jobId);
   expect(job.permissions?.attestations).toBe("read");
   const step = job.steps.at(-1);
+  expect(step?.if).toBeUndefined();
   expect(step).toMatchObject({
     name: "Verify release approval receipt",
     id: "receipt",
-    if: undefined,
     env: {
       GH_TOKEN: "${{ github.token }}",
       ...parentEnv,

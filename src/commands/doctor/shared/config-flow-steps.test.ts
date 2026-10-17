@@ -7,6 +7,7 @@ const { migrateLegacyConfigMock, stripUnknownConfigKeysMock } = vi.hoisted(() =>
   stripUnknownConfigKeysMock: vi.fn(),
 }));
 
+// mock-isolation: Exercise flow decisions with a fixed migration result, not plugin discovery.
 vi.mock("./legacy-config-migrate.js", () => ({ migrateLegacyConfig: migrateLegacyConfigMock }));
 
 vi.mock("../../doctor-config-analysis.js", () => ({

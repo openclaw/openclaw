@@ -22,15 +22,21 @@ vi.mock("./create-client.js", () => ({
 }));
 
 type SharedLease = Awaited<ReturnType<typeof acquireSharedMatrixClient>>;
-type Auth = Parameters<typeof acquireSharedMatrixClient>[0]["auth"];
+type Auth = NonNullable<Parameters<typeof acquireSharedMatrixClient>[0]>["auth"];
 type Disposer = () => void | Promise<void>;
+type LifecycleOwner = {
+  runtime: PluginRuntime;
+  acquire: (auth: Auth, abortSignal?: AbortSignal) => Promise<SharedLease>;
+  snapshotDisposers: () => Disposer[];
+  dispose: () => Promise<void>;
+};
 
 const { clearRuntime: clearMatrixRuntime } = createPluginRuntimeStore<PluginRuntime>({
   pluginId: "matrix",
   errorMessage: "Matrix runtime not initialized",
 });
 
-const owners: ReturnType<typeof registerOwner>[] = [];
+const owners: LifecycleOwner[] = [];
 const acquisitions: Promise<SharedLease>[] = [];
 const releaseBlockedIo: Array<() => void> = [];
 let previousRuntime: PluginRuntime | null;
@@ -51,7 +57,7 @@ function expectBlocked(settled: ReturnType<typeof vi.fn>) {
   expect(createMatrixClientMock).toHaveBeenCalledOnce();
 }
 
-function registerOwner(onDisposeRegistered?: () => void) {
+function registerOwner(onDisposeRegistered?: () => void): LifecycleOwner {
   const controller = new AbortController();
   const disposers = new Set<Disposer>();
   const api = createTestPluginApi({ id: "matrix", name: "Matrix" });

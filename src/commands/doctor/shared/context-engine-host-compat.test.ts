@@ -36,8 +36,10 @@ vi.mock("../../../agents/harness/registry.js", () => ({
   getRegisteredAgentHarness: vi.fn(() => undefined),
 }));
 
+// mock-isolation: Register synthetic engines without initializing live context-engine plugins.
 vi.mock("../../../context-engine/init.js", () => ({ ensureContextEnginesInitialized: vi.fn() }));
 
+// mock-isolation: Control inspection leases without loading installed plugins.
 vi.mock("../../../plugins/loader.js", () => ({ acquirePluginRegistryForInspection: vi.fn() }));
 
 let engineCounter = 0;

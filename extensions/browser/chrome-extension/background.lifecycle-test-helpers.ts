@@ -14,19 +14,19 @@ import type { FakeWebSocket } from "./background.test-support.js";
 export function deferredScope() {
   const releases = new Set<() => void>();
   return {
-    deferred<T>(fallback: T) {
+    deferred: <T>(fallback: T) => {
       const pending = createDeferred<T>();
       const release = () => pending.resolve(fallback);
       releases.add(release);
       return {
         promise: pending.promise,
-        resolve(value = fallback) {
+        resolve: (value = fallback) => {
           releases.delete(release);
           pending.resolve(value);
         },
       };
     },
-    releaseAll() {
+    releaseAll: () => {
       for (const release of releases) {
         release();
       }
@@ -176,10 +176,11 @@ export async function waitCalled(mock: unknown, ...args: unknown[]) {
 export function holdNext<Args extends unknown[], Result>(
   mock: Mock<(...args: Args) => Promise<Result>>,
   gate: Promise<void>,
-) {
+): Mock<(...args: Args) => Promise<Result>> {
   const original = mock.getMockImplementation()!;
   mock.mockImplementationOnce(async (...args) => {
     await gate;
     return await original(...args);
   });
+  return mock;
 }

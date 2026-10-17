@@ -334,7 +334,7 @@ async function connectInlineClient(gateway: QaGatewayChild): Promise<GatewayClie
     scopes: ["operator.admin"],
     caps: ["inline-widgets"],
     requestTimeoutMs: 20_000,
-    onHelloOk: connected.resolve,
+    onHelloOk: () => connected.resolve(),
     onConnectError: connected.reject,
   });
   client.start();

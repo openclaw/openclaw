@@ -36,7 +36,7 @@ type Context = { state: State; nodeId: string; gatewayToken: string; gatewayUrl:
 export async function withNodeGateway(
   options: {
     label: string;
-    plugin: Pick<OpenClawPluginDefinition, "id" | "name" | "register">;
+    plugin: Required<Pick<OpenClawPluginDefinition, "id" | "name" | "register">>;
     contracts?: Parameters<typeof registerVirtualTestPlugin>[0]["contracts"];
     env?: NodeJS.ProcessEnv;
     platform: string;

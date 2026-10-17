@@ -23,9 +23,9 @@ const runPolicyShell = (body: string, args: string[] = [], env: NodeJS.ProcessEn
   run("bash", ["-euo", "pipefail", "-c", `${policySource}\n${body}`, "policy-cell", ...args], env);
 function policyPaths() {
   const root = tempDirs.make("openclaw-policy-");
-  const [source, artifacts, prefix] = ["source", "artifacts", "npm-prefix"].map((p) =>
-    join(root, p),
-  );
+  const source = join(root, "source");
+  const artifacts = join(root, "artifacts");
+  const prefix = join(root, "npm-prefix");
   const packageRoot = join(prefix, "lib/node_modules/openclaw");
   for (const directory of [source, artifacts, packageRoot, join(prefix, "bin")]) {
     mkdirSync(directory, { recursive: true });

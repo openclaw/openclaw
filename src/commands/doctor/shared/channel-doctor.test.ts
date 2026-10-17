@@ -22,15 +22,18 @@ const READ_ONLY_CHANNEL_DOCTOR_OPTIONS = {
   includeSetupFallbackPlugins: true,
 } as const;
 
+// mock-isolation: Control registry lookup without activating bundled plugin runtimes.
 vi.mock("../../../channels/plugins/registry.js", () => ({
   getLoadedChannelPlugin: mocks.getLoadedChannelPlugin,
 }));
 
+// mock-isolation: Supply only the bundled plugin lookups used by channel Doctor.
 vi.mock("../../../channels/plugins/bundled.js", () => ({
   getBundledChannelPlugin: mocks.getBundledChannelPlugin,
   getBundledChannelSetupPlugin: mocks.getBundledChannelSetupPlugin,
 }));
 
+// mock-isolation: Keep read-only discovery independent of live plugin registration.
 vi.mock("../../../channels/plugins/read-only.js", () => ({
   resolveReadOnlyChannelPluginsForConfig: mocks.resolveReadOnlyChannelPluginsForConfig,
 }));

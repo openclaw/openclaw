@@ -11,6 +11,7 @@ const { applyPluginDoctorCompatibilityMigrations, collectRelevantDoctorPluginIds
 const loadBundledChannelDoctorContractApi = vi.hoisted(() => vi.fn());
 const getBootstrapChannelPlugin = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Control migration discovery while retaining the real deferred-migration guard.
 vi.mock(import("../../../plugins/doctor-contract-registry.js"), async (importOriginal) => {
   const { isPluginDoctorMigrationDeferred } = await importOriginal();
   return {
@@ -21,10 +22,12 @@ vi.mock(import("../../../plugins/doctor-contract-registry.js"), async (importOri
   };
 });
 
+// mock-isolation: Supply migration contracts without activating channel runtimes.
 vi.mock("../../../channels/plugins/doctor-contract-api.js", () => ({
   loadBundledChannelDoctorContractApi,
 }));
 
+// mock-isolation: The fixture owns bootstrap lookup; no runtime plugin registry is loaded.
 vi.mock("../../../channels/plugins/bootstrap-registry.js", () => ({ getBootstrapChannelPlugin }));
 
 let applyChannelDoctorCompatibilityMigrations: typeof import("./channel-legacy-config-migrate.js").applyChannelDoctorCompatibilityMigrations;

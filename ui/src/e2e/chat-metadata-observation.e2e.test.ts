@@ -28,7 +28,7 @@ function sessionsResponse() {
     count: sessionKeys.length,
     defaults: { model: model.id, modelProvider: model.provider },
     path: "",
-    sessions: sessionKeys.map((key, index) => ({
+    sessions: sessionKeys.map((key: string, index) => ({
       key,
       kind: "direct",
       label: `Metadata ${index + 1}`,
@@ -65,11 +65,11 @@ async function expectCatalog(pane: Locator, name: string) {
 }
 
 async function requestCounts(gateway: MockGatewayControls) {
-  return Object.fromEntries(
-    await Promise.all(
-      methods.map(async (method) => [method, (await gateway.getRequests(method)).length]),
-    ),
-  );
+  const [metadata, catalog] = await Promise.all([
+    gateway.getRequests("chat.metadata"),
+    gateway.getRequests("models.list"),
+  ]);
+  return { "chat.metadata": metadata.length, "models.list": catalog.length };
 }
 
 async function seedSharedSessionPanes(page: Page) {
@@ -123,7 +123,11 @@ async function deferRefresh(gateway: MockGatewayControls) {
 }
 const withPage = (run: Parameters<typeof suite.withPage>[1]) =>
   suite.withPage({ viewport: { width: 1440, height: 900 } }, run);
-const countsAfter = (before: Record<string, number>, metadata: number, catalog: number) => ({
+const countsAfter = (
+  before: Record<(typeof methods)[number], number>,
+  metadata: number,
+  catalog: number,
+) => ({
   "chat.metadata": before["chat.metadata"] + metadata,
   "models.list": before["models.list"] + catalog,
 });

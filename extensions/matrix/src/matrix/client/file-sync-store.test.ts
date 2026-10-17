@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
@@ -187,6 +188,7 @@ describe("SqliteBackedMatrixSyncStore", () => {
     const writer = await openStore();
     await writer.setSyncData(structuredClone(response));
     await writer.flush();
+    assert(response.rooms.join);
     response.rooms.join["!room:example.org"]["org.matrix.msc4222.state_after"] = { events: [] };
     const expected = {
       nextBatch: "large-cursor",

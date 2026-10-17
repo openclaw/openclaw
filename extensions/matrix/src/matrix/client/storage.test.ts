@@ -599,7 +599,12 @@ describe("matrix client storage paths", () => {
     const storagePaths = await resolveDefaultStoragePaths({ accessToken: "secret-token-old" });
     fs.mkdirSync(storagePaths.rootDir, { recursive: true });
     fs.writeFileSync(storagePaths.storagePath, '{"legacy":true}');
-    await expectCanonicalRootForNewDevice();
+    const canonicalPaths = seedCanonicalStorageRoot("secret-token-new", {
+      deviceId: "NEWDEVICE",
+    });
+    const resolved = await resolveRotatedDevice("NEWDEVICE");
+    expect(resolved.rootDir).toBe(canonicalPaths.rootDir);
+    expect(resolved.tokenHash).toBe(canonicalPaths.tokenHash);
   });
 
   it.each([true, false])("keeps backfilled roots sticky only when claimed: %s", async (claimed) => {

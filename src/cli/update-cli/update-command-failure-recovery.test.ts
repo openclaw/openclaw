@@ -49,13 +49,16 @@ vi.mock("./update-command-service-plan.js", async (importOriginal) => ({
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let root: string;
-const containing = expect.objectContaining;
+const containing = (value: unknown) => expect.objectContaining(value);
 const noCalls = (...fns: unknown[]) => {
   for (const fn of fns) {
     expect(fn).not.toHaveBeenCalled();
   }
 };
-const failedPlugins = (recovery?: { serviceRestartSafe: false; reason: string }) =>
+const failedPlugins = (recovery?: {
+  serviceRestartSafe: false;
+  reason: "state-migration-started";
+}) =>
   mocks.converge.mockImplementationOnce(async ({ result }) => ({
     resultWithPostUpdate: {
       ...result,

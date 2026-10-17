@@ -145,7 +145,11 @@ module.exports = { id: ${JSON.stringify(PLUGIN_ID)}, register(api) {
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line));
-  expect(events.map(([profileId, agentDir]) => [profileId, agentDir]).toSorted()).toEqual(
+  expect(
+    events
+      .map(([profileId, agentDir]) => [profileId, agentDir] as const)
+      .toSorted(([left], [right]) => left.localeCompare(right)),
+  ).toEqual(
     ["alpha", "alpha", "beta", "beta", "beta"].map((agentId) => [
       `${PROVIDER_ID}:${agentId}`,
       agentId === "alpha" ? entries.alpha.agentDir : entries.beta.agentDir,

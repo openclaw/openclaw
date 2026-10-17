@@ -33,7 +33,7 @@ const cleanPairing = {
   pairedNodePresent: true,
   nodeSurfaceReapprovalRequired: false,
   nodeSurfaceCommandAdditions: [],
-};
+} satisfies Parameters<typeof buildRedactedEvidence>[0]["pairing"];
 
 afterEach(() => vi.useRealTimers());
 
@@ -433,8 +433,11 @@ it("checks both candidate starts before Doctor and the final phase after Doctor"
     [first, "assert-historical-package-replacement-startup-repair", restart],
     [restart, "doctor run_doctor", "mobile-pairing-final"],
   ]) {
-    for (let index = 1; index < sequence.length; index += 1) {
-      expect(position(sequence[index - 1])).toBeLessThan(position(sequence[index]));
+    let lastPosition = -1;
+    for (const phase of sequence) {
+      const nextPosition = position(phase);
+      expect(nextPosition).toBeGreaterThan(lastPosition);
+      lastPosition = nextPosition;
     }
   }
 });

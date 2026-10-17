@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { buildExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
   createMessageReceiptFromOutboundResults,
@@ -713,6 +714,7 @@ describe("signal outbound", () => {
       };
     });
     const deps = { signal: send };
+    assert(signalPlugin.message?.send);
     const sendMessage = signalPlugin.message.send;
     const to = "signal:+15555550123";
     const replyToId = "1700000000001";

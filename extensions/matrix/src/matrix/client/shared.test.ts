@@ -15,6 +15,7 @@ const createMatrixClientMock = vi.hoisted(() => vi.fn());
 
 const TEST_CFG = {};
 
+// mock-isolation: These shared-client fixtures supply resolved auth without loading disk config.
 vi.mock("./config.js", () => ({
   resolveMatrixAuth: resolveMatrixAuthMock,
 }));
@@ -90,7 +91,9 @@ function createMonitorRetirement(callOrder: string[]) {
   return {
     closeTaskAdmission: vi.fn(() => callOrder.push("close-admission")),
     detachListeners: vi.fn(() => callOrder.push("detach-listeners")),
-    waitForTasks: vi.fn(async () => void callOrder.push("wait-tasks")),
+    waitForTasks: vi.fn<() => Promise<void>>(async () => {
+      callOrder.push("wait-tasks");
+    }),
     cleanup: vi.fn(async () => void callOrder.push("monitor-cleanup")),
   };
 }
@@ -450,7 +453,7 @@ describe("shared Matrix client generations", () => {
     const start = createDeferred<void>();
     const { auth, client: firstClient, replacementClient } = clients();
     let startupSignal: AbortSignal | undefined;
-    firstClient.start.mockImplementation(({ abortSignal } = {}) => {
+    firstClient.start.mockImplementation(({ abortSignal }: { abortSignal?: AbortSignal } = {}) => {
       startupSignal = abortSignal;
       return start.promise;
     });

@@ -552,7 +552,7 @@ describe("collectCodexRouteWarnings", () => {
     expectAgentRuntime(result.cfg, "codex", { modelId: "gpt-5.5" });
   });
 
-  it.each([
+  it.each<RouteFixture & { name: string }>([
     {
       name: "inherited bare aliases",
       defaults: {
