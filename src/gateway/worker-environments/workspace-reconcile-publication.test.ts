@@ -33,6 +33,7 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const read = (root: string, name = "result.txt") => fs.readFile(path.join(root, name));
 afterEach(() => {
   workspaceWarning.mockReset();
   vi.unstubAllEnvs();
@@ -59,16 +60,10 @@ async function workspace(eol = "\n", added = false) {
     baseBytes,
     workerBytes,
     addedBytes,
-    base,
-    current,
-    apply: {
-      root,
-      stagingRoot,
-      base: base.manifest,
-      current: current.manifest,
-      baseManifestRef: base.manifestRef,
-      currentManifestRef: current.manifestRef,
-    },
+    base: base.manifest,
+    current: current.manifest,
+    baseManifestRef: base.manifestRef,
+    currentManifestRef: current.manifestRef,
   };
 }
 
@@ -129,7 +124,7 @@ it.each([
       },
       async () => {
         if (definitive) {
-          expect(await fs.readFile(path.join(f.root, "result.txt"))).toEqual(f.baseBytes);
+          expect(await read(f.root)).toEqual(f.baseBytes);
         }
       },
     );
@@ -137,7 +132,7 @@ it.each([
     try {
       await expect(
         applyStagedWorkerWorkspace({
-          ...f.apply,
+          ...f,
           journal,
           acceptance: {
             kind: "reconcile",
@@ -156,16 +151,16 @@ it.each([
     if (definitive) {
       expect(state.pending()).toBeUndefined();
       expect(journal.abort).toHaveBeenCalledOnce();
-      await expect(fs.readFile(path.join(f.root, "result.txt"))).resolves.toEqual(f.baseBytes);
+      await expect(read(f.root)).resolves.toEqual(f.baseBytes);
       return;
     }
     expect(state.pending()).toBeDefined();
     expect(journal.commit).toHaveBeenCalledTimes(phase === "apply" ? 0 : 1);
     expect(journal.abort).not.toHaveBeenCalled();
-    await expect(fs.readFile(path.join(f.root, "result.txt"))).resolves.toEqual(f.workerBytes);
-    await expect(fs.readFile(path.join(f.root, "added.txt"))).resolves.toEqual(f.addedBytes);
+    await expect(read(f.root)).resolves.toEqual(f.workerBytes);
+    await expect(read(f.root, "added.txt")).resolves.toEqual(f.addedBytes);
     await recoverWorkerWorkspaceReconciliation({ root: f.root, journal: state.pending()! });
-    await expect(fs.readFile(path.join(f.root, "result.txt"))).resolves.toEqual(f.baseBytes);
+    await expect(read(f.root)).resolves.toEqual(f.baseBytes);
     await expect(fs.access(path.join(f.root, "added.txt"))).rejects.toThrow();
     expect(state.pending()).toBeDefined();
   },
@@ -176,28 +171,28 @@ it.each([
   ["preserves publication failures and rollback when scratch cleanup fails", true, true],
   ["removes disposable scratch without warning when cleanup succeeds", false, false],
 ])("%s", async (_name, cleanupFails, publicationFails) => {
-  const { root: local, stagingRoot: payload, base, current } = await workspace();
+  const f = await workspace();
   const publicationError = new Error("accepted publication rejected");
   const cleanupError = new Error("scratch removal failed");
   const ref = workerWorkspaceResultRef("claim-staging-cleanup");
   const hasRef = (stagedResultRef: string) =>
-    hasWorkerWorkspaceResultRef({ root: local, stagedResultRef });
+    hasWorkerWorkspaceResultRef({ root: f.root, stagedResultRef });
   const candidateRef = preparedWorkerWorkspaceResultRef(ref);
   const record = vi.fn();
   const commit = vi.fn(async () => {});
   const abort = vi.fn(async () => {});
   const prepared = await workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
     request: {
-      localPath: local,
+      localPath: f.root,
       remoteWorkspaceDir: "/worker/workspace",
-      baseManifestRef: base.manifestRef,
+      baseManifestRef: f.baseManifestRef,
       journal: { load: async () => undefined, begin: async () => {}, commit, abort },
       stagedResult: { ref, record },
     },
-    stagingRoot: payload,
-    currentManifestRef: current.manifestRef,
-    baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
-    currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
+    stagingRoot: f.stagingRoot,
+    currentManifestRef: f.currentManifestRef,
+    baseManifestRaw: serializeWorkerWorkspaceManifest(f.base),
+    currentManifestRaw: serializeWorkerWorkspaceManifest(f.current),
     publishAcceptedManifest: async () => {
       if (publicationFails) {
         throw publicationError;
@@ -221,7 +216,7 @@ it.each([
     const finalized = verifyReconciledWorkspaceFinal(
       {
         ...prepared,
-        manifestRef: current.manifestRef,
+        manifestRef: f.currentManifestRef,
         changed: true,
         verifyStable: async () => {},
       },
@@ -231,20 +226,17 @@ it.each([
       await expect(finalized).rejects.toBe(publicationError);
       expect(abort).toHaveBeenCalledOnce();
     } else {
-      await expect(finalized).resolves.toMatchObject({ manifestRef: current.manifestRef });
+      await expect(finalized).resolves.toMatchObject({ manifestRef: f.currentManifestRef });
       expect(commit).toHaveBeenCalledOnce();
     }
-    await expect(fs.readFile(path.join(local, "result.txt"), "utf8")).resolves.toBe(
-      publicationFails ? "base\n" : "worker\n",
-    );
+    await expect(read(f.root)).resolves.toEqual(publicationFails ? f.baseBytes : f.workerBytes);
     await expect(hasRef(ref)).resolves.toBe(!publicationFails);
     await expect(hasRef(candidateRef)).resolves.toBe(false);
     expect(record).toHaveBeenCalledTimes(publicationFails ? 0 : 1);
-    expect(workspaceWarning).toHaveBeenCalledTimes(cleanupFails ? 1 : 0);
+    expect(workspaceWarning.mock.calls).toEqual(
+      cleanupFails ? [["worker workspace staging cleanup failed: scratch removal failed"]] : [],
+    );
     if (cleanupFails) {
-      expect(workspaceWarning).toHaveBeenCalledWith(
-        "worker workspace staging cleanup failed: scratch removal failed",
-      );
       await fs.access(scratch);
     } else {
       await expect(fs.access(scratch)).rejects.toMatchObject({ code: "ENOENT" });

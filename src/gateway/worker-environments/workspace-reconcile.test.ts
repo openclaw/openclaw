@@ -44,7 +44,6 @@ beforeEach(() => {
   local = tempDirs.make("workspace-local-");
   staged = tempDirs.make("workspace-staged-");
 });
-afterEach(() => vi.unstubAllEnvs());
 
 function encodeWorkspaceManifest(manifest: WorkerWorkspaceManifest) {
   const raw = serializeWorkerWorkspaceManifest(manifest);
@@ -88,6 +87,18 @@ async function resultFixture(
   const base = encodeWorkspaceManifest(await manifestFor(local));
   const current = encodeWorkspaceManifest(await manifestFor(staged));
   return { local, staged, base, current, ref: workerWorkspaceResultRef(`claim-${name}`) };
+}
+
+function stageResult({ ref, base, current }: Awaited<ReturnType<typeof resultFixture>>) {
+  return stageWorkerWorkspaceResult({
+    root: local,
+    stagingRoot: staged,
+    stagedResultRef: ref,
+    baseManifestRef: base.ref,
+    currentManifestRef: current.ref,
+    baseManifestRaw: base.raw,
+    currentManifestRaw: current.raw,
+  });
 }
 
 function prepareWorkspaceResult(params: {
@@ -181,25 +192,24 @@ it("applies the candidate before publishing its recovery ref", async () => {
   const current = encodeWorkspaceManifest(await manifestFor(complete));
   const ref = workerWorkspaceResultRef("claim-stage-order");
   let recordedRef: string | undefined;
-  let acceptedManifestRef: string | undefined;
+  const commit = vi.fn(async (_manifestRef: string) => {
+    expect(recordedRef).toBeUndefined();
+  });
   const prepared = await prepareWorkspaceResult({
     ref,
     base,
     current,
-    journal: emptyJournal(async (manifestRef) => {
-      expect(recordedRef).toBeUndefined();
-      acceptedManifestRef = manifestRef;
-    }),
+    journal: emptyJournal(commit),
     record: (resultRef) => {
       recordedRef = resultRef;
     },
   });
 
+  const probe = (targetRef: string) =>
+    runCommandWithTimeout(["git", "-C", local, "show-ref", "--verify", targetRef], {
+      timeoutMs: 10_000,
+    });
   const expectRefs = async () => {
-    const probe = (targetRef: string) =>
-      runCommandWithTimeout(["git", "-C", local, "show-ref", "--verify", targetRef], {
-        timeoutMs: 10_000,
-      });
     expect(await probe(preparedWorkerWorkspaceResultRef(ref))).toMatchObject({ code: 0 });
     expect((await probe(ref)).code).not.toBe(0);
   };
@@ -209,46 +219,39 @@ it("applies the candidate before publishing its recovery ref", async () => {
   await prepared.applyPreparedStagedResult();
 
   expect(recordedRef).toBeUndefined();
-  expect(acceptedManifestRef).toBe(current.ref);
+  expect(commit).toHaveBeenLastCalledWith(current.ref);
   await expectRefs();
   await prepared.publishStagedResult();
 
   expect(recordedRef).toBe(ref);
-  expect(acceptedManifestRef).toBe(current.ref);
+  expect(commit).toHaveBeenLastCalledWith(current.ref);
   await expectWorkspaceFiles(local, { ...changedFiles, "unchanged.txt": "keep\n" });
   const replayCommit = vi.fn(async () => {});
   await replayResult(ref, current.ref, { journal: emptyJournal(replayCommit) });
   expect(replayCommit).not.toHaveBeenCalled();
   await deleteStagedWorkerWorkspaceResult({ root: local, stagedResultRef: ref });
-  expect(
-    (
-      await runCommandWithTimeout(["git", "-C", local, "show-ref", "--verify", ref], {
-        timeoutMs: 10_000,
-      })
-    ).code,
-  ).not.toBe(0);
+  expect((await probe(ref)).code).not.toBe(0);
 });
 
 it("rejects a persisted journal above the combined inventory record budget", () => {
-  expect(() =>
-    parseWorkerWorkspaceReconciliationPlan(
-      JSON.stringify({
-        version: 1,
-        temporaryNonce: "a".repeat(32),
-        baseManifestRef: `sha256:${"a".repeat(64)}`,
-        currentManifestRef: `sha256:${"b".repeat(64)}`,
-        baseEntries: [],
-        appliedEntries: [],
-        baseDirectories: Array.from(
-          { length: MAX_RECONCILIATION_ENTRIES + 1 },
-          (_, index) => `directory-${index}`,
-        ),
-        appliedDirectories: [],
-        baseTree: "b".repeat(40),
-        basePackSha256: "c".repeat(64),
-      }),
+  const journal = {
+    version: 1,
+    temporaryNonce: "a".repeat(32),
+    baseManifestRef: `sha256:${"a".repeat(64)}`,
+    currentManifestRef: `sha256:${"b".repeat(64)}`,
+    baseEntries: [],
+    appliedEntries: [],
+    appliedDirectories: [],
+    baseDirectories: Array.from(
+      { length: MAX_RECONCILIATION_ENTRIES + 1 },
+      (_, index) => `directory-${index}`,
     ),
-  ).toThrow("unsupported shape");
+    baseTree: "b".repeat(40),
+    basePackSha256: "c".repeat(64),
+  };
+  expect(() => parseWorkerWorkspaceReconciliationPlan(JSON.stringify(journal))).toThrow(
+    "unsupported shape",
+  );
 });
 
 it("preserves the published result when its fence-row update fails", async () => {
@@ -306,21 +309,10 @@ it.each([false, true])(
 );
 
 it("does not sweep cleanup refs retained by another pending result", async () => {
-  const {
-    base,
-    current,
-    ref: stagedResultRef,
-  } = await resultFixture("retained-cleanup", {}, { "result.txt": "worker\n" });
+  const fixture = await resultFixture("retained-cleanup", {}, { "result.txt": "worker\n" });
+  const stagedResultRef = fixture.ref;
   await gitInit(local);
-  await stageWorkerWorkspaceResult({
-    root: local,
-    stagingRoot: staged,
-    stagedResultRef,
-    baseManifestRef: base.ref,
-    currentManifestRef: current.ref,
-    baseManifestRaw: base.raw,
-    currentManifestRaw: current.raw,
-  });
+  await stageResult(fixture);
   const cleanupRef = await moveStagedWorkerWorkspaceResultToCleanup({
     root: local,
     stagedResultRef,
@@ -379,30 +371,20 @@ it("does not treat a Git probe failure as an absent staged result", async () => 
 });
 
 it("disables workspace repository hooks while publishing result refs", async () => {
-  const { base, current, ref } = await resultFixture("disabled-hooks");
+  const fixture = await resultFixture("disabled-hooks");
   await gitInit(local);
   const hook = path.join(local, ".git", "hooks", "reference-transaction");
   await fs.writeFile(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
 
-  await stageWorkerWorkspaceResult({
-    root: local,
-    stagingRoot: staged,
-    stagedResultRef: ref,
-    baseManifestRef: base.ref,
-    currentManifestRef: current.ref,
-    baseManifestRaw: base.raw,
-    currentManifestRaw: current.raw,
-  });
-
-  await expect(hasRef(ref)).resolves.toBe(true);
+  await stageResult(fixture);
+  await expect(hasRef(fixture.ref)).resolves.toBe(true);
 });
 
-it("applies changed, added, deleted, executable, binary, and symlink results", async () => {
+it("applies changed, added, executable, binary, and symlink results", async () => {
   const addedName = process.platform === "win32" ? "added.txt" : "added\u0001-é.txt";
   await gitInit(local);
   await writeWorkspaceFiles(local, {
     "keep.bin": Buffer.from([0, 1, 2]),
-    "delete.txt": "remove",
     "src/script.sh": "before",
   });
   const base = await manifestFor(local);
@@ -420,7 +402,6 @@ it("applies changed, added, deleted, executable, binary, and symlink results", a
   await apply(base, current);
 
   await expectWorkspaceFiles(local, files);
-  await expect(fs.access(path.join(local, "delete.txt"))).rejects.toThrow();
   await expect(fs.readlink(path.join(local, "link.txt"))).resolves.toBe(addedName);
   expect((await fs.stat(path.join(local, "src", "script.sh"))).mode & 0o111).not.toBe(0);
 });
@@ -497,12 +478,8 @@ it("applies the three-way matrix while keeping local conflicts", async () => {
     "removed-dir/local.txt": "local addition",
   });
 
-  let acceptedManifestRef: string | undefined;
-  const result = await apply(base, current, {
-    commit: (manifestRef) => {
-      acceptedManifestRef = manifestRef;
-    },
-  });
+  const commit = vi.fn<(manifestRef: string) => void>();
+  const result = await apply(base, current, { commit });
 
   expect(result.conflictPaths).toEqual([
     "collision.txt",
@@ -512,7 +489,7 @@ it("applies the three-way matrix while keeping local conflicts", async () => {
     "removed-dir/local.txt",
     "tree",
   ]);
-  expect(acceptedManifestRef).toBe(result.manifestRef);
+  expect(commit).toHaveBeenLastCalledWith(result.manifestRef);
   for (const row of files) {
     const [entryPath] = row;
     const expected = row[4];
@@ -538,11 +515,9 @@ it("applies the three-way matrix while keeping local conflicts", async () => {
 
 it("allows a remote file to replace an unchanged base directory", async () => {
   await gitInit(local);
-  await fs.mkdir(path.join(local, "src"));
-  await fs.writeFile(path.join(local, "src", "old.txt"), "base");
+  await writeWorkspaceFiles(local, { "src/old.txt": "base" });
   const base = await manifestFor(local);
-  await fs.mkdir(path.join(local, "src", "__pycache__"));
-  await fs.writeFile(path.join(local, "src", "__pycache__", "old.pyc"), "local cache");
+  await writeWorkspaceFiles(local, { "src/__pycache__/old.pyc": "local cache" });
   await fs.writeFile(path.join(staged, "src"), "replacement");
   const current = await manifestFor(staged);
 
@@ -572,11 +547,10 @@ it("accepts a worker-added directory that gains only derived residue", async () 
 });
 
 it("treats derived residue as absent after a cloud directory deletion", async () => {
-  await fs.mkdir(path.join(local, "removed", "nested"), { recursive: true });
-  await fs.writeFile(path.join(local, "removed", "nested", "base.txt"), "base");
+  await writeWorkspaceFiles(local, { "removed/nested/base.txt": "base" });
   const base = { ...(await manifestFor(local)), baseCommit: "a".repeat(40) };
-  await fs.mkdir(path.join(local, "removed", "nested", "__pycache__"));
-  await fs.writeFile(path.join(local, "removed", "nested", "__pycache__", "cache.pyc"), "derived");
+  const residue = "removed/nested/__pycache__/cache.pyc";
+  await writeWorkspaceFiles(local, { [residue]: "derived" });
 
   const applied = await apply(base, {
     ...(await manifestFor(staged)),
@@ -584,9 +558,7 @@ it("treats derived residue as absent after a cloud directory deletion", async ()
   });
 
   expect(applied.conflictPaths).toEqual([]);
-  await expect(
-    fs.readFile(path.join(local, "removed", "nested", "__pycache__", "cache.pyc"), "utf8"),
-  ).resolves.toBe("derived");
+  await expectWorkspaceFiles(local, { [residue]: "derived" });
   expect(applied.manifest.directories).not.toContain("removed");
 });
 

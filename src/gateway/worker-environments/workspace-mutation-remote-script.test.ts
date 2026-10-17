@@ -22,6 +22,8 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const RECEIVER_CLEANUP_MS = 10_000;
+const receiverNonce = "b".repeat(32);
+const resetNonce = "c".repeat(32);
 
 function spawnTransaction(argv: string[], env: NodeJS.ProcessEnv, withReady = false) {
   const child = spawn(process.execPath, argv, {
@@ -37,12 +39,9 @@ function spawnTransaction(argv: string[], env: NodeJS.ProcessEnv, withReady = fa
       output[stream] += chunk;
     });
   }
-  const exited = new Promise<{
-    code: number | null;
-    signal: NodeJS.Signals | null;
-    stdout: string;
-    stderr: string;
-  }>((resolve, reject) => {
+  const exited = new Promise<
+    { code: number | null; signal: NodeJS.Signals | null } & typeof output
+  >((resolve, reject) => {
     child.once("error", reject);
     child.once("close", (code, signal) => resolve({ code, signal, ...output }));
   });
@@ -50,21 +49,17 @@ function spawnTransaction(argv: string[], env: NodeJS.ProcessEnv, withReady = fa
 }
 
 function waitForReady(transaction: ReturnType<typeof spawnTransaction>, signal: AbortSignal) {
-  return withinTest(
-    awaitGateBeforeSettlement(
-      transaction.ready,
-      transaction.exited,
-      "transaction exited before ready",
-    ),
-    signal,
+  const ready = awaitGateBeforeSettlement(
+    transaction.ready,
+    transaction.exited,
+    "transaction exited before ready",
   );
+  return withinTest(ready, signal);
 }
 
 async function writeGate(gate: string, value = "release\n", nonblocking = false) {
-  const writer = await fs.open(
-    gate,
-    nonblocking ? fsConstants.O_WRONLY | fsConstants.O_NONBLOCK : "w",
-  );
+  const flags = nonblocking ? fsConstants.O_WRONLY | fsConstants.O_NONBLOCK : "w";
+  const writer = await fs.open(gate, flags);
   try {
     await writer.write(value);
   } finally {
@@ -72,10 +67,19 @@ async function writeGate(gate: string, value = "release\n", nonblocking = false)
   }
 }
 
-async function receiverFixture() {
+async function receiverFixture(rsync: string, preloadSource: string) {
   const root = tempDirs.make("openclaw-workspace-receiver-");
   const bin = path.join(root, "bin");
   await Promise.all([fs.mkdir(path.join(root, "home")), fs.mkdir(bin)]);
+  const gate = path.join(root, "gate");
+  const marker = path.join(root, "marker");
+  const contenderMarker = path.join(root, "contender-marker");
+  const preload = path.join(root, "preload.cjs");
+  expect((await runCommandWithTimeout(["mkfifo", gate], { timeoutMs: 10_000 })).code).toBe(0);
+  await Promise.all([
+    fs.writeFile(path.join(bin, "rsync"), rsync, { mode: 0o755 }),
+    fs.writeFile(preload, preloadSource),
+  ]);
   const home = await fs.realpath(path.join(root, "home"));
   const relative = ".openclaw-worker/workspaces/env/session/1";
   const workspace = path.join(home, relative);
@@ -113,14 +117,16 @@ async function receiverFixture() {
   const env = { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH ?? ""}` };
   const workspaceKey = createHash("sha256").update(workspace).digest("hex");
   const lock = path.join(path.dirname(workspace), `.openclaw-accepted-lock-${workspaceKey}`);
-  return { root, bin, workspace, receiverArgv, resetArgv, env, lock };
+  return { workspace, receiverArgv, resetArgv, env, lock, gate, marker, contenderMarker, preload };
+}
+
+async function expectFile(workspace: string, file: string, contents: string) {
+  await expect(fs.readFile(path.join(workspace, file), "utf8")).resolves.toBe(contents);
 }
 
 async function expectResetWorkspace(workspace: string, removed: string) {
   await expect(fs.access(path.join(workspace, removed))).rejects.toThrow();
-  await expect(fs.readFile(path.join(workspace, "node_modules/cache"), "utf8")).resolves.toBe(
-    "keep\n",
-  );
+  await expectFile(workspace, "node_modules/cache", "keep\n");
   expect(
     (await fs.readdir(path.dirname(workspace))).filter((name) =>
       name.startsWith(".openclaw-accepted-"),
@@ -141,22 +147,8 @@ function parseReceiverOwner(name: string) {
 it.skipIf(process.platform === "win32")(
   "keeps receiver ownership after its controller dies while a descendant can still mutate",
   async ({ signal }) => {
-    const fixture = await receiverFixture();
-    const { root, bin, workspace, receiverArgv, resetArgv } = fixture;
-    const { env: baseEnv, lock } = fixture;
-    const gate = path.join(root, "receiver-gate");
-    const receiverMarker = path.join(root, "receiver-marker");
-    const contenderMarker = path.join(root, "contender-marker");
-    const preload = path.join(root, "contender-preload.cjs");
-    const fifo = await runCommandWithTimeout(["mkfifo", gate], { timeoutMs: 10_000 });
-    expect(fifo.code).toBe(0);
-    await fs.writeFile(
-      path.join(bin, "rsync"),
+    const fixture = await receiverFixture(
       '#!/bin/sh\nset -eu\n( : > "$OPENCLAW_TEST_RECEIVER_MARKER"; read -r _ < "$OPENCLAW_TEST_RECEIVER_GATE"; printf "late\\n" > "$OPENCLAW_TEST_RECEIVER_WORKSPACE/late.txt" ) </dev/null >/dev/null 2>&1 &\nexit 0\n',
-      { mode: 0o755 },
-    );
-    await fs.writeFile(
-      preload,
       String.raw`const fs = require("node:fs");
 const kill = process.kill.bind(process);
 process.kill = function(pid, signal) {
@@ -167,8 +159,8 @@ process.kill = function(pid, signal) {
 };
 `,
     );
-    const receiverNonce = "b".repeat(32);
-    const resetNonce = "c".repeat(32);
+    const { workspace, receiverArgv, resetArgv, env: baseEnv, lock } = fixture;
+    const { gate, marker: receiverMarker, contenderMarker, preload } = fixture;
     const env = {
       ...baseEnv,
       OPENCLAW_TEST_RECEIVER_GATE: gate,
@@ -201,9 +193,7 @@ process.kill = function(pid, signal) {
         { timeoutMs: 10_000, baseEnv: env },
       );
       await waitForFile(contenderMarker, signal);
-      await expect(fs.readFile(path.join(workspace, "current.txt"), "utf8")).resolves.toBe(
-        "current\n",
-      );
+      await expectFile(workspace, "current.txt", "current\n");
 
       await writeGate(gate);
       gateReleased = true;
@@ -227,17 +217,8 @@ process.kill = function(pid, signal) {
 it.skipIf(process.platform === "win32")(
   "keeps receiver ownership while its live controller is releasing a dead receiver group",
   async ({ signal }) => {
-    const fixture = await receiverFixture();
-    const { root, bin, workspace, receiverArgv, resetArgv } = fixture;
-    const { env: baseEnv, lock } = fixture;
-    const releaseGate = path.join(root, "release-gate");
-    const releaseMarker = path.join(root, "release-marker");
-    const preload = path.join(root, "release-preload.cjs");
-    await fs.writeFile(path.join(bin, "rsync"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    const fifo = await runCommandWithTimeout(["mkfifo", releaseGate], { timeoutMs: 10_000 });
-    expect(fifo.code).toBe(0);
-    await fs.writeFile(
-      preload,
+    const fixture = await receiverFixture(
+      "#!/bin/sh\nexit 0\n",
       String.raw`const fs = require("node:fs");
 const renameSync = fs.renameSync.bind(fs);
 fs.renameSync = function(source, destination) {
@@ -267,8 +248,8 @@ process.kill = function(pid, signal) {
 };
 `,
     );
-    const receiverNonce = "d".repeat(32);
-    const resetNonce = "e".repeat(32);
+    const { workspace, receiverArgv, resetArgv, env: baseEnv, lock } = fixture;
+    const { gate: releaseGate, marker: releaseMarker, preload } = fixture;
     const env = {
       ...baseEnv,
       OPENCLAW_TEST_RECEIVER_NONCE: receiverNonce,
@@ -303,9 +284,7 @@ process.kill = function(pid, signal) {
       void reset.exited.then(markSettled, markSettled);
       await waitForReady(reset, signal);
       expect(resetSettled).toBe(false);
-      await expect(fs.readFile(path.join(workspace, "current.txt"), "utf8")).resolves.toBe(
-        "current\n",
-      );
+      await expectFile(workspace, "current.txt", "current\n");
       await expect(fs.readdir(lock)).resolves.toEqual([ownerName]);
 
       await writeGate(releaseGate);

@@ -53,43 +53,28 @@ function dependencies(overrides: Record<string, unknown>) {
 it("renews and releases an initialized Windows lease without repeating DDL", () => {
   const root = nativeFs.realpathSync(tempDirs.make("workspace-quiescence-warm-schema-"));
   const directory = path.join(root, ".openclaw-worker", "quiescence");
-  nativeFs.mkdirSync(directory, { recursive: true });
   const databasePath = path.join(directory, "windows-shared-host.sqlite");
   const workspaceKey = crypto.createHash("sha256").update(root).digest("hex");
-  const database = new DatabaseSync(databasePath);
   const output: string[] = [];
+  const run = (operation: Parameters<typeof workspaceQuiescenceArgv>[1]) =>
+    runScript(workspaceQuiescenceArgv(root, operation, "shared-host"), {
+      process: {
+        platform: "win32",
+        stdout: { write: (value: string) => output.push(value) },
+        stderr: { write: (value: string) => output.push(value) },
+      },
+      require: (name: string) => (name === "node:os" ? { homedir: () => root } : require(name)),
+    });
+  run({ action: "acquire", nonce: "", timeoutMs: 60_000 });
+  const leaseNonce = /^quiesced ([a-f0-9]{32})\n$/u.exec(output.at(-1)!)?.[1];
+  expect(leaseNonce).toBeDefined();
+  output.length = 0;
+  const database = new DatabaseSync(databasePath, { readOnly: true });
   const sql = observeHostDataSql();
   try {
-    database.exec(
-      "CREATE TABLE workspace_leases (workspace_key TEXT PRIMARY KEY, lease_json TEXT NOT NULL)",
-    );
-    database.prepare("INSERT INTO workspace_leases VALUES (?, ?)").run(
-      workspaceKey,
-      JSON.stringify({
-        version: 1,
-        nonce,
-        sharedHost: true,
-        processes: [],
-        watchdog: null,
-        expiresAtMs: Date.now() + 60_000,
-      }),
-    );
-    sql.queries.length = 0;
-    for (const operation of [
-      { action: "renew", nonce, timeoutMs: 60_000, validationMode: "heartbeat" },
-      { action: "release", nonce },
-    ] as const) {
-      const command = workspaceQuiescenceArgv(root, operation, "shared-host");
-      runScript(command, {
-        process: {
-          platform: "win32",
-          stdout: { write: (value: string) => output.push(value) },
-          stderr: { write: (value: string) => output.push(value) },
-        },
-        require: (name: string) => (name === "node:os" ? { homedir: () => root } : require(name)),
-      });
-    }
-    expect(output).toEqual([`renewed ${nonce}\n`, ""]);
+    run({ action: "renew", nonce: leaseNonce!, timeoutMs: 60_000, validationMode: "heartbeat" });
+    run({ action: "release", nonce: leaseNonce! });
+    expect(output).toEqual([`renewed ${leaseNonce}\n`, ""]);
     expect(
       database
         .prepare("SELECT lease_json FROM workspace_leases WHERE workspace_key = ?")

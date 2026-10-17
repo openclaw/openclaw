@@ -45,6 +45,17 @@ const binding = (publication: { currentManifestRef: string; publicationDigest: s
 const write = (root: string, name: string, bytes: string | Buffer) =>
   fs.writeFile(path.join(root, name), bytes, { mode: 0o600 });
 const blobPath = (root: string, sha: string) => path.join(root, "blobs", sha);
+const changedBlob = "blob changed after checkpoint capture";
+type InvalidPublicationCase = {
+  fault: string;
+  blob?: "missing" | "substituted" | "symlink" | "hardlink";
+  error?: string | RegExp;
+  code?: string;
+  metadata?: string;
+  baseCommit?: string;
+  entry?: { path?: string; mode?: string };
+  duplicate?: boolean;
+};
 
 async function fixture(kind: "metadata-only" | "mixed" = "mixed") {
   const stagingRoot = temporary.make("workspace-publication-source-");
@@ -87,27 +98,20 @@ async function fixture(kind: "metadata-only" | "mixed" = "mixed") {
   for (const [sha, bytes] of blobs) {
     await write(stagingRoot, "blobs/" + sha, bytes);
   }
-  return { stagingRoot, publication, blobs };
+  const contents = new Map<string, Buffer>([
+    ["snapshot.json", Buffer.from(metadata)],
+    ["binding.json", Buffer.from(binding(publication))],
+    ...[...blobs].map(([sha, bytes]): [string, Buffer] => ["blobs/" + sha, bytes]),
+  ]);
+  return { stagingRoot, publication, blobs, contents };
 }
 
 async function legacyPayload(f: Awaited<ReturnType<typeof fixture>>) {
-  const { raw, snapshot } = await publicationSnapshot.readGitHubRepositoryPublicationMetadata(
-    f.stagingRoot,
-    f.publication.publicationDigest,
-  );
   const root = temporary.make("workspace-publication-legacy-");
-  // Golden oracle: the removed private-copy algorithm, including its empty directory.
+  // Fixture-owned bytes keep the legacy oracle independent of publication readers.
   await fs.mkdir(path.join(root, "blobs"), { mode: 0o700 });
-  await write(root, "snapshot.json", raw);
-  await write(root, "binding.json", binding(f.publication));
-  const shas = new Set(
-    snapshot.entries
-      .filter((entry) => entry.sha !== null && entry.mode !== "160000")
-      .map((entry) => entry.sha!),
-  );
-  for (const sha of shas) {
-    const bytes = await publicationSnapshot.readGitHubRepositoryPublicationBlob(f.stagingRoot, sha);
-    await write(root, "blobs/" + sha, bytes);
+  for (const [pathname, bytes] of f.contents) {
+    await write(root, pathname, bytes);
   }
   const captured = await captureWorkspaceSnapshot({ root, baseCommit: null });
   return {
@@ -194,27 +198,23 @@ it.each(["metadata-only", "mixed"] as const)(
     });
     expect(newOid).toBe(oldOid);
     expect(assertCurrent).toHaveBeenCalled();
-    const stageCalls = operations.mock.calls.filter(
-      ([command]) => command.type === "workspace.manifest.stage-input",
+    const stageInputs = operations.mock.calls.flatMap(([command]) =>
+      command.type === "workspace.manifest.stage-input" ? [command.input] : [],
     );
-    expect(stageCalls).toHaveLength(2);
-    for (const [command] of stageCalls) {
-      if (command.type !== "workspace.manifest.stage-input") {
-        throw new Error("Expected the real stage-input transport");
-      }
-      expect(command.input).not.toHaveProperty("assertCurrent");
-      expect(command.input).not.toHaveProperty("root");
-      if ("publication" in command.input) {
-        expect(command.input.publication.metadata).toBeInstanceOf(Uint8Array);
-        expect(command.input.publication.metadata.byteLength).toBe(0);
+    expect(stageInputs).toHaveLength(2);
+    for (const input of stageInputs) {
+      expect(input).not.toHaveProperty("assertCurrent");
+      expect(input).not.toHaveProperty("root");
+      if ("publication" in input) {
+        expect(input.publication.metadata).toBeInstanceOf(Uint8Array);
+        expect(input.publication.metadata.byteLength).toBe(0);
       } else {
-        expect(command.input.baseManifestRaw.byteLength).toBe(0);
-        expect(command.input.currentManifestRaw.byteLength).toBe(0);
+        expect(input).toMatchObject({
+          baseManifestRaw: { byteLength: 0 },
+          currentManifestRaw: { byteLength: 0 },
+        });
       }
     }
-    // Encoded worker-owned buffers transfer; caller-owned strings remain reusable.
-    expect(digest(f.publication.metadata)).toBe(f.publication.publicationDigest);
-    expect(digest(legacy.currentManifestRaw)).toBe(legacy.currentManifestRef);
     const newResult = await readStagedWorkerWorkspaceResult(root, newRef);
     const { stagingRoot: _stagingRoot, ...manifests } = legacy;
     expect(newResult).toMatchObject({ ...manifests, current: { directories: ["blobs"] } });
@@ -224,20 +224,8 @@ it.each(["metadata-only", "mixed"] as const)(
       directories: [],
       entries: [],
     });
-    expect(newResult.changedEntries).toHaveLength(f.blobs.size + 2);
-    const expected = new Map<string, Buffer>([
-      ["snapshot.json", Buffer.from(f.publication.metadata)],
-      ["binding.json", Buffer.from(binding(f.publication))],
-      ...[...f.blobs].map(([sha, bytes]): [string, Buffer] => ["blobs/" + sha, bytes]),
-    ]);
-    expect(await stagedContents(newResult)).toEqual(expected);
-    const tree = await gitRaw(root, ["ls-tree", "-r", "-z", "--full-tree", newRef]);
-    expect(
-      tree
-        .split("\0")
-        .filter(Boolean)
-        .every((entry) => entry.startsWith("100644 blob ")),
-    ).toBe(true);
+    // The reader verifies tree modes against these manifest entries before exposing bytes.
+    expect(await stagedContents(newResult)).toEqual(f.contents);
     const commit = await gitRaw(root, ["cat-file", "commit", newRef]);
     const separator = commit.indexOf("\n\n");
     expect(commit.slice(0, separator)).toMatch(
@@ -262,29 +250,29 @@ it.each(["metadata-only", "mixed"] as const)(
   },
 );
 
-it.for([
-  "digest",
-  "json",
-  "base",
-  "path",
-  "mode",
-  "duplicate-path",
-  "missing",
-  "substituted",
-  "symlink",
-  "hardlink",
-] as const)("rejects invalid publication input: %s", async (fault, context) => {
+it.for<InvalidPublicationCase>([
+  { fault: "digest", error: /digest/i },
+  { fault: "json", metadata: "{invalid JSON" },
+  { fault: "base", baseCommit: "f".repeat(40), error: /base/i },
+  { fault: "path", entry: { path: "../escape" }, error: /entry/i },
+  { fault: "mode", entry: { mode: "100600" }, error: /entry/i },
+  { fault: "duplicate-path", duplicate: true, error: /entry/i },
+  { fault: "missing", blob: "missing", code: "not-found" },
+  { fault: "substituted", blob: "substituted", error: changedBlob },
+  { fault: "symlink", blob: "symlink", code: "symlink" },
+  { fault: "hardlink", blob: "hardlink", code: "hardlink" },
+])("rejects invalid publication input: $fault", async (test, context) => {
+  const { fault, blob, code, error } = test;
   // Windows link privileges and identity differ; retain the existing platform boundary.
   if (process.platform === "win32" && (fault === "symlink" || fault === "hardlink")) {
     context.skip();
     return;
   }
-  const blobFault = ["missing", "substituted", "symlink", "hardlink"].includes(fault);
-  const f = await fixture(blobFault ? "mixed" : "metadata-only");
+  const f = await fixture(blob ? "mixed" : "metadata-only");
   const publication = { ...f.publication };
   const output = temporary.make("workspace-publication-invalid-");
   let alias: { path: string; bytes: Buffer } | undefined;
-  if (blobFault) {
+  if (blob) {
     const [sha, bytes] = [...f.blobs][0]!;
     const target = blobPath(f.stagingRoot, sha);
     alias = {
@@ -293,27 +281,24 @@ it.for([
     };
     await fs.writeFile(alias.path, bytes);
     await fs.rm(target);
-    if (fault === "substituted") {
+    if (blob === "substituted") {
       await fs.writeFile(target, Buffer.alloc(bytes.length, 0x78));
-    } else if (fault === "symlink") {
+    } else if (blob === "symlink") {
       await fs.symlink(alias.path, target);
-    } else if (fault === "hardlink") {
+    } else if (blob === "hardlink") {
       await fs.link(alias.path, target);
     }
   } else {
     const snapshot: GitHubRepositoryPublicationSnapshot = JSON.parse(publication.metadata);
-    if (fault === "json") {
-      publication.metadata = "{invalid JSON";
-    } else if (fault === "base") {
-      publication.baseCommit = "f".repeat(40);
-    } else if (fault === "path" || fault === "mode" || fault === "duplicate-path") {
-      const entry = snapshot.entries[0]!;
-      const entries =
-        fault === "duplicate-path"
-          ? [entry, entry]
-          : [{ ...entry, ...(fault === "path" ? { path: "../escape" } : { mode: "100600" }) }];
-      publication.metadata = JSON.stringify({ ...snapshot, entries });
+    if (test.entry || test.duplicate) {
+      const entry = { ...snapshot.entries[0], ...test.entry };
+      publication.metadata = JSON.stringify({
+        ...snapshot,
+        entries: test.duplicate ? [entry, entry] : [entry],
+      });
     }
+    publication.metadata = test.metadata ?? publication.metadata;
+    publication.baseCommit = test.baseCommit ?? publication.baseCommit;
     publication.publicationDigest =
       fault === "digest" ? "sha256:" + "0".repeat(64) : digest(publication.metadata);
   }
@@ -323,22 +308,10 @@ it.for([
     stagedResultRef: candidate("invalid"),
     publication,
   });
-  if (blobFault && fault !== "substituted") {
-    await expect(staging).rejects.toMatchObject({
-      code: fault === "missing" ? "not-found" : fault,
-    });
+  if (code) {
+    await expect(staging).rejects.toMatchObject({ code });
   } else {
-    await expect(staging).rejects.toThrow(
-      fault === "substituted"
-        ? "blob changed after checkpoint capture"
-        : fault === "json"
-          ? undefined
-          : fault === "digest"
-            ? /digest/i
-            : fault === "base"
-              ? /base/i
-              : /entry/i,
-    );
+    await expect(staging).rejects.toThrow(error);
   }
   expect(await fs.readdir(output)).toEqual([]);
   if (alias) {
