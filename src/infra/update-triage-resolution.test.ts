@@ -107,16 +107,25 @@ function failure(
 let failedRun: UpdateRunRecord;
 let latestRun: UpdateRunRecord;
 const validateDoctor = vi.fn<() => Promise<UpdateRepairValidation>>();
+const gitHead = (sha: string) => ({
+  code: 0,
+  stdout: `${sha}\n`,
+  stderr: "",
+  signal: null,
+  killed: false,
+  termination: "exit" as const,
+});
 
 function validate(
   savedFailure = failure(),
   env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: "/fixture/state" },
+  signal = new AbortController().signal,
 ) {
   return validateTriageUpdateResolution({
     failure: savedFailure,
     installRoot: "/fixture/openclaw",
     env,
-    signal: new AbortController().signal,
+    signal,
     validateDoctor,
   });
 }
@@ -137,14 +146,7 @@ function repair() {
       workspaceDir: "/fixture/workspace",
     },
     context: { ...failure(), phase: "verifying", targetVersion: TARGET_VERSION },
-    validate: (signal) =>
-      validateTriageUpdateResolution({
-        failure: failure(),
-        installRoot: "/fixture/openclaw",
-        env: { OPENCLAW_STATE_DIR: "/fixture/state" },
-        signal,
-        validateDoctor,
-      }),
+    validate: (signal) => validate(failure(), undefined, signal),
   });
 }
 
@@ -202,14 +204,7 @@ beforeEach(() => {
   vi.mocked(readPackageVersion).mockResolvedValue(TARGET_VERSION);
   vi.mocked(resolveGatewayRestartProbeContext).mockResolvedValue({ config: {}, auth: undefined });
   vi.mocked(verifyPreviousGatewayForUpdate).mockResolvedValue(true);
-  vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue({
-    code: 0,
-    stdout: `${TARGET_SHA}\n`,
-    stderr: "",
-    signal: null,
-    killed: false,
-    termination: "exit",
-  });
+  vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue(gitHead(TARGET_SHA));
   repairRuntime.prepareUpdateRepairInference.mockResolvedValue({
     ok: true,
     route: {
@@ -437,14 +432,7 @@ describe("saved update failure resolution", () => {
       if (identity === "installed version") {
         vi.mocked(readPackageVersion).mockResolvedValue(BEFORE_VERSION);
       } else {
-        vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue({
-          code: 0,
-          stdout: `${BEFORE_SHA}\n`,
-          stderr: "",
-          signal: null,
-          killed: false,
-          termination: "exit",
-        });
+        vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue(gitHead(BEFORE_SHA));
       }
       expect(await validate(failure("checkout-failed", { mode: "git" }))).toMatchObject({
         ok: false,
@@ -454,14 +442,7 @@ describe("saved update failure resolution", () => {
 
   it("accepts an owner-recorded Git rollback only with the previous runtime currently verified", async () => {
     useGitTarget();
-    vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue({
-      code: 0,
-      stdout: `${BEFORE_SHA}\n`,
-      stderr: "",
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
+    vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue(gitHead(BEFORE_SHA));
     latestRun.status = "rolled-back";
     latestRun.after = { ...failedRun.before };
     latestRun.steps.push({ step: "package rollback", status: "completed", exitCode: 0 });

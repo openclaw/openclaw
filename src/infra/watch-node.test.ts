@@ -41,11 +41,22 @@ const createFakeProcess = () =>
     pid: 4242,
     execPath: "/usr/local/bin/node",
   }) as unknown as NodeJS.Process;
+const createChild = () => Object.assign(new EventEmitter(), { kill: vi.fn() });
+const nextTurn = () =>
+  new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+
+function createWatcherHarness() {
+  const watcher = Object.assign(new EventEmitter(), { close: vi.fn(async () => {}) });
+  const createWatcher = vi.fn((_paths: string[], options: Parameters<typeof observe>[1]) =>
+    observe(watcher, options),
+  );
+  return { watcher, createWatcher, fakeProcess: createFakeProcess() };
+}
 
 const createKillableChild = () => {
-  const child = Object.assign(new EventEmitter(), {
-    kill: vi.fn(),
-  });
+  const child = createChild();
   child.kill.mockImplementation((signal: NodeJS.Signals = "SIGTERM") => {
     // A native run-node owner that completes requested cleanup acknowledges
     // SIGTERM with a code. Raw signal death is covered independently below.
@@ -60,20 +71,11 @@ const createKillableChild = () => {
 const createWatchHarness = () => {
   const child = createKillableChild();
   const spawn = vi.fn(() => child);
-  const watcher = Object.assign(new EventEmitter(), {
-    close: vi.fn(async () => {}),
-  });
-  const createWatcher = vi.fn((_paths: string[], options: Parameters<typeof observe>[1]) =>
-    observe(watcher, options),
-  );
-  const fakeProcess = createFakeProcess();
-  return { child, spawn, watcher, createWatcher, fakeProcess };
+  return { child, spawn, ...createWatcherHarness() };
 };
 
 const createAutoExitChild = () => {
-  const child = Object.assign(new EventEmitter(), {
-    kill: vi.fn(),
-  });
+  const child = createChild();
   child.kill.mockImplementation(() => {
     queueMicrotask(() => child.emit("exit", 0, null));
   });
@@ -84,18 +86,11 @@ const startWatchRun = async ({
   args = ["gateway", "--force"],
   env,
   spawn,
-}: {
-  args?: string[];
-  env?: WatchRunParams["env"];
+  ...overrides
+}: Pick<WatchRunParams, "args" | "env" | "fs" | "pathClassifier" | "sleep"> & {
   spawn: NonNullable<WatchRunParams["spawn"]>;
 }) => {
-  const watcher = Object.assign(new EventEmitter(), {
-    close: vi.fn(async () => {}),
-  });
-  const createWatcher = vi.fn((_paths: string[], options: Parameters<typeof observe>[1]) =>
-    observe(watcher, options),
-  );
-  const fakeProcess = createFakeProcess();
+  const { watcher, createWatcher, fakeProcess } = createWatcherHarness();
   const runPromise = runWatch({
     args,
     createWatcher,
@@ -103,6 +98,7 @@ const startWatchRun = async ({
     fs: { existsSync: () => true },
     process: fakeProcess,
     spawn,
+    ...overrides,
   });
   await watchReady();
   return { watcher, createWatcher, fakeProcess, runPromise };
@@ -181,7 +177,7 @@ describe("watch-node script", () => {
   );
 
   it("preserves raw Unix runner SIGTERM without doctor or restart", async () => {
-    const child = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    const child = createChild();
     const spawn = vi.fn(() => child);
     const fakeProcess = Object.assign(createFakeProcess(), { platform: "linux" });
     const run = runWatch({
@@ -201,8 +197,8 @@ describe("watch-node script", () => {
   it.each(["restart", "shutdown", "doctor", "startup-error"] as const)(
     "does not hide raw Unix signal loss during %s",
     async (phase) => {
-      const child = Object.assign(new EventEmitter(), { kill: vi.fn() });
-      const doctor = Object.assign(new EventEmitter(), { kill: vi.fn() });
+      const child = createChild();
+      const doctor = createChild();
       const spawn = vi.fn().mockReturnValueOnce(child).mockReturnValueOnce(doctor);
       const watcher = Object.assign(new EventEmitter(), { close: vi.fn(async () => {}) });
       const fakeProcess = Object.assign(createFakeProcess(), { platform: "linux" });
@@ -239,8 +235,8 @@ describe("watch-node script", () => {
   );
 
   it("preserves requested Windows SIGTERM rebuilds and shutdown", async () => {
-    const first = Object.assign(new EventEmitter(), { kill: vi.fn() });
-    const second = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    const first = createChild();
+    const second = createChild();
     const spawn = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second);
     const watcher = Object.assign(new EventEmitter(), { close: vi.fn(async () => {}) });
     const fakeProcess = Object.assign(createFakeProcess(), { platform: "win32" });
@@ -304,9 +300,7 @@ describe("watch-node script", () => {
     );
 
     resolveLoadWatcher(watch);
-    await new Promise((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextTurn();
     expect(watch).toHaveBeenCalledTimes(1);
 
     fakeProcess.emit("SIGINT");
@@ -320,30 +314,20 @@ describe("watch-node script", () => {
     const childA = createAutoExitChild();
     const childB = createKillableChild();
     const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
-    const watcher = Object.assign(new EventEmitter(), {
-      close: vi.fn(async () => {}),
-    });
-    const fakeProcess = createFakeProcess();
     const pathClassifier = {
       refreshGeneratedPluginAssetPaths: vi.fn(),
       isRestartRelevantRunNodePath: vi.fn(() => true),
     };
 
-    const runPromise = runWatch({
-      args: ["gateway", "--force"],
-      createWatcher: (_paths, options) => observe(watcher, options),
+    const { watcher, fakeProcess, runPromise } = await startWatchRun({
       fs: { existsSync: () => true },
       pathClassifier,
-      process: fakeProcess,
       spawn,
     });
-    await watchReady();
 
     expect(pathClassifier.refreshGeneratedPluginAssetPaths).toHaveBeenCalledTimes(1);
     watcher.emit("change", "extensions/browser/package.json");
-    await new Promise((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextTurn();
 
     expect(spawn).toHaveBeenCalledTimes(2);
     expect(pathClassifier.refreshGeneratedPluginAssetPaths).toHaveBeenCalledTimes(2);
@@ -354,8 +338,8 @@ describe("watch-node script", () => {
   });
 
   it("runs doctor once and restarts when gateway exits nonzero", async () => {
-    const gatewayA = Object.assign(new EventEmitter(), { kill: vi.fn() });
-    const doctor = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    const gatewayA = createChild();
+    const doctor = createChild();
     const gatewayB = createKillableChild();
     const spawn = vi
       .fn()
@@ -365,9 +349,7 @@ describe("watch-node script", () => {
     const { watcher, fakeProcess, runPromise } = await startWatchRun({ env: {}, spawn });
 
     gatewayA.emit("exit", 1, null);
-    await new Promise((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextTurn();
 
     expect(spawn).toHaveBeenCalledTimes(2);
     const doctorSpawnCall = requireMockCall(spawn, 1);
@@ -381,9 +363,7 @@ describe("watch-node script", () => {
     expect(requireSpawnOptions(spawn, 1).stdio).toBe("inherit");
 
     doctor.emit("exit", 0, null);
-    await new Promise((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextTurn();
 
     expect(spawn).toHaveBeenCalledTimes(3);
     const restartedGatewaySpawnCall = requireMockCall(spawn, 2);
@@ -419,17 +399,13 @@ describe("watch-node script", () => {
   });
 
   it("restarts when the runner exits with a SIGTERM-derived code unexpectedly", async () => {
-    const childA = Object.assign(new EventEmitter(), {
-      kill: vi.fn(),
-    });
+    const childA = createChild();
     const childB = createKillableChild();
     const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
     const { watcher, fakeProcess, runPromise } = await startWatchRun({ spawn });
 
     childA.emit("exit", 143, null);
-    await new Promise((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextTurn();
     expect(spawn).toHaveBeenCalledTimes(2);
 
     fakeProcess.emit("SIGINT");
@@ -452,54 +428,29 @@ describe("watch-node script", () => {
       .mockReturnValueOnce(childD);
     const { watcher, fakeProcess, runPromise } = await startWatchRun({ spawn });
 
-    watcher.emit("change", "src/infra/watch-node.test.ts");
-    await new Promise((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(spawn).toHaveBeenCalledTimes(1);
-    expect(childA.kill).not.toHaveBeenCalled();
-
-    watcher.emit("change", "src/infra/watch-node.test.tsx");
-    await new Promise((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(spawn).toHaveBeenCalledTimes(1);
-    expect(childA.kill).not.toHaveBeenCalled();
-
-    watcher.emit("change", "src/infra/watch-node-test-helpers.ts");
-    await new Promise((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(spawn).toHaveBeenCalledTimes(1);
-    expect(childA.kill).not.toHaveBeenCalled();
-
-    watcher.emit("change", VOICE_CALL_README);
-    await new Promise((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(spawn).toHaveBeenCalledTimes(1);
-    expect(childA.kill).not.toHaveBeenCalled();
-
-    watcher.emit("change", VOICE_CALL_MANIFEST);
-    await new Promise((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(childA.kill).toHaveBeenCalledWith("SIGTERM");
-    expect(spawn).toHaveBeenCalledTimes(2);
-
-    watcher.emit("change", VOICE_CALL_PACKAGE);
-    await new Promise((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(childB.kill).toHaveBeenCalledWith("SIGTERM");
-    expect(spawn).toHaveBeenCalledTimes(3);
-
-    watcher.emit("change", "src/infra/watch-node.ts");
-    await new Promise((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(childC.kill).toHaveBeenCalledWith("SIGTERM");
-    expect(spawn).toHaveBeenCalledTimes(4);
+    for (const file of [
+      "src/infra/watch-node.test.ts",
+      "src/infra/watch-node.test.tsx",
+      "src/infra/watch-node-test-helpers.ts",
+      VOICE_CALL_README,
+    ]) {
+      watcher.emit("change", file);
+      await nextTurn();
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(childA.kill).not.toHaveBeenCalled();
+    }
+    for (const [index, [file, child]] of (
+      [
+        [VOICE_CALL_MANIFEST, childA],
+        [VOICE_CALL_PACKAGE, childB],
+        ["src/infra/watch-node.ts", childC],
+      ] as const
+    ).entries()) {
+      watcher.emit("change", file);
+      await nextTurn();
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(spawn).toHaveBeenCalledTimes(index + 2);
+    }
 
     fakeProcess.emit("SIGINT");
     const exitCode = await runPromise;
@@ -510,10 +461,6 @@ describe("watch-node script", () => {
     const childA = createKillableChild();
     const childB = createKillableChild();
     const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
-    const watcher = Object.assign(new EventEmitter(), {
-      close: vi.fn(async () => {}),
-    });
-    const fakeProcess = createFakeProcess();
     let distEntryExists = false;
     let resumePoll: (() => void) | undefined;
     const sleep = vi.fn(
@@ -522,15 +469,11 @@ describe("watch-node script", () => {
           resumePoll = resolve;
         }),
     );
-    const runPromise = runWatch({
-      args: ["gateway", "--force"],
-      createWatcher: (_paths, options) => observe(watcher, options),
+    const { watcher, fakeProcess, runPromise } = await startWatchRun({
       fs: { existsSync: () => distEntryExists },
-      process: fakeProcess,
       sleep,
       spawn,
     });
-    await watchReady();
 
     watcher.emit("change", "src/infra/restart.ts");
     watcher.emit("change", "src/infra/restart.ts");
@@ -539,9 +482,7 @@ describe("watch-node script", () => {
 
     distEntryExists = true;
     resumePoll?.();
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextTurn();
     expect(childA.kill).toHaveBeenCalledWith("SIGTERM");
     expect(spawn).toHaveBeenCalledTimes(2);
 
@@ -552,56 +493,38 @@ describe("watch-node script", () => {
   it("does not resurrect a deferred child after watcher shutdown", async () => {
     const child = createKillableChild();
     const spawn = vi.fn(() => child);
-    const watcher = Object.assign(new EventEmitter(), {
-      close: vi.fn(async () => {}),
-    });
-    const fakeProcess = createFakeProcess();
     let resumePoll: (() => void) | undefined;
-    const runPromise = runWatch({
-      args: ["gateway", "--force"],
-      createWatcher: (_paths, options) => observe(watcher, options),
+    const { watcher, fakeProcess, runPromise } = await startWatchRun({
       fs: { existsSync: () => false },
-      process: fakeProcess,
       sleep: () =>
         new Promise<void>((resolve) => {
           resumePoll = resolve;
         }),
       spawn,
     });
-    await watchReady();
 
     watcher.emit("change", "src/infra/restart.ts");
     fakeProcess.emit("SIGINT");
     expect(await runPromise).toBe(130);
     resumePoll?.();
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextTurn();
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 
   it("waits for the build entry when the healthy child exits during deferral", async () => {
-    const childA = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    const childA = createChild();
     const childB = createKillableChild();
     const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
-    const watcher = Object.assign(new EventEmitter(), {
-      close: vi.fn(async () => {}),
-    });
-    const fakeProcess = createFakeProcess();
     let distEntryExists = false;
     const resumePolls: Array<() => void> = [];
-    const runPromise = runWatch({
-      args: ["gateway", "--force"],
-      createWatcher: (_paths, options) => observe(watcher, options),
+    const { watcher, fakeProcess, runPromise } = await startWatchRun({
       fs: { existsSync: () => distEntryExists },
-      process: fakeProcess,
       sleep: () =>
         new Promise<void>((resolve) => {
           resumePolls.push(resolve);
         }),
       spawn,
     });
-    await watchReady();
 
     watcher.emit("change", "src/infra/restart.ts");
     childA.emit("exit", 1, null);
@@ -612,9 +535,7 @@ describe("watch-node script", () => {
     for (const resume of resumePolls) {
       resume();
     }
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextTurn();
     expect(spawn).toHaveBeenCalledTimes(2);
 
     fakeProcess.emit("SIGINT");
@@ -665,9 +586,7 @@ describe("watch-node script", () => {
       });
       await watchReady();
 
-      await new Promise((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextTurn();
 
       expect(signalProcess).toHaveBeenCalledWith(2121, "SIGTERM");
       expect(spawn).toHaveBeenCalledTimes(1);

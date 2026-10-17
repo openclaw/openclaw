@@ -219,6 +219,15 @@ function mapped(groups: SourceTargetGroup[], physical: string) {
     sourceTargetPaths(group, path.relative(group.authority.rootReal, physical)),
   );
 }
+const authorities = (groups: SourceTargetGroup[]) => groups.map((group) => group.authority);
+const filesIn = (groups: SourceTargetGroup[]) => groups.flatMap((group) => [...group.files.keys()]);
+async function discoveryFixture() {
+  const cwd = temp.make("source-repo-");
+  const outside = temp.make("source-target-");
+  await fs.mkdir(path.join(cwd, "src"));
+  const discovery = createSourceTargetDiscovery(cwd, ["src"], ignored);
+  return { cwd, outside, alias: path.join(cwd, "src", "linked"), discovery };
+}
 
 describe("developer source discovery", () => {
   it("rediscovers a file replaced by a directory between enumeration and hashing", async () => {
@@ -247,12 +256,8 @@ describe("developer source discovery", () => {
   });
 
   it("rebuilds link addition, retarget, removal, and dangling destination creation with pinned Roots", async () => {
-    const cwd = temp.make("source-repo-");
-    const outside = temp.make("source-target-");
-    await fs.mkdir(path.join(cwd, "src"));
-    const discovery = createSourceTargetDiscovery(cwd, ["src"], ignored);
+    const { outside, alias, discovery } = await discoveryFixture();
     const initial = await discovery.discover(signal());
-    const alias = path.join(cwd, "src", "linked");
     const destination = path.join(outside, "missing", "deep");
     await directoryLink(destination, alias);
     const dangling = await discovery.discover(signal());
@@ -263,9 +268,7 @@ describe("developer source discovery", () => {
     await fs.mkdir(destination, { recursive: true });
     await fs.writeFile(path.join(destination, "main.ts"), "first");
     const created = await discovery.discover(signal());
-    expect(created.map((group) => group.authority)).toEqual(
-      dangling.map((group) => group.authority),
-    );
+    expect(authorities(created)).toEqual(authorities(dangling));
     await fs.unlink(alias);
     await directoryLink(path.join(outside, "second"), alias);
     const retargeted = await discovery.discover(signal());
@@ -284,14 +287,10 @@ describe("developer source discovery", () => {
   });
 
   it("does not re-admit a replaced target authority, even after its last alias was removed", async () => {
-    const cwd = temp.make("source-repo-");
-    const outside = temp.make("source-target-");
+    const { outside, alias, discovery } = await discoveryFixture();
     const boundary = path.join(outside, "boundary");
-    await fs.mkdir(path.join(cwd, "src"));
     await fs.mkdir(path.join(boundary, "source"), { recursive: true });
-    const alias = path.join(cwd, "src", "linked");
     await directoryLink(path.join(boundary, "source"), alias);
-    const discovery = createSourceTargetDiscovery(cwd, ["src"], ignored);
     await discovery.discover(signal());
     await fs.unlink(alias);
     await discovery.discover(signal());
@@ -302,11 +301,7 @@ describe("developer source discovery", () => {
   });
 
   it("bounds lifetime Root admission across source retargets without discarding prior authority", async () => {
-    const cwd = temp.make("source-repo-");
-    const outside = temp.make("source-target-");
-    await fs.mkdir(path.join(cwd, "src"));
-    const alias = path.join(cwd, "src", "linked");
-    const discovery = createSourceTargetDiscovery(cwd, ["src"], ignored);
+    const { outside, alias, discovery } = await discoveryFixture();
     let first: SourceTargetGroup[] | undefined;
     for (let index = 0; index < 128; index++) {
       const destination = path.join(outside, String(index), "source");
@@ -322,16 +317,14 @@ describe("developer source discovery", () => {
     }
     await directoryLink(path.join(outside, "0", "source"), alias);
     const reused = await discovery.discover(signal());
-    expect(reused.map((group) => group.authority)).toEqual(first!.map((group) => group.authority));
+    expect(authorities(reused)).toEqual(authorities(first!));
   });
 
   // Windows junction creation normalizes parent components before storing the target.
   it.skipIf(process.platform === "win32")(
     "resolves symlink targets before parent traversal and retains dangling prefixes",
     async () => {
-      const cwd = temp.make("source-repo-");
-      const outside = temp.make("source-target-");
-      await fs.mkdir(path.join(cwd, "src"));
+      const { outside, alias, discovery } = await discoveryFixture();
       await fs.mkdir(path.join(outside, "actual", "child"), { recursive: true });
       await fs.mkdir(path.join(outside, "actual", "source"));
       await fs.mkdir(path.join(outside, "source"));
@@ -339,39 +332,30 @@ describe("developer source discovery", () => {
       await fs.writeFile(path.join(outside, "source", "wrong.ts"), "lexically collapsed");
       const intermediate = path.join(outside, "intermediate");
       await directoryLink(path.join(outside, "actual", "child"), intermediate);
-      const alias = path.join(cwd, "src", "linked");
       await directoryLink(intermediate + "/../source", alias);
-      const discovery = createSourceTargetDiscovery(cwd, ["src"], ignored);
       const discovered = await discovery.discover(signal());
       expect(await fs.readdir(alias)).toEqual(["main.ts"]);
-      expect(discovered.flatMap((group) => Array.from(group.files.keys()))).toEqual([
-        path.join(alias, "main.ts"),
-      ]);
+      expect(filesIn(discovered)).toEqual([path.join(alias, "main.ts")]);
       expect(mapped(discovered, intermediate)).toContain(alias);
       await fs.unlink(intermediate);
       const dangling = await discovery.discover(signal());
-      expect(dangling.flatMap((group) => Array.from(group.files.keys()))).toEqual([]);
+      expect(filesIn(dangling)).toEqual([]);
       expect(mapped(dangling, intermediate)).toContain(alias);
       await directoryLink(path.join(outside, "actual", "child"), intermediate);
       const restored = await discovery.discover(signal());
-      expect(restored.flatMap((group) => Array.from(group.files.keys()))).toEqual([
-        path.join(alias, "main.ts"),
-      ]);
+      expect(filesIn(restored)).toEqual([path.join(alias, "main.ts")]);
     },
   );
 
   it("keeps a symbolic parent of a declared destination observable", async () => {
-    const cwd = temp.make("source-repo-");
-    const outside = temp.make("source-target-");
-    await fs.mkdir(path.join(cwd, "src"));
+    const { outside, alias, discovery } = await discoveryFixture();
     await fs.mkdir(path.join(outside, "actual", "deep"), { recursive: true });
     await directoryLink(path.join(outside, "actual"), path.join(outside, "alias"));
-    await directoryLink(path.join(outside, "alias", "deep"), path.join(cwd, "src", "linked"));
-    const discovery = createSourceTargetDiscovery(cwd, ["src"], ignored);
+    await directoryLink(path.join(outside, "alias", "deep"), alias);
     const groups = await discovery.discover(signal());
-    expect(mapped(groups, path.join(outside, "alias"))).toContain(path.join(cwd, "src", "linked"));
+    expect(mapped(groups, path.join(outside, "alias"))).toContain(alias);
     expect(mapped(groups, path.join(outside, "actual", "deep", "main.ts"))).toContain(
-      path.join(cwd, "src", "linked", "main.ts"),
+      path.join(alias, "main.ts"),
     );
   });
 });

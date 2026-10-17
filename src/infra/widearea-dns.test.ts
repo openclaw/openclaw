@@ -86,10 +86,9 @@ describe("wide-area DNS-SD zone rendering", () => {
     ]);
   });
 
-  it.each([
-    {
-      name: "includes gateway TLS TXT fields and trims display metadata",
-      overrides: {
+  it("includes gateway TLS TXT fields and trims display metadata", () => {
+    expectZoneRecords(
+      renderZoneText({
         domain: "openclaw.internal",
         displayName: "  Mac Studio (OpenClaw)  ",
         hostLabel: " Studio London ",
@@ -99,8 +98,8 @@ describe("wide-area DNS-SD zone rendering", () => {
         gatewayDirectReachable: true,
         tailnetDns: " tailnet.ts.net ",
         cliPath: " /opt/homebrew/bin/openclaw ",
-      },
-      records: [
+      }),
+      [
         `$ORIGIN openclaw.internal.`,
         `studio-london IN A 100.123.224.76`,
         `studio-london._openclaw-gw._tcp IN TXT`,
@@ -111,9 +110,7 @@ describe("wide-area DNS-SD zone rendering", () => {
         `tailnetDns=tailnet.ts.net`,
         `cliPath=/opt/homebrew/bin/openclaw`,
       ],
-    },
-  ])("$name", ({ overrides, records }) => {
-    expectZoneRecords(renderZoneText(overrides), records);
+    );
   });
 });
 
@@ -174,21 +171,16 @@ describe("wide-area DNS zone writes", () => {
       renderWideAreaGatewayZoneText({ ...makeZoneOpts(), serial: 2026031304 }),
     );
 
-    const result = await writeWideAreaGatewayZone(
-      makeZoneOpts({ gatewayTlsEnabled: true, gatewayTlsFingerprintSha256: "abc123" }),
-    );
+    const opts = makeZoneOpts({ gatewayTlsEnabled: true, gatewayTlsFingerprintSha256: "abc123" });
+    const result = await writeWideAreaGatewayZone(opts);
 
     expect(result).toEqual({
       zonePath: getWideAreaZonePath("openclaw.internal."),
       changed: true,
     });
-    const expectedZoneText = renderWideAreaGatewayZoneText({
-      ...makeZoneOpts({ gatewayTlsEnabled: true, gatewayTlsFingerprintSha256: "abc123" }),
-      serial: 2026031305,
-    });
     expect(replaceFileAtomicSyncMock).toHaveBeenCalledWith({
       filePath: getWideAreaZonePath("openclaw.internal."),
-      content: expectedZoneText,
+      content: renderWideAreaGatewayZoneText({ ...opts, serial: 2026031305 }),
       dirMode: 0o700,
       mode: 0o644,
       preserveExistingMode: true,
