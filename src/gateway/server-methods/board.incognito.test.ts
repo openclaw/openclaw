@@ -31,7 +31,6 @@ const cfg = {
 };
 const env = { OPENCLAW_STATE_DIR: "/synthetic/board-incognito-rpc" };
 const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
-const approved = { decision: "allow-once", risk: "low", rationale: "Synthetic Board" };
 
 function privateBoard(sessionKey: string) {
   const harness = createBoardHarness(undefined, {}, boardStore, { getRuntimeConfig: () => cfg });
@@ -45,22 +44,11 @@ function privateBoard(sessionKey: string) {
   return { ...harness, put };
 }
 
-function holdReview(result = () => approved) {
-  const started = createDeferred();
-  const release = createDeferred();
-  review.mockImplementation(async () => {
-    started.resolve();
-    await release.promise;
-    return result();
-  });
-  return { started, release };
-}
-
 beforeAll(() => {
   setRuntimeConfigSnapshot(cfg, cfg);
 });
 
-async function createSession(sessionKey: string, entry: Partial<SessionEntry>) {
+async function createSession(sessionKey: string, entry: SessionEntry) {
   const binding = await acquireSessionActorStorage(
     { sessionKey, agentId: "main", storePath, env },
     { authority, lifetime: { assertCurrent() {}, assertReadable() {} }, create: true },
@@ -68,10 +56,7 @@ async function createSession(sessionKey: string, entry: Partial<SessionEntry>) {
   assert(binding);
   try {
     const result = await binding.actor.storage.mutate(
-      {
-        type: "session.entry.create",
-        input: { entry: { updatedAt: 1, incognito: true, sessionId: sessionKey, ...entry } },
-      },
+      { type: "session.entry.create", input: { entry } },
       authority,
     );
     expect(result.kind).toBe("committed");
@@ -97,7 +82,15 @@ afterAll(() => {
   vi.unstubAllEnvs();
 });
 
-it.each(["grant", "permission", "replacement", "approval-failure", "review-failure"] as const)(
+it.each([
+  "grant",
+  "permission",
+  "replacement",
+  "approval-failure",
+  "review-failure",
+  "guarded",
+  "closed",
+] as const)(
   "retains the actor through Board put and review (%s), without replaying a committed put",
   async (outcome) => {
     const sessionKey = `agent:main:dashboard:incognito-board-${outcome}`;
@@ -106,15 +99,19 @@ it.each(["grant", "permission", "replacement", "approval-failure", "review-failu
       lifecycleRevision: "initial",
       updatedAt: 1,
       incognito: true as const,
-      permissionMode: "workspace" as const,
+      permissionMode: outcome === "guarded" ? ("guarded" as const) : ("workspace" as const),
     };
     await createSession(sessionKey, entry);
     const harness = privateBoard(sessionKey);
-    const { started, release } = holdReview(() => {
+    const started = createDeferred();
+    const release = createDeferred();
+    review.mockImplementation(async () => {
+      started.resolve();
+      await release.promise;
       if (outcome === "review-failure") {
         throw new Error("Synthetic reviewer failure");
       }
-      return approved;
+      return { decision: "allow-once", risk: "low", rationale: "Synthetic Board" };
     });
     if (outcome === "approval-failure") {
       vi.mocked(approvals.readExecApprovalsPolicyReadOnlyAsync).mockImplementationOnce(async () => {
@@ -126,7 +123,9 @@ it.each(["grant", "permission", "replacement", "approval-failure", "review-failu
     const sql = observeMainThreadSql();
     const putting = harness.put("status", "<p>Private status</p>");
     try {
-      await awaitGateBeforeSettlement(started.promise, putting, "Board put did not reach review");
+      if (outcome !== "guarded") {
+        await awaitGateBeforeSettlement(started.promise, putting, "Board put did not reach review");
+      }
       if (outcome === "permission" || outcome === "replacement") {
         const scope = { sessionKey, agentId: "main", storePath, env };
         if (outcome === "permission") {
@@ -139,24 +138,32 @@ it.each(["grant", "permission", "replacement", "approval-failure", "review-failu
           });
         }
       }
+      if (outcome === "closed") {
+        memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
+      }
       release.resolve();
       const response = await putting;
-      if (outcome === "permission" || outcome === "replacement" || outcome === "approval-failure") {
+      const grantState =
+        outcome === "grant" ? "granted" : outcome === "review-failure" ? "rejected" : "pending";
+      expect(review).toHaveBeenCalledTimes(
+        outcome === "approval-failure" || outcome === "guarded" ? 0 : 1,
+      );
+      if (["permission", "replacement", "approval-failure", "closed"].includes(outcome)) {
         expect(response.mock.calls[0]?.[0]).toBe(false);
         expect(harness.broadcast).not.toHaveBeenCalled();
       } else {
-        expect(response.mock.calls[0]).toMatchObject([
-          true,
-          { widgets: [{ grantState: outcome === "grant" ? "granted" : "rejected" }] },
-        ]);
+        expect(response.mock.calls[0]).toMatchObject([true, { widgets: [{ grantState }] }]);
+      }
+      if (outcome === "closed") {
+        expect(memorySessionActorOwners.read({ agentId: "main", path: storePath })).toBeUndefined();
+        sql.expectIdle();
+        return;
       }
       const stored = await boardStore.getSnapshot({ sessionKey });
-      expect(stored.widgets).toHaveLength(1);
-      expect(stored.revision).toBe(outcome === "grant" || outcome === "review-failure" ? 2 : 1);
-      expect(stored.widgets[0]?.grantState).toBe(
-        outcome === "grant" ? "granted" : outcome === "review-failure" ? "rejected" : "pending",
-      );
-      expect(review).toHaveBeenCalledTimes(outcome === "approval-failure" ? 0 : 1);
+      expect(stored).toMatchObject({
+        revision: outcome === "grant" || outcome === "review-failure" ? 2 : 1,
+        widgets: [{ grantState }],
+      });
       sql.expectIdle();
     } finally {
       release.resolve();
@@ -211,39 +218,4 @@ it("returns explicit absence without opening Board, progress, or deletion source
     sql.restore();
   }
   expect(memorySessionActorOwners.list().some((owner) => owner.agentId === "absent")).toBe(false);
-});
-
-it("reads guarded permission mode from the memory owner before granting a widget", async () => {
-  const sessionKey = "agent:main:dashboard:incognito-guarded";
-  await createSession(sessionKey, {
-    sessionId: "guarded-widget",
-    permissionMode: "guarded",
-  });
-  const harness = privateBoard(sessionKey);
-  const response = await harness.put();
-  expect(response.mock.calls[0]).toMatchObject([true, { widgets: [{ grantState: "pending" }] }]);
-  expect(review).not.toHaveBeenCalled();
-});
-
-it("refuses a pending Board approval after its memory owner closes", async () => {
-  const sessionKey = "agent:main:dashboard:incognito-board-close";
-  await createSession(sessionKey, {
-    sessionId: "closing-widget",
-    permissionMode: "workspace",
-  });
-  const harness = privateBoard(sessionKey);
-  const { started, release: finish } = holdReview();
-  const putting = harness.put();
-  try {
-    await awaitGateBeforeSettlement(started.promise, putting, "Board put did not reach review");
-    memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
-    finish.resolve();
-    const response = await putting;
-    expect(response.mock.calls[0]?.[0]).toBe(false);
-    expect(harness.broadcast).not.toHaveBeenCalled();
-    expect(memorySessionActorOwners.read({ agentId: "main", path: storePath })).toBeUndefined();
-  } finally {
-    finish.resolve();
-    await putting;
-  }
 });

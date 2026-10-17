@@ -1,3 +1,4 @@
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   errorShape,
@@ -6,6 +7,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { readBoardRegistered } from "../../boards/board-store.test-support.js";
+import type { PluginBoardWidgetContentKind } from "../../plugins/board-widget-content-kind.types.js";
 import { createPluginBoardWidgetContentKindRegistrar } from "../../plugins/board-widget-content-kinds.js";
 import { registerPluginDashboardCapabilities } from "../../plugins/dashboard-capabilities.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
@@ -16,14 +18,17 @@ import { createPluginGatewayMethodDescriptor } from "../methods/descriptor.js";
 import { createBoardHarness } from "./board.test-support.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
-function createWorkboardCapabilityRegistry(params: {
+async function widgetHarness(
+  handlerPair: {
   readHandler: GatewayRequestHandlers[string];
   actionHandler: GatewayRequestHandlers[string];
-}) {
+  },
+  mode: "ask" | "full" = "full",
+) {
   const registry = createEmptyPluginRegistry();
   for (const [name, scope, handler] of [
-    ["workboard.cards.list", "operator.read", params.readHandler],
-    ["workboard.cards.dispatch", "operator.write", params.actionHandler],
+    ["workboard.cards.list", "operator.read", handlerPair.readHandler],
+    ["workboard.cards.dispatch", "operator.write", handlerPair.actionHandler],
   ] as const) {
     registry.gatewayHandlers[name] = handler;
   registry.gatewayMethodDescriptors.push(
@@ -49,28 +54,13 @@ function createWorkboardCapabilityRegistry(params: {
           id: "dispatch",
           method: "workboard.cards.dispatch",
           description: "Dispatch fixture cards",
-          paramShape: {
-            type: "object",
-            additionalProperties: false,
-            required: ["force"],
-            properties: { force: { type: "boolean" } },
-          },
+          paramShape: Type.Object({ force: Type.Boolean() }, { additionalProperties: false }),
         },
       ],
     },
   });
   registerPluginDashboardCapabilities({ record: plugin, registry });
   registry.plugins.push(plugin);
-  return registry;
-}
-
-const target = { sessionKey: "session", name: "plugin-widget" };
-
-async function widgetHarness(
-  handlers: Parameters<typeof createWorkboardCapabilityRegistry>[0],
-  mode: "ask" | "full" = "full",
-) {
-  const registry = createWorkboardCapabilityRegistry(handlers);
   setActivePluginRegistry(registry);
   const harness = createBoardHarness(undefined, {}, undefined, {
     getRuntimeConfig: () => ({ agents: { entries: { main: {} } }, tools: { exec: { mode } } }),
@@ -85,7 +75,34 @@ async function widgetHarness(
     const board = await harness.invoke("board.get", { sessionKey: target.sessionKey });
     return (board.mock.calls[0]![1] as BoardSnapshot).widgets[0]!.viewTicket;
   };
-  return { ...harness, registry, widget, ticket };
+  const call = (
+    operation: Operation,
+    viewTicket: string | undefined,
+    params?: Record<string, unknown>,
+  ) => {
+    const request = widgetRequest(operation, viewTicket, params);
+    return harness.invoke(request.method, request.params);
+  };
+  return { ...harness, registry, widget, ticket, call };
+}
+
+const target = { sessionKey: "session", name: "plugin-widget" };
+type Operation = "read" | "action";
+const requests = {
+  read: ["board.data.read", "bindingId", "workboard.cards.list"],
+  action: ["board.action", "action", "workboard.dispatch"],
+} as const;
+function widgetRequest(
+  operation: Operation,
+  ticket: string | undefined,
+  params?: Record<string, unknown>,
+) {
+  const [method, field, capability] = requests[operation];
+  const extra = params ?? (operation === "action" ? { force: true } : undefined);
+  return {
+    method,
+    params: { ticket, [field]: capability, ...(extra ? { params: extra } : {}) },
+  };
 }
 
 describe("board plugin capabilities", () => {
@@ -127,11 +144,7 @@ describe("board plugin capabilities", () => {
           return consume(document);
         }),
       );
-      const method = operation === "read" ? "board.data.read" : "board.action";
-      const params =
-        operation === "read"
-          ? { ticket: viewTicket, bindingId: "workboard.cards.list" }
-          : { ticket: viewTicket, action: "workboard.dispatch", params: { force: true } };
+      const { method, params } = widgetRequest(operation, viewTicket);
       const respond = vi.fn<RespondFn>((ok) => {
         if (ok) {
           order.push("published");
@@ -172,19 +185,12 @@ describe("board plugin capabilities", () => {
         }
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, detail));
       };
-      const { invoke, ticket } = await widgetHarness({
+      const { invoke, ticket, call } = await widgetHarness({
         readHandler: handler,
         actionHandler: handler,
       });
       const viewTicket = await ticket();
-      const pending =
-        operation === "read"
-          ? invoke("board.data.read", { ticket: viewTicket, bindingId: "workboard.cards.list" })
-          : invoke("board.action", {
-              ticket: viewTicket,
-              action: "workboard.dispatch",
-              params: { force: true },
-            });
+      const pending = call(operation, viewTicket);
       try {
         await started.promise;
         if (retired) {
@@ -199,10 +205,14 @@ describe("board plugin capabilities", () => {
         if (retired) {
           expect(JSON.stringify(response.mock.calls)).not.toContain(detail);
         } else {
-          expect(response.mock.calls[0]?.[2]).toMatchObject({
+          expect(response.mock.calls[0]).toMatchObject([
+            false,
+            undefined,
+            {
             code: operation === "action" ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
             message: expect.stringContaining(detail),
-          });
+            },
+          ]);
         }
       } finally {
         release.resolve();
@@ -218,7 +228,7 @@ describe("board plugin capabilities", () => {
     const actionHandler = vi.fn<GatewayRequestHandlers[string]>(async ({ params, respond }) => {
       respond(true, { refreshed: params.force });
     });
-    const { invoke, registry, widget, ticket } = await widgetHarness(
+    const { invoke, registry, widget, ticket, call } = await widgetHarness(
       { readHandler, actionHandler },
       "ask",
     );
@@ -233,41 +243,32 @@ describe("board plugin capabilities", () => {
       instanceId: widget.instanceId,
     });
     const viewTicket = await ticket();
-    const read = await invoke("board.data.read", {
-      ticket: viewTicket,
-      bindingId: "workboard.cards.list",
-      params: { filter: "ready" },
-    });
+    const read = await call("read", viewTicket, { filter: "ready" });
     expect(read.mock.calls[0]?.[1]).toEqual({ items: ["ready"] });
     expect(readHandler).toHaveBeenCalledOnce();
     const action = (actionTicket: string | undefined, force: boolean | string) =>
-      invoke("board.action", {
-        ticket: actionTicket,
-        action: "workboard.dispatch",
-        params: { force },
-      });
+      call("action", actionTicket, { force });
     expect((await action(viewTicket, "yes")).mock.calls[0]?.[0]).toBe(false);
     expect(actionHandler).not.toHaveBeenCalled();
     expect((await action(viewTicket, true)).mock.calls[0]?.[1]).toEqual({ refreshed: true });
     expect(actionHandler).toHaveBeenCalledOnce();
     setActivePluginRegistry(registry);
     const stale = await action(viewTicket, true);
-    expect(stale.mock.calls[0]?.[0]).toBe(false);
-    expect(stale.mock.calls[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
+    expect(stale.mock.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
     expect(actionHandler).toHaveBeenCalledOnce();
     expect((await action(await ticket(), true)).mock.calls[0]?.[1]).toEqual({ refreshed: true });
     expect(actionHandler).toHaveBeenCalledTimes(2);
     setActivePluginRegistry(createEmptyPluginRegistry());
-    const unavailable = await invoke("board.data.read", {
-      ticket: viewTicket,
-      bindingId: "workboard.cards.list",
-    });
-    expect(unavailable.mock.calls[0]?.[0]).toBe(false);
-    expect(unavailable.mock.calls[0]?.[2]?.message).toContain("dashboard unavailable");
+    const unavailable = await call("read", viewTicket);
+    expect(unavailable.mock.calls[0]).toMatchObject([
+      false,
+      undefined,
+      { message: expect.stringContaining("dashboard unavailable") },
+    ]);
   });
 });
 
-function registeredWidgetRegistry() {
+function registeredWidgetHarness() {
   const registry = createEmptyPluginRegistry();
   const record = createPluginRecord({
     id: "diagram",
@@ -281,33 +282,19 @@ function registeredWidgetRegistry() {
       throw new Error("diagram prefix required");
     }
   });
-  const composeDocument = vi.fn(
-    ({
-      source,
-      resourceUrls,
-    }: {
-      source: string;
-      resourceUrls: Readonly<Record<string, string>>;
-    }) =>
+  const composeDocument = vi.fn<PluginBoardWidgetContentKind["composeDocument"]>(
+    ({ source, resourceUrls }) =>
       `<main>${source}</main><script src="${resourceUrls["/__openclaw__/diagram/app.js"]}"></script>`,
   );
   createPluginBoardWidgetContentKindRegistrar(registry)(record, {
     kind: "diagram",
     label: "Diagram",
-    resources: {
-      surface: "diagram",
-      paths: ["/__openclaw__/diagram/app.js"],
-    },
+    resources: { surface: "diagram", paths: ["/__openclaw__/diagram/app.js"] },
     validateSource,
     composeDocument,
   });
   registry.plugins.push(record);
-  return { registry, validateSource, composeDocument };
-}
-
-function registeredWidgetHarness() {
-  const plugin = registeredWidgetRegistry();
-  setActivePluginRegistry(plugin.registry);
+  setActivePluginRegistry(registry);
   const harness = createBoardHarness(
     undefined,
     {},
@@ -325,7 +312,7 @@ function registeredWidgetHarness() {
       content: { kind: "registered", contentKind: "diagram", source },
       ...(declared ? { declared } : {}),
     });
-  return { ...harness, ...plugin, put };
+  return { ...harness, validateSource, composeDocument, put };
 }
 
 describe("board registered widget content kinds", () => {
@@ -382,10 +369,15 @@ describe("board registered widget content kinds", () => {
       name: "status",
       content: { kind: "registered", contentKind: "diagram", source: "diagram:first" },
     });
-    expect(response.mock.calls[0]?.[0]).toBe(false);
-    expect(response.mock.calls[0]?.[2]?.message).toContain(
+    expect(response.mock.calls[0]).toMatchObject([
+      false,
+      undefined,
+      {
+        message: expect.stringContaining(
       'widget kind "diagram" is unavailable; enable the plugin that provides it and retry',
-    );
+        ),
+      },
+    ]);
   });
 
   it("composes registered widget prompt actions after an explicit grant", async () => {

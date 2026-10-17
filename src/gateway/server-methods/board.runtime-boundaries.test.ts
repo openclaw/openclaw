@@ -2,10 +2,7 @@ import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { GatewayClient } from "../../../packages/gateway-client/src/index.js";
-import {
-  PROTOCOL_VERSION,
-  type BoardSnapshot,
-} from "../../../packages/gateway-protocol/src/index.js";
+import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
@@ -35,6 +32,12 @@ import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodRegistry,
 } from "../methods/registry.js";
+import {
+  buildMinimalGatewayHelloOkPayload,
+  closeMinimalGatewayServer,
+  sendMinimalGatewayConnectChallenge,
+  sendMinimalGatewayResponse,
+} from "../minimal-gateway.test-helpers.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
@@ -108,27 +111,21 @@ describe("board gateway runtime boundaries", () => {
     cronRun.mockReset();
   });
 
-  it.each(["agent:main:guarded"])(
-    "reads current permission mode from its session owner: %s",
-    async (sessionKey) => {
-      const { store } = sessionBoard(sessionKey, "guarded-widget", "guarded");
-      const cfg = { tools: { exec: { mode: "auto" as const } } };
-      const harness = createHarness(undefined, undefined, store, {
-        getRuntimeConfig: () => cfg,
-      });
-      const response = await harness.invoke("board.widget.put", {
-        sessionKey,
-        name: "health",
-        content: { kind: "html", html: "<p>health</p>" },
-        declared: { tools: ["health"] },
-      });
-      expect(response.mock.calls[0]).toMatchObject([
-        true,
-        { widgets: [{ grantState: "pending" }] },
-      ]);
-      expect(reviewWidgetApproval).not.toHaveBeenCalled();
-    },
-  );
+  it("reads current permission mode from its session owner", async () => {
+    const sessionKey = "agent:main:guarded";
+    const { store } = sessionBoard(sessionKey, "guarded-widget", "guarded");
+    const harness = createHarness(undefined, undefined, store, {
+      getRuntimeConfig: () => ({ tools: { exec: { mode: "auto" } } }),
+    });
+    const response = await harness.invoke("board.widget.put", {
+      sessionKey,
+      name: "health",
+      content: { kind: "html", html: "<p>health</p>" },
+      declared: { tools: ["health"] },
+    });
+    expect(response.mock.calls[0]).toMatchObject([true, { widgets: [{ grantState: "pending" }] }]);
+    expect(reviewWidgetApproval).not.toHaveBeenCalled();
+  });
 
   afterEach(async () => {
     resetGatewayWorkAdmission();
@@ -300,13 +297,7 @@ describe("board gateway runtime boundaries", () => {
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     server.on("connection", (socket) => {
       let gatewayClient: GatewayWsClient | null = null;
-      socket.send(
-        JSON.stringify({
-          type: "event",
-          event: "connect.challenge",
-          payload: { nonce: "board-authority-proof", ts: Date.now() },
-        }),
-      );
+      sendMinimalGatewayConnectChallenge(socket, "board-authority-proof");
       socket.on("message", (data) => {
         const request = JSON.parse(rawDataToString(data)) as {
           id: string;
@@ -325,29 +316,13 @@ describe("board gateway runtime boundaries", () => {
             usesSharedGatewayAuth: false,
           };
           gatewayClients.add(gatewayClient);
-          socket.send(
-            JSON.stringify({
-              type: "res",
-              id: request.id,
-              ok: true,
-              payload: {
-                type: "hello-ok",
-                protocol: PROTOCOL_VERSION,
-                server: { version: "board-authority-proof", connId: "board-authority-proof" },
-                features: { methods: ["board.widget.put"], events: ["board.changed"] },
-                snapshot: {
-                  presence: [],
-                  health: {},
-                  stateVersion: { presence: 1, health: 1 },
-                  uptimeMs: 1,
-                },
-                auth: { role: "operator", scopes: ["operator.admin"] },
-                policy: {
-                  maxPayload: 512 * 1024,
-                  maxBufferedBytes: 1024 * 1024,
-                  tickIntervalMs: 60_000,
-                },
-              },
+          sendMinimalGatewayResponse(
+            socket,
+            request.id,
+            buildMinimalGatewayHelloOkPayload({
+              connId: "board-authority-proof",
+              methods: ["board.widget.put"],
+              auth: { role: "operator", scopes: ["operator.admin"] },
             }),
           );
           return;
@@ -388,25 +363,24 @@ describe("board gateway runtime boundaries", () => {
     try {
       client.start();
       await connected.promise;
-      const request = client.request(
-        "board.widget.put",
-        {
-          sessionKey: "session",
-          name: "canvas",
-          content: { kind: "canvas-doc", docId: "canvas-doc" },
-        },
-        { timeoutMs: null },
-      );
-      const requestOutcome = request.then(
-        () => ({ error: undefined }),
-        (error: unknown) => ({ error }),
-      );
+      const putCanvas = (name: string, unbounded = false) =>
+        client.request(
+          "board.widget.put",
+          {
+            sessionKey: "session",
+            name,
+            content: { kind: "canvas-doc", docId: "canvas-doc" },
+          },
+          unbounded ? { timeoutMs: null } : undefined,
+        );
+      const request = putCanvas("canvas", true);
+      const requestOutcome = request.catch((error: unknown) => error);
       await documentStarted.promise;
 
       resetGatewayWorkAdmission();
       releaseDocument.resolve({ html: "<p>canvas</p>", cspSandbox: "scripts" });
 
-      const { error } = await requestOutcome;
+      const error = await requestOutcome;
       expect(error).toBeInstanceOf(Error);
       expect(String(error)).toContain("dashboard unavailable");
       expect(
@@ -414,11 +388,7 @@ describe("board gateway runtime boundaries", () => {
       ).toEqual([]);
       expect(events).not.toContain("board.changed");
 
-      await client.request("board.widget.put", {
-        sessionKey: "session",
-        name: "live",
-        content: { kind: "canvas-doc", docId: "live-canvas-doc" },
-      });
+      await putCanvas("live");
       expect(
         (await harness.store.getSnapshot({ sessionKey: "session", agentId: "main" })).widgets,
       ).toMatchObject([{ name: "live" }]);
@@ -426,12 +396,7 @@ describe("board gateway runtime boundaries", () => {
     } finally {
       client.stop();
       gatewayClients.clear();
-      for (const socket of server.clients) {
-        socket.terminate();
-      }
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await closeMinimalGatewayServer(server);
     }
   });
 
