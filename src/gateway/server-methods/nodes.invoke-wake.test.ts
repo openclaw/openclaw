@@ -135,11 +135,28 @@ function requireString(value: unknown, label: string): string {
 }
 
 function expectInvokeTimeout(respond: Parameters<typeof firstRespondCall>[0]) {
-  expect(firstRespondCall(respond)).toMatchObject([
-    false,
-    undefined,
-    { message: "TIMEOUT: node invoke timed out", details: { nodeError: { code: "TIMEOUT" } } },
-  ]);
+  expectInvokeError(respond, {
+    message: "TIMEOUT: node invoke timed out",
+    details: { nodeError: { code: "TIMEOUT" } },
+  });
+}
+
+function expectInvokeError(
+  respond: Parameters<typeof firstRespondCall>[0],
+  error: Record<string, unknown>,
+) {
+  expect(firstRespondCall(respond)).toMatchObject([false, undefined, error]);
+}
+
+function expectNodeError(respond: Parameters<typeof firstRespondCall>[0], code: string) {
+  expectInvokeError(respond, { details: { nodeError: { code } } });
+}
+
+function expectPairingChanged(respond: Parameters<typeof firstRespondCall>[0]) {
+  expectInvokeError(respond, {
+    message: "node pairing changed while invocation was active",
+    details: { code: "PAIRING_CHANGED" },
+  });
 }
 
 function requireRespondPayload(call: RespondCall | undefined, label: string) {
@@ -297,6 +314,22 @@ const invokeNode = createNodeInvokeTestHarness({
   nodeHandlers,
 });
 
+type InvokeOptions = Parameters<typeof invokeNode>[0];
+function invokeAt(
+  nodeRegistry: InvokeOptions["nodeRegistry"],
+  nodeId: string,
+  requestParams: Record<string, unknown> = {},
+) {
+  return invokeNode({ nodeRegistry, requestParams: { nodeId, ...requestParams } });
+}
+
+function makeNodeSession(
+  nodeId: string,
+  overrides: Partial<TestNodeSession> = {},
+): TestNodeSession {
+  return { nodeId, commands: ["camera.capture"], platform: "iOS 26.4.0", ...overrides };
+}
+
 function createNodeClient(nodeId: string, commands?: string[]) {
   return {
     connId: `conn:${nodeId}`,
@@ -320,11 +353,12 @@ function createForegroundUnavailableNodeRegistry(params: {
   platform?: string;
 }) {
   return {
-    get: vi.fn(() => ({
-      nodeId: params.nodeId,
-      commands: params.commands ?? ["canvas.navigate"],
-      platform: params.platform ?? "iOS 26.4.0",
-    })),
+    get: vi.fn(() =>
+      makeNodeSession(params.nodeId, {
+        commands: params.commands ?? ["canvas.navigate"],
+        platform: params.platform ?? "iOS 26.4.0",
+      }),
+    ),
     invoke: vi.fn().mockResolvedValue({
       ok: false,
       error: {
@@ -687,11 +721,7 @@ describe("node.invoke APNs wake path", () => {
             ok: true,
           }),
         ).toBe(false);
-        expect(firstRespondCall(await invocation)).toMatchObject([
-          false,
-          undefined,
-          { details: { nodeError: { code: "TIMEOUT" } } },
-        ]);
+        expectNodeError(await invocation, "TIMEOUT");
         expect(requests).toHaveLength(1);
       } finally {
         controller.abort();
@@ -747,11 +777,7 @@ describe("node.invoke APNs wake path", () => {
       expect(requests[1]?.timeoutMs).toBe(50);
       await vi.advanceTimersByTimeAsync(50);
 
-      expect(firstRespondCall(await invocation)).toMatchObject([
-        false,
-        undefined,
-        { details: { nodeError: { code: "TIMEOUT" } } },
-      ]);
+      expectNodeError(await invocation, "TIMEOUT");
       expect(requests).toHaveLength(2);
     });
 
@@ -762,11 +788,7 @@ describe("node.invoke APNs wake path", () => {
       await vi.advanceTimersByTimeAsync(50);
 
       expect(requests).toHaveLength(1);
-      expect(firstRespondCall(await invocation)).toMatchObject([
-        false,
-        undefined,
-        { details: { nodeError: { code: "TIMEOUT" } } },
-      ]);
+      expectNodeError(await invocation, "TIMEOUT");
     });
 
     it.each([-10_000])(
@@ -780,11 +802,7 @@ describe("node.invoke APNs wake path", () => {
         vi.setSystemTime(clockChange + 1);
         await vi.advanceTimersByTimeAsync(1);
 
-        expect(firstRespondCall(await invocation)).toMatchObject([
-          false,
-          undefined,
-          { details: { nodeError: { code: "TIMEOUT" } } },
-        ]);
+        expectNodeError(await invocation, "TIMEOUT");
         expect(requests).toHaveLength(1);
       },
     );
@@ -798,11 +816,7 @@ describe("node.invoke APNs wake path", () => {
         expect(requests).toHaveLength(index + 2);
       }
       rejectNotReady(4);
-      expect(firstRespondCall(await invocation)).toMatchObject([
-        false,
-        undefined,
-        { details: { nodeError: { code: "NODE_NOT_READY" } } },
-      ]);
+      expectNodeError(await invocation, "NODE_NOT_READY");
       expect(requests).toHaveLength(5);
     });
 
@@ -846,11 +860,7 @@ describe("node.invoke APNs wake path", () => {
         await vi.advanceTimersByTimeAsync(2_000);
 
         expect(requests).toHaveLength(1);
-        expect(firstRespondCall(await invocation)).toMatchObject([
-          false,
-          undefined,
-          { details: { nodeError: { code: "UNAVAILABLE" } } },
-        ]);
+        expectNodeError(await invocation, "UNAVAILABLE");
         expect(onProgress).toHaveBeenCalledTimes(streaming && seq === 0 ? 1 : 0);
       },
     );
@@ -1106,12 +1116,7 @@ describe("node.invoke APNs wake path", () => {
     vi.setSystemTime(0);
     const nodeId = "ios-node-dispatched-plugin-pairing-timeout";
     mocks.isNodePairingGenerationCurrent.mockImplementation(() => new Promise<never>(() => {}));
-    const session: TestNodeSession = {
-      nodeId,
-      connId: "dispatched-plugin-conn",
-      commands: ["camera.capture"],
-      platform: "iOS 26.4.0",
-    };
+    const session = makeNodeSession(nodeId, { connId: "dispatched-plugin-conn" });
     const nodeRegistry = {
       get: vi.fn(() => session),
       invoke: vi.fn().mockResolvedValue({ ok: true, payload: { ok: true }, payloadJSON: null }),
@@ -1132,28 +1137,20 @@ describe("node.invoke APNs wake path", () => {
       });
 
     try {
-      const pending = invokeNode({
-        nodeRegistry,
-        requestParams: {
-          nodeId,
-          idempotencyKey: "idem-dispatched-plugin-pairing-timeout",
-          timeoutMs: 100,
-        },
+      const pending = invokeAt(nodeRegistry, nodeId, {
+        idempotencyKey: "idem-dispatched-plugin-pairing-timeout",
+        timeoutMs: 100,
       });
 
       await vi.advanceTimersByTimeAsync(100);
 
-      expect(firstRespondCall(await pending)).toMatchObject([
-        false,
-        undefined,
-        {
-          message: "TIMEOUT: node invoke timed out",
-          details: {
-            nodeError: { code: "TIMEOUT" },
-            nodeCommandDispatched: true,
-          },
+      expectInvokeError(await pending, {
+        message: "TIMEOUT: node invoke timed out",
+        details: {
+          nodeError: { code: "TIMEOUT" },
+          nodeCommandDispatched: true,
         },
-      ]);
+      });
       expect(nodeRegistry.invoke).toHaveBeenCalledOnce();
     } finally {
       applyPolicy.mockRestore();
@@ -1171,7 +1168,7 @@ describe("node.invoke APNs wake path", () => {
       mocks.sendApnsBackgroundWake.mockReturnValue(wake.promise);
       const nodeRegistry = createMissingNodeRegistry();
       let settled = false;
-      const pending = invokeNode({ nodeRegistry, requestParams: { nodeId, timeoutMs } });
+      const pending = invokeAt(nodeRegistry, nodeId, { timeoutMs });
       void pending.then(() => {
         settled = true;
       });
@@ -1206,9 +1203,9 @@ describe("node.invoke APNs wake path", () => {
     const nodeRegistry = createMissingNodeRegistry();
 
     try {
-      const respond = await invokeNode({
-        nodeRegistry,
-        requestParams: { nodeId, idempotencyKey: "idem-late-apns-wake-result", timeoutMs: 100 },
+      const respond = await invokeAt(nodeRegistry, nodeId, {
+        idempotencyKey: "idem-late-apns-wake-result",
+        timeoutMs: 100,
       });
 
       expectInvokeTimeout(respond);
@@ -1254,10 +1251,7 @@ describe("node.invoke APNs wake path", () => {
         get: vi.fn(() => (connected ? session : undefined)),
         invoke: vi.fn().mockResolvedValue({ ok: true }),
       };
-      const pending = invokeNode({
-        nodeRegistry,
-        requestParams: { nodeId, command: "computer.act" },
-      });
+      const pending = invokeAt(nodeRegistry, nodeId, { command: "computer.act" });
       setTimeout(() => {
         runtimeConfig = policy(!initiallyAllowed);
         connected = true;
@@ -1329,16 +1323,12 @@ describe("node.invoke APNs wake path", () => {
       runtimeConfig = { gateway: { nodes: { commands: { deny: ["system.which"] } } } };
       pairingReleased.resolve();
 
-      expect(firstRespondCall(await invocation)).toMatchObject([
-        false,
-        undefined,
-        {
-          details: {
-            nodeError: { code: "POLICY_CHANGED" },
-            nodeCommandDispatched: false,
-          },
+      expectInvokeError(await invocation, {
+        details: {
+          nodeError: { code: "POLICY_CHANGED" },
+          nodeCommandDispatched: false,
         },
-      ]);
+      });
       expect(dispatch).not.toHaveBeenCalled();
     } finally {
       pairingReleased.resolve();
@@ -1510,13 +1500,9 @@ describe("node.invoke APNs wake path", () => {
       }
       const nodeRegistry = createMissingNodeRegistry();
 
-      const respond = await invokeNode({
-        nodeRegistry,
-        requestParams: {
-          nodeId,
-          command: "system.which",
-          idempotencyKey: "idem-pairing-admission",
-        },
+      const respond = await invokeAt(nodeRegistry, nodeId, {
+        command: "system.which",
+        idempotencyKey: "idem-pairing-admission",
       });
 
       expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
@@ -1525,16 +1511,15 @@ describe("node.invoke APNs wake path", () => {
       expect(mocks.loadApnsRegistration).not.toHaveBeenCalled();
       expect(mocks.sendApnsBackgroundWake).not.toHaveBeenCalled();
       expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-      expect(firstRespondCall(respond)).toMatchObject([
-        false,
-        undefined,
+      expectInvokeError(
+        respond,
         state === "removed"
           ? {
               message: "node pairing changed while invocation was active",
               details: { code: "PAIRING_CHANGED" },
             }
           : { code: ErrorCodes.UNAVAILABLE, message: "Error: pairing transport unavailable" },
-      ]);
+      );
     },
   );
 
@@ -1544,13 +1529,9 @@ describe("node.invoke APNs wake path", () => {
 
     const nodeRegistry = createMissingNodeRegistry();
 
-    const invokePromise = invokeNode({
-      nodeRegistry,
-      requestParams: {
-        nodeId: "ios-node-throttle",
-        idempotencyKey: "idem-throttle-1",
-        timeoutMs: 0,
-      },
+    const invokePromise = invokeAt(nodeRegistry, "ios-node-throttle", {
+      idempotencyKey: "idem-throttle-1",
+      timeoutMs: 0,
     });
     await vi.advanceTimersByTimeAsync(20_000);
     await invokePromise;
@@ -1566,9 +1547,8 @@ describe("node.invoke APNs wake path", () => {
     mocks.sendApnsAlert.mockResolvedValue(DIRECT_APNS_RESULT);
     const nodeRegistry = createMissingNodeRegistry();
 
-    const invokePromise = invokeNode({
-      nodeRegistry,
-      requestParams: { nodeId, idempotencyKey: "idem-remove-during-wake" },
+    const invokePromise = invokeAt(nodeRegistry, nodeId, {
+      idempotencyKey: "idem-remove-during-wake",
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(1);
@@ -1581,12 +1561,7 @@ describe("node.invoke APNs wake path", () => {
     expect(mocks.sendApnsAlert).not.toHaveBeenCalled();
     expect(getNodeWakeStateSnapshot(nodeId)).toBeUndefined();
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-    const call = firstRespondCall(respond);
-    expect(call[0]).toBe(false);
-    expect(call[2]).toMatchObject({
-      message: "node pairing changed while invocation was active",
-      details: { code: "PAIRING_CHANGED" },
-    });
+    expectPairingChanged(respond);
   });
 
   it.each(["wake", "nudge"])("revalidates pairing after direct %s auth resolves", async (kind) => {
@@ -1647,21 +1622,15 @@ describe("node.invoke APNs wake path", () => {
     mockDirectWakeConfig(nodeId);
     let pairingCurrent = true;
     mocks.isNodePairingGenerationCurrent.mockImplementation(async () => pairingCurrent);
-    const replacementSession: TestNodeSession = {
-      nodeId,
-      connId: "replacement-conn",
-      commands: ["camera.capture"],
-      platform: "iOS 26.4.0",
-    };
+    const replacementSession = makeNodeSession(nodeId, { connId: "replacement-conn" });
     let replacementConnected = false;
     const nodeRegistry = {
       get: vi.fn(() => (replacementConnected ? replacementSession : undefined)),
       invoke: vi.fn().mockResolvedValue({ ok: true, payload: { replacement: true } }),
     };
 
-    const invokePromise = invokeNode({
-      nodeRegistry,
-      requestParams: { nodeId, idempotencyKey: "idem-replacement-after-remove" },
+    const invokePromise = invokeAt(nodeRegistry, nodeId, {
+      idempotencyKey: "idem-replacement-after-remove",
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(1);
@@ -1672,23 +1641,13 @@ describe("node.invoke APNs wake path", () => {
     const respond = await invokePromise;
 
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-    const call = firstRespondCall(respond);
-    expect(call[0]).toBe(false);
-    expect(call[2]).toMatchObject({
-      message: "node pairing changed while invocation was active",
-      details: { code: "PAIRING_CHANGED" },
-    });
+    expectPairingChanged(respond);
   });
 
   it("does not raw-dispatch when runtime authority closes during an awaited policy check", async () => {
     const nodeId = "ios-node-authority-close";
     const nodeRegistry = {
-      get: vi.fn(() => ({
-        nodeId,
-        connId: "authority-conn",
-        commands: ["camera.capture"],
-        platform: "iOS 26.4.0",
-      })),
+      get: vi.fn(() => makeNodeSession(nodeId, { connId: "authority-conn" })),
       invoke: vi.fn().mockResolvedValue({ ok: true, payload: { delivered: true } }),
     };
     let authorityActive = true;
@@ -1720,14 +1679,10 @@ describe("node.invoke APNs wake path", () => {
     expect(retainForHandoff).toHaveBeenCalledWith("approval-backend-bridge");
     expect(releaseHandoff).toHaveBeenCalledOnce();
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-    expect(firstRespondCall(respond)).toMatchObject([
-      false,
-      undefined,
-      {
-        message: "approved runtime authority closed before node dispatch",
-        details: { code: "APPROVAL_AUTHORITY_CLOSED" },
-      },
-    ]);
+    expectInvokeError(respond, {
+      message: "approved runtime authority closed before node dispatch",
+      details: { code: "APPROVAL_AUTHORITY_CLOSED" },
+    });
   });
 
   it.each(["invalidated", "prior generation"])(
@@ -1735,14 +1690,11 @@ describe("node.invoke APNs wake path", () => {
     async (state) => {
       const nodeId = "ios-node-stale-session";
       mocks.loadApnsRegistration.mockResolvedValue(null);
-      const oldSession: TestNodeSession = {
-        nodeId,
+      const oldSession = makeNodeSession(nodeId, {
         connId: "old-conn",
         pairingGeneration: `generation:${nodeId}:0`,
-        commands: ["camera.capture"],
-        platform: "iOS 26.4.0",
         client: { invalidated: state === "invalidated" },
-      };
+      });
       const getForPairingGeneration = vi.fn((_requestedNodeId: string, generation: string) =>
         generation === oldSession.pairingGeneration ? oldSession : undefined,
       );
@@ -1752,20 +1704,15 @@ describe("node.invoke APNs wake path", () => {
         invoke: vi.fn().mockResolvedValue({ ok: true, payload: { delivered: true } }),
       };
 
-      const respond = await invokeNode({
-        nodeRegistry,
-        requestParams: { nodeId, idempotencyKey: "idem-stale-session" },
+      const respond = await invokeAt(nodeRegistry, nodeId, {
+        idempotencyKey: "idem-stale-session",
       });
 
       if (state === "prior generation") {
         expect(getForPairingGeneration).toHaveBeenCalledWith(nodeId, `generation:${nodeId}:1`);
       }
       expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-      expect(firstRespondCall(respond)).toMatchObject([
-        false,
-        undefined,
-        { details: { code: "NOT_CONNECTED" } },
-      ]);
+      expectInvokeError(respond, { details: { code: "NOT_CONNECTED" } });
     },
   );
 
@@ -1773,12 +1720,7 @@ describe("node.invoke APNs wake path", () => {
     const nodeId = "ios-node-revoked-during-dispatch";
     let pairingCurrent = true;
     mocks.isNodePairingGenerationCurrent.mockImplementation(async () => pairingCurrent);
-    const session: TestNodeSession = {
-      nodeId,
-      connId: "revoked-conn",
-      commands: ["camera.capture"],
-      platform: "iOS 26.4.0",
-    };
+    const session = makeNodeSession(nodeId, { connId: "revoked-conn" });
     const nodeRegistry = {
       get: vi.fn(() => session),
       invoke: vi.fn(
@@ -1793,9 +1735,8 @@ describe("node.invoke APNs wake path", () => {
       ),
     };
 
-    const pending = invokeNode({
-      nodeRegistry,
-      requestParams: { nodeId, idempotencyKey: "idem-revoked-during-dispatch" },
+    const pending = invokeAt(nodeRegistry, nodeId, {
+      idempotencyKey: "idem-revoked-during-dispatch",
     });
     await vi.waitFor(() => expect(nodeRegistry.invoke).toHaveBeenCalledTimes(1));
     const signal = requireGatewayRecord(
@@ -1811,20 +1752,14 @@ describe("node.invoke APNs wake path", () => {
     invalidateNodeWakeState(nodeId);
 
     expect(signal.aborted).toBe(true);
-    expect(firstRespondCall(await pending)).toMatchObject([
-      false,
-      undefined,
-      { details: { code: "PAIRING_CHANGED" } },
-    ]);
+    expectInvokeError(await pending, { details: { code: "PAIRING_CHANGED" } });
   });
 
   it("does not queue foreground work when pairing changes during node dispatch", async () => {
     const nodeId = "ios-node-replaced-during-dispatch";
     let pairingCurrent = true;
     mocks.isNodePairingGenerationCurrent.mockImplementation(async () => pairingCurrent);
-    const nodeRegistry = createForegroundUnavailableNodeRegistry({
-      nodeId,
-    });
+    const nodeRegistry = createForegroundUnavailableNodeRegistry({ nodeId });
     nodeRegistry.invoke.mockImplementation(async () => {
       pairingCurrent = false;
       return {
@@ -1847,14 +1782,7 @@ describe("node.invoke APNs wake path", () => {
 
     expect(nodeRegistry.invoke).toHaveBeenCalledTimes(1);
     expect(mocks.loadApnsRegistration).not.toHaveBeenCalled();
-    expect(firstRespondCall(respond)).toMatchObject([
-      false,
-      undefined,
-      {
-        message: "node pairing changed while invocation was active",
-        details: { code: "PAIRING_CHANGED" },
-      },
-    ]);
+    expectPairingChanged(respond);
   });
 
   it("keeps a foreground-recovery wake alive across an ordinary disconnect cleanup", async () => {
@@ -1868,18 +1796,12 @@ describe("node.invoke APNs wake path", () => {
     );
     mocks.resolveApnsAuthConfigFromEnv.mockResolvedValue(DIRECT_APNS_AUTH);
     mocks.sendApnsBackgroundWake.mockResolvedValue(DIRECT_APNS_RESULT);
-    const nodeRegistry = createForegroundUnavailableNodeRegistry({
-      nodeId,
-    });
+    const nodeRegistry = createForegroundUnavailableNodeRegistry({ nodeId });
 
-    const invokePromise = invokeNode({
-      nodeRegistry,
-      requestParams: {
-        nodeId,
-        command: "canvas.navigate",
-        params: { url: "http://example.com/" },
-        idempotencyKey: "idem-disconnect-during-foreground-wake",
-      },
+    const invokePromise = invokeAt(nodeRegistry, nodeId, {
+      command: "canvas.navigate",
+      params: { url: "http://example.com/" },
+      idempotencyKey: "idem-disconnect-during-foreground-wake",
     });
     await vi.waitFor(() => expect(mocks.loadApnsRegistration).toHaveBeenCalledTimes(1));
 
@@ -1952,14 +1874,7 @@ describe("node.invoke APNs wake path", () => {
           "foreground wake must not hold the invocation past its deadline",
         ).toBeDefined();
         const completed = expectDefined(respond, "completed invocation response");
-        expect(firstRespondCall(completed)).toMatchObject([
-          false,
-          undefined,
-          {
-            message: "TIMEOUT: node invoke timed out",
-            details: { nodeError: { code: "TIMEOUT" } },
-          },
-        ]);
+        expectInvokeTimeout(completed);
         expect(completed).toHaveBeenCalledOnce();
         const afterTimeout = await pendingPayload(nodeId);
         expectQueuedAction(afterTimeout, { id: originalActionId, command: "canvas.navigate" });
@@ -1984,14 +1899,10 @@ describe("node.invoke APNs wake path", () => {
     const respond = await invokeForeground(nodeId, {
       requestParams: { params: { url: "http://example.com/" } },
     });
-    expect(firstRespondCall(respond)).toMatchObject([
-      false,
-      undefined,
-      {
-        code: ErrorCodes.UNAVAILABLE,
-        message: "node command queued until iOS returns to foreground",
-      },
-    ]);
+    expectInvokeError(respond, {
+      code: ErrorCodes.UNAVAILABLE,
+      message: "node command queued until iOS returns to foreground",
+    });
     expect(mocks.sendApnsBackgroundWake).not.toHaveBeenCalled();
     const payload = await pendingPayload(nodeId);
     expect(payload.nodeId).toBe(nodeId);
@@ -2055,11 +1966,9 @@ describe("node.invoke APNs wake path", () => {
               execApprovalManager: { projectDecisionIfActive: (_id, decision) => decision },
             },
       );
-      expect(firstRespondCall(respond)).toMatchObject([
-        false,
-        undefined,
-        { details: { nodeError: { code: "NODE_BACKGROUND_UNAVAILABLE" } } },
-      ]);
+      expectInvokeError(respond, {
+        details: { nodeError: { code: "NODE_BACKGROUND_UNAVAILABLE" } },
+      });
       expect((await pendingPayload(nodeId)).actions).toEqual([]);
     },
   );
@@ -2105,11 +2014,9 @@ describe("node.invoke APNs wake path", () => {
     const nodeId = "ios-node-prior-generation-pending";
     mocks.loadApnsRegistration.mockResolvedValue(null);
     await invokeForeground(nodeId);
-    expect(firstRespondCall(await pullPending(nodeId, ["canvas.navigate"], null))).toMatchObject([
-      false,
-      undefined,
-      { details: { code: "PAIRING_CHANGED" } },
-    ]);
+    expectInvokeError(await pullPending(nodeId, ["canvas.navigate"], null), {
+      details: { code: "PAIRING_CHANGED" },
+    });
     const payload = await pendingPayload(nodeId);
     const id = requireString(
       expectQueuedAction(payload, { command: "canvas.navigate" }).id,

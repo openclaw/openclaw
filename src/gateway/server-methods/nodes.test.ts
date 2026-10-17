@@ -18,6 +18,7 @@ import {
   requestDevicePairing,
   resolveNodePairingState,
 } from "../../infra/device-pairing.js";
+import type { PairedDevice } from "../../infra/device-pairing.types.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -157,12 +158,16 @@ function createClient(scopes: string[], deviceId?: string, opts?: { isDeviceToke
 function createOptions(
   params: Record<string, unknown>,
   overrides?: Partial<GatewayRequestHandlerOptions>,
+  registry?: NodeRegistry,
 ): {
   context: ReturnType<typeof createContext>;
   opts: GatewayRequestHandlerOptions;
   respond: ReturnType<typeof vi.fn>;
 } {
   const context = createContext();
+  if (registry) {
+    Object.assign(context, { nodeRegistry: registry });
+  }
   const respond = vi.fn();
   const opts = {
     req: { type: "req", id: "req-1", method: "node.pair.remove", params },
@@ -178,6 +183,28 @@ function createOptions(
 
 function invokeNode(method: string, opts: GatewayRequestHandlerOptions) {
   return expectDefined(nodeHandlers[method], `${method} test invariant`)(opts);
+}
+
+function expectSuccess(opts: GatewayRequestHandlerOptions, payload: unknown) {
+  expect(opts.respond).toHaveBeenCalledWith(true, payload, undefined);
+}
+
+async function publishRunner(
+  registry: NodeRegistry,
+  client: ReturnType<typeof createWorkerSupervisorNodeClient>,
+  workerHost: {
+    enabled: boolean;
+    capacity: { total: number; available: number };
+    bundleRetention?: number;
+    bundleStatus?: number;
+  } = { enabled: true, capacity: { total: 2, available: 2 } },
+) {
+  const publication = createOptions(
+    { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE], workerHost },
+    { client: client as never },
+    registry,
+  );
+  await invokeNode("node.runnerInventory.update", publication.opts);
 }
 
 describe("nodeHandlers node.skills.update", () => {
@@ -205,21 +232,20 @@ describe("nodeHandlers node.skills.update", () => {
     await invokeNode("node.skills.update", opts);
 
     expect(context.nodeRegistry.updateNodeSkills).toHaveBeenCalledWith("node-1", "conn-1", [skill]);
-    expect(opts.respond).toHaveBeenCalledWith(
-      true,
-      { nodeId: "node-1", skills: [skill] },
-      undefined,
-    );
+    expectSuccess(opts, { nodeId: "node-1", skills: [skill] });
   });
 });
 
 function expectApproved(opts: GatewayRequestHandlerOptions, nodeId: string) {
-  expect(opts.respond).toHaveBeenCalledWith(
-    true,
-    expect.objectContaining({ node: expect.objectContaining({ nodeId }) }),
-    undefined,
-  );
+  expectSuccess(opts, expect.objectContaining({ node: expect.objectContaining({ nodeId }) }));
 }
+
+const androidSurface = {
+  platform: "android",
+  deviceFamily: "Android",
+  clientId: "openclaw-android",
+  clientMode: "node",
+};
 
 async function pairAndroidNodeDevice(
   stateDir: string,
@@ -232,10 +258,7 @@ async function pairAndroidNodeDevice(
       deviceId: nodeId,
       publicKey: `public-key-${nodeId}`,
       displayName: "Galaxy A54 5G",
-      platform: "android",
-      deviceFamily: "Android",
-      clientId: "openclaw-android",
-      clientMode: "node",
+      ...androidSurface,
       role,
       roles: role === "operator" ? ["operator", "node"] : ["node"],
       scopes,
@@ -251,17 +274,7 @@ async function pairAndroidNodeDevice(
 }
 
 function requestSurface(stateDir: string, nodeId: string, displayName: string) {
-  return nodePairing.requestNodePairing(
-    {
-      nodeId,
-      platform: "android",
-      deviceFamily: "Android",
-      clientId: "openclaw-android",
-      clientMode: "node",
-      displayName,
-    },
-    stateDir,
-  );
+  return nodePairing.requestNodePairing({ nodeId, ...androidSurface, displayName }, stateDir);
 }
 
 async function approveNodeSurface(stateDir: string, nodeId: string): Promise<void> {
@@ -286,20 +299,12 @@ describe("nodeHandlers node.describe", () => {
       pairingIdentity: pairingState?.identity.key ?? "",
       pairingGeneration: pairingState?.generation?.key,
     });
-    const publication = createOptions(
-      {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: {
+    await publishRunner(runtime.nodeRegistry, nodeClient, {
           enabled: true,
           capacity: { total: 2, available: 2 },
           bundleRetention: 1,
           bundleStatus: 1,
-        },
-      },
-      { client: nodeClient as never },
-    );
-    Object.assign(publication.context, { nodeRegistry: runtime.nodeRegistry });
-    await invokeNode("node.runnerInventory.update", publication.opts);
+    });
     const [proof] = await runtime.nodeWorkerSupervisorTransport.listCurrentNodes();
     expect(proof).toBeDefined();
     expect(
@@ -310,15 +315,13 @@ describe("nodeHandlers node.describe", () => {
         }),
     ).toBe(true);
 
-    const listCall = createOptions({});
-    Object.assign(listCall.context, { nodeRegistry: runtime.nodeRegistry });
+    const listCall = createOptions({}, undefined, runtime.nodeRegistry);
     await invokeNode("node.list", listCall.opts);
-    const describeCall = createOptions({ nodeId });
-    Object.assign(describeCall.context, { nodeRegistry: runtime.nodeRegistry });
+    const describeCall = createOptions({ nodeId }, undefined, runtime.nodeRegistry);
     await invokeNode("node.describe", describeCall.opts);
 
-    expect(listCall.respond).toHaveBeenCalledWith(
-      true,
+    expectSuccess(
+      listCall.opts,
       expect.objectContaining({
         nodes: expect.arrayContaining([
           expect.objectContaining({
@@ -328,17 +331,15 @@ describe("nodeHandlers node.describe", () => {
           }),
         ]),
       }),
-      undefined,
     );
-    expect(describeCall.respond).toHaveBeenCalledWith(
-      true,
+    expectSuccess(
+      describeCall.opts,
       expect.objectContaining({
         nodeId,
         sessionHost: true,
         workerSlots: { total: 2, available: 2 },
         workerBundle: { status: "installed", version: "2026.8.9" },
       }),
-      undefined,
     );
     expect(JSON.stringify(listCall.respond.mock.calls)).not.toContain("bundleHash");
     expect(JSON.stringify(describeCall.respond.mock.calls)).not.toContain("bundleHash");
@@ -346,7 +347,7 @@ describe("nodeHandlers node.describe", () => {
   });
 });
 
-async function readPaired(stateDir: string): Promise<Record<string, unknown>> {
+async function readPaired(stateDir: string): Promise<Record<string, PairedDevice>> {
   const { paired } = await listDevicePairing(stateDir);
   return Object.fromEntries(paired.map((device) => [device.deviceId, device]));
 }
@@ -406,15 +407,7 @@ describe("nodeHandlers node.pair.approve", () => {
       pairingIdentity: previousState?.identity.key ?? "",
       pairingGeneration: previousState?.generation?.key,
     });
-    const publication = createOptions(
-      {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
-      },
-      { client: client as never },
-    );
-    Object.assign(publication.context, { nodeRegistry: runtime.nodeRegistry });
-    await invokeNode("node.runnerInventory.update", publication.opts);
+    await publishRunner(runtime.nodeRegistry, client);
     await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
       expect.objectContaining({ pairingGeneration: previousState?.generation?.key }),
     ]);
@@ -432,8 +425,11 @@ describe("nodeHandlers node.pair.approve", () => {
       stateDir,
     );
     const lifecycle = captureNodeWakeLifecycle(nodeId);
-    const approval = createOptions({ requestId: pending.request.requestId });
-    Object.assign(approval.context, { nodeRegistry: runtime.nodeRegistry });
+    const approval = createOptions(
+      { requestId: pending.request.requestId },
+      undefined,
+      runtime.nodeRegistry,
+    );
     inspectPublishedSurface.mockClear();
     inspectPublishedSurface.mockImplementation(() => {
       const session = runtime.nodeRegistry.get(nodeId);
@@ -474,15 +470,7 @@ describe("nodeHandlers node.pair.approve", () => {
       event: "node.pair.resolved",
       payload: { requestId: pending.request.requestId, nodeId, decision: "approved" },
     });
-    const republish = createOptions(
-      {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
-      },
-      { client: client as never },
-    );
-    Object.assign(republish.context, { nodeRegistry: runtime.nodeRegistry });
-    await invokeNode("node.runnerInventory.update", republish.opts);
+    await publishRunner(runtime.nodeRegistry, client);
 
     await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
       expect.objectContaining({
@@ -523,8 +511,7 @@ describe("nodeHandlers node.pair.approve", () => {
           return result;
         });
       }
-      const { context, opts } = createOptions({ requestId: pending.request.requestId });
-      Object.assign(context, { nodeRegistry: registry });
+      const { opts } = createOptions({ requestId: pending.request.requestId }, undefined, registry);
       try {
         await invokeNode("node.pair.approve", opts);
         expect((await captureNodePairingGeneration(nodeId))?.key).not.toBe(staleGeneration.key);
@@ -563,8 +550,7 @@ describe("nodeHandlers node.pair.approve", () => {
     const send = vi.spyOn(client.socket, "send");
     client.connect.device = { ...client.connect.device!, id: nodeId };
     registry.register(client, { pairingIdentity: staleState?.identity.key ?? "" });
-    const { context, opts } = createOptions({ requestId: pending.request.requestId });
-    Object.assign(context, { nodeRegistry: registry });
+    const { opts } = createOptions({ requestId: pending.request.requestId }, undefined, registry);
 
     try {
       await invokeNode("node.pair.approve", opts);
@@ -589,7 +575,7 @@ describe("nodeHandlers node.pair.remove", () => {
     await invokeNode("node.pair.remove", opts);
     await Promise.resolve();
 
-    expect(opts.respond).toHaveBeenCalledWith(true, { nodeId }, undefined);
+    expectSuccess(opts, { nodeId });
     expect(getNodeWakeStateSnapshot(nodeId)).toBeUndefined();
     expect(wakeLifecycle.aborted).toBe(true);
     expect(drainNodePendingWork(nodeId).items.map((item) => item.id)).toEqual(["baseline-status"]);
@@ -644,7 +630,7 @@ describe("nodeHandlers node.pair.remove", () => {
       } else {
         expect(reconcileActive).toHaveBeenCalledWith("environment-1");
         expect(order).toEqual(["environment", "placement", "respond"]);
-        expect(opts.respond).toHaveBeenCalledWith(true, { nodeId }, undefined);
+        expectSuccess(opts, { nodeId });
       }
     },
   );
@@ -750,9 +736,7 @@ describe("nodeHandlers node.pair.remove", () => {
     await registerApns(nodeId);
 
     const before = await readPaired(stateDir);
-    expect(
-      (before[nodeId] as { roles?: string[]; tokens?: Record<string, unknown> }).roles,
-    ).toEqual(["operator", "node"]);
+    expect(before[nodeId]?.roles).toEqual(["operator", "node"]);
 
     const { context, opts } = createOptions(
       { nodeId },
@@ -764,20 +748,11 @@ describe("nodeHandlers node.pair.remove", () => {
     await invokeNode("node.pair.remove", opts);
     await Promise.resolve();
 
-    expect(opts.respond).toHaveBeenCalledWith(true, { nodeId }, undefined);
+    expectSuccess(opts, { nodeId });
     const after = await readPaired(stateDir);
-    expect((after[nodeId] as { roles?: string[]; tokens?: Record<string, unknown> }).roles).toEqual(
-      ["operator"],
-    );
-    expect(
-      Object.hasOwn(
-        (after[nodeId] as { tokens?: Record<string, unknown> }).tokens ?? {},
-        "operator",
-      ),
-    ).toBe(true);
-    expect(
-      Object.hasOwn((after[nodeId] as { tokens?: Record<string, unknown> }).tokens ?? {}, "node"),
-    ).toBe(false);
+    expect(after[nodeId]?.roles).toEqual(["operator"]);
+    expect(Object.hasOwn(after[nodeId]?.tokens ?? {}, "operator")).toBe(true);
+    expect(Object.hasOwn(after[nodeId]?.tokens ?? {}, "node")).toBe(false);
     await expect(loadApnsRegistration(nodeId)).resolves.toMatchObject({
       nodeId,
       transport: "direct",

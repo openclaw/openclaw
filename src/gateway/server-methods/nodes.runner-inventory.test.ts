@@ -48,26 +48,6 @@ const RETIRED_WORKER_RUNS = { retired: true } as const;
 const AVAILABLE_CAPACITY = { total: 2, available: 2 } as const;
 const FULL_CAPACITY = { total: 2, available: 0 } as const;
 
-function runnerInventoryOptions(params: {
-  nodeRegistry: NodeRegistry;
-  client: GatewayWsClient;
-  declaration: unknown;
-}): GatewayRequestHandlerOptions {
-  return {
-    req: {
-      type: "req",
-      id: "req-1",
-      method: "node.runnerInventory.update",
-      params: params.declaration,
-    },
-    params: params.declaration,
-    client: params.client as never,
-    isWebchatConnect: () => false,
-    respond: vi.fn(),
-    context: { nodeRegistry: params.nodeRegistry, logGateway: { warn: vi.fn() } },
-  } as unknown as GatewayRequestHandlerOptions;
-}
-
 const runnerInventoryHandler = expectDefined(
   nodeHandlers["node.runnerInventory.update"],
   'nodeHandlers["node.runnerInventory.update"] test invariant',
@@ -78,41 +58,62 @@ async function publishInventory(
   client: GatewayWsClient,
   declaration: unknown,
 ) {
-  const options = runnerInventoryOptions({ nodeRegistry, client, declaration });
-  await runnerInventoryHandler(options);
-  return options;
+  const respond = vi.fn();
+  await runnerInventoryHandler({
+    req: { type: "req", id: "req-1", method: "node.runnerInventory.update", params: declaration },
+    params: declaration,
+    client,
+    isWebchatConnect: () => false,
+    respond,
+    context: { nodeRegistry, logGateway: { warn: vi.fn() } },
+  } as unknown as GatewayRequestHandlerOptions);
+  return { respond };
 }
 
-const availableHost = {
+const host = (capacity: typeof AVAILABLE_CAPACITY | typeof FULL_CAPACITY) => ({
   protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-  workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, bundlePrewarm: 1 },
-} as const;
-
-const fullHost = {
-  protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-  workerHost: { enabled: true, capacity: FULL_CAPACITY, bundlePrewarm: 1 },
-} as const;
-
+  workerHost: { enabled: true, capacity, bundlePrewarm: 1 },
+});
+const availableHost = host(AVAILABLE_CAPACITY);
+const fullHost = host(FULL_CAPACITY);
 const retainedHost = {
-  protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-  workerHost: {
-    enabled: true,
-    capacity: AVAILABLE_CAPACITY,
-    bundlePrewarm: 1,
-    bundleRetention: 1,
-    bundleStatus: 1,
-  },
-} as const;
+  ...availableHost,
+  workerHost: { ...availableHost.workerHost, bundleRetention: 1, bundleStatus: 1 },
+};
+const installed = { status: "installed", version: "2026.8.9" } as const;
+const bundleStatus = (hash: string, status: "installed" | "missing") => ({
+  bundleHash: hash.repeat(64),
+  status: status === "installed" ? { ...installed } : { status },
+});
 
-function createCurrentRunner() {
-  const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-  const transport = runtime.nodeWorkerSupervisorTransport;
-  const client = createWorkerSupervisorNodeClient();
-  runtime.nodeRegistry.register(client, {
+function expectPublication(
+  publication: { respond: ReturnType<typeof vi.fn> },
+  error?: Record<string, unknown>,
+) {
+  expect(publication.respond).toHaveBeenCalledWith(
+    !error,
+    error ? undefined : { nodeId: "node-1" },
+    error ? expect.objectContaining(error) : undefined,
+  );
+}
+
+function register(registry: NodeRegistry, client: GatewayWsClient) {
+  return registry.register(client, {
     pairingIdentity: "identity-1",
     pairingGeneration: "generation-1",
   });
-  return { runtime, client, transport };
+}
+
+function readCatalog(registry: NodeRegistry) {
+  return collectNodeCatalogRuntimeState(registry, [{ nodeId: "node-1", connId: "conn-1" }]);
+}
+
+function createCurrentRunner() {
+  const { nodeRegistry: registry, nodeWorkerSupervisorTransport: transport } =
+    createNodeRegistryRuntime(() => new NodeRegistry());
+  const client = createWorkerSupervisorNodeClient();
+  register(registry, client);
+  return { registry, client, transport };
 }
 
 beforeEach(() => {
@@ -125,22 +126,19 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     "publishes explicit runner consent and launch capacity for authenticated %s",
     async (clientId) => {
       const inventoryChanged = vi.fn();
-      const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-      const transport = runtime.nodeWorkerSupervisorTransport;
-      setNodeRunnerStateChangedListener(runtime.nodeRegistry, inventoryChanged);
+      const { nodeRegistry: registry, nodeWorkerSupervisorTransport: transport } =
+        createNodeRegistryRuntime(() => new NodeRegistry());
+      setNodeRunnerStateChangedListener(registry, inventoryChanged);
       const client = createWorkerSupervisorNodeClient();
       const sent: string[] = [];
       client.socket.send = (frame) => {
         sent.push(frame.toString());
       };
       client.connect.client.id = clientId;
-      runtime.nodeRegistry.register(client, {
-        pairingIdentity: "identity-1",
-        pairingGeneration: "generation-1",
-      });
-      const opts = await publishInventory(runtime.nodeRegistry, client, availableHost);
+      register(registry, client);
+      const opts = await publishInventory(registry, client, availableHost);
 
-      expect(opts.respond).toHaveBeenCalledWith(true, { nodeId: "node-1" }, undefined);
+      expectPublication(opts);
       expect(updatePairedNodeSessionHostMock).toHaveBeenCalledWith(
         expect.objectContaining({
           nodeId: "node-1",
@@ -161,11 +159,9 @@ describe("nodeHandlers node.runnerInventory.update", () => {
           workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, bundlePrewarm: 1 },
         }),
       ]);
-      expect(
-        collectNodeCatalogRuntimeState(runtime.nodeRegistry, [
-          { nodeId: "node-1", connId: "conn-1" },
-        ]).workerSlotsByNodeId,
-      ).toEqual(new Map([["node-1", AVAILABLE_CAPACITY]]));
+      expect(readCatalog(registry).workerSlotsByNodeId).toEqual(
+        new Map([["node-1", AVAILABLE_CAPACITY]]),
+      );
       const proof = expectDefined(
         (await transport.listCurrentNodes())[0],
         "current authenticated runner proof",
@@ -177,8 +173,8 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       });
       const frame = JSON.parse(expectDefined(sent[0], "private invoke frame"));
       expect(frame.payload.command).toBe(NODE_WORKER_SUPERVISOR_STATUS_COMMAND);
-      expect(runtime.nodeRegistry.get("node-1")?.clientId).toBe(clientId);
-      runtime.nodeRegistry.handleInvokeResult({
+      expect(registry.get("node-1")?.clientId).toBe(clientId);
+      registry.handleInvokeResult({
         id: frame.payload.id,
         nodeId: "node-1",
         connId: "conn-1",
@@ -186,43 +182,25 @@ describe("nodeHandlers node.runnerInventory.update", () => {
         payloadJSON: "{}",
       });
       await expect(invocation).resolves.toMatchObject({ ok: true });
-      runtime.nodeRegistry.unregister("conn-1");
+      registry.unregister("conn-1");
     },
   );
 
   it("stores bundle status only for the exact current node proof", async () => {
-    const { runtime, client, transport } = createCurrentRunner();
-    await publishInventory(runtime.nodeRegistry, client, retainedHost);
-    const [proof] = await transport.listCurrentNodes();
-    if (!proof) {
-      throw new Error("expected current node proof");
-    }
+    const { registry, client, transport } = createCurrentRunner();
+    await publishInventory(registry, client, retainedHost);
+    const proof = expectDefined((await transport.listCurrentNodes())[0], "current node proof");
 
-    expect(
-      transport.acceptBundleStatus?.(proof, {
-        bundleHash: "a".repeat(64),
-        status: { status: "installed", version: "2026.8.9" },
-      }),
-    ).toBe(true);
-    expect(transport.getBundleStatus?.("node-1")).toEqual({
-      bundleHash: "a".repeat(64),
-      status: { status: "installed", version: "2026.8.9" },
-    });
-    const catalog = collectNodeCatalogRuntimeState(runtime.nodeRegistry, [
-      { nodeId: "node-1", connId: "conn-1" },
-    ]);
-    expect(catalog.workerBundleByNodeId).toEqual(
-      new Map([["node-1", { status: "installed", version: "2026.8.9" }]]),
-    );
-    const bundle = expectDefined(catalog.workerBundleByNodeId.get("node-1"), "projected bundle");
+    expect(transport.acceptBundleStatus?.(proof, bundleStatus("a", "installed"))).toBe(true);
+    expect(transport.getBundleStatus?.("node-1")).toEqual(bundleStatus("a", "installed"));
+    const state = readCatalog(registry);
+    expect(state.workerBundleByNodeId).toEqual(new Map([["node-1", installed]]));
+    const bundle = expectDefined(state.workerBundleByNodeId.get("node-1"), "projected bundle");
     bundle.status = "missing";
-    expect(transport.getBundleStatus?.("node-1")?.status).toEqual({
-      status: "installed",
-      version: "2026.8.9",
-    });
+    expect(transport.getBundleStatus?.("node-1")?.status).toEqual(installed);
 
     expect(
-      runtime.nodeRegistry.updateSurface(
+      registry.updateSurface(
         "node-1",
         { commands: ["system.run"] },
         {
@@ -233,52 +211,30 @@ describe("nodeHandlers node.runnerInventory.update", () => {
         },
       ),
     ).not.toBeNull();
-    expect(
-      transport.acceptBundleStatus?.(proof, {
-        bundleHash: "b".repeat(64),
-        status: { status: "missing" },
-      }),
-    ).toBe(false);
-    expect(
-      collectNodeCatalogRuntimeState(runtime.nodeRegistry, [{ nodeId: "node-1", connId: "conn-1" }])
-        .workerBundleByNodeId,
-    ).toEqual(new Map());
+    expect(transport.acceptBundleStatus?.(proof, bundleStatus("b", "missing"))).toBe(false);
+    expect(readCatalog(registry).workerBundleByNodeId).toEqual(new Map());
 
-    await publishInventory(runtime.nodeRegistry, client, retainedHost);
-    const [currentProof] = await transport.listCurrentNodes();
-    if (!currentProof) {
-      throw new Error("expected promoted node proof");
-    }
-    expect(
-      transport.acceptBundleStatus?.(currentProof, {
-        bundleHash: "b".repeat(64),
-        status: { status: "missing" },
-      }),
-    ).toBe(true);
-    await publishInventory(runtime.nodeRegistry, client, availableHost);
-    expect(
-      transport.acceptBundleStatus?.(currentProof, {
-        bundleHash: "c".repeat(64),
-        status: { status: "installed", version: "2026.8.9" },
-      }),
-    ).toBe(false);
-    expect(
-      collectNodeCatalogRuntimeState(runtime.nodeRegistry, [{ nodeId: "node-1", connId: "conn-1" }])
-        .workerBundleByNodeId,
-    ).toEqual(new Map());
+    await publishInventory(registry, client, retainedHost);
+    const currentProof = expectDefined(
+      (await transport.listCurrentNodes())[0],
+      "promoted node proof",
+    );
+    expect(transport.acceptBundleStatus?.(currentProof, bundleStatus("b", "missing"))).toBe(true);
+    await publishInventory(registry, client, availableHost);
+    expect(transport.acceptBundleStatus?.(currentProof, bundleStatus("c", "installed"))).toBe(
+      false,
+    );
+    expect(readCatalog(registry).workerBundleByNodeId).toEqual(new Map());
 
-    runtime.nodeRegistry.unregister("conn-1");
-    expect(
-      collectNodeCatalogRuntimeState(runtime.nodeRegistry, [{ nodeId: "node-1", connId: "conn-1" }])
-        .workerBundleByNodeId,
-    ).toEqual(new Map());
+    registry.unregister("conn-1");
+    expect(readCatalog(registry).workerBundleByNodeId).toEqual(new Map());
   });
 
   it("retains the supervisor proof while full but rejects new launches", async () => {
-    const { runtime, client, transport } = createCurrentRunner();
+    const { registry, client, transport } = createCurrentRunner();
     const publish = async (declaration: unknown) => {
-      const opts = await publishInventory(runtime.nodeRegistry, client, declaration);
-      expect(opts.respond).toHaveBeenCalledWith(true, { nodeId: "node-1" }, undefined);
+      const opts = await publishInventory(registry, client, declaration);
+      expectPublication(opts);
     };
 
     await publish(availableHost);
@@ -294,25 +250,21 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     expect(transport.isCurrent(proof)).toBe(true);
     expect(transport.isCurrent(proof, true)).toBe(false);
     expect((await transport.getCurrentNode("node-1"))?.workerHost.capacity).toEqual(FULL_CAPACITY);
-    runtime.nodeRegistry.unregister("conn-1");
+    registry.unregister("conn-1");
   });
 
   it("requires a fresh current-generation publication after same-connection promotion", async () => {
-    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    const transport = runtime.nodeWorkerSupervisorTransport;
+    const { nodeRegistry: registry, nodeWorkerSupervisorTransport: transport } =
+      createNodeRegistryRuntime(() => new NodeRegistry());
     const client = createWorkerSupervisorNodeClient();
-    runtime.nodeRegistry.register(client, { pairingIdentity: "identity-1" });
-    const opts = await publishInventory(runtime.nodeRegistry, client, fullHost);
+    registry.register(client, { pairingIdentity: "identity-1" });
+    const opts = await publishInventory(registry, client, fullHost);
 
-    expect(opts.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
+    expectPublication(opts, { code: "UNAVAILABLE" });
     await expect(transport.listCurrentNodes()).resolves.toEqual([]);
 
     expect(
-      runtime.nodeRegistry.updateSurface(
+      registry.updateSurface(
         "node-1",
         { commands: ["system.run"] },
         {
@@ -324,42 +276,42 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     ).not.toBeNull();
     await expect(transport.listCurrentNodes()).resolves.toEqual([]);
 
-    const retry = await publishInventory(runtime.nodeRegistry, client, fullHost);
-    expect(retry.respond).toHaveBeenCalledWith(true, { nodeId: "node-1" }, undefined);
+    const retry = await publishInventory(registry, client, fullHost);
+    expectPublication(retry);
     await expect(transport.listCurrentNodes()).resolves.toEqual([
       expect.objectContaining({
         pairingGeneration: "generation-1",
         workerHost: { enabled: true, capacity: FULL_CAPACITY, bundlePrewarm: 1 },
       }),
     ]);
-    runtime.nodeRegistry.unregister("conn-1");
+    registry.unregister("conn-1");
   });
 
   it("persists false for current disabled and empty publications", async () => {
-    const { runtime, client } = createCurrentRunner();
+    const { registry, client } = createCurrentRunner();
 
-    await publishInventory(runtime.nodeRegistry, client, {
+    await publishInventory(registry, client, {
       protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
       workerHost: { enabled: false },
     });
-    await publishInventory(runtime.nodeRegistry, client, { protocolFeatures: [] });
+    await publishInventory(registry, client, { protocolFeatures: [] });
 
     expect(
       updatePairedNodeSessionHostMock.mock.calls.map(([params]) => params.sessionHost),
     ).toEqual([false, false]);
-    runtime.nodeRegistry.unregister("conn-1");
+    registry.unregister("conn-1");
   });
 
   it("keeps a failed session host available for desktop while refusing session placement", async () => {
     const config = { gateway: { nodes: { commands: { allow: [NODE_DESKTOP_STREAM_COMMAND] } } } };
-    const runtime = createNodeRegistryRuntime(() => new NodeRegistry({ getConfig: () => config }));
-    const transport = runtime.nodeWorkerSupervisorTransport;
+    const { nodeRegistry: registry, nodeWorkerSupervisorTransport: transport } =
+      createNodeRegistryRuntime(() => new NodeRegistry({ getConfig: () => config }));
     const client = createWorkerSupervisorNodeClient();
     client.connect.commands = [NODE_DESKTOP_STREAM_COMMAND];
     const paired = pairedNodeDevice("node-1", { commands: [NODE_DESKTOP_STREAM_COMMAND] });
     const snapshot = createDevicePairingNodeSnapshot([paired]);
     const binding = expectDefined(snapshot.bindings.get("node-1"), "paired node binding");
-    const node = runtime.nodeRegistry.register(client, {
+    const node = registry.register(client, {
       pairingIdentity: binding.identity,
       pairingGeneration: binding.generation,
     });
@@ -369,23 +321,23 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     const service = {};
     bindDeviceWorkerAvailability(service, device.resolveAvailability);
     const inventoryChanged = vi.fn();
-    setNodeRunnerStateChangedListener(runtime.nodeRegistry, inventoryChanged);
+    setNodeRunnerStateChangedListener(registry, inventoryChanged);
     const connected = [node];
     try {
       const reason = "state directory /srv/node is group-writable; run chmod go-w /srv/node";
       inventoryChanged.mockClear();
-      const opts = await publishInventory(runtime.nodeRegistry, client, {
+      const opts = await publishInventory(registry, client, {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
         workerHost: { enabled: false, reason },
       });
-      expect(opts.respond).toHaveBeenCalledWith(true, { nodeId: "node-1" }, undefined);
+      expectPublication(opts);
       expect(inventoryChanged).toHaveBeenCalledWith("node-1", {
         inventoryChanged: true,
         availabilityChanged: false,
       });
       const issue = { code: "worker-host-unavailable", message: reason };
       expect(transport.getIssue?.("node-1")).toEqual(issue);
-      const catalog = collectNodeCatalogRuntimeState(runtime.nodeRegistry, connected);
+      const catalog = collectNodeCatalogRuntimeState(registry, connected);
       expect(catalog.issuesByNodeId.get("node-1")).toEqual([issue]);
       expect(catalog.sessionHostNodeIds.size).toBe(0);
       expect(catalog.workerSlotsByNodeId.size).toBe(0);
@@ -395,7 +347,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
         await environmentsHandlers[method]?.({
           params: method === "environments.list" ? {} : { environmentId: "node:node-1" },
           respond,
-          context: { nodeRegistry: runtime.nodeRegistry, getRuntimeConfig: () => config },
+          context: { nodeRegistry: registry, getRuntimeConfig: () => config },
         } as never);
         const expected = {
           id: "node:node-1",
@@ -427,82 +379,62 @@ describe("nodeHandlers node.runnerInventory.update", () => {
         updatePairedNodeSessionHostMock.mock.calls.map(([params]) => params.sessionHost),
       ).toEqual([false]);
 
-      await publishInventory(runtime.nodeRegistry, client, availableHost);
+      await publishInventory(registry, client, availableHost);
       expect(transport.getIssue?.("node-1")).toBeUndefined();
-      expect(
-        collectNodeCatalogRuntimeState(runtime.nodeRegistry, connected).issuesByNodeId.size,
-      ).toBe(0);
+      expect(collectNodeCatalogRuntimeState(registry, connected).issuesByNodeId.size).toBe(0);
     } finally {
-      runtime.nodeRegistry.unregister("conn-1");
+      registry.unregister("conn-1");
     }
     expect(transport.getIssue?.("node-1")).toBeUndefined();
   });
 
   it("returns a retryable failure when durable consent does not commit", async () => {
-    const { runtime, client } = createCurrentRunner();
+    const { registry, client } = createCurrentRunner();
     updatePairedNodeSessionHostMock.mockRejectedValueOnce(new Error("database busy"));
-    const first = await publishInventory(runtime.nodeRegistry, client, availableHost);
+    const first = await publishInventory(registry, client, availableHost);
 
-    expect(first.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE", message: expect.stringContaining("retry") }),
-    );
+    expectPublication(first, { code: "UNAVAILABLE", message: expect.stringContaining("retry") });
 
-    const retry = await publishInventory(runtime.nodeRegistry, client, availableHost);
-    expect(retry.respond).toHaveBeenCalledWith(true, { nodeId: "node-1" }, undefined);
+    const retry = await publishInventory(registry, client, availableHost);
+    expectPublication(retry);
     expect(updatePairedNodeSessionHostMock).toHaveBeenCalledTimes(2);
-    runtime.nodeRegistry.unregister("conn-1");
+    registry.unregister("conn-1");
   });
 
   it("rejects durable consent after a same-generation connection replacement", async () => {
-    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
+    const { nodeRegistry: registry } = createNodeRegistryRuntime(() => new NodeRegistry());
     const client = createWorkerSupervisorNodeClient("conn-original");
-    runtime.nodeRegistry.register(client, {
-      pairingIdentity: "identity-1",
-      pairingGeneration: "generation-1",
-    });
+    register(registry, client);
     const replacement = createWorkerSupervisorNodeClient("conn-replacement");
     updatePairedNodeSessionHostMock.mockImplementationOnce(async (params) => {
-      runtime.nodeRegistry.register(replacement, {
-        pairingIdentity: "identity-1",
-        pairingGeneration: "generation-1",
-      });
+      register(registry, replacement);
       return params.isConnectionCurrent();
     });
-    const publication = await publishInventory(runtime.nodeRegistry, client, availableHost);
+    const publication = await publishInventory(registry, client, availableHost);
 
-    expect(publication.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE", message: expect.stringContaining("retry") }),
-    );
-    runtime.nodeRegistry.unregister("conn-replacement");
+    expectPublication(publication, {
+      code: "UNAVAILABLE",
+      message: expect.stringContaining("retry"),
+    });
+    registry.unregister("conn-replacement");
   });
 
   it("keeps retired v1 inventory diagnostic-only until disconnect and v6 reconnect", async () => {
     const inventoryChanged = vi.fn();
-    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    const transport = runtime.nodeWorkerSupervisorTransport;
-    setNodeRunnerStateChangedListener(runtime.nodeRegistry, inventoryChanged);
+    const { nodeRegistry: registry, nodeWorkerSupervisorTransport: transport } =
+      createNodeRegistryRuntime(() => new NodeRegistry());
+    setNodeRunnerStateChangedListener(registry, inventoryChanged);
     const legacyClient = createWorkerSupervisorNodeClient("conn-v1");
-    runtime.nodeRegistry.register(legacyClient, {
-      pairingIdentity: "identity-1",
-      pairingGeneration: "generation-1",
-    });
-    const legacy = await publishInventory(runtime.nodeRegistry, legacyClient, {
+    register(registry, legacyClient);
+    const legacy = await publishInventory(registry, legacyClient, {
       protocolFeatures: ["node-worker-supervisor-v1"],
       workerRuns: RETIRED_WORKER_RUNS,
     });
 
-    expect(legacy.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("openclaw update"),
-      }),
-    );
+    expectPublication(legacy, {
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("openclaw update"),
+    });
     expect(inventoryChanged).toHaveBeenLastCalledWith("node-1", {
       inventoryChanged: true,
       availabilityChanged: false,
@@ -530,16 +462,13 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       }),
     ).resolves.toMatchObject({ ok: false, error: { code: "PRIVATE_DIALECT_UNAVAILABLE" } });
 
-    runtime.nodeRegistry.unregister("conn-v1");
+    registry.unregister("conn-v1");
     expect(transport.getIssue?.("node-1")).toBeUndefined();
     expect(inventoryChanged).toHaveBeenCalledTimes(2);
 
     const currentClient = createWorkerSupervisorNodeClient("conn-v6");
-    runtime.nodeRegistry.register(currentClient, {
-      pairingIdentity: "identity-1",
-      pairingGeneration: "generation-1",
-    });
-    await publishInventory(runtime.nodeRegistry, currentClient, availableHost);
+    register(registry, currentClient);
+    await publishInventory(registry, currentClient, availableHost);
     expect(transport.getIssue?.("node-1")).toBeUndefined();
     await expect(transport.listCurrentNodes()).resolves.toEqual([
       expect.objectContaining({
@@ -548,43 +477,32 @@ describe("nodeHandlers node.runnerInventory.update", () => {
         workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, bundlePrewarm: 1 },
       }),
     ]);
-    runtime.nodeRegistry.unregister("conn-v6");
+    registry.unregister("conn-v6");
   });
 
   it("rejects malformed inventory without changing private eligibility", async () => {
-    const { runtime, client, transport } = createCurrentRunner();
-    const opts = await publishInventory(runtime.nodeRegistry, client, {
+    const { registry, client, transport } = createCurrentRunner();
+    const opts = await publishInventory(registry, client, {
       protocolFeatures: [],
       extra: true,
     });
-    expect(opts.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expectPublication(opts, { code: "INVALID_REQUEST" });
     expect(transport.getIssue?.("node-1")).toBeUndefined();
     expect(updatePairedNodeSessionHostMock).not.toHaveBeenCalled();
     await expect(transport.listCurrentNodes()).resolves.toEqual([]);
-    runtime.nodeRegistry.unregister("conn-1");
+    registry.unregister("conn-1");
   });
 
   it("rejects a stale connection without replacing the current session proof", async () => {
-    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    const transport = runtime.nodeWorkerSupervisorTransport;
+    const { nodeRegistry: registry, nodeWorkerSupervisorTransport: transport } =
+      createNodeRegistryRuntime(() => new NodeRegistry());
     const current = createWorkerSupervisorNodeClient("conn-current");
-    runtime.nodeRegistry.register(current, {
-      pairingIdentity: "identity-1",
-      pairingGeneration: "generation-1",
-    });
+    register(registry, current);
     const stale = createWorkerSupervisorNodeClient("conn-stale");
-    const opts = await publishInventory(runtime.nodeRegistry, stale, availableHost);
+    const opts = await publishInventory(registry, stale, availableHost);
 
-    expect(opts.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expectPublication(opts, { code: "INVALID_REQUEST" });
     await expect(transport.listCurrentNodes()).resolves.toEqual([]);
-    runtime.nodeRegistry.unregister("conn-current");
+    registry.unregister("conn-current");
   });
 });
