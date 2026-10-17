@@ -85,6 +85,16 @@ it("admits optional memory indexes but omits their rebuildable rows", async () =
   expect(inspected.tables).not.toHaveProperty("memory_index_sources");
 });
 
+it("preserves historical raw trajectory rows and refuses malformed compressed port values", async () => {
+  const descriptor = await loadAgentPortDescriptor();
+  const decode = descriptor.decodeSqlite!.trajectory_runtime_events!;
+  const legacy = { session_id: "session", seq: 0, event_json: '{ "type": "legacy" }' };
+  expect(decode(legacy)).toEqual(legacy);
+  expect(() =>
+    decode({ ...legacy, event_codec: "br", event_payload: "not a blob", event_utf8_bytes: 20 }),
+  ).toThrow("Invalid compressed trajectory payload");
+});
+
 it("migrates only the private historical agent copy before canonical verification", async () => {
   const directory = tempDirs.make("agent-port-migration-");
   const source = path.join(directory, "source.sqlite");

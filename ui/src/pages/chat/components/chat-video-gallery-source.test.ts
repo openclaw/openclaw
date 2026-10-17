@@ -6,7 +6,7 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { AssistantAttachments } from "./chat-message-attachments-solid.tsx";
 import {
-  releaseChatMediaResourceSubscriber,
+  releaseChatMediaResourceOwner,
   type AttachmentItem,
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
@@ -21,7 +21,7 @@ afterEach(() => {
   disconnect = undefined;
   view?.unmount();
   view = undefined;
-  releaseChatMediaResourceSubscriber(update);
+  releaseChatMediaResourceOwner(update);
   update = undefined;
   if (container) {
     container.remove();
@@ -54,7 +54,7 @@ async function open(
         get options(): ImageRenderOptions {
           revision();
           return {
-            onRequestUpdate: update,
+            mediaOwner: update,
             resolveArtifactDownload,
             galleryVideos: () => ({ index: 0, items: gallery }),
             onOpenImage: (item) => {
@@ -202,13 +202,17 @@ it("explicit retry clears a cached recoverable neighbor failure through its sour
   const opened = await open(first, resolve, [first, next]);
   const background = vi.fn();
   const backgroundContainer = document.body.appendChild(document.createElement("div"));
-  const options = { resolveArtifactDownload: resolve, onRequestUpdate: background };
+  const options = { resolveArtifactDownload: resolve, mediaOwner: background };
   const backgroundView = mountSolid(
     () => createComponent(AssistantAttachments, { attachments: [next], options }),
     { container: backgroundContainer },
   );
   try {
-    await vi.waitFor(() => expect(background).toHaveBeenCalled());
+    await vi.waitFor(() =>
+      expect(
+        backgroundContainer.querySelector(".chat-assistant-attachment-card__retry"),
+      ).not.toBeNull(),
+    );
     const item = await opened.gallery!.items[1]!();
     const media = document.createElement("video");
     const notify = vi.fn();
@@ -222,6 +226,6 @@ it("explicit retry clears a cached recoverable neighbor failure through its sour
   } finally {
     backgroundView.unmount();
     backgroundContainer.remove();
-    releaseChatMediaResourceSubscriber(background);
+    releaseChatMediaResourceOwner(background);
   }
 });

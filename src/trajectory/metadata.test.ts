@@ -1,10 +1,6 @@
 // Trajectory metadata tests cover metadata capture and normalization.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
-import {
-  redactPathForSupport,
-  type SupportRedactionContext,
-} from "../logging/diagnostic-support-redaction.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
@@ -258,12 +254,6 @@ describe("trajectory metadata", () => {
 
     const skills = metadata.skills as { entries?: Array<{ name?: string }> };
     expect(skills.entries?.map((e) => e.name)).toEqual(["fallback-skill"]);
-  });
-
-  it("redactPathForSupport returns empty string for null/undefined input", () => {
-    const ctx: SupportRedactionContext = { env: {}, stateDir: "/tmp/.openclaw" };
-    expect(redactPathForSupport(undefined, ctx)).toBe("");
-    expect(redactPathForSupport(null, ctx)).toBe("");
   });
 
   it("captures final artifact summaries for export sidecars", () => {

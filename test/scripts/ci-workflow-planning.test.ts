@@ -981,11 +981,11 @@ describe("channel detail presentation CI selection", () => {
 });
 
 describe("curated plugin settings CI selection", () => {
-  it("selects the actual consumer proof for a presentation-only change", () => {
-    expect(
-      detectChangedScope(["extensions/memory-core/control-ui.settings-presentation.json"])
-        .runUiTests,
-    ).toBe(true);
+  it.each([
+    "extensions/memory-core/control-ui.settings-presentation.json",
+    "extensions/acpx/control-ui.session-source.json",
+  ])("selects the actual consumer proof for %s", (file) => {
+    expect(detectChangedScope([file]).runUiTests).toBe(true);
   });
 });
 

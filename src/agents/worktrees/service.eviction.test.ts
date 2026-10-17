@@ -102,7 +102,7 @@ describe("managed worktree cap eviction", () => {
       .db.prepare("SELECT lease_key FROM state_leases WHERE scope = ?")
       .all(worktreeRunLeaseScope(id));
   const evict = (record: ManagedWorktreeRecord, guard: WorktreeAllocationGuard) =>
-    evictManagedWorktree({ env, record, guard, reason: "idle-age", now: Date.now, getConfig });
+    evictManagedWorktree({ env, record, guard, reason: "idle-age", getConfig });
   async function removeExact(record: ManagedWorktreeRecord, target = service, unsaved?: string) {
     const head = await requireGit(record.path, ["rev-parse", "HEAD"]);
     await requireGit(record.path, ["checkout", "--detach", "HEAD"]);

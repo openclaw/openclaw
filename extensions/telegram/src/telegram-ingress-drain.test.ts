@@ -183,6 +183,85 @@ describe("createTelegramIngressMonitor", () => {
     });
   });
 
+  it("keeps a fresh admission lane when the forum cache changes during ACK", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-telegram-ingress-drain-", applyEnv: false },
+      async ({ stateDir }) => {
+        const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
+          channelId: "telegram",
+          accountId: "default",
+          stateDir,
+        });
+        const update = {
+          update_id: 17,
+          message: {
+            text: "hello",
+            from: { id: 111 },
+            chat: { id: -9017, type: "supergroup" },
+          },
+        };
+        await resolveTelegramForumFlag({
+          chatId: -9017,
+          chatType: "supergroup",
+          isGroup: true,
+          isForum: false,
+        });
+        const ackEntered = deferred();
+        const ackRelease = deferred();
+        const receivedAt = 1_700_000_000_000;
+        const delivered: Array<{ laneKey: string | undefined; receivedAt: number }> = [];
+        const monitor = createTelegramIngressMonitor({
+          queue,
+          getConfig: () => cfg,
+          accountId: "default",
+          botInfo: telegramBotInfoForTest,
+          onDurableAdmission: async () => {
+            ackEntered.resolve();
+            await ackRelease.promise;
+          },
+          dispatch: async (raw, lifecycle) => {
+            const [claim] = await queue.listClaims();
+            delivered.push({
+              laneKey: claim?.laneKey,
+              receivedAt: resolveTelegramUpdateReceivedAtSeconds(raw),
+            });
+            await lifecycle.onAdopted();
+            return { kind: "completed" };
+          },
+        });
+        monitor.start();
+        await monitor.waitForIdle();
+        const admission = monitor.admit(update, { receivedAt });
+        try {
+          await ackEntered.promise;
+          expect(await queue.listClaims()).toEqual([
+            expect.objectContaining({ laneKey: "telegram:-9017", attempts: 0 }),
+          ]);
+          expect(delivered).toEqual([]);
+          await resolveTelegramForumFlag({
+            chatId: -9017,
+            chatType: "supergroup",
+            isGroup: true,
+            isForum: true,
+          });
+          ackRelease.resolve();
+          await admission;
+          await monitor.waitForIdle();
+          expect(delivered).toEqual([{ laneKey: "telegram:-9017", receivedAt: 1_700_000_000 }]);
+          expect(await monitor.admit(update)).toMatchObject({
+            kind: "durable",
+            queueResult: { kind: "completed" },
+          });
+          expect(delivered).toHaveLength(1);
+        } finally {
+          ackRelease.resolve();
+          await admission;
+          await monitor.stop();
+        }
+      },
+    );
+  });
+
   it("reconciles a cached General topic when private bot topics are disabled", async () => {
     await withTempState(async ({ queue, monitor: makeMonitor }) => {
       const eventId = "9".padStart(16, "0");

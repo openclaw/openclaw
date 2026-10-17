@@ -19,9 +19,11 @@ import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectProgressCard } from "../../lib/reactive/domain-keyed.ts";
 import { i18nRevision } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
+import { projectTheme } from "../../lib/reactive/theme.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { ChatComposerCapabilityDialogs } from "./chat-composer-capability-host.tsx";
+import { projectChatFields } from "./chat-field-projection.ts";
 import { chatGoalOperations } from "./chat-goals.ts";
 import { PaneLayout } from "./chat-pane-layout-view.tsx";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
@@ -32,12 +34,14 @@ import {
   type ChatProviderReviewOwner,
 } from "./chat-provider-review-controller.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
+import { sessionWorkspaceForHost } from "./components/chat-session-workspace-state.ts";
 import { notifyRenderLifecycleForTest } from "./render-lifecycle.ts";
 import { createSolidRenderLifecycle } from "./solid-render-lifecycle.ts";
 
 /** One Solid owner publishes, mounts, and retires the synchronous pane runtime. */
 export function createChatPaneView(runtime: ChatPaneRuntime) {
   const viewOwner = getOwner();
+  projectChatFields(runtime.swarm);
   const [ready, setReady] = createSignal(false);
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   let disposed = false;
@@ -109,6 +113,10 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   function MountedPane() {
     const context = runtime.context;
     const gateway = projectGateway(context.gateway);
+    const theme = projectTheme(context.theme);
+    // Startup attaches one host for this mounted pane's lifetime.
+    const state = runtime.readState();
+    const workspace = state && projectOwner(sessionWorkspaceForHost(state), (owner) => owner.state);
     const composerCapabilities = projectOwner(runtime.composerCapabilities, (owner) => owner);
     const realtimeOwner = createMemo(() => {
       revision();
@@ -119,12 +127,14 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       return owner && projectOwner(owner, (source) => source.snapshot);
     });
     const projects = projectOwner(projectsForGateway(context.gateway), (owner) => owner.snapshot);
-    // Startup attaches one host for this mounted pane's lifetime.
-    const state = runtime.readProviderReviewState();
     const goals = state && projectOwner(chatGoalOperations(state), (owner) => owner);
     const resources = projectOwner(runtime.activeSessionResources, (owner) => owner);
     const discussion = projectOwner(runtime.sessionDiscussion, (owner) => owner.snapshot);
     const companion = projectOwner(runtime.sessionCompanionThreads, (owner) => owner);
+    const swarm = createMemo(() => {
+      const hydrator = runtime.swarm.hydrator;
+      return hydrator ? projectOwner(hydrator, (owner) => owner) : undefined;
+    });
     const boardProvider = createMemo(() => {
       revision();
       return runtime.subscribedBoardProvider;
@@ -192,10 +202,13 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         composerCapabilities.read();
         realtime()?.read();
         projects.read();
+        theme.preferences.read();
+        workspace?.read();
         goals?.read();
         resources.read();
         discussion.read();
         companion.read();
+        swarm()?.read();
         board().forEach((source) => source.read());
         i18nRevision();
         sources.forEach((source) => source?.read());
@@ -206,7 +219,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const frame = createMemo(() => lifecycle.snapshot());
     const providerReview: ChatProviderReviewOwner = createChatProviderReview({
       source: () => frame().providerReviewSource,
-      readState: () => runtime.readProviderReviewState(),
+      readState: () => runtime.readState(),
     });
     // Commit transcript geometry and control the browser timer after Solid publishes the frame.
     createEffect(

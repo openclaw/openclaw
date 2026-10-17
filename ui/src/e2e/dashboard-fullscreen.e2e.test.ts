@@ -503,7 +503,7 @@ suite.define(() => {
           expect(await board.getByRole("status", { name: "Loading…", exact: true }).count()).toBe(
             0,
           );
-          await cleanup.click();
+          await cleanup.tap();
           await replacement
             .getByRole("button", { name: "Cleanup requested", exact: true })
             .waitFor();

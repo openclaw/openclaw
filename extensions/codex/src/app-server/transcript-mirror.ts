@@ -244,7 +244,7 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
   try {
     const mirrorPromise = (async () => {
       const userPromptMessage = projectAgentHarnessTranscriptMessageForDisplay({
-        hidden: params.params.trigger === "memory",
+        hidden: params.params.privateCompletion === true || params.params.trigger === "memory",
         inputProvenance: params.params.inputProvenance,
         message: attachUpstreamUserText(
           attachCodexMirrorIdentity(

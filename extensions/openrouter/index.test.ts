@@ -410,7 +410,7 @@ describe("openrouter provider hooks", () => {
     });
   });
 
-  it.each(["typesafe/jev-1.13", "openrouter/~typesafe/jev-latest"])(
+  it.each(["typesafe/jev-1.13", "typesafe/jev-1.14", "openrouter/~typesafe/jev-latest"])(
     "keeps %s out of dynamic chat resolution",
     async (modelId) => {
       getLoadedOpenRouterModelCapabilitiesMock.mockClear();

@@ -354,7 +354,6 @@ function ChatContent(input: { props: ChatProps }) {
           const state = input.props.historyState;
           if (state && getChatHistoryLoadState(state).phase === "failed") {
             input.props.onRefresh();
-            state.requestUpdate?.();
           }
         }}
       >

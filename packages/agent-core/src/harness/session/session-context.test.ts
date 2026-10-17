@@ -138,6 +138,37 @@ function compactionEntry(
 }
 
 describe("buildSessionContext", () => {
+  it.each(["command", "delivery-mirror", "gateway-injected", "automation-result"])(
+    "keeps the inference model after an OpenClaw %s reply without hiding its history",
+    (model) => {
+      const answer = assistantEntry("answer", null, "Provider answer");
+      const artifact = assistantEntry("artifact", "answer", "Delivered reply");
+      if (artifact.type !== "message" || artifact.message.role !== "assistant") {
+        throw new Error("expected assistant fixture");
+      }
+      artifact.message.provider = "openclaw";
+      artifact.message.model = model;
+      const context = buildSessionContext([answer, artifact]);
+      expect(context.model).toEqual({ provider: "test-provider", modelId: "test-model" });
+      expect(context.messages).toContainEqual(artifact.message);
+    },
+  );
+
+  it("ignores a synthetic model change retained by an earlier bounded context", () => {
+    const context = buildSessionContext([
+      assistantEntry("answer", null, "Provider answer"),
+      {
+        type: "model_change",
+        id: "command-model",
+        parentId: "answer",
+        timestamp,
+        provider: "openclaw",
+        modelId: "command",
+      },
+    ]);
+    expect(context.model).toEqual({ provider: "test-provider", modelId: "test-model" });
+  });
+
   it.each(["compaction", "reset", "prompt-restart", "prompt-checkpoint"])(
     "retires only operators from an earlier prompt series across %s",
     (boundary) => {

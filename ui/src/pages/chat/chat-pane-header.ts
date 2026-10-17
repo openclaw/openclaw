@@ -538,7 +538,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       mergedChrome: this.mergedChrome,
       navDrawerOpen: this.navDrawerOpen,
       title:
-        (catalog ? this.catalogSession?.name?.trim() : undefined) ||
+        (catalog ? this.history.catalogSession?.name?.trim() : undefined) ||
         this.resolveHeaderSessionTitle(row),
       agent:
         !catalog && this.state?.settings?.sidebarAgentsMode === "roster"
@@ -549,7 +549,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       ownerViewing,
       personActivity,
       catalog,
-      catalogColor: this.catalogSession?.color,
+      catalogColor: this.history.catalogSession?.color,
       editing: Boolean(this.headerRenameSession && this.headerRenameSession.key === row?.key),
       renameValue: this.headerRenameValue,
       workspaceRoot: workspace.root,

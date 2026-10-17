@@ -29,15 +29,15 @@ type PendingUploadChunkRecord = {
   dataBase64: string;
 };
 
-function createMetaStore(): PluginStateKeyedStore<PendingUploadMetaRecord> {
-  return getMSTeamsRuntime().state.openKeyedStore<PendingUploadMetaRecord>({
+function createMetaStore(): PluginStateKeyedStore<PendingUploadMetaRecord, 2> {
+  return getMSTeamsRuntime().state.openKeyedStoreV2<PendingUploadMetaRecord>({
     namespace: PENDING_UPLOAD_META_NAMESPACE,
     maxEntries: PENDING_UPLOAD_META_MAX_ENTRIES,
   });
 }
 
-function createChunkStore(): PluginStateKeyedStore<PendingUploadChunkRecord> {
-  return getMSTeamsRuntime().state.openKeyedStore<PendingUploadChunkRecord>({
+function createChunkStore(): PluginStateKeyedStore<PendingUploadChunkRecord, 2> {
+  return getMSTeamsRuntime().state.openKeyedStoreV2<PendingUploadChunkRecord>({
     namespace: PENDING_UPLOAD_CHUNKS_NAMESPACE,
     maxEntries: MAX_PENDING_UPLOAD_CHUNK_ROWS,
   });
@@ -126,7 +126,7 @@ async function registerUploadRows(
 async function readUploadRows(
   id: string,
   metaStore: PluginStateKeyedStore<PendingUploadMetaRecord>,
-  chunkStore: PluginStateKeyedStore<PendingUploadChunkRecord>,
+  chunkStore: PluginStateKeyedStore<PendingUploadChunkRecord, 2>,
 ): Promise<PendingUpload | undefined> {
   const meta = await metaStore.lookup(buildMetaKey(id));
   if (!meta) {
@@ -139,17 +139,16 @@ async function readUploadRows(
   ) {
     return undefined;
   }
-  // Published Teams packages retain support for hosts with point reads only.
-  const records = await chunkStore.lookupMany?.(
+  const records = await chunkStore.lookupMany(
     Array.from({ length: meta.chunkCount }, (_, index) => buildChunkKey(id, index)),
   );
   const chunks: Buffer[] = [];
   for (let index = 0; index < meta.chunkCount; index += 1) {
-    const result = records?.[index];
+    const result = records[index];
     if (result && !result.ok) {
       throw result.error;
     }
-    const chunk = records ? result?.value : await chunkStore.lookup(buildChunkKey(id, index));
+    const chunk = result?.value;
     if (!chunk || chunk.id !== id || chunk.index !== index) {
       return undefined;
     }

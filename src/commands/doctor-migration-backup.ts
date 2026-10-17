@@ -18,6 +18,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { sameFileMutationFingerprint } from "../infra/file-descriptor.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { isPathInside } from "../infra/path-guards.js";
+import type { MigrationArtifactVerification } from "../infra/session-sqlite-migration-artifact.js";
 import { runSqliteIntegrityOperationInWorker } from "../infra/sqlite-integrity-operation.js";
 import { withSqliteIntegrityWorkerScope } from "../infra/sqlite-integrity-worker.js";
 import {
@@ -34,6 +35,7 @@ import {
   type ScopedMigrationInspection,
 } from "../infra/sqlite-migration-scoped-snapshot.js";
 import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import type { PublishedSqliteFileGuard } from "../infra/sqlite-snapshot.types.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import type { MigrationMessages } from "../infra/state-migrations.types.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
@@ -455,6 +457,11 @@ export async function backupDoctorSqliteDatabases(params: {
       );
     }
   }
+  const verification: MigrationArtifactVerification = new Map();
+  const afterPublish = (guard: PublishedSqliteFileGuard) => {
+    const verified = guard.assertTargetUnchanged();
+    verification.set(`${verified.stat.dev}:${verified.stat.ino}`, verified);
+  };
   for (const { path: sourcePath } of inventory) {
     assertCapture();
     const targetPath = targetFor(sourcePath);
@@ -509,6 +516,7 @@ export async function backupDoctorSqliteDatabases(params: {
           tables: inspection.tables.map((table) => table.name),
           inspection,
           beforePublish: assertCapture,
+          afterPublish,
         })
       : await createVerifiedSqliteSnapshot({
           sourcePath,
@@ -517,6 +525,7 @@ export async function backupDoctorSqliteDatabases(params: {
           integrity: params.integrityChecks?.get(sourcePath),
           transform: sanitizeOpenClawStateLeaseRows,
           beforePublish: assertCapture,
+          afterPublish,
           validate: params.repair?.validate,
         });
     assertCapture();
@@ -542,6 +551,7 @@ export async function backupDoctorSqliteDatabases(params: {
       backupId,
       inventory.map(({ path, identity }) => ({ path, identity, archivePath: targetFor(path) })),
       params.migrationTables !== undefined,
+      verification,
     );
   } catch (error) {
     warnings.push(

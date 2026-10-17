@@ -175,6 +175,12 @@ Console logs are **TTY-aware** and formatted for readability:
 
 Console formatting is controlled by `logging.consoleStyle`.
 
+Gateway startup notices for `OPENCLAW_RAW_STREAM` and `OPENCLAW_RAW_STREAM_PATH`
+identify configured flags without printing their values. Successful LSP startup,
+native web-search activation, and web-search provider auto-detection stay quiet.
+Video generation retains the first skipped-candidate warning and all returned
+attempts without repeating every skip at debug level.
+
 SQLite worker diagnostics use stderr. After the final backend closes normally,
 the worker flushes queued file logs and gives pending console output up to five
 seconds to drain before acknowledging close. Source-loaded backends and compiled

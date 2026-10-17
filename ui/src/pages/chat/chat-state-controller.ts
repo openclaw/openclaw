@@ -20,7 +20,7 @@ import { resolveChatAgentId } from "./chat-state-route.ts";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import { isChatRunWorking } from "./components/chat-composer-state.ts";
-import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
+import { releaseChatMediaResourceOwner } from "./components/chat-message-media.ts";
 import {
   clearSessionWorkspacePreviews,
   clearWorkspaceTimer,
@@ -200,7 +200,7 @@ export function createChatState<TState extends ChatPageHost>(
       if (stateValue && stateValue !== state) {
         privateDraftReview?.controller.abort();
         disposeSelectedSessionMessageSubscription(stateValue);
-        releaseChatMediaResourceSubscriber(stateValue.requestUpdate);
+        releaseChatMediaResourceOwner(stateValue);
         attachmentReadsValue.abortReads();
         composerPersistence.stop();
         cancelChatStreamRenderFrame(stateValue);
@@ -650,7 +650,7 @@ export function createChatState<TState extends ChatPageHost>(
     const state = stateValue;
     if (state) {
       disposeSelectedSessionMessageSubscription(state);
-      releaseChatMediaResourceSubscriber(state.requestUpdate);
+      releaseChatMediaResourceOwner(state);
       cancelChatStreamRenderFrame(state);
       cancelChatScroll(state);
       invalidateImageLightbox(state);
