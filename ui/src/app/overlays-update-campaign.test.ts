@@ -31,9 +31,7 @@ describe("application update campaign overlays", () => {
     });
     const { harness, overlays } = automaticTest(async () => ({ lastRun: run }));
     await flushMicrotasks();
-    harness.emitEvent("update.available", {
-      schedule: automaticSchedule({ state: "applying" }),
-    });
+    harness.emitEvent("update.available", { schedule: automaticSchedule({ state: "applying" }) });
     expect(overlays.snapshot.updateRun).toEqual(run);
     expect(overlays.snapshot.updateRunning).toBe(false);
   });
@@ -48,19 +46,13 @@ describe("application update campaign overlays", () => {
     harness.emitEvent("update.available", {
       schedule: automaticSchedule({ state: "applying", updatedAtMs: 61_000 }),
     });
-    harness.emitEvent("update.available", {
-      schedule: { channel: "stable", autoEnabled: true },
-    });
+    harness.emitEvent("update.available", { schedule: { channel: "stable", autoEnabled: true } });
     await vi.advanceTimersByTimeAsync(5_000);
     await flushMicrotasks();
 
     expectState({
       updateStatusBanner: { text: expect.stringContaining("build-failed") },
-      recordedUpdateAttempt: {
-        timestampMs: 62_000,
-        status: "error",
-        reason: "build-failed",
-      },
+      recordedUpdateAttempt: { timestampMs: 62_000, status: "error", reason: "build-failed" },
       updateSchedule: { campaign: undefined },
     });
     const statusRequests = request.mock.calls.filter(([method]) => method === "update.status");
@@ -124,27 +116,19 @@ describe("application update campaign overlays", () => {
         }
         statusReads += 1;
         return statusReads === 1
-          ? Promise.resolve({
-              sentinel: updateSentinel("retained-admin-only-attempt", 500),
-            })
+          ? Promise.resolve({ sentinel: updateSentinel("retained-admin-only-attempt", 500) })
           : Promise.resolve({});
       });
       const { harness, overlays, expectState } = automaticTest(request);
       await flushMicrotasks();
       expect(overlays.snapshot.recordedUpdateAttempt?.reason).toBe("retained-admin-only-attempt");
       const refresh = overlays.refreshUpdateStatus();
-      harness.update({
-        hello: updateHello(AUTO_UPDATE_SCHEDULE, "operator.read"),
-      });
+      harness.update({ hello: updateHello(AUTO_UPDATE_SCHEDULE, "operator.read") });
       expectState({ updateStatusBanner: null, recordedUpdateAttempt: null });
       if (restoreAdmin) {
-        harness.update({
-          hello: updateHello(AUTO_UPDATE_SCHEDULE),
-        });
+        harness.update({ hello: updateHello(AUTO_UPDATE_SCHEDULE) });
       }
-      updateStatus.resolve({
-        sentinel: updateSentinel("admin-only-attempt", 62_000),
-      });
+      updateStatus.resolve({ sentinel: updateSentinel("admin-only-attempt", 62_000) });
       expect(await refresh).toBe(false);
 
       expectState({
@@ -286,9 +270,7 @@ describe("application update campaign overlays", () => {
     expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(2);
     expect(overlays.snapshot.updateCampaignStatusHydrated).toBe(false);
 
-    updateStatus.resolve({
-      sentinel: updateSentinel("build-dirty"),
-    });
+    updateStatus.resolve({ sentinel: updateSentinel("build-dirty") });
     await flushMicrotasks();
 
     expectState({
@@ -322,12 +304,7 @@ describe("application update campaign overlays", () => {
     await expect(overlays.holdUpdate()).resolves.toBe(true);
     expect(request).toHaveBeenCalledWith("update.hold", {});
     expectState({
-      updateSchedule: {
-        campaign: {
-          state: "waiting-for-idle",
-          holdUntilMs: 3_601_000,
-        },
-      },
+      updateSchedule: { campaign: { state: "waiting-for-idle", holdUntilMs: 3_601_000 } },
       heldUpdateCampaignId: "campaign-1",
     });
 
@@ -356,15 +333,10 @@ describe("application update campaign overlays", () => {
         schedule: automaticSchedule({ state: "applying", updatedAtMs: 61_000 }),
       });
     } else {
-      harness.update({
-        hello: updateHello(AUTO_UPDATE_SCHEDULE, "operator.read"),
-      });
+      harness.update({ hello: updateHello(AUTO_UPDATE_SCHEDULE, "operator.read") });
     }
     if (reply === "success") {
-      holdReply.resolve({
-        ok: true,
-        schedule: automaticSchedule({ holdUntilMs: 3_601_000 }),
-      });
+      holdReply.resolve({ ok: true, schedule: automaticSchedule({ holdUntilMs: 3_601_000 }) });
     } else {
       holdReply.reject(new Error("retired hold response"));
     }
@@ -393,12 +365,7 @@ describe("application update campaign overlays", () => {
 
     await expect(overlays.holdUpdate()).resolves.toBe(false);
     expectState({
-      updateSchedule: {
-        campaign: {
-          state: "waiting-for-idle",
-          holdUntilMs: 3_601_000,
-        },
-      },
+      updateSchedule: { campaign: { state: "waiting-for-idle", holdUntilMs: 3_601_000 } },
       heldUpdateCampaignId: "campaign-1",
     });
   });

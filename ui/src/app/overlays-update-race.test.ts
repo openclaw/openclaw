@@ -26,6 +26,9 @@ function admissionTest(status: (sent: boolean) => unknown, getRun: () => unknown
   return { ...runTest(request), admission, request };
 }
 
+const finishedRun = (overrides: Parameters<typeof updateRunFixture>[0] = {}) =>
+  updateRunFixture({ phase: "finished", status: "succeeded", finishedAtMs: 3_000, ...overrides });
+
 afterEach(async () => {
   await disposeTestOverlays();
   vi.restoreAllMocks();
@@ -33,12 +36,7 @@ afterEach(async () => {
 
 describe("update run response races", () => {
   it("retires privileged run facts when reconnect authenticates without administrator access", async () => {
-    const run = updateRunFixture({
-      phase: "finished",
-      status: "failed",
-      reason: "build-failed",
-      finishedAtMs: 3_000,
-    });
+    const run = finishedRun({ status: "failed", reason: "build-failed" });
     const request = updateStatusRequest(() => ({ lastRun: run }));
     const { harness, overlays, expectState } = runTest(request);
     await flushMicrotasks();
@@ -47,43 +45,10 @@ describe("update run response races", () => {
     harness.update({ phase: "reconnecting", hello: null });
     expect(overlays.snapshot.updateRun).toEqual(run);
     // A build-skew handshake publishes its new auth before connection admission.
-    harness.update({
-      phase: "reconnecting",
-      hello: updateHello(undefined, "operator.read"),
-    });
+    harness.update({ phase: "reconnecting", hello: updateHello(undefined, "operator.read") });
     harness.update({ phase: "connected" });
     expectState({ updateRun: null, recordedUpdateAttempt: null, updateStatusBanner: null });
   });
-
-  it.each(["activeRun", "lastRun"] as const)(
-    "discovers %s when disconnect wins the admission reply",
-    async (field) => {
-      const run = updateRunFixture(
-        field === "lastRun"
-          ? {
-              phase: "finished",
-              status: "succeeded",
-              after: { version: "2.0.0" },
-              finishedAtMs: 3_000,
-            }
-          : {},
-      );
-      const { overlays, admission, request, reconnect } = admissionTest((sent) =>
-        sent ? { [field]: run } : {},
-      );
-      await flushMicrotasks();
-      const running = settleAtCleanup(overlays.runUpdate());
-      await flushMicrotasks();
-      reconnect();
-      await flushMicrotasks();
-      expect(overlays.snapshot.updateRun).toEqual(run);
-      admission.reject(new Error("old socket closed"));
-      await running;
-      expect(overlays.snapshot.updateRun).toEqual(run);
-      expect(overlays.snapshot.updateStatusBanner).toBeNull();
-      expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(1);
-    },
-  );
 
   it.each(["Gateway", "profile", "administrator", "dispose"] as const)(
     "discards a run read after changing %s",
@@ -106,9 +71,7 @@ describe("update run response races", () => {
           selfUser: { id: "other" } as NonNullable<ApplicationGatewaySnapshot["selfUser"]>,
         });
       } else if (boundary === "administrator") {
-        harness.update({
-          hello: updateHello(undefined, "operator.read"),
-        });
+        harness.update({ hello: updateHello(undefined, "operator.read") });
       } else {
         overlays.dispose();
       }
@@ -131,14 +94,11 @@ describe("update run response races", () => {
       }
       return {};
     });
-    const finished = {
-      ...run,
-      status: "succeeded" as const,
-      phase: "finished" as const,
+    const finished = finishedRun({
       updatedAtMs: 4_000,
       finishedAtMs: 4_000,
       after: { version: "2.0.0" },
-    };
+    });
     const replacement = vi.fn<RequestFn>(async (method) =>
       method === "update.runs.get" ? { run: finished } : {},
     );
@@ -163,38 +123,39 @@ describe("update run response races", () => {
     });
     const running = settleAtCleanup(overlays.runUpdate());
     expect(overlays.snapshot.updateRunning).toBe(true);
-    harness.update({
-      hello: updateHello(undefined, "operator.read"),
-    });
+    harness.update({ hello: updateHello(undefined, "operator.read") });
     drained.resolve(undefined);
     await running;
     expect(request.mock.calls.some(([method]) => method === "update.run")).toBe(false);
     expect(overlays.snapshot.updateRunning).toBe(false);
   });
   it.each([
-    { baseline: "unknown", discovered: "old", attach: false },
-    { baseline: "unknown", discovered: "old after disconnect", attach: false },
-    { baseline: "previous", discovered: "old", attach: false },
-    { baseline: "previous", discovered: "new", attach: true },
-    { baseline: "empty", discovered: "new", attach: true },
-    { baseline: "unknown", discovered: "active", attach: true },
+    { baseline: "unknown", discovered: "old", timing: "connected", attach: false },
+    { baseline: "unknown", discovered: "old", timing: "disconnect", attach: false },
+    { baseline: "previous", discovered: "old", timing: "connected", attach: false },
+    { baseline: "previous", discovered: "new", timing: "connected", attach: true },
+    { baseline: "empty", discovered: "new", timing: "connected", attach: true },
+    { baseline: "unknown", discovered: "active", timing: "connected", attach: true },
+    { baseline: "empty", discovered: "active", timing: "reconnect", attach: true },
+    { baseline: "empty", discovered: "finished", timing: "reconnect", attach: true },
   ] as const)(
-    "reconciles lost admission using $baseline history and $discovered run identity",
-    async ({ baseline, discovered, attach }) => {
-      const previous = updateRunFixture({
-        status: "succeeded",
-        phase: "finished",
-        finishedAtMs: 3_000,
-      });
-      let found = discovered.startsWith("old")
-        ? previous
-        : updateRunFixture({
-            runId: "00000000-0000-4000-8000-000000000002",
-            ...(discovered === "active"
-              ? {}
-              : { status: "succeeded", phase: "finished", finishedAtMs: 4_000 }),
-          });
-      const { harness, overlays, expectState, admission, request } = admissionTest(
+    "reconciles lost admission using $baseline history and $discovered run identity ($timing)",
+    async ({ baseline, discovered, timing, attach }) => {
+      const previous = finishedRun();
+      let found =
+        discovered === "old"
+          ? previous
+          : discovered === "finished"
+            ? finishedRun({ after: { version: "2.0.0" } })
+            : updateRunFixture({
+                ...(timing === "reconnect"
+                  ? {}
+                  : { runId: "00000000-0000-4000-8000-000000000002" }),
+                ...(discovered === "active"
+                  ? {}
+                  : { status: "succeeded", phase: "finished", finishedAtMs: 4_000 }),
+              });
+      const { harness, overlays, expectState, admission, request, reconnect } = admissionTest(
         (requested) => {
           if (!requested) {
             if (baseline === "unknown") {
@@ -204,25 +165,32 @@ describe("update run response races", () => {
           }
           return found.status === "running" ? { activeRun: found } : { lastRun: found };
         },
-        () => ({ run: found }),
+        () => (timing === "reconnect" ? {} : { run: found }),
       );
-      const outcome =
-        discovered === "old after disconnect" ? "outcome is unknown" : "Admission reply lost";
+      const outcome = timing === "disconnect" ? "outcome is unknown" : "Admission reply lost";
       await flushMicrotasks();
       const operation = settleAtCleanup(overlays.runUpdate());
       await flushMicrotasks();
-      if (discovered === "old after disconnect") {
+      if (timing === "reconnect") {
+        reconnect();
+        await flushMicrotasks();
+        expect(overlays.snapshot.updateRun).toEqual(found);
+      } else if (timing === "disconnect") {
         harness.update({ phase: "reconnecting" });
       }
-      admission.reject(new Error("Admission reply lost"));
-      if (discovered === "old after disconnect") {
+      admission.reject(
+        new Error(timing === "reconnect" ? "old socket closed" : "Admission reply lost"),
+      );
+      if (timing === "disconnect") {
         harness.update({ phase: "connected" });
       }
       await operation;
       await flushMicrotasks();
       if (attach) {
         expect(overlays.snapshot.updateRun).toEqual(found);
-        if (discovered === "active") {
+        if (timing === "reconnect") {
+          expect(overlays.snapshot.updateStatusBanner).toBeNull();
+        } else if (discovered === "active") {
           found = {
             ...found,
             status: "succeeded",
@@ -240,8 +208,7 @@ describe("update run response races", () => {
           updateStatusBanner: { tone: "danger", text: expect.stringContaining(outcome) },
           updateRunning: false,
         });
-        harness.update({ phase: "reconnecting" });
-        harness.update({ phase: "connected" });
+        reconnect();
         await flushMicrotasks();
         harness.emitEvent("update.run.changed", { ...previous, updatedAtMs: 4_000 });
         await flushMicrotasks();

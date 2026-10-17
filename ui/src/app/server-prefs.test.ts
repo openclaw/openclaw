@@ -12,23 +12,30 @@ import { waitForFast } from "../test-helpers/wait-for.ts";
 import { resetServerUiPref } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs, requestServerUiPrefIntent } from "./server-prefs-intent.ts";
 import { applyServerUiPrefs, resolveServerUiPrefState } from "./server-prefs-reconcile.ts";
+import type { ServerUiPrefsCommit } from "./server-prefs-sync-contract.ts";
 import {
   configWithPrefs,
   createServerPrefsWriter as createClient,
   type RequestMock,
 } from "./server-prefs.test-support.ts";
-import { flushServerUiPrefs, pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
+import {
+  flushServerUiPrefs as flush,
+  pushServerUiPrefs as push,
+  resetServerUiPrefsSync,
+} from "./server-prefs.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
 
 const pendingKey = (scope: string) => `openclaw.control.serverPrefs.pending.v1:${scope}`;
-const readPending = (scope: string) =>
-  JSON.parse(localStorage.getItem(pendingKey(scope)) ?? "{}") as Record<string, unknown>;
+const readPending = (gateway = scope) =>
+  JSON.parse(localStorage.getItem(pendingKey(gateway)) ?? "{}") as Record<string, unknown>;
 
 const scope = "ws://gw";
 type Request = (method: string, params?: unknown) => Promise<unknown>;
 let request: RequestMock;
 let client: ReturnType<typeof createClient>;
 let onApplied: ReturnType<typeof vi.fn>;
+type ApplyHooks = Parameters<typeof applyServerUiPrefs>[1];
+const hooks = (): ApplyHooks => ({ scope, onApplied });
 const storePending = (prefs: Record<string, unknown>, gateway = scope) =>
   localStorage.setItem(pendingKey(gateway), JSON.stringify(prefs));
 const expectCleared = (gateway = scope) =>
@@ -56,17 +63,42 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function applyPrefs(
-  prefs: Record<string, unknown>,
-  hooks: Parameters<typeof applyServerUiPrefs>[1] = { onApplied },
-) {
-  return applyServerUiPrefs(configWithPrefs(prefs), hooks);
+function applyPrefs(prefs: Record<string, unknown>, options: ApplyHooks = { onApplied }) {
+  return applyServerUiPrefs(configWithPrefs(prefs), options);
 }
 
+const patchParams = (prefs: Record<string, unknown>) => ({
+  raw: JSON.stringify({ ui: { prefs } }),
+  note: "control-ui prefs sync",
+});
 function expectPatch(prefs: Record<string, unknown>) {
-  expect(request).toHaveBeenCalledWith("config.patch", {
-    raw: JSON.stringify({ ui: { prefs } }),
-    note: "control-ui prefs sync",
+  expect(request).toHaveBeenCalledWith("config.patch", patchParams(prefs));
+}
+function holdRequest(once = false) {
+  const gate = createDeferred<unknown>();
+  if (once) {
+    request.mockReturnValueOnce(gate.promise);
+  } else {
+    request.mockReturnValue(gate.promise);
+  }
+  return gate;
+}
+function expectApplied(config: unknown, changed: boolean, theme: string, options = hooks()) {
+  expect(applyServerUiPrefs(config, options)).toBe(changed);
+  expect(loadSettings().theme).toBe(theme);
+}
+function expectThemeState(
+  config: unknown,
+  provenance: string,
+  value: string,
+  gateway = scope,
+  canSync = false,
+) {
+  expect(resolveServerUiPrefState(config, "theme", gateway, loadSettings(), { canSync })).toEqual({
+    overridden: true,
+    provenance,
+    resetValue: "claw",
+    value,
   });
 }
 
@@ -93,11 +125,7 @@ describe("server preferences", () => {
     );
     try {
       await runtimeConfig.ensureLoaded();
-      pushServerUiPrefs(
-        runtimeConfig,
-        { themeMode: "dark" },
-        { afterCommit: () => committed.resolve() },
-      );
+      push(runtimeConfig, { themeMode: "dark" }, { afterCommit: () => committed.resolve() });
       await started.promise;
       runtimeConfig.patchForm(["count"], 2);
       release.resolve();
@@ -139,7 +167,7 @@ describe("server preferences", () => {
       throw new GatewayRequestError({ code: "INVALID_REQUEST", message: "Unknown preference" });
     });
     storePending({ unknownPreference: true });
-    flushServerUiPrefs(client, { afterCommit: () => completed.resolve() });
+    flush(client, { afterCommit: () => completed.resolve() });
     await completed.promise;
     expectPatch({ unknownPreference: true });
     expectCleared();
@@ -165,20 +193,16 @@ describe("server preferences", () => {
       chatPersistCommentary: false,
       chatSendShortcut: "modifier-enter",
     };
-    expect(
-      applyPrefs(
-        {
-          ...valid,
-          accent: "#AbC123",
-          textScale: 125,
-          sidebarLiveActivity: false,
-          chatMessageMaxWidth: "82%",
-          sidebarEntries: ["route:usage", "session:agent:main:test", "route:usage", 7],
-          bogus: true,
-        },
-        { onApplied },
-      ),
-    ).toBe(true);
+    const mixed = {
+      ...valid,
+      accent: "#AbC123",
+      textScale: 125,
+      sidebarLiveActivity: false,
+      chatMessageMaxWidth: "82%",
+      sidebarEntries: ["route:usage", "session:agent:main:test", "route:usage", 7],
+      bogus: true,
+    };
+    expect(applyPrefs(mixed)).toBe(true);
     expect(onApplied).toHaveBeenCalledWith(valid);
   });
 
@@ -191,21 +215,9 @@ describe("server preferences", () => {
     expect(onThemeChanged).toHaveBeenCalledWith("custom");
     const state = resolveServerUiPrefState(config, "theme");
 
-    expect(state).toEqual({
-      overridden: true,
-      provenance: "synced",
-      resetValue: "claw",
-      value: "claw",
-    });
+    expectThemeState(config, "synced", "claw", "", true);
     patchSettings({ theme: "knot" });
-    expect(
-      resolveServerUiPrefState(config, "theme", "", loadSettings(), { canSync: false }),
-    ).toEqual({
-      overridden: true,
-      provenance: "device-local",
-      resetValue: "claw",
-      value: "knot",
-    });
+    expectThemeState(config, "device-local", "knot", "");
 
     const beforeReset = loadSettings();
     const afterReset = resetServerUiPref("theme", state);
@@ -217,24 +229,43 @@ describe("server preferences", () => {
     });
   });
 
-  it("does not reapply a retained pre-commit snapshot after an ack moves lastSeen", async () => {
-    const oldSnapshot = configWithPrefs({ themeMode: "light" });
-    applyServerUiPrefs(oldSnapshot, { scope, onApplied });
+  it.each([false, true])("reconciles pending snapshots after refresh: %s", async (refreshed) => {
+    const snapshot = configWithPrefs({ themeMode: "light" });
+    if (!refreshed) {
+      applyServerUiPrefs(snapshot, hooks());
+    }
     patchSettings({ themeMode: "dark" });
-    client = createClient(request, scope, true, {
-      ok: false,
-      error: "config.get failed",
+    client = createClient(
+      request,
+      scope,
+      true,
+      refreshed ? { ok: true } : { ok: false, error: "config.get failed" },
+    );
+    request.mockImplementation(async () => {
+      if (refreshed) {
+        applyServerUiPrefs(snapshot, hooks());
+      }
+      return {};
     });
     const committed = createDeferred();
-    const afterCommit = vi.fn(() => committed.resolve());
-    pushServerUiPrefs(client, { themeMode: "dark" }, { afterCommit });
+    const afterCommit = vi.fn((commit: ServerUiPrefsCommit) => {
+      expect(commit).toEqual({ needsRefresh: !refreshed });
+      if (refreshed) {
+        applyServerUiPrefs(snapshot, hooks());
+      }
+      committed.resolve();
+    });
+    push(client, { themeMode: "dark" }, { afterCommit });
     await committed.promise;
     expectCleared();
-
-    expect(applyServerUiPrefs(oldSnapshot, { scope, onApplied })).toBe(false);
-    expect(loadSettings().themeMode).toBe("dark");
-    expect(afterCommit).toHaveBeenCalledWith({ needsRefresh: true });
-    expect(applyPrefs({ themeMode: "light" }, { scope, onApplied })).toBe(true);
+    if (refreshed) {
+      expect(onApplied).toHaveBeenCalledWith({ themeMode: "light" });
+    } else {
+      expect(afterCommit).toHaveBeenCalledWith({ needsRefresh: true });
+      expect(applyServerUiPrefs(snapshot, hooks())).toBe(false);
+      expect(loadSettings().themeMode).toBe("dark");
+      expect(applyPrefs({ themeMode: "light" }, hooks())).toBe(true);
+    }
     expect(loadSettings().themeMode).toBe("light");
   });
 
@@ -275,20 +306,19 @@ describe("server preferences", () => {
   });
 
   it("does not publish a server theme change shadowed by pending local intent", async () => {
-    const requestGate = createDeferred<unknown>();
-    request.mockReturnValue(requestGate.promise);
+    const requestGate = holdRequest();
     const onThemeChanged = vi.fn();
-    const hooks = { scope, onApplied, onThemeChanged };
-    applyPrefs({ theme: "claw" }, hooks);
+    const themeHooks = { scope, onApplied, onThemeChanged };
+    applyPrefs({ theme: "claw" }, themeHooks);
     onThemeChanged.mockClear();
 
-    pushServerUiPrefs(client, { theme: "knot" });
+    push(client, { theme: "knot" });
     await waitForRequest();
-    expect(applyPrefs({ theme: "knot" }, hooks)).toBe(false);
+    expect(applyPrefs({ theme: "knot" }, themeHooks)).toBe(false);
     expect(onThemeChanged).not.toHaveBeenCalled();
 
     onApplied.mockClear();
-    expect(applyPrefs({ theme: "knot", locale: "de" }, hooks)).toBe(true);
+    expect(applyPrefs({ theme: "knot", locale: "de" }, themeHooks)).toBe(true);
     expect(onApplied).toHaveBeenCalledExactlyOnceWith({ locale: "de" });
     expect(loadSettings().locale).toBe("de");
     expect(onThemeChanged).not.toHaveBeenCalled();
@@ -303,9 +333,9 @@ describe("server preferences", () => {
     const prefs = changedServerUiPrefs(previous, next);
     expect(prefs).toEqual({ theme: null });
 
-    pushServerUiPrefs(createClient(vi.fn(), scope, false), prefs ?? {});
+    push(createClient(vi.fn(), scope, false), prefs ?? {});
 
-    expect(readPending(scope)).toEqual({ theme: null });
+    expect(readPending()).toEqual({ theme: null });
     expect(resolveServerUiPrefState(configWithPrefs({ theme: "claw" }), "theme", scope)).toEqual({
       overridden: false,
       provenance: "pending",
@@ -315,32 +345,27 @@ describe("server preferences", () => {
   });
 
   it("settles only this tab's acknowledged keys from sibling persisted pending", async () => {
-    const flight = createDeferred<unknown>();
-    request.mockReturnValue(flight.promise);
-    flushServerUiPrefs(client);
+    const flight = holdRequest();
+    flush(client);
     storePending({ locale: "fr" });
-    pushServerUiPrefs(client, { theme: "knot" });
+    push(client, { theme: "knot" });
     await waitForRequest();
 
     flight.resolve({});
 
-    await waitForFast(() => expect(readPending(scope)).toEqual({ locale: "fr" }));
+    await waitForFast(() => expect(readPending()).toEqual({ locale: "fr" }));
   });
 
   it("preserves a newer same-key edit across the older batch ack", async () => {
-    const first = createDeferred<unknown>();
-    request.mockReturnValueOnce(first.promise);
+    const first = holdRequest(true);
 
-    pushServerUiPrefs(client, { themeMode: "dark" });
+    push(client, { themeMode: "dark" });
     await waitForRequest();
-    pushServerUiPrefs(client, { themeMode: "light" });
+    push(client, { themeMode: "light" });
     first.resolve({});
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-    expect(request.mock.calls[1]?.[1]).toEqual({
-      raw: JSON.stringify({ ui: { prefs: { themeMode: "light" } } }),
-      note: "control-ui prefs sync",
-    });
+    expect(request.mock.calls[1]?.[1]).toEqual(patchParams({ themeMode: "light" }));
   });
 
   it("retains in-memory pending intent when localStorage is unavailable", async () => {
@@ -355,22 +380,21 @@ describe("server preferences", () => {
     });
     client = createClient(request, scope, false);
 
-    pushServerUiPrefs(client, { locale: "de" });
+    push(client, { locale: "de" });
     connect();
-    flushServerUiPrefs(client);
+    flush(client);
 
     await waitForRequest();
     expectPatch({ locale: "de" });
   });
 
   it("ignores a superseded request rejection while its replacement is pending", async () => {
-    const first = createDeferred<unknown>();
-    const second = createDeferred<unknown>();
-    request.mockReturnValueOnce(first.promise).mockReturnValue(second.promise);
+    const first = holdRequest(true);
+    const second = holdRequest();
 
-    pushServerUiPrefs(client, { locale: "de" });
+    push(client, { locale: "de" });
     await waitForRequest();
-    flushServerUiPrefs(client);
+    flush(client);
     await waitForRequest(2);
     first.reject(new Error("socket closed"));
     await Promise.resolve();
@@ -380,38 +404,12 @@ describe("server preferences", () => {
     await waitForFast(expectCleared);
   });
 
-  it("reconciles the refreshed snapshot again after clearing its pending shadow", async () => {
-    const refreshedSnapshot = configWithPrefs({ themeMode: "light" });
-    patchSettings({ themeMode: "dark" });
-    request.mockImplementation(async () => {
-      applyServerUiPrefs(refreshedSnapshot, { scope, onApplied });
-      return {};
-    });
-
-    pushServerUiPrefs(
-      client,
-      { themeMode: "dark" },
-      {
-        afterCommit: ({ needsRefresh }) => {
-          expect(needsRefresh).toBe(false);
-          applyServerUiPrefs(refreshedSnapshot, { scope, onApplied });
-        },
-      },
-    );
-    await waitForRequest();
-    await waitForFast(expectCleared);
-
-    expect(onApplied).toHaveBeenCalledWith({ themeMode: "light" });
-    expect(loadSettings().themeMode).toBe("light");
-  });
-
   it("does not let another scope's reconcile replace an active drain's pending state", async () => {
-    const flight = createDeferred<unknown>();
-    request.mockReturnValue(flight.promise);
+    const flight = holdRequest();
     client = createClient(request, "ws://a");
     storePending({ locale: "de" }, "ws://b");
 
-    pushServerUiPrefs(client, { themeMode: "dark" });
+    push(client, { themeMode: "dark" });
     await waitForRequest();
     applyPrefs({ themeMode: "light", locale: "fr" }, { scope: "ws://b", onApplied: vi.fn() });
     flight.resolve({});
@@ -421,7 +419,7 @@ describe("server preferences", () => {
   });
 
   it("keeps personal sidebar arrays out of global config writes", () => {
-    pushServerUiPrefs(client, { sidebarEntries: ["route:usage"] });
+    push(client, { sidebarEntries: ["route:usage"] });
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -429,20 +427,18 @@ describe("server preferences", () => {
     const writer = createClient(request, "", false);
     Object.assign(writer.state, { client: null });
 
-    pushServerUiPrefs(writer, { locale: "de" });
+    push(writer, { locale: "de" });
     expect(readPending("")).toEqual({ locale: "de" });
 
-    const firstClient = createClient(request, "ws://first").state.client;
-    Object.assign(writer.state, { client: firstClient });
+    Object.assign(writer.state, { client: createClient(request, "ws://first").state.client });
     connect(writer);
-    flushServerUiPrefs(writer);
+    flush(writer);
     await waitForFast(() => expectCleared("ws://first"));
     expectCleared("");
 
     storePending({ themeMode: "dark" }, "ws://second");
-    const secondClient = createClient(request, "ws://second").state.client;
-    Object.assign(writer.state, { client: secondClient });
-    flushServerUiPrefs(writer);
+    Object.assign(writer.state, { client: createClient(request, "ws://second").state.client });
+    flush(writer);
 
     await waitForRequest(2);
     expect(request.mock.calls[1]?.[1]).toMatchObject({
@@ -452,77 +448,57 @@ describe("server preferences", () => {
 });
 
 describe("read-only server preference lifecycle", () => {
-  const applied = { scope, onApplied: vi.fn() };
   const retainedKey = `openclaw.control.serverPrefs.retained-local.v1:${scope}`;
-  it("retains a pre-snapshot read-only edit until the first server baseline is recorded", () => {
-    patchSettings({ theme: "knot" });
-    pushServerUiPrefs(createClient(request, scope, true, { ok: true }, false), { theme: "knot" });
-
+  it.each(["before", "after"])("retains an edit made %s the first snapshot", (timing) => {
     const initial = configWithPrefs({ theme: "claw" });
-    expect(applyServerUiPrefs(initial, applied)).toBe(false);
-    expect(loadSettings().theme).toBe("knot");
-    expect(localStorage.getItem(retainedKey)).toBeNull();
-
-    resetServerUiPrefsSync();
-    expect(applyPrefs({ theme: "claw" }, applied)).toBe(false);
-    expect(loadSettings().theme).toBe("knot");
-    const previous = loadSettings();
-    const state = resolveServerUiPrefState(initial, "theme", scope, previous, { canSync: false });
-    const reset = resetServerUiPref("theme", state, scope);
-    expect(reset.theme).toBe("claw");
-    expect(changedServerUiPrefs(previous, reset)).toBeNull();
-
-    expect(applyPrefs({ theme: "dash" }, applied)).toBe(true);
-    expect(loadSettings().theme).toBe("dash");
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("applies the first server delta after a post-snapshot read-only edit", () => {
-    const initial = configWithPrefs({ theme: "claw" });
-    applyServerUiPrefs(initial, applied);
+    if (timing === "after") {
+      applyServerUiPrefs(initial, hooks());
+    }
     patchSettings({ theme: "knot" });
-
-    pushServerUiPrefs(
-      createClient(vi.fn(), scope, true, { ok: true }, false),
+    push(
+      createClient(request, scope, true, { ok: true }, false),
       { theme: "knot" },
       {
         afterCommit: ({ retainedLocal }) => {
-          expect(retainedLocal).toBe(true);
-          expect(applyServerUiPrefs(initial, applied)).toBe(false);
+          if (timing === "after") {
+            expect(retainedLocal).toBe(true);
+            expectApplied(initial, false, "knot");
+          }
         },
       },
     );
-
+    if (timing === "before") {
+      expectApplied(initial, false, "knot");
+      expect(localStorage.getItem(retainedKey)).toBeNull();
+      resetServerUiPrefsSync();
+      expectApplied(configWithPrefs({ theme: "claw" }), false, "knot");
+      const previous = loadSettings();
+      const state = resolveServerUiPrefState(initial, "theme", scope, previous, { canSync: false });
+      const reset = resetServerUiPref("theme", state, scope);
+      expect(reset.theme).toBe("claw");
+      expect(changedServerUiPrefs(previous, reset)).toBeNull();
+    }
     expect(localStorage.getItem(retainedKey)).toBeNull();
-    expect(applyPrefs({ theme: "dash" }, applied)).toBe(true);
-    expect(loadSettings().theme).toBe("dash");
+    expectApplied(configWithPrefs({ theme: "dash" }), true, "dash");
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("keeps offline intent through read-only reconnect and replays it after authorization", async () => {
     const writer = createClient(request, scope, false, { ok: true }, false);
     patchSettings({ theme: "knot" });
 
-    pushServerUiPrefs(writer, { theme: "knot" });
-    expect(readPending(scope)).toEqual({ theme: "knot" });
-    expect(
-      resolveServerUiPrefState(configWithPrefs({ theme: "claw" }), "theme", scope, loadSettings(), {
-        canSync: false,
-      }),
-    ).toEqual({
-      overridden: true,
-      provenance: "device-local",
-      resetValue: "claw",
-      value: "knot",
-    });
+    push(writer, { theme: "knot" });
+    expect(readPending()).toEqual({ theme: "knot" });
+    expectThemeState(configWithPrefs({ theme: "claw" }), "device-local", "knot");
 
     connect(writer);
-    flushServerUiPrefs(writer);
+    flush(writer);
     await Promise.resolve();
     expect(request).not.toHaveBeenCalled();
-    expect(readPending(scope)).toEqual({ theme: "knot" });
+    expect(readPending()).toEqual({ theme: "knot" });
 
     Object.assign(writer, { canPatch: true });
-    flushServerUiPrefs(writer);
+    flush(writer);
     await waitForRequest();
     await vi.waitFor(expectCleared);
   });
@@ -531,7 +507,7 @@ describe("read-only server preference lifecycle", () => {
     [
       "scope replacement",
       "ws://new",
-      () => pushServerUiPrefs(createClient(request, "ws://new", false), { locale: "de" }),
+      () => push(createClient(request, "ws://new", false), { locale: "de" }),
     ],
     ["lost write capability", "ws://old", () => Object.assign(client, { canPatch: false })],
   ] as const)("refuses queued dispatch after %s", async (_change, pendingScope, change) => {
@@ -547,7 +523,7 @@ describe("read-only server preference lifecycle", () => {
       resumed.resolve();
       return result;
     };
-    pushServerUiPrefs(client, { locale: "de" });
+    push(client, { locale: "de" });
     await queued.promise;
     change();
     gate.resolve();
@@ -556,45 +532,34 @@ describe("read-only server preference lifecycle", () => {
     expect(readPending(pendingScope)).toEqual({ locale: "de" });
   });
 
-  it("does not resurrect a sibling key another tab cancelled during a read-only edit", async () => {
+  it.each(["cancelled sibling", "same-key replacement"])("adopts a tab's %s", async (change) => {
     client = createClient(request, scope, false);
-
-    pushServerUiPrefs(client, { locale: "de", theme: "knot" });
-    storePending({ theme: "knot" });
-    connect(client, false);
-    pushServerUiPrefs(client, { themeMode: "dark" });
-
-    expect(readPending(scope)).toEqual({ theme: "knot" });
-    expect(request).not.toHaveBeenCalled();
-
-    Object.assign(client, { canPatch: true });
-    flushServerUiPrefs(client);
+    const cancelled = change === "cancelled sibling";
+    const persisted = { theme: cancelled ? "knot" : "dash" };
+    push(client, cancelled ? { locale: "de", theme: "knot" } : { theme: "knot" });
+    storePending(persisted);
+    connect(client, !cancelled);
+    if (cancelled) {
+      push(client, { themeMode: "dark" });
+      expect(readPending()).toEqual(persisted);
+      expect(request).not.toHaveBeenCalled();
+      Object.assign(client, { canPatch: true });
+    }
+    flush(client);
     await waitForRequest();
-    expectPatch({ theme: "knot" });
-  });
-
-  it("dispatches a same-key replacement persisted by another tab", async () => {
-    client = createClient(request, scope, false);
-
-    pushServerUiPrefs(client, { theme: "knot" });
-    storePending({ theme: "dash" });
-    connect();
-    flushServerUiPrefs(client);
-
-    await waitForRequest();
-    expectPatch({ theme: "dash" });
+    expectPatch(persisted);
   });
 
   it("does not migrate cancelled pre-connection intent into an adopted gateway scope", async () => {
     const writer = createClient(request, "", false);
     Object.assign(writer.state, { client: null });
 
-    pushServerUiPrefs(writer, { theme: "knot" });
+    push(writer, { theme: "knot" });
     localStorage.removeItem(pendingKey(""));
 
     Object.assign(writer.state, createClient(request, "ws://first").state);
-    flushServerUiPrefs(writer);
-    pushServerUiPrefs(writer, { themeMode: "dark" });
+    flush(writer);
+    push(writer, { themeMode: "dark" });
 
     await waitForRequest();
     expectPatch({ themeMode: "dark" });

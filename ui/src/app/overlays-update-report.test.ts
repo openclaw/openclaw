@@ -14,6 +14,7 @@ import {
   disposeTestOverlays,
   pendingReply,
   updateHello,
+  updateSentinel,
 } from "./overlays-update.test-support.ts";
 
 const reportUpdateFailure = vi.hoisted(() =>
@@ -22,17 +23,11 @@ const reportUpdateFailure = vi.hoisted(() =>
 
 vi.mock("./update-failure-report.ts", () => ({ reportUpdateFailure }));
 
-const FAILURE = {
-  kind: "update",
-  status: "error",
-  ts: 1_000,
-  stats: {
-    handoffId: "handoff-failed",
-    reason: "build-failed",
-    before: { version: "1.0.0" },
-    steps: [{ name: "build", log: { exitCode: 1, stderrTail: "Disk is full" } }],
-  },
-};
+const FAILURE = updateSentinel("build-failed", 1_000, {
+  handoffId: "handoff-failed",
+  before: { version: "1.0.0" },
+  steps: [{ name: "build", log: { exitCode: 1, stderrTail: "Disk is full" } }],
+});
 
 const FAILED_RUN = createUpdateRunFixture({
   phase: "finished",
@@ -82,10 +77,7 @@ it("does not admit a failure report without an identified administrator profile"
   expect(overlays.snapshot.reportableUpdateFailureId).toBe(FAILED_RUN.runId);
   await overlays.reportUpdateFailure(FAILED_RUN.runId);
   expect(reportUpdateFailure).not.toHaveBeenCalled();
-  expectState({
-    updateFailureReportBusy: false,
-    updateFailureReportNotice: null,
-  });
+  expectState({ updateFailureReportBusy: false, updateFailureReportNotice: null });
 });
 
 describe("update failure report continuity", () => {
@@ -102,10 +94,7 @@ describe("update failure report continuity", () => {
     const duplicate = overlays.reportUpdateFailure(attemptId);
     expect(overlays.snapshot.updateFailureReportBusy).toBe(true);
     await vi.waitFor(() => expect(reportUpdateFailure).toHaveBeenCalledOnce());
-    pending.resolve({
-      status: "created",
-      url: "https://github.com/openclaw/openclaw/issues/123",
-    });
+    pending.resolve({ status: "created", url: "https://github.com/openclaw/openclaw/issues/123" });
     await Promise.all([first, duplicate]);
 
     expect(reportUpdateFailure).toHaveBeenCalledOnce();
@@ -127,10 +116,7 @@ describe("update failure report continuity", () => {
     expect(admission?.isCurrent?.()).toBe(false);
     first.resolve(null);
     await interrupted;
-    expectState({
-      updateFailureReportBusy: false,
-      updateFailureReportNotice: null,
-    });
+    expectState({ updateFailureReportBusy: false, updateFailureReportNotice: null });
 
     harness.update({
       phase: "connected",
@@ -164,7 +150,6 @@ describe("update failure report continuity", () => {
 
 it("keeps a reported legacy sentinel across reconnect without reporting again", async () => {
   const attemptId = "handoff-failed";
-
   const { harness, overlays, request } = reportTest(() => null);
   const hello = harness.gateway.snapshot.hello;
   reportUpdateFailure.mockResolvedValue({
@@ -237,10 +222,7 @@ it.each(["changed-facts", "running", "succeeded", "reconciled", "skipped"] as co
     }
     pending.resolve(null);
     await reporting;
-    expectState({
-      updateFailureReportNotice: null,
-      updateFailureReportBusy: false,
-    });
+    expectState({ updateFailureReportNotice: null, updateFailureReportBusy: false });
     expect(reportUpdateFailure).toHaveBeenCalledOnce();
   },
 );

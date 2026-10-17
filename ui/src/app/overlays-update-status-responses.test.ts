@@ -72,9 +72,7 @@ describe("application update status response ownership", () => {
     await flushMicrotasks();
     const refresh = overlays.refreshUpdateStatus();
     expect(overlays.snapshot.updateStatusRefreshing).toBe(true);
-    harness.update({
-      hello: updateHello(AUTO_UPDATE_SCHEDULE),
-    });
+    harness.update({ hello: updateHello(AUTO_UPDATE_SCHEDULE) });
     discovery.resolve({ schedule: null });
     await expect(refresh).resolves.toBe(false);
     expect(overlays.snapshot.updateStatusRefreshing).toBe(false);
@@ -137,9 +135,7 @@ describe("application update status response ownership", () => {
       expect(overlays.snapshot.updateStatusCheckBanner?.text).toContain("checkout unavailable");
       if (scope === "access") {
         for (const permission of ["operator.read", "operator.admin"]) {
-          harness.update({
-            hello: updateHello(AUTO_UPDATE_SCHEDULE, permission),
-          });
+          harness.update({ hello: updateHello(AUTO_UPDATE_SCHEDULE, permission) });
         }
       } else if (scope === "gateway") {
         harness.gateway.connection.gatewayUrl = "ws://replacement-gateway.test";
@@ -150,9 +146,7 @@ describe("application update status response ownership", () => {
         expect(overlays.snapshot.updateStatusCheckBanner).toBeNull();
       }
       failProgress = true;
-      harness.emitEvent("update.available", {
-        schedule: automaticSchedule({ state: "applying" }),
-      });
+      harness.emitEvent("update.available", { schedule: automaticSchedule({ state: "applying" }) });
       harness.emitEvent("update.available", { schedule: AUTO_UPDATE_SCHEDULE });
       await flushMicrotasks();
       expect(overlays.snapshot.updateStatusCheckBanner?.text).toContain(
