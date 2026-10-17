@@ -129,6 +129,17 @@ export class TalkRealtimeRelayOutputOwnership {
       }
       this.finish(this.responseId);
     }
+    if (
+      this.phase === "owned" &&
+      this.mode === "exact-response" &&
+      normalizedResponseId &&
+      this.responseId &&
+      normalizedResponseId !== this.responseId
+    ) {
+      // Server VAD can replace an unfinished response without a terminal (xAI);
+      // an identified successor retires it, as the provider bridge already does.
+      this.finish(this.responseId);
+    }
     if (this.phase === "unowned") {
       this.cancelledTerminal = undefined;
       Object.assign(this, {
