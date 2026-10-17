@@ -25,8 +25,6 @@ const {
   upsertPairingRequestMock,
 } = getSignalToolResultTestMocks();
 
-const SIGNAL_BASE_URL = "http://127.0.0.1:8080";
-
 const nativeQuote = {
   replyToId: "1700000000001",
   replyToAuthor: "+15550001111",
@@ -45,12 +43,8 @@ function inboundEnvelope(envelope: Record<string, unknown>) {
   return { sourceNumber: "+15550001111", sourceName: "Ada", timestamp: 1, ...envelope };
 }
 
-function receiveSingleEnvelope(
-  envelope: Record<string, unknown> = {
-    timestamp: 1700000000001,
-    dataMessage: { message: "quote me" },
-  },
-) {
+const DEFAULT_ENVELOPE = { timestamp: 1700000000001, dataMessage: { message: "quote me" } };
+function receiveSingleEnvelope(envelope: Record<string, unknown> = DEFAULT_ENVELOPE) {
   return receiveSignalPayloads({ payloads: [{ envelope: inboundEnvelope(envelope) }] });
 }
 
@@ -71,48 +65,38 @@ function setReactionNotificationConfig(mode: "all" | "own", extra: Record<string
 }
 
 describe("monitorSignalProvider tool results", () => {
-  it.each([
-    { failed: true, media: true, finalQuoted: true },
-    { failed: false, media: false, finalQuoted: false },
-  ] as const)(
-    "quotes final replies after a block: failed=$failed media=$media",
-    async ({ failed, media, finalQuoted }) => {
-      configure({ replyToMode: "first", streaming: { block: { enabled: true } } });
-      sendMock.mockResolvedValue({ messageId: "1700000000002" });
-      if (failed) {
-        sendMock.mockRejectedValueOnce(
-          new PlatformMessageNotDispatchedError("not dispatched", { cause: new Error("offline") }),
-        );
-      }
-      replyMock.mockImplementation(async (_ctx, options: GetReplyOptions) => {
-        await options.onBlockReply?.({
-          text: "Streamed block",
-          ...(media ? { mediaUrl: "https://example.com/block.png" } : {}),
-        });
-        return { text: "Final answer" };
+  it.each([true, false])("quotes final replies after a block (failed media=%s)", async (failed) => {
+    configure({ replyToMode: "first", streaming: { block: { enabled: true } } });
+    sendMock.mockResolvedValue({ messageId: "1700000000002" });
+    if (failed) {
+      sendMock.mockRejectedValueOnce(
+        new PlatformMessageNotDispatchedError("not dispatched", { cause: new Error("offline") }),
+      );
+    }
+    replyMock.mockImplementation(async (_ctx, options: GetReplyOptions) => {
+      await options.onBlockReply?.({
+        text: "Streamed block",
+        ...(failed ? { mediaUrl: "https://example.com/block.png" } : {}),
       });
+      return { text: "Final answer" };
+    });
 
-      await receiveSingleEnvelope();
+    await receiveSingleEnvelope();
 
-      expect(sendMock).toHaveBeenCalledTimes(2);
-      expect(sendMock.mock.calls.map((call) => call[1])).toEqual([
-        "PFX Streamed block",
-        "PFX Final answer",
-      ]);
-      expect(sendMock.mock.calls[0]?.[2]).toMatchObject(nativeQuote);
-      if (media) {
-        expect(sendMock.mock.calls[0]?.[2]).toHaveProperty(
-          "mediaUrl",
-          "https://example.com/block.png",
-        );
-      }
-      if (finalQuoted) {
-        expect(sendMock.mock.calls[1]?.[2]).toMatchObject(nativeQuote);
-      } else {
-        expect(sendMock.mock.calls[1]?.[2]).not.toHaveProperty("replyToId");
-      }
-    },
-  );
+    expect(sendMock.mock.calls.map((call) => call[1])).toEqual([
+      "PFX Streamed block",
+      "PFX Final answer",
+    ]);
+    expect(sendMock.mock.calls[0]?.[2]).toMatchObject({
+      ...nativeQuote,
+      ...(failed ? { mediaUrl: "https://example.com/block.png" } : {}),
+    });
+    if (failed) {
+      expect(sendMock.mock.calls[1]?.[2]).toMatchObject(nativeQuote);
+    } else {
+      expect(sendMock.mock.calls[1]?.[2]).not.toHaveProperty("replyToId");
+    }
+  });
 
   it("passes group inbound quote metadata through group reply mode overrides", async () => {
     configure({ groupPolicy: "open", replyToMode: "off", replyToModeByChatType: { group: "all" } });
@@ -140,7 +124,6 @@ describe("monitorSignalProvider tool results", () => {
       { text: "final reply" },
     ]);
     await receiveSingleEnvelope();
-    expect(sendMock).toHaveBeenCalledTimes(2);
     expect(sendMock.mock.calls.map((call) => call[1])).toEqual(["PFX working", "PFX final reply"]);
     for (const call of sendMock.mock.calls) {
       expect(call[2]).toMatchObject(nativeQuote);
@@ -179,7 +162,7 @@ describe("monitorSignalProvider tool results", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const monitorPromise = monitorSignalProvider({
       autoStart: false,
-      baseUrl: SIGNAL_BASE_URL,
+      baseUrl: "http://127.0.0.1:8080",
       abortSignal: AbortSignal.any([abortController.signal, signal]),
     });
     const monitorStopped = monitorPromise.then(() => {
@@ -199,11 +182,7 @@ describe("monitorSignalProvider tool results", () => {
       }
     } finally {
       abortController.abort();
-      try {
-        await monitorPromise;
-      } finally {
-        vi.useRealTimers();
-      }
+      await monitorPromise.finally(() => vi.useRealTimers());
     }
     expect(replyMock).toHaveBeenCalledTimes(2);
     expect(sendMock).toHaveBeenCalledTimes(2);
@@ -212,26 +191,23 @@ describe("monitorSignalProvider tool results", () => {
     }
   });
 
-  it("does not attach native quote metadata for a different explicit reply target", async () => {
-    replyMock.mockResolvedValue({ text: "final reply", replyToId: "1700000000999" });
+  it.each([
+    [{ replyToId: "1700000000999" }, undefined, false],
+    [{ replyToCurrent: false }, undefined, false],
+    [{ replyToCurrent: true }, "off", true],
+  ] as const)("applies explicit native quote override %j", async (payload, mode, quoted) => {
+    if (mode) {
+      configure({ replyToMode: mode });
+    }
+    replyMock.mockResolvedValue({ text: "final reply", ...payload });
     await receiveSingleEnvelope();
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expectNoNativeQuote(sendMock.mock.calls[0]?.[2]);
-  });
-
-  it("does not attach native quote metadata when the reply opts out of the current message", async () => {
-    replyMock.mockResolvedValue({ text: "status reply", replyToCurrent: false });
-    await receiveSingleEnvelope();
-    expect(sendMock).toHaveBeenCalledTimes(1);
-    expectNoNativeQuote(sendMock.mock.calls[0]?.[2]);
-  });
-
-  it("keeps explicit current-message native quote metadata when reply mode is off", async () => {
-    configure({ replyToMode: "off" });
-    replyMock.mockResolvedValue({ text: "final reply", replyToCurrent: true });
-    await receiveSingleEnvelope();
-    expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(sendMock.mock.calls[0]?.[2]).toMatchObject(nativeQuote);
+    const options = sendMock.mock.calls[0]?.[2];
+    if (quoted) {
+      expect(options).toMatchObject(nativeQuote);
+    } else {
+      expectNoNativeQuote(options);
+    }
   });
 
   it("ignores reaction-only dataMessage.reaction events (don’t treat as broken attachments)", async () => {
@@ -253,15 +229,11 @@ describe("monitorSignalProvider tool results", () => {
   });
 
   it.each([
-    { name: "UUID and phone", targetAuthor: "+15550002222", accountUuid: undefined },
-    {
-      name: "UUID-only",
-      targetAuthor: undefined,
-      accountUuid: "123e4567-e89b-12d3-a456-426614174000",
-    },
-  ])(
-    "notifies on own $name reactions from allowlisted senders",
-    async ({ targetAuthor, accountUuid }) => {
+    ["UUID and phone", "+15550002222", undefined],
+    ["UUID-only", undefined, "123e4567-e89b-12d3-a456-426614174000"],
+  ] as const)(
+    "notifies on own %s reactions from allowlisted senders",
+    async (_name, targetAuthor, accountUuid) => {
       setReactionNotificationConfig("own", {
         account: "+15550002222",
         accountUuid,

@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import http from "node:http";
+import type http from "node:http";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
@@ -9,6 +9,12 @@ import { clearSignalApprovalReactionTargetsForTest } from "./approval-reactions.
 import { signalPlugin } from "./channel.js";
 import { registerSignalReplyContext } from "./reply-authors.js";
 import { sendMessageSignal } from "./send.js";
+import {
+  signalJsonServer,
+  listenSignalServer,
+  closeSignalServer,
+  type SignalRpcEnvelope,
+} from "./signal-rpc.test-support.js";
 
 const SIGNAL_IMAGE = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
@@ -18,20 +24,6 @@ const SIGNAL_IMAGE = Buffer.from(
 type SignalMediaContext = Parameters<
   NonNullable<NonNullable<typeof signalPlugin.outbound>["sendFormattedMedia"]>
 >[0] & { deps?: { signal: typeof sendMessageSignal } };
-
-type SignalRpcEnvelope = {
-  id?: string | number;
-  method?: string;
-  params?: {
-    account?: string;
-    recipient?: string[];
-    message?: string;
-    attachments?: string[];
-    quoteTimestamp?: number;
-    quoteAuthor?: string;
-    quoteMessage?: string;
-  };
-};
 
 function requireAdapter<T>(send: T | undefined): T {
   if (!send) {
@@ -43,15 +35,16 @@ function requireAdapter<T>(send: T | undefined): T {
 const SIGNAL_MEDIA_ADAPTERS = [
   {
     name: "message adapter",
-    deliver: (context: SignalMediaContext) =>
-      requireAdapter(signalPlugin.message?.send?.media)(context),
+    deliver: requireAdapter(signalPlugin.message?.send?.media),
+    text: requireAdapter(signalPlugin.message?.send?.text),
   },
   {
     name: "formatted outbound adapter",
-    deliver: (context: SignalMediaContext) =>
-      requireAdapter(signalPlugin.outbound?.sendFormattedMedia)(context),
+    deliver: requireAdapter(signalPlugin.outbound?.sendFormattedMedia),
+    text: requireAdapter(signalPlugin.outbound?.sendFormattedText),
   },
 ] as const;
+const SENT_MESSAGE = { messageId: "1700000000999" };
 
 describe("Signal host-owned outbound media access", () => {
   let state: OpenClawTestState;
@@ -69,65 +62,32 @@ describe("Signal host-owned outbound media access", () => {
     requests = [];
     onRequest = undefined;
     rejectQuotes = false;
-    server = http.createServer((request, response) => {
-      const chunks: Buffer[] = [];
-      request.on("data", (chunk: Buffer | string) => {
-        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+    server = signalJsonServer(async (envelope, _request, response) => {
+      const attachmentPath = envelope.params?.attachments?.[0];
+      requests.push({
+        envelope,
+        attachment: attachmentPath ? await fs.readFile(attachmentPath) : undefined,
       });
-      request.on("end", () => {
-        void (async () => {
-          const envelope = JSON.parse(Buffer.concat(chunks).toString("utf8")) as SignalRpcEnvelope;
-          const attachmentPath = envelope.params?.attachments?.[0];
-          requests.push({
-            envelope,
-            attachment: attachmentPath ? await fs.readFile(attachmentPath) : undefined,
-          });
-          onRequest?.();
-          response.writeHead(200, { "content-type": "application/json" });
-          response.end(
-            JSON.stringify({
-              jsonrpc: "2.0",
-              id: envelope.id,
-              ...(rejectQuotes && envelope.params?.quoteTimestamp !== undefined
-                ? { error: { code: -32602, message: "quote metadata invalid" } }
-                : { result: { timestamp: 1700000000999, results: [{ type: "SUCCESS" }] } }),
-            }),
-          );
-        })().catch((error: unknown) => {
-          response.writeHead(500, { "content-type": "text/plain" });
-          response.end(String(error));
-        });
-      });
+      onRequest?.();
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: envelope.id,
+          ...(rejectQuotes && envelope.params?.quoteTimestamp !== undefined
+            ? { error: { code: -32602, message: "quote metadata invalid" } }
+            : { result: { timestamp: 1700000000999, results: [{ type: "SUCCESS" }] } }),
+        }),
+      );
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Signal test server did not expose a TCP port");
-    }
-    cfg = {
-      channels: {
-        signal: {
-          reactionLevel: "minimal",
-          accounts: {
-            default: {
-              account: "+15550001111",
-              transport: { kind: "external-native", url: `http://127.0.0.1:${address.port}` },
-            },
-          },
-        },
-      },
-    };
+    cfg = await listenSignalServer(server);
+    cfg = { channels: { signal: { ...cfg.channels?.signal, reactionLevel: "minimal" } } };
   });
 
   afterEach(async () => {
     try {
       if (server?.listening) {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        await closeSignalServer(server);
       }
     } finally {
       clearSignalApprovalReactionTargetsForTest();
@@ -137,21 +97,11 @@ describe("Signal host-owned outbound media access", () => {
   });
 
   function createContext(overrides: Partial<SignalMediaContext> = {}): SignalMediaContext {
-    return {
-      cfg,
-      to: "+15551234567",
-      text: "Workspace attachment",
-      mediaUrl: "chart.png",
-      ...overrides,
-    };
+    return { cfg, to: "+15551234567", text: "attachment", mediaUrl: "chart.png", ...overrides };
   }
 
   function workspaceAccess(readFile?: OutboundMediaAccess["readFile"]): OutboundMediaAccess {
-    return {
-      localRoots: [state.workspaceDir],
-      workspaceDir: state.workspaceDir,
-      ...(readFile ? { readFile } : {}),
-    };
+    return { localRoots: [state.workspaceDir], workspaceDir: state.workspaceDir, readFile };
   }
   function registerQuote() {
     return registerSignalReplyContext({
@@ -194,7 +144,7 @@ describe("Signal host-owned outbound media access", () => {
         }),
       );
 
-      expect(result).toMatchObject({ messageId: "1700000000999" });
+      expect(result).toMatchObject(SENT_MESSAGE);
       expect(send).toHaveBeenCalledOnce();
       expect(send.mock.calls[0]?.[2].mediaAccess).toBe(mediaAccess);
       expect(send.mock.calls[0]?.[2].mediaLocalRoots).toEqual([conflictingRoot]);
@@ -217,12 +167,8 @@ describe("Signal host-owned outbound media access", () => {
   );
 
   it.each(
-    SIGNAL_MEDIA_ADAPTERS.flatMap((adapter) =>
-      ["during read", "after transmission"].map((phase) => ({
-        name: adapter.name,
-        deliver: adapter.deliver,
-        phase,
-      })),
+    SIGNAL_MEDIA_ADAPTERS.flatMap(({ name, deliver }) =>
+      ["during read", "after transmission"].map((phase) => ({ name, deliver, phase })),
     ),
   )("settles the $name when its caller closes $phase", async ({ deliver, phase }) => {
     await fs.writeFile(path.join(state.workspaceDir, "chart.png"), SIGNAL_IMAGE);
@@ -247,21 +193,16 @@ describe("Signal host-owned outbound media access", () => {
       expect(readFile).toHaveBeenCalledOnce();
       expect(requests).toHaveLength(0);
     } else {
-      await expect(delivery).resolves.toMatchObject({ messageId: "1700000000999" });
+      await expect(delivery).resolves.toMatchObject(SENT_MESSAGE);
       expect(requests).toHaveLength(1);
       expect(requests[0]?.attachment).toEqual(SIGNAL_IMAGE);
     }
   });
 
-  it.each(["message", "formatted"] as const)(
-    "checks the current caller after preparation for %s text delivery",
-    async (adapter) => {
+  it.each(SIGNAL_MEDIA_ADAPTERS)(
+    "checks the current caller after preparation for $name text delivery",
+    async ({ text: send }) => {
       const caller = new AbortController();
-      const send = requireAdapter(
-        adapter === "message"
-          ? signalPlugin.message?.send?.text
-          : signalPlugin.outbound?.sendFormattedText,
-      );
       const delivery = send(textContext(caller));
       caller.abort(new Error("Signal caller closed"));
 
@@ -288,7 +229,7 @@ describe("Signal host-owned outbound media access", () => {
       await expect(delivery).rejects.toThrow("Signal caller closed");
       expect(requests).toHaveLength(1);
     } else {
-      await expect(delivery).resolves.toMatchObject({ messageId: "1700000000999" });
+      await expect(delivery).resolves.toMatchObject(SENT_MESSAGE);
       expect(requests).toHaveLength(2);
       expect(requests[1]?.envelope.params).not.toHaveProperty("quoteTimestamp");
     }
@@ -314,7 +255,7 @@ describe("Signal host-owned outbound media access", () => {
       }),
     ).rejects.toThrow("Signal caller closed between chunks");
     expect(requests).toHaveLength(1);
-    expect(delivered).toEqual([expect.objectContaining({ messageId: "1700000000999" })]);
+    expect(delivered).toEqual([expect.objectContaining(SENT_MESSAGE)]);
   });
 
   it.each([false, true])("stops a closed caller's reaction (remove=%s)", async (remove) => {

@@ -44,8 +44,7 @@ function startDaemon(overrides: Partial<Parameters<typeof spawnSignalDaemon>[0]>
 
 beforeEach(() => {
   child = createMockChild();
-  spawnMock.mockReset();
-  spawnMock.mockReturnValue(child);
+  spawnMock.mockReset().mockReturnValue(child);
   ensurePortAvailableMock.mockClear();
 });
 
@@ -123,20 +122,14 @@ describe("spawnSignalDaemon", () => {
   });
 
   it("classifies complete UTF-8 output lines through the spawned process", async () => {
-    const logs: string[] = [];
-    const errors: string[] = [];
-    startDaemon({
-      runtime: {
-        log: (...args) => logs.push(args.map(String).join(" ")),
-        error: (...args) => errors.push(args.map(String).join(" ")),
-        exit: vi.fn(),
-      },
-    });
+    const log = vi.fn();
+    const error = vi.fn();
+    startDaemon({ runtime: { log, error, exit: vi.fn() } });
     const ended = once(child.stderr, "end");
     child.stderr.write(Buffer.from("ER"));
     child.stderr.write(
       Buffer.from(
-        "ROR DaemonCommand - startup failed\r\nWARN Manager - retrying\nreceive exception: org.signal.libsignal.protocol.InvalidMessageException: invalid PreKey message: decryption failed\npartial",
+        "ROR DaemonCommand - startup failed\r\nSEVERE Manager - database exception\nWARN Manager - retrying\nreceive exception: org.signal.libsignal.protocol.InvalidMessageException: invalid PreKey message: decryption failed\npartial",
       ),
     );
     child.stderr.write(" warning\n");
@@ -145,22 +138,18 @@ describe("spawnSignalDaemon", () => {
     child.stderr.write(utf8Line.subarray(0, splitCodePointAt));
     child.stderr.end(utf8Line.subarray(splitCodePointAt));
     await ended;
-    expect(errors).toEqual(["signal-cli: ERROR DaemonCommand - startup failed"]);
-    expect(logs).toEqual([
-      "signal-cli: WARN Manager - retrying",
-      "signal-cli: receive exception: org.signal.libsignal.protocol.InvalidMessageException: invalid PreKey message: decryption failed",
-      "signal-cli: partial warning",
-      "signal-cli: INFO Manager - café ready",
+    expect(error.mock.calls).toEqual([
+      ["signal-cli: ERROR DaemonCommand - startup failed"],
+      ["signal-cli: SEVERE Manager - database exception"],
     ]);
-  });
-
-  it("surfaces untagged failure output", async () => {
-    const error = vi.fn();
-    startDaemon({ runtime: { log: vi.fn(), error, exit: vi.fn() } });
-    const ended = once(child.stderr, "end");
-    child.stderr.end("SEVERE Manager - database exception\n");
-    await ended;
-    expect(error).toHaveBeenCalledWith("signal-cli: SEVERE Manager - database exception");
+    expect(log.mock.calls).toEqual([
+      ["signal-cli: WARN Manager - retrying"],
+      [
+        "signal-cli: receive exception: org.signal.libsignal.protocol.InvalidMessageException: invalid PreKey message: decryption failed",
+      ],
+      ["signal-cli: partial warning"],
+      ["signal-cli: INFO Manager - café ready"],
+    ]);
   });
 
   it("falls back to SIGKILL when the daemon does not exit after SIGTERM", async () => {

@@ -370,26 +370,24 @@ describe("installSignalCli", () => {
   });
 });
 
-describe("extractSignalCliArchive", () => {
-  it("extracts tar.gz archives with Signal-specific limits", async () => {
-    const archivePath = path.join(workDir, "ok.tgz");
-    const extractDir = path.join(workDir, "extract");
-    const rootDir = path.join(workDir, "root");
-    await fs.mkdir(rootDir, { recursive: true });
-    await fs.writeFile(path.join(rootDir, "signal-cli"), "bin", "utf-8");
-    await tar.c({ cwd: workDir, file: archivePath, gzip: true }, ["root"]);
-    await fs.mkdir(extractDir, { recursive: true });
-    await extractSignalCliArchive(archivePath, extractDir, 5_000);
-    await expect(fs.readFile(path.join(extractDir, "root", "signal-cli"), "utf-8")).resolves.toBe(
-      "bin",
-    );
-    expect(extractArchiveLimits).toEqual([
-      {
-        maxArchiveBytes: 256 * 1024 * 1024,
-        maxEntries: 32,
-        maxEntryBytes: 384 * 1024 * 1024,
-        maxExtractedBytes: 384 * 1024 * 1024,
-      },
-    ]);
-  });
+it("extracts tar.gz archives with Signal-specific limits", async () => {
+  const archivePath = path.join(workDir, "ok.tgz");
+  const extractDir = path.join(workDir, "extract");
+  const rootDir = path.join(workDir, "root");
+  await fs.mkdir(rootDir, { recursive: true });
+  await fs.writeFile(path.join(rootDir, "signal-cli"), "bin", "utf-8");
+  await tar.c({ cwd: workDir, file: archivePath, gzip: true }, ["root"]);
+  await fs.mkdir(extractDir, { recursive: true });
+  await extractSignalCliArchive(archivePath, extractDir, 5_000);
+  await expect(fs.readFile(path.join(extractDir, "root", "signal-cli"), "utf-8")).resolves.toBe(
+    "bin",
+  );
+  expect(extractArchiveLimits).toEqual([
+    {
+      maxArchiveBytes: 256 * 1024 * 1024,
+      maxEntries: 32,
+      maxEntryBytes: 384 * 1024 * 1024,
+      maxExtractedBytes: 384 * 1024 * 1024,
+    },
+  ]);
 });

@@ -1,6 +1,11 @@
-import http from "node:http";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  signalAccountConfig as accountConfig,
+  signalJsonServer,
+  listenSignalServer as listen,
+  closeSignalServer as close,
+  type SignalRpcEnvelope,
+} from "./signal-rpc.test-support.js";
 
 const signalRpcRequestMock = vi.hoisted(() => vi.fn());
 const resolveOutboundAttachmentFromUrlMock = vi.hoisted(() =>
@@ -28,37 +33,12 @@ const {
 } = await import("./approval-reactions.js");
 const { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } = await import("./send.js");
 
-type TransportKind = "external-native" | "container";
-function accountConfig(kind: TransportKind, url: string, accountId = "default") {
-  return {
-    channels: {
-      signal: {
-        accounts: {
-          [accountId]: { transport: { kind, url }, account: "+15550001111" },
-        },
-      },
-    },
-  } satisfies OpenClawConfig;
-}
 const SIGNAL_TEST_CFG = accountConfig("external-native", "http://signal.test");
 const QUOTE = {
   replyToId: "1700000000001",
   replyToAuthor: "+15550002222",
   replyToBody: "original",
 };
-
-async function listen(server: http.Server, kind: TransportKind) {
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const { port } = server.address() as { port: number };
-  return accountConfig(kind, `http://127.0.0.1:${port}`);
-}
-function close(server: http.Server) {
-  return new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-}
 
 function receiptAt(timestamp: number) {
   return {
@@ -119,9 +99,7 @@ describe("sendMessageSignal receipts", () => {
       expect.objectContaining({ attachments: ["/tmp/image.png"], message: "" }),
       expect.objectContaining({ maxAttachmentBytes: maxBytes }),
     );
-    expect(result.messageId).toBe("1234567891");
-    expect(result.timestamp).toBe(1234567891);
-    expect(result.receipt.primaryPlatformMessageId).toBe("1234567891");
+    expect(result).toMatchObject(receiptAt(1234567891));
     expect(result.receipt.platformMessageIds).toEqual(["1234567891"]);
     const raw = {
       channel: "signal",
@@ -221,21 +199,14 @@ describe("sendMessageSignal receipts", () => {
     });
   });
 
-  it.each(["Signal HTTP timed out after 10000ms"])(
-    "does not retry an unconfirmed quote rejection: %s",
-    async (message) => {
-      signalRpcRequestMock.mockRejectedValueOnce(new Error(message));
-
-      await expect(
-        sendMessageSignal("+15551234567", "hello", {
-          cfg: SIGNAL_TEST_CFG,
-          ...QUOTE,
-        }),
-      ).rejects.toThrow(message);
-
-      expect(signalRpcRequestMock).toHaveBeenCalledTimes(1);
-    },
-  );
+  it("does not retry an unconfirmed quote timeout", async () => {
+    const message = "Signal HTTP timed out after 10000ms";
+    signalRpcRequestMock.mockRejectedValueOnce(new Error(message));
+    await expect(
+      sendMessageSignal("+15551234567", "hello", { cfg: SIGNAL_TEST_CFG, ...QUOTE }),
+    ).rejects.toThrow(message);
+    expect(signalRpcRequestMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("Signal quoted-message provider replay safety", () => {
@@ -244,43 +215,36 @@ describe("Signal quoted-message provider replay safety", () => {
     { label: "HTTP 400", transportKind: "container", status: 400, fallback: true },
     { label: "RPC -32603", transportKind: "external-native", rpcCode: -32603, fallback: false },
   ] as const)("replays a real $label request only after definitive rejection", async (testCase) => {
-    const requests: Array<Record<string, unknown>> = [];
-    const server = http.createServer((request, response) => {
-      let body = "";
-      request.on("data", (chunk: Buffer) => {
-        body += chunk.toString("utf8");
-      });
-      request.on("end", () => {
-        const payload = JSON.parse(body) as Record<string, unknown>;
-        requests.push(payload);
-        if (requests.length === 1) {
-          if (testCase.transportKind === "container") {
-            response.writeHead(testCase.status, { "content-type": "text/plain" });
-            response.end("quote storage not found during upstream outage");
-          } else {
-            response.writeHead(200, { "content-type": "application/json" });
-            response.end(
-              JSON.stringify({
-                jsonrpc: "2.0",
-                id: payload.id,
-                error: {
-                  code: testCase.rpcCode,
-                  message: "quote storage not found during upstream outage",
-                },
-              }),
-            );
-          }
-          return;
+    const requests: SignalRpcEnvelope[] = [];
+    const server = signalJsonServer((payload, _request, response) => {
+      requests.push(payload);
+      if (requests.length === 1) {
+        if (testCase.transportKind === "container") {
+          response.writeHead(testCase.status, { "content-type": "text/plain" });
+          response.end("quote storage not found during upstream outage");
+        } else {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: payload.id,
+              error: {
+                code: testCase.rpcCode,
+                message: "quote storage not found during upstream outage",
+              },
+            }),
+          );
         }
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(
-          JSON.stringify(
-            testCase.transportKind === "container"
-              ? { timestamp: 1700000000002 }
-              : { jsonrpc: "2.0", id: payload.id, result: { timestamp: 1700000000002 } },
-          ),
-        );
-      });
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify(
+          testCase.transportKind === "container"
+            ? { timestamp: 1700000000002 }
+            : { jsonrpc: "2.0", id: payload.id, result: { timestamp: 1700000000002 } },
+        ),
+      );
     });
     const cfg = await listen(server, testCase.transportKind);
     vi.doUnmock("./client-adapter.js");
@@ -291,9 +255,7 @@ describe("Signal quoted-message provider replay safety", () => {
       const delivery = sendWithRealContainer("+15551234567", "deliver only once", {
         cfg,
         textMode: "plain",
-        replyToId: "1700000000001",
-        replyToAuthor: "+15550002222",
-        replyToBody: "original",
+        ...QUOTE,
       });
       if (testCase.fallback) {
         await expect(delivery).resolves.toMatchObject({ messageId: "1700000000002" });
@@ -354,40 +316,20 @@ describe("Signal native JSON-RPC recipient delivery", () => {
       groupId: unknown;
       message: unknown;
     }> = [];
-    const server = http.createServer((request, response) => {
-      let body = "";
-      request.setEncoding("utf8");
-      request.on("data", (chunk: string) => {
-        body += chunk;
+    const server = signalJsonServer((envelope, request, response) => {
+      requests.push({
+        method: request.method,
+        path: request.url,
+        contentType: request.headers["content-type"],
+        jsonrpc: envelope.jsonrpc,
+        rpcMethod: envelope.method,
+        account: envelope.params?.account,
+        recipient: envelope.params?.recipient,
+        groupId: envelope.params?.groupId,
+        message: envelope.params?.message,
       });
-      request.on("end", () => {
-        const envelope = JSON.parse(body) as {
-          id?: string;
-          jsonrpc?: string;
-          method?: string;
-          params?: {
-            account?: string;
-            recipient?: string[];
-            groupId?: string;
-            message?: string;
-          };
-        };
-        requests.push({
-          method: request.method,
-          path: request.url,
-          contentType: request.headers["content-type"],
-          jsonrpc: envelope.jsonrpc,
-          rpcMethod: envelope.method,
-          account: envelope.params?.account,
-          recipient: envelope.params?.recipient,
-          groupId: envelope.params?.groupId,
-          message: envelope.params?.message,
-        });
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(
-          JSON.stringify({ jsonrpc: "2.0", id: envelope.id, result: responses.shift() }),
-        );
-      });
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ jsonrpc: "2.0", id: envelope.id, result: responses.shift() }));
     });
     const cfg = await listen(server, "external-native");
     signalRpcRequestMock.mockClear();
