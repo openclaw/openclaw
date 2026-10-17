@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import type { Locator } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   defaultControlUiFeatureMethods,
@@ -15,14 +15,6 @@ import {
   themeConfigResponse,
 } from "./theme-typography.test-support.ts";
 
-/*
- * A theme that declares webfonts must actually paint in them, and a theme that
- * does not must never pay for them. Both halves are invisible to unit tests:
- * the stylesheet is linked at runtime and the faces only resolve once the
- * browser has fetched them, so a broken asset path or a dropped link degrades
- * silently to the fallback stack and looks merely "a bit off".
- */
-
 // Every pair JetBrains Mono ligates, each closed by the trailing space that
 // triggers the corruption reported in issue #137473.
 const COMPOSER_LIGATURE_SEQUENCE = ">= ... -> => != <= :: ";
@@ -35,6 +27,15 @@ const suite = createControlUiE2eSuite({
 });
 
 const openThemedChat = createThemedChatOpener(suite);
+const composerSelector = ".agent-chat__composer-combobox textarea";
+const waitForComposer = (page: Page) => page.locator(composerSelector).waitFor();
+const expectTheme = (page: Page, theme: string) =>
+  expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(theme);
+const historyMessage = (role: "user" | "assistant", text: string, timestamp: number) => ({
+  role,
+  timestamp,
+  content: [{ text, type: "text" }],
+});
 
 async function captureTypography(
   page: Awaited<ReturnType<typeof openThemedChat>>["page"],
@@ -131,39 +132,25 @@ suite.define(() => {
     ).toEqual(["", ""]);
   });
 
-  // JetBrains Mono routes through --font-body in both themes, so native text
-  // controls inherit contextual ligatures. Typing into one then corrupts the
-  // already-typed glyphs (issue #137473) and the damage survives caret moves
-  // and blur, while the value stays correct — so the assertion is that typing a
-  // string paints what that same string paints without incremental input.
-  // Rendered chat is not a text control and keeps its ligatures.
+  // Issue #137473: incremental input corrupts glyphs, not the value; compare
+  // its pixels with a whole-value assignment and retain transcript ligatures.
   it.each(["crt", "phosphor"])(
     "paints typed operator sequences like their own value in the %s composer",
     async (theme) => {
       const timestamp = Date.now();
       const { page } = await openThemedChat(theme, "dark", {
         historyMessages: [
-          {
-            content: [{ text: "say something", type: "text" }],
-            role: "user",
-            timestamp: timestamp - 1,
-          },
-          {
-            content: [{ text: "a >= b and keep ... going", type: "text" }],
-            role: "assistant",
-            timestamp,
-          },
+          historyMessage("user", "say something", timestamp - 1),
+          historyMessage("assistant", "a >= b and keep ... going", timestamp),
         ],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await expect.poll(() => page.locator(".chat-text").last().textContent()).toContain("keep");
 
-      const textarea = page.locator(".agent-chat__composer-combobox textarea");
+      const textarea = page.locator(composerSelector);
       await expect.poll(() => textarea.isEditable()).toBe(true);
       await page.evaluate(() => document.fonts.ready);
       await textarea.click();
-      // The reported failure sequence: operator pairs each closed by a trailing
-      // space at the caret.
       await textarea.pressSequentially(COMPOSER_LIGATURE_SEQUENCE);
       expect(await textarea.inputValue()).toBe(COMPOSER_LIGATURE_SEQUENCE);
       // Blur first: the corruption outlives focus, and an unfocused control
@@ -182,8 +169,6 @@ suite.define(() => {
       await expect.poll(() => textarea.inputValue()).toBe(COMPOSER_LIGATURE_SEQUENCE);
       const valuePixels = await textarea.screenshot();
 
-      // Typing must paint what the value itself paints. On an unfixed control
-      // the typed shot drops glyphs the value shot renders, and these differ.
       expect(Buffer.compare(typedPixels, valuePixels)).toBe(0);
 
       const report = await page.evaluate(() => {
@@ -207,19 +192,12 @@ suite.define(() => {
     },
   );
 
-  // The opt-out belongs to native text controls, which the browser shapes
-  // incrementally as you type. CodeMirror owns its own text layer, so it keeps
-  // whatever the theme gives it and edit mode renders a file exactly like the
-  // read view — a divergence there would be invisible without this assertion.
+  // CodeMirror owns its text layer; only native controls need the opt-out.
   it("scopes the ligature opt-out to native controls, not the file editor", async () => {
     const { gateway, page } = await openThemedChat("crt", "dark", {
       featureMethods: [...defaultControlUiFeatureMethods, "sessions.files.set"],
       historyMessages: [
-        {
-          content: [{ text: `Review \`notes.txt\`: ${COMPOSER_LIGATURE_SEQUENCE}`, type: "text" }],
-          role: "assistant",
-          timestamp: 1,
-        },
+        historyMessage("assistant", `Review \`notes.txt\`: ${COMPOSER_LIGATURE_SEQUENCE}`, 1),
       ],
       methodResponses: {
         "sessions.files.get": {
@@ -247,7 +225,7 @@ suite.define(() => {
     });
     await page.goto(`${suite.server.baseUrl}chat`);
 
-    const composer = page.locator(".agent-chat__composer-combobox textarea");
+    const composer = page.locator(composerSelector);
     await composer.waitFor({ state: "visible" });
 
     // Open the file first: fetching it needs the gateway, and queuing below
@@ -255,7 +233,6 @@ suite.define(() => {
     await page.locator('a.markdown-file-link[data-file-path="notes.txt"]').click();
     await page.locator(".cm-content").waitFor({ state: "visible" });
     await page.getByRole("button", { name: "Edit file" }).first().click();
-    // contenteditable flips on only once the editor is actually editable.
     const editableContent = page.locator('.cm-content[contenteditable="true"]');
     await editableContent.waitFor();
 
@@ -280,8 +257,6 @@ suite.define(() => {
 
     expect(await ligaturesOf(composer)).toBe("no-contextual");
     expect(await ligaturesOf(queueEditor)).toBe("no-contextual");
-    // The file editor keeps the theme's ligature rendering, so a file reads the
-    // same whether it is being viewed or edited.
     expect(fileEditorLigatures).toBe("normal");
     expect(fileLineLigatures).toBe("normal");
   });
@@ -325,7 +300,7 @@ suite.define(() => {
     const { page } = await openThemedChat("claw", "light");
     await page.setViewportSize({ width: 720, height: 900 });
     await page.goto(`${suite.server.baseUrl}chat`);
-    await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+    await waitForComposer(page);
 
     const readChrome = () =>
       page.evaluate(() => ({
@@ -356,7 +331,7 @@ suite.define(() => {
     await waitForControlUiRoute(page, { pathname: "/settings/appearance", routeId: "appearance" });
     await expectChrome(pageColor);
     await page.goBack();
-    await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+    await waitForComposer(page);
     await expectChrome(chatColor);
     await page.locator(".chat-pane__nav-toggle").first().click();
     await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
@@ -419,7 +394,7 @@ suite.define(() => {
       await route.continue();
     });
     await page.goto(`${suite.server.baseUrl}chat`);
-    await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+    await waitForComposer(page);
     await page.evaluate(() => {
       const root = document.documentElement;
       new MutationObserver(() => {
@@ -445,7 +420,7 @@ suite.define(() => {
         ),
       ).toBe("#f9f9fb");
       await changeTheme("beacon");
-      await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("beacon-light");
+      await expectTheme(page, "beacon-light");
       const response = page.waitForResponse(tidePaletteUrl);
       releasePalette();
       await response;
@@ -464,7 +439,7 @@ suite.define(() => {
         "#eef2f7",
       );
       await changeTheme("claw");
-      await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("light");
+      await expectTheme(page, "light");
     } finally {
       releasePalette();
     }

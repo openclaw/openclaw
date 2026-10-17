@@ -1,10 +1,15 @@
 import { writeFileSync } from "node:fs";
 import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ThemeDefinition } from "../../../packages/gateway-protocol/src/theme.ts";
 import { createThemePaletteFixture } from "../../../test/helpers/theme-fixture.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { controlUiBundledGatewayUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledGatewayUrl,
+  installMockGateway,
+  type MockGatewayControls,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { themeConfigResponse } from "./theme-typography.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "Theme branding proof" });
@@ -64,6 +69,24 @@ function catalog(value: ThemeDefinition) {
     themes: [theme],
   };
 }
+async function setTheme(gateway: MockGatewayControls, value: ThemeDefinition, generation?: number) {
+  for (const method of ["themes.list", "themes.get"]) {
+    await gateway.setMethodResponse(method, catalog(value));
+  }
+  if (generation !== undefined) {
+    await gateway.emitGatewayEvent("plugins.changed", { generation });
+  }
+}
+async function capture(page: Page, target: Locator, name: string, scroll = false) {
+  if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
+    return;
+  }
+  const frame = await takeControlUiScreenshotFrame(page, page.locator("openclaw-app"), [target], {
+    animations: "disabled",
+    ...(scroll ? { scrollTo: target } : {}),
+  });
+  writeFileSync(path.join(suite.artifactDir, `${name}.png`), frame.png);
+}
 suite.define(() => {
   it("applies plugin branding, hides collection entry points, and hot reloads without losing preferences", async () => {
     await suite.withPage(
@@ -109,15 +132,7 @@ suite.define(() => {
         expect(await hero.locator("a").count()).toBe(0);
         expect(await page.title()).toBe("About — Northstar");
         await page.getByRole("link", { name: "Ask Northstar", exact: true }).waitFor();
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator("openclaw-app"),
-            [hero],
-            { animations: "disabled" },
-          );
-          writeFileSync(path.join(suite.artifactDir, "after-about.png"), frame.png);
-        }
+        await capture(page, hero, "after-about");
         await page.goto(suite.server.baseUrl + "settings/appearance");
         await page.locator(".settings-tab-icon").waitFor();
         await expect.poll(() => page.locator(".lobsterdex__gallery").count()).toBe(0);
@@ -135,23 +150,12 @@ suite.define(() => {
               ).tabIcon,
           ),
         ).toBe("lobster:crimson");
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const tabIcon = page.locator(".settings-tab-icon");
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator("openclaw-app"),
-            [tabIcon],
-            { animations: "disabled", scrollTo: tabIcon },
-          );
-          writeFileSync(path.join(suite.artifactDir, "after-appearance.png"), frame.png);
-        }
+        await capture(page, page.locator(".settings-tab-icon"), "after-appearance", true);
         await page.goto(suite.server.baseUrl + "settings/lobsterdex");
         await page.locator("openclaw-lobsterdex-page section[role=status]").waitFor();
         expect(await page.locator(".lobsterdex-page__card").count()).toBe(0);
         const restored = { ...definition, brandName: "Northstar Lab", lobsterdex: true };
-        await gateway.setMethodResponse("themes.list", catalog(restored));
-        await gateway.setMethodResponse("themes.get", catalog(restored));
-        await gateway.emitGatewayEvent("plugins.changed", { generation: 2 });
+        await setTheme(gateway, restored, 2);
         await page.locator(".lobsterdex-page__card").first().waitFor();
         await page.goto(suite.server.baseUrl + "settings/about");
         await expect.poll(() => name.textContent()).toBe("Northstar Lab");
@@ -162,8 +166,7 @@ suite.define(() => {
           mascot: "claw" as const,
           workingIndicator: "claw" as const,
         };
-        await gateway.setMethodResponse("themes.list", catalog(claw));
-        await gateway.setMethodResponse("themes.get", catalog(claw));
+        await setTheme(gateway, claw);
         await page.goto(suite.server.baseUrl + "chat");
         await page
           .locator(".agent-chat__composer-combobox textarea")
@@ -172,18 +175,8 @@ suite.define(() => {
         await gateway.waitForRequest("chat.send");
         const indicator = page.locator(".chat-reading-indicator");
         await indicator.locator("svg").waitFor();
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator("openclaw-app"),
-            [indicator],
-            { animations: "disabled" },
-          );
-          writeFileSync(path.join(suite.artifactDir, "before-working.png"), frame.png);
-        }
-        await gateway.setMethodResponse("themes.list", catalog(definition));
-        await gateway.setMethodResponse("themes.get", catalog(definition));
-        await gateway.emitGatewayEvent("plugins.changed", { generation: 3 });
+        await capture(page, indicator, "before-working");
+        await setTheme(gateway, definition, 3);
         const workingImage = indicator.locator("openclaw-theme-brand-icon img");
         await workingImage.waitFor();
         const bounds = await workingImage.boundingBox();
@@ -195,24 +188,8 @@ suite.define(() => {
         );
         await page.emulateMedia({ reducedMotion: "no-preference" });
         expect(await indicator.getAttribute("class")).toContain("chat-reading-indicator--brand");
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator("openclaw-app"),
-            [indicator],
-            { animations: "disabled" },
-          );
-          writeFileSync(path.join(suite.artifactDir, "after-working.png"), frame.png);
-        }
-        await gateway.setMethodResponse(
-          "themes.list",
-          catalog({ ...definition, workingIndicator: "none" }),
-        );
-        await gateway.setMethodResponse(
-          "themes.get",
-          catalog({ ...definition, workingIndicator: "none" }),
-        );
-        await gateway.emitGatewayEvent("plugins.changed", { generation: 4 });
+        await capture(page, indicator, "after-working");
+        await setTheme(gateway, { ...definition, workingIndicator: "none" }, 4);
         await expect.poll(() => indicator.count()).toBe(0);
         await page
           .locator(".chat-working-indicator__status")

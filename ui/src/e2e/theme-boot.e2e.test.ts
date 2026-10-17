@@ -11,6 +11,17 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI theme continuity during startup" });
 const profileId = "theme-reader";
 const secondSessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+const browserOptions = {
+  deviceScaleFactor: 2,
+  locale: "en-US",
+  serviceWorkers: "block",
+} as const;
+const ready = (page: Page) =>
+  page.getByText("Theme continuity is ready.", { exact: true }).waitFor();
+const appearance = (theme: string, mode: string) => ({
+  theme: theme === "claw" ? mode : mode === "light" ? `${theme}-light` : theme,
+  mode,
+});
 const variants = [
   { system: "light", mode: "dark", saved: true },
   { system: "dark", mode: "light", saved: true },
@@ -161,13 +172,7 @@ suite.define(() => {
               })),
             )
             .toEqual({
-              theme:
-                prefs.theme === "claw"
-                  ? "light"
-                  : prefs.themeMode === "light"
-                    ? "rose-light"
-                    : "rose",
-              mode: prefs.themeMode,
+              ...appearance(prefs.theme, prefs.themeMode),
               accent: prefs.accent,
             });
           for (const viewport of [
@@ -180,15 +185,7 @@ suite.define(() => {
             await page.evaluate(() => {
               window.themeBootFrames = [];
             });
-            await assertThemeFrames(page, {
-              theme:
-                prefs.theme === "claw"
-                  ? "light"
-                  : prefs.themeMode === "light"
-                    ? "rose-light"
-                    : "rose",
-              mode: prefs.themeMode,
-            });
+            await assertThemeFrames(page, appearance(prefs.theme, prefs.themeMode));
           }
         }
       },
@@ -202,20 +199,13 @@ suite.define(() => {
         let releaseAppScripts = () => {};
         await suite.withPage(
           {
+            ...browserOptions,
             colorScheme: system,
-            deviceScaleFactor: 2,
-            locale: "en-US",
-            serviceWorkers: "block",
             viewport: { width, height: 900 },
           },
           async ({ page }) => {
             const theme = saved ? "rose" : "claw";
             const resolvedMode = mode === "system" ? system : mode;
-            const resolvedTheme = saved
-              ? resolvedMode === "light"
-                ? "rose-light"
-                : "rose"
-              : resolvedMode;
             const config = saved
               ? { ui: { prefs: { theme: "absolutely", themeMode: system } } }
               : {};
@@ -272,7 +262,7 @@ suite.define(() => {
               },
             );
             await page.addInitScript({ content: themeFrameObserver });
-            const expectedAppearance = { theme: resolvedTheme, mode: resolvedMode };
+            const expectedAppearance = appearance(theme, resolvedMode);
             let appScriptsReady = Promise.resolve();
             const appAssets = new URL("assets/", suite.server.baseUrl);
             await page.route(
@@ -306,7 +296,7 @@ suite.define(() => {
                 await settleThemeFrames(page);
                 await gateway.resolveDeferred("users.prefs.get", profileResponse);
               }
-              await page.getByText("Theme continuity is ready.", { exact: true }).waitFor();
+              await ready(page);
               await assertThemeFrames(page, expectedAppearance);
             }
             if (width !== 1440 || !saved || mode === "system") {
@@ -355,10 +345,8 @@ suite.define(() => {
   it("keeps a ready tab's theme while another tab's profile is pending", async () => {
     await suite.withPage(
       {
+        ...browserOptions,
         colorScheme: "light",
-        deviceScaleFactor: 2,
-        locale: "en-US",
-        serviceWorkers: "block",
         viewport: { width: 1440, height: 900 },
       },
       async ({ context, page }) => {
@@ -381,7 +369,7 @@ suite.define(() => {
           },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
-        await page.getByText("Theme continuity is ready.", { exact: true }).waitFor();
+        await ready(page);
         // With no seeded mirror, Rosé proves this tab has applied the resolved profile.
         await page.waitForFunction(
           () =>
@@ -432,7 +420,7 @@ suite.define(() => {
 
         await pendingGateway.resolveDeferred("users.prefs.get", profileResponse);
         await pendingPage.bringToFront();
-        await pendingPage.getByText("Theme continuity is ready.", { exact: true }).waitFor();
+        await ready(pendingPage);
         await page.bringToFront();
         await assertThemeFrames(page, { theme: "rose", mode: "dark" });
       },

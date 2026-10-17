@@ -48,18 +48,7 @@ const textTokens = [
 const surfaceTokens = ["--bg", "--bg-elevated", "--bg-muted", "--card", "--panel"] as const;
 
 function themeConfigResponse(
-  family:
-    | "claw"
-    | "knot"
-    | "dash"
-    | "absolutely"
-    | "tide"
-    | "beacon"
-    | "phosphor"
-    | "crt"
-    | "manuscript"
-    | "rose"
-    | "miami",
+  family: (typeof themeCases)[number]["family"],
   mode: "dark" | "light",
   accent?: string,
 ) {
@@ -394,18 +383,16 @@ suite.define(() => {
         expect(await gateway.getRequests("config.get")).toHaveLength(initialConfigGets);
 
         if (captureUiProof) {
-          await mkdir(path.join(suite.artifactDir, "theme-muted-contrast"), { recursive: true });
+          const proofDir = path.join(suite.artifactDir, "theme-muted-contrast");
+          await mkdir(proofDir, { recursive: true });
           const proofName = accent ? `${resolved}-${accent.slice(1)}` : resolved;
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
-            path: path.join(
-              path.join(suite.artifactDir, "theme-muted-contrast"),
-              `${proofName}.png`,
-            ),
+            path: path.join(proofDir, `${proofName}.png`),
           });
           await writeFile(
-            path.join(path.join(suite.artifactDir, "theme-muted-contrast"), `${proofName}.json`),
+            path.join(proofDir, `${proofName}.json`),
             `${JSON.stringify(
               {
                 accent,
