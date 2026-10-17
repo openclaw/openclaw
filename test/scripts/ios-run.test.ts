@@ -1,4 +1,3 @@
-// iOS run tests cover simulator launch orchestration without touching Xcode.
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -27,32 +26,28 @@ function makeFixture(bundleId: string): { root: string; script: string; logFile:
   const iosDir = path.join(root, "apps", "ios");
   const binDir = path.join(root, "bin");
   const logFile = path.join(root, "commands.log");
-  mkdirSync(scriptsDir, { recursive: true });
-  mkdirSync(iosDir, { recursive: true });
-  mkdirSync(binDir, { recursive: true });
+  for (const dir of [scriptsDir, iosDir, binDir]) {
+    mkdirSync(dir, { recursive: true });
+  }
 
   const script = path.join(scriptsDir, "ios-run.sh");
-  writeFileSync(script, readFileSync(SCRIPT, "utf8"), "utf8");
-  chmodSync(script, 0o755);
+  writeExecutable(script, readFileSync(SCRIPT, "utf8"));
 
-  writeExecutable(
-    path.join(scriptsDir, "ios-configure-signing.sh"),
-    `#!/usr/bin/env bash
-set -euo pipefail
+  const proofEnvGuard = (name: string) => `
 if [[ -n "\${OPENCLAW_SIMULATOR_PUSH_PROOF_SECRET:-}" || -n "\${CUSTOM_SIMULATOR_PUSH_PROOF_SECRET:-}" ]]; then
-  printf 'configure-signing-proof-env leaked\\n' >>"${logFile}"
+  printf '${name}-proof-env leaked\\n' >>"${logFile}"
 fi
-`,
-  );
-  writeExecutable(
-    path.join(scriptsDir, "ios-write-version-xcconfig.sh"),
-    `#!/usr/bin/env bash
+`;
+  const executable = (dir: string, name: string, body: string, guard = false) =>
+    writeExecutable(
+      path.join(dir, name),
+      `#!/usr/bin/env bash
 set -euo pipefail
-if [[ -n "\${OPENCLAW_SIMULATOR_PUSH_PROOF_SECRET:-}" || -n "\${CUSTOM_SIMULATOR_PUSH_PROOF_SECRET:-}" ]]; then
-  printf 'write-version-proof-env leaked\\n' >>"${logFile}"
-fi
-`,
-  );
+${guard ? proofEnvGuard(name) : ""}${body}`,
+    );
+  for (const name of ["ios-configure-signing.sh", "ios-write-version-xcconfig.sh"]) {
+    executable(scriptsDir, name, "", true);
+  }
   writeFileSync(
     path.join(scriptsDir, "ios-write-swift-filelist.mjs"),
     `import { appendFileSync } from "node:fs";
@@ -63,31 +58,12 @@ appendFileSync(${JSON.stringify(logFile)}, "write-swift-filelist\\n");
 `,
     "utf8",
   );
-  writeExecutable(
-    path.join(binDir, "xcodegen"),
-    `#!/usr/bin/env bash
-set -euo pipefail
-printf 'xcodegen %s\\n' "$*" >>"${logFile}"
-if [[ -n "\${OPENCLAW_SIMULATOR_PUSH_PROOF_SECRET:-}" ]]; then
-  printf 'xcodegen-proof-env leaked\\n' >>"${logFile}"
-fi
-if [[ -n "\${CUSTOM_SIMULATOR_PUSH_PROOF_SECRET:-}" ]]; then
-  printf 'xcodegen-custom-proof-env leaked\\n' >>"${logFile}"
-fi
-`,
-  );
-  writeExecutable(
-    path.join(binDir, "xcodebuild"),
-    `#!/usr/bin/env bash
-set -euo pipefail
-printf 'xcodebuild %s\\n' "$*" >>"${logFile}"
-if [[ -n "\${OPENCLAW_SIMULATOR_PUSH_PROOF_SECRET:-}" ]]; then
-  printf 'xcodebuild-proof-env leaked\\n' >>"${logFile}"
-fi
-if [[ -n "\${CUSTOM_SIMULATOR_PUSH_PROOF_SECRET:-}" ]]; then
-  printf 'xcodebuild-custom-proof-env leaked\\n' >>"${logFile}"
-fi
-derived=""
+  const commandLog = (name: string) => `printf '${name} %s\\n' "$*" >>"${logFile}"\n`;
+  executable(binDir, "xcodegen", commandLog("xcodegen"), true);
+  executable(
+    binDir,
+    "xcodebuild",
+    `${commandLog("xcodebuild")}derived=""
 configuration="Debug"
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -112,12 +88,12 @@ cat >"$app_dir/Info.plist" <<'PLIST'
 <plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${bundleId}</string></dict></plist>
 PLIST
 `,
+    true,
   );
-  writeExecutable(
-    path.join(binDir, "simctl"),
-    `#!/usr/bin/env bash
-set -euo pipefail
-printf 'simctl %s\\n' "$*" >>"${logFile}"
+  executable(
+    binDir,
+    "simctl",
+    `${commandLog("simctl")}
 if [[ "$1" == "launch" ]]; then
   if [[ -n "\${SIMCTL_CHILD_OPENCLAW_SIMULATOR_PUSH_PROOF_SECRET:-}" ]]; then
     printf 'simctl-launch-proof set\\n' >>"${logFile}"
@@ -137,12 +113,10 @@ if [[ "$1" == "boot" ]]; then
 fi
 `,
   );
-  writeExecutable(
-    path.join(binDir, "plistbuddy"),
-    `#!/usr/bin/env bash
-set -euo pipefail
-sed -n 's:.*<key>CFBundleIdentifier</key><string>\\([^<]*\\)</string>.*:\\1:p' "$3"
-`,
+  executable(
+    binDir,
+    "plistbuddy",
+    `sed -n 's:.*<key>CFBundleIdentifier</key><string>\\([^<]*\\)</string>.*:\\1:p' "$3"\n`,
   );
 
   return { root, script, logFile };

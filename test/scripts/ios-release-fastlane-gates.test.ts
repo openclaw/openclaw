@@ -17,10 +17,7 @@ import { describe, expect, it } from "vitest";
 const fastfilePath = path.join(process.cwd(), "apps", "ios", "fastlane", "Fastfile");
 const snapshotUITestPath = path.join(
   process.cwd(),
-  "apps",
-  "ios",
-  "UITests",
-  "OpenClawSnapshotUITests.swift",
+  "apps/ios/UITests/OpenClawSnapshotUITests.swift",
 );
 const rootTabsPath = path.join(process.cwd(), "apps", "ios", "Sources", "RootTabs.swift");
 const ciWorkflowPath = path.join(process.cwd(), ".github", "workflows", "ci.yml");
@@ -28,6 +25,41 @@ const gemfilePath = path.join(process.cwd(), "apps", "ios", "Gemfile");
 
 function readFastfile(): string {
   return readFileSync(fastfilePath, "utf8");
+}
+
+function rubyJson<T>(source: string, args: string[] = [], bundled = false, isolated = false): T {
+  const useBundle = bundled && process.env.OPENCLAW_TEST_FASTLANE_BUNDLE === "1";
+  const rubyArgs = ["-e", source, ...args];
+  const result = spawnSync(
+    useBundle ? "bundle" : "ruby",
+    useBundle ? ["_4.0.22_", "exec", "ruby", ...rubyArgs] : rubyArgs,
+    {
+      encoding: "utf8",
+      env: isolated
+        ? { PATH: process.env.PATH }
+        : bundled
+          ? { ...process.env, BUNDLE_GEMFILE: gemfilePath }
+          : process.env,
+    },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  return JSON.parse(result.stdout) as T;
+}
+
+function rubyLaneFixture(uiMethods = ["success(*)", "important(*)", "message(*)"]): string {
+  return `
+require "json"
+module UI
+  def self.user_error!(message); raise message; end
+${uiMethods.map((method) => `  def self.${method}; end`).join("\n")}
+end
+def default_platform(*); end
+def desc(*); end
+def platform(*); yield; end
+def lane(name, &body); define_singleton_method(name, &body); end
+alias private_lane lane
+load ARGV.fetch(0)
+`;
 }
 
 function laneBody(source: string, name: string): string {
@@ -43,15 +75,7 @@ function laneBody(source: string, name: string): string {
 }
 
 function functionBody(source: string, name: string): string {
-  const startMarker = `def ${name}`;
-  const start = source.indexOf(startMarker);
-  if (start < 0) {
-    throw new Error(`missing Fastfile function ${name}`);
-  }
-
-  const rest = source.slice(start + startMarker.length);
-  const nextFunction = rest.search(/\ndef /);
-  return nextFunction < 0 ? rest : rest.slice(0, nextFunction);
+  return functionDefinition(source, name).slice(`def ${name}`.length);
 }
 
 function functionDefinition(source: string, name: string): string {
@@ -79,20 +103,8 @@ function swiftFunctionBody(source: string, name: string): string {
 describe("iOS Fastlane release upload gates", () => {
   it("recovers notes and build selection on the registered stage lane without uploading again", () => {
     const source = String.raw`
-require "json"
 require "spaceship" if ENV["OPENCLAW_TEST_FASTLANE_BUNDLE"] == "1"
-module UI
-  def self.user_error!(message); raise message; end
-  def self.success(*); end
-  def self.important(*); end
-  def self.message(*); end
-end
-def default_platform(*); end
-def desc(*); end
-def platform(*); yield; end
-def lane(name, &body); define_singleton_method(name, &body); end
-alias private_lane lane
-load ARGV.fetch(0)
+${rubyLaneFixture()}
 module Spaceship
   class ConnectAPI
     module Platform
@@ -190,21 +202,15 @@ rows = %w[success first source-mismatch processing expired missing ambiguous loc
 end
 puts JSON.generate(rows)
 `;
-    const useBundle = process.env.OPENCLAW_TEST_FASTLANE_BUNDLE === "1";
-    const rubyArgs = ["-e", source, fastfilePath];
-    const result = spawnSync(
-      useBundle ? "bundle" : "ruby",
-      useBundle ? ["_4.0.22_", "exec", "ruby", ...rubyArgs] : rubyArgs,
-      { encoding: "utf8", env: { ...process.env, BUNDLE_GEMFILE: gemfilePath } },
-    );
-    expect(result.status, result.stderr).toBe(0);
-    const rows = JSON.parse(result.stdout) as {
-      scenario: string;
-      events: string[];
-      error: string | null;
-      selected: string | null;
-      notes: string;
-    }[];
+    const rows = rubyJson<
+      {
+        scenario: string;
+        events: string[];
+        error: string | null;
+        selected: string | null;
+        notes: string;
+      }[]
+    >(source, [fastfilePath], true);
     for (const row of rows) {
       if (["success", "retry"].includes(row.scenario)) {
         expect(row.error).toBeNull();
@@ -392,21 +398,15 @@ end
 puts JSON.generate(rows)
 `;
     // Node CI needs only Ruby; this opt-in also proves the pinned Fastlane runtime.
-    const useBundle = process.env.OPENCLAW_TEST_FASTLANE_BUNDLE === "1";
-    const rubyArgs = ["-e", source, fastfilePath];
-    const result = spawnSync(
-      useBundle ? "bundle" : "ruby",
-      useBundle ? ["_4.0.22_", "exec", "ruby", ...rubyArgs] : rubyArgs,
-      { encoding: "utf8", env: { ...process.env, BUNDLE_GEMFILE: gemfilePath } },
-    );
-    expect(result.status, result.stderr).toBe(0);
-    const rows = JSON.parse(result.stdout) as {
-      scenario: string;
-      error: string | null;
-      options: Record<string, unknown> | null;
-      result: { outcome: string; externalState: string } | null;
-      facts: { selectedForAppStore: boolean; hasBetaNotes: boolean } | null;
-    }[];
+    const rows = rubyJson<
+      {
+        scenario: string;
+        error: string | null;
+        options: Record<string, unknown> | null;
+        result: { outcome: string; externalState: string } | null;
+        facts: { selectedForAppStore: boolean; hasBetaNotes: boolean } | null;
+      }[]
+    >(source, [fastfilePath], true);
     const outcomes: Record<string, string> = {
       submit: "awaiting-review",
       pending: "awaiting-review",
@@ -479,19 +479,7 @@ puts JSON.generate(rows)
   });
 
   it("uploads the planned iOS build without Android preparation and records only accepted uploads", () => {
-    const source = String.raw`
-require "json"
-module UI
-  def self.user_error!(message); raise message; end
-  def self.success(*); end
-  def self.important(*); end
-end
-def default_platform(*); end
-def desc(*); end
-def platform(*); yield; end
-def lane(name, &body); define_singleton_method(name, &body); end
-alias private_lane lane
-load ARGV.fetch(0)
+    const source = String.raw`${rubyLaneFixture(["success(*)", "important(*)"])}
 def sh(*); raise "unexpected external preparation"; end
 def step(name)
   @events << name
@@ -573,53 +561,25 @@ end
 end
 puts JSON.generate(rows)
 `;
-    const result = spawnSync("ruby", ["-e", source, fastfilePath], {
-      encoding: "utf8",
-      env: { PATH: process.env.PATH },
-    });
-    expect(result.status, result.stderr).toBe(0);
-    const rows = JSON.parse(result.stdout) as {
-      scenario: string;
-      events: string[];
-      error: string | null;
-      xcconfig: string | null;
-    }[];
-    const steps = [
-      "signing",
-      "plan",
-      "baseline",
-      "notes",
-      "store-preflight",
-      "ref-preflight",
-      "screenshots",
-      "source",
-      "archive",
-      "recheck",
-      "baseline-recheck",
-      "metadata",
-      "upload",
-      "record",
-      "stage",
-    ];
+    const rows = rubyJson<
+      {
+        scenario: string;
+        events: string[];
+        error: string | null;
+        xcconfig: string | null;
+      }[]
+    >(source, [fastfilePath], false, true);
+    const steps =
+      "signing plan baseline notes store-preflight ref-preflight screenshots source archive recheck baseline-recheck metadata upload record stage".split(
+        " ",
+      );
+    const betaSteps =
+      "signing plan baseline beta-preflight notes ref-preflight source archive recheck baseline-recheck beta-recheck upload record stage".split(
+        " ",
+      );
     for (const row of rows) {
       expect(row.xcconfig).toBeNull();
       if (row.scenario.startsWith("testflight-")) {
-        const betaSteps = [
-          "signing",
-          "plan",
-          "baseline",
-          "beta-preflight",
-          "notes",
-          "ref-preflight",
-          "source",
-          "archive",
-          "recheck",
-          "baseline-recheck",
-          "beta-recheck",
-          "upload",
-          "record",
-          "stage",
-        ];
         const scenario = row.scenario.slice("testflight-".length);
         expect(row.error).toBe(scenario === "success" ? null : `failed ${scenario}`);
         expect(row.events).toEqual(
@@ -797,21 +757,21 @@ rows = %w[capture result success].map do |scenario|
 end
 puts JSON.generate(rows)
 `;
-    const result = spawnSync("ruby", ["-e", source], { encoding: "utf8" });
-    expect(result.status, result.stderr).toBe(0);
-    const rows = JSON.parse(result.stdout) as {
-      scenario: string;
-      calls: number;
-      checks: number;
-      uninstalls: string[][];
-      error: string | null;
-      xcodeArguments: string[];
-      attempts: { attempt: number; captureOutcome: string }[];
-      ledgerKeys: string[];
-      archived: string;
-      evidenceEntries: string[];
-      log: string;
-    }[];
+    const rows = rubyJson<
+      {
+        scenario: string;
+        calls: number;
+        checks: number;
+        uninstalls: string[][];
+        error: string | null;
+        xcodeArguments: string[];
+        attempts: { attempt: number; captureOutcome: string }[];
+        ledgerKeys: string[];
+        archived: string;
+        evidenceEntries: string[];
+        log: string;
+      }[]
+    >(source);
     expect(
       rows.map(({ scenario, calls, checks, error }) => ({ scenario, calls, checks, error })),
     ).toEqual([
@@ -905,35 +865,12 @@ puts JSON.generate(rows)
 
   it("owns one simulator at a time and cleans up failed captures while reusing the screenshot build", () => {
     const source = `
-require "json"
 require "tmpdir"
-module UI
-  def self.user_error!(message)
-    raise message
-  end
-  def self.success(message); end
-  def self.important(message); end
-end
-def default_platform(*); end
-def desc(*); end
-def platform(*)
-  yield
-end
-def lane(name, &body)
-  define_singleton_method(name, &body)
-end
-alias private_lane lane
-load ARGV.fetch(0)
+${rubyLaneFixture(["success(message)", "important(message)"])}
 
-def repo_root
-  @root
-end
-def ios_root
-  File.join(@root, "apps", "ios")
-end
-def snapshot_devices
-  ["iPhone 17 Pro Max", "iPad Pro 13-inch"]
-end
+def repo_root; @root; end
+def ios_root; File.join(@root, "apps", "ios"); end
+def snapshot_devices; ["iPhone 17 Pro Max", "iPad Pro 13-inch"]; end
 def available_simulator_devices
   [
     { "name" => "iPhone 17 Pro Max", "udid" => "iphone-template", "deviceTypeIdentifier" => "iphone-type", "runtime" => "com.apple.CoreSimulator.SimRuntime.iOS-27-0", "state" => "Shutdown" },
@@ -943,9 +880,7 @@ def available_simulator_devices
   ] + @owned.values + (@scenario == "busy" ? [{ "name" => "Unrelated", "udid" => "unrelated", "state" => "Booted" }] : [])
 end
 def write_watch_screenshot_mode_defaults(*); end
-def set_watch_status_bar_override(*)
-  false
-end
+def set_watch_status_bar_override(*); false; end
 def normalize_watch_screenshot_status_bar(*); end
 def sleep(*); end
 
@@ -1069,24 +1004,24 @@ results = %w[combined diagnostics iphone standalone standalone-build-failure mis
 end
 puts JSON.generate(results)
 `;
-    const result = spawnSync("ruby", ["-e", source, fastfilePath], { encoding: "utf8" });
-    expect(result.status, result.stderr).toBe(0);
-    const rows = JSON.parse(result.stdout) as {
-      scenario: string;
-      builds: string[];
-      error: string | null;
-      installed: string | null;
-      pngs: number;
-      xcresults: number;
-      attempts: boolean;
-      ledgerKeys: string[] | null;
-      diagnostics: { schemaVersion: number; diagnostics: unknown[] } | null;
-      evidenceEntries: string[];
-      logs: string[];
-      versions: string[][];
-      owned: string[];
-      lifecycle: string[][];
-    }[];
+    const rows = rubyJson<
+      {
+        scenario: string;
+        builds: string[];
+        error: string | null;
+        installed: string | null;
+        pngs: number;
+        xcresults: number;
+        attempts: boolean;
+        ledgerKeys: string[] | null;
+        diagnostics: { schemaVersion: number; diagnostics: unknown[] } | null;
+        evidenceEntries: string[];
+        logs: string[];
+        versions: string[][];
+        owned: string[];
+        lifecycle: string[][];
+      }[]
+    >(source, [fastfilePath]);
     const row = (scenario: string) => rows.find((entry) => entry.scenario === scenario)!;
     const versionArgs = ["--version", "2026.9.1", "--revision", "2", "--build-number", "123"];
     expect(row("combined")).toMatchObject({
@@ -1099,14 +1034,11 @@ puts JSON.generate(results)
       attempts: true,
       evidenceEntries: [
         "capture-attempts.json",
-        "iPad Pro 13-inch-01-control-connected.xcresult",
-        "iPad Pro 13-inch-02-chat-connected.xcresult",
-        "iPad Pro 13-inch-03-agent-connected.xcresult",
-        "iPad Pro 13-inch-04-settings-connected.xcresult",
-        "iPhone 17 Pro Max-01-control-connected.xcresult",
-        "iPhone 17 Pro Max-02-chat-connected.xcresult",
-        "iPhone 17 Pro Max-03-agent-connected.xcresult",
-        "iPhone 17 Pro Max-04-settings-connected.xcresult",
+        ...["iPad Pro 13-inch", "iPhone 17 Pro Max"].flatMap((device) =>
+          ["01-control", "02-chat", "03-agent", "04-settings"].map(
+            (screen) => `${device}-${screen}-connected.xcresult`,
+          ),
+        ),
       ],
       logs: ["build.log"],
       versions: [versionArgs],
@@ -1168,20 +1100,9 @@ puts JSON.generate(results)
       pngs: 0,
       xcresults: 0,
     });
-    expect(row("combined").lifecycle.map(([operation]) => operation)).toEqual([
-      "create",
-      "bootstatus",
-      "shutdown",
-      "delete",
-      "create",
-      "bootstatus",
-      "shutdown",
-      "delete",
-      "create",
-      "bootstatus",
-      "shutdown",
-      "delete",
-    ]);
+    expect(row("combined").lifecycle.map(([operation]) => operation)).toEqual(
+      Array.from({ length: 3 }, () => ["create", "bootstatus", "shutdown", "delete"]).flat(),
+    );
     expect(
       row("combined")
         .lifecycle.filter(([operation]) => operation === "create")

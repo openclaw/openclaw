@@ -102,7 +102,7 @@ function fixture(options: { annotatedTag?: boolean } = {}) {
   });
   vi.stubGlobal("fetch", fetch);
   const installs: Array<{ packageBytes: string; lockBytes: string }> = [];
-  command.mockImplementation(async (operation: RunManagedCommandOptions) => {
+  command.mockImplementation(async (operation) => {
     const stdout = new PassThrough();
     const stderr = new PassThrough();
     const child = new ChildProcess();
@@ -166,7 +166,11 @@ function fixture(options: { annotatedTag?: boolean } = {}) {
       stderr.end();
     }
   });
-  return { root, selectionDir, installDir, signal, state, lock, fetch, requests, installs };
+  const selection = { selectionDir, targetSha, signal };
+  const select = () => selectIOSReleaseGateway(selection);
+  const prepare = (overrides: Partial<Parameters<typeof prepareIOSReleaseGateway>[0]> = {}) =>
+    prepareIOSReleaseGateway({ ...selection, installDir, ...overrides });
+  return { selectionDir, installDir, state, lock, fetch, requests, installs, select, prepare };
 }
 
 describe("iOS stable Gateway package qualification", () => {
@@ -176,15 +180,15 @@ describe("iOS stable Gateway package qualification", () => {
       vi.stubEnv("GH_TOKEN", annotatedTag ? "synthetic-ios-github-token" : "");
       vi.stubEnv("GITHUB_TOKEN", "");
       const f = fixture({ annotatedTag });
-      const selected = await selectIOSReleaseGateway({
-        selectionDir: f.selectionDir,
-        targetSha,
-        signal: f.signal,
-      });
-      expect(selected).toMatchObject({ targetSha, version, sourceSha, integrity, tarball });
+      const selected = await f.select();
       const packageBytes = readFileSync(path.join(f.selectionDir, "package.json"), "utf8");
       const lockBytes = readFileSync(path.join(f.selectionDir, "package-lock.json"), "utf8");
       expect(selected).toMatchObject({
+        targetSha,
+        version,
+        sourceSha,
+        integrity,
+        tarball,
         packageSha256: createHash("sha256").update(packageBytes).digest("hex"),
         lockSha256: createHash("sha256").update(lockBytes).digest("hex"),
       });
@@ -192,12 +196,7 @@ describe("iOS stable Gateway package qualification", () => {
       f.fetch.mockImplementation(async () => {
         throw new Error("The registry and moving latest tag are unavailable during replay");
       });
-      const prepared = await prepareIOSReleaseGateway({
-        selectionDir: f.selectionDir,
-        installDir: f.installDir,
-        signal: f.signal,
-        targetSha,
-      });
+      const prepared = await f.prepare();
       expect(prepared.identity).toEqual(selected);
       expect(prepared.cwd).toBe(path.join(f.installDir, "node_modules", "openclaw"));
       expect(prepared.entrypoint).toEqual([path.join(prepared.cwd, "openclaw.mjs")]);
@@ -233,14 +232,7 @@ describe("iOS stable Gateway package qualification", () => {
         f.lock.packages["node_modules/openclaw"].integrity =
           `sha512-${Buffer.alloc(64, 3).toString("base64")}`;
       }
-      await expect(
-        prepareIOSReleaseGateway({
-          selectionDir: f.selectionDir,
-          installDir: f.installDir,
-          signal: f.signal,
-          targetSha,
-        }),
-      ).rejects.toThrow(error);
+      await expect(f.prepare()).rejects.toThrow(error);
       expect(f.installs).toHaveLength(0);
       expect(existsSync(path.join(f.selectionDir, "selection.json"))).toBe(false);
     },
@@ -249,9 +241,7 @@ describe("iOS stable Gateway package qualification", () => {
   it("refuses an incomplete saved selection without replacing it with latest", async () => {
     const f = fixture();
     mkdirSync(f.selectionDir);
-    await expect(
-      selectIOSReleaseGateway({ selectionDir: f.selectionDir, targetSha, signal: f.signal }),
-    ).rejects.toThrow(/ENOENT/u);
+    await expect(f.select()).rejects.toThrow(/ENOENT/u);
     expect(f.fetch).not.toHaveBeenCalled();
     expect(command).not.toHaveBeenCalled();
   });
@@ -260,7 +250,7 @@ describe("iOS stable Gateway package qualification", () => {
     "refuses changed saved %s instead of reselecting latest",
     async (invalid) => {
       const f = fixture();
-      await selectIOSReleaseGateway({ selectionDir: f.selectionDir, targetSha, signal: f.signal });
+      await f.select();
       f.fetch.mockClear();
       const manifestPath = path.join(f.selectionDir, "selection.json");
       if (invalid === "package.json" || invalid === "package-lock.json") {
@@ -271,12 +261,7 @@ describe("iOS stable Gateway package qualification", () => {
         writeJson(manifestPath, { ...readJson(manifestPath), nodeVersion: "v0.0.0" });
       }
       await expect(
-        prepareIOSReleaseGateway({
-          selectionDir: f.selectionDir,
-          installDir: f.installDir,
-          signal: f.signal,
-          targetSha: invalid === "target SHA" ? "4".repeat(40) : targetSha,
-        }),
+        f.prepare({ targetSha: invalid === "target SHA" ? "4".repeat(40) : targetSha }),
       ).rejects.toThrow(
         /manifests changed|qualification target|Node version and platform|npm version/u,
       );
@@ -294,14 +279,7 @@ describe("iOS stable Gateway package qualification", () => {
       } else {
         f.state.installedCommit = "4".repeat(40);
       }
-      await expect(
-        prepareIOSReleaseGateway({
-          selectionDir: f.selectionDir,
-          installDir: f.installDir,
-          signal: f.signal,
-          targetSha,
-        }),
-      ).rejects.toThrow(/Installed Gateway identity differs/);
+      await expect(f.prepare()).rejects.toThrow(/Installed Gateway identity differs/);
       expect(f.installs).toHaveLength(1);
     },
   );
@@ -316,14 +294,9 @@ describe("iOS stable Gateway package qualification", () => {
       } else {
         f.state.cancelInstall = abort;
       }
-      await expect(
-        prepareIOSReleaseGateway({
-          selectionDir: f.selectionDir,
-          installDir: f.installDir,
-          targetSha,
-          signal: abort.signal,
-        }),
-      ).rejects.toThrow(outcome === "failure" ? /23/ : /cancellation/);
+      await expect(f.prepare({ signal: abort.signal })).rejects.toThrow(
+        outcome === "failure" ? /23/ : /cancellation/,
+      );
       expect(f.installs).toHaveLength(1);
       expect(existsSync(path.join(f.selectionDir, "selection.json"))).toBe(true);
       expect(command.mock.calls.at(-1)?.[0].args).toContain("ci");

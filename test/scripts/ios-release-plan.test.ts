@@ -31,17 +31,18 @@ const upload = (buildNumber: string, shortVersion: string, state: string) => ({
   state,
 });
 const legacy = version("legacy", "READY_FOR_DISTRIBUTION", "2026.7.2");
-type PlanCase = [
-  string,
-  Partial<IosReleasePlanInput>,
-  Partial<ReturnType<typeof resolveIosReleasePlan>>,
-];
-type InvalidPlanCase = [string, Partial<IosReleasePlanInput>, string | RegExp];
+type PlanCase = [Partial<IosReleasePlanInput>, Partial<ReturnType<typeof resolveIosReleasePlan>>];
+type InvalidPlanCase = [Partial<IosReleasePlanInput>, string | RegExp];
+const newRevision = {
+  appStoreRevision: 1,
+  appStoreVersion: "2026.7.21",
+  buildNumber: 1,
+  decision: "new-revision",
+} as const;
 
 describe("resolveIosReleasePlan", () => {
   it.each<PlanCase>([
     [
-      "new gateway",
       {},
       {
         destination: "app-store",
@@ -52,28 +53,9 @@ describe("resolveIosReleasePlan", () => {
         decision: "new-revision",
       },
     ],
+    [{ appStoreVersions: [legacy] }, newRevision],
+    [{ buildUploads: [upload("4", "2026.7.2", "COMPLETE")] }, newRevision],
     [
-      "legacy released revision",
-      { appStoreVersions: [legacy] },
-      {
-        appStoreRevision: 1,
-        appStoreVersion: "2026.7.21",
-        buildNumber: 1,
-        decision: "new-revision",
-      },
-    ],
-    [
-      "legacy upload-only revision",
-      { buildUploads: [upload("4", "2026.7.2", "COMPLETE")] },
-      {
-        appStoreRevision: 1,
-        appStoreVersion: "2026.7.21",
-        buildNumber: 1,
-        decision: "new-revision",
-      },
-    ],
-    [
-      "editable revision",
       { appStoreVersions: [version("editable", "PREPARE_FOR_SUBMISSION", "2026.7.21")] },
       {
         appStoreRevision: 1,
@@ -83,7 +65,6 @@ describe("resolveIosReleasePlan", () => {
       },
     ],
     [
-      "TestFlight alongside a matching App Store revision",
       {
         destination: "testflight",
         appStoreVersions: [
@@ -104,7 +85,6 @@ describe("resolveIosReleasePlan", () => {
       },
     ],
     [
-      "TestFlight alongside another gateway's App Store revision",
       {
         destination: "testflight",
         appStoreVersions: [version("other", "IN_REVIEW", "2026.7.30")],
@@ -124,7 +104,6 @@ describe("resolveIosReleasePlan", () => {
       },
     ],
     ...["FAILED", "AWAITING_UPLOAD"].map<PlanCase>((state) => [
-      `uploaded revision after removing its version record (${state})`,
       {
         appStoreVersions: [legacy],
         buildUploads: [upload("1", "2026.7.21", state)],
@@ -132,7 +111,6 @@ describe("resolveIosReleasePlan", () => {
       { appStoreRevision: 1, buildNumber: 2, decision: "retry-upload" },
     ]),
     [
-      "next build after a failed upload",
       {
         appStoreVersions: [version("editable", "READY_FOR_REVIEW", "2026.7.21")],
         buildUploads: [upload("7", "2026.7.21", "FAILED"), upload("3", "2026.7.21", "COMPLETE")],
@@ -140,7 +118,6 @@ describe("resolveIosReleasePlan", () => {
       { buildNumber: 8 },
     ],
     [
-      "an appended version is not a future gateway's legacy release",
       {
         appStoreVersions: [version("older", "READY_FOR_DISTRIBUTION", "2026.7.21")],
         gatewayVersion: "2026.7.21",
@@ -148,7 +125,6 @@ describe("resolveIosReleasePlan", () => {
       { appStoreRevision: 0, appStoreVersion: "2026.7.210", decision: "new-revision" },
     ],
     [
-      "public notes baseline stays independent of candidate uploads",
       {
         appStoreVersions: [legacy, version("editable", "PREPARE_FOR_SUBMISSION", "2026.7.21")],
         buildUploads: [upload("19", "2026.7.21", "COMPLETE")],
@@ -159,7 +135,7 @@ describe("resolveIosReleasePlan", () => {
         releaseNotesBaselines: [{ audience: "ios", version: "2026.7.2", build: "3" }],
       },
     ],
-  ])("plans %s", (_name, overrides, expected) => {
+  ])("plans %j", (overrides, expected) => {
     const plan = resolveIosReleasePlan(input(overrides));
     expect(plan).toMatchObject(expected);
     if (expected.releaseNotesBaselines) {
@@ -169,7 +145,6 @@ describe("resolveIosReleasePlan", () => {
 
   it.each<InvalidPlanCase>([
     [
-      "ambiguous TestFlight revisions",
       {
         destination: "testflight",
         appStoreVersions: [version("store", "PREPARE_FOR_SUBMISSION", "2026.7.21")],
@@ -178,7 +153,6 @@ describe("resolveIosReleasePlan", () => {
       "Multiple unreleased TestFlight revisions",
     ],
     [
-      "multiple upload-only unreleased revisions",
       {
         appStoreVersions: [legacy],
         buildUploads: [upload("1", "2026.7.21", "FAILED"), upload("1", "2026.7.22", "FAILED")],
@@ -186,17 +160,14 @@ describe("resolveIosReleasePlan", () => {
       "Multiple unreleased App Store build-upload revisions",
     ],
     [
-      "locked active version",
       { appStoreVersions: [version("locked", "IN_REVIEW", "2026.7.21")] },
       "locked in state IN_REVIEW",
     ],
     [
-      "mismatched active version",
       { appStoreVersions: [version("other", "PREPARE_FOR_SUBMISSION", "2026.7.30")] },
       "does not belong to gateway 2026.7.2",
     ],
     ...(["app-store", "testflight"] as const).map((destination): InvalidPlanCase => [
-      `multiple active ${destination} versions`,
       {
         destination,
         appStoreVersions: [
@@ -207,41 +178,29 @@ describe("resolveIosReleasePlan", () => {
       "multiple active iOS versions",
     ]),
     [
-      "unknown upload state",
       { buildUploads: [upload("1", "2026.7.20", "NEW_APPLE_STATE")] },
       "Unknown App Store build upload state",
     ],
     [
-      "exhausted revisions",
       { appStoreVersions: [version("last", "READY_FOR_DISTRIBUTION", "2026.7.29")] },
       "exhausted App Store revisions 0 through 9",
     ],
     [
-      "planned version older than another gateway's released history",
       { appStoreVersions: [legacy], gatewayVersion: "2026.6.11" },
       "must be greater than latest released version 2026.7.2",
     ],
-    [
-      "explicit revision mismatch",
-      { explicitRevision: 4 },
-      "does not match the planned revision 0",
-    ],
-    [
-      "explicit build mismatch",
-      { explicitBuildNumber: "4" },
-      "does not match the planned next build 1",
-    ],
+    [{ explicitRevision: 4 }, "does not match the planned revision 0"],
+    [{ explicitBuildNumber: "4" }, "does not match the planned next build 1"],
     ...[
       { version: null, build: null },
       { version: "2026.7.2", build: null },
       { version: "2026.7.21", build: "3" },
       { version: "2026.7.2", build: "unknown" },
     ].map((baseline): InvalidPlanCase => [
-      `unresolvable public notes baseline ${JSON.stringify(baseline)}`,
       { appStoreVersions: [legacy], releaseNotesBaselines: [{ audience: "ios", ...baseline }] },
       /baseline|build number/,
     ]),
-  ])("rejects %s", (_name, overrides, error) => {
+  ])("rejects %j", (overrides, error) => {
     expect(() => resolveIosReleasePlan(input(overrides))).toThrow(error);
   });
 
