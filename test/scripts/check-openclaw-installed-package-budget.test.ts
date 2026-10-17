@@ -10,7 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("installed package tree budget", () => {
-  // Published updaters (2026.9.3-2026.9.7) charge npm's hidden lockfile bytes too.
+  // Published updaters (2026.9.3-2026.9.8) charge npm's hidden lockfile bytes too.
   it("counts installed paths and every regular file's bytes without following links", async () => {
     const root = tempDirs.make("openclaw-installed-budget-");
     const outside = tempDirs.make("openclaw-installed-budget-external-");
@@ -87,6 +87,15 @@ describe("installed package tree budget", () => {
         "root must be a real directory",
       );
     }
+  });
+
+  it("keeps headroom below the immutable published-driver limits", () => {
+    const bytes = 900 * 1024 * 1024;
+    expect(evaluateInstalledPackageBudget({ entries: 47_500, bytes })).toEqual([]);
+    expect(evaluateInstalledPackageBudget({ entries: 47_501, bytes })).toEqual(["entries"]);
+    expect(evaluateInstalledPackageBudget({ entries: 47_500, bytes: bytes + 1 })).toEqual([
+      "bytes",
+    ]);
   });
 
   it.each([
