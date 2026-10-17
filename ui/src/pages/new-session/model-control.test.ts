@@ -3,6 +3,7 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
+import { modelOption } from "./model-control-view-queries.test-support.ts";
 import { contextWith, renderControl } from "./model-control.test-support.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 import * as modelTarget from "./model-target.ts";
@@ -12,13 +13,17 @@ const luna = { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" };
 const sol = { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true };
 const levels = (ids: string[]) => ids.map((id) => ({ id, label: id }));
 const controls: NewSessionModelControl[] = [];
-function setup(models: ModelCatalogEntry[], methods: string[] = []) {
+function setup(
+  models: ModelCatalogEntry[],
+  methods: string[] = [],
+  defaultAgent?: GatewayAgentRow,
+) {
   const state = contextWith(models, "openclaw", methods);
   const changed = vi.fn();
   const targetSelected = vi.fn();
   const control = new NewSessionModelControl(() => undefined, changed, targetSelected);
   controls.push(control);
-  const draw = (agent?: GatewayAgentRow | null) =>
+  const draw = (agent: GatewayAgentRow | null | undefined = defaultAgent) =>
     renderControl(control, state.context, "main", agent);
   const find = (selector: string) => draw().querySelector<HTMLButtonElement>(selector);
   return { ...state, control, changed, targetSelected, draw, find };
@@ -88,9 +93,7 @@ describe("new-session model controls", () => {
     });
     const agent = { id: "main", model: { primary: "model" } };
     control.load(context, "main", true, { agent });
-    await vi.waitFor(() =>
-      expect(draw(agent).querySelector('[data-chat-model-option="openai/model"]')).not.toBeNull(),
-    );
+    await vi.waitFor(() => expect(modelOption(draw(agent), "openai/model")).not.toBeNull());
     expect(draw(agent).querySelector('[data-chat-thinking-option="high"]')).toBeNull();
     expect(draw(agent).querySelector("[data-chat-thinking-slider]")).toBeNull();
     expect(changed).not.toHaveBeenCalled();
@@ -129,8 +132,7 @@ describe("new-session model controls", () => {
     expect(
       ready.querySelector("[data-chat-thinking-slider]")?.getAttribute("data-chat-thinking-values"),
     ).toContain("high");
-    expect(control.selected).toBe("");
-    expect(control.thinkingLevel).toBe("");
+    expect(control).toMatchObject({ selected: "", thinkingLevel: "" });
   });
 
   it("preserves an explicitly remembered Off effort", async () => {
@@ -229,8 +231,7 @@ describe("new-session model controls", () => {
       preference: { model: "anthropic/retired-model", thinkingLevel: "high" },
     });
     expect(request).toHaveBeenCalledOnce();
-    expect(control.selected).toBe("");
-    expect(control.thinkingLevel).toBe("");
+    expect(control).toMatchObject({ selected: "", thinkingLevel: "" });
     expect(changed).toHaveBeenLastCalledWith({ model: "", thinkingLevel: "" });
   });
 
@@ -386,7 +387,7 @@ describe("configured defaults", () => {
   const agent = { id: "main", model: { primary: "openai/default-model" }, thinkingDefault: "high" };
   const preference = { model: "openai/other-model", thinkingLevel: "low", fastMode: true };
   function setupDefaults() {
-    const state = contextWith(models);
+    const state = setup(models, [], agent);
     Object.assign(state.context, {
       config: { ...state.context.config, current: { newSessionModelDefaults: "configured" } },
     });
@@ -395,8 +396,7 @@ describe("configured defaults", () => {
 
   describe("configured fresh-session model defaults", () => {
     it("preserves URL intent until the next agent", async () => {
-      const { context } = setupDefaults();
-      const control = new NewSessionModelControl(() => undefined);
+      const { context, control } = setupDefaults();
       control.load(context, "main", true, { agent, preference, initialModel: preference.model });
       await waitForFast(() => expect(control.isRestoringPreference()).toBe(false));
       expect(control.selected).toBe(preference.model);
@@ -411,9 +411,8 @@ describe("configured defaults", () => {
     });
 
     it("withholds stale preferences after metadata failure", async () => {
-      const { context, request } = setupDefaults();
+      const { context, request, control } = setupDefaults();
       request.mockRejectedValue(new Error("offline"));
-      const control = new NewSessionModelControl(() => undefined);
       control.load(context, "main", true, {
         agent,
         preference: { ...preference, agentRuntime: "stale-runtime" },
@@ -426,8 +425,7 @@ describe("configured defaults", () => {
     it.each(["optional", "required", "required-after-hydration"])(
       "restores a deliberate same-route draft choice after %s hydration",
       async (placement) => {
-        const { context } = setupDefaults();
-        const control = new NewSessionModelControl(() => undefined);
+        const { context, control } = setupDefaults();
         control.restoreDraftSelection({
           agentId: "main",
           model: "openai/other-model",
@@ -440,8 +438,7 @@ describe("configured defaults", () => {
           configuredDefaults: placement === "required",
         });
         await waitForFast(() => expect(control.isRestoringPreference()).toBe(false));
-        expect(control.selected).toBe("openai/other-model");
-        expect(control.thinkingLevel).toBe("low");
+        expect(control).toMatchObject({ selected: "openai/other-model", thinkingLevel: "low" });
         expect(control.draftSelection("main")).toMatchObject({
           model: "openai/other-model",
           thinkingLevel: "low",
@@ -451,17 +448,15 @@ describe("configured defaults", () => {
           preference,
           configuredDefaults: placement !== "optional",
         });
-        expect(control.selected).toBe("openai/other-model");
-        expect(control.thinkingLevel).toBe("low");
+        expect(control).toMatchObject({ selected: "openai/other-model", thinkingLevel: "low" });
         control.reset();
       },
     );
 
     it("hydrates late Fast Mode preferences independently of a restored model", async () => {
-      const { context, request } = setupDefaults();
+      const { context, request, control, find } = setupDefaults();
       const catalogRead = deferred<{ models: typeof models }>();
       request.mockReturnValue(catalogRead.promise);
-      const control = new NewSessionModelControl(() => undefined);
       control.load(context, "main", true, { agent, preference: null });
       control.restoreDraftSelection({
         agentId: "main",
@@ -472,9 +467,7 @@ describe("configured defaults", () => {
       catalogRead.resolve({ models });
       await waitForFast(() => expect(control.isRestoringPreference()).toBe(false));
       expect(control.fastMode).toBe(true);
-      renderControl(control, context, "main", agent)
-        .querySelector<HTMLButtonElement>('[data-chat-speed-option="off"]')!
-        .click();
+      find('[data-chat-speed-option="off"]')!.click();
       expect(control.fastMode).toBe(false);
       control.load(context, "main", true, { agent, preference });
       expect(control.fastMode).toBe(false);
@@ -482,8 +475,7 @@ describe("configured defaults", () => {
     });
 
     it("retires a consumed restored choice but preserves a newer deliberate choice", async () => {
-      const { context } = setupDefaults();
-      const control = new NewSessionModelControl(() => undefined);
+      const { context, control, find } = setupDefaults();
       control.load(context, "main", true, { agent, preference });
       await waitForFast(() => expect(control.isRestoringPreference()).toBe(false));
       const saved = { agentId: "main", model: preference.model, thinkingLevel: "low" };
@@ -498,9 +490,7 @@ describe("configured defaults", () => {
       });
       expect(control.draftSelection("main")).toBeUndefined();
       control.restoreDraftSelection(saved);
-      renderControl(control, context, "main", agent)
-        .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/default-model"]')!
-        .click();
+      find('[data-chat-model-option="openai/default-model"]')!.click();
       control.restoreDraftSelection(undefined);
       expect(control.draftSelection("main")).toMatchObject({ model: "", thinkingLevel: "low" });
       control.reset();
@@ -511,7 +501,7 @@ describe("new-session speed preferences", () => {
   it.each(["auto", "ultrafast"] as const)(
     "restores a standalone speed preference %s",
     async (fastMode) => {
-      const { context } = contextWith([
+      const { context, control, draw } = setup([
         {
           id: "gpt-5.6-luna",
           name: "Model",
@@ -521,15 +511,12 @@ describe("new-session speed preferences", () => {
           serviceTiers: ["ultrafast"],
         },
       ]);
-      const control = new NewSessionModelControl(() => undefined);
       control.load(context, "main", true, { preference: { fastMode } });
       expect(control.isRestoringPreference()).toBe(true);
       await waitForFast(() => expect(control.fastMode).toBe(fastMode));
       const selected = fastMode === "auto" ? undefined : "ultrafast";
       const options = Array.from(
-        renderControl(control, context).querySelectorAll<HTMLButtonElement>(
-          "[data-chat-speed-option]",
-        ),
+        draw().querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]"),
       );
       expect(options).toHaveLength(3);
       for (const option of options) {
@@ -544,7 +531,7 @@ describe("new-session speed preferences", () => {
   );
 
   it("clears speed when switching to a provider without a wire mapping", async () => {
-    const { context } = contextWith([
+    const { context, control, find } = setup([
       { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", reasoning: true },
       {
         id: "llama-4",
@@ -556,26 +543,19 @@ describe("new-session speed preferences", () => {
         ],
       },
     ]);
-    const control = new NewSessionModelControl(() => undefined);
     control.load(context, "main", true);
 
     await vi.waitFor(() =>
-      expect(
-        renderControl(control, context).querySelector('[data-chat-model-option="ollama/llama-4"]'),
-      ).not.toBeNull(),
+      expect(find('[data-chat-model-option="ollama/llama-4"]')).not.toBeNull(),
     );
-    renderControl(control, context)
-      .querySelector<HTMLButtonElement>('[data-chat-speed-option="on"]')
-      ?.click();
+    find('[data-chat-speed-option="on"]')?.click();
     expect(control.fastMode).toBe(true);
 
-    renderControl(control, context)
-      .querySelector<HTMLButtonElement>('[data-chat-model-option="ollama/llama-4"]')
-      ?.click();
+    find('[data-chat-model-option="ollama/llama-4"]')?.click();
 
     expect(control.selected).toBe("ollama/llama-4");
     expect(control.fastMode).toBeUndefined();
-    expect(renderControl(control, context).querySelector("[data-chat-speed-option]")).toBeNull();
+    expect(find("[data-chat-speed-option]")).toBeNull();
   });
 });
 
@@ -583,7 +563,7 @@ it.each(["blue", "red"])(
   "applies supported speed choices when switching a Fast draft to Daybreak %s",
   async (color) => {
     const id = "gpt-daybreak-" + color + "-latest";
-    const { context } = contextWith([
+    const { context, control, draw, find } = setup([
       {
         id: "gpt-5.6-luna",
         name: "General model",
@@ -602,23 +582,16 @@ it.each(["blue", "red"])(
         effectiveFastMode: "ultrafast",
       },
     ]);
-    const control = new NewSessionModelControl(() => undefined);
     control.load(context, "main", true);
     await waitForFast(() => {
-      const container = renderControl(control, context);
-      expect(
-        container.querySelector('[data-chat-model-option="openai/' + id + '"]'),
-      ).not.toBeNull();
+      const container = draw();
+      expect(modelOption(container, "openai/" + id)).not.toBeNull();
       expect(container.querySelector('[data-chat-speed-option="on"]')).not.toBeNull();
     });
-    renderControl(control, context)
-      .querySelector<HTMLButtonElement>('[data-chat-speed-option="on"]')!
-      .click();
+    find('[data-chat-speed-option="on"]')!.click();
     expect(control.fastMode).toBe(true);
-    renderControl(control, context)
-      .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/' + id + '"]')!
-      .click();
-    const container = renderControl(control, context);
+    find('[data-chat-model-option="openai/' + id + '"]')!.click();
+    const container = draw();
     expect(control.selected).toBe("openai/" + id);
     expect(
       container
@@ -690,28 +663,18 @@ describe("runtime choices", () => {
         }),
       );
       const control = new NewSessionModelControl(() => undefined, changed);
+      const draw = () => renderControl(control, context, "main", agent);
+      const find = (selector: string) => draw().querySelector<HTMLButtonElement>(selector);
       control.load(context, "main", true, { agent });
       try {
-        await vi.waitFor(() =>
-          expect(
-            renderControl(control, context, "main", agent).querySelector(
-              '[data-chat-model-runtime="codex"]',
-            ),
-          ).not.toBeNull(),
-        );
-        renderControl(control, context, "main", agent)
-          .querySelector<HTMLButtonElement>('[data-chat-model-runtime="codex"]')!
-          .click();
+        await vi.waitFor(() => expect(find('[data-chat-model-runtime="codex"]')).not.toBeNull());
+        find('[data-chat-model-runtime="codex"]')!.click();
         expect(control.selected).toBe("openai/gpt-5.6-sol");
         expect(control.agentRuntime).toBe("codex");
-        renderControl(control, context, "main", agent)
-          .querySelector<HTMLButtonElement>('[data-chat-context-window-toggle="64k"]')!
-          .click();
+        find('[data-chat-context-window-toggle="64k"]')!.click();
         expect(control.contextWindow).toBe("64k");
         const changesBeforeReselect = changed.mock.calls.length;
-        renderControl(control, context, "main", agent)
-          .querySelector<HTMLButtonElement>('[data-chat-model-runtime="codex"]')!
-          .click();
+        find('[data-chat-model-runtime="codex"]')!.click();
         expect(control.contextWindow).toBe("64k");
         expect(changed).toHaveBeenCalledTimes(changesBeforeReselect);
         expect(control.resolveAgentRuntime({ agent, context })?.cloudPlacementExecutionMode).toBe(
@@ -724,7 +687,7 @@ describe("runtime choices", () => {
             executionModes: ["worker-turn"],
           }),
         ).toContain("codex runtime");
-        const selected = renderControl(control, context, "main", agent);
+        const selected = draw();
         expect(
           selected.querySelectorAll('[data-chat-model-option][aria-selected="true"]'),
         ).toHaveLength(1);
@@ -753,9 +716,7 @@ describe("runtime choices", () => {
           preference: loadNewSessionPreference(gatewayUrl, "main"),
         });
         await vi.waitFor(() => expect(control.agentRuntime).toBe("codex"));
-        renderControl(control, context, "main", agent)
-          .querySelector<HTMLButtonElement>('[data-chat-model-default="true"]')!
-          .click();
+        find('[data-chat-model-default="true"]')!.click();
         expect(control.modelForSubmission()).toBe("");
         expect(control.agentRuntime).toBeUndefined();
         expect(loadNewSessionPreference(gatewayUrl, "main")?.agentRuntime).toBeUndefined();

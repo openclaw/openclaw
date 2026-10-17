@@ -1,13 +1,17 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import * as toast from "../../lib/toast.ts";
+import {
+  holdPreferenceClear,
+  acceptIdlePlacement,
+  chooseModel,
+} from "./draft-worktree-checks.test-support.ts";
 import { identityPreferences } from "./draft-worktree-preferences.test-support.ts";
 import {
   acceptedWorktreeSession,
   readyPreferenceDraft,
   selectCloudWorktree,
 } from "./draft-worktree-submission.test-support.ts";
-import { renderControl } from "./model-control.test-support.ts";
 import { decodeIdentityPreferences } from "./preferences.ts";
 
 afterEach(() => {
@@ -15,6 +19,12 @@ afterEach(() => {
   localStorage.clear();
   sessionStorage.clear();
 });
+
+const acceptedWarnings = (warning: { mock: { calls: Parameters<typeof toast.showToast>[] } }) =>
+  warning.mock.calls.filter(
+    ([notice]) =>
+      typeof notice.message === "string" && notice.message.startsWith("Session accepted,"),
+  );
 
 const models = ["gpt-5.6-luna", "gpt-5.6-sol"].map((id) => ({ id, name: id, provider: "openai" }));
 
@@ -34,7 +44,6 @@ it.each(["repository", "model", "empty base", "base before read"] as const)(
     );
     const started = createDeferred();
     const release = createDeferred();
-    let held = false;
     if (change === "base before read") {
       vi.mocked(first.context.sessions.createResult).mockImplementation(async () => {
         started.resolve();
@@ -42,20 +51,7 @@ it.each(["repository", "model", "empty base", "base before read"] as const)(
         return acceptedWorktreeSession;
       });
     } else {
-      prefs.beforeSave.mockImplementation(async ({ entries }) => {
-        const entry = entries["new-session.v1:main"];
-        if (
-          !held &&
-          entry &&
-          typeof entry === "object" &&
-          "worktreeName" in entry &&
-          entry.worktreeName === ""
-        ) {
-          held = true;
-          started.resolve();
-          await release.promise;
-        }
-      });
+      holdPreferenceClear(prefs, true, { started, release });
       vi.mocked(first.context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
     }
     const warning =
@@ -73,17 +69,7 @@ it.each(["repository", "model", "empty base", "base before read"] as const)(
         next.place.setWorktreeName("next-task");
       }
       if (change === "repository" || change === "model") {
-        const control = next.place.modelControl;
-        await vi.waitFor(() =>
-          expect(
-            renderControl(control, next.context).querySelector(
-              '[data-chat-model-option="openai/gpt-5.6-sol"]',
-            ),
-          ).not.toBeNull(),
-        );
-        renderControl(control, next.context)
-          .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-sol"]')!
-          .click();
+        await chooseModel(next);
         await vi.waitFor(() =>
           expect(prefs.stored()).toMatchObject({
             model: "openai/gpt-5.6-sol",
@@ -109,12 +95,7 @@ it.each(["repository", "model", "empty base", "base before read"] as const)(
     expect(next.context.sessions.createResult).not.toHaveBeenCalled();
     expect(first.flow.error).toBeNull();
     if (warning) {
-      expect(
-        warning.mock.calls.filter(
-          ([notice]) =>
-            typeof notice.message === "string" && notice.message.startsWith("Session accepted,"),
-        ),
-      ).toEqual([]);
+      expect(acceptedWarnings(warning)).toEqual([]);
     }
     if (change === "model") {
       expect(prefs.stored()).toMatchObject({ worktreeName: "", model: "openai/gpt-5.6-sol" });
@@ -160,12 +141,7 @@ it.each(["accepted clear", "ordinary edit"] as const)(
       await first.flow.submit(undefined, true);
       expect(first.context.sessions.createResult).toHaveBeenCalledOnce();
       expect(first.flow.error).toBeNull();
-      expect(
-        warning.mock.calls.filter(
-          ([notice]) =>
-            typeof notice.message === "string" && notice.message.startsWith("Session accepted,"),
-        ),
-      ).toEqual([
+      expect(acceptedWarnings(warning)).toEqual([
         [
           {
             message:
@@ -236,10 +212,7 @@ it.each(["explicit", "implicit", "cleared"] as const)(
     const retry = await readyPreferenceDraft(prefs, first.context.gateway);
     const start = vi.fn();
     retry.context.placementStartup.start = start;
-    vi.mocked(retry.context.sessions.createResult).mockImplementation(async (params) => ({
-      key: params!.key!,
-      initialRun: { status: "idle" },
-    }));
+    acceptIdlePlacement(retry);
     const warning = vi.spyOn(toast, "showToast").mockReturnValue(false);
     await retry.flow.submit(undefined, true);
     expect(retry.context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(original, {
@@ -249,20 +222,10 @@ it.each(["explicit", "implicit", "cleared"] as const)(
     expect(retry.flow.error).toBeNull();
     if (base !== "cleared") {
       expect(prefs.stored()).toMatchObject({ worktreeName: "" });
-      expect(
-        warning.mock.calls.filter(
-          ([notice]) =>
-            typeof notice.message === "string" && notice.message.startsWith("Session accepted,"),
-        ),
-      ).toEqual([]);
+      expect(acceptedWarnings(warning)).toEqual([]);
     } else {
       expect(prefs.stored()).toEqual(retained);
-      expect(
-        warning.mock.calls.filter(
-          ([notice]) =>
-            typeof notice.message === "string" && notice.message.startsWith("Session accepted,"),
-        ),
-      ).toHaveLength(1);
+      expect(acceptedWarnings(warning)).toHaveLength(1);
     }
   },
 );
@@ -297,17 +260,7 @@ it("keeps an accepted name retired when an older independent model save commits 
     }
   });
   const writes = vi.spyOn(next.gateway, "persistPreference");
-  const control = next.place.modelControl;
-  await vi.waitFor(() =>
-    expect(
-      renderControl(control, next.context).querySelector(
-        '[data-chat-model-option="openai/gpt-5.6-sol"]',
-      ),
-    ).not.toBeNull(),
-  );
-  renderControl(control, next.context)
-    .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-sol"]')!
-    .click();
+  await chooseModel(next);
   try {
     await modelSaveStarted.promise;
     vi.mocked(first.context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);

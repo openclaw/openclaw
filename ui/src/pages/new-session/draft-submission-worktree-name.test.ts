@@ -4,11 +4,15 @@ import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import {
+  browserPreference,
+  expectWorktreeName,
+  acceptIdlePlacement,
+} from "./draft-worktree-checks.test-support.ts";
+import {
   acceptedWorktreeSession,
   disposeWorktreeDraft,
   selectCloudWorktree,
 } from "./draft-worktree-submission.test-support.ts";
-import { loadNewSessionPreference } from "./preferences.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -45,29 +49,26 @@ async function namedWorktreeFixture(explicitBase = true, name = "first-task", re
   vi.mocked(fixture.context.navigateAndWait).mockImplementation(async () => {
     queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
   });
-  return fixture;
+  return { ...fixture, create: vi.mocked(fixture.context.sessions.createResult) };
 }
 
 describe("submitted custom worktree names", () => {
   it.each([true, false])(
     "consumes an accepted name with explicit base=%s",
     async (explicitBase) => {
-      const { context, flow, place } = await namedWorktreeFixture(
+      const { create, flow, place } = await namedWorktreeFixture(
         explicitBase,
         explicitBase ? "first-task" : "  first-task  ",
       );
       if (!explicitBase) {
-        expect(loadNewSessionPreference("ws://gateway.example", "main")?.baseRef).toBeUndefined();
+        expect(browserPreference()?.baseRef).toBeUndefined();
       }
-      vi.mocked(context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
+      create.mockResolvedValue(acceptedWorktreeSession);
       expect(flow.submitDisabledReason()).toBeUndefined();
       await flow.submit(undefined, !explicitBase);
-      expect(place.worktreeName).toBe("");
-      expect(
-        loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName,
-      ).toBeUndefined();
+      expectWorktreeName(place);
       if (explicitBase) {
-        expect(context.sessions.createResult).toHaveBeenCalledWith(
+        expect(create).toHaveBeenCalledWith(
           expect.objectContaining({
             worktree: true,
             worktreeName: "first-task",
@@ -75,29 +76,22 @@ describe("submitted custom worktree names", () => {
           }),
           { reconciliation: "background" },
         );
-        expect(place.worktree).toBe(true);
-        expect(place.baseRef).toBe("main");
-        expect(loadNewSessionPreference("ws://gateway.example", "main")).toMatchObject({
-          worktree: true,
-          baseRef: "main",
-        });
+        expect(place).toMatchObject({ worktree: true, baseRef: "main" });
+        expect(browserPreference()).toMatchObject({ worktree: true, baseRef: "main" });
         const next = await namedWorktreeFixture(true, "", true);
         next.flow.setMessage("next task");
-        vi.mocked(next.context.sessions.createResult).mockResolvedValue({
+        next.create.mockResolvedValue({
           key: "agent:main:dashboard:next",
           initialRun: { status: "started", runId: "next-run" },
         });
         await next.flow.submit(undefined, true);
-        expect(next.context.sessions.createResult).toHaveBeenCalledOnce();
-        expect(vi.mocked(next.context.sessions.createResult).mock.calls[0]![0]).not.toHaveProperty(
-          "worktreeName",
-        );
+        expect(next.create).toHaveBeenCalledOnce();
+        expect(next.create.mock.calls[0]![0]).not.toHaveProperty("worktreeName");
       }
     },
   );
   it.each(["null", "throw", "rejected"])("retains the name after %s admission", async (outcome) => {
-    const { context, flow, place } = await namedWorktreeFixture();
-    const create = vi.mocked(context.sessions.createResult);
+    const { create, flow, place } = await namedWorktreeFixture();
     if (outcome === "throw") {
       create.mockRejectedValue(new Error("admission failed"));
     } else {
@@ -112,10 +106,7 @@ describe("submitted custom worktree names", () => {
     }
     await flow.submit(undefined, true);
     expect(create).toHaveBeenCalledOnce();
-    expect(place.worktreeName).toBe("first-task");
-    expect(loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName).toBe(
-      "first-task",
-    );
+    expectWorktreeName(place, "first-task");
   });
 
   it.each(["reconnect", "same name again", "new repository", "new principal"])(
@@ -158,15 +149,17 @@ describe("submitted custom worktree names", () => {
       selectCloudWorktree(first);
       const start = vi.fn();
       first.context.placementStartup.start = start;
-      vi.mocked(first.context.sessions.createResult).mockResolvedValue(null);
+      first.create.mockResolvedValue(null);
       expect(first.flow.submitDisabledReason()).toBeUndefined();
       await first.flow.submit(undefined, true);
-      expect(first.context.sessions.createResult).toHaveBeenCalledOnce();
+      expect(first.create).toHaveBeenCalledOnce();
       expect(start).not.toHaveBeenCalled();
       expect(first.place.worktreeName).toBe("first-task");
-      expect(first.flow.pendingPlacement.createParams?.worktreeName).toBe("first-task");
-      expect(first.flow.pendingPlacement.phase).toBe("creating");
-      const original = vi.mocked(first.context.sessions.createResult).mock.calls[0]![0];
+      expect(first.flow.pendingPlacement).toMatchObject({
+        createParams: { worktreeName: "first-task" },
+        phase: "creating",
+      });
+      const original = first.create.mock.calls[0]![0];
       if (restored) {
         disposeWorktreeDraft(first);
       }
@@ -176,18 +169,15 @@ describe("submitted custom worktree names", () => {
         expect(retry.place.worktreeName).toBe("");
       }
       retry.context.placementStartup.start = start;
-      vi.mocked(retry.context.sessions.createResult).mockImplementation(async (params) => ({
-        key: params!.key!,
-        initialRun: { status: "idle" },
-      }));
+      acceptIdlePlacement(retry);
       expect(retry.flow.submitDisabledReason()).toBeUndefined();
       await retry.flow.submit(undefined, true);
       if (restored) {
-        expect(retry.context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(original, {
+        expect(retry.create).toHaveBeenCalledExactlyOnceWith(original, {
           reconciliation: "background",
         });
       } else {
-        expect(vi.mocked(retry.context.sessions.createResult).mock.calls[1]![0]).toEqual(original);
+        expect(retry.create.mock.calls[1]![0]).toEqual(original);
       }
       expect(start).toHaveBeenCalledOnce();
       expect(start).toHaveBeenCalledWith(
@@ -196,10 +186,7 @@ describe("submitted custom worktree names", () => {
           persistRecovery: true,
         }),
       );
-      expect(retry.place.worktreeName).toBe("");
-      expect(
-        loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName,
-      ).toBeUndefined();
+      expectWorktreeName(retry.place);
     },
   );
 });

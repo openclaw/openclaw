@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import {
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload,
@@ -16,62 +17,62 @@ afterEach(() => {
   sessionStorage.clear();
 });
 
+function previewFixture(key: string, navigate = () => Promise.resolve()) {
+  const { context } = createDraftFixture();
+  Object.defineProperty(context, "router", {
+    value: { getState: () => ({ location: undefined }), subscribe: () => () => {}, navigate },
+  });
+  Object.defineProperty(context.gateway, "subscribe", { value: () => () => {} });
+  const instant = new InstantThreadHandoff(
+    context,
+    key,
+    "main",
+    {
+      data: {
+        agentId: "main",
+        requestedAgentId: "main",
+        catalogId: "",
+        catalogLabel: "",
+        startTerminal: false,
+      },
+      page: document.createElement("div"),
+      release: vi.fn(),
+      synchronizeGateway: vi.fn(),
+    },
+    null,
+  );
+  const navigation = new StartedSessionNavigation();
+  vi.spyOn(navigation, "navigate").mockResolvedValue();
+  return {
+    context,
+    instant,
+    navigation,
+    client: context.gateway.snapshot.client!,
+    agentId: "main",
+    clearDraft: vi.fn(async () => {}),
+    isCurrent: () => true,
+    completeInBackground: () => false,
+    finishNavigation: vi.fn(),
+  };
+}
+
 describe("first-turn publication", () => {
   it("retires an accepted draft before a slow preview route is ready", async () => {
-    const { context } = createDraftFixture();
-    let ready!: () => void;
-    Object.defineProperty(context, "router", {
-      value: {
-        getState: () => ({ location: undefined }),
-        subscribe: () => () => {},
-        navigate: () =>
-          new Promise<void>((resolve) => {
-            ready = resolve;
-          }),
-      },
-    });
     const key = "agent:main:accepted-before-preview";
-    const instant = new InstantThreadHandoff(
-      context,
-      key,
-      "main",
-      {
-        data: {
-          agentId: "main",
-          requestedAgentId: "main",
-          catalogId: "",
-          catalogLabel: "",
-          startTerminal: false,
-        },
-        page: document.createElement("div"),
-        release: vi.fn(),
-        synchronizeGateway: vi.fn(),
-      },
-      null,
-    );
-    const client = context.gateway.snapshot.client!;
-    const clearDraft = vi.fn(async () => {});
-    const navigation = new StartedSessionNavigation();
-    vi.spyOn(navigation, "navigate").mockResolvedValue();
+    const ready = createDeferred();
+    const fixture = previewFixture(key, () => ready.promise);
+    const { context, client, instant, clearDraft } = fixture;
     const completion = completeInitialSessionTurn({
-      context,
-      client,
-      agentId: "main",
+      ...fixture,
       result: { key, initialRun: { status: "started", runId: "accepted-run" } },
       turn: { text: "Accepted prompt", attachments: [], createdAt: 1 },
-      instant,
-      navigation,
-      isCurrent: () => true,
-      clearDraft,
-      completeInBackground: () => false,
-      finishNavigation: vi.fn(),
     });
     try {
       // Acceptance, not lazy route readiness or storage completion, consumes input.
       expect(clearDraft).toHaveBeenCalledOnce();
       expect(context.chatSubmissions.readInitial(key, client)).toBeNull();
     } finally {
-      ready();
+      ready.resolve();
       await completion;
       instant.dispose();
     }
@@ -85,36 +86,9 @@ describe("first-turn publication", () => {
   ] as const)(
     "rechecks $change authority before publishing a $status turn",
     async ({ status, change }) => {
-      const { context } = createDraftFixture();
-      Object.defineProperties(context, {
-        router: {
-          value: {
-            getState: () => ({ location: undefined }),
-            subscribe: () => () => {},
-            navigate: () => Promise.resolve(),
-          },
-        },
-      });
-      Object.defineProperty(context.gateway, "subscribe", { value: () => () => {} });
       const key = "agent:main:dashboard:incognito-private";
-      const instant = new InstantThreadHandoff(
-        context,
-        key,
-        "main",
-        {
-          data: {
-            agentId: "main",
-            requestedAgentId: "main",
-            catalogId: "",
-            catalogLabel: "",
-            startTerminal: false,
-          },
-          page: document.createElement("div"),
-          release: vi.fn(),
-          synchronizeGateway: vi.fn(),
-        },
-        null,
-      );
+      const fixture = previewFixture(key);
+      const { context, instant, clearDraft, navigation } = fixture;
       try {
         // Settle preview readiness, then invalidate ownership in the microtask
         // between checking readiness and publishing the first-turn result.
@@ -125,15 +99,11 @@ describe("first-turn publication", () => {
         if (!client || !auth) {
           throw new Error("fixture requires authenticated client");
         }
-        const clearDraft = vi.fn(async () => {});
         const retainRejected = vi.spyOn(rejected, "retainRejectedInitialTurn");
-        const navigation = new StartedSessionNavigation();
-        const navigate = vi.spyOn(navigation, "navigate").mockResolvedValue();
+        const navigate = vi.mocked(navigation.navigate);
         let current = true;
         const completion = completeInitialSessionTurn({
-          context,
-          client,
-          agentId: "main",
+          ...fixture,
           result: {
             key,
             initialRun:
@@ -142,12 +112,7 @@ describe("first-turn publication", () => {
                 : { status, error: "synthetic denial" },
           },
           turn: { text: "private incognito first turn", attachments: [], createdAt: 1 },
-          instant,
-          navigation,
           isCurrent: () => current,
-          clearDraft,
-          completeInBackground: () => false,
-          finishNavigation: vi.fn(),
         });
         queueMicrotask(() => {
           if (change === "scope") {

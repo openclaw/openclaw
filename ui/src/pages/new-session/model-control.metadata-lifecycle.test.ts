@@ -11,6 +11,7 @@ import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { identityPreferences } from "./draft-worktree-preferences.test-support.ts";
+import { controlQueries, modelOption } from "./model-control-view-queries.test-support.ts";
 import { contextWith, renderControl } from "./model-control.test-support.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 import { loadNewSessionPreference } from "./preferences.ts";
@@ -56,8 +57,8 @@ function retainedAccountDraft() {
   const control = new NewSessionModelControl(() => undefined, savePreference);
   control.load(context, "main", true, { agent });
   const draw = (id = "main") => renderControl(control, context, id, { ...agent, id });
-  const select = (value: string) =>
-    draw().querySelector<HTMLButtonElement>(`[data-chat-account-option="${value}"]`)!.click();
+  const find = (selector: string) => draw().querySelector<HTMLButtonElement>(selector);
+  const select = (value: string) => find(`[data-chat-account-option="${value}"]`)!.click();
   const chooseAccount = async () => {
     await vi.waitFor(() => expect(control.modelUnavailableReason(agent)).toBe("missing-auth"));
     const picker = draw().querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]");
@@ -81,6 +82,7 @@ function retainedAccountDraft() {
     connected,
     neutral,
     draw,
+    find,
     select,
     chooseAccount,
     savePreference,
@@ -89,7 +91,7 @@ function retainedAccountDraft() {
 
 describe("new-session model metadata lifecycle", () => {
   it("retires a consumed personal-account model before the next configured draft", async () => {
-    const { context, control, neutral, connected, preview, draw, chooseAccount } =
+    const { context, control, neutral, connected, preview, find, draw, chooseAccount } =
       retainedAccountDraft();
     Object.assign(context.config.current, { newSessionModelDefaults: "configured" });
     const alternate = {
@@ -103,9 +105,7 @@ describe("new-session model metadata lifecycle", () => {
     const { completion } = await chooseAccount();
     preview.resolve(connected);
     await completion;
-    draw()
-      .querySelector<HTMLButtonElement>('[data-chat-model-option="anthropic/alternate"]')!
-      .click();
+    find('[data-chat-model-option="anthropic/alternate"]')!.click();
     expect(control.modelForSubmission()).toContain("anthropic/alternate@");
     control.retireDraftSelection();
     expect(control.modelForSubmission()).toBe("");
@@ -116,7 +116,7 @@ describe("new-session model metadata lifecycle", () => {
   });
 
   it("keeps a personal account when Default uses the role-permitted provider rather than the agent default", async () => {
-    const { control, neutral, connected, preview, draw, chooseAccount, agent } =
+    const { control, neutral, connected, preview, find, chooseAccount, agent } =
       retainedAccountDraft();
     agent.model.primary = "openai/other";
     const policy = { restricted: true as const, defaultModel: "anthropic/model" };
@@ -133,13 +133,11 @@ describe("new-session model metadata lifecycle", () => {
     const { completion } = await chooseAccount();
     preview.resolve(connected);
     await completion;
-    draw()
-      .querySelector<HTMLButtonElement>('[data-chat-model-option="anthropic/alternate"]')!
-      .click();
+    find('[data-chat-model-option="anthropic/alternate"]')!.click();
     expect(control.modelForSubmission()).toBe(
       "anthropic/alternate@personal:person-a:anthropic:one",
     );
-    draw().querySelector<HTMLButtonElement>('[data-chat-model-default="true"]')!.click();
+    find('[data-chat-model-default="true"]')!.click();
     expect(control.modelForSubmission()).toBe("anthropic/model@personal:person-a:anthropic:one");
     expect(control.accountSelectionReady()).toBe(true);
     control.reset();
@@ -153,7 +151,7 @@ describe("new-session model metadata lifecycle", () => {
       neutral,
       connected,
       preview,
-      draw,
+      find,
       chooseAccount,
       savePreference,
     } = retainedAccountDraft();
@@ -166,7 +164,7 @@ describe("new-session model metadata lifecycle", () => {
     await completion;
     expect(control.accountSelectionReady()).toBe(true);
     const reads = request.mock.calls.filter(([method]) => method === "models.list").length;
-    draw().querySelector<HTMLButtonElement>('[data-chat-model-option="openai/other"]')!.click();
+    find('[data-chat-model-option="openai/other"]')!.click();
     expect(control.modelForSubmission()).toBe("openai/other");
     expect(savePreference).toHaveBeenLastCalledWith(
       expect.objectContaining({ model: "openai/other" }),
@@ -208,12 +206,8 @@ describe("new-session model metadata lifecycle", () => {
       const preference = { model: "fixture/remembered", thinkingLevel: "high" };
       try {
         remounted.load(context, "main", true, { agent, preference });
-        expect(
-          draw(remounted).querySelector('[data-chat-model-option="fixture/first"]'),
-        ).not.toBeNull();
-        expect(
-          draw(remounted).querySelector('[data-chat-model-option="fixture/second"]'),
-        ).not.toBeNull();
+        expect(modelOption(draw(remounted), "fixture/first")).not.toBeNull();
+        expect(modelOption(draw(remounted), "fixture/second")).not.toBeNull();
         expect(remounted.isRestoringPreference()).toBe(true);
         expect(remounted.selected).toBe("");
         expect(remounted.resolveAgentRuntime({ agent, context })?.cloudPlacementSupported).toBe(
@@ -232,16 +226,14 @@ describe("new-session model metadata lifecycle", () => {
         }
         await vi.waitFor(() => expect(remounted.isRestoringPreference()).toBe(false));
         const container = draw(remounted);
-        expect(container.querySelector('[data-chat-model-option="fixture/second"]') !== null).toBe(
-          outcome === "rejection",
-        );
+        expect(modelOption(container, "fixture/second") !== null).toBe(outcome === "rejection");
         if (outcome === "rejection") {
           expect(savePreference).not.toHaveBeenCalled();
-          expect(remounted.selected).toBe(preference.model);
-          expect(remounted.thinkingLevel).toBe(preference.thinkingLevel);
-          container
-            .querySelector<HTMLButtonElement>('[data-chat-model-option="fixture/second"]')
-            ?.click();
+          expect(remounted).toMatchObject({
+            selected: preference.model,
+            thinkingLevel: preference.thinkingLevel,
+          });
+          modelOption(container, "fixture/second")?.click();
           expect(remounted.selected).toBe("fixture/second");
           expect(remounted.resolveAgentRuntime({ agent, context })?.cloudPlacementSupported).toBe(
             false,
@@ -270,6 +262,7 @@ describe("new-session model metadata lifecycle", () => {
       chooseAccount,
       select,
       draw,
+      find,
       savePreference,
     } = retainedAccountDraft();
     const { completion } = await chooseAccount();
@@ -288,10 +281,10 @@ describe("new-session model metadata lifecycle", () => {
         : Promise.resolve({ profileId: "person-a", accounts: [account], links: [] }),
     );
     try {
-      draw().querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
+      find("[data-chat-account-group-toggle]")!.click();
       await vi.waitFor(() => expect(draw().textContent).toContain(account.label));
       select(`account:${account.authProfileId}`);
-      expect(draw().querySelector('[data-chat-model-option="anthropic/model"]')).not.toBeNull();
+      expect(modelOption(draw(), "anthropic/model")).not.toBeNull();
       expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
       expect(control.accountSelectionReady()).toBe(false);
       expect(
@@ -329,7 +322,7 @@ describe("new-session model metadata lifecycle", () => {
       const draw = () => renderControl(control, context, agentId, { ...agent, id: agentId });
       try {
         control.load(context, agentId, true, { agent });
-        expect(draw().querySelector('[data-chat-model-option="fixture/retained"]')).not.toBeNull();
+        expect(modelOption(draw(), "fixture/retained")).not.toBeNull();
         await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
         const previous = { ...context.gateway.snapshot };
         if (change === "agent") {
@@ -349,29 +342,21 @@ describe("new-session model metadata lifecycle", () => {
         }
         createGatewayMetadataObserver(() => true).synchronize(previous, context.gateway.snapshot);
         control.load(context, agentId, true, { agent: { ...agent, id: agentId } });
-        expect(draw().querySelector('[data-chat-model-option="fixture/retained"]')).toBeNull();
+        expect(modelOption(draw(), "fixture/retained")).toBeNull();
         current.resolve({ models: [{ ...model, id: "current", name: "Current" }] });
         if (change === "agent" || change === "client") {
-          await vi.waitFor(() =>
-            expect(
-              draw().querySelector('[data-chat-model-option="fixture/current"]'),
-            ).not.toBeNull(),
-          );
+          await vi.waitFor(() => expect(modelOption(draw(), "fixture/current")).not.toBeNull());
         }
         retired.resolve({ models: [{ ...model, id: "late", name: "Late" }] });
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 0);
         });
         if (change === "disconnect") {
-          expect(draw().querySelector('[data-chat-model-option="fixture/current"]')).toBeNull();
+          expect(modelOption(draw(), "fixture/current")).toBeNull();
         } else {
-          await vi.waitFor(() =>
-            expect(
-              draw().querySelector('[data-chat-model-option="fixture/current"]'),
-            ).not.toBeNull(),
-          );
+          await vi.waitFor(() => expect(modelOption(draw(), "fixture/current")).not.toBeNull());
         }
-        expect(draw().querySelector('[data-chat-model-option="fixture/late"]')).toBeNull();
+        expect(modelOption(draw(), "fixture/late")).toBeNull();
       } finally {
         control.reset();
       }
@@ -391,10 +376,8 @@ describe("new-session model metadata lifecycle", () => {
     const agent = { id: "main", model: { primary: "example/model" } };
     const { context, request } = contextWith([model]);
     const control = new NewSessionModelControl(() => undefined);
-    const option = () =>
-      renderControl(control, context, "main", agent).querySelector<HTMLButtonElement>(
-        '[data-chat-model-option="example/model"]',
-      );
+    const { find } = controlQueries(control, context, "main", agent);
+    const option = () => find('[data-chat-model-option="example/model"]');
     try {
       control.load(context, "main", true, { agent });
       await vi.waitFor(() => expect(option()?.disabled).toBe(true));
@@ -404,9 +387,7 @@ describe("new-session model metadata lifecycle", () => {
         ],
       });
       clock.mockReturnValue(12_000);
-      renderControl(control, context, "main", agent)
-        .querySelector<HTMLElement>('[data-chat-model-select="true"]')!
-        .click();
+      find('[data-chat-model-select="true"]')!.click();
       await vi.waitFor(() => expect(option()?.disabled).toBe(false));
       expect(request).toHaveBeenCalledTimes(2);
     } finally {
@@ -508,6 +489,7 @@ describe("new-session model metadata lifecycle", () => {
     const { context, request, emitCatalogChanged } = contextWith([model]);
     const client = context.gateway.snapshot.client!;
     const control = new NewSessionModelControl(() => undefined);
+    const { draw } = controlQueries(control, context, "main", agent);
     control.load(context, "main", true, { agent });
     await vi.waitFor(() => expect(control.modelUnavailableReason(agent)).toBe("missing-auth"));
     const scope = { agentId: "main", sessionKey: "agent:main:locked" };
@@ -526,7 +508,7 @@ describe("new-session model metadata lifecycle", () => {
     request.mockRejectedValueOnce(new Error("transport failed"));
     emitCatalogChanged();
     await vi.waitFor(() => {
-      const container = renderControl(control, context, "main", agent);
+      const container = draw();
       expect(
         container.querySelector('[data-chat-model-select="true"]')?.getAttribute("aria-busy"),
       ).toBe("false");
@@ -563,9 +545,7 @@ describe("new-session model metadata lifecycle", () => {
     await vi.waitFor(() => {
       const container = renderControl(remountedControl, context);
       expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
-      expect(
-        container.querySelector('[data-chat-model-option="openai/gpt-5.6-luna"]'),
-      ).not.toBeNull();
+      expect(modelOption(container, "openai/gpt-5.6-luna")).not.toBeNull();
     });
     expect(request).toHaveBeenCalledTimes(2);
     remountedControl.reset();
@@ -590,14 +570,11 @@ describe("model selection policy", () => {
       request.mockReturnValue(wire.promise);
       const ready = deferred();
       const control = new NewSessionModelControl(() => {
-        if (
-          renderControl(control, context, "main", agent).querySelector(
-            '[data-chat-model-option="fixture/permitted"]',
-          )
-        ) {
+        if (find('[data-chat-model-option="fixture/permitted"]')) {
           ready.resolve();
         }
       });
+      const { draw, find } = controlQueries(control, context, "main", agent);
       try {
         control.load(context, "main", true, {
           agent,
@@ -609,13 +586,11 @@ describe("model selection policy", () => {
         await published;
         await ready.promise;
         expect(control.modelForSubmission()).toBe("");
-        const container = renderControl(control, context, "main", agent);
+        const container = draw();
         expect(container.textContent).not.toContain("forbidden");
         expect(control.resolveAgentRuntime()).toBeUndefined();
         expect(control.modelSelectionBlockedReason(agent)).toBe("Choose a model");
-        container
-          .querySelector<HTMLButtonElement>('[data-chat-model-option="fixture/permitted"]')
-          ?.click();
+        modelOption(container, "fixture/permitted")?.click();
         expect(control.modelSelectionBlockedReason(agent)).toBeUndefined();
       } finally {
         control.reset();
@@ -636,27 +611,24 @@ describe("model selection policy", () => {
         const ready = deferred();
         let failed = deferred();
         const control = new NewSessionModelControl(() => {
-          const container = renderControl(control, context, "main", agent);
-          if (container.querySelector('[data-chat-model-option="fixture/permitted"]')) {
+          const container = draw();
+          if (modelOption(container, "fixture/permitted")) {
             ready.resolve();
           }
           if (container.querySelector('[data-chat-model-catalog-state="error"]')) {
             failed.resolve();
           }
         });
+        const { draw, find } = controlQueries(control, context, "main", agent);
         try {
           control.load(context, "main", true, { agent });
           await loadModelCatalog(context.gateway.snapshot.client!, scope);
           await ready.promise;
-          expect(
-            renderControl(control, context, "main", agent).querySelector(
-              "[data-chat-model-option]",
-            ),
-          ).not.toBeNull();
+          expect(find("[data-chat-model-option]")).not.toBeNull();
           const wire = deferred<ModelCatalogResult>();
           request.mockReturnValueOnce(wire.promise);
           emitCatalogChanged(event, payload);
-          const container = renderControl(control, context, "main", agent);
+          const container = draw();
           expect(Boolean(container.querySelector("[data-chat-model-option]"))).toBe(!clearsChoices);
           if (clearsChoices) {
             expect(container.textContent).not.toContain("forbidden-default");
@@ -666,13 +638,7 @@ describe("model selection policy", () => {
           wire.reject(new Error("Catalog unavailable"));
           await expect(published).rejects.toThrow("Catalog unavailable");
           await failed.promise;
-          expect(
-            Boolean(
-              renderControl(control, context, "main", agent).querySelector(
-                "[data-chat-model-option]",
-              ),
-            ),
-          ).toBe(!clearsChoices);
+          expect(Boolean(find("[data-chat-model-option]"))).toBe(!clearsChoices);
           expect(control.modelSelectionBlockedReason(agent)).toBe(
             clearsChoices ? "Models unavailable" : undefined,
           );
@@ -681,25 +647,19 @@ describe("model selection policy", () => {
           const replacement = deferred<ModelCatalogResult>();
           request.mockReturnValueOnce(replacement.promise);
           emitCatalogChanged(event, payload);
-          const checking = renderControl(control, context, "main", agent);
+          const checking = draw();
           expect(checking.querySelector('[data-chat-model-catalog-state="error"]')).toBeNull();
           expect(checking.querySelector(".btn__spinner")).not.toBeNull();
           if (clearsChoices) {
             expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
           } else {
-            expect(
-              checking.querySelector('[data-chat-model-option="fixture/permitted"]'),
-            ).not.toBeNull();
+            expect(modelOption(checking, "fixture/permitted")).not.toBeNull();
           }
           const rechecked = loadModelCatalog(context.gateway.snapshot.client!, scope);
           replacement.reject(new Error("Catalog still unavailable"));
           await expect(rechecked).rejects.toThrow("Catalog still unavailable");
           await failed.promise;
-          expect(
-            renderControl(control, context, "main", agent).querySelector(
-              '[data-chat-model-catalog-state="error"]',
-            ),
-          ).not.toBeNull();
+          expect(find('[data-chat-model-catalog-state="error"]')).not.toBeNull();
           expect(control.modelSelectionBlockedReason(agent)).toBe(
             clearsChoices ? "Models unavailable" : undefined,
           );
@@ -779,9 +739,7 @@ describe("model selection policy", () => {
             expect(control.modelForSubmission()).toBe("");
             expect(control.modelSelectionBlockedReason(agent)).toBeUndefined();
             const confirmed = renderControl(control, next.context, "main", agent);
-            expect(
-              confirmed.querySelector('[data-chat-model-option="fixture/permitted"]'),
-            ).not.toBeNull();
+            expect(modelOption(confirmed, "fixture/permitted")).not.toBeNull();
             expect(confirmed.textContent).not.toContain("previous");
           }
         } finally {
@@ -829,14 +787,12 @@ describe("model selection policy", () => {
         const client = first.context.gateway.snapshot.client!;
         const control = first.place.modelControl;
         const browserBytes = () => {
-          const entries: Record<string, string | null> = {};
-          for (let index = 0; index < localStorage.length; index += 1) {
-            const key = localStorage.key(index);
-            if (key !== null) {
-              entries[key] = localStorage.getItem(key);
-            }
-          }
-          return entries;
+          return Object.fromEntries(
+            Array.from({ length: localStorage.length }, (_, index) => {
+              const key = localStorage.key(index)!;
+              return [key, localStorage.getItem(key)];
+            }),
+          );
         };
         try {
           // This owner promise includes identity hydration and its initial browser mirror.

@@ -2,6 +2,14 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import * as toast from "../../lib/toast.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
+import {
+  browserPreference,
+  preferenceGate,
+  expectWorktreeName,
+  holdPreferenceClear,
+  acceptIdlePlacement,
+  chooseModel,
+} from "./draft-worktree-checks.test-support.ts";
 import { identityPreferences } from "./draft-worktree-preferences.test-support.ts";
 import {
   acceptedWorktreeSession,
@@ -11,7 +19,6 @@ import {
   submitPendingWorktree,
 } from "./draft-worktree-submission.test-support.ts";
 import { renderControl } from "./model-control.test-support.ts";
-import { loadNewSessionPreference } from "./preferences.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -46,16 +53,7 @@ it.each([
     const { admitted, submitting } = await submitPendingWorktree(first);
     const next = await readyPreferenceDraft(prefs, first.context.gateway);
     const control = next.place.modelControl;
-    await vi.waitFor(() =>
-      expect(
-        renderControl(control, next.context).querySelector(
-          '[data-chat-model-option="openai/gpt-5.6-sol"]',
-        ),
-      ).not.toBeNull(),
-    );
-    renderControl(control, next.context)
-      .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-sol"]')!
-      .click();
+    await chooseModel(next);
     const thinking = renderControl(control, next.context).querySelector<HTMLInputElement>(
       '[data-chat-thinking-slider="true"]',
     )!;
@@ -68,12 +66,13 @@ it.each([
     await vi.waitFor(() => expect(prefs.stored()).toMatchObject(selected));
     admitted.resolve(acceptedWorktreeSession);
     await submitting;
-    expect(next.place.worktreeName).toBe("");
+    expectWorktreeName(next.place);
     expect(prefs.stored()).toMatchObject(selected);
-    expect(loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName).toBeUndefined();
-    expect(control.selected).toBe(selected.model);
-    expect(control.thinkingLevel).toBe(selected.thinkingLevel);
-    expect(control.fastMode).toBe(selected.fastMode);
+    expect(control).toMatchObject({
+      selected: selected.model,
+      thinkingLevel: selected.thinkingLevel,
+      fastMode,
+    });
   },
 );
 
@@ -92,35 +91,17 @@ it.each(["composer retirement", "preference clear"] as const)(
       }
     });
     first.context.placementStartup.start = start;
-    vi.mocked(first.context.sessions.createResult).mockImplementation(async (params) => ({
-      key: params!.key!,
-      initialRun: { status: "idle" },
-    }));
-    const clearStarted = createDeferred();
-    const clear = createDeferred();
-    if (phase === "preference clear") {
-      prefs.beforeSave.mockImplementation(async ({ entries }) => {
-        const entry = entries["new-session.v1:main"];
-        if (
-          entry &&
-          typeof entry === "object" &&
-          "worktreeName" in entry &&
-          entry.worktreeName === ""
-        ) {
-          clearStarted.resolve();
-          await clear.promise;
-        }
-      });
-    }
+    acceptIdlePlacement(first);
+    const clear = phase === "preference clear" ? holdPreferenceClear(prefs) : undefined;
     first.flow.setMessage("first task");
     expect(first.flow.submitDisabledReason()).toBeUndefined();
     const submitting = first.flow.submit(undefined, phase === "composer retirement");
     if (phase === "preference clear") {
-      await clearStarted.promise;
+      await clear!.started.promise;
       expect(start).toHaveBeenCalledOnce();
       first.flow.invalidate();
       first.gateway.disconnect();
-      clear.resolve();
+      clear!.release.resolve();
     }
     await submitting;
     expect(first.context.sessions.createResult).toHaveBeenCalledOnce();
@@ -129,9 +110,7 @@ it.each(["composer retirement", "preference clear"] as const)(
     expect(first.request.mock.calls.some(([method]) => method === "agent.wait")).toBe(false);
     if (phase === "composer retirement") {
       await readyPreferenceDraft(prefs, first.context.gateway);
-      expect(
-        loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName,
-      ).toBeUndefined();
+      expect(browserPreference()?.worktreeName).toBeUndefined();
       expect(prefs.stored()).toMatchObject({ worktreeName: "" });
     }
   },
@@ -141,13 +120,9 @@ it("opens an accepted worktree while its saved name cleanup is pending", async (
   const prefs = identityPreferences();
   const first = await readyPreferenceDraft(prefs);
   const admission = createDeferred<typeof acceptedWorktreeSession>();
-  const clearing = createDeferred();
-  const clearStarted = createDeferred();
+  const { started: clearStarted, release: clearing, wait } = preferenceGate();
   const navigated = createDeferred();
-  prefs.beforeSave.mockImplementation(async () => {
-    clearStarted.resolve();
-    await clearing.promise;
-  });
+  prefs.beforeSave.mockImplementation(wait);
   vi.mocked(first.context.sessions.createResult).mockReturnValue(admission.promise);
   vi.mocked(first.context.navigateAndWait).mockImplementation(async () => {
     disposeWorktreeDraft(first);
@@ -184,8 +159,7 @@ it("opens an accepted worktree while its saved name cleanup is pending", async (
     }
     vi.useRealTimers();
     const next = await readyPreferenceDraft(prefs, first.context.gateway);
-    expect(next.place.worktreeName).toBe("");
-    expect(loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName).toBeUndefined();
+    expectWorktreeName(next.place);
     expect(first.context.sessions.createResult).toHaveBeenCalledOnce();
   } finally {
     vi.useRealTimers();
@@ -265,8 +239,7 @@ it.each([
     } else {
       expect(prefs.stored()).toMatchObject({ worktreeName: "" });
       expect(prefs.stored("work")).toEqual(retained);
-      expect(first.place.agentId).toBe("work");
-      expect(first.place.worktreeName).toBe("work-task");
+      expect(first.place).toMatchObject({ agentId: "work", worktreeName: "work-task" });
       expect(first.context.navigateAndWait).not.toHaveBeenCalled();
     }
   },
@@ -279,24 +252,11 @@ it.each(["name", "base"])(
     const first = await readyPreferenceDraft(prefs);
     const next = await readyPreferenceDraft(prefs, first.context.gateway);
     const observer = await readyPreferenceDraft(prefs, first.context.gateway);
-    const clearStarted = createDeferred();
-    const clear = createDeferred();
-    prefs.beforeSave.mockImplementation(async (params) => {
-      const entry = params.entries["new-session.v1:main"];
-      if (
-        entry &&
-        typeof entry === "object" &&
-        "worktreeName" in entry &&
-        entry.worktreeName === ""
-      ) {
-        clearStarted.resolve();
-        await clear.promise;
-      }
-    });
+    const clear = holdPreferenceClear(prefs);
     vi.mocked(first.context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
     first.flow.setMessage("first task");
     const submitting = first.flow.submit(undefined, true);
-    await clearStarted.promise;
+    await clear.started.promise;
     const writes = vi.spyOn(next.gateway, "persistPreference");
     if (edit === "name") {
       next.place.setWorktreeName("next-task");
@@ -308,7 +268,7 @@ it.each(["name", "base"])(
       setTimeout(resolve, 0);
     });
     const concurrentWrites = prefs.beforeSave.mock.calls.length;
-    clear.resolve();
+    clear.release.resolve();
     await Promise.all([submitting, writes.mock.results.at(-1)?.value]);
     if (edit === "name") {
       expect(prefs.stored()).toMatchObject({ worktreeName: "next-task", baseRef: "main" });
@@ -330,12 +290,8 @@ it.each(["name", "base"])(
 it("does not drain queued Gateway edits into a newer disconnected browser choice", async () => {
   const prefs = identityPreferences();
   const first = await readyPreferenceDraft(prefs);
-  const started = createDeferred();
-  const release = createDeferred();
-  prefs.beforeSave.mockImplementationOnce(async () => {
-    started.resolve();
-    await release.promise;
-  });
+  const { started, release, wait } = preferenceGate();
+  prefs.beforeSave.mockImplementationOnce(wait);
   const writes = vi.spyOn(first.gateway, "persistPreference");
   first.place.setBaseRef("release");
   await started.promise;
@@ -344,14 +300,14 @@ it("does not drain queued Gateway edits into a newer disconnected browser choice
     first.context.gateway.snapshot.phase = "reconnecting";
     first.gateway.synchronize(first.context.gateway);
     first.place.setWorktreeName("new-local-task");
-    expect(loadNewSessionPreference("ws://gateway.example", "main")).toMatchObject({
+    expect(browserPreference()).toMatchObject({
       worktreeName: "new-local-task",
     });
   } finally {
     release.resolve();
     await Promise.all(writes.mock.results.map((result) => result.value));
   }
-  expect(loadNewSessionPreference("ws://gateway.example", "main")).toMatchObject({
+  expect(browserPreference()).toMatchObject({
     worktreeName: "new-local-task",
   });
 });
@@ -362,12 +318,8 @@ it.each([false, true])(
     const prefs = identityPreferences();
     const first = await readyPreferenceDraft(prefs);
     const observer = await readyPreferenceDraft(prefs, first.context.gateway);
-    const started = createDeferred();
-    const release = createDeferred();
-    prefs.beforeSave.mockImplementationOnce(async () => {
-      started.resolve();
-      await release.promise;
-    });
+    const { started, release, wait } = preferenceGate();
+    prefs.beforeSave.mockImplementationOnce(wait);
     const saving = first.gateway.persistPreference("main", "/repo", { baseRef: "release" });
     await started.promise;
     const queued = first.gateway.persistPreference("main", "/repo", {
@@ -389,31 +341,22 @@ it.each([false, true])(
     // Confirmed defaults refresh the projection, not another open draft’s active fields.
     expect(observer.place.baseRef).toBe("main");
     const next = await readyPreferenceDraft(prefs, first.context.gateway);
-    expect(next.place.baseRef).toBe(baseRef);
-    expect(next.place.worktreeName).toBe("first-task");
+    expect(next.place).toMatchObject({ baseRef, worktreeName: "first-task" });
   },
 );
 
 it("does not let a replacement draft's pending preference load restore a consumed name", async () => {
   const prefs = identityPreferences();
   const first = await readyPreferenceDraft(prefs);
-  const clear = createDeferred();
-  const clearStarted = createDeferred();
-  prefs.beforeSave.mockImplementation(async () => {
-    clearStarted.resolve();
-    await clear.promise;
-  });
+  const { started: clearStarted, release: clear, wait } = preferenceGate();
+  prefs.beforeSave.mockImplementation(wait);
   vi.mocked(first.context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
   first.flow.setMessage("first task");
   const submitting = first.flow.submit(undefined, true);
   await clearStarted.promise;
   disposeWorktreeDraft(first);
-  const read = createDeferred();
-  const readStarted = createDeferred();
-  prefs.beforeRead.mockImplementationOnce(async () => {
-    readStarted.resolve();
-    await read.promise;
-  });
+  const { started: readStarted, release: read, wait: waitRead } = preferenceGate();
+  prefs.beforeRead.mockImplementationOnce(waitRead);
   const next = prefs.make(first.context.gateway);
   await readStarted.promise;
   clear.resolve();
@@ -479,7 +422,7 @@ it.each(["read", "save", "transport", "browser"] as const)(
         expect.any(String),
       );
     } else {
-      expect(loadNewSessionPreference("ws://gateway.example", "main")).toMatchObject({
+      expect(browserPreference()).toMatchObject({
         worktreeName: "first-task",
       });
     }
@@ -505,10 +448,7 @@ it("retires the restored placement's agent preference even when the picker hydra
   const mainPreference = structuredClone(prefs.stored());
   const start = vi.fn();
   retry.context.placementStartup.start = start;
-  vi.mocked(retry.context.sessions.createResult).mockImplementation(async (params) => ({
-    key: params!.key!,
-    initialRun: { status: "idle" },
-  }));
+  acceptIdlePlacement(retry);
   await retry.flow.submit(undefined, true);
   expect(retry.context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(original, {
     reconciliation: "background",

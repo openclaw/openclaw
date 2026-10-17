@@ -40,11 +40,46 @@ afterEach(() => {
   }
   vi.restoreAllMocks();
 });
+function modelControl(context: Parameters<typeof renderControl>[1]) {
+  const control = new NewSessionModelControl(() => {});
+  controls.push(control);
+  const draw = () => renderControl(control, context, "main", agent);
+  const find = (selector: string) => draw().querySelector<HTMLButtonElement>(selector);
+  return { control, draw, find };
+}
+function renderPlace(params: Parameters<typeof NewSessionPlaceControls>[0]["params"]) {
+  const element = document.createElement("div");
+  mountSolid(() => createComponent(NewSessionPlaceControls, { params }), { container: element });
+  return element;
+}
+function placeParams(
+  f: Pick<ReturnType<typeof createDraftFixture>, "context" | "gateway" | "place">,
+  data?: NewSessionRouteData,
+) {
+  return {
+    context: f.context,
+    data,
+    gateway: f.gateway,
+    place: f.place,
+    submitting: false,
+    pendingPlacement: false,
+    onConnectMachine: vi.fn(),
+    onNavigate: vi.fn(),
+    onFocusComposer: vi.fn(),
+    onChange: vi.fn(),
+  };
+}
+function hostedRepository(data?: NewSessionRouteData) {
+  const fixture = createRepositoryFixture({ models: [model], workspaceGit: true, data });
+  const { state, context } = fixture;
+  controls.push(state.modelControl);
+  context.agents.state.agentsList!.agents[0]!.model = agent.model;
+  return fixture;
+}
 describe("hosted environment selection", () => {
   it("keeps explicit runtime intent across a late catalog, permission loss, and restored preferences", async () => {
     const { context, request } = contextWith([model]);
-    const control = new NewSessionModelControl(() => {});
-    controls.push(control);
+    const { control } = modelControl(context);
     control.load(context, "main", true, { agent });
     await vi.waitFor(() =>
       expect(control.hostedEnvironments()[0]?.model).toBe("openai/hosted-model"),
@@ -72,8 +107,7 @@ describe("hosted environment selection", () => {
     await vi.waitFor(() => expect(control.hostedEnvironments()[0]?.disabledReason).toBeTruthy());
     expect(control.agentRuntime).toBe("agentsapi");
     expect(control.modelSelectionBlockedReason(agent)).toBeTruthy();
-    const restored = new NewSessionModelControl(() => {});
-    controls.push(restored);
+    const { control: restored } = modelControl(context);
     restored.load(context, "main", true, {
       agent,
       preference: { model: "openai/hosted-model", agentRuntime: "agentsapi" },
@@ -84,13 +118,10 @@ describe("hosted environment selection", () => {
   });
   it("uses model-picker changes and configured defaults as the environment authority", async () => {
     const { context } = contextWith([model]);
-    const control = new NewSessionModelControl(() => {});
-    controls.push(control);
+    const { control, find } = modelControl(context);
     control.load(context, "main", true, { agent });
     await vi.waitFor(() => expect(control.hostedEnvironments()).toHaveLength(1));
-    renderControl(control, context, "main", agent)
-      .querySelector<HTMLButtonElement>('[data-chat-model-runtime="agentsapi"]')!
-      .click();
+    find('[data-chat-model-runtime="agentsapi"]')!.click();
     expect(control.resolveAgentRuntime()?.workspaceEnvironment).toEqual(
       runtime.workspaceEnvironment,
     );
@@ -135,10 +166,8 @@ describe("hosted environment selection", () => {
           : { kind: "automatic", label: "Automatic" },
       });
     });
-    const control = new NewSessionModelControl(() => {});
-    controls.push(control);
+    const { control, draw } = modelControl(context);
     control.load(context, "main", true, { agent });
-    const draw = () => renderControl(control, context, "main", agent);
     const choose = async (id: string) => {
       draw().querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
       await vi.waitFor(() =>
@@ -203,10 +232,8 @@ describe("hosted environment selection", () => {
       catalogLabel: "",
       startTerminal: false,
     };
-    const fixture = createRepositoryFixture({ models: [model], workspaceGit: true, data });
-    const { state, context, request } = fixture;
-    controls.push(state.modelControl);
-    context.agents.state.agentsList!.agents[0]!.model = { primary: "openai/hosted-model" };
+    const fixture = hostedRepository(data);
+    const { state, request } = fixture;
     request.mockResolvedValue({
       repositoryStatus: "git",
       branches: [{ kind: "local", name: "main" }],
@@ -229,25 +256,7 @@ describe("hosted environment selection", () => {
     expect(state.hostedEnvironment).toBeUndefined();
     expect(state.folder).toBe("/local/project");
     expect(state.worktree).toBe(true);
-    const element = document.createElement("div");
-    mountSolid(
-      () =>
-        createComponent(NewSessionPlaceControls, {
-          params: {
-            context,
-            data,
-            gateway: fixture.gateway,
-            place: state,
-            submitting: false,
-            pendingPlacement: false,
-            onConnectMachine: vi.fn(),
-            onNavigate: vi.fn(),
-            onFocusComposer: vi.fn(),
-            onChange: vi.fn(),
-          },
-        }),
-      { container: element },
-    );
+    const element = renderPlace(placeParams({ ...fixture, place: state }, data));
     expect(element.querySelector("#new-session-project-trigger")).not.toBeNull();
     expect(element.querySelector("#new-session-checkout-trigger")).not.toBeNull();
     expect(
@@ -290,25 +299,7 @@ describe("hosted environment selection", () => {
     f.place.selectHostedEnvironment("agentsapi");
     expect(f.place.hostedEnvironment).toBeDefined();
     await f.gateway.refreshCloudProfiles();
-    const element = document.createElement("div");
-    mountSolid(
-      () =>
-        createComponent(NewSessionPlaceControls, {
-          params: {
-            context: f.context,
-            data: undefined,
-            gateway: f.gateway,
-            place: f.place,
-            submitting: false,
-            pendingPlacement: false,
-            onConnectMachine: vi.fn(),
-            onNavigate: vi.fn(),
-            onFocusComposer: vi.fn(),
-            onChange: vi.fn(),
-          },
-        }),
-      { container: element },
-    );
+    const element = renderPlace(placeParams(f));
     expect(element.textContent).toContain("Chooses the first eligible connected device");
     expect(element.textContent).not.toContain("Chooses the least-busy connected device");
     f.place.selectDevice("", true);
@@ -317,10 +308,7 @@ describe("hosted environment selection", () => {
   });
 
   it("suppresses remote clone and worktree payloads while preserving place intent", async () => {
-    const fixture = createRepositoryFixture({ models: [model], workspaceGit: true });
-    const { state, context } = fixture;
-    controls.push(state.modelControl);
-    context.agents.state.agentsList!.agents[0]!.model = { primary: "openai/hosted-model" };
+    const { state } = hostedRepository();
     state.adoptAgentDefaults();
     await vi.waitFor(() => expect(state.modelControl.hostedEnvironments()).toHaveLength(1));
     state.selectDevice("desktop");
@@ -330,9 +318,7 @@ describe("hosted environment selection", () => {
     });
     const before = state.preferenceSelection();
     state.selectHostedEnvironment("agentsapi");
-    expect(state.remotePlacement).toBe(false);
-    expect(state.deviceId).toBe("");
-    expect(state.worktree).toBe(false);
+    expect(state).toMatchObject({ remotePlacement: false, deviceId: "", worktree: false });
     const payload = buildSelectedSessionCreateParams(state, {
       message: "hello",
       visibility: "normal",
