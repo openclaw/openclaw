@@ -27,7 +27,6 @@ describe("Code Mode guest execution", () => {
       `
         const result = {
           invoked: false,
-          value: null,
           hostGlobals: [typeof process, typeof module, typeof require, typeof globalThis.__openclawHostRequest],
         };
         result.value = {
@@ -47,8 +46,7 @@ describe("Code Mode guest execution", () => {
       telemetry: { searchCount: 0, describeCount: 0, callCount: 0 },
     });
     expect(noop.execute).not.toHaveBeenCalled();
-    expect(testing.activeRuns.size).toBe(0);
-    expect(testing.resumingRunIds.size).toBe(0);
+    expect(testing).toMatchObject({ activeRuns: { size: 0 }, resumingRunIds: { size: 0 } });
   });
 
   it("keeps normalized, reserved, and colliding prompt names aligned with runtime", async () => {
@@ -236,14 +234,11 @@ describe("Code Mode guest execution", () => {
       const { run: execute, resume: wait } = createGuestHarness([target]);
       const clock = vi.spyOn(performance, "now").mockReturnValue(0);
       const original = worker.runCodeModeExecutor;
-      const spy = vi.spyOn(worker, "runCodeModeExecutor").mockImplementation(async (...args) => {
-        const inline = args[1].inlineHost;
-        if (!inline) {
-          return await original(...args);
-        }
-        return await original(args[0], {
-          ...args[1],
-          inlineHost: {
+      const spy = vi.spyOn(worker, "runCodeModeExecutor").mockImplementation((config, options) => {
+        const inline = options.inlineHost;
+        return original(config, {
+          ...options,
+          inlineHost: inline && {
             ...inline,
             onBoundary: async (boundary, context) => {
               if (boundary.pendingRequests.some((request) => request.method === "callValue")) {
@@ -272,16 +267,12 @@ describe("Code Mode guest execution", () => {
     },
   );
   it.each([
-    { name: "original 1KiB", cap: 1024, firstText: "🦞".repeat(140), lastText: "é".repeat(240) },
-    {
-      name: "clipped first leg",
-      cap: 1024,
-      firstText: "🦞".repeat(1000),
-      lastText: '\\"\n\té'.repeat(30),
-    },
+    ["original 1KiB", "🦞".repeat(140), "é".repeat(240)],
+    ["clipped first leg", "🦞".repeat(1000), '\\"\n\té'.repeat(30)],
   ])(
-    "bounds cumulative original output across yielded waits: $name",
-    async ({ cap, firstText, lastText }) => {
+    "bounds cumulative original output across yielded waits: %s",
+    async (_name, firstText, lastText) => {
+      const cap = 1024;
       const { run: execute, resume } = createGuestHarness([], {
         codeMode: { maxOutputBytes: cap },
       });
@@ -294,7 +285,7 @@ describe("Code Mode guest execution", () => {
         "cumulative",
       );
       expect(first.status).toBe("waiting");
-      if (Buffer.byteLength(JSON.stringify([original[0]])) > (cap ?? 65536)) {
+      if (Buffer.byteLength(JSON.stringify([original[0]])) > cap) {
         expectOriginalCodeModeMarker((first.output as unknown[])[0], [original[0]]);
       } else {
         expect(first.output).toEqual([original[0]]);
@@ -308,7 +299,7 @@ describe("Code Mode guest execution", () => {
       expect(final).toMatchObject({ status: "completed", value: true });
       expectOriginalCodeModeMarker((final.output as unknown[])[0], original);
       for (const frame of [first, empty, changed, final]) {
-        expectCodeModeSharedBudget(frame, cap ?? 65536);
+        expectCodeModeSharedBudget(frame, cap);
       }
       expect(testing.activeRuns.size).toBe(0);
     },
@@ -338,12 +329,7 @@ describe("Code Mode guest execution", () => {
     const result = await run(
       `
           const values = [await flag_only(), await no_details(), await blank_message(), await structured()];
-          let thrownMessage;
-          try {
-            await throw_error();
-          } catch (error) {
-            thrownMessage = error.message;
-          }
+          const thrownMessage = await throw_error().catch(error => error.message);
           return { values, thrownMessage };
         `,
       "tool-error-text",

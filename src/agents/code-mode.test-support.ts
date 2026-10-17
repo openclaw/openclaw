@@ -2,7 +2,6 @@ import { expect, vi } from "vitest";
 import type { CodeModeConfig as CodeModeToolsConfig } from "../config/types.tools.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
-import { normalizeCodeModeTimeoutResult } from "./code-mode-errors.js";
 import type { CodeModeExecutorContinuation } from "./code-mode-executor-types.js";
 import { runCodeModeExecutor } from "./code-mode-executor.js";
 import { resolveCodeModeHeadlessConfig } from "./code-mode-runtime.js";
@@ -29,7 +28,6 @@ export const testing = {
   resumingRunIds,
   codeModeReplayIdForToolCall,
   removeExpiredRuns,
-  normalizeCodeModeTimeoutResult,
   runCodeModeExecutor: async (...args: Parameters<typeof runCodeModeExecutor>) => {
     const result = await runCodeModeExecutor(...args);
     if (result.status === "waiting") {
@@ -71,9 +69,7 @@ export function pluginToolWithExecute(
   description: string,
   execute: AnyAgentTool["execute"],
 ): AnyAgentTool {
-  const tool = pluginTool(name, description);
-  tool.execute = vi.fn(execute) as AnyAgentTool["execute"];
-  return tool;
+  return Object.assign(pluginTool(name, description), { execute: vi.fn(execute) });
 }
 
 export function jsonTool(name: string, value: unknown, description = name): AnyAgentTool {
@@ -134,7 +130,6 @@ export function mcpTool(params: {
 }
 
 export function resultDetails(result: { details?: unknown }): Record<string, unknown> {
-  expect(result.details).toBeDefined();
   expect(typeof result.details).toBe("object");
   return result.details as Record<string, unknown>;
 }
@@ -153,8 +148,6 @@ export function expectOriginalCodeModeMarker(marker: unknown, original: unknown)
   expect(marker).toMatchObject({
     truncated: true,
     guidance: "Output truncated; rerun with narrower args.",
-    prefix: expect.any(String),
-    omittedBytes: expect.any(Number),
   });
   const { prefix, omittedBytes } = marker as { prefix: string; omittedBytes: number };
   const serialized = JSON.stringify(original);
@@ -169,14 +162,12 @@ export function expectCodeModeSharedBudget(
 ): void {
   let bytes = 0;
   for (const field of ["output", "value", "error"] as const) {
-    if (!Object.hasOwn(result, field)) {
-      continue;
+    if (Object.hasOwn(result, field)) {
+      const value = result[field];
+      if (!(field === "output" && Array.isArray(value) && value.length === 0)) {
+        bytes += Buffer.byteLength(JSON.stringify(value));
+      }
     }
-    const value = result[field];
-    if (field === "output" && Array.isArray(value) && value.length === 0) {
-      continue;
-    }
-    bytes += Buffer.byteLength(JSON.stringify(value));
   }
   expect(bytes).toBeLessThanOrEqual(maxBytes);
 }

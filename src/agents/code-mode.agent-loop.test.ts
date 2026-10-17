@@ -1,13 +1,14 @@
-import { access, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  createAssistantMessageEventStream,
-  type AssistantMessage,
-  type Context,
-} from "openclaw/plugin-sdk/llm";
+import type { Context } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  makeAssistantMessage,
+  model as agentLoopModel,
+  reply,
+} from "../../packages/agent-core/src/agent-loop.test-support.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
@@ -33,33 +34,10 @@ import {
 } from "./plugin-runtime-refresh.js";
 import { Agent } from "./runtime/index.js";
 import { createReadTool } from "./sessions/tools/read.js";
-import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
-import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 import { isToolResultError, readToolResultDetails } from "./tool-result-error.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
-const model = makeProviderModelFixture({
-  id: "test-model",
-  name: "Test Model",
-  api: "openai-responses",
-  provider: "test-provider",
-  baseUrl: "https://example.test",
-  contextWindow: 1_000,
-  maxTokens: 1_000,
-});
-
-function createAssistant(content: AssistantMessage["content"]): AssistantMessage {
-  return {
-    role: "assistant",
-    content,
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: createZeroUsageFixture(),
-    stopReason: content.some((entry) => entry.type === "toolCall") ? "toolUse" : "stop",
-    timestamp: Date.now(),
-  };
-}
+const model: typeof agentLoopModel = { ...agentLoopModel, api: "openai-responses" };
 
 type RecoveryProgram = string | { wait: true; runId?: string };
 
@@ -110,7 +88,7 @@ async function runCodeModeAgent(params: {
       const program = params.programs[index];
       const code = typeof program === "function" ? program(context) : program;
       const waiting = code !== undefined && typeof code !== "string";
-      const message = createAssistant(
+      const message = makeAssistantMessage(
         code === undefined
           ? [{ type: "text", text: "recovered" }]
           : [
@@ -124,16 +102,7 @@ async function runCodeModeAgent(params: {
               },
             ],
       );
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        stream.push({
-          type: "done",
-          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
-          message,
-        });
-        stream.end();
-      });
-      return stream;
+      return reply({ ...message, api: model.api, timestamp: Date.now() });
     },
   });
   params.configureAgent?.(agent, { tools, ctx });
@@ -142,8 +111,9 @@ async function runCodeModeAgent(params: {
 }
 
 describe("Code Mode agent-loop error recovery", () => {
+  const tempDirs = createTempDirTracker();
   it("recovers after a parked read fails without replaying the mutation", async () => {
-    const workspace = await realpath(await mkdtemp(join(tmpdir(), "code-mode-wait-")));
+    const workspace = tempDirs.make("code-mode-wait-");
     const input = join(workspace, "input.txt");
     await writeFile(input, "audited input\n");
     const readStarted = createDeferred();
@@ -158,18 +128,13 @@ describe("Code Mode agent-loop error recovery", () => {
         readFile: async (file) => {
           readStarted.resolve();
           await readRelease.promise;
-          try {
-            return await readFile(file);
-          } finally {
-            readFinished.resolve();
-          }
+          return await readFile(file).finally(readFinished.resolve);
         },
       },
     });
     vi.spyOn(read, "execute");
     const complete = effectTool("complete_task", effects, "completed", { completed: true });
     let activeAgent: Agent | undefined;
-    let waitDetails: Record<string, unknown> | undefined;
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const running = runCodeModeAgent({
       hiddenTools: [read, complete],
@@ -180,12 +145,6 @@ describe("Code Mode agent-loop error recovery", () => {
       ],
       configureAgent: (agent) => {
         activeAgent = agent;
-        agent.afterToolCall = async ({ toolCall, result, isError }) => {
-          if (toolCall.name === "wait") {
-            waitDetails = resultDetails(result);
-          }
-          return { isError: isError || isToolResultError(result) };
-        };
         agent.afterToolOutcome = async ({ toolCall, result }) => {
           if (toolCall.name === "exec" && readToolResultDetails(result)?.status === "waiting") {
             vi.useRealTimers();
@@ -210,9 +169,12 @@ describe("Code Mode agent-loop error recovery", () => {
       beginWait.resolve();
       readRelease.resolve();
       const result = await running;
+      const waited = result.agent.state.messages.find(
+        (message) => message.role === "toolResult" && message.toolName === "wait",
+      );
       expect(read.execute).toHaveBeenCalledOnce();
       expect([testing.activeRuns.size, testing.resumingRunIds.size]).toEqual([0, 0]);
-      expect(waitDetails).toMatchObject({
+      expect(readToolResultDetails(waited)).toMatchObject({
         status: "failed",
         bridgeDispatchStarted: true,
         error: expect.stringContaining("ReferenceError: missingAfterWait is not defined"),
@@ -228,7 +190,6 @@ describe("Code Mode agent-loop error recovery", () => {
       readRelease.resolve();
       await running;
       await readFinished.promise;
-      await rm(workspace, { recursive: true, force: true });
     }
   });
 
@@ -263,13 +224,8 @@ describe("Code Mode agent-loop error recovery", () => {
         (context) => {
           const outer = readToolResultDetails(context.messages.at(-1));
           expect(outer).toMatchObject({ status: "completed", value: { status: "running" } });
-          const nested = outer?.value;
-          if (
-            !nested ||
-            typeof nested !== "object" ||
-            !("sessionId" in nested) ||
-            typeof nested.sessionId !== "string"
-          ) {
+          const nested = resultDetails({ details: outer?.value });
+          if (typeof nested.sessionId !== "string") {
             throw new Error("Expected the real shell session ID");
           }
           sessionId = nested.sessionId;
@@ -378,12 +334,16 @@ describe("Code Mode agent-loop error recovery", () => {
   });
 
   afterEach(async () => {
-    await resetCodeModeTestState();
-    vi.useRealTimers();
+    try {
+      await resetCodeModeTestState();
+    } finally {
+      vi.useRealTimers();
+      tempDirs.cleanup();
+    }
   });
 
   it("inspects source and completes multiple edits after a partially applied program fails", async () => {
-    const workspace = await realpath(await mkdtemp(join(tmpdir(), "code-mode-continue-")));
+    const workspace = tempDirs.make("code-mode-continue-");
     const file = join(workspace, "source.txt");
     await writeFile(file, "original\n");
     const patch = tool("apply_patch", async (_id, input) => {
@@ -395,35 +355,31 @@ describe("Code Mode agent-loop error recovery", () => {
       jsonResult({ source: await readFile(file, "utf8") }),
     );
 
-    try {
-      const { agent, providerContexts } = await runCodeModeAgent({
-        hiddenTools: [patch, shell],
-        programs: [
-          'await apply_patch({ value: "first" }); throw new Error("interrupted after first change");',
-          "return await shell_command({});",
-          'return await apply_patch({ value: "second" });',
-          'return await apply_patch({ value: "third" });',
-          "return await shell_command({});",
-        ],
-      });
+    const { agent, providerContexts } = await runCodeModeAgent({
+      hiddenTools: [patch, shell],
+      programs: [
+        'await apply_patch({ value: "first" }); throw new Error("interrupted after first change");',
+        "return await shell_command({});",
+        'return await apply_patch({ value: "second" });',
+        'return await apply_patch({ value: "third" });',
+        "return await shell_command({});",
+      ],
+    });
 
-      expectRecovered(agent, providerContexts, 6);
-      expect(providerContexts[1]?.messages).toContainEqual(
-        expect.objectContaining({
-          role: "toolResult",
-          isError: true,
-          details: expect.objectContaining({
-            status: "failed",
-            error: expect.stringContaining("interrupted after first change"),
-          }),
+    expectRecovered(agent, providerContexts, 6);
+    expect(providerContexts[1]?.messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        isError: true,
+        details: expect.objectContaining({
+          status: "failed",
+          error: expect.stringContaining("interrupted after first change"),
         }),
-      );
-      expect(patch.execute).toHaveBeenCalledTimes(3);
-      expect(shell.execute).toHaveBeenCalledTimes(2);
-      expect(await readFile(file, "utf8")).toBe("original\nfirst\nsecond\nthird\n");
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-    }
+      }),
+    );
+    expect(patch.execute).toHaveBeenCalledTimes(3);
+    expect(shell.execute).toHaveBeenCalledTimes(2);
+    expect(await readFile(file, "utf8")).toBe("original\nfirst\nsecond\nthird\n");
   });
 
   it("continues after an operator permission change without replaying earlier mutations", async () => {
@@ -435,15 +391,9 @@ describe("Code Mode agent-loop error recovery", () => {
       if (!signal) {
         throw new Error("Expected owning tool signal");
       }
-      const cancelled = createDeferred<never>();
-      const onAbort = () => cancelled.reject(signal.reason);
-      signal.addEventListener("abort", onAbort, { once: true });
+      const cancelled = withinTest(createDeferred<never>().promise, signal);
       parked.resolve();
-      try {
-        return await cancelled.promise;
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-      }
+      return await cancelled;
     });
     const inspect = tool("inspect_state", async () => jsonResult({ applied: [...applied] }));
     const finish = effectTool("finish_task", applied, "remaining mutation", { finished: true });

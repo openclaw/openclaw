@@ -39,6 +39,8 @@ const sandbox = {
   workspaceDir: process.cwd(),
   containerWorkdir: "/workspace",
 };
+const requiredSandbox = { sandboxRequired: true, sandbox };
+const approval = { title: "Confirm command", description: "Review host command" };
 const deniedCode = 'return await exec({ command: "printf host-denied", host: "node" });';
 const harnessDisposers: Array<() => void> = [];
 const execCode = (args: object, command = "host-denied") =>
@@ -57,12 +59,13 @@ function installBefore(
 }
 
 function createHostHarness(
-  options: Parameters<typeof createSubscribedCodeModeHarness>[0] & {
+  options: Omit<Parameters<typeof createSubscribedCodeModeHarness>[0], "name"> & {
+    name?: string;
     defaults?: ExecToolDefaults;
     approvalMode?: "report";
-  },
+  } = {},
 ) {
-  const harness = createSubscribedCodeModeHarness(options);
+  const harness = createSubscribedCodeModeHarness({ name: "host-denial", ...options });
   harnessDisposers.push(harness.dispose);
   const source = createExecTool({
     host: "gateway",
@@ -94,10 +97,7 @@ function createHostHarness(
     remote,
     addTools,
     complete,
-    expectNoStart: () => {
-      expect(spawn).not.toHaveBeenCalled();
-      expect(remote).not.toHaveBeenCalled();
-    },
+    expectNoStart: () => [spawn, remote].forEach((spy) => expect(spy).not.toHaveBeenCalled()),
     run,
     runToCompletion: async (code = deniedCode) => complete(await run(code)),
   };
@@ -126,19 +126,13 @@ describe("Code Mode subscribed host denial", () => {
     [
       "required-elevation",
       {
-        sandboxRequired: true,
-        sandbox,
+        ...requiredSandbox,
         elevated: { enabled: true, allowed: true, defaultLevel: "off" },
       },
       { elevated: true },
       "Elevated execution is unavailable",
     ],
-    [
-      "required-outside",
-      { sandboxRequired: true, sandbox },
-      { host: "gateway" },
-      "this session requires a sandbox",
-    ],
+    ["required-outside", requiredSandbox, { host: "gateway" }, "this session requires a sandbox"],
   ])("preserves subscriber no-start for %s", async (policy, defaults, args, error) => {
     const before = installBefore();
     const observeToolTerminal = vi.fn(createToolTerminalObserver(`run-code-mode-host-${policy}`));
@@ -171,22 +165,18 @@ describe("Code Mode subscribed host denial", () => {
         if (change === "throw") {
           throw new Error("hook failed");
         }
-        if (change === "veto") {
-          return { block: true, blockReason: "hook veto" };
-        }
-        return { params: { command: "printf host-corrected", host: "gateway" } };
+        return change === "veto"
+          ? { block: true, blockReason: "hook veto" }
+          : { params: { command: "printf host-corrected", host: "gateway" } };
       });
       const timeoutMs = 1_500;
+      // Exhaust the budget after the command completes, before VM restore.
+      const exhaustBudget = () => {
+        vi.advanceTimersByTime(timeoutMs);
+      };
       const harness = createHostHarness({
-        name: `hook-${change}`,
         timeoutMs,
-        onToolStreamBoundary:
-          change === "repair"
-            ? () => {
-                // Exhaust the call budget after the real command completes, before VM restore.
-                vi.advanceTimersByTime(timeoutMs);
-              }
-            : undefined,
+        onToolStreamBoundary: change === "repair" ? exhaustBudget : undefined,
       });
       if (change === "repair") {
         vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
@@ -217,8 +207,7 @@ describe("Code Mode subscribed host denial", () => {
       const resolutions: string[] = [];
       const before = installBefore(() => ({
         requireApproval: {
-          title: "Confirm command",
-          description: "Review host command",
+          ...approval,
           onResolution: (value: string) => resolutions.push(value),
         },
       }));
@@ -232,8 +221,7 @@ describe("Code Mode subscribed host denial", () => {
         return { id: "host-approval", decision: decision === "timeout" ? null : decision };
       });
       const harness = createHostHarness({
-        name: `approval-${decision}`,
-        ...(decision === "report" ? { approvalMode: "report" } : {}),
+        approvalMode: decision === "report" ? "report" : undefined,
       });
       const details = await harness.runToCompletion();
       expect(details.status).toBe("failed");
@@ -261,7 +249,7 @@ describe("Code Mode subscribed host denial", () => {
   it("keeps the approved host snapshot frozen against later hook rewrites", async () => {
     const approve = vi.fn(() => ({
       params: { command: "printf approved", host: "node" },
-      requireApproval: { title: "Approve", description: "Exact host" },
+      requireApproval: approval,
     }));
     const rewrite = vi.fn(() => ({ params: { command: "printf changed", host: "gateway" } }));
     installHooks([
@@ -272,7 +260,7 @@ describe("Code Mode subscribed host denial", () => {
       id: "frozen",
       decision: "allow-once",
     });
-    const harness = createHostHarness({ name: "approval-freeze" });
+    const harness = createHostHarness();
     const details = await harness.runToCompletion();
     expect(details.error).toContain("requested node");
     expect(approve).toHaveBeenCalledOnce();
@@ -287,7 +275,7 @@ describe("Code Mode subscribed host denial", () => {
       await release.promise;
       finished.resolve();
     };
-    const harness = createHostHarness({ name: "abort-preparation" });
+    const harness = createHostHarness();
     installHooks([
       { hookName: "resolve_exec_env", handler: pause },
       {
@@ -321,7 +309,6 @@ describe("Code Mode subscribed host denial", () => {
   it("does not transfer the consumed fact when awaited completion replaces the error", async () => {
     const replacement = new Error("completion observer failed");
     const harness = createHostHarness({
-      name: "completion-replacement",
       observeToolTerminal: () => {
         throw replacement;
       },
@@ -331,14 +318,11 @@ describe("Code Mode subscribed host denial", () => {
     const capture = wrapToolWithBeforeToolCallHook(
       copyAgentToolMetadata(harness.source, {
         ...harness.source,
-        execute: async (...args: Parameters<typeof execute>) => {
-          try {
-            return await execute(...args);
-          } catch (error) {
+        execute: (...args: Parameters<typeof execute>) =>
+          execute(...args).catch((error: unknown) => {
             producerError = error;
             throw error;
-          }
-        },
+          }),
       }),
       { runId: harness.runId },
     );
@@ -383,9 +367,7 @@ describe("Code Mode subscribed host denial", () => {
         await mutated.promise;
       }
     });
-    const harness = createHostHarness({
-      name: `mutation-${order.replaceAll("/", "-")}`,
-    });
+    const harness = createHostHarness();
     const mutation = pluginToolWithExecute("record_mutation", "Append marker", async () => {
       if (order === "late-settlement") {
         await releaseLateMutation.promise;
@@ -429,14 +411,13 @@ describe("Code Mode subscribed host denial", () => {
       expect(await fs.readFile(marker, "utf8")).toBe("applied\n");
       expect(mutation.execute).toHaveBeenCalledOnce();
       if (parallel) {
-        expect(dispatchOrder).toEqual(
-          order.startsWith("denial-first")
-            ? ["exec", "record_mutation"]
-            : ["record_mutation", "exec"],
-        );
-        expect(settlementOrder).toEqual(
-          mutationFirstSettlement ? ["record_mutation", "exec"] : ["exec", "record_mutation"],
-        );
+        const expectedOrder = order.startsWith("denial-first")
+          ? ["exec", "record_mutation"]
+          : ["record_mutation", "exec"];
+        expect({ dispatchOrder, settlementOrder }).toEqual({
+          dispatchOrder: expectedOrder,
+          settlementOrder: expectedOrder,
+        });
       }
       harness.expectNoStart();
     } finally {
@@ -448,10 +429,7 @@ describe("Code Mode subscribed host denial", () => {
   });
 
   it("reports security denial without starting a shell process", async () => {
-    const harness = createHostHarness({
-      name: "security-deny",
-      defaults: { security: "deny" },
-    });
+    const harness = createHostHarness({ defaults: { security: "deny" } });
     const details = await harness.runToCompletion(execCode({ host: "gateway" }, "no"));
     expect(details.status).toBe("failed");
     harness.expectNoStart();
