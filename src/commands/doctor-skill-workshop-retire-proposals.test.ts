@@ -52,21 +52,18 @@ function writeFiles(dir: string, files: Record<string, string>) {
 const read = (...parts: string[]) => fs.readFileSync(path.join(...parts), "utf8");
 const retiredTablesMessage = "Retired the Skill Workshop proposal tables.";
 
-function fixture(label: string, options: { opsOnly?: boolean; workspace?: boolean } = {}) {
-  const root = tempDirs.make(`openclaw-retire-${label}-`);
+function fixture(options: { opsOnly?: boolean; workspace?: boolean } = {}) {
+  const root = tempDirs.make("openclaw-retire-");
   const stateDir = path.join(root, "state");
   const env = { HOME: root, OPENCLAW_STATE_DIR: stateDir };
   const mainDir = path.join(root, "main-agent");
   const opsDir = path.join(root, "ops-agent");
   const opsWorkspace = path.join(root, "ops-workspace");
-  const config: OpenClawConfig = {
-    agents: {
-      entries: {
-        ...(!options.opsOnly ? { main: { agentDir: mainDir } } : {}),
-        ops: { agentDir: opsDir, ...(options.workspace ? { workspace: opsWorkspace } : {}) },
-      },
-    },
+  const entries: NonNullable<OpenClawConfig["agents"]>["entries"] = {
+    ...(!options.opsOnly ? { main: { agentDir: mainDir } } : {}),
+    ops: { agentDir: opsDir, ...(options.workspace ? { workspace: opsWorkspace } : {}) },
   };
+  const config: OpenClawConfig = { agents: { entries } };
   const proposalsDir = path.join(stateDir, "skill-workshop", "proposals");
   const exportsFor = (agentDir: string) =>
     path.join(agentDir, "workshop-skills", ".archive", ".retired-proposals");
@@ -90,7 +87,7 @@ function rollbackFixture(
   previousHash: string | null = null,
   draftFile?: string,
 ) {
-  const setup = fixture("unfinished-apply", { opsOnly: true });
+  const setup = fixture({ opsOnly: true });
   const { env, skillDir, skillFile } = setup;
   const record = {
     draftFile,
@@ -128,7 +125,7 @@ function retiredTableNames(env: NodeJS.ProcessEnv) {
 }
 
 it("exports pending drafts from retired tables and legacy files, then drops the tables once", async () => {
-  const { env, config, proposalsDir, mainExports, opsExports } = fixture("proposals");
+  const { env, config, proposalsDir, mainExports, opsExports } = fixture();
 
   openOpenClawStateDatabase({ env }).db.exec(`
     ${RETIRED_TABLES}
@@ -179,9 +176,7 @@ it("exports pending drafts from retired tables and legacy files, then drops the 
 });
 
 it("keeps legacy bundles without a provable owner, record, or draft until every bundle is exported", async () => {
-  const { env, config, proposalsDir, opsWorkspace, opsExports } = fixture("legacy-proposals", {
-    workspace: true,
-  });
+  const { env, config, proposalsDir, opsWorkspace, opsExports } = fixture({ workspace: true });
   const bundle = (id: string, record?: object) => {
     write(path.join(proposalsDir, id, "PROPOSAL.md"), `# ${id}\n`);
     if (record) {
@@ -194,16 +189,11 @@ it("keeps legacy bundles without a provable owner, record, or draft until every 
   });
   bundle("unowned-procedure-1", { status: "quarantined" });
   bundle("orphan-procedure-1");
-  // A lost draft must not take its remaining support files down with the bundle.
-  write(
-    path.join(proposalsDir, "draftless-procedure-1", "proposal.json"),
-    JSON.stringify({
-      status: "pending",
-      origin: { agentId: "ops" },
-      supportFiles: [{ path: "references/notes.md" }],
-    }),
-  );
-  write(path.join(proposalsDir, "draftless-procedure-1", "references", "notes.md"), "notes\n");
+  writeFiles(path.join(proposalsDir, "draftless-procedure-1"), {
+    "proposal.json":
+      '{"status":"pending","origin":{"agentId":"ops"},"supportFiles":[{"path":"references/notes.md"}]}',
+    "references/notes.md": "notes\n",
+  });
 
   const first = await retireSkillWorkshopProposals({ config, env });
   expect(first.changes).toEqual([
@@ -277,63 +267,51 @@ it.each([
   expect(retiredTableNames(env)).toEqual([]);
 });
 
-it("undoes an apply that stopped before SKILL.md, then retires its rollback", async () => {
-  const { env, config, proposalsDir, skillDir, skillFile } = rollbackFixture(
-    [
-      ["references/replaced.md", "new replaced\n", "old replaced\n"],
-      ["references/added.md", "new added\n", null],
-    ],
-    "update",
-    sha256Hex("# Before\n"),
-    "PROPOSAL.md",
-  );
-  const proposed = {
-    "references/replaced.md": "new replaced\n",
-    "references/added.md": "new added\n",
-  };
-  writeFiles(path.join(proposalsDir, "deploy-procedure-1"), {
-    "PROPOSAL.md": "# Draft\n",
-    ...proposed,
-  });
-  // The apply wrote both support files, then stopped before its last write, SKILL.md.
-  writeFiles(skillDir, { "SKILL.md": "# Before\n", ...proposed });
+it.each<"update" | "create">(["update", "create"])(
+  "undoes a %s stopped before SKILL.md",
+  async (action) => {
+    const updating = action === "update";
+    const files: Parameters<typeof rollbackFixture>[0] = updating
+      ? [
+          ["references/replaced.md", "new replaced\n", "old replaced\n"],
+          ["references/added.md", "new added\n", null],
+        ]
+      : [["references/notes.md", "proposed\n", null]];
+    const { env, config, proposalsDir, skillDir, skillFile } = rollbackFixture(
+      files,
+      action,
+      updating ? sha256Hex("# Before\n") : null,
+      updating ? "PROPOSAL.md" : undefined,
+    );
+    const proposed = Object.fromEntries(files.map(([file, content]) => [file, content]));
+    if (updating) {
+      writeFiles(path.join(proposalsDir, "deploy-procedure-1"), {
+        "PROPOSAL.md": "# Draft\n",
+        ...proposed,
+      });
+      write(skillFile, "# Before\n");
+    }
+    // The apply wrote support files, then stopped before its last write, SKILL.md.
+    writeFiles(skillDir, proposed);
 
-  const result = await retireSkillWorkshopProposals({ config, env });
-
-  expect(result.warnings).toEqual([]);
-  expect(result.changes).toContain(
-    `Restored ${skillDir} from the unfinished apply of Skill Workshop proposal deploy-procedure-1.`,
-  );
-  expect(result.changes).toContain(retiredTablesMessage);
-  expect(read(skillFile)).toBe("# Before\n");
-  expect(read(skillDir, "references", "replaced.md")).toBe("old replaced\n");
-  expect(fs.existsSync(path.join(skillDir, "references", "added.md"))).toBe(false);
-  expect(retiredTableNames(env)).toEqual([]);
-});
-
-it("frees the skill name when it undoes a create that stopped before SKILL.md", async () => {
-  const { env, config, skillDir } = rollbackFixture(
-    [["references/notes.md", "proposed\n", null]],
-    "create",
-  );
-  write(path.join(skillDir, "references", "notes.md"), "proposed\n");
-
-  const result = await retireSkillWorkshopProposals({ config, env });
-
-  expect(result.changes).toContain(retiredTablesMessage);
-  expect(fs.existsSync(skillDir)).toBe(false);
-});
-
-async function retireUnfinishedApply(live: { skill: string; support: string }) {
-  const { env, config, skillDir, skillFile } = rollbackFixture([
-    ["references/notes.md", "proposed\n", "before\n"],
-  ]);
-  const supportFile = path.join(skillDir, "references", "notes.md");
-  write(skillFile, live.skill);
-  write(supportFile, live.support);
-  const result = await retireSkillWorkshopProposals({ config, env });
-  return { result, env, skillDir, skillFile, supportFile };
-}
+    const result = await retireSkillWorkshopProposals({ config, env });
+    expect(result.changes).toContain(retiredTablesMessage);
+    expect(retiredTableNames(env)).toEqual([]);
+    if (updating) {
+      expect(result.warnings).toEqual([]);
+      expect(result.changes).toContain(
+        `Restored ${skillDir} from the unfinished apply of Skill Workshop proposal deploy-procedure-1.`,
+      );
+      expect([read(skillFile), read(skillDir, "references", "replaced.md")]).toEqual([
+        "# Before\n",
+        "old replaced\n",
+      ]);
+      expect(fs.existsSync(path.join(skillDir, "references", "added.md"))).toBe(false);
+    } else {
+      expect(fs.existsSync(skillDir)).toBe(false);
+    }
+  },
+);
 
 it.each([
   {
@@ -347,27 +325,32 @@ it.each([
     live: { skill: "# Proposed\n", support: "before\n" },
     cause: () => "SKILL.md is past its pre-apply content but its support files are not",
   },
-])("keeps the rollback when $state", async ({ live, cause }) => {
-  const { result, env, skillDir, skillFile, supportFile } = await retireUnfinishedApply(live);
-
-  expect(result).toMatchObject({ changes: [], warningDisposition: "recoverable" });
-  expect(result.warnings).toContainEqual(
-    expect.stringContaining(
-      `Could not undo the unfinished apply of Skill Workshop proposal deploy-procedure-1 in ${skillDir}: Error: ${cause(supportFile)}.`,
-    ),
-  );
-  expect([read(skillFile), read(supportFile)]).toEqual([live.skill, live.support]);
-  expect(retiredTableNames(env)).not.toEqual([]);
-});
-
-it("retires the rollback of an apply that finished before its status commit", async () => {
-  const live = { skill: "# Proposed\n", support: "proposed\n" };
-  const { result, env, skillFile, supportFile } = await retireUnfinishedApply(live);
-
-  expect(result.warnings).toEqual([
-    "Skill Workshop proposal deploy-procedure-1 has no draft left to export; retired its record.",
+  {
+    state: "the apply finished before its status commit",
+    live: { skill: "# Proposed\n", support: "proposed\n" },
+    cause: undefined,
+  },
+])("preserves live files when $state", async ({ live, cause }) => {
+  const { env, config, skillDir, skillFile } = rollbackFixture([
+    ["references/notes.md", "proposed\n", "before\n"],
   ]);
-  expect(result.changes).toContain(retiredTablesMessage);
+  const supportFile = path.join(skillDir, "references", "notes.md");
+  writeFiles(skillDir, { "SKILL.md": live.skill, "references/notes.md": live.support });
+  const result = await retireSkillWorkshopProposals({ config, env });
+
+  if (cause) {
+    expect(result).toMatchObject({ changes: [], warningDisposition: "recoverable" });
+    expect(result.warnings).toContainEqual(
+      expect.stringContaining(
+        `Could not undo the unfinished apply of Skill Workshop proposal deploy-procedure-1 in ${skillDir}: Error: ${cause(supportFile)}.`,
+      ),
+    );
+  } else {
+    expect(result.warnings).toEqual([
+      "Skill Workshop proposal deploy-procedure-1 has no draft left to export; retired its record.",
+    ]);
+    expect(result.changes).toContain(retiredTablesMessage);
+  }
   expect([read(skillFile), read(supportFile)]).toEqual([live.skill, live.support]);
-  expect(retiredTableNames(env)).toEqual([]);
+  expect(retiredTableNames(env).length > 0).toBe(Boolean(cause));
 });

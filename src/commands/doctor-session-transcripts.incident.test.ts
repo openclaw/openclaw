@@ -184,11 +184,10 @@ it("repairs a full store of mixed stable bindings without losing current or unce
       env,
     }),
   );
-  const sorted = (entries: ReadonlyArray<{ key: string; value: unknown }>) =>
-    entries
-      .map(({ key, value }) => ({ key, value }))
-      .toSorted((a, b) => a.key.localeCompare(b.key));
-  expect(sorted(bindingRows)).toEqual(sorted(retainedBindings));
+  const valuesByKey = (entries: ReadonlyArray<{ key: string; value: unknown }>) =>
+    Object.fromEntries(entries.map(({ key, value }) => [key, value]));
+  expect(bindingRows).toHaveLength(retainedBindings.length);
+  expect(valuesByKey(bindingRows)).toEqual(valuesByKey(retainedBindings));
   expect(capacity()).toBe(ADVISORY_MANAGED_THREAD_COUNT + retainedBindings.length);
   expect(note).toHaveBeenCalledWith(
     expect.stringContaining(`Removed ${orphanCount} orphaned Codex`),

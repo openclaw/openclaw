@@ -123,6 +123,8 @@ describe("doctor session transcript repair", () => {
     noteSessionTranscriptHealth({ cfg: {}, env, shouldRepair: true, ...overrides });
   const expectNote = (text: string) =>
     expect(note).toHaveBeenCalledWith(expect.stringContaining(text), "Session SQLite");
+  const stepReceipt = (details: object) =>
+    expect.objectContaining({ id: "plugin-doctor-post-session-state", ...details });
 
   beforeEach(async () => {
     note.mockClear();
@@ -141,9 +143,8 @@ describe("doctor session transcript repair", () => {
       .mockResolvedValue({ changes: [], warnings: [] });
     withDoctorSqliteMaintenanceLock
       .mockReset()
-      .mockImplementation(
-        async (params: { run: (authority: { assertCurrent(): void }) => unknown }) =>
-          await params.run(maintenanceAuthority),
+      .mockImplementation((params: { run: (authority: { assertCurrent(): void }) => unknown }) =>
+        params.run(maintenanceAuthority),
       );
     root = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-transcripts-")),
@@ -381,22 +382,15 @@ describe("doctor session transcript repair", () => {
       maintenanceAuthority: { assertCurrent: expect.any(Function) },
       plannedActions: postSessionMigration.plannedActions,
     });
-    expect(first).toMatchObject({
-      id: "plugin-doctor-post-session-state",
-      outcome: "completed",
-      changes: ["repaired frozen plugin action"],
-    });
-    expect(replay).toMatchObject({
-      id: "plugin-doctor-post-session-state",
-      outcome: "skipped",
-      changes: [],
-    });
+    expect(first).toEqual(
+      stepReceipt({ outcome: "completed", changes: ["repaired frozen plugin action"] }),
+    );
+    expect(replay).toEqual(stepReceipt({ outcome: "skipped", changes: [] }));
     expect(receipts).toEqual([first, replay]);
   });
 
   const refusedReceipt = (code: string) =>
-    expect.objectContaining({
-      id: "plugin-doctor-post-session-state",
+    stepReceipt({
       outcome: "refused",
       changes: [],
       refusal: expect.objectContaining({ code }),
@@ -461,9 +455,7 @@ describe("doctor session transcript repair", () => {
 
     expect(runDoctorSessionSqlite).not.toHaveBeenCalled();
     expectNote(cause.message);
-    if (cause.cause) {
-      expectNote("ENOSYS");
-    }
+    expectNote("ENOSYS");
     expectNote('run "openclaw doctor --fix" for session-store maintenance');
   });
 

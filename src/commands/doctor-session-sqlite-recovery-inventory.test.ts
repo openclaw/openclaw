@@ -30,6 +30,12 @@ import {
 } from "./doctor-session-sqlite-recovery-inventory.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 
+function hasSettledDuplicate(manifest: ActiveSessionSqliteMigrationRun["manifest"] | undefined) {
+  return manifest?.targets.some((target) =>
+    target.issues.some((issue) => issue.code === "historical_duplicate_settled"),
+  );
+}
+
 function recoveryGraph(transcripts: number) {
   const target: SessionSqliteMigrationTargetManifest = {
     agentId: "main",
@@ -85,7 +91,6 @@ function createRetainedDuplicateArchives(state: OpenClawTestState) {
   const archiveDir = path.join(path.dirname(sessions), "session-sqlite-import-archive");
   fs.mkdirSync(archiveDir);
   const bytes = `${JSON.stringify({ type: "session", id: "duplicate", version: 3, timestamp: "2026-09-01T00:00:00Z", cwd: "/synthetic" })}\n`;
-  const moves: SessionSqliteMigrationMove[] = [];
   function recordRun(runMoves: SessionSqliteMigrationMove[], failed = false) {
     const run = createSessionSqliteMigrationRun(state.env, [target]);
     recordPlannedMigrationMoves(run, target, runMoves);
@@ -95,7 +100,7 @@ function createRetainedDuplicateArchives(state: OpenClawTestState) {
     writeSessionSqliteMigrationManifest(run);
     return run;
   }
-  const archives = [1, 2].map((copy) => {
+  const moves = [1, 2].map((copy) => {
     const archivePath = path.join(archiveDir, `duplicate.jsonl.imported-${copy}`);
     fs.writeFileSync(archivePath, bytes);
     const move: SessionSqliteMigrationMove = {
@@ -111,13 +116,12 @@ function createRetainedDuplicateArchives(state: OpenClawTestState) {
       },
     };
     recordRun([move]);
-    moves.push(move);
-    return archivePath;
+    return move;
   });
   return {
     archiveDir,
     bytes,
-    archives,
+    archives: moves.map((move) => move.archivePath),
     moves,
     recordRun,
     doctor: (mode: "import" | "recover" | "dry-run") =>
@@ -149,8 +153,8 @@ it("preserves the latest failed run's rollback when duplicate references are coa
     for (const file of survivingFiles) {
       expect(fs.readFileSync(file, "utf8")).toBe(bytes);
     }
-    expect(retained.report.artifacts).not.toContainEqual(
-      expect.objectContaining({ reason: "unexpectedly-missing-artifact" }),
+    expect(retained.report.artifacts.map(({ reason }) => reason)).not.toContain(
+      "unexpectedly-missing-artifact",
     );
   });
 });
@@ -184,12 +188,7 @@ it.each(["disposal", "manifest-publication"] as const)(
           : vi
               .spyOn(migrationRun, "writeSessionSqliteMigrationManifest")
               .mockImplementation((run) => {
-                if (
-                  run.manifest.targets.some((item) =>
-                    item.issues.some((issue) => issue.code === "historical_duplicate_settled"),
-                  ) &&
-                  ++coalescedWrites === 3
-                ) {
+                if (hasSettledDuplicate(run.manifest) && ++coalescedWrites === 3) {
                   throw new Error("injected partial manifest coalescing");
                 }
                 publish(run);
@@ -219,13 +218,12 @@ it.each(["disposal", "manifest-publication"] as const)(
         const pending = [...before.references].filter(([, refs]) =>
           refs.some(({ move }) => move.artifact?.disposal.state === "pending-disposal"),
         );
-        expect(pending).toHaveLength(1);
-        const [pendingPath, refs] = pending[0]!;
-        expect(pendingPath).toBe(retiredPath);
-        expect(refs.length).toBeGreaterThan(0);
-        expect(refs.every(({ move }) => move.artifact?.disposal.state === "pending-disposal")).toBe(
-          true,
-        );
+        expect(
+          pending.map(([file, refs]) => [
+            file,
+            new Set(refs.map(({ move }) => move.artifact?.disposal.state)),
+          ]),
+        ).toEqual([[retiredPath, new Set(["pending-disposal"])]]);
         expect(fs.readFileSync(survivorPath, "utf8")).toBe(bytes);
         expect(fs.readdirSync(archiveDir).some((file) => file.startsWith(".cleanup-"))).toBe(true);
       } else {
@@ -234,23 +232,19 @@ it.each(["disposal", "manifest-publication"] as const)(
         expect(before.references.get(survivorPath)?.length).toBeGreaterThan(1);
         expect(
           before.manifestPaths.filter((file) =>
-            migrationRun
-              .readSessionSqliteMigrationManifest(file)
-              ?.targets.some((item) =>
-                item.issues.some((issue) => issue.code === "historical_duplicate_settled"),
-              ),
+            hasSettledDuplicate(migrationRun.readSessionSqliteMigrationManifest(file)),
           ),
         ).toHaveLength(2);
       }
       const recovered = await doctor("recover");
-      expect(recovered.targets.flatMap((item) => item.issues)).toEqual([
-        expect.objectContaining({ code: "historical_duplicate_settled" }),
+      expect(recovered.targets.flatMap((item) => item.issues.map(({ code }) => code))).toEqual([
+        "historical_duplicate_settled",
       ]);
       expect(fs.readFileSync(survivorPath, "utf8")).toBe(bytes);
       const after = inventory();
       expect(after.references.has(retiredPath)).toBe(false);
-      expect(after.report.artifacts).not.toContainEqual(
-        expect.objectContaining({ reason: "unexpectedly-missing-artifact" }),
+      expect(after.report.artifacts.map(({ reason }) => reason)).not.toContain(
+        "unexpectedly-missing-artifact",
       );
       if (phase === "disposal") {
         expect(fs.readdirSync(archiveDir)).toEqual([path.basename(survivorPath)]);

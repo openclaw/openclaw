@@ -41,21 +41,21 @@ export async function seedStaleDeferredPluginSessionImport(state: OpenClawTestSt
     allAgents: true,
     mode: "import",
   });
-  let foreignReport = "";
-  runOpenClawStateWriteTransaction(
+  const foreignReport = runOpenClawStateWriteTransaction(
     ({ db }) => {
+      const kind = "deferred-plugin-session-import";
       const row = db
-        .prepare(
-          "SELECT report_json FROM migration_sources WHERE migration_kind = 'deferred-plugin-session-import'",
-        )
-        .get()!;
-      foreignReport = JSON.stringify({
+        .prepare("SELECT report_json FROM migration_sources WHERE migration_kind = ?")
+        .get(kind)!;
+      const report = JSON.stringify({
         ...JSON.parse(String(row.report_json)),
         databaseIdentity: "123:456",
       });
-      db.prepare(
-        "UPDATE migration_sources SET report_json = ? WHERE migration_kind = 'deferred-plugin-session-import'",
-      ).run(foreignReport);
+      db.prepare("UPDATE migration_sources SET report_json = ? WHERE migration_kind = ?").run(
+        report,
+        kind,
+      );
+      return report;
     },
     { env: state.env },
   );

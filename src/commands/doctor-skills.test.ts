@@ -71,17 +71,12 @@ function createPrompter(repair = false) {
 async function runSkillDoctor(skills: SkillStatusEntry[]) {
   mocks.note.mockClear();
   mocks.buildWorkspaceSkillStatus.mockReturnValue(createReport(skills));
-  await maybeRepairSkillReadiness({
-    cfg: {},
-    prompter: createPrompter(),
-  });
+  await maybeRepairSkillReadiness({ cfg: {}, prompter: createPrompter() });
   return mocks.note.mock.calls;
 }
 
 describe("doctor skills", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
+  afterEach(() => vi.unstubAllEnvs());
 
   it.each([
     { mode: "update", update: true, expectedEnabled: true },
