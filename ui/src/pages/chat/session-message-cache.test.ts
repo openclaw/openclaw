@@ -11,24 +11,28 @@ import {
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 
-function createCacheContext() {
-  const host = {
-    assistantAgentId: "ops",
-    agentsList: { defaultId: "ops", mainKey: "home" },
-  };
+function createCacheContext(
+  assistantAgentId = "ops",
+  agentsList = { defaultId: "ops", mainKey: "home" },
+) {
+  const host = { assistantAgentId, agentsList };
   const cache: ChatMessageCache = new Map();
-  const target = (sessionKey = "home") => ({ sessionKey });
+  const target = (sessionKey = "home", agentId?: string) => ({ sessionKey, agentId });
   const read = (sessionKey = "home") => readChatSessionSnapshot(cache, host, target(sessionKey));
   const write = (snapshot: ChatSessionSnapshot, sessionKey = "home") =>
     cacheChatSessionSnapshot(cache, host, target(sessionKey), snapshot);
   return {
-    host,
-    cache,
     read,
     write,
-    messages: (sessionKey: string) => readChatMessagesFromCache(cache, host, target(sessionKey)),
-    writeMessages: (sessionKey: string, messages: unknown[]) =>
-      write({ messages, pagination: { hasMore: false }, sessionId: null }, sessionKey),
+    messages: (sessionKey: string, agentId?: string) =>
+      readChatMessagesFromCache(cache, host, target(sessionKey, agentId)),
+    writeMessages: (sessionKey: string, messages: unknown[], agentId?: string) =>
+      cacheChatSessionSnapshot(
+        cache,
+        host,
+        target(sessionKey, agentId),
+        widgetSnapshot(messages, null),
+      ),
     append: (sessionKey: string, message: unknown, event?: object) =>
       appendChatMessageToCache(cache, host, target(sessionKey), message, event),
     clear: (sessionKey = "home") => clearChatMessagesFromCache(cache, host, target(sessionKey)),
@@ -39,7 +43,8 @@ function createCacheContext() {
 const widgetSnapshot = (
   messages: unknown[] = ["widget"],
   sessionId: string | null = "session-1",
-): ChatSessionSnapshot => ({ messages, pagination: { hasMore: false }, sessionId });
+  extras: Partial<ChatSessionSnapshot> = {},
+): ChatSessionSnapshot => ({ messages, pagination: { hasMore: false }, sessionId, ...extras });
 
 describe("session message cache", () => {
   it.each([
@@ -74,21 +79,14 @@ describe("session message cache", () => {
   );
 
   it("uses explicit event agent identity for global cache targets", () => {
-    const { host, cache, writeMessages } = createCacheContext();
-    host.assistantAgentId = "work";
-    host.agentsList = { defaultId: "main", mainKey: "main" };
+    const { writeMessages, messages } = createCacheContext("work", {
+      defaultId: "main",
+      mainKey: "main",
+    });
     writeMessages("global", ["work"]);
-    cacheChatSessionSnapshot(
-      cache,
-      host,
-      { sessionKey: "global", agentId: "main" },
-      widgetSnapshot(["main"], null),
-    );
-
-    expect(readChatMessagesFromCache(cache, host, { sessionKey: "global" })).toEqual(["work"]);
-    expect(
-      readChatMessagesFromCache(cache, host, { sessionKey: "global", agentId: "main" }),
-    ).toEqual(["main"]);
+    writeMessages("global", ["main"], "main");
+    expect(messages("global")).toEqual(["work"]);
+    expect(messages("global", "main")).toEqual(["main"]);
   });
 
   it("claims a shared gateway event only once across retained panes", () => {
@@ -105,20 +103,10 @@ describe("session message cache", () => {
 
   it("does not retain history across backing session changes", () => {
     const { write, read, layout: createLayout } = createCacheContext();
-    write({
-      messages: [{ content: "old", __openclaw: { seq: 1 } }],
-      pagination: { hasMore: false, totalMessages: 1 },
-      sessionId: "session-1",
-      widgetHeights: { "canvas:preview": 700 },
-    });
-    const replacement = [{ content: "new", __openclaw: { seq: 1 } }];
+    write(widgetSnapshot(["old"], "session-1", { widgetHeights: { "canvas:preview": 700 } }));
+    const replacement = ["new"];
     const layout = createLayout();
-    write({
-      messages: replacement,
-      pagination: { hasMore: false, totalMessages: 1 },
-      sessionId: "session-2",
-    });
-
+    write(widgetSnapshot(replacement, "session-2"));
     expect(read()?.messages).toEqual(replacement);
     layout.write("canvas:preview", 800);
     expect(layout.read("canvas:preview")).toBeUndefined();
@@ -151,15 +139,13 @@ describe("session message cache", () => {
     expect(layout.read("canvas:preview")).toBeUndefined();
     write(widgetSnapshot());
     layout.write("canvas:preview", 700);
-    expect(read()?.widgetHeights).toEqual({
-      "canvas:preview": 700,
-    });
+    expect(read()?.widgetHeights).toEqual({ "canvas:preview": 700 });
   });
 
   it("removes an empty identity-free snapshot after a cleared session reload", () => {
     const { writeMessages, write, read } = createCacheContext();
     writeMessages("home", ["stale"]);
-    write({ ...widgetSnapshot([]), sessionId: null });
+    write(widgetSnapshot([], null));
     expect(read()).toBeNull();
   });
 
@@ -175,30 +161,17 @@ describe("session message cache", () => {
       pagination: { hasMore: false, totalMessages: 2 },
       sessionId: "session-1",
     });
-
     const snapshot = read();
     expect(snapshot?.messages).toHaveLength(1);
-    expect(snapshot?.pagination).toEqual({
-      hasMore: true,
-      nextOffset: 1,
-      totalMessages: 2,
-    });
+    expect(snapshot?.pagination).toEqual({ hasMore: true, nextOffset: 1, totalMessages: 2 });
   });
 
   it("evicts whole least-recently-used snapshots when the global budget is exceeded", () => {
     const { write, read } = createCacheContext();
     const content = "x".repeat(9 * 1024 * 1024);
     for (const sessionKey of ["one", "two", "three"]) {
-      write(
-        {
-          messages: [{ content, __openclaw: { seq: 1 } }],
-          pagination: { hasMore: false, totalMessages: 1 },
-          sessionId: sessionKey,
-        },
-        sessionKey,
-      );
+      write(widgetSnapshot([content], sessionKey), sessionKey);
     }
-
     expect(read("one")).toBeNull();
     expect(read("two")).not.toBeNull();
     expect(read("three")).not.toBeNull();
