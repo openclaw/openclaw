@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
+import type { SqliteReadOnlyWorkerMode } from "./sqlite-readonly-worker-protocol.js";
 
 const { prepare, prepareCopy, createToken, SourceChangedError } = vi.hoisted(() => ({
   prepare: vi.fn(),
@@ -29,6 +30,27 @@ afterEach(() => {
   createToken.mockReset();
   vi.resetModules();
 });
+
+async function readFailure(stdout: string, mode: SqliteReadOnlyWorkerMode, failure?: string) {
+  const { readSqliteReadOnlyWorkerValue } = await import("./sqlite-readonly-worker-protocol.js");
+  let received: unknown;
+  try {
+    readSqliteReadOnlyWorkerValue(
+      {
+        kind: "launched",
+        stdout,
+        stderr: "",
+        status: 0,
+        ...(failure === undefined ? {} : { failure }),
+      },
+      mode,
+    );
+  } catch (error) {
+    received = error;
+  }
+  expect(received).toBeInstanceOf(Error);
+  return received;
+}
 
 async function expectWorkerFailure(
   error: unknown,
@@ -61,15 +83,9 @@ async function expectWorkerFailure(
   const stdout = JSON.stringify({ ok: false, message: `${prefix}${message}` });
   expect(write).toHaveBeenCalledExactlyOnceWith(stdout);
   expect(process.exitCode).toBe(1);
-  const { readSqliteReadOnlyWorkerValue, SqliteReadOnlyInspectionContentionError } =
+  const { SqliteReadOnlyInspectionContentionError } =
     await import("./sqlite-readonly-worker-protocol.js");
-  let received: unknown;
-  try {
-    readSqliteReadOnlyWorkerValue({ kind: "launched", stdout, stderr: "", status: 0 }, mode);
-  } catch (cause) {
-    received = cause;
-  }
-  expect(received).toBeInstanceOf(Error);
+  const received = await readFailure(stdout, mode);
   expect(received instanceof SqliteReadOnlyInspectionContentionError).toBe(contention);
   const { isPrivateDirectoryCreationRefused } = await import("./private-directory-creation.js");
   expect(isPrivateDirectoryCreationRefused(received)).toBe(contention && allocationRefused);
@@ -78,96 +94,81 @@ async function expectWorkerFailure(
 const codedError = (message: string, fields: { code?: string; errcode?: number }) =>
   Object.assign(new Error(message), fields);
 
-it.each<{
-  name: string;
-  error: () => unknown;
-  message: string;
-  mode?: "sync" | "async" | "staging-create" | "staging-create-legacy";
+type FailureOptions = {
+  mode?: Parameters<typeof expectWorkerFailure>[3];
   refused?: boolean;
   contention?: boolean;
   allocationRefused?: boolean;
-}>([
-  ...(
-    [
-      { mode: "sync", errcode: 5 },
-      { mode: "staging-create-legacy", errcode: 6 },
-    ] as const
-  ).map(({ mode, errcode }) => ({
-    name: `${mode} pre-creation contention`,
-    mode,
-    refused: true,
+};
+const failureCase = (error: unknown, message: string, options: FailureOptions = {}) => ({
+  error,
+  message,
+  ...options,
+});
+
+function cyclicFailure() {
+  const error = Object.assign(new Error("disk I/O error"), {
+    code: "ERR_SQLITE_ERROR",
+    errcode: 778,
+    errstr: "hidden errstr",
+    stack: "hidden stack",
+    sql: "hidden SQL",
+    data: { code: "HIDDEN_DATA" },
+    errors: [{ code: "HIDDEN_AGGREGATE" }],
+  });
+  error.cause = Object.assign(new Error("hidden cause message", { cause: error }), {
+    code: "ERR_SQLITE_ERROR",
+    errcode: 778,
+  });
+  return error;
+}
+
+function deepFailure() {
+  let cause: unknown = { code: "HIDDEN_NINTH", errcode: 999 };
+  for (let index = 7; index >= 0; index -= 1) {
+    cause = Object.assign(new Error("staging failure", { cause }), {
+      code: `E${index}`,
+      errcode: index,
+    });
+  }
+  return cause;
+}
+
+it.each([
+  failureCase(
+    codedError("parent token admission failed", { errcode: 5 }),
+    "parent token admission failed (errcode=5)",
+    { mode: "sync", refused: true, contention: true },
+  ),
+  failureCase(
+    codedError("parent token admission failed", { errcode: 6 }),
+    "parent token admission failed (errcode=6)",
+    { mode: "staging-create-legacy", refused: true, contention: true, allocationRefused: true },
+  ),
+  failureCase(
+    codedError("parent admission refused", { code: "EACCES" }),
+    "parent admission refused (code=EACCES)",
+    { mode: "staging-create", refused: true, allocationRefused: true },
+  ),
+  failureCase(
+    codedError("allocation failed", { code: "ENOENT" }),
+    "allocation failed (code=ENOENT)",
+    { mode: "staging-create" },
+  ),
+  failureCase(new SourceChangedError("source changed"), "source changed", {
     contention: true,
-    allocationRefused: mode === "staging-create-legacy",
-    error: () => codedError("parent token admission failed", { errcode }),
-    message: `parent token admission failed (errcode=${errcode})`,
-  })),
-  {
-    name: "pre-creation permission refusal",
-    mode: "staging-create",
-    refused: true,
-    allocationRefused: true,
-    error: () => codedError("parent admission refused", { code: "EACCES" }),
-    message: "parent admission refused (code=EACCES)",
-  },
-  {
-    name: "ordinary allocation failure",
-    mode: "staging-create",
-    error: () => codedError("allocation failed", { code: "ENOENT" }),
-    message: "allocation failed (code=ENOENT)",
-  },
-  {
-    name: "source contention",
-    error: () => new SourceChangedError("source changed"),
-    message: "source changed",
-    contention: true,
-  },
-  {
-    name: "cyclic causes without private details",
-    error: () => {
-      const error = Object.assign(new Error("disk I/O error"), {
-        code: "ERR_SQLITE_ERROR",
-        errcode: 778,
-        errstr: "hidden errstr",
-        stack: "hidden stack",
-        sql: "hidden SQL",
-        data: { code: "HIDDEN_DATA" },
-        errors: [{ code: "HIDDEN_AGGREGATE" }],
-      });
-      error.cause = Object.assign(new Error("hidden cause message", { cause: error }), {
-        code: "ERR_SQLITE_ERROR",
-        errcode: 778,
-      });
-      return error;
-    },
-    message: "disk I/O error (code=ERR_SQLITE_ERROR, errcode=778)",
-  },
-  {
-    name: "bounded cause traversal",
-    error: () => {
-      let cause: unknown = { code: "HIDDEN_NINTH", errcode: 999 };
-      for (let index = 7; index >= 0; index -= 1) {
-        cause = Object.assign(new Error("staging failure", { cause }), {
-          code: `E${index}`,
-          errcode: index,
-        });
-      }
-      return cause;
-    },
-    message:
-      "staging failure (code=E0, errcode=0, code=E1, errcode=1, code=E2, errcode=2, code=E3, errcode=3, code=E4, errcode=4, code=E5, errcode=5, code=E6, errcode=6, code=E7, errcode=7)",
-  },
-  {
-    name: "unsafe code token",
-    error: () => codedError("failure", { code: "EIO\n", errcode: 11 }),
-    message: "failure (errcode=11)",
-  },
-  ...[-1, 1.5, 2 ** 31].map((errcode) => ({
-    name: `out-of-contract errcode ${errcode}`,
-    error: () => codedError("failure", { code: "EIO", errcode }),
-    message: "failure (code=EIO)",
-  })),
+  }),
+  failureCase(cyclicFailure(), "disk I/O error (code=ERR_SQLITE_ERROR, errcode=778)"),
+  failureCase(
+    deepFailure(),
+    "staging failure (code=E0, errcode=0, code=E1, errcode=1, code=E2, errcode=2, code=E3, errcode=3, code=E4, errcode=4, code=E5, errcode=5, code=E6, errcode=6, code=E7, errcode=7)",
+  ),
+  failureCase(codedError("failure", { code: "EIO\n", errcode: 11 }), "failure (errcode=11)"),
+  ...[-1, 1.5, 2 ** 31].map((errcode) =>
+    failureCase(codedError("failure", { code: "EIO", errcode }), "failure (code=EIO)"),
+  ),
 ])(
-  "serializes $name through the worker boundary",
+  "serializes $message through the worker boundary",
   async ({
     error,
     message,
@@ -176,13 +177,12 @@ it.each<{
     contention = false,
     allocationRefused = false,
   }) => {
-    const failure = error();
     if (refused) {
       const { markPrivateDirectoryCreationRefused } =
         await import("./private-directory-creation.js");
-      markPrivateDirectoryCreationRefused(failure);
+      markPrivateDirectoryCreationRefused(error);
     }
-    await expectWorkerFailure(failure, message, contention, mode, allocationRefused);
+    await expectWorkerFailure(error, message, contention, mode, allocationRefused);
   },
 );
 
@@ -194,7 +194,6 @@ it.each([
 ] as const)(
   "does not accept an allocation refusal receipt with $kind (contention: $contention)",
   async ({ kind, contention }) => {
-    const { readSqliteReadOnlyWorkerValue } = await import("./sqlite-readonly-worker-protocol.js");
     const stdout = JSON.stringify({
       ok: false,
       message:
@@ -202,23 +201,15 @@ it.each([
         "SQLite snapshot directory creation refused: root unavailable",
       ...(kind === "malformed-result" ? { unexpected: true } : {}),
     });
-    let received: unknown;
-    try {
-      readSqliteReadOnlyWorkerValue(
-        {
-          kind: "launched",
-          stdout,
-          stderr: "",
-          status: 0,
-          ...(kind === "transport-failure" ? { failure: "native transport failed" } : {}),
-          ...(kind === "empty-failure" ? { failure: "" } : {}),
-        },
-        kind === "wrong-mode" ? "async" : "staging-create",
-      );
-    } catch (error) {
-      received = error;
-    }
-    expect(received).toBeInstanceOf(Error);
+    const received = await readFailure(
+      stdout,
+      kind === "wrong-mode" ? "async" : "staging-create",
+      kind === "transport-failure"
+        ? "native transport failed"
+        : kind === "empty-failure"
+          ? ""
+          : undefined,
+    );
     const { isPrivateDirectoryCreationRefused } = await import("./private-directory-creation.js");
     expect(isPrivateDirectoryCreationRefused(received)).toBe(false);
   },

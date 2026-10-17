@@ -4,7 +4,6 @@ import type { DatabaseSync } from "node:sqlite";
 import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   cleanupSnapshotOperations,
@@ -12,6 +11,7 @@ import {
   registerSnapshotTempDirectory,
 } from "./sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationFromOwnedDatabase } from "./sqlite-readonly-location.js";
+import { createReadBarrier, observeSettlement } from "./sqlite-readonly.test-support.js";
 import type { SqliteStagingToken } from "./sqlite-staging-token.js";
 
 const mocks = vi.hoisted(() => ({
@@ -85,13 +85,9 @@ function expectOwnership(exists: boolean) {
 it.each(["sync", "async"] as const)(
   "joins %s cleanup before releasing private bytes",
   async (mode) => {
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
+    const { entered, resume, hold } = createReadBarrier();
     if (mode === "async") {
-      mocks.retire.mockImplementation(async () => {
-        entered.resolve();
-        await release.promise;
-      });
+      mocks.retire.mockImplementation(() => hold(undefined));
     }
     if (mode === "sync") {
       const prepared = await prepareSqliteReadOnlyLocationFromOwnedDatabase(database, () => {});
@@ -101,19 +97,16 @@ it.each(["sync", "async"] as const)(
       expect(mocks.retire).not.toHaveBeenCalled();
     } else {
       const prepared = await prepare();
-      let finished = false;
-      const closing = prepared.cleanupAsync().then((removed) => {
-        finished = true;
-        return removed;
-      });
+      const closing = prepared.cleanupAsync();
+      const observation = observeSettlement(closing);
       try {
         await Promise.race([entered.promise, closing]);
         expect(mocks.retire).toHaveBeenCalledOnce();
-        expect(finished).toBe(false);
+        expect(observation.settled).toBe(false);
         expect(fs.existsSync(prepared.location)).toBe(true);
         expect(database.isOpen).toBe(true);
       } finally {
-        release.resolve();
+        resume.resolve();
         await closing;
       }
       expect(mocks.retireSync).not.toHaveBeenCalled();
@@ -150,8 +143,7 @@ it.each(["allocation", "backup", "cancelled allocation"] as const)(
       phase === "cancelled allocation" ? "native inspection cancelled" : "source owner replaced",
     );
     const controller = new AbortController();
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
+    const { entered, resume, hold } = createReadBarrier();
     let current = true;
     const assertCurrent = () => {
       if (!current) {
@@ -169,8 +161,7 @@ it.each(["allocation", "backup", "cancelled allocation"] as const)(
       const allocate = mocks.allocate.getMockImplementation()!;
       mocks.allocate.mockImplementation(async (...args) => {
         if (phase === "cancelled allocation") {
-          entered.resolve();
-          await release.promise;
+          await hold(undefined);
         }
         const result = await allocate(...args);
         if (phase === "allocation") {
@@ -188,7 +179,7 @@ it.each(["allocation", "backup", "cancelled allocation"] as const)(
         expect(mocks.backup).not.toHaveBeenCalled();
       }
     } finally {
-      release.resolve();
+      resume.resolve();
       await rejected;
     }
     expect(mocks.backup).toHaveBeenCalledTimes(phase === "backup" ? 1 : 0);

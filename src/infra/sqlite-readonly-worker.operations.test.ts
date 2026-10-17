@@ -28,6 +28,7 @@ import {
   createSqliteReadOnlyWorkerScope,
   runSqliteReadOnlyOperation,
 } from "./sqlite-readonly-worker.js";
+import { observeSettlement } from "./sqlite-readonly.test-support.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -62,18 +63,10 @@ function readCommand(pathname = source) {
   };
 }
 
-function read(signal?: AbortSignal) {
-  return scope.run(() =>
-    runSqliteReadOnlyOperation(source, readCommand(), {
-      source: "canonical",
-      expectedIdentity,
-      env,
-      signal,
-    }),
-  );
-}
-
 const readOptions = () => ({ source: "canonical" as const, expectedIdentity, env });
+const runRead = (options: Parameters<typeof runSqliteReadOnlyOperation>[2] = readOptions()) =>
+  runSqliteReadOnlyOperation(source, readCommand(), options);
+const read = (signal?: AbortSignal) => scope.run(() => runRead({ ...readOptions(), signal }));
 const beginCommand = () => ({
   type: "pageCache.begin" as const,
   input: { kind: "agent" as const, maxBytes: 1024, now: Date.now() },
@@ -193,25 +186,17 @@ it("preserves off-thread reads, queued inputs, and cancellation ownership", asyn
     );
     now = 10;
     const prepared = readCommand();
+    const synthetic = {
+      count: 9_007_199_254_740_993n,
+      absent: undefined,
+      owners: new Map([["fixture", "captured"]]),
+      selected: new Set(["main"]),
+    };
     const command = {
       type: prepared.type,
-      input: {
-        ...prepared.input,
-        synthetic: {
-          count: 9_007_199_254_740_993n,
-          absent: undefined,
-          owners: new Map([["fixture", "captured"]]),
-          selected: new Set(["main"]),
-        },
-      },
+      input: { ...prepared.input, synthetic: structuredClone(synthetic) },
     };
-    const captured = scope.run(() =>
-      runSqliteReadOnlyOperation(source, command, {
-        source: "canonical",
-        expectedIdentity,
-        env,
-      }),
-    );
+    const captured = scope.run(() => runSqliteReadOnlyOperation(source, command, readOptions()));
     pending.push(captured);
     command.input.agentId = "other";
     command.input.synthetic.count = 1n;
@@ -239,18 +224,9 @@ it("preserves off-thread reads, queued inputs, and cancellation ownership", asyn
       throw new Error("Expected a serialized operation command");
     }
     const decoded: unknown = deserialize(Buffer.from(encoded, "base64"));
-    expect(decoded).toMatchObject({
+    expect(decoded).toStrictEqual({
       type: "agentRetirement.sessionStoreBlocker",
-      input: { agentId: "main" },
-    });
-    if (!isRecord(decoded) || !isRecord(decoded.input)) {
-      throw new Error("Expected a deserialized operation input");
-    }
-    expect(decoded.input.synthetic).toStrictEqual({
-      count: 9_007_199_254_740_993n,
-      absent: undefined,
-      owners: new Map([["fixture", "captured"]]),
-      selected: new Set(["main"]),
+      input: { ...prepared.input, synthetic },
     });
 
     transfer.reset();
@@ -266,8 +242,7 @@ it("preserves off-thread reads, queued inputs, and cancellation ownership", asyn
     activeAbort.abort(activeFailure);
     await rejectedActive;
     expect(requests()).toHaveLength(3);
-    expect(child.signalCode).toBe("SIGKILL");
-    expect(child.connected).toBe(false);
+    expect(child).toMatchObject({ signalCode: "SIGKILL", connected: false });
     expect(digest(readFileSync(source))).toBe(sourceDigest);
     expect(spawn).toHaveBeenCalledTimes(1);
     await waitForDiagnosticEventsDrained();
@@ -319,13 +294,7 @@ it("reuses workers across closed scopes without carrying database or inspection 
   };
   await expect(query(source, true)).resolves.toEqual({ blocker: "survivor" });
   await expect(query(other)).resolves.toEqual({ blocker: undefined });
-  await expect(
-    runSqliteReadOnlyOperation(source, readCommand(), {
-      source: "canonical",
-      expectedIdentity,
-      env,
-    }),
-  ).resolves.toEqual({ blocker: "survivor" });
+  await expect(runRead()).resolves.toEqual({ blocker: "survivor" });
   expect(vi.mocked(spawn).mock.calls.length - start).toBe(1);
   const reusedChild = vi.mocked(spawn).mock.results.at(-1)?.value;
   expect(reusedChild.exitCode).toBeNull();
@@ -352,13 +321,11 @@ it("closes a queued scope without waiting for an unrelated active transfer", asy
   );
   const queued = secondScope.run(() => runSqliteReadOnlyOperation(source, beginCommand(), options));
   const rejected = expect(queued).rejects.toThrow("scope closed");
-  let closed = false;
-  const closing = secondScope.close().then(() => {
-    closed = true;
-  });
+  const closing = secondScope.close();
+  const observation = observeSettlement(closing);
   try {
     await nextTurn();
-    expect(closed).toBe(true);
+    expect(observation.settled).toBe(true);
     await rejected;
     expect(activeChild.exitCode).toBeNull();
   } finally {
@@ -386,9 +353,8 @@ it("bounds concurrent incompatible launches to four live reader processes", asyn
   try {
     const rows = await Promise.all(
       Array.from({ length: 8 }, (_, index) =>
-        runSqliteReadOnlyOperation(source, readCommand(), {
-          source: "canonical",
-          expectedIdentity,
+        runRead({
+          ...readOptions(),
           env: { ...env, OPENCLAW_POOL_FIXTURE: String(index) },
         }),
       ),
@@ -476,9 +442,8 @@ it.skipIf(process.platform !== "linux")(
       const secondChild: ChildProcess = vi.mocked(spawn).mock.results.at(-1)?.value;
       expect(secondChild).not.toBe(firstChild);
       for (let index = 0; index < 5; index++) {
-        await runSqliteReadOnlyOperation(source, readCommand(), {
-          source: "canonical",
-          expectedIdentity,
+        await runRead({
+          ...readOptions(),
           env: { ...env, OPENCLAW_POOL_FIXTURE: `paced-${index}` },
         });
       }
@@ -514,18 +479,14 @@ it.skipIf(process.platform !== "linux")(
           request.run(() => runSqliteReadOnlyOperation(source, beginCommand(), readOptions())),
         ),
       );
-      const readOwner = () => runSqliteReadOnlyOperation(source, readCommand(), readOptions());
-      let settled = false;
-      const queued = waiting.run(readOwner).then((rows) => {
-        settled = true;
-        return rows;
-      });
-      const cancelled = aborting.run(readOwner);
+      const queued = waiting.run(() => runRead());
+      const observation = observeSettlement(queued);
+      const cancelled = aborting.run(() => runRead());
       const rejected = expect(cancelled).rejects.toThrow("scope closed");
       await aborting.close();
       await rejected;
       await nextTurn();
-      expect(settled).toBe(false);
+      expect(observation.settled).toBe(false);
       expect(vi.mocked(spawn).mock.calls.length - start).toBe(4);
       await warmers[0]!.close();
       await expect(withinTest(queued, signal)).resolves.toEqual({ blocker: "survivor" });
@@ -541,8 +502,7 @@ it.skipIf(process.platform !== "linux")(
     const first = createSpawnBrokerHost();
     const second = createSpawnBrokerHost();
     const readerScope = createSqliteReadOnlyWorkerScope();
-    const readOwner = () =>
-      readerScope.run(() => runSqliteReadOnlyOperation(source, readCommand(), readOptions()));
+    const readOwner = () => readerScope.run(() => runRead());
     const firstSpawn = vi.spyOn(first, "spawn");
     const secondSpawn = vi.spyOn(second, "spawn");
     try {
@@ -558,8 +518,7 @@ it.skipIf(process.platform !== "linux")(
       await closeSqliteReadOnlyWorkersForBroker(first);
       await first.close();
       expect(performance.now() - started).toBeLessThan(GRACEFUL_CANCEL_TIMEOUT_MS);
-      expect(firstChild.exitCode).toBe(0);
-      expect(firstChild.connected).toBe(false);
+      expect(firstChild).toMatchObject({ exitCode: 0, connected: false });
       expect(secondChild.exitCode).toBeNull();
       await expect(runWithSpawnBroker(second, readOwner)).resolves.toEqual({ blocker: "survivor" });
       expect(secondSpawn).toHaveBeenCalledTimes(1);
