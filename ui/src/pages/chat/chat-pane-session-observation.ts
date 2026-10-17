@@ -358,10 +358,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
               refreshRunner.refresh();
               return;
             }
-            this.activeSessionResources.reconcileObservation({
-              requestUpdate: () => this.invalidate(),
-              updated: () => this.updateComplete,
-            });
+            this.activeSessionResources.reconcileObservation();
           }
         },
         onEvent: (event, result) => {

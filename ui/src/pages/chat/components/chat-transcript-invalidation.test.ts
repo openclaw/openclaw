@@ -134,7 +134,7 @@ describe("chat transcript invalidation", () => {
       const container = document.body.appendChild(document.createElement("div"));
       const searchContainer = document.body.appendChild(document.createElement("div"));
       const rerender = () => {
-        render(renderTranscriptSearch(paneId, rerender), searchContainer);
+        render(renderTranscriptSearch(paneId), searchContainer);
         render(
           renderChatThread(
             { ...props, mediaOwner: rerender, onRequestUpdate: rerender },
@@ -180,7 +180,8 @@ describe("chat transcript invalidation", () => {
           );
         }
 
-        toggleTranscriptSearch(paneId, rerender);
+        toggleTranscriptSearch(paneId);
+        flush();
         const input = expectDefined(
           searchContainer.querySelector<HTMLInputElement>("input"),
           "transcript search",

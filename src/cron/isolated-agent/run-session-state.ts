@@ -1,7 +1,6 @@
 /** Owns admission and persistence for isolated cron sessions. */
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
-import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
 import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
@@ -323,10 +322,6 @@ export function createPersistCronSessionEntry(params: {
     if (!committedEntry) {
       throw new CronSessionLifecycleClaimError(params.agentSessionKey);
     }
-    clearBootstrapSnapshotOnSessionBoundary({
-      boundaryAppended: resetBoundaryPending,
-      sessionKey: params.agentSessionKey,
-    });
     params.cronSession.resetBoundaryPending = undefined;
     // The storage projection may intentionally omit resume identity until its
     // transcript exists. Keep that projection out of the active run object.

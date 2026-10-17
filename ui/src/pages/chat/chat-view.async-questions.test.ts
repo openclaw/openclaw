@@ -9,6 +9,7 @@ import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
@@ -213,11 +214,6 @@ it.each(["discard", "consumed"] as const)(
         sessionKey,
         currentSessionId: "question-delivery-session",
         chatMessages: [question],
-        requestUpdate: () => {
-          props.queue = host.chatQueue;
-          props.messages = host.chatMessages;
-          renderChatPropsInto(element, props);
-        },
       });
       const props = createChatProps({
         paneId,
@@ -227,12 +223,27 @@ it.each(["discard", "consumed"] as const)(
         onQueueRemove: (id) => {
           removeQueuedMessage(host, id, { discard: true });
         },
-        onRequestUpdate: () => host.requestUpdate?.(),
+        onRequestUpdate: () => refresh(),
       });
+      const refresh = () => {
+        props.queue = host.chatQueue;
+        props.messages = host.chatMessages;
+        renderChatPropsInto(element, props);
+      };
+      const stopPublication = subscribeChatOutboxQueue(host, refresh);
       const stop = chatOutboxOwner(host).subscribe(host, (item) =>
         getTranscriptState(paneId).transcriptRenderContext.onAsyncQuestionDiscard?.(item),
       );
-      return { element, host, props, stop };
+      return {
+        element,
+        host,
+        props,
+        refresh,
+        stop: () => {
+          stopPublication();
+          stop();
+        },
+      };
     });
     const first = panes[0]!;
     try {
@@ -243,9 +254,9 @@ it.each(["discard", "consumed"] as const)(
           row,
         ),
       ).toBe(true);
-      for (const { host } of panes) {
+      for (const { host, refresh } of panes) {
         host.chatMessages = [question, ...["question-run", "later-run"].map(terminal)];
-        host.requestUpdate?.();
+        refresh();
       }
       const discard = () =>
         first.element.querySelector<HTMLButtonElement>(".chat-send-status__discard")!;
@@ -300,12 +311,12 @@ it.each(["discard", "consumed"] as const)(
           content: row.text,
           __openclaw: { id: "audience-answer", seq: 2, replyToId: "audience-question" },
         };
-        for (const [index, { element, host }] of panes.entries()) {
+        for (const [index, { element, host, refresh }] of panes.entries()) {
           reduceChatSessionProjection(host, {
             type: "snapshotLoaded",
             messages: [question, answer],
           });
-          host.requestUpdate?.();
+          refresh();
           expect(element.querySelector(".agent-chat__question-dock")).toBeNull();
           expect(element.querySelector(".chat-question-summary")?.textContent).toContain(
             "Answer sent",

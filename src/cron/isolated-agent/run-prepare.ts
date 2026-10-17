@@ -1,6 +1,5 @@
 /** Session identity and context preparation for isolated cron runs. */
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
-import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { scopePreparedModelRuntimeLease } from "../../agents/prepared-model-runtime-generation-scope.js";
@@ -223,11 +222,6 @@ export async function prepareCronRunContext(params: {
       usesDetachedRunSession,
       signal: input.abortSignal ?? input.signal,
       onInterrupt: params.onLifecycleInterrupt,
-    });
-
-    clearBootstrapSnapshotOnSessionRollover({
-      sessionKey: agentSessionKey,
-      previousSessionId: cronSession.previousSessionId,
     });
 
     let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;

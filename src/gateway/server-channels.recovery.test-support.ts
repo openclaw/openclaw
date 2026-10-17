@@ -22,6 +22,17 @@ export function registerChannelAutostartRecoveryTests({
   installTestRegistry: typeof createTestChannelRegistry;
   stayRunning: (context: ChannelGatewayContext<TestAccount>) => Promise<void>;
 }): void {
+  function suppressedManager(
+    options: Parameters<typeof createManager>[0],
+    start: typeof stayRunning = async () => {},
+  ) {
+    const startAccount = vi.fn(start);
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager(options);
+    const suppression = { reason: "crash-loop-breaker" as const, message: "safe mode" };
+    manager.setAutostartSuppression(suppression);
+    return { manager, startAccount, suppression };
+  }
   describe("crash-loop channel autostart recovery", () => {
     let originalEnv: ReturnType<typeof captureEnv>;
     beforeEach(() => {
@@ -35,10 +46,10 @@ export function registerChannelAutostartRecoveryTests({
       "preserves %s suppression after breaker recovery while allowing manual starts",
       async (envKey) => {
         setTestEnvValue(envKey, "1");
-        const startAccount = vi.fn(stayRunning);
-        installTestRegistry(createTestPlugin({ startAccount }));
-        const manager = createManager({ tryRecoverAutostartSuppression: async () => undefined });
-        manager.setAutostartSuppression({ reason: "crash-loop-breaker", message: "safe mode" });
+        const { manager, startAccount } = suppressedManager(
+          { tryRecoverAutostartSuppression: async () => undefined },
+          stayRunning,
+        );
 
         await expect(manager.recoverAutostartSuppression()).resolves.toBeUndefined();
         expect(manager.getAutostartSuppression()).toBeNull();
@@ -51,10 +62,7 @@ export function registerChannelAutostartRecoveryTests({
     it("joins autostart recovery after a waiter cancels without undoing manual stops", async () => {
       const startAccount = vi.fn(stayRunning);
       installTestRegistry(
-        createTestPlugin({
-          startAccount,
-          listAccountIds: () => [DEFAULT_ACCOUNT_ID, "work"],
-        }),
+        createTestPlugin({ startAccount, listAccountIds: () => [DEFAULT_ACCOUNT_ID, "work"] }),
       );
       const transition = createDeferred<number | undefined>();
       const tryRecover = vi.fn(() => transition.promise);
@@ -111,11 +119,10 @@ export function registerChannelAutostartRecoveryTests({
         await waitForAbortSignal(signal);
         return undefined;
       });
-      const startAccount = vi.fn(async () => {});
-      installTestRegistry(createTestPlugin({ startAccount }));
-      const manager = createManager({ scheduler, tryRecoverAutostartSuppression: tryRecover });
-      const suppression = { reason: "crash-loop-breaker" as const, message: "safe mode" };
-      manager.setAutostartSuppression(suppression);
+      const { manager, startAccount, suppression } = suppressedManager({
+        scheduler,
+        tryRecoverAutostartSuppression: tryRecover,
+      });
 
       const recovery = manager.recoverAutostartSuppression();
       const failure = Promise.resolve(recovery).catch((error: unknown) => error);
@@ -131,17 +138,11 @@ export function registerChannelAutostartRecoveryTests({
 
     it("does not start recovered accounts after gateway close begins during handoff", async () => {
       const accountStartReady = createDeferred();
-      const startAccount = vi.fn(async () => {});
       let closing = false;
-      installTestRegistry(createTestPlugin({ startAccount }));
-      const manager = createManager({
+      const { manager, startAccount } = suppressedManager({
         deferStartupAccountStartsUntil: accountStartReady.promise,
         isClosing: () => closing,
         tryRecoverAutostartSuppression: async () => undefined,
-      });
-      manager.setAutostartSuppression({
-        reason: "crash-loop-breaker",
-        message: "safe mode",
       });
 
       const recovery = manager.recoverAutostartSuppression();
@@ -158,11 +159,9 @@ export function registerChannelAutostartRecoveryTests({
     it.each(["paused", "failed"] as const)(
       "keeps suppression when the breaker owner reports %s recovery",
       async (result) => {
-        const startAccount = vi.fn(async () => {});
         const deadline = Date.now() + 10_000;
         const failure = new Error("Crash-loop recovery did not commit");
-        installTestRegistry(createTestPlugin({ startAccount }));
-        const manager = createManager({
+        const { manager, startAccount, suppression } = suppressedManager({
           tryRecoverAutostartSuppression: async () => {
             if (result === "failed") {
               throw failure;
@@ -170,8 +169,6 @@ export function registerChannelAutostartRecoveryTests({
             return deadline;
           },
         });
-        const suppression = { reason: "crash-loop-breaker" as const, message: "safe mode" };
-        manager.setAutostartSuppression(suppression);
 
         const recovery = manager.recoverAutostartSuppression();
         if (result === "paused") {
@@ -189,15 +186,11 @@ export function registerChannelAutostartRecoveryTests({
       "keeps suppression when %s overtakes the persisted recovery transition",
       async (change) => {
         const transition = createDeferred<number | undefined>();
-        const startAccount = vi.fn(async () => {});
         let closing = false;
-        installTestRegistry(createTestPlugin({ startAccount }));
-        const manager = createManager({
+        const { manager, startAccount, suppression } = suppressedManager({
           isClosing: () => closing,
           tryRecoverAutostartSuppression: () => transition.promise,
         });
-        const suppression = { reason: "crash-loop-breaker" as const, message: "safe mode" };
-        manager.setAutostartSuppression(suppression);
 
         const recovery = manager.recoverAutostartSuppression();
         const current = change === "replacement" ? { ...suppression } : suppression;

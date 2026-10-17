@@ -490,7 +490,6 @@ describe("chat pane embedded panels", () => {
               chat,
               content,
               host: state,
-              requestUpdate: vi.fn(),
             }),
           { container: mount, wrapper: application.wrapper },
         );

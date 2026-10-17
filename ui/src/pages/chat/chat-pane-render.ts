@@ -683,7 +683,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         ? undefined
         : {
             read: () => this.composerCapabilities.dialogView(this.context, state, selectedSession),
-            revision: {},
           },
       layout: this.renderChatPaneLayout({
         state,
