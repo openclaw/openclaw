@@ -1,63 +1,14 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../../src/talk/describe-view-tool.js";
+import {
+  createSession,
+  installGoogleLiveTestFixture,
+  latestWebSocket,
+} from "./google-live.test-support.ts";
 import { GoogleLiveRealtimeTalkTransport } from "./google-live.ts";
 import { prepareRealtimeTalkTestInput } from "./input.test-support.ts";
 import type { RealtimeTalkCallbacks } from "./shared.ts";
-
-class FakeGoogleLiveWebSocket extends EventTarget {
-  static OPEN = 1;
-  static instance: FakeGoogleLiveWebSocket | undefined;
-
-  readyState = FakeGoogleLiveWebSocket.OPEN;
-  readonly sent: unknown[] = [];
-  binaryType: BinaryType = "blob";
-
-  constructor(readonly url: string) {
-    super();
-    FakeGoogleLiveWebSocket.instance = this;
-  }
-
-  send(payload: string): void {
-    this.sent.push(JSON.parse(payload));
-  }
-
-  close(): void {
-    this.readyState = 3;
-  }
-
-  emitOpen(): void {
-    this.dispatchEvent(new Event("open"));
-  }
-
-  emitMessage(message: unknown): void {
-    this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(message) }));
-  }
-}
-
-class FakeAudioContext {
-  readonly currentTime = 0;
-  readonly destination = {};
-  readonly sampleRate: number;
-
-  constructor(options?: { sampleRate?: number }) {
-    this.sampleRate = options?.sampleRate ?? 24_000;
-  }
-
-  createMediaStreamSource() {
-    return { connect() {}, disconnect() {} };
-  }
-
-  createScriptProcessor() {
-    return { connect() {}, disconnect() {}, onaudioprocess: null };
-  }
-
-  createGain() {
-    return { connect() {}, disconnect() {}, gain: { value: 1 } };
-  }
-
-  async close(): Promise<void> {}
-}
 
 function audioFixture() {
   const track = Object.assign(new EventTarget(), { stop: vi.fn() });
@@ -83,23 +34,40 @@ function cameraFixture(deviceId?: string) {
   return { track, stream };
 }
 
+function installMedia(...streams: MediaStream[]) {
+  const getUserMedia = vi.fn();
+  for (const stream of streams) {
+    getUserMedia.mockResolvedValueOnce(stream);
+  }
+  vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+  return getUserMedia;
+}
+
+function mockVideoElements(readyState: (index: number) => number) {
+  const videos: HTMLVideoElement[] = [];
+  const createElement = document.createElement.bind(document);
+  vi.spyOn(document, "createElement").mockImplementation((tagName: string) => {
+    const element = createElement(tagName);
+    if (element instanceof HTMLVideoElement) {
+      Object.defineProperties(element, {
+        readyState: { configurable: true, value: readyState(videos.length) },
+        videoWidth: { configurable: true, value: 1280 },
+        videoHeight: { configurable: true, value: 720 },
+      });
+      videos.push(element);
+      vi.spyOn(element, "play").mockResolvedValue(undefined);
+    }
+    return element;
+  });
+  return videos;
+}
+
 async function createTransport(callbacks: RealtimeTalkCallbacks, videoDeviceId?: string) {
   return new GoogleLiveRealtimeTalkTransport(
-    {
-      provider: "google",
-      transport: "provider-websocket",
-      protocol: "google-live-bidi",
-      // Fake harness token, assembled so secret scanners do not flag it.
-      clientSecret: ["auth_tokens", "browser-video-test"].join("/"),
-      websocketUrl:
-        "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
-      audio: {
-        inputEncoding: "pcm16",
-        inputSampleRateHz: 16_000,
-        outputEncoding: "pcm16",
-        outputSampleRateHz: 24_000,
-      },
-    },
+    createSession(
+      "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
+      ["auth_tokens", "browser-video-test"].join("/"),
+    ),
     {
       input: await prepareRealtimeTalkTestInput(),
       callbacks,
@@ -112,35 +80,28 @@ async function createTransport(callbacks: RealtimeTalkCallbacks, videoDeviceId?:
 
 async function beginTransport(transport: GoogleLiveRealtimeTalkTransport): Promise<{
   start: Promise<"ready" | "cancelled">;
-  ws: FakeGoogleLiveWebSocket;
+  ws: ReturnType<typeof latestWebSocket>;
 }> {
   const start = transport.start();
   await vi.advanceTimersByTimeAsync(0);
-  const ws = FakeGoogleLiveWebSocket.instance;
-  if (!ws) {
-    throw new Error("missing Google Live WebSocket");
-  }
+  const ws = latestWebSocket();
   return { start, ws };
 }
 
 async function startTransport(
   transport: GoogleLiveRealtimeTalkTransport,
-): Promise<FakeGoogleLiveWebSocket> {
+): Promise<ReturnType<typeof latestWebSocket>> {
   const { start, ws } = await beginTransport(transport);
   ws.emitOpen();
-  ws.emitMessage({ setupComplete: {} });
+  ws.emitJson({ setupComplete: {} });
   await expect(start).resolves.toBe("ready");
   transport.activate();
   return ws;
 }
 
 describe("Google Live Video Talk", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    FakeGoogleLiveWebSocket.instance = undefined;
-    vi.stubGlobal("WebSocket", FakeGoogleLiveWebSocket);
-    vi.stubGlobal("AudioContext", FakeAudioContext);
-  });
+  installGoogleLiveTestFixture();
+  beforeEach(() => vi.useFakeTimers());
 
   afterEach(() => {
     vi.useRealTimers();
@@ -153,22 +114,9 @@ describe("Google Live Video Talk", () => {
     const { track: videoTrack, stream: camera } = cameraFixture();
     const audioStop = audioTrack.stop;
     const videoStop = videoTrack.stop;
-    const getUserMedia = vi.fn().mockResolvedValueOnce(audio).mockResolvedValueOnce(camera);
-    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const getUserMedia = installMedia(audio, camera);
 
-    const originalCreateElement = document.createElement.bind(document);
-    vi.spyOn(document, "createElement").mockImplementation((tagName: string) => {
-      const element = originalCreateElement(tagName);
-      if (element instanceof HTMLVideoElement) {
-        Object.defineProperties(element, {
-          readyState: { configurable: true, value: HTMLMediaElement.HAVE_CURRENT_DATA },
-          videoWidth: { configurable: true, value: 1280 },
-          videoHeight: { configurable: true, value: 720 },
-        });
-        vi.spyOn(element, "play").mockResolvedValue(undefined);
-      }
-      return element;
-    });
+    mockVideoElements(() => HTMLMediaElement.HAVE_CURRENT_DATA);
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
       drawImage: vi.fn(),
     } as never);
@@ -184,23 +132,23 @@ describe("Google Live Video Talk", () => {
     expect(onVideoStream).not.toHaveBeenCalled();
     await transport.setVideoEnabled(true);
     ws.emitOpen();
-    ws.emitMessage({ setupComplete: {} });
+    ws.emitJson({ setupComplete: {} });
     await expect(start).resolves.toBe("ready");
-    expect(ws.sent.some((message) => JSON.stringify(message).includes('"video"'))).toBe(false);
+    expect(ws.messages.some((message) => JSON.stringify(message).includes('"video"'))).toBe(false);
     transport.activate();
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(ws.sent).toContainEqual({
+    expect(ws.messages).toContainEqual({
       realtimeInput: {
         video: { data: "gemini-camera-frame", mimeType: "image/jpeg" },
       },
     });
-    for (const message of ws.sent) {
+    for (const message of ws.messages) {
       expect(new TextEncoder().encode(JSON.stringify(message)).length).toBeLessThanOrEqual(
         512 * 1024,
       );
     }
-    ws.emitMessage({
+    ws.emitJson({
       toolCall: {
         functionCalls: [
           { id: "call-camera", name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME, args: {} },
@@ -208,7 +156,7 @@ describe("Google Live Video Talk", () => {
       },
     });
     await Promise.resolve();
-    expect(ws.sent).toContainEqual({
+    expect(ws.messages).toContainEqual({
       toolResponse: {
         functionResponses: [
           {
@@ -231,7 +179,7 @@ describe("Google Live Video Talk", () => {
     expect(onStatus).toHaveBeenCalledWith("listening");
 
     const countVideoMessages = () =>
-      ws.sent.filter((message) => JSON.stringify(message).includes('"video"')).length;
+      ws.messages.filter((message) => JSON.stringify(message).includes('"video"')).length;
     expect(countVideoMessages()).toBe(1);
     await vi.advanceTimersByTimeAsync(999);
     expect(countVideoMessages()).toBe(1);
@@ -241,7 +189,7 @@ describe("Google Live Video Talk", () => {
     await transport.setVideoEnabled(false);
     expect(videoStop).toHaveBeenCalledOnce();
     expect(audioStop).not.toHaveBeenCalled();
-    ws.emitMessage({
+    ws.emitJson({
       toolCall: {
         functionCalls: [
           { id: "call-ended-camera", name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME, args: {} },
@@ -249,7 +197,7 @@ describe("Google Live Video Talk", () => {
       },
     });
     await Promise.resolve();
-    expect(ws.sent).toContainEqual({
+    expect(ws.messages).toContainEqual({
       toolResponse: {
         functionResponses: [
           {
@@ -264,10 +212,10 @@ describe("Google Live Video Talk", () => {
       },
     });
 
-    const sentBeforeStop = ws.sent.length;
+    const sentBeforeStop = ws.messages.length;
     transport.stop();
     await vi.advanceTimersByTimeAsync(2_000);
-    expect(ws.sent).toHaveLength(sentBeforeStop);
+    expect(ws.messages).toHaveLength(sentBeforeStop);
     expect(onVideoStream).toHaveBeenLastCalledWith(null);
     expect(audioStop).toHaveBeenCalledOnce();
     expect(videoStop).toHaveBeenCalledOnce();
@@ -278,11 +226,7 @@ describe("Google Live Video Talk", () => {
     const { track: videoTrack, stream: camera } = cameraFixture();
     const audioStop = audioTrack.stop;
     const videoStop = videoTrack.stop;
-    vi.stubGlobal("navigator", {
-      mediaDevices: {
-        getUserMedia: vi.fn().mockResolvedValueOnce(audio).mockResolvedValueOnce(camera),
-      },
-    });
+    installMedia(audio, camera);
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     const onVideoStream = vi.fn((stream: MediaStream | null) => {
       if (!stream) {
@@ -306,33 +250,10 @@ describe("Google Live Video Talk", () => {
       const { track: frontTrack, stream: frontCamera } = cameraFixture("front");
       const { stream: backCamera } = cameraFixture("back");
       const frontStop = frontTrack.stop;
-      const getUserMedia = vi
-        .fn()
-        .mockResolvedValueOnce(audio)
-        .mockResolvedValueOnce(frontCamera)
-        .mockResolvedValueOnce(backCamera);
-      vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
-      const videos: HTMLVideoElement[] = [];
-      const originalCreateElement = document.createElement.bind(document);
-      vi.spyOn(document, "createElement").mockImplementation((tagName: string) => {
-        const element = originalCreateElement(tagName);
-        if (element instanceof HTMLVideoElement) {
-          videos.push(element);
-          Object.defineProperties(element, {
-            readyState: {
-              configurable: true,
-              value:
-                videos.length === 1
-                  ? HTMLMediaElement.HAVE_NOTHING
-                  : HTMLMediaElement.HAVE_CURRENT_DATA,
-            },
-            videoWidth: { configurable: true, value: 1280 },
-            videoHeight: { configurable: true, value: 720 },
-          });
-          vi.spyOn(element, "play").mockResolvedValue(undefined);
-        }
-        return element;
-      });
+      const getUserMedia = installMedia(audio, frontCamera, backCamera);
+      const videos = mockVideoElements((index) =>
+        index === 0 ? HTMLMediaElement.HAVE_NOTHING : HTMLMediaElement.HAVE_CURRENT_DATA,
+      );
       let capturedVideo: HTMLVideoElement | undefined;
       vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
         drawImage: (video: HTMLVideoElement) => {
@@ -368,7 +289,7 @@ describe("Google Live Video Talk", () => {
       });
       videos[0]!.dispatchEvent(new Event("loadeddata"));
       await vi.advanceTimersByTimeAsync(1_000);
-      const frames = ws.sent.filter((message) => JSON.stringify(message).includes('"video"'));
+      const frames = ws.messages.filter((message) => JSON.stringify(message).includes('"video"'));
       expect(frames).toEqual(
         Array.from({ length: 2 }, () => ({
           realtimeInput: { video: { data: "back-frame", mimeType: "image/jpeg" } },
@@ -384,16 +305,8 @@ describe("Google Live Video Talk", () => {
     const { track: videoTrack, stream: camera } = cameraFixture();
     const audioStop = audioTrack.stop;
     const videoStop = videoTrack.stop;
-    const getUserMedia = vi.fn().mockResolvedValueOnce(audio).mockResolvedValueOnce(camera);
-    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
-    const originalCreateElement = document.createElement.bind(document);
-    vi.spyOn(document, "createElement").mockImplementation((tagName: string) => {
-      const element = originalCreateElement(tagName);
-      if (element instanceof HTMLVideoElement) {
-        vi.spyOn(element, "play").mockResolvedValue(undefined);
-      }
-      return element;
-    });
+    const getUserMedia = installMedia(audio, camera);
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     const onStatus = vi.fn();
     const onVideoStream = vi.fn();
     const transport = await createTransport({ onStatus, onVideoStream });

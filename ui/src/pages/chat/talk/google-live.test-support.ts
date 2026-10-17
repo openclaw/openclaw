@@ -65,6 +65,22 @@ class MockGoogleLiveWebSocket {
     this.sent.push(data);
   }
 
+  emitJson(message: unknown) {
+    this.emitMessage(JSON.stringify(message));
+  }
+
+  emitContent(serverContent: unknown) {
+    this.emitMessage(encodeJsonFrame({ serverContent }));
+  }
+
+  emitCalls(...functionCalls: unknown[]) {
+    this.emitMessage(encodeJsonFrame({ toolCall: { functionCalls } }));
+  }
+
+  get messages(): unknown[] {
+    return this.sent.map((payload) => JSON.parse(payload));
+  }
+
   close() {
     this.readyState = 3;
   }
