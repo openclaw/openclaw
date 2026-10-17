@@ -52,6 +52,17 @@ import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime" });
 const { mocks } = fixture;
 
+function publishGateway(
+  config: OpenClawConfig = {},
+  options: Parameters<typeof refreshPreparedModelRuntimeSnapshots>[1] = {},
+) {
+  return refreshPreparedModelRuntimeSnapshots(config, {
+    gatewayLifecycle: true,
+    catalogMode: "static",
+    ...options,
+  });
+}
+
 async function useDiscoveryCredentials() {
   const { prepareAmbientAgentCredentialsForDiscovery } = await vi.importActual<
     typeof import("./agent-auth-discovery.js")
@@ -167,10 +178,7 @@ describe("prepared reply dispatch runtime", () => {
         ? selectedRegistry
         : (params.reusableRegistry ?? createEmptyPluginRegistry()),
     );
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-    });
+    await publishGateway(config);
     const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
     const input = {
       config,
@@ -237,9 +245,7 @@ describe("prepared reply dispatch runtime", () => {
       manifestPath: `/plugins/${id}/openclaw.plugin.json`,
       activation: { onStartup: false, onAgentHarnesses: [id] },
     }));
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
+    await publishGateway(config, {
       allowGatewaySubagentBinding: true,
       pluginMetadataSnapshot: createPluginMetadataSnapshot({
         config,
@@ -348,9 +354,7 @@ describe("prepared reply dispatch runtime", () => {
           { id: "qwen", origin: "bundled", channels: [], providers: ["bailian-token-plan"] },
         ]),
       });
-      await refreshPreparedModelRuntimeSnapshots(config, {
-        gatewayLifecycle: true,
-        catalogMode: "static",
+      await publishGateway(config, {
         allowGatewaySubagentBinding: true,
         pluginMetadataSnapshot: {
           ...metadata,
@@ -526,10 +530,7 @@ describe("prepared reply dispatch runtime", () => {
   it("keeps unaffected dispatch and run admission available when a scoped replacement fails", async () => {
     mocks.configuredAgentIds = ["default", "worker"];
     const input = fixture.agentInput("default", {});
-    await refreshPreparedModelRuntimeSnapshots(input.config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-    });
+    await publishGateway(input.config);
     const original = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
     const gate = markPreparedModelRuntimeSnapshotsStale("worker agent reload", {
       waitForReplacement: true,
@@ -574,13 +575,7 @@ describe("prepared reply dispatch runtime", () => {
 
   it("keeps a rejected auth refresh projection unavailable without affecting siblings", async () => {
     mocks.configuredAgentIds = ["default", "worker"];
-    await refreshPreparedModelRuntimeSnapshots(
-      {},
-      {
-        gatewayLifecycle: true,
-        catalogMode: "static",
-      },
-    );
+    await publishGateway();
     const defaultRuntime = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
     const refreshFailed = createDeferred();
     const unregister = registerPreparedModelRuntimePublicationListener((event) => {
@@ -790,11 +785,7 @@ describe("catalog-worker replacement demand", () => {
     const input = fixture.agentInput("default", snapshot?.config ?? {});
     if (!snapshot) {
       mocks.configuredAgentIds = agentIds;
-      await refreshPreparedModelRuntimeSnapshots(input.config, {
-        gatewayLifecycle: true,
-        catalogMode: "static",
-        allowGatewaySubagentBinding: true,
-      });
+      await publishGateway(input.config, { allowGatewaySubagentBinding: true });
     }
     const prepared = snapshot ?? (await prepareModelRuntimeSnapshot(input));
     const failure = new Error("catalog replacement preparation failed");

@@ -84,16 +84,12 @@ describe("prepared model runtime owner selection", () => {
     expect(resolveMetadata).toHaveBeenCalledOnce();
     expect(deriveRuntimePluginSelections).not.toHaveBeenCalled();
     prepared.resolve(metadataSnapshot);
-    const lease = await pending;
-    try {
-      expect(deriveRuntimePluginSelections).toHaveBeenCalledExactlyOnceWith({
-        config: input.config,
-        metadataSnapshot,
-      });
-      expect(lease.snapshot.metadataSnapshot).toBe(metadataSnapshot);
-    } finally {
-      await lease[Symbol.asyncDispose]();
-    }
+    await using lease = await pending;
+    expect(deriveRuntimePluginSelections).toHaveBeenCalledExactlyOnceWith({
+      config: input.config,
+      metadataSnapshot,
+    });
+    expect(lease.snapshot.metadataSnapshot).toBe(metadataSnapshot);
   });
 
   it.each(["binding owner", "binding demand", "environment", "workspace"] as const)(
@@ -138,7 +134,7 @@ describe("prepared model runtime owner selection", () => {
     await publishGateway(config, { catalogMode: "static" });
     const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
     mocks.loadAgentRuntimePluginRegistryHandle.mockClear();
-    const lease = await acquireAgentRunPreparedModelRuntime(
+    await using lease = await acquireAgentRunPreparedModelRuntime(
       {
         ...fixture.agentInput("default", config),
         runtimePluginPurpose: "isolated-completion",
@@ -146,14 +142,10 @@ describe("prepared model runtime owner selection", () => {
       },
       { catalogMode: "static" },
     );
-    try {
-      expect(lease.pluginGeneration).not.toBe(published.pluginGeneration);
-      expect(mocks.loadAgentRuntimePluginRegistryHandle.mock.calls[0]?.[0]).toMatchObject({
-        purpose: "isolated-completion",
-      });
-    } finally {
-      await lease[Symbol.asyncDispose]();
-    }
+    expect(lease.pluginGeneration).not.toBe(published.pluginGeneration);
+    expect(mocks.loadAgentRuntimePluginRegistryHandle.mock.calls[0]?.[0]).toMatchObject({
+      purpose: "isolated-completion",
+    });
   });
 
   it.each(["static", undefined] as const)(
@@ -164,24 +156,22 @@ describe("prepared model runtime owner selection", () => {
         entries: [discovered],
         routeVariants: [discovered],
       });
-      const lease = await acquireReadOnlyPreparedModelRuntime(
-        {
-          config: {},
-          agentDir: fixture.state.agentDir("isolated-probe-agent"),
-          workspaceDir: fixture.state.workspaceDir,
-          loadRuntimePlugins: true,
-        },
-        { catalogMode },
-      );
-      try {
+      {
+        await using lease = await acquireReadOnlyPreparedModelRuntime(
+          {
+            config: {},
+            agentDir: fixture.state.agentDir("isolated-probe-agent"),
+            workspaceDir: fixture.state.workspaceDir,
+            loadRuntimePlugins: true,
+          },
+          { catalogMode },
+        );
         expect(lease.snapshot.modelCatalog.entries.map(({ id }) => id)).toEqual(
           catalogMode === "static" ? [] : [discovered.id],
         );
         expect(mocks.buildPreparedModelCatalogSnapshot).toHaveBeenCalledTimes(
           catalogMode === "static" ? 0 : 1,
         );
-      } finally {
-        await lease[Symbol.asyncDispose]();
       }
       expect(getPreparedModelRuntimeTestApi().getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
     },

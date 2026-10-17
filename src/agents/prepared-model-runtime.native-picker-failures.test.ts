@@ -64,6 +64,13 @@ function expectModels(
   }
 }
 
+function nativeSelection(
+  entry: Pick<ModelCatalogEntry, "provider" | "id"> & { nativeRuntime: string },
+  modelId = entry.id,
+) {
+  return { provider: entry.provider, modelId, runtime: entry.nativeRuntime };
+}
+
 async function renewProvider(owner: PreparedModelRuntimeSnapshot, provider: string) {
   const inventory = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!.catalogInventory!;
   inventory.providers.get(provider)!.expiresAt = 0;
@@ -349,13 +356,9 @@ it.each(["before", "during", "revoked"] as const)(
         expect(published.readFullModelCatalog?.()?.entries ?? []).not.toContainEqual(
           expect.objectContaining(b),
         );
-        await expect(
-          owner.loadNativeModelCatalog!({
-            provider: b.provider,
-            modelId: b.id,
-            runtime: b.nativeRuntime,
-          }),
-        ).rejects.toThrow("superseded");
+        await expect(owner.loadNativeModelCatalog!(nativeSelection(b))).rejects.toThrow(
+          "superseded",
+        );
       }
       expect(loadB).toHaveBeenCalledOnce();
     } finally {
@@ -491,11 +494,7 @@ it("keeps observed untagged models without restoring API rows deleted during nat
       harnessOnly,
     ];
   });
-  const selected = owner.loadNativeModelCatalog!({
-    provider: b.provider,
-    modelId: harnessOnly.id,
-    runtime: b.nativeRuntime,
-  });
+  const selected = owner.loadNativeModelCatalog!(nativeSelection(b, harnessOnly.id));
   try {
     await entered.promise;
     const freshApi = {
@@ -534,7 +533,7 @@ it("keeps observed untagged models without restoring API rows deleted during nat
       expectModels(entries, harnessOnly, { ...latestApi, name: "Observed host model" });
       expect(entries.some((entry) => entry.id === removedApi.id)).toBe(false);
     }
-    const selection = { provider: b.provider, modelId: harnessOnly.id, runtime: b.nativeRuntime };
+    const selection = nativeSelection(b, harnessOnly.id);
     loadB.mockRejectedValueOnce(new Error("Host discovery unavailable"));
     await owner.loadNativeModelCatalog!(selection).catch(() => undefined);
     expectModels(owner.readFullModelCatalog!()?.entries, harnessOnly);
@@ -592,11 +591,7 @@ it("keeps a newly selected native model when a queued full refresh partly fails"
     return [updatedB];
   });
   loadB.mockRejectedValue(new Error("Native B unavailable during full refresh"));
-  const selected = owner.loadNativeModelCatalog!({
-    provider: updatedB.provider,
-    modelId: updatedB.id,
-    runtime: updatedB.nativeRuntime,
-  });
+  const selected = owner.loadNativeModelCatalog!(nativeSelection(updatedB));
   await selectionEntered.promise;
   mocks.runPreparedModelCatalogWorker.mockImplementationOnce(async () => {
     providerCompleted.resolve();
@@ -718,13 +713,7 @@ it.each([false, true])(
       ? vi.fn().mockReturnValueOnce(undefined).mockImplementation(readReadiness)
       : readReadiness;
 
-    await expect(
-      owner.loadNativeModelCatalog!({
-        provider: b.provider,
-        modelId: b.id,
-        runtime: b.nativeRuntime,
-      }),
-    ).rejects.toThrow("superseded");
+    await expect(owner.loadNativeModelCatalog!(nativeSelection(b))).rejects.toThrow("superseded");
     expect(owner.isCurrent()).toBe(false);
     expect(readReadiness).toHaveBeenCalledOnce();
     expect(loadB).toHaveBeenCalledTimes(calls);
