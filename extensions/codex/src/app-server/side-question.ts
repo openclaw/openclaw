@@ -547,7 +547,7 @@ export async function runCodexAppServerSideQuestion(
         request: CodexAppServerServerRequest,
         _scope: CodexThreadRouteScope,
         requestSignal: AbortSignal,
-        setExecutionTimeoutMs?: (timeoutMs: number) => void,
+        setExecutionTimeoutMs?: (timeoutMs: number | null) => void,
       ) => {
         const signal = AbortSignal.any([requestSignal, runAbortController.signal]);
         if (signal.aborted || !childThreadId || !turnId) {
@@ -607,6 +607,7 @@ export async function runCodexAppServerSideQuestion(
           call,
           config: params.cfg,
           toolBridge,
+          parentTimeoutMs: SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
         });
         setExecutionTimeoutMs?.(timeoutMs);
         const toolStartedAt = Date.now();

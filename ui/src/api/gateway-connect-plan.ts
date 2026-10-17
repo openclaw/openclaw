@@ -220,6 +220,7 @@ export async function buildBrowserGatewayConnectPlan({
           "chat-only-assistant-text",
           "hello-health-on-demand",
           "session-scoped-events",
+          "presence-deltas",
           "inline-widgets",
           "model-selection-policy",
           "model-wait-status",

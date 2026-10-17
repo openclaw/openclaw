@@ -47,13 +47,8 @@ type GatewayEventLoopHealthMonitor = {
   stop: () => void;
 };
 
-type EventLoopUtilizationReader = typeof performance.eventLoopUtilization;
-
 type GatewayEventLoopHealthMonitorDeps = {
   scheduler: GatewayScheduler;
-  now?: () => number;
-  cpuUsage?: typeof process.cpuUsage;
-  eventLoopUtilization?: EventLoopUtilizationReader;
   isIdle?: () => boolean;
 };
 
@@ -176,10 +171,9 @@ export function createGatewayEventLoopHealthMonitor(
   deps: GatewayEventLoopHealthMonitorDeps,
 ): GatewayEventLoopHealthMonitor {
   const { scheduler } = deps;
-  const nowMs = deps.now ?? performance.now.bind(performance);
-  const readCpuUsage = deps.cpuUsage ?? process.cpuUsage.bind(process);
-  const readEventLoopUtilization =
-    deps.eventLoopUtilization ?? performance.eventLoopUtilization.bind(performance);
+  const nowMs = performance.now.bind(performance);
+  const readCpuUsage = process.cpuUsage.bind(process);
+  const readEventLoopUtilization = performance.eventLoopUtilization.bind(performance);
   const flightRecorder = createStallFlightRecorder((message) => log.warn(message), nowMs);
   const stalls = createMainThreadStallMonitor(nowMs);
   let unattributedDelayMs = 0;

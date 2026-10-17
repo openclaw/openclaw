@@ -37,6 +37,7 @@ export type GatewayClient = Pick<
   | "remoteControlUiIngress"
   | "browserOrigin"
   | "presenceKey"
+  | "presenceSnapshot"
   | "clientIp"
   | "pairedClientId"
   | "authenticatedUserId"
