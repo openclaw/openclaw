@@ -125,6 +125,7 @@ export async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Pro
   if (warnings.length > 0) {
     ctx.updateWarnings ??= [];
     ctx.updateWarnings.push(...warnings);
+    ctx.healthWarningCount = (ctx.healthWarningCount ?? 0) + warnings.length;
   }
   const { noteStateIntegrity } = await import("../commands/doctor-state-integrity.js");
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath, {

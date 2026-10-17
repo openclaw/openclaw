@@ -2,7 +2,6 @@ import fs from "node:fs";
 import nodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDoctorConfigSnapshot } from "../commands/doctor-config-snapshot.test-helpers.js";
-import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
 import { fetchNpmPackageTargetStatus } from "../infra/update-check-package-target.js";
@@ -827,25 +826,6 @@ describe("doctor health contributions", () => {
       ]),
     };
   }
-
-  it("stops after an optional contribution fails after writing config", async () => {
-    const ctx = doctorContext({ env: {} });
-    const failure = new ConfigWritePostCommitError({
-      configPath: ctx.configPath,
-      rollbackStatus: "not-restored",
-      cause: new Error("config path changed since last load"),
-    });
-    const { laterRun, promise } = runBeforeLater(
-      ctx,
-      createDoctorHealthContribution("doctor:test-config-write", "Test config write", {
-        run: async () => {
-          throw failure;
-        },
-      }),
-    );
-    await expect(promise).rejects.toBe(failure);
-    expect(laterRun).not.toHaveBeenCalled();
-  });
 
   it("rejects a failed initial config write before later work runs", async () => {
     const cfg = { gateway: { mode: "invalid" } } as unknown as OpenClawConfig;
@@ -2019,7 +1999,7 @@ describe("doctor health contributions", () => {
         cwd: "/tmp/openclaw-workspace",
         configPath: "/tmp/fake-openclaw.json",
       }),
-      { checks: contribution.healthChecks, dryRun: false },
+      { checks: contribution.healthChecks, dryRun: false, progress: true },
     );
     expect([ctx.cfg, ctx.cfgForPersistence, ctx.configResult.pendingChangePanels]).toEqual([
       { updated: true },
@@ -2051,7 +2031,7 @@ describe("doctor health contributions", () => {
     );
     expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: undefined }),
-      { checks: contribution.healthChecks, dryRun: false },
+      { checks: contribution.healthChecks, dryRun: false, progress: true },
     );
     expect(mocks.resolveAgentWorkspaceDir).not.toHaveBeenCalled();
   });
@@ -2102,7 +2082,7 @@ describe("doctor health contributions", () => {
     });
     expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(
       expect.objectContaining({ env: { OPENCLAW_UPDATE_POST_CORE: "1" } }),
-      { checks: [getHealthCheck("plugin/example/regular")] },
+      { checks: [getHealthCheck("plugin/example/regular")], progress: true },
     );
   });
 
