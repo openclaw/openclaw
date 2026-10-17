@@ -67,6 +67,48 @@ function nativeClient(scopes = ["operator.admin"], profileId?: string): GatewayC
   };
 }
 
+function sendNative(
+  config: OpenClawConfig,
+  client = nativeClient(),
+  sessionKey = "agent:main:main",
+  isWebchat = true,
+) {
+  const respond = vi.fn<RespondFn>();
+  const context = createDirectChatContext({ getRuntimeConfig: () => config });
+  const send = () =>
+    expectDefined(
+      coreGatewayHandlers["chat.send"],
+      "registered chat.send",
+    )({
+      req: { type: "req", id: "native-consent-request", method: "chat.send" },
+      params: {
+        sessionKey,
+        agentId: "main",
+        message: "Keep this input unsent until I choose native permissions.",
+        idempotencyKey: "native-consent-run",
+      },
+      respond,
+      context,
+      client,
+      isWebchatConnect: () => isWebchat,
+    });
+  return { respond, context, send };
+}
+
+function pauseConsentCommit() {
+  const entered = createDeferred();
+  const release = createDeferred();
+  const commit = replyInitialization.commitReplySessionInitialization;
+  vi.spyOn(replyInitialization, "commitReplySessionInitialization").mockImplementation(
+    async (params) => {
+      entered.resolve();
+      await release.promise;
+      return commit(params);
+    },
+  );
+  return { entered, release };
+}
+
 it.each([false, true])(
   "refuses native chat.send before input persistence with an existing session=%s",
   async (preseed) => {
@@ -94,26 +136,14 @@ it.each([false, true])(
           },
         });
       }
-      const respond = vi.fn<RespondFn>();
-      const context = createDirectChatContext({ getRuntimeConfig: () => config });
-      const client = nativeClient();
+      const { respond, context, send } = sendNative(
+        config,
+        nativeClient(),
+        target.sessionKey,
+        false,
+      );
       try {
-        await expectDefined(
-          coreGatewayHandlers["chat.send"],
-          "registered chat.send",
-        )({
-          req: { type: "req", id: "native-consent-request", method: "chat.send" },
-          params: {
-            sessionKey: target.sessionKey,
-            agentId: target.agentId,
-            message: "Keep this input unsent until I choose native permissions.",
-            idempotencyKey: "native-consent-run",
-          },
-          respond,
-          context,
-          client,
-          isWebchatConnect: () => false,
-        });
+        await send();
         expect(respond).toHaveBeenCalledWith(
           false,
           undefined,
@@ -193,26 +223,9 @@ it.each([
       }
       await state.writeConfig(config);
       const native = await registerNative(state, config, "owner-agent.mjs");
-      const respond = vi.fn<RespondFn>();
-      const context = createDirectChatContext({ getRuntimeConfig: () => config });
-      const sessionKey = "agent:main:main";
+      const { respond, context, send } = sendNative(config, client);
       try {
-        await expectDefined(
-          coreGatewayHandlers["chat.send"],
-          "registered chat.send",
-        )({
-          req: { type: "req", id: "restricted-first-send", method: "chat.send" },
-          params: {
-            sessionKey,
-            agentId: "main",
-            message: "This message must remain unsent.",
-            idempotencyKey: "restricted-native-run",
-          },
-          respond,
-          context,
-          client,
-          isWebchatConnect: () => true,
-        });
+        await send();
         expect(respond).toHaveBeenCalledWith(
           false,
           undefined,
@@ -238,37 +251,10 @@ it.each(["authority", "mandatory policy", "competing entry"] as const)(
       await state.writeConfig(config);
       const native = await registerNative(state, config, "owner-agent.mjs");
       const client = nativeClient();
-      const respond = vi.fn<RespondFn>();
-      const context = createDirectChatContext({ getRuntimeConfig: () => config });
+      const { context, send } = sendNative(config, client);
       const sessionKey = "agent:main:main";
-      const entered = createDeferred();
-      const release = createDeferred();
-      const commit = replyInitialization.commitReplySessionInitialization;
-      vi.spyOn(replyInitialization, "commitReplySessionInitialization").mockImplementation(
-        async (params) => {
-          entered.resolve();
-          await release.promise;
-          return commit(params);
-        },
-      );
-      const sending = Promise.resolve(
-        expectDefined(
-          coreGatewayHandlers["chat.send"],
-          "registered chat.send",
-        )({
-          req: { type: "req", id: "racing-first-send", method: "chat.send" },
-          params: {
-            sessionKey,
-            agentId: "main",
-            message: "Do not commit stale consent or input.",
-            idempotencyKey: "racing-native-run",
-          },
-          respond,
-          context,
-          client,
-          isWebchatConnect: () => true,
-        }),
-      );
+      const { entered, release } = pauseConsentCommit();
+      const sending = Promise.resolve(send());
       const outcome = sending.then(
         () => undefined,
         (error: unknown) => error,
@@ -317,43 +303,14 @@ it.runIf(process.platform !== "win32")(
       const config = nativeConfig(state.workspaceDir);
       await state.writeConfig(config);
       const native = await registerNative(state, config, "owner-agent.mjs");
-      const client = nativeClient();
-      const respond = vi.fn<RespondFn>();
-      const context = createDirectChatContext({ getRuntimeConfig: () => config });
-      const sessionKey = "agent:main:main";
-      const entered = createDeferred();
-      const release = createDeferred();
+      const { respond, context, send } = sendNative(config);
       const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
       const replacementPath = `${databasePath}.native-replacement`;
       const displacedPath = `${databasePath}.native-original`;
       await backup(requireNativeSqliteDatabase(database.db), replacementPath);
-      const commit = replyInitialization.commitReplySessionInitialization;
-      vi.spyOn(replyInitialization, "commitReplySessionInitialization").mockImplementation(
-        async (params) => {
-          entered.resolve();
-          await release.promise;
-          return commit(params);
-        },
-      );
-      const sending = Promise.resolve(
-        expectDefined(
-          coreGatewayHandlers["chat.send"],
-          "registered chat.send",
-        )({
-          req: { type: "req", id: "replaced-first-send", method: "chat.send" },
-          params: {
-            sessionKey,
-            agentId: "main",
-            message: "Do not create this session in a replacement database.",
-            idempotencyKey: "replaced-native-run",
-          },
-          respond,
-          context,
-          client,
-          isWebchatConnect: () => true,
-        }),
-      );
+      const { entered, release } = pauseConsentCommit();
+      const sending = Promise.resolve(send());
       const outcome = sending.then(
         () => undefined,
         (error: unknown) => error,

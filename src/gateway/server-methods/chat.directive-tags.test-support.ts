@@ -38,15 +38,13 @@ export function expectManagedAudioBlock(
   fileName: string,
   isVoiceNote?: boolean,
 ) {
-  expect(block).toEqual(
-    expect.objectContaining({
-      type: "audio",
-      artifactId: expect.stringMatching(/^artifact_managed_media_/u),
-      fileName,
-      mimeType: "audio/mpeg",
-      ...(isVoiceNote === undefined ? {} : { isVoiceNote }),
-    }),
-  );
+  expect(block).toMatchObject({
+    type: "audio",
+    artifactId: expect.stringMatching(/^artifact_managed_media_/u),
+    fileName,
+    mimeType: "audio/mpeg",
+    ...(isVoiceNote === undefined ? {} : { isVoiceNote }),
+  });
 }
 
 export class ChatDirectiveDedupe extends Map<string, DedupeEntry> {

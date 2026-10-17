@@ -16,12 +16,68 @@ import { readLoggingConfig } from "../../logging/config.js";
 import { applyLoggingConfig } from "../../logging/logger.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { readChatHistoryMessageId } from "../session-history-tail.js";
 import { readSessionMessageByIdAsync } from "../session-transcript-readers.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
+
+function appendMessage(
+  scope: Parameters<typeof appendTranscriptMessage>[0],
+  message: Parameters<typeof appendTranscriptMessage>[1]["message"],
+  eventId?: string,
+) {
+  return appendTranscriptMessage(scope, { message, eventId });
+}
+
+async function seedCliHistory(state: OpenClawTestState, sessionKey: string, incognito = false) {
+  await captureRuntimeConfigAsyncReader()();
+  const scope = { agentId: "main", sessionKey, sessionId: randomUUID() };
+  const cliSessionId = randomUUID();
+  const timestamp = Date.parse("2026-09-01T10:00:00Z");
+  await upsertSessionEntryCore(scope, {
+    sessionId: scope.sessionId,
+    updatedAt: incognito ? Date.now() : timestamp,
+    ...(incognito ? { incognito: true as const } : {}),
+    providerOverride: "claude-cli",
+    modelOverride: "claude-sonnet-4-6",
+    cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
+  });
+  const projectDir = path.join(state.home, ".claude", "projects", "synthetic-history");
+  await fs.mkdir(projectDir, { recursive: true });
+  return {
+    scope,
+    cliSessionId,
+    timestamp,
+    sourcePath: path.join(projectDir, `${cliSessionId}.jsonl`),
+  };
+}
+
+function cliMessage(
+  sessionId: string,
+  uuid: string,
+  role: string,
+  content: string,
+  timestamp: number,
+  parentUuid: string | null = null,
+) {
+  return {
+    type: role,
+    uuid,
+    parentUuid,
+    sessionId,
+    timestamp: new Date(timestamp).toISOString(),
+    message: { role, content },
+  };
+}
+
+function writeCliRows(sourcePath: string, rows: unknown[]) {
+  return fs.writeFile(sourcePath, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+}
 
 type HistoryPage = {
   messages: unknown[];
@@ -67,6 +123,29 @@ async function historyReader(
   };
 }
 
+async function messageReader(sessionKey: string) {
+  const context = await createHistoryReadContext();
+  return async (messageId: string) => {
+    let result: unknown;
+    await expectDefined(
+      chatMessageGetHandlers["chat.message.get"],
+      "message handler",
+    )({
+      params: { sessionKey, messageId },
+      context,
+      req: { type: "req", id: randomUUID(), method: "chat.message.get" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond: (ok, payload, error) => {
+        expect(error).toBeUndefined();
+        expect(ok).toBe(true);
+        result = payload;
+      },
+    });
+    return result;
+  };
+}
+
 async function withImportedHistory(
   method: "chat.history" | "chat.startup",
   importedCount: number,
@@ -81,53 +160,35 @@ async function withImportedHistory(
   incognito = false,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    await captureRuntimeConfigAsyncReader()();
-    const scope = {
-      agentId: "main",
-      sessionKey: incognito
-        ? "agent:main:dashboard:incognito-cli-history"
-        : "agent:main:cli-history-anchor",
-      sessionId: randomUUID(),
-    };
-    const cliSessionId = randomUUID();
-    const timestamp = Date.parse("2026-09-01T10:00:00Z");
-    await upsertSessionEntryCore(scope, {
-      sessionId: scope.sessionId,
-      updatedAt: incognito ? Date.now() : timestamp,
-      ...(incognito ? { incognito: true as const } : {}),
-      providerOverride: "claude-cli",
-      modelOverride: "claude-sonnet-4-6",
-      cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
-    });
-    await appendTranscriptMessage(scope, {
-      message: { role: "user", content: "Local question", timestamp },
-    });
-    await appendTranscriptMessage(scope, {
-      message: { role: "assistant", content: "Local answer", timestamp: timestamp + 1 },
+    const { scope, cliSessionId, timestamp, sourcePath } = await seedCliHistory(
+      state,
+      incognito ? "agent:main:dashboard:incognito-cli-history" : "agent:main:cli-history-anchor",
+      incognito,
+    );
+    await appendMessage(scope, { role: "user", content: "Local question", timestamp });
+    await appendMessage(scope, {
+      role: "assistant",
+      content: "Local answer",
+      timestamp: timestamp + 1,
     });
     const importedIds = Array.from({ length: importedCount }, () => randomUUID());
-    const projectDir = path.join(state.home, ".claude", "projects", "synthetic-history");
-    await fs.mkdir(projectDir, { recursive: true });
-    await fs.writeFile(
-      path.join(projectDir, `${cliSessionId}.jsonl`),
-      importedIds
-        .map((uuid, index) => {
-          const role = index % 2 === 0 ? "user" : "assistant";
-          return JSON.stringify({
-            type: role,
-            uuid,
-            parentUuid: importedIds[index - 1] ?? null,
-            sessionId: cliSessionId,
-            timestamp: new Date(timestamp + index + 2).toISOString(),
-            message: { role, content: `Imported ${index}: ${text}` },
-          });
-        })
-        .join("\n") + "\n",
+    await writeCliRows(
+      sourcePath,
+      importedIds.map((uuid, index) =>
+        cliMessage(
+          cliSessionId,
+          uuid,
+          index % 2 === 0 ? "user" : "assistant",
+          `Imported ${index}: ${text}`,
+          timestamp + index + 2,
+          importedIds[index - 1] ?? null,
+        ),
+      ),
     );
     await run({
       read: await historyReader(scope.sessionKey, method),
       importedIds,
-      sourcePath: path.join(projectDir, `${cliSessionId}.jsonl`),
+      sourcePath,
       sessionsDir: state.sessionsDir(),
       scope,
     });
@@ -157,25 +218,10 @@ describe("CLI-imported history pages", () => {
           expect(await readSessionMessageByIdAsync(scope, messageId)).toMatchObject({
             found: false,
           });
-          const context = await createHistoryReadContext();
-          let message: unknown;
-          await expectDefined(
-            chatMessageGetHandlers["chat.message.get"],
-            "message handler",
-          )({
-            params: { sessionKey: scope.sessionKey, messageId },
-            context,
-            req: { type: "req", id: randomUUID(), method: "chat.message.get" },
-            client: null,
-            isWebchatConnect: () => false,
-            respond: (ok, payload, error) => {
-              expect(error).toBeUndefined();
-              expect(ok).toBe(true);
-              expect(payload).toMatchObject({ ok: true });
-              message = asOptionalRecord(payload)?.message;
-            },
-          });
-          expect(message).toMatchObject({
+          const getMessage = await messageReader(scope.sessionKey);
+          const payload = await getMessage(messageId);
+          expect(payload).toMatchObject({ ok: true });
+          expect(asOptionalRecord(payload)?.message).toMatchObject({
             role: "user",
             content: `Imported 0: ${text}`,
             __openclaw: { id: messageId, importedFrom: "claude-cli" },
@@ -292,7 +338,7 @@ describe("CLI-imported history pages", () => {
           ok: false,
           unavailableReason: "not_found",
         });
-        const context = await createHistoryReadContext();
+        const getMessage = await messageReader(scope.sessionKey);
         const results: unknown[] = [];
         for (const messageId of [
           "archived-original",
@@ -300,21 +346,7 @@ describe("CLI-imported history pages", () => {
           "reused-hidden",
           "native-visible",
         ]) {
-          await expectDefined(
-            chatMessageGetHandlers["chat.message.get"],
-            "message handler",
-          )({
-            params: { sessionKey: scope.sessionKey, messageId },
-            context,
-            req: { type: "req", id: randomUUID(), method: "chat.message.get" },
-            client: null,
-            isWebchatConnect: () => false,
-            respond: (ok, payload, error) => {
-              expect(error).toBeUndefined();
-              expect(ok).toBe(true);
-              results.push([messageId, payload]);
-            },
-          });
+          results.push([messageId, await getMessage(messageId)]);
         }
         expect(results).toEqual([
           [
@@ -337,38 +369,19 @@ describe("CLI-imported history pages", () => {
 
   it("retains metadata-only imports on anchored history reads", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      await captureRuntimeConfigAsyncReader()();
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:cli-history-metadata-anchor",
-        sessionId: randomUUID(),
-      };
-      const cliSessionId = randomUUID();
-      const importedId = randomUUID();
-      const timestamp = Date.parse("2026-09-01T10:00:00Z");
-      await upsertSessionEntryCore(scope, {
-        sessionId: scope.sessionId,
-        updatedAt: timestamp,
-        providerOverride: "claude-cli",
-        modelOverride: "claude-sonnet-4-6",
-        cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
-      });
-      const local = await appendTranscriptMessage(scope, {
-        message: { role: "assistant", content: "Deduplicated answer", timestamp },
-      });
-      const projectDir = path.join(state.home, ".claude", "projects", "synthetic-history");
-      await fs.mkdir(projectDir, { recursive: true });
-      await fs.writeFile(
-        path.join(projectDir, `${cliSessionId}.jsonl`),
-        `${JSON.stringify({
-          type: "assistant",
-          uuid: importedId,
-          parentUuid: null,
-          sessionId: cliSessionId,
-          timestamp: new Date(timestamp).toISOString(),
-          message: { role: "assistant", content: "Deduplicated answer" },
-        })}\n`,
+      const { scope, cliSessionId, timestamp, sourcePath } = await seedCliHistory(
+        state,
+        "agent:main:cli-history-metadata-anchor",
       );
+      const importedId = randomUUID();
+      const local = await appendMessage(scope, {
+        role: "assistant",
+        content: "Deduplicated answer",
+        timestamp,
+      });
+      await writeCliRows(sourcePath, [
+        cliMessage(cliSessionId, importedId, "assistant", "Deduplicated answer", timestamp),
+      ]);
       const read = await historyReader(scope.sessionKey);
       const result = await read({
         messageId: local.messageId,
@@ -387,47 +400,26 @@ describe("CLI-imported history pages", () => {
 
   it("advances offset pages when imports only add metadata", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      await captureRuntimeConfigAsyncReader()();
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:cli-history-metadata-pages",
-        sessionId: randomUUID(),
-      };
-      const cliSessionId = randomUUID();
-      const timestamp = Date.parse("2026-09-01T10:00:00Z");
-      await upsertSessionEntryCore(scope, {
-        sessionId: scope.sessionId,
-        updatedAt: timestamp,
-        providerOverride: "claude-cli",
-        modelOverride: "claude-sonnet-4-6",
-        cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
-      });
+      const { scope, cliSessionId, timestamp, sourcePath } = await seedCliHistory(
+        state,
+        "agent:main:cli-history-metadata-pages",
+      );
       const localIds: string[] = [];
-      const importedRows: string[] = [];
+      const importedRows: ReturnType<typeof cliMessage>[] = [];
       for (let index = 0; index < 6; index += 1) {
         const content = `Deduplicated answer ${index}`;
         const messageTimestamp = timestamp + index;
-        const local = await appendTranscriptMessage(scope, {
-          message: { role: "assistant", content, timestamp: messageTimestamp },
+        const local = await appendMessage(scope, {
+          role: "assistant",
+          content,
+          timestamp: messageTimestamp,
         });
         localIds.push(local.messageId);
         importedRows.push(
-          JSON.stringify({
-            type: "assistant",
-            uuid: randomUUID(),
-            parentUuid: null,
-            sessionId: cliSessionId,
-            timestamp: new Date(messageTimestamp).toISOString(),
-            message: { role: "assistant", content },
-          }),
+          cliMessage(cliSessionId, randomUUID(), "assistant", content, messageTimestamp),
         );
       }
-      const projectDir = path.join(state.home, ".claude", "projects", "synthetic-history");
-      await fs.mkdir(projectDir, { recursive: true });
-      await fs.writeFile(
-        path.join(projectDir, `${cliSessionId}.jsonl`),
-        `${importedRows.join("\n")}\n`,
-      );
+      await writeCliRows(sourcePath, importedRows);
       const read = await historyReader(scope.sessionKey);
 
       const newest = await read({ limit: 2, offset: 0 });
@@ -441,57 +433,34 @@ describe("CLI-imported history pages", () => {
 
   it("preserves recovered-failure filtering on metadata-only offset pages", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      await captureRuntimeConfigAsyncReader()();
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:cli-history-metadata-recovery",
-        sessionId: randomUUID(),
-      };
-      const cliSessionId = randomUUID();
-      const importedId = randomUUID();
-      const timestamp = Date.parse("2026-09-01T10:00:00Z");
-      await upsertSessionEntryCore(scope, {
-        sessionId: scope.sessionId,
-        updatedAt: timestamp,
-        providerOverride: "claude-cli",
-        modelOverride: "claude-sonnet-4-6",
-        cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
-      });
-      const localUser = await appendTranscriptMessage(scope, {
-        message: { role: "user", content: "Question", timestamp },
-      });
-      await appendTranscriptMessage(scope, {
-        message: {
-          role: "assistant",
-          content: [],
-          timestamp: timestamp + 1,
-          stopReason: "error",
-          errorMessage: "The selected model is unavailable.",
-          __openclaw: { runId: "recovered-run" },
-        },
-      });
-      await appendTranscriptMessage(scope, {
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "Recovered answer" }],
-          timestamp: timestamp + 2,
-          stopReason: "stop",
-          __openclaw: { runId: "recovered-run" },
-        },
-      });
-      const projectDir = path.join(state.home, ".claude", "projects", "synthetic-history");
-      await fs.mkdir(projectDir, { recursive: true });
-      await fs.writeFile(
-        path.join(projectDir, `${cliSessionId}.jsonl`),
-        `${JSON.stringify({
-          type: "user",
-          uuid: importedId,
-          parentUuid: null,
-          sessionId: cliSessionId,
-          timestamp: new Date(timestamp).toISOString(),
-          message: { role: "user", content: "Question" },
-        })}\n`,
+      const { scope, cliSessionId, timestamp, sourcePath } = await seedCliHistory(
+        state,
+        "agent:main:cli-history-metadata-recovery",
       );
+      const importedId = randomUUID();
+      const localUser = await appendMessage(scope, {
+        role: "user",
+        content: "Question",
+        timestamp,
+      });
+      await appendMessage(scope, {
+        role: "assistant",
+        content: [],
+        timestamp: timestamp + 1,
+        stopReason: "error",
+        errorMessage: "The selected model is unavailable.",
+        __openclaw: { runId: "recovered-run" },
+      });
+      await appendMessage(scope, {
+        role: "assistant",
+        content: [{ type: "text", text: "Recovered answer" }],
+        timestamp: timestamp + 2,
+        stopReason: "stop",
+        __openclaw: { runId: "recovered-run" },
+      });
+      await writeCliRows(sourcePath, [
+        cliMessage(cliSessionId, importedId, "user", "Question", timestamp),
+      ]);
       const read = await historyReader(scope.sessionKey);
       const { messages } = await read({ limit: 1, offset: 1 });
       expect(messages.map(readChatHistoryMessageId)).toEqual([localUser.messageId]);
@@ -566,12 +535,10 @@ describe("CLI-imported history pages", () => {
         try {
           registerSecretValueForRedaction("opaqueSeedQ");
           applyLoggingConfig({ redactPatterns: ["customMask7"] });
-          const local = await appendTranscriptMessage(scope, {
-            message: {
-              role: "user",
-              content: "Imported 0: opaqueSeedQ customMask7 laterRegV7 laterCfgV8",
-              timestamp: Date.parse("2026-09-01T10:00:00Z") + 2,
-            },
+          const local = await appendMessage(scope, {
+            role: "user",
+            content: "Imported 0: opaqueSeedQ customMask7 laterRegV7 laterCfgV8",
+            timestamp: Date.parse("2026-09-01T10:00:00Z") + 2,
           });
           const initial = await read({ limit: 10 });
           expect(initial.totalMessages).toBe(4);
@@ -622,12 +589,10 @@ describe("CLI-imported history pages", () => {
         const replaced = await read({ limit: 2 });
         expect(replaced.totalMessages).toBe(3);
         expect(replaced.messages.map(readChatHistoryMessageId)).toContain("replacement-native");
-        const appended = await appendTranscriptMessage(scope, {
-          message: {
-            role: "assistant",
-            content: "New local answer",
-            timestamp: Date.parse("2026-09-01T10:00:02Z"),
-          },
+        const appended = await appendMessage(scope, {
+          role: "assistant",
+          content: "New local answer",
+          timestamp: Date.parse("2026-09-01T10:00:02Z"),
         });
         const newest = await read({ limit: 2 });
         expect(newest.totalMessages).toBe(4);
@@ -689,14 +654,16 @@ describe("CLI-imported history pages", () => {
         modelOverride: "claude-opus-5-5",
         ...(bindCli ? { cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } } } : {}),
       });
-      await appendTranscriptMessage(scope, {
-        eventId: "old-question",
-        message: { role: "user", content: "Old question", timestamp },
-      });
-      await appendTranscriptMessage(scope, {
-        eventId: "old-answer",
-        message: { role: "assistant", content: "Old answer", timestamp: timestamp + 1 },
-      });
+      await appendMessage(
+        scope,
+        { role: "user", content: "Old question", timestamp },
+        "old-question",
+      );
+      await appendMessage(
+        scope,
+        { role: "assistant", content: "Old answer", timestamp: timestamp + 1 },
+        "old-answer",
+      );
       await appendTranscriptEvent(scope, {
         type: "reset",
         id: "reset",
@@ -705,24 +672,18 @@ describe("CLI-imported history pages", () => {
         reason: "new",
         ...(keepOldAnswer ? { firstKeptEntryId: "old-answer" } : {}),
       });
-      await appendTranscriptMessage(scope, {
-        eventId: "fresh-question",
-        message: { role: "user", content: "Fresh question", timestamp: resetAt + 1 },
-      });
+      await appendMessage(
+        scope,
+        { role: "user", content: "Fresh question", timestamp: resetAt + 1 },
+        "fresh-question",
+      );
       // Reset clears CLI bindings, so the bound Claude transcript only knows
       // post-reset rows; this CLI-only row makes the merge expand.
       const projectDir = path.join(state.home, ".claude", "projects", "synthetic-history");
       await fs.mkdir(projectDir, { recursive: true });
       await fs.writeFile(
         path.join(projectDir, `${cliSessionId}.jsonl`),
-        `${JSON.stringify({
-          type: "assistant",
-          uuid: "cli-only-answer",
-          parentUuid: null,
-          sessionId: cliSessionId,
-          timestamp: new Date(resetAt + 2).toISOString(),
-          message: { role: "assistant", content: "CLI-only answer" },
-        })}\n`,
+        `${JSON.stringify(cliMessage(cliSessionId, "cli-only-answer", "assistant", "CLI-only answer", resetAt + 2))}\n`,
       );
       await run(await historyReader(scope.sessionKey));
     });
@@ -771,57 +732,21 @@ describe("CLI-imported history pages", () => {
 
   it("keeps a current-window failure hidden when an imported answer recovers it", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      await captureRuntimeConfigAsyncReader()();
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:cli-history-hidden-recovered-failure",
-        sessionId: randomUUID(),
-      };
-      const cliSessionId = randomUUID();
-      const timestamp = Date.parse("2026-09-01T10:00:00Z");
-      await upsertSessionEntryCore(scope, {
-        sessionId: scope.sessionId,
-        updatedAt: timestamp,
-        providerOverride: "claude-cli",
-        modelOverride: "claude-sonnet-4-6",
-        cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
-      });
-      await appendTranscriptMessage(scope, {
-        message: { role: "user", content: "Question", timestamp },
-      });
-      const failed = await appendTranscriptMessage(scope, {
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
-          timestamp: timestamp + 1,
-          stopReason: "error",
-        },
-      });
-      const projectDir = path.join(state.home, ".claude", "projects", "synthetic-history");
-      await fs.mkdir(projectDir, { recursive: true });
-      await fs.writeFile(
-        path.join(projectDir, `${cliSessionId}.jsonl`),
-        [
-          {
-            type: "user",
-            uuid: randomUUID(),
-            parentUuid: null,
-            sessionId: cliSessionId,
-            timestamp: new Date(timestamp).toISOString(),
-            message: { role: "user", content: "Question" },
-          },
-          {
-            type: "assistant",
-            uuid: "imported-answer",
-            parentUuid: null,
-            sessionId: cliSessionId,
-            timestamp: new Date(timestamp + 2).toISOString(),
-            message: { role: "assistant", content: "Recovered answer" },
-          },
-        ]
-          .map((line) => `${JSON.stringify(line)}\n`)
-          .join(""),
+      const { scope, cliSessionId, timestamp, sourcePath } = await seedCliHistory(
+        state,
+        "agent:main:cli-history-hidden-recovered-failure",
       );
+      await appendMessage(scope, { role: "user", content: "Question", timestamp });
+      const failed = await appendMessage(scope, {
+        role: "assistant",
+        content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+        timestamp: timestamp + 1,
+        stopReason: "error",
+      });
+      await writeCliRows(sourcePath, [
+        cliMessage(cliSessionId, randomUUID(), "user", "Question", timestamp),
+        cliMessage(cliSessionId, "imported-answer", "assistant", "Recovered answer", timestamp + 2),
+      ]);
       const read = await historyReader(scope.sessionKey);
       const newest = await read({ limit: 10 });
       expect(newest.messages.map(readChatHistoryMessageId)).toContain("imported-answer");
@@ -840,12 +765,12 @@ describe("CLI-imported history pages", () => {
         sessionId: randomUUID(),
       };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const hidden = await appendTranscriptMessage(scope, {
-        message: { role: "user", content: "Hidden input", display: false },
+      const hidden = await appendMessage(scope, {
+        role: "user",
+        content: "Hidden input",
+        display: false,
       });
-      await appendTranscriptMessage(scope, {
-        message: { role: "assistant", content: "Visible answer" },
-      });
+      await appendMessage(scope, { role: "assistant", content: "Visible answer" });
       const read = await historyReader(scope.sessionKey);
       const page = await read({ messageId: hidden.messageId, limit: 2 });
       expect(page.messages).toEqual([]);

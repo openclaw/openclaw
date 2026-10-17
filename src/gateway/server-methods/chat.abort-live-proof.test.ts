@@ -285,35 +285,13 @@ describe("late abort real Gateway proof", () => {
           (message) => assistantText(message) === REPLY_TEXT,
         );
         const replyEventStates = replyEvents.map((event) => event.state);
-        const verdict = {
-          runId: started.runId,
-          replyVisible: JSON.stringify(visibleEvent).includes(REPLY_TEXT),
-          waitBeforeAbort: waiting.status,
-          durableRowsBeforeAbort: beforeRows.length,
-          abort,
-          terminalStatus: terminal.status,
-          replyEventStates,
-          abortedReplyEvents: replyEventStates.filter((state) => state === "aborted").length,
-          finalReplyEvents: replyEventStates.filter((state) => state === "final").length,
-          durableRowsAfterAbort: afterRows.length,
-          abortMarkedRowsAfterAbort: afterRows.filter((message) => message.openclawAbort).length,
-          reopenedRows: reopenedRows.length,
-          reopenedAbortMarkedRows: reopenedRows.filter((message) => message.openclawAbort).length,
-        };
-        console.info(`LATE_ABORT_VERDICT ${JSON.stringify(verdict)}`);
-        expect(verdict).toMatchObject({
-          replyVisible: true,
-          waitBeforeAbort: "timeout",
-          durableRowsBeforeAbort: 1,
-          abort: { aborted: false, runIds: [] },
-          terminalStatus: "ok",
-          abortedReplyEvents: 0,
-          finalReplyEvents: 1,
-          durableRowsAfterAbort: 1,
-          abortMarkedRowsAfterAbort: 0,
-          reopenedRows: 1,
-          reopenedAbortMarkedRows: 0,
-        });
+        expect(JSON.stringify(visibleEvent)).toContain(REPLY_TEXT);
+        expect(abort).toMatchObject({ aborted: false, runIds: [] });
+        expect(terminal.status).toBe("ok");
+        expect(replyEventStates.filter((state) => state === "aborted")).toHaveLength(0);
+        expect(replyEventStates.filter((state) => state === "final")).toHaveLength(1);
+        expect(reopenedRows).toHaveLength(1);
+        expect(reopenedRows.filter((message) => message.openclawAbort)).toHaveLength(0);
       } finally {
         releaseAfterTurn.resolve();
         if (gateway) {

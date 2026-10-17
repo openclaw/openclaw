@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -22,6 +23,32 @@ import { chatHistoryActivityBytes } from "./chat-history-budget.js";
 import { readChatHistoryDelta } from "./chat-history-delta.js";
 import { readChatHistoryPage } from "./chat-history-pages.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
+
+function appendMessage(
+  scope: Parameters<typeof appendTranscriptMessage>[0],
+  message: Parameters<typeof appendTranscriptMessage>[1]["message"],
+  eventId?: string,
+) {
+  return appendTranscriptMessage(scope, { message, eventId });
+}
+
+function processResult(toolCallId: string, details: Record<string, unknown>, isError = false) {
+  return {
+    role: "toolResult",
+    toolCallId,
+    toolName: "process",
+    isError,
+    details,
+    content: [{ type: "text", text: "Result" }],
+  };
+}
+
+function processCall(id: string, args: Record<string, unknown> = {}) {
+  return {
+    role: "assistant",
+    content: [{ type: "toolCall", id, name: "process", arguments: args }],
+  };
+}
 
 const tempDirs = createTempDirTracker();
 afterEach(async () => {
@@ -58,9 +85,7 @@ async function createTranscript() {
   await replaceSessionEntry(scope, { sessionId, updatedAt: 42 });
   await replaceTranscriptEvents(scope, [{ type: "session", version: 3, id: sessionId }]);
   const head = readTranscriptDisplayDelta(scope);
-  if (head.kind !== "page") {
-    throw new Error("Expected an initial transcript cursor");
-  }
+  assert(head.kind === "page", "Expected an initial transcript cursor");
   return { scope, cursor: head.cursor };
 }
 
@@ -104,9 +129,7 @@ async function readContents(contents: string[], requestedMaxBytes?: number) {
     hasMore: false,
     events: contents.map((_, index) => ({ messageSeq: index + 1 })),
   });
-  if (raw.kind !== "page") {
-    throw new Error("Expected a complete raw delta");
-  }
+  assert(raw.kind === "page", "Expected a complete raw delta");
   expect(raw.serializedBytes).toBeLessThan(byteLimit);
   expect(JSON.stringify(raw.events)).toContain("PRIVATE_REPLAY");
   return readChatHistoryDelta({
@@ -153,23 +176,10 @@ describe("chat history delta display budget", () => {
         },
       ],
     ] as const) {
-      await appendTranscriptMessage(scope, {
-        eventId: id,
-        message: {
-          role: "toolResult",
-          toolCallId: id,
-          toolName: "process",
-          isError: false,
-          details,
-          content: [{ type: "text", text: "Result" }],
-        },
-      });
+      await appendMessage(scope, processResult(id, details), id);
     }
     const result = await readDelta(scope, cursor);
-    expect(result.kind).toBe("delta");
-    if (result.kind !== "delta") {
-      throw new Error("Expected a result delta");
-    }
+    assert(result.kind === "delta", "Expected a result delta");
     expect(result.activity).toMatchObject([
       { messageId: "poll", items: [] },
       { messageId: "stopped", items: [] },
@@ -182,16 +192,10 @@ describe("chat history delta display budget", () => {
 
   it("projects a poll call and its result together before producing a delta", async () => {
     const { scope, cursor } = await createTranscript();
-    await appendTranscriptMessage(scope, {
-      eventId: "call",
-      message: {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "poll", name: "process", arguments: { action: "kill" } }],
-      },
-    });
-    await appendTranscriptMessage(scope, {
-      eventId: "result",
-      message: {
+    await appendMessage(scope, processCall("poll", { action: "kill" }), "call");
+    await appendMessage(
+      scope,
+      {
         role: "toolResult",
         toolCallId: "poll",
         toolName: "process",
@@ -207,7 +211,8 @@ describe("chat history delta display budget", () => {
           },
         ],
       },
-    });
+      "result",
+    );
     expect(await readDelta(scope, cursor)).toMatchObject({
       kind: "delta",
       activity: [
@@ -221,16 +226,10 @@ describe("chat history delta display budget", () => {
     "keeps missing-result placeholders visible until a real result arrives (%s)",
     async (resolved) => {
       const { scope, cursor } = await createTranscript();
-      await appendTranscriptMessage(scope, {
-        eventId: "call",
-        message: {
-          role: "assistant",
-          content: [{ type: "toolCall", id: "poll", name: "process", arguments: {} }],
-        },
-      });
-      await appendTranscriptMessage(scope, {
-        eventId: "missing",
-        message: {
+      await appendMessage(scope, processCall("poll"), "call");
+      await appendMessage(
+        scope,
+        {
           role: "toolResult",
           toolCallId: "poll",
           toolName: "process",
@@ -238,15 +237,13 @@ describe("chat history delta display budget", () => {
           details: { openclawSyntheticMissingToolResult: true, reason: "missing_tool_result" },
           content: [{ type: "text", text: "aborted" }],
         },
-      });
+        "missing",
+      );
       if (resolved) {
-        await appendTranscriptMessage(scope, {
-          eventId: "empty",
-          message: { role: "assistant", content: [] },
-        });
-        await appendTranscriptMessage(scope, {
-          eventId: "actual",
-          message: {
+        await appendMessage(scope, { role: "assistant", content: [] }, "empty");
+        await appendMessage(
+          scope,
+          {
             role: "toolResult",
             toolCallId: "poll",
             toolName: "process",
@@ -254,7 +251,8 @@ describe("chat history delta display budget", () => {
             details: { status: "running", sessionId: "job", aggregated: "working" },
             content: [{ type: "text", text: "working" }],
           },
-        });
+          "actual",
+        );
       }
       const items = resolved ? [] : [{ status: "failed" }];
       expect(await readDelta(scope, cursor)).toMatchObject({
@@ -276,30 +274,30 @@ describe("chat history delta display budget", () => {
         ["failed-run", true],
         ["quiet-run", false],
       ] as const) {
-        await appendTranscriptMessage(scope, {
-          eventId: `${runId}-call`,
-          message: {
-            role: "assistant",
+        await appendMessage(
+          scope,
+          {
+            ...processCall("same"),
             ...(scoped ? { __openclaw: { runId } } : {}),
-            content: [{ type: "toolCall", id: "same", name: "process", arguments: {} }],
           },
-        });
-        await appendTranscriptMessage(scope, {
-          eventId: `${runId}-result`,
-          message: {
-            role: "toolResult",
+          `${runId}-call`,
+        );
+        await appendMessage(
+          scope,
+          {
+            ...processResult(
+              "same",
+              {
+                status: failed ? "failed" : "completed",
+                sessionId: "job",
+                aggregated: "output",
+              },
+              failed,
+            ),
             ...(scoped ? { __openclaw: { runId } } : {}),
-            toolCallId: "same",
-            toolName: "process",
-            isError: failed,
-            details: {
-              status: failed ? "failed" : "completed",
-              sessionId: "job",
-              aggregated: "output",
-            },
-            content: [{ type: "text", text: "Result" }],
           },
-        });
+          `${runId}-result`,
+        );
       }
       const delta = await readDelta(scope, cursor);
       const unknownOutcome = { phase: "end", summary: "Outcome unknown" };
@@ -315,9 +313,7 @@ describe("chat history delta display budget", () => {
           { messageId: "quiet-run-result", items: [] },
         ],
       });
-      if (delta.kind !== "delta") {
-        throw new Error("Expected the reused-call delta");
-      }
+      assert(delta.kind === "delta", "Expected the reused-call delta");
       if (!scoped) {
         for (const entry of delta.activity.filter((item) => item.messageId.endsWith("-call"))) {
           expect(entry.items).toHaveLength(1);
@@ -333,7 +329,7 @@ describe("chat history delta display budget", () => {
       role: "assistant",
       content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "notes.txt" } }],
     };
-    await appendTranscriptMessage(scope, { eventId: "stored-call", message: call });
+    await appendMessage(scope, call, "stored-call");
     const savedCall = readTranscriptDisplayDelta(scope, { cursor });
     const pending = await readTail(scope);
     const pendingDelta = await readDelta(scope, cursor);
@@ -342,9 +338,7 @@ describe("chat history delta display budget", () => {
       kind: "delta",
       messages: [{ messageId: "stored-call", message: call }],
     });
-    if (pendingDelta.kind !== "delta") {
-      throw new Error("Expected the stored-call delta");
-    }
+    assert(pendingDelta.kind === "delta", "Expected the stored-call delta");
     for (const activity of [pending.activity, pendingDelta.activity]) {
       expect(activity).toMatchObject([
         {
@@ -363,7 +357,7 @@ describe("chat history delta display budget", () => {
       isError: false,
       content: [{ type: "text", text: "Saved notes" }],
     };
-    await appendTranscriptMessage(scope, { eventId: "stored-result", message: result });
+    await appendMessage(scope, result, "stored-result");
     const savedPair = readTranscriptDisplayDelta(scope, { cursor });
     const olderPage = await readTail(scope, 1, 1);
     expect(olderPage.messages).toMatchObject([call]);
@@ -383,9 +377,7 @@ describe("chat history delta display budget", () => {
       activity: [{ messageId: "stored-result", items: [completed] }],
     });
     const refreshedDelta = await readDelta(scope, cursor);
-    if (refreshedDelta.kind !== "delta") {
-      throw new Error("Expected the completed-call delta");
-    }
+    assert(refreshedDelta.kind === "delta", "Expected the completed-call delta");
     for (const refreshed of [await readTail(scope), refreshedDelta]) {
       expect(refreshed.activity).toMatchObject([
         { messageId: "stored-call", items: [completed] },
@@ -410,9 +402,7 @@ describe("chat history delta display budget", () => {
       const prefix = 'escaped: "\\\n🤖\ud800';
       const contents = Array.from({ length: count }, () => prefix);
       const small = await readContents(contents, requestedMaxBytes);
-      if (small.kind !== "delta") {
-        throw new Error("Expected the small delta");
-      }
+      assert(small.kind === "delta", "Expected the small delta");
       contents[0] =
         prefix +
         "x".repeat(
@@ -435,9 +425,7 @@ describe("chat history delta display budget", () => {
           message: { content: budgetContent(content) },
         })),
       });
-      if (result.kind !== "delta") {
-        throw new Error("Expected the exact-limit delta");
-      }
+      assert(result.kind === "delta", "Expected the exact-limit delta");
       const serialized = JSON.stringify(result.messages);
       expect(result.messagesBytes).toBe(Buffer.byteLength(serialized, "utf8"));
       expect(result.activityBytes).toBe(chatHistoryActivityBytes(result.activity));
@@ -496,14 +484,9 @@ function readTail(scope: TranscriptScope, offset?: number, max = 20) {
 describe("chat history custom reports", () => {
   it("delivers a committed failure notice once through the cursor and refreshed history", async () => {
     const { scope } = await createTranscript();
-    await appendTranscriptMessage(scope, {
-      eventId: "question",
-      message: { role: "user", content: "Please help." },
-    });
+    await appendMessage(scope, { role: "user", content: "Please help." }, "question");
     const before = await readTail(scope);
-    if (!before.deltaCursor) {
-      throw new Error("Expected a cursor before the failure report");
-    }
+    assert(before.deltaCursor, "Expected a cursor before the failure report");
     for (const report of [
       {
         customType: "run-failed-before-reply",
@@ -521,10 +504,7 @@ describe("chat history custom reports", () => {
         }),
       ).resolves.toMatchObject({ ok: true });
     }
-    await appendTranscriptMessage(scope, {
-      eventId: "follow-up",
-      message: { role: "user", content: "Please try again." },
-    });
+    await appendMessage(scope, { role: "user", content: "Please try again." }, "follow-up");
 
     const delta = await readDelta(scope, before.deltaCursor);
     expect(delta).toMatchObject({
@@ -543,9 +523,7 @@ describe("chat history custom reports", () => {
         { messageId: "follow-up", messageSeq: 3 },
       ],
     });
-    if (delta.kind !== "delta") {
-      throw new Error("Expected the committed report delta");
-    }
+    assert(delta.kind === "delta", "Expected the committed report delta");
     expect(delta.messages).toHaveLength(2);
     const refreshed = await readTail(scope);
     expect(refreshed.pagination?.totalMessages).toBe(3);
@@ -584,10 +562,7 @@ describe("chat history commentary cursor reconciliation", () => {
         stopReason: withTool ? "toolUse" : "stop",
         __openclaw: { runId: "run-commentary" },
       };
-      await appendTranscriptMessage(scope, {
-        eventId: "commentary-and-tool",
-        message: savedMessage,
-      });
+      await appendMessage(scope, savedMessage, "commentary-and-tool");
 
       // A saved cursor must not accept a partial envelope and permanently skip commentary.
       expect(await readDelta(scope, cursor)).toEqual({ kind: "reset" });
@@ -605,13 +580,12 @@ describe("chat history commentary cursor reconciliation", () => {
         kind: "page",
         events: [{ event: { message: savedMessage } }],
       });
-      if (!refreshed.deltaCursor) {
-        throw new Error("Reconciled commentary must resume incremental history");
-      }
-      await appendTranscriptMessage(scope, {
-        eventId: "final-answer",
-        message: { role: "assistant", content: [{ type: "text", text: "Done." }] },
-      });
+      assert(refreshed.deltaCursor, "Reconciled commentary must resume incremental history");
+      await appendMessage(
+        scope,
+        { role: "assistant", content: [{ type: "text", text: "Done." }] },
+        "final-answer",
+      );
       expect(await readDelta(scope, refreshed.deltaCursor)).toMatchObject({
         kind: "delta",
         messages: [{ messageId: "final-answer", message: { content: [{ text: "Done." }] } }],
@@ -624,14 +598,9 @@ describe("chat history quoted reply cursor reconciliation", () => {
   it("refreshes one enriched page for reply-bearing deltas and then resumes the cursor", async () => {
     const { scope } = await createTranscript();
     const originalText = "original text ".repeat(60);
-    await appendTranscriptMessage(scope, {
-      eventId: "original",
-      message: { role: "user", content: originalText },
-    });
+    await appendMessage(scope, { role: "user", content: originalText }, "original");
     const initial = await readTail(scope);
-    if (!initial.deltaCursor) {
-      throw new Error("Expected original transcript cursor");
-    }
+    assert(initial.deltaCursor, "Expected original transcript cursor");
     for (const message of [
       { role: "user", content: "User reply", __openclaw: { replyToId: "original" } },
       {
@@ -654,9 +623,7 @@ describe("chat history quoted reply cursor reconciliation", () => {
         }),
       });
     }
-    if (!page.deltaCursor) {
-      throw new Error("Reply page must resume incremental history");
-    }
+    assert(page.deltaCursor, "Reply page must resume incremental history");
     expect(await readDelta(scope, page.deltaCursor)).toMatchObject({ kind: "delta", messages: [] });
   });
 });
@@ -673,11 +640,9 @@ describe("chat history channel mirror cursor reconciliation", () => {
           { type: "text", text: "The observatory opens at seven." },
         ],
       };
-      await appendTranscriptMessage(scope, { eventId: "answer-1", message: answer });
+      await appendMessage(scope, answer, "answer-1");
       const firstAnswer = await readDelta(scope, cursor);
-      if (firstAnswer.kind !== "delta") {
-        throw new Error("The ordinary answer must support incremental history");
-      }
+      assert(firstAnswer.kind === "delta", "The ordinary answer must support incremental history");
       const mirror = {
         role: "assistant",
         provider: "openclaw",
@@ -688,7 +653,7 @@ describe("chat history channel mirror cursor reconciliation", () => {
           sourceAssistantMessageId: "answer-1",
         },
       };
-      await appendTranscriptMessage(scope, { eventId: "mirror-1", message: mirror });
+      await appendMessage(scope, mirror, "mirror-1");
       const saved = readTranscriptDisplayDelta(scope, { cursor });
 
       expect(
@@ -698,18 +663,17 @@ describe("chat history channel mirror cursor reconciliation", () => {
       expect(refreshed.messages).toMatchObject([{ __openclaw: { id: "answer-1" } }]);
       expect(refreshed.messages).toHaveLength(1);
       expect(readTranscriptDisplayDelta(scope, { cursor })).toEqual(saved);
-      if (!refreshed.deltaCursor) {
-        throw new Error("Reconciled mirrors must resume incremental history");
-      }
+      assert(refreshed.deltaCursor, "Reconciled mirrors must resume incremental history");
 
-      await appendTranscriptMessage(scope, { eventId: "answer-2", message: answer });
-      await appendTranscriptMessage(scope, {
-        eventId: "mirror-2",
-        message: {
+      await appendMessage(scope, answer, "answer-2");
+      await appendMessage(
+        scope,
+        {
           ...mirror,
           openclawDeliveryMirror: { kind: "channel-final", sourceAssistantMessageId: "answer-2" },
         },
-      });
+        "mirror-2",
+      );
       expect(await readDelta(scope, refreshed.deltaCursor)).toEqual({ kind: "reset" });
       const reconciled = await readTail(scope);
       expect(reconciled.messages).toMatchObject([
@@ -733,9 +697,9 @@ describe("chat history channel mirror cursor reconciliation", () => {
     "preserves $name through full reconciliation",
     async ({ legacyIdentity, media, expectedIds }) => {
       const { scope, cursor } = await createTranscript();
-      await appendTranscriptMessage(scope, {
-        eventId: "source",
-        message: {
+      await appendMessage(
+        scope,
+        {
           role: "assistant",
           content: [
             { type: "text", text: "The observatory opens at seven." },
@@ -745,10 +709,11 @@ describe("chat history channel mirror cursor reconciliation", () => {
           ],
           ...(legacyIdentity ? { __openclaw: { mirrorIdentity: "legacy-answer" } } : {}),
         },
-      });
-      await appendTranscriptMessage(scope, {
-        eventId: "mirror",
-        message: {
+        "source",
+      );
+      await appendMessage(
+        scope,
+        {
           role: "assistant",
           provider: "openclaw",
           model: "delivery-mirror",
@@ -758,7 +723,8 @@ describe("chat history channel mirror cursor reconciliation", () => {
             ...(media ? { sourceAssistantMessageId: "source" } : {}),
           },
         },
-      });
+        "mirror",
+      );
       const saved = readTranscriptDisplayDelta(scope, { cursor });
       expect(await readDelta(scope, cursor)).toEqual({ kind: "reset" });
       const refreshed = await readTail(scope);
@@ -774,20 +740,14 @@ describe("chat history recovery cursor eligibility", () => {
     "keeps refreshes authoritative while a tail error can recover (offset=%s)",
     async (offset) => {
       const { scope, cursor } = await createTranscript();
-      await appendTranscriptMessage(scope, {
-        eventId: "failed-attempt",
-        message: failedAssistant,
-      });
+      await appendMessage(scope, failedAssistant, "failed-attempt");
       expect(await readDelta(scope, cursor)).toEqual({ kind: "reset" });
 
       const pending = await readTail(scope, offset);
       expect(pending.messages).toEqual([]);
       expect(pending).not.toHaveProperty("deltaCursor");
 
-      await appendTranscriptMessage(scope, {
-        eventId: "recovered-answer",
-        message: recoveredAssistant,
-      });
+      await appendMessage(scope, recoveredAssistant, "recovered-answer");
       const recovered = await readTail(scope, offset);
       expect(recovered.messages).toEqual([
         expect.objectContaining({
@@ -795,18 +755,14 @@ describe("chat history recovery cursor eligibility", () => {
         }),
       ]);
       expect(recovered.deltaCursor).toEqual(expect.any(String));
-      if (!recovered.deltaCursor) {
-        throw new Error("Recovered history must resume incremental updates");
-      }
+      assert(recovered.deltaCursor, "Recovered history must resume incremental updates");
 
-      await appendTranscriptMessage(scope, {
-        eventId: "next-user",
-        message: { role: "user", content: "next turn" },
-      });
-      await appendTranscriptMessage(scope, {
-        eventId: "next-answer",
-        message: { ...recoveredAssistant, __openclaw: { runId: "run-next" } },
-      });
+      await appendMessage(scope, { role: "user", content: "next turn" }, "next-user");
+      await appendMessage(
+        scope,
+        { ...recoveredAssistant, __openclaw: { runId: "run-next" } },
+        "next-answer",
+      );
       expect(await readDelta(scope, recovered.deltaCursor)).toMatchObject({
         kind: "delta",
         deltaCursor: expect.any(String),
@@ -824,15 +780,13 @@ describe("chat history TTS supplement cursor reconciliation", () => {
       type: "attachment",
       attachment: { kind: "audio", label: "reply.wav", mimeType: "audio/wav" },
     };
-    await appendTranscriptMessage(scope, {
-      eventId: "answer",
-      message: { role: "assistant", content: [{ type: "text", text: visibleText }] },
-    });
+    await appendMessage(
+      scope,
+      { role: "assistant", content: [{ type: "text", text: visibleText }] },
+      "answer",
+    );
     const answerDelta = await readDelta(scope, cursor);
-    expect(answerDelta.kind).toBe("delta");
-    if (answerDelta.kind !== "delta") {
-      throw new Error("Expected the answer delta");
-    }
+    assert(answerDelta.kind === "delta", "Expected the answer delta");
 
     const appended = await appendInjectedAssistantMessageToTranscript({
       ...scope,
