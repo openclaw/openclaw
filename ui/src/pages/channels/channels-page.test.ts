@@ -232,6 +232,24 @@ async function mountNostrProfile() {
   return { gateway, source, refresh, page };
 }
 
+it("retains Nostr drafts and loaded channels through a same-client blip, but not replacement", async () => {
+  const { gateway, source, page } = await mountNostrProfile();
+  const hello = gateway.snapshot.hello;
+  gateway.emit({ phase: "reconnecting", hello: null });
+  await settle();
+  expect(page.querySelector<HTMLInputElement>("#nostr-profile-name")?.value).toBe("Alice Updated");
+  expect(page.textContent).not.toContain("No channels connected");
+  expect(profileButton(page, "Save & Publish").disabled).toBe(true);
+  gateway.emit({ phase: "connected", hello });
+  await settle();
+  expect(page.querySelector<HTMLInputElement>("#nostr-profile-name")?.value).toBe("Alice Updated");
+  gateway.emit({ client: createGateway().snapshot.client });
+  await settle();
+  expect(page.querySelector("#nostr-profile-name")).toBeNull();
+  source.runtimeConfig.dispose();
+  source.channels.dispose();
+});
+
 afterEach(() => {
   for (const page of mountedPages.keys()) {
     disposePage(page);
@@ -992,7 +1010,7 @@ describe("ChannelsPage lifecycle", () => {
           break;
       }
       await settle();
-      expect(page.querySelector("#nostr-profile-name")).toBeNull();
+      expect(page.querySelector("#nostr-profile-name") === null).toBe(retirement !== "disconnect");
       if (retirement === "replacement form") {
         profileButton(page, "Edit Profile").click();
         await settle();
@@ -1024,6 +1042,10 @@ describe("ChannelsPage lifecycle", () => {
           "Fresh draft",
         );
         expect(profileButton(page, "Import from Relays").disabled).toBe(false);
+      } else if (retirement === "disconnect") {
+        expect(page.querySelector<HTMLInputElement>("#nostr-profile-name")?.value).toBe(
+          "Alice Updated",
+        );
       } else {
         expect(page.querySelector("#nostr-profile-name")).toBeNull();
       }

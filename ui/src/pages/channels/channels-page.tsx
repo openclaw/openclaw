@@ -97,7 +97,7 @@ function createChannelsPage(getContext: () => ApplicationContext) {
   const pluginPresentation = createChannelPluginPresentation({
     getContext,
     getChannelIds: () => resolveChannelOrder(channelsProjection.read().channelsSnapshot),
-    isConnected: () => active,
+    isConnected: () => active && getContext().gateway.snapshot.phase === "connected",
   });
 
   const wizardHost = createChannelSetup({
@@ -108,6 +108,8 @@ function createChannelsPage(getContext: () => ApplicationContext) {
   let schemaLoadStarted = false;
   let channelsSource: ApplicationContext["channels"] | undefined;
   let gatewayPairingAuthSignature: string | null = null;
+  let canManagePairing = false;
+  let canAdmin = false;
   const connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
 
   function handleGatewaySnapshot(source: ApplicationContext["gateway"]) {
@@ -124,25 +126,40 @@ function createChannelsPage(getContext: () => ApplicationContext) {
     }
     currentGateway = source;
     currentClient = snapshot.client;
-    const pairingAccess = hasOperatorPairingAccess(snapshot.hello?.auth ?? null);
-    const pairingAuthSignature = resolveChannelPairingAuthSignature(snapshot);
+    const connected = snapshot.phase === "connected";
+    const pairingAccess = connected
+      ? hasOperatorPairingAccess(snapshot.hello?.auth ?? null)
+      : canManagePairing;
+    const adminAccess = connected ? hasOperatorAdminAccess(snapshot.hello?.auth ?? null) : canAdmin;
+    const pairingAuthSignature = connected
+      ? resolveChannelPairingAuthSignature(snapshot)
+      : gatewayPairingAuthSignature;
     const pairingAuthChanged = !initial && gatewayPairingAuthSignature !== pairingAuthSignature;
-    if (identityChanged || snapshot.phase !== "connected") {
+    if (identityChanged || (connected && !adminAccess)) {
       clearNostrForm();
+    } else if (transportChanged && operations.form) {
+      updateOperations({ form: { ...operations.form, saving: false, importing: false } });
     }
-    if (identityChanged || transportChanged || snapshot.phase !== "connected") {
+    if (identityChanged) {
       pluginPresentation.reset();
+    } else if (transportChanged) {
+      pluginPresentation.invalidateRequests();
     }
-    if (identityChanged || pairingAuthChanged || snapshot.phase !== "connected" || !pairingAccess) {
+    if (identityChanged || pairingAuthChanged || (connected && !pairingAccess)) {
       updateOperations({ prompt: null });
       setPairingFilter(null, null);
       setPairingNotice(null);
     }
     gatewayPairingAuthSignature = pairingAuthSignature;
+    canManagePairing = !identityChanged || connected ? pairingAccess : false;
+    canAdmin = !identityChanged || connected ? adminAccess : false;
     syncPairingPolling();
     if (snapshot.phase === "connected" && snapshot.client) {
       if (!initial) {
         ensureInitialData();
+      }
+      if (!initial && (identityChanged || transportChanged)) {
+        void getContext().channels.refresh(false);
       }
       if (
         !initial &&
@@ -538,13 +555,10 @@ function createChannelsPage(getContext: () => ApplicationContext) {
 
   function viewProps(): ChannelsProps {
     operationState.read();
-    const { snapshot } = gatewayProjection.read();
+    gatewayProjection.read();
     const channels = channelsProjection.read();
     const config = configProjection.read().state;
     const context = getContext();
-    const auth = snapshot.hello?.auth ?? null;
-    const canManagePairing = hasOperatorPairingAccess(auth);
-    const canAdmin = hasOperatorAdminAccess(auth);
     return {
       channels,
       config,
@@ -566,7 +580,7 @@ function createChannelsPage(getContext: () => ApplicationContext) {
       onShowDetail: setSelectedChannel,
       onCloseDetail: () => setSelectedChannel(null),
       onStartSetup: (channelId) => {
-        if (canAdmin) {
+        if (canAdmin && context.gateway.snapshot.phase === "connected") {
           wizardHost.startSetup(channelId);
         }
       },

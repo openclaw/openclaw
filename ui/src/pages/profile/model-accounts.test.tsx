@@ -11,7 +11,7 @@ import type {
   WizardStep,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayEventFrame } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -203,8 +203,14 @@ async function mountAccounts(
       await vi.advanceTimersByTimeAsync(0);
       flush();
     },
-    emit(phase: ApplicationGatewaySnapshot["phase"]) {
-      snapshot = { ...snapshot, phase };
+    emit(phase: ApplicationGatewaySnapshot["phase"], replaceClient = false) {
+      snapshot = {
+        ...snapshot,
+        phase,
+        ...(replaceClient
+          ? { client: createTestGatewayClient(request as GatewayBrowserClient["request"]) }
+          : {}),
+      };
       for (const listener of listeners) {
         listener(snapshot);
       }
@@ -212,6 +218,12 @@ async function mountAccounts(
     emitEvent(event: GatewayEventFrame) {
       for (const listener of eventListeners) {
         listener(event);
+      }
+    },
+    emitSnapshot(next: Partial<ApplicationGatewaySnapshot>) {
+      snapshot = { ...snapshot, ...next };
+      for (const listener of listeners) {
+        listener(snapshot);
       }
     },
   };
@@ -509,13 +521,58 @@ it("waits for cancellation and ignores a late completion from the cancelled atte
   expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false);
 });
 
-it("does not apply an old poll after reconnecting and starting a new attempt", async () => {
+it("retains account data and sign-in input through a blip, but resets them for another client", async () => {
+  const harness = await mountAccounts(async () => ({ status: "pending", step: redirectStep() }), {
+    accounts: [connectedAccount],
+    scopes: ["operator.write", "operator.admin"],
+  });
+  await input(harness.accounts, ".profile-auth-link-input", "openai:draft");
+  await harness.start();
+  await input(harness.accounts, ".wizard-step__form input", "https://example.test/callback");
+  harness.emit("reconnecting");
+  flush();
+  expect(harness.accounts.textContent).toContain(connectedAccount.label);
+  expect(harness.accounts.querySelector<HTMLInputElement>(".profile-auth-link-input")?.value).toBe(
+    "openai:draft",
+  );
+  expect(harness.accounts.querySelector<HTMLInputElement>(".wizard-step__form input")?.value).toBe(
+    "https://example.test/callback",
+  );
+  expect(button(harness.accounts, '.wizard-step__form button[type="submit"]').disabled).toBe(true);
+  const requestsBeforeHello = harness.request.mock.calls.length;
+  harness.emitSnapshot({ phase: "connected", selfUser: undefined });
+  await vi.advanceTimersByTimeAsync(2_000);
+  flush();
+  expect(harness.accounts.querySelector<HTMLInputElement>(".wizard-step__form input")?.value).toBe(
+    "https://example.test/callback",
+  );
+  expect(button(harness.accounts, '.wizard-step__form button[type="submit"]').disabled).toBe(true);
+  expect(harness.request).toHaveBeenCalledTimes(requestsBeforeHello);
+  harness.emitSnapshot({ selfUser: { id: "profile-1", name: "Ada" } });
+  await waitForSolid(() =>
+    expect(button(harness.accounts, '.wizard-step__form button[type="submit"]').disabled).toBe(
+      false,
+    ),
+  );
+  expect(harness.accounts.querySelector<HTMLInputElement>(".wizard-step__form input")?.value).toBe(
+    "https://example.test/callback",
+  );
+  harness.emit("connected", true);
+  flush();
+  expect(harness.accounts.querySelector(".model-accounts-flow")).toBeNull();
+  expect(harness.accounts.querySelector<HTMLInputElement>(".profile-auth-link-input")?.value).toBe(
+    "",
+  );
+  harness.unmount();
+});
+
+it("does not apply an old poll after replacing the connection and starting a new attempt", async () => {
   const oldPoll = createDeferred<UsersAuthConnectStatusResult>();
   const harness = await mountAccounts(async () => oldPoll.promise);
   await harness.start();
   await vi.advanceTimersByTimeAsync(2_000);
   harness.emit("reconnecting");
-  harness.emit("connected");
+  harness.emit("connected", true);
   await waitForSolid(() =>
     expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false),
   );

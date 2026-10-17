@@ -53,6 +53,7 @@ export class ModelAccountsState {
   inventoryRequest = 0;
   pollTimer: ReturnType<typeof setTimeout> | null = null;
   connected = true;
+  hello: ApplicationGatewaySnapshot["hello"] | undefined;
   constructor(
     readonly context: ApplicationContext,
     readonly props: ModelAccountsProps,
@@ -66,43 +67,57 @@ export class ModelAccountsState {
   }
 
   applySnapshot(snapshot: ApplicationGatewaySnapshot) {
-    const canWrite =
-      snapshot.phase === "connected" && hasOperatorWriteAccess(snapshot.hello?.auth ?? null);
+    const transportConnected = snapshot.phase === "connected";
+    const connected = transportConnected && snapshot.selfUser !== undefined;
+    const connectionChanged =
+      connected !== this.connected || (connected && this.hello !== snapshot.hello);
+    const canWrite = transportConnected
+      ? hasOperatorWriteAccess(snapshot.hello?.auth ?? null)
+      : this.target !== null;
     const client = canWrite ? snapshot.client : null;
-    const identityId = snapshot.selfUser?.id ?? null;
+    const identityId = connected
+      ? (snapshot.selfUser?.id ?? null)
+      : (this.target?.identityId ?? null);
     // users.self returns canonical IDs while presence may still name a merged alias.
     // Bind the parent's canonical result to its exact authenticated connection identity.
     const profileId = client && identityId === this.props.identityId ? this.props.profileId : null;
-    const canAdmin = canWrite && hasOperatorAdminAccess(snapshot.hello?.auth ?? null);
-    if (
+    const canAdmin = transportConnected
+      ? canWrite && hasOperatorAdminAccess(snapshot.hello?.auth ?? null)
+      : (this.target?.canAdmin ?? false);
+    const sameTarget =
       this.target?.client === client &&
       this.target?.identityId === identityId &&
       this.target?.profileId === profileId &&
-      this.target?.canAdmin === canAdmin
-    ) {
+      this.target?.canAdmin === canAdmin;
+    this.connected = connected;
+    this.hello = snapshot.hello;
+    if (sameTarget && !connectionChanged) {
       return;
     }
     this.generation += 1;
     this.stopPoll();
-    this.target =
-      client && identityId && profileId ? { client, identityId, profileId, canAdmin } : null;
-    this.links = [];
-    this.accounts = [];
-    this.nextCursor = undefined;
     this.inventoryRequest += 1;
     this.inventoryLoading = false;
     this.inventoryError = null;
     this.action = null;
     this.error = null;
     this.notice = null;
-    this.linkDraft = "";
-    this.signIn = null;
-    this.connectFlow = null;
-    this.stepValue = undefined;
-    this.statusUnavailable = false;
+    if (!sameTarget) {
+      this.target =
+        client && identityId && profileId ? { client, identityId, profileId, canAdmin } : null;
+      this.links = [];
+      this.accounts = [];
+      this.nextCursor = undefined;
+      this.linkDraft = "";
+      this.signIn = null;
+      this.connectFlow = null;
+      this.stepValue = undefined;
+      this.statusUnavailable = false;
+    }
     this.publish();
-    if (this.target) {
+    if (this.target && connected) {
       void this.loadAccounts();
+      this.schedulePoll();
     }
   }
 
@@ -116,7 +131,7 @@ export class ModelAccountsState {
 
   async loadAccounts(cursor?: string) {
     const target = this.target;
-    if (!target) {
+    if (!target || !this.connected) {
       return;
     }
     const request = ++this.inventoryRequest;
@@ -157,7 +172,11 @@ export class ModelAccountsState {
     apply: (result: T) => void,
   ) {
     const target = this.target;
-    if (!target || (this.action && !(action === "cancel" && this.action === "answer"))) {
+    if (
+      !target ||
+      !this.connected ||
+      (this.action && !(action === "cancel" && this.action === "answer"))
+    ) {
       return;
     }
     const generation = ++this.generation;
@@ -314,7 +333,7 @@ export class ModelAccountsState {
   answerStep(stepId: string, value: unknown) {
     const flow = this.connectFlow;
     const step = flow?.step;
-    if (!flow || !step || step.id !== stepId || step.type === "progress") {
+    if (!this.connected || !flow || !step || step.id !== stepId || step.type === "progress") {
       return;
     }
     // Do not retain submitted secrets while the Gateway runs the provider-owned step.
@@ -344,7 +363,7 @@ export class ModelAccountsState {
   schedulePoll(interval = 2000) {
     this.stopPoll();
     const flow = this.connectFlow;
-    if (!flow || !this.target || this.action) {
+    if (!this.connected || !flow || !this.target || this.action) {
       return;
     }
     const delay = Math.max(0, Math.min(interval, flow.expiresAtMs - Date.now()));
@@ -358,7 +377,7 @@ export class ModelAccountsState {
     const target = this.target;
     const flow = this.connectFlow;
     const generation = this.generation;
-    if (!target || !flow || this.action) {
+    if (!this.connected || !target || !flow || this.action) {
       return;
     }
     try {
@@ -395,10 +414,10 @@ export class ModelAccountsState {
   }
 
   get busy() {
-    return this.inventoryLoading || this.action !== null;
+    return !this.connected || this.inventoryLoading || this.action !== null;
   }
   get cancelBusy() {
-    return this.action !== null && this.action !== "answer";
+    return !this.connected || (this.action !== null && this.action !== "answer");
   }
 
   setLinkDraft(value: string) {

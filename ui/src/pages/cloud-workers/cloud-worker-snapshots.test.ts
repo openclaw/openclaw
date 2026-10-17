@@ -2,6 +2,8 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   button,
@@ -30,6 +32,38 @@ function changeInput(element: HTMLInputElement, value: string) {
 }
 
 describe("Cloud environments", () => {
+  it("retains loaded environments and pool/policy drafts through a blip, but retires them for another client", async () => {
+    const fixture = mountPage(methods);
+    try {
+      await waitForSolid(() => expect(input(fixture.page, "Refresh after").disabled).toBe(false));
+      await waitForSolid(() => expect(fixture.page.textContent).toContain("github.com/acme/app"));
+      changeInput(input(fixture.page, "Pool cap"), "7");
+      changeInput(input(fixture.page, "Refresh after"), "6h");
+      const hello = gatewayHelloForMethods(methods);
+      fixture.harness.publish(false, fixture.client, null);
+      flush();
+      expect(input(fixture.page, "Pool cap").value).toBe("7");
+      expect(input(fixture.page, "Refresh after").value).toBe("6h");
+      expect(fixture.page.textContent).toContain("github.com/acme/app");
+      expect(button(fixture.page, "Save pool").disabled).toBe(true);
+      expect(button(fixture.page, "Save retention policy").disabled).toBe(true);
+      fixture.harness.publish(true, fixture.client, hello);
+      await waitForSolid(() => expect(button(fixture.page, "Save pool").disabled).toBe(false));
+      expect(input(fixture.page, "Pool cap").value).toBe("7");
+      expect(input(fixture.page, "Refresh after").value).toBe("6h");
+      fixture.harness.publish(
+        true,
+        { request: fixture.request } as unknown as GatewayBrowserClient,
+        hello,
+      );
+      flush();
+      expect(input(fixture.page, "Pool cap").value).not.toBe("7");
+      expect(input(fixture.page, "Refresh after").value).toBe("24h");
+    } finally {
+      fixture.dispose();
+    }
+  });
+
   it("combines repository defaults, images and workers into one minimal row and shows only the selected details", async () => {
     const result = snapshotListFixture();
     result.images = [

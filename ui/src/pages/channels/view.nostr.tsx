@@ -180,6 +180,7 @@ export function NostrCard(props: ChannelsProps) {
         {(state) => (
           <NostrProfileForm
             state={state()}
+            connected={props.channels.connected}
             accountId={accountId()}
             callbacks={{
               onFieldChange: props.onNostrProfileFieldChange,
