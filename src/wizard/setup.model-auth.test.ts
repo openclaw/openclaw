@@ -14,7 +14,7 @@ import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
+import { WizardCancelledError } from "./prompts.js";
 import { runSetupModelAuthStep, type SetupModelAuthCandidate } from "./setup.model-auth.js";
 import {
   requestTelemetryConsent,
@@ -200,6 +200,8 @@ describe("runSetupModelAuthStep", () => {
 
   it("keeps managed model defaults owned by the selected fleet agent", async () => {
     const selectedModel = "managed-local/selected";
+    const existingModels = { "ops/current": { alias: "existing" } };
+    const selectedModels = { ...existingModels, [selectedModel]: { alias: "selected" } };
     const config = explicitAgentConfig(
       {
         systemAgent: { agentId: "ops" },
@@ -209,7 +211,7 @@ describe("runSetupModelAuthStep", () => {
       {
         ops: {
           model: { primary: "ops/current" },
-          models: { "ops/current": { alias: "existing" } },
+          models: existingModels,
           agentDir: "/tmp/ops-agent",
           workspace: "/tmp/ops-workspace",
         },
@@ -242,7 +244,7 @@ describe("runSetupModelAuthStep", () => {
         agents: expect.objectContaining({
           defaults: expect.objectContaining({
             model: { primary: "ops/current" },
-            models: { "ops/current": { alias: "existing" } },
+            models: existingModels,
           }),
         }),
       }),
@@ -250,10 +252,7 @@ describe("runSetupModelAuthStep", () => {
     expect(result.config.agents?.defaults).toEqual(config.agents?.defaults);
     expect(result.config.agents?.entries?.main).toEqual(config.agents?.entries?.main);
     expect(result.config.agents?.entries?.ops?.model).toEqual({ primary: selectedModel });
-    expect(result.config.agents?.entries?.ops?.models).toEqual({
-      "ops/current": { alias: "existing" },
-      [selectedModel]: { alias: "selected" },
-    });
+    expect(result.config.agents?.entries?.ops?.models).toEqual(selectedModels);
   });
 
   it("passes the explicit system agent to custom setup while preserving its existing model", async () => {
@@ -404,18 +403,13 @@ vi.mock("../plugins/install-record-commit.js", async (importOriginal) => ({
   transformConfigWithPendingPluginInstalls: mocks.transformConfigWithPendingPluginInstalls,
 }));
 
-describe("requestTelemetryConsent", () => {
-  it("records telemetry consent only once", async () => {
-    const enabled = true;
-    const select = vi.fn(async () => enabled) as unknown as WizardPrompter["select"];
-    const prompter = createWizardPrompter({ select });
-
-    const config = await requestTelemetryConsent({ opts: {}, prompter, config: {} });
-
-    expect(config.telemetry).toEqual({ enabled, consentedAt: expect.any(String) });
-    await expect(requestTelemetryConsent({ opts: {}, prompter, config })).resolves.toBe(config);
-    expect(select).toHaveBeenCalledOnce();
-  });
+it("records telemetry consent only once", async () => {
+  const prompter = createWizardPrompter();
+  vi.mocked(prompter.select).mockResolvedValue(true);
+  const config = await requestTelemetryConsent({ opts: {}, prompter, config: {} });
+  expect(config.telemetry).toEqual({ enabled: true, consentedAt: expect.any(String) });
+  await expect(requestTelemetryConsent({ opts: {}, prompter, config })).resolves.toBe(config);
+  expect(prompter.select).toHaveBeenCalledOnce();
 });
 
 describe("resolveQuickstartGatewayDefaults", () => {
@@ -505,24 +499,21 @@ describe("writeWizardConfigFile", () => {
     const pluginConfig = (config: Record<string, unknown>): OpenClawConfig => ({
       plugins: { entries: { demo: { enabled: true, config } } },
     });
-    const base = pluginConfig({ choice: 1, unchangedNull: null, nested: { existing: true } });
+    const original = { choice: 1, unchangedNull: null, nested: { existing: true } };
+    const concurrent = { ...original, unchangedNull: "concurrent" };
+    const base = pluginConfig(original);
     const next = pluginConfig({
+      ...original,
       choice: null,
-      unchangedNull: null,
       nested: { existing: true, optional: null },
     });
     const sourceConfig = {
-      ...pluginConfig({ choice: 1, unchangedNull: "concurrent", nested: { existing: true } }),
+      ...pluginConfig(concurrent),
       gateway: { port: 19001 },
     };
     mocks.currentConfig = {
-      ...pluginConfig({
-        callerOwned: "concurrent",
-        choice: 1,
-        unchangedNull: "concurrent",
-        nested: { existing: true },
-      }),
-      gateway: { port: 19001 },
+      ...sourceConfig,
+      ...pluginConfig({ ...concurrent, callerOwned: "concurrent" }),
     };
     const explicitSetValueSource = pluginConfig({ callerOwned: "caller" });
     mocks.transformConfigWithPendingPluginInstalls.mockImplementationOnce(
@@ -550,13 +541,13 @@ describe("writeWizardConfigFile", () => {
       },
     });
     expect(committed.nextConfig).toEqual({
+      ...sourceConfig,
       ...pluginConfig({
+        ...concurrent,
         callerOwned: "caller",
         choice: null,
-        unchangedNull: "concurrent",
         nested: { existing: true, optional: null },
       }),
-      gateway: { port: 19001 },
     });
   });
 });

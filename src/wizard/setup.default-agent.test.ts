@@ -197,28 +197,22 @@ describe("runSetupWizard default-agent ownership", () => {
 
   it("revokes provider requests when config changes during an earlier setup prompt", async () => {
     await withOpenClawTestState({ label: "setup-parent-authority" }, async (state) => {
-      const config: OpenClawConfig = {
+      const configForEndpoint = (endpoint: string): OpenClawConfig => ({
         agents: { entries: { main: {} } },
         models: {
           providers: {
-            litellm: { baseUrl: "http://127.0.0.1:19479/original/v1", models: [] },
+            litellm: { baseUrl: `http://127.0.0.1:19479/${endpoint}/v1`, models: [] },
           },
         },
-      };
+      });
+      const config = configForEndpoint("original");
       await state.writeConfig(config);
       const { readSetupConfigAuthority } =
         await vi.importActual<typeof import("./setup.shared.js")>("./setup.shared.js");
       mocks.readAuthority.mockImplementation(readSetupConfigAuthority);
       let endpointReplaced = false;
       vi.mocked(prompter.select).mockImplementationOnce(async () => {
-        await state.writeConfig({
-          ...config,
-          models: {
-            providers: {
-              litellm: { baseUrl: "http://127.0.0.1:19479/replacement/v1", models: [] },
-            },
-          },
-        });
+        await state.writeConfig(configForEndpoint("replacement"));
         endpointReplaced = true;
         return false;
       });
@@ -342,17 +336,12 @@ describe("runSetupWizard default-agent ownership", () => {
   it("uses the keyed default-agent workspace for all classic agent-owned effects", async () => {
     await runWizard({ workspace: "/tmp/global-workspace", skipSkills: false });
 
-    expect(mocks.writeConfig).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        agents: expect.objectContaining({
-          defaults: expect.objectContaining({ workspace: "/tmp/global-workspace" }),
-        }),
-      }),
+    expect(mocks.writeConfig.mock.lastCall).toMatchObject([
+      { agents: { defaults: { workspace: "/tmp/global-workspace" } } },
       expect.any(Object),
-    );
+    ]);
     const target = {
       agentId: "ops",
-      agentDir: "/tmp/ops-agent",
       workspaceDir: "/tmp/ops-workspace",
     };
     expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(

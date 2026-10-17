@@ -1,4 +1,3 @@
-// Setup migration stage tests cover isolated SQLite writes and promotion rollback.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -28,11 +27,12 @@ function migrationPaths(workspaceInState = false) {
   return { root, stateDir, workspaceDir, reportDir };
 }
 
-function createStage(
-  paths: { stateDir: string; workspaceDir: string; reportDir: string },
-  targetConfig: OpenClawConfig = { agents: { defaults: { workspace: paths.workspaceDir } } },
-) {
-  return createSetupMigrationStage({ providerId: "claude", ...paths, targetConfig });
+function createStage(paths = migrationPaths()) {
+  return createSetupMigrationStage({
+    providerId: "claude",
+    ...paths,
+    targetConfig: { agents: { defaults: { workspace: paths.workspaceDir } } },
+  });
 }
 
 async function stageMemory(paths = migrationPaths()) {
@@ -290,7 +290,7 @@ describe("setup migration stage", () => {
   });
 
   it("rejects staged state that the promotion owner does not publish", async () => {
-    const stage = await createStage(migrationPaths());
+    const stage = await createStage();
     await fs.mkdir(path.join(stage.staged.stateDir, "credentials"), { recursive: true });
     await fs.writeFile(
       path.join(stage.staged.stateDir, "credentials", "provider.json"),
