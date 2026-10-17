@@ -10,59 +10,61 @@ import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cle
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { expectRows, settle } from "./openclaw-state-db-fixtures.test-support.js";
 import {
-  executeExistingOpenClawStateRead,
-  withArtifactPreservingStateReads,
+  executeExistingOpenClawStateRead as readExisting,
+  withArtifactPreservingStateReads as preserveArtifacts,
 } from "./openclaw-state-db-readonly.js";
 import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
+  closeOpenClawStateDatabaseAsync as closeState,
+  closeOpenClawStateDatabaseForTest as resetState,
+  openOpenClawStateDatabase as openState,
 } from "./openclaw-state-db.js";
-import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
+import { captureOpenClawStateReadWorkerContext as captureReadContext } from "./openclaw-state-worker-context.js";
 
 const directories = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
+    await closeState();
     await cleanupSnapshotOperations();
-    closeOpenClawStateDatabaseForTest();
+    resetState();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     cleanup();
   });
 });
 
-it("rejects successor bytes substituted after fresh validation and before snapshot preparation", async () => {
-  const root = directories.make("state-read-source-identity-");
+function sourceFixture() {
+  const root = directories.make("state-read-identity-");
   vi.stubEnv("XDG_CACHE_HOME", path.join(root, "cache"));
   const options = {
     path: path.join(root, "state", "openclaw.sqlite"),
     env: { OPENCLAW_STATE_DIR: root, OPENCLAW_TEST_FAST: "1" },
   };
+  const stateKey = "readonly.identity.fixture";
+  const seed = (pathname: string, value: string) => {
+    const { db } = openState({ ...options, path: pathname });
+    db.prepare(
+      "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+    ).run(stateKey, JSON.stringify({ source: value }), 1);
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE");
+  };
+  return { root, options, stateKey, seed };
+}
+
+it("rejects successor bytes substituted after fresh validation and before snapshot preparation", async () => {
+  const { root, options, stateKey, seed } = sourceFixture();
   const replacement = path.join(root, "replacement.sqlite");
   const archived = path.join(root, "original.sqlite");
-  const stateKey = "readonly.source-identity.fixture";
-  const sources = [
-    { pathname: options.path, value: "original" },
-    { pathname: replacement, value: "successor" },
-  ];
-  for (const { pathname, value } of sources) {
-    const database = openOpenClawStateDatabase({ ...options, path: pathname });
-    database.db
-      .prepare(
-        "INSERT INTO config_machine_state(state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
-      )
-      .run(stateKey, JSON.stringify({ source: value }), 1);
-    database.db.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE");
-  }
+  seed(options.path, "original");
+  seed(replacement, "successor");
   // The measured read must take fresh snapshot preparation, never the cached native branch.
-  await closeOpenClawStateDatabaseAsync();
+  await closeState();
   const originalIdentity = readDatabasePathIdentitySync(options.path);
   const replacementIdentity = readDatabasePathIdentitySync(replacement);
   expect(replacementIdentity.key).not.toBe(originalIdentity.key);
   const originalBytes = fs.readFileSync(options.path);
   const replacementBytes = fs.readFileSync(replacement);
-  const context = captureOpenClawStateReadWorkerContext(options);
+  const context = captureReadContext(options);
   expect(context.admission.identity.key).toBe(originalIdentity.key);
 
   const startPreparation = snapshots.startSqliteReadOnlyLocationAsync;
@@ -75,15 +77,10 @@ it("rejects successor bytes substituted after fresh validation and before snapsh
       fs.renameSync(replacement, options.path);
       return startPreparation(pathname, preparationOptions);
     });
-  const outcome = await withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(
-      options,
-      { type: "tui.lastSession.read", stateKey },
-      { context },
+  const outcome = await settle(
+    preserveArtifacts(() =>
+      readExisting(options, { type: "tui.lastSession.read", stateKey }, { context }),
     ),
-  ).then(
-    (value) => ({ value }),
-    (error: unknown) => ({ error }),
   );
 
   expect(preparation).toHaveBeenCalledOnce();
@@ -104,23 +101,11 @@ it("rejects successor bytes substituted after fresh validation and before snapsh
 it.runIf(process.platform === "darwin" && fs.existsSync("/usr/bin/SetFile"))(
   "reads the admitted source after a same-inode birthtime metadata change",
   async () => {
-    const root = directories.make("state-read-birthtime-");
-    vi.stubEnv("XDG_CACHE_HOME", path.join(root, "cache"));
-    const options = {
-      path: path.join(root, "state", "openclaw.sqlite"),
-      env: { OPENCLAW_STATE_DIR: root, OPENCLAW_TEST_FAST: "1" },
-    };
-    const stateKey = "readonly.birthtime.fixture";
+    const { options, stateKey, seed } = sourceFixture();
     const value = JSON.stringify({ source: "original" });
-    const database = openOpenClawStateDatabase(options);
-    database.db
-      .prepare(
-        "INSERT INTO config_machine_state(state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
-      )
-      .run(stateKey, value, 1);
-    database.db.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE");
-    await closeOpenClawStateDatabaseAsync();
-    const context = captureOpenClawStateReadWorkerContext(options);
+    seed(options.path, "original");
+    await closeState();
+    const context = captureReadContext(options);
     const before = fs.statSync(options.path, { bigint: true });
     const sourceBytes = fs.readFileSync(options.path);
     const sourceFiles = fs.readdirSync(path.dirname(options.path)).toSorted();
@@ -135,19 +120,15 @@ it.runIf(process.platform === "darwin" && fs.existsSync("/usr/bin/SetFile"))(
     expect(after.birthtimeNs).not.toBe(before.birthtimeNs);
     expect(() => context.admission.assertCurrent()).not.toThrow();
     expect(
-      await withArtifactPreservingStateReads(() =>
-        executeExistingOpenClawStateRead(
-          options,
-          { type: "tui.lastSession.read", stateKey },
-          { context },
-        ),
+      await preserveArtifacts(() =>
+        readExisting(options, { type: "tui.lastSession.read", stateKey }, { context }),
       ),
     ).toMatchObject({
       ok: true,
       type: "tui.lastSession.read",
       row: { value_json: value, updated_at_ms: 1 },
     });
-    await closeOpenClawStateDatabaseAsync();
+    await closeState();
     await cleanupSnapshotOperations();
     expect(fs.readdirSync(stagingRoot).toSorted()).toEqual(stagingBefore);
     expect(fs.readFileSync(options.path)).toEqual(sourceBytes);
@@ -163,19 +144,19 @@ it.runIf(process.platform === "darwin" && fs.existsSync("/usr/bin/SetFile"))(
 
 function source() {
   const pathname = path.join(directories.make("openclaw-readonly-exclusion-"), "openclaw.sqlite");
-  const owner = openOpenClawStateDatabase({ path: pathname });
+  const owner = openState({ path: pathname });
   owner.db
     .prepare(
       "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
     )
     .run("readonly-exclusion", "preserved", "{}", 1);
-  closeOpenClawStateDatabaseForTest();
+  resetState();
   return pathname;
 }
 
 it("shares one online backup across concurrent snapshots of the live state owner", async () => {
   const pathname = source();
-  const owner = openOpenClawStateDatabase({ path: pathname });
+  const owner = openState({ path: pathname });
   owner.db
     .prepare(
       "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
@@ -207,11 +188,12 @@ it("shares one online backup across concurrent snapshots of the live state owner
     expect(fs.existsSync(second.location)).toBe(true);
     const snapshot = openNodeSqliteDatabase(second.location, { readOnly: true });
     try {
-      expect(
-        snapshot
-          .prepare("SELECT event_key FROM diagnostic_events WHERE scope = ? ORDER BY created_at")
-          .all("readonly-exclusion"),
-      ).toEqual([{ event_key: "preserved" }, { event_key: "single-flight" }]);
+      expectRows(
+        snapshot,
+        "SELECT event_key FROM diagnostic_events WHERE scope = ? ORDER BY created_at",
+        [{ event_key: "preserved" }, { event_key: "single-flight" }],
+        "readonly-exclusion",
+      );
     } finally {
       snapshot.close();
     }

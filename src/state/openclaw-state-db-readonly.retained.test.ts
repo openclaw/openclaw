@@ -1,13 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import fs from "node:fs";
-import path from "node:path";
 import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { RetainedPreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
 import { createOwnedWorkerTaskPoolMock } from "../infra/worker-task-pool.mock.test-support.js";
-import type { RetainedWorkerTask, WorkerTaskInput } from "../infra/worker-task-pool.types.js";
+import type { WorkerTaskInput } from "../infra/worker-task-pool.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { expectCalls, makeReadSource } from "./openclaw-state-db-fixtures.test-support.js";
 import type {
   OpenClawStateReadReply,
   OpenClawStateReadRequest,
@@ -39,34 +38,34 @@ vi.mock("../infra/sqlite-snapshot-source.js", async (original) => ({
   prepareSqliteReadOnlyLocation: mock.prepareInherited,
 }));
 
-import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
+import { createOpenClawDatabaseMaintenanceScope as createMaintenance } from "./openclaw-state-db-async-lifecycle.js";
+import { closeOpenClawStateDatabaseByPathAsync as closePath } from "./openclaw-state-db-cache.js";
 import {
-  executeExistingOpenClawStateRead,
-  withArtifactPreservingStateReads,
+  executeExistingOpenClawStateRead as readExisting,
+  withArtifactPreservingStateReads as preserveArtifacts,
 } from "./openclaw-state-db-readonly.js";
 import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync as closeState,
+  closeOpenClawStateDatabaseForTest as resetState,
 } from "./openclaw-state-db.js";
 import * as readWorker from "./openclaw-state-read-worker.js";
 
-const tasks: Array<RetainedWorkerTask<OpenClawStateReadReply>> = [];
+let taskCount = 0;
 const releaseFixtures: Array<() => void> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     for (const release of releaseFixtures.splice(0)) {
       release();
     }
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await closeState();
+    resetState();
     vi.restoreAllMocks();
     cleanup();
   }),
 );
 
 beforeEach(() => {
-  tasks.length = 0;
+  taskCount = 0;
   mock.borrow.mockReset();
   mock.prepareNative.mockReset();
   mock.prepareFresh.mockReset();
@@ -94,7 +93,7 @@ beforeEach(() => {
           cleanup.resolve(undefined);
         });
         const task = { ...completion.operation, release: () => cleanup.operation };
-        tasks.push(task);
+        taskCount++;
         releaseFixtures.push(() =>
           inContext(() => {
             task.service();
@@ -106,13 +105,6 @@ beforeEach(() => {
     }),
   );
 });
-
-function source() {
-  const root = tempDirs.make("openclaw-retained-read-");
-  const pathname = path.join(root, "source.sqlite");
-  fs.writeFileSync(pathname, "synthetic worker source");
-  return { path: pathname, env: { OPENCLAW_STATE_DIR: root } };
-}
 
 function observeReaderRelease() {
   const captureSource = readWorker.captureOpenClawStateReadSource;
@@ -135,7 +127,7 @@ function observeReaderRelease() {
 
 it("retains failed preparation custody through a pending close and canonical retry", async () => {
   const released = observeReaderRelease();
-  const options = source();
+  const options = makeReadSource(tempDirs, "openclaw-retained-read-");
   const preparationFailure = new Error("snapshot preparation failed after admission");
   const closeFailure = new Error("snapshot producer has not joined");
   const mapped = new Error("mapped preparation failure");
@@ -143,12 +135,12 @@ it("retains failed preparation custody through a pending close and canonical ret
   const preparation = createRetainedOperation<RetainedPreparedSqliteReadOnlyLocation>(() => {});
   const firstClose = createRetainedOperation<void>(() => {});
   const retryClose = createRetainedOperation<void>(() => {});
-  const initialCloseStarted = createDeferredCore();
+  const firstStarted = createDeferredCore();
   const retryStarted = createDeferredCore();
   const startClose = vi
     .fn()
     .mockImplementationOnce(() => {
-      initialCloseStarted.resolve();
+      firstStarted.resolve();
       return firstClose.operation;
     })
     .mockImplementation(() => {
@@ -156,30 +148,27 @@ it("retains failed preparation custody through a pending close and canonical ret
       return retryClose.operation;
     });
   mock.prepareFresh.mockReturnValueOnce({ ...preparation.operation, startClose });
-  const maintenance = createOpenClawDatabaseMaintenanceScope();
+  const maintenance = createMaintenance();
   const handleClosed = vi.fn();
   maintenance.own({}, "shared-handles", handleClosed);
   let maintenanceClose: Promise<void> | undefined;
   let canonicalClose: Promise<unknown> | undefined;
-  let completion: ReturnType<typeof executeExistingOpenClawStateRead> | undefined;
+  let completion: ReturnType<typeof readExisting> | undefined;
   let readSettled = false;
   try {
     completion = maintenance.run(() =>
-      withArtifactPreservingStateReads(() =>
-        executeExistingOpenClawStateRead(options, { type: "backup.runs" }, { mapError }),
-      ),
+      preserveArtifacts(() => readExisting(options, { type: "backup.runs" }, { mapError })),
     );
     const settled = () => {
       readSettled = true;
     };
     void completion.then(settled, settled);
     preparation.reject(preparationFailure);
-    await initialCloseStarted.promise;
+    await firstStarted.promise;
     expect(readSettled).toBe(false);
-    expect(mapError).not.toHaveBeenCalled();
+    expectCalls(0, mapError, released);
     expect(startClose).toHaveBeenCalledOnce();
-    expect(released).not.toHaveBeenCalled();
-    expect(tasks).toHaveLength(1); // Admission only; preparation never yielded a query location.
+    expect(taskCount).toBe(1); // Admission only; preparation never yielded a query location.
     maintenanceClose = maintenance.close();
     expect(handleClosed).not.toHaveBeenCalled();
 
@@ -193,18 +182,16 @@ it("retains failed preparation custody through a pending close and canonical ret
       "before-read",
     );
     expect(released).not.toHaveBeenCalled();
-    canonicalClose = closeOpenClawStateDatabaseByPathAsync(options.path);
+    canonicalClose = closePath(options.path);
     await retryStarted.promise;
     expect(startClose).toHaveBeenCalledTimes(2);
     expect(mock.prepareFresh).toHaveBeenCalledOnce();
-    expect(released).not.toHaveBeenCalled();
-    expect(handleClosed).not.toHaveBeenCalled();
+    expectCalls(0, released, handleClosed);
 
     retryClose.resolve(undefined);
     await canonicalClose;
     await maintenanceClose;
-    expect(released).toHaveBeenCalledOnce();
-    expect(handleClosed).toHaveBeenCalledOnce();
+    expectCalls(1, released, handleClosed);
     await expect(completion).rejects.toBe(mapped);
     expect(mapError).toHaveBeenCalledOnce();
   } finally {

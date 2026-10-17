@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import type { OwnedWorkerTask } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -9,18 +7,19 @@ import type { RetainedWorkerTask } from "../infra/worker-task-pool.types.js";
 import { PluginBlobStoreError } from "../plugin-state/plugin-blob-store.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseByPathAsync,
+  closeOpenClawStateDatabaseAsync as closeState,
+  closeOpenClawStateDatabaseByPathAsync as closePath,
 } from "./openclaw-state-db-cache.js";
-import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import { expectCalls, makeReadSource } from "./openclaw-state-db-fixtures.test-support.js";
+import { executeExistingOpenClawStateRead as readExisting } from "./openclaw-state-db-readonly.js";
 import { observeAsyncFixture } from "./openclaw-state-db-readonly.test-support.js";
-import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
+import { withExistingOpenClawStateSchema as withExistingSchema } from "./openclaw-state-db-schema-policy.js";
 import type {
   OpenClawStateReadReceipt,
   OpenClawStateReadReply,
   OpenClawStateReadRequest,
 } from "./openclaw-state-read.types.js";
-import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
+import { captureOpenClawStateReadWorkerContext as captureReadContext } from "./openclaw-state-worker-context.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
 
 const mock = vi.hoisted(() => ({
@@ -30,13 +29,6 @@ const mock = vi.hoisted(() => ({
   closeResources: vi.fn<(key?: string) => Promise<void>>(),
   rotate: vi.fn<() => Promise<void>>(),
 }));
-vi.mock("./openclaw-state-worker-context.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./openclaw-state-worker-context.js")>();
-  return {
-    ...actual,
-    captureOpenClawStateReadWorkerContext: vi.fn(actual.captureOpenClawStateReadWorkerContext),
-  };
-});
 vi.mock("../infra/worker-task-pool.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/worker-task-pool.js")>()),
   createOwnedWorkerTaskPool: () =>
@@ -57,7 +49,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     mock.closePool.mockResolvedValue();
     mock.closeResources.mockResolvedValue();
     mock.rotate.mockResolvedValue();
-    await closeOpenClawStateDatabaseAsync();
+    await closeState();
     cleanup();
   }),
 );
@@ -75,11 +67,7 @@ beforeEach(() => {
   mock.rotate.mockReset().mockResolvedValue();
 });
 function source() {
-  const root = tempDirs.make("state-read-error-phase-");
-  const pathname = path.join(root, "source.sqlite");
-  // The mocked worker uses only this filesystem identity; no SQLite connection opens.
-  fs.writeFileSync(pathname, "mock transport source");
-  return { path: pathname, env: { OPENCLAW_STATE_DIR: root } };
+  return makeReadSource(tempDirs, "state-read-error-phase-");
 }
 function mapper() {
   const mapped = new Error("mapped read failure");
@@ -97,12 +85,11 @@ it("rotates mapped readers when explicit SQLite close cannot release native reso
   });
   try {
     const options = source();
-    await executeExistingOpenClawStateRead(options, { type: "backup.runs" });
-    await closeOpenClawStateDatabaseByPathAsync(options.path);
+    await readExisting(options, { type: "backup.runs" });
+    await closePath(options.path);
     expect(mock.rotate).toHaveBeenCalledOnce();
-    expect(mock.closeResources).not.toHaveBeenCalled();
-    expect(mock.closePool).not.toHaveBeenCalled();
-    await closeOpenClawStateDatabaseAsync();
+    expectCalls(0, mock.closeResources, mock.closePool);
+    await closeState();
     expect(mock.closePool).toHaveBeenCalledOnce();
   } finally {
     capabilities.mockRestore();
@@ -115,16 +102,14 @@ it.each(["retired", "different-source", "schema"] as const)(
     const options = source();
     const context =
       kind === "schema"
-        ? withExistingOpenClawStateSchema({ path: options.path }, () =>
-            captureOpenClawStateReadWorkerContext(options),
-          )
-        : captureOpenClawStateReadWorkerContext(options);
+        ? withExistingSchema({ path: options.path }, () => captureReadContext(options))
+        : captureReadContext(options);
     if (kind === "retired") {
-      await closeOpenClawStateDatabaseByPathAsync(options.path);
+      await closePath(options.path);
     }
     const { mapped, mapError } = mapper();
     const read = () =>
-      executeExistingOpenClawStateRead(
+      readExisting(
         kind === "different-source" ? source() : options,
         { type: "backup.runs" },
         { context, mapError },
@@ -146,8 +131,7 @@ it.each(["retired", "different-source", "schema"] as const)(
         "before-read",
       );
     }
-    expect(mock.run).not.toHaveBeenCalled();
-    expect(mock.close).not.toHaveBeenCalled();
+    expectCalls(0, mock.run, mock.close);
   },
 );
 
@@ -177,11 +161,10 @@ it.each(["before-read", "read", "unobserved"] as const)(
       }
     }
     const { mapped, mapError } = mapper();
-    await expect(
-      executeExistingOpenClawStateRead(source(), { type: "backup.runs" }, { mapError }),
-    ).rejects.toBe(mapped);
-    expect(mapError).toHaveBeenCalledOnce();
-    expect(mock.close).toHaveBeenCalledOnce();
+    await expect(readExisting(source(), { type: "backup.runs" }, { mapError })).rejects.toBe(
+      mapped,
+    );
+    expectCalls(1, mapError, mock.close);
     expect(mock.close.mock.invocationCallOrder[0]).toBeLessThan(
       mapError.mock.invocationCallOrder[0]!,
     );
@@ -219,24 +202,21 @@ it("retains a successful receipt through failed task cleanup and canonical retry
   });
   const { mapped, mapError } = mapper();
   const publish = vi.fn();
-  const pending = executeExistingOpenClawStateRead(options, { type: "backup.runs" }, { mapError });
+  const pending = readExisting(options, { type: "backup.runs" }, { mapError });
   const assertion = expect(pending.then(publish)).rejects.toBe(mapped);
   const cleanup = new Error("successful read cleanup failed");
   try {
     await closing.promise;
-    expect(publish).not.toHaveBeenCalled();
-    expect(mapError).not.toHaveBeenCalled();
-    expect(mock.closePool).not.toHaveBeenCalled();
+    expectCalls(0, publish, mapError, mock.closePool);
   } finally {
     stopped.reject(cleanup);
   }
   await assertion;
   expect(mapError).toHaveBeenCalledExactlyOnceWith(cleanup, "read");
   expect(mock.close).toHaveBeenCalledOnce();
-  await closeOpenClawStateDatabaseByPathAsync(options.path);
+  await closePath(options.path);
   expect(mock.close).toHaveBeenCalledTimes(2);
-  expect(mock.closePool).not.toHaveBeenCalled();
-  expect(publish).not.toHaveBeenCalled();
+  expectCalls(0, mock.closePool, publish);
   await expect(pending).rejects.toBe(mapped);
   expect(mapError).toHaveBeenCalledOnce();
 });

@@ -18,15 +18,16 @@ import { ensureMeetingTranscriptsSchema } from "../transcripts/sqlite-schema.js"
 import { ensureOpenClawAgentBoardSchemaInTransaction } from "./openclaw-agent-board-schema.js";
 import { ensureSessionGoalOperationsSchema } from "./openclaw-agent-goal-operations-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION as SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { expectRow, readRow, readRows } from "./openclaw-state-db-fixtures.test-support.js";
 import {
   assertAgentDeletionJournalAvailable,
   ensureAgentDatabaseLeaseSchema,
   ensureSecretStoreSchema,
 } from "./openclaw-state-db-schema-additive.js";
 import {
-  openExistingOpenClawStateDatabaseReadOnly,
-  openOpenClawStateDatabase,
+  openExistingOpenClawStateDatabaseReadOnly as openReadOnly,
+  openOpenClawStateDatabase as openState,
 } from "./openclaw-state-db.js";
 import {
   getOpenClawStateRuntimeSchema,
@@ -44,56 +45,43 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 const { openDatabase } = useSqliteSchemaTestFixture();
 
 it.each([
-  {
-    name: "audit lifecycle binding",
-    schema: OPENCLAW_STATE_SCHEMA_SQL,
-    ensure: ensureExecutionOwnerLifecycleBindingSchema,
-  },
-  {
-    name: "goal receipt",
-    schema: OPENCLAW_AGENT_SCHEMA_SQL,
-    ensure: ensureSessionGoalOperationsSchema,
-  },
-  {
-    name: "board",
-    schema: OPENCLAW_AGENT_SCHEMA_SQL,
-    ensure: ensureOpenClawAgentBoardSchemaInTransaction,
-  },
-  {
-    name: "memory origin",
-    schema: OPENCLAW_AGENT_SCHEMA_SQL,
-    ensure: ensureMemoryEntryOriginsSchema,
-  },
-  {
-    name: "memory provenance",
-    schema: OPENCLAW_AGENT_SCHEMA_SQL,
-    ensure: ensureMemoryChunkProvenance,
-  },
-])("never issues persistent DDL on first or repeated warm $name use", ({ schema, ensure }) => {
-  const database = openDatabase(schema);
-  const observation = observeHostDataSql();
-  try {
-    for (let call = 0; call < 2; call += 1) {
-      database.exec("BEGIN IMMEDIATE");
-      ensure(database);
-      database.exec("COMMIT");
+  [
+    "audit lifecycle binding",
+    OPENCLAW_STATE_SCHEMA_SQL,
+    ensureExecutionOwnerLifecycleBindingSchema,
+  ],
+  ["goal receipt", OPENCLAW_AGENT_SCHEMA_SQL, ensureSessionGoalOperationsSchema],
+  ["board", OPENCLAW_AGENT_SCHEMA_SQL, ensureOpenClawAgentBoardSchemaInTransaction],
+  ["memory origin", OPENCLAW_AGENT_SCHEMA_SQL, ensureMemoryEntryOriginsSchema],
+  ["memory provenance", OPENCLAW_AGENT_SCHEMA_SQL, ensureMemoryChunkProvenance],
+] as const)(
+  "never issues persistent DDL on first or repeated warm %s use",
+  (_name, schema, ensure) => {
+    const database = openDatabase(schema);
+    const observation = observeHostDataSql();
+    try {
+      for (let call = 0; call < 2; call += 1) {
+        database.exec("BEGIN IMMEDIATE");
+        ensure(database);
+        database.exec("COMMIT");
+      }
+      expect(
+        observation.queries.filter((sql) => classifySqliteMutation(sql, "batch").mainSchemaChange),
+      ).toEqual([]);
+    } finally {
+      observation.restore();
     }
-    expect(
-      observation.queries.filter((sql) => classifySqliteMutation(sql, "batch").mainSchemaChange),
-    ).toEqual([]);
-  } finally {
-    observation.restore();
-  }
-});
+  },
+);
 
 it("installs only the secret-store table and index on first use", () => {
   using database = new DatabaseSync(":memory:");
 
   ensureSecretStoreSchema(database);
-  const names = database
-    .prepare("SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name")
-    .all()
-    .map((row) => row.name);
+  const names = readRows(
+    database,
+    "SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name",
+  ).map((row) => row.name);
 
   expect(names).toEqual(["secret_store_entries", "secret_store_entries_live_idx"]);
 });
@@ -119,12 +107,14 @@ it("lazily adds allowed_hosts to a v6 secret store without changing user_version
 
   ensureSecretStoreSchema(database);
 
-  expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
-  expect(
-    database
-      .prepare('SELECT name, type, "notnull", dflt_value FROM pragma_table_info(?) WHERE name = ?')
-      .get("secret_store_entries", "allowed_hosts"),
-  ).toEqual({ name: "allowed_hosts", type: "TEXT", notnull: 0, dflt_value: null });
+  expectRow(database, "PRAGMA user_version", { user_version: 6 });
+  expectRow(
+    database,
+    'SELECT name, type, "notnull", dflt_value FROM pragma_table_info(?) WHERE name = ?',
+    { name: "allowed_hosts", type: "TEXT", notnull: 0, dflt_value: null },
+    "secret_store_entries",
+    "allowed_hosts",
+  );
 });
 
 it("adds lease provenance without certifying legacy owners or changing their identifiers", () => {
@@ -142,26 +132,26 @@ it("adds lease provenance without certifying legacy owners or changing their ide
       ) STRICT;
       INSERT INTO agent_database_leases VALUES ('abc-123', 'main', '/agent.sqlite', 123, 456, 789);
     `);
-  const before = database.prepare("SELECT * FROM agent_database_leases").get();
+  const before = readRow(database, "SELECT * FROM agent_database_leases");
 
   database.exec("BEGIN");
   ensureAgentDatabaseLeaseSchema(database);
   database.exec("ROLLBACK");
-  expect(database.prepare("SELECT * FROM agent_database_leases").get()).toEqual(before);
+  expectRow(database, "SELECT * FROM agent_database_leases", before);
 
   ensureAgentDatabaseLeaseSchema(database);
-  expect(database.prepare("SELECT * FROM agent_database_leases").get()).toEqual({
+  expectRow(database, "SELECT * FROM agent_database_leases", {
     ...before,
     provenance: null,
   });
-  expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+  expectRow(database, "PRAGMA user_version", { user_version: 6 });
 });
 
 it("adds the caption retry index to populated same-version state without changing its rows", async () => {
   const options = {
     env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-caption-index-") },
   };
-  const database = openOpenClawStateDatabase(options);
+  const database = openState(options);
   database.db.exec(`
     INSERT INTO meeting_transcript_sessions
       (session_id, started_at, selector, export_key, session_slug, provider_id,
@@ -175,18 +165,21 @@ it("adds the caption retry index to populated same-version state without changin
            ('meeting', 'start', 2, NULL, 'Unidentified caption', NULL);
   `);
   const readState = (db: EngineConnection) => ({
-    sessions: db.prepare("SELECT * FROM meeting_transcript_sessions ORDER BY session_id").all(),
-    utterances: db.prepare("SELECT * FROM meeting_transcript_utterances ORDER BY sequence").all(),
-    metadata: db.prepare("SELECT * FROM schema_meta ORDER BY meta_key").all(),
-    version: db.prepare("PRAGMA user_version").get(),
+    sessions: readRows(db, "SELECT * FROM meeting_transcript_sessions ORDER BY session_id"),
+    utterances: readRows(db, "SELECT * FROM meeting_transcript_utterances ORDER BY sequence"),
+    metadata: readRows(db, "SELECT * FROM schema_meta ORDER BY meta_key"),
+    version: readRow(db, "PRAGMA user_version"),
   });
   const before = readState(database.db);
-  expect(before.version).toEqual({ user_version: OPENCLAW_STATE_SCHEMA_VERSION });
+  expect(before.version).toEqual({ user_version: SCHEMA_VERSION });
   const indexName = "idx_meeting_transcript_utterances_id";
   const readIndex = (db: EngineConnection) =>
-    db
-      .prepare('SELECT "unique", partial FROM pragma_index_list(?) WHERE name = ?')
-      .get("meeting_transcript_utterances", indexName);
+    readRow(
+      db,
+      'SELECT "unique", partial FROM pragma_index_list(?) WHERE name = ?',
+      "meeting_transcript_utterances",
+      indexName,
+    );
   const previousSchema = getOpenClawStateRuntimeSchema({
     includeVersionLazyAdditiveTables: false,
   }).replace(/CREATE INDEX IF NOT EXISTS idx_meeting_transcript_utterances_id\b[^;]*;/u, "");
@@ -205,7 +198,7 @@ it("adds the caption retry index to populated same-version state without changin
 
     previous.exec(`DROP INDEX IF EXISTS ${indexName}`);
   }
-  const reader = await openExistingOpenClawStateDatabaseReadOnly(options);
+  const reader = await openReadOnly(options);
   assert(reader);
   try {
     expect(readState(reader.db)).toEqual(before);
@@ -214,20 +207,19 @@ it("adds the caption retry index to populated same-version state without changin
     reader.walMaintenance.close();
   }
 
-  const repaired = openOpenClawStateDatabase(options);
+  const repaired = openState(options);
   expect(readState(repaired.db)).toEqual(before);
   expect(readIndex(repaired.db)).toEqual({ unique: 0, partial: 1 });
   expect(
-    repaired.db
-      .prepare("SELECT name FROM pragma_index_info(?) ORDER BY seqno")
-      .all(indexName)
-      .map((row) => row.name),
+    readRows(repaired.db, "SELECT name FROM pragma_index_info(?) ORDER BY seqno", indexName).map(
+      (row) => row.name,
+    ),
   ).toEqual(["session_id", "session_started_at", "utterance_id"]);
-  const schemaCookie = repaired.db.prepare("PRAGMA schema_version").get();
+  const schemaCookie = readRow(repaired.db, "PRAGMA schema_version");
   await closeStateDatabaseForTest();
-  const reopened = openOpenClawStateDatabase(options);
+  const reopened = openState(options);
   expect(readState(reopened.db)).toEqual(before);
-  expect(reopened.db.prepare("PRAGMA schema_version").get()).toEqual(schemaCookie);
+  expectRow(reopened.db, "PRAGMA schema_version", schemaCookie);
 
   // A retained handle's first feature use must include the index in its canonical DDL block.
   reopened.db.exec(`DROP INDEX ${indexName}`);
@@ -237,7 +229,7 @@ it("adds the caption retry index to populated same-version state without changin
 });
 
 it("reuses admitted journal columns while observing managed DDL and rollback", () => {
-  const database = openOpenClawStateDatabase({
+  const database = openState({
     env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-journal-columns-") },
   });
   const check = () =>
