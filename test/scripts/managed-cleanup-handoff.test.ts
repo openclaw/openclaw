@@ -33,17 +33,13 @@ function readSpawnedPids(record: string): number[] {
   if (!fs.existsSync(record)) {
     return [];
   }
-  return fs
-    .readFileSync(record, "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => {
-      const pid = Number(line);
-      if (!Number.isSafeInteger(pid) || pid <= 1) {
-        throw new Error(`Invalid fixture PID in ${record}`);
-      }
-      return pid;
-    });
+  const pids = fs.readFileSync(record, "utf8").trim().split("\n").map(Number);
+  for (const pid of pids) {
+    if (!Number.isSafeInteger(pid) || pid <= 1) {
+      throw new Error(`Invalid fixture PID in ${record}`);
+    }
+  }
+  return pids;
 }
 
 function makeFixture(name: string) {
@@ -56,6 +52,24 @@ function makeFixture(name: string) {
     env: { ...process.env, TMPDIR: cwd, TMP: cwd, TEMP: cwd },
   };
 }
+function blockingOwner(marker: string) {
+  return `import fs from "node:fs";
+import { claimManagedCleanup } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-cleanup-handoff.mts")).href)};
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => {});
+await claimManagedCleanup();
+fs.writeSync(1, ${JSON.stringify(`${marker}\n`)});
+Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+`;
+}
+function recordedCommand(record: string) {
+  return `import fs from "node:fs";
+import { runManagedCommand } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href)};
+const run = (signal) => runManagedCommand({
+  bin: process.execPath, args: ["-e", ""], stdio: "ignore", signal,
+  onReady(child) { fs.appendFileSync(${JSON.stringify(record)}, String(child.pid) + "\\n"); },
+});
+`;
+}
 function controlChannel(child: ChildProcess) {
   const channel = child.stdio[3];
   if (!(channel instanceof Socket)) {
@@ -64,57 +78,66 @@ function controlChannel(child: ChildProcess) {
   return channel;
 }
 function observeOwner(pause?: boolean) {
-  let child: ChildProcess | undefined;
-  let handoff: Socket | undefined;
-  let stdout = "",
-    stderr = "";
+  const state: { child?: ChildProcess; handoff?: Socket; stdout: string; stderr: string } = {
+    stdout: "",
+    stderr: "",
+  };
   const exited = createDeferred();
-  const gates: Array<{ match: string | RegExp; resolve: () => void }> = [];
+  const gates: Array<{ matches: () => boolean; resolve: () => void }> = [];
   const checkGates = () => {
     for (const gate of gates) {
-      if (typeof gate.match === "string" ? stdout.includes(gate.match) : gate.match.test(stdout)) {
+      if (gate.matches()) {
         gate.resolve();
       }
     }
   };
-  return {
-    get child() {
-      return child;
-    },
-    get handoff() {
-      return handoff;
-    },
-    get stdout() {
-      return stdout;
-    },
-    get stderr() {
-      return stderr;
-    },
+  return Object.assign(state, {
     exited: exited.promise,
     onReady(owned: ChildProcess) {
-      child = owned;
+      state.child = owned;
       owned.once("exit", () => exited.resolve());
       if (pause !== undefined) {
-        handoff = controlChannel(owned);
+        state.handoff = controlChannel(owned);
         if (pause) {
-          handoff.pause();
+          state.handoff.pause();
         }
       }
-      owned.stdout!.on("data", (chunk) => {
-        stdout += String(chunk);
-        checkGates();
-      });
-      owned.stderr!.on("data", (chunk) => {
-        stderr += String(chunk);
-      });
+      for (const stream of ["stdout", "stderr"] as const) {
+        owned[stream]!.on("data", (chunk) => {
+          state[stream] += String(chunk);
+          if (stream === "stdout") {
+            checkGates();
+          }
+        });
+      }
     },
     wait(match: string | RegExp, completion: Promise<unknown>, signal: AbortSignal) {
       const gate = createDeferred();
-      gates.push({ match, resolve: () => gate.resolve() });
+      gates.push({
+        matches: () =>
+          typeof match === "string" ? state.stdout.includes(match) : match.test(state.stdout),
+        resolve: () => gate.resolve(),
+      });
       checkGates();
       return waitFor(gate.promise, completion, `Missing child output: ${match}`, signal);
     },
-  };
+  });
+}
+function runOwner(
+  { childPath, cwd, env }: ReturnType<typeof makeFixture>,
+  owner: ReturnType<typeof observeOwner>,
+) {
+  return runManagedCommand({
+    bin: process.execPath,
+    args: [childPath],
+    cwd,
+    env,
+    stdio: ["pipe", "pipe", "pipe"],
+    onReady: owner.onReady,
+  }).then(
+    (status) => ({ status }),
+    (error: unknown) => ({ error }),
+  );
 }
 function waitFor(
   gate: Promise<unknown>,
@@ -146,32 +169,28 @@ function cleanup(
 
 describe.skipIf(process.platform === "win32")("managed cleanup ownership handoff", () => {
   it("acknowledges inherited custody in the current runtime", async ({ signal }) => {
-    const result = await runNodeScript(
-      [
-        "--input-type=module",
-        "-e",
-        `import { acquireManagedCleanup } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-cleanup-handoff.mts")).href)};
+    const script = `import { acquireManagedCleanup } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-cleanup-handoff.mts")).href)};
 for (let index = 0; index < 2; index++) {
   const release = await acquireManagedCleanup();
   if (!release) throw new Error("Missing managed cleanup parent");
   await release(true, true);
 }
 console.log("custody-released");
-`,
-      ],
+`;
+    const result = await runNodeScript(
+      ["--input-type=module", "-e", script],
       process.env,
       undefined,
       { signal, executable: process.execPath, requireProcessTreeExit: true, maxBuffer: 64 * 1024 },
     );
-    expect(result.error, result.stderr).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
+    expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
     expect(result.stdout).toBe("custody-released\n");
   });
 
   it.for(["acknowledge", "cancel"] as const)(
     "holds concurrent command admission until the parent can %s ownership",
-    async (action, { signal }) => {
-      await fixture.run(async () => {
+    (action, { signal }) =>
+      fixture.run(async () => {
         const cwd = fixture.createTempDir("managed-handoff-admission-");
         const childPath = path.join(cwd, "owner.mjs");
         const spawnRecord = path.join(cwd, "spawned-pids");
@@ -224,8 +243,7 @@ process.exitCode = statuses.find(code => code !== 0) ?? 0;
         });
         try {
           await owner.wait("claims-requested\n", completion, signal);
-          // onReady records synchronously at spawn, so the child's marker proves
-          // both callers returned pending without creating an unowned command.
+          // The marker follows both admissions; synchronous onReady records prove neither spawned.
           expect(readSpawnedPids(spawnRecord)).toEqual([]);
           if (action === "cancel") {
             cancellation.abort();
@@ -233,13 +251,14 @@ process.exitCode = statuses.find(code => code !== 0) ?? 0;
           owner.handoff!.resume();
           const result = await withinTest(completion, signal);
           if (action === "cancel") {
-            expect(result.error, result.stderr).toMatchObject({ code: "ABORT_ERR" });
-            expect(result.status).toBeNull();
+            expect(result, result.stderr).toMatchObject({
+              error: { code: "ABORT_ERR" },
+              status: null,
+            });
             expect(result.stdout).toContain("completed [143,143]\n");
             expect(readSpawnedPids(spawnRecord)).toEqual([]);
           } else {
-            expect(result.error, result.stderr).toBeUndefined();
-            expect(result.status, result.stderr).toBe(0);
+            expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
             expect(result.stdout).toContain("completed [0,0]\n");
             expect(readSpawnedPids(spawnRecord)).toHaveLength(2);
             for (const index of [0, 1]) {
@@ -258,16 +277,16 @@ process.exitCode = statuses.find(code => code !== 0) ?? 0;
         } finally {
           await cleanup(completion, owner.child, spawnRecord, owner.handoff);
         }
-      });
-    },
+      }),
   );
 
   it.for(["concurrent", "terminal", "release", "release-timeout"] as const)(
     "preserves %s outcomes while cleanup acknowledgements are pending",
-    async (mode, { signal }) => {
-      await fixture.run(async () => {
+    (mode, { signal }) =>
+      fixture.run(async () => {
         const releasing = mode === "release" || mode === "release-timeout";
-        const { cwd, resourceOwner, childPath, spawnRecord, env } = makeFixture("abort");
+        const scenario = makeFixture("abort");
+        const { resourceOwner, childPath, spawnRecord } = scenario;
         fs.writeFileSync(
           childPath,
           releasing
@@ -306,16 +325,11 @@ else leaf.stdin.end();
 fs.writeSync(1, "settled " + JSON.stringify([await command]) + "\\n");
 fs.writeSync(1, "completed []\\n");
 `
-            : `import fs from "node:fs";
+            : `${recordedCommand(spawnRecord)}
 import { once } from "node:events";
-import { runManagedCommand } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href)};
 const preaborted = new AbortController();
 preaborted.abort();
 const pending = new AbortController();
-const run = (signal) => runManagedCommand({
-  bin: process.execPath, args: ["-e", ""], stdio: "ignore", signal,
-  onReady(child) { fs.appendFileSync(${JSON.stringify(spawnRecord)}, String(child.pid) + "\\n"); },
-});
 const cancelled = Promise.all([preaborted, pending].map(controller =>
   run(controller.signal).then(status => ({ status }), error => ({
     error: { code: error.code, reasonMatches: error === controller.signal.reason },
@@ -333,17 +347,7 @@ process.exitCode = statuses.find(code => code !== 0) ?? 0;
 `,
         );
         const owner = observeOwner(!releasing);
-        const completion = runManagedCommand({
-          bin: process.execPath,
-          args: [childPath],
-          cwd,
-          env,
-          stdio: ["pipe", "pipe", "pipe"],
-          onReady: owner.onReady,
-        }).then(
-          (status) => ({ status }),
-          (error: unknown) => ({ error }),
-        );
+        const completion = runOwner(scenario, owner);
         try {
           await owner.wait("claims-requested\n", completion, signal);
           if (releasing) {
@@ -380,32 +384,21 @@ process.exitCode = statuses.find(code => code !== 0) ?? 0;
         } finally {
           await cleanup(completion, owner.child, spawnRecord, owner.handoff);
         }
-      });
-    },
+      }),
   );
 
   it.for(["idle", "owner-loss"] as const)(
     "settles %s custody after the owner exits",
-    async (mode, { signal }) => {
-      await fixture.run(async () => {
+    (mode, { signal }) =>
+      fixture.run(async () => {
         const lost = mode === "owner-loss";
         const { cwd, resourceOwner, childPath, spawnRecord, env } = makeFixture(mode);
         fs.writeFileSync(
           childPath,
           lost
-            ? `import fs from "node:fs";
-import { claimManagedCleanup } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-cleanup-handoff.mts")).href)};
-for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => {});
-await claimManagedCleanup();
-fs.writeSync(1, "ownership-accepted\\n");
-Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
-`
-            : `import fs from "node:fs";
-import { runManagedCommand } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href)};
-const status = await runManagedCommand({
-  bin: process.execPath, args: ["-e", ""], stdio: "ignore",
-  onReady(child) { fs.appendFileSync(${JSON.stringify(spawnRecord)}, String(child.pid) + "\\n"); },
-});
+            ? blockingOwner("ownership-accepted")
+            : `${recordedCommand(spawnRecord)}
+const status = await run();
 if (status !== 0) throw new Error("initial command failed: " + status);
 fs.writeSync(1, "between-commands-ready\\n");
 Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
@@ -431,11 +424,10 @@ Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
           expect(owner.child!.kill(lost ? "SIGKILL" : "SIGTERM")).toBe(true);
           const result = await withinTest(completion, signal);
           if (lost) {
-            expect(result.error, result.stderr).toMatchObject({
-              code: "EPROCESSGROUP_CLEANUP_FAILED",
-              processTreeState: "indeterminate",
+            expect(result, result.stderr).toMatchObject({
+              error: { code: "EPROCESSGROUP_CLEANUP_FAILED", processTreeState: "indeterminate" },
+              status: null,
             });
-            expect(result.status).toBeNull();
             expect(() => resourceOwner.assertReleased()).toThrow(
               "Unreleased Vitest resource claim",
             );
@@ -448,21 +440,16 @@ Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
         } finally {
           await cleanup(completion, owner.child, lost ? undefined : spawnRecord);
         }
-      });
-    },
+      }),
   );
 
-  it("reclaims acknowledged custody before starting a later command", async ({ signal }) => {
-    await fixture.run(async () => {
-      const { cwd, resourceOwner, childPath, spawnRecord, env } = makeFixture("reclaim");
+  it("reclaims acknowledged custody before starting a later command", ({ signal }) =>
+    fixture.run(async () => {
+      const scenario = makeFixture("reclaim");
+      const { resourceOwner, childPath, spawnRecord } = scenario;
       fs.writeFileSync(
         childPath,
-        `import fs from "node:fs";
-import { runManagedCommand } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href)};
-const run = () => runManagedCommand({
-  bin: process.execPath, args: ["-e", ""], stdio: "ignore",
-  onReady(child) { fs.appendFileSync(${JSON.stringify(spawnRecord)}, String(child.pid) + "\\n"); },
-});
+        `${recordedCommand(spawnRecord)}
 if (await run() !== 0) throw new Error("initial command failed");
 const continued = new Promise(resolve => process.stdin.once("data", resolve));
 fs.writeSync(1, "between-commands-ready\\n");
@@ -473,17 +460,7 @@ process.exitCode = await second;
 `,
       );
       const owner = observeOwner(false);
-      const completion = runManagedCommand({
-        bin: process.execPath,
-        args: [childPath],
-        cwd,
-        env,
-        stdio: ["pipe", "pipe", "pipe"],
-        onReady: owner.onReady,
-      }).then(
-        (status) => ({ status }),
-        (error: unknown) => ({ error }),
-      );
+      const completion = runOwner(scenario, owner);
       try {
         await owner.wait("between-commands-ready\n", completion, signal);
         expect(readSpawnedPids(spawnRecord)).toHaveLength(1);
@@ -500,27 +477,15 @@ process.exitCode = await second;
       } finally {
         await cleanup(completion, owner.child, spawnRecord, owner.handoff);
       }
-    });
-  });
+    }));
 
-  it("bounds unresponsive delegated custody without killing its acknowledged owner", async ({
-    signal,
-  }) => {
-    await fixture.run(async () => {
+  it("bounds unresponsive delegated custody without killing its acknowledged owner", ({ signal }) =>
+    fixture.run(async () => {
       const { cwd, resourceOwner, childPath: ownerPath, env } = makeFixture("unresponsive");
       const supervisorPath = path.join(cwd, "supervisor.mjs");
       const ownerPidPath = path.join(cwd, "owner.pid");
       const reportPath = path.join(cwd, "result.json");
-      fs.writeFileSync(
-        ownerPath,
-        `import fs from "node:fs";
-import { claimManagedCleanup } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-cleanup-handoff.mts")).href)};
-for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => {});
-await claimManagedCleanup();
-fs.writeSync(1, "unresponsive-owner-ready\\n");
-Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
-`,
-      );
+      fs.writeFileSync(ownerPath, blockingOwner("unresponsive-owner-ready"));
       fs.writeFileSync(
         supervisorPath,
         `import fs from "node:fs";
@@ -547,8 +512,7 @@ process.exitCode = report.error ? 1 : report.status;
 `,
       );
       const owner = observeOwner();
-      // A native parent observes whether the actual CLI can exit after reporting
-      // failed custody; no outer managed finalizer can rescue its retained handles.
+      // No outer managed finalizer can rescue the CLI's retained handles.
       const supervisor = spawn(process.execPath, [supervisorPath], {
         cwd,
         env,
@@ -566,13 +530,11 @@ process.exitCode = report.error ? 1 : report.status;
         expect(JSON.parse(fs.readFileSync(reportPath, "utf8"))).toMatchObject({
           error: { code: "EPROCESSGROUP_CLEANUP_FAILED", processTreeState: "indeterminate" },
         });
-        // Unresolved handoff is a retained failure, never permission to force-kill
-        // the acknowledged owner or certify its potentially detached work as dead.
+        // Failed handoff cannot authorize killing the owner or certifying its work as dead.
         expect(isProcessAlive(ownerPid!)).toBe(true);
         expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
       } finally {
         await cleanup(completion, supervisor, ownerPidPath);
       }
-    });
-  });
+    }));
 });

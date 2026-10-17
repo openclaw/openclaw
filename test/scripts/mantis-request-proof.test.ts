@@ -1,21 +1,17 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import JSZip from "jszip";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   createRequestReceipt,
   requestEvidenceDigest,
   requestIdentitySchema,
   requestReceiptSchema,
 } from "../../scripts/mantis/request-proof.ts";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const jsonBytes = (value: unknown) => Buffer.from(JSON.stringify(value));
-const encode = (value: unknown) => jsonBytes(value).toString("base64");
-const decode = (value: string) => JSON.parse(Buffer.from(value, "base64").toString("utf8"));
 const identity = requestIdentitySchema.parse({
   request_id: "a".repeat(64),
   repository: { id: "123", full_name: "openclaw/openclaw" },
@@ -39,25 +35,29 @@ function observations(wrongMessage = false) {
   };
   const reply = "Mantis reply 00000000-0000-4000-8000-000000000000";
   const files: Record<string, Buffer> = {
-    "chat-send.json": jsonBytes({
-      expected,
-      request_count: 1,
-      actual: {
-        ...expected,
-        message: wrongMessage ? "wrong" : expected.message,
-        idempotencyKey: "observed-key",
-      },
-    }),
-    "final-reply.json": jsonBytes({ expected: reply, actual: reply }),
+    "chat-send.json": Buffer.from(
+      JSON.stringify({
+        expected,
+        request_count: 1,
+        actual: {
+          ...expected,
+          message: wrongMessage ? "wrong" : expected.message,
+          idempotencyKey: "observed-key",
+        },
+      }),
+    ),
+    "final-reply.json": Buffer.from(JSON.stringify({ expected: reply, actual: reply })),
     "final-reply.png": Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
   };
-  files["observer.json"] = jsonBytes({
-    schema: "mantis.web-ui-observer.v1",
-    inventory: Object.entries(files).map(([name, bytes]) => ({
-      path: name,
-      sha256: requestEvidenceDigest(bytes),
-    })),
-  });
+  files["observer.json"] = Buffer.from(
+    JSON.stringify({
+      schema: "mantis.web-ui-observer.v1",
+      inventory: Object.entries(files).map(([name, bytes]) => ({
+        path: name,
+        sha256: requestEvidenceDigest(bytes),
+      })),
+    }),
+  );
   return Object.fromEntries(
     Object.entries(files).map(([name, bytes]) => [name, bytes.toString("base64")]),
   );
@@ -116,9 +116,13 @@ describe("request proof finalization", () => {
         files["chat-send.json"] = Buffer.from("{}").toString("base64");
       }
       if (fault === "duplicate") {
-        const manifest = decode(files["observer.json"]!);
+        const rawManifest = files["observer.json"];
+        if (!rawManifest) {
+          throw new Error("Fixture manifest missing");
+        }
+        const manifest = JSON.parse(Buffer.from(rawManifest, "base64").toString());
         manifest.inventory[1] = manifest.inventory[0];
-        files["observer.json"] = encode(manifest);
+        files["observer.json"] = Buffer.from(JSON.stringify(manifest)).toString("base64");
       }
       if (fault === "unknown") {
         files["receipt.json"] = Buffer.from("pass").toString("base64");
@@ -155,14 +159,14 @@ describe("request proof finalization", () => {
   });
   it("does not pass duplicate Web UI sends", () => {
     const files = observations();
-    const send = decode(files["chat-send.json"]!);
+    const send = JSON.parse(Buffer.from(files["chat-send.json"]!, "base64").toString("utf8"));
     send.request_count = 2;
-    const bytes = jsonBytes(send);
+    const bytes = Buffer.from(JSON.stringify(send));
     files["chat-send.json"] = bytes.toString("base64");
-    const manifest = decode(files["observer.json"]!);
+    const manifest = JSON.parse(Buffer.from(files["observer.json"]!, "base64").toString("utf8"));
     manifest.inventory.find((item: { path: string }) => item.path === "chat-send.json").sha256 =
       requestEvidenceDigest(bytes);
-    files["observer.json"] = encode(manifest);
+    files["observer.json"] = Buffer.from(JSON.stringify(manifest)).toString("base64");
     expect(createRequestReceipt(identity, "completed", evidence, files).assertion_outcome).toBe(
       "inconclusive",
     );
@@ -188,52 +192,67 @@ describe("archive boundary", () => {
   it.each(["complete", "traversal", "symlink", "missing", "oversized", "duplicate", "nul-path"])(
     "handles %s ZIP without unsafe extraction",
     async (fault) => {
-      const temp = tempDirs.make("mantis-archive-");
-      const zip = new JSZip();
-      for (const [name, value] of Object.entries(observations())) {
-        zip.file(name, Buffer.from(value, "base64"));
-      }
-      if (fault === "traversal") {
-        zip.file("../escape", "bad");
-      }
-      if (fault === "symlink") {
-        zip.file("final-reply.png", "../escape", { unixPermissions: 0o120777 });
-      }
-      if (fault === "missing") {
-        zip.remove("final-reply.png");
-      }
-      if (fault === "nul-path") {
-        const manifest = await zip.file("observer.json")?.async("nodebuffer");
-        if (!manifest) {
-          throw new Error("Fixture manifest missing");
+      const temp = mkdtempSync(path.join(os.tmpdir(), "mantis-archive-"));
+      try {
+        const zip = new JSZip();
+        for (const [name, value] of Object.entries(observations())) {
+          zip.file(name, Buffer.from(value, "base64"));
         }
-        zip.remove("observer.json");
-        zip.file("observer.json\0unused", manifest);
+        if (fault === "traversal") {
+          zip.file("../escape", "bad");
+        }
+        if (fault === "symlink") {
+          zip.file("final-reply.png", "../escape", { unixPermissions: 0o120777 });
+        }
+        if (fault === "missing") {
+          zip.remove("final-reply.png");
+        }
+        if (fault === "nul-path") {
+          const manifest = await zip.file("observer.json")?.async("nodebuffer");
+          if (!manifest) {
+            throw new Error("Fixture manifest missing");
+          }
+          zip.remove("observer.json");
+          zip.file("observer.json\0unused", manifest);
+        }
+        if (fault === "oversized") {
+          zip.file("observer.json", Buffer.alloc(65537));
+        }
+        const archive = path.join(temp, "evidence.zip");
+        const output = path.join(temp, "files.json");
+        writeFileSync(archive, await zip.generateAsync({ type: "nodebuffer", platform: "UNIX" }));
+        if (fault === "duplicate") {
+          execFileSync(
+            "python3",
+            [
+              "-I",
+              "-S",
+              "-c",
+              "import sys,zipfile; z=zipfile.ZipFile(sys.argv[1], 'a'); z.writestr('observer.json', '{}'); z.close()",
+              archive,
+            ],
+            { stdio: "pipe" },
+          );
+        }
+        const parse = () =>
+          execFileSync("python3", ["-I", "-S", parser, "evidence", archive, output], {
+            stdio: "pipe",
+          });
+        if (fault === "complete") {
+          parse();
+          const receipt = createRequestReceipt(
+            identity,
+            "completed",
+            evidence,
+            JSON.parse(readFileSync(output, "utf8")),
+          );
+          expect(receipt.assertion_outcome).toBe("pass");
+        } else {
+          expect(parse).toThrow();
+        }
+      } finally {
+        rmSync(temp, { recursive: true, force: true });
       }
-      if (fault === "oversized") {
-        zip.file("observer.json", Buffer.alloc(65537));
-      }
-      const archive = path.join(temp, "evidence.zip");
-      const output = path.join(temp, "files.json");
-      writeFileSync(archive, await zip.generateAsync({ type: "nodebuffer", platform: "UNIX" }));
-      if (fault === "duplicate") {
-        execFileSync(
-          "python3",
-          [
-            "-I",
-            "-S",
-            "-c",
-            "import sys,zipfile; z=zipfile.ZipFile(sys.argv[1], 'a'); z.writestr('observer.json', '{}'); z.close()",
-            archive,
-          ],
-          { stdio: "pipe" },
-        );
-      }
-      const parse = () =>
-        execFileSync("python3", ["-I", "-S", parser, "evidence", archive, output], {
-          stdio: "pipe",
-        });
-      expect(parse).toThrow();
     },
   );
 });
@@ -258,149 +277,153 @@ describe("trusted finalizer CLI", () => {
     "missing-digest",
     "wrong-size",
   ])("binds authoritative API metadata and actual ZIP bytes (%s)", async (fault) => {
-    const temp = tempDirs.make("mantis-finalizer-");
-    const zip = new JSZip();
-    for (const [name, value] of Object.entries(observations())) {
-      zip.file(name, Buffer.from(value, "base64"));
-    }
-    const archive = await zip.generateAsync({ type: "nodebuffer", platform: "UNIX" });
-    const archivePath = path.join(temp, "fixture.zip");
-    writeFileSync(archivePath, archive);
-    mkdirSync(path.join(temp, "scripts/mantis"), { recursive: true });
-    copyFileSync(parser, path.join(temp, "scripts/mantis/read-request-archive.py"));
-    const run = {
-      id: 456,
-      run_attempt: fault === "wrong-attempt" ? 2 : 1,
-      event: "workflow_dispatch",
-      head_sha: identity.workflow.sha,
-      path:
-        fault === "qualified-path"
-          ? identity.workflow.path + "@mantis-proof-v1"
-          : fault === "wrong-path-ref"
-            ? identity.workflow.path + "@other-ref"
-            : identity.workflow.path,
-      display_title:
-        fault === "wrong-title" ? "other request" : `Mantis request [${identity.request_id}]`,
-      repository: { id: 123 },
-      head_repository: { id: 123 },
-    };
-    const artifact = {
-      id: 789,
-      name: evidence.artifact_name,
-      expired: false,
-      size_in_bytes: archive.length + (fault === "wrong-size" ? 1 : 0),
-      digest:
-        fault === "missing-digest"
-          ? null
-          : "sha256:" +
-            (fault.includes("digest-mismatch") ? "e".repeat(64) : requestEvidenceDigest(archive)),
-      workflow_run: {
-        id: fault === "wrong-run" ? 999 : 456,
-        repository_id: 123,
-        head_repository_id: 123,
+    const temp = mkdtempSync(path.join(os.tmpdir(), "mantis-finalizer-"));
+    try {
+      const zip = new JSZip();
+      for (const [name, value] of Object.entries(observations())) {
+        zip.file(name, Buffer.from(value, "base64"));
+      }
+      const archive = await zip.generateAsync({ type: "nodebuffer", platform: "UNIX" });
+      const archivePath = path.join(temp, "fixture.zip");
+      writeFileSync(archivePath, archive);
+      mkdirSync(path.join(temp, "scripts/mantis"), { recursive: true });
+      copyFileSync(parser, path.join(temp, "scripts/mantis/read-request-archive.py"));
+      const run = {
+        id: 456,
+        run_attempt: fault === "wrong-attempt" ? 2 : 1,
+        event: "workflow_dispatch",
         head_sha: identity.workflow.sha,
-      },
-    };
-    const pr = {
-      state: "open",
-      head: {
-        sha: fault.startsWith("stale-head") ? "f".repeat(40) : identity.candidate_sha,
-        repo: { id: 123 },
-      },
-    };
-    const mockPath = path.join(temp, "mock-api.mjs");
-    const routes = {
-      "https://api.github.com/repos/openclaw/openclaw/actions/runs/456/attempts/1": run,
-      "https://api.github.com/repos/openclaw/openclaw/actions/runs/456/attempts/1/jobs?per_page=100":
-        {
-          total_count: fault === "incomplete-jobs" ? 2 : 1,
-          jobs: [
-            {
-              name: "Run request-bound web chat proof",
-              run_id: fault === "wrong-job-run" ? 999 : 456,
-              head_sha: identity.workflow.sha,
-              status: "completed",
-              conclusion: fault === "timed-out" ? "timed_out" : "success",
-            },
-          ],
+        path:
+          fault === "qualified-path"
+            ? identity.workflow.path + "@mantis-proof-v1"
+            : fault === "wrong-path-ref"
+              ? identity.workflow.path + "@other-ref"
+              : identity.workflow.path,
+        display_title:
+          fault === "wrong-title" ? "other request" : `Mantis request [${identity.request_id}]`,
+        repository: { id: 123 },
+        head_repository: { id: 123 },
+      };
+      const artifact = {
+        id: 789,
+        name: evidence.artifact_name,
+        expired: false,
+        size_in_bytes: archive.length + (fault === "wrong-size" ? 1 : 0),
+        digest:
+          fault === "missing-digest"
+            ? null
+            : "sha256:" +
+              (fault.includes("digest-mismatch") ? "e".repeat(64) : requestEvidenceDigest(archive)),
+        workflow_run: {
+          id: fault === "wrong-run" ? 999 : 456,
+          repository_id: 123,
+          head_repository_id: 123,
+          head_sha: identity.workflow.sha,
         },
-      "https://api.github.com/repos/openclaw/openclaw/pulls/42": pr,
-      "https://api.github.com/repos/openclaw/openclaw/actions/runs/456/artifacts?per_page=100&name=mantis-request-web-ui-456-1":
-        { total_count: 1, artifacts: [artifact] },
-    };
-    writeFileSync(
-      mockPath,
-      [
-        'import { readFileSync } from "node:fs";',
-        "const routes = " + JSON.stringify(routes) + ";",
-        "const archive = readFileSync(" + JSON.stringify(archivePath) + ");",
-        "globalThis.fetch = async (url, options) => {",
-        "  const key = String(url);",
-        "  if (Object.hasOwn(routes, key)) return Response.json(routes[key]);",
-        '  if (key === "https://api.github.com/repos/openclaw/openclaw/actions/artifacts/789/zip") {',
-        fault === "redirect"
-          ? 'return new Response(null, { status: 302, headers: { location: "https://fixture.blob.core.windows.net/evidence" } });'
-          : "return new Response(archive);",
-        "  }",
-        '  if (key === "https://fixture.blob.core.windows.net/evidence") { if (options.headers?.Authorization) throw new Error("Authorization leaked"); return new Response(archive); }',
-        '  throw new Error("Unexpected network request");',
-        "};",
-      ].join("\n"),
-    );
-    const invoke = () =>
-      execFileSync(process.execPath, ["--import", pathToFileURL(mockPath).href, finalizer], {
-        cwd: temp,
-        stdio: "pipe",
-        timeout: 15_000,
-        env: {
-          PATH: process.env.PATH,
-          GH_TOKEN: "test-only-placeholder",
-          REQUEST_ID: identity.request_id,
-          TARGET_PR: "42",
-          CANDIDATE_SHA: identity.candidate_sha,
-          GITHUB_REPOSITORY: "openclaw/openclaw",
-          GITHUB_REPOSITORY_ID: "123",
-          GITHUB_WORKFLOW_SHA: identity.workflow.sha,
-          GITHUB_REF: "refs/heads/mantis-proof-v1",
-          GITHUB_RUN_ID: "456",
-          GITHUB_RUN_ATTEMPT: "1",
+      };
+      const pr = {
+        state: "open",
+        head: {
+          sha: fault.startsWith("stale-head") ? "f".repeat(40) : identity.candidate_sha,
+          repo: { id: 123 },
         },
-      });
-    if (
-      [
-        "wrong-attempt",
-        "wrong-title",
-        "wrong-job-run",
-        "incomplete-jobs",
-        "wrong-path-ref",
-      ].includes(fault)
-    ) {
-      expect(invoke).toThrow();
-      return;
-    }
-    invoke();
-    const receipt = requestReceiptSchema.parse(
-      JSON.parse(
-        readFileSync(path.join(temp, ".artifacts/mantis-request-finalizer/receipt.json"), "utf8"),
-      ),
-    );
-    expect(receipt.assertion_outcome).toBe(
-      ["complete", "redirect", "qualified-path"].includes(fault) ? "pass" : "inconclusive",
-    );
-    if (["complete", "redirect", "qualified-path"].includes(fault)) {
-      expect(receipt.evidence?.sha256).toBe(requestEvidenceDigest(archive));
-    }
-    if (["digest-mismatch", "wrong-run"].includes(fault)) {
-      expect(receipt.evidence).toBeNull();
-    }
-    if (fault.startsWith("stale-head")) {
-      expect(receipt.reason).toBe(
-        "PR is no longer open at the exact same-repository candidate head.",
+      };
+      const mockPath = path.join(temp, "mock-api.mjs");
+      const routes = {
+        "https://api.github.com/repos/openclaw/openclaw/actions/runs/456/attempts/1": run,
+        "https://api.github.com/repos/openclaw/openclaw/actions/runs/456/attempts/1/jobs?per_page=100":
+          {
+            total_count: fault === "incomplete-jobs" ? 2 : 1,
+            jobs: [
+              {
+                name: "Run request-bound web chat proof",
+                run_id: fault === "wrong-job-run" ? 999 : 456,
+                head_sha: identity.workflow.sha,
+                status: "completed",
+                conclusion: fault === "timed-out" ? "timed_out" : "success",
+              },
+            ],
+          },
+        "https://api.github.com/repos/openclaw/openclaw/pulls/42": pr,
+        "https://api.github.com/repos/openclaw/openclaw/actions/runs/456/artifacts?per_page=100&name=mantis-request-web-ui-456-1":
+          { total_count: 1, artifacts: [artifact] },
+      };
+      writeFileSync(
+        mockPath,
+        [
+          'import { readFileSync } from "node:fs";',
+          "const routes = " + JSON.stringify(routes) + ";",
+          "const archive = readFileSync(" + JSON.stringify(archivePath) + ");",
+          "globalThis.fetch = async (url, options) => {",
+          "  const key = String(url);",
+          "  if (Object.hasOwn(routes, key)) return Response.json(routes[key]);",
+          '  if (key === "https://api.github.com/repos/openclaw/openclaw/actions/artifacts/789/zip") {',
+          fault === "redirect"
+            ? 'return new Response(null, { status: 302, headers: { location: "https://fixture.blob.core.windows.net/evidence" } });'
+            : "return new Response(archive);",
+          "  }",
+          '  if (key === "https://fixture.blob.core.windows.net/evidence") { if (options.headers?.Authorization) throw new Error("Authorization leaked"); return new Response(archive); }',
+          '  throw new Error("Unexpected network request");',
+          "};",
+        ].join("\n"),
       );
-    } else if (fault === "digest-mismatch") {
-      expect(receipt.reason).toBe(
-        "Evidence archive is unavailable, ambiguous, expired, malformed, unsafe, partial, or does not match its authoritative identity/digest.",
+      const invoke = () =>
+        execFileSync(process.execPath, ["--import", pathToFileURL(mockPath).href, finalizer], {
+          cwd: temp,
+          stdio: "pipe",
+          timeout: 15_000,
+          env: {
+            PATH: process.env.PATH,
+            GH_TOKEN: "test-only-placeholder",
+            REQUEST_ID: identity.request_id,
+            TARGET_PR: "42",
+            CANDIDATE_SHA: identity.candidate_sha,
+            GITHUB_REPOSITORY: "openclaw/openclaw",
+            GITHUB_REPOSITORY_ID: "123",
+            GITHUB_WORKFLOW_SHA: identity.workflow.sha,
+            GITHUB_REF: "refs/heads/mantis-proof-v1",
+            GITHUB_RUN_ID: "456",
+            GITHUB_RUN_ATTEMPT: "1",
+          },
+        });
+      if (
+        [
+          "wrong-attempt",
+          "wrong-title",
+          "wrong-job-run",
+          "incomplete-jobs",
+          "wrong-path-ref",
+        ].includes(fault)
+      ) {
+        expect(invoke).toThrow();
+        return;
+      }
+      invoke();
+      const receipt = requestReceiptSchema.parse(
+        JSON.parse(
+          readFileSync(path.join(temp, ".artifacts/mantis-request-finalizer/receipt.json"), "utf8"),
+        ),
       );
+      expect(receipt.assertion_outcome).toBe(
+        ["complete", "redirect", "qualified-path"].includes(fault) ? "pass" : "inconclusive",
+      );
+      if (["complete", "redirect", "qualified-path"].includes(fault)) {
+        expect(receipt.evidence?.sha256).toBe(requestEvidenceDigest(archive));
+      }
+      if (["digest-mismatch", "wrong-run"].includes(fault)) {
+        expect(receipt.evidence).toBeNull();
+      }
+      if (fault.startsWith("stale-head")) {
+        expect(receipt.reason).toBe(
+          "PR is no longer open at the exact same-repository candidate head.",
+        );
+      } else if (fault === "digest-mismatch") {
+        expect(receipt.reason).toBe(
+          "Evidence archive is unavailable, ambiguous, expired, malformed, unsafe, partial, or does not match its authoritative identity/digest.",
+        );
+      }
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
     }
   });
 });
