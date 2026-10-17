@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createMemo, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { requestVideoPoster } from "../../../lib/media/video-poster.ts";
@@ -8,11 +8,7 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
-import {
-  releaseChatMediaResourceSubscriber,
-  type AssistantAttachmentItem,
-  type ImageBlock,
-} from "./chat-message-media.ts";
+import type { AssistantAttachmentItem, ImageBlock } from "./chat-message-media.ts";
 import { MessageVideoPreview } from "./chat-message-video-preview-solid.tsx";
 
 vi.mock("../../../lib/media/video-poster.ts", async (importOriginal) => ({
@@ -136,19 +132,14 @@ it.each(["document", "audio", "video"] as const)(
     const url = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
     const pending = createDeferred<{ url: string }>();
     const resolveArtifactDownload = vi.fn(() => pending.promise);
-    const [revision, setRevision] = createSignal(0);
-    const onRequestUpdate = () => setRevision((value) => value + 1);
-    const options = createMemo(() => {
-      revision();
-      return { resolveArtifactDownload, onRequestUpdate };
-    });
+    const options = { resolveArtifactDownload };
     const view = mountSolid(() => (
       <MessageAttachment
         item={{
           type: "attachment",
           attachment: { kind, label: `${kind} recording`, url, artifactId: `fixture-${kind}` },
         }}
-        options={options()}
+        options={options}
         presentation="card"
       />
     ));
@@ -167,7 +158,6 @@ it.each(["document", "audio", "video"] as const)(
       expect(document.activeElement).toBe(download);
     } finally {
       view.unmount();
-      releaseChatMediaResourceSubscriber(onRequestUpdate);
     }
   },
 );

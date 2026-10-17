@@ -49,6 +49,7 @@ type StreamMessageOptions = Pick<
   | "runActive"
   | "asyncQuestions"
   | "onRequestUpdate"
+  | "mediaOwner"
   | "canvasPluginSurfaceUrl"
   | "resourceBasePath"
   | "mediaPolicyKey"

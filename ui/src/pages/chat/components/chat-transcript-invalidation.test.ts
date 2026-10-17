@@ -31,7 +31,7 @@ import {
   renderTranscriptSearch,
 } from "../test-helpers/chat-transcript-native.tsx";
 import * as chatMessage from "./chat-message-group-frame.ts";
-import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
+import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
 import { resetTranscriptSession, toggleTranscriptSearch } from "./chat-thread-interactions.ts";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
@@ -135,7 +135,13 @@ describe("chat transcript invalidation", () => {
       const searchContainer = document.body.appendChild(document.createElement("div"));
       const rerender = () => {
         render(renderTranscriptSearch(paneId, rerender), searchContainer);
-        render(renderChatThread({ ...props, onRequestUpdate: rerender }, transcript), container);
+        render(
+          renderChatThread(
+            { ...props, mediaOwner: rerender, onRequestUpdate: rerender },
+            transcript,
+          ),
+          container,
+        );
         transcript.update();
       };
       const ownName = () =>
@@ -653,6 +659,7 @@ describe("chat transcript invalidation", () => {
       transcript.update();
     };
     props.onRequestUpdate = rerender;
+    props.mediaOwner = rerender;
     rerender();
     transcript.start();
     transcript.update();
@@ -673,7 +680,7 @@ describe("chat transcript invalidation", () => {
       }
     }
     expect(fetchMock).toHaveBeenCalledTimes(4);
-    releaseChatMediaResourceSubscriber(rerender);
+    releaseChatMediaResourceOwner(rerender);
     transcript.dispose();
   });
 
@@ -731,6 +738,7 @@ describe("chat transcript invalidation", () => {
           {
             ...threadProps("pane-gateway-media-auth", state.sessionKey, messages),
             assistantAttachmentAuthToken: resolveControlUiAuthToken(state),
+            mediaOwner: renderPane,
             onRequestUpdate: renderPane,
           },
           transcript,
@@ -772,7 +780,7 @@ describe("chat transcript invalidation", () => {
     );
     expect(container.querySelector<HTMLImageElement>(".chat-message-image")?.src).toBe(blobUrl);
 
-    releaseChatMediaResourceSubscriber(renderPane);
+    releaseChatMediaResourceOwner(renderPane);
     transcript.dispose();
   });
 

@@ -34,7 +34,7 @@ import {
 } from "./chat-message-local-media.ts";
 import {
   observeChatMediaResourceSubscriber,
-  releaseChatMediaResourceSubscriber,
+  releaseChatMediaResourceOwner,
   type ImageBlock,
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
@@ -163,13 +163,13 @@ function createMessageImagePresentation(props: MessageImageProps) {
         admitted = false;
         imageKey = Symbol("image-presentation");
       }
-      releaseChatMediaResourceSubscriber(refreshImage);
+      releaseChatMediaResourceOwner(refreshImage);
     }
     currentImage = image;
     currentOptions = options;
     if (!active) {
       releaseRetainedImage();
-      releaseChatMediaResourceSubscriber(refreshImage);
+      releaseChatMediaResourceOwner(refreshImage);
       return renderImagePlaceholder(image);
     }
     // A warm preview needs no network admission. Native images retain their
@@ -202,22 +202,18 @@ function createMessageImagePresentation(props: MessageImageProps) {
       return present(renderImagePlaceholder(image));
     }
     admitted = true;
-    const onRequestUpdate = options?.onRequestUpdate;
-
-    // The image component owns its resource subscription. Reparent its stable subscription when the pane
-    // callback changes without discarding its loaded resource.
-    if (onRequestUpdate) {
+    // A pane owns cancellation; this image alone owns its presentation updates.
+    const observed = options?.mediaOwner !== undefined || options?.onMediaChange !== undefined;
+    if (observed) {
       pendingPreview = undefined;
-      observeChatMediaResourceSubscriber(onRequestUpdate, refreshImage);
+      observeChatMediaResourceSubscriber(options?.mediaOwner, refreshImage);
     } else {
-      releaseChatMediaResourceSubscriber(refreshImage);
+      releaseChatMediaResourceOwner(refreshImage);
     }
-    const subscriptionOptions = onRequestUpdate
-      ? { ...options, onRequestUpdate: refreshImage }
-      : options;
+    const subscriptionOptions = observed ? { ...options, onMediaChange: refreshImage } : options;
     const source = image.url;
     if (source === undefined) {
-      return renderManagedImage(image, options, subscriptionOptions);
+      return renderManagedImage(image, subscriptionOptions);
     }
     const availability = resolveAssistantAttachmentAvailability(source, subscriptionOptions);
     const decodeFailed = retainedImage?.status === "unavailable";
@@ -296,12 +292,11 @@ function createMessageImagePresentation(props: MessageImageProps) {
         ),
       );
     }
-    return renderManagedImage(image, options, subscriptionOptions, displayUrl);
+    return renderManagedImage(image, subscriptionOptions, displayUrl);
   }
 
   function renderManagedImage(
     image: ImageBlock,
-    options: ImageRenderOptions | undefined,
     subscriptionOptions: ImageRenderOptions | undefined,
     source = image.url,
   ) {
@@ -314,13 +309,13 @@ function createMessageImagePresentation(props: MessageImageProps) {
       previewWidth,
     );
     const pending = resource.pending;
-    // Standalone renders settle without opting into pane-owned automatic retries.
-    if (!options?.onRequestUpdate && pending && pendingPreview !== pending) {
+    // Standalone previews settle once without opting into a pane's automatic retries.
+    if (!subscriptionOptions?.onMediaChange && pending && pendingPreview !== pending) {
       pendingPreview = pending;
       void pending.then(() => {
         if (pendingPreview === pending && active && currentImage) {
           pendingPreview = undefined;
-          void refresh(model);
+          refreshImage();
         }
       });
     }
@@ -402,9 +397,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
           ? () => {
               resolveManagedImageResource(
                 image.url,
-                currentOptions?.onRequestUpdate
-                  ? { ...currentOptions, onRequestUpdate: refreshImage }
-                  : currentOptions,
+                { ...currentOptions, onMediaChange: refreshImage },
                 image.artifactId,
                 managedImageInlineVariant(image),
                 true,
@@ -432,7 +425,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
     if (currentImage?.url && isLocalAssistantAttachmentSource(currentImage.url)) {
       reportAssistantImageFailure(currentImage.url, {
         ...currentOptions,
-        onRequestUpdate: currentOptions?.onRequestUpdate ? refreshImage : undefined,
+        onMediaChange: refreshImage,
       });
     } else {
       retainedImage = { status: "unavailable" };
@@ -455,7 +448,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
     previewElement?.remove();
     previewElement = undefined;
     loadedElement = undefined;
-    releaseChatMediaResourceSubscriber(refreshImage);
+    releaseChatMediaResourceOwner(refreshImage);
     // Transcript disposal can run inside a render computation; only invalidation waits.
     queueMicrotask(refreshImage);
   };
@@ -489,7 +482,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
     loadedElement = undefined;
     pendingPreview = undefined;
     imageKey = Symbol("image-presentation");
-    releaseChatMediaResourceSubscriber(refreshImage);
+    releaseChatMediaResourceOwner(refreshImage);
   });
   return { model, observeFrame, admit, renderPreviewElement };
 }
