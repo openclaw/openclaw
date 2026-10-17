@@ -16,7 +16,6 @@ import {
 } from "./sandbox-exec-server.test-helpers.js";
 
 afterEach(async () => {
-  vi.unstubAllEnvs();
   await sandboxExecServerRegistry.closeAll();
 });
 
@@ -80,7 +79,6 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       createdAtMs: 0,
       modifiedAtMs: 5678,
     });
-    socket.close();
   });
 
   it("keeps pre-upgrade sandbox fs bridges source- and runtime-compatible", async () => {
@@ -163,7 +161,6 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       recursive: false,
       force: false,
     });
-    socket.close();
   });
 
   it("preserves missing-parent failures for file writes", async () => {
@@ -177,7 +174,6 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       "parent directory not found",
     );
     expect(writeFile).not.toHaveBeenCalled();
-    socket.close();
   });
 
   it("denies copies whose canonical destination is policy-protected", async () => {
@@ -197,7 +193,6 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       }),
     ).rejects.toThrow("Codex fs sandbox denied write access");
     expect(copyFile).not.toHaveBeenCalled();
-    socket.close();
   });
 
   it("honors Codex fs sandbox protected metadata carveouts", async () => {
@@ -218,7 +213,6 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     ).rejects.toThrow("because /workspace/.git is not writable");
     expect(writeFile).not.toHaveBeenCalled();
     expect(remove).not.toHaveBeenCalled();
-    socket.close();
   });
 
   it("enforces Codex fs sandbox glob deny entries", async () => {
@@ -227,24 +221,15 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     const writeFile = vi.fn(async () => undefined);
     const socket = await connect({ readFile, remove, writeFile });
     const policy = makeWorkspacePolicy(globPath("private/*.txt"));
-    await expect(
-      rpc(socket, "fs/readFile", {
-        path: "file:///workspace/private/secret.txt",
-        sandbox: policy,
-      }),
-    ).rejects.toThrow("Codex fs sandbox denied read access");
-    await expect(
-      rpc(socket, "fs/readFile", {
-        path: "file:///workspace/key.pem",
-        sandbox: makeWorkspacePolicy(globPath("**/*.pem")),
-      }),
-    ).rejects.toThrow("Codex fs sandbox denied read access");
-    await expect(
-      rpc(socket, "fs/readFile", {
-        path: "file:///workspace/KEY.PEM",
-        sandbox: makeWorkspacePolicy(globPath("**/*.[Pp][Ee][Mm]")),
-      }),
-    ).rejects.toThrow("Codex fs sandbox denied read access");
+    for (const [name, sandbox] of [
+      ["private/secret.txt", policy],
+      ["key.pem", makeWorkspacePolicy(globPath("**/*.pem"))],
+      ["KEY.PEM", makeWorkspacePolicy(globPath("**/*.[Pp][Ee][Mm]"))],
+    ] as const) {
+      await expect(rpc(socket, "fs/readFile", { path: uri(name), sandbox })).rejects.toThrow(
+        "Codex fs sandbox denied read access",
+      );
+    }
     await write(socket, "file:///workspace/private/nested/allowed.txt", "ok", policy);
     await expect(
       rpc(socket, "fs/remove", {
@@ -257,7 +242,6 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     expect(readFile).not.toHaveBeenCalled();
     expect(remove).not.toHaveBeenCalled();
     expect(writeFile).toHaveBeenCalledTimes(1);
-    socket.close();
   });
 
   it("denies a bridge-resolved read path before content or metadata leaves", async () => {
@@ -280,7 +264,6 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     }
     expect(stat).not.toHaveBeenCalled();
     expect(readFile).not.toHaveBeenCalled();
-    socket.close();
   });
 
   it("ignores non-granting Codex fs sandbox special entries", async () => {
@@ -302,7 +285,6 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       data: Buffer.from("ok"),
       mkdir: false,
     });
-    socket.close();
   });
 
   it("fails closed for unsupported Codex fs sandbox glob classes", async () => {
@@ -315,7 +297,6 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       }),
     ).rejects.toThrow("fs sandbox glob character class must be closed");
     expect(readFile).not.toHaveBeenCalled();
-    socket.close();
   });
 
   it("fails closed for recursive removes below protected glob prefixes", async () => {
@@ -331,7 +312,6 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       }),
     ).rejects.toThrow("because /workspace/**/*.pem is not writable");
     expect(remove).not.toHaveBeenCalled();
-    socket.close();
   });
 
   it("routes recursive copies through the sandbox filesystem bridge", async () => {
@@ -361,25 +341,19 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       destinationPath: "file:///workspace/destination-dir",
       recursive: true,
     });
-    expect(mkdirp).toHaveBeenCalledWith({ filePath: "/workspace/destination-dir" });
-    expect(mkdirp).toHaveBeenCalledWith({ filePath: "/workspace/destination-dir/subdir" });
-    expect(copyFile).toHaveBeenCalledWith({
-      sourcePath: "/workspace/source-dir/file.txt",
-      destinationPath: "/workspace/destination-dir/file.txt",
-      mkdir: true,
-    });
-    expect(copyFile).toHaveBeenCalledWith({
-      sourcePath: "/workspace/source-dir/subdir/nested.txt",
-      destinationPath: "/workspace/destination-dir/subdir/nested.txt",
-      mkdir: true,
-    });
-    expect(runShellCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ args: ["/workspace/source-dir"] }),
-    );
-    expect(runShellCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ args: ["/workspace/source-dir/subdir"] }),
-    );
-    socket.close();
+    for (const suffix of ["", "/subdir"]) {
+      expect(mkdirp).toHaveBeenCalledWith({ filePath: `/workspace/destination-dir${suffix}` });
+      expect(runShellCommand).toHaveBeenCalledWith(
+        expect.objectContaining({ args: [`/workspace/source-dir${suffix}`] }),
+      );
+    }
+    for (const file of ["file.txt", "subdir/nested.txt"]) {
+      expect(copyFile).toHaveBeenCalledWith({
+        sourcePath: `/workspace/source-dir/${file}`,
+        destinationPath: `/workspace/destination-dir/${file}`,
+        mkdir: true,
+      });
+    }
   });
 
   it("bounds buffered file copies when a sandbox bridge cannot stream them", async () => {
@@ -408,7 +382,6 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       data,
       mkdir: true,
     });
-    socket.close();
   });
 
   it("bounds legacy whole-file reads within the sandbox filesystem bridge", async () => {
@@ -425,7 +398,6 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       filePath: "/workspace/note.txt",
       maxBytes: 512 * 1024 * 1024,
     });
-    socket.close();
   });
 
   it("rejects oversized file reads before buffering through the fs bridge", async () => {
@@ -442,7 +414,6 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       rpc(socket, "fs/readFile", { path: "file:///workspace/huge.bin" }),
     ).rejects.toThrow("file is too large to read through Codex sandbox exec-server");
     expect(readFile).not.toHaveBeenCalled();
-    socket.close();
   });
 
   it("does not create parent directories for non-recursive directory creation", async () => {
@@ -464,7 +435,6 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       recursive: false,
     });
     expect(mkdirp).toHaveBeenCalledWith({ filePath: "/workspace/existing/child" });
-    socket.close();
   });
 });
 
@@ -488,12 +458,9 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
       [0, 10, "0123456789", true],
       [10, 2, "", true],
     ] as const) {
-      await expect(
-        rpc(socket, "fs/readBlock", { handleId: "stream-1", offset, len }),
-      ).resolves.toEqual({
-        chunk: Buffer.from(expected).toString("base64"),
-        eof,
-      });
+      await expect(readBlock(socket, "stream-1", offset, len)).resolves.toEqual(
+        block(expected, eof),
+      );
     }
     expect(readFile).toHaveBeenCalledTimes(1);
     expect(readFile).toHaveBeenCalledWith({
@@ -504,7 +471,6 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
     await expect(rpc(socket, "fs/close", { handleId: "stream-1" })).resolves.toEqual({});
     await expect(rpc(socket, "fs/close", { handleId: "stream-1" })).resolves.toEqual({});
     await expectError(readBlock(socket, "stream-1", 0, 1), -32004);
-    socket.close();
   });
 
   it("isolates file handles between authenticated exec-server connections", async () => {
@@ -576,7 +542,6 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
       await expectError(rpc(socket, "fs/readBlock", params), -32600);
     }
     await expectError(readBlock(socket, "missing", 0, 1), -32004);
-    socket.close();
   });
 
   it("bounds grown sandbox files to their pre-reserved size and releases failed handles", async () => {
@@ -600,7 +565,6 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
     });
     await expect(rpc(socket, "fs/open", params)).resolves.toEqual({ handleId: "growing" });
     await expect(readBlock(socket, "growing", 0, 5)).resolves.toEqual(block("small", true));
-    socket.close();
   });
 
   it("caps pending sandbox stats and retains their slots until cancellation settles", async () => {
@@ -629,16 +593,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
       }
     });
     for (let index = 0; index < 128; index += 1) {
-      socket.send(
-        JSON.stringify({
-          id: 20_000 + index,
-          method: "fs/open",
-          params: {
-            handleId: `stat-${index}`,
-            path: `file:///workspace/stat-${index}.bin`,
-          },
-        }),
-      );
+      sendOpen(socket, 20_000 + index, `stat-${index}`, uri(`stat-${index}.bin`));
     }
     await vi.waitFor(() => expect(stat).toHaveBeenCalledTimes(128));
     expect(signals).toHaveLength(128);
@@ -714,7 +669,6 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
     await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(3));
     releaseReads.get("/workspace/first.txt")?.(Buffer.from("first"));
     await expect(recovered).resolves.toEqual({ handleId: "first" });
-    socket.close();
   });
 
   it("aborts pending reads and never starts new sandbox reads after socket disconnect", async () => {
