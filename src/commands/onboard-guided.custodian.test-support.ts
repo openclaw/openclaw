@@ -144,11 +144,12 @@ function makeRuntime(): RuntimeEnv {
 
 type RecordedCall = { mock: { invocationCallOrder: number[] } };
 
-function expectCallOrder(...calls: RecordedCall[]) {
-  for (const [index, call] of calls.slice(1).entries()) {
-    expect(calls[index]?.mock.invocationCallOrder[0]).toBeLessThan(
-      call.mock.invocationCallOrder[0]!,
-    );
+function expectCallOrder(...calls: Array<RecordedCall | number | undefined>) {
+  const orders = calls.map((call) =>
+    typeof call === "object" ? call.mock.invocationCallOrder[0] : call,
+  );
+  for (const [index, order] of orders.slice(1).entries()) {
+    expect(orders[index]).toBeLessThan(order!);
   }
 }
 
@@ -223,32 +224,17 @@ function pendingLocalSetup(params: {
   return pending;
 }
 
-function setupDeps(
-  params: {
-    prompter?: WizardPrompter;
-    detect?: Deps["detect"];
-    activate?: Deps["activate"];
-    runSystemAgentChat?: Deps["runSystemAgentChat"];
-    persistRiskAcknowledgement?: Deps["persistRiskAcknowledgement"];
-    runSetupMemoryImportStep?: Deps["runSetupMemoryImportStep"];
-    runMemorySetupFlow?: Deps["runMemorySetupFlow"];
-    runAppRecommendations?: Deps["runAppRecommendations"];
-    runBrowserHandoff?: Deps["runBrowserHandoff"];
-    applySetup?: Deps["applySetup"];
-    handoffMode?: Deps["handoffMode"];
-  } = {},
-) {
-  const { prompter = createWizardPrompter() } = params;
-  const runSystemAgentChat = vi.fn<NonNullable<Deps["runSystemAgentChat"]>>(
-    params.runSystemAgentChat ?? (async () => {}),
-  );
-  const runSetupMemoryImportStep = vi.fn<NonNullable<Deps["runSetupMemoryImportStep"]>>(
-    params.runSetupMemoryImportStep ?? (async () => ({ status: "skipped", providers: [] })),
-  );
+function setupDeps(params: Omit<Deps, "createPrompter"> & { prompter?: WizardPrompter } = {}) {
+  const {
+    prompter = createWizardPrompter(),
+    runSystemAgentChat,
+    runSetupMemoryImportStep,
+    ...overrides
+  } = params;
   return {
     createPrompter: () => prompter,
     persistAccessMode: vi.fn(async () => undefined),
-    applySetup: params.applySetup ?? vi.fn(async () => setupApplyResult()),
+    applySetup: vi.fn(async () => setupApplyResult()),
     launchHatchTui: vi.fn<typeof import("../tui/tui-launch.js").launchTuiCli>(
       async () => undefined,
     ),
@@ -259,34 +245,34 @@ function setupDeps(
       workspace: "/tmp/openclaw-workspace",
       setupComplete: false,
     })),
-    detect: params.detect ?? vi.fn(async () => detection()),
-    activate:
-      params.activate ??
-      vi.fn<NonNullable<Deps["activate"]>>(async (activation) => {
-        activation.onCommitStarted?.(localOnboarding.persisted.config ?? {});
-        return {
-          ok: true as const,
-          modelRef: "claude-cli/opus",
-          latencyMs: 1250,
-          lines: ["Workspace: /tmp/work", "Gateway: running"],
-        };
-      }),
-    persistRiskAcknowledgement:
-      params.persistRiskAcknowledgement ??
-      vi.fn(async (config: OpenClawConfig) => {
-        localOnboarding.persisted.config = config;
-        return config.wizard?.securityAcknowledgedAt;
-      }),
-    runSetupMemoryImportStep,
-    runMemorySetupFlow:
-      params.runMemorySetupFlow ?? vi.fn(async (config: OpenClawConfig) => config),
-    runAppRecommendations:
-      params.runAppRecommendations ??
-      vi.fn(async ({ config }) => ({ config, commitResult: vi.fn(async () => undefined) })),
-    runBrowserHandoff: params.runBrowserHandoff ?? vi.fn(async () => false),
-    runSystemAgentChat,
+    detect: vi.fn(async () => detection()),
+    activate: vi.fn<NonNullable<Deps["activate"]>>(async (activation) => {
+      activation.onCommitStarted?.(localOnboarding.persisted.config ?? {});
+      return {
+        ok: true as const,
+        modelRef: "claude-cli/opus",
+        latencyMs: 1250,
+        lines: ["Workspace: /tmp/work", "Gateway: running"],
+      };
+    }),
+    persistRiskAcknowledgement: vi.fn(async (config: OpenClawConfig) => {
+      localOnboarding.persisted.config = config;
+      return config.wizard?.securityAcknowledgedAt;
+    }),
+    runMemorySetupFlow: vi.fn(async (config: OpenClawConfig) => config),
+    runAppRecommendations: vi.fn(async ({ config }) => ({
+      config,
+      commitResult: vi.fn(async () => undefined),
+    })),
+    runBrowserHandoff: vi.fn(async () => false),
     observeHandoff: vi.fn(),
-    ...(params.handoffMode ? { handoffMode: params.handoffMode } : {}),
+    ...overrides,
+    runSystemAgentChat: vi.fn<NonNullable<Deps["runSystemAgentChat"]>>(
+      runSystemAgentChat ?? (async () => {}),
+    ),
+    runSetupMemoryImportStep: vi.fn<NonNullable<Deps["runSetupMemoryImportStep"]>>(
+      runSetupMemoryImportStep ?? (async () => ({ status: "skipped", providers: [] })),
+    ),
   } satisfies Deps;
 }
 

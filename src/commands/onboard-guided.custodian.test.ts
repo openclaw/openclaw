@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GuidedOrchestrationFixture as GuidedOnboardingDeps } from "./onboard-guided-runtime.test-support.js";
+import type { GuidedOrchestrationFixture as Deps } from "./onboard-guided-runtime.test-support.js";
 import { setupGuidedCustodianTestSuite } from "./onboard-guided.custodian.test-support.js";
 
 const launchTuiCli = vi.hoisted(() => vi.fn(async (_opts: unknown) => undefined));
@@ -24,11 +24,19 @@ describe("runGuidedOnboarding", () => {
     setupDeps,
     withConfigMutationExclusive,
   } = setupGuidedCustodianTestSuite();
+  const match = expect.objectContaining;
   const run = (
     deps: Parameters<typeof runGuidedOnboarding>[2],
     opts: Parameters<typeof runGuidedOnboarding>[0] = {},
     runtime = makeRuntime(),
   ) => runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work", ...opts }, runtime, deps);
+
+  const verified = () => ({
+    ok: true as const,
+    modelRef: "claude-cli/opus",
+    latencyMs: 50,
+    lines: ["Inference verified"],
+  });
 
   beforeAll(() => {
     vi.doMock("./auth-choice-prompt.js", async () => ({
@@ -52,28 +60,21 @@ describe("runGuidedOnboarding", () => {
     expect(prompter.outro).toHaveBeenCalledWith("OpenClaw is ready.");
   });
 
-  it("launches the guided terminal hatch through the running Gateway", async () => {
-    const deps: GuidedOnboardingDeps = setupDeps();
+  it.each([false, true])("selects the terminal hatch for configured=%s", async (configured) => {
+    if (configured) {
+      localOnboarding.persisted.config = { gateway: {} };
+    }
+    const deps: Deps = setupDeps();
     delete deps.launchHatchTui;
-
     await run(deps, { tui: true });
-
     expect(launchTuiCli).toHaveBeenCalledOnce();
-    const options = launchTuiCli.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(options).toMatchObject({ deliver: false });
-    expect(options).not.toHaveProperty("local");
-  });
-
-  it("keeps the local terminal hatch for configured reruns", async () => {
-    localOnboarding.persisted.config = { gateway: {} };
-    const deps: GuidedOnboardingDeps = setupDeps();
-    delete deps.launchHatchTui;
-
-    await run(deps, { tui: true });
-
-    expect(launchTuiCli).toHaveBeenCalledOnce();
-    expect(launchTuiCli).toHaveBeenCalledWith(expect.objectContaining({ local: true }));
-    expect(deps.applySetup).not.toHaveBeenCalled();
+    if (configured) {
+      expect(launchTuiCli).toHaveBeenCalledWith(match({ local: true }));
+      expect(deps.applySetup).not.toHaveBeenCalled();
+    } else {
+      expect(launchTuiCli.mock.calls[0]?.[0]).toMatchObject({ deliver: false });
+      expect(launchTuiCli.mock.calls[0]?.[0]).not.toHaveProperty("local");
+    }
   });
 
   it("never attempts browser handoff for remote chat onboarding", async () => {
@@ -91,15 +92,11 @@ describe("runGuidedOnboarding", () => {
   });
 
   it("never replaces a configured model by fallthrough when its check fails", async () => {
-    const existingModel = existingModelCandidate();
     promptAuthChoiceGrouped
       .mockResolvedValueOnce("candidate:existing-model")
       .mockResolvedValueOnce("candidate:existing-model");
-    const prompter = createWizardPrompter({
-      confirm: vi.fn(async () => false),
-    });
     const activate = vi
-      .fn<NonNullable<GuidedOnboardingDeps["activate"]>>()
+      .fn<NonNullable<Deps["activate"]>>()
       .mockResolvedValueOnce({
         ok: false,
         status: "unavailable",
@@ -112,10 +109,9 @@ describe("runGuidedOnboarding", () => {
         lines: ["Default model: acme/workspace-model"],
       });
     const deps = setupDeps({
-      prompter,
       detect: vi.fn(async () =>
         detection({
-          candidates: [existingModel, candidate("claude-cli", "Claude Code")],
+          candidates: [existingModelCandidate(), candidate("claude-cli", "Claude Code")],
         }),
       ),
       activate,
@@ -123,7 +119,7 @@ describe("runGuidedOnboarding", () => {
 
     await run(deps);
 
-    // Both attempts follow an explicit choice of the existing route.
+    const prompter = deps.createPrompter();
     expect(activate).toHaveBeenCalledTimes(2);
     expect(activate.mock.calls.map(([{ kind, modelRef }]) => ({ kind, modelRef }))).toEqual([
       { kind: "existing-model", modelRef: "acme/workspace-model" },
@@ -143,7 +139,7 @@ describe("runGuidedOnboarding", () => {
       modelRef: "ollama/qwen3.5:4b",
       latencyMs: 500,
       lines: ["Default model: ollama/qwen3.5:4b"],
-    })) as GuidedOnboardingDeps["activate"];
+    })) as Deps["activate"];
     const deps = setupDeps({
       prompter,
       detect: vi.fn(async () =>
@@ -214,23 +210,18 @@ describe("runGuidedOnboarding", () => {
   });
 
   it("records setup ownership at inference commit and completes before optional imports", async () => {
-    const activate = vi.fn<NonNullable<GuidedOnboardingDeps["activate"]>>(async (params) => {
+    const activate = vi.fn<NonNullable<Deps["activate"]>>(async (params) => {
       expect(localOnboarding.begin).not.toHaveBeenCalled();
       params.onCommitStarted?.(localOnboarding.persisted.config ?? {});
       expect(localOnboarding.states.get("/tmp/openclaw.json")?.status).toBe("pending");
-      return {
-        ok: true,
-        modelRef: "claude-cli/opus",
-        latencyMs: 50,
-        lines: ["Inference verified"],
-      };
+      return verified();
     });
-    const runSetupMemoryImportStep = vi.fn<
-      NonNullable<GuidedOnboardingDeps["runSetupMemoryImportStep"]>
-    >(async () => {
-      expect(localOnboarding.states.get("/tmp/openclaw.json")?.status).toBe("completed");
-      return { status: "skipped", providers: [] };
-    });
+    const runSetupMemoryImportStep = vi.fn<NonNullable<Deps["runSetupMemoryImportStep"]>>(
+      async () => {
+        expect(localOnboarding.states.get("/tmp/openclaw.json")?.status).toBe("completed");
+        return { status: "skipped", providers: [] };
+      },
+    );
     const deps = setupDeps({ activate, runSetupMemoryImportStep });
 
     await run(deps);
@@ -283,7 +274,7 @@ describe("runGuidedOnboarding", () => {
     await run(retry, { workspace: undefined, tui: true });
 
     expect(retry.applySetup).toHaveBeenCalledWith(
-      expect.objectContaining({ workspace: "/tmp/approved-workspace", resume: true }),
+      match({ workspace: "/tmp/approved-workspace", resume: true }),
       { beforePersistentApply: expect.any(Function) },
     );
     expect(localOnboarding.states.get("/tmp/openclaw.json")).toMatchObject({
@@ -291,66 +282,45 @@ describe("runGuidedOnboarding", () => {
       runId: pending?.runId,
     });
     expect(retry.observeHandoff).toHaveBeenCalledWith(
-      expect.objectContaining({ workspace: "/tmp/approved-workspace", next: "hatch" }),
+      match({ workspace: "/tmp/approved-workspace", next: "hatch" }),
     );
-    expect(retry.launchHatchTui).toHaveBeenCalledWith(expect.objectContaining({ deliver: false }));
+    expect(retry.launchHatchTui).toHaveBeenCalledWith(match({ deliver: false }));
   });
 
-  it("replaces a stale receipt when explicit onboarding owns the replacement config", async () => {
-    const stale = pendingLocalSetup({
-      runId: "replaced-config-run",
-      workspace: "/tmp/stale-workspace",
-    });
-    const securityAcknowledgedAt = "2026-08-03T00:00:00.000Z";
-    localOnboarding.persisted.config = { wizard: { securityAcknowledgedAt } };
-    const deps = setupDeps();
-
-    await run(deps, { workspace: "/tmp/replacement-workspace" });
-
-    expect(localOnboarding.begin).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replace: true,
-        expectedRunId: stale.runId,
+  it.each(["stale", "completed"])(
+    "replaces a %s receipt for an incomplete config",
+    async (receipt) => {
+      const workspace = "/tmp/new-workspace";
+      const previous = pendingLocalSetup({
+        runId: "previous-run",
+        workspace: "/tmp/old-workspace",
+      });
+      const securityAcknowledgedAt =
+        receipt === "stale" ? "2026-08-03T00:00:00.000Z" : previous.securityAcknowledgedAt;
+      if (receipt === "completed") {
+        localOnboarding.states.set(previous.configPath, {
+          ...previous,
+          status: "completed",
+          completedAtMs: 2,
+        });
+      }
+      localOnboarding.persisted.config = { wizard: { securityAcknowledgedAt } };
+      await run(setupDeps(), { workspace });
+      expect(localOnboarding.begin).toHaveBeenCalledWith(
+        match({
+          replace: true,
+          expectedRunId: previous.runId,
+          securityAcknowledgedAt,
+          workspace,
+        }),
+      );
+      expect(localOnboarding.states.get(previous.configPath)).toMatchObject({
+        status: "completed",
+        workspace,
         securityAcknowledgedAt,
-        workspace: "/tmp/replacement-workspace",
-      }),
-    );
-    expect(localOnboarding.states.get(stale.configPath)).toMatchObject({
-      status: "completed",
-      securityAcknowledgedAt,
-    });
-  });
-
-  it("restarts an incomplete config with its completed receipt", async () => {
-    const securityAcknowledgedAt = "2026-01-01T00:00:00.000Z";
-    const previous = pendingLocalSetup({
-      runId: "completed-incomplete-run",
-      workspace: "/tmp/old-workspace",
-    });
-    localOnboarding.states.set(previous.configPath, {
-      ...previous,
-      status: "completed",
-      completedAtMs: 2,
-    });
-    localOnboarding.persisted.config = { wizard: { securityAcknowledgedAt } };
-    const deps = setupDeps();
-
-    await run(deps, { workspace: "/tmp/new-workspace" });
-
-    expect(localOnboarding.begin).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replace: true,
-        expectedRunId: previous.runId,
-        securityAcknowledgedAt,
-        workspace: "/tmp/new-workspace",
-      }),
-    );
-    expect(localOnboarding.states.get(previous.configPath)).toMatchObject({
-      status: "completed",
-      workspace: "/tmp/new-workspace",
-      securityAcknowledgedAt,
-    });
-  });
+      });
+    },
+  );
 
   it("binds a new receipt to the acknowledgement actually won by a concurrent writer", async () => {
     const committedAcknowledgement = "2026-08-03T00:00:00.000Z";
@@ -366,7 +336,7 @@ describe("runGuidedOnboarding", () => {
     await run(deps);
 
     expect(localOnboarding.begin).toHaveBeenCalledWith(
-      expect.objectContaining({ securityAcknowledgedAt: committedAcknowledgement }),
+      match({ securityAcknowledgedAt: committedAcknowledgement }),
     );
     expect(localOnboarding.states.get("/tmp/openclaw.json")).toMatchObject({
       status: "completed",
@@ -378,15 +348,10 @@ describe("runGuidedOnboarding", () => {
     const replacementConfig: OpenClawConfig = {
       wizard: { securityAcknowledgedAt: "2026-08-03T00:00:00.000Z" },
     };
-    const activate = vi.fn<NonNullable<GuidedOnboardingDeps["activate"]>>(async (params) => {
+    const activate = vi.fn<NonNullable<Deps["activate"]>>(async (params) => {
       localOnboarding.persisted.config = replacementConfig;
       params.onCommitStarted?.(replacementConfig);
-      return {
-        ok: true,
-        modelRef: "claude-cli/opus",
-        latencyMs: 50,
-        lines: ["Inference verified"],
-      };
+      return verified();
     });
     const deps = setupDeps({ activate });
 
@@ -397,71 +362,68 @@ describe("runGuidedOnboarding", () => {
     expectNotCalled(localOnboarding.begin, deps.applySetup);
   });
 
-  it("never mistakes a concurrently created config owner for a stale reset receipt", async () => {
-    const competing = pendingLocalSetup({
-      runId: "concurrent-config-run",
-      workspace: "/tmp/concurrent-workspace",
-    });
-    const firstSnapshot = {
-      exists: false,
-      valid: true,
-      path: competing.configPath,
-      issues: [],
-      config: {},
-    };
-    readConfigFileSnapshot.mockResolvedValueOnce(firstSnapshot);
-    localOnboarding.persisted.config = {
-      wizard: { securityAcknowledgedAt: competing.securityAcknowledgedAt },
-    };
-    const deps = setupDeps({
-      persistRiskAcknowledgement: async () => competing.securityAcknowledgedAt,
-    });
+  it.each(["before snapshot", "during acknowledgement"])(
+    "rejects a competing owner created %s",
+    async (phase) => {
+      const competing = pendingLocalSetup({
+        runId: "competing-run",
+        workspace: "/tmp/competing-workspace",
+      });
+      if (phase === "before snapshot") {
+        readConfigFileSnapshot.mockResolvedValueOnce({
+          exists: false,
+          valid: true,
+          path: competing.configPath,
+          issues: [],
+          config: {},
+        });
+        localOnboarding.persisted.config = {
+          wizard: { securityAcknowledgedAt: competing.securityAcknowledgedAt },
+        };
+      } else {
+        localOnboarding.states.delete(competing.configPath);
+      }
+      const deps = setupDeps({
+        persistRiskAcknowledgement: async (config) => {
+          if (phase === "before snapshot") {
+            return competing.securityAcknowledgedAt;
+          }
+          localOnboarding.persisted.config = config;
+          localOnboarding.states.set(competing.configPath, competing);
+        },
+      });
+      await expect(run(deps)).rejects.toThrow("already owns this installation");
+      expect(localOnboarding.states.get(competing.configPath)).toEqual(competing);
+      expectNotCalled(localOnboarding.begin, localOnboarding.complete, deps.applySetup);
+    },
+  );
 
-    await expect(run(deps)).rejects.toThrow("already owns this installation");
-
-    expect(localOnboarding.begin).not.toHaveBeenCalled();
-    expect(localOnboarding.states.get(competing.configPath)).toEqual(competing);
-  });
-
-  it("rejects an explicit workspace different from the pending approved workspace", async () => {
+  it.each([false, true])("rejects a conflicting %s fleet-resolved workspace", async (resolved) => {
     const pending = pendingLocalSetup({
-      runId: "approved-workspace-run",
+      runId: resolved ? "approved-fleet-workspace-run" : "approved-workspace-run",
       workspace: "/tmp/approved-workspace",
     });
     localOnboarding.persisted.config = {
+      ...(resolved
+        ? {
+            agents: {
+              defaults: { workspace: "/tmp/existing-workspace" },
+              entries: { main: { workspace: "/tmp/existing-workspace" } },
+            },
+          }
+        : {}),
       wizard: { securityAcknowledgedAt: pending.securityAcknowledgedAt },
     };
     const deps = setupDeps();
-
-    await expect(run(deps, { workspace: "/tmp/different-workspace" })).rejects.toThrow(
-      "owns a different workspace",
-    );
-
-    expectNotCalled(localOnboarding.begin, deps.applySetup);
-  });
-
-  it("rejects a resolved fleet workspace that differs from the pending approved workspace", async () => {
-    const pending = pendingLocalSetup({
-      runId: "approved-fleet-workspace-run",
-      workspace: "/tmp/approved-workspace",
-    });
-    localOnboarding.persisted.config = {
-      agents: {
-        defaults: { workspace: "/tmp/existing-workspace" },
-        entries: { main: { workspace: "/tmp/existing-workspace" } },
-      },
-      wizard: { securityAcknowledgedAt: pending.securityAcknowledgedAt },
-    };
-    const deps = setupDeps();
-
-    await expect(run(deps, { workspace: undefined })).rejects.toThrow("owns a different workspace");
-
-    expectNotCalled(deps.applySetup, localOnboarding.complete);
+    await expect(
+      run(deps, { workspace: resolved ? undefined : "/tmp/different-workspace" }),
+    ).rejects.toThrow("owns a different workspace");
+    expectNotCalled(localOnboarding.begin, deps.applySetup, localOnboarding.complete);
   });
 
   it("rejects replacement config identity at the setup config-write boundary", async () => {
     const setupEffects = vi.fn();
-    const applySetup = vi.fn<NonNullable<GuidedOnboardingDeps["applySetup"]>>(async (params) => {
+    const applySetup = vi.fn<NonNullable<Deps["applySetup"]>>(async (params) => {
       const replacementConfig: OpenClawConfig = {
         agents: { defaults: { workspace: params.workspace } },
         wizard: { securityAcknowledgedAt: "2026-08-03T00:00:00.000Z" },
@@ -519,31 +481,12 @@ describe("runGuidedOnboarding", () => {
     },
   );
 
-  it("rejects a concurrent fresh owner before the inference config can commit", async () => {
-    const competing = pendingLocalSetup({
-      runId: "competing-run",
-      workspace: "/tmp/competing-workspace",
-    });
-    localOnboarding.states.delete(competing.configPath);
-    const deps = setupDeps({
-      persistRiskAcknowledgement: async (config) => {
-        localOnboarding.persisted.config = config;
-        localOnboarding.states.set("/tmp/openclaw.json", competing);
-      },
-    });
-
-    await expect(run(deps)).rejects.toThrow("already owns this installation");
-
-    expect(localOnboarding.states.get("/tmp/openclaw.json")).toEqual(competing);
-    expectNotCalled(localOnboarding.complete, deps.applySetup);
-  });
-
   it("identifies workspace failures and keeps the setup-chat recovery", async () => {
     const title = "Workspace setup failed";
     const detail = "workspace could not be prepared";
     const stop = vi.fn();
     const prompter = createWizardPrompter({ progress: () => ({ update: vi.fn(), stop }) });
-    const applySetup = vi.fn<NonNullable<GuidedOnboardingDeps["applySetup"]>>(async () => ({
+    const applySetup = vi.fn<NonNullable<Deps["applySetup"]>>(async () => ({
       ...setupApplyResult(),
       workspaceReady: false,
     }));
@@ -563,7 +506,7 @@ describe("runGuidedOnboarding", () => {
   });
 
   it("returns a utility-only installation to the setup assistant instead of regular agent hatch", async () => {
-    const config: OpenClawConfig = {
+    localOnboarding.persisted.config = {
       meta: { migrations: { utilityModelSeparation: true } },
       agents: {
         defaults: { utilityModel: "fixture/small", workspace: "/tmp/work" },
@@ -572,8 +515,6 @@ describe("runGuidedOnboarding", () => {
       gateway: { mode: "local" },
       wizard: { securityAcknowledgedAt: "2026-09-16T00:00:00.000Z" },
     };
-    localOnboarding.persisted.config = config;
-    const prompter = createWizardPrompter();
     const utilityCandidate = {
       kind: "provider-auto:fixture" as const,
       label: "Local setup helper",
@@ -590,14 +531,13 @@ describe("runGuidedOnboarding", () => {
       lines: ["Utility model verified"],
     }));
     const deps = setupDeps({
-      prompter,
       activate,
       detect: async () =>
         detection({ candidates: [utilityCandidate], setupModel: "fixture/small" }),
     });
     await run(deps, { workspace: undefined, tui: true });
     expect(activate).toHaveBeenCalledWith(
-      expect.objectContaining({ modelTarget: "utility", modelRef: "fixture/small" }),
+      match({ modelTarget: "utility", modelRef: "fixture/small" }),
     );
     expect(deps.launchHatchTui).not.toHaveBeenCalled();
     expect(deps.runSystemAgentChat).toHaveBeenCalledOnce();

@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,12 +18,6 @@ vi.mock("./onboard-interactive-runner.js", async (importActual) => {
     runInteractiveOnboarding: async (run: () => Promise<void>) => await run(),
   };
 });
-
-type MockOpenAiServer = {
-  baseUrl: string;
-  requestBodies: string[];
-  close: () => Promise<void>;
-};
 
 const cleanupTasks: Array<() => Promise<void>> = [];
 
@@ -144,28 +138,25 @@ describe("guided onboarding inference composition", () => {
       let interruptAfterProvision = team;
       const deps: GuidedOnboardingDeps = {
         createPrompter: () => activePrompter,
-        detect: async () => {
-          const probeLocalCommand = async (command: string) => ({
-            command,
-            found: false,
-            error: "not found",
-          });
-          const result = await setupInference.detectSetupInference({
+        detect: () =>
+          setupInference.detectSetupInference({
             detectInferenceBackends: async (options) =>
               await onboardInference.detectInferenceBackends({
                 config: options?.config,
                 env: process.env,
                 platform: "linux",
                 deps: {
-                  probeLocalCommand,
+                  probeLocalCommand: async (command) => ({
+                    command,
+                    found: false,
+                    error: "not found",
+                  }),
                   hasCodexCliAuthFile: () => false,
                   readGeminiCliCredentials: () => null,
                 },
               }),
             resolveManifestProviderAuthChoices: () => [],
-          });
-          return result;
-        },
+          }),
         activate: async (params) => {
           const result = await setupInference.activateSetupInference(params);
           expect(result.ok, result.ok ? undefined : result.error).toBe(true);
@@ -218,32 +209,25 @@ describe("guided onboarding inference composition", () => {
       }
       await run();
 
-      expect(prompter.select).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({
-          initialValue: false,
-          options: [
-            expect.objectContaining({ value: false }),
-            expect.objectContaining({ value: true }),
-          ],
-        }),
-      );
-      expect(prompter.select).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({
-          initialValue: "one",
-          options: [
-            { value: "one", label: "One agent" },
-            { value: "team", label: "A small team: a chief of staff plus specialists" },
-          ],
-        }),
-      );
-      expect(prompter.select).toHaveBeenNthCalledWith(
-        3,
-        expect.objectContaining({
-          options: expect.arrayContaining([expect.objectContaining({ value: "full" })]),
-        }),
-      );
+      const expectSelection = (index: number, options: Record<string, unknown>) =>
+        expect(prompter.select).toHaveBeenNthCalledWith(index, expect.objectContaining(options));
+      expectSelection(1, {
+        initialValue: false,
+        options: [
+          expect.objectContaining({ value: false }),
+          expect.objectContaining({ value: true }),
+        ],
+      });
+      expectSelection(2, {
+        initialValue: "one",
+        options: [
+          { value: "one", label: "One agent" },
+          { value: "team", label: "A small team: a chief of staff plus specialists" },
+        ],
+      });
+      expectSelection(3, {
+        options: expect.arrayContaining([expect.objectContaining({ value: "full" })]),
+      });
       const persisted = await configModule.readConfigFileSnapshot();
       expect(runSystemAgentChat).not.toHaveBeenCalled();
       expect(persisted.valid).toBe(true);
@@ -268,24 +252,17 @@ describe("guided onboarding inference composition", () => {
       expect(inferenceReadyIndex).toBeGreaterThanOrEqual(0);
       expect(postInferenceIndex).toBeGreaterThan(inferenceReadyIndex);
       expect(runSetupMemoryImportStep).toHaveBeenCalledOnce();
-      expect(runAppRecommendations).toHaveBeenCalledWith(
-        expect.objectContaining({
-          modelRouteVerified: true,
-          workspaceDir: team ? path.join(workspace, "coordinator") : workspace,
-        }),
-      );
-      expect(observeHandoff).toHaveBeenCalledWith(
-        expect.objectContaining({
-          next: "hatch",
-          workspace: team ? path.join(workspace, "coordinator") : workspace,
-        }),
-      );
-      expect(launchHatchTui).toHaveBeenCalledWith(
-        expect.objectContaining({
-          deliver: false,
-          ...(team ? { session: "agent:coordinator:main" } : { local: true }),
-        }),
-      );
+      const targetWorkspace = team ? path.join(workspace, "coordinator") : workspace;
+      for (const [mock, options] of [
+        [runAppRecommendations, { modelRouteVerified: true, workspaceDir: targetWorkspace }],
+        [observeHandoff, { next: "hatch", workspace: targetWorkspace }],
+        [
+          launchHatchTui,
+          { deliver: false, ...(team ? { session: "agent:coordinator:main" } : { local: true }) },
+        ],
+      ] as const) {
+        expect(mock).toHaveBeenCalledWith(expect.objectContaining(options));
+      }
       if (team) {
         expect(Object.keys(persisted.sourceConfig.agents?.entries ?? {})).toEqual([
           "coordinator",
@@ -303,10 +280,24 @@ describe("guided onboarding inference composition", () => {
   );
 });
 
-async function startMockOpenAiServer(): Promise<MockOpenAiServer> {
+async function startMockOpenAiServer() {
   const requestBodies: string[] = [];
-  const server = createServer((request, response) => {
-    void handleMockOpenAiRequest(request, response, requestBodies);
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    if (request.method !== "POST" || url.pathname !== "/v1/responses") {
+      response.writeHead(404).end();
+      return;
+    }
+    let body = "";
+    for await (const chunk of request) {
+      body += String(chunk);
+    }
+    requestBodies.push(body);
+    writeOpenAiResponsesText(response, {
+      text: "OK",
+      messageId: "guided-inference-message",
+      responseId: "guided-inference-response",
+    });
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -322,32 +313,8 @@ async function startMockOpenAiServer(): Promise<MockOpenAiServer> {
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => {
-        server.close(() => {
-          resolve();
-        });
+        server.close(() => resolve());
       });
     },
   };
-}
-
-async function handleMockOpenAiRequest(
-  request: IncomingMessage,
-  response: ServerResponse,
-  requestBodies: string[],
-): Promise<void> {
-  const url = new URL(request.url ?? "/", "http://127.0.0.1");
-  if (request.method !== "POST" || url.pathname !== "/v1/responses") {
-    response.writeHead(404).end();
-    return;
-  }
-  let body = "";
-  for await (const chunk of request) {
-    body += String(chunk);
-  }
-  requestBodies.push(body);
-  writeOpenAiResponsesText(response, {
-    text: "OK",
-    messageId: "guided-inference-message",
-    responseId: "guided-inference-response",
-  });
 }

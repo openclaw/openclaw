@@ -22,13 +22,17 @@ describe("runGuidedOnboarding quick start", () => {
     setupDeps({ prompter: createWizardPrompter(undefined, { selectValues }), ...overrides });
   const expectSetup = (deps: ReturnType<typeof setupDeps>, options: object) =>
     expect(deps.applySetup).toHaveBeenCalledWith(match(options), beforePersistentApply);
+  const expectSelection = (prompter: ReturnType<typeof createWizardPrompter>, options: object) =>
+    expect(prompter.select).toHaveBeenCalledWith(match(options));
+  const skippedGateway = (reason: "explicit" | "external") =>
+    vi.fn(async () => ({
+      ...setupApplyResult(),
+      gateway: { status: "skipped" as const, reason },
+    }));
 
   it("quick start restores stdin before foreground launch", async () => {
     const deps = setupQuick(["quick", "one"], {
-      applySetup: vi.fn(async () => ({
-        ...setupApplyResult(),
-        gateway: { status: "skipped" as const, reason: "explicit" as const },
-      })),
+      applySetup: skippedGateway("explicit"),
     });
     const prompter = deps.createPrompter();
     promptAuthChoiceGrouped.mockImplementationOnce(async () => {
@@ -89,15 +93,8 @@ describe("runGuidedOnboarding quick start", () => {
     expect(prompter.select).not.toHaveBeenCalledWith(
       match({ message: "How would you like to start?" }),
     );
-    expect(prompter.select).toHaveBeenCalledWith(
-      match({
-        message: "How should I set things up?",
-        initialValue: "guarded",
-      }),
-    );
-    expect(prompter.select).toHaveBeenCalledWith(
-      match({ message: "May I look around to find your AI access?" }),
-    );
+    expectSelection(prompter, { message: "How should I set things up?", initialValue: "guarded" });
+    expectSelection(prompter, { message: "May I look around to find your AI access?" });
     expect(deps.detect).not.toHaveBeenCalled();
     expect(deps.listManualOptions).toHaveBeenCalledOnce();
     expect(deps.persistAccessMode).not.toHaveBeenCalledWith("full");
@@ -121,11 +118,8 @@ describe("runGuidedOnboarding quick start", () => {
     ]);
     const selects = vi.mocked(prompter.select).mock.invocationCallOrder;
     const firstAgentPrompt = vi.mocked(prompter.text).mock.invocationCallOrder[0]!;
-    expect(selects[1]).toBeLessThan(firstAgentPrompt);
-    expect(selects[2]).toBeLessThan(firstAgentPrompt);
-    expect(firstAgentPrompt).toBeLessThan(selects[3]!);
-    expect(selects[3]).toBeLessThan(promptAuthChoiceGrouped.mock.invocationCallOrder[0]!);
-    expectCallOrder(promptAuthChoiceGrouped, vi.mocked(deps.activate));
+    expectCallOrder(selects[1], selects[2], firstAgentPrompt, selects[3]);
+    expectCallOrder(selects[3], promptAuthChoiceGrouped, vi.mocked(deps.activate));
     expect(prompter.confirm).toHaveBeenCalledOnce();
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining("Recommended safer setup"),
@@ -148,10 +142,7 @@ describe("runGuidedOnboarding quick start", () => {
     const runBrowserHandoff = vi.fn(async () => true);
     const deps = setupQuick(["quick"], {
       runBrowserHandoff,
-      applySetup: vi.fn(async () => ({
-        ...setupApplyResult(),
-        gateway: { status: "skipped" as const, reason: "external" as const },
-      })),
+      applySetup: skippedGateway("external"),
     });
 
     await runGuidedOnboardingImpl({}, makeRuntime(), deps);
@@ -234,12 +225,10 @@ describe("runGuidedOnboarding quick start", () => {
     });
     await runGuidedOnboardingImpl({}, makeRuntime(), deps);
 
-    expect(deps.createPrompter().select).toHaveBeenCalledWith(
-      match({
-        message: "What would you like to create?",
-        initialValue: "one",
-      }),
-    );
+    expectSelection(deps.createPrompter(), {
+      message: "What would you like to create?",
+      initialValue: "one",
+    });
     expectSetup(deps, { firstAgent: { name: "coordinator", team: true } });
     expect(localOnboarding.begin).toHaveBeenCalledWith(match({ teamCoordinatorId: "coordinator" }));
     expect(deps.runForegroundGateway).toHaveBeenCalledWith(match({ agentId: "coordinator" }));

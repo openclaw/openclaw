@@ -3,6 +3,7 @@ import { createServer, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
@@ -64,6 +65,8 @@ async function runCustomSetup(scenario: Scenario) {
   setTestEnvValue("OPENCLAW_STATE_DIR", root);
   setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
   setTestEnvValue("CUSTOM_SETUP_FIXTURE_KEY", credential);
+  const agentDir = resolveAgentDir(initialConfig, "main");
+  const readProfiles = () => loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles;
 
   const server = createServer((request, response) => {
     void (async () => {
@@ -186,10 +189,9 @@ async function runCustomSetup(scenario: Scenario) {
     const { upsertAuthProfileWithLock } = await import("../agents/auth-profiles.js");
     const { getRuntimeAuthProfileStoreCredentialsRevision } =
       await import("../agents/auth-profiles/runtime-snapshots.js");
-    const agentDir = resolveAgentDir(initialConfig, "main");
-    const selected = Object.entries(
-      loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles,
-    ).find(([, profile]) => profile.provider === "fixture-custom");
+    const selected = Object.entries(readProfiles()).find(
+      ([, profile]) => profile.provider === "fixture-custom",
+    );
     if (!selected || selected[1].type !== "api_key") {
       throw new Error("Expected the saved fixture credential");
     }
@@ -209,9 +211,7 @@ async function runCustomSetup(scenario: Scenario) {
     expect(
       await upsertAuthProfileWithLock({ agentDir, profileId, credential: source }),
     ).not.toBeNull();
-    expect(loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId]).toEqual(
-      source,
-    );
+    expect(readProfiles()[profileId]).toEqual(source);
     expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBeGreaterThan(revision);
   };
   if (
@@ -234,10 +234,7 @@ async function runCustomSetup(scenario: Scenario) {
           });
         }
         if (scenario.unavailableSecretRef) {
-          const saved = loadAuthProfileStoreWithoutExternalProfiles(
-            resolveAgentDir(initialConfig, "main"),
-          );
-          expect(Object.values(saved.profiles)).toEqual([
+          expect(Object.values(readProfiles())).toEqual([
             expect.objectContaining({
               ...profileShape,
               keyRef,
@@ -289,9 +286,9 @@ async function runCustomSetup(scenario: Scenario) {
       ? await resultPromise.catch((error: unknown) => error)
       : await resultPromise;
   expect(serverErrors).toEqual([]);
-  const authProfiles = Object.entries(
-    loadAuthProfileStoreWithoutExternalProfiles(resolveAgentDir(initialConfig, "main")).profiles,
-  ).filter(([, profile]) => profile.provider === "fixture-custom");
+  const authProfiles = Object.entries(readProfiles()).filter(
+    ([, profile]) => profile.provider === "fixture-custom",
+  );
   return {
     authProfiles: authProfiles.map(([, profile]) => profile),
     authProfileIds: authProfiles.map(([profileId]) => profileId),
@@ -312,6 +309,9 @@ async function runCustomSetup(scenario: Scenario) {
 }
 
 type Setup = Awaited<ReturnType<typeof runCustomSetup>>;
+function runSecretRefSetup(overrides: Omit<Scenario, "protocol" | "secretRef"> = {}) {
+  return runCustomSetup({ protocol: "openai-responses", secretRef: true, ...overrides });
+}
 function expectUnpromoted(setup: Setup, sent = false) {
   expect(setup.requests).toEqual(
     sent ? [expect.objectContaining({ stream: true, authorized: true })] : [],
@@ -328,11 +328,7 @@ describe("guided custom provider activation", () => {
     "refuses a SecretRef source whose generation changes before preparation",
     { timeout: 300_000 },
     async () => {
-      const setup = await runCustomSetup({
-        protocol: "openai-responses",
-        secretRef: true,
-        revokeDuringPreparation: true,
-      });
+      const setup = await runSecretRefSetup({ revokeDuringPreparation: true });
       expect(setup.activationResults).toEqual([expect.objectContaining({ ok: false })]);
       expect(setup.requests).toEqual([]);
       expect(setup.config.agents?.defaults?.model).toBe("prior/working-model");
@@ -381,43 +377,22 @@ describe("guided custom provider activation", () => {
   );
 
   it("does not normalize an untrusted preparer error as a missing SecretRef", async () => {
-    await expect(
-      runCustomSetup({
-        protocol: "openai-responses",
-        secretRef: true,
-        preparationFailure: "unexpected",
-      }),
-    ).rejects.toThrow("fixture unexpected preparation failure");
+    await expect(runSecretRefSetup({ preparationFailure: "unexpected" })).rejects.toThrow(
+      "fixture unexpected preparation failure",
+    );
   });
 
-  it("keeps cancellation ahead of a missing SecretRef refusal", async () => {
-    const setup = await runCustomSetup({
-      protocol: "openai-responses",
-      secretRef: true,
-      unavailableSecretRef: true,
-      preparationFailure: "abort",
-    });
+  it.each([
+    ["cancellation", { preparationFailure: "abort" }, "unavailable"],
+    ["credential-generation drift", { revokeDuringPreparation: true }, "auth"],
+  ] as const)("keeps %s ahead of a missing SecretRef refusal", async (_name, scenario, status) => {
+    const setup = await runSecretRefSetup({ unavailableSecretRef: true, ...scenario });
     expectUnpromoted(setup);
-    expectActivationFailure(setup, "unavailable");
-  });
-
-  it("keeps credential-generation drift ahead of a missing SecretRef refusal", async () => {
-    const setup = await runCustomSetup({
-      protocol: "openai-responses",
-      secretRef: true,
-      unavailableSecretRef: true,
-      revokeDuringPreparation: true,
-    });
-    expectUnpromoted(setup);
-    expectActivationFailure(setup, "auth");
+    expectActivationFailure(setup, status);
   });
 
   it("saves an unresolved SecretRef without promoting the prior route", async () => {
-    const setup = await runCustomSetup({
-      protocol: "openai-responses",
-      secretRef: true,
-      unavailableSecretRef: true,
-    });
+    const setup = await runSecretRefSetup({ unavailableSecretRef: true });
     expectUnpromoted(setup);
     expect(setup.result).toBeNull();
     expect(Object.values(setup.authProfiles)).toEqual([
@@ -468,6 +443,14 @@ describe("guided custom provider activation", () => {
 });
 
 function writeCompletion(response: ServerResponse, protocol: Scenario["protocol"]): void {
+  if (protocol === "openai-responses") {
+    writeOpenAiResponsesText(response, {
+      text: "OK",
+      messageId: "fixture-message",
+      responseId: "fixture-response",
+    });
+    return;
+  }
   response.writeHead(200, { "content-type": "text/event-stream" });
   if (protocol === "openai") {
     const chunk = {
@@ -505,48 +488,5 @@ function writeCompletion(response: ServerResponse, protocol: Scenario["protocol"
     response.end(
       events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""),
     );
-    return;
   }
-  const item = {
-    type: "message",
-    id: "fixture-message",
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text: "OK", annotations: [] }],
-  };
-  const events = [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...item, status: "in_progress", content: [] },
-    },
-    {
-      type: "response.output_text.delta",
-      output_index: 0,
-      content_index: 0,
-      item_id: item.id,
-      delta: "OK",
-    },
-    {
-      type: "response.output_text.done",
-      output_index: 0,
-      content_index: 0,
-      item_id: item.id,
-      text: "OK",
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: "fixture-response",
-        status: "completed",
-        model,
-        output: [item],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ];
-  response.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
 }
