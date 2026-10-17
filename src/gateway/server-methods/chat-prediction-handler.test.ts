@@ -94,15 +94,24 @@ async function fixture(enabled = true) {
     },
   });
   const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
-  return { cfg, client, scope, context };
+  return {
+    cfg,
+    client,
+    scope,
+    context,
+    predict: (runId?: string, signal?: AbortSignal) => request(context, client, runId, signal),
+  };
 }
 
 const testState = { scenario: "minimal", prepareProfileCatalog: true } as const;
 
-async function withPredictionTest(run: () => Promise<void>) {
+async function withPredictionTest(
+  run: (f: Awaited<ReturnType<typeof fixture>>) => Promise<void>,
+  enabled = true,
+) {
   await withOpenClawTestState(testState, async () => {
     try {
-      await run();
+      await run(await fixture(enabled));
     } finally {
       await disposeSessionReadContexts();
     }
@@ -111,23 +120,21 @@ async function withPredictionTest(run: () => Promise<void>) {
 
 describe("registered chat.predict", () => {
   it("gates disabled, stale, and nonterminal requests before inference", async () => {
-    await withPredictionTest(async () => {
-      const f = await fixture(false);
-      expect(await request(f.context, f.client)).toMatchObject([true, { text: null }]);
+    await withPredictionTest(async (f) => {
+      expect(await f.predict()).toMatchObject([true, { text: null }]);
       f.cfg.gateway!.controlUi!.experimental!.composerPredictions!.enabled = true;
-      expect(await request(f.context, f.client, "old-run")).toMatchObject([true, { text: null }]);
+      expect(await f.predict("old-run")).toMatchObject([true, { text: null }]);
       await patchSessionEntryCore(f.scope, () => ({
         status: undefined,
         lifecycleRunId: "successor",
       }));
-      expect(await request(f.context, f.client)).toMatchObject([true, { text: null }]);
+      expect(await f.predict()).toMatchObject([true, { text: null }]);
       expect(complete).not.toHaveBeenCalled();
-    });
+    }, false);
   });
 
   it("enforces read and compose authority at the registered RPC", async () => {
-    await withPredictionTest(async () => {
-      const f = await fixture();
+    await withPredictionTest(async (f) => {
       for (const role of ["view", "none"] as const) {
         const client = roleClient(role, "prediction-" + role);
         client.connId = role;
@@ -143,14 +150,10 @@ describe("registered chat.predict", () => {
   });
 
   it("uses only bounded visible dialogue and never appends a prediction", async () => {
-    await withPredictionTest(async () => {
-      const f = await fixture();
+    await withPredictionTest(async (f) => {
       f.client.connect.scopes = ["operator.sessions.read", "operator.sessions.write"];
       const before = await loadTranscriptEvents(f.scope);
-      expect(await request(f.context, f.client)).toMatchObject([
-        true,
-        { text: "What should I try next?" },
-      ]);
+      expect(await f.predict()).toMatchObject([true, { text: "What should I try next?" }]);
       expect(complete).toHaveBeenCalledOnce();
       const input = complete.mock.calls[0]?.[0];
       expect(input.choice).toBe("utility");
@@ -165,8 +168,7 @@ describe("registered chat.predict", () => {
   it.each(["suggestion", "disabled", "cancelled"] as const)(
     "waits for final-event terminal persistence before prediction (%s)",
     async (outcome) => {
-      await withPredictionTest(async () => {
-        const f = await fixture();
+      await withPredictionTest(async (f) => {
         const runId = "completed";
         await patchSessionEntryCore(f.scope, () => ({
           status: undefined,
@@ -220,21 +222,12 @@ describe("registered chat.predict", () => {
         try {
           h.register(runId, f.scope.sessionKey, runId, { agentId: f.scope.agentId });
           h.chatRunState.getOrCreate(runId).buffer = "Here are the tradeoffs.";
-          await h.emit(
-            runId,
-            "lifecycle",
-            { phase: "end" },
-            {
-              sessionKey: f.scope.sessionKey,
-              sessionId: f.scope.sessionId,
-              agentId: f.scope.agentId,
-            },
-          );
+          await h.emit(runId, "lifecycle", { phase: "end" }, f.scope);
           await writeEntered.promise;
           expect(h.chat().at(-1)?.[1]).toMatchObject({ state: "final", runId });
           expect(loadSessionEntry(f.scope)).toMatchObject({ lifecycleRunId: runId });
           expect(loadSessionEntry(f.scope)?.status).not.toBe("done");
-          prediction = request(f.context, f.client, runId, controller.signal);
+          prediction = f.predict(runId, controller.signal);
           await awaitGateBeforeSettlement(
             waitEntered.promise,
             prediction,
@@ -270,19 +263,18 @@ describe("registered chat.predict", () => {
   );
 
   it("discards a paid result if the feature or completed anchor changes", async () => {
-    await withPredictionTest(async () => {
-      const f = await fixture();
+    await withPredictionTest(async (f) => {
       complete.mockImplementationOnce(async () => {
         f.cfg.gateway!.controlUi!.experimental!.composerPredictions!.enabled = false;
         return "stale suggestion";
       });
-      expect(await request(f.context, f.client)).toMatchObject([true, { text: null }]);
+      expect(await f.predict()).toMatchObject([true, { text: null }]);
       f.cfg.gateway!.controlUi!.experimental!.composerPredictions!.enabled = true;
       complete.mockImplementationOnce(async () => {
         await patchSessionEntryCore(f.scope, () => ({ lastRunId: "new-completed" }));
         return "stale suggestion";
       });
-      expect(await request(f.context, f.client)).toMatchObject([true, { text: null }]);
+      expect(await f.predict()).toMatchObject([true, { text: null }]);
     });
   });
 });
