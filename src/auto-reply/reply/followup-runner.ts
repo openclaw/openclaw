@@ -427,8 +427,9 @@ export function createFollowupRunner(
         clearAgentRunContext(admittedTurn.runId);
       }
       operation?.complete();
-      defaults.typing.markRunComplete();
-      defaults.typing.markDispatchIdle();
+      const typing = queued.typing ?? defaults.typing;
+      typing.markRunComplete();
+      typing.markDispatchIdle();
     }
   };
   return runFollowup;
