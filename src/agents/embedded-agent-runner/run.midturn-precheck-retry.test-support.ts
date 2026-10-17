@@ -1,4 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core";
+// Full-entry coverage for retrying an already-capped mid-turn transcript.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { buildEmbeddedRunnerAssistant } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
@@ -24,31 +24,22 @@ const settledExecResult = makeTextToolResult("call-exec", "exec", "command compl
 let session: Awaited<ReturnType<typeof createSharedRunIntegrationSession>>;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
-function requireAttemptCall(index: number) {
-  return expectDefined(mockedRunEmbeddedAttempt.mock.calls[index])[0];
-}
-
-function run(runId: string, overrides: Partial<Parameters<typeof runEmbeddedAgent>[0]> = {}) {
-  return runEmbeddedAgent({ ...session.runParams, runId, ...overrides });
-}
-
-function expectCompactedRetry(result: Awaited<ReturnType<typeof runEmbeddedAgent>>, attempts = 2) {
-  expect(mockedCompactDirect).toHaveBeenCalledOnce();
-  expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(attempts);
-  expectRetryContinuesFromTranscript();
-  expect(result.meta.error).toBeUndefined();
-}
-
-function cappedAttempt(overrides: Parameters<typeof session.makeAttemptResult>[0] = {}) {
-  return session.makeAttemptResult({
-    preflightRecovery: {
-      route: "truncate_tool_results_only",
-      source: "mid-turn",
-      handled: true,
-      truncatedCount: 0,
-    },
-    ...overrides,
-  });
+function requireAttemptCall(index: number): {
+  prompt?: string;
+  promptCacheKey?: string;
+  sessionId?: string;
+  suppressNextUserMessagePersistence?: boolean;
+} {
+  const call = mockedRunEmbeddedAttempt.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected embedded attempt call ${index}`);
+  }
+  return call[0] as {
+    prompt?: string;
+    promptCacheKey?: string;
+    sessionId?: string;
+    suppressNextUserMessagePersistence?: boolean;
+  };
 }
 
 function expectRetryContinuesFromTranscript(): void {
@@ -80,13 +71,15 @@ function makeReplayUnsafeMidTurnOverflow(params?: {
     assistantTexts: [],
     lastAssistant: settledExecAssistant,
     currentAttemptAssistant: settledExecAssistant,
-    messagesSnapshot: [
-      settledExecAssistant,
-      ...(resultRecorded ? [settledExecResult] : []),
-      ...(resultRecorded && params?.steeredAfterResult
-        ? [{ role: "user" as const, content: "also check the logs", timestamp: 3 }]
-        : []),
-    ],
+    messagesSnapshot: resultRecorded
+      ? [
+          settledExecAssistant,
+          settledExecResult,
+          ...(params?.steeredAfterResult
+            ? [{ role: "user" as const, content: "also check the logs", timestamp: 3 }]
+            : []),
+        ]
+      : [settledExecAssistant],
     toolMetas: [
       {
         toolName: "exec",
@@ -121,14 +114,22 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
   it("continues once when persisted truncation is already a no-op", async () => {
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(
-        cappedAttempt({
+        session.makeAttemptResult({
+          preflightRecovery: {
+            route: "truncate_tool_results_only",
+            source: "mid-turn",
+            handled: true,
+            truncatedCount: 0,
+          },
           toolMetas: [{ toolName: "read", meta: "step=1" }],
           latestMcpAppChannelView: { viewId: "view-before-retry" },
         }),
       )
       .mockResolvedValueOnce(session.makeAttemptResult());
 
-    const result = await run("run-midturn-precheck-noop", {
+    const result = await runEmbeddedAgent({
+      ...session.runParams,
+      runId: "run-midturn-precheck-noop",
       promptCacheKey: "stable-cache-key",
     });
 
@@ -146,7 +147,16 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
 
   it("still compacts after a real provider overflow follows the no-op", async () => {
     mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(cappedAttempt())
+      .mockResolvedValueOnce(
+        session.makeAttemptResult({
+          preflightRecovery: {
+            route: "truncate_tool_results_only",
+            source: "mid-turn",
+            handled: true,
+            truncatedCount: 0,
+          },
+        }),
+      )
       .mockResolvedValueOnce(session.makeAttemptResult({ promptError: makeOverflowError() }))
       .mockResolvedValueOnce(session.makeAttemptResult());
     mockedCompactDirect.mockResolvedValueOnce(
@@ -157,7 +167,15 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       }),
     );
 
-    expectCompactedRetry(await run("run-midturn-precheck-provider-overflow"), 3);
+    const result = await runEmbeddedAgent({
+      ...session.runParams,
+      runId: "run-midturn-precheck-provider-overflow",
+    });
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expectRetryContinuesFromTranscript();
+    expect(result.meta.error).toBeUndefined();
   });
 
   it("recovers a successor transcript from its own frozen tool projection", async () => {
@@ -170,11 +188,19 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     const { truncateOversizedToolResultsInSessionManager } =
       await import("./tool-result-truncation.js");
     const truncate = vi.mocked(truncateOversizedToolResultsInSessionManager);
-    const previousTruncate = expectDefined(truncate.getMockImplementation());
+    const previousTruncate = truncate.getMockImplementation();
+    if (!previousTruncate) {
+      throw new Error("expected the shared harness truncation implementation");
+    }
     truncate.mockImplementation(actualTruncation.truncateOversizedToolResultsInSessionManager);
     const successorId = `${session.runParams.sessionId}-tool-projection-successor`;
-    const evidence = "tool evidence ".repeat(8_000);
-    const toolResult = makeTextToolResult("call-exec", "exec", evidence, false, 2);
+    const toolResult = makeTextToolResult(
+      "call-exec",
+      "exec",
+      "tool evidence ".repeat(8_000),
+      false,
+      2,
+    );
     const prepareAttemptProjection = async (
       attempt: Parameters<typeof mockedRunEmbeddedAttempt>[0],
       maxChars: number,
@@ -183,26 +209,29 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       if (!target?.agentId || !target.sessionId || !target.sessionKey || !target.storePath) {
         throw new Error("expected the current attempt's complete admitted transcript target");
       }
-      const { agentId, sessionId, sessionKey, storePath } = target;
       const manager = await SessionManager.openAsync(
-        { ...target, agentId, sessionId, sessionKey, storePath },
+        {
+          ...target,
+          agentId: target.agentId,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+          storePath: target.storePath,
+        },
         attempt.workspaceDir,
       );
-      for (const message of [
-        { role: "user" as const, content: "Use the tool evidence", timestamp: 0 },
-        settledExecAssistant,
-        toolResult,
-      ]) {
-        await manager.appendMessageAsync(message);
-      }
+      await manager.appendMessageAsync({
+        role: "user",
+        content: "Use the tool evidence",
+        timestamp: 0,
+      });
+      await manager.appendMessageAsync(settledExecAssistant);
+      await manager.appendMessageAsync(toolResult);
       const messages = manager.buildSessionContext().messages;
       using promptStateLease = retainEmbeddedSessionPromptState(attempt.sessionId);
       const projection = promptStateLease.state.toolResults;
-      const project = (cap: number) =>
-        actualTruncation
-          .truncateOversizedToolResultsInMessages(messages, 200_000, cap, undefined, projection)
-          .messages.find((message) => message.role === "toolResult");
-      const projected = project(maxChars);
+      const projected = actualTruncation
+        .truncateOversizedToolResultsInMessages(messages, 200_000, maxChars, undefined, projection)
+        .messages.find((message) => message.role === "toolResult");
       if (projected?.role !== "toolResult") {
         throw new Error("expected a frozen tool result for the current attempt");
       }
@@ -213,7 +242,11 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       expect(key).toBeDefined();
       expect(key && projection.frozen.has(key)).toBe(true);
       // A larger cap must replay the same frozen bytes from this complete branch.
-      expect(project(112_000)).toMatchObject({ content: projected.content });
+      expect(
+        actualTruncation
+          .truncateOversizedToolResultsInMessages(messages, 200_000, 112_000, undefined, projection)
+          .messages.find((message) => message.role === "toolResult"),
+      ).toMatchObject({ content: projected.content });
       await manager.appendCustomEntryAsync(
         "openclaw.cache-ttl",
         serializeCacheTtlToolResultProjections(projection),
@@ -249,59 +282,116 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       )
       .mockResolvedValueOnce(makeCompactionSuccess({ summary: "Recover successor context" }));
     try {
-      const result = await run("run-successor-tool-projection");
+      const result = await runEmbeddedAgent({
+        ...session.runParams,
+        runId: "run-successor-tool-projection",
+      });
 
       expect(result.meta.error).toBeUndefined();
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
-      const { manager, content } = expectDefined(
-        successor,
-        "expected the successor attempt to populate its projection",
-      );
+      if (!successor) {
+        throw new Error("expected the successor attempt to populate its projection");
+      }
       // Recovery writes through a separate manager; read its committed branch.
-      await manager.reloadPersistedTranscriptAsync();
+      await successor.manager.reloadPersistedTranscriptAsync();
       expect(
-        manager.buildSessionContext().messages.find((message) => message.role === "toolResult"),
-      ).toMatchObject({ content });
+        successor.manager
+          .buildSessionContext()
+          .messages.find((message) => message.role === "toolResult"),
+      ).toMatchObject({ content: successor.content });
     } finally {
       truncate.mockImplementation(previousTruncate);
       clearEmbeddedSessionPromptStates([session.runParams.sessionId, successorId]);
     }
   });
 
-  it.each([
-    { label: "steered settled batch", steeredAfterResult: true, rotated: false },
-    { label: "suspended nested work", activeCount: 1, rotated: false },
-    { label: "rotated nested work", activeCount: 1, rotated: true },
-    { label: "rotated yield_control without active items", activeCount: 0, rotated: true },
-  ])("recovers $label only while the transcript identity permits it", async (row) => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeReplayUnsafeMidTurnOverflow({
-        activeCount: row.activeCount,
-        codeModeEngaged: !row.steeredAfterResult,
-        codeModeSuspended: !row.steeredAfterResult,
-        steeredAfterResult: row.steeredAfterResult,
-      }),
-    );
-    if (!row.rotated) {
-      mockedRunEmbeddedAttempt.mockResolvedValueOnce(session.makeAttemptResult());
-    }
+  it("compacts a settled batch when a steering message follows its result", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(makeReplayUnsafeMidTurnOverflow({ steeredAfterResult: true }))
+      .mockResolvedValueOnce(session.makeAttemptResult());
     mockedCompactDirect.mockResolvedValueOnce(
       makeCompactionSuccess({
-        summary: "Compacted settled context",
-        firstKeptEntryId: "entry-exec",
+        summary: "Compacted after steering",
+        firstKeptEntryId: "entry-steered-exec",
         tokensBefore: 201_000,
-        ...(row.rotated ? { sessionId: `${session.runParams.sessionId}-rotated` } : {}),
       }),
     );
-    const result = await run(`run-midturn-${row.label}`);
-    if (row.rotated) {
+
+    const result = await runEmbeddedAgent({
+      ...session.runParams,
+      runId: "run-midturn-steered-exec",
+    });
+
+    expect(mockedCompactDirect).toHaveBeenCalledOnce();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expectRetryContinuesFromTranscript();
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("compacts while a code-mode exec still waits on nested tool work", async () => {
+    // exec returned status "waiting" (result persisted) but its nested call keeps
+    // a lifecycle item active; the run stays resumable through `wait`.
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeReplayUnsafeMidTurnOverflow({
+          activeCount: 1,
+          codeModeEngaged: true,
+          codeModeSuspended: true,
+        }),
+      )
+      .mockResolvedValueOnce(session.makeAttemptResult());
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted while exec waits",
+        firstKeptEntryId: "entry-waiting-exec",
+        tokensBefore: 201_000,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...session.runParams,
+      runId: "run-midturn-waiting-exec",
+    });
+
+    expect(mockedCompactDirect).toHaveBeenCalledOnce();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expectRetryContinuesFromTranscript();
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it.each([
+    ["with a nested tool item still active", 1],
+    // A local yield_control parks the exec without any nested lifecycle item.
+    ["parked by yield_control with no active item", 0],
+  ])(
+    "keeps a parked Code Mode run fail-closed when compaction rotates the session (%s)",
+    async (_label, activeCount) => {
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeReplayUnsafeMidTurnOverflow({
+          activeCount,
+          codeModeEngaged: true,
+          codeModeSuspended: true,
+        }),
+      );
+      mockedCompactDirect.mockResolvedValueOnce(
+        makeCompactionSuccess({
+          summary: "Compacted into a successor session",
+          firstKeptEntryId: "entry-rotated-exec",
+          tokensBefore: 201_000,
+          sessionId: `${session.runParams.sessionId}-rotated`,
+        }),
+      );
+
+      const result = await runEmbeddedAgent({
+        ...session.runParams,
+        runId: `run-midturn-waiting-exec-rotated-${activeCount}`,
+      });
+
       expect(mockedCompactDirect).toHaveBeenCalledOnce();
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
       expect(result.payloads?.[0]?.text).toContain("Try /reset (or /new)");
-    } else {
-      expectCompactedRetry(result);
-    }
-  });
+    },
+  );
 
   it.each([
     ["a tool call without a recorded result", { resultRecorded: false }, true],
@@ -314,7 +404,10 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
   ])("keeps %s fail-closed", async (_label, attemptParams, expectsWarning) => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeReplayUnsafeMidTurnOverflow(attemptParams));
 
-    const result = await run(`run-midturn-fail-closed-${_label.replaceAll(" ", "-")}`);
+    const result = await runEmbeddedAgent({
+      ...session.runParams,
+      runId: `run-midturn-fail-closed-${_label.replaceAll(" ", "-")}`,
+    });
 
     expect(mockedCompactDirect).not.toHaveBeenCalled();
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
@@ -335,7 +428,10 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       reason: "compaction unavailable",
     });
 
-    const result = await run("run-midturn-settled-compaction-failure");
+    const result = await runEmbeddedAgent({
+      ...session.runParams,
+      runId: "run-midturn-settled-compaction-failure",
+    });
 
     expect(mockedCompactDirect).toHaveBeenCalledOnce();
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();

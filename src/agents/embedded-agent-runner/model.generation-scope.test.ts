@@ -95,31 +95,6 @@ async function resolveGeneration(
   );
 }
 
-function resolveTieredGeneration(
-  generation: ReturnType<typeof createModelGenerationFixture>,
-  options: Partial<Parameters<typeof resolveTieredModel>[0]> = {},
-) {
-  return resolveTieredModel({
-    provider: generation.provider,
-    modelId: generation.modelId,
-    agentDir: state.agentDir(),
-    config: generation.preparedModelRuntime.config,
-    workspaceDir: state.workspaceDir,
-    preparedModelRuntime: generation.preparedModelRuntime,
-    ...options,
-  });
-}
-
-function writeProfiles(
-  profiles: Parameters<OpenClawTestState["writeAuthProfiles"]>[0]["profiles"] = {},
-) {
-  return state.writeAuthProfiles({ version: 1, profiles });
-}
-
-function apiKeyProfile(provider: string, key = "synthetic-key") {
-  return { type: "api_key" as const, provider, key };
-}
-
 async function createExternalCodexGeneration() {
   const codexDir = path.join(state.home, ".codex");
   const payload = Buffer.from(
@@ -149,7 +124,7 @@ async function createExternalCodexGeneration() {
     label: "external-codex",
   });
   publishCurrentModelGeneration(generation);
-  await writeProfiles();
+  await state.writeAuthProfiles({ version: 1, profiles: {} });
   return generation;
 }
 
@@ -176,14 +151,17 @@ describe("model runtime generation scope", () => {
 
   it("does not replace a missing managed profile with an external Codex account", async () => {
     const generation = await createExternalCodexGeneration();
-    await writeProfiles({
-      "openai:managed": {
-        provider: "openai",
-        type: "oauth",
-        access: "synthetic-managed-access",
-        refresh: "synthetic-managed-refresh",
-        expires: Date.now() + 86_400_000,
-        accountId: "managed-account",
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        "openai:managed": {
+          provider: "openai",
+          type: "oauth",
+          access: "synthetic-managed-access",
+          refresh: "synthetic-managed-refresh",
+          expires: Date.now() + 86_400_000,
+          accountId: "managed-account",
+        },
       },
     });
 
@@ -201,9 +179,14 @@ describe("model runtime generation scope", () => {
       label: "revoked",
     });
     const profileId = `${generation.provider}:selected`;
-    await writeProfiles({ [profileId]: apiKeyProfile(generation.provider) });
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        [profileId]: { type: "api_key", provider: generation.provider, key: "synthetic-key" },
+      },
+    });
     expect((await resolveGeneration(generation, profileId)).model?.id).toBe(generation.modelId);
-    await writeProfiles();
+    await state.writeAuthProfiles({ version: 1, profiles: {} });
     generation.resolveDynamicModel.mockClear();
 
     await expect(resolveGeneration(generation, profileId)).rejects.toMatchObject({
@@ -257,9 +240,16 @@ describe("model runtime generation scope", () => {
     const result = await resolveGeneration(generation, authProfileId);
 
     expect(result.model?.provider).toBe(generation.provider);
-    expect(generation.resolveDynamicModel).toHaveBeenLastCalledWith(
-      expect.objectContaining({ authProfileId, authProfileMode: "oauth" }),
-    );
+    const [context] =
+      vi.mocked(generation.pluginRegistry.providers[0]!.provider.resolveDynamicModel!).mock
+        .lastCall ?? [];
+    expect({
+      authProfileId: context?.authProfileId,
+      authProfileMode: context?.authProfileMode,
+    }).toEqual({
+      authProfileId,
+      authProfileMode: "oauth",
+    });
   });
 
   it("fills the missing registry from the prepared runtime with caller auth", async () => {
@@ -353,15 +343,20 @@ describe("model runtime generation scope", () => {
       label: "cold-owned",
     });
     await state.writeConfig({ gateway: { mode: "local" } });
-    await writeProfiles({
-      "generation-missing:selected": apiKeyProfile(
-        "generation-missing",
-        "synthetic-missing-generation-key",
-      ),
-      [`${generation.provider}:selected`]: apiKeyProfile(
-        generation.provider,
-        "synthetic-owned-generation-key",
-      ),
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        "generation-missing:selected": {
+          type: "api_key",
+          provider: "generation-missing",
+          key: "synthetic-missing-generation-key",
+        },
+        [`${generation.provider}:selected`]: {
+          type: "api_key",
+          provider: generation.provider,
+          key: "synthetic-owned-generation-key",
+        },
+      },
     });
     const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
     await closeOpenClawStateDatabaseAsync();
@@ -404,9 +399,14 @@ describe("model runtime generation scope", () => {
     const before = await fs.readFile(databasePath);
     expect(getRuntimeConfigSnapshot()).toBeNull();
     try {
-      const { resolution } = await resolveTieredGeneration(generation, {
+      const { resolution } = await resolveTieredModel({
         provider: "generation-missing",
         fallbackProvider: generation.provider,
+        modelId: generation.modelId,
+        agentDir: state.agentDir(),
+        config: generation.preparedModelRuntime.config,
+        workspaceDir: state.workspaceDir,
+        preparedModelRuntime: generation.preparedModelRuntime,
       });
       expect(resolution.model).toMatchObject({
         provider: generation.provider,
@@ -471,7 +471,14 @@ describe("model runtime generation scope", () => {
     vi.spyOn(stores.modelRegistry, "find").mockReturnValue(generation.resolveDynamicModel());
     generation.preparedModelRuntime.createStores = () => stores;
 
-    const { resolution } = await resolveTieredGeneration(generation);
+    const { resolution } = await resolveTieredModel({
+      provider: generation.provider,
+      modelId: generation.modelId,
+      agentDir: state.agentDir(),
+      config: generation.preparedModelRuntime.config,
+      workspaceDir: state.workspaceDir,
+      preparedModelRuntime: generation.preparedModelRuntime,
+    });
 
     expect(resolution.model).toBeUndefined();
     expect(resolution.error).toContain("openclaw doctor --fix");
@@ -508,15 +515,20 @@ describe("model runtime generation scope", () => {
           }
         },
       });
-      await writeProfiles({
-        [`${missingProvider}:default`]: apiKeyProfile(
-          missingProvider,
-          "synthetic-missing-provider-key",
-        ),
-        [`${fallbackProvider}:default`]: apiKeyProfile(
-          fallbackProvider,
-          "synthetic-fallback-provider-key",
-        ),
+      await state.writeAuthProfiles({
+        version: 1,
+        profiles: {
+          [`${missingProvider}:default`]: {
+            type: "api_key",
+            provider: missingProvider,
+            key: "synthetic-missing-provider-key",
+          },
+          [`${fallbackProvider}:default`]: {
+            type: "api_key",
+            provider: fallbackProvider,
+            key: "synthetic-fallback-provider-key",
+          },
+        },
       });
       const actual =
         await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -535,7 +547,7 @@ describe("model runtime generation scope", () => {
             return child;
           });
           const select = async () => {
-            const selected = await resolveTieredGeneration(generation, {
+            const selected = await resolveTieredModel({
               abortSignal: controller.signal,
               assertCurrent: () => {
                 if (!current) {
@@ -544,6 +556,11 @@ describe("model runtime generation scope", () => {
               },
               provider: missingProvider,
               fallbackProvider,
+              modelId: generation.modelId,
+              agentDir: state.agentDir(),
+              config: generation.preparedModelRuntime.config,
+              workspaceDir: state.workspaceDir,
+              preparedModelRuntime: generation.preparedModelRuntime,
             });
             liveAfterSelection = children.filter((child) => child.exitCode === null);
             return selected;
