@@ -9,7 +9,7 @@ import {
   type MatrixQaUiaaResponse,
 } from "./client-message-content.js";
 import type { MatrixQaObservedEvent } from "./events.js";
-import { readMatrixQaJsonResponse, requestMatrixJson, type MatrixQaFetchLike } from "./request.js";
+import { readMatrixQaJsonResponse, requestMatrixJson } from "./request.js";
 import {
   createMatrixQaRoomObserver,
   primeMatrixQaRoom,
@@ -87,7 +87,6 @@ async function uploadMatrixQaContent(params: {
   baseUrl: string;
   buffer: Buffer;
   contentType?: string;
-  fetchImpl: MatrixQaFetchLike;
   fileName?: string;
 }) {
   const url = new URL("/_matrix/media/v3/upload", params.baseUrl);
@@ -99,7 +98,7 @@ async function uploadMatrixQaContent(params: {
     params.buffer.buffer instanceof ArrayBuffer
       ? new Uint8Array(params.buffer.buffer, params.buffer.byteOffset, params.buffer.byteLength)
       : Uint8Array.from(params.buffer);
-  const response = await params.fetchImpl(url, {
+  const response = await fetch(url, {
     method: "POST",
     headers: {
       accept: "application/json",
@@ -153,28 +152,22 @@ function resolveMatrixQaLoginUser(params: { localpart?: string; userId?: string 
 export function createMatrixQaClient(params: {
   accessToken?: string;
   baseUrl: string;
-  fetchImpl?: MatrixQaFetchLike;
   syncObserver?: MatrixQaRoomObserver;
 }) {
-  const fetchImpl = params.fetchImpl ?? fetch;
   const syncObserver = params.syncObserver;
   const resolveRoomObserver = (opts: MatrixQaClientRoomEventWaitParams) =>
     syncObserver ??
     createMatrixQaRoomObserver({
       accessToken: params.accessToken,
       baseUrl: params.baseUrl,
-      fetchImpl,
       observedEvents: opts.observedEvents,
       since: opts.since,
     });
-  const request = <T>(
-    options: Omit<Parameters<typeof requestMatrixJson<T>>[0], "baseUrl" | "fetchImpl">,
-  ) =>
+  const request = <T>(options: Omit<Parameters<typeof requestMatrixJson<T>>[0], "baseUrl">) =>
     requestMatrixJson<T>({
       accessToken: params.accessToken,
       ...options,
       baseUrl: params.baseUrl,
-      fetchImpl,
     });
   const sendEvent = async (opts: { body: unknown; endpoint: string; errorLabel: string }) => {
     const result = await request<{ event_id?: string }>({
@@ -221,7 +214,6 @@ export function createMatrixQaClient(params: {
       return await primeMatrixQaRoom({
         accessToken: params.accessToken,
         baseUrl: params.baseUrl,
-        fetchImpl,
       });
     },
     async registerWithToken(opts: {
@@ -323,7 +315,6 @@ export function createMatrixQaClient(params: {
         baseUrl: params.baseUrl,
         buffer: opts.buffer,
         contentType: opts.contentType,
-        fetchImpl,
         fileName: opts.fileName,
       });
       const txnId = randomUUID();
@@ -400,7 +391,6 @@ export function createMatrixQaClient(params: {
 async function provisionMatrixQaTopology(params: {
   accounts: Record<MatrixQaParticipantRole, MatrixQaRegisteredAccount>;
   baseUrl: string;
-  fetchImpl?: MatrixQaFetchLike;
   spec: MatrixQaTopologySpec;
 }): Promise<MatrixQaProvisionedTopology> {
   const rooms = [];
@@ -414,7 +404,6 @@ async function provisionMatrixQaTopology(params: {
     const creatorClient = createMatrixQaClient({
       accessToken: params.accounts[creatorRole].accessToken,
       baseUrl: params.baseUrl,
-      fetchImpl: params.fetchImpl,
     });
     const roomId = await creatorClient.createPrivateRoom({
       encrypted: room.encrypted === true,
@@ -427,7 +416,6 @@ async function provisionMatrixQaTopology(params: {
         createMatrixQaClient({
           accessToken: params.accounts[role].accessToken,
           baseUrl: params.baseUrl,
-          fetchImpl: params.fetchImpl,
         }).joinRoom(roomId),
       ),
     );
@@ -461,7 +449,6 @@ async function provisionMatrixQaTopology(params: {
 
 export async function provisionMatrixQaRoom(params: {
   baseUrl: string;
-  fetchImpl?: MatrixQaFetchLike;
   topology?: MatrixQaTopologySpec;
   roomName: string;
   driverLocalpart: string;
@@ -471,7 +458,6 @@ export async function provisionMatrixQaRoom(params: {
 }) {
   const anonClient = createMatrixQaClient({
     baseUrl: params.baseUrl,
-    fetchImpl: params.fetchImpl,
   });
   const registerActor = (role: MatrixQaParticipantRole, deviceName: string) =>
     anonClient.registerWithToken({
@@ -492,7 +478,6 @@ export async function provisionMatrixQaRoom(params: {
       sut,
     },
     baseUrl: params.baseUrl,
-    fetchImpl: params.fetchImpl,
     spec:
       params.topology ??
       ({

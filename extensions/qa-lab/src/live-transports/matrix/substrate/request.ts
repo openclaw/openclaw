@@ -1,8 +1,6 @@
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 
-export type MatrixQaFetchLike = typeof fetch;
-
 const MATRIX_QA_JSON_MAX_BYTES = 16 * 1024 * 1024;
 
 type MatrixQaRequestResult<T> = {
@@ -27,7 +25,6 @@ export async function requestMatrixJson<T>(params: {
   baseUrl: string;
   body?: unknown;
   endpoint: string;
-  fetchImpl: MatrixQaFetchLike;
   method: "DELETE" | "GET" | "POST" | "PUT";
   okStatuses?: number[];
   query?: Record<string, string | number | undefined>;
@@ -40,7 +37,7 @@ export async function requestMatrixJson<T>(params: {
       url.searchParams.set(key, String(value));
     }
   }
-  const response = await params.fetchImpl(url, {
+  const response = await fetch(url, {
     method: params.method,
     headers: {
       accept: "application/json",
