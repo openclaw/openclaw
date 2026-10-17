@@ -29,7 +29,6 @@ import { resolveCronSession } from "../cron/isolated-agent/session.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { isInternalMessageChannel } from "../utils/message-channel.js";
 import { getAgentEventLifecycleGeneration } from "./agent-events.js";
@@ -79,11 +78,7 @@ import { deferSessionEventWakePoll } from "./session-event-wake.js";
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
     getReplyFromConfig?: typeof import("../auto-reply/reply/get-reply.js").getReplyFromConfig;
-    runtime?: RuntimeEnv;
     getQueueSize?: typeof getQueueSize;
-    isReplyRunActive?: (sessionKey: string) => boolean;
-    listActiveReplyRunSessionKeys?: () => readonly string[];
-    listActiveEmbeddedRunSessionKeys?: () => readonly string[];
     nowMs?: () => number;
   };
 
@@ -93,14 +88,6 @@ function hasActiveRunForAgent(agentId: string, listSessionKeys: () => readonly s
     const parsed = parseAgentSessionKey(sessionKey);
     return parsed ? normalizeAgentId(parsed.agentId) === normalizedAgentId : false;
   });
-}
-
-function hasActiveRunForSession(
-  sessionKey: string,
-  listSessionKeys: () => readonly string[],
-): boolean {
-  const normalizedSessionKey = sessionKey.trim();
-  return Boolean(normalizedSessionKey) && listSessionKeys().includes(normalizedSessionKey);
 }
 
 function skippedHeartbeatStage<T extends string>(reason: T, startedAt: number) {
@@ -237,17 +224,13 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
 
   const shouldHonorActiveReplyRuns =
     !isSessionExecCompletion && opts.intent !== "immediate" && opts.intent !== "manual";
-  const listActiveReplyRuns =
-    opts.deps?.listActiveReplyRunSessionKeys ?? listActiveReplyRunSessionKeys;
-  const listActiveEmbeddedRuns =
-    opts.deps?.listActiveEmbeddedRunSessionKeys ?? listActiveEmbeddedRunSessionKeys;
   // Scheduled heartbeats are background work, so defer them when any session on
   // the same agent is already replying; immediate/manual wakes keep their
   // existing semantics for explicit user/system actions.
   if (
     shouldHonorActiveReplyRuns &&
-    (hasActiveRunForAgent(agentId, listActiveReplyRuns) ||
-      hasActiveRunForAgent(agentId, listActiveEmbeddedRuns))
+    (hasActiveRunForAgent(agentId, listActiveReplyRunSessionKeys) ||
+      hasActiveRunForAgent(agentId, listActiveEmbeddedRunSessionKeys))
   ) {
     return skippedBusyStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT);
   }
@@ -317,13 +300,10 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     return skippedHeartbeatStage(preflight.skipReason, startedAt);
   }
   const { sessionKey } = preflight.session;
-  const isReplyRunActive =
-    opts.deps?.isReplyRunActive ?? ((key: string) => replyRunRegistry.isActive(key));
-  // Keep injected lists authoritative; production checks the current indexed owner at each fence.
-  const isEmbeddedRunActive = opts.deps?.listActiveEmbeddedRunSessionKeys
-    ? (key: string) => hasActiveRunForSession(key, listActiveEmbeddedRuns)
-    : (key: string) => resolveActiveEmbeddedRunSessionId(key) !== undefined;
-  if (isReplyRunActive(sessionKey) || isEmbeddedRunActive(sessionKey)) {
+  if (
+    replyRunRegistry.isActive(sessionKey) ||
+    resolveActiveEmbeddedRunSessionId(sessionKey) !== undefined
+  ) {
     return skippedBusyStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT);
   }
 
@@ -347,8 +327,6 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
       preflight.pendingEventEntries.length === 0 &&
       scheduledTasks.length === 0,
     startedAt,
-    isEmbeddedRunActive,
-    isReplyRunActive,
     preflight,
   } as const;
 }
@@ -359,7 +337,6 @@ export type ReadyHeartbeatWake = StageResult<ReturnType<typeof resolveHeartbeatW
 export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
   const { cfg, agentId, heartbeat, preflight } = wake;
   const { scheduledTasks, startedAt } = wake;
-  const { isEmbeddedRunActive, isReplyRunActive } = wake;
   const { entry, sessionKey, run, conversationEntry } = preflight.session;
   const previousUpdatedAt = entry?.updatedAt;
   const projectionSessionKey = run.kind === "isolated" ? run.baseSessionKey : sessionKey;
@@ -539,7 +516,10 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
             isolatedSessionKey,
             isolatedBaseSessionKey,
           });
-    if (isReplyRunActive(isolatedSessionKey) || isEmbeddedRunActive(isolatedSessionKey)) {
+    if (
+      replyRunRegistry.isActive(isolatedSessionKey) ||
+      resolveActiveEmbeddedRunSessionId(isolatedSessionKey) !== undefined
+    ) {
       return skippedHeartbeatStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, startedAt);
     }
     const staleIsolatedEntry = staleIsolatedSessionKey

@@ -2048,16 +2048,24 @@ describe("chat state render lifecycle", () => {
     });
     let state: ChatPageHost;
     const rendered: (string | null)[] = [];
+    const queueLengths: number[] = [];
     const dispose = createRoot((stop) => {
       state = createPageState(createChatPageStateContext(), controller.createRenderLifecycle(), {
         dispatchEvent: () => true,
         querySelector: () => null,
       });
+      state.client = createTestGatewayClient(vi.fn());
       controller.attach(state);
       createEffect(
         () => state.chatStream,
         (stream) => {
           rendered.push(stream);
+        },
+      );
+      createEffect(
+        () => state.chatQueue.length,
+        (length) => {
+          queueLengths.push(length);
         },
       );
       return stop;
@@ -2073,6 +2081,19 @@ describe("chat state render lifecycle", () => {
     controller.prepareRender();
     flush();
     expect(frames.size).toBe(0);
+    expect(rendered).toEqual([null, "queued stream"]);
+    keepVolatileQueuedMessage(state!, state!.sessionKey, {
+      id: "run-and-outbox-publication",
+      text: "Keep this queued input",
+      createdAt: 1,
+      sendState: "held",
+    });
+    expect(state!.chatQueue).toHaveLength(1);
+    flush();
+    expect(queueLengths).toEqual([0, 1]);
+    removeQueuedMessage(state!, "run-and-outbox-publication");
+    flush();
+    expect(queueLengths).toEqual([0, 1, 0]);
     expect(rendered).toEqual([null, "queued stream"]);
     expect(redraw).not.toHaveBeenCalled();
   });
