@@ -340,7 +340,8 @@ const APP_RESOURCE_PATH_PREFIXES = [
   ["plugins", "diffs"],
   ["plugins", "diffs-language-pack"],
 ];
-const markdownCache = new Map<string, string>();
+const markdownCache = new Map<string, { html: string; highlighting?: boolean }>();
+const HIGHLIGHTABLE_CODE_RE = /<pre><code(?! class="markdown-block-art")/u;
 
 function normalizeStreamingMarkdownInput(markdownLocal: string, streamKey?: string): string {
   const source = stripUnsupportedCitationControlMarkers(markdownLocal);
@@ -634,16 +635,25 @@ export function toSanitizedMarkdownHtml(
     return renderSanitizedMarkdown(renderInput, renderOptions);
   }
   const cacheKey = `${markdownRenderKey(renderOptions)}\0${renderInput}`;
-  const sanitized =
-    markdownCache.get(cacheKey) ?? renderSanitizedMarkdown(renderInput, renderOptions);
+  let cached = markdownCache.get(cacheKey);
+  // Only highlightable code changes when the optional highlighter loads.
+  if (
+    !cached ||
+    (cached.highlighting !== undefined && cached.highlighting !== markdownHighlightingReady())
+  ) {
+    cached = { html: renderSanitizedMarkdown(renderInput, renderOptions) };
+    if (HIGHLIGHTABLE_CODE_RE.test(cached.html)) {
+      cached.highlighting = markdownHighlightingReady();
+    }
+  }
   markdownCache.delete(cacheKey);
-  markdownCache.set(cacheKey, sanitized);
+  markdownCache.set(cacheKey, cached);
   pruneMapToMaxSize(markdownCache, MARKDOWN_CACHE_LIMIT);
-  return sanitized;
+  return cached.html;
 }
 
 function markdownRenderKey(options: MarkdownRenderEnv): string {
-  return `${markdownHighlightingReady()}\0${i18n.getLocale()}\0${options.assistantTranscriptRoleHeaders}\0${options.codeBlockChrome}\0${options.codeBlockInteraction}\0${options.fileLinks}\0${JSON.stringify(options.githubRepo ? [options.githubRepo.owner, options.githubRepo.repo] : null)}\0${markdownGitHubAliasSignature(options.githubRepositories, options.githubRepo)}\0${options.interactiveImages}\0${options.linkFavicons}\0${options.progressBars}\0${options.mode}\0${options.remoteImages}\0${options.sessionLinks}\0${options.tableInteractions}\0${JSON.stringify(options.humanMentionTokens ?? [])}`;
+  return `${i18n.getLocale()}\0${options.assistantTranscriptRoleHeaders}\0${options.codeBlockChrome}\0${options.codeBlockInteraction}\0${options.fileLinks}\0${JSON.stringify(options.githubRepo ? [options.githubRepo.owner, options.githubRepo.repo] : null)}\0${markdownGitHubAliasSignature(options.githubRepositories, options.githubRepo)}\0${options.interactiveImages}\0${options.linkFavicons}\0${options.progressBars}\0${options.mode}\0${options.remoteImages}\0${options.sessionLinks}\0${options.tableInteractions}\0${JSON.stringify(options.humanMentionTokens ?? [])}`;
 }
 
 function toPlainTextElement(value: string, options: MarkdownRenderEnv): HTMLDivElement {
@@ -655,7 +665,7 @@ function toPlainTextElement(value: string, options: MarkdownRenderEnv): HTMLDivE
 
 /** Keep late highlighting in the same mutable DOM owner, including stream finalization. */
 export function partitionMarkdownHtml(html: string, streamKey?: string): [string, string] {
-  if (!markdownHighlightingPending()) {
+  if (!HIGHLIGHTABLE_CODE_RE.test(html) || !markdownHighlightingPending()) {
     return [html, ""];
   }
   const previous = streamingMarkdownStableHtml(streamKey);
@@ -726,7 +736,7 @@ export function toStreamingMarkdownParts(
         ? renderSanitizedMarkdown(stableMarkdown, { ...renderOptions })
         : stableHtml + appendedHtml;
   }
-  if (markdownHighlightingPending()) {
+  if (HIGHLIGHTABLE_CODE_RE.test(stableHtml) && markdownHighlightingPending()) {
     // Keep provisional code in the mutable tail so highlighting can arrive
     // before its DOM is promoted to stable content, preserving reader controls.
     const retained = previous?.options === renderKey && append ? previous : undefined;

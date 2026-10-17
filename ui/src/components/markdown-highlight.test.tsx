@@ -1,4 +1,4 @@
-import { createSignal } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { prepareMessageMarkdown } from "../pages/chat/components/chat-message-text-preparation.ts";
 import { MessageJson } from "../pages/chat/components/chat-message-text-view.tsx";
@@ -34,6 +34,28 @@ it("keeps code readable while loading and refreshes cached, streamed, and reader
   const initial = "Intro\n\n```ts\n" + "const value = 1;\n".repeat(12);
   const [stream, setStream] = createSignal(initial);
   const [streaming, setStreaming] = createSignal(true);
+  const proseRuns = { cached: 0, streaming: 0 };
+  function Prose() {
+    const cached = createMemo(() => {
+      proseRuns.cached += 1;
+      return prepareMessageMarkdown(
+        "Plain **text**",
+        "plain-history",
+        { role: "assistant", isStreaming: false },
+        {},
+      ).parts.join("");
+    });
+    const streamed = createMemo(() => {
+      proseRuns.streaming += 1;
+      return toStreamingMarkdownParts("Plain **streamed** prose", {}, "plain-stream").join("");
+    });
+    return (
+      <>
+        <SanitizedHtml html={cached()} />
+        <SanitizedHtml html={streamed()} />
+      </>
+    );
+  }
   const json = parseMarkdownJson(JSON.stringify({ lines: Array(12).fill("value") }, null, 2))!;
   function TranscriptMarkdown(props: { streaming: boolean; history?: boolean }) {
     const ref = createMarkdownRef(() => ({
@@ -49,6 +71,7 @@ it("keeps code readable while loading and refreshes cached, streamed, and reader
   const view = mountSolid(() => {
     return (
       <>
+        <Prose />
         <TranscriptMarkdown streaming={streaming()} />
         <TranscriptMarkdown streaming={false} history={true} />
         <div class="retained-fixture" onClick={handleMarkdownCodeBlockClick}>
@@ -77,6 +100,11 @@ it("keeps code readable while loading and refreshes cached, streamed, and reader
     "hljs-keyword",
   );
   expect(view.container.querySelector("safe")).toBeNull();
+  expect(proseRuns).toEqual({ cached: 1, streaming: 1 });
+  toStreamingMarkdownParts("▀▀▀▀\n\n", {}, "pending-block-art");
+  expect(
+    toStreamingMarkdownParts("▀▀▀▀\n\n▄▄▄▄\n\nIntro", {}, "pending-block-art").join(""),
+  ).toContain('<code class="markdown-block-art">▀▀▀▀\n\n▄▄▄▄\n\n');
 
   const wrappers = view.container.querySelectorAll<HTMLElement>(
     ".retained-fixture .code-block-wrapper",
@@ -109,6 +137,7 @@ it("keeps code readable while loading and refreshes cached, streamed, and reader
     expect(wrapper.classList.contains("is-wrapped")).toBe(true);
   }
   expect(wrappers[2]!.classList.contains("is-json-raw")).toBe(true);
+  expect(proseRuns).toEqual({ cached: 1, streaming: 1 });
   expect(view.container.querySelector(".static-fixture")?.innerHTML).toBe(sample.html);
   expect(view.container.querySelector(".streaming-fixture")?.innerHTML).toBe(sample.html);
 });
