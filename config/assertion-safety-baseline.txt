@@ -2237,7 +2237,6 @@ src/plugin-sdk/tool-plugin.ts	10
 src/plugin-sdk/windows-spawn.ts	1
 src/plugin-state/plugin-store-validation.ts	1
 src/plugins/agent-tool-result-middleware.ts	1
-src/plugins/api-facades.ts	1
 src/plugins/bundle-config-shared.ts	1
 src/plugins/bundle-lsp.ts	1
 src/plugins/bundle-mcp.ts	2

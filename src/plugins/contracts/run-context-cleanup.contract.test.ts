@@ -124,10 +124,14 @@ describe("plugin cleanup run context", () => {
       const previous = createFixture(true);
       setActivePluginRegistry(previous.registry.registry);
       expect(
-        previous.api?.setRunContext({ runId, namespace: "state", value: { restored: true } }),
+        previous.api?.runContext.setRunContext({
+          runId,
+          namespace: "state",
+          value: { restored: true },
+        }),
       ).toBe(true);
       expect(
-        previous.api?.setRunContext({
+        previous.api?.runContext.setRunContext({
           runId,
           namespace: "remove",
           value: { original: true },
@@ -149,14 +153,14 @@ describe("plugin cleanup run context", () => {
           const successor = createFixture(false);
           setActivePluginRegistry(successor.registry.registry);
           expect(
-            successor.api?.setRunContext({
+            successor.api?.runContext.setRunContext({
               runId,
               namespace: "state",
               value: { restored: true },
             }),
           ).toBe(true);
           expect(
-            successor.api?.setRunContext({
+            successor.api?.runContext.setRunContext({
               runId,
               namespace: "remove",
               value: { successor: true },

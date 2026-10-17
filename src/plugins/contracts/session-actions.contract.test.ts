@@ -180,7 +180,7 @@ describe("plugin session actions", () => {
       id: "session-action-fixture",
       name: "Session Action Fixture",
       register(api) {
-        api.registerSessionAction({
+        api.session.controls.registerSessionAction({
           id: "approve",
           description: "Approve the current workflow",
           requiredScopes: [APPROVALS_SCOPE],
@@ -223,7 +223,7 @@ describe("plugin session actions", () => {
           },
           { id: "" },
         ]) {
-          api.registerSessionAction({
+          api.session.controls.registerSessionAction({
             ...action,
             handler: () => ({ ok: true }),
           });
@@ -279,7 +279,7 @@ describe("plugin session actions", () => {
       id: "schema-action-fixture",
       name: "Schema Action Fixture",
       register(api) {
-        api.registerSessionAction({
+        api.session.controls.registerSessionAction({
           id: "approve",
           schema: {
             type: "object",
@@ -298,7 +298,7 @@ describe("plugin session actions", () => {
             };
           },
         });
-        api.registerSessionAction({
+        api.session.controls.registerSessionAction({
           id: "typed-error",
           handler: () => ({
             ok: false,
@@ -307,12 +307,12 @@ describe("plugin session actions", () => {
             details: { field: "version" },
           }),
         });
-        api.registerSessionAction({
+        api.session.controls.registerSessionAction({
           id: "allow-any",
           schema: true,
           handler: ({ payload }) => ({ result: { payload: payload ?? null } }),
         });
-        api.registerSessionAction({
+        api.session.controls.registerSessionAction({
           id: "deny-all",
           schema: false,
           handler: () => ({ result: { unreachable: true } }),
@@ -436,7 +436,7 @@ describe("plugin session actions", () => {
           },
         };
         for (const [id, handler] of Object.entries(handlers)) {
-          api.registerSessionAction({ id, handler: handler as never });
+          api.session.controls.registerSessionAction({ id, handler: handler as never });
         }
       },
     });
@@ -524,7 +524,7 @@ describe("plugin session actions", () => {
         id: pluginId,
         register(api) {
           for (const [id, requiredScopes] of Object.entries(actionScopes)) {
-            api.registerSessionAction({ id, requiredScopes, handler });
+            api.session.controls.registerSessionAction({ id, requiredScopes, handler });
           }
         },
       });
@@ -804,21 +804,21 @@ describe("plugin session actions", () => {
         }),
       ).toEqual({ emitted: true, stream: "lifecycle" });
       expect(
-        workspaceApi?.emitAgentEvent({
+        workspaceApi?.agent.events.emitAgentEvent({
           runId: "run-emit",
           stream: "lifecycle",
           data: { phase: "end" },
         }),
       ).toEqual({ emitted: false, reason: "stream lifecycle is reserved for bundled plugins" });
       expect(
-        workspaceApi?.emitAgentEvent({
+        workspaceApi?.agent.events.emitAgentEvent({
           runId: "run-emit",
           stream: "assistant",
           data: { text: "spoofed assistant output" },
         }),
       ).toEqual({ emitted: false, reason: "stream assistant is reserved for bundled plugins" });
       expect(
-        workspaceApi?.emitAgentEvent({
+        workspaceApi?.agent.events.emitAgentEvent({
           runId: "run-emit",
           stream: "other-plugin.workflow",
           data: { state: "queued" },
@@ -828,14 +828,14 @@ describe("plugin session actions", () => {
         reason: "stream other-plugin.workflow must be scoped to plugin workspace-event-plugin",
       });
       expect(
-        workspaceApi?.emitAgentEvent({
+        workspaceApi?.agent.events.emitAgentEvent({
           runId: "run-emit",
           stream: "workspace-event-plugin.workflow",
           data: { state: "queued" },
         }),
       ).toEqual({ emitted: true, stream: "workspace-event-plugin.workflow" });
       expect(
-        bundledApi?.emitAgentEvent({
+        bundledApi?.agent.events.emitAgentEvent({
           runId: "run-emit",
           stream: "approval",
           data: 1n as never,
@@ -896,7 +896,7 @@ describe("plugin session actions", () => {
 
     try {
       expect(
-        capturedApi?.emitAgentEvent({
+        capturedApi?.agent.events.emitAgentEvent({
           runId: "stale-run",
           stream: "approval",
           data: { stale: true },
@@ -926,7 +926,7 @@ describe("plugin session actions", () => {
         },
       });
       expect(
-        neverActiveApi?.emitAgentEvent({
+        neverActiveApi?.agent.events.emitAgentEvent({
           runId: "never-active-run",
           stream: "approval",
           data: { inactive: true },
@@ -957,7 +957,7 @@ describe("plugin session actions", () => {
         },
       });
       expect(
-        inactiveApi?.emitAgentEvent({
+        inactiveApi?.agent.events.emitAgentEvent({
           runId: "inactive-run",
           stream: "approval",
           data: { inactive: true },
@@ -995,7 +995,7 @@ describe("plugin session actions", () => {
 
     try {
       expect(
-        capturedApi?.emitAgentEvent({
+        capturedApi?.agent.events.emitAgentEvent({
           runId: "reactivated-run",
           stream: "approval",
           data: { active: true },

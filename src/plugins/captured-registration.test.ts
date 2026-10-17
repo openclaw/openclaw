@@ -316,7 +316,9 @@ describe("captured plugin registration", () => {
   });
 
   it("returns synthetic scheduled-turn ids independent of human-readable names", async () => {
-    let scheduleSessionTurn: OpenClawPluginApi["scheduleSessionTurn"] | undefined;
+    let scheduleSessionTurn:
+      | OpenClawPluginApi["session"]["workflow"]["scheduleSessionTurn"]
+      | undefined;
     let registerSessionSchedulerJob: OpenClawPluginApi["registerSessionSchedulerJob"] | undefined;
     const captured = capturePluginRegistration({
       id: "captured-custom-plugin",

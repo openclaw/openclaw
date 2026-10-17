@@ -143,18 +143,27 @@ type OpenClawPluginSessionWorkflowApi = {
   registerSessionSchedulerJob: (
     job: PluginSessionSchedulerJobRegistration,
   ) => PluginSessionSchedulerJobHandle | undefined;
-  /** Send host-validated files to the active direct-outbound route for a session. */
+  /**
+   * Send host-validated files to the active direct-outbound route for a session.
+   * Intended for bundled plugins with host channel/session integration available.
+   * Calls can return `{ ok: false }` when side effects are disabled or the required
+   * channel runtime is not loaded; callers must handle that result.
+   */
   sendSessionAttachment: (
     params: PluginSessionAttachmentParams,
   ) => Promise<PluginSessionAttachmentResult>;
   /**
    * Schedule a future agent turn in a session through Cron.
    * Cron owns timing and records the run history when the turn runs.
+   * Bundled plugins only; workspace plugins receive undefined.
    */
   scheduleSessionTurn: (
     params: PluginSessionTurnScheduleParams,
   ) => Promise<PluginSessionSchedulerJobHandle | undefined>;
-  /** Remove Cron-backed scheduled session turns that share a plugin-owned tag. */
+  /**
+   * Remove Cron-backed scheduled session turns that share a plugin-owned tag.
+   * Bundled plugins only; workspace plugins receive a zero-count result.
+   */
   unscheduleSessionTurnsByTag: (
     params: PluginSessionTurnUnscheduleByTagParams,
   ) => Promise<PluginSessionTurnUnscheduleByTagResult>;
@@ -413,8 +422,6 @@ export type OpenClawPluginApi = {
    * @deprecated Use `api.session.workflow.enqueueNextTurnInjection(...)`.
    */
   enqueueNextTurnInjection: OpenClawPluginSessionWorkflowApi["enqueueNextTurnInjection"];
-  /** Backs `api.session.workflow.steerActiveRun(...)`; plugins call the workflow facade. */
-  steerActiveRun: OpenClawPluginSessionWorkflowApi["steerActiveRun"];
   /**
    * Register a trusted pre-tool policy. Installed plugins must declare the
    * policy id in `contracts.trustedToolPolicies`.
@@ -442,26 +449,6 @@ export type OpenClawPluginApi = {
    */
   registerAgentEventSubscription: OpenClawPluginAgentEventsApi["registerAgentEventSubscription"];
   /**
-   * Emit a host-routed, plugin-attributed agent event for workflow/UI subscribers.
-   * @deprecated Use `api.agent.events.emitAgentEvent(...)`.
-   */
-  emitAgentEvent: OpenClawPluginAgentEventsApi["emitAgentEvent"];
-  /**
-   * Store namespaced, JSON-compatible data for the active run. Cleared on run end/error.
-   * @deprecated Use `api.runContext.setRunContext(...)`.
-   */
-  setRunContext: OpenClawPluginRunContextApi["setRunContext"];
-  /**
-   * Read namespaced plugin data for a run.
-   * @deprecated Use `api.runContext.getRunContext(...)`.
-   */
-  getRunContext: OpenClawPluginRunContextApi["getRunContext"];
-  /**
-   * Clear one namespace or all namespaces this plugin owns for a run.
-   * @deprecated Use `api.runContext.clearRunContext(...)`.
-   */
-  clearRunContext: OpenClawPluginRunContextApi["clearRunContext"];
-  /**
    * Register cleanup metadata for a plugin-owned session scheduler job.
    * This does not schedule work or create task records; it only lets the host
    * clean external scheduler state during reset/delete/disable.
@@ -469,37 +456,6 @@ export type OpenClawPluginApi = {
    * @deprecated Use `api.session.workflow.registerSessionSchedulerJob(...)`.
    */
   registerSessionSchedulerJob: OpenClawPluginSessionWorkflowApi["registerSessionSchedulerJob"];
-  /**
-   * Register a typed session action that clients can dispatch through the Gateway.
-   * @deprecated Use `api.session.controls.registerSessionAction(...)`.
-   */
-  registerSessionAction: OpenClawPluginSessionControlsApi["registerSessionAction"];
-  /**
-   * Send one or more host-validated files to the active direct-outbound channel for a session.
-   *
-   * This API is intended for bundled plugins running with the host channel/session
-   * integration available. Calls may resolve to `{ ok: false }` instead of attaching
-   * files when global side effects are disabled or when the required plugin/channel
-   * runtime is not loaded, so callers must handle rejection via the returned result.
-   *
-   * @deprecated Use `api.session.workflow.sendSessionAttachment(...)`.
-   */
-  sendSessionAttachment: OpenClawPluginSessionWorkflowApi["sendSessionAttachment"];
-  /**
-   * Schedule a future agent turn in a session through Cron.
-   * Cron owns timing and records the run history when the turn runs.
-   * Bundled plugins only; workspace plugins receive undefined.
-   *
-   * @deprecated Use `api.session.workflow.scheduleSessionTurn(...)`.
-   */
-  scheduleSessionTurn: OpenClawPluginSessionWorkflowApi["scheduleSessionTurn"];
-  /**
-   * Remove Cron-backed scheduled session turns that share the same plugin-owned tag.
-   * Bundled plugins only; workspace plugins receive a zero-count result.
-   *
-   * @deprecated Use `api.session.workflow.unscheduleSessionTurnsByTag(...)`.
-   */
-  unscheduleSessionTurnsByTag: OpenClawPluginSessionWorkflowApi["unscheduleSessionTurnsByTag"];
   /** Register the active memory capability for this memory plugin (exclusive slot). */
   registerMemoryCapability: (capability: MemoryPluginCapability) => void;
   /** Register an additive memory-adjacent prompt section (non-exclusive). */
