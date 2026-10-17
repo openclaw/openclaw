@@ -56,11 +56,11 @@ const controlUiPerformanceBudgets = {
   startupJsRequests: 9,
   chatBootJsRequests: 27,
   newBootJsRequests: 22,
-  // Combined measured 1,483,085 / 1,044,906 B; retain under 1% headroom.
-  chatBootJsGzipBytes: 1_495_000,
-  newBootJsGzipBytes: 1_055_000,
+  // Integrated main measured 1,485,690 / 1,047,088 B; retain under 1% headroom.
+  chatBootJsGzipBytes: 1_490_000,
+  newBootJsGzipBytes: 1_050_000,
   startupCssRequests: 1,
-  startupJsGzipBytes: 339_000,
+  startupJsGzipBytes: 338_900,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,

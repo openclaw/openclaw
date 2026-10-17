@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 338494,
-  "reason": "Schema runtime deferral saves 62588 B for Chat and 74019 B for New Session; identical 453 startup sources gain 741 B of generated chunk references, within the unchanged 339000 B ceiling.",
+  "startupJsGzipBytes": 338803,
+  "reason": "Integrated main after schema and syntax-highlighting deferrals measures 338803 B at startup; cap at 338900 B with the existing 64 B build-variance allowance.",
   "updatedAt": "2026-10-17"
 }
