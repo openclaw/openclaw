@@ -85,25 +85,14 @@ it("bundles LanceDB JavaScript while installing matching native bindings per pla
 describe("plugin package authoring metadata", () => {
   it("exposes the declared discovery and release entrypoints", () => {
     const manifest: PackageManifest = {
-      name: "@openclaw/example",
-      version: "1.2.3",
       openclaw: {
         extensions: ["./src/index.ts"],
         runtimeExtensions: ["./dist/index.js"],
         setupEntry: "./src/setup.ts",
         runtimeSetupEntry: "./dist/setup.js",
-        plugin: {
-          id: "example",
-          label: "Example",
-        },
-        compat: {
-          pluginApi: ">=1",
-          minGatewayVersion: "2026.8.1",
-        },
-        install: {
-          npmSpec: "@openclaw/example",
-          minHostVersion: "2026.8.1",
-        },
+        plugin: { id: "example", label: "Example" },
+        compat: { pluginApi: ">=1", minGatewayVersion: "2026.8.1" },
+        install: { npmSpec: "@openclaw/example", minHostVersion: "2026.8.1" },
       },
     };
 
