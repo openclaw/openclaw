@@ -149,8 +149,7 @@ export function registerServiceInspectionStatusTests(params: {
           serviceReadCommand.mockResolvedValueOnce(null);
         }
         const status = await gatherStatus({ probe: false, deep: true });
-        expect(status.service.inspectionReason).toBe(reason);
-        expect(status.service.loaded).toBeNull();
+        expect(status.service).toMatchObject({ inspectionReason: reason, loaded: null });
         const printed = capturePrintedDaemonStatus(status, { json: false, deep: true });
         const output = `${printed.logs}\n${printed.errors}`;
         if (reason === "service-manager-unavailable") {

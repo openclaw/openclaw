@@ -1,7 +1,6 @@
-// Daemon status print tests cover user-facing service status formatting.
 import fs from "node:fs";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { ExtraGatewayService } from "../../daemon/inspect.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
@@ -14,10 +13,11 @@ import { printDaemonStatus as printDaemonStatusRuntime } from "./status.print.js
 
 type StatusFixture = Omit<Partial<DaemonStatus>, "service"> & {
   service?: Partial<DaemonStatus["service"]>;
+  platform?: NodeJS.Platform;
 };
 
 function printDaemonStatus(
-  status: StatusFixture,
+  { platform, ...status }: StatusFixture,
   options: Parameters<typeof printDaemonStatusRuntime>[1] = { json: false },
 ) {
   const serviceState = { ...service, ...status.service };
@@ -27,10 +27,22 @@ function printDaemonStatus(
       : serviceState.loadState.status === "unknown"
         ? null
         : serviceState.loadState.status === "loaded";
-  printDaemonStatusRuntime(
-    { extraServices: [], ...status, service: { ...serviceState, loaded } },
-    options,
-  );
+  const print = () =>
+    printDaemonStatusRuntime(
+      { extraServices: [], ...status, service: { ...serviceState, loaded } },
+      options,
+    );
+  if (platform) {
+    withMockedPlatform(platform, print);
+  } else {
+    print();
+  }
+}
+
+function commandEnv(
+  environment: GatewayServiceCommandConfig["environment"],
+): GatewayServiceCommandConfig {
+  return { programArguments: [], environment };
 }
 
 const runtime = vi.hoisted(() => ({
@@ -67,12 +79,8 @@ vi.mock("../../daemon/inspect.js", () => ({
   renderGatewayServiceCleanupHints: renderGatewayServiceCleanupHintsMock,
 }));
 
+// mock-isolation: Keep status fixtures independent of the operator's log paths.
 vi.mock("../../daemon/restart-logs.js", () => ({
-  resolveGatewayLogPaths: () => ({
-    logDir: "/tmp",
-    stdoutPath: "/tmp/gateway.out.log",
-    stderrPath: "/tmp/gateway.err.log",
-  }),
   resolveGatewaySupervisorLogPaths: () => ({
     logDir: "/Users/test/Library/Logs/openclaw",
     stdoutPath: "/Users/test/Library/Logs/openclaw/gateway.log",
@@ -132,528 +140,487 @@ function emptyPort(
   return { port: 18789, status, listeners: [], hints: [] };
 }
 
-describe("printDaemonStatus", () => {
-  function output(mock = runtime.log) {
-    return mock.mock.calls.flat().join("\n");
+function configFile(file: string, controlUi?: { basePath: string }) {
+  return { path: file, exists: true, valid: true, controlUi };
+}
+function output(mock = runtime.log) {
+  return mock.mock.calls.flat().join("\n");
+}
+function expectText(mock: typeof runtime.log, ...expected: string[]) {
+  for (const text of expected) {
+    expect(output(mock)).toContain(text);
   }
-  function expectMockLineContains(mock: typeof runtime.log, expected: string) {
-    expect(output(mock)).toContain(expected);
-  }
+}
 
-  beforeEach(() => {
-    runtime.log.mockReset();
-    runtime.error.mockReset();
-    runtime.writeJson.mockReset();
-    renderGatewayServiceCleanupHintsMock.mockReset().mockReturnValue([]);
-    resolveControlUiLinksMock.mockClear();
-    isSystemdUnavailableDetailMock.mockReset().mockReturnValue(false);
-    renderSystemdUnavailableHintsMock.mockReset().mockReturnValue([]);
-    isWSLEnvMock.mockClear();
-  });
+beforeEach(() => {
+  runtime.log.mockReset();
+  runtime.error.mockReset();
+  runtime.writeJson.mockReset();
+  renderGatewayServiceCleanupHintsMock.mockReset().mockReturnValue([]);
+  resolveControlUiLinksMock.mockClear();
+  isSystemdUnavailableDetailMock.mockReset().mockReturnValue(false);
+  renderSystemdUnavailableHintsMock.mockReset().mockReturnValue([]);
+  isWSLEnvMock.mockClear();
+});
 
-  it("preserves Gateway metadata and input while redacting private definitions in JSON", () => {
-    const server = { version: "2026.5.6", buildId: "build-2026.5.6", connId: "conn-1" };
-    const extraService: ExtraGatewayService = {
+it("preserves Gateway metadata and input while redacting private definitions in JSON", () => {
+  const server = { version: "2026.5.6", buildId: "build-2026.5.6", connId: "conn-1" };
+  const extraService: ExtraGatewayService = {
+    platform: "linux",
+    label: "sibling.service",
+    detail: "unit: /etc/systemd/system/sibling.service",
+    sourcePath: "/etc/systemd/system/sibling.service",
+    scope: "system",
+  };
+  const command: GatewayServiceCommandConfig = {
+    programArguments: ["node"],
+    environment: { OPENCLAW_STATE_DIR: "/tmp", OPENCLAW_GATEWAY_TOKEN: "effective-gateway-token" },
+    managedDefinition: commandEnv({ OPENCLAW_GATEWAY_TOKEN: "managed-base-gateway-token" }),
+    managedOverrides: { launcher: "command", environment: { keys: ["OPENCLAW_GATEWAY_TOKEN"] } },
+    definitionPaths: ["/etc/systemd/user/private-definition.conf"],
+    reloadPending: true,
+  };
+  const original = structuredClone(command);
+  printDaemonStatus(
+    { service: { command }, rpc: { ok: true, server }, extraServices: [extraService] },
+    { json: true, deep: true },
+  );
+  expect(runtime.writeJson).toHaveBeenCalledOnce();
+  const payload = runtime.writeJson.mock.calls[0]?.[0];
+  const { sourcePath, ...publicService } = extraService;
+  expect(payload).toHaveProperty("rpc.server", server);
+  expect(payload).toHaveProperty("extraServices", [publicService]);
+  expect(sourcePath).toBe("/etc/systemd/system/sibling.service");
+  expect(payload).not.toHaveProperty("service.command.managedDefinition");
+  expect(payload).not.toHaveProperty("service.command.managedOverrides");
+  expect(payload).not.toHaveProperty("service.command.definitionPaths");
+  expect(payload).toHaveProperty("service.command.reloadPending", true);
+  expect(JSON.stringify(payload)).not.toContain("gateway-token");
+  expect(command).toEqual(original);
+});
+
+it.each([
+  ["user", "systemctl --user"],
+  ["system", "sudo systemctl --system"],
+] as const)(
+  "prints %s-manager pending reload guidance after the service file",
+  (scope, command) => {
+    printDaemonStatus({
       platform: "linux",
-      label: "sibling.service",
-      detail: "unit: /etc/systemd/system/sibling.service",
-      sourcePath: "/etc/systemd/system/sibling.service",
-      scope: "system",
-    };
-    const command: GatewayServiceCommandConfig = {
-      programArguments: ["node"],
-      environment: {
-        OPENCLAW_STATE_DIR: "/tmp",
-        OPENCLAW_GATEWAY_TOKEN: "effective-gateway-token",
+      service: {
+        label: "systemd",
+        runtime: { status: "running", systemd: { scope, unit: "openclaw.service" } },
+        command: { programArguments: ["node"], sourcePath: "/tmp/unit", reloadPending: true },
       },
-      managedDefinition: {
-        programArguments: ["node"],
-        environment: { OPENCLAW_GATEWAY_TOKEN: "managed-base-gateway-token" },
-      },
-      managedOverrides: { launcher: "command", environment: { keys: ["OPENCLAW_GATEWAY_TOKEN"] } },
-      definitionPaths: ["/etc/systemd/user/private-definition.conf"],
-      reloadPending: true,
-    };
-    const original = structuredClone(command);
-    printDaemonStatus(
-      { service: { command }, rpc: { ok: true, server }, extraServices: [extraService] },
-      { json: true, deep: true },
-    );
-    expect(runtime.writeJson).toHaveBeenCalledOnce();
-    const payload = runtime.writeJson.mock.calls[0]?.[0];
-    expect(payload).toHaveProperty("rpc.server", server);
-    expect(payload).toHaveProperty("extraServices", [
-      {
-        platform: "linux",
-        label: "sibling.service",
-        detail: "unit: /etc/systemd/system/sibling.service",
-        scope: "system",
-      },
-    ]);
-    expect(extraService.sourcePath).toBe("/etc/systemd/system/sibling.service");
-    expect(payload).not.toHaveProperty("service.command.managedDefinition");
-    expect(payload).not.toHaveProperty("service.command.managedOverrides");
-    expect(payload).not.toHaveProperty("service.command.definitionPaths");
-    expect(payload).toHaveProperty("service.command.reloadPending", true);
-    expect(JSON.stringify(payload)).not.toContain("gateway-token");
-    expect(command).toEqual(original);
-  });
+      port: emptyPort("free"),
+    });
 
-  it.each([
-    ["user", "systemctl --user"],
-    ["system", "sudo systemctl --system"],
-  ] as const)(
-    "prints %s-manager pending reload guidance after the service file",
-    (scope, command) => {
-      withMockedPlatform("linux", () => {
+    const lines = runtime.log.mock.calls.map(([line]) => line);
+    const serviceFileIndex = lines.findIndex((line) => line.startsWith("Service file:"));
+    expect(lines[serviceFileIndex + 1]).toBe(
+      `Systemd reload: pending (run ${command} daemon-reload)`,
+    );
+    expectText(runtime.error, `Logs: journalctl --${scope} -u openclaw.service`);
+  },
+);
+
+it.skipIf(process.platform !== "win32")(
+  "shortens real Windows home casing aliases in human status",
+  async () => {
+    await withTestDir({ prefix: "openclaw-home-display-" }, async (home) => {
+      const logFile = path.join(home, "logs", "gateway.log");
+      await fs.promises.mkdir(path.dirname(logFile), { recursive: true });
+      await fs.promises.writeFile(logFile, "ready", "utf8");
+      const logFileAlias = logFile.toUpperCase();
+      expect(fs.statSync(logFileAlias).isFile()).toBe(true);
+
+      await withEnv({ OPENCLAW_HOME: home }, async () => {
         printDaemonStatus({
           service: {
-            label: "systemd",
-            runtime: { status: "running", systemd: { scope, unit: "openclaw.service" } },
-            command: {
-              programArguments: ["node"],
-              sourcePath: `${scope === "user" ? "/home/test/.config/systemd/user" : "/etc/systemd/system"}/openclaw.service`,
-              reloadPending: true,
-            },
+            label: "Scheduled Task",
+            loadedText: "registered",
+            notLoadedText: "not registered",
           },
-          port: emptyPort("free"),
+          logFile: logFileAlias,
         });
       });
 
-      const lines = runtime.log.mock.calls.map(([line]) => line);
-      const serviceFileIndex = lines.findIndex((line) => line.startsWith("Service file:"));
-      expect(lines[serviceFileIndex + 1]).toBe(
-        `Systemd reload: pending (run ${command} daemon-reload)`,
-      );
-      expectMockLineContains(runtime.error, `Logs: journalctl --${scope} -u openclaw.service`);
+      expectText(runtime.log, `File logs: $OPENCLAW_HOME${path.sep}LOGS${path.sep}GATEWAY.LOG`);
+      expect(output()).not.toContain(home.toUpperCase());
+    });
+  },
+);
+
+it("uses service command env for WSL systemd unavailable hints", () => {
+  isSystemdUnavailableDetailMock.mockReturnValue(true);
+  renderSystemdUnavailableHintsMock.mockReturnValue(["wsl hint"]);
+  const unavailable = {
+    status: "unknown" as const,
+    detail: "System has not been booted with systemd as init system",
+  };
+  printDaemonStatus({
+    platform: "linux",
+    service: {
+      label: "systemd",
+      loadState: unavailable,
+      runtime: unavailable,
+      command: commandEnv({ WSL_DISTRO_NAME: "Ubuntu" }),
     },
-  );
+    rpc: { ok: false, error: "unavailable", url: gateway.probeUrl },
+  });
 
-  it.skipIf(process.platform !== "win32")(
-    "shortens real Windows home casing aliases in human status",
-    async () => {
-      await withTestDir({ prefix: "openclaw-home-display-" }, async (home) => {
-        const logFile = path.join(home, "logs", "gateway.log");
-        await fs.promises.mkdir(path.dirname(logFile), { recursive: true });
-        await fs.promises.writeFile(logFile, "ready", "utf8");
-        const logFileAlias = logFile.toUpperCase();
-        expect(fs.statSync(logFileAlias).isFile()).toBe(true);
+  expect(isWSLEnvMock).toHaveBeenCalledWith({ WSL_DISTRO_NAME: "Ubuntu" });
+  expect(renderSystemdUnavailableHintsMock).toHaveBeenCalledWith({
+    wsl: true,
+    kind: "generic_unavailable",
+    env: { WSL_DISTRO_NAME: "Ubuntu" },
+  });
+  expectText(runtime.log, "Service: systemd (unknown)");
+  expect(output()).not.toContain("Service: systemd (not loaded)");
+  expectText(runtime.error, "wsl hint");
+});
 
-        await withEnv({ OPENCLAW_HOME: home }, async () => {
-          printDaemonStatus({
-            service: {
-              label: "Scheduled Task",
-              loadState: { status: "loaded" },
-              loadedText: "registered",
-              notLoadedText: "not registered",
-            },
-            logFile: logFileAlias,
-          });
-        });
-
-        expectMockLineContains(
-          runtime.log,
-          `File logs: $OPENCLAW_HOME${path.sep}LOGS${path.sep}GATEWAY.LOG`,
-        );
-        expect(output()).not.toContain(home.toUpperCase());
-      });
+it("reports non-lifecycle launchd jobs without warnings", () => {
+  const job = {
+    label: "ai.openclaw.test.w15.other",
+    program: "/tmp/openclaw-test/other.sh",
+    keepAlive: false,
+    gatewayActions: [],
+    safeToRemove: false,
+  };
+  printDaemonStatus({
+    service: {
+      ...runningService,
+      foreignLaunchdJobs: [job],
+      forcedRestartSummary: { count: 3, windowMs: 600_000 },
     },
-  );
+  });
 
-  it("uses service command env for WSL systemd unavailable hints", () => {
-    isSystemdUnavailableDetailMock.mockReturnValue(true);
-    renderSystemdUnavailableHintsMock.mockReturnValue(["wsl hint"]);
+  expectText(
+    runtime.log,
+    "Other OpenClaw launchd jobs (macOS)",
+    job.label,
+    job.program,
+    "Report only; left unchanged.",
+  );
+  expect(runtime.error).not.toHaveBeenCalled();
+  expect(output()).not.toContain("Listed lifecycle jobs may be responsible");
+});
+
+it("prints stale updater launchd job guidance", () => {
+  printDaemonStatus({
+    service: {
+      ...runningService,
+      staleUpdateLaunchdJobs: [
+        { label: "ai.openclaw.update.2026.5.12", lastExitStatus: 127 },
+        { label: "ai.openclaw.manual-update.1717168800", lastExitStatus: 0 },
+      ],
+    },
+    gateway,
+  });
+
+  expectText(
+    runtime.error,
+    "Stale OpenClaw updater launchd job(s) detected.",
+    "ai.openclaw.update.2026.5.12",
+    "ai.openclaw.manual-update.1717168800",
+    "launchctl remove <label>",
+    formatCliCommand("openclaw gateway restart"),
+  );
+});
+
+it("points macOS launchd stdout and stderr at one log when gateway is not listening", () => {
+  printDaemonStatus({
+    platform: "darwin",
+    service: { ...runningService, command: commandEnv({ HOME: "/Users/test" }) },
+    gateway,
+    port: emptyPort("free"),
+    rpc: {
+      ok: false,
+      kind: "connect",
+      capability: "unknown",
+      error: "gateway closed (1000): ",
+      url: gateway.probeUrl,
+    },
+    lastError: "failed to bind gateway socket EADDRINUSE",
+  });
+
+  expectText(
+    runtime.error,
+    "Gateway port 18789 is not listening",
+    "/Users/test/Library/Logs/openclaw/gateway.log",
+    "Logs (stdout and stderr):",
+  );
+  expect(output()).not.toContain("Warm-up:");
+  expect(output()).toContain("Readiness is not confirmed");
+  const errors = output(runtime.error);
+  expect(errors).not.toContain("suppressed");
+  expect(errors.match(/Recent Gateway log error/g)).toHaveLength(1);
+  expect(errors).toContain("may be from an earlier run");
+});
+
+it("names a disabled custom Scheduled Task and explains how to re-enable it", () => {
+  printDaemonStatus({
+    platform: "win32",
+    service: {
+      label: "Scheduled Task",
+      loadedText: "registered",
+      notLoadedText: "not registered",
+      runtime: { status: "stopped", state: "Disabled" },
+      command: commandEnv({ OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Custom Gateway" }),
+    },
+  });
+
+  const errors = output(runtime.error);
+  expectText(
+    runtime.error,
+    "Scheduled Task 'OpenClaw Custom Gateway' is registered but DISABLED",
+    "openclaw gateway start",
+    "openclaw doctor --fix",
+    "to re-enable it",
+    'schtasks /Query /TN "OpenClaw Custom Gateway"',
+  );
+  expect(errors).not.toContain("likely exited immediately");
+});
+
+it("prints GUI-session recovery guidance for the service profile", () => {
+  printDaemonStatus({
+    service: {
+      loadState: { status: "not-loaded" },
+      runtime: {
+        status: "unknown",
+        missingGuiSession: true,
+        detail: "Bootstrap failed: 125: Domain does not support specified action",
+      },
+      command: commandEnv({ OPENCLAW_PROFILE: "work" }),
+    },
+  });
+
+  expectText(
+    runtime.error,
+    "macOS has no usable GUI session",
+    "logged-in macOS GUI session",
+    "openclaw --profile work gateway restart",
+  );
+});
+
+it("prints connectivity and capability without a service config summary", () => {
+  printDaemonStatus({
+    service: runningService,
+    config: { cli: configFile("/tmp/openclaw.json") },
+    gateway,
+    rpc: { ok: true, kind: "connect", capability: "write_capable", url: gateway.probeUrl },
+  });
+  expectText(runtime.log, "Connectivity check: ok");
+  expect(
+    runtime.log.mock.calls.map(([line]) => line).filter((line) => line.startsWith("Capability:")),
+  ).toEqual(["Capability: write-capable"]);
+  expect(output(runtime.error)).not.toContain("doctor --fix");
+});
+
+it("passes daemon TLS state to dashboard link rendering", () => {
+  printDaemonStatus({
+    service: runningService,
+    config: {
+      cli: configFile("/tmp/openclaw-cli/openclaw.json"),
+      daemon: configFile("/tmp/openclaw-daemon/openclaw.json", { basePath: "/ui" }),
+      mismatch: true,
+    },
+    gateway: {
+      ...gateway,
+      bindMode: "lan",
+      bindHost: "0.0.0.0",
+      port: 19001,
+      probeUrl: "wss://127.0.0.1:19001",
+      tlsEnabled: true,
+    },
+    rpc: { ok: true, kind: "connect", capability: "write_capable", url: "wss://127.0.0.1:19001" },
+  });
+
+  expect(resolveControlUiLinksMock).toHaveBeenCalledWith({
+    port: 19001,
+    bind: "lan",
+    customBindHost: undefined,
+    basePath: "/ui",
+    tlsEnabled: true,
+  });
+});
+
+it("prints extra gateways as warnings with cleanup scoped to the detected gateway", () => {
+  const extraService = {
+    platform: "darwin" as const,
+    label: "com.example.openclaw-gateway",
+    scope: "user" as const,
+    detail: "plist: /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
+  };
+  renderGatewayServiceCleanupHintsMock.mockReturnValue([
+    "launchctl bootout gui/$UID/com.example.openclaw-gateway",
+    "rm /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
+  ]);
+
+  printDaemonStatus({ service: runningService, extraServices: [extraService] });
+
+  expect(runtime.error).not.toHaveBeenCalled();
+  expectText(runtime.log, "Other gateway-like services detected");
+  expect(renderGatewayServiceCleanupHintsMock).toHaveBeenCalledWith([extraService]);
+  expectText(runtime.log, "Cleanup hint: launchctl bootout gui/$UID/com.example.openclaw-gateway");
+  expect(output()).not.toContain("ai.openclaw.gateway");
+});
+
+registerServiceInspectionHintTests({ renderHints: renderGatewayServiceCleanupHintsMock, output });
+
+it.each([
+  { lastExitStatus: undefined, exhausted: true },
+  { lastExitStatus: 78, exhausted: false },
+])(
+  "distinguishes systemd crash exhaustion from config exit $lastExitStatus",
+  ({ lastExitStatus, exhausted }) => {
     withMockedPlatform("linux", () => {
       printDaemonStatus({
         service: {
           label: "systemd",
-          loadState: {
-            status: "unknown",
-            detail: "System has not been booted with systemd as init system",
-          },
-          loadedText: "loaded",
-          notLoadedText: "not loaded",
           runtime: {
-            status: "unknown",
-            detail: "System has not been booted with systemd as init system",
-          },
-          command: { programArguments: [], environment: { WSL_DISTRO_NAME: "Ubuntu" } },
-        },
-        rpc: {
-          ok: false,
-          error: "unavailable",
-          url: "ws://127.0.0.1:18789",
-        },
-      });
-    });
-
-    expect(isWSLEnvMock).toHaveBeenCalledWith({ WSL_DISTRO_NAME: "Ubuntu" });
-    expect(renderSystemdUnavailableHintsMock).toHaveBeenCalledWith({
-      wsl: true,
-      kind: "generic_unavailable",
-      env: { WSL_DISTRO_NAME: "Ubuntu" },
-    });
-    expectMockLineContains(runtime.log, "Service: systemd (unknown)");
-    expect(output()).not.toContain("Service: systemd (not loaded)");
-    expectMockLineContains(runtime.error, "wsl hint");
-  });
-
-  it("reports non-lifecycle launchd jobs without warnings", () => {
-    const job = {
-      label: "ai.openclaw.test.w15.other",
-      program: "/tmp/openclaw-test/other.sh",
-      keepAlive: false,
-      gatewayActions: [],
-      safeToRemove: false,
-    };
-    printDaemonStatus({
-      service: {
-        runtime: { status: "running", pid: 8000 },
-        foreignLaunchdJobs: [job],
-        forcedRestartSummary: { count: 3, windowMs: 600_000 },
-      },
-    });
-
-    expectMockLineContains(runtime.log, "Other OpenClaw launchd jobs (macOS)");
-    expectMockLineContains(runtime.log, job.label);
-    expectMockLineContains(runtime.log, job.program);
-    expectMockLineContains(runtime.log, "Report only; left unchanged.");
-    expect(output(runtime.error)).not.toContain(job.label);
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(output()).not.toContain("Listed lifecycle jobs may be responsible");
-  });
-
-  it("prints stale updater launchd job guidance", () => {
-    printDaemonStatus({
-      service: {
-        runtime: { status: "running", pid: 8000 },
-        staleUpdateLaunchdJobs: [
-          { label: "ai.openclaw.update.2026.5.12", lastExitStatus: 127 },
-          { label: "ai.openclaw.manual-update.1717168800", lastExitStatus: 0 },
-        ],
-      },
-      gateway,
-    });
-
-    expectMockLineContains(runtime.error, "Stale OpenClaw updater launchd job(s) detected.");
-    expectMockLineContains(runtime.error, "ai.openclaw.update.2026.5.12");
-    expectMockLineContains(runtime.error, "ai.openclaw.manual-update.1717168800");
-    expectMockLineContains(runtime.error, "launchctl remove <label>");
-    expectMockLineContains(runtime.error, formatCliCommand("openclaw gateway restart"));
-  });
-
-  it("points macOS launchd stdout and stderr at one log when gateway is not listening", () => {
-    withMockedPlatform("darwin", () => {
-      printDaemonStatus({
-        service: {
-          runtime: { status: "running", pid: 8000 },
-          command: { programArguments: [], environment: { HOME: "/Users/test" } },
-        },
-        gateway,
-        port: emptyPort("free"),
-        rpc: {
-          ok: false,
-          kind: "connect",
-          capability: "unknown",
-          error: "gateway closed (1000): ",
-          url: "ws://127.0.0.1:18789",
-        },
-        lastError: "failed to bind gateway socket EADDRINUSE",
-      });
-    });
-
-    expectMockLineContains(runtime.error, "Gateway port 18789 is not listening");
-    expectMockLineContains(runtime.error, "/Users/test/Library/Logs/openclaw/gateway.log");
-    expectMockLineContains(runtime.error, "Logs (stdout and stderr):");
-    expect(output()).not.toContain("Warm-up:");
-    expect(output()).toContain("Readiness is not confirmed");
-    const errors = output(runtime.error);
-    expect(errors).not.toContain("suppressed");
-    expect(errors.match(/Recent Gateway log error/g)).toHaveLength(1);
-    expect(errors).toContain("may be from an earlier run");
-  });
-
-  it("names a disabled custom Scheduled Task and explains how to re-enable it", () => {
-    withMockedPlatform("win32", () => {
-      printDaemonStatus({
-        service: {
-          label: "Scheduled Task",
-          loadedText: "registered",
-          notLoadedText: "not registered",
-          runtime: { status: "stopped", state: "Disabled" },
-          command: {
-            programArguments: [],
-            environment: { OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Custom Gateway" },
+            status: "stopped",
+            state: "failed",
+            lastExitStatus,
+            systemd: { result: "exit-code", nRestarts: 5, startLimitBurst: 5 },
           },
         },
       });
     });
-
     const errors = output(runtime.error);
-    expect(errors).toContain("Scheduled Task 'OpenClaw Custom Gateway' is registered but DISABLED");
-    expect(errors).toContain("openclaw gateway start");
-    expect(errors).toContain("openclaw doctor --fix");
-    expect(errors).toContain("to re-enable it");
-    expect(errors).toContain('schtasks /Query /TN "OpenClaw Custom Gateway"');
-    expect(errors).not.toContain("likely exited immediately");
-  });
-
-  it("prints GUI-session recovery guidance for the service profile", () => {
-    printDaemonStatus({
-      service: {
-        label: "LaunchAgent",
-        loadState: { status: "not-loaded" },
-        loadedText: "loaded",
-        notLoadedText: "not loaded",
-        runtime: {
-          status: "unknown",
-          missingGuiSession: true,
-          detail: "Bootstrap failed: 125: Domain does not support specified action",
-        },
-        command: { programArguments: [], environment: { OPENCLAW_PROFILE: "work" } },
-      },
-    });
-
-    expectMockLineContains(runtime.error, "macOS has no usable GUI session");
-    expectMockLineContains(runtime.error, "logged-in macOS GUI session");
-    expectMockLineContains(runtime.error, "openclaw --profile work gateway restart");
-  });
-
-  it("prints connectivity and capability without a service config summary", () => {
-    printDaemonStatus({
-      service: runningService,
-      config: { cli: { path: "/tmp/openclaw.json", exists: true, valid: true } },
-      gateway,
-      rpc: { ok: true, kind: "connect", capability: "write_capable", url: gateway.probeUrl },
-    });
-    expectMockLineContains(runtime.log, "Connectivity check: ok");
-    expect(
-      runtime.log.mock.calls.map(([line]) => line).filter((line) => line.startsWith("Capability:")),
-    ).toEqual(["Capability: write-capable"]);
-    expect(output(runtime.error)).not.toContain("doctor --fix");
-  });
-
-  it("passes daemon TLS state to dashboard link rendering", () => {
-    printDaemonStatus({
-      service: runningService,
-      config: {
-        cli: { path: "/tmp/openclaw-cli/openclaw.json", exists: true, valid: true },
-        daemon: {
-          path: "/tmp/openclaw-daemon/openclaw.json",
-          exists: true,
-          valid: true,
-          controlUi: { basePath: "/ui" },
-        },
-        mismatch: true,
-      },
-      gateway: {
-        bindMode: "lan",
-        bindHost: "0.0.0.0",
-        port: 19001,
-        portSource: "service args",
-        probeUrl: "wss://127.0.0.1:19001",
-        tlsEnabled: true,
-      },
-      rpc: {
-        ok: true,
-        kind: "connect",
-        capability: "write_capable",
-        url: "wss://127.0.0.1:19001",
-      },
-    });
-
-    expect(resolveControlUiLinksMock).toHaveBeenCalledWith({
-      port: 19001,
-      bind: "lan",
-      customBindHost: undefined,
-      basePath: "/ui",
-      tlsEnabled: true,
-    });
-  });
-
-  it("prints extra gateways as warnings with cleanup scoped to the detected gateway", () => {
-    const extraService = {
-      platform: "darwin" as const,
-      label: "com.example.openclaw-gateway",
-      scope: "user" as const,
-      detail: "plist: /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
-    };
-    renderGatewayServiceCleanupHintsMock.mockReturnValue([
-      "launchctl bootout gui/$UID/com.example.openclaw-gateway",
-      "rm /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
-    ]);
-
-    printDaemonStatus({ service: runningService, extraServices: [extraService] });
-
-    expect(runtime.error).not.toHaveBeenCalled();
-    expectMockLineContains(runtime.log, "Other gateway-like services detected");
-    expect(renderGatewayServiceCleanupHintsMock).toHaveBeenCalledWith([extraService]);
-    expectMockLineContains(
-      runtime.log,
-      "Cleanup hint: launchctl bootout gui/$UID/com.example.openclaw-gateway",
+    expect(errors.includes("systemd stopped restarting the gateway after repeated crashes")).toBe(
+      exhausted,
     );
-    expect(output()).not.toContain("ai.openclaw.gateway");
+    expect(errors.includes("Service is loaded but not running (likely exited immediately).")).toBe(
+      !exhausted,
+    );
+  },
+);
+
+type Drift = NonNullable<DaemonStatus["pluginVersionDrift"]>["drifts"][number];
+function printDrift(overrides: Partial<Drift>) {
+  const entry: Drift = {
+    pluginId: "whatsapp",
+    installedVersion: "2026.9.2",
+    gatewayVersion: "2026.9.4",
+    source: "clawhub",
+    ...overrides,
+  };
+  printDaemonStatus(
+    {
+      service: runningService,
+      pluginVersionDrift: { gatewayVersion: entry.gatewayVersion, drifts: [entry] },
+    },
+    { json: false, deep: true },
+  );
+}
+
+it.each([
+  {
+    status: "resolved",
+    installedVersion: "2026.9.2",
+    requestedTarget: "latest",
+    expected: [
+      "- whatsapp: 2026.9.2 (clawhub)",
+      "expected 2026.9.3; clawhub target @openclaw/whatsapp@2026.9.3",
+      `Fix: ${formatCliCommand("openclaw plugins update whatsapp")} && ${formatCliCommand("openclaw gateway restart")}.`,
+    ],
+    absent: "expected 2026.9.4",
+  },
+  {
+    status: "registry-current",
+    installedVersion: "2026.9.3",
+    requestedTarget: "2026.9.4",
+    expected: [
+      "- whatsapp: 2026.9.3 (clawhub) → expected 2026.9.4",
+      "registry version 2026.9.3 is already installed; no release reaches 2026.9.4 yet",
+    ],
+    absent: "openclaw plugins update",
+  },
+] as const)(
+  "prints the $status ClawHub repair target",
+  ({ status, installedVersion, requestedTarget, expected, absent }) => {
+    printDrift({
+      installedVersion,
+      targetResolution: {
+        status,
+        packageName: "@openclaw/whatsapp",
+        requestedTarget,
+        version: "2026.9.3",
+      },
+    });
+    expectText(runtime.log, ...expected);
+    expect(output()).not.toContain(absent);
+    expect(output(runtime.error)).not.toContain("Plugin repair target resolution failed");
+  },
+);
+
+it("fails loudly without an install command when npm cannot resolve a pinned target", () => {
+  printDrift({
+    pluginId: "brave",
+    installedVersion: "2026.7.1-beta.2",
+    gatewayVersion: "2026.7.1-2",
+    source: "npm",
+    packageName: "@openclaw/brave-plugin",
+    spec: "@openclaw/brave-plugin@2026.7.1-beta.2",
+    targetResolution: {
+      status: "unresolved",
+      packageName: "@openclaw/brave-plugin",
+      requestedTarget: "2026.7.1",
+      error: "npm registry did not resolve @openclaw/brave-plugin@2026.7.1: HTTP 404",
+    },
   });
 
-  registerServiceInspectionHintTests({ renderHints: renderGatewayServiceCleanupHintsMock, output });
-
-  it.each([
-    { lastExitStatus: undefined, exhausted: true },
-    { lastExitStatus: 78, exhausted: false },
-  ])(
-    "distinguishes systemd crash exhaustion from config exit $lastExitStatus",
-    ({ lastExitStatus, exhausted }) => {
-      withMockedPlatform("linux", () => {
-        printDaemonStatus({
-          service: {
-            label: "systemd",
-            runtime: {
-              status: "stopped",
-              state: "failed",
-              lastExitStatus,
-              systemd: { result: "exit-code", nRestarts: 5, startLimitBurst: 5 },
-            },
-          },
-        });
-      });
-      const errors = output(runtime.error);
-      expect(errors.includes("systemd stopped restarting the gateway after repeated crashes")).toBe(
-        exhausted,
-      );
-      expect(
-        errors.includes("Service is loaded but not running (likely exited immediately)."),
-      ).toBe(!exhausted);
+  expectText(runtime.error, "Plugin repair target resolution failed", "HTTP 404");
+  const combinedOutput = [output(), output(runtime.error)].join("\n");
+  expect(combinedOutput).not.toContain("openclaw plugins update");
+  expect(combinedOutput).not.toContain("openclaw gateway restart");
+});
+it("reports an admitted probe timeout as event-loop saturation instead of failed connectivity", () => {
+  printDaemonStatus(
+    {
+      service: runningService,
+      rpc: {
+        ok: false,
+        kind: "read",
+        gatewayReached: true,
+        timedOut: true,
+        error: "gateway timeout after 5000ms",
+        eventLoop: {
+          degraded: true,
+          reasons: ["event_loop_delay", "event_loop_utilization"],
+          intervalMs: 5_000,
+          delayP99Ms: 5_079,
+          delayMaxMs: 5_100,
+          utilization: 1,
+          cpuCoreRatio: 0.94,
+        },
+      },
+      health: { healthy: true, staleGatewayPids: [] },
     },
+    { json: false, deep: true },
   );
 
-  function printDrift(entry: NonNullable<DaemonStatus["pluginVersionDrift"]>["drifts"][number]) {
-    printDaemonStatus(
-      {
-        service: runningService,
-        pluginVersionDrift: { gatewayVersion: entry.gatewayVersion, drifts: [entry] },
+  const errors = output(runtime.error);
+  const logs = output();
+  expect(errors).toContain("Read check: timed out under event-loop load");
+  expect(errors).toContain("Gateway event loop: degraded max=5100ms p99=5079ms util=1 cpu=0.94");
+  expect(logs).toContain("Gateway accepted the connection");
+  expect(errors).not.toContain("Connectivity check: failed");
+  expect(logs).not.toContain("not a warm-up delay");
+});
+it("does not warn about the service install when it matches the CLI version", () => {
+  printDaemonStatus({
+    cli: { version: "2026.6.35", entrypoint: "/home/ops/.local/bin/openclaw" },
+    service: {
+      layout: {
+        execStart: "/usr/bin/node /home/ops/.local/lib/node_modules/openclaw/dist/index.js gateway",
+        packageRoot: "/home/ops/.local/lib/node_modules/openclaw",
+        packageVersion: "2026.6.35",
       },
-      { json: false, deep: true },
-    );
-  }
-
-  it("prints the confirmed ClawHub target instead of the host version in deep mode", () => {
-    printDrift({
-      pluginId: "whatsapp",
-      installedVersion: "2026.9.2",
-      gatewayVersion: "2026.9.4",
-      source: "clawhub",
-      targetResolution: {
-        status: "resolved",
-        packageName: "@openclaw/whatsapp",
-        requestedTarget: "latest",
-        version: "2026.9.3",
-      },
-    });
-
-    expectMockLineContains(runtime.log, "- whatsapp: 2026.9.2 (clawhub)");
-    expectMockLineContains(
-      runtime.log,
-      "expected 2026.9.3; clawhub target @openclaw/whatsapp@2026.9.3",
-    );
-    expect(output()).not.toContain("expected 2026.9.4");
-    expectMockLineContains(
-      runtime.log,
-      `Fix: ${formatCliCommand("openclaw plugins update whatsapp")} && ${formatCliCommand("openclaw gateway restart")}.`,
-    );
+    },
   });
-
-  it("explains a registry-current ClawHub target without a repair command in deep mode", () => {
-    printDrift({
-      pluginId: "whatsapp",
-      installedVersion: "2026.9.3",
-      gatewayVersion: "2026.9.4",
-      source: "clawhub",
-      targetResolution: {
-        status: "registry-current",
-        packageName: "@openclaw/whatsapp",
-        requestedTarget: "2026.9.4",
-        version: "2026.9.3",
-      },
-    });
-
-    expectMockLineContains(runtime.log, "- whatsapp: 2026.9.3 (clawhub) → expected 2026.9.4");
-    expectMockLineContains(
-      runtime.log,
-      "registry version 2026.9.3 is already installed; no release reaches 2026.9.4 yet",
-    );
-    const logged = output();
-    expect(logged).not.toContain("openclaw plugins update");
-    expect(output(runtime.error)).not.toContain("Plugin repair target resolution failed");
-  });
-
-  it("fails loudly without an install command when npm cannot resolve a pinned target", () => {
-    printDrift({
-      pluginId: "brave",
-      installedVersion: "2026.7.1-beta.2",
-      gatewayVersion: "2026.7.1-2",
-      source: "npm",
-      packageName: "@openclaw/brave-plugin",
-      spec: "@openclaw/brave-plugin@2026.7.1-beta.2",
-      targetResolution: {
-        status: "unresolved",
-        packageName: "@openclaw/brave-plugin",
-        requestedTarget: "2026.7.1",
-        error: "npm registry did not resolve @openclaw/brave-plugin@2026.7.1: HTTP 404",
-      },
-    });
-
-    expectMockLineContains(runtime.error, "Plugin repair target resolution failed");
-    expectMockLineContains(runtime.error, "HTTP 404");
-    const combinedOutput = [output(), output(runtime.error)].join("\n");
-    expect(combinedOutput).not.toContain("openclaw plugins update");
-    expect(combinedOutput).not.toContain("openclaw gateway restart");
-  });
-  it("reports an admitted probe timeout as event-loop saturation instead of failed connectivity", () => {
-    printDaemonStatus(
-      {
-        service: runningService,
-        rpc: {
-          ok: false,
-          kind: "read",
-          gatewayReached: true,
-          timedOut: true,
-          error: "gateway timeout after 5000ms",
-          eventLoop: {
-            degraded: true,
-            reasons: ["event_loop_delay", "event_loop_utilization"],
-            intervalMs: 5_000,
-            delayP99Ms: 5_079,
-            delayMaxMs: 5_100,
-            utilization: 1,
-            cpuCoreRatio: 0.94,
-          },
-        },
-        health: { healthy: true, staleGatewayPids: [] },
-      },
-      { json: false, deep: true },
-    );
-
-    const errors = output(runtime.error);
-    const logs = output();
-    expect(errors).toContain("Read check: timed out under event-loop load");
-    expect(errors).toContain("Gateway event loop: degraded max=5100ms p99=5079ms util=1 cpu=0.94");
-    expect(logs).toContain("Gateway accepted the connection");
-    expect(errors).not.toContain("Connectivity check: failed");
-    expect(logs).not.toContain("not a warm-up delay");
-  });
-  it("does not warn about the service install when it matches the CLI version", () => {
-    printDaemonStatus({
-      cli: { version: "2026.6.35", entrypoint: "/home/ops/.local/bin/openclaw" },
-      service: {
-        layout: {
-          execStart:
-            "/usr/bin/node /home/ops/.local/lib/node_modules/openclaw/dist/index.js gateway",
-          packageRoot: "/home/ops/.local/lib/node_modules/openclaw",
-          packageVersion: "2026.6.35",
-        },
-      },
-    });
-    expectMockLineContains(runtime.log, "Gateway service version: 2026.6.35");
-    expect(output(runtime.error)).not.toContain("installed Gateway service is version");
-  });
+  expectText(runtime.log, "Gateway service version: 2026.6.35");
+  expect(output(runtime.error)).not.toContain("installed Gateway service is version");
 });
