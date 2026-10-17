@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import type { AdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { generateBlobsterForAgent } from "./blobster-generation.js";
 
@@ -6,14 +7,19 @@ const prepare = vi.hoisted(() => vi.fn());
 const provider = vi.hoisted(() => vi.fn());
 const route = vi.hoisted(() => vi.fn());
 const complete = vi.hoisted(() => vi.fn());
+// mock-isolation: keep model configuration independent from installed providers.
 vi.mock("./utility-completion.js", () => ({ prepareUtilityCompletionForAgent: prepare }));
+// mock-isolation: exercise route selection without loading provider runtimes.
 vi.mock("./isolated-completion-route.js", () => ({
   resolveIsolatedCompletionProvider: provider,
   resolveIsolatedCompletionRoute: route,
 }));
+// mock-isolation: avoid invoking a real model in generation tests.
 vi.mock("./isolated-completion.js", () => ({ runIsolatedCompletion: complete }));
 
-const cfg = { agents: { list: [{ id: "garden" }] } };
+const cfg: OpenClawConfig = {
+  agents: { defaults: { model: { primary: "ollama/qwen3:4b-instruct" } } },
+};
 const design = {
   version: 1,
   id: "garden-keeper",
@@ -92,7 +98,9 @@ it("retries once when the model returns an invalid design", async () => {
   const result = await generateBlobsterForAgent(input);
   expect(result.name).toBe("Garden Keeper");
   expect(complete).toHaveBeenCalledTimes(2);
-  expect(complete.mock.calls[1][0].systemPrompt).toContain("previous design could not be rendered");
+  expect(complete.mock.calls[1]?.[0]?.systemPrompt).toContain(
+    "previous design could not be rendered",
+  );
 });
 
 it("does not retry provider errors", async () => {

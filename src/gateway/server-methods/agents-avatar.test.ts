@@ -6,7 +6,9 @@ import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./type
 
 const generation = vi.hoisted(() => vi.fn());
 const capture = vi.hoisted(() => vi.fn());
+// mock-isolation: test Gateway admission and responses without model inference.
 vi.mock("../../agents/blobster-generation.js", () => ({ generateBlobsterForAgent: generation }));
+// mock-isolation: control admitted authority and its cleanup explicitly.
 vi.mock("../operator-run-authority.js", () => ({ captureGatewayOperatorRunAuthority: capture }));
 
 const preview = {
