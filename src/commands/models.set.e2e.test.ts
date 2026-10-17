@@ -65,14 +65,18 @@ function getWrittenConfig(): OpenClawConfig {
   return mocks.writtenConfig as OpenClawConfig;
 }
 
+type Defaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
+
+function mockDefaults(defaults: Defaults) {
+  mockConfigSnapshot({ agents: { defaults } });
+}
+
+function expectDefaults(defaults: Defaults) {
+  expect(getWrittenConfig().agents).toEqual({ defaults });
+}
+
 function expectWrittenPrimaryModel(model: string) {
-  const written = getWrittenConfig();
-  expect(written.agents).toEqual({
-    defaults: {
-      model: { primary: model },
-      models: { [model]: {} },
-    },
-  });
+  expectDefaults({ model: { primary: model }, models: { [model]: {} } });
 }
 
 const fallbackGroups = [
@@ -98,30 +102,26 @@ describe("models set + fallbacks", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("normalizes z.ai provider in models set", async () => {
-    await modelsSetCommand("z.ai/glm-4.7", runtime);
-
-    expectWrittenPrimaryModel("zai/glm-4.7");
-  });
-
-  it("does not warn for a cataloged model under a known provider", async () => {
-    await modelsSetCommand("openai/gpt-5.6-sol", runtime);
-
-    expectWrittenPrimaryModel("openai/gpt-5.6-sol");
-    expect(runtime.error).not.toHaveBeenCalled();
+  it.each([
+    ["z.ai/glm-4.7", "zai/glm-4.7", false],
+    ["openai/gpt-5.6-sol", "openai/gpt-5.6-sol", true],
+  ] as const)("sets %s as %s", async (input, expected, checkWarnings) => {
+    await modelsSetCommand(input, runtime);
+    expectWrittenPrimaryModel(expected);
+    if (checkWarnings) {
+      expect(runtime.error).not.toHaveBeenCalled();
+    }
   });
 
   it("rejects an unknown text model provider without writing config", async () => {
     await expect(
       modelsSetCommand("no-such-provider/no-such-model", runtime, "model"),
     ).rejects.toThrow('Unknown model provider "no-such-provider"');
-
     expect(mocks.writtenConfig).toBeUndefined();
   });
 
   it("warns but saves an unknown image model for a known provider", async () => {
     await modelsSetCommand("openai/not-in-the-local-catalog", runtime, "imageModel");
-
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining(
         'Model "openai/not-in-the-local-catalog" is not in the local model catalog',
@@ -134,9 +134,7 @@ describe("models set + fallbacks", () => {
 
   it("recognizes a provider declared by a disabled installed plugin", async () => {
     mockConfigSnapshot({ plugins: { entries: { ollama: { enabled: false } } } });
-
     await modelsSetCommand("ollama/site-local-model", runtime);
-
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining('Provider "ollama" has no local model catalog'),
     );
@@ -146,28 +144,16 @@ describe("models set + fallbacks", () => {
 
   it("normalizes z-ai provider in models fallbacks add", async () => {
     const { name, key, label } = fallbackGroups[0];
-    mockConfigSnapshot({ agents: { defaults: { [key]: { fallbacks: [] } } } });
-
+    mockDefaults({ [key]: { fallbacks: [] } });
     await runFallbackCommand(name, "add", "z-ai/glm-4.7");
-
-    const written = getWrittenConfig();
-    expect(written.agents).toEqual({
-      defaults: {
-        [key]: { fallbacks: ["zai/glm-4.7"] },
-        models: { "zai/glm-4.7": {} },
-      },
-    });
+    expectDefaults({ [key]: { fallbacks: ["zai/glm-4.7"] }, models: { "zai/glm-4.7": {} } });
     expect(defaultRuntime.log).toHaveBeenLastCalledWith(`${label}: zai/glm-4.7`);
   });
 
   it("does not duplicate a provider alias in models image-fallbacks add", async () => {
     const { name, key } = fallbackGroups[1];
-    mockConfigSnapshot({
-      agents: { defaults: { [key]: { fallbacks: ["moonshotai/kimi-k3"] } } },
-    });
-
+    mockDefaults({ [key]: { fallbacks: ["moonshotai/kimi-k3"] } });
     await runFallbackCommand(name, "add", "moonshot/kimi-k3");
-
     expect(getWrittenConfig().agents?.defaults?.[key]).toEqual({
       fallbacks: ["moonshotai/kimi-k3"],
     });
@@ -179,29 +165,20 @@ describe("models set + fallbacks", () => {
       const siblingKey = key === "model" ? "imageModel" : "model";
       const primary = "openai/gpt-5.6-luna";
       const sibling = { primary, fallbacks: [primary] };
-      mockConfigSnapshot({
-        agents: {
-          defaults: {
-            [key]: { primary, fallbacks: ["backup", primary] },
-            [siblingKey]: sibling,
-            models: { "zai/glm-4.7": { alias: "backup" } },
-          },
-        },
+      mockDefaults({
+        [key]: { primary, fallbacks: ["backup", primary] },
+        [siblingKey]: sibling,
+        models: { "zai/glm-4.7": { alias: "backup" } },
       });
-
       await runFallbackCommand(name, "remove", "z-ai/glm-4.7");
-
       expect(getWrittenConfig().agents?.defaults?.[key]).toEqual({ primary, fallbacks: [primary] });
       expect(getWrittenConfig().agents?.defaults?.[siblingKey]).toEqual(sibling);
       expect(defaultRuntime.log).toHaveBeenLastCalledWith(`${label}: ${primary}`);
       mocks.currentConfig = getWrittenConfig();
-
       await runFallbackCommand(name, "clear");
-
       expect(getWrittenConfig().agents?.defaults?.[key]).toEqual({ primary, fallbacks: [] });
       expect(getWrittenConfig().agents?.defaults?.[siblingKey]).toEqual(sibling);
       expect(defaultRuntime.log).toHaveBeenLastCalledWith(`${singular} list cleared.`);
-
       mockConfigSnapshot(getWrittenConfig());
       const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
       const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {
@@ -218,26 +195,10 @@ describe("models set + fallbacks", () => {
   );
 
   it("migrates legacy duplicated OpenRouter keys on write", async () => {
-    mockConfigSnapshot({
-      agents: {
-        defaults: {
-          models: {
-            "openrouter/openrouter/hunter-alpha": { params: { thinking: "high" } },
-          },
-        },
-      },
-    });
-
-    await modelsSetCommand("openrouter/hunter-alpha", runtime);
-
-    const written = getWrittenConfig();
-    expect(written.agents).toEqual({
-      defaults: {
-        model: { primary: "openrouter/hunter-alpha" },
-        models: {
-          "openrouter/hunter-alpha": { params: { thinking: "high" } },
-        },
-      },
-    });
+    const model = "openrouter/hunter-alpha";
+    const params = { thinking: "high" };
+    mockDefaults({ models: { "openrouter/openrouter/hunter-alpha": { params } } });
+    await modelsSetCommand(model, runtime);
+    expectDefaults({ model: { primary: model }, models: { [model]: { params } } });
   });
 });

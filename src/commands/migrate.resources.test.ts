@@ -27,54 +27,110 @@ afterEach(() => {
   resetPluginLoaderTestStateForTest();
 });
 
+type Fixture = ReturnType<typeof createMigrationResourceFixture>;
+type FixtureOptions = NonNullable<Parameters<typeof createMigrationResourceFixture>[0]> & {
+  interactive?: boolean;
+  configPath?: boolean;
+};
+
+async function withFixture(options: FixtureOptions, run: (fixture: Fixture) => Promise<void>) {
+  const fixture = createMigrationResourceFixture(options);
+  const stdin = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+  if (options.interactive) {
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+  }
+  const state = path.join(fixture.root, "state");
+  try {
+    await withEnvAsync(
+      {
+        OPENCLAW_STATE_DIR: state,
+        ...(options.configPath ? { OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json") } : {}),
+      },
+      () => run(fixture),
+    );
+  } finally {
+    if (stdin) {
+      Object.defineProperty(process.stdin, "isTTY", stdin);
+    } else {
+      Reflect.deleteProperty(process.stdin, "isTTY");
+    }
+    fixture.cleanup();
+  }
+}
+
+function applyOptions(fixture: Fixture) {
+  return {
+    provider: fixture.id,
+    configOverride: fixture.config,
+    yes: true,
+    json: true,
+    noBackup: true,
+    force: true,
+  };
+}
+
+function postInstall(fixture: Fixture, runtime = createNonExitingRuntime()) {
+  return offerPostInstallMigrations({
+    config: fixture.config,
+    runtime,
+    installedPluginIds: [fixture.id],
+    prompter: createWizardPrompter({ confirm: async () => true }),
+  });
+}
+
+function settled<T>(operation: Promise<T>) {
+  return operation.then(
+    (result) => ({ result, error: undefined }),
+    (error: unknown) => ({ result: undefined, error }),
+  );
+}
+
+function expectConnection(fixture: Fixture, disposals: number, isOpen: boolean) {
+  expect(fixture.state.connections).toHaveLength(1);
+  expect(fixture.state.connections[0]?.disposals).toBe(disposals);
+  expect(fixture.state.connections[0]?.database.isOpen).toBe(isOpen);
+}
+
 describe("migration command resources", () => {
   it.each(["command", "list", "memory"] as const)(
     "refuses %s imports before provider loading when discovery finds a live Gateway",
     async (surface) => {
-      const fixture = createMigrationResourceFixture();
-      fixture.state.resumeApply.resolve();
-      const loadConfig = vi.spyOn(config, "loadConfig");
-      const discover = vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
-        pid: process.pid,
-        port: 18789,
-        ownerId: "synthetic-foreign-gateway",
-        createdAt: new Date().toISOString(),
-      });
-      try {
-        await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(fixture.root, "state") }, async () => {
-          const consume = vi.fn();
-          const operation =
-            surface === "memory"
-              ? withMemoryMigrationProviders(fixture.config, consume)
-              : surface === "list"
-                ? migrateListCommand(createNonExitingRuntime(), { json: true })
-                : migrateDefaultCommand(createNonExitingRuntime(), {
-                    provider: fixture.id,
-                    yes: true,
-                    json: true,
-                    noBackup: true,
-                    force: true,
-                  });
-          await expect(operation).rejects.toThrow("stop the Gateway");
-          expect(discover).toHaveBeenCalled();
-          expect(loadConfig).not.toHaveBeenCalled();
-          expect(fixture.state.connections).toEqual([]);
-          expect(consume).not.toHaveBeenCalled();
-          expect(fixture.state.applyCalls).toBe(0);
+      await withFixture({}, async (fixture) => {
+        fixture.state.resumeApply.resolve();
+        const loadConfig = vi.spyOn(config, "loadConfig");
+        const discover = vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
+          pid: process.pid,
+          port: 18789,
+          ownerId: "synthetic-foreign-gateway",
+          createdAt: new Date().toISOString(),
         });
-      } finally {
-        discover.mockRestore();
-        fixture.cleanup();
-      }
+        const consume = vi.fn();
+        const operation =
+          surface === "memory"
+            ? withMemoryMigrationProviders(fixture.config, consume)
+            : surface === "list"
+              ? migrateListCommand(createNonExitingRuntime(), { json: true })
+              : migrateDefaultCommand(createNonExitingRuntime(), {
+                  provider: fixture.id,
+                  yes: true,
+                  json: true,
+                  noBackup: true,
+                  force: true,
+                });
+        await expect(operation).rejects.toThrow("stop the Gateway");
+        expect(discover).toHaveBeenCalled();
+        expect(loadConfig).not.toHaveBeenCalled();
+        expect(fixture.state).toMatchObject({ connections: [], applyCalls: 0 });
+        expect(consume).not.toHaveBeenCalled();
+      });
     },
   );
 
   it.each([false, true])(
     "keeps native plan resources through apply and releases them after completion (failure: %s)",
     async (failApply) => {
-      const fixture = createMigrationResourceFixture({ failApply });
-      const logs: string[] = [];
-      await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(fixture.root, "state") }, async () => {
+      await withFixture({ failApply }, async (fixture) => {
+        const logs: string[] = [];
         const command = migrateDefaultCommand(
           {
             exit: createNonExitingRuntime().exit,
@@ -84,21 +140,10 @@ describe("migration command resources", () => {
               logs.push(String(value));
             },
           },
-          {
-            provider: fixture.id,
-            configOverride: fixture.config,
-            yes: true,
-            json: true,
-            noBackup: true,
-            force: true,
-          },
+          applyOptions(fixture),
         );
-        // Observe early command failure as well as the provider rendezvous, so a
-        // loading regression cannot strand the test behind an unfulfilled gate.
-        const completion = command.then(
-          (result) => ({ result, error: undefined }),
-          (error: unknown) => ({ result: undefined, error }),
-        );
+        // Early failure must also release a test waiting for the provider rendezvous.
+        const completion = settled(command);
         try {
           await Promise.race([fixture.state.applying.promise, completion]);
           const ownerPath = gatewayLock.resolveGatewayLockPaths(process.env).ownerLockPath;
@@ -108,263 +153,167 @@ describe("migration command resources", () => {
           });
           expect(fixture.state.applied).toBeDefined();
           expect(fixture.state.applied).toBe(fixture.state.planned);
-          expect(fixture.state.connections).toHaveLength(1);
+          expectConnection(fixture, 0, true);
           expect(
             fixture.state.connections[0]?.database.prepare("SELECT 42 AS value").get(),
           ).toEqual({ value: 42 });
-          expect(fixture.state.connections[0]?.disposals).toBe(0);
           fixture.state.resumeApply.resolve();
           const outcome = await completion;
           if (failApply) {
             expect(outcome.error).toEqual(new Error("Synthetic migration apply failed"));
             expect(logs).toEqual([]);
           } else {
-            expect(outcome.error).toBeUndefined();
-            expect(outcome.result?.summary.migrated).toBe(1);
-            // Metadata stays opaque; managed provider callbacks own the retirement fence.
+            expect(outcome).toMatchObject({
+              error: undefined,
+              result: { summary: { migrated: 1 } },
+            });
             expect(outcome.result?.metadata).toBe(fixture.state.planned?.metadata);
             expect(outcome.result?.metadata).toEqual({ read: expect.any(Function) });
             expect(logs).toHaveLength(1);
             expect(JSON.parse(logs[0] ?? "{}").summary.migrated).toBe(1);
           }
-          expect(fixture.state.connections[0]?.disposals).toBe(1);
-          expect(fixture.state.connections[0]?.database.isOpen).toBe(false);
+          expectConnection(fixture, 1, false);
           expect(gatewayLock.readLockPayloadSync(ownerPath)).toBeNull();
         } finally {
           fixture.state.resumeApply.resolve();
           await completion;
-          fixture.cleanup();
         }
       });
     },
   );
 
   it("borrows an active raw provider without disposing its connection", async () => {
-    const fixture = createMigrationResourceFixture();
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(fixture.root, "state") }, async () => {
-        const active = await loadAndActivateRootPluginRegistry({ config: fixture.config });
-        expect(active.migrationProviders.map(({ provider }) => provider.id)).toContain(fixture.id);
-        fixture.state.resumeApply.resolve();
-        const result = await migrateDefaultCommand(createNonExitingRuntime(), {
-          provider: fixture.id,
-          configOverride: fixture.config,
-          yes: true,
-          json: true,
-          noBackup: true,
-          force: true,
-        });
-        expect(result.summary.migrated).toBe(1);
-        expect(fixture.state.connections).toHaveLength(1);
-        expect(fixture.state.connections[0]?.disposals).toBe(0);
-        expect(fixture.state.connections[0]?.database.prepare("SELECT 42 AS value").get()).toEqual({
-          value: 42,
-        });
+    await withFixture({}, async (fixture) => {
+      const active = await loadAndActivateRootPluginRegistry({ config: fixture.config });
+      expect(active.migrationProviders.map(({ provider }) => provider.id)).toContain(fixture.id);
+      fixture.state.resumeApply.resolve();
+      const result = await migrateDefaultCommand(createNonExitingRuntime(), applyOptions(fixture));
+      expect(result.summary.migrated).toBe(1);
+      expectConnection(fixture, 0, true);
+      expect(fixture.state.connections[0]?.database.prepare("SELECT 42 AS value").get()).toEqual({
+        value: 42,
       });
-    } finally {
-      fixture.cleanup();
-    }
+    });
   });
 
   it("keeps post-install plan details alive through config projection and preparation disposal", async () => {
-    const fixture = createMigrationResourceFixture({ configPatch: true });
-    const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
-    fixture.state.resumeApply.resolve();
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(fixture.root, "state") }, async () => {
-        const operation = offerPostInstallMigrations({
-          config: fixture.config,
-          runtime: createNonExitingRuntime(),
-          installedPluginIds: [fixture.id],
-          prompter: createWizardPrompter({ confirm: async () => true }),
+    await withFixture({ configPatch: true, interactive: true }, async (fixture) => {
+      fixture.state.resumeApply.resolve();
+      const completion = settled(postInstall(fixture));
+      try {
+        await Promise.race([fixture.state.preparationDisposing.promise, completion]);
+        expect(fixture.state.applied).toBe(fixture.state.planned);
+        const ownerPath = gatewayLock.resolveGatewayLockPaths(process.env).ownerLockPath;
+        expect(gatewayLock.readLockPayloadSync(ownerPath)).toMatchObject({
+          pid: process.pid,
+          role: "agent-embedded",
         });
-        const completion = operation.then(
-          (result) => ({ result, error: undefined }),
-          (error: unknown) => ({ result: undefined, error }),
-        );
-        try {
-          await Promise.race([fixture.state.preparationDisposing.promise, completion]);
-          expect(fixture.state.applied).toBe(fixture.state.planned);
-          expect(
-            gatewayLock.readLockPayloadSync(
-              gatewayLock.resolveGatewayLockPaths(process.env).ownerLockPath,
-            ),
-          ).toMatchObject({
-            pid: process.pid,
-            role: "agent-embedded",
-          });
-          expect(fixture.state.patchReads).toBeGreaterThan(0);
-          expect(fixture.state.connections).toHaveLength(1);
-          expect(fixture.state.connections[0]?.disposals).toBe(0);
-          expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
-          fixture.state.finishPreparation.resolve();
-          const outcome = await completion;
-          expect(outcome.error).toBeUndefined();
-          expect(outcome.result?.config.agents?.defaults?.heartbeat?.every).toBe("42m");
-          expect(fixture.state.preparationDisposals).toBe(1);
-          expect(fixture.state.connections[0]?.disposals).toBe(1);
-          expect(fixture.state.connections[0]?.database.isOpen).toBe(false);
-        } finally {
-          fixture.state.finishPreparation.resolve();
-          await completion;
-        }
-      });
-    } finally {
-      if (stdinDescriptor) {
-        Object.defineProperty(process.stdin, "isTTY", stdinDescriptor);
-      } else {
-        Reflect.deleteProperty(process.stdin, "isTTY");
+        expect(fixture.state.patchReads).toBeGreaterThan(0);
+        expectConnection(fixture, 0, true);
+        fixture.state.finishPreparation.resolve();
+        const outcome = await completion;
+        expect(outcome).toMatchObject({
+          error: undefined,
+          result: { config: { agents: { defaults: { heartbeat: { every: "42m" } } } } },
+        });
+        expect(fixture.state.preparationDisposals).toBe(1);
+        expectConnection(fixture, 1, false);
+      } finally {
+        fixture.state.finishPreparation.resolve();
+        await completion;
       }
-      fixture.cleanup();
-    }
+    });
   });
 
   it("logs the primary migration failure before a prepared instance disposal failure aborts onboarding", async () => {
-    const fixture = createMigrationResourceFixture({ failApply: true });
-    const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
-    fixture.state.resumeApply.resolve();
-    fixture.state.finishPreparation.resolve();
-    fixture.state.failPreparationDisposal = true;
-    const messages: string[] = [];
-    try {
-      await withEnvAsync(
-        {
-          OPENCLAW_STATE_DIR: path.join(fixture.root, "state"),
-          OPENCLAW_CONFIG_PATH: path.join(fixture.root, "state", "openclaw.json"),
-        },
-        async () => {
-          await expect(
-            offerPostInstallMigrations({
-              config: fixture.config,
-              runtime: {
-                ...createNonExitingRuntime(),
-                log(message) {
-                  expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
-                  expect(fixture.state.preparationDisposals).toBe(0);
-                  messages.push(String(message));
-                },
-              },
-              installedPluginIds: [fixture.id],
-              prompter: createWizardPrompter({ confirm: async () => true }),
-            }),
-          ).rejects.toBe(fixture.state.preparationError);
-          expect(messages).toHaveLength(1);
-          expect(messages[0]).toContain("Synthetic migration apply failed");
-          expect(fixture.state.preparationDisposals).toBe(1);
-          expect(fixture.state.connections[0]?.disposals).toBe(1);
-          expect(fixture.state.connections[0]?.database.isOpen).toBe(false);
-        },
-      );
-    } finally {
-      if (stdinDescriptor) {
-        Object.defineProperty(process.stdin, "isTTY", stdinDescriptor);
-      } else {
-        Reflect.deleteProperty(process.stdin, "isTTY");
-      }
-      fixture.cleanup();
-    }
+    await withFixture({ failApply: true, interactive: true, configPath: true }, async (fixture) => {
+      fixture.state.resumeApply.resolve();
+      fixture.state.finishPreparation.resolve();
+      fixture.state.failPreparationDisposal = true;
+      const messages: string[] = [];
+      await expect(
+        postInstall(fixture, {
+          ...createNonExitingRuntime(),
+          log(message) {
+            expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
+            expect(fixture.state.preparationDisposals).toBe(0);
+            messages.push(String(message));
+          },
+        }),
+      ).rejects.toBe(fixture.state.preparationError);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toContain("Synthetic migration apply failed");
+      expect(fixture.state.preparationDisposals).toBe(1);
+      expectConnection(fixture, 1, false);
+    });
   });
 
   it("carries runtime metadata for a negative detection after its native registration closes", async () => {
-    const fixture = createMigrationResourceFixture({ detectFound: false });
-    try {
-      await withEnvAsync(
+    await withFixture({ detectFound: false, configPath: true }, async (fixture) => {
+      const discovery = await detectSetupMigrationSources({
+        config: fixture.config,
+        runtime: createNonExitingRuntime(),
+      });
+      expect(discovery.detections).toEqual([]);
+      expect(fixture.state.connections).toHaveLength(1);
+      expect(fixture.state.connections[0]?.database.isOpen).toBe(false);
+      const params = { baseConfig: fixture.config, ...discovery };
+      const options = await listSetupMigrationOptions(params);
+      expect(options).toEqual([
         {
-          OPENCLAW_STATE_DIR: path.join(fixture.root, "state"),
-          OPENCLAW_CONFIG_PATH: path.join(fixture.root, "state", "openclaw.json"),
+          providerId: fixture.id,
+          label: "Import from Native migration fixture",
+          hint: "Native source 42",
         },
-        async () => {
-          const discovery = await detectSetupMigrationSources({
-            config: fixture.config,
-            runtime: createNonExitingRuntime(),
-          });
-          expect(discovery.detections).toEqual([]);
-          expect(fixture.state.connections.length).toBe(1);
-          expect(fixture.state.connections[0]?.database.isOpen).toBe(false);
-          const options = await listSetupMigrationOptions({
-            baseConfig: fixture.config,
-            ...discovery,
-          });
-          expect(options).toEqual([
-            {
-              providerId: fixture.id,
-              label: "Import from Native migration fixture",
-              hint: "Native source 42",
-            },
-          ]);
-          expect(
-            await listSetupMigrationOptions({ baseConfig: fixture.config, ...discovery }),
-          ).toEqual(options);
-          expect(fixture.state.connections.length).toBe(1);
-          expect(fixture.state.connections[0]?.disposals).toBe(1);
-        },
-      );
-    } finally {
-      fixture.cleanup();
-    }
+      ]);
+      expect(await listSetupMigrationOptions(params)).toEqual(options);
+      expectConnection(fixture, 1, false);
+    });
   });
 
   it.each([1, 2])(
     "preserves completed provider config patches when registration %s cleanup fails",
     async (failedConnection) => {
-      const fixture = createMigrationResourceFixture({ configPatch: true, secondProvider: true });
-      const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-      Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
-      fixture.state.resumeApply.resolve();
-      fixture.state.finishPreparation.resolve();
-      fixture.state.failCleanupOnConnection = failedConnection;
-      const messages: string[] = [];
-      try {
-        await withEnvAsync(
-          {
-            OPENCLAW_STATE_DIR: path.join(fixture.root, "state"),
-            OPENCLAW_CONFIG_PATH: path.join(fixture.root, "state", "openclaw.json"),
-          },
-          async () => {
-            const result = await offerPostInstallMigrations({
-              config: fixture.config,
-              runtime: {
-                ...createNonExitingRuntime(),
-                log: (message) => {
-                  messages.push(String(message));
-                },
-              },
-              installedPluginIds: [fixture.id],
-              prompter: createWizardPrompter({ confirm: async () => true }),
-            });
-            expect(fixture.state.applyCalls).toBe(2);
-            expect(result.config.agents?.defaults?.heartbeat?.every).toBe("43m");
-            expect(fixture.state.preparationOwners).toHaveLength(2);
-            for (const owner of fixture.state.preparationOwners) {
-              expect(owner.prepared === owner.applied, owner.providerId).toBe(true);
-            }
-            const cleanupWarnings = messages.filter((message) =>
-              message.includes("plugin cleanup failed"),
-            );
-            expect(cleanupWarnings).toHaveLength(1);
-            expect(cleanupWarnings[0]).toContain(
-              "migration result retained, but plugin cleanup failed",
-            );
-            expect(messages.some((message) => message.includes("migration failed:"))).toBe(false);
-            expect(messages.some((message) => message.includes("Re-run with"))).toBe(false);
-            expect(fixture.state.preparationDisposals).toBe(2);
-            expect(
-              fixture.state.connections.every(
-                ({ database, disposals }) => !database.isOpen && disposals === 1,
-              ),
-            ).toBe(true);
-          },
-        );
-      } finally {
-        if (stdinDescriptor) {
-          Object.defineProperty(process.stdin, "isTTY", stdinDescriptor);
-        } else {
-          Reflect.deleteProperty(process.stdin, "isTTY");
-        }
-        fixture.cleanup();
-      }
+      await withFixture(
+        {
+          configPatch: true,
+          secondProvider: true,
+          interactive: true,
+          configPath: true,
+        },
+        async (fixture) => {
+          fixture.state.resumeApply.resolve();
+          fixture.state.finishPreparation.resolve();
+          fixture.state.failCleanupOnConnection = failedConnection;
+          const messages: string[] = [];
+          const result = await postInstall(fixture, {
+            ...createNonExitingRuntime(),
+            log: (message) => {
+              messages.push(String(message));
+            },
+          });
+          expect(fixture.state).toMatchObject({ applyCalls: 2, preparationDisposals: 2 });
+          expect(result.config.agents?.defaults?.heartbeat?.every).toBe("43m");
+          expect(fixture.state.preparationOwners).toHaveLength(2);
+          for (const owner of fixture.state.preparationOwners) {
+            expect(owner.prepared === owner.applied, owner.providerId).toBe(true);
+          }
+          const cleanupWarnings = messages.filter((message) =>
+            message.includes("plugin cleanup failed"),
+          );
+          expect(cleanupWarnings).toHaveLength(1);
+          expect(cleanupWarnings[0]).toContain(
+            "migration result retained, but plugin cleanup failed",
+          );
+          expect(messages.some((message) => message.includes("migration failed:"))).toBe(false);
+          expect(messages.some((message) => message.includes("Re-run with"))).toBe(false);
+          expect(
+            fixture.state.connections.every(
+              ({ database, disposals }) => !database.isOpen && disposals === 1,
+            ),
+          ).toBe(true);
+        },
+      );
     },
   );
 });

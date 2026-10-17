@@ -29,9 +29,9 @@ function makeProvider(params: { id: string; label?: string; aliases?: string[] }
   return { ...params, label: params.label ?? params.id, auth: [] };
 }
 
-function credentialPlan(items: MigrationItem[]): MigrationPlan {
+function credentialPlan(items: MigrationItem[], providerId = "fixture"): MigrationPlan {
   return {
-    providerId: "fixture",
+    providerId,
     source: "/fixture",
     items,
     summary: summarizeMigrationItems(items),
@@ -64,20 +64,39 @@ describe("selected credential import", () => {
     details: { provider: "fixture", credentialKind: "api_key", profileId: "fixture:imported" },
   };
 
-  it("imports only the declared credential and preserves model configuration", async () => {
-    const defaults = { model: { primary: "other/model" }, models: { "other/model": {} } };
-    const config: OpenClawConfig = { agents: { defaults } };
-    const items: MigrationItem[] = [
-      keyItem,
-      { id: "auth:oauth", kind: "auth", action: "create", status: "planned" },
-    ];
-    const plan = credentialPlan(items);
-    const persisted: string[] = [];
-    const resolve = mockCredentialProvider({
-      id: "fixture",
-      label: "Fixture",
-      plan: () => plan,
-      apply(ctx, selected) {
+  it.each([undefined, "cancelled", "changed", "ambiguous", "wrong-provider"])(
+    "imports only the declared credential or rejects %s without another sign-in",
+    async (failure) => {
+      const controller = new AbortController();
+      const config: OpenClawConfig = failure
+        ? {}
+        : {
+            agents: {
+              defaults: { model: { primary: "other/model" }, models: { "other/model": {} } },
+            },
+          };
+      const items =
+        failure === "ambiguous"
+          ? [keyItem, keyItem]
+          : failure === "wrong-provider"
+            ? [{ ...keyItem, details: { ...keyItem.details, provider: "other" } }]
+            : failure
+              ? [keyItem]
+              : [
+                  keyItem,
+                  {
+                    id: "auth:oauth",
+                    kind: "auth" as const,
+                    action: "create" as const,
+                    status: "planned" as const,
+                  },
+                ];
+      const plan = credentialPlan(items);
+      const persisted: string[] = [];
+      const apply = vi.fn<MigrationProviderPlugin["apply"]>((ctx, selected) => {
+        if (failure) {
+          return { ...plan, items: [{ ...keyItem, status: "skipped" }] };
+        }
         if (!selected) {
           throw new Error("Expected selected import plan");
         }
@@ -89,78 +108,50 @@ describe("selected credential import", () => {
           persisted.push(item.id);
           return { ...item, status: "migrated" as const };
         });
-        return {
-          ...selected,
-          items: resultItems,
-          summary: summarizeMigrationItems(resultItems),
-        };
-      },
-    });
-    try {
-      const result = await tryImportProviderCredential({
-        method,
-        providerId: "fixture",
-        config,
-        agentId: "main",
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        return { ...selected, items: resultItems, summary: summarizeMigrationItems(resultItems) };
       });
-      expect(result).toMatchObject({
-        profileId: "fixture:imported",
-        provider: "fixture",
-        mode: "api_key",
-      });
-      expect(persisted).toEqual(["auth:key"]);
-      expect(config.agents?.defaults?.model).toEqual({ primary: "other/model" });
-      expect(config.agents?.defaults?.models).toEqual({ "other/model": {} });
-    } finally {
-      resolve.mockRestore();
-    }
-  });
-
-  it.each(["cancelled", "changed", "ambiguous", "wrong-provider"])(
-    "refuses a %s import without starting another sign-in",
-    async (failure) => {
-      const controller = new AbortController();
-      const items =
-        failure === "ambiguous"
-          ? [keyItem, keyItem]
-          : failure === "wrong-provider"
-            ? [{ ...keyItem, details: { ...keyItem.details, provider: "other" } }]
-            : [keyItem];
-      const plan = credentialPlan(items);
-      const apply = vi.fn(() => ({ ...plan, items: [{ ...keyItem, status: "skipped" as const }] }));
       const resolve = mockCredentialProvider({
         id: "fixture",
         label: "Fixture",
+        apply,
         plan: () => {
           if (failure === "cancelled") {
             controller.abort(new Error("Sign-in cancelled"));
           }
           return plan;
         },
-        apply,
       });
       try {
-        await expect(
-          tryImportProviderCredential({
-            method,
-            providerId: "fixture",
-            config: {},
-            agentId: "main",
-            signal: controller.signal,
-            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-          }),
-        ).rejects.toThrow(
-          failure === "cancelled"
-            ? "Sign-in cancelled"
-            : failure === "changed"
-              ? "changed during import"
-              : failure === "ambiguous"
-                ? "ambiguous item identity"
-                : "another provider",
-        );
-        if (failure !== "changed") {
-          expect(apply).not.toHaveBeenCalled();
+        const operation = tryImportProviderCredential({
+          method,
+          providerId: "fixture",
+          config,
+          agentId: "main",
+          ...(failure ? { signal: controller.signal } : {}),
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        });
+        if (failure) {
+          const errors: Record<string, string> = {
+            cancelled: "Sign-in cancelled",
+            changed: "changed during import",
+            ambiguous: "ambiguous item identity",
+            "wrong-provider": "another provider",
+          };
+          await expect(operation).rejects.toThrow(errors[failure]);
+          if (failure !== "changed") {
+            expect(apply).not.toHaveBeenCalled();
+          }
+        } else {
+          expect(await operation).toMatchObject({
+            profileId: "fixture:imported",
+            provider: "fixture",
+            mode: "api_key",
+          });
+          expect(persisted).toEqual(["auth:key"]);
+          expect(config.agents?.defaults).toEqual({
+            model: { primary: "other/model" },
+            models: { "other/model": {} },
+          });
         }
       } finally {
         resolve.mockRestore();
@@ -182,7 +173,6 @@ describe("resolveRequestedLoginProviderOrThrow", () => {
       { requested: "gemini-cli", expectedId: "google-gemini-cli" },
       { requested: "openai", expectedId: "openai" },
     ] as const;
-
     for (const scenario of scenarios) {
       const result = resolveRequestedLoginProviderOrThrow(providers, scenario.requested);
       expect(result?.id ?? null).toBe(scenario.expectedId);
@@ -194,7 +184,6 @@ describe("resolveRequestedLoginProviderOrThrow", () => {
       makeProvider({ id: "google-gemini-cli" }),
       makeProvider({ id: "minimax-portal" }),
     ];
-
     expect(() =>
       resolveRequestedLoginProviderOrThrow(loadedProviders, "google-antigravity"),
     ).toThrowError(
@@ -246,46 +235,38 @@ describe("models auth login explicit credential selection", () => {
         OPENCLAW_GATEWAY_PASSWORD: undefined,
       },
     });
-    const importOwner = vi.spyOn(migrationRuntime, "withPluginMigrationProviders");
-    if (selection === "unavailable-import") {
-      importOwner.mockImplementation(async (_params, run) =>
-        run([
-          {
-            id: "authstore-proof",
+    const provider = "authstore-proof";
+    const importOwner =
+      selection === "unavailable-import"
+        ? mockCredentialProvider({
+            id: provider,
             label: "Auth store proof",
-            plan() {
-              const items: MigrationItem[] = [
-                {
-                  id: "auth:shared",
-                  kind: "auth",
-                  action: "skip",
-                  status: "skipped",
-                  message: "The existing sign-in needs to be renewed.",
-                  details: { credentialImportUnavailable: true },
-                },
-              ];
-              return {
-                providerId: "authstore-proof",
-                source: "/fixture",
-                items,
-                summary: summarizeMigrationItems(items),
-              };
-            },
+            plan: () =>
+              credentialPlan(
+                [
+                  {
+                    id: "auth:shared",
+                    kind: "auth",
+                    action: "skip",
+                    status: "skipped",
+                    message: "The existing sign-in needs to be renewed.",
+                    details: { credentialImportUnavailable: true },
+                  },
+                ],
+                provider,
+              ),
             apply() {
               throw new Error("Unavailable credentials cannot be applied");
             },
-          },
-        ]),
-      );
-    } else {
-      importOwner.mockRejectedValue(
-        new Error("Explicit credential selection must not acquire an import owner"),
-      );
-    }
+          })
+        : vi
+            .spyOn(migrationRuntime, "withPluginMigrationProviders")
+            .mockRejectedValue(
+              new Error("Explicit credential selection must not acquire an import owner"),
+            );
     try {
       getPluginLoaderCacheState().clear();
       resetPluginRuntimeStateForTest();
-      const provider = "authstore-proof";
       const freshId = `${provider}:${selection === "profile-id" ? "selected" : "fresh"}`;
       const fresh = { type: "token" as const, provider, token: "fixture-fresh-token" };
       const expired = { ...fresh, token: "fixture-expired-token", expires: 1 };
@@ -314,6 +295,9 @@ describe("models auth login explicit credential selection", () => {
               auth: [{ id: "token", label: "Fixture token", kind: "token",
                 credentialImport: { migrationProviderId: ${JSON.stringify(provider)}, itemId: "auth:shared", credentialKind: "token" },
                 async run({ config, credentialOnly }) {
+                  const patchConnection = (id, value) => ({ models: { providers: { [id]: value } } });
+                  const patchDefaults = value => ({ agents: { defaults: value } });
+                  const write = value => require("node:fs/promises").writeFile(process.env.OPENCLAW_CONFIG_PATH, JSON.stringify(value));
                   const result = ${JSON.stringify({ profiles: [{ profileId: `${provider}:fresh`, credential: fresh }], defaultModel: `${provider}/recommended` })};
                   if (${JSON.stringify(selection)} === "credential-only") {
                     if (!credentialOnly) throw new Error("Credential-only login attempted starter discovery");
@@ -324,39 +308,34 @@ describe("models auth login explicit credential selection", () => {
                           baseUrl: "https://other.invalid", api: "openai-completions", models: []
                         } } } }
                       : { logging: { level: "debug" } };
-                    await require("node:fs/promises").writeFile(process.env.OPENCLAW_CONFIG_PATH,
-                      JSON.stringify({ ...config, ...concurrent }));
-                    result.configPatch = { ...config, models: { providers: {
-                      "authstore-proof": { baseUrl: "https://fixture.invalid", api: "openai-completions", models: [] }
-                    } } };
+                    await write({ ...config, ...concurrent });
+                    result.configPatch = { ...config, ...patchConnection("authstore-proof",
+                      { baseUrl: "https://fixture.invalid", api: "openai-completions", models: [] }) };
                   } else if (${JSON.stringify(modelUpdate)}) {
                     const connection = config.models.providers[${JSON.stringify(provider)}];
                     const original = connection.models[0];
                     if (${JSON.stringify(selection)} === "concurrent-models" || ${JSON.stringify(modelConflict)}) {
-                      await require("node:fs/promises").writeFile(process.env.OPENCLAW_CONFIG_PATH,
-                        JSON.stringify({ ...config, models: { providers: {
-                          ${JSON.stringify(provider)}: { ...connection, models: [
-                            { ...original, contextWindow: 8192, name: ${JSON.stringify(modelConflict)} ? "Concurrent update" : original.name },
-                            { ...original, id: "concurrent" }
-                          ] }
-                        } } }));
+                      await write({ ...config, ...patchConnection(${JSON.stringify(provider)}, {
+                        ...connection, models: [
+                          { ...original, contextWindow: 8192, name: ${JSON.stringify(modelConflict)} ? "Concurrent update" : original.name },
+                          { ...original, id: "concurrent" },
+                        ],
+                      }) });
                     }
-                    result.configPatch = { models: { providers: {
-                      ${JSON.stringify(provider)}: { ...connection, models: [{ id: original.id, name: "Login update" }] }
-                    } } };
+                    result.configPatch = patchConnection(${JSON.stringify(provider)},
+                      { ...connection, models: [{ id: original.id, name: "Login update" }] });
                   } else if (${JSON.stringify(canonicalModels)}) {
                     const connection = config.models.providers.google;
-                    result.configPatch = { models: { providers: { google: {
-                      ...connection, models: connection.models.map(model => ({ ...model, name: "Login update" }))
-                    } } } };
+                    result.configPatch = patchConnection("google",
+                      { ...connection, models: connection.models.map(model => ({ ...model, name: "Login update" })) });
                   } else if (${JSON.stringify(selection)} === "source-models") {
-                    result.configPatch = { agents: { defaults: { models: { "authstore-proof/recommended": {} } } } };
+                    result.configPatch = patchDefaults({ models: { "authstore-proof/recommended": {} } });
                   } else if (${JSON.stringify(selection)} === "config-rejected") {
                     result.configPatch = { gateway: { port: -1 } };
                   } else if (${JSON.stringify(selection)} === "absent-default") {
-                    result.configPatch = { agents: { defaults: { model: "authstore-proof/recommended" } } };
+                    result.configPatch = patchDefaults({ model: "authstore-proof/recommended" });
                   } else if (${JSON.stringify(selection.startsWith("consent-"))}) {
-                    result.configPatch = { agents: { defaults: { modelPolicy: { allow: ["authstore-proof/*"] }, models: { "authstore-proof/recommended": {} } } } };
+                    result.configPatch = patchDefaults({ modelPolicy: { allow: ["authstore-proof/*"] }, models: { "authstore-proof/recommended": {} } });
                   }
                   return result;
                 }
@@ -379,50 +358,39 @@ describe("models auth login explicit credential selection", () => {
         api: "openai-completions" as const,
         models: [originalModel],
       };
+      const defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> =
+        selection === "absent-default" ? {} : { model: { primary: "other-proof/existing" } };
+      if (selection.startsWith("consent-")) {
+        Object.assign(
+          defaults,
+          selection.includes("-legacy-")
+            ? { models: { "existing-model": {} } }
+            : { modelPolicy: { allow: ["other-proof/existing"] } },
+        );
+      }
       const config: OpenClawConfig = {
         agents: {
-          ...(selection === "source-models"
-            ? {}
-            : {
-                defaults:
-                  selection === "absent-default"
-                    ? {}
-                    : {
-                        model: { primary: "other-proof/existing" },
-                        ...(selection.startsWith("consent-")
-                          ? selection.includes("-legacy-")
-                            ? { models: { "existing-model": {} } }
-                            : { modelPolicy: { allow: ["other-proof/existing"] } }
-                          : {}),
-                      },
-              }),
+          ...(selection === "source-models" ? {} : { defaults }),
           entries: { main: { workspace: state.workspaceDir } },
         },
         plugins: { allow: [provider], entries: { [provider]: { enabled: true } } },
         logging: { level: "info" },
-        ...(modelUpdate || canonicalModels
-          ? {
-              models: {
-                providers: {
-                  [provider]: modelConnection,
-                  ...(canonicalModels
-                    ? {
-                        google: {
-                          ...modelConnection,
-                          models: [{ ...originalModel, id: "google/gemini-3-pro-preview" }],
-                        },
-                      }
-                    : {}),
-                },
-              },
-            }
-          : {}),
         gateway: {
           mode: "local",
           port: await getFreePort(),
           auth: { mode: "token", token: "fixture-gateway-token" },
         },
       };
+      if (modelUpdate || canonicalModels) {
+        config.models = { providers: { [provider]: modelConnection } };
+        if (canonicalModels) {
+          const providers = config.models.providers ?? {};
+          providers.google = {
+            ...modelConnection,
+            models: [{ ...originalModel, id: "google/gemini-3-pro-preview" }],
+          };
+        }
+      }
       await state.writeConfig(config);
       if (selection === "stale-models") {
         await state.writeConfig({
@@ -458,32 +426,30 @@ describe("models auth login explicit credential selection", () => {
       };
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
       let consentAsked = false;
+      const options: Partial<Parameters<typeof runModelsAuthLoginFlowCore>[0]> =
+        selection === "unavailable-import" ? {} : { profileId: freshId };
+      if (selection === "force") {
+        delete options.profileId;
+        options.force = true;
+      } else if (selection === "set-default" || selection.includes("-set-default-")) {
+        delete options.profileId;
+        options.setDefault = true;
+      } else if (selection === "credential-only" || selection === "revoked-after-save") {
+        delete options.profileId;
+        options.credentialOnly = true;
+        if (selection === "revoked-after-save") {
+          options.assertCurrent = () => {
+            if (loadPersistedAuthProfileStore()?.profiles[freshId]) {
+              throw new Error("Login authority was revoked after the credential write.");
+            }
+          };
+        }
+      }
       const login = runModelsAuthLoginFlowCore({
         provider,
         method: "token",
         agent: "main",
-        ...(selection === "force"
-          ? { force: true }
-          : selection === "profile-id"
-            ? { profileId: freshId }
-            : selection === "set-default" || selection.includes("-set-default-")
-              ? { setDefault: true }
-              : selection === "credential-only"
-                ? { credentialOnly: true }
-                : selection === "revoked-after-save"
-                  ? {
-                      credentialOnly: true,
-                      assertCurrent: () => {
-                        if (loadPersistedAuthProfileStore()?.profiles[freshId]) {
-                          throw new Error(
-                            "Login authority was revoked after the credential write.",
-                          );
-                        }
-                      },
-                    }
-                  : selection !== "unavailable-import"
-                    ? { profileId: freshId }
-                    : {}),
+        ...options,
         ...(selection === "runtime-canonical-models" ? {} : { config }),
         runtime,
         prompter: createWizardPrompter({
@@ -522,7 +488,6 @@ describe("models auth login explicit credential selection", () => {
       } else {
         await login;
       }
-
       const savedConfig = JSON.parse(await fs.readFile(state.configPath, "utf8"));
       if (selection.startsWith("consent-")) {
         expect(consentAsked).toBe(true);
@@ -581,23 +546,21 @@ describe("models auth login explicit credential selection", () => {
           { id: "original", name: "Login update", contextWindow: 4096, maxTokens: 1024 },
         ]);
       }
-      expect(loadPersistedAuthProfileStore()?.profiles).toEqual({
+      const sharedProfiles = {
         ...(selection !== "force" ? { [`${provider}:shared`]: expired } : {}),
         [freshId]: fresh,
         "other-proof:shared": unrelated,
-      });
-      const local = loadPersistedAuthProfileStore(state.agentDir());
-      expect(local?.profiles).toEqual({
+      };
+      const localProfiles = {
         ...(selection !== "force" ? { [`${provider}:local`]: expired } : {}),
         "other-proof:local": unrelated,
-      });
+      };
+      const local = loadPersistedAuthProfileStore(state.agentDir());
+      expect(loadPersistedAuthProfileStore()?.profiles).toEqual(sharedProfiles);
+      expect(local?.profiles).toEqual(localProfiles);
       expect(loadAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles).toEqual({
-        ...(selection !== "force"
-          ? { [`${provider}:shared`]: expired, [`${provider}:local`]: expired }
-          : {}),
-        [freshId]: fresh,
-        "other-proof:shared": unrelated,
-        "other-proof:local": unrelated,
+        ...sharedProfiles,
+        ...localProfiles,
       });
       if (selection === "force") {
         expect(local?.order?.[provider]).toBeUndefined();
