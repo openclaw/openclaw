@@ -48,7 +48,7 @@ describe("persisted auth profile boundary", () => {
   );
 
   it("normalizes dead-account classification with permanent-auth reason", () => {
-    const state = {
+    const state: Pick<AuthProfileStore, "usageStats"> = {
       usageStats: {
         "openai:default": {
           cooldownUntil: 1_900_000_000_000,
@@ -71,83 +71,7 @@ describe("persisted auth profile boundary", () => {
   });
 
   it("normalizes malformed canonical credentials and state before runtime use", () => {
-    const store = coercePersistedAuthProfileStore({
-      version: "not-a-version",
-      profiles: {
-        "openai:default": {
-          type: "api_key",
-          provider: " OpenAI ",
-          key: "demo-openai-key",
-          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-          metadata: { account: "acct_123", bad: 123 },
-          copyToAgents: "yes",
-          email: ["wrong"],
-          displayName: "Work",
-        },
-        "openai:legacy-api-key": apiKey("openai", "legacy-openai-key"),
-        "openai:legacy-malformed-ref": {
-          type: "api_key",
-          provider: "openai",
-          key: "legacy-fallback-key",
-          keyRef: { source: "env", id: "" },
-        },
-        "minimax:default": {
-          type: "token",
-          provider: "minimax",
-          token: ["wrong"],
-          tokenRef: { source: "env", provider: "default", id: "MINIMAX_TOKEN" },
-          expires: "tomorrow",
-        },
-        "openai:oauth": {
-          type: "oauth",
-          provider: "openai",
-          access: ["wrong"],
-          refresh: "refresh-token",
-          expires: "later",
-          oauthRef: {
-            source: "openclaw-credentials",
-            provider: "openai",
-            id: "not-a-secret-id",
-          },
-        },
-        "xai:oauth": {
-          type: "oauth",
-          provider: "xai",
-          access: "synthetic-xai-access",
-          refresh: "synthetic-xai-refresh",
-          expires: 1_900_000_000_000,
-          tokenEndpoint: "https://auth.x.ai/oauth2/token",
-          deviceAuthorizationEndpoint: ["wrong"],
-          issuer: "https://auth.x.ai",
-          authFlow: "device-code",
-          authorizationScope: "openid email profile",
-          grantedScope: "openid profile",
-        },
-        "broken:array": [],
-      },
-      order: {
-        OpenAI: [" openai:default ", 5, ""],
-        minimax: "wrong",
-      },
-      lastGood: {
-        OpenAI: " openai:default ",
-        minimax: 5,
-      },
-      usageStats: {
-        "openai:default": {
-          cooldownUntil: "later",
-          disabledUntil: 123,
-          disabledReason: "billing",
-          failureCounts: {
-            billing: 2,
-            nope: 4,
-          },
-        },
-        "minimax:default": "wrong",
-      },
-    });
-
-    expect(store).toMatchObject({
+    const expected = {
       version: AUTH_STORE_VERSION,
       profiles: {
         "openai:default": {
@@ -157,11 +81,7 @@ describe("persisted auth profile boundary", () => {
           metadata: { account: "acct_123" },
           displayName: "Work",
         },
-        "openai:legacy-api-key": {
-          type: "api_key",
-          provider: "openai",
-          key: "legacy-openai-key",
-        },
+        "openai:legacy-api-key": { type: "api_key", provider: "openai", key: "legacy-openai-key" },
         "openai:legacy-malformed-ref": {
           type: "api_key",
           provider: "openai",
@@ -192,12 +112,8 @@ describe("persisted auth profile boundary", () => {
           grantedScope: "openid profile",
         },
       },
-      order: {
-        openai: ["openai:default"],
-      },
-      lastGood: {
-        openai: "openai:default",
-      },
+      order: { openai: ["openai:default"] },
+      lastGood: { openai: "openai:default" },
       usageStats: {
         "openai:default": {
           disabledUntil: 123,
@@ -205,7 +121,51 @@ describe("persisted auth profile boundary", () => {
           failureCounts: { billing: 2 },
         },
       },
+    };
+    const raw = structuredClone(expected);
+    const store = coercePersistedAuthProfileStore({
+      ...raw,
+      version: "not-a-version",
+      profiles: {
+        ...raw.profiles,
+        "openai:default": {
+          ...raw.profiles["openai:default"],
+          provider: " OpenAI ",
+          key: "demo-openai-key",
+          metadata: { account: "acct_123", bad: 123 },
+          copyToAgents: "yes",
+          email: ["wrong"],
+        },
+        "openai:legacy-malformed-ref": {
+          ...raw.profiles["openai:legacy-malformed-ref"],
+          keyRef: { source: "env", id: "" },
+        },
+        "minimax:default": {
+          ...raw.profiles["minimax:default"],
+          token: ["wrong"],
+          expires: "tomorrow",
+        },
+        "openai:oauth": {
+          ...raw.profiles["openai:oauth"],
+          access: ["wrong"],
+          expires: "later",
+          oauthRef: { source: "openclaw-credentials", provider: "openai", id: "not-a-secret-id" },
+        },
+        "xai:oauth": { ...raw.profiles["xai:oauth"], deviceAuthorizationEndpoint: ["wrong"] },
+        "broken:array": [],
+      },
+      order: { OpenAI: [" openai:default ", 5, ""], minimax: "wrong" },
+      lastGood: { OpenAI: " openai:default ", minimax: 5 },
+      usageStats: {
+        "openai:default": {
+          ...raw.usageStats["openai:default"],
+          cooldownUntil: "later",
+          failureCounts: { billing: 2, nope: 4 },
+        },
+        "minimax:default": "wrong",
+      },
     });
+    expect(store).toMatchObject(expected);
     expect(store?.profiles["broken:array"]).toBeUndefined();
     expect(store?.profiles["openai:default"]).not.toHaveProperty("copyToAgents");
     expect(store?.profiles["openai:oauth"]).not.toHaveProperty("oauthRef");
@@ -221,12 +181,8 @@ describe("persisted auth profile boundary", () => {
         {
           runtimeExternalProfileIds: ["anthropic:claude-cli"],
           runtimeExternalProfileIdsAuthoritative: true,
-          order: {
-            anthropic: ["anthropic:claude-cli"],
-          },
-          lastGood: {
-            anthropic: "anthropic:claude-cli",
-          },
+          order: { anthropic: ["anthropic:claude-cli"] },
+          lastGood: { anthropic: "anthropic:claude-cli" },
         },
       ),
       makeStore(
@@ -334,11 +290,7 @@ describe("persisted auth profile boundary", () => {
             "minimax-portal",
           ),
         },
-        {
-          order: {
-            "minimax-portal": ["minimax-portal:cli"],
-          },
-        },
+        { order: { "minimax-portal": ["minimax-portal:cli"] } },
       ),
       makeStore({
         "minimax-portal:default": oauth(
@@ -368,29 +320,19 @@ describe("persisted auth profile boundary", () => {
         {
           "openai:main": apiKey("OpenAI", "main-key"),
         },
-        {
-          order: {
-            OpenAI: ["openai:main"],
-          },
-        },
+        { order: { OpenAI: ["openai:main"] } },
       ),
       makeStore(
         {
           "openai:agent": apiKey("openai", "agent-key"),
           "openai:other-agent": apiKey("openai", "other-agent-key"),
         },
-        {
-          order: {
-            openai: ["openai:agent"],
-          },
-        },
+        { order: { openai: ["openai:agent"] } },
       ),
       { preserveBaseRuntimeExternalProfiles: true },
     );
 
-    expect(merged.order).toEqual({
-      openai: ["openai:agent"],
-    });
+    expect(merged.order).toEqual({ openai: ["openai:agent"] });
   });
 
   it("keeps the winning external profile when stores are merged", () => {
@@ -417,63 +359,40 @@ describe("persisted auth profile boundary", () => {
   });
 });
 
-describe("applyLegacyAuthStore", () => {
-  it("preserves OAuth refresh material when migrating legacy auth.json", () => {
-    const legacy = coerceLegacyAuthStore({
-      chutes: {
-        type: "oauth",
-        provider: "chutes",
-        access: "ACCESS_TOKEN",
-        refresh: "REFRESH_TOKEN",
-        expires: 1_900_000_000_000,
-        clientId: "chutes-client-id-123",
-        idToken: "ID_TOKEN_xyz",
-        chatgptPlanType: "pro",
-      },
-    });
-    expect(legacy).not.toBeNull();
-
-    const store: AuthProfileStore = makeStore({});
-    applyLegacyAuthStore(store, legacy ?? {});
-
-    expect(store.profiles["chutes:default"]).toMatchObject({
+it.each([
+  [
+    "chutes:default",
+    {
       type: "oauth",
       provider: "chutes",
       access: "ACCESS_TOKEN",
       refresh: "REFRESH_TOKEN",
+      expires: 1_900_000_000_000,
       clientId: "chutes-client-id-123",
       idToken: "ID_TOKEN_xyz",
       chatgptPlanType: "pro",
-    });
-  });
-
-  it("preserves secret-ref credentials when migrating legacy auth.json", () => {
-    const legacy = coerceLegacyAuthStore({
-      openai: {
-        type: "api_key",
-        provider: "openai",
-        keyRef: { source: "env", id: "OPENAI_API_KEY" },
-      },
-      anthropic: {
-        type: "token",
-        provider: "anthropic",
-        tokenRef: { source: "env", id: "ANTHROPIC_TOKEN" },
-      },
-    });
-    expect(legacy).not.toBeNull();
-
-    const store: AuthProfileStore = makeStore({});
-    applyLegacyAuthStore(store, legacy ?? {});
-
-    expect(store.profiles["openai:default"]).toMatchObject({
+    },
+  ],
+  [
+    "openai:default",
+    {
       type: "api_key",
       provider: "openai",
       keyRef: { source: "env", id: "OPENAI_API_KEY" },
-    });
-    expect(store.profiles["anthropic:default"]).toMatchObject({
+    },
+  ],
+  [
+    "anthropic:default",
+    {
       type: "token",
       provider: "anthropic",
       tokenRef: { source: "env", id: "ANTHROPIC_TOKEN" },
-    });
-  });
+    },
+  ],
+] as const)("preserves legacy auth.json credential fields for %s", (profileId, credential) => {
+  const legacy = coerceLegacyAuthStore({ [credential.provider]: structuredClone(credential) });
+  expect(legacy).not.toBeNull();
+  const store = makeStore({});
+  applyLegacyAuthStore(store, legacy ?? {});
+  expect(store.profiles[profileId]).toMatchObject(credential);
 });

@@ -26,6 +26,7 @@ import {
   saveAuthProfileStore,
 } from "./store-runtime.js";
 import * as storeUpdate from "./store-update.js";
+import type { AuthProfileStore } from "./types.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -42,6 +43,26 @@ function resolveCliProfile(agentDir: string, profileId: string) {
   });
 }
 
+function saveProfiles(agentDir: string, profiles: AuthProfileStore["profiles"]) {
+  saveAuthProfileStore({ version: AUTH_STORE_VERSION, profiles }, agentDir);
+}
+
+function catalogWrites(
+  apiKey: string | undefined,
+  models: Array<{ id: string; apiKey?: string; headers?: Record<string, string> }>,
+  headers?: Record<string, string>,
+) {
+  return {
+    [catalogs.encodePluginModelCatalogRelativePath("fixture")]: JSON.stringify({
+      generatedBy: "openclaw-plugin-model-catalog-v1",
+      providers: { fixture: { api: "openai-completions", apiKey, headers, models } },
+    }),
+  };
+}
+
+const readCatalog = (agentDir: string) =>
+  catalogs.loadPersistedPluginModelCatalogsReadOnly(agentDir)[0]?.contents;
+
 describe("auth profile catalog credential removal", () => {
   it.each([
     { window: "before-delete", credentialChange: "unchanged" },
@@ -57,15 +78,11 @@ describe("auth profile catalog credential removal", () => {
         const independentKey = "never-canonical-catalog-key";
         const independentHeader = "never-canonical-catalog-header";
         const survivor = createApiKeyCredential("fixture", "held-refresh-surviving-secret");
-        saveAuthProfileStore(
-          {
-            version: AUTH_STORE_VERSION,
-            profiles:
-              credentialChange === "added"
-                ? { survivor }
-                : { survivor, selected: { type: "api_key", provider: "fixture", key: initialKey } },
-          },
+        saveProfiles(
           agentDir,
+          credentialChange === "added"
+            ? { survivor }
+            : { survivor, selected: createApiKeyCredential("fixture", initialKey) },
         );
         const planned = createDeferredCore();
         const release = createDeferredCore();
@@ -73,13 +90,10 @@ describe("auth profile catalog credential removal", () => {
           .spyOn(modelPlans, "planOpenClawModelsJson")
           .mockImplementationOnce(async () => {
             if (credentialChange !== "unchanged") {
-              saveAuthProfileStore(
-                {
-                  version: AUTH_STORE_VERSION,
-                  profiles: { survivor, selected: { type: "api_key", provider: "fixture", key } },
-                },
-                agentDir,
-              );
+              saveProfiles(agentDir, {
+                survivor,
+                selected: createApiKeyCredential("fixture", key),
+              });
             }
             const credential =
               loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles.selected;
@@ -87,37 +101,25 @@ describe("auth profile catalog credential removal", () => {
               throw new Error("expected selected API-key profile during catalog planning");
             }
             expect(credential.key).toBe(key);
-            const contents = JSON.stringify({
-              generatedBy: "openclaw-plugin-model-catalog-v1",
-              providers: {
-                fixture: {
-                  api: "openai-completions",
-                  apiKey: credential.key,
-                  headers: { Authorization: `Bearer ${credential.key}` },
-                  models: [
-                    {
-                      id: "retained-inventory",
-                      apiKey: independentKey,
-                      headers: { "X-Independent-Auth": independentHeader },
-                    },
-                    {
-                      id: "surviving-inventory",
-                      apiKey: survivor.key,
-                      headers: { Authorization: `Bearer ${survivor.key}` },
-                    },
-                  ],
+            const pluginCatalogWrites = catalogWrites(
+              credential.key,
+              [
+                {
+                  id: "retained-inventory",
+                  apiKey: independentKey,
+                  headers: { "X-Independent-Auth": independentHeader },
                 },
-              },
-            });
+                {
+                  id: "surviving-inventory",
+                  apiKey: survivor.key,
+                  headers: { Authorization: `Bearer ${survivor.key}` },
+                },
+              ],
+              { Authorization: `Bearer ${credential.key}` },
+            );
             planned.resolve();
             await release.promise;
-            return {
-              action: "write",
-              contents: '{"providers":{}}\n',
-              pluginCatalogWrites: {
-                [catalogs.encodePluginModelCatalogRelativePath("fixture")]: contents,
-              },
-            };
+            return { action: "write", contents: '{"providers":{}}\n', pluginCatalogWrites };
           });
         const refresh = ensureOpenClawModelsJson({}, agentDir);
         await Promise.race([planned.promise, refresh]);
@@ -125,8 +127,7 @@ describe("auth profile catalog credential removal", () => {
         const publishHeldRefresh = async () => {
           release.resolve();
           const result = await refresh;
-          const persisted =
-            catalogs.loadPersistedPluginModelCatalogsReadOnly(agentDir)[0]?.contents;
+          const persisted = readCatalog(agentDir);
           expect(result.publishedSource?.modelsJsonContents).toBe('{"providers":{}}\n');
           expect(result.publishedSource?.pluginCatalogs).toEqual([
             { pluginId: "fixture", contents: persisted },
@@ -156,8 +157,7 @@ describe("auth profile catalog credential removal", () => {
           ).toBe(true);
           expect(cleanup.mock.calls.length).toBe(1);
           expect(loadPersistedAuthProfileStore(agentDir)?.profiles).toEqual({ survivor });
-          const persisted =
-            catalogs.loadPersistedPluginModelCatalogsReadOnly(agentDir)[0]?.contents;
+          const persisted = readCatalog(agentDir);
           expect(persisted).not.toContain(key);
           expect(persisted).toContain("retained-inventory");
           expect(persisted).toContain(independentKey);
@@ -192,25 +192,11 @@ describe("auth profile catalog credential removal", () => {
           expires: Date.now() + 60_000,
         };
         for (const agentDir of [main, child]) {
-          saveAuthProfileStore(
-            { version: AUTH_STORE_VERSION, profiles: { [profileId]: credential } },
-            agentDir,
-          );
+          saveProfiles(agentDir, { [profileId]: credential });
         }
         await catalogs.replacePersistedPluginModelCatalogs({
           agentDir: child,
-          pluginCatalogWrites: {
-            [catalogs.encodePluginModelCatalogRelativePath("fixture")]: JSON.stringify({
-              generatedBy: "openclaw-plugin-model-catalog-v1",
-              providers: {
-                fixture: {
-                  api: "openai-completions",
-                  apiKey: credential.access,
-                  models: [{ id: "retained" }],
-                },
-              },
-            }),
-          },
+          pluginCatalogWrites: catalogWrites(credential.access, [{ id: "retained" }]),
         });
         const update = storeUpdate.runAuthProfileStoreUpdate;
         vi.spyOn(storeUpdate, "runAuthProfileStoreUpdate").mockImplementation(async (params) => {
@@ -234,7 +220,7 @@ describe("auth profile catalog credential removal", () => {
         }
         expect(loadPersistedAuthProfileStore(main)?.profiles[profileId]).toEqual(credential);
         expect(loadPersistedAuthProfileStore(child)?.profiles[profileId]).toBeUndefined();
-        const persisted = catalogs.loadPersistedPluginModelCatalogsReadOnly(child)[0]?.contents;
+        const persisted = readCatalog(child);
         expect(persisted).toContain("retained");
         expect(persisted).not.toContain(credential.access);
       });
@@ -293,10 +279,7 @@ describe("auth profile catalog credential removal", () => {
       const agentDir = agentDirFor("inference");
       const profileId = "claude-cli:work";
       const credential = createApiKeyCredential("claude-cli", "synthetic-cli-credential");
-      saveAuthProfileStore(
-        { version: AUTH_STORE_VERSION, profiles: { [profileId]: credential } },
-        agentDir,
-      );
+      saveProfiles(agentDir, { [profileId]: credential });
       const resolveProfile = () => resolveCliProfile(agentDir, profileId);
       await expect(resolveProfile()).resolves.toBe(profileId);
       const databasePath = resolveAuthProfileDatabasePath(agentDir);
@@ -326,15 +309,9 @@ describe("auth profile catalog credential removal", () => {
     await withAuthProfileTestState("openclaw-auth-newer-rollback-", async ({ agentDirFor }) => {
       const agentDir = agentDirFor("inference");
       const profileId = "claude-cli:work";
-      saveAuthProfileStore(
-        {
-          version: AUTH_STORE_VERSION,
-          profiles: {
-            [profileId]: createApiKeyCredential("claude-cli", "synthetic-original-credential"),
-          },
-        },
-        agentDir,
-      );
+      saveProfiles(agentDir, {
+        [profileId]: createApiKeyCredential("claude-cli", "synthetic-original-credential"),
+      });
       const resolveProfile = () => resolveCliProfile(agentDir, profileId);
       await expect(resolveProfile()).resolves.toBe(profileId);
       const newerStore = {

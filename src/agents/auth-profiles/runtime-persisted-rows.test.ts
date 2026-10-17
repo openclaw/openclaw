@@ -218,6 +218,21 @@ it.each(["agent", "shared-state"] as const)(
         lastGood: { example: "example:key" },
       }),
     );
+    if (kind === "shared-state") {
+      const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+      try {
+        expect(readAuthProfileRows(database, databasePath, kind)).toMatchObject({
+          store: {
+            status: "readable",
+            raw: { version: 1, profiles: { "example:key": { key: "fixture" } } },
+          },
+          state: { status: "readable", raw: { lastGood: { example: "example:key" } } },
+        });
+        expect(observation.queries).toHaveLength(1);
+      } finally {
+        observation.restore();
+      }
+    }
     expect((await resolve()).state).toEqual({
       status: "readable",
       raw: { lastGood: { example: "example:key" } },
@@ -234,32 +249,6 @@ it.each(["agent", "shared-state"] as const)(
     expect(read).toHaveBeenCalledTimes(4);
   },
 );
-
-it("reads shared credentials and health together after an in-process write", () => {
-  const databasePath = path.join(tempDirs.make("shared-auth-rows-"), "state.sqlite");
-  using database = openNodeSqliteDatabase(databasePath);
-  database.exec(`
-    CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT);
-    INSERT INTO config_machine_state VALUES ('authProfiles.store', '{"version":1,"profiles":{}}');
-    INSERT INTO config_machine_state VALUES ('authProfiles.state', '{"lastGood":{}}');
-  `);
-  admitSqliteSchema(database);
-  readAuthProfileRows(database, databasePath, "shared-state");
-  database.exec(`
-    UPDATE config_machine_state SET value_json='{"lastGood":{"example":"example:key"}}'
-    WHERE state_key='authProfiles.state';
-  `);
-  const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-  try {
-    expect(readAuthProfileRows(database, databasePath, "shared-state")).toMatchObject({
-      store: { status: "readable", raw: { version: 1, profiles: {} } },
-      state: { status: "readable", raw: { lastGood: { example: "example:key" } } },
-    });
-    expect(observation.queries).toHaveLength(1);
-  } finally {
-    observation.restore();
-  }
-});
 
 it("keeps an independently absent credential row when the legacy health table is malformed", () => {
   const databasePath = path.join(tempDirs.make("legacy-auth-rows-"), "auth.sqlite");

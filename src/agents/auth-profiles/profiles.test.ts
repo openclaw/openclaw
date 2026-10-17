@@ -1,11 +1,7 @@
-/**
- * Tests auth profile mutation helpers.
- * Covers locked upserts, order promotion, last-good clearing, legacy OAuth file
- * imports, and credential normalization.
- */
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
@@ -172,12 +168,7 @@ describe("promoteAuthProfileInOrder", () => {
         throw new Error("expected custom API-key profile");
       }
       customCredential.key = "sk-custom-resolved";
-      publishSnapshots([
-        {
-          agentDir: customAgentDir,
-          store: derivedStore,
-        },
-      ]);
+      publishSnapshots([{ agentDir: customAgentDir, store: derivedStore }]);
       expect(runtimeSnapshot(customAgentDir)?.profiles["openai:default"]).toMatchObject({
         access: "old",
       });
@@ -231,11 +222,7 @@ describe("promoteAuthProfileInOrder", () => {
           upsertAuthProfileWithLock({
             agentDir: customAgentDir,
             profileId: "openai:local",
-            credential: {
-              type: "api_key",
-              provider: "openai",
-              key: "sk-local-new",
-            },
+            credential: { type: "api_key", provider: "openai", key: "sk-local-new" },
           }),
         ).resolves.not.toBeNull();
       } finally {
@@ -480,11 +467,7 @@ describe("promoteAuthProfileInOrder", () => {
       const capturedAgentDir = agentDirFor("captured");
       const newerAgentDir = agentDirFor("newer");
       const keyRef = { source: "env", provider: "default", id: "OPENAI_API_KEY" } as const;
-      saveProfile("openai:baseline", {
-        type: "api_key",
-        provider: "openai",
-        keyRef,
-      });
+      saveProfile("openai:baseline", { type: "api_key", provider: "openai", keyRef });
       const capturedRuntime = loadRuntime(capturedAgentDir);
       const capturedProfile = capturedRuntime.profiles["openai:baseline"];
       if (capturedProfile?.type !== "api_key") {
@@ -568,19 +551,13 @@ describe("promoteAuthProfileInOrder", () => {
 
       expect(committed.publishRuntimeSnapshots()).toBe(true);
       expect(listOwnedRuntimeAuthProfileStoreSnapshots()).toMatchObject([
-        {
-          databasePath,
-          store: { profiles: { "openai:temporary": { key: "sk-temporary" } } },
-        },
+        { databasePath, store: { profiles: { "openai:temporary": { key: "sk-temporary" } } } },
       ]);
 
       restoreAuthProfileStorePersistenceSnapshot(snapshot, committed.owned);
 
       expect(listOwnedRuntimeAuthProfileStoreSnapshots()).toMatchObject([
-        {
-          databasePath,
-          store: { profiles: { "openai:baseline": { key: "sk-baseline" } } },
-        },
+        { databasePath, store: { profiles: { "openai:baseline": { key: "sk-baseline" } } } },
       ]);
     }));
 
@@ -591,11 +568,7 @@ describe("promoteAuthProfileInOrder", () => {
 
       await upsertAuthProfileWithLock({
         profileId: "openai:manual",
-        credential: {
-          type: "token",
-          provider: "openai",
-          token: "  bearer\r\n-token\u2502  ",
-        },
+        credential: { type: "token", provider: "openai", token: "  bearer\r\n-token\u2502  " },
         agentDir,
       });
       await upsertAuthProfileWithLock({
@@ -677,11 +650,7 @@ describe("promoteAuthProfileInOrder", () => {
           [staleProfileId]: oauth("stale-access", "stale-refresh", Date.now() + 30 * 60 * 1000),
         },
         agentDir,
-        {
-          order: {
-            openai: [staleProfileId],
-          },
-        },
+        { order: { openai: [staleProfileId] } },
       );
 
       const updated = await promoteAuthProfileInOrder({
@@ -900,11 +869,7 @@ describe("promoteAuthProfileInOrder", () => {
       saveAuthProfileStore(initialStore, agentDir);
 
       const removedStore: RuntimeAuthProfileStore | null = await removeProviderAuthProfilesWithLock(
-        {
-          agentDir,
-          provider: "openrouter",
-          profileIds: ["openrouter:oauth"],
-        },
+        { agentDir, provider: "openrouter", profileIds: ["openrouter:oauth"] },
       );
 
       expect(loadRuntime(agentDir)).toMatchObject({
@@ -1059,18 +1024,13 @@ describe("promoteAuthProfileInOrder", () => {
       saveProfile(profileId, original, mainAgentDir);
       saveProfile(profileId, original, peerAgentDir);
 
-      let releaseLock: (() => void) | undefined;
-      let markLocked: (() => void) | undefined;
-      const locked = new Promise<void>((resolve) => {
-        markLocked = resolve;
-      });
+      const locked = createDeferredCore();
+      const releaseLock = createDeferredCore();
       const blocker = withOAuthProfileLock({ profileId, provider: "openai" }, async () => {
-        markLocked?.();
-        await new Promise<void>((resolve) => {
-          releaseLock = resolve;
-        });
+        locked.resolve();
+        await releaseLock.promise;
       });
-      await locked;
+      await locked.promise;
 
       const removing = removeAuthProfilesAcrossOwnerStores({
         agentDir: mainAgentDir,
@@ -1081,7 +1041,7 @@ describe("promoteAuthProfileInOrder", () => {
       });
       saveProfile(profileId, replacement, mainAgentDir);
       saveProfile(profileId, replacement, peerAgentDir);
-      releaseLock?.();
+      releaseLock.resolve();
       await blocker;
 
       await expect(removing).resolves.toBe(true);
@@ -1121,57 +1081,39 @@ describe("setAuthProfileOrder", () => {
       const seeded = (): AuthProfileStore => ({
         version: AUTH_STORE_VERSION,
         profiles,
-        order: {
-          "gmi-cloud": [primary],
-          openai: ["openai:other"],
-          gmicloud: [secondary],
-        },
+        order: { "gmi-cloud": [primary], openai: ["openai:other"], gmicloud: [secondary] },
         lastGood: { gmicloud: secondary, openai: "openai:other", "gmi-cloud": primary },
       });
-
-      saveAuthProfileStore(seeded(), agentDir);
-      clearRuntimeAuthProfileStoreSnapshots();
+      const reset = (order?: AuthProfileStore["order"]) => {
+        const store = seeded();
+        saveAuthProfileStore(
+          order ? { ...store, order: { ...store.order, ...order } } : store,
+          agentDir,
+        );
+        clearRuntimeAuthProfileStoreSnapshots();
+      };
+      reset();
       await setAuthProfileOrder({ agentDir, provider: "gmi-cloud", order: [secondary] });
       expect(loadPersisted(agentDir)?.order).toEqual({
         openai: ["openai:other"],
         gmi: [secondary],
       });
-      saveAuthProfileStore(
-        {
-          ...seeded(),
-          order: { ...seeded().order, gmi: [primary] },
-        },
-        agentDir,
-      );
-      clearRuntimeAuthProfileStoreSnapshots();
+      reset({ gmi: [primary] });
       await setAuthProfileOrder({ agentDir, provider: "gmi-cloud", order: null });
-      expect(loadPersisted(agentDir)?.order).toEqual({
-        openai: ["openai:other"],
-      });
+      expect(loadPersisted(agentDir)?.order).toEqual({ openai: ["openai:other"] });
 
-      saveAuthProfileStore(
-        {
-          ...seeded(),
-          order: { ...seeded().order, "gmi-cloud": [secondary, primary] },
-        },
-        agentDir,
-      );
-      clearRuntimeAuthProfileStoreSnapshots();
+      reset({ "gmi-cloud": [secondary, primary] });
       await promoteAuthProfileInOrder({ agentDir, provider: "gmi-cloud", profileId: secondary });
       expect(loadPersisted(agentDir)?.order).toEqual({
         openai: ["openai:other"],
         gmi: [secondary, primary],
       });
 
-      saveAuthProfileStore(seeded(), agentDir);
-      clearRuntimeAuthProfileStoreSnapshots();
+      reset();
       await clearLastGoodProfileWithLock({ agentDir, provider: "gmi-cloud", profileId: secondary });
-      expect(loadPersisted(agentDir)?.lastGood).toEqual({
-        openai: "openai:other",
-      });
+      expect(loadPersisted(agentDir)?.lastGood).toEqual({ openai: "openai:other" });
 
-      saveAuthProfileStore(seeded(), agentDir);
-      clearRuntimeAuthProfileStoreSnapshots();
+      reset();
       const runtimeStore = loadRuntime(agentDir);
       await markAuthProfileSuccess({
         agentDir,
@@ -1179,13 +1121,9 @@ describe("setAuthProfileOrder", () => {
         provider: "gmi-cloud",
         store: runtimeStore,
       });
-      expect(loadPersisted(agentDir)?.lastGood).toEqual({
-        openai: "openai:other",
-        gmi: secondary,
-      });
+      expect(loadPersisted(agentDir)?.lastGood).toEqual({ openai: "openai:other", gmi: secondary });
 
-      saveAuthProfileStore(seeded(), agentDir);
-      clearRuntimeAuthProfileStoreSnapshots();
+      reset();
       await removeProviderAuthProfilesWithLock({ agentDir, provider: "gmi-cloud" });
       expect(loadPersisted(agentDir)).toMatchObject({
         profiles: { "openai:other": expect.any(Object) },
@@ -1200,8 +1138,6 @@ describe("setAuthProfileOrder", () => {
       const customAgentDir = agentDirFor("custom");
       fs.mkdirSync(mainAgentDir, { recursive: true });
       fs.mkdirSync(customAgentDir, { recursive: true });
-      // Main agent owns two OAuth profiles; the secondary agent inherits them
-      // at runtime and has no local credential copies.
       const mainStore = (): AuthProfileStore =>
         makeStore(
           {
@@ -1212,10 +1148,7 @@ describe("setAuthProfileOrder", () => {
         );
       saveAuthProfileStore(mainStore());
 
-      // The secondary agent selects the other inherited profile ID. Before the
-      // fix, the local save pruned this ID because the secondary store does
-      // not own the OAuth credential, so `order get` fell back to main's
-      // profile-a (issue #119233).
+      // Regression #119233: local saves must preserve inherited order references.
       const updated = await setAuthProfileOrder({
         agentDir: customAgentDir,
         provider: "openai",
@@ -1223,12 +1156,8 @@ describe("setAuthProfileOrder", () => {
       });
 
       expect(updated?.order?.openai).toEqual(["openai:profile-b"]);
-      // Reload from persistence: the inherited ID must survive, not be pruned.
       expect(loadPersisted(customAgentDir)?.order?.openai).toEqual(["openai:profile-b"]);
-      // The runtime store for the secondary agent reflects the local override.
       expect(loadRuntime(customAgentDir).order?.openai).toEqual(["openai:profile-b"]);
-      // The secondary agent must not gain a local copy of the inherited OAuth
-      // credential — only the order reference is preserved.
       const persistedCustom = loadPersisted(customAgentDir);
       expect(persistedCustom?.profiles["openai:profile-b"]).toBeUndefined();
       expect(persistedCustom?.profiles["openai:profile-a"]).toBeUndefined();
@@ -1241,11 +1170,7 @@ describe("setAuthProfileOrder", () => {
         order: { openai: ["openai:local"] },
       });
 
-      const updated = await setAuthProfileOrder({
-        agentDir,
-        provider: "openai",
-        order: null,
-      });
+      const updated = await setAuthProfileOrder({ agentDir, provider: "openai", order: null });
 
       expect(updated?.order?.openai ?? null).toBeNull();
       expect(loadPersisted(agentDir)?.order?.openai ?? null).toBeNull();

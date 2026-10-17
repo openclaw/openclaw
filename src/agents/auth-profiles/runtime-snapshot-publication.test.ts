@@ -30,91 +30,86 @@ function makeStore(
   return { version: 1, profiles, ...extra };
 }
 
+function sharedOwner(databasePath: string) {
+  return { databasePath, sharedDatabasePath: databasePath, location: "state-db" as const };
+}
+
+function publishDerived(
+  store: RuntimeAuthProfileStore,
+  agentDir: string,
+  owner: Parameters<typeof publishAtPath>[3],
+) {
+  const databasePath = resolveAuthProfileDatabasePath(agentDir);
+  publishAtPath(store, databasePath, agentDir, { ...owner, databasePath });
+}
+
 describe("runtime auth snapshot publication", () => {
   afterEach(() => clearRuntimeAuthProfileStoreSnapshots());
   beforeEach(() => {
     prepareSharedAuthStoreOwnershipForNative();
   });
 
-  it("keeps locally shadowed snapshots unchanged when shared credentials rotate", () => {
-    const sharedPath = "/tmp/openclaw-auth-incremental/shared.sqlite";
-    const owner = {
-      databasePath: sharedPath,
-      sharedDatabasePath: sharedPath,
-      location: "state-db" as const,
-    };
-    const localDir = "/tmp/openclaw-auth-incremental/local";
-    const inheritedDir = "/tmp/openclaw-auth-incremental/inherited";
-    const localPath = resolveAuthProfileDatabasePath(localDir);
-    const inheritedPath = resolveAuthProfileDatabasePath(inheritedDir);
-    const profile = createApiKeyCredential("fixture", "synthetic-local");
-    const mutation = {
-      credentialsChanged: true,
-      stateChanged: false,
-      profileIds: ["fixture:primary"],
-    };
-
-    for (const [databasePath, agentDir, runtimeLocalProfileIds] of [
-      [localPath, localDir, ["fixture:primary"]],
-      [inheritedPath, inheritedDir, []],
-    ] as const) {
-      publishAtPath(
-        makeStore(
-          { "fixture:primary": profile },
-          {
-            runtimeLocalProfileIds: [...runtimeLocalProfileIds],
-            runtimeHasLocalOAuthProfiles: false,
-          },
-        ),
-        databasePath,
-        agentDir,
-        { ...owner, databasePath },
-      );
-    }
-    const localRevision = revisionOf(localDir);
-    noteMutation(undefined, mutation, owner);
-    expect(readSnapshot(localDir)?.profiles["fixture:primary"]).toEqual(profile);
-    expect(revisionOf(localDir)).toBe(localRevision);
-    expect(readSnapshot(inheritedDir)).toBeUndefined();
-
-    expect(
-      sharedSnapshots(owner, {
-        ...mutation,
-        credentialsChanged: false,
-        stateChanged: true,
-      }).map((entry) => entry.databasePath),
-    ).toEqual([localPath]);
-  });
-
-  it.each(["oauth", "hidden", "unknown"] as const)(
-    "refreshes a shared shadow with %s local ownership facts",
+  it.each(["api-key", "oauth", "hidden", "unknown"] as const)(
+    "invalidates shared shadows according to %s local ownership",
     (kind) => {
-      const agentDir = `/tmp/openclaw-auth-incremental-${kind}`;
-      const databasePath = resolveAuthProfileDatabasePath(agentDir);
-      const sharedDatabasePath = "/tmp/openclaw-auth-incremental/shared.sqlite";
-      const owner = {
-        databasePath: sharedDatabasePath,
-        sharedDatabasePath,
-        location: "state-db" as const,
-      };
-      const store: RuntimeAuthProfileStore = {
-        ...createStore("local"),
-        runtimeLocalProfileIds:
-          kind === "unknown" ? undefined : [kind === "hidden" ? "hidden:legacy" : "openai:default"],
-      };
-
-      publishAtPath(store, databasePath, agentDir, {
-        ...owner,
-        databasePath,
-      });
+      const owner = sharedOwner("/tmp/openclaw-auth-incremental/shared.sqlite");
+      const localDir = `/tmp/openclaw-auth-incremental-${kind}`;
+      const inheritedDir = "/tmp/openclaw-auth-incremental/inherited";
+      const profile = createApiKeyCredential("fixture", "synthetic-local");
+      const store: RuntimeAuthProfileStore =
+        kind === "api-key"
+          ? makeStore(
+              { "fixture:primary": profile },
+              {
+                runtimeLocalProfileIds: ["fixture:primary"],
+                runtimeHasLocalOAuthProfiles: false,
+              },
+            )
+          : {
+              ...createStore("local"),
+              runtimeLocalProfileIds:
+                kind === "unknown"
+                  ? undefined
+                  : [kind === "hidden" ? "hidden:legacy" : "openai:default"],
+            };
+      publishDerived(store, localDir, owner);
+      if (kind === "api-key") {
+        publishDerived(
+          makeStore(
+            { "fixture:primary": profile },
+            {
+              runtimeLocalProfileIds: [],
+              runtimeHasLocalOAuthProfiles: false,
+            },
+          ),
+          inheritedDir,
+          owner,
+        );
+      }
       const mutation = {
         credentialsChanged: true,
         stateChanged: false,
-        profileIds: ["unrelated:changed"],
+        profileIds: [kind === "api-key" ? "fixture:primary" : "unrelated:changed"],
       };
-      expect(sharedSnapshots(owner, mutation)).toHaveLength(1);
+      const localRevision = revisionOf(localDir);
+      if (kind !== "api-key") {
+        expect(sharedSnapshots(owner, mutation)).toHaveLength(1);
+      }
       noteMutation(undefined, mutation, owner);
-      expect(readSnapshot(agentDir)).toBeUndefined();
+      if (kind === "api-key") {
+        expect(readSnapshot(localDir)?.profiles["fixture:primary"]).toEqual(profile);
+        expect(revisionOf(localDir)).toBe(localRevision);
+        expect(readSnapshot(inheritedDir)).toBeUndefined();
+        expect(
+          sharedSnapshots(owner, {
+            ...mutation,
+            credentialsChanged: false,
+            stateChanged: true,
+          }).map((entry) => entry.databasePath),
+        ).toEqual([resolveAuthProfileDatabasePath(localDir)]);
+      } else {
+        expect(readSnapshot(localDir)).toBeUndefined();
+      }
     },
   );
 
@@ -158,18 +153,9 @@ describe("runtime auth snapshot publication", () => {
     expect(updated.order).toBe(prepared.order);
     expect(updated.lastGood).toBe(prepared.lastGood);
     expect(updated.usageStats).toBe(prepared.usageStats);
-    expect(
-      updateInherited(prepared, changed, {
-        ...mutation,
-        stateChanged: true,
-      }),
-    ).toBeUndefined();
-    expect(
-      updateInherited(prepared, changed, {
-        ...mutation,
-        profileSetChanged: true,
-      }),
-    ).toBeUndefined();
+    for (const flag of ["stateChanged", "profileSetChanged"] as const) {
+      expect(updateInherited(prepared, changed, { ...mutation, [flag]: true })).toBeUndefined();
+    }
 
     const hiddenLocal = createStore("hidden-local");
     const localOAuth = hiddenLocal.profiles["openai:default"];
@@ -187,12 +173,7 @@ describe("runtime auth snapshot publication", () => {
 
   it("publishes one shared credential generation before notifying any derived snapshot reader", () => {
     const sharedPath = "/tmp/openclaw-auth-atomic/shared.sqlite";
-    const owner = {
-      env: {},
-      databasePath: sharedPath,
-      sharedDatabasePath: sharedPath,
-      location: "state-db" as const,
-    };
+    const owner = { ...sharedOwner(sharedPath), env: {} };
     const agentDirs = ["/tmp/openclaw-auth-atomic/first", "/tmp/openclaw-auth-atomic/second"];
     const fallbackDir = "/tmp/openclaw-auth-atomic/local-oauth";
     const before = createStore("before");
@@ -202,21 +183,14 @@ describe("runtime auth snapshot publication", () => {
     try {
       publishAtPath(before, sharedPath, undefined, owner);
       for (const agentDir of agentDirs) {
-        const databasePath = resolveAuthProfileDatabasePath(agentDir);
         const store = inheritStore(
           makeStore({ local: createApiKeyCredential("fixture", "synthetic-local") }),
           before,
         );
-        publishAtPath(store, databasePath, agentDir, {
-          ...owner,
-          databasePath,
-        });
+        publishDerived(store, agentDir, owner);
       }
       const fallbackPath = resolveAuthProfileDatabasePath(fallbackDir);
-      publishAtPath(inheritStore(createStore("local-oauth"), before), fallbackPath, fallbackDir, {
-        ...owner,
-        databasePath: fallbackPath,
-      });
+      publishDerived(inheritStore(createStore("local-oauth"), before), fallbackDir, owner);
       unregister = registerRuntimeAuthProfileStoreMutationListener(() => {
         observations.push(
           agentDirs.map((agentDir) => {
@@ -248,7 +222,6 @@ describe("runtime auth snapshot publication", () => {
       });
     } finally {
       unregister?.();
-      clearRuntimeAuthProfileStoreSnapshots();
     }
   });
 });

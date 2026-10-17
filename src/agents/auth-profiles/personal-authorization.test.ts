@@ -50,6 +50,23 @@ function capture(profileId: string, assertCurrent = () => {}) {
   return capturePersonalAuthProfileAuthorization({ profileId, assertCurrent });
 }
 
+function withAccount(
+  run: (account: ReturnType<typeof fixture> & { env: NodeJS.ProcessEnv }) => Promise<void>,
+) {
+  return withOpenClawTestState({ scenario: "minimal" }, ({ env }) => run({ ...fixture(), env }));
+}
+
+async function captureWithoutMainThreadSql(profileId: string) {
+  const sql = observeMainThreadSql();
+  try {
+    const grant = await capture(profileId);
+    sql.expectIdle();
+    return grant;
+  } finally {
+    sql.restore();
+  }
+}
+
 const retired = { code: "MCP_AUTHORIZATION_RETIRED" };
 function expectRetired(grant: Awaited<ReturnType<typeof capture>>) {
   expect(grant.assertCurrent).toThrow(expect.objectContaining(retired));
@@ -91,15 +108,8 @@ function mutateRecord(profileId: string, transform: (value: string) => string | 
 }
 
 it("keeps its private lifetime through OAuth/usage updates and unlink, with cheap effect assertions", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { owner, profileId } = fixture();
-    const sql = observeMainThreadSql();
-    const grant = await capture(profileId);
-    try {
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-    }
+  withAccount(async ({ owner, profileId }) => {
+    const grant = await captureWithoutMainThreadSql(profileId);
     await withPersonalAuthProfileStore(profileId, async (store) => {
       await store.update(
         (current) => {
@@ -162,8 +172,7 @@ it("keeps its private lifetime through OAuth/usage updates and unlink, with chea
 it.each(["same bytes", "refreshed bytes"])(
   "survives owner restart but rotates on same-ID reconnect (%s)",
   async (kind) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const { owner, profileId, credential } = fixture();
+    await withAccount(async ({ owner, profileId, credential }) => {
       const before = await capture(profileId);
       const originalId = before.authorizationId;
       await closeOpenClawStateDatabaseAsync();
@@ -178,9 +187,7 @@ it.each(["same bytes", "refreshed bytes"])(
       });
       expect(connected.authProfileId).toBe(profileId);
       expectRetired(restarted);
-      await expect(restarted.revalidate()).rejects.toMatchObject({
-        code: "MCP_AUTHORIZATION_RETIRED",
-      });
+      await expect(restarted.revalidate()).rejects.toMatchObject(retired);
       await closeOpenClawStateDatabaseAsync();
       const replacement = await capture(profileId);
       expect(replacement.authorizationId).not.toBe(originalId);
@@ -193,8 +200,7 @@ it.each(["same bytes", "refreshed bytes"])(
 );
 
 it("allows concurrent adoption after an out-of-process reconnect without reviving old grants", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const { owner, profileId, credential } = fixture();
+  withAccount(async ({ owner, profileId, credential, env }) => {
     const original = await capture(profileId);
     try {
       const operationsUrl = new URL(
@@ -234,9 +240,7 @@ it("allows concurrent adoption after an out-of-process reconnect without revivin
           await adopted.revalidate();
         }
         expectRetired(original);
-        await expect(original.revalidate()).rejects.toMatchObject({
-          code: "MCP_AUTHORIZATION_RETIRED",
-        });
+        await expect(original.revalidate()).rejects.toMatchObject(retired);
       } finally {
         for (const adopted of adoptedGrants) {
           adopted.dispose();
@@ -248,8 +252,7 @@ it("allows concurrent adoption after an out-of-process reconnect without revivin
   }));
 
 it("separates a different account while preserving the original explicit pin", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { owner, profileId, credential } = fixture();
+  withAccount(async ({ owner, profileId, credential }) => {
     const original = await capture(profileId);
     const connected = await connectUserModelAccountAsync({
       ownerProfileId: owner.id,
@@ -267,20 +270,13 @@ it("separates a different account while preserving the original explicit pin", (
   }));
 
 it("explicitly enrolls a legacy record once through the native writer without exporting its lifetime", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { profileId } = fixture();
+  withAccount(async ({ profileId }) => {
     mutateRecord(profileId, (raw) => {
       const record = JSON.parse(raw);
       delete record.authorizationId;
       return JSON.stringify(record);
     });
-    const sql = observeMainThreadSql();
-    const grant = await capture(profileId);
-    try {
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-    }
+    const grant = await captureWithoutMainThreadSql(profileId);
     const { db } = openOpenClawStateDatabase();
     const row = executeSqliteQuerySync(
       db,
@@ -299,20 +295,18 @@ it("explicitly enrolls a legacy record once through the native writer without ex
   }));
 
 it("does not enroll missing/deleted accounts or recreate their credentials", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { profileId } = fixture();
+  withAccount(async ({ profileId }) => {
     const grant = await capture(profileId);
     mutateRecord(profileId, () => undefined);
-    await expect(grant.revalidate()).rejects.toMatchObject({ code: "MCP_AUTHORIZATION_RETIRED" });
+    await expect(grant.revalidate()).rejects.toMatchObject(retired);
     expectRetired(grant);
-    await expect(capture(profileId)).rejects.toMatchObject({ code: "MCP_AUTHORIZATION_RETIRED" });
+    await expect(capture(profileId)).rejects.toMatchObject(retired);
     expect(readUserModelAuthProfile(profileId)).toBeUndefined();
     grant.dispose();
   }));
 
 it("retires transferred ownership and preserves a distinct lifetime after restart", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { owner, profileId } = fixture();
+  withAccount(async ({ owner, profileId }) => {
     const target = ensureProfileForEmail("personal-authorization-target@example.test");
     const grant = await capture(profileId);
     await mergeCanonicalUserProfiles(owner.id, target.id);
@@ -326,8 +320,7 @@ it("retires transferred ownership and preserves a distinct lifetime after restar
   }));
 
 it("retains caller revocation and refuses isolated auth scopes", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { profileId } = fixture();
+  withAccount(async ({ profileId }) => {
     let current = true;
     const grant = await capture(profileId, () => {
       if (!current) {
@@ -337,7 +330,7 @@ it("retains caller revocation and refuses isolated auth scopes", () =>
     current = false;
     expectRetired(grant);
     current = true;
-    await expect(grant.revalidate()).rejects.toMatchObject({ code: "MCP_AUTHORIZATION_RETIRED" });
+    await expect(grant.revalidate()).rejects.toMatchObject(retired);
     await expect(
       authProfileRuntimeMode.run({ kind: "env-only" }, () => capture(profileId)),
     ).rejects.toMatchObject({ code: "MCP_AUTHORIZATION_UNAVAILABLE" });
