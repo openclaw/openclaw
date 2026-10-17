@@ -16,12 +16,12 @@ function describeGoogleChatMessageTool({
     (account) =>
       account.enabled && account.credentialSource !== "none" && account.tokenStatus === "available",
   );
-  return hasAvailableAccount ? { actions: ["send" as const] } : null;
+  return hasAvailableAccount ? { actions: ["send" as const, "edit" as const] } : null;
 }
 
 export const googlechatMessageActions = {
   describeMessageTool: describeGoogleChatMessageTool,
-  supportsAction: ({ action }) => action === "send",
+  supportsAction: ({ action }) => action === "send" || action === "edit",
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
   handleAction: async (ctx) => (await import("./actions.js")).handleGoogleChatAction(ctx),
 } satisfies ChannelMessageActionAdapter;
