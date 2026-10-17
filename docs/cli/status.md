@@ -285,7 +285,10 @@ If local session state requires Doctor, status prints any installation drift to 
 `status --json --all` reports memory details from the active memory plugin
 runtime selected by `plugins.slots.memory`. Custom memory plugins can leave
 built-in `memory.search.enabled` disabled and still report
-their own files, chunks, vector, and FTS state.
+their own files, chunks, vector, and FTS state. If the vector probe fails,
+the report marks the vector availability it could not verify as `false` and
+puts the probe error in `memory.vector.loadError` instead of repeating the
+last reported vector state.
 
 ## Related
 
