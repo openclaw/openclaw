@@ -412,8 +412,6 @@ describe("queued cancellation during adapter preparation", () => {
     "does not retire the same claim after durable state advances to %s",
     async (state) => {
       const { retireUnsentDelivery } = await import("./delivery-queue-ack.js");
-      const stateDir = fixtures.tmpDir();
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       const initialProducerClaim = createInitialDeliveryProducerClaim();
       const id = await enqueueDelivery({
         channel: "matrix",
