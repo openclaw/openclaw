@@ -24,6 +24,7 @@ suite.define(() => {
           const sessionKey = "agent:main:dashboard:collaborator-scroll";
           const runId = "active-review";
           const now = Date.now() - 60_000;
+          const finding = "The workspace is organized into independent components. ".repeat(5);
           const history = [
             {
               role: "user",
@@ -37,11 +38,7 @@ suite.define(() => {
               content: [
                 {
                   type: "text",
-                  text:
-                    "Finding " +
-                    (index + 1) +
-                    ": " +
-                    "The workspace is organized into independent components. ".repeat(5),
+                  text: `Finding ${index + 1}: ${finding}`,
                 },
               ],
               timestamp: now + index + 1,
@@ -220,6 +217,12 @@ suite.define(() => {
             senderName: person.name,
             senderIdentity: person.identity,
           });
+          const earlier =
+            "Retain this reading position while the shared conversation continues. ".repeat(5);
+          const active =
+            "The component remains independently testable and its current behavior is being inspected. ".repeat(
+              4,
+            );
           const history: unknown[] = Array.from({ length: 12 }, (_, index) => [
             {
               role: "user",
@@ -234,11 +237,7 @@ suite.define(() => {
             },
             {
               role: "assistant",
-              content:
-                "Earlier answer " +
-                index +
-                ". " +
-                "Retain this reading position while the shared conversation continues. ".repeat(5),
+              content: `Earlier answer ${index}. ${earlier}`,
               timestamp: now + index * 2 + 1,
               __openclaw: {
                 id: "earlier-answer-" + index,
@@ -262,13 +261,7 @@ suite.define(() => {
             history.push({
               role: "assistant",
               phase: "commentary",
-              content:
-                "Active finding " +
-                index +
-                ". " +
-                "The component remains independently testable and its current behavior is being inspected. ".repeat(
-                  4,
-                ),
+              content: `Active finding ${index}. ${active}`,
               timestamp: now + 31 + index,
               __openclaw: { id: "active-finding-" + index, seq: 26 + index, runId },
             });
@@ -462,27 +455,25 @@ suite.define(() => {
           // The fixture relays the actual sender request to both independent clients.
           // It is not a production Gateway or an authenticated multi-user backend.
           const clients = [readerGateway, senderGateway];
-          await Promise.all(
-            clients.map((gateway) =>
-              gateway.setMethodResponse("chat.history", {
-                ...snapshot,
-                pendingInputs: { items: [pending], total: 1 },
-              }),
-            ),
-          );
+          const setHistory = (overrides: Record<string, unknown>) =>
+            Promise.all(
+              clients.map((gateway) =>
+                gateway.setMethodResponse("chat.history", { ...snapshot, ...overrides }),
+              ),
+            );
+          const broadcast = (event: string, payload: Record<string, unknown>) =>
+            Promise.all(
+              clients.map((gateway) => gateway.emitGatewayEvent(event, { sessionKey, ...payload })),
+            );
+          await setHistory({ pendingInputs: { items: [pending], total: 1 } });
           await senderGateway.resolveDeferred("chat.send", { runId: sendId, status: "queued" });
           const reads = (await readerGateway.getRequests("chat.history")).length;
-          await Promise.all(
-            clients.map((gateway) =>
-              gateway.emitGatewayEvent("sessions.changed", {
-                sessionKey,
-                agentId: "main",
-                reason: "send",
-                hasActiveRun: true,
-                activeRunIds: [runId],
-              }),
-            ),
-          );
+          await broadcast("sessions.changed", {
+            agentId: "main",
+            reason: "send",
+            hasActiveRun: true,
+            activeRunIds: [runId],
+          });
           await expect
             .poll(async () => (await readerGateway.getRequests("chat.history")).length)
             .toBeGreaterThan(reads);
@@ -497,52 +488,30 @@ suite.define(() => {
             },
           };
           const nextHistory = [...history, promoted];
-          await Promise.all(
-            clients.map((gateway) =>
-              gateway.setMethodResponse("chat.history", { ...snapshot, messages: nextHistory }),
-            ),
-          );
-          await Promise.all(
-            clients.map((gateway) =>
-              gateway.emitGatewayEvent("session.message", {
-                sessionKey,
-                sessionId,
-                agentId: "main",
-                session,
-                message: promoted,
-                messageId: "peer-persisted",
-                messageSeq: 45,
-                clientRunId: sendId,
-                hasActiveRun: true,
-                activeRunIds: [runId],
-              }),
-            ),
-          );
+          await setHistory({ messages: nextHistory });
+          await broadcast("session.message", {
+            sessionId,
+            agentId: "main",
+            session,
+            message: promoted,
+            messageId: "peer-persisted",
+            messageSeq: 45,
+            clientRunId: sendId,
+            hasActiveRun: true,
+            activeRunIds: [runId],
+          });
           await checkpoint("persisted");
           const tail =
             "Streaming continuation. " +
             "A new verified detail expands the current response. ".repeat(15);
-          await Promise.all(
-            clients.map((gateway) =>
-              gateway.emitGatewayEvent("chat", {
-                sessionKey,
-                runId,
-                state: "delta",
-                seq: 1,
-                message: { role: "assistant", content: tail },
-              }),
-            ),
-          );
+          await broadcast("chat", {
+            runId,
+            state: "delta",
+            seq: 1,
+            message: { role: "assistant", content: tail },
+          });
           await checkpoint("stream-growth");
-          await Promise.all(
-            clients.map((gateway) =>
-              gateway.setMethodResponse("chat.history", {
-                ...snapshot,
-                messages: nextHistory,
-                inFlightRun: { ...inFlightRun, text: tail },
-              }),
-            ),
-          );
+          await setHistory({ messages: nextHistory, inFlightRun: { ...inFlightRun, text: tail } });
           await readerGateway.emitGatewayEvent("sessions.changed", {
             sessionKey,
             agentId: "main",

@@ -247,31 +247,11 @@ type ScrollSample = {
   top: number;
   anchor: number | null;
   distance: number;
-  messageKey?: string;
-  rowKey?: string;
-  policy?: {
-    locked: boolean;
-    initialized: boolean;
-    runId: string | null;
-    streamLength: number | null;
-    lastTop: number;
-    maintenance?: boolean;
-    programmatic?: boolean;
-  };
-  rows: Array<{ key?: string; height: number }>;
-};
-type ScrollPolicy = {
-  top: number;
-  distance: number;
-  lastTop?: number;
-  locked?: boolean;
-  programmatic?: boolean;
-  maintenance?: boolean;
+  policy?: { locked: boolean };
 };
 type ScrollProbeElement = HTMLElement & {
   scrollProof: {
     samples: ScrollSample[];
-    policyChanges: Array<{ before?: ScrollPolicy; after: ScrollPolicy }>;
     stop: () => void;
   };
 };
@@ -299,23 +279,7 @@ export async function startScrollProbe(page: Page) {
       const pane = element.closest<HTMLElement & { state?: ChatPageHost }>("openclaw-chat-pane");
       const state = pane?.state;
       return {
-        messageKey: anchor?.closest<HTMLElement>(".chat-bubble")?.dataset.messageId,
-        rowKey: anchor?.closest<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey,
-        policy: state
-          ? {
-              locked: state.chatFollowLocked,
-              initialized: state.chatHasAutoScrolled,
-              runId: state.chatRunId,
-              streamLength: state.chatStream?.length ?? null,
-              lastTop: state.chatLastScrollTop,
-              maintenance: state.chatIsMaintenanceScroll?.(),
-              programmatic: state.chatIsProgrammaticScroll?.(),
-            }
-          : undefined,
-        rows: [...element.querySelectorAll<HTMLElement>(".chat-virtual-row")].map((row) => ({
-          key: row.dataset.virtualRowKey,
-          height: row.offsetHeight,
-        })),
+        policy: state ? { locked: state.chatFollowLocked } : undefined,
         top: element.scrollTop,
         distance: element.scrollHeight - element.clientHeight - element.scrollTop,
         anchor: anchor
@@ -325,32 +289,6 @@ export async function startScrollProbe(page: Page) {
     };
     const before = sample();
     const samples = [before];
-    const scrollPolicy = (): ScrollPolicy => {
-      const state = element.closest<HTMLElement & { state?: ChatPageHost }>(
-        "openclaw-chat-pane",
-      )?.state;
-      return {
-        top: element.scrollTop,
-        distance: element.scrollHeight - element.clientHeight - element.scrollTop,
-        lastTop: state?.chatLastScrollTop,
-        locked: state?.chatFollowLocked,
-        programmatic: state?.chatIsProgrammaticScroll?.(),
-        maintenance: state?.chatIsMaintenanceScroll?.(),
-      };
-    };
-    const policyChanges: ScrollProbeElement["scrollProof"]["policyChanges"] = [];
-    let beforeScroll: ScrollPolicy | undefined;
-    const captureScroll = () => {
-      beforeScroll = scrollPolicy();
-    };
-    const recordScroll = () => {
-      const after = scrollPolicy();
-      if (beforeScroll?.locked !== after.locked) {
-        policyChanges.push({ before: beforeScroll, after });
-      }
-    };
-    element.addEventListener("scroll", captureScroll, true);
-    element.addEventListener("scroll", recordScroll);
     let frame = 0;
     const tick = () => {
       samples.push(sample());
@@ -358,29 +296,20 @@ export async function startScrollProbe(page: Page) {
     };
     (element as ScrollProbeElement).scrollProof = {
       samples,
-      policyChanges,
-      stop: () => {
-        cancelAnimationFrame(frame);
-        element.removeEventListener("scroll", captureScroll, true);
-        element.removeEventListener("scroll", recordScroll);
-      },
+      stop: () => cancelAnimationFrame(frame),
     };
     frame = requestAnimationFrame(tick);
     return { ...before, anchorText };
   });
 }
 export async function readScrollProbe(page: Page, stop = false) {
-  const result = await page
+  return page
     .locator(".chat-pane-cache__pane--active .chat-thread")
     .evaluate((element, shouldStop) => {
       const probe = (element as ScrollProbeElement).scrollProof;
       if (shouldStop) {
         probe.stop();
       }
-      return { samples: probe.samples, policyChanges: shouldStop ? probe.policyChanges : [] };
+      return probe.samples;
     }, stop);
-  if (result.policyChanges.length > 0) {
-    console.info("REAL_GATEWAY_SCROLL_POLICY", JSON.stringify(result.policyChanges));
-  }
-  return result.samples;
 }

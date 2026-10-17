@@ -26,11 +26,6 @@ import {
   startScrollProbe,
   readScrollProbe,
 } from "./chat-collaborator-scroll.real-gateway.test-support.ts";
-import {
-  traceCollaboratorVisuals,
-  traceCollaboratorPaints,
-  markCollaboratorVisuals,
-} from "./chat-collaborator-visual-trace.test-support.ts";
 import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -204,7 +199,6 @@ async function send(
   message: string,
   afterDraft?: () => Promise<void>,
 ) {
-  await markCollaboratorVisuals(page, "send:" + message);
   const before = observed.requests("chat.send").length;
   const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
   await composer.fill(message);
@@ -258,17 +252,12 @@ async function assertAlignment(page: Page, prompt: string, own: boolean) {
   return geometry;
 }
 function paragraphs(prefix: string, count = 14) {
+  const body =
+    "This genuine streamed fixture response provides a stable reading anchor while another authenticated person writes. ";
   return (
     Array.from(
       { length: count },
-      (_, index) =>
-        prefix +
-        " paragraph " +
-        (index + 1) +
-        ". " +
-        "This genuine streamed fixture response provides a stable reading anchor while another authenticated person writes. ".repeat(
-          2,
-        ),
+      (_, index) => `${prefix} paragraph ${index + 1}. ${body.repeat(2)}`,
     ).join("\n\n") + "\n\n"
   );
 }
@@ -294,6 +283,26 @@ function persistedEvent(observed: Observation, runId: string) {
         runId + ":user",
   );
 }
+async function waitForDelta(observed: Observation, text: string, expectedSession?: string) {
+  await expect
+    .poll(() =>
+      observed.received.some(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event === "chat" &&
+          (expectedSession === undefined ||
+            record(frame.payload)?.sessionKey === expectedSession) &&
+          record(frame.payload)?.state === "delta" &&
+          JSON.stringify(frame.payload).includes(text),
+      ),
+    )
+    .toBe(true);
+}
+async function waitForSettlement(page: Page) {
+  await page
+    .getByRole("button", { name: "Stop generating", exact: true })
+    .waitFor({ state: "detached" });
+}
 async function wheel(page: Page, delta: number) {
   await page.locator(".chat-pane-cache__pane--active .chat-thread").hover();
   await page.mouse.wheel(0, delta);
@@ -316,17 +325,6 @@ suite.define(() => {
         await suite.withPage(options, async ({ page: reader }) => {
           await suite.withPage(options, async ({ page: writer }) => {
             const pages = [reader, writer];
-            const traceVisuals = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-            const finishVisuals = traceVisuals
-              ? await Promise.all(
-                  pages.map((page, index) =>
-                    traceCollaboratorVisuals(page, artifactDir, index === 0 ? "reader" : "writer"),
-                  ),
-                )
-              : [];
-            const finishPaints = traceVisuals
-              ? await traceCollaboratorPaints(reader, artifactDir)
-              : null;
             const observers = pages.map(observe);
             const [a, b] = observers as [Observation, Observation];
             const capture = async (stage: string) => {
@@ -415,15 +413,6 @@ suite.define(() => {
               expect(new Set(clientInstanceIds).size).toBe(2);
               expect(identities[0]!.connId).not.toBe(identities[1]!.connId);
               expect(profileIds[0]).not.toBe(profileIds[1]);
-              proof.servedScripts = await Promise.all(
-                pages.map((page) =>
-                  page
-                    .locator("script[src]")
-                    .evaluateAll((scripts) =>
-                      scripts.map((script) => new URL((script as HTMLScriptElement).src).pathname),
-                    ),
-                ),
-              );
               const finishVisibility = await Promise.all(pages.map(startAssistantVisibilityProbe));
               // Short actual turns qualify both reciprocal sender alignments before scroll assertions.
               const alignments: unknown[] = [];
@@ -445,9 +434,7 @@ suite.define(() => {
                     prompt,
                     geometry: await assertAlignment(page, prompt, viewer === index),
                   });
-                  await page
-                    .getByRole("button", { name: "Stop generating", exact: true })
-                    .waitFor({ state: "detached" });
+                  await waitForSettlement(page);
                 }
               }
               proof.alignments = alignments;
@@ -465,18 +452,7 @@ suite.define(() => {
                 const own = await send(reader, a, "Reader starts the " + mode + " scenario");
                 await expect.poll(provider.requests).toBe(turn.index);
                 await turn.append(paragraphs(mode));
-                await expect
-                  .poll(() =>
-                    a.received.some(
-                      (frame) =>
-                        frame.type === "event" &&
-                        frame.event === "chat" &&
-                        record(frame.payload)?.sessionKey === sessionKey &&
-                        record(frame.payload)?.state === "delta" &&
-                        JSON.stringify(frame.payload).includes(mode + " paragraph 14."),
-                    ),
-                  )
-                  .toBe(true);
+                await waitForDelta(a, mode + " paragraph 14.", sessionKey);
                 await waitForChatScrollIdle(reader);
                 await expect
                   .poll(() => chatThreadDistanceFromBottom(reader))
@@ -484,7 +460,6 @@ suite.define(() => {
                 if (mode.startsWith("reading")) {
                   await wheel(reader, -420);
                 }
-                await markCollaboratorVisuals(reader, mode + ":before-remote");
                 const before = await startScrollProbe(reader);
                 expect(
                   mode.startsWith("reading") ? before.distance > 8 : before.distance <= 8,
@@ -516,21 +491,10 @@ suite.define(() => {
                 await expect.poll(() => hasPending(a, remote.runId)).toBe(true);
                 const checkpoints: unknown[] = [];
                 const checkpoint = async (stage: string) => {
-                  await markCollaboratorVisuals(reader, mode + ":" + stage);
                   await waitForChatScrollIdle(reader);
                   const samples = await readScrollProbe(reader);
                   const latest = samples.at(-1)!;
                   checkpoints.push({ stage, ...latest });
-                  console.info(
-                    "REAL_GATEWAY_SCROLL",
-                    JSON.stringify({
-                      mode,
-                      stage,
-                      beforeTop: before.top,
-                      beforeAnchor: before.anchor,
-                      current: latest,
-                    }),
-                  );
                   if (mode.startsWith("reading")) {
                     expect
                       .soft(
@@ -544,21 +508,6 @@ suite.define(() => {
                       .soft(latest.policy?.locked, mode + ": " + stage + " follow lock")
                       .toBe(true);
                   } else {
-                    if (latest.distance > 8) {
-                      const locked = samples.findIndex(
-                        (sample, index) =>
-                          sample.policy?.locked && samples[index - 1]?.policy?.locked === false,
-                      );
-                      console.info(
-                        "REAL_GATEWAY_FOLLOW_LOCK",
-                        JSON.stringify({
-                          mode,
-                          stage,
-                          transition:
-                            locked < 0 ? [] : samples.slice(Math.max(0, locked - 2), locked + 3),
-                        }),
-                      );
-                    }
                     expect
                       .soft(latest.distance, mode + ": " + stage + " follows")
                       .toBeLessThanOrEqual(8);
@@ -566,20 +515,9 @@ suite.define(() => {
                 };
                 await checkpoint("real-pending-input");
                 await turn.append(paragraphs(mode + " continuing", 3));
-                await expect
-                  .poll(() =>
-                    a.received.some(
-                      (frame) =>
-                        frame.type === "event" &&
-                        frame.event === "chat" &&
-                        record(frame.payload)?.state === "delta" &&
-                        JSON.stringify(frame.payload).includes(mode + " continuing paragraph 3."),
-                    ),
-                  )
-                  .toBe(true);
+                await waitForDelta(a, mode + " continuing paragraph 3.");
                 await checkpoint("assistant-stream-growth");
                 const followup = provider.plan();
-                await markCollaboratorVisuals(reader, mode + ":finish-active");
                 await turn.finish();
                 await expect.poll(provider.requests).toBe(followup.index);
                 await expect.poll(() => persistedEvent(a, remote.runId)).toBeDefined();
@@ -587,9 +525,7 @@ suite.define(() => {
                 await followup.append("Writer follow-up completed in " + mode + ".");
                 await followup.finish();
                 for (const page of pages) {
-                  await page
-                    .getByRole("button", { name: "Stop generating", exact: true })
-                    .waitFor({ state: "detached" });
+                  await waitForSettlement(page);
                 }
                 await checkpoint("settled-history");
                 const writerMissingFrames = await finishWriterPresence();
@@ -600,19 +536,6 @@ suite.define(() => {
                   )
                   .toEqual([]);
                 const samples = await readScrollProbe(reader, true);
-                let largestStep = 1;
-                for (let i = 2; i < samples.length; i += 1) {
-                  if (
-                    Math.abs(samples[i]!.top - samples[i - 1]!.top) >
-                    Math.abs(samples[largestStep]!.top - samples[largestStep - 1]!.top)
-                  ) {
-                    largestStep = i;
-                  }
-                }
-                console.info(
-                  "REAL_GATEWAY_TRANSITION",
-                  JSON.stringify({ mode, frames: samples.slice(largestStep - 1, largestStep + 2) }),
-                );
                 const maxDrift = Math.max(
                   ...samples.map((sample) =>
                     Math.abs((sample.anchor ?? Infinity) - before.anchor!),
@@ -654,9 +577,7 @@ suite.define(() => {
                   .toBeLessThanOrEqual(8);
                 await local.finish();
                 for (const page of pages) {
-                  await page
-                    .getByRole("button", { name: "Stop generating", exact: true })
-                    .waitFor({ state: "detached" });
+                  await waitForSettlement(page);
                 }
                 await capture("04-" + mode + "-local-resumed");
               }
@@ -676,33 +597,6 @@ suite.define(() => {
                 expect(observed.sockets()).toBe(2);
               }
             } finally {
-              // Ordinary PR CI retains logs but does not upload the full protocol proof.
-              console.info(
-                "REAL_GATEWAY_TERMINALS",
-                JSON.stringify(
-                  observers.map((observed) => ({
-                    sends: observed
-                      .requests("chat.send")
-                      .map((frame) =>
-                        frame.type === "req" ? record(frame.params)?.idempotencyKey : null,
-                      ),
-                    terminals: observed.received.flatMap((frame) => {
-                      if (frame.type !== "event" || frame.event !== "chat") {
-                        return [];
-                      }
-                      const payload = record(frame.payload);
-                      return payload &&
-                        ["final", "aborted", "error"].includes(String(payload.state))
-                        ? [{ runId: payload.runId, state: payload.state, seq: payload.seq }]
-                        : [];
-                    }),
-                  })),
-                ),
-              );
-              await finishPaints?.();
-              for (const finish of finishVisuals) {
-                await finish();
-              }
               proof.protocol = observers.map((observed) => ({
                 sockets: observed.sockets(),
                 sends: observed

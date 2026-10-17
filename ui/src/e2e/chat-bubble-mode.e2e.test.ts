@@ -87,6 +87,12 @@ suite.define(() => {
       const closeBubbleMenu = async () => {
         await page.locator(".chat-header-session-menu__trigger").click();
       };
+      const changeBubbles = async (enabled: boolean) => {
+        const toggle = await openBubbleMenu();
+        await browserExpect(toggle).toHaveAttribute("aria-checked", String(!enabled));
+        await toggle.click();
+        await browserExpect(toggle).toHaveAttribute("aria-checked", String(enabled));
+      };
       const storedBubbleSessions = () =>
         page.evaluate(
           (key) => JSON.parse(localStorage.getItem(key) ?? "{}").chatBubbleSessionKeys,
@@ -111,10 +117,7 @@ suite.define(() => {
         writeFileSync(path.join(suite.artifactDir, name + ".png"), frame.elements[0]!.png);
       };
       await capture("before");
-      const toggle = await openBubbleMenu();
-      await browserExpect(toggle).toHaveAttribute("aria-checked", "false");
-      await toggle.click();
-      await browserExpect(toggle).toHaveAttribute("aria-checked", "true");
+      await changeBubbles(true);
       await browserExpect.poll(storedBubbleSessions).toEqual([sessionKey]);
       await closeBubbleMenu();
       await browserExpect(chat).toHaveClass(/chat--bubbles/);
@@ -150,18 +153,13 @@ suite.define(() => {
       await browserExpect(
         page.locator("openclaw-chat-header-session-menu > .chat-header-session-menu"),
       ).toHaveClass(/chat-header-session-menu--compact/);
-      const otherToggle = await openBubbleMenu();
-      await browserExpect(otherToggle).toHaveAttribute("aria-checked", "false");
-      await otherToggle.click();
-      await browserExpect(otherToggle).toHaveAttribute("aria-checked", "true");
+      await changeBubbles(true);
       await closeBubbleMenu();
       await browserExpect(chat).toHaveClass(/chat--bubbles/);
       await browserExpect.poll(storedBubbleSessions).toEqual([sessionKey, otherSessionKey]);
       await page.reload();
       await browserExpect(chat).toHaveClass(/chat--bubbles/);
-      const reloadedToggle = await openBubbleMenu();
-      await browserExpect(reloadedToggle).toHaveAttribute("aria-checked", "true");
-      await reloadedToggle.click();
+      await changeBubbles(false);
       await closeBubbleMenu();
       await browserExpect(chat).not.toHaveClass(/chat--bubbles/);
       await browserExpect.poll(storedBubbleSessions).toEqual([sessionKey]);
@@ -205,9 +203,7 @@ suite.define(() => {
       await browserExpect(chat).toHaveClass(/chat--bubbles/);
       await browserExpect(streamedReply).toHaveCount(1);
       await browserExpect(streamedReply).toBeVisible();
-      const finalToggle = await openBubbleMenu();
-      await finalToggle.click();
-      await browserExpect(finalToggle).toHaveAttribute("aria-checked", "false");
+      await changeBubbles(false);
       await closeBubbleMenu();
       await browserExpect(chat).not.toHaveClass(/chat--bubbles/);
       await browserExpect.poll(storedBubbleSessions).toBeUndefined();

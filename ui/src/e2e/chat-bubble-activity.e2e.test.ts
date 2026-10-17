@@ -1,6 +1,7 @@
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Page } from "playwright";
 import { expect as browserExpect } from "playwright/test";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -15,21 +16,48 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Bubble identity and activity" });
 const sessionKey = "agent:main:dashboard:bubble-activity";
 
+async function enableBubbles(page: Page) {
+  await page.addInitScript(
+    ({ key, session }) => {
+      localStorage.setItem(
+        key,
+        JSON.stringify({ chatBubbleSessionKeys: [session], theme: "dark" }),
+      );
+    },
+    { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), session: sessionKey },
+  );
+  await page.route("**/control-ui-config.json", (route) =>
+    route.fulfill({
+      json: { ...createControlUiMockBootstrapConfig(), chatBubblesEnabled: true },
+    }),
+  );
+}
+
+function userMessage(content: string, timestamp: number) {
+  return {
+    role: "user",
+    content,
+    timestamp,
+    __openclaw: {
+      id: `layout-user-${timestamp}`,
+      runId: "layout-request",
+      senderId: "profile-riley",
+      senderIdentity: { type: "profile", id: "profile-riley" },
+      senderName: "Riley",
+    },
+  };
+}
+function assistantMessage(content: string, timestamp: number, phase = "final_answer") {
+  return { role: "assistant", content, timestamp, phase, runId: "layout" };
+}
+
 suite.define(() => {
   it.each([
     { width: 1280, height: 900 },
     { width: 390, height: 844 },
   ])("keeps identity on the first message and work compact at $width px", async (viewport) => {
     await suite.withPage({ viewport, reducedMotion: "reduce" }, async ({ page }) => {
-      await page.addInitScript(
-        ({ key, session }) => {
-          localStorage.setItem(
-            key,
-            JSON.stringify({ chatBubbleSessionKeys: [session], theme: "dark" }),
-          );
-        },
-        { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), session: sessionKey },
-      );
+      await enableBubbles(page);
       await installMockGateway(page, {
         sessionKey,
         presenceUsers: [
@@ -41,37 +69,9 @@ suite.define(() => {
           },
         ],
         historyMessages: [
-          {
-            role: "user",
-            content: "Please check the layout.",
-            timestamp: 1,
-            __openclaw: {
-              id: "layout-user-1",
-              runId: "layout-request",
-              senderId: "profile-riley",
-              senderIdentity: { type: "profile", id: "profile-riley" },
-              senderName: "Riley",
-            },
-          },
-          {
-            role: "user",
-            content: "Keep the avatar where it is.",
-            timestamp: 2,
-            __openclaw: {
-              id: "layout-user-2",
-              runId: "layout-request",
-              senderId: "profile-riley",
-              senderIdentity: { type: "profile", id: "profile-riley" },
-              senderName: "Riley",
-            },
-          },
-          {
-            role: "assistant",
-            content: "I’ll check the spacing first.",
-            phase: "commentary",
-            runId: "layout",
-            timestamp: 3,
-          },
+          userMessage("Please check the layout.", 1),
+          userMessage("Keep the avatar where it is.", 2),
+          assistantMessage("I’ll check the spacing first.", 3, "commentary"),
           {
             role: "toolResult",
             toolName: "read",
@@ -80,27 +80,10 @@ suite.define(() => {
             runId: "layout",
             timestamp: 4,
           },
-          {
-            role: "assistant",
-            content: "The layout now has room to breathe.",
-            phase: "final_answer",
-            runId: "layout",
-            timestamp: 5,
-          },
-          {
-            role: "assistant",
-            content: "The second message keeps its rounded corners.",
-            phase: "final_answer",
-            runId: "layout",
-            timestamp: 6,
-          },
+          assistantMessage("The layout now has room to breathe.", 5),
+          assistantMessage("The second message keeps its rounded corners.", 6),
         ],
       });
-      await page.route("**/control-ui-config.json", (route) =>
-        route.fulfill({
-          json: { ...createControlUiMockBootstrapConfig(), chatBubblesEnabled: true },
-        }),
-      );
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const chat = page.locator("section.chat");
       await browserExpect(chat).toHaveClass(/chat--bubbles/);
@@ -158,36 +141,24 @@ suite.define(() => {
 
   it("renders a first fragment before any tool or final event and preserves it across tools", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      await page.addInitScript(
-        ({ key, session }) => {
-          localStorage.setItem(
-            key,
-            JSON.stringify({ chatBubbleSessionKeys: [session], theme: "dark" }),
-          );
-        },
-        { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), session: sessionKey },
-      );
+      await enableBubbles(page);
       const gateway = await installMockGateway(page, {
         sessionKey,
         sessionInfo: { reasoningLevel: "stream" },
         sessions: [{ key: sessionKey, reasoningLevel: "stream" }],
       });
-      await page.route("**/control-ui-config.json", (route) =>
-        route.fulfill({
-          json: { ...createControlUiMockBootstrapConfig(), chatBubblesEnabled: true },
-        }),
-      );
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const chat = page.locator("section.chat");
       await page.locator(".agent-chat__composer-combobox textarea").fill("Check the live layout.");
       await page.getByRole("button", { name: "Send message", exact: true }).click();
       const request = await gateway.waitForRequest("chat.send");
       const runId = String(asOptionalRecord(request.params)?.idempotencyKey);
-      await gateway.emitGatewayEvent("agent", {
-        sessionKey,
+      const emit = (event: string, seq: number, payload: Record<string, unknown>) =>
+        gateway.emitGatewayEvent(event, { sessionKey, runId, seq, ...payload });
+      const tool = (seq: number, data: Record<string, unknown>) =>
+        emit("session.tool", seq, { agentId: "main", ts: Date.now(), stream: "tool", data });
+      await emit("agent", 1, {
         agentId: "main",
-        runId,
-        seq: 1,
         ts: Date.now(),
         stream: "thinking",
         data: { itemId: "layout-thinking", text: "Inspecting the layout" },
@@ -216,10 +187,7 @@ suite.define(() => {
           characterData: true,
         });
       });
-      await gateway.emitGatewayEvent("chat", {
-        sessionKey,
-        runId,
-        seq: 2,
+      await emit("chat", 2, {
         state: "delta",
         deltaText: "I’ll",
         message: {
@@ -244,36 +212,22 @@ suite.define(() => {
       await browserExpect(chat.locator(".chat-bubble-dots--working")).toHaveCount(0);
       // The producer retires the live text tail when its keyed preamble is published.
       // First-fragment visibility above deliberately precedes this boundary.
-      await gateway.emitGatewayEvent("chat", {
-        sessionKey,
-        runId,
-        seq: 3,
+      await emit("chat", 3, {
         state: "delta",
         deltaText: "",
         replace: true,
         message: { role: "assistant", content: [] },
       });
-      await gateway.emitGatewayEvent("agent", {
-        sessionKey,
-        runId,
-        seq: 4,
+      await emit("agent", 4, {
         ts: Date.now(),
         stream: "item",
         data: { kind: "preamble", itemId: "layout-preamble", phase: "end", progressText: "I’ll" },
       });
-      await gateway.emitGatewayEvent("session.tool", {
-        sessionKey,
-        agentId: "main",
-        runId,
-        seq: 5,
-        ts: Date.now(),
-        stream: "tool",
-        data: {
-          phase: "start",
-          toolCallId: "live-read",
-          name: "read",
-          args: { path: "layout.css" },
-        },
+      await tool(5, {
+        phase: "start",
+        toolCallId: "live-read",
+        name: "read",
+        args: { path: "layout.css" },
       });
       await browserExpect(chat.locator(".chat-bubble-dots--working")).toHaveCount(1);
       const working = chat.locator(".chat-bubble-activity--working");
@@ -282,19 +236,11 @@ suite.define(() => {
       await browserExpect(
         chat.locator(".chat-text").getByText("I’ll", { exact: true }),
       ).toBeVisible();
-      await gateway.emitGatewayEvent("session.tool", {
-        sessionKey,
-        agentId: "main",
-        runId,
-        seq: 6,
-        ts: Date.now(),
-        stream: "tool",
-        data: {
-          phase: "result",
-          toolCallId: "live-read",
-          name: "read",
-          result: "The layout is ready.",
-        },
+      await tool(6, {
+        phase: "result",
+        toolCallId: "live-read",
+        name: "read",
+        result: "The layout is ready.",
       });
       await browserExpect(chat.locator(".chat-bubble-dots--working")).toHaveCount(1);
       await browserExpect(working).toHaveAttribute("open", "");
