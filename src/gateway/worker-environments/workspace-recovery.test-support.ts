@@ -73,6 +73,18 @@ export function createWorkerWorkspaceRecoveryFixture(options: {
 }
 
 type WorkspaceFiles = Record<string, string | Uint8Array>;
+const digest = (content: string | Uint8Array) => createHash("sha256").update(content).digest("hex");
+const fileEntry = (
+  entryPath: string,
+  content: Uint8Array,
+  mode = 0o644,
+): WorkerWorkspaceManifestEntry => ({
+  path: entryPath,
+  type: "file",
+  mode,
+  size: content.length,
+  sha256: digest(content),
+});
 
 export async function writeWorkspaceFiles(root: string, files: WorkspaceFiles) {
   for (const [relative, content] of Object.entries(files)) {
@@ -120,13 +132,7 @@ export async function manifestFor(root: string): Promise<WorkerWorkspaceManifest
         });
       } else {
         const content = await fs.readFile(absolute);
-        entries.push({
-          path: relative,
-          type: "file",
-          mode: (stats.mode & 0o111) === 0 ? 0o644 : 0o755,
-          size: content.length,
-          sha256: createHash("sha256").update(content).digest("hex"),
-        });
+        entries.push(fileEntry(relative, content, (stats.mode & 0o111) === 0 ? 0o644 : 0o755));
       }
     }
   };
@@ -149,26 +155,16 @@ export async function applyWorkspace(params: {
   }) => Promise<void>;
 }) {
   const { applyStagedWorkerWorkspace } = await import("./workspace-reconcile-apply.js");
-  let pending: WorkerWorkspaceReconciliationJournal | undefined;
   return await applyStagedWorkerWorkspace({
     ...params,
     baseManifestRef: `sha256:${"a".repeat(64)}`,
     currentManifestRef: `sha256:${"b".repeat(64)}`,
     acceptance: { kind: "reconcile", publish: params.publishAcceptedManifest },
     journal: {
-      load: async () => pending,
-      begin: async (journal) => {
-        pending = journal;
-        await params.begin?.(journal);
-      },
-      commit: async (manifestRef) => {
-        await params.commit?.(manifestRef);
-        pending = undefined;
-      },
-      abort: async () => {
-        await params.abort?.();
-        pending = undefined;
-      },
+      load: async () => undefined,
+      begin: async (journal) => params.begin?.(journal),
+      commit: async (manifestRef) => params.commit?.(manifestRef),
+      abort: async () => params.abort?.(),
     },
   });
 }
@@ -197,20 +193,9 @@ export async function stagePendingWorkerWorkspaceResult(params: {
     const raw = JSON.stringify({
       version: 1,
       baseCommit: null,
-      entries:
-        content === undefined
-          ? []
-          : [
-              {
-                path: "result.txt",
-                type: "file",
-                mode: 0o644,
-                size: Buffer.byteLength(content),
-                sha256: createHash("sha256").update(content).digest("hex"),
-              },
-            ],
+      entries: content === undefined ? [] : [fileEntry("result.txt", Buffer.from(content))],
     });
-    return { raw, ref: `sha256:${createHash("sha256").update(raw).digest("hex")}` };
+    return { raw, ref: `sha256:${digest(raw)}` };
   };
   const base = encode(params.base);
   const current = encode(params.current);
