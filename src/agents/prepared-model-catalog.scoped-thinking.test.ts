@@ -32,14 +32,16 @@ const augmentCatalogMock =
   vi.fn<(params: { snapshot: ModelCatalogSnapshot }) => Promise<ModelCatalogSnapshot>>();
 
 vi.mock("./harness/model-catalog.js", () => ({
-  augmentModelCatalogWithAgentHarness: augmentCatalogMock,
+  augmentModelCatalogWithAgentHarness: (params: { snapshot: ModelCatalogSnapshot }) =>
+    augmentCatalogMock(params),
 }));
 
 vi.mock("./model-catalog.js", () => ({ loadManifestModelCatalog: () => manifestCatalogMock() }));
 vi.mock("./prepared-model-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./prepared-model-runtime.js")>()),
-  getPreparedModelRuntimeSnapshot: publishedSnapshotMock,
-  prepareModelRuntimeSnapshot: preparedSnapshotMock,
+  getPreparedModelRuntimeSnapshot: (input: PreparedModelRuntimeInput) =>
+    publishedSnapshotMock(input),
+  prepareModelRuntimeSnapshot: (input: PreparedModelRuntimeInput) => preparedSnapshotMock(input),
   acquireReadOnlyPreparedModelRuntime: async (input: PreparedModelRuntimeInput) => ({
     snapshot: await acquireSnapshotMock(input),
     [Symbol.asyncDispose]: releaseSnapshotMock,
