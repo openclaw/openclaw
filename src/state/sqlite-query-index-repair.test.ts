@@ -47,15 +47,11 @@ const cases = [
       },
     ],
     seed(db: EngineConnection) {
-      db.exec(`
-        INSERT INTO worker_session_placements
-          (session_id, agent_id, session_key, state, environment_id,
-           created_at_ms, updated_at_ms, state_changed_at_ms)
-        VALUES
+      db.exec(`INSERT INTO worker_session_placements
+          (session_id, agent_id, session_key, state, environment_id, created_at_ms, updated_at_ms, state_changed_at_ms) VALUES
           ('a', 'main', 'agent:main:a', 'provisioning', 'environment', 1, 1, 1),
           ('b', 'main', 'agent:main:b', 'provisioning', 'environment', 2, 2, 2),
-          ('c', 'main', 'agent:main:c', 'local', NULL, 3, 3, 3);
-      `);
+          ('c', 'main', 'agent:main:c', 'local', NULL, 3, 3, 3);`);
     },
   },
   {
@@ -91,30 +87,19 @@ const cases = [
       },
     ],
     seed(db: EngineConnection) {
-      const insert = db.prepare(`
-        INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
-        VALUES (?, ?, ?, 1)
-      `);
+      const insert = db.prepare(`INSERT INTO session_nodes
+        (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)`);
+      const cache = db.prepare(
+        "INSERT INTO cache_entries(scope, key, value_json, updated_at) VALUES ('talk-client-voice-sessions', ?, ?, 1)",
+      );
+      const voiceScope = { agentId: "main", sessionKey: "agent:main:main", origin: "client" };
       for (const key of ["a", "b", "c"]) {
         insert.run(
           `agent:main:${key}`,
           key,
           key === "c" ? JSON.stringify({ sessionId: key, updatedAt: 1 }) : `{invalid-${key}`,
         );
-      }
-      const cache = db.prepare(
-        "INSERT INTO cache_entries(scope, key, value_json, updated_at) VALUES ('talk-client-voice-sessions', ?, ?, 1)",
-      );
-      for (const key of ["a", "b", "c"]) {
-        cache.run(
-          key,
-          JSON.stringify({
-            agentId: "main",
-            sessionKey: "agent:main:main",
-            origin: "client",
-            status: key === "c" ? "closed" : "open",
-          }),
-        );
+        cache.run(key, JSON.stringify({ ...voiceScope, status: key === "c" ? "closed" : "open" }));
       }
       cache.run("malformed", "{broken");
       db.exec(`
@@ -156,18 +141,21 @@ function readSchema(db: EngineConnection) {
   };
 }
 
+function snapshot(db: EngineConnection, testCase: IndexCase) {
+  return { rows: readRows(db, testCase), schema: readSchema(db) };
+}
+
 it.each(["fresh", "missing", "drifted"] as const)(
   "opens %s query indexes without migrating or changing stored rows",
   (kind) => {
     for (const testCase of cases) {
       const fixture = createFixture(testCase);
       let database = fixture.database;
-      const before = readRows(database.db, testCase);
-      const metadata = database.db.prepare("SELECT * FROM schema_meta ORDER BY meta_key").all();
+      const before = snapshot(database.db, testCase);
       if (kind !== "fresh") {
         closeDatabases();
-        const previous = new DatabaseSync(database.path);
-        try {
+        {
+          using previous = new DatabaseSync(database.path);
           for (const index of testCase.indexes) {
             previous.exec(`DROP INDEX IF EXISTS ${index.name}`);
             if (kind === "drifted") {
@@ -176,18 +164,15 @@ it.each(["fresh", "missing", "drifted"] as const)(
               );
             }
           }
-        } finally {
-          previous.close();
         }
         database = fixture.open();
       }
 
-      expect(readRows(database.db, testCase)).toEqual(before);
-      expect(database.db.prepare("SELECT * FROM schema_meta ORDER BY meta_key").all()).toEqual(
-        metadata,
-      );
-      expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: testCase.version,
+      expect(readRows(database.db, testCase)).toEqual(before.rows);
+      const { metadata, version } = readSchema(database.db);
+      expect({ metadata, version }).toEqual({
+        metadata: before.schema.metadata,
+        version: { user_version: testCase.version },
       });
       for (const index of testCase.indexes) {
         expect(database.db.prepare(index.query).all()).toEqual([{ id: "a" }, { id: "b" }]);
@@ -202,11 +187,10 @@ it.each(["fresh", "missing", "drifted"] as const)(
         ).toEqual({ unique: 0 });
       }
 
-      const schema = readSchema(database.db);
+      const repaired = snapshot(database.db, testCase);
       closeDatabases();
       database = fixture.open();
-      expect(readSchema(database.db)).toEqual(schema);
-      expect(readRows(database.db, testCase)).toEqual(before);
+      expect(snapshot(database.db, testCase)).toEqual(repaired);
       closeDatabases();
     }
   },
@@ -217,15 +201,10 @@ it.each(cases)(
   async (testCase) => {
     const { database, options } = createFixture(testCase);
     // The preceding same-version reader knows every current contract except these additions.
+    const names = testCase.indexes.map((index) => index.name).join("|");
     const previousSchema = testCase
       .schema()
-      .replace(
-        new RegExp(
-          `CREATE INDEX IF NOT EXISTS (?:${testCase.indexes.map((index) => index.name).join("|")})\\b[^;]*;`,
-          "gu",
-        ),
-        "",
-      );
+      .replace(new RegExp(`CREATE INDEX IF NOT EXISTS (?:${names})\\b[^;]*;`, "gu"), "");
     expect(() =>
       assertSqliteSchemaContains(
         requireNativeSqliteDatabase(database.db),
@@ -236,23 +215,21 @@ it.each(cases)(
     ).not.toThrow();
     const rows = readRows(database.db, testCase);
     closeDatabases();
-    const previous = new DatabaseSync(database.path);
     let before;
-    try {
+    {
+      using previous = new DatabaseSync(database.path);
       for (const index of testCase.indexes) {
         previous.exec(`DROP INDEX IF EXISTS ${index.name}`);
       }
       before = readSchema(previous);
-    } finally {
-      previous.close();
     }
+    const expected = { rows, schema: before };
 
     if (testCase.role === "state") {
       const reader = await openExistingOpenClawStateDatabaseReadOnly(options);
       assert(reader);
       try {
-        expect(readRows(reader.db, testCase)).toEqual(rows);
-        expect(readSchema(reader.db)).toEqual(before);
+        expect(snapshot(reader.db, testCase)).toEqual(expected);
       } finally {
         reader.walMaintenance.close();
       }
@@ -260,18 +237,12 @@ it.each(cases)(
       const result = openOpenClawAgentDatabaseReadOnly(options);
       assert(result.found);
       try {
-        expect(readRows(result.database.db, testCase)).toEqual(rows);
-        expect(readSchema(result.database.db)).toEqual(before);
+        expect(snapshot(result.database.db, testCase)).toEqual(expected);
       } finally {
         result.database.close();
       }
     }
-    const after = new DatabaseSync(database.path, { readOnly: true });
-    try {
-      expect(readSchema(after)).toEqual(before);
-      expect(readRows(after, testCase)).toEqual(rows);
-    } finally {
-      after.close();
-    }
+    using after = new DatabaseSync(database.path, { readOnly: true });
+    expect(snapshot(after, testCase)).toEqual(expected);
   },
 );

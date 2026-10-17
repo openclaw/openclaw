@@ -2,10 +2,9 @@ import { deserialize } from "node:v8";
 import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
-import type { Actor } from "../infra/sqlite-worker-broker.types.js";
 import { createSqliteWorkerClient } from "../infra/sqlite-worker-client.js";
+import { createSqliteWorkerClientActor } from "../infra/sqlite-worker-client.test-support.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
-import { SqliteWorkerSlotCustody } from "../infra/sqlite-worker-request-custody.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
@@ -21,6 +20,19 @@ import {
 } from "./openclaw-state-worker-store.js";
 
 type DomainScope = Pick<SqliteWorkerStore<OpenClawStateWorkerOperations>, "execute">;
+
+function endSession(sessionId: string, endedAt = 1) {
+  return { type: "capture.endSession" as const, input: { sessionId, endedAt } };
+}
+
+function observeSettlement(promise: Promise<unknown>) {
+  const result = { settled: false };
+  const mark = () => {
+    result.settled = true;
+  };
+  void promise.then(mark, mark);
+  return result;
+}
 
 const physical = vi.hoisted(() => ({
   client: undefined as
@@ -51,7 +63,6 @@ vi.mock("../shared/global-singleton.js", async (importOriginal) => {
 
 // mock-isolation: the synthetic physical database must not reach the real cache singleton lifecycle.
 vi.mock("./openclaw-state-db-cache.js", () => ({
-  // The synthetic cache is the only lifecycle this file publishes.
   assertPublishedOpenClawStateDatabaseLifecycle: () => {},
   openClawStateDatabaseCache: {
     getKnownOpenClawStateDatabaseIdentity: () => physical.databaseAdmission?.identity,
@@ -122,33 +133,7 @@ afterEach(() => {
 });
 
 function createLeaseFixture() {
-  const custody = new SqliteWorkerSlotCustody().createRequest();
-  custody.activate();
-  custody.accept();
-  custody.post();
-  const actor: Actor = {
-    nativeStopped: Promise.resolve(),
-    markNativeStopped() {},
-    id: 1,
-    key: "synthetic-state",
-    databasePath: "/synthetic/state.sqlite",
-    stateAccess: {
-      canonicalPath: "/synthetic/state.sqlite",
-      assertAccessAllowed() {},
-      assertReadAllowed() {},
-    },
-    pathReferences: new Map([["/synthetic/state.sqlite", 1]]),
-    moduleUrl: "file:///synthetic/shared-state-worker.js",
-    inputHash: "capture-lease-fixture",
-    get slot(): never {
-      throw new Error("Lease client must not access the native Worker slot");
-    },
-    references: 1,
-    opened: Promise.resolve(),
-    openDispatch: { custody },
-    initialized: true,
-    backendClosed: false,
-  };
+  const actor = createSqliteWorkerClientActor();
   physical.client = createSqliteWorkerClient<OpenClawStateWorkerOperations>({
     actor,
     isDraining: () => false,
@@ -168,9 +153,9 @@ function createLeaseFixture() {
   const context: OpenClawStateWorkerContext = {
     maintenanceScope: maintenance,
     admission: {
-      coordinationKey: "synthetic-state",
-      databasePath: "/synthetic/state.sqlite",
-      identity: { key: "synthetic-state", canonicalPath: "/synthetic/state.sqlite" },
+      coordinationKey: actor.key,
+      databasePath: actor.databasePath,
+      identity: { key: actor.key, canonicalPath: actor.databasePath },
       assertCurrent: () => {},
     },
     environment: { OPENCLAW_STATE_DIR: "/synthetic" },
@@ -181,18 +166,9 @@ function createLeaseFixture() {
 
 it("closes fresh callback admission while accepted callbacks and terminal writes finish", async () => {
   const { maintenance, context } = createLeaseFixture();
-  const acceptedCommand = {
-    type: "capture.endSession" as const,
-    input: { sessionId: "accepted", endedAt: 1 },
-  };
-  const terminalCommand = {
-    type: "capture.endSession" as const,
-    input: { sessionId: "terminal", endedAt: 2 },
-  };
-  const forbiddenCommand = {
-    type: "capture.endSession" as const,
-    input: { sessionId: "not-admitted", endedAt: 3 },
-  };
+  const acceptedCommand = endSession("accepted");
+  const terminalCommand = endSession("terminal", 2);
+  const forbiddenCommand = endSession("not-admitted", 3);
   const finishAccepted = createDeferredCore();
   const acceptedFinished = createDeferredCore();
   const pendingCommand = createDeferredCore();
@@ -248,10 +224,7 @@ it("drains a command accepted before cold acquisition after its callback returns
   const { maintenance, context } = createLeaseFixture();
   const lease = maintenance.run(() => createOpenClawStateWorkerLease(context));
   const callbackResult = createDeferredCore<string>();
-  const acceptedCommand = {
-    type: "capture.endSession" as const,
-    input: { sessionId: "accepted-before-open", endedAt: 1 },
-  };
+  const acceptedCommand = endSession("accepted-before-open");
   physical.commandCompletion = finishCommand.promise.then(() => {
     expect(physical.events).toEqual([acceptedCommand]);
   });
@@ -262,11 +235,7 @@ it("drains a command accepted before cold acquisition after its callback returns
     commands.push(scope.execute(acceptedCommand));
     return callbackResult.promise;
   });
-  let operationSettled = false;
-  const markSettled = () => {
-    operationSettled = true;
-  };
-  void operation.then(markSettled, markSettled);
+  const operationState = observeSettlement(operation);
   callbackResult.resolve("callback-complete");
   await callbackResult.promise;
   const closing = maintenance.close();
@@ -275,19 +244,16 @@ it("drains a command accepted before cold acquisition after its callback returns
     if (!invocation) {
       throw new Error("Lease callback was not invoked synchronously");
     }
-    await expect(
-      invocation.execute({
-        type: "capture.endSession",
-        input: { sessionId: "after-callback", endedAt: 2 },
-      }),
-    ).rejects.toThrow("Shared-state worker operation is closed");
-    expect(operationSettled).toBe(false);
+    await expect(invocation.execute(endSession("after-callback", 2))).rejects.toThrow(
+      "Shared-state worker operation is closed",
+    );
+    expect(operationState.settled).toBe(false);
     expect(physical.events).toEqual([]);
 
     openGate.resolve();
     await lease.ready;
     await commandStarted.promise;
-    expect(operationSettled).toBe(false);
+    expect(operationState.settled).toBe(false);
     expect(physical.events).toEqual([acceptedCommand]);
     finishCommand.resolve();
     await expect(commands[0]).resolves.toBeUndefined();
@@ -309,10 +275,7 @@ it("cancels a queued callback without abandoning the shared actor's cold acquisi
   const { maintenance, context } = createLeaseFixture();
   const lease = maintenance.run(() => createOpenClawStateWorkerLease(context));
   const canceled = new AbortController();
-  const pending = lease.execute(
-    { type: "capture.endSession", input: { sessionId: "canceled-before-open", endedAt: 1 } },
-    { signal: canceled.signal },
-  );
+  const pending = lease.execute(endSession("canceled-before-open"), { signal: canceled.signal });
   const reason = new Error("callback task deadline expired");
   canceled.abort(reason);
   try {
@@ -392,16 +355,12 @@ it("retires an abandoned actor after joining its accepted native opening", async
     { signal: cancel.signal },
   );
   const rejected = expect(pending).rejects.toBe(reason);
-  let settled = false;
-  const markSettled = () => {
-    settled = true;
-  };
-  void pending.then(markSettled, markSettled);
+  const pendingState = observeSettlement(pending);
   try {
     await withinTest(opening.promise, signal);
     cancel.abort(reason);
     await vi.advanceTimersByTimeAsync(0);
-    expect(settled).toBe(false);
+    expect(pendingState.settled).toBe(false);
     openGate.resolve();
     await withinTest(rejected, signal);
     expect(operation).not.toHaveBeenCalled();
@@ -441,9 +400,7 @@ it.each(["replaced", "revoked"] as const)(
       }
     };
     try {
-      await expect(
-        lease.execute({ type: "capture.endSession", input: { sessionId: "refused", endedAt: 1 } }),
-      ).rejects.toThrow(
+      await expect(lease.execute(endSession("refused"))).rejects.toThrow(
         change === "revoked" ? "Synthetic maintenance owner revoked" : "resource owner changed",
       );
       expect(physical.events).toEqual([]);
