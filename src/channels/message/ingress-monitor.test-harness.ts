@@ -12,7 +12,7 @@ export type RawEvent = { id: string; lane: string; text: string };
 export type StoredEvent = { version: 1; rawEvent: string };
 type MonitorOptions = CreateChannelIngressMonitorOptions<RawEvent, string, StoredEvent, unknown>;
 
-class PermanentIngressError extends Error {}
+export class PermanentIngressError extends Error {}
 
 export function createMonitor(
   queue: MonitorOptions["queue"],
@@ -20,10 +20,7 @@ export function createMonitor(
   activityOrMonitorOptions?:
     | MonitorOptions["onActivityChange"]
     | (Partial<Omit<MonitorOptions, "queue" | "deliver" | "payload" | "drain">> &
-        Pick<
-          NonNullable<MonitorOptions["drain"]>,
-          "retryPolicy" | "deferredLaneOccupancy" | "deriveLaneKey"
-        >),
+        Pick<NonNullable<MonitorOptions["drain"]>, "retryPolicy" | "deferredLaneOccupancy">),
   onError?: (error: unknown) => void,
   abortSignal?: AbortSignal,
   pollIntervalMs = 10,
@@ -33,8 +30,7 @@ export function createMonitor(
     typeof activityOrMonitorOptions === "function" ? activityOrMonitorOptions : undefined;
   const monitorOptions =
     typeof activityOrMonitorOptions === "object" ? activityOrMonitorOptions : {};
-  const { inspect, retryPolicy, deferredLaneOccupancy, deriveLaneKey, ...baseMonitorOptions } =
-    monitorOptions;
+  const { inspect, retryPolicy, deferredLaneOccupancy, ...baseMonitorOptions } = monitorOptions;
   return createChannelIngressMonitor<RawEvent, string, StoredEvent>({
     queue,
     inspect: inspect ?? ((raw) => ({ eventId: raw.id, laneKey: `lane:${raw.lane}` })),
@@ -53,7 +49,6 @@ export function createMonitor(
       adoptionStallTimeoutMs: 5_000,
       retryPolicy: retryPolicy ?? { baseMs: retryBaseMs, maxMs: retryBaseMs },
       ...(deferredLaneOccupancy ? { deferredLaneOccupancy } : {}),
-      ...(deriveLaneKey ? { deriveLaneKey } : {}),
       resolveNonRetryableFailure: (error) =>
         error instanceof PermanentIngressError
           ? { reason: "invalid-event", message: error.message }

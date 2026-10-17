@@ -30,31 +30,46 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import {
+  ensureCanonicalUserProfileForEmail,
+  setCanonicalUserProfileRole,
+} from "../../state/user-profile-writes.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import type { GatewayClient } from "./types.js";
+import type { GatewayRequestContext, RespondFn, GatewayClient } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   readMediaBuffer: vi.fn(),
-  unexpected: (operation: string) => () => {
-    throw new Error(`Unexpected ${operation}`);
-  },
 }));
 
 // Queued sources stay idle: this boundary only cuts history and settles pending work.
 vi.mock("../../auto-reply/reply/queue/drain.js", () => ({
   clearFollowupDrainCallback: vi.fn(),
-  dropAbortedFollowups: mocks.unexpected("followup drain"),
-  kickFollowupDrainIfIdle: mocks.unexpected("followup drain"),
-  rememberFollowupDrainCallback: mocks.unexpected("followup drain"),
+  dropAbortedFollowups: () => {
+    throw new Error("Unexpected followup drain");
+  },
+  kickFollowupDrainIfIdle: () => {
+    throw new Error("Unexpected followup drain");
+  },
+  rememberFollowupDrainCallback: () => {
+    throw new Error("Unexpected followup drain");
+  },
 }));
 vi.mock("../../auto-reply/reply/queue/delivery-context.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../auto-reply/reply/queue/delivery-context.js")>()),
-  createOverflowSummaryRetrySource: mocks.unexpected("queue overflow"),
-  resolveFollowupAuthorizationKey: mocks.unexpected("queue overflow"),
-  resolveFollowupDeliveryStorageKey: mocks.unexpected("queue overflow"),
+  createOverflowSummaryRetrySource: () => {
+    throw new Error("Unexpected queue overflow");
+  },
+  resolveFollowupAuthorizationKey: () => {
+    throw new Error("Unexpected queue overflow");
+  },
+  resolveFollowupDeliveryStorageKey: () => {
+    throw new Error("Unexpected queue overflow");
+  },
 }));
 vi.mock("../../agents/model-thinking-default.js", () => ({
-  resolveThinkingSelection: mocks.unexpected("model selection refresh"),
+  resolveThinkingSelection: () => {
+    throw new Error("Unexpected model selection refresh");
+  },
 }));
 vi.mock("../../auto-reply/thinking.js", async () => {
   const { normalizeThinkLevel } = await import("../../auto-reply/thinking.shared.js");
@@ -79,56 +94,20 @@ import {
 } from "../../config/sessions/session-entry-read-runtime.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
-import {
-  sessionKey,
-  sourceSessionId,
-  messageCutContext as context,
-  invokeHandler as invoke,
-  restrictedOperator,
-  holdLifecycle,
-} from "./sessions-rewind.handler.test-support.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { sessionRewindHandlers } from "./sessions-rewind.js";
 
 // One teardown owns drainage and deletion so a failed drain retains the fixture root.
 const tempDirs = createTempDirTracker();
-const sourceScope = { agentId: "main", sessionKey };
-const transcriptScope = { ...sourceScope, sessionId: sourceSessionId };
+const sessionKey = "agent:main:rewind-handler";
+const sourceSessionId = "rewind-handler-source";
 const sessionLane = resolveEmbeddedSessionLane(sessionKey);
 const storedImageId = "stored-image.png";
 const storedImagePath = `/state/media/inbound/${storedImageId}`;
 const storedImageData = Buffer.from("stored-image");
-const editorAttachments = [
-  { mimeType: "image/png", data: "aW1hZ2U=" },
-  { mimeType: "image/png", data: storedImageData.toString("base64") },
-];
 const queuedCommandSettlements = new Set<Promise<void>>();
-
-function messageEvent(id: string, parentId: string | null, message: Record<string, unknown>) {
-  return { type: "message" as const, id, parentId, message };
-}
-
-function expectReply(respond: ReturnType<typeof vi.fn>, payload: unknown) {
-  expect(respond).toHaveBeenCalledWith(true, payload, undefined);
-}
-
-function expectRejected(
-  respond: ReturnType<typeof vi.fn>,
-  message: unknown,
-  code: string = ErrorCodes.INVALID_REQUEST,
-) {
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ code, message }),
-  );
-}
-
-const readSource = () => readSessionEntryReadOnlyInWorker(sourceScope);
-const readEntries = () =>
-  readSessionEntrySummariesInWorker({
-    agentId: "main",
-    storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-  });
 
 beforeEach(async () => {
   mocks.readMediaBuffer.mockReset().mockImplementation(async (id: string) => {
@@ -145,29 +124,47 @@ beforeEach(async () => {
   setActivePluginRegistry(createEmptyPluginRegistry());
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-rewind-handler-"));
   setRuntimeConfigSnapshot(context().getRuntimeConfig());
-  await upsertSessionEntryCore(sourceScope, {
-    sessionId: sourceSessionId,
-    updatedAt: Date.now(),
-  });
+  await upsertSessionEntryCore(
+    { agentId: "main", sessionKey },
+    {
+      sessionId: sourceSessionId,
+      updatedAt: Date.now(),
+    },
+  );
   for (const event of [
     { type: "session", id: sourceSessionId, version: 3 },
-    messageEvent("user-entry", null, {
-      role: "user",
-      content: [
-        { type: "text", text: "edit me" },
-        { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
-      ],
-      __openclaw: {
-        media: [
-          { path: storedImagePath, contentType: "image/png" },
-          // Duplicate ref proves dedupe: the response must carry this image once.
-          { path: storedImagePath, contentType: "image/png" },
-          { path: `${storedImagePath}.missing`, contentType: "image/png" },
+    {
+      type: "message",
+      id: "user-entry",
+      parentId: null,
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "edit me" },
+          { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
         ],
+        __openclaw: {
+          media: [
+            { path: storedImagePath, contentType: "image/png" },
+            // Duplicate ref proves dedupe: the response must carry this image once.
+            { path: storedImagePath, contentType: "image/png" },
+            { path: `${storedImagePath}.missing`, contentType: "image/png" },
+          ],
+        },
       },
-    }),
-    messageEvent("assistant-entry", "user-entry", { role: "assistant", content: "answer" }),
-    messageEvent("off-path-entry", null, { role: "user", content: "inactive" }),
+    },
+    {
+      type: "message",
+      id: "assistant-entry",
+      parentId: "user-entry",
+      message: { role: "assistant", content: "answer" },
+    },
+    {
+      type: "message",
+      id: "off-path-entry",
+      parentId: null,
+      message: { role: "user", content: "inactive" },
+    },
     {
       type: "leaf",
       id: "active-leaf",
@@ -175,14 +172,15 @@ beforeEach(async () => {
       targetId: "assistant-entry",
     },
   ]) {
+    const scope = { agentId: "main", sessionId: sourceSessionId, sessionKey };
     if (event.type === "message") {
-      await appendTranscriptMessage(transcriptScope, {
+      await appendTranscriptMessage(scope, {
         eventId: event.id,
         message: event.message,
         parentId: event.parentId,
       });
     } else {
-      await appendTranscriptEvent(transcriptScope, event);
+      await appendTranscriptEvent(scope, event);
     }
   }
   await waitForSessionTranscriptIndexReconcile({ agentId: "main" });
@@ -241,6 +239,54 @@ it("drains rewind fixture owners before closing handles and restoring selectors"
     expect(fs.existsSync(stateDir)).toBe(false);
   });
 });
+
+function context(active = false): GatewayRequestContext {
+  return {
+    broadcastToConnIds: vi.fn(),
+    chatAbortControllers: new Map(
+      active ? [["active-run", { sessionId: sourceSessionId, sessionKey }]] : undefined,
+    ),
+    getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
+    getSessionEventSubscriberConnIds: () => new Set(),
+  } as unknown as GatewayRequestContext;
+}
+
+type MessageCutMethod =
+  | "sessions.branches.list"
+  | "sessions.branches.switch"
+  | "sessions.fork"
+  | "sessions.rewind";
+
+async function invoke(
+  method: MessageCutMethod,
+  entryId?: string,
+  client: GatewayClient | null = null,
+  active = false,
+  runtimeConfig?: GatewayRequestContext["getRuntimeConfig"],
+) {
+  const respond = vi.fn();
+  await expectDefined(
+    sessionRewindHandlers[method],
+    `${method} handler`,
+  )({
+    req: { id: `${method}-request` } as never,
+    params: {
+      sessionKey,
+      ...(method === "sessions.branches.switch"
+        ? { leafEntryId: entryId }
+        : method === "sessions.branches.list"
+          ? {}
+          : { entryId }),
+    },
+    respond: respond as unknown as RespondFn,
+    context: runtimeConfig
+      ? { ...context(active), getRuntimeConfig: runtimeConfig }
+      : context(active),
+    client,
+    isWebchatConnect: () => false,
+  });
+  return respond;
+}
 
 type QueuedSessionWork = {
   command: Promise<string>;
@@ -308,52 +354,115 @@ async function expectSessionWorkCleared(work: QueuedSessionWork): Promise<void> 
 }
 
 async function archiveSourceSession(storePath?: string): Promise<void> {
-  const entry = await patchSessionEntryCore({ ...sourceScope, storePath }, () => ({
+  const entry = await patchSessionEntryCore({ agentId: "main", sessionKey, storePath }, () => ({
     archivedAt: Date.now(),
   }));
   expectDefined(entry, "source session");
 }
 
+async function restrictedOperator(email: string, agentId: string, sandbox?: "required") {
+  const profile = await ensureCanonicalUserProfileForEmail(email);
+  await setCanonicalUserProfileRole(profile.id, "guest");
+  const client: GatewayClient = {
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: { id: "test", version: "test", platform: "test", mode: "test" },
+      scopes: ["operator.write"],
+    },
+    authenticatedUserProfile: {
+      profileId: profile.id,
+      displayName: profile.displayName,
+      hasAvatar: false,
+      updatedAt: profile.updatedAt,
+    },
+  };
+  const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
+    agents: { entries: { main: {} } },
+    gateway: {
+      roles: {
+        default: "guest",
+        definitions: {
+          guest: {
+            sessions: { others: "view" },
+            agents: [agentId],
+            scopes: ["operator.read", "operator.write"],
+            ...(sandbox ? { sandbox } : {}),
+          },
+        },
+      },
+    },
+  });
+  return { profile, client, runtimeConfig };
+}
+
 describe("session message-cut methods", () => {
   it("rejects a disallowed agent fork without restricting existing-session rewind", async () => {
-    const { options } = await restrictedOperator(
+    const { client, runtimeConfig } = await restrictedOperator(
       "restricted-fork-creator@example.com",
       "guest-only",
     );
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
 
-    const fork = await invoke("sessions.fork", "user-entry", options);
-    expectRejected(fork, expect.stringContaining('agent "main"'), ErrorCodes.FORBIDDEN);
-    expect(await readEntries()).toHaveLength(1);
+    const fork = await invoke("sessions.fork", "user-entry", client, false, runtimeConfig);
+    expect(fork).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.FORBIDDEN,
+        message: expect.stringContaining('agent "main"'),
+      }),
+    );
+    expect(
+      await readSessionEntrySummariesInWorker({
+        agentId: "main",
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+      }),
+    ).toHaveLength(1);
 
-    const rewind = await invoke("sessions.rewind", "user-entry", options);
-    expectReply(rewind, expect.any(Object));
+    const rewind = await invoke("sessions.rewind", "user-entry", client, false, runtimeConfig);
+    expect(rewind).toHaveBeenCalledWith(true, expect.any(Object), undefined);
   });
 
   it("stamps a required sandbox on a session fork created by a restricted operator", async () => {
-    const { options, profile } = await restrictedOperator(
+    const { profile, client, runtimeConfig } = await restrictedOperator(
       "sandbox-required-fork-creator@example.com",
       "main",
       "required",
     );
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
 
-    const fork = await invoke("sessions.fork", "user-entry", options);
+    const fork = await invoke("sessions.fork", "user-entry", client, false, runtimeConfig);
     const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
 
-    expectReply(fork, expect.objectContaining({ sessionKey: expect.any(String) }));
+    expect(fork).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ sessionKey: expect.any(String) }),
+      undefined,
+    );
     expect(
       await readSessionEntryReadOnlyInWorker({ agentId: "main", sessionKey: forkKey ?? "" }),
     ).toMatchObject({
       createdActor: { type: "human", id: profile.id },
       sandbox: "required",
     });
-    expect(await readSource()).not.toHaveProperty("sandbox");
+    expect(
+      await readSessionEntryReadOnlyInWorker({ agentId: "main", sessionKey }),
+    ).not.toHaveProperty("sandbox");
   });
 
   it("returns an empty branch list for a not-yet-materialized session", async () => {
-    const respond = await invoke("sessions.branches.list", undefined, {
+    const respond = vi.fn() as unknown as RespondFn;
+    await expectDefined(
+      sessionRewindHandlers["sessions.branches.list"],
+      "sessions.branches.list handler",
+    )({
+      req: { id: "fresh-branches-list" } as never,
       params: { sessionKey: "agent:main:never-materialized" },
+      respond,
+      context: context(),
+      client: null,
+      isWebchatConnect: () => false,
     });
     expect(respond).toHaveBeenCalledWith(true, { branches: [] }, undefined);
   });
@@ -370,13 +479,22 @@ describe("session message-cut methods", () => {
       );
       mocks.readMediaBuffer.mockImplementation(async (id: string) => {
         const result = await readMedia(id);
-        expect((await readSource())?.sessionId).not.toBe(sourceSessionId);
+        expect(
+          (await readSessionEntryReadOnlyInWorker({ agentId: "main", sessionKey }))?.sessionId,
+        ).not.toBe(sourceSessionId);
         if (revoke) {
           current = false;
         }
         return result;
       });
-      const respond = await invoke("sessions.rewind", "user-entry", {
+      const respond = vi.fn();
+      await sessionRewindHandlers["sessions.rewind"]!({
+        req: { id: "committed-rewind" } as never,
+        params: { sessionKey, entryId: "user-entry" },
+        respond,
+        context: context(),
+        client: null,
+        isWebchatConnect: () => false,
         sessionMutationCommitGuard: () => {
           if (!current) {
             throw new Error("rewind authority revoked after commit");
@@ -384,7 +502,11 @@ describe("session message-cut methods", () => {
         },
       });
 
-      expectReply(respond, expect.objectContaining({ editorText: "edit me" }));
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ editorText: "edit me" }),
+        undefined,
+      );
       await expectSessionWorkCleared(work);
     },
   );
@@ -409,14 +531,19 @@ describe("session message-cut methods", () => {
     ];
     const settled = Promise.allSettled(commands);
     try {
-      const respond = await invoke("sessions.rewind", "research-user", {
+      const respond = vi.fn();
+      await sessionRewindHandlers["sessions.rewind"]!({
+        req: { id: "research-rewind" } as never,
         params: { sessionKey: key, agentId: target.agentId, entryId: "research-user" },
+        respond,
         context: {
           ...context(),
           getRuntimeConfig: () => ({ agents: { entries: { main: {}, research: {} } } }),
         },
+        client: null,
+        isWebchatConnect: () => false,
       });
-      expectReply(respond, { editorText: "research question" });
+      expect(respond).toHaveBeenCalledWith(true, { editorText: "research question" }, undefined);
       setCommandLaneConcurrency(lane, 1);
       expect(await settled).toEqual([
         { status: "fulfilled", value: "main tagged" },
@@ -436,7 +563,14 @@ describe("session message-cut methods", () => {
 
     const respond = await invoke("sessions.branches.switch", "missing");
 
-    expectRejected(respond, expect.stringContaining("branch entry not found"));
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: expect.stringContaining("branch entry not found"),
+      }),
+    );
     expectSessionWorkQueued(work);
 
     setCommandLaneConcurrency(sessionLane, 1);
@@ -445,75 +579,89 @@ describe("session message-cut methods", () => {
   });
 
   it.each([
-    ["sessions.branches.switch", "user-entry", "entry is not a branch tip"],
-    ["sessions.branches.switch", "assistant-entry", "branch is already active"],
-    ["sessions.rewind", "missing", "message entry not found"],
-    ["sessions.rewind", "assistant-entry", "entry is not a user message"],
-    ["sessions.rewind", "off-path-entry", "not on the active path"],
-  ] as const)("rejects invalid %s target %s", async (method, entryId, message) => {
-    expectRejected(await invoke(method, entryId), expect.stringContaining(message));
+    ["user-entry", "entry is not a branch tip"],
+    ["assistant-entry", "branch is already active"],
+  ])("rejects invalid branch switch target %s", async (entryId, message) => {
+    const respond = await invoke("sessions.branches.switch", entryId);
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: expect.stringContaining(message),
+      }),
+    );
   });
 
   it.each(["sessions.rewind", "sessions.fork"] as const)(
     "%s restores canonical inbound media facts and skips invalid URI hints",
     async (method) => {
-      await appendTranscriptMessage(transcriptScope, {
-        eventId: "canonical-image",
-        parentId: "assistant-entry",
-        message: {
-          role: "user",
-          content: "canonical image prompt",
-          __openclaw: {
-            media: [
-              { url: `media://inbound/${storedImageId}`, contentType: "image/png" },
-              { url: "media://inbound/%73tored-image.png", contentType: "image/png" },
-              { url: `media://outbound/${storedImageId}`, contentType: "image/png" },
-              { url: "media://inbound/nested%2Fimage.png", contentType: "image/png" },
-              { url: `media://inbound/${storedImageId}?query=1`, contentType: "image/png" },
-              { url: "https://example.test/stored-image.png", contentType: "image/png" },
-              { url: "file:///tmp/stored-image.png", contentType: "image/png" },
-            ],
+      await appendTranscriptMessage(
+        { agentId: "main", sessionId: sourceSessionId, sessionKey },
+        {
+          eventId: "canonical-image",
+          parentId: "assistant-entry",
+          message: {
+            role: "user",
+            content: "canonical image prompt",
+            __openclaw: {
+              media: [
+                { url: `media://inbound/${storedImageId}`, contentType: "image/png" },
+                { url: "media://inbound/%73tored-image.png", contentType: "image/png" },
+                { url: `media://outbound/${storedImageId}`, contentType: "image/png" },
+                { url: "media://inbound/nested%2Fimage.png", contentType: "image/png" },
+                { url: `media://inbound/${storedImageId}?query=1`, contentType: "image/png" },
+                { url: "https://example.test/stored-image.png", contentType: "image/png" },
+                { url: "file:///tmp/stored-image.png", contentType: "image/png" },
+              ],
+            },
           },
         },
-      });
+      );
       const respond = await invoke(method, "canonical-image");
-      expectReply(
-        respond,
+      expect(respond).toHaveBeenCalledWith(
+        true,
         expect.objectContaining({
           editorText: "canonical image prompt",
           editorAttachments: [{ mimeType: "image/png", data: storedImageData.toString("base64") }],
         }),
+        undefined,
       );
-      expect(mocks.readMediaBuffer.mock.calls).toEqual([
-        [storedImageId, "inbound", expect.any(Number)],
-      ]);
+      expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(1);
+      expect(mocks.readMediaBuffer).toHaveBeenCalledWith(
+        storedImageId,
+        "inbound",
+        expect.any(Number),
+      );
     },
   );
 
   it("returns editor text for rewind and a new key for fork", async () => {
-    await patchSessionEntryCore(sourceScope, () => ({
+    await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
       sandboxMode: "off",
       nativeRuntimeConsent: "native-fixture",
     }));
     const profileId = "profile-fork-creator";
     const fork = await invoke("sessions.fork", "user-entry", {
-      client: {
-        connect: { scopes: ["operator.write"] },
-        authenticatedUserProfile: {
-          profileId,
-          displayName: "Fork Operator",
-          hasAvatar: false,
-          updatedAt: 1,
-        },
-      } as GatewayClient,
-    });
-    expectReply(
-      fork,
+      connect: { scopes: ["operator.write"] },
+      authenticatedUserProfile: {
+        profileId,
+        displayName: "Fork Operator",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+    } as GatewayClient);
+    expect(fork).toHaveBeenCalledWith(
+      true,
       expect.objectContaining({
         editorText: "edit me",
-        editorAttachments,
+        editorAttachments: [
+          { mimeType: "image/png", data: "aW1hZ2U=" },
+          { mimeType: "image/png", data: storedImageData.toString("base64") },
+        ],
         sessionKey: expect.any(String),
       }),
+      undefined,
     );
     expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(2);
     const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
@@ -538,12 +686,31 @@ describe("session message-cut methods", () => {
     );
 
     const rewind = await invoke("sessions.rewind", "user-entry");
-    expectReply(rewind, { editorText: "edit me", editorAttachments });
-    expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(4);
-    expect((await readSource())?.sandboxMode).toBe("off");
-    expect((await readEntries()).map((row) => row.sessionKey).toSorted()).toEqual(
-      [sessionKey, forkKey ?? ""].toSorted(),
+    expect(rewind).toHaveBeenCalledWith(
+      true,
+      {
+        editorText: "edit me",
+        editorAttachments: [
+          { mimeType: "image/png", data: "aW1hZ2U=" },
+          { mimeType: "image/png", data: storedImageData.toString("base64") },
+        ],
+      },
+      undefined,
     );
+    expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(4);
+    expect(
+      (await readSessionEntryReadOnlyInWorker({ agentId: "main", sessionKey }))?.sandboxMode,
+    ).toBe("off");
+    expect(
+      (
+        await readSessionEntrySummariesInWorker({
+          agentId: "main",
+          storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+        })
+      )
+        .map((row) => row.sessionKey)
+        .toSorted(),
+    ).toEqual([sessionKey, forkKey ?? ""].toSorted());
   });
 
   it.each([
@@ -554,24 +721,60 @@ describe("session message-cut methods", () => {
 
     const respond = await invoke(method, entryId);
 
-    expectRejected(respond, `${label} is unavailable for archived sessions.`);
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: `${label} is unavailable for archived sessions.`,
+      }),
+    );
   });
 
   it("rechecks archived state after waiting for the session lifecycle lock", async () => {
     const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-    const { release, settled: archiving } = await holdLifecycle(
-      storePath,
-      sourceSessionId,
-      "archive",
-      () => archiveSourceSession(storePath),
-    );
+    const mutationEntered = createDeferredCore();
+    const releaseMutation = createDeferredCore();
+    const archiving = runExclusiveSessionLifecycleMutation("archive", {
+      scope: storePath,
+      identities: [sourceSessionId],
+      run: async () => {
+        mutationEntered.resolve();
+        await releaseMutation.promise;
+        await archiveSourceSession(storePath);
+      },
+    });
+    await mutationEntered.promise;
 
     const rewinding = invoke("sessions.rewind", "user-entry");
-    release();
+    releaseMutation.resolve();
     await archiving;
 
     const respond = await rewinding;
-    expectRejected(respond, "Rewind is unavailable for archived sessions.");
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "Rewind is unavailable for archived sessions.",
+      }),
+    );
+  });
+
+  it.each([
+    ["missing", "message entry not found"],
+    ["assistant-entry", "entry is not a user message"],
+    ["off-path-entry", "not on the active path"],
+  ])("returns a typed validation error for %s", async (entryId, message) => {
+    const respond = await invoke("sessions.rewind", entryId);
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: expect.stringContaining(message),
+      }),
+    );
   });
 
   it.each([
@@ -582,13 +785,17 @@ describe("session message-cut methods", () => {
     const respond = await invoke(
       method,
       method === "sessions.branches.switch" ? "off-path-entry" : "user-entry",
-      { context: context(true) },
+      null,
+      true,
     );
 
-    expectRejected(
-      respond,
-      `${label} is unavailable while the agent is working.`,
-      ErrorCodes.UNAVAILABLE,
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.UNAVAILABLE,
+        message: `${label} is unavailable while the agent is working.`,
+      }),
     );
   });
 });
