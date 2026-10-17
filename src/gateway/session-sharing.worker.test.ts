@@ -33,17 +33,20 @@ import { withQualifiedGatewaySessionEntry } from "./session-utils-store.js";
 
 type PolicyConfig = ReturnType<typeof rolePolicyConfig>;
 const createdActor = (id: string) => ({ type: "human" as const, source: "profile" as const, id });
-function authorize(
+async function authorize(
   client: GatewayClient,
   scope: { agentId: string; sessionKey: string },
   getRuntimeConfig: () => PolicyConfig,
 ) {
-  return resolveSessionMutationAuthorizationAsync({
+  const result = await resolveSessionMutationAuthorizationAsync({
     client,
     method: "chat.send",
     requestParams: scope,
     context: { getRuntimeConfig } as GatewayRequestContext,
   });
+  expect(result.error).toBeNull();
+  expect(result.authorization).toBeDefined();
+  return result.authorization!;
 }
 async function memberSession(client: GatewayClient, sessionKey: string, sessionId: string) {
   const scope = { agentId: "main", sessionKey };
@@ -63,20 +66,12 @@ function restrictView(
   cfg: PolicyConfig,
   restriction: { agents: string[] } | { sandbox: "required" },
 ) {
-  const roles = cfg.gateway!.roles!;
-  return {
-    ...cfg,
-    gateway: {
-      ...cfg.gateway,
-      roles: {
-        ...roles,
-        definitions: {
-          ...roles.definitions,
-          view: { ...roles.definitions.view!, ...restriction },
-        },
-      },
-    },
+  const roles = { ...cfg.gateway!.roles! };
+  roles.definitions = {
+    ...roles.definitions,
+    view: { ...roles.definitions.view!, ...restriction },
   };
+  return { ...cfg, gateway: { ...cfg.gateway, roles } };
 }
 
 it.each([
@@ -84,8 +79,8 @@ it.each([
   { phase: "after", listing: "denied" },
 ] as const)(
   "refuses a sharing locator retargeted $phase source preparation (listing=$listing)",
-  async ({ phase, listing }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  ({ phase, listing }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const sessionKey = "agent:main:sharing-locator";
       const original = state.statePath("original", "store.main.sqlite");
       const replacement = state.statePath("replacement", "store.main.sqlite");
@@ -158,8 +153,7 @@ it.each([
           syncBuiltinESMExports();
         }
       }
-    });
-  },
+    }),
 );
 
 it.each([
@@ -168,8 +162,8 @@ it.each([
   { kind: "unknown", agentId: "main" },
 ])(
   "admits missing $agentId $kind session authority without caller-thread SQL",
-  async ({ kind, agentId }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  ({ kind, agentId }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       let cfg = rolePolicyConfig();
       if (kind === "global") {
         cfg = {
@@ -200,8 +194,7 @@ it.each([
       const effect = vi.fn();
       const host = observeHostDataSql();
       try {
-        const result = await authorize(client, scope, () => cfg);
-        expect(result.error).toBeNull();
+        const authorization = await authorize(client, scope, () => cfg);
         await withQualifiedGatewaySessionEntry({
           cfg,
           target: qualified,
@@ -210,26 +203,24 @@ it.each([
           assertConfigCurrent: () => {},
           consume: (latest, membership, assertSourceCurrent) => {
             expect(latest.legacyKey ?? latest.canonicalKey).toBe(route.canonicalKey);
-            return result.authorization!.withPreparedCurrent!(
-              {
-                agentId: latest.agentId,
-                storePath: latest.storePath,
-                sessionKey: latest.canonicalKey,
-                entry: latest.entry,
-                readSource: latest.capturedReadSource,
-                members: membership.get(latest.legacyKey ?? latest.canonicalKey) ?? [],
-              },
+            const prepared = {
+              agentId: latest.agentId,
+              storePath: latest.storePath,
+              sessionKey: latest.canonicalKey,
+              entry: latest.entry,
+              readSource: latest.capturedReadSource,
+              members: membership.get(latest.legacyKey ?? latest.canonicalKey) ?? [],
+            };
+            return authorization.withPreparedCurrent!(
+              prepared,
               () => {
                 if (kind === "global" || kind === "unknown") {
                   const wrongOwnerEffect = vi.fn();
                   expect(() =>
-                    result.authorization!.withPreparedCurrent!(
+                    authorization.withPreparedCurrent!(
                       {
-                        agentId: latest.agentId,
-                        storePath: latest.storePath,
+                        ...prepared,
                         sessionKey: `agent:other:${kind}`,
-                        entry: latest.entry,
-                        readSource: latest.capturedReadSource,
                         members: [],
                       },
                       wrongOwnerEffect,
@@ -239,28 +230,29 @@ it.each([
                   expect(wrongOwnerEffect).not.toHaveBeenCalled();
                 }
                 cfg = { ...cfg, logging: { level: "debug" } };
-                result.authorization!.assertCurrent();
-                result.authorization!.assertTargetCurrent(scope);
+                authorization.assertCurrent();
+                authorization.assertTargetCurrent(scope);
                 effect();
               },
               assertSourceCurrent,
             );
           },
         });
-        await result.authorization!.admittedInputAuthority!.withCurrent((facts, assertCurrent) => {
-          expect(facts.sessionKey).toBe(route.canonicalKey);
-          expect(facts.entry).toBeUndefined();
-          expect(facts.members).toEqual([]);
+        await authorization.admittedInputAuthority!.withCurrent((facts, assertCurrent) => {
+          expect(facts).toMatchObject({
+            sessionKey: route.canonicalKey,
+            entry: undefined,
+            members: [],
+          });
           assertCurrent();
-          result.authorization!.assertCurrent();
+          authorization.assertCurrent();
         });
         expect(effect).toHaveBeenCalledOnce();
         expect(host.queries).toEqual([]);
       } finally {
         host.restore();
       }
-    });
-  },
+    }),
 );
 
 // Warm entry receipts answer repeat reads in memory; these cases need the worker read.
@@ -272,8 +264,8 @@ function invalidateSessionReadFacts(scope: { agentId: string; sessionKey: string
   });
 }
 
-it("allows unrelated config reloads after session authority is prepared", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("allows unrelated config reloads after session authority is prepared", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     let cfg = rolePolicyConfig();
     const client = roleClient("write", "reload-owner");
     const scope = { agentId: "main", sessionKey: "agent:main:reload-sharing" };
@@ -282,21 +274,16 @@ it("allows unrelated config reloads after session authority is prepared", async 
       updatedAt: 1,
       createdActor: createdActor(client.authenticatedUserProfile!.profileId),
     });
-    const result = await authorize(client, scope, () => cfg);
-    try {
-      expect(result.error).toBeNull();
-      cfg = { ...cfg, logging: { level: "debug" } };
-      const effect = vi.fn(() => result.authorization!.assertCurrent());
-      await result.authorization!.withCurrent!(effect);
-      expect(effect).toHaveBeenCalledOnce();
-    } finally {
-      result.authorization?.release?.();
-    }
-  });
-});
+    const authorization = await authorize(client, scope, () => cfg);
+    using _ = { [Symbol.dispose]: () => authorization.release?.() };
+    cfg = { ...cfg, logging: { level: "debug" } };
+    const effect = vi.fn(() => authorization.assertCurrent());
+    await authorization.withCurrent!(effect);
+    expect(effect).toHaveBeenCalledOnce();
+  }));
 
-it("does not replay an authorization consumer after its own effect changes the row", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("does not replay an authorization consumer after its own effect changes the row", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = rolePolicyConfig();
     const client = roleClient("write", "consumer-owner");
     const scope = { agentId: "main", sessionKey: "agent:main:consumer-settlement" };
@@ -306,26 +293,21 @@ it("does not replay an authorization consumer after its own effect changes the r
       createdActor: createdActor(client.authenticatedUserProfile!.profileId),
     };
     replaceSessionEntrySync(scope, entry);
-    const result = await authorize(client, scope, () => cfg);
-    expect(result.error).toBeNull();
+    const authorization = await authorize(client, scope, () => cfg);
+    using _ = { [Symbol.dispose]: () => authorization.release?.() };
     const effect = vi.fn();
-    try {
-      await result.authorization!.withCurrent!(() => {
-        effect();
-        replaceSessionEntrySync(scope, { ...entry, updatedAt: effect.mock.calls.length + 1 });
-        result.authorization!.assertCurrent();
-      });
-      expect(effect).toHaveBeenCalledOnce();
-    } finally {
-      result.authorization?.release?.();
-    }
-  });
-});
+    await authorization.withCurrent!(() => {
+      effect();
+      replaceSessionEntrySync(scope, { ...entry, updatedAt: effect.mock.calls.length + 1 });
+      authorization.assertCurrent();
+    });
+    expect(effect).toHaveBeenCalledOnce();
+  }));
 
 it.for([false, true])(
   "checks committed chat authority while an unrelated writer is held (revoked=%s)",
-  async (revoked, { signal }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  (revoked, { signal }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = rolePolicyConfig();
       const client = roleClient("view", "contended-member");
       const scope = await memberSession(
@@ -334,8 +316,7 @@ it.for([false, true])(
         "contended-session",
       );
       const identityId = client.authenticatedUserProfile!.profileId;
-      const result = await authorize(client, scope, () => cfg);
-      expect(result.error).toBeNull();
+      const authorization = await authorize(client, scope, () => cfg);
       if (revoked) {
         await removeSessionMember(scope, identityId);
       }
@@ -348,7 +329,7 @@ it.for([false, true])(
       const effect = vi.fn(() => "accepted");
       try {
         await withinTest(entered.promise, signal);
-        const checked = result.authorization!.withCurrent!(effect);
+        const checked = authorization.withCurrent!(effect);
         if (revoked) {
           await expect(withinTest(checked, signal)).rejects.toThrow(
             "session is read-only for this connection",
@@ -361,10 +342,9 @@ it.for([false, true])(
       } finally {
         release.resolve();
         await writer;
-        result.authorization?.release?.();
+        authorization.release?.();
       }
-    });
-  },
+    }),
 );
 
 it.each([
@@ -372,36 +352,27 @@ it.each([
   "reset-before-read",
   "native-before-consume",
   "owner-before-consume",
-] as const)("rejects %s authority revocation before disclosure", async (boundary) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+] as const)("rejects %s authority revocation before disclosure", (boundary) =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = rolePolicyConfig();
     const client = roleClient("view", "worker-member");
     const scope = await memberSession(client, "agent:main:worker-sharing", "sharing-current");
     const database = openOpenClawAgentDatabase(scope);
     const host = observeHostDataSql();
-    let authorization: SessionMutationAuthorization | undefined;
+    let authorization: SessionMutationAuthorization;
     try {
-      const result = await authorize(client, scope, () => cfg);
-      expect(result.error).toBeNull();
-      const currentAuthorization = result.authorization;
-      if (!currentAuthorization) {
-        throw new Error("expected session authorization");
-      }
-      authorization = currentAuthorization;
-      await currentAuthorization.admittedInputAuthority!.withCurrent((facts, assertCurrent) => {
+      authorization = await authorize(client, scope, () => cfg);
+      await authorization.admittedInputAuthority!.withCurrent((facts, assertCurrent) => {
         expect(facts.entry?.sessionId).toBe("sharing-current");
         expect(facts.members.map((member) => member.identityId)).toEqual([
           client.authenticatedUserProfile!.profileId,
         ]);
         assertCurrent();
-        currentAuthorization.assertCurrent();
+        authorization.assertCurrent();
       });
       expect(host.calls.flatMap((call) => call.mock.calls)).toEqual([]);
     } finally {
       host.restore();
-    }
-    if (!authorization) {
-      throw new Error("expected session authorization");
     }
     const read = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
     let revoked = false;
@@ -410,24 +381,14 @@ it.each([
     const runExternalClose = AsyncLocalStorage.snapshot();
     const spy = vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
       const reply = await read(...args);
-      if (
-        reply.ok &&
-        typeof reply.value === "object" &&
-        reply.value !== null &&
-        "kind" in reply.value &&
-        reply.value.kind === "session-target-inventory"
-      ) {
+      const kind =
+        reply.ok && typeof reply.value === "object" && reply.value !== null && "kind" in reply.value
+          ? reply.value.kind
+          : undefined;
+      if (kind === "session-target-inventory") {
         inventories += 1;
       }
-      if (
-        boundary.endsWith("before-consume") &&
-        !revoked &&
-        reply.ok &&
-        typeof reply.value === "object" &&
-        reply.value !== null &&
-        "kind" in reply.value &&
-        reply.value.kind === "session-exact-entries"
-      ) {
+      if (boundary.endsWith("before-consume") && !revoked && kind === "session-exact-entries") {
         revoked = true;
         if (boundary === "owner-before-consume") {
           closing = runExternalClose(closeOpenClawAgentDatabasesAsync);
@@ -465,19 +426,17 @@ it.each([
       spy.mockRestore();
       await closing;
     }
-  });
-});
+  }),
+);
 
 it.each(["membership", "routing", "policy"] as const)(
   "rechecks %s changes within the consuming frame",
-  async (change) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  (change) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       let cfg = rolePolicyConfig();
       const client = roleClient("view", "scoped-member");
       const scope = await memberSession(client, "agent:main:scoped-sharing", "scoped-current");
-      const result = await authorize(client, scope, () => cfg);
-      expect(result.error).toBeNull();
-      const authorization = result.authorization!;
+      const authorization = await authorize(client, scope, () => cfg);
       let checked = false;
       await authorization.withCurrent!(() => {
         authorization.assertCurrent();
@@ -492,14 +451,13 @@ it.each(["membership", "routing", "policy"] as const)(
         checked = true;
       });
       expect(checked).toBe(true);
-    });
-  },
+    }),
 );
 
 it.each(["role", "agent", "sandbox", "unprepared-role"] as const)(
   "rechecks prepared %s policy at the next worker admission",
-  async (change) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  (change) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       let cfg = rolePolicyConfig();
       const client =
         change === "unprepared-role"
@@ -515,9 +473,7 @@ it.each(["role", "agent", "sandbox", "unprepared-role"] as const)(
       const host = observeHostDataSql();
       let authorization: SessionMutationAuthorization;
       try {
-        const result = await authorize(client, scope, () => cfg);
-        expect(result.error, "prepared role authorization").toBeNull();
-        authorization = result.authorization!;
+        authorization = await authorize(client, scope, () => cfg);
         await authorization.withCurrent!(() => authorization.assertCurrent());
         expect(host.queries).toEqual([]);
       } finally {
@@ -534,6 +490,5 @@ it.each(["role", "agent", "sandbox", "unprepared-role"] as const)(
       if (change === "unprepared-role") {
         expect(client.preparedSessionProfile).toBeUndefined();
       }
-    });
-  },
+    }),
 );

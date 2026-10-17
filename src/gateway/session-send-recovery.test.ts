@@ -28,40 +28,37 @@ const io = vi.hoisted(() => ({
   withdraw: vi.fn(),
 }));
 vi.mock(
-  "../agents/main-session-recovery/main-session-restart-recovery-shared.js",
+  import("../agents/main-session-recovery/main-session-restart-recovery-shared.js"),
   async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import("../agents/main-session-recovery/main-session-restart-recovery-shared.js")
-    >()),
+    ...(await importOriginal()),
     discoverRestartRecoveryStoreTargets: io.discover,
   }),
 );
-vi.mock("../config/sessions/session-entry-read-maintenance.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../config/sessions/session-entry-read-maintenance.js")
-  >()),
+vi.mock(import("../config/sessions/session-entry-read-maintenance.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   readPendingInputRecoveryEntriesInWorker: io.entries,
 }));
-vi.mock("../config/sessions/session-pending-input-history.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/sessions/session-pending-input-history.js")>()),
+vi.mock(import("../config/sessions/session-pending-input-history.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   readSessionSendRecoveryPage: io.pending,
 }));
-vi.mock("../config/sessions/session-pending-input-source.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/sessions/session-pending-input-source.js")>()),
+vi.mock(import("../config/sessions/session-pending-input-source.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   readPendingInputSource: io.source,
 }));
-vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
+vi.mock(import("../config/sessions/session-accessor.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   appendSessionTranscriptReport: io.report,
 }));
-vi.mock("../config/sessions/session-pending-input-withdrawal.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../config/sessions/session-pending-input-withdrawal.js")
-  >()),
-  discardSessionPendingInput: io.withdraw,
-}));
-vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
+vi.mock(
+  import("../config/sessions/session-pending-input-withdrawal.js"),
+  async (importOriginal) => ({
+    ...(await importOriginal()),
+    discardSessionPendingInput: io.withdraw,
+  }),
+);
+vi.mock(import("./session-utils-store-worker.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   resolveGatewaySessionStoreTargetInWorker: io.load,
 }));
 
@@ -152,6 +149,12 @@ function expectNoCalls(...mocks: ReturnType<typeof vi.fn>[]) {
   for (const mock of mocks) {
     expect(mock).not.toHaveBeenCalled();
   }
+}
+function timed<T>(ms: number, value: () => T) {
+  return async () => {
+    vi.advanceTimersByTime(ms);
+    return value();
+  };
 }
 
 beforeEach(() => {
@@ -260,31 +263,24 @@ it("partitions delivery recovery work and retry backoff in the startup summary",
   vi.spyOn(performance, "now").mockImplementation(() => Date.now() - startedAt);
   const info = vi.spyOn(context.logGateway, "info").mockImplementation(() => {});
   const trace = createGatewayStartupTrace(context.logGateway, 0);
-  io.discover.mockImplementation(async () => {
-    vi.advanceTimersByTime(10);
-    return [{ agentId: "main", storePath: "/fixture/sessions.json" }];
-  });
-  io.entries.mockImplementation(async () => {
-    vi.advanceTimersByTime(20);
-    return [{ sessionKey: delivery.target.sessionKey, entry: targetEntry }];
-  });
-  io.pending.mockImplementation(async () => {
-    vi.advanceTimersByTime(30);
-    return { items: [input], total: 1 };
-  });
-  io.source.mockImplementationOnce(async () => {
-    vi.advanceTimersByTime(40);
-    throw new WorkerTaskError("Reader starting", "unavailable");
-  });
+  io.discover.mockImplementation(
+    timed(10, () => [{ agentId: "main", storePath: "/fixture/sessions.json" }]),
+  );
+  io.entries.mockImplementation(
+    timed(20, () => [{ sessionKey: delivery.target.sessionKey, entry: targetEntry }]),
+  );
+  io.pending.mockImplementation(timed(30, () => ({ items: [input], total: 1 })));
+  io.source.mockImplementationOnce(
+    timed(40, () => {
+      throw new WorkerTaskError("Reader starting", "unavailable");
+    }),
+  );
   io.load.mockImplementation(async ({ key }: { key: string }) => {
     vi.advanceTimersByTime(50);
     return storeTarget(key);
   });
   sourceEntry.sessionId = "replaced-source";
-  io.report.mockImplementation(async () => {
-    vi.advanceTimersByTime(250);
-    return { ok: true };
-  });
+  io.report.mockImplementation(timed(250, () => ({ ok: true })));
   try {
     const recovery = trace.measure("sidecars.subagent-recovery", () =>
       trace.measure("sidecars.delivery-recovery", () =>
@@ -424,37 +420,34 @@ it("retains replaced-endpoint inputs when the durable notice is refused", async 
 const privateDatabasePath = "/synthetic/private/agents/main/openclaw-agent.sqlite";
 const quarantineCommand = `mv ${privateDatabasePath} /synthetic/private/quarantine/`;
 const privateDiagnostic = `Inspection failed at ${privateDatabasePath}; ${quarantineCommand}`;
+const inspectionError = (code: "pending" | "failed", privatePaths = true) =>
+  new AgentDatabaseAdmissionError({
+    agentId: "main",
+    paths: privatePaths ? [privateDatabasePath] : [],
+    code: `agent-database-inspection-${code}`,
+    reason: privatePaths ? privateDiagnostic : "Inspection is starting",
+    repairHint: privatePaths ? quarantineCommand : "Wait for inspection",
+  });
+const exhausted = {
+  reason: "transient-admission",
+  attempts: 3,
+  description: "the Gateway was still unavailable after 3 automatic attempts",
+};
 
 it.each([
   {
     name: "capacity",
     error: new WorkerTaskError(privateDiagnostic, "overloaded"),
-    reason: "transient-admission",
-    attempts: 3,
-    description: "the Gateway was still unavailable after 3 automatic attempts",
+    ...exhausted,
   },
   {
     name: "pending inspection",
-    error: new AgentDatabaseAdmissionError({
-      agentId: "main",
-      paths: [privateDatabasePath],
-      code: "agent-database-inspection-pending",
-      reason: privateDiagnostic,
-      repairHint: quarantineCommand,
-    }),
-    reason: "transient-admission",
-    attempts: 3,
-    description: "the Gateway was still unavailable after 3 automatic attempts",
+    error: inspectionError("pending"),
+    ...exhausted,
   },
   {
     name: "failed inspection",
-    error: new AgentDatabaseAdmissionError({
-      agentId: "main",
-      paths: [privateDatabasePath],
-      code: "agent-database-inspection-failed",
-      reason: privateDiagnostic,
-      repairHint: quarantineCommand,
-    }),
+    error: inspectionError("failed"),
     reason: "store-unavailable",
     attempts: 1,
     description: "session storage was unavailable",
@@ -518,13 +511,7 @@ it.each([
     code: "SQLITE_BUSY",
     message: "Reader is locked",
   }),
-  new AgentDatabaseAdmissionError({
-    agentId: "main",
-    paths: [],
-    code: "agent-database-inspection-pending",
-    reason: "Inspection is starting",
-    repairHint: "Wait for inspection",
-  }),
+  inspectionError("pending", false),
 ])("retries storage readiness without replacing the saved delivery: %s", async (error) => {
   io.load.mockRejectedValueOnce(error);
   await recoverWithTimers();

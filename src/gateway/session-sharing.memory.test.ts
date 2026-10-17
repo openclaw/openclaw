@@ -1,4 +1,5 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import {
@@ -34,28 +35,26 @@ const sessionKey = "agent:main:dashboard:incognito-memory-sharing";
 const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
 const cfg = { agents: { entries: { main: {} } } };
-const owners: ReturnType<typeof memorySessionActorOwners.get>[] = [];
+const location = {
+  agentId: "main",
+  path: "/synthetic/sharing/agents/main/agent/incognito-openclaw-agent.sqlite",
+};
+const scope = { cfg, sessionKey, agentId: location.agentId };
 beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/sharing"));
 afterEach(() => {
   vi.unstubAllEnvs();
-  for (const owner of owners.splice(0)) {
-    memorySessionActorOwners.closeDatabase(owner);
-  }
+  memorySessionActorOwners.closeDatabase(location);
 });
 
 async function fixture() {
-  const path = "/synthetic/sharing/agents/main/agent/incognito-openclaw-agent.sqlite";
-  const owner = memorySessionActorOwners.get({ agentId: "main", path });
-  owners.push(owner);
+  const owner = memorySessionActorOwners.get(location);
   const actor = await owner.acquire({ database: owner.identity, sessionKey }, lifetime);
-  if (!actor.storage) {
-    throw new Error("Missing memory storage");
-  }
-  const binding: SessionActorStorageBinding = { actor, authority, agentId: "main", path };
-  return { owner, actor, storage: actor.storage, binding };
+  const storage = expectDefined(actor.storage, "memory storage");
+  const binding: SessionActorStorageBinding = { actor, authority, ...location };
+  return { owner, storage, binding, ops: operations(storage) };
 }
 
-function operations(storage: Awaited<ReturnType<typeof fixture>>["storage"]) {
+function operations(storage: NonNullable<SessionActorStorageBinding["actor"]["storage"]>) {
   const mutate = (command: Parameters<typeof storage.mutate>[0]) =>
     storage.mutate(command, authority);
   return {
@@ -79,24 +78,18 @@ function operations(storage: Awaited<ReturnType<typeof fixture>>["storage"]) {
   };
 }
 
-const prepareSource = (storePath: string, key = sessionKey) =>
+const prepareSource = (key = sessionKey) =>
   prepareSessionSharingSource(
-    { agentId: "main", canonicalKey: key, storeKey: key, storePath },
+    { agentId: "main", canonicalKey: key, storeKey: key, storePath: location.path },
     () => authority.assertCurrent(),
   );
 
 it("prepares unbound sharing facts and observes committed creation and membership without SQLite", async () => {
-  const { owner, storage, binding } = await fixture();
-  const ops = operations(storage);
+  const { owner, ops, binding } = await fixture();
   const prepared = {
-    facts: await prepareSessionMutationFacts({
-      cfg,
-      sessionKey,
-      agentId: "main",
-      allowMissing: true,
-    }),
-    read: await prepareSessionSharingRead({ cfg, sessionKey, agentId: "main" }),
-    source: await prepareSource(binding.path),
+    facts: await prepareSessionMutationFacts({ ...scope, allowMissing: true }),
+    read: await prepareSessionSharingRead(scope),
+    source: await prepareSource(),
   };
   try {
     expect(prepared.facts.readCurrent(cfg).target).toBeNull();
@@ -138,21 +131,18 @@ it("prepares unbound sharing facts and observes committed creation and membershi
 });
 
 it("reads unbound sibling sharing from the captured owner", async () => {
-  const { binding, owner, storage } = await fixture();
+  const { owner, storage } = await fixture();
   const siblingKey = "agent:main:dashboard:incognito-memory-sharing-sibling";
   const sibling = await storage.acquire(siblingKey);
-  if (!sibling.storage) {
-    throw new Error("Missing sibling memory storage");
-  }
-  const ops = operations(sibling.storage);
+  const ops = operations(expectDefined(sibling.storage, "sibling memory storage"));
   await ops.create("sibling-session");
-  const scope = { agentId: "main", sessionKey: siblingKey, storePath: binding.path };
+  const siblingScope = { agentId: "main", sessionKey: siblingKey, storePath: location.path };
   expect(await ops.add("sibling-reader")).toMatchObject({ kind: "committed" });
-  expect((await readSessionMembersInWorker(scope)).members).toEqual([
+  expect((await readSessionMembersInWorker(siblingScope)).members).toEqual([
     { identityId: "sibling-reader", addedBy: "owner", addedAt: 1 },
   ]);
   await ops.remove("sibling-reader");
-  expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
+  expect((await readSessionMembersInWorker(siblingScope)).members).toEqual([]);
   expect(
     await readSessionMembersInWorker({
       agentId: "other",
@@ -160,8 +150,8 @@ it("reads unbound sibling sharing from the captured owner", async () => {
     }),
   ).toEqual({ entry: undefined, members: [] });
   const prepared = {
-    facts: await prepareSessionMutationFacts({ cfg, sessionKey: siblingKey, agentId: "main" }),
-    source: await prepareSource(binding.path, siblingKey),
+    facts: await prepareSessionMutationFacts({ ...scope, sessionKey: siblingKey }),
+    source: await prepareSource(siblingKey),
   };
   try {
     await ops.label("Sibling postimage");
@@ -170,8 +160,7 @@ it("reads unbound sibling sharing from the captured owner", async () => {
     });
     expect(prepared.source.target?.entry).toMatchObject({ label: "Sibling postimage" });
     memorySessionActorOwners.closeDatabase(owner);
-    const replacement = memorySessionActorOwners.get(owner);
-    owners.push(replacement);
+    memorySessionActorOwners.get(owner);
     expect(() => prepared.source.assertCurrent()).toThrow(/closed/);
   } finally {
     prepared.facts.release();
@@ -183,14 +172,13 @@ it("reads unbound sibling sharing from the captured owner", async () => {
 it.each(["chat.send", "sessions.dispatch", "sessions.move"] as const)(
   "retains memory sharing for %s and refuses revoked incognito access at the effect",
   async (method) => {
-    const { binding, storage } = await fixture();
-    const ops = operations(storage);
+    const { ops } = await fixture();
     await ops.create("authorized-memory");
     const context = createGatewayRequestContext(makeContextParams());
     context.getRuntimeConfig = () => cfg;
     context.getCommittedRuntimeConfig = () => cfg;
     const client = sharingPolicyClient({ scopes: ["operator.admin"] });
-    const result = await resolveSessionMutationAuthorizationAsync({
+    const { error, authorization } = await resolveSessionMutationAuthorizationAsync({
       client,
       method,
       requestParams:
@@ -201,23 +189,21 @@ it.each(["chat.send", "sessions.dispatch", "sessions.move"] as const)(
         agentId: "main",
         sessionKey,
         sessionId: "authorized-memory",
-        storePath: binding.path,
+        storePath: location.path,
       },
       context,
     });
-    expect(result.error).toBeNull();
-    if (!result.authorization) {
-      throw new Error("Missing sharing authorization");
-    }
-    const prepared = await prepareSessionSourceAuthority(result.authorization.assertCurrent);
-    const grant = await result.authorization.prepareWorkerGrant?.();
+    expect(error).toBeNull();
+    const authorized = expectDefined(authorization, "sharing authorization");
+    const prepared = await prepareSessionSourceAuthority(authorized.assertCurrent);
+    const grant = await authorized.prepareWorkerGrant?.();
     try {
       expect(prepared.nativeSource).not.toBe(true);
       prepared.assertCurrent();
       grant?.assertCurrent();
       if (method === "chat.send") {
-        expect(result.authorization.admittedInputAuthority).toBeDefined();
-        await result.authorization.admittedInputAuthority!.withCurrent((facts, assertCurrent) => {
+        expect(authorized.admittedInputAuthority).toBeDefined();
+        await authorized.admittedInputAuthority!.withCurrent((facts, assertCurrent) => {
           expect(facts.entry?.sessionId).toBe("authorized-memory");
           assertCurrent();
         });
