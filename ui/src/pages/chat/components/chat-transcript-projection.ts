@@ -29,11 +29,7 @@ import { assistantMediaPolicyKey, getChatMediaRenderVersion } from "./chat-messa
 import type { StreamGroupOptions } from "./chat-message-stream-view.tsx";
 import { projectRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
-import {
-  closeTranscriptSearch,
-  getTranscriptState,
-  type ChatThreadProps,
-} from "./chat-thread-interactions.ts";
+import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interactions.ts";
 import { projectTranscriptActivity } from "./chat-transcript-activity.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import {
@@ -62,10 +58,13 @@ import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 
 type ChatRenderItem = SystemEventRenderItem;
 
-export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTranscriptSession) {
+export function projectChatTranscript(
+  props: ChatThreadProps,
+  transcript: ChatTranscriptSession,
+  search = getTranscriptState(props.paneId).search.snapshot,
+) {
   const state = getTranscriptState(props.paneId);
   const { asyncQuestions, selectedSession: activeSession } = props;
-  const requestUpdate = props.onRequestUpdate ?? (() => {});
   const { showOwnSenderName, sessionPeople } = resolveTranscriptParticipants(props);
   const mediaPolicyKey = assistantMediaPolicyKey(activeSession, props.mediaPolicyEpoch);
   const isGlobalAliasKey = isTranscriptGlobalAlias(props);
@@ -84,7 +83,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     textAvatar: assistantAvatar.textAvatar,
   };
   const locale = i18n.getLocale();
-  const searchFiltering = state.searchOpen && Boolean(state.searchQuery.trim());
+  const searchFiltering = search.open && Boolean(search.query.trim());
   const expandedAssistantMessages = transcript.expandedAssistantMessages;
   const recoveryKey = (id: string) => messageRecoveryKey(props.fullMessageAgentId, id);
   pruneTranscriptExpansions(expandedAssistantMessages, props);
@@ -126,8 +125,8 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     loading: props.loading,
     replyPeople: [...sessionPeople].toSorted(),
     replyLocalPerson: localParticipantIdentityKey(props.userId),
-    searchOpen: state.searchOpen,
-    searchQuery: state.searchQuery,
+    searchOpen: search.open,
+    searchQuery: search.query,
     messageRecovery:
       searchFiltering && props.loadFullAssistantMessage
         ? {
@@ -230,7 +229,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     transcriptItems.length === 0 &&
     !props.loading &&
     !hasLiveContent &&
-    (!props.historyPagination?.hasMore || state.searchOpen);
+    (!props.historyPagination?.hasMore || search.open);
   transcript.setContentReady(!props.loading);
   const { isDirectThread, avatarPlacement } = resolveTranscriptAvatarPlacement(
     props,
@@ -300,7 +299,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     asyncQuestions,
     onOpenWorkspaceFile: props.onOpenWorkspaceFile,
     onPermissionRetry: props.onPermissionRetry,
-    onRequestUpdate: requestUpdate,
+    onRequestUpdate: props.onRequestUpdate,
     resourceBasePath: props.resourceBasePath,
     mediaPolicyKey,
     connectionEpoch: props.connectionEpoch,
@@ -682,7 +681,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       expandReplyTargetWork(targetChain.transcriptItems, expandedToolCards, replyToId);
     }
     if (searchFiltering) {
-      closeTranscriptSearch(state, requestUpdate);
+      state.search.close();
     }
     if (loaded) {
       // Closing search must commit the original's row before reveal can find it.
@@ -703,13 +702,13 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       : positionIndex,
     isEmpty,
     showLoadingSkeleton,
-    searchOpen: state.searchOpen,
+    searchOpen: search.open,
     renderRows: (overlay: JSX.Element = null, header: TranscriptHeader | null = null) =>
       transcript.render(
         transcriptRows,
         (row) => (row.kind === "item" ? renderItem(row.item) : row.content),
         latestTranscriptAnnouncement(collapsedItems),
-        props.announceTranscript !== false && !state.searchOpen && !props.loading,
+        props.announceTranscript !== false && !search.open && !props.loading,
         overlay,
         header,
         props.transcriptVisible ?? true,

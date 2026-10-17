@@ -58,6 +58,13 @@ without a useful delta return the normal full row array. Current authorization
 and selection always precede this comparison. The Gateway retains up to 32 prior
 vectors per bounded query view, including across runtime activity updates.
 Configuration, identity, and selection resets retire the view and its history.
+Views are retained in least-recently-used order, with limits of 512 cache slots
+(selection and row presentation use separate slots) and 32 MiB of estimated
+retention per projection. The estimate counts row/history references, selection
+and partition entries, query keys, and view overhead; it is not a heap-size limit
+for shared row objects or their encodings. A response exceeding the budget is
+served without retaining its baseline. Eviction does not change authorization
+or selection; a later read can return full rows to establish a new baseline.
 
 This mode is optional: bare revision tokens never receive deltas, and older
 Gateways treat the prefixed token as a miss and return full rows.

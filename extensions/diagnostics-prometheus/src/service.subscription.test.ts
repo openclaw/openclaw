@@ -78,6 +78,42 @@ it("exports session traffic attribution while keeping aggregate event labels unc
   }
 });
 
+it("exports trusted session-list retention gauges and clears them on retirement", () => {
+  const metrics = createMetricsHarness();
+  const retentionLines = () =>
+    metrics
+      .render()
+      .split("\n")
+      .filter((line) => line.startsWith("openclaw_sessions_list_retained_"));
+  try {
+    metrics.record({ type: "sessions.list.retention", views: 3, refs: 17, estimatedBytes: 3_504 });
+    for (const metadata of [untrusted, { trusted: false, internal: true }]) {
+      metrics.record(
+        { type: "sessions.list.retention", views: 99, refs: 999, estimatedBytes: 99_999 },
+        metadata,
+      );
+    }
+    for (const suffix of ["views", "refs", "bytes"]) {
+      expect(metrics.render()).toContain(
+        `# TYPE openclaw_sessions_list_retained_${suffix} gauge\n`,
+      );
+    }
+    expect(retentionLines()).toEqual([
+      "openclaw_sessions_list_retained_bytes 3504",
+      "openclaw_sessions_list_retained_refs 17",
+      "openclaw_sessions_list_retained_views 3",
+    ]);
+    metrics.record({ type: "sessions.list.retention", views: 0, refs: 0, estimatedBytes: 0 });
+    expect(retentionLines()).toEqual([
+      "openclaw_sessions_list_retained_bytes 0",
+      "openclaw_sessions_list_retained_refs 0",
+      "openclaw_sessions_list_retained_views 0",
+    ]);
+  } finally {
+    metrics.stop();
+  }
+});
+
 it("records terminal metrics without reading logs or private diagnostic content", async () => {
   const exporter = createDiagnosticsPrometheusExporter();
   const readPrivateContent = vi.fn(() => ({ toolInput: { text: "private tool input" } }));

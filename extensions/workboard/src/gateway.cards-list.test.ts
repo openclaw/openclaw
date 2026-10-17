@@ -26,6 +26,48 @@ function captureCardsList(store: WorkboardStore) {
 }
 
 describe("workboard card list revisions", () => {
+  it("bounds card pages and invalidates the first page after a committed update", async () => {
+    const { store, stores } = createWorkboardSqliteTestHarness();
+    for (let index = 0; index < 105; index++) {
+      const id = `card-${String(index).padStart(3, "0")}`;
+      await stores.cards.register(id, {
+        version: 1,
+        card: {
+          id,
+          title: id,
+          status: "todo",
+          priority: "normal",
+          labels: [],
+          position: 0,
+          createdAt: 1,
+          updatedAt: 1,
+          metadata: { comments: [{ id: `${id}-comment`, body: `Comment ${index}`, createdAt: 1 }] },
+        },
+      });
+    }
+    const list = captureCardsList(store);
+    const first = (await list({})).mock.calls[0]?.[1];
+    expect(first.cards).toHaveLength(100);
+    expect(first.nextCursor).toEqual({ position: 0, createdAt: 1, id: "card-099" });
+    expect(first.cards[99].metadata.comments[0].body).toBe("Comment 99");
+    const second = (await list({ after: first.nextCursor, sinceRevision: first.revision })).mock
+      .calls[0]?.[1];
+    expect(second.cards.map((card: { id: string }) => card.id)).toEqual([
+      "card-100",
+      "card-101",
+      "card-102",
+      "card-103",
+      "card-104",
+    ]);
+    expect(second.nextCursor).toBeUndefined();
+    expect(second.boards[0].total).toBe(105);
+    await store.update("card-000", { title: "Changed on the Gateway" });
+    const refreshed = (await list({ sinceRevision: first.revision })).mock.calls[0]?.[1];
+    expect(refreshed.cards[0].title).toBe("Changed on the Gateway");
+    expect(refreshed.cards).toHaveLength(100);
+    expect((await list({ after: { id: "card-099" } })).mock.calls[0]?.[0]).toBe(false);
+  });
+
   it("keeps session-filtered payloads and revision receipts separate from full card lists", async () => {
     const { store } = createWorkboardSqliteTestHarness();
     const first = await store.create({ title: "First session", sessionKey: "session-one" });

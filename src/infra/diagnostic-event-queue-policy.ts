@@ -6,6 +6,7 @@ export const ASYNC_DIAGNOSTIC_EVENT_NAMES = [
   "gateway.http.cancelled",
   "gateway.rpc",
   "sessions.list.baseline.retired",
+  "sessions.list.retention",
   "gateway.ws.event",
   "gateway.ws.connections",
   "tool.execution.started",

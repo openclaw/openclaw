@@ -4649,3 +4649,12 @@ workboard-inline-text {
     height: 44px;
   }
 }
+
+.workboard-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  color: var(--muted);
+}
