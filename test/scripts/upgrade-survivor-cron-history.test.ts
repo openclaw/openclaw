@@ -175,11 +175,17 @@ it.each(["2026.9.3", "2026.9.4"])(
   },
 );
 
-it("rejects a successful Doctor exit which leaves retained history for startup", () => {
-  const fixture = prepare();
-  fixture.invoke(false);
-  expect(fixture.assert).toThrow("table was not retired");
-});
+it.each([
+  ["2026.9.4", false, "table was not retired"],
+  ["2026.9.3", true, "published updater never received the unchanged retained cron history"],
+] as const)(
+  "rejects successful %s Doctor with import=%s at the wrong owner",
+  (version, imported, error) => {
+    const fixture = prepare(version);
+    fixture.invoke(imported);
+    expect(fixture.assert).toThrow(error);
+  },
+);
 
 it("rejects parent-side import even when canonical task rows and Doctor exit are correct", () => {
   const fixture = prepare();
@@ -221,14 +227,6 @@ it("rejects parent-side import even when canonical task rows and Doctor exit are
   publishDiagnostics(fixture.artifacts, published, (text: string) => text);
   const failure = readJson(path.join(published, "failure.json"));
   expect(JSON.parse(failure.logs["legacy-operator-cron-history-proof.json"])).toEqual(evidence);
-});
-
-it("requires the original seed at the published 9.3 updater entry", () => {
-  const fixture = prepare("2026.9.3");
-  fixture.invoke(true);
-  expect(fixture.assert).toThrow(
-    "published updater never received the unchanged retained cron history",
-  );
 });
 
 it.each([

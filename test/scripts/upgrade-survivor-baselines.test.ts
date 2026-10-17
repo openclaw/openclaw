@@ -90,6 +90,13 @@ function baseline(
     ...extra,
   };
 }
+function unsupportedLine(
+  tags: BaselineFixture["tags"],
+  versions: string,
+  error = "npm extended-stable must name a published extended-stable version",
+) {
+  return { args: { requested: "supported-lines" }, tags, versions: yearVersions(versions), error };
+}
 
 function resolveFixture({ args = {}, releases, versions, tags }: BaselineFixture) {
   const params = new Map(
@@ -450,33 +457,19 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
       args,
       error: "Upgrade pre-June installs through OpenClaw 2026.9.5 and run Doctor first",
     })),
-    ...[
-      {
-        tags: {},
-        versions: ["2026.8.33", "2026.9.2"],
-        error: "npm latest must name a published stable version",
-      },
-      {
-        tags: { latest: "2026.9.2", "extended-stable": "2026.8.99" },
-        versions: ["2026.6.34", "2026.8.33", "2026.9.1", "2026.9.2"],
-        error: "npm extended-stable must name a published extended-stable version",
-      },
-      ...["2026.9.1", "2026.8.35-1", "2026.8.35-beta.1"].map((extended) => ({
-        tags: { latest: "2026.9.2", "extended-stable": extended },
-        versions: ["2026.6.34", "2026.8.33", "2026.9.1", "2026.9.2", extended],
-        error: "npm extended-stable must name a published extended-stable version",
-      })),
-      {
-        tags: { latest: "2026.9.2" },
-        versions: ["2026.9.1", "2026.9.2"],
-        error: "oldest supported baseline is not published",
-      },
-    ].map(({ tags, versions, error }) => ({
-      tags,
-      versions,
-      error,
-      args: { requested: "supported-lines" },
-    })),
+    unsupportedLine({}, "8.33 9.2", "npm latest must name a published stable version"),
+    unsupportedLine({ latest: "2026.9.2", "extended-stable": "2026.8.99" }, "6.34 8.33 9.1 9.2"),
+    ...["9.1", "8.35-1", "8.35-beta.1"].map((extended) =>
+      unsupportedLine(
+        { latest: "2026.9.2", "extended-stable": `2026.${extended}` },
+        `6.34 8.33 9.1 9.2 ${extended}`,
+      ),
+    ),
+    unsupportedLine(
+      { latest: "2026.9.2" },
+      "9.1 9.2",
+      "oldest supported baseline is not published",
+    ),
     {
       args: { requested: "release-history", "history-count": "1e3" },
       releases: [],
