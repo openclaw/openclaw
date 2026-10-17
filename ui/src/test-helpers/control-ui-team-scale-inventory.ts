@@ -1,9 +1,6 @@
-import type {
-  CronCompactJob,
-  CronJob,
-  CronJobsListResult,
-  GatewaySessionRow,
-} from "../api/types.ts";
+import { sortCronJobs } from "../../../src/cron/service/list-page-sort.ts";
+import type { CronJob } from "../../../src/cron/types.ts";
+import type { CronCompactJob, CronJobsListResult, GatewaySessionRow } from "../api/types.ts";
 import type { ControlUiMockPresenceUser } from "./control-ui-mock-presence.ts";
 import { prepareTeamScaleSessionOwnership } from "./control-ui-sidebar-list-fixture.ts";
 
@@ -179,6 +176,11 @@ export function createTeamScaleCronInventory({
             : params.enabled === "enabled"
               ? job.enabled
               : params.includeDisabled === true || job.enabled)),
+    );
+    sortCronJobs(
+      rows,
+      params.sortBy === "name" || params.sortBy === "updatedAtMs" ? params.sortBy : "nextRunAtMs",
+      params.sortDir === "desc" ? "desc" : "asc",
     );
     const offset = typeof params.offset === "number" ? params.offset : 0;
     const limit = typeof params.limit === "number" ? params.limit : 50;

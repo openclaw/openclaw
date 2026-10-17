@@ -35,10 +35,12 @@ function record(value: unknown): value is Record<string, unknown> {
 
 function sourcePath(value: string): string {
   const normalized = value.replaceAll("\\", "/");
-  const relative = normalized.includes("/src/")
-    ? normalized.slice(normalized.lastIndexOf("/src/") + 5)
-    : normalized.replace(/^(?:\.\.\/|\.\/)+/u, "");
-  return relative.replace(/^ui\/src\//u, "");
+  const workspace = /(?:^|\/)((?:ui|packages\/[^/]+|extensions\/[^/]+)\/.*)$/u.exec(normalized);
+  if (workspace?.[1]) {
+    return workspace[1];
+  }
+  const core = /(?:^|\/)(src\/.*)$/u.exec(normalized);
+  return core?.[1] ?? normalized.replace(/^(?:\.\.\/|\.\/)+/u, "");
 }
 
 /** Same-line aliases describe nested/minified frames, not additive CPU time. */
@@ -167,10 +169,11 @@ export function compareFidelity(
     const liveShare = (fn.milliseconds / live.busyMs) * 100;
     const samples = runs.map((run) => {
       const match = matchingFunction(fn, run.cpu, live);
-      return { match, share: ((match?.fn.milliseconds ?? 0) / run.cpu.busyMs) * 100 };
+      return { match, share: match ? (match.fn.milliseconds / run.cpu.busyMs) * 100 : null };
     });
-    const shares = fidelityDistribution(samples.map((sample) => sample.share));
-    const ratio = shares.median / liveShare;
+    const observed = samples.flatMap((sample) => (sample.share === null ? [] : [sample.share]));
+    const shares = observed.length === runs.length ? fidelityDistribution(observed) : null;
+    const ratio = shares ? shares.median / liveShare : null;
     return {
       source: fn.source,
       line: fn.line,
@@ -178,10 +181,11 @@ export function compareFidelity(
       liveMs: fn.milliseconds,
       liveShare,
       benchShare: shares,
+      benchShareSamples: samples.map((sample) => sample.share),
       ratio,
       matchedRuns: samples.filter((sample) => sample.match).length,
-      matches: samples.map((sample) => sample.match?.match ?? "missing"),
-      pass: samples.every((sample) => sample.match) && ratio >= 0.5 && ratio <= 2,
+      matches: samples.map((sample) => sample.match?.match ?? "not observed"),
+      pass: ratio !== null && ratio >= 0.5 && ratio <= 2,
     };
   });
   const methods = new Set([
@@ -223,7 +227,7 @@ export function formatFidelityMarkdown(report: FidelityReport): string {
   const lines = [
     `# Control UI bench fidelity: ${report.pass ? "PASS" : "FAIL"}`,
     "",
-    "CPU = inclusive share of sampled non-idle busy time. Same-source-line aliases use the maximum, never their sum. Missing functions count as zero. IQR uses linear-interpolated quartiles.",
+    "CPU = inclusive share of sampled non-idle busy time. Same-source-line aliases use the maximum, never their sum. Frames absent from the analyzer's top 70 or unmatched by identity are not observed, not measured zero; incomplete observations fail the gate. IQR uses linear-interpolated quartiles.",
     "",
     "CPU gate: 15 of 20 unique live app locations at 0.5–2× live share, present in every run. RPC gate: every run within ±1 for every method (unlisted live methods count as zero).",
   ];
@@ -245,7 +249,7 @@ export function formatFidelityMarkdown(report: FidelityReport): string {
         .replaceAll("|", "\\|")
         .replaceAll("`", "'");
       lines.push(
-        `| ${label} | ${number(fn.liveShare)} | ${spread(fn.benchShare)} | ${number(fn.ratio)}× | ${fn.matchedRuns}/${scenario.runs.length} | ${fn.pass ? "PASS" : "FAIL"} |`,
+        `| ${label} | ${number(fn.liveShare)} | ${fn.benchShare ? spread(fn.benchShare) : "not observed in every run"} | ${fn.ratio === null ? "not observed" : `${number(fn.ratio)}×`} | ${fn.matchedRuns}/${scenario.runs.length} | ${fn.pass ? "PASS" : "FAIL"} |`,
       );
     }
     lines.push(
@@ -275,6 +279,9 @@ async function readScenario(
   const summary = await readJson(path.join(directory, "summary.json"));
   if (!record(summary) || typeof summary.bundleDir !== "string") {
     throw new Error(`${scenario.name}: summary.json must identify its bundleDir`);
+  }
+  if (summary.route !== scenario.name) {
+    throw new Error(`${scenario.name}: summary.json route must be ${scenario.name}`);
   }
   const assets = scenario.assets ?? path.join(summary.bundleDir, "assets");
   if (!(await readdir(assets)).some((filename) => filename.endsWith(".js.map"))) {
@@ -383,7 +390,9 @@ async function main() {
 
 Consumes summary.json, run-N.metrics.json and run-N.cpuprofile from each bench directory.
 Live RPC JSON is a complete, sanitized method-to-count object, e.g. {"connect":1,"sessions.list":5}.
-Assets must contain source maps from the exact measured bundle. Both scenarios are required.
+Assets must contain source maps from the exact measured bundle. Each summary.route must match its
+board/chat scenario. Explicit workspace source paths stay distinct; already stripped analyzer labels
+remain unqualified. Both scenarios are required.
 Prints JSON and Markdown; --output also writes report.json and report.md. Exit 1 = fidelity gate
 failed; exit 2 = missing/invalid evidence or analyzer error. No live preambles or RPC params are copied.`);
     return;

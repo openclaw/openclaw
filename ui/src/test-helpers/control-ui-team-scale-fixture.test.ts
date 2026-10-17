@@ -149,4 +149,40 @@ describe("Team-scale Gateway fixture", () => {
     expect(fixture.counts.plugins).toBe(7);
     expect([...fixture.assets.keys()].filter((key) => key.endsWith("/index.js"))).toHaveLength(7);
   });
+
+  it("orders filtered cron inventories before paging full or compact responses", () => {
+    const fixture = createControlUiTeamScaleFixture({ now });
+    const catalog = fixture.listCronJobs({
+      limit: 200,
+      includeDisabled: true,
+      compact: true,
+      sortBy: "name",
+      sortDir: "asc",
+    });
+    expect(catalog.jobs).toHaveLength(120);
+    expect(catalog.jobs.slice(0, 4).map((job) => job.id)).toEqual([
+      "team-cron-1",
+      "team-cron-10",
+      "team-cron-100",
+      "team-cron-101",
+    ]);
+    const page = fixture.listCronJobs({
+      limit: 1,
+      offset: 1,
+      enabled: "disabled",
+      sortBy: "updatedAtMs",
+      sortDir: "asc",
+    });
+    expect(page.jobs).toHaveLength(1);
+    expect(page.jobs[0]).toMatchObject({ id: "team-cron-111", state: { lastRunStatus: "error" } });
+    expect(page).toMatchObject({ total: 24, offset: 1, hasMore: true, nextOffset: 2 });
+    expect(
+      fixture.listCronJobs({
+        limit: 1,
+        includeDisabled: true,
+        sortBy: "nextRunAtMs",
+        sortDir: "desc",
+      }).jobs[0]?.id,
+    ).toBe("team-cron-120");
+  });
 });

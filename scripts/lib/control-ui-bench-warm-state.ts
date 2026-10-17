@@ -23,6 +23,7 @@ type StoredSidebar = {
 export async function persistColdLoadWarmState(input: {
   sessionKey: string;
   sidebarView: "sessions" | "online";
+  snapshot?: ChatSnapshot;
 }) {
   const pane = document.querySelector(".chat-pane-cache__pane--active");
   const store: SnapshotStore | undefined = pane
@@ -36,7 +37,8 @@ export async function persistColdLoadWarmState(input: {
   if (!store || !entry) {
     throw new Error("Warm reload requires the active transcript cache owner");
   }
-  store.write(entry[0], { ...entry[1].snapshot });
+  const snapshot = input.snapshot ?? entry[1].snapshot;
+  store.write(entry[0], { ...snapshot });
   const started = performance.now();
   const flushed = store.flush();
   const serializeMs = performance.now() - started;
@@ -78,6 +80,7 @@ export async function persistColdLoadWarmState(input: {
     }
     const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
     return {
+      snapshot,
       serializeMs,
       writeMs,
       bytes: bytes(record),

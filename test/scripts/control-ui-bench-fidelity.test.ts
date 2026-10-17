@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   compareFidelity,
   fidelityDistribution,
@@ -6,6 +9,9 @@ import {
   parseFidelityCpuReport,
   parseFidelityRpcCounts,
 } from "../../scripts/control-ui-bench-fidelity.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function cpuReport(rows: string[], busy = 1000) {
   return parseFidelityCpuReport(
@@ -30,8 +36,8 @@ describe("Control UI bench fidelity report", () => {
   it("reads only app-function data, deduplicates aliases and ignores multiline bodies", () => {
     const report = cpuReport([
       "100 ../../ui/src/components/panel.tsx:10 createPanel",
-      " 90 components/panel.tsx:10 x",
-      " 80 components/panel.tsx:20 <For each={items()}>",
+      " 90 ui/src/components/panel.tsx:10 x",
+      " 80 ui/src/components/panel.tsx:20 <For each={items()}>",
       "        {(item) => <PrivateText />}\n      </For>",
       " 70 C:\\build\\ui\\src\\lib\\render.ts:7 renderView",
       " 60 node_modules/vendor/index.ts:10 createVendor",
@@ -43,18 +49,18 @@ describe("Control UI bench fidelity report", () => {
       busyMs: 1000,
       functions: [
         {
-          source: "components/panel.tsx",
+          source: "ui/src/components/panel.tsx",
           line: 10,
           names: ["createPanel", "x"],
           milliseconds: 100,
         },
         {
-          source: "components/panel.tsx",
+          source: "ui/src/components/panel.tsx",
           line: 20,
           names: ["<For each={items()}>"],
           milliseconds: 80,
         },
-        { source: "lib/render.ts", line: 7, names: ["renderView"], milliseconds: 70 },
+        { source: "ui/src/lib/render.ts", line: 7, names: ["renderView"], milliseconds: 70 },
       ],
     });
     const output = formatFidelityMarkdown({
@@ -68,6 +74,84 @@ describe("Control UI bench fidelity report", () => {
     expect(output).not.toContain("private capture preamble");
     expect(output).not.toContain("PrivateText");
     expect(output).not.toContain("ignored");
+  });
+
+  it("keeps identically named source locations in different workspaces distinct", () => {
+    const live = cpuReport([
+      "100 /build/openclaw/ui/src/lib/view.ts:10 createView",
+      "90 ../../packages/alpha/src/lib/view.ts:10 createView",
+      "80 C:\\build\\openclaw\\packages\\beta\\src\\lib\\view.ts:10 createView",
+      "70 ../../src/lib/view.ts:10 createView",
+    ]);
+    expect(live.functions.map((fn) => fn.source)).toEqual([
+      "ui/src/lib/view.ts",
+      "packages/alpha/src/lib/view.ts",
+      "packages/beta/src/lib/view.ts",
+      "src/lib/view.ts",
+    ]);
+    const report = compareFidelity("board", live, {}, [
+      benchRun(1, ["100 packages/alpha/src/lib/view.ts:10 createView"], {}),
+    ]);
+    expect(report.functions.map((fn) => fn.matchedRuns)).toEqual([0, 1, 0, 0]);
+  });
+
+  it("reports censored or unmatched frames as unobserved instead of measured zero", () => {
+    const scenario = compareFidelity("board", cpuReport(twentyFunctions), { "sessions.list": 5 }, [
+      benchRun(1, twentyFunctions.slice(0, 15)),
+      benchRun(2, twentyFunctions.slice(0, 14)),
+    ]);
+    expect(scenario).toMatchObject({ cpuPass: false, matchedFunctions: 14 });
+    expect(scenario.functions[14]).toMatchObject({
+      benchShare: null,
+      benchShareSamples: [8.6, null],
+      ratio: null,
+      matches: ["name", "not observed"],
+      matchedRuns: 1,
+      pass: false,
+    });
+    expect(scenario.functions[19]).toMatchObject({
+      benchShare: null,
+      benchShareSamples: [null, null],
+      ratio: null,
+      matchedRuns: 0,
+      pass: false,
+    });
+    const markdown = formatFidelityMarkdown({ pass: false, scenarios: [scenario] });
+    expect(markdown).toContain("not observed, not measured zero");
+    expect(markdown).toContain("| not observed in every run | not observed | 1/2 | FAIL |");
+  });
+
+  it.each([undefined, "chat"])("rejects a board directory whose recorded route is %s", (route) => {
+    const directory = tempDirs.make("openclaw-fidelity-route-");
+    mkdirSync(path.join(directory, "assets"));
+    writeFileSync(
+      path.join(directory, "summary.json"),
+      JSON.stringify({ route, bundleDir: directory }),
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/control-ui-bench-fidelity.ts"),
+        "--board",
+        directory,
+        "--board-live",
+        "unused",
+        "--board-rpcs",
+        "unused",
+        "--chat",
+        directory,
+        "--chat-live",
+        "unused",
+        "--chat-rpcs",
+        "unused",
+        "--analyzer",
+        "unused",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("board: summary.json route must be board");
   });
 
   it("requires fifteen distinct locations, not aliases, and rejects fewer than twenty references", () => {

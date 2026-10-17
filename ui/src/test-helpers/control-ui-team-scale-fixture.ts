@@ -11,7 +11,6 @@ import { defaultControlUiFeatureMethods } from "./control-ui-e2e-defaults.ts";
 import type { ControlUiMockGatewayScenario } from "./control-ui-e2e.ts";
 import {
   createTeamScaleSessionEvents,
-  createTeamScaleSidebarListOwner,
   prepareTeamScaleSidebarListChurn,
   type TeamScaleLiveEvent,
 } from "./control-ui-sidebar-list-fixture.ts";
@@ -165,8 +164,6 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       label: person.name,
     })),
   };
-  const sidebarLists = createTeamScaleSidebarListOwner(sidebarListInput);
-  const list = (params: Record<string, unknown>) => sidebarLists.list(params).result;
   const { cronJobs, listCronJobs } = createTeamScaleCronInventory({
     count: counts.cronJobs,
     now,
@@ -382,63 +379,11 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         },
       },
       "users.prefs.set": { status: "ok" },
-      "sessions.list": {
-        cases: [
-          ...["pinned", "hasBoard", "involvingMe"].map((flag) => ({
-            match: { [flag]: true },
-            response: list({
-              [flag]: true,
-              limit: counts.firstPage,
-              includeDerivedTitles: true,
-              includeLastMessage: true,
-            }),
-          })),
-          ...[selectedSessionKey, "agent:main:main"].map((spawnedBy) => ({
-            match: { spawnedBy },
-            response: list({ spawnedBy, rowMode: "compact", limit: 10_000 }),
-          })),
-          {
-            match: { includeOwnerSessionCounts: true },
-            response: list({
-              rowMode: "compact",
-              limit: 1,
-              excludeSubagents: true,
-              excludeCron: true,
-              excludeSystem: true,
-              includeOwnerSessionCounts: true,
-            }),
-          },
-          {
-            match: { offset: counts.firstPage },
-            response: list({
-              offset: counts.firstPage,
-              limit: counts.firstPage,
-              includeDerivedTitles: true,
-              includeLastMessage: true,
-            }),
-          },
-          {
-            match: {},
-            response: list({
-              limit: counts.firstPage,
-              ownerFirst: true,
-              includeDerivedTitles: true,
-              includeLastMessage: true,
-            }),
-          },
-        ],
-      },
       "cron.status": {
         enabled: true,
         triggersEnabled: true,
         jobs: cronJobs.length,
         nextWakeAtMs: now + 60_000,
-      },
-      "cron.list": {
-        cases: [0, 50, 100].map((offset) => ({
-          match: { offset },
-          response: listCronJobs({ offset, limit: 50, includeDisabled: true, compact: true }),
-        })),
       },
       "sessions.catalog.list": {
         catalogs: catalogs.map((catalog) =>

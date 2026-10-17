@@ -2745,9 +2745,14 @@ export async function prepareControlUiMockGatewayScenario(
   return { scenario: preparedScenario, assets };
 }
 
+let mockRequestBindingSequence = 0;
+
 export async function installMockGateway(
   page: Page,
   scenario: ControlUiMockGatewayScenario = {},
+  options: {
+    requestHandlers?: Record<string, (params: unknown) => unknown | Promise<unknown>>;
+  } = {},
 ): Promise<MockGatewayControls> {
   const prepared = await prepareControlUiMockGatewayScenario(scenario);
   if (prepared.assets.size) {
@@ -2766,7 +2771,22 @@ export async function installMockGateway(
     }),
   );
   await installControlUiE2eUnhandledRejectionRing(page);
-  await page.addInitScript({ content: createControlUiMockGatewayInitScript(normalizedScenario) });
+  let initScript = createControlUiMockGatewayInitScript(normalizedScenario);
+  const handlers = options.requestHandlers;
+  if (handlers) {
+    const binding = `__openclawMockRequest${++mockRequestBindingSequence}`;
+    await page.exposeBinding(binding, (_source, method: string, params: unknown) =>
+      handlers[method]!(params),
+    );
+    initScript += `;for (const method of ${JSON.stringify(Object.keys(handlers))}) {
+      window.openclawControlUiE2eGateway.setRequestHandler(method, ({ params, respond }) => {
+        window[${JSON.stringify(binding)}](method, params).then(respond, (error) => respond({
+          __mockError: { code: "MOCK_REQUEST_HANDLER_FAILED", message: String(error) }
+        }));
+      });
+    }`;
+  }
+  await page.addInitScript({ content: initScript });
   const rosterGates = new Set([
     "connect",
     "agents.list",

@@ -551,6 +551,10 @@ try {
   }
   await settle();
   await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
+  const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
+    sessionKey: fixture.selectedSessionKey,
+    sidebarView: sidebarView === "online" ? "online" : "sessions",
+  };
   for (let run = 0; run < runs; run++) {
     const cpuPhases: Record<string, ColdLoadCpuTables> = {};
     async function recordCpu(phase: string, profile: Parameters<typeof mapColdLoadCpuProfile>[0]) {
@@ -579,11 +583,9 @@ try {
       return { ...mapped, summary };
     }
     await page.evaluate("globalThis.__name = (fn) => fn");
-    const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
-      sessionKey: fixture.selectedSessionKey,
-      sidebarView: sidebarView === "online" ? "online" : "sessions",
-    };
-    const snapshotSave = await page.evaluate(persistColdLoadWarmState, warmInput);
+    const { snapshot, ...snapshotSave } = await page.evaluate(persistColdLoadWarmState, warmInput);
+    // Post-reload live/streaming probes must not change the next reload's cached transcript.
+    warmInput.snapshot ??= snapshot;
     runTransfer =
       sidebarRowTransfer === "delta" || (sidebarRowTransfer === "interleaved" && run % 2 === 1)
         ? "delta"
