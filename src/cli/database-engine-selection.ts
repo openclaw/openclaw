@@ -102,6 +102,9 @@ const OWNED_DATABASE_SELECTION = new Set([
 /** Select storage before stateful startup; true means Doctor completed a no-database report. */
 export async function prepareCliDatabaseEngine(argv: string[]): Promise<boolean> {
   const invocation = resolveCliArgvInvocation(argv);
+  const isSetupInvocation =
+    invocation.commandPath.length === 1 &&
+    ["onboard", "setup", "crestodian"].includes(invocation.primary ?? "");
   let command = invocation.hasHelpOrVersion
     ? "help"
     : resolveCliDatabaseProcessRole(argv) === "gateway"
@@ -150,6 +153,10 @@ export async function prepareCliDatabaseEngine(argv: string[]): Promise<boolean>
   const readSnapshot = () =>
     readConfigSnapshotBeforeEngineSelection(process.env, { isolateEnv: false });
   let snapshot = await readSnapshot();
+  // Reset owns the old engine only through cleanup, then selects its fresh config.
+  if (isSetupInvocation && hasFlag(argv, "--reset")) {
+    return false;
+  }
   let doctorRecovery = false;
   const {
     createConfigReadError,
@@ -158,8 +165,7 @@ export async function prepareCliDatabaseEngine(argv: string[]): Promise<boolean>
     isConfigReadFailure,
   } = await import("../config/io.invalid-config.js");
   if (
-    ["onboard", "setup", "crestodian"].includes(invocation.primary ?? "") &&
-    invocation.commandPath.length === 1 &&
+    isSetupInvocation &&
     !hasFlag(argv, "--non-interactive") &&
     !isConfigReadFailure(snapshot) &&
     snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")

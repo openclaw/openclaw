@@ -27,6 +27,9 @@ const database = {
 
 const recoveryOwnerCommands = [
   [],
+  ["onboard", "--reset"],
+  ["onboard", "--reset", "--non-interactive", "--accept-risk"],
+  ["setup", "--wizard", "--reset"],
   ["agent", "--agent", "main", "--message", "hello"],
   ["gateway", "restart"],
   ["daemon", "restart"],
