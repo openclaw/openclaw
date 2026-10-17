@@ -10,6 +10,7 @@ const require = createRequire(import.meta.url);
 const leaseId = "cbx_replay_fixture";
 // Slowest identity probe (lsof) measured on a CPU-starved macOS host; native inspection is heavier.
 const LOADED_HOST_PROBE_MS = 27_042;
+const processResult = (stdout = "", status: number | null = 0) => ({ status, stdout });
 
 async function replay(
   platform: "linux" | "darwin",
@@ -158,30 +159,25 @@ async function replay(
   const hostArguments = [
     "/Applications/OpenClawCloudWorker.app/Contents/MacOS/OpenClaw",
     "--cloud-worker-host",
-    "--node-executable",
-    "/usr/bin/node",
-    "--runtime-dir",
-    runtimeDir,
-    "--state-dir",
-    stateDir,
-    "--desktop-dir",
-    `/var/db/crabbox/openclaw-workers/${leaseId}`,
-    "--lease-id",
-    leaseId,
-    "--display-name",
-    displayName,
-    "--enrollment-mode",
-    "connect",
+    ...Object.entries({
+      "--node-executable": "/usr/bin/node",
+      "--runtime-dir": runtimeDir,
+      "--state-dir": stateDir,
+      "--desktop-dir": `/var/db/crabbox/openclaw-workers/${leaseId}`,
+      "--lease-id": leaseId,
+      "--display-name": displayName,
+      "--enrollment-mode": "connect",
+    }).flat(),
   ];
   const spawnSync = vi.fn((binary: string, args: string[], options?: { timeout?: number }) => {
     if (binary === "/usr/bin/node") {
       if (args[0] !== cli) {
         throw new Error("Unexpected runtime executable");
       }
-      return { status: 0, stdout: args[1] === "--version" ? "OpenClaw 2026.8.1" : "" };
+      return processResult(args[1] === "--version" ? "OpenClaw 2026.8.1" : "");
     }
     if (failure === "unavailable") {
-      return { status: 1, stdout: "" };
+      return processResult("", 1);
     }
     if (
       failure === "loaded-host" &&
@@ -190,8 +186,7 @@ async function replay(
     ) {
       // spawnSync's watchdog kills an overrun probe and reports ETIMEDOUT without a status.
       return {
-        status: null,
-        stdout: "",
+        ...processResult("", null),
         error: Object.assign(new Error(`spawnSync ${binary} ETIMEDOUT`), { code: "ETIMEDOUT" }),
       };
     }
@@ -204,7 +199,7 @@ async function replay(
         throw new Error("Unexpected native process inspection");
       }
       if (failure === "host-inspect-unavailable") {
-        return { status: 1, stdout: "" };
+        return processResult("", 1);
       }
       const cwd = { device: "2147483649", inode: "42" };
       const inspection =
@@ -215,9 +210,7 @@ async function replay(
               host: {
                 pid: 456,
                 uid: failure === "host-uid" ? 0 : 501,
-                parentPid: 111,
                 startTime: hostStart,
-                executablePath: hostArguments[0],
                 arguments: failure === "host-command" ? ["unrelated-host"] : hostArguments,
                 cwd: failure === "host-cwd" ? { ...cwd, inode: "43" } : cwd,
               },
@@ -234,31 +227,26 @@ async function replay(
                 cwd: failure === "cwd" ? { ...cwd, inode: "43" } : cwd,
               },
             };
-      return {
-        status: 0,
-        stdout: failure === "host-argv-invalid-json" ? "invalid" : JSON.stringify(inspection),
-      };
+      return processResult(
+        failure === "host-argv-invalid-json" ? "invalid" : JSON.stringify(inspection),
+      );
     }
     if (binary.endsWith("lsof")) {
       if (failure === "lsof" || (failure === "lsof-fallback" && binary === "lsof")) {
-        return { status: 1, stdout: "" };
+        return processResult("", 1);
       }
-      return {
-        status: 0,
-        stdout: `p123\nfcwd\nn${runtimeDir.replace(/[^\x20-\x7e]/gu, "?")}${failure === "cwd" ? "-other" : ""}\n`,
-      };
+      return processResult(
+        `p123\nfcwd\nn${runtimeDir.replace(/[^\x20-\x7e]/gu, "?")}${failure === "cwd" ? "-other" : ""}\n`,
+      );
     }
     if (binary === "ps") {
       if (args.includes("lstart=")) {
-        return {
-          status: 0,
-          stdout: failure === "missing-start" ? "" : "Wed Sep  9 12:00:00 2026\n",
-        };
+        return processResult(failure === "missing-start" ? "" : "Wed Sep  9 12:00:00 2026\n");
       }
       if (args.includes("-E") || args.includes("eww")) {
         throw new Error("Must not inspect macOS process environment");
       }
-      return { status: 0, stdout: command + "\n" };
+      return processResult(command + "\n");
     }
     throw new Error("Unexpected process probe");
   });

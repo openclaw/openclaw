@@ -36,6 +36,37 @@ import {
 } from "./crabbox-worker-warm-image.test-support.js";
 
 const warmImage = async () => (await listCrabboxWarmImages(crabboxState))[0];
+const commandCount = (calls: CommandCall[], command: string) =>
+  calls.filter(({ argv }) => argv[1] === command || argv[2] === command).length;
+const PREPARATION_EVENTS = ["project-prepared", "runtime-granted", "runtime-install", "capture"];
+const ENROLLMENT_EVENTS = ["enrollment-begun", "enrollment-install"];
+const runtimeGrant = (signal: AbortSignal) => ({
+  nodeBootstrap: createNodeBootstrapFixture(),
+  workerBundle: createWorkerArchiveFixture(),
+  signal,
+});
+
+function projectFixture(
+  command?: Parameters<typeof createWarmProvider>[0],
+  controller?: AbortController,
+) {
+  const events: string[] = [];
+  const { options, observe } = projectOptions(events, controller);
+  const warm = createWarmProvider((call) => {
+    observe(call);
+    return command?.(call);
+  });
+  return { ...warm, options, events };
+}
+
+function writeFile(file: string, content: string | Buffer, mode?: number) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content, { mode });
+}
+
+async function expectNoCapture() {
+  expect((await listCrabboxWarmImages(crabboxState)).every((image) => !image.capture)).toBe(true);
+}
 
 type ProvisionOptions = NonNullable<Parameters<WorkerProvider["provision"]>[2]>;
 
@@ -73,15 +104,8 @@ describe("Crabbox project snapshot provisioning", () => {
     };
     const { provider, calls, warn, stateDir } = createWarmProvider(command);
     const source = await provider.provision(profile, "unsupported-project", current.options);
-    expect(events).toEqual([
-      "project-prepared",
-      "runtime-granted",
-      "runtime-install",
-      "capture",
-      "enrollment-begun",
-      "enrollment-install",
-    ]);
-    expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
+    expect(events).toEqual([...PREPARATION_EVENTS, ...ENROLLMENT_EVENTS]);
+    expect(commandCount(calls, "stop")).toBe(0);
     expect(await warmImage()).toMatchObject({
       captureUnsupported: {
         atMs: now,
@@ -103,100 +127,30 @@ describe("Crabbox project snapshot provisioning", () => {
     const next = await restarted.provider.provision(profile, "refused-next", current.options);
     expect(current.options.prepareNodeRuntime).not.toHaveBeenCalled();
     expect(current.options.beginNodeEnrollment).toHaveBeenCalledOnce();
-    expect(restarted.calls.some(({ argv }) => argv[2] === "create")).toBe(false);
+    expect(commandCount(restarted.calls, "create")).toBe(0);
     await destroyAndWait(restarted.provider, { ...next, profile });
-    expect(restarted.calls.some(({ argv }) => argv[2] === "create")).toBe(false);
+    expect(commandCount(restarted.calls, "create")).toBe(0);
     clock.mockReturnValue(now + 86_400_000);
     unsupported = false;
     current = projectOptions([]);
     await restarted.provider.provision(profile, "supported-next", current.options);
     expect(current.options.prepareNodeRuntime).toHaveBeenCalledOnce();
-    expect(restarted.calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
-    expect((await warmImage())?.checkpointId).toBe(CHECKPOINT_ID);
-    expect((await warmImage())?.captureUnsupported).toBeUndefined();
+    expect(commandCount(restarted.calls, "create")).toBe(1);
+    const image = await warmImage();
+    expect({
+      checkpointId: image?.checkpointId,
+      captureUnsupported: image?.captureUnsupported,
+    }).toEqual({
+      checkpointId: CHECKPOINT_ID,
+      captureUnsupported: undefined,
+    });
   });
 
   it.skipIf(process.platform === "win32").each(["none", "runtime", "scrub"] as const)(
     "prepares and scrubs in one settled command before capture (failure=%s)",
     async (failure) => {
       const home = fs.realpathSync(tempDirs.make("openclaw-crabbox-capture-command-"));
-      const events: string[] = [];
-      const { options, observe } = projectOptions(events);
-      const nodeBootstrap = createNodeBootstrapFixture();
-      const archive = Buffer.from("verified synthetic worker archive");
-      const archiveSha = createHash("sha256").update(archive).digest("hex");
-      const workerBundle = {
-        ...createWorkerArchiveFixture(),
-        sha256: archiveSha,
-        bytes: archive.length,
-        packageRelativePath: `worker-artifacts/${archiveSha}.tgz`,
-      };
-      options.nodeRuntimeIdentity.workerBundleSha256 = archiveSha;
-      options.prepareNodeRuntime.mockResolvedValue({
-        nodeBootstrap,
-        workerBundle,
-        signal: options.project.signal,
-      });
-      const packageRoot = path.join(
-        home,
-        ".openclaw-worker",
-        "node-runtimes",
-        nodeBootstrap.sha256,
-        "node_modules",
-        "openclaw",
-      );
-      const retainedArchive = path.join(packageRoot, workerBundle.packageRelativePath);
-      const privateFiles = [
-        path.join(home, ".openclaw", "cloud-workers", "previous-worker", "setup-code"),
-        path.join(home, ".openclaw-worker", "workspaces", "previous-session", "private.txt"),
-        path.join(home, ".crabbox", "env", "forwarded.env"),
-        path.join(home, ".crabbox", "scripts", "prepare.sh"),
-      ];
-      for (const file of [...privateFiles, retainedArchive]) {
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, "synthetic private state");
-      }
-      fs.writeFileSync(retainedArchive, archive);
-      fs.writeFileSync(
-        path.join(packageRoot, "package.json"),
-        JSON.stringify({ name: "openclaw", version: failure === "runtime" ? "0.0.0" : "2026.8.1" }),
-      );
-      fs.writeFileSync(
-        path.join(packageRoot, "openclaw.mjs"),
-        `import fs from "node:fs";
-import path from "node:path";
-if (process.env.CRABBOX_WORKER_BOOTSTRAP_TOKEN || !fs.existsSync(${JSON.stringify(privateFiles[0])})) process.exit(9);
-fs.writeFileSync(path.join(process.env.HOME, "runtime-verified"), "verified");
-console.log("OpenClaw 2026.8.1");
-`,
-      );
-      const bin = path.join(home, "bin");
-      fs.mkdirSync(bin);
-      fs.writeFileSync(
-        path.join(bin, "node"),
-        `#!/bin/sh
-set -eu
-if [ -f "$HOME/runtime-verified" ] && [ -n "\${CRABBOX_WORKER_BOOTSTRAP_TOKEN-}" ]; then
-  echo "bootstrap credentials reached scrub" >&2
-  exit 9
-fi
-exec "$CRABBOX_TEST_NODE" "$@"
-`,
-        { mode: 0o700 },
-      );
-      if (failure === "scrub") {
-        fs.writeFileSync(
-          path.join(bin, "rm"),
-          '#!/bin/sh\ncase "$*" in *".crabbox/env"*) exit 7;; esac\nexec /bin/rm "$@"\n',
-          { mode: 0o700 },
-        );
-      }
-      let preparationCommands = 0;
-      let preparationProcess: { error?: Error; signal: NodeJS.Signals | null } | undefined;
-      let filesAtCapture: boolean[] | undefined;
-      let archiveAtCapture: Buffer | undefined;
-      const { provider, calls } = createWarmProvider((call) => {
-        observe(call);
+      const { options, events, provider, calls } = projectFixture((call) => {
         if (call.argv[2] === "create") {
           filesAtCapture = privateFiles.map((file) => fs.existsSync(file));
           archiveAtCapture = fs.readFileSync(retainedArchive);
@@ -210,7 +164,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
         }
         preparationCommands += 1;
         const scriptPath = privateFiles[3]!;
-        fs.writeFileSync(scriptPath, String(call.options.input));
+        writeFile(scriptPath, String(call.options.input));
         const result = spawnSync("/bin/sh", [scriptPath], {
           cwd: home,
           env: {
@@ -232,11 +186,82 @@ exec "$CRABBOX_TEST_NODE" "$@"
         preparationProcess = result;
         return commandResult({ code: result.status, stdout: result.stdout, stderr: result.stderr });
       });
+      const nodeBootstrap = createNodeBootstrapFixture();
+      const archive = Buffer.from("verified synthetic worker archive");
+      const archiveSha = createHash("sha256").update(archive).digest("hex");
+      const workerBundle = {
+        ...createWorkerArchiveFixture(),
+        sha256: archiveSha,
+        bytes: archive.length,
+        packageRelativePath: `worker-artifacts/${archiveSha}.tgz`,
+      };
+      options.nodeRuntimeIdentity.workerBundleSha256 = archiveSha;
+      options.prepareNodeRuntime.mockResolvedValue({
+        nodeBootstrap,
+        workerBundle,
+        signal: options.project.signal,
+      });
+      const packageRoot = path.join(
+        home,
+        ".openclaw-worker/node-runtimes",
+        nodeBootstrap.sha256,
+        "node_modules/openclaw",
+      );
+      const retainedArchive = path.join(packageRoot, workerBundle.packageRelativePath);
+      const privateFiles = [
+        ".openclaw/cloud-workers/previous-worker/setup-code",
+        ".openclaw-worker/workspaces/previous-session/private.txt",
+        ".crabbox/env/forwarded.env",
+        ".crabbox/scripts/prepare.sh",
+      ].map((relative) => path.join(home, relative));
+      for (const file of privateFiles) {
+        writeFile(file, "synthetic private state");
+      }
+      writeFile(retainedArchive, archive);
+      writeFile(
+        path.join(packageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: failure === "runtime" ? "0.0.0" : "2026.8.1" }),
+      );
+      writeFile(
+        path.join(packageRoot, "openclaw.mjs"),
+        `import fs from "node:fs";
+import path from "node:path";
+if (process.env.CRABBOX_WORKER_BOOTSTRAP_TOKEN || !fs.existsSync(${JSON.stringify(privateFiles[0])})) process.exit(9);
+fs.writeFileSync(path.join(process.env.HOME, "runtime-verified"), "verified");
+console.log("OpenClaw 2026.8.1");
+`,
+      );
+      const bin = path.join(home, "bin");
+      writeFile(
+        path.join(bin, "node"),
+        `#!/bin/sh
+set -eu
+if [ -f "$HOME/runtime-verified" ] && [ -n "\${CRABBOX_WORKER_BOOTSTRAP_TOKEN-}" ]; then
+  echo "bootstrap credentials reached scrub" >&2
+  exit 9
+fi
+exec "$CRABBOX_TEST_NODE" "$@"
+`,
+        0o700,
+      );
+      if (failure === "scrub") {
+        writeFile(
+          path.join(bin, "rm"),
+          '#!/bin/sh\ncase "$*" in *".crabbox/env"*) exit 7;; esac\nexec /bin/rm "$@"\n',
+          0o700,
+        );
+      }
+      let preparationCommands = 0;
+      let preparationProcess: { error?: Error; signal: NodeJS.Signals | null } | undefined;
+      let filesAtCapture: boolean[] | undefined;
+      let archiveAtCapture: Buffer | undefined;
 
       const provision = provider.provision(PROFILE, "capture-command", options);
       await provision.catch(() => {});
-      expect(preparationProcess?.error).toBeUndefined();
-      expect(preparationProcess?.signal).toBeNull();
+      expect({ error: preparationProcess?.error, signal: preparationProcess?.signal }).toEqual({
+        error: undefined,
+        signal: null,
+      });
       if (failure === "none") {
         await expect(provision).resolves.toMatchObject({ node: { deviceId: "project-node" } });
         expect(filesAtCapture).toEqual([false, false, false, false]);
@@ -246,23 +271,20 @@ exec "$CRABBOX_TEST_NODE" "$@"
         await expect(provision).rejects.toThrow();
         expect(filesAtCapture).toBeUndefined();
         expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
-        expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
+        expect(commandCount(calls, "stop")).toBe(1);
         expect(fs.existsSync(privateFiles[2]!)).toBe(true);
       }
       expect(preparationCommands).toBe(1);
       expect(fs.existsSync(path.join(home, "runtime-verified"))).toBe(failure !== "runtime");
-      expect((await listCrabboxWarmImages(crabboxState)).every((image) => !image.capture)).toBe(
-        true,
-      );
+      await expectNoCapture();
     },
   );
 
   it("reports checkpoint rejection and cleanup failure while retaining capture recovery", async () => {
     const diagnostic =
       'coordinator POST /v1/checkpoints: http 429: {"error":"checkpoint_limit_exceeded","message":"checkpoint admission limit exceeded: scope=owner observed=10 limit=10"}';
-    const { options } = projectOptions([]);
     let blocked = true;
-    const { provider, calls, warn } = createWarmProvider(({ argv }) => {
+    const { options, provider, calls, warn } = projectFixture(({ argv }) => {
       if (blocked && argv[2] === "create") {
         return commandResult({ code: 5, stderr: diagnostic });
       }
@@ -283,15 +305,14 @@ exec "$CRABBOX_TEST_NODE" "$@"
     expect(message).toContain(`--recover ${capture!.selector}`);
     expect(message).toContain("source has unresolved checkpoint chk_quota");
     expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
-    expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
+    expect(commandCount(calls, "stop")).toBe(1);
 
     const lease = { leaseId: operationLeaseId("quota-rejection"), profile: PROFILE };
     warn.mockClear();
     for (let retry = 0; retry < 3; retry++) {
       await expect(provider.destroy(lease)).rejects.toThrow("source has unresolved checkpoint");
     }
-    expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
-    expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(4);
+    expect([commandCount(calls, "create"), commandCount(calls, "stop")]).toEqual([1, 4]);
     expect(warn.mock.calls.filter(([warning]) => warning.includes("capture paused"))).toEqual([
       [expect.stringContaining(`--recover ${capture!.selector} --acknowledge-provider-cleanup`)],
     ]);
@@ -304,7 +325,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
     blocked = false;
     await recoverCrabboxWarmImageCapture(crabboxState, capture!.selector, true);
     await destroyAndWait(provider, lease);
-    expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(2);
+    expect(commandCount(calls, "create")).toBe(2);
     expect((await warmImage())?.capture).toBeUndefined();
   });
 
@@ -315,11 +336,8 @@ exec "$CRABBOX_TEST_NODE" "$@"
   ])(
     "clears only its own rejected capture and still stops the source (replaced=$replaced, unsupported=$unsupported)",
     async ({ replaced, unsupported }) => {
-      const events: string[] = [];
-      const { options, observe } = projectOptions(events);
       const leaseId = operationLeaseId("not-submitted");
-      const { provider, calls } = createWarmProvider((call) => {
-        observe(call);
+      const { options, provider, calls } = projectFixture((call) => {
         if (call.argv[2] !== "create") {
           return undefined;
         }
@@ -351,7 +369,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
         "image submission rejected; source rollback failed",
       );
       expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
-      expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
+      expect(commandCount(calls, "stop")).toBe(1);
       expect(calls.find(({ argv }) => argv[1] === "stop")?.argv).toContain(leaseId);
       if (replaced) {
         expect((await warmImage())?.captureUnsupported).toBeUndefined();
@@ -471,13 +489,10 @@ exec "$CRABBOX_TEST_NODE" "$@"
   );
 
   it("waits beyond the submission deadline for a retained checkpoint before enrollment", async () => {
-    const events: string[] = [];
-    const { options, observe } = projectOptions(events);
     const entered = createDeferred<void>();
     const available = createDeferred<void>();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    const { provider, calls } = createWarmProvider(async (call) => {
-      observe(call);
+    const { options, provider, calls } = projectFixture(async (call) => {
       if (call.argv[2] !== "create") {
         return undefined;
       }
@@ -534,7 +549,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
       state: "available",
       allocations: { [operationLeaseId("retained-capture")]: { phase: "enrolled" } },
     });
-    expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
+    expect(commandCount(calls, "create")).toBe(1);
     expect(options.beginNodeEnrollment).toHaveBeenCalledOnce();
     expect((await warmImage())?.capture).toBeUndefined();
   });
@@ -542,16 +557,12 @@ exec "$CRABBOX_TEST_NODE" "$@"
   it.each(["project transfer", "runtime grant", "runtime setup", "enrollment setup"] as const)(
     "cancels explicit Stop during %s without replacing its narrower grant signal",
     async (phase) => {
-      const events: string[] = [];
       const controller = new AbortController();
       const reason = new DOMException("Stop snapshot provisioning", "AbortError");
       const entered = createDeferred<void>();
       const release = createDeferred<void>();
-      const { options, observe } = projectOptions(events);
-      const provisionOptions = { ...options, signal: controller.signal };
       let commandSignal: AbortSignal | undefined;
-      const { provider, calls } = createWarmProvider(async (call) => {
-        observe(call);
+      const { options, events, provider, calls } = projectFixture(async (call) => {
         const input = call.options.input?.toString();
         const currentPhase =
           input === "project-checkout"
@@ -573,22 +584,18 @@ exec "$CRABBOX_TEST_NODE" "$@"
         options.prepareNodeRuntime.mockImplementationOnce(async () => {
           entered.resolve();
           await release.promise;
-          return {
-            nodeBootstrap: createNodeBootstrapFixture(),
-            workerBundle: createWorkerArchiveFixture(),
-            signal: options.project.signal,
-          };
+          return runtimeGrant(options.project.signal);
         });
       }
       let settled = false;
       const operation = provider
-        .provision(PROFILE, `stop-${phase}`, provisionOptions)
+        .provision(PROFILE, `stop-${phase}`, { ...options, signal: controller.signal })
         .catch((error: unknown) => error)
         .finally(() => {
           settled = true;
         });
       await entered.promise;
-      const commandCount = calls.length;
+      const initialCommandCount = calls.length;
       try {
         controller.abort(reason);
         await setImmediate();
@@ -597,17 +604,17 @@ exec "$CRABBOX_TEST_NODE" "$@"
           expect(commandSignal?.aborted).toBe(true);
         }
         expect(settled).toBe(false);
-        expect(calls).toHaveLength(commandCount);
+        expect(calls).toHaveLength(initialCommandCount);
       } finally {
         release.resolve();
         await operation;
       }
       expect(await operation).toBe(reason);
-      expect(calls).toHaveLength(commandCount);
+      expect(calls).toHaveLength(initialCommandCount);
       if (phase !== "enrollment setup") {
         expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
       }
-      expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
+      expect(commandCount(calls, "stop")).toBe(0);
     },
   );
 
@@ -647,12 +654,8 @@ exec "$CRABBOX_TEST_NODE" "$@"
 
       expect(events).toEqual([
         ...(desktop ? ["desktop"] : []),
-        "project-prepared",
-        "runtime-granted",
-        "runtime-install",
-        "capture",
-        "enrollment-begun",
-        "enrollment-install",
+        ...PREPARATION_EVENTS,
+        ...ENROLLMENT_EVENTS,
       ]);
       expect(await warmImage()).toMatchObject({
         projectKey: PROJECT_KEY,
@@ -661,20 +664,17 @@ exec "$CRABBOX_TEST_NODE" "$@"
           [operationLeaseId("project-first")]: { phase: "enrolled", baseCommit: BASE_COMMIT },
         },
       });
-      // The first worker is still running: a new session can already use its clean image.
       calls.length = 0;
       events.length = 0;
       current = projectOptions(events);
       await provider.provision(profile, "project-second", current.options);
       expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
-      expect(calls.some(({ argv }) => argv[1] === "warmup" || argv[2] === "create")).toBe(false);
-      // Waited capture already established readiness; reuse does not repeat the inspection.
+      expect([commandCount(calls, "warmup"), commandCount(calls, "create")]).toEqual([0, 0]);
       expect(calls.filter(({ argv }) => argv[2] === "inspect")).toHaveLength(0);
       expect(events).toEqual([
         ...(desktop ? ["desktop"] : []),
         "project-prepared",
-        "enrollment-begun",
-        "enrollment-install",
+        ...ENROLLMENT_EVENTS,
       ]);
       expect(current.options.prepareNodeRuntime).not.toHaveBeenCalled();
       // A cache hit does not restart the machine; only allocation needs provider readiness.
@@ -687,29 +687,27 @@ exec "$CRABBOX_TEST_NODE" "$@"
   it.each(["grant", "readiness"] as const)(
     "preserves preparation %s failure ownership without enrollment",
     async (failure) => {
-      const events: string[] = [];
-      const { options, observe } = projectOptions(events);
-      if (failure === "grant") {
-        options.prepareNodeRuntime.mockRejectedValueOnce(new Error("runtime grant failed"));
-      }
       let captured = false;
-      const { provider, calls } = createWarmProvider((call) => {
-        observe(call);
+      const { options, provider, calls } = projectFixture((call) => {
         captured ||= call.argv[2] === "create";
         if (captured && failure === "readiness" && call.argv[1] === "inspect") {
           return commandResult({ termination: "timeout", code: null, killed: true });
         }
         return undefined;
       });
+      if (failure === "grant") {
+        options.prepareNodeRuntime.mockRejectedValueOnce(new Error("runtime grant failed"));
+      }
       await expect(provider.provision(PROFILE, `runtime-${failure}`, options)).rejects.toThrow();
       expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
-      expect(calls.some(({ argv }) => argv[2] === "create")).toBe(failure === "readiness");
-      expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(
-        failure === "readiness" ? 0 : 1,
-      );
-      expect((await listCrabboxWarmImages(crabboxState)).every((image) => !image.capture)).toBe(
-        true,
-      );
+      expect({
+        captured: commandCount(calls, "create") > 0,
+        stops: commandCount(calls, "stop"),
+      }).toEqual({
+        captured: failure === "readiness",
+        stops: failure === "readiness" ? 0 : 1,
+      });
+      await expectNoCapture();
       if (failure === "readiness") {
         expect(
           (await warmImage())?.allocations[operationLeaseId(`runtime-${failure}`)],
@@ -721,10 +719,8 @@ exec "$CRABBOX_TEST_NODE" "$@"
   it.each(["resolve", "reject"] as const)(
     "fences a runtime grant that will %s after project ownership changes",
     async (outcome) => {
-      const events: string[] = [];
       const controller = new AbortController();
-      const { options, observe } = projectOptions(events, controller);
-      const { provider, calls } = createWarmProvider(observe);
+      const { options, events, provider, calls } = projectFixture(undefined, controller);
       let current = true;
       const closed = new DOMException("Project owner changed", "AbortError");
       options.project.assertCurrent = () => {
@@ -739,11 +735,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
         if (outcome === "reject") {
           throw closed;
         }
-        return {
-          nodeBootstrap: createNodeBootstrapFixture(),
-          workerBundle: createWorkerArchiveFixture(),
-          signal: new AbortController().signal,
-        };
+        return runtimeGrant(new AbortController().signal);
       });
 
       await expect(
@@ -753,15 +745,13 @@ exec "$CRABBOX_TEST_NODE" "$@"
       });
 
       expect(events).not.toContain("runtime-install");
-      expect(calls.some(({ argv }) => argv[1] === "stop" || argv[2] === "create")).toBe(false);
+      expect([commandCount(calls, "stop"), commandCount(calls, "create")]).toEqual([0, 0]);
       expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
-      expect(await warmImage()).toMatchObject({
-        allocations: {
-          [operationLeaseId(`stale-grant-${outcome}`)]: {
-            phase: "prepared",
-            choice: { kind: "cold" },
-          },
-        },
+      expect(
+        (await warmImage())?.allocations[operationLeaseId(`stale-grant-${outcome}`)],
+      ).toMatchObject({
+        phase: "prepared",
+        choice: { kind: "cold" },
       });
       expect((await warmImage())?.capture).toBeUndefined();
     },
@@ -779,11 +769,8 @@ exec "$CRABBOX_TEST_NODE" "$@"
   ])(
     "retains uncertainty and prevents enrollment after native capture: $failure",
     async ({ failure, result, receipt }) => {
-      const events: string[] = [];
       const controller = new AbortController();
-      const { options, observe } = projectOptions(events, controller);
-      const { provider, calls } = createWarmProvider((call) => {
-        observe(call);
+      const { options, events, provider, calls } = projectFixture((call) => {
         if (call.argv[2] !== "create") {
           return undefined;
         }
@@ -800,7 +787,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
           }),
           ...result,
         });
-      });
+      }, controller);
 
       await expect(provider.provision(PROFILE, `project-${failure}`, options)).rejects.toThrow();
 
@@ -808,7 +795,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
       expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
       expect(events).not.toContain("enrollment-install");
       expect((await warmImage())?.capture?.phase).toBe("uncertain");
-      expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(failure !== "aborted");
+      expect(commandCount(calls, "stop") > 0).toBe(failure !== "aborted");
     },
   );
 
@@ -859,8 +846,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
   });
 
   it("keeps an unsupported refusal for a different lease uncertain before enrollment", async () => {
-    const { options } = projectOptions([]);
-    const { provider } = createWarmProvider(({ argv }) =>
+    const { options, provider } = projectFixture(({ argv }) =>
       argv[2] === "create"
         ? commandResult({
             code: 2,
@@ -881,9 +867,8 @@ exec "$CRABBOX_TEST_NODE" "$@"
     "preserves capture uncertainty but reports the source cleanup result after cancellation (stopFails=%s)",
     async (stopFails) => {
       const controller = new AbortController();
-      const { options } = projectOptions([], controller);
       const leaseId = operationLeaseId("cancelled-project-capture");
-      const { provider, calls, warn } = createWarmProvider(({ argv }) => {
+      const { options, provider, calls, warn } = projectFixture(({ argv }) => {
         if (argv[2] === "create") {
           controller.abort();
           return commandResult({ code: 2, stderr: "capture interrupted" });
@@ -892,7 +877,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
           return commandResult({ code: 5, stderr: "source cleanup still pending" });
         }
         return undefined;
-      });
+      }, controller);
 
       await expect(
         provider.provision(PROFILE, "cancelled-project-capture", options),
@@ -900,7 +885,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
       const capture = (await warmImage())?.capture;
       expect(capture).toMatchObject({ leaseId, phase: "uncertain" });
       expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
-      expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
+      expect(commandCount(calls, "stop")).toBe(0);
       calls.length = 0;
       warn.mockClear();
 
@@ -925,15 +910,13 @@ exec "$CRABBOX_TEST_NODE" "$@"
 
   it("prepares runtime without project capture for an opted-out profile", async () => {
     const profile = { ...PROFILE, warmImage: false };
-    const events: string[] = [];
-    const { options, observe } = projectOptions(events);
-    const { provider, calls } = createWarmProvider((call) => observe(call));
+    const { options, provider, calls } = projectFixture();
     expect(provider.supportsProjectPreparation?.(profile)).toBe(false);
     await provider.provision(profile, "project-optout", options);
     expect(options.project.prepare).not.toHaveBeenCalled();
     expect(options.prepareNodeRuntime).toHaveBeenCalledOnce();
     expect(options.beginNodeEnrollment).toHaveBeenCalledOnce();
-    expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
+    expect(commandCount(calls, "checkpoint")).toBe(0);
     expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
   });
 });

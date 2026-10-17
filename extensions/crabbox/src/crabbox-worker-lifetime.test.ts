@@ -18,7 +18,15 @@ const context = {
 const jsonResult = (value: unknown) => commandResult({ stdout: JSON.stringify(value) });
 
 function fixture(
-  options: { ttl?: number; extension?: string; runtime?: boolean; expiry?: number } = {},
+  options: {
+    ttl?: number;
+    extension?: string;
+    runtime?: boolean;
+    expiry?: number;
+    createdAgo?: number;
+    maximum?: number;
+    source?: "inspect" | "list";
+  } = {},
 ) {
   let ttl = options.ttl ?? 1800;
   const calls: string[][] = [];
@@ -27,12 +35,12 @@ function fixture(
     id: ID,
     state: "active",
     provider: "aws",
-    createdAt: new Date(NOW).toISOString(),
+    createdAt: new Date(NOW - (options.createdAgo ?? 0)).toISOString(),
     ttlSeconds: ttl,
     idleTimeout: "45m",
     expiresAt: new Date(NOW + (options.expiry ?? 2700) * 1000).toISOString(),
     leasePolicy: {
-      maxTTLSeconds: 14400,
+      maxTTLSeconds: options.maximum ?? 14400,
       runtimeExtension: options.runtime ?? true,
       extension: options.extension ?? "allow",
     },
@@ -50,10 +58,11 @@ function fixture(
     if (argv[1] === "inspect") {
       // Coordinator inspect omits the creation anchor and total TTL.
       const { createdAt: _created, ttlSeconds: _ttl, ...inspect } = facts();
-      return jsonResult(inspect);
+      return jsonResult(options.source === "inspect" ? facts() : inspect);
     }
     if (argv[1] === "list") {
-      return jsonResult([facts()]);
+      const { leasePolicy, ...listed } = facts();
+      return jsonResult([options.source ? listed : { ...listed, leasePolicy }]);
     }
     return jsonResult(facts());
   };
@@ -114,59 +123,40 @@ describe("Crabbox capture lifetime admission", () => {
   it.each(["inspect", "list"] as const)(
     "honors a tightened maximum when total TTL comes from %s",
     async (source) => {
-      const facts = {
-        id: ID,
-        provider: "aws",
-        state: "active",
-        createdAt: new Date(NOW - 60 * 60_000).toISOString(),
-        ttlSeconds: 14400,
-        expiresAt: new Date(NOW + 30 * 60_000).toISOString(),
-        leasePolicy: { maxTTLSeconds: 5400, runtimeExtension: true, extension: "allow" },
-      };
-      const runCommand = vi.fn<CrabboxCommandRunner>(async (argv) => {
-        const { createdAt, ttlSeconds, leasePolicy, ...inspect } = facts;
-        const value =
-          argv[1] === "list"
-            ? [{ ...inspect, createdAt, ttlSeconds }]
-            : {
-                ...inspect,
-                leasePolicy,
-                ...(source === "inspect" ? { createdAt, ttlSeconds } : {}),
-              };
-        return jsonResult(value);
+      const f = fixture({
+        source,
+        ttl: 14400,
+        createdAgo: 60 * 60_000,
+        expiry: 1800,
+        maximum: 5400,
       });
-      vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(runCommand);
-      await expect(prepareCrabboxCaptureLifetime(context, { observe: vi.fn() })).rejects.toThrow(
+      await expect(f.prepare()).rejects.toThrow(
         "required source window exceeds the configured TTL or effective maximum",
       );
-      expect(runCommand.mock.calls.some(([argv]) => argv[1] === "extend")).toBe(false);
+      expect(f.writes()).toEqual([]);
     },
   );
 
-  it("requests one bounded total target and verifies authoritative readback", async () => {
-    const f = fixture();
-    f.setExtension(async () => {
-      // Extension and readback consume real lease lifetime.
-      vi.advanceTimersByTime(30_000);
-      f.setTTL(4440);
-      return jsonResult({ id: ID });
-    });
-    await f.prepare();
-    expect(f.writes()).toEqual([
-      ["/fixture/crabbox", "extend", ID, "--provider", "aws", "--ttl", "4440s", "--json"],
-    ]);
-    expect(f.actions().slice(-2)).toEqual(["inspect", "list"]);
-  });
-
-  it("admits the actual longer runtime preparation budget", async () => {
-    const f = fixture();
-    f.setExtension(async () => {
-      f.setTTL(5340);
-      return jsonResult({ id: ID });
-    });
-    await f.prepare({ sourcePreparationTimeoutMs: 30 * 60_000 });
-    expect(f.writes()[0]).toContain("5340s");
-  });
+  it.each([
+    { budget: 15, target: 4440, elapsed: 30_000 },
+    { budget: 30, target: 5340, elapsed: 0 },
+  ])(
+    "admits a $budget minute preparation budget with one bounded, verified extension",
+    async ({ budget, target, elapsed }) => {
+      const f = fixture();
+      f.setExtension(async () => {
+        // Extension and readback consume real lease lifetime.
+        vi.advanceTimersByTime(elapsed);
+        f.setTTL(target);
+        return jsonResult({ id: ID });
+      });
+      await f.prepare({ sourcePreparationTimeoutMs: budget * 60_000 });
+      expect(f.writes()).toEqual([
+        ["/fixture/crabbox", "extend", ID, "--provider", "aws", "--ttl", `${target}s`, "--json"],
+      ]);
+      expect(f.actions().slice(-2)).toEqual(["inspect", "list"]);
+    },
+  );
 
   it("surfaces coordinator refusal without a retry or replacement", async () => {
     const code = "lease_extension_budget_exceeded";
@@ -186,41 +176,38 @@ describe("Crabbox capture lifetime admission", () => {
     },
   );
 
-  it("replays the exact target once for a partial direct guest refresh", async () => {
-    const f = fixture();
-    let attempts = 0;
-    f.setExtension(async () => {
-      if (attempts++ === 0) {
+  it.each([true, false])(
+    "settles the exact guest-refresh target once (recovered=%s)",
+    async (recovered) => {
+      const f = fixture();
+      let attempts = 0;
+      f.setExtension(async () => {
+        if (recovered && attempts++ > 0) {
+          f.setTTL(4440);
+          return jsonResult({ id: ID });
+        }
+        if (!recovered) {
+          f.setTTL(14400);
+        }
         return commandResult({
           code: 1,
           stdout: JSON.stringify({
             id: ID,
             guestExpiryRefreshPending: true,
-            error: "guest refresh failed",
+            ...(recovered ? { error: "guest refresh failed" } : {}),
           }),
         });
-      }
-      f.setTTL(4440);
-      return jsonResult({ id: ID });
-    });
-    await f.prepare();
-    const writes = f.writes();
-    expect(writes).toHaveLength(2);
-    expect(writes[1]).toEqual(writes[0]);
-  });
-
-  it("rejects persistent guest-refresh failure even when provider TTL advanced", async () => {
-    const f = fixture();
-    f.setExtension(async () => {
-      f.setTTL(14400);
-      return commandResult({
-        code: 1,
-        stdout: JSON.stringify({ id: ID, guestExpiryRefreshPending: true }),
       });
-    });
-    await expect(f.prepare()).rejects.toThrow("guest expiry refresh remains unconfirmed");
-    expect(f.writes()).toHaveLength(2);
-  });
+      if (recovered) {
+        await f.prepare();
+      } else {
+        await expect(f.prepare()).rejects.toThrow("guest expiry refresh remains unconfirmed");
+      }
+      const writes = f.writes();
+      expect(writes).toHaveLength(2);
+      expect(writes[1]).toEqual(writes[0]);
+    },
+  );
 
   it("rejects ambiguous success and never exceeds the operator's intended TTL", async () => {
     const f = fixture();

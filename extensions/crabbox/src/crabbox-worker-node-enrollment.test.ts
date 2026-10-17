@@ -59,6 +59,30 @@ const runtimePackage = (home: string, digest: string) =>
   path.join(runtimeRoot(home), digest, "node_modules", "openclaw");
 const readJson = (...parts: string[]): unknown =>
   JSON.parse(fs.readFileSync(path.join(...parts), "utf8"));
+const readText = (...parts: string[]) => fs.readFileSync(path.join(...parts), "utf8");
+const phases = (names: string) => names.split(" ").map((name) => `openclaw-bootstrap-${name}`);
+const loginEnvironment = {
+  DISPLAY: ":0",
+  DBUS_SESSION_BUS_ADDRESS: "wrong-login-session",
+  XDG_RUNTIME_DIR: "/run/wrong",
+};
+const desktopEnvironment = (runtimeDir = "/run/fixture") => ({
+  DISPLAY: ":99",
+  DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/fixture/bus",
+  ...(runtimeDir ? { XDG_RUNTIME_DIR: runtimeDir } : {}),
+});
+function expectFailure(
+  result: { code: number | null; output: string },
+  diagnosis: string | RegExp,
+) {
+  expect(result).toMatchObject({
+    code: 1,
+    output:
+      typeof diagnosis === "string"
+        ? expect.stringContaining(diagnosis)
+        : expect.stringMatching(diagnosis),
+  });
+}
 function expectAbsent(...files: string[]) {
   for (const file of files) {
     expect(fs.existsSync(file), file).toBe(false);
@@ -115,16 +139,7 @@ async function serveArtifact(
     execFileSync(
       "openssl",
       [
-        "req",
-        "-x509",
-        "-newkey",
-        "rsa:2048",
-        "-nodes",
-        "-days",
-        "1",
-        "-subj",
-        "/CN=localhost",
-        "-keyout",
+        ..."req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost -keyout".split(" "),
         key,
         "-out",
         cert,
@@ -205,6 +220,16 @@ async function serveArtifact(
   return { nodeBootstrap, authorizations, requested: requested.promise, closed: closed.promise };
 }
 
+const servePackage = async (
+  build: string,
+  options?: Parameters<typeof serveArtifact>[1],
+  postinstall = "",
+) => serveArtifact(await packageFixture(build, postinstall), options);
+const workerBundleFor = (nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"]) => ({
+  ...nodeBootstrap,
+  packageRelativePath: `worker-artifacts/${nodeBootstrap.sha256}.tgz`,
+});
+
 async function enroll(
   home: string,
   nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"],
@@ -266,13 +291,7 @@ echo 123
       HOME: home,
       NODE_OPTIONS: `--require ${JSON.stringify(timers)}`,
       PATH: desktop ? `${bin}:${process.env.PATH}` : process.env.PATH,
-      ...(desktop
-        ? {
-            DISPLAY: ":0",
-            DBUS_SESSION_BUS_ADDRESS: "wrong-login-session",
-            XDG_RUNTIME_DIR: "/run/wrong",
-          }
-        : {}),
+      ...(desktop ? loginEnvironment : {}),
       ...setup.forwardedEnv,
       ...(options?.credentials ? { CRABBOX_WORKER_BOOTSTRAP_TOKEN: options.credentials } : {}),
       // Exercise the installer overriding an inherited package-manager default.
@@ -316,8 +335,8 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
   it("reuses a completed runtime upgrade on the next fresh warm child", async () => {
     const root = fs.realpathSync(tempDirs.make("warm-runtime-repeat-proof-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "gateway-state"));
-    const oldArtifact = await serveArtifact(await packageFixture("older-runtime"));
-    const currentArtifact = await serveArtifact(await packageFixture("current-runtime"));
+    const oldArtifact = await servePackage("older-runtime");
+    const currentArtifact = await servePackage("current-runtime");
     expect(oldArtifact.nodeBootstrap.sha256).not.toBe(currentArtifact.nodeBootstrap.sha256);
     const profile = resolveCrabboxProvisionProfile(PROFILE, undefined).profile;
     const homes = new Map<string, string>();
@@ -339,6 +358,8 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       slug: id,
       timeoutMs: () => 60_000,
     });
+    const hasRuntime = (id: string, digest: string) =>
+      fs.existsSync(path.join(runtimeRoot(homes.get(id)!), digest));
     vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(async (argv, options) => {
       if (argv[1] === "warmup") {
         homeFor(argv[argv.indexOf("--lease-id") + 1]!);
@@ -419,11 +440,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       enroll(homes.get(upgraded.id)!, currentArtifact.nodeBootstrap, undefined, true),
     );
     expect(upgradePhases).toContain("openclaw-bootstrap-installation");
-    expect(
-      fs.existsSync(
-        path.join(runtimeRoot(homes.get(upgraded.id)!), currentArtifact.nodeBootstrap.sha256),
-      ),
-    ).toBe(true);
+    expect(hasRuntime(upgraded.id, currentArtifact.nodeBootstrap.sha256)).toBe(true);
     await manager.markEnrolled(upgraded.id);
     const refreshed = await manager.capture(upgraded);
     await manager.release(upgraded);
@@ -433,9 +450,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
 
     const next = context("cbx_next", currentArtifact.nodeBootstrap.sha256);
     const nextChoice = await manager.allocate(next);
-    const currentWasCached = fs.existsSync(
-      path.join(runtimeRoot(homes.get(next.id)!), currentArtifact.nodeBootstrap.sha256),
-    );
+    const currentWasCached = hasRuntime(next.id, currentArtifact.nodeBootstrap.sha256);
     const repeatPhases = await expectSetupPhases(
       enroll(homes.get(next.id)!, currentArtifact.nodeBootstrap, undefined, true),
     );
@@ -446,68 +461,50 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     expect(nextChoice).toEqual({ kind: "checkpoint", checkpointId: retainedCheckpoint });
     expect(currentWasCached).toBe(true);
     expect(repeatPhases).not.toContain("openclaw-bootstrap-installation");
-    expect(await openCrabboxWarmImageStore(crabboxState).entries()).toHaveLength(1);
-    expect(
-      Object.keys((await openCrabboxWarmImageStore(crabboxState).entries())[0]!.value.allocations),
-    ).toEqual([]);
+    const entries = await openCrabboxWarmImageStore(crabboxState).entries();
+    expect(entries).toHaveLength(1);
+    expect(Object.keys(entries[0]!.value.allocations)).toEqual([]);
   }, 60_000);
 
-  it.each(["file"] as const)(
-    "rejects an occupied runtime %s before plugin activation",
-    async () => {
-      const { home, stateDir } = testHome();
-      fs.mkdirSync(stateDir, { recursive: true });
-      const pointer = path.join(stateDir, "runtime");
-      const retained = pointer;
-      fs.writeFileSync(retained, "retained fixture");
-      const { nodeBootstrap } = await serveArtifact(await packageFixture("occupied"));
-      const result = await enroll(home, nodeBootstrap);
-      expect(result).toMatchObject({
-        code: 1,
-        output: expect.stringContaining("runtime pointer is occupied"),
-      });
-      expect(fs.readFileSync(retained, "utf8")).toBe("retained fixture");
-      expectAbsent(path.join(stateDir, "activation.jsonl"), path.join(stateDir, "node.pid"));
-    },
-  );
+  it("rejects an occupied runtime file before plugin activation", async () => {
+    const { home, stateDir } = testHome();
+    fs.mkdirSync(stateDir, { recursive: true });
+    const retained = path.join(stateDir, "runtime");
+    fs.writeFileSync(retained, "retained fixture");
+    const { nodeBootstrap } = await servePackage("occupied");
+    const result = await enroll(home, nodeBootstrap);
+    expectFailure(result, "runtime pointer is occupied");
+    expect(readText(retained)).toBe("retained fixture");
+    expectAbsent(path.join(stateDir, "activation.jsonl"), path.join(stateDir, "node.pid"));
+  });
 
   it("leaves the runtime pointer unpublished when plugin activation fails", async () => {
     const { home, stateDir } = testHome();
-    const { nodeBootstrap } = await serveArtifact(await packageFixture("activation-failed"));
+    const { nodeBootstrap } = await servePackage("activation-failed");
     const result = await enroll(home, nodeBootstrap);
-    expect(result).toMatchObject({
-      code: 1,
-      output: expect.stringMatching(
-        /could not enable plugins demo: exit code 1, signal none: plugin dependency missing/u,
-      ),
-    });
+    expectFailure(
+      result,
+      /could not enable plugins demo: exit code 1, signal none: plugin dependency missing/u,
+    );
     expectAbsent(path.join(stateDir, "runtime"), path.join(stateDir, "node.pid"));
-    expect(readJson(stateDir, "activation.jsonl")).toEqual({
-      runtimePublished: false,
-    });
+    expect(readJson(stateDir, "activation.jsonl")).toEqual({ runtimePublished: false });
   });
 
   it("rejects malformed forwarded credentials without disclosing their value", async () => {
     const { home } = testHome();
-    const { nodeBootstrap, authorizations } = await serveArtifact(
-      await packageFixture("bad-credentials"),
-    );
+    const { nodeBootstrap, authorizations } = await servePackage("bad-credentials");
     const credentials = "synthetic-worker-secret-not-json";
     const result = await enroll(home, nodeBootstrap, undefined, false, undefined, { credentials });
-    expect(result.code).toBe(1);
-    expect(result.output).toContain("credential format is invalid");
+    expectFailure(result, "credential format is invalid");
     expect(result.output).not.toContain("synthetic");
     expect(authorizations).toEqual([]);
   });
 
   it("rejects a FIFO prepared archive without a blocking read or another download", async () => {
     const { home } = testHome();
-    const { nodeBootstrap } = await serveArtifact(await packageFixture("fifo"));
+    const { nodeBootstrap } = await servePackage("fifo");
     const worker = await serveArtifact(Buffer.from("synthetic worker archive"));
-    const workerBundle = {
-      ...worker.nodeBootstrap,
-      packageRelativePath: `worker-artifacts/${worker.nodeBootstrap.sha256}.tgz`,
-    };
+    const workerBundle = workerBundleFor(worker.nodeBootstrap);
     await expectSetupPhases(enroll(home, nodeBootstrap, undefined, true, workerBundle));
     const archivePath = path.join(
       runtimePackage(home, nodeBootstrap.sha256),
@@ -520,10 +517,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       timeoutMs: 3_000,
     });
 
-    expect(result).toMatchObject({
-      code: 1,
-      output: expect.stringContaining("archive path or length is unsafe"),
-    });
+    expectFailure(result, "archive path or length is unsafe");
     expect(worker.authorizations).toHaveLength(1);
   }, 30_000);
 
@@ -532,19 +526,15 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
   }) => {
     const { home, stateDir, stop } = testHome();
     const installed = await serveArtifact(Buffer.from("installed"));
-    const { nodeBootstrap, authorizations } = await serveArtifact(
-      await packageFixture(
-        "first",
-        `require("node:http").get(${JSON.stringify(installed.nodeBootstrap.url)}, (response) => response.resume());`,
-      ),
+    const { nodeBootstrap, authorizations } = await servePackage(
+      "first",
+      undefined,
+      `require("node:http").get(${JSON.stringify(installed.nodeBootstrap.url)}, (response) => response.resume());`,
     );
     const workerBytes = Buffer.from("synthetic standalone worker archive");
     const workerResponse = Promise.withResolvers<void>();
     const worker = await serveArtifact(workerBytes, { hold: workerResponse.promise });
-    const workerBundle = {
-      ...worker.nodeBootstrap,
-      packageRelativePath: `worker-artifacts/${worker.nodeBootstrap.sha256}.tgz`,
-    };
+    const workerBundle = workerBundleFor(worker.nodeBootstrap);
     const preparation = expectSetupPhases(
       enroll(home, nodeBootstrap, undefined, true, workerBundle),
     );
@@ -563,16 +553,11 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       await preparation;
     }
     expect(await preparation).toEqual(
-      expect.arrayContaining([
-        "openclaw-bootstrap-preparation",
-        "openclaw-bootstrap-download-connection",
-        "openclaw-bootstrap-download-http-response",
-        "openclaw-bootstrap-download-body",
-        "openclaw-bootstrap-installation-and-worker-download",
-        "openclaw-bootstrap-runtime-verification",
-        "openclaw-bootstrap-worker-archive-publication",
-        "openclaw-bootstrap-complete",
-      ]),
+      expect.arrayContaining(
+        phases(
+          "preparation download-connection download-http-response download-body installation-and-worker-download runtime-verification worker-archive-publication complete",
+        ),
+      ),
     );
     expectAbsent(path.join(home, ".openclaw"));
     expect(fs.readdirSync(runtimeRoot(home))).toEqual([nodeBootstrap.sha256]);
@@ -602,22 +587,15 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     );
     expect(
       await expectSetupPhases(enroll(home, nodeBootstrap, undefined, true, workerBundle)),
-    ).toEqual([
-      "openclaw-bootstrap-preparation",
-      "openclaw-bootstrap-runtime-verification",
-      "openclaw-bootstrap-worker-archive-verification",
-      "openclaw-bootstrap-worker-archive-publication",
-      "openclaw-bootstrap-complete",
-    ]);
+    ).toEqual(
+      phases(
+        "preparation runtime-verification worker-archive-verification worker-archive-publication complete",
+      ),
+    );
     expect(worker.authorizations).toEqual([`Bearer ${workerBundle.token}`]);
-    expect(await expectSetupPhases(enroll(home, nodeBootstrap))).toEqual([
-      "openclaw-bootstrap-preparation",
-      "openclaw-bootstrap-runtime-verification",
-      "openclaw-bootstrap-activation",
-      "openclaw-bootstrap-plugin-activation",
-      "openclaw-bootstrap-node-launch",
-      "openclaw-bootstrap-complete",
-    ]);
+    expect(await expectSetupPhases(enroll(home, nodeBootstrap))).toEqual(
+      phases("preparation runtime-verification activation plugin-activation node-launch complete"),
+    );
     const launch = await readLaunch(stateDir, receipts, signal);
     expect(launch).toMatchObject({
       build: "first",
@@ -636,10 +614,8 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     expectPrivate(launch);
     expect(launch.cli).toContain(`/node-runtimes/${nodeBootstrap.sha256}/`);
     expect(readJson(path.dirname(launch.cli), "installed.json")).toEqual({ scriptsRan: true });
-    expect(fs.readFileSync(path.join(stateDir, "enabled"), "utf8")).toBe("demo\n");
-    expect(readJson(stateDir, "activation.jsonl")).toEqual({
-      runtimePublished: false,
-    });
+    expect(readText(stateDir, "enabled")).toBe("demo\n");
+    expect(readJson(stateDir, "activation.jsonl")).toEqual({ runtimePublished: false });
     expect(fs.realpathSync(path.join(stateDir, "runtime"))).toBe(
       path.dirname(path.dirname(path.dirname(launch.cli))),
     );
@@ -661,10 +637,10 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
         hold: postinstallResponse.promise,
       });
       const finished = path.join(home, "postinstall-complete");
-      const { nodeBootstrap } = await serveArtifact(
-        await packageFixture(
-          "preparation-failure",
-          `
+      const { nodeBootstrap } = await servePackage(
+        "preparation-failure",
+        undefined,
+        `
 require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (response) => {
   response.resume();
   response.once("end", () => {
@@ -673,16 +649,14 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
     if (${JSON.stringify(failure)} === "npm installation") process.exit(17);
   });
 });`,
-        ),
       );
       const workerResponse = Promise.withResolvers<void>();
       const worker = await serveArtifact(Buffer.from("synthetic worker archive"), {
         hold: workerResponse.promise,
       });
       const workerBundle = {
-        ...worker.nodeBootstrap,
+        ...workerBundleFor(worker.nodeBootstrap),
         ...(failure === "worker download" ? { bytes: worker.nodeBootstrap.bytes + 1 } : {}),
-        packageRelativePath: `worker-artifacts/${worker.nodeBootstrap.sha256}.tgz`,
       };
       const preparation = enroll(home, nodeBootstrap, undefined, true, workerBundle);
       cleanups.push(async () => {
@@ -705,14 +679,12 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
         postinstallResponse.resolve();
         await preparation;
       }
-      expect(await preparation).toMatchObject({
-        code: 1,
-        output: expect.stringContaining(
-          failure === "worker download"
-            ? "archive length does not match the Gateway"
-            : "package installation failed (exit code 17)",
-        ),
-      });
+      expectFailure(
+        await preparation,
+        failure === "worker download"
+          ? "archive length does not match the Gateway"
+          : "package installation failed (exit code 17)",
+      );
       expect(fs.existsSync(finished)).toBe(failure === "npm installation");
       expect(fs.readdirSync(runtimeRoot(home))).toEqual([]);
     },
@@ -723,16 +695,16 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
     "reuses only a live process with the exact artifact and invocation",
     async ({ signal }) => {
       const { home, stateDir } = testHome();
-      const { nodeBootstrap, authorizations } = await serveArtifact(await packageFixture("first"));
+      const { nodeBootstrap, authorizations } = await servePackage("first");
       await expectSetupPhases(enroll(home, nodeBootstrap));
       const launch = await readLaunch(stateDir, receipts, signal);
-      const pid = fs.readFileSync(path.join(stateDir, "node.pid"), "utf8");
+      const pid = readText(stateDir, "node.pid");
       await expectSetupPhases(enroll(home, nodeBootstrap));
-      expect(fs.readFileSync(path.join(stateDir, "node.pid"), "utf8")).toBe(pid);
+      expect(readText(stateDir, "node.pid")).toBe(pid);
       expect(authorizations).toHaveLength(1);
       if (process.platform === "darwin") {
         const launchFile = path.join(stateDir, "node-launch.json");
-        const record = JSON.parse(fs.readFileSync(launchFile, "utf8"));
+        const record = JSON.parse(readText(launchFile));
         expect(record).toMatchObject({
           pid: Number(pid),
           stateDir,
@@ -749,18 +721,12 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
           launchFile,
           JSON.stringify({ ...record, startTime: "different process start" }),
         );
-        expect(await enroll(home, nodeBootstrap)).toMatchObject({
-          code: 1,
-          output: expect.stringContaining("release and reprovision the worker"),
-        });
+        expectFailure(await enroll(home, nodeBootstrap), "release and reprovision the worker");
         fs.writeFileSync(launchFile, JSON.stringify(record));
       }
       const rejected = await enroll(home, { ...nodeBootstrap, sha256: "b".repeat(64) });
-      expect(rejected).toMatchObject({
-        code: 1,
-        output: expect.stringContaining("different bootstrap artifact or invocation"),
-      });
-      expect(fs.readFileSync(path.join(stateDir, "node.pid"), "utf8")).toBe(pid);
+      expectFailure(rejected, "different bootstrap artifact or invocation");
+      expect(readText(stateDir, "node.pid")).toBe(pid);
     },
     30_000,
   );
@@ -772,12 +738,9 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
     "handles $failures transient HTTP 530 responses during enrollment",
     async ({ failures, expectedCode, requests }, { signal }) => {
       const { home, stateDir } = testHome();
-      const { nodeBootstrap, authorizations } = await serveArtifact(
-        await packageFixture("edge-retry"),
-        {
-          statusCodes: Array(failures).fill(530),
-        },
-      );
+      const { nodeBootstrap, authorizations } = await servePackage("edge-retry", {
+        statusCodes: Array(failures).fill(530),
+      });
       const result = await enroll(home, nodeBootstrap, undefined, false, undefined, { signal });
       expect(result.code, result.output).toBe(expectedCode);
       expect(authorizations).toEqual(Array(requests).fill(`Bearer ${nodeBootstrap.token}`));
@@ -866,16 +829,12 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
     signal,
   }) => {
     const { home, stateDir } = testHome();
-    const { nodeBootstrap, authorizations } = await serveArtifact(await packageFixture("tls"), {
-      tls: true,
-    });
+    const { nodeBootstrap, authorizations } = await servePackage("tls", { tls: true });
     const rejected = await enroll(home, { ...nodeBootstrap, tlsFingerprint: "f".repeat(64) });
-    expect(rejected).toMatchObject({
-      code: 1,
-      output: expect.stringContaining(
-        `download TLS failed from ${new URL(nodeBootstrap.url).origin}: Cloud worker bootstrap TLS fingerprint mismatch`,
-      ),
-    });
+    expectFailure(
+      rejected,
+      `download TLS failed from ${new URL(nodeBootstrap.url).origin}: Cloud worker bootstrap TLS fingerprint mismatch`,
+    );
     expect(authorizations).toHaveLength(0);
     await expectSetupPhases(enroll(home, nodeBootstrap));
     expect((await readLaunch(stateDir, receipts, signal)).build).toBe("tls");
@@ -896,9 +855,7 @@ describe.runIf(hasBashMapfile)("Crabbox desktop node bootstrap", () => {
       execFileSync("mkfifo", [readiness]);
       const readinessFd = fs.openSync(readiness, fs.constants.O_RDWR);
       cleanups.push(() => fs.closeSync(readinessFd));
-      const { nodeBootstrap, authorizations } = await serveArtifact(
-        await packageFixture("desktop"),
-      );
+      const { nodeBootstrap, authorizations } = await servePackage("desktop");
       const setup = `set -eu
 [ -z "\${CRABBOX_WORKER_BOOTSTRAP_TOKEN-}" ]
 [ -z "\${CRABBOX_WORKER_SETUP_CODE-}" ]
@@ -923,12 +880,12 @@ echo "$pid" >> "$OPENCLAW_STATE_DIR/desktop-pids"
       if (exitCode !== 0) {
         expect(first.output).toContain("desktop setup failed with exit code 19");
       }
-      const pid = fs.readFileSync(path.join(stateDir, "node.pid"), "utf8").trim();
+      const pid = readText(stateDir, "node.pid").trim();
       await expectSetupPhases(
         enroll(home, nodeBootstrap, { enabled: true, setup }, false, undefined, { signal }),
       );
-      expect(fs.readFileSync(path.join(stateDir, "desktop-pids"), "utf8")).toBe(`${pid}\n${pid}\n`);
-      expect(fs.readFileSync(path.join(stateDir, "node.pid"), "utf8").trim()).toBe(pid);
+      expect(readText(stateDir, "desktop-pids")).toBe(`${pid}\n${pid}\n`);
+      expect(readText(stateDir, "node.pid").trim()).toBe(pid);
       expect(authorizations).toEqual([`Bearer ${nodeBootstrap.token}`]);
     },
   );
@@ -949,9 +906,7 @@ echo "$pid" >> "$OPENCLAW_STATE_DIR/desktop-pids"
     { timeout: 30_000 },
     async ({ enabled, runtimeDir, pluginIds, verbose }, { signal }) => {
       const { home, stateDir } = testHome();
-      const served = await serveArtifact(
-        await packageFixture(verbose ? "verbose-activation" : "desktop"),
-      );
+      const served = await servePackage(verbose ? "verbose-activation" : "desktop");
       const nodeBootstrap = { ...served.nodeBootstrap, enabledPluginIds: pluginIds };
       await expectSetupPhases(enroll(home, nodeBootstrap, { enabled, runtimeDir }));
       const launch = await readLaunch(stateDir, receipts, signal);
@@ -968,17 +923,7 @@ echo "$pid" >> "$OPENCLAW_STATE_DIR/desktop-pids"
         enabled || pluginIds.length > 0 ? [{ runtimePublished: false }] : [],
       );
       expect(launch.environment).toEqual(
-        enabled
-          ? {
-              DISPLAY: ":99",
-              DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/fixture/bus",
-              ...(runtimeDir ? { XDG_RUNTIME_DIR: runtimeDir } : {}),
-            }
-          : {
-              DISPLAY: ":0",
-              DBUS_SESSION_BUS_ADDRESS: "wrong-login-session",
-              XDG_RUNTIME_DIR: "/run/wrong",
-            },
+        enabled ? desktopEnvironment(runtimeDir) : loginEnvironment,
       );
       expectPrivate(launch);
     },
@@ -988,12 +933,9 @@ echo "$pid" >> "$OPENCLAW_STATE_DIR/desktop-pids"
     "refuses an invalid XFCE binding before artifact download or node launch: %j",
     async (invalid) => {
       const { home, stateDir } = testHome();
-      const { nodeBootstrap, authorizations } = await serveArtifact(
-        await packageFixture("invalid-desktop"),
-      );
+      const { nodeBootstrap, authorizations } = await servePackage("invalid-desktop");
       const result = await enroll(home, nodeBootstrap, { enabled: true, ...invalid });
-      expect(result.code).toBe(1);
-      expect(result.output).toContain("XFCE session");
+      expectFailure(result, "XFCE session");
       expect(authorizations).toEqual([]);
       expect(fs.existsSync(path.join(stateDir, "node.pid"))).toBe(false);
     },

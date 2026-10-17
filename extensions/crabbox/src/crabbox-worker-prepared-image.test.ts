@@ -16,11 +16,9 @@ import {
 } from "./crabbox-worker-warm-image.test-support.js";
 
 const warmImage = async () => (await listCrabboxWarmImages(crabboxState))[0];
-const captureResult = (
-  argv: string[],
-  id: string,
-  state: "available" | "completed" = "available",
-) => checkpointResult(id, argv[argv.indexOf("--id") + 1]!, state);
+const captureResult = (argv: string[], id: string) =>
+  checkpointResult(id, argv[argv.indexOf("--id") + 1]!, "available");
+const preparedCapture = { seedKey: PROJECT_KEY, cacheHit: false, captureRequired: true as const };
 
 type Preparation = NonNullable<Parameters<typeof projectOptions>[2]>;
 
@@ -66,11 +64,7 @@ describe("Crabbox prepared image demand and custody", () => {
         projectOptions([], undefined, { ...preparation, purpose: "session" }).options,
       );
       const next = projectOptions([], undefined, preparation);
-      next.options.project.prepare.mockResolvedValueOnce({
-        seedKey: PROJECT_KEY,
-        cacheHit: false,
-        captureRequired: true,
-      });
+      next.options.project.prepare.mockResolvedValueOnce(preparedCapture);
       const replacement = await provider.provision(PROFILE, "generation-replacement", next.options);
       expect(captures).toBe(2);
       await provider.notePreparedDemand!(
@@ -97,17 +91,12 @@ describe("Crabbox prepared image demand and custody", () => {
         keepPrevious ? [] : ["chk_demand_1"],
       );
       const clock = vi.spyOn(Date, "now").mockReturnValue(now + 14 * 86_400_000);
-      const maintenance = {
-        profiles: [PROFILE],
-        signal: new AbortController().signal,
-        assertCurrent() {},
-      };
-      await provider.maintain!(maintenance);
+      await maintain(provider);
       expect((await warmImage())?.previous?.checkpointId).toBe(
         keepPrevious ? "chk_demand_1" : undefined,
       );
       clock.mockReturnValue(now + 60_000 + 14 * 86_400_000);
-      await provider.maintain!(maintenance);
+      await maintain(provider);
       expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
     },
   );
@@ -135,11 +124,7 @@ describe("Crabbox prepared image demand and custody", () => {
     await destroyAndWait(provider, { leaseId: source.leaseId, profile });
     const next = { ...preparation, key: "e".repeat(64) };
     current = projectOptions(events, undefined, next);
-    current.options.project.prepare.mockResolvedValueOnce({
-      seedKey: PROJECT_KEY,
-      cacheHit: false,
-      captureRequired: true,
-    });
+    current.options.project.prepare.mockResolvedValueOnce(preparedCapture);
     calls.length = 0;
     const changed = await provider.provision(profile, "prepared-changed", current.options);
     expect(captures).toBe(1);
@@ -170,11 +155,7 @@ describe("Crabbox prepared image demand and custody", () => {
       purpose: "reserve",
       demandAtMs: now + 60_000,
     });
-    current.options.project.prepare.mockResolvedValueOnce({
-      seedKey: PROJECT_KEY,
-      cacheHit: false,
-      captureRequired: true,
-    });
+    current.options.project.prepare.mockResolvedValueOnce(preparedCapture);
     const reserve = await provider.provision(profile, "prepared-reserve", current.options);
     expect(captures).toBe(2);
     expect(await warmImage()).toMatchObject({
@@ -275,7 +256,7 @@ describe("Crabbox prepared image demand and custody", () => {
     const interrupted = projectOptions([], controller, next);
     interrupted.options.project.prepare.mockImplementationOnce(async () => {
       controller.abort();
-      return { seedKey: PROJECT_KEY, cacheHit: false, captureRequired: true };
+      return preparedCapture;
     });
     await expect(
       provider.provision(PROFILE, "capture-policy-changed", interrupted.options),
@@ -320,11 +301,7 @@ describe("Crabbox prepared image demand and custody", () => {
         key: "e".repeat(64),
         purpose: "session",
       });
-      current.options.project.prepare.mockResolvedValueOnce({
-        seedKey: PROJECT_KEY,
-        cacheHit: false,
-        captureRequired: true,
-      });
+      current.options.project.prepare.mockResolvedValueOnce(preparedCapture);
       current.options.beginNodeEnrollment.mockRejectedValueOnce(
         new Error("enrollment admission failed"),
       );
@@ -516,7 +493,7 @@ describe("Crabbox prepared image demand and custody", () => {
     current.options.project.prepare.mockImplementationOnce(async (transport) => {
       await transport.runScript("changed-recipe-setup", current.options.project.signal);
       events.push("project-prepared");
-      return { seedKey: PROJECT_KEY, cacheHit: false, captureRequired: true };
+      return preparedCapture;
     });
     const reserve = await provider.provision(profile, "changed-cache", current.options);
     expect(current.options.project.prepare).toHaveBeenCalledOnce();

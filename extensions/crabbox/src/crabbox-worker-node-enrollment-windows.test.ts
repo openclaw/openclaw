@@ -40,6 +40,18 @@ type ReplayOptions = {
 
 async function replay(options: ReplayOptions = {}) {
   const identity = { pid: 123, startTime, ...(options.desktop ? session : {}) };
+  const files = new Map([
+    [
+      path.win32.join(runtimeDir, "node_modules", "openclaw", "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.8.1" }),
+    ],
+    [stateFile("node.pid"), "123\n"],
+    [
+      stateFile("node-launch.json"),
+      options.recordOutput ??
+        JSON.stringify({ ...identity, runtimeDir, stateDir, cli, ...options.launchRecord }),
+    ],
+  ]);
   const setup = createCrabboxNodeEnrollmentSetup({
     leaseId,
     desktop: options.desktop,
@@ -91,35 +103,16 @@ async function replay(options: ReplayOptions = {}) {
       throw Object.assign(new Error("Missing runtime pointer"), { code: "ENOENT" });
     },
     readFileSync: (file: string) => {
-      if (file === path.win32.join(runtimeDir, "node_modules", "openclaw", "package.json")) {
-        return JSON.stringify({ name: "openclaw", version: "2026.8.1" });
+      const content = files.get(file);
+      if (content === undefined) {
+        throw new Error(`Unexpected file read: ${file}`);
       }
-      if (file === stateFile("node.pid")) {
-        return "123\n";
-      }
-      if (file === stateFile("node-launch.json")) {
-        return (
-          options.recordOutput ??
-          JSON.stringify({
-            ...identity,
-            runtimeDir,
-            stateDir,
-            cli,
-            ...options.launchRecord,
-          })
-        );
-      }
-      throw new Error(`Unexpected file read: ${file}`);
+      return content;
     },
-    realpathSync: (file: string) => {
-      if (options.canonicalizePaths && file.toLowerCase() === node.toLowerCase()) {
-        return node;
-      }
-      if (options.canonicalizePaths && file.toLowerCase() === home.toLowerCase()) {
-        return home;
-      }
-      return file;
-    },
+    realpathSync: (file: string) =>
+      options.canonicalizePaths
+        ? ([node, home].find((canonical) => canonical.toLowerCase() === file.toLowerCase()) ?? file)
+        : file,
   };
   const spawn = vi.fn(() => {
     throw new Error("Replay must not launch another node");
@@ -159,26 +152,18 @@ async function replay(options: ReplayOptions = {}) {
   const encoded = setup.command.match(/FromBase64String\('([A-Za-z0-9+/=]+)'\)/u)?.[1];
   expect(encoded).toBeDefined();
   const script = Buffer.from(encoded!, "base64").toString("utf8");
+  const modules: Record<string, unknown> = {
+    "node:fs": fs,
+    "node:path": path.win32,
+    "node:os": {
+      homedir: () => (options.canonicalizePaths ? home.toLowerCase() : home),
+      tmpdir: () => path.win32.join(home, "Temp"),
+    },
+    "node:child_process": { spawn, spawnSync },
+  };
   await runInNewContext(script, {
     Buffer,
-    require: (name: string) => {
-      if (name === "node:fs") {
-        return fs;
-      }
-      if (name === "node:path") {
-        return path.win32;
-      }
-      if (name === "node:os") {
-        return {
-          homedir: () => (options.canonicalizePaths ? home.toLowerCase() : home),
-          tmpdir: () => path.win32.join(home, "Temp"),
-        };
-      }
-      if (name === "node:child_process") {
-        return { spawn, spawnSync };
-      }
-      return require(name);
-    },
+    require: (name: string) => (Object.hasOwn(modules, name) ? modules[name] : require(name)),
     process: processFixture,
     console: { error: (line: string) => output.push(line) },
   });
