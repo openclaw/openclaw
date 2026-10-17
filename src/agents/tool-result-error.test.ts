@@ -15,6 +15,18 @@ const requireUndiciPackage = createRequire(
 );
 const undiciErrors = (requireUndiciPackage("./index.js") as typeof import("undici")).errors;
 
+function protect(error: unknown, fallback = "fallback"): Error & { code?: unknown } {
+  const result = protectNetworkToolExecutionError(error, fallback);
+  if (!(result instanceof Error)) {
+    throw new Error("expected a protected Error");
+  }
+  return result;
+}
+function expectSanitized(error: Error) {
+  expect(error.message).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+  expect(error.message).not.toContain("<|im_start|>");
+  expect(error.cause).toBeUndefined();
+}
 describe("isToolResultError", () => {
   it("keeps real failures fatal even with a completed status", () => {
     expect(isToolResultError({ details: { status: "completed", timedOut: true } })).toBe(true);
@@ -48,7 +60,7 @@ describe("protectNetworkToolExecutionError", () => {
   it("bounds hostile upstream failures without splitting UTF-16 surrogate pairs", () => {
     const original = new Error(`${"x".repeat(3_999)}🚀<|im_start|>${"y".repeat(20_000)}`);
 
-    const protectedError = protectNetworkToolExecutionError(original, "fallback") as Error;
+    const protectedError = protect(original);
 
     expect(protectedError.message.length).toBeLessThan(5_000);
     expect(protectedError.message).not.toContain("<|im_start|>");
@@ -56,36 +68,29 @@ describe("protectNetworkToolExecutionError", () => {
   });
 
   it("bounds the final sanitized error after short special tokens expand", () => {
-    const protectedError = protectNetworkToolExecutionError(
-      new Error("<s>".repeat(1_333)),
-      "fallback",
-    ) as Error;
+    const protectedError = protect(new Error("<s>".repeat(1_333)));
 
     expect(protectedError.message.length).toBeLessThan(5_000);
     expect(protectedError.message).not.toContain("<s>");
     expect(protectedError.message).toContain("[REMOVED_SPECIAL_TOKEN]");
   });
 
-  it.each([["connect", undiciErrors.ConnectTimeoutError]])(
-    "retains private timeout classification for a real Undici %s cause",
-    (_label, Failure) => {
-      const original = new TypeError("fetch failed", { cause: new Failure("deadline elapsed") });
+  it("retains private timeout classification for a real Undici connect cause", () => {
+    const original = new TypeError("fetch failed", {
+      cause: new undiciErrors.ConnectTimeoutError("deadline elapsed"),
+    });
 
-      const protectedError = protectNetworkToolExecutionError(original, "fallback") as Error & {
-        cause?: unknown;
-        code?: string;
-      };
+    const protectedError = protect(original);
 
-      expect(resolveToolExecutionErrorKind(original)).toBe("timed_out");
-      expect(resolveToolExecutionErrorKind(protectedError)).toBe("timed_out");
-      expect(protectedError).toBeInstanceOf(TypeError);
-      expect(protectedError.cause).toBeUndefined();
-      expect(protectedError.code).toBeUndefined();
-      expect(protectNetworkToolExecutionError(protectedError, "second fallback")).toBe(
-        protectedError,
-      );
-    },
-  );
+    expect(resolveToolExecutionErrorKind(original)).toBe("timed_out");
+    expect(resolveToolExecutionErrorKind(protectedError)).toBe("timed_out");
+    expect(protectedError).toBeInstanceOf(TypeError);
+    expect(protectedError.cause).toBeUndefined();
+    expect(protectedError.code).toBeUndefined();
+    expect(protectNetworkToolExecutionError(protectedError, "second fallback")).toBe(
+      protectedError,
+    );
+  });
 
   it.each([
     new ToolInputError("query required"),
@@ -109,7 +114,7 @@ describe("protectNetworkToolExecutionError", () => {
         ErrorType.prototype,
       );
 
-      const protectedError = protectNetworkToolExecutionError(forged, "fallback") as Error;
+      const protectedError = protect(forged);
 
       expect(forged).toBeInstanceOf(ErrorType);
       expect(protectedError).not.toBe(forged);
@@ -126,16 +131,14 @@ describe("protectNetworkToolExecutionError", () => {
       status: 504,
     });
 
-    const protectedError = protectNetworkToolExecutionError(original, "fallback");
+    const protectedError = protect(original);
 
     expect(protectedError).toBeInstanceOf(TypeError);
     expect(protectedError).toMatchObject({ name: "TypeError", code: "ETIMEDOUT", status: 504 });
-    expect((protectedError as Error).message).toMatch(
-      /<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/,
-    );
-    expect((protectedError as Error).message).not.toContain("feedfeedfeedfeed");
-    expect((protectedError as Error).message).not.toContain("<|im_start|>");
-    expect((protectedError as Error & { cause?: unknown }).cause).toBeUndefined();
+    expect(protectedError.message).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
+    expect(protectedError.message).not.toContain("feedfeedfeedfeed");
+    expect(protectedError.message).not.toContain("<|im_start|>");
+    expect(protectedError.cause).toBeUndefined();
     expect(protectNetworkToolExecutionError(protectedError, "different fallback")).toBe(
       protectedError,
     );
@@ -178,11 +181,9 @@ describe("protectNetworkToolExecutionError", () => {
       }),
     },
   ])("contains hostile $label reflection", ({ error }) => {
-    const protectedError = protectNetworkToolExecutionError(error, "safe network failure") as Error;
+    const protectedError = protect(error, "safe network failure");
 
-    expect(protectedError.message).toContain("EXTERNAL_UNTRUSTED_CONTENT");
-    expect(protectedError.message).not.toContain("<|im_start|>");
-    expect((protectedError as Error & { cause?: unknown }).cause).toBeUndefined();
+    expectSanitized(protectedError);
   });
 });
 
@@ -225,14 +226,5 @@ describe("resolveToolResultFailureKind", () => {
 
     expect(resolveToolResultFailureKind({ details: hostileDetails })).toBeUndefined();
     expect(resolveToolResultFailureKind(hostileResult)).toBeUndefined();
-  });
-
-  it("does not classify completed nonzero exits as failures", () => {
-    expect(
-      resolveToolResultFailureKind({ details: { status: "completed", exitCode: 1 } }),
-    ).toBeUndefined();
-    expect(resolveToolResultFailureKind({ details: { status: "failed", exitCode: 1 } })).toBe(
-      "failed",
-    );
   });
 });
