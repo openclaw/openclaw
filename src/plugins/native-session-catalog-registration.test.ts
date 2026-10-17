@@ -433,26 +433,14 @@ describe("registered native catalog access", () => {
     },
   );
 
-  it("requires opt-in for a new declared catalog after fresh configuration is written", async () => {
-    const state = await registerCatalog("fresh", undefined, { legacyDefaultEnabled: true });
-    await state.provider.list({});
-    expect(state.list).not.toHaveBeenCalled();
-    await expectNodeDisabled(state);
-    await state.setPreference(true);
-    await state.provider.list({});
-    expect(state.list).toHaveBeenCalledOnce();
-  });
-  it("does not inherit a legacy opt-in from a dangling config link", async () => {
-    const state = await registerCatalog("dangling");
-    expect(await state.provider.list({})).toEqual([]);
-    await expectNodeDisabled(state);
-    expectCalls(0, state.list, state.handle, state.staticHandle);
-  });
-
-  it.each([false, true])(
-    "blocks validated defaults from granting consent (file exists: %s)",
+  it.each(["fresh", "dangling", false, true] as const)(
+    "requires explicit consent despite validated defaults (config: %s)",
     async (exists) => {
-      const state = await registerCatalog(exists, exists ? false : undefined);
+      const state = await registerCatalog(
+        exists,
+        exists === true ? false : undefined,
+        exists === "fresh" ? { legacyDefaultEnabled: true } : {},
+      );
       expect(await state.provider.list({ agentId: "research" })).toEqual([]);
       await expect(state.provider.read({ hostId: "local", threadId: "thread" })).rejects.toThrow(
         "discovery is disabled",
@@ -460,6 +448,9 @@ describe("registered native catalog access", () => {
       expect(state.node.isAvailable?.({ config: {}, env: {} })).toBe(false);
       await expectNodeDisabled(state);
       expectCalls(0, state.list, state.read, state.available, state.handle, state.staticHandle);
+      if (exists === "dangling") {
+        return;
+      }
       await state.setPreference(true);
       await state.provider.list({});
       await state.provider.read({ hostId: "local", threadId: "thread" });

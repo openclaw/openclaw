@@ -7,15 +7,21 @@ import type { EmbeddingProviderAdapter } from "./embedding-provider-types.js";
 import { createPluginRecord } from "./loader-records.js";
 import { activatePluginRegistry } from "./loader-shared.js";
 import { getMemoryEmbeddingProvider } from "./memory-embedding-provider-runtime.js";
-import { prepareMemoryRuntimeReload } from "./memory-runtime.js";
+import { prepareMemoryRuntimeReload as prepareReload } from "./memory-runtime.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { MemoryPluginRuntime } from "./registry-contribution-types.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
-import { disposePluginRegistryInstances } from "./runtime.js";
-import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import { disposePluginRegistryInstances as disposeRegistry } from "./runtime.js";
+import { getPluginRuntimeGatewayRequestScope as currentScope } from "./runtime/gateway-request-scope.js";
 
 const cleanupClock = vi.hoisted(() => ({ setTimeout: globalThis.setTimeout }));
+const recordDefaults = {
+  source: "fixture",
+  origin: "config",
+  enabled: true,
+  configSchema: false,
+} as const;
 
 beforeEach(() => {
   const nativeSetTimeout = globalThis.setTimeout;
@@ -73,6 +79,10 @@ async function getManager(
   return result.manager;
 }
 
+async function expectAvailable(manager: Awaited<ReturnType<typeof getManager>>, ok = true) {
+  await expect(manager.probeEmbeddingAvailability()).resolves.toMatchObject({ ok });
+}
+
 it("keeps persistent managers isolated between memory runtime instances with the same agent", async () => {
   const state = await createOpenClawTestState({
     scenario: "minimal",
@@ -90,21 +100,15 @@ it("keeps persistent managers isolated between memory runtime instances with the
   } finally {
     await first.runtime.closeAllMemorySearchManagers?.();
     await second.runtime.closeAllMemorySearchManagers?.();
-    await disposePluginRegistryInstances(first.registry);
-    await disposePluginRegistryInstances(second.registry);
+    await disposeRegistry(first.registry);
+    await disposeRegistry(second.registry);
     await state.cleanup();
   }
 });
 
 function registerMemoryOwner(config: OpenClawConfig, options: { legacy?: boolean } = {}) {
   const owner = createTestPluginRegistry();
-  const record = createPluginRecord({
-    id: "memory-fixture",
-    source: "fixture",
-    origin: "config",
-    enabled: true,
-    configSchema: false,
-  });
+  const record = createPluginRecord({ ...recordDefaults, id: "memory-fixture" });
   record.kind = "memory";
   record.memorySlotSelected = true;
   owner.registry.plugins.push(record);
@@ -128,11 +132,8 @@ function registerAdapter(
   adapter: EmbeddingProviderAdapter,
 ) {
   const record = createPluginRecord({
+    ...recordDefaults,
     id: adapter.id,
-    source: "fixture",
-    origin: "config",
-    enabled: true,
-    configSchema: false,
     contracts: { embeddingProviders: [adapter.id] },
   });
   owner.registry.plugins.push(record);
@@ -159,6 +160,8 @@ it.each([
   const fallback = mode === "pending-fallback" || mode === "healthy-fallback";
   const providerId = fallback ? "primary-probe" : "embedding-probe";
   const targetId = fallback ? "fallback-probe" : providerId;
+  const revoked = mode === "failed-close" || mode === "late-probe";
+  const revokedMessage = `Plugin ${targetId} was reloaded or disabled`;
   const config = memoryConfig(state.workspaceDir, {
     provider: providerId,
     model: "synthetic-embedding",
@@ -193,7 +196,7 @@ it.each([
   });
   const close = vi.fn(async () => {
     closeEntered.resolve();
-    expect(getPluginRuntimeGatewayRequestScope()?.pluginId).toBe(targetId);
+    expect(currentScope()?.pluginId).toBe(targetId);
     if (rejectClose) {
       throw new Error("synthetic provider cleanup refused");
     }
@@ -246,11 +249,10 @@ it.each([
     replacement.registration,
   );
   let probe: Promise<unknown> | undefined;
-  let lateManager: Awaited<ReturnType<MemoryPluginRuntime["getMemorySearchManager"]>>["manager"] =
-    null;
+  let lateManager: Awaited<ReturnType<typeof getManager>> | undefined;
   // Each live replacement-era manager (fresh main, fenced late) owns one successor provider.
   const successorProviders = () => (mode === "late-probe" ? 0 : lateManager ? 2 : 1);
-  let drain: ReturnType<ReturnType<typeof prepareMemoryRuntimeReload>["drain"]> | undefined;
+  let drain: ReturnType<ReturnType<typeof prepareReload>["drain"]> | undefined;
   try {
     expect(owner.instance.run(() => getMemoryEmbeddingProvider(targetId, config))).toBe(
       retiring.registration.provider,
@@ -266,7 +268,7 @@ it.each([
       await probe;
     }
     if (mode === "healthy-fallback") {
-      const primaryOnly = prepareMemoryRuntimeReload(owner.registry, {
+      const primaryOnly = prepareReload(owner.registry, {
         ...owner.registry,
         embeddingProviders: owner.registry.embeddingProviders.filter(
           (entry) => entry !== owner.registry.embeddingProviders[0],
@@ -279,10 +281,10 @@ it.each([
       const previousManager = manager;
       manager = await getManager(owner, config);
       expect(manager).not.toBe(previousManager);
-      await expect(manager.probeEmbeddingAvailability()).resolves.toMatchObject({ ok: true });
+      await expectAvailable(manager);
     }
     if (mode === "legacy-retained") {
-      const unchanged = prepareMemoryRuntimeReload(owner.registry, owner.registry);
+      const unchanged = prepareReload(owner.registry, owner.registry);
       await unchanged.drain();
       unchanged.commit();
       expect(close).not.toHaveBeenCalled();
@@ -292,7 +294,7 @@ it.each([
       await unaffected.probeEmbeddingAvailability();
     }
     const providerClosesBeforeReload = close.mock.calls.length;
-    const reload = prepareMemoryRuntimeReload(owner.registry, next);
+    const reload = prepareReload(owner.registry, next);
     const commitReload = () => {
       activatePluginRegistry(next, null, "gateway-bindable", undefined, owner.registry);
       reload.commit();
@@ -324,37 +326,34 @@ it.each([
       });
       expect(siblingClose).not.toHaveBeenCalled();
       commitReload();
-    } else if (mode === "timeout") {
+    } else if (mode === "timeout" || mode === "late-probe") {
       const expired = expect(drain).rejects.toThrow("plugin host cleanup timed out");
-      await closeEntered.promise;
+      if (mode === "timeout") {
+        await closeEntered.promise;
+      }
       await vi.advanceTimersByTimeAsync(500);
       await expired;
       commitReload();
       const fresh = await getManager(owner, config);
       expect(fresh).not.toBe(manager);
-      await expect(fresh.probeEmbeddingAvailability()).resolves.toMatchObject({ ok: true });
-      let joined = false;
-      const finalClose = reload.close().then(() => {
-        joined = true;
-      });
-      await Promise.resolve();
-      expect(joined).toBe(false);
-      releaseClose.resolve();
-      await finalClose;
-      expect(close).toHaveBeenCalledOnce();
-    } else if (mode === "late-probe") {
-      const expired = expect(drain).rejects.toThrow("plugin host cleanup timed out");
-      await vi.advanceTimersByTimeAsync(500);
-      await expired;
-      commitReload();
-      const fresh = await getManager(owner, config);
-      expect(fresh).not.toBe(manager);
-      await expect(fresh.probeEmbeddingAvailability()).resolves.toMatchObject({ ok: false });
-      releaseProbe.resolve();
-      await expect(probe).resolves.toMatchObject({ ok: true });
-      await expect(reload.close()).resolves.toMatchObject({
-        errors: [expect.objectContaining({ message: `Plugin ${targetId} is retiring` })],
-      });
+      await expectAvailable(fresh, mode !== "late-probe");
+      if (mode === "timeout") {
+        let joined = false;
+        const finalClose = reload.close().then(() => {
+          joined = true;
+        });
+        await Promise.resolve();
+        expect(joined).toBe(false);
+        releaseClose.resolve();
+        await finalClose;
+        expect(close).toHaveBeenCalledOnce();
+      } else {
+        releaseProbe.resolve();
+        await expect(probe).resolves.toMatchObject({ ok: true });
+        await expect(reload.close()).resolves.toMatchObject({
+          errors: [expect.objectContaining({ message: `Plugin ${targetId} is retiring` })],
+        });
+      }
     } else {
       await drain;
       expect(close).toHaveBeenCalledTimes(
@@ -363,7 +362,7 @@ it.each([
       commitReload();
     }
     await expect(manager.probeEmbeddingAvailability()).rejects.toThrow("closed");
-    await expect(other.probeEmbeddingAvailability()).resolves.toMatchObject({ ok: true });
+    await expectAvailable(other);
     expect(siblingClose).not.toHaveBeenCalled();
     expect(unaffectedClose).not.toHaveBeenCalled();
     const fresh = await getManager(owner, config);
@@ -375,24 +374,22 @@ it.each([
       if (mode.startsWith("pending")) {
         await expect(fresh.search("replacement provider acquisition")).resolves.toEqual([]);
       }
-      await expect(fresh.probeEmbeddingAvailability()).resolves.toMatchObject({ ok: true });
+      await expectAvailable(fresh);
     }
     // A real search acquires each required successor provider, unlike advisory cached probes.
     if (lateManager) {
       if (mode.startsWith("pending")) {
         await expect(lateManager.search("replacement provider acquisition")).resolves.toEqual([]);
       }
-      await expect(lateManager.probeEmbeddingAvailability()).resolves.toMatchObject({
-        ok: mode !== "late-probe",
-      });
+      await expectAvailable(lateManager, mode !== "late-probe");
     }
     if (mode.startsWith("pending")) {
       expect(successorCreate).toHaveBeenCalledTimes(2);
     }
     const attemptedCloses = close.mock.calls.length;
     const finalClose = owner.runtime.closeAllMemorySearchManagers?.();
-    if (mode === "failed-close" || mode === "late-probe") {
-      await expect(finalClose).rejects.toThrow(`Plugin ${targetId} was reloaded or disabled`);
+    if (revoked) {
+      await expect(finalClose).rejects.toThrow(revokedMessage);
       expect(close).toHaveBeenCalledTimes(attemptedCloses);
     } else {
       await finalClose;
@@ -410,22 +407,17 @@ it.each([
       sibling.runtime.closeAllMemorySearchManagers?.(),
       successor.runtime.closeAllMemorySearchManagers?.(),
     ]);
-    await disposePluginRegistryInstances(next);
-    await disposePluginRegistryInstances(owner.registry);
-    await disposePluginRegistryInstances(sibling.registry);
-    await disposePluginRegistryInstances(successor.registry);
+    for (const registry of [next, owner.registry, sibling.registry, successor.registry]) {
+      await disposeRegistry(registry);
+    }
     await state.cleanup();
-    if (mode === "failed-close" || mode === "late-probe") {
+    if (revoked) {
       expect(memoryCleanup[0]).toMatchObject({
         status: "rejected",
-        reason: expect.objectContaining({
-          message: expect.stringContaining(`Plugin ${targetId} was reloaded or disabled`),
-        }),
+        reason: { message: expect.stringContaining(revokedMessage) },
       });
     }
-    for (const result of memoryCleanup.slice(
-      mode === "failed-close" || mode === "late-probe" ? 1 : 0,
-    )) {
+    for (const result of memoryCleanup.slice(revoked ? 1 : 0)) {
       expect(result.status, result.status === "rejected" ? String(result.reason) : undefined).toBe(
         "fulfilled",
       );
@@ -442,7 +434,7 @@ it.each(["legacy-success", "legacy", "modern", "revoked"] as const)(
     const owner = registerMemoryOwner({});
     const failure = new Error("memory callback cleanup failed");
     const close = vi.fn(async () => {
-      expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(owner.registry);
+      expect(currentScope()?.pluginRegistry).toBe(owner.registry);
       if (mode !== "legacy-success") {
         throw failure;
       }
@@ -455,7 +447,7 @@ it.each(["legacy-success", "legacy", "modern", "revoked"] as const)(
         : { closeAllMemorySearchManagers: close }),
     };
     owner.registry.memoryCapabilities[0]!.capability = owner.instance.wrap({ runtime });
-    const prepared = prepareMemoryRuntimeReload(owner.registry, createEmptyPluginRegistry());
+    const prepared = prepareReload(owner.registry, createEmptyPluginRegistry());
     owner.instance.quiesce();
     try {
       if (mode === "revoked") {
@@ -470,7 +462,7 @@ it.each(["legacy-success", "legacy", "modern", "revoked"] as const)(
         expect(close).toHaveBeenCalledOnce();
       }
     } finally {
-      await disposePluginRegistryInstances(owner.registry);
+      await disposeRegistry(owner.registry);
     }
   },
 );
@@ -498,10 +490,10 @@ it("unwinds prepared memory admission when another runtime rejects preparation",
     },
   });
   try {
-    expect(() => prepareMemoryRuntimeReload(first.registry, next)).toThrow(failure);
+    expect(() => prepareReload(first.registry, next)).toThrow(failure);
     expect(resume).toHaveBeenCalledOnce();
     expect(drain).not.toHaveBeenCalled();
   } finally {
-    await disposePluginRegistryInstances(first.registry);
+    await disposeRegistry(first.registry);
   }
 });

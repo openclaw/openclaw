@@ -14,10 +14,32 @@ import {
 } from "./native-module-require.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+function writeFile(dir: string, name: string, source: string) {
+  const target = path.join(dir, name);
+  fs.writeFileSync(target, source, "utf8");
+  return target;
+}
+
 function writeModule(source: string, name = "plugin.cjs") {
-  const modulePath = path.join(tempDirs.make("openclaw-native-require-"), name);
-  fs.writeFileSync(modulePath, source, "utf8");
-  return modulePath;
+  return writeFile(tempDirs.make("openclaw-native-require-"), name, source);
+}
+
+function expectProbe(
+  probePath: string,
+  output: string,
+  options: { args?: string[]; cwd?: string; native?: boolean } = {},
+) {
+  const native = options.native ?? true;
+  const result = spawnSync(process.execPath, [...(options.args ?? []), probePath], {
+    cwd: options.cwd ?? process.cwd(),
+    encoding: "utf8",
+    ...(native ? { env: { ...process.env, NODE_OPTIONS: "" }, timeout: 30_000 } : {}),
+  });
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout.trim()).toBe(output);
+  if (!native) {
+    expect(result.stderr).toBe("");
+  }
 }
 
 async function bundleOwner(dir: string) {
@@ -42,10 +64,7 @@ describe("tryNativeRequireJavaScriptModule", () => {
 
     const result = tryNativeRequireJavaScriptModule(modulePath);
     if (process.versions.bun) {
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.moduleExport).toMatchObject({ marker: "esm" });
-      }
+      expect(result).toMatchObject({ ok: true, moduleExport: { marker: "esm" } });
     } else {
       expect(result).toEqual({ ok: false });
     }
@@ -67,51 +86,37 @@ describe("tryNativeRequireJavaScriptModule", () => {
 
   it("loads native ESM graphs with temporary SDK aliases", () => {
     const dir = tempDirs.make("openclaw-native-require-");
-    const sdkPath = path.join(dir, "sdk.js");
-    const modulePath = path.join(dir, "plugin.mjs");
-    const probePath = path.join(dir, "probe.mjs");
     const nativeRequireModuleUrl = pathToFileURL(
       path.resolve("src/plugins/native-module-require.ts"),
     ).href;
-    fs.writeFileSync(
-      sdkPath,
+    const sdkPath = writeFile(
+      dir,
+      "sdk.js",
       'export const defineChannelMessageAdapter = () => "adapter";\n',
-      "utf8",
     );
-    fs.writeFileSync(
-      modulePath,
+    const modulePath = writeFile(
+      dir,
+      "plugin.mjs",
       'import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-outbound";\nexport const marker = defineChannelMessageAdapter();\n',
-      "utf8",
     );
-    fs.writeFileSync(
-      probePath,
-      [
-        `import { tryNativeRequireJavaScriptModule } from ${JSON.stringify(nativeRequireModuleUrl)};`,
-        `const result = tryNativeRequireJavaScriptModule(${JSON.stringify(modulePath)}, {`,
-        `  aliasMap: { "openclaw/plugin-sdk/channel-outbound": ${JSON.stringify(sdkPath)} },`,
-        "});",
-        "if (!result.ok) {",
-        '  throw new Error("native require declined ESM graph");',
-        "}",
-        "console.log(result.moduleExport.marker);",
-        "",
-      ].join("\n"),
-      "utf8",
+    const probePath = writeFile(
+      dir,
+      "probe.mjs",
+      `import { tryNativeRequireJavaScriptModule } from ${JSON.stringify(nativeRequireModuleUrl)};
+const result = tryNativeRequireJavaScriptModule(${JSON.stringify(modulePath)}, {
+  aliasMap: { "openclaw/plugin-sdk/channel-outbound": ${JSON.stringify(sdkPath)} },
+});
+if (!result.ok) throw new Error("native require declined ESM graph");
+console.log(result.moduleExport.marker);
+`,
     );
-
-    const result = spawnSync(process.execPath, ["--import", "tsx", probePath], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
-    expect(result).toMatchObject({ stderr: "", status: 0 });
-    expect(result.stdout.trim()).toBe("adapter");
+    expectProbe(probePath, "adapter", { args: ["--import", "tsx"], native: false });
   });
 
   it("uses the configured native loader for JavaScript-to-TypeScript lookup", () => {
     const dir = tempDirs.make("openclaw-native-require-");
-    const modulePath = path.join(dir, "plugin.cjs");
-    fs.writeFileSync(modulePath, 'module.exports = require("./helper.js");\n', "utf8");
-    fs.writeFileSync(path.join(dir, "helper.ts"), "export const loaded = true;\n", "utf8");
+    const modulePath = writeFile(dir, "plugin.cjs", 'module.exports = require("./helper.js");\n');
+    writeFile(dir, "helper.ts", "export const loaded = true;\n");
 
     const result = tryNativeRequireJavaScriptModule(modulePath);
     expect(result).toMatchObject({ ok: true, moduleExport: { loaded: true } });
@@ -172,23 +177,13 @@ assert.equal(aliased.moduleExport, createRequire(import.meta.url)(aliasedSdkPath
 console.log("native path + source SDK process identity; native JavaScript precedence; missing target/dependency controls passed");
 `,
     );
-    const result = spawnSync(
-      process.execPath,
-      [
-        ...(process.versions.bun ? ["--no-install", "--tsconfig-override", tsconfigPath] : []),
-        probePath,
-      ],
+    expectProbe(
+      probePath,
+      "native path + source SDK process identity; native JavaScript precedence; missing target/dependency controls passed",
       {
         cwd: dir,
-        env: { ...process.env, NODE_OPTIONS: "" },
-        encoding: "utf8",
-        timeout: 30_000,
+        args: process.versions.bun ? ["--no-install", "--tsconfig-override", tsconfigPath] : [],
       },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe(
-      "native path + source SDK process identity; native JavaScript precedence; missing target/dependency controls passed",
     );
   });
 
@@ -234,15 +229,13 @@ for (const target of [brokenPath, pathToFileURL(brokenPath).href, "./broken.mjs"
 const newPath = path.join(dir, "new-generation.mjs");
 fs.writeFileSync(newPath, pluginSource);
 const repaired = load(newPath, { ...options, aliasMap: { "fixture-api": currentApi } });
-assert.equal(repaired.ok, true);
-assert.equal(repaired.moduleExport.value, 2);
+assert.deepEqual([repaired.ok, repaired.moduleExport.value], [true, 2]);
 const retryPath = path.join(dir, "retry.cjs");
 fs.writeFileSync(retryPath, 'if (!globalThis.__pluginDependencyReady) throw new Error("dependency not ready"); module.exports = { ready: true };\\n');
 assert.throws(() => load(retryPath), /dependency not ready/);
 globalThis.__pluginDependencyReady = true;
 const retried = load(path.join(aliasDir, "retry.cjs"));
-assert.equal(retried.ok, true);
-assert.equal(retried.moduleExport.ready, true);
+assert.deepEqual([retried.ok, retried.moduleExport.ready], [true, true]);
 delete globalThis.__pluginDependencyReady;
 delete require.cache[require.resolve(retryPath)];
 fs.writeFileSync(retryPath, 'throw Object.assign(new Error("fresh race"), { code: "ERR_REQUIRE_ESM_RACE_CONDITION" });\\n');
@@ -259,15 +252,7 @@ console.log("terminal error retained; new generation recovered");
 `,
       );
       // tsx changes named-import linking, so this contract needs an unhooked Node process.
-      const result = spawnSync(process.execPath, [probePath], {
-        cwd: process.cwd(),
-        env: { ...process.env, NODE_OPTIONS: "" },
-        encoding: "utf8",
-        timeout: 30_000,
-      });
-
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.trim()).toBe("terminal error retained; new generation recovered");
+      expectProbe(probePath, "terminal error retained; new generation recovered");
     },
   );
 });
