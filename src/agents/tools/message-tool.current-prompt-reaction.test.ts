@@ -377,7 +377,7 @@ it("requires a committed host-owned prompt and rejects model-selected targets or
 it.each([
   { sourceReplyOnly: true, error: 'permit only action "send"' },
   { sourceReplyOnly: false, error: 'Message action "react" is disabled' },
-])("keeps send-only schema and execution policy aligned ($sourceReplyOnly)", async (policy) => {
+])("enforces send-only execution policy ($sourceReplyOnly)", async (policy) => {
   await persist();
   const selected = tool(
     policy.sourceReplyOnly
@@ -385,9 +385,11 @@ it.each([
       : { config: { ...config, tools: { message: { actions: { allow: ["send"] } } } } },
   );
   if (policy.sourceReplyOnly) {
-    expect(Check(selected.parameters, { action: "send", message: "Done" })).toBe(true);
+    // The definition matches ordinary turns; source-only delivery is enforced per call.
+    expect(selected.parameters).toEqual(tool({}).parameters);
+  } else {
+    expect(Check(selected.parameters, { action: "react", emoji: "👍" })).toBe(false);
   }
-  expect(Check(selected.parameters, { action: "react", emoji: "👍" })).toBe(false);
   await expect(execute(policy.sourceReplyOnly ? { final: true } : {}, selected)).rejects.toThrow(
     policy.error,
   );

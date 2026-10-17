@@ -299,27 +299,11 @@ const nodeRequiredProcessFiles = new Set([
 // Trial policies remove qualification gates, but retain Node/V8 contracts and known fork defects.
 const nodeRequiredFiles = new Set([
   ...nodeRequiredProcessFiles,
-  // Bun's fs.watch callback is not registered as an EventEmitter change listener.
-  "src/infra/owned-directory-observation.test.ts",
-  // Bun does not settle a pending IPC send callback when its parent disconnects.
-  "src/infra/tailscale-route-owner.worker.test.ts",
-  // Bun leaves a Proxy-closed FileHandle's finalizer armed (ERR_INVALID_STATE); fork repro reported.
-  "src/gateway/session-utils.fs.display-position.test.ts",
   // Bun reports peer ECONNRESET when destroying a socket with a pending reply; fork compat review pending.
   "src/infra/exec-host.socket.test.ts",
-  // Bun throws ENOTDIR despite statSync's throwIfNoEntry: false option.
-  "src/state/openclaw-database-preflight.startup-prepared.test.ts",
-  // Bun Worker termination leaves unmanaged fs.openSync descriptors open.
-  "src/state/openclaw-state-ownership.test.ts",
   // Node's trace-exit, diagnostic reports, and native process/SQLite lifecycle.
   "src/cli/cli-process-diagnostics.test.ts",
   "test/scripts/bench-session-history.test.ts",
-  // Bun's node:module SourceMap.findOrigin returns {} for valid mappings.
-  "test/scripts/control-ui-cold-load-trace.test.ts",
-  // Bun's os.availableParallelism reads mutable navigator.hardwareConcurrency.
-  "test/talk-browser-defaults.test.ts",
-  // Bun's HTTP ServerResponse sends body bytes before an explicit uncork.
-  "src/gateway/artifact-downloads.test.ts",
   // These proofs require V8 heap instrumentation or Node worker heap flags.
   "src/infra/worker-heap-flag.test.ts",
   "src/logging/diagnostic-heap-profile.test.ts",

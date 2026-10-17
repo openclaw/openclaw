@@ -718,6 +718,7 @@ describe("server-owned pending input display", () => {
     async (runId) => {
       const stale = createDeferred<unknown>();
       const fresh = createDeferred<unknown>();
+      const freshStarted = createDeferred();
       const initialUser = {
         role: "user",
         content: "First turn",
@@ -753,7 +754,14 @@ describe("server-owned pending input display", () => {
           ],
         ]),
         requestHandlers: {
-          "chat.history": () => (++historyReads === 1 ? stale.promise : fresh.promise),
+          "chat.history": () => {
+            historyReads += 1;
+            if (historyReads === 1) {
+              return stale.promise;
+            }
+            freshStarted.resolve();
+            return fresh.promise;
+          },
         },
       });
       applyChatPendingInputs(host, page);
@@ -774,8 +782,8 @@ describe("server-owned pending input display", () => {
       expect(historyReads).toBe(1);
       const refreshing = loadChatHistory(host);
       stale.resolve({ sessionId, messages: [initialUser], pendingInputs: page });
-      await loading;
-      await vi.waitFor(() => expect(historyReads).toBe(2));
+      await freshStarted.promise;
+      expect(historyReads).toBe(2);
       expect(host.chatMessages).toEqual([initialUser, promoted]);
       expect(getChatHistoryLoadState(host).phase).toBe("in-flight");
       fresh.resolve({
@@ -784,7 +792,8 @@ describe("server-owned pending input display", () => {
         pendingInputs: { items: [], total: 0 },
         sessionInfo: { key: sessionKey, sessionId, hasActiveRun: true, status: "running" },
       });
-      const refreshed = await refreshing;
+      const [loaded, refreshed] = await Promise.all([loading, refreshing]);
+      expect(loaded).toBe(refreshed);
       expect(host.lastError).toBeNull();
       expect(getChatHistoryLoadState(host).phase).toBe("committed");
       expect(refreshed).toMatchObject({ pendingInputs: { items: [], total: 0 } });

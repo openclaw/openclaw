@@ -24,7 +24,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveInFlightRunSnapshot } from "../chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
-import { isQueuedChatTurnForSession } from "../chat-queued-turns.js";
+import { isQueuedFollowupChatTurnForSession } from "../chat-queued-turns.js";
 import { resolveClaudeCliBindingSessionId } from "../cli-session-history.claude.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
@@ -228,7 +228,7 @@ export async function handleChatHistoryRequest({
           ).map((receipt) =>
             receipt.state === "pending" &&
             !receipt.cancelled &&
-            isQueuedChatTurnForSession(context.chatQueuedTurns, receipt.runId, {
+            isQueuedFollowupChatTurnForSession(context.chatQueuedTurns, receipt.runId, {
               agentId: sessionAgentId,
               sessionKey: canonicalKey,
               sessionId,

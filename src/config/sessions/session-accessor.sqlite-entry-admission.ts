@@ -299,15 +299,6 @@ export async function loadSessionEntryForAdmission(
                       { expectedIdentity, requestedPath: storePath },
                     );
                     try {
-                      // Borrow this prepared generation only; never open a replacement at the path.
-                      const next = successor.capturePreparedGenerationClaim();
-                      if (
-                        !next ||
-                        next.identity !== generation.identity ||
-                        next.incarnation !== generation.incarnation
-                      ) {
-                        throw new Error("Session transition changed its native generation");
-                      }
                       generation.assertCurrent();
                       assertOwnerCurrent();
                       return createClaim(successor, {

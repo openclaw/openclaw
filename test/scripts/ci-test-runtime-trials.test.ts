@@ -17,17 +17,29 @@ const nodeFile = "src/process/spawn-broker/cleanup.test.ts";
 const bunFile = "src/process/spawn-broker/context.test.ts";
 
 describe("explicit all-test runtime trials", () => {
+  it("keeps the blocked socket reset contract on Node", () => {
+    for (const policy of ["bun-all", "dual-all"] as const) {
+      expect(
+        resolveCiTestRuntimeSelections({ targets: ["src/infra/exec-host.socket.test.ts"] }, policy),
+      ).toEqual([{ runtime: "node" }]);
+    }
+  });
+
   it.each([
-    "src/infra/owned-directory-observation.test.ts",
+    "src/gateway/artifact-downloads.test.ts",
+    "test/talk-browser-defaults.test.ts",
+    "test/scripts/control-ui-cold-load-trace.test.ts",
     "src/infra/tailscale-route-owner.worker.test.ts",
-    "src/gateway/session-utils.fs.display-position.test.ts",
-    "src/infra/exec-host.socket.test.ts",
     "src/state/openclaw-database-preflight.startup-prepared.test.ts",
     "src/state/openclaw-state-ownership.test.ts",
-  ])("keeps the blocked native contract in %s on Node", (file) => {
+    "src/gateway/session-utils.fs.display-position.test.ts",
+    "extensions/team-reports/src/render/theme.test.ts",
+    "src/infra/owned-directory-observation.test.ts",
+  ])("runs the fork-fixed contract in %s on Bun", (file) => {
     for (const policy of ["bun-all", "dual-all"] as const) {
       expect(resolveCiTestRuntimeSelections({ targets: [file] }, policy)).toEqual([
-        { runtime: "node" },
+        ...(policy === "dual-all" ? [{ runtime: "node" }] : []),
+        { runtime: "bun" },
       ]);
     }
   });
@@ -178,14 +190,7 @@ describe("explicit all-test runtime trials", () => {
   });
 
   it("retains exact Node exceptions and selects broad target remainders on Bun", async () => {
-    for (const target of [
-      nodeFile,
-      `./${nodeFile}`,
-      path.resolve(nodeFile),
-      "test/scripts/control-ui-cold-load-trace.test.ts",
-      "test/talk-browser-defaults.test.ts",
-      "src/gateway/artifact-downloads.test.ts",
-    ]) {
+    for (const target of [nodeFile, `./${nodeFile}`, path.resolve(nodeFile)]) {
       expect(resolveCiTestRuntimeSelections({ targets: [target] }, "bun-all")).toEqual([
         { runtime: "node" },
       ]);

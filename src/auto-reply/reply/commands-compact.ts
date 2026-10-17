@@ -10,12 +10,6 @@ import {
   classifyCompactionReason,
   isBenignCompactionSkipResult,
 } from "../../agents/embedded-agent-runner/compact-reasons.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
-import {
-  OPENAI_CODEX_PROVIDER_ID,
-  OPENAI_PROVIDER_ID,
-  resolveContextConfigProviderForRuntime,
-} from "../../agents/openai-routing.js";
 import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
 import { resolveManualCompactionCliTarget } from "../../agents/session-runtime-compat.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -86,8 +80,6 @@ function resolveManualCompactContextTokenBudget(params: {
   cfg: OpenClawConfig;
   provider?: string;
   model?: string;
-  agentId: string;
-  sessionKey: string;
   liveContextTokens?: number;
   persistedContextTokens?: number;
 }): number | undefined {
@@ -99,24 +91,11 @@ function resolveManualCompactContextTokenBudget(params: {
     return liveContextTokens ?? normalizeContextTokenBudget(params.persistedContextTokens);
   }
 
-  const harnessPolicy = resolveAgentHarnessPolicy({
-    provider,
-    modelId: model,
-    config: params.cfg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
-  const contextConfigProvider = resolveContextConfigProviderForRuntime({
-    provider,
-    runtimeId: harnessPolicy.runtime,
-    config: params.cfg,
-  });
   const configuredContextTokens = resolveContextTokensForModel({
     cfg: params.cfg,
-    provider: contextConfigProvider,
+    provider,
     model: resolveManualCompactContextModelId({
       provider,
-      contextConfigProvider,
       model,
     }),
     allowAsyncLoad: false,
@@ -135,11 +114,7 @@ function normalizeContextTokenBudget(value: number | undefined): number | undefi
   return value !== undefined && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
 }
 
-function resolveManualCompactContextModelId(params: {
-  provider: string;
-  contextConfigProvider: string;
-  model: string;
-}): string {
+function resolveManualCompactContextModelId(params: { provider: string; model: string }): string {
   const model = params.model;
   const slashIndex = model.indexOf("/");
   if (slashIndex <= 0) {
@@ -148,17 +123,12 @@ function resolveManualCompactContextModelId(params: {
 
   const modelProvider = normalizeProviderId(model.slice(0, slashIndex));
   const selectedProvider = normalizeProviderId(params.provider);
-  const contextConfigProvider = normalizeProviderId(params.contextConfigProvider);
   const modelId = model.slice(slashIndex + 1).trim();
   if (!modelId) {
     return model;
   }
 
-  if (
-    modelProvider === selectedProvider ||
-    modelProvider === contextConfigProvider ||
-    (modelProvider === OPENAI_PROVIDER_ID && contextConfigProvider === OPENAI_CODEX_PROVIDER_ID)
-  ) {
+  if (modelProvider === selectedProvider) {
     return modelId;
   }
 
@@ -210,8 +180,6 @@ export async function handleCompactCommand(
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
-    agentId: sessionAgentId,
-    sessionKey: params.sessionKey,
     liveContextTokens: params.contextTokens,
     persistedContextTokens: targetSessionEntry.contextTokens,
   });
