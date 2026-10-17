@@ -27,10 +27,6 @@ const {
     append(key: string, value: unknown, filename?: string): void {
       this.entriesList.push([key, value, filename]);
     }
-
-    get(key: string): unknown {
-      return this.entriesList.find(([entryKey]) => entryKey === key)?.[1] ?? null;
-    }
   }
   const ProxyAgent = vi.fn();
   class EnvAgent {
@@ -83,16 +79,9 @@ function requireUndiciFetchCall(index = 0) {
   return call;
 }
 
-function requireUndiciFetchInit(index = 0) {
-  const init = requireUndiciFetchCall(index)[1];
-  if (!init) {
-    throw new Error(`expected undici fetch init at index ${index}`);
-  }
-  return init;
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
+  undiciFetch.mockResolvedValue(new Response());
   for (const key of PROXY_ENV_KEYS) {
     vi.stubEnv(key, undefined);
   }
@@ -102,8 +91,6 @@ afterAll(() => vi.doUnmock("./undici-runtime.js"));
 
 describe("proxy fetch", () => {
   it("converts global FormData bodies before dispatching through undici", async () => {
-    undiciFetch.mockResolvedValue(new Response());
-
     const proxyFetch = makeProxyFetch("http://proxy.test:8080");
     const form = new globalThis.FormData();
     form.append("model", "whisper-1");
@@ -118,18 +105,18 @@ describe("proxy fetch", () => {
       body: form,
     });
 
-    const passedInit = requireUndiciFetchInit();
-    const passedBody = passedInit.body;
-    expect(passedBody).toBeInstanceOf(MockUndiciFormData);
-    if (!(passedBody instanceof MockUndiciFormData)) {
-      throw new Error("expected converted FormData");
-    }
-    expect(passedBody.get("model")).toBe("whisper-1");
-    expect(passedBody.get("file")).toBeInstanceOf(Blob);
-    expect(passedBody.entriesList.find(([key]) => key === "file")?.[2]).toBe("voice.ogg");
-    const sentHeaders = new Headers(passedInit.headers);
-    expect(sentHeaders.has("content-length")).toBe(false);
-    expect(sentHeaders.has("content-type")).toBe(false);
+    const [, init] = requireUndiciFetchCall();
+    expect(init?.body).toBeInstanceOf(MockUndiciFormData);
+    expect(init).toMatchObject({
+      body: {
+        entriesList: [
+          ["model", "whisper-1", undefined],
+          ["file", expect.any(Blob), "voice.ogg"],
+        ],
+      },
+    });
+    const headers = new Headers(init?.headers);
+    expect([headers.has("content-length"), headers.has("content-type")]).toEqual([false, false]);
   });
   it("returns undefined for plain fetch functions or blank metadata", () => {
     const plainFetch = vi.fn() as unknown as typeof fetch;
@@ -139,8 +126,6 @@ describe("proxy fetch", () => {
     expect(getProxyUrlFromFetch(blankMetadataFetch)).toBeUndefined();
   });
   it("returns proxy fetch using EnvHttpProxyAgent when HTTPS_PROXY is set", async () => {
-    undiciFetch.mockResolvedValue(new Response());
-
     const fetchFn = requireProxyFetch(
       resolveProxyFetchFromEnv({
         HTTP_PROXY: "",

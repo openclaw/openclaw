@@ -10,7 +10,12 @@ import {
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
+  type SsrFPolicy,
 } from "./ssrf.js";
+
+function samePolicy(a: SsrFPolicy, b: SsrFPolicy, expected: boolean) {
+  expect(isSameSsrFPolicy(a, b)).toBe(expected);
+}
 
 const privateIpCases = [
   ...`
@@ -161,32 +166,26 @@ describe("SSRF policy", () => {
       ),
     ).toBe(true);
 
-    expect(isSameSsrFPolicy({}, { blockedHostnames: [] })).toBe(true);
-    expect(isSameSsrFPolicy({}, { blockedHostnames: ["tracker.example.com"] })).toBe(false);
-    expect(
-      isSameSsrFPolicy(
-        { blockedHostnames: ["tracker.example.com"] },
-        { blockedHostnames: ["*.example.com"] },
-      ),
-    ).toBe(false);
-
-    expect(
-      isSameSsrFPolicy(
-        { dangerouslyAllowPrivateNetwork: true },
-        { dangerouslyAllowPrivateNetwork: true, allowRfc2544BenchmarkRange: true },
-      ),
-    ).toBe(false);
+    samePolicy({}, { blockedHostnames: [] }, true);
+    samePolicy({}, { blockedHostnames: ["tracker.example.com"] }, false);
+    samePolicy(
+      { blockedHostnames: ["tracker.example.com"] },
+      { blockedHostnames: ["*.example.com"] },
+      false,
+    );
+    samePolicy(
+      { dangerouslyAllowPrivateNetwork: true },
+      { dangerouslyAllowPrivateNetwork: true, allowRfc2544BenchmarkRange: true },
+      false,
+    );
 
     // #74351: changing ULA policy must invalidate consumers' policy caches.
-    expect(
-      isSameSsrFPolicy(
-        { allowPrivateNetwork: true },
-        { allowPrivateNetwork: true, allowIpv6UniqueLocalRange: true },
-      ),
-    ).toBe(false);
-    expect(
-      isSameSsrFPolicy({ allowIpv6UniqueLocalRange: true }, { allowIpv6UniqueLocalRange: true }),
-    ).toBe(true);
+    samePolicy(
+      { allowPrivateNetwork: true },
+      { allowPrivateNetwork: true, allowIpv6UniqueLocalRange: true },
+      false,
+    );
+    samePolicy({ allowIpv6UniqueLocalRange: true }, { allowIpv6UniqueLocalRange: true }, true);
   });
   it("retains every configured block when combining policies and trust exceptions", () => {
     const policy = mergeSsrFPolicies(

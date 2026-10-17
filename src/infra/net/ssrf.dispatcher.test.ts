@@ -3,6 +3,14 @@ import type { Dispatcher } from "undici";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
+const telegram = "api.telegram.org";
+const proxyUrl = "http://127.0.0.1:7890";
+const familyOptions = { autoSelectFamily: true, autoSelectFamilyAttemptTimeout: 300 };
+const telegramRequest: Dispatcher.DispatchOptions = {
+  origin: `https://${telegram}`,
+  path: "/getMe",
+  method: "GET",
+};
 
 const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => {
   function createMockDispatcher(
@@ -29,9 +37,7 @@ vi.mock("node:net", async (importOriginal) => ({
   getDefaultAutoSelectFamily,
 }));
 
-vi.mock("../wsl.js", () => ({
-  isWSL2Sync: isWSL2SyncMock,
-}));
+vi.mock("../wsl.js", () => ({ isWSL2Sync: isWSL2SyncMock }));
 
 import type { PinnedHostname } from "./ssrf.js";
 
@@ -62,20 +68,13 @@ function createPinnedTelegramHost(
   lookup: PinnedHostname["lookup"],
   address = "149.154.167.220",
 ): PinnedHostname {
-  return {
-    hostname: "api.telegram.org",
-    addresses: [address],
-    lookup,
-  };
+  return { hostname: telegram, addresses: [address], lookup };
 }
 
 function createDispatcherWithPinnedOverride(lookup: PinnedHostname["lookup"]) {
   createPinnedDispatcher(createPinnedTelegramHost(lookup, "149.154.167.221"), {
     mode: "direct",
-    pinnedHostname: {
-      hostname: "api.telegram.org",
-      addresses: ["149.154.167.220"],
-    },
+    pinnedHostname: { hostname: telegram, addresses: ["149.154.167.220"] },
   });
 
   const call = agentCtor.mock.calls[agentCtor.mock.calls.length - 1];
@@ -113,17 +112,10 @@ describe("createPinnedDispatcher", () => {
   it("reuses the global WSL2 autoSelectFamily policy for pinned dispatchers", () => {
     isWSL2SyncMock.mockReturnValue(true);
     const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
-    const pinned = createPinnedTelegramHost(lookup);
-
-    createPinnedDispatcher(pinned);
-
+    createPinnedDispatcher(createPinnedTelegramHost(lookup));
     expect(agentCtor).toHaveBeenCalledWith({
       factory: expect.any(Function),
-      connect: {
-        lookup,
-        autoSelectFamily: false,
-        autoSelectFamilyAttemptTimeout: 300,
-      },
+      connect: { ...familyOptions, lookup, autoSelectFamily: false },
       allowH2: false,
     });
   });
@@ -134,7 +126,7 @@ describe("createPinnedDispatcher", () => {
 
     expect(lookup).toBeTypeOf("function");
     const result = await new Promise<[unknown, string, number]>((resolve) => {
-      lookup?.("api.telegram.org", (err, address, family) => {
+      lookup?.(telegram, (err, address, family) => {
         resolve([err, address as string, family as number]);
       });
     });
@@ -158,112 +150,58 @@ describe("createPinnedDispatcher", () => {
     expect(callback).toHaveBeenCalledWith(null, "93.184.216.34", 4);
   });
 
-  it("rejects pinned override addresses that violate SSRF policy", () => {
-    expect(() =>
-      createPinnedDispatcher(createPinnedTelegramHost(vi.fn(), "149.154.167.221"), {
-        mode: "direct",
-        pinnedHostname: {
-          hostname: "api.telegram.org",
-          addresses: ["127.0.0.1"],
-        },
-      }),
-    ).toThrow(/private|internal|blocked/i);
-  });
-
-  it("rejects a trusted private hostname override rebound to loopback", () => {
+  it.each([
+    [telegram, "149.154.167.221", "127.0.0.1", undefined],
+    ["model.lan", "192.168.1.25", "64:ff9b::127.0.0.1", { allowedHostnames: ["model.lan"] }],
+  ] as const)("rejects %s override rebound to loopback", (hostname, address, rebound, policy) => {
     expect(() =>
       createPinnedDispatcher(
-        { hostname: "model.lan", addresses: ["192.168.1.25"], lookup: vi.fn() },
-        {
-          mode: "direct",
-          pinnedHostname: {
-            hostname: "model.lan",
-            addresses: ["64:ff9b::127.0.0.1"],
-          },
-        },
-        { allowedHostnames: ["model.lan"] },
+        { hostname, addresses: [address], lookup: vi.fn() },
+        { mode: "direct", pinnedHostname: { hostname, addresses: [rebound] } },
+        policy && { allowedHostnames: [...policy.allowedHostnames] },
       ),
     ).toThrow(/private|internal|blocked/i);
   });
 
   it("keeps env proxy route while pinning the direct no-proxy path", () => {
-    vi.stubEnv("http_proxy", "http://127.0.0.1:7890");
+    vi.stubEnv("http_proxy", proxyUrl);
     vi.stubEnv("https_proxy", "");
     vi.stubEnv("no_proxy", "");
     const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
-    const pinned = createPinnedTelegramHost(lookup);
-
-    const dispatcher = createPinnedDispatcher(pinned, {
+    const dispatcher = createPinnedDispatcher(createPinnedTelegramHost(lookup), {
       mode: "env-proxy",
-      connect: {
-        autoSelectFamily: true,
-        lookup: vi.fn(),
-        ca: "target-ca",
-      },
-      proxyTls: {
-        autoSelectFamily: true,
-        ca: "proxy-ca",
-      },
+      connect: { autoSelectFamily: true, lookup: vi.fn(), ca: "target-ca" },
+      proxyTls: { autoSelectFamily: true, ca: "proxy-ca" },
     });
-    const request: Dispatcher.DispatchOptions = {
-      origin: "https://api.telegram.org",
-      path: "/getMe",
-      method: "GET",
-    };
-    const proxyOptions = dispatchToOwner(dispatcher, request, proxyAgentCtor);
+    const proxyOptions = dispatchToOwner(dispatcher, telegramRequest, proxyAgentCtor);
     expect(proxyOptions).toMatchObject({
-      uri: "http://127.0.0.1:7890",
+      uri: proxyUrl,
       allowH2: false,
       proxyTunnel: true,
-      proxyTls: {
-        autoSelectFamily: true,
-        autoSelectFamilyAttemptTimeout: 300,
-        ca: "proxy-ca",
-      },
+      proxyTls: { ...familyOptions, ca: "proxy-ca" },
     });
     expect(proxyOptions.proxyTls).not.toHaveProperty("lookup");
 
-    vi.stubEnv("no_proxy", "api.telegram.org");
-    const directOptions = dispatchToOwner(dispatcher, request, envHttpProxyAgentCtor);
+    vi.stubEnv("no_proxy", telegram);
+    const directOptions = dispatchToOwner(dispatcher, telegramRequest, envHttpProxyAgentCtor);
     expect(directOptions.allowH2).toBe(false);
-    expect(directOptions.connect).toEqual({
-      autoSelectFamily: true,
-      autoSelectFamilyAttemptTimeout: 300,
-      lookup,
-      ca: "target-ca",
-    });
+    expect(directOptions.connect).toEqual({ ...familyOptions, lookup, ca: "target-ca" });
   });
 
   it("keeps explicit proxy routing intact", () => {
     const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
-    const pinned = createPinnedTelegramHost(lookup);
-
-    const dispatcher = createPinnedDispatcher(pinned, {
+    const dispatcher = createPinnedDispatcher(createPinnedTelegramHost(lookup), {
       mode: "explicit-proxy",
-      proxyUrl: "http://127.0.0.1:7890",
-      proxyTls: {
-        autoSelectFamily: false,
-        ca: "target-ca",
-      },
+      proxyUrl,
+      proxyTls: { autoSelectFamily: false, ca: "target-ca" },
     });
-    const options = dispatchToOwner(
-      dispatcher,
-      { origin: "https://api.telegram.org", path: "/getMe", method: "GET" },
-      proxyAgentCtor,
-    );
+    const options = dispatchToOwner(dispatcher, telegramRequest, proxyAgentCtor);
     expect(options).toMatchObject({
-      uri: "http://127.0.0.1:7890",
+      uri: proxyUrl,
       proxyTunnel: true,
-      proxyTls: {
-        autoSelectFamily: true,
-        autoSelectFamilyAttemptTimeout: 300,
-      },
+      proxyTls: familyOptions,
       allowH2: false,
-      requestTls: {
-        autoSelectFamily: false,
-        ca: "target-ca",
-        lookup,
-      },
+      requestTls: { autoSelectFamily: false, ca: "target-ca", lookup },
     });
     expect(options.proxyTls).not.toHaveProperty("lookup");
     expect(options.proxyTls).not.toHaveProperty("ca");
