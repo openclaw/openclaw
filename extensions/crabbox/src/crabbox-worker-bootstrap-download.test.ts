@@ -18,6 +18,14 @@ const archive = Buffer.from("verified worker archive".repeat(3));
 const runtimeArchive = Buffer.from("verified runtime archive".repeat(3));
 const workerToken = "Bearer synthetic-worker-archive-token";
 const runtimeToken = "Bearer synthetic-bootstrap-token";
+const resumedRange = `bytes=${Math.floor(archive.length * 0.4)}-`;
+const transferError = (code = "ECONNRESET", message = "transport interrupted") =>
+  Object.assign(new Error(message), { code });
+function abortAfter(ms: number, error: Error) {
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(error), ms);
+  return controller.signal;
+}
 
 type DownloadOutcome =
   | string
@@ -91,16 +99,13 @@ async function download(
   const aborted: string[] = [];
   const completedAt: number[] = [];
   const grants = new Map<string, AbortSignal>(
-    [nodeBootstrap, workerBundle].map((artifact) => {
-      const controller = new AbortController();
-      setTimeout(
-        () => {
-          controller.abort(Object.assign(new Error("capability expired"), { code: "ECONNRESET" }));
-        },
+    [nodeBootstrap, workerBundle].map((artifact): [string, AbortSignal] => [
+      `Bearer ${artifact.token}`,
+      abortAfter(
         bootstrapTimeoutMs ?? 10 * 60_000,
-      );
-      return [`Bearer ${artifact.token}`, controller.signal] as const;
-    }),
+        transferError("ECONNRESET", "capability expired"),
+      ),
+    ]),
   );
   const transport = {
     request: (
@@ -112,19 +117,15 @@ async function download(
         typeof outcomes === "function"
           ? outcomes(Date.now())
           : outcomes[Math.min(requests.length, outcomes.length - 1)];
+      const behavior = typeof outcome === "object" ? outcome : undefined;
       requests.push(options.headers.authorization);
       ranges.push(options.headers.range);
       const offset =
-        options.headers.range &&
-        outcome !== "ignore-range" &&
-        !(typeof outcome === "object" && outcome.ignoreRange)
+        options.headers.range && outcome !== "ignore-range" && !behavior?.ignoreRange
           ? Number(options.headers.range.slice(6, -1))
           : 0;
       const split = Math.min(
-        offset +
-          (typeof outcome === "object" && outcome.resetAfterBytes !== undefined
-            ? outcome.resetAfterBytes
-            : Math.floor(content.length * 0.4)),
+        offset + (behavior?.resetAfterBytes ?? Math.floor(content.length * 0.4)),
         content.length,
       );
       const grant = grants.get(options.headers.authorization)!;
@@ -157,12 +158,12 @@ async function download(
           const response = Object.assign(
             Readable.from(
               (async function* () {
-                if (typeof outcome === "object") {
-                  if (outcome.progress) {
+                if (behavior) {
+                  if (behavior.progress) {
                     const startedAt = Date.now();
                     for (let index = offset; index < content.length; index++) {
                       const arrival = Math.round(
-                        (outcome.durationMs * (index + 1 - offset)) / (content.length - offset),
+                        (behavior.durationMs * (index + 1 - offset)) / (content.length - offset),
                       );
                       await waitForDownload(startedAt + arrival - Date.now(), signal);
                       idleTimer?.refresh();
@@ -172,11 +173,11 @@ async function download(
                     completedAt.push(Date.now());
                     return;
                   }
-                  if (!outcome.stall) {
-                    await waitForDownload(outcome.durationMs, signal);
+                  if (!behavior.stall) {
+                    await waitForDownload(behavior.durationMs, signal);
                   }
-                  if (outcome.failure) {
-                    throw new Error(outcome.failure);
+                  if (behavior.failure) {
+                    throw new Error(behavior.failure);
                   }
                 }
                 if (outcome === "busy") {
@@ -186,11 +187,11 @@ async function download(
                 signal.throwIfAborted();
                 idleTimer?.refresh();
                 yield content.subarray(offset, split);
-                if (typeof outcome === "object" && outcome.resetAfterBytes !== undefined) {
-                  throw Object.assign(new Error("transport interrupted"), { code: "ECONNRESET" });
+                if (behavior?.resetAfterBytes !== undefined) {
+                  throw transferError();
                 }
-                if (typeof outcome === "object" && outcome.stall === "body") {
-                  await waitForDownload(outcome.durationMs, signal);
+                if (behavior?.stall === "body") {
+                  await waitForDownload(behavior.durationMs, signal);
                 }
                 if (outcome === "short") {
                   return;
@@ -206,7 +207,7 @@ async function download(
                     "late-reset",
                   ].includes(outcome)
                 ) {
-                  throw Object.assign(new Error("transport interrupted"), { code: outcome });
+                  throw transferError(outcome);
                 }
                 signal.throwIfAborted();
                 idleTimer?.refresh();
@@ -217,7 +218,7 @@ async function download(
                   yield Buffer.from("excess");
                 }
                 if (outcome === "late-reset") {
-                  throw Object.assign(new Error("transport interrupted"), { code: "ECONNRESET" });
+                  throw transferError();
                 }
                 finished = true;
                 completedAt.push(Date.now());
@@ -244,8 +245,8 @@ async function download(
           void (async () => {
             // Native requests receive their socket before response headers.
             await Promise.resolve();
-            if (typeof outcome === "object" && outcome.stall === "headers") {
-              await waitForDownload(outcome.durationMs, signal);
+            if (behavior?.stall === "headers") {
+              await waitForDownload(behavior.durationMs, signal);
             }
             signal.throwIfAborted();
             idleTimer?.refresh();
@@ -340,6 +341,37 @@ async function download(
   const script = setup.command
     .split("CRABBOX_NODE_ENROLLMENT_SCRIPT'\n")[1]!
     .split("\nCRABBOX_NODE_ENROLLMENT_SCRIPT")[0]!;
+  const dependencies: Record<string, unknown> = {
+    "node:fs": fileSystem,
+    "node:path": path.posix,
+    "node:os": { homedir: () => "/fixture" },
+    "node:http": transport,
+    "node:https": transport,
+    "node:timers/promises": {
+      setTimeout: async (ms: number, _value: unknown, options?: { signal: AbortSignal }) => {
+        delays.push(ms);
+        await waitForDownload(ms, options?.signal);
+      },
+    },
+    "node:child_process": {
+      spawnSync: () => ({ status: 0, stdout: "OpenClaw 2026.8.1" }),
+      spawn: () => {
+        installations.push(Date.now());
+        const child = Object.assign(new EventEmitter(), { pid: 1234 });
+        // Keep close delayed even after kill so the join must await actual settlement.
+        setTimeout(
+          () =>
+            child.emit(
+              "close",
+              terminations.length ? null : install.exitCode,
+              terminations.length ? "SIGKILL" : null,
+            ),
+          install.durationMs,
+        );
+        return child;
+      },
+    },
+  };
   const execution = runInNewContext(script, {
     Buffer,
     URL,
@@ -349,63 +381,12 @@ async function download(
     AbortController,
     AbortSignal: {
       any: (signals: AbortSignal[]) => AbortSignal.any(signals),
-      timeout: (ms: number) => {
-        const controller = new AbortController();
-        setTimeout(
-          () =>
-            controller.abort(
-              Object.assign(new Error("request deadline exceeded"), { code: "ABORT_ERR" }),
-            ),
-          ms,
-        );
-        return controller.signal;
-      },
+      timeout: (ms: number) =>
+        abortAfter(ms, transferError("ABORT_ERR", "request deadline exceeded")),
     },
     process: processFixture,
     console: { error: (line: string) => output.push(line) },
-    require: (name: string) => {
-      if (name === "node:fs") {
-        return fileSystem;
-      }
-      if (name === "node:path") {
-        return path.posix;
-      }
-      if (name === "node:os") {
-        return { homedir: () => "/fixture" };
-      }
-      if (name === "node:http" || name === "node:https") {
-        return transport;
-      }
-      if (name === "node:timers/promises") {
-        return {
-          setTimeout: async (ms: number, _value: unknown, options?: { signal: AbortSignal }) => {
-            delays.push(ms);
-            await waitForDownload(ms, options?.signal);
-          },
-        };
-      }
-      if (name === "node:child_process") {
-        return {
-          spawnSync: () => ({ status: 0, stdout: "OpenClaw 2026.8.1" }),
-          spawn: () => {
-            installations.push(Date.now());
-            const child = Object.assign(new EventEmitter(), { pid: 1234 });
-            // Keep close delayed even after kill so the join must await actual settlement.
-            setTimeout(
-              () =>
-                child.emit(
-                  "close",
-                  terminations.length ? null : install.exitCode,
-                  terminations.length ? "SIGKILL" : null,
-                ),
-              install.durationMs,
-            );
-            return child;
-          },
-        };
-      }
-      return require(name);
-    },
+    require: (name: string) => dependencies[name] ?? require(name),
   });
   const completion = Promise.resolve(execution).finally(() => {
     elapsedMs = Date.now();
@@ -594,31 +575,21 @@ describe("bootstrap artifact download retries", () => {
     expect(result.created).toHaveLength(3);
   });
 
-  it("restarts from the full response when the server ignores Range", async () => {
-    const result = await download(["ECONNRESET", "ignore-range"]);
-    expectDownload(result, 0, {
-      ranges: [undefined, `bytes=${Math.floor(archive.length * 0.4)}-`],
-    });
+  it.each<[DownloadOutcome, 0 | 1, Array<string | undefined>]>([
+    ["ignore-range", 0, [undefined, resumedRange]],
+    ["range-mismatch", 0, [undefined, resumedRange, undefined]],
+    [416, 0, [undefined, resumedRange, undefined]],
+    ["digest", 1, [undefined, resumedRange]],
+  ])("validates resumed response %s before publishing", async (outcome, code, ranges) => {
+    const result = await download(["ECONNRESET", outcome, "success"]);
+    expectDownload(result, code, { ranges });
+    if (outcome === "digest") {
+      expect(result.output).toContain("failed integrity verification (download attempt 2)");
+    }
   });
-  it.each(["range-mismatch", 416])(
-    "discards range failure %s before retrying from byte zero",
-    async (failure) => {
-      const result = await download(["ECONNRESET", failure, "success"]);
-      expectDownload(result, 0, {
-        ranges: [undefined, `bytes=${Math.floor(archive.length * 0.4)}-`, undefined],
-      });
-    },
-  );
   it("verifies all received bytes after a reset without requesting an empty range", async () => {
     const result = await download(["late-reset"]);
     expectDownload(result, 0, { ranges: [undefined] });
-  });
-  it("rejects corrupted resumed bytes before publishing the archive", async () => {
-    const result = await download(["ECONNRESET", "digest"]);
-    expectDownload(result, 1, {
-      ranges: [undefined, `bytes=${Math.floor(archive.length * 0.4)}-`],
-    });
-    expect(result.output).toContain("failed integrity verification (download attempt 2)");
   });
   it.each(["short", "size", "pin", 401, 403, 404, 429, 500, 501, 505, 525, 526, 529, 531])(
     "keeps %s terminal without retrying",

@@ -51,6 +51,35 @@ function preparation(purpose: "session" | "reserve" = "session") {
   return { key: "c".repeat(64), cacheKey: "d".repeat(64), purpose, demandAtMs: Date.now() };
 }
 
+function current() {
+  return openWarmImageStore().entries()[0]!.value;
+}
+
+function pendingCapture(
+  inspect: (argv: string[]) => ReturnType<typeof commandResult>,
+  established?: boolean,
+) {
+  const fixture = createWarmProvider(({ argv }) => {
+    if (argv[2] === "create") {
+      return captureResult(argv, "pending", established);
+    }
+    if (argv[2] === "inspect") {
+      return inspect(argv);
+    }
+    return undefined;
+  });
+  useCliVersion();
+  return fixture;
+}
+
+function provision(
+  provider: ReturnType<typeof createWarmProvider>["provider"],
+  name: string,
+  prepared: ReturnType<typeof preparation>,
+) {
+  return provider.provision(PROFILE, name, createProjectOptions([], undefined, prepared).options);
+}
+
 describe("Crabbox capture receipt", () => {
   it.each([
     ["pending", "pending"],
@@ -98,7 +127,7 @@ describe("Crabbox first capture without upload wait", () => {
       useCliVersion(version);
       const enroll = options.beginNodeEnrollment.getMockImplementation()!;
       options.beginNodeEnrollment.mockImplementation(async () => {
-        const record = openWarmImageStore().entries()[0]!.value;
+        const record = current();
         expect(record.operation).toBeUndefined();
         expect(record.image).toMatchObject({
           checkpointId: CHECKPOINT_ID,
@@ -131,9 +160,7 @@ describe("Crabbox first capture without upload wait", () => {
         calls.slice(captureCallIndex + 1).filter((call) => call.argv[1] === "inspect"),
       ).toHaveLength(nonBlocking ? 0 : 1);
       expect(managedBinary.ensureManagedCrabboxBinary).toHaveBeenCalledOnce();
-      expect(Object.values(openWarmImageStore().entries()[0]!.value.allocations)[0]?.phase).toBe(
-        "enrolled",
-      );
+      expect(Object.values(current().allocations)[0]?.phase).toBe("enrolled");
     },
   );
 
@@ -144,21 +171,14 @@ describe("Crabbox first capture without upload wait", () => {
       const entered = Promise.withResolvers<void>();
       let available = false;
       const { options } = createProjectOptions([]);
-      const { provider, calls, warn } = createWarmProvider(({ argv }) => {
-        if (argv[2] === "create") {
-          return captureResult(argv, "pending", established);
-        }
-        if (argv[2] === "inspect") {
-          expect(argv[3]).toBe(CHECKPOINT_ID);
-          entered.resolve();
-          return availability(available);
-        }
-        return undefined;
-      });
-      useCliVersion();
+      const { provider, calls, warn } = pendingCapture((argv) => {
+        expect(argv[3]).toBe(CHECKPOINT_ID);
+        entered.resolve();
+        return availability(available);
+      }, established);
       const enroll = options.beginNodeEnrollment.getMockImplementation()!;
       options.beginNodeEnrollment.mockImplementation(async () => {
-        const record = openWarmImageStore().entries()[0]!.value;
+        const record = current();
         expect(record.operation).toBeUndefined();
         expect(record.image).toMatchObject({ checkpointId: CHECKPOINT_ID, state: "available" });
         return enroll();
@@ -166,7 +186,7 @@ describe("Crabbox first capture without upload wait", () => {
       const provisioning = provider.provision(PROFILE, "unattested-capture", options);
       await Promise.race([entered.promise, provisioning]);
       expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
-      expect(openWarmImageStore().entries()[0]!.value.image).toBeUndefined();
+      expect(current().image).toBeUndefined();
       await vi.advanceTimersByTimeAsync(4_999);
       expect(calls.filter((call) => call.argv[2] === "inspect")).toHaveLength(1);
       available = true;
@@ -187,17 +207,10 @@ describe("Crabbox first capture without upload wait", () => {
       const entered = Promise.withResolvers<void>();
       const controller = new AbortController();
       const { options } = createProjectOptions([], controller);
-      const { provider, calls } = createWarmProvider(({ argv }) => {
-        if (argv[2] === "create") {
-          return captureResult(argv, "pending");
-        }
-        if (argv[2] === "inspect") {
-          entered.resolve();
-          return availability();
-        }
-        return undefined;
+      const { provider, calls } = pendingCapture(() => {
+        entered.resolve();
+        return availability();
       });
-      useCliVersion();
       const provisioning = provider.provision(PROFILE, "interrupted-capture", options);
       const rejected = expect(provisioning).rejects.toThrow(
         outcome === "timeout" ? "capture is unresolved" : `${outcome} capture`,
@@ -216,11 +229,11 @@ describe("Crabbox first capture without upload wait", () => {
       await vi.advanceTimersByTimeAsync(5_000);
       await rejected;
       expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
-      expect(openWarmImageStore().entries()[0]!.value.operation).toMatchObject({
+      expect(current().operation).toMatchObject({
         type: "capture",
         phase: "uncertain",
       });
-      expect(openWarmImageStore().entries()[0]!.value.image).toBeUndefined();
+      expect(current().image).toBeUndefined();
       expect(calls.filter((call) => call.argv[2] === "create")).toHaveLength(1);
     },
   );
@@ -228,42 +241,21 @@ describe("Crabbox first capture without upload wait", () => {
   it("goes cold while upload is pending, then verifies and forks the exact available checkpoint", async () => {
     let available = false;
     const prepared = preparation();
-    const { provider, calls } = createWarmProvider(({ argv }) => {
-      if (argv[2] === "create") {
-        return captureResult(argv, "pending", true);
-      }
-      if (argv[2] === "inspect") {
-        return availability(available);
-      }
-      return undefined;
-    });
-    useCliVersion();
-    const first = await provider.provision(
-      PROFILE,
-      "upload-source",
-      createProjectOptions([], undefined, prepared).options,
-    );
+    const { provider, calls } = pendingCapture(() => availability(available), true);
+    const first = await provision(provider, "upload-source", prepared);
     await provider.notePreparedDemand!(
       { leaseId: first.leaseId, profile: PROFILE },
       { preparationKey: prepared.key, demandAtMs: prepared.demandAtMs },
     );
-    const whileUploading = await provider.provision(
-      PROFILE,
-      "upload-pending",
-      createProjectOptions([], undefined, prepared).options,
-    );
+    const whileUploading = await provision(provider, "upload-pending", prepared);
     expect(whileUploading.node).toBeDefined();
     expect(calls.some((call) => call.argv[2] === "fork")).toBe(false);
     expect(calls.filter((call) => call.argv[2] === "create")).toHaveLength(1);
-    expect(openWarmImageStore().entries()[0]!.value.image?.state).toBe("pending");
+    expect(current().image?.state).toBe("pending");
     available = true;
-    await provider.provision(
-      PROFILE,
-      "upload-ready",
-      createProjectOptions([], undefined, prepared).options,
-    );
+    await provision(provider, "upload-ready", prepared);
     expect(calls.find((call) => call.argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
-    expect(openWarmImageStore().entries()[0]!.value.image?.state).toBe("available");
+    expect(current().image?.state).toBe("available");
   });
 
   it("keeps refresh blocking and retains its predecessor until the replacement is available", async () => {
@@ -287,11 +279,7 @@ describe("Crabbox first capture without upload wait", () => {
     });
     useCliVersion();
     const prepared = preparation("reserve");
-    await provider.provision(
-      PROFILE,
-      "refresh-source",
-      createProjectOptions([], undefined, prepared).options,
-    );
+    await provision(provider, "refresh-source", prepared);
     const next = createProjectOptions([], undefined, prepared).options;
     next.project.prepare.mockResolvedValue({
       seedKey: PROJECT_KEY,
@@ -306,14 +294,14 @@ describe("Crabbox first capture without upload wait", () => {
           .filter((call) => call.argv[2] === "create")
           .every((call) => call.argv.includes("--wait")),
       ).toBe(true);
-      expect(openWarmImageStore().entries()[0]!.value.image?.checkpointId).toBe(CHECKPOINT_ID);
+      expect(current().image?.checkpointId).toBe(CHECKPOINT_ID);
       expect(calls.some((call) => call.argv[2] === "delete")).toBe(false);
       expect(next.beginNodeEnrollment).not.toHaveBeenCalled();
     } finally {
       finish.resolve();
       await refresh;
     }
-    expect(openWarmImageStore().entries()[0]!.value.image).toMatchObject({
+    expect(current().image).toMatchObject({
       checkpointId: "chk_replacement",
       state: "available",
     });

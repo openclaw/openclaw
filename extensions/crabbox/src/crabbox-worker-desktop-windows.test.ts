@@ -26,6 +26,7 @@ const identity = {
   userSid: "S-1-5-21-123-456-789-1001",
   startTime: "2026-09-18T12:34:56.1234567Z",
 };
+const setup = createCrabboxWindowsDesktopSetup("cbx_fixture", "c3ludGhldGlj");
 
 function launcher(result: { status: number; stdout?: string; stderr?: string }) {
   let source = "";
@@ -37,26 +38,18 @@ function launcher(result: { status: number; stdout?: string; stderr?: string }) 
     rmSync: vi.fn(),
   };
   const run = vi.fn(() => result);
+  const dependencies: Record<string, unknown> = {
+    "node:fs": mockFs,
+    "node:path": path.win32,
+    "node:os": { tmpdir: () => String.raw`C:\Users\crabbox\AppData\Local\Temp` },
+    "node:child_process": { spawnSync: run },
+  };
   const runtime = runInNewContext(
     `${createCrabboxWindowsDesktopNodeLauncher()}
 ({ launch: launchWindowsDesktopNode })`,
     {
       Buffer,
-      require: (name: string) => {
-        if (name === "node:fs") {
-          return mockFs;
-        }
-        if (name === "node:path") {
-          return path.win32;
-        }
-        if (name === "node:os") {
-          return { tmpdir: () => String.raw`C:\Users\crabbox\AppData\Local\Temp` };
-        }
-        if (name === "node:child_process") {
-          return { spawnSync: run };
-        }
-        return require(name);
-      },
+      require: (name: string) => dependencies[name] ?? require(name),
     },
   ) as {
     launch: (input: typeof options) => Promise<typeof identity>;
@@ -139,14 +132,27 @@ const hasPowerShell =
     stdio: "ignore",
   }).status === 0;
 
+function runPowerShell(script: string, input: unknown, timeout = 20_000) {
+  const result = spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", script], {
+    input: JSON.stringify(input),
+    encoding: "utf8",
+    timeout,
+  });
+  expect({ code: result.status, errors: result.stderr }).toEqual({ code: 0, errors: "" });
+  return result.stdout;
+}
+
+function browserFixture(prefix: string) {
+  const root = tempDirs.make(prefix);
+  const browser = path.join(root, "browser's.exe");
+  fs.writeFileSync(browser, "synthetic executable identity; never executed");
+  return { root, browser, setup };
+}
+
 describe.skipIf(!hasPowerShell)("generated Windows PowerShell syntax", () => {
   it("parses setup, nested app launchers, and enrollment using the installed PowerShell parser", async () => {
     const runtime = launcher({ status: 0, stdout: JSON.stringify(identity) });
     await runtime.launch(options);
-    const scripts = [
-      createCrabboxWindowsDesktopSetup("cbx_fixture", "c3ludGhldGlj"),
-      runtime.source(),
-    ];
     const parser = String.raw`
 $ErrorActionPreference = 'Stop'
 function Check-Script([string]$text) {
@@ -158,12 +164,7 @@ function Check-Script([string]$text) {
 }
 foreach ($script in ([Console]::In.ReadToEnd() | ConvertFrom-Json)) { Check-Script $script }
 `;
-    const result = spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", parser], {
-      input: JSON.stringify(scripts),
-      encoding: "utf8",
-      timeout: 20_000,
-    });
-    expect({ code: result.status, errors: result.stderr }).toEqual({ code: 0, errors: "" });
+    runPowerShell(parser, [setup, runtime.source()]);
   });
 });
 
@@ -178,9 +179,7 @@ describe.skipIf(!hasPowerShell)("Windows browser launcher ownership", () => {
     { scenario: "public-listener", passed: false, launches: 0 },
     { scenario: "changed-after-response", passed: false, launches: 1 },
   ])("$scenario", ({ scenario, passed, launches }) => {
-    const root = tempDirs.make("windows-browser-owner-");
-    const browser = path.join(root, "browser's.exe");
-    fs.writeFileSync(browser, "synthetic executable identity; never executed");
+    const fixture = browserFixture("windows-browser-owner-");
     const harness = String.raw`
 $ErrorActionPreference = 'Stop'
 $fixture = [Console]::In.ReadToEnd() | ConvertFrom-Json
@@ -234,18 +233,10 @@ function Invoke-RestMethod { $global:responded=$true; [pscustomobject]@{Browser=
 try { & $launcher; $passed=$true; $message=$null } catch { $passed=$false; $message=$_.Exception.Message }
 @{passed=$passed;launches=$global:launches;message=$message} | ConvertTo-Json -Compress
 `;
-    const result = spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", harness], {
-      input: JSON.stringify({
-        scenario,
-        root,
-        browser,
-        setup: createCrabboxWindowsDesktopSetup("cbx_fixture", "c3ludGhldGlj"),
-      }),
-      encoding: "utf8",
-      timeout: 20_000,
+    expect(JSON.parse(runPowerShell(harness, { ...fixture, scenario }))).toMatchObject({
+      passed,
+      launches,
     });
-    expect({ code: result.status, errors: result.stderr }).toEqual({ code: 0, errors: "" });
-    expect(JSON.parse(result.stdout)).toMatchObject({ passed, launches });
   });
 });
 
@@ -276,9 +267,7 @@ describe.skipIf(!hasPowerShell)("Windows desktop VNC handover", () => {
       handover("cancel-during-discovery", "launch was cancelled", 1),
       handover("cancel-reuse", "launch was cancelled"),
     ];
-    const root = tempDirs.make("windows-vnc-owner-");
-    const browser = path.join(root, "browser.exe");
-    fs.writeFileSync(browser, "synthetic executable identity; never executed");
+    const fixture = browserFixture("windows-vnc-owner-");
     // Execute the generated administrative request and its interactive script,
     // substituting only Windows APIs and the disposable filesystem root.
     const harness = String.raw`
@@ -408,20 +397,11 @@ try { $output=& $setup; $passed=$true; $message=$null } catch { $passed=$false; 
 @{scenario=$fixture.scenario;passed=$passed;launches=$global:launches;stops=$global:stops;kills=$global:kills;configures=$global:configures;writes=$global:writes;settings=$global:registry;message=$message} | ConvertTo-Json -Compress
 }
 `;
-    const result = spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", harness], {
-      input: JSON.stringify(
-        cases.map(({ scenario }) => ({
-          scenario,
-          root,
-          browser,
-          setup: createCrabboxWindowsDesktopSetup("cbx_fixture", "c3ludGhldGlj"),
-        })),
-      ),
-      encoding: "utf8",
-      timeout: 60_000,
-    });
-    expect({ code: result.status, errors: result.stderr }).toEqual({ code: 0, errors: "" });
-    const results = result.stdout
+    const results = runPowerShell(
+      harness,
+      cases.map(({ scenario }) => ({ ...fixture, scenario })),
+      60_000,
+    )
       .trim()
       .split("\n")
       .map((line: string) => JSON.parse(line));

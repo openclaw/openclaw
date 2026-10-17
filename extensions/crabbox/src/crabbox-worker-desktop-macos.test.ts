@@ -31,19 +31,20 @@ function desktopFixture(readiness: Readiness) {
   const workingDirectory = path.join(root, "runtime directory");
   const app = path.join(root, "OpenClawCloudWorker.app");
   const browser = path.join(root, "Google Chrome.app/Contents/MacOS/Google Chrome");
+  const executable = (target: string, body: string) => {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, body, { mode: 0o700 });
+  };
   for (const directory of [bin, home, provider, workingDirectory, path.dirname(browser)]) {
     fs.mkdirSync(directory, { recursive: true });
   }
   fs.writeFileSync(path.join(provider, "vnc.password"), "synthetic-vnc-password\n");
   for (const suffix of ["Contents/MacOS/OpenClaw", "Contents/Resources/cua-driver"]) {
-    const executable = path.join(app, suffix);
-    fs.mkdirSync(path.dirname(executable), { recursive: true });
-    fs.writeFileSync(executable, "#!/bin/sh\nexit 99\n", { mode: 0o700 });
+    executable(path.join(app, suffix), "#!/bin/sh\nexit 99\n");
   }
-  fs.writeFileSync(
+  executable(
     browser,
     '#!/bin/bash\nprintf "launch\\n" >> "$FIXTURE_ROOT/launches"\nprintf "%s\\n" "$FIXTURE_EFFECTIVE_UID" "$FIXTURE_GUI_CONTEXT" "$HOME" "$TMPDIR" "$PATH" "$PWD" "${INHERITED_CANARY-unset}" > "$FIXTURE_ROOT/browser-context"\ntouch "$FIXTURE_ROOT/cdp-ready"\nexec /bin/sleep 30\n',
-    { mode: 0o700 },
   );
   const commands: Record<string, string> = {
     // A tail larger than a pipe buffer exposes signature readers that close before printf finishes.
@@ -52,17 +53,13 @@ case "$FIXTURE_READINESS" in
   ad-hoc) echo Signature=adhoc ;;
   invalid-team) printf 'Authority=Developer ID Application: Fixture\\nTeamIdentifier=invalid\\n' ;;
   authority-first-long|team-first-long)
-    if [ "$FIXTURE_READINESS" = authority-first-long ]; then
-      printf 'Authority=Developer ID Application: Fixture\\n'
-    else
-      printf 'TeamIdentifier=ABCDEFGHIJ\\n'
-    fi
+    authority='Authority=Developer ID Application: Fixture'
+    team='TeamIdentifier=ABCDEFGHIJ'
+    if [ "$FIXTURE_READINESS" = authority-first-long ]; then first="$authority"; last="$team";
+    else first="$team"; last="$authority"; fi
+    printf '%s\\n' "$first"
     for ((line=0; line<4096; line++)); do printf 'Certificate=%0100d\\n' "$line"; done
-    if [ "$FIXTURE_READINESS" = authority-first-long ]; then
-      printf 'TeamIdentifier=ABCDEFGHIJ\\n'
-    else
-      printf 'Authority=Developer ID Application: Fixture\\n'
-    fi ;;
+    printf '%s\\n' "$last" ;;
   *) printf 'Authority=Developer ID Application: Fixture\\nTeamIdentifier=ABCDEFGHIJ\\n' ;;
 esac`,
     PlistBuddy: `case "$2" in
@@ -106,9 +103,7 @@ exec /usr/bin/install "\${args[@]}"`,
 printf '%s --user-data-dir=%s --remote-debugging-port=9222 about:blank\\n' "$FIXTURE_BROWSER" "$FIXTURE_PROFILE"`,
   };
   for (const [name, body] of Object.entries(commands)) {
-    fs.writeFileSync(path.join(bin, name), `#!/bin/bash\nset -euo pipefail\n${body}\n`, {
-      mode: 0o700,
-    });
+    executable(path.join(bin, name), `#!/bin/bash\nset -euo pipefail\n${body}\n`);
   }
   const remapCommands = (source: string) =>
     source.replaceAll(
@@ -146,20 +141,29 @@ printf '%s --user-data-dir=%s --remote-debugging-port=9222 about:blank\\n' "$FIX
       timeout: 5_000,
     });
   const result = run("/bin/bash", [], script);
+  const cleanup = () => {
+    const pidFile = path.join(profile, "browser.pid");
+    if (!fs.existsSync(pidFile)) {
+      return;
+    }
+    const pid = Number(fs.readFileSync(pidFile, "utf8"));
+    if (!Number.isSafeInteger(pid) || pid <= 1) {
+      return;
+    }
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+        throw error;
+      }
+    }
+  };
   return {
+    cleanup,
     result,
     desktop,
     read: (name: string) => fs.readFileSync(path.join(root, name), "utf8"),
-    expectedContext: [
-      "501",
-      "adopted",
-      home,
-      path.join(root, "tmp"),
-      env.PATH,
-      workingDirectory,
-      "unset",
-      "",
-    ].join("\n"),
+    expectedContext: `501\nadopted\n${home}\n${root}/tmp\n${env.PATH}\n${workingDirectory}\nunset\n`,
     repeat: () => run(path.join(desktop, "browser"), []),
     terminal: () => run(path.join(desktop, "terminal"), []),
     host: () =>
@@ -172,33 +176,18 @@ printf '%s --user-data-dir=%s --remote-debugging-port=9222 about:blank\\n' "$FIX
         "--display-name",
         "Worker with spaces",
       ]),
-    cleanup: () => {
-      const pidFile = path.join(profile, "browser.pid");
-      if (fs.existsSync(pidFile)) {
-        const pid = Number(fs.readFileSync(pidFile, "utf8"));
-        if (Number.isSafeInteger(pid) && pid > 1) {
-          try {
-            process.kill(pid, "SIGTERM");
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
-              throw error;
-            }
-          }
-        }
-      }
-    },
   };
 }
 
 describe("Crabbox macOS desktop descriptor", () => {
   it("rejects a malformed inspected account", () => {
     const username = "ec2-user\nother";
-    expect(() => createCrabboxMacosDesktopEndpoint(leaseId, username)).toThrow(
-      "inspected SSH account",
-    );
-    expect(() => createCrabboxMacosDesktopSetup(leaseId, "cG5n", username)).toThrow(
-      "inspected SSH account",
-    );
+    for (const create of [
+      createCrabboxMacosDesktopEndpoint,
+      (id: string, user: string) => createCrabboxMacosDesktopSetup(id, "cG5n", user),
+    ]) {
+      expect(() => create(leaseId, username)).toThrow("inspected SSH account");
+    }
   });
 
   it("binds ARD credentials and launchers to the inspected account and exact lease", () => {
@@ -254,12 +243,11 @@ describe.skipIf(process.platform === "win32")("Crabbox macOS desktop setup", () 
         expect(repeated.status, repeated.stderr).toBe(0);
         expect(fixture.read("launches")).toBe("launch\n");
         expect(fixture.read("browser-context")).toBe(fixture.expectedContext);
-        const terminal = fixture.terminal();
-        expect(terminal.status, terminal.stderr).toBe(0);
-        expect(fixture.read("terminal-context")).toBe(fixture.expectedContext);
-        const host = fixture.host();
-        expect(host.status, host.stderr).toBe(0);
-        expect(fixture.read("terminal-context")).toBe(fixture.expectedContext);
+        for (const launch of [fixture.terminal, fixture.host]) {
+          const result = launch();
+          expect(result.status, result.stderr).toBe(0);
+          expect(fixture.read("terminal-context")).toBe(fixture.expectedContext);
+        }
         expect(fixture.read("gui-arguments")).toBe(
           "--cloud-worker-host\n--display-name\nWorker with spaces\n",
         );
