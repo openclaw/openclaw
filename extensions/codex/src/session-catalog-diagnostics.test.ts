@@ -65,6 +65,8 @@ const clientInstanceId = "11111111-1111-4111-8111-111111111111";
 let clock = 0;
 let records: LogRecord[] = [];
 let unsubscribe = () => {};
+const releases: Array<() => void> = [];
+const pendingWork: Promise<unknown>[] = [];
 
 beforeEach(() => {
   diagnosticRuntime.resetDiagnosticEventsForTest();
@@ -83,12 +85,33 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  await diagnosticRuntime.waitForDiagnosticEventsDrained();
-  unsubscribe();
-  resetLogger();
-  vi.restoreAllMocks();
-  diagnosticRuntime.resetDiagnosticEventsForTest();
+  // Stack-ordered hooks drain request gates before the shared catalog-owner teardown.
+  releases.splice(0).forEach((release) => release());
+  await Promise.allSettled(pendingWork.splice(0));
+  try {
+    await diagnosticRuntime.waitForDiagnosticEventsDrained();
+    expect(JSON.stringify(records)).not.toContain(privateText);
+    for (const record of records) {
+      expectBounded(record);
+      expect(
+        Object.values(fields(record)).every((value) =>
+          ["string", "number", "boolean"].includes(typeof value),
+        ),
+      ).toBe(true);
+    }
+  } finally {
+    unsubscribe();
+    resetLogger();
+    vi.restoreAllMocks();
+    diagnosticRuntime.resetDiagnosticEventsForTest();
+  }
 });
+
+function responseGate() {
+  const gate = createDeferred<unknown>();
+  releases.push(() => gate.resolve({ data: [] }));
+  return gate;
+}
 
 async function emitted(message: string) {
   await diagnosticRuntime.waitForDiagnosticEventsDrained();
@@ -243,7 +266,7 @@ it("keeps background hydration context separate from list requests", async () =>
 it("shares one cold hydration across four callers without logging session data", async () => {
   const f = await fixture();
   const thread = await f.thread("codex");
-  const response = createDeferred<unknown>();
+  const response = responseGate();
   const started = createDeferred<void>();
   mockObservedRequest(async (observation) => {
     started.resolve();
@@ -265,69 +288,56 @@ it("shares one cold hydration across four callers without logging session data",
       return result;
     }),
   );
-  try {
-    await started.promise;
-    await nextTurn();
-    expect(nativeRequest).toHaveBeenCalledOnce();
-    expect(settledLists).toBe(0);
-    clock += 1_500;
-    response.resolve({ data: [thread] });
-    await Promise.all(pending);
-    const results = await Promise.all(coldLists);
-    expect(results).toEqual(Array.from({ length: 4 }, () => results[0]));
-    expect(results[0]?.[0]?.sessions).toEqual([
-      expect.objectContaining({ threadId: thread.id, name: privateText, cwd: f.home }),
-    ]);
-    const pages = await emitted(PAGE);
-    const lists = await emitted(LIST);
-    expect(pages).toHaveLength(1);
-    expect(lists).toHaveLength(4);
-    for (const list of lists) {
-      expect(fields(list)).toMatchObject({
-        outcome: "resolved",
-        elapsedMs: 1_500,
-        controlPageCalls: 1,
-        adoptionCalls: 1,
-      });
-    }
-    for (const trace of traces) {
-      expect(lists).toContainEqual(
-        expect.objectContaining({ trace: expect.objectContaining(trace) }),
-      );
-    }
-    expect(nativeRequest).toHaveBeenCalledOnce();
-    const producer = fields(pages[0]);
-    expect(producer).not.toHaveProperty("controlFailurePhase");
-    expect(producer).not.toHaveProperty("controlFailureCategory");
-    expect(producer).toMatchObject({
+  pendingWork.push(...pending, ...coldLists);
+  await started.promise;
+  await nextTurn();
+  expect(nativeRequest).toHaveBeenCalledOnce();
+  expect(settledLists).toBe(0);
+  clock += 1_500;
+  response.resolve({ data: [thread] });
+  await Promise.all(pending);
+  const results = await Promise.all(coldLists);
+  expect(results).toEqual(Array.from({ length: 4 }, () => results[0]));
+  expect(results[0]?.[0]?.sessions).toEqual([
+    expect.objectContaining({ threadId: thread.id, name: privateText, cwd: f.home }),
+  ]);
+  const pages = await emitted(PAGE);
+  const lists = await emitted(LIST);
+  expect(pages).toHaveLength(1);
+  expect(lists).toHaveLength(4);
+  for (const list of lists) {
+    expect(fields(list)).toMatchObject({
       outcome: "resolved",
-      origin: "cold",
-      controlRequestCalls: 1,
-      inclusiveControlRequestWaitMs: 1_500,
-      inclusiveControlRequestWaitMaxMs: 1_500,
-      provenanceChecks: 1,
-      provenanceReadCalls: 1,
-      provenanceCacheHits: 0,
-      controlWaitersV1: resolvedWaiters,
-      controlWaitersOmitted: 0,
+      elapsedMs: 1_500,
+      controlPageCalls: 1,
+      adoptionCalls: 1,
     });
-    expect(producer).not.toHaveProperty("listOperationId");
-    expect(pages[0]?.trace).toMatchObject(traces[0]!);
-    expect(new Set(records.map((record) => fields(record).diagnosticEpoch)).size).toBe(1);
-    expect(JSON.stringify(records)).not.toContain(privateText);
-    expect(JSON.stringify(records)).not.toContain(f.home);
-    for (const record of records) {
-      expectBounded(record);
-      expect(
-        Object.values(fields(record)).every((value) =>
-          ["string", "number", "boolean"].includes(typeof value),
-        ),
-      ).toBe(true);
-    }
-  } finally {
-    response.resolve({ data: [] });
-    await Promise.allSettled([...pending, ...coldLists]);
   }
+  for (const trace of traces) {
+    expect(lists).toContainEqual(
+      expect.objectContaining({ trace: expect.objectContaining(trace) }),
+    );
+  }
+  expect(nativeRequest).toHaveBeenCalledOnce();
+  const producer = fields(pages[0]);
+  expect(producer).not.toHaveProperty("controlFailurePhase");
+  expect(producer).not.toHaveProperty("controlFailureCategory");
+  expect(producer).toMatchObject({
+    outcome: "resolved",
+    origin: "cold",
+    controlRequestCalls: 1,
+    inclusiveControlRequestWaitMs: 1_500,
+    inclusiveControlRequestWaitMaxMs: 1_500,
+    provenanceChecks: 1,
+    provenanceReadCalls: 1,
+    provenanceCacheHits: 0,
+    controlWaitersV1: resolvedWaiters,
+    controlWaitersOmitted: 0,
+  });
+  expect(producer).not.toHaveProperty("listOperationId");
+  expect(pages[0]?.trace).toMatchObject(traces[0]!);
+  expect(new Set(records.map((record) => fields(record).diagnosticEpoch)).size).toBe(1);
+  expect(JSON.stringify(records)).not.toContain(f.home);
 });
 
 it("records complete native hydration before resident title filtering", async () => {
@@ -378,10 +388,8 @@ it("records complete native hydration before resident title filtering", async ()
     const tuples = JSON.parse(String(fields(page).controlWaitersV1));
     expect(tuples).toHaveLength(4);
     expect(tuples.map((tuple: unknown[]) => tuple[1])).toEqual([1, 2, 5, 6]);
-    expectBounded(page);
   }
   expect(JSON.stringify(records)).not.toContain("private-cursor-");
-  expect(JSON.stringify(records)).not.toContain(privateText);
   await f.list("another query");
   expect(nativeRequest).toHaveBeenCalledTimes(20);
 });
@@ -441,8 +449,6 @@ it("preserves a bounded page warning with maximal waiter values and omitted inva
     controlWaitersOmitted: 1,
     omittedObservations: 0,
   });
-  expectBounded(pages[0]!);
-  expect(JSON.stringify(records)).not.toContain(privateText);
   expect(nativeRequest).toHaveBeenCalledOnce();
 });
 
@@ -506,11 +512,10 @@ it("separates node inventory and paired-node waits without issuing local request
   expect(f.runtime.nodes.invoke).toHaveBeenCalledOnce();
   expect(nativeRequest).not.toHaveBeenCalled();
   expect(await emitted(PAGE)).toEqual([]);
-  expect(JSON.stringify(records)).not.toContain(privateText);
 });
 
 it("bounds summaries and active observations without limiting background hydration", async () => {
-  const response = createDeferred<unknown>();
+  const response = responseGate();
   const allStarted = createDeferred<void>();
   let started = 0;
   nativeRequest.mockImplementation(() => {
@@ -519,36 +524,31 @@ it("bounds summaries and active observations without limiting background hydrati
     }
     return response.promise;
   });
-  const calls: Promise<void>[] = [];
-  try {
-    for (let index = 0; index < 80; index++) {
-      const f = await fixture(`cold-source-${index}`);
-      calls.push(f.control.initialize());
-    }
-    await allStarted.promise;
-    clock += 1_500;
-    response.resolve({ data: [] });
-    await Promise.all(calls);
-    expect(nativeRequest).toHaveBeenCalledTimes(80);
-    await diagnosticRuntime.waitForDiagnosticEventsDrained();
-    expect(records).toHaveLength(60);
-    expect(records.some((record) => Number(fields(record).omittedObservations) >= 16)).toBe(true);
-    records = [];
-    clock += 61_000;
-    nativeRequest.mockImplementation(async () => {
-      clock += 1_100;
-      return { data: [] };
-    });
-    const next = await fixture("after-capacity");
-    await next.control.initialize();
-    expect((await next.list())[0]?.connected).toBe(true);
-    expect(await emitted(PAGE)).toHaveLength(1);
-    expect(fields((await emitted(PAGE))[0])).toMatchObject({ omittedObservations: 4 });
-    expect(await emitted(LIST)).toEqual([]);
-  } finally {
-    response.resolve({ data: [] });
-    await Promise.allSettled(calls);
+  const calls = pendingWork;
+  for (let index = 0; index < 80; index++) {
+    const f = await fixture(`cold-source-${index}`);
+    calls.push(f.control.initialize());
   }
+  await allStarted.promise;
+  clock += 1_500;
+  response.resolve({ data: [] });
+  await Promise.all(calls);
+  expect(nativeRequest).toHaveBeenCalledTimes(80);
+  await diagnosticRuntime.waitForDiagnosticEventsDrained();
+  expect(records).toHaveLength(60);
+  expect(records.some((record) => Number(fields(record).omittedObservations) >= 16)).toBe(true);
+  records = [];
+  clock += 61_000;
+  nativeRequest.mockImplementation(async () => {
+    clock += 1_100;
+    return { data: [] };
+  });
+  const next = await fixture("after-capacity");
+  await next.control.initialize();
+  expect((await next.list())[0]?.connected).toBe(true);
+  expect(await emitted(PAGE)).toHaveLength(1);
+  expect(fields((await emitted(PAGE))[0])).toMatchObject({ omittedObservations: 4 });
+  expect(await emitted(LIST)).toEqual([]);
 });
 
 it("records each hydration page's control phases and rejects late callbacks after settlement", async () => {
@@ -643,10 +643,6 @@ it("records each hydration page's control phases and rejects late callbacks afte
     ]),
     controlWaitersOmitted: 0,
   });
-  for (const page of pages) {
-    expectBounded(page);
-  }
-  expect(JSON.stringify(records)).not.toContain(privateText);
   const completed = JSON.stringify(pages);
   for (const observation of completedObservations) {
     observation.attemptWaiterFinished?.(waiterSummary({ rpcId: 100 }));

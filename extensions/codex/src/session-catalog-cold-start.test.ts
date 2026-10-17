@@ -64,11 +64,8 @@ function expectPage(
   cursors: { nextCursor?: unknown; backwardsCursor?: unknown } = {},
 ) {
   expect(page.sessions.map((session) => session.threadId)).toEqual(ids);
-  for (const key of ["nextCursor", "backwardsCursor"] as const) {
-    if (key in cursors) {
-      expect(page[key]).toEqual(cursors[key]);
-    }
-  }
+  const actual = { nextCursor: page.nextCursor, backwardsCursor: page.backwardsCursor };
+  expect(actual).toMatchObject(cursors);
 }
 
 it.each([

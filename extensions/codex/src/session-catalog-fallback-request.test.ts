@@ -1,5 +1,6 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import type { CodexThreadListParams } from "./app-server/protocol.js";
 import {
   nativeCatalogFixture,
   remoteCatalogFactory,
@@ -14,6 +15,7 @@ import {
 } from "./session-catalog.test-helpers.js";
 
 const nativeRequest = commandRpcMocks.codexControlRequest;
+type NativeReadParams = CodexThreadListParams & { threadId?: string };
 const expectCalls = (count: number) => expect(nativeRequest).toHaveBeenCalledTimes(count);
 const sequence = (count: number) => Array.from({ length: count }, (_, index) => index + 1);
 const thread = (id: string, name = "Wanted") =>
@@ -57,8 +59,7 @@ async function failingFallback() {
   const failure = new Error("second fallback page failed");
   let recovered = false;
   nativeRequest.mockImplementation(async (_plugin, method, params) => {
-    expect(method).toBe("thread/list");
-    expect(params.useStateDbOnly).toBe(true);
+    expect([method, params.useStateDbOnly]).toEqual(["thread/list", true]);
     if (params.cursor === "page-two" && !recovered) {
       throw failure;
     }
@@ -71,10 +72,10 @@ async function failingFallback() {
   const search = () => listVisiblePage(params);
   return {
     ...fixture,
-    failure,
     params,
     search,
-    async expectFailure(calls: number) {
+    async expectFailure(calls: number, advance = 0) {
+      fixture.advance(advance);
       await expect(search()).rejects.toBe(failure);
       expectCalls(calls);
     },
@@ -98,8 +99,7 @@ it("shares 20 native reads across title search and stepped exclusion filling", a
   const positions: number[] = [];
   let visibleAt = 0;
   nativeRequest.mockImplementation(async (_plugin, method, params) => {
-    expect(method).toBe("thread/list");
-    expect(params.useStateDbOnly).toBe(true);
+    expect([method, params.useStateDbOnly]).toEqual(["thread/list", true]);
     const position = params.cursor ? Number(params.cursor.slice("native-after:".length)) + 1 : 1;
     positions.push(position);
     const wanted = position % 20 === 0 || position === visibleAt;
@@ -131,11 +131,8 @@ it("backs off the complete visible fallback request when a later native page fai
   await fixture.expectFailure(2);
   await fixture.expectFailure(4);
   await fixture.expectFailure(4);
-
-  fixture.advance(5_000);
-  await fixture.expectFailure(6);
-  fixture.advance(9_999);
-  await fixture.expectFailure(6);
+  await fixture.expectFailure(6, 5_000);
+  await fixture.expectFailure(6, 9_999);
 
   fixture.advance(1);
   fixture.recover();
@@ -143,78 +140,64 @@ it("backs off the complete visible fallback request when a later native page fai
   expectCalls(8);
 });
 
-it.each(["read count", "deadline"] as const)(
-  "shares the fallback %s with nested eligibility, metadata, and descendant reads",
-  async (bound) => {
-    const fixture = await saturatedHome();
+it.each(["read count", "deadline"] as const)("bounds nested reads by %s", async (bound) => {
+  const fixture = await saturatedHome();
+  if (bound === "deadline") {
+    vi.spyOn(performance, "now").mockImplementation(fixture.now);
+  }
+  let reads = 0;
+  let completedCallbacks = 0;
+  let latestThreadId = "";
+  const dispatch = async (method: string, params: NativeReadParams) => {
+    reads++;
     if (bound === "deadline") {
-      vi.spyOn(performance, "now").mockImplementation(fixture.now);
+      fixture.advance(20_000);
     }
-    let reads = 0;
-    let completedCallbacks = 0;
-    let latestThreadId = "";
-    const dispatch = async (
-      method: string,
-      params: {
-        cursor?: string | null;
-        threadId?: string;
-        ancestorThreadId?: string | null;
-        useStateDbOnly?: boolean;
+    if (method === "thread/read") {
+      if (!params.threadId) {
+        throw new Error("Expected a thread identity for the metadata read");
+      }
+      latestThreadId = params.threadId;
+      return { thread: thread(params.threadId) };
+    }
+    expect(method).toBe("thread/list");
+    if (params.ancestorThreadId || !params.useStateDbOnly) {
+      return { data: params.ancestorThreadId ? [] : [thread(latestThreadId)] };
+    }
+    const position = Number(params.cursor ?? 0) + 1;
+    return { data: [thread(`excluded-${position}`)], nextCursor: String(position) };
+  };
+  nativeRequest.mockImplementation((_plugin, method, params) => dispatch(method, params));
+  pinnedConnectionMocks.request.mockImplementation(({ method, requestParams }) =>
+    dispatch(method, requestParams),
+  );
+
+  const [result] = await Promise.allSettled([
+    listVisiblePage({
+      ...searchParams(fixture.control, new Set(sequence(20).map((index) => `excluded-${index}`))),
+      onExcludedThread: async ({ threadId }) => {
+        await fixture.control.requireEligibleThread(threadId);
+        await fixture.control.readThread(threadId);
+        await fixture.control.listDescendantPage({ ancestorThreadId: threadId, limit: 64 });
+        completedCallbacks++;
       },
-    ) => {
-      reads++;
-      if (bound === "deadline") {
-        fixture.advance(20_000);
-      }
-      if (method === "thread/read") {
-        if (!params.threadId) {
-          throw new Error("Expected a thread identity for the metadata read");
-        }
-        latestThreadId = params.threadId;
-        return { thread: thread(params.threadId) };
-      }
-      expect(method).toBe("thread/list");
-      if (params.ancestorThreadId) {
-        return { data: [] };
-      }
-      if (!params.useStateDbOnly) {
-        return { data: [thread(latestThreadId)] };
-      }
-      const position = Number(params.cursor ?? 0) + 1;
-      return { data: [thread(`excluded-${position}`)], nextCursor: String(position) };
-    };
-    nativeRequest.mockImplementation((_plugin, method, params) => dispatch(method, params));
-    pinnedConnectionMocks.request.mockImplementation(({ method, requestParams }) =>
-      dispatch(method, requestParams),
-    );
+    }),
+  ]);
 
-    const [result] = await Promise.allSettled([
-      listVisiblePage({
-        ...searchParams(fixture.control, new Set(sequence(20).map((index) => `excluded-${index}`))),
-        onExcludedThread: async ({ threadId }) => {
-          await fixture.control.requireEligibleThread(threadId);
-          await fixture.control.readThread(threadId);
-          await fixture.control.listDescendantPage({ ancestorThreadId: threadId, limit: 64 });
-          completedCallbacks++;
-        },
-      }),
-    ]);
-
-    expect(reads).toBeGreaterThan(0);
-    expect(reads).toBeLessThanOrEqual(bound === "deadline" ? 3 : 20);
-    if (bound === "deadline") {
-      expect(result).toMatchObject({ status: "rejected", reason: expect.any(Error) });
-      expect(completedCallbacks).toBe(0);
+  expect(reads).toBeGreaterThan(0);
+  expect(reads).toBeLessThanOrEqual(bound === "deadline" ? 3 : 20);
+  if (bound === "deadline") {
+    expect(result).toMatchObject({ status: "rejected", reason: expect.any(Error) });
+    expect(completedCallbacks).toBe(0);
+  } else {
+    expect(completedCallbacks).toBeGreaterThan(0);
+    if (result.status === "fulfilled") {
+      expect(result.value).toMatchObject({ sessions: [], nextCursor: expect.any(String) });
     } else {
-      expect(completedCallbacks).toBeGreaterThan(0);
-      if (result.status === "fulfilled") {
-        expect(result.value).toMatchObject({ sessions: [], nextCursor: expect.any(String) });
-      } else {
-        expect(result.reason).toBeInstanceOf(Error);
-      }
+      expect(result.reason).toBeInstanceOf(Error);
     }
-  },
-);
+  }
+});
 
 it("releases an abandoned exclusion-fill probe for the next catalog request", async () => {
   const fixture = await failingFallback();

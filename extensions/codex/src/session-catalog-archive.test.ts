@@ -38,16 +38,28 @@ async function warmCatalog(control: ReturnType<typeof createCodexSessionCatalogC
   commandRpcMocks.codexControlRequest.mockClear();
 }
 
-async function bindOwner(threadId: string, bindingId: string) {
-  const bindingStore = createCodexTestBindingStore();
+async function bindOwner(
+  threadId: string,
+  bindingId: string,
+  bindingStore = createCodexTestBindingStore(),
+) {
   await bindingStore.mutate(
     { kind: "conversation", bindingId },
-    {
-      kind: "set",
-      binding: { threadId, cwd: "/workspace/project" },
-    },
+    { kind: "set", binding: { threadId, cwd: "/workspace/project" } },
   );
   return bindingStore;
+}
+
+function pinnedRequests(handlers: Record<string, (params?: Record<string, unknown>) => unknown>) {
+  pinnedConnectionMocks.request.mockImplementation(
+    async (request: { method: string; requestParams?: Record<string, unknown> }) => {
+      const handler = handlers[request.method];
+      if (!handler) {
+        throw new Error(`unexpected method: ${request.method}`);
+      }
+      return handler(request.requestParams);
+    },
+  );
 }
 
 it("rechecks status after eligibility and rejects active local sessions before either mutation", async () => {
@@ -61,13 +73,7 @@ it("rechecks status after eligibility and rejects active local sessions before e
   });
 
   await expect(
-    continueLocalCodexSession({
-      api,
-      bindingStore,
-      config,
-      control,
-      threadId: "thread-1",
-    }),
+    continueLocalCodexSession({ api, bindingStore, config, control, threadId: "thread-1" }),
   ).rejects.toThrow("active in this App Server");
   await expect(archiveTestSession({ control, bindingStore, runtime })).rejects.toThrow(
     "active in this App Server",
@@ -87,32 +93,20 @@ it("pins one App Server connection while archive configuration changes live", as
   const initialRuntimeConfig = compatibilityOwnerConfig();
   const expectedAgentDir = resolveDefaultAgentDir(initialRuntimeConfig);
   let runtimeConfig = initialRuntimeConfig;
-  pinnedConnectionMocks.request.mockImplementation(
-    async (request: { method: string; requestParams?: Record<string, unknown> }) => {
-      if (request.method === "thread/read") {
-        pluginConfig = {
-          appServer: { command: "codex-archive-b", homeScope: "agent" },
-          supervision: { enabled: false },
-        };
-        runtimeConfig = {
-          agents: { defaults: { workspace: "/workspace/b" } },
-        } as OpenClawConfig;
-        return { thread: idleThread({ source: "cli" }) };
-      }
-      if (request.method === "thread/list") {
-        return {
-          data:
-            request.requestParams?.ancestorThreadId === undefined
-              ? [idleThread({ source: "cli" })]
-              : [],
-        };
-      }
-      if (request.method === "thread/archive") {
-        return {};
-      }
-      throw new Error(`unexpected method: ${request.method}`);
+  pinnedRequests({
+    "thread/read": () => {
+      pluginConfig = {
+        appServer: { command: "codex-archive-b", homeScope: "agent" },
+        supervision: { enabled: false },
+      };
+      runtimeConfig = { agents: { defaults: { workspace: "/workspace/b" } } } as OpenClawConfig;
+      return { thread: idleThread({ source: "cli" }) };
     },
-  );
+    "thread/list": (params) => ({
+      data: params?.ancestorThreadId === undefined ? [idleThread({ source: "cli" })] : [],
+    }),
+    "thread/archive": () => ({}),
+  });
   const control = createCodexSessionCatalogControlFactory({
     getPluginConfig: () => pluginConfig,
     getRuntimeConfig: () => runtimeConfig,
@@ -121,9 +115,7 @@ it("pins one App Server connection while archive configuration changes live", as
   await warmCatalog(control);
   await expect(
     archiveTestSession({ agentId: "alpha", config: initialRuntimeConfig, control }),
-  ).resolves.toEqual({
-    archived: true,
-  });
+  ).resolves.toEqual({ archived: true });
 
   expect(pinnedConnectionMocks.getClient).toHaveBeenCalledOnce();
   const acquisition = pinnedConnectionMocks.getClient.mock.calls[0]?.[0];
@@ -149,14 +141,9 @@ it("pins one App Server connection while archive configuration changes live", as
 });
 
 it("refuses archive when current membership contains only another thread", async () => {
-  pinnedConnectionMocks.request.mockImplementation(async (request: { method: string }) => {
-    if (request.method === "thread/read") {
-      return { thread: idleThread({ source: "cli" }) };
-    }
-    if (request.method === "thread/list") {
-      return { data: [idleThread({ id: "other-thread", source: "cli" })] };
-    }
-    throw new Error(`unexpected method: ${request.method}`);
+  pinnedRequests({
+    "thread/read": () => ({ thread: idleThread({ source: "cli" }) }),
+    "thread/list": () => ({ data: [idleThread({ id: "other-thread", source: "cli" })] }),
   });
   const control = createCodexSessionCatalogControl({
     getPluginConfig: () => ({ supervision: { enabled: true } }),
@@ -259,12 +246,9 @@ it("fences ownership mutations through both descendant collections and their pag
 
   const archiving = archiveTestSession({ bindingStore, control });
   await validating.promise;
-  await expect(
-    bindingStore.mutate(lateIdentity, {
-      kind: "set",
-      binding: { threadId: "late-descendant", cwd: "/workspace/project" },
-    }),
-  ).rejects.toThrow("native archive is in progress");
+  await expect(bindOwner("late-descendant", lateIdentity.bindingId, bindingStore)).rejects.toThrow(
+    "native archive is in progress",
+  );
   validationReleased.resolve();
   await expect(archiving).resolves.toEqual({ archived: true });
   expect(bindingStore.read(lateIdentity)).toBeUndefined();
@@ -343,6 +327,8 @@ it("registers generic actions and keeps paired-node archive view-only", async ()
     threadId: "thread-remote",
   };
   const isolated = { ...localSource, allowProcessHomeFallback: false };
+  const archive = (source: typeof localSource) =>
+    provider?.archive?.({ ...source, confirmNoOtherRunner: true });
   expect(provider?.resolveCreateSession?.({ agentId: "main" })).toEqual({
     model: "openai/gpt-6-astra",
     agentRuntime: "codex",
@@ -350,7 +336,7 @@ it("registers generic actions and keeps paired-node archive view-only", async ()
   await withEnvAsync({ CODEX_HOME: undefined }, async () => {
     for (const operation of [
       () => provider?.continueSession?.({ ...isolated, clientScopes: ["operator.admin"] }),
-      () => provider?.archive?.({ ...isolated, confirmNoOtherRunner: true }),
+      () => archive(isolated),
       () => provider?.openTerminal?.(isolated),
       () =>
         provider?.startTerminalSession?.({
@@ -370,23 +356,10 @@ it("registers generic actions and keeps paired-node archive view-only", async ()
       confirmNoOtherRunner: false,
     } as never),
   ).rejects.toThrow("requires confirmation");
+  await expect(archive(localSource)).resolves.toEqual({ ok: true });
+  await expect(archive(remoteSource)).rejects.toThrow("paired-node Codex sessions are view-only");
   await expect(
-    provider?.archive?.({
-      ...localSource,
-      confirmNoOtherRunner: true,
-    }),
-  ).resolves.toEqual({ ok: true });
-  await expect(
-    provider?.archive?.({
-      ...remoteSource,
-      confirmNoOtherRunner: true,
-    }),
-  ).rejects.toThrow("paired-node Codex sessions are view-only");
-  await expect(
-    provider?.continueSession?.({
-      ...remoteSource,
-      clientScopes: ["operator.admin"],
-    }),
+    provider?.continueSession?.({ ...remoteSource, clientScopes: ["operator.admin"] }),
   ).rejects.toThrow("paired node does not permit Codex session continuation");
   expect(control.requireEligibleThread).toHaveBeenCalledOnce();
   expect(control.archiveThread).toHaveBeenCalledOnce();

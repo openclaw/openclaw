@@ -91,39 +91,28 @@ it("shrinks oversized wire pages and retains the working limit for later refresh
 
 it("defers an oversized single thread for 15 minutes without repeated background warnings", async () => {
   let now = 0;
-  let oversized = true;
-  const limits: number[] = [];
-  wirePages((_offset, limit) => {
-    limits.push(limit);
-    return {
-      data: [
-        idleThread({
-          source: "cli",
-          name: null,
-          preview: oversized ? "x".repeat(8 * 1024 * 1024) : "Recovered",
-        }),
-      ],
-    };
-  });
+  const native = idleThread({ source: "cli", name: null, preview: "x".repeat(8 * 1024 * 1024) });
+  const pages = wirePages(() => ({ data: [native] }));
+  const limits = () => pages.map((page) => page.limit);
   const warn = warnings();
   const factory = catalogFactory({ now: () => now });
   const control = factory.forRequest("main");
   await expect(control.listPage({})).rejects.toThrow("exceeds 8 MiB");
   await vi.waitFor(() => expect(factory.hasActiveWork()).toBe(false));
-  expect(limits).toEqual([16, 8, 4, 2, 1]);
+  expect(limits()).toEqual([16, 8, 4, 2, 1]);
   for (now = 5_000; now < 15 * 60_000; now += 5_000) {
     await expect(control.listPage({})).rejects.toThrow("exceeds 8 MiB");
     await nextTurn();
   }
-  expect(limits).toHaveLength(5);
+  expect(limits()).toHaveLength(5);
   expect(
     warn.mock.calls.filter(
       ([message]) => message === "Codex resident catalog background update failed",
     ),
   ).toHaveLength(1);
-  oversized = false;
+  native.preview = "Recovered";
   await control.initialize();
-  expect(limits).toEqual([16, 8, 4, 2, 1, 1]);
+  expect(limits()).toEqual([16, 8, 4, 2, 1, 1]);
   expect((await control.listPage({})).sessions[0]?.fallbackName).toBe("Recovered");
 });
 
@@ -172,51 +161,46 @@ it("settles a successful prefix recovery probe before the next activity check", 
   ).toBe(true);
 });
 
-it.each([true, false])(
-  "backs off complete home hydration independently of memory queries (runtime config %s)",
-  async (hasConfig) => {
-    let now = 0;
-    let recovered = false;
-    const failure = new Error("third native page failed");
-    const control = catalogFactory({
-      getRuntimeConfig: () => (hasConfig ? config : undefined),
-      now: () => now,
-    }).forRequest("main");
-    rpc.mockImplementation(async (_plugin, _method, params) => {
-      if (params.cursor === "page-three") {
-        if (!recovered) {
-          throw failure;
-        }
-        return { data: [idleThread({ id: "match", source: "cli", name: "Wanted" })] };
-      }
-      return {
-        data: [idleThread({ id: params.cursor ? "second" : "head", source: "cli", name: "Other" })],
-        nextCursor: params.cursor ? "page-three" : "page-two",
-      };
-    });
-    const search = () => control.listPage({ limit: 1, searchTerm: "Wanted" });
-    await expect(control.initialize()).rejects.toBe(failure);
-    expectCalls(3);
-    await expect(control.initialize()).rejects.toBe(failure);
-    expectCalls(6);
+it.each([true, false])("backs off hydration, not memory (config %s)", async (hasConfig) => {
+  let now = 0;
+  let recovered = false;
+  const failure = new Error("third native page failed");
+  const control = catalogFactory({
+    getRuntimeConfig: () => (hasConfig ? config : undefined),
+    now: () => now,
+  }).forRequest("main");
+  const native = ["head", "second", "match"].map((id) =>
+    idleThread({ id, source: "cli", name: id === "match" ? "Wanted" : "Other" }),
+  );
+  rpc.mockImplementation(async (_plugin, _method, params) => {
+    const offset = Number(params.cursor ?? 0);
+    if (offset === 2 && !recovered) {
+      throw failure;
+    }
+    return nativePage(native, offset, 1);
+  });
+  const search = () => control.listPage({ limit: 1, searchTerm: "Wanted" });
+  await expect(control.initialize()).rejects.toBe(failure);
+  expectCalls(3);
+  await expect(control.initialize()).rejects.toBe(failure);
+  expectCalls(6);
 
-    await expect(control.initialize()).rejects.toBe(failure);
-    const partial = await search();
-    expect(partial).toMatchObject({ sessions: [], nextCursor: expect.any(String) });
-    await expect(
-      control.listPage({ limit: 1, searchTerm: "Wanted", cursor: partial.nextCursor }),
-    ).rejects.toBe(failure);
-    expectCalls(6);
+  await expect(control.initialize()).rejects.toBe(failure);
+  const partial = await search();
+  expect(partial).toMatchObject({ sessions: [], nextCursor: expect.any(String) });
+  await expect(
+    control.listPage({ limit: 1, searchTerm: "Wanted", cursor: partial.nextCursor }),
+  ).rejects.toBe(failure);
+  expectCalls(6);
 
-    now += 5_000;
-    recovered = true;
-    await control.initialize();
-    expect((await search()).sessions[0]?.threadId).toBe("match");
-    expectCalls(9);
-    expect((await control.listPage({ limit: 10 })).sessions).toHaveLength(3);
-    expectCalls(9);
-  },
-);
+  now += 5_000;
+  recovered = true;
+  await control.initialize();
+  expect((await search()).sessions[0]?.threadId).toBe("match");
+  expectCalls(9);
+  expect((await control.listPage({ limit: 10 })).sessions).toHaveLength(3);
+  expectCalls(9);
+});
 
 it("shares cold initialization and keeps host backoff observable to catalog callers", async () => {
   let now = 0;
@@ -229,16 +213,13 @@ it("shares cold initialization and keeps host backoff observable to catalog call
   const failure = new Error("native host timed out");
   const { started, pending: failed } = holdRpc();
   const settled = Promise.allSettled(parallel(() => request.initialize()));
-  let listDelivered = false;
-  const pendingList = list().then((result) => {
-    listDelivered = true;
-    return result;
-  });
-  const observedList = Promise.allSettled([pendingList]);
+  const listDelivered = vi.fn();
+  const pendingList = list();
+  const observedList = Promise.allSettled([pendingList.then(listDelivered)]);
   try {
     await started.promise;
     await nextTurn();
-    expect(listDelivered).toBe(false);
+    expect(listDelivered).not.toHaveBeenCalled();
     expectCalls(1);
     now += 60_000;
     failed.reject(failure);
@@ -276,22 +257,19 @@ it("shares cold initialization and keeps host backoff observable to catalog call
   }
 });
 
-it.each([-32600, -32602])(
-  "does not treat invalid-request error %s as a host outage",
-  async (code) => {
-    const control = catalogFactory({ getRuntimeConfig: () => config }).forRequest("main");
-    const failure = new CodexAppServerRpcError({ code, message: "invalid cursor" }, "thread/list");
-    rpc.mockRejectedValue(failure);
-    await expect(control.initialize()).rejects.toBe(failure);
-    await expect(control.initialize()).rejects.toBe(failure);
-    rpc.mockResolvedValue({ data: [] });
-    await control.initialize();
-    await expect(control.listPage({ limit: 1 })).resolves.toEqual({ sessions: [] });
-    expectCalls(3);
-  },
-);
+it.each([-32600, -32602])("does not back off invalid-request error %s", async (code) => {
+  const control = catalogFactory({ getRuntimeConfig: () => config }).forRequest("main");
+  const failure = new CodexAppServerRpcError({ code, message: "invalid cursor" }, "thread/list");
+  rpc.mockRejectedValue(failure);
+  await expect(control.initialize()).rejects.toBe(failure);
+  await expect(control.initialize()).rejects.toBe(failure);
+  rpc.mockResolvedValue({ data: [] });
+  await control.initialize();
+  await expect(control.listPage({ limit: 1 })).resolves.toEqual({ sessions: [] });
+  expectCalls(3);
+});
 it.each(["cold", "refresh"])(
-  "stops background and foreground retries after a terminal spawn failure during %s",
+  "stops all retries after terminal spawn failure (%s)",
   async (phase) => {
     fakeClock();
     const warn = warnings();
