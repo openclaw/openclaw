@@ -24,7 +24,6 @@ function writePlugin(
   const pluginDir = path.join(rootDir, "extensions", "alpha");
   writeJson(path.join(pluginDir, "package.json"), {
     name: "@openclaw/alpha",
-    version: "0.0.1",
     openclaw: { extensions: ["./index.ts"], ...params.packageOpenClaw },
   });
   writeJson(path.join(pluginDir, "openclaw.plugin.json"), {

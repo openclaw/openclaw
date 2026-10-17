@@ -1,28 +1,11 @@
-// Verifies bundled plugin naming conventions and package metadata.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { describe, expect, it } from "vitest";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
-
-type PluginManifestShape = {
-  id?: unknown;
-};
-
-type OpenClawPackageShape = {
-  name?: unknown;
-  openclaw?: {
-    install?: {
-      npmSpec?: unknown;
-    };
-    channel?: {
-      id?: unknown;
-    };
-  };
-};
+import type { PackageManifest, PluginManifest } from "./manifest.js";
 
 type BundledPluginRecord = {
   dirName: string;
@@ -48,45 +31,20 @@ const ALLOWED_PACKAGE_SUFFIXES = [
 ] as const;
 
 function listBundledPluginDirs(): string[] {
-  const externalDirs = listExternalBundledPluginDirs();
-  if (externalDirs) {
-    return externalDirs;
-  }
-  return fs.readdirSync(EXTENSIONS_ROOT).toSorted();
-}
-
-function listExternalBundledPluginDirs(): string[] | null {
-  const files = listGitPluginMetadataFiles() ?? listFindPluginMetadataFiles();
+  const files =
+    listGitTrackedFiles({
+      pathspecs: ["extensions/*/package.json", "extensions/*/openclaw.plugin.json"],
+    }) ?? listFindPluginMetadataFiles();
   if (!files) {
-    return null;
+    return fs.readdirSync(EXTENSIONS_ROOT).toSorted();
   }
-
-  const metadataByDir = new Map<string, Set<string>>();
-  for (const file of files) {
-    const match = /^extensions\/([^/]+)\/(openclaw\.plugin\.json|package\.json)$/u.exec(file);
-    if (!match) {
-      continue;
-    }
-    const [, dirName, fileName] = match;
-    const metadataFiles =
-      metadataByDir.get(expectDefined(dirName, "dirName test invariant")) ?? new Set<string>();
-    metadataFiles.add(expectDefined(fileName, "fileName test invariant"));
-    metadataByDir.set(expectDefined(dirName, "dirName test invariant"), metadataFiles);
-  }
-
-  return [...metadataByDir.entries()]
-    .filter(
-      ([, metadataFiles]) =>
-        metadataFiles.has("package.json") && metadataFiles.has("openclaw.plugin.json"),
-    )
-    .map(([dirName]) => dirName)
+  const metadata = new Set(files);
+  return [...metadata]
+    .flatMap((file) => {
+      const dir = /^extensions\/([^/]+)\/package\.json$/u.exec(file)?.[1];
+      return dir && metadata.has(`extensions/${dir}/openclaw.plugin.json`) ? [dir] : [];
+    })
     .toSorted();
-}
-
-function listGitPluginMetadataFiles(): string[] | null {
-  return listGitTrackedFiles({
-    pathspecs: ["extensions/*/package.json", "extensions/*/openclaw.plugin.json"],
-  });
 }
 
 function listFindPluginMetadataFiles(): string[] | null {
@@ -133,8 +91,8 @@ function readBundledPluginRecords(): BundledPluginRecord[] {
       return [];
     }
 
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as PluginManifestShape;
-    const pkg = JSON.parse(fs.readFileSync(packagePath, "utf8")) as OpenClawPackageShape;
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as PluginManifest;
+    const pkg = JSON.parse(fs.readFileSync(packagePath, "utf8")) as PackageManifest;
     const manifestId = normalizeOptionalString(manifest.id);
     const packageName = normalizeOptionalString(pkg.name);
     if (!manifestId || !packageName) {

@@ -1,4 +1,3 @@
-/** Covers bundled plugin source overlays and packaged load-path decisions. */
 import { bundledPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -90,18 +89,6 @@ function expectedSource(pluginId: string, configSchema?: Record<string, unknown>
   };
 }
 
-function expectBundledSourceLookup(
-  lookup: Parameters<typeof findBundledPluginSource>[0]["lookup"],
-  expected: Pick<ReturnType<typeof expectedSource>, "pluginId" | "localPath"> | undefined,
-) {
-  const resolved = findBundledPluginSource({ lookup });
-  if (!expected) {
-    expect(resolved).toBeUndefined();
-    return;
-  }
-  expect(resolved).toMatchObject(expected);
-}
-
 describe("bundled plugin sources", () => {
   beforeEach(() => {
     resetPluginCache();
@@ -154,34 +141,22 @@ describe("bundled plugin sources", () => {
   });
 
   it.each([
-    [
-      "finds bundled source by npm spec",
-      { kind: "npmSpec", value: "@openclaw/feishu" } as const,
-      { pluginId: "feishu", localPath: appBundledPluginRoot("feishu") },
-    ],
-    [
-      "returns undefined for missing npm spec",
-      { kind: "npmSpec", value: "@openclaw/not-found" } as const,
-      undefined,
-    ],
-    [
-      "finds bundled source by plugin id",
-      { kind: "pluginId", value: "diffs" } as const,
-      { pluginId: "diffs", localPath: appBundledPluginRoot("diffs") },
-    ],
-    [
-      "finds bundled source by local path",
-      { kind: "localPath", value: appBundledPluginRoot("diffs") } as const,
-      { pluginId: "diffs", localPath: appBundledPluginRoot("diffs") },
-    ],
-    [
-      "returns undefined for missing plugin id",
-      { kind: "pluginId", value: "not-found" } as const,
-      undefined,
-    ],
-  ] as const)("%s", (_name, lookup, expected) => {
+    ["npmSpec", "@openclaw/feishu", "feishu"],
+    ["npmSpec", "@openclaw/not-found", undefined],
+    ["pluginId", "diffs", "diffs"],
+    ["localPath", appBundledPluginRoot("diffs"), "diffs"],
+    ["pluginId", "not-found", undefined],
+  ] as const)("looks up %s %s", (kind, value, expectedId) => {
     setBundledLookupFixture();
-    expectBundledSourceLookup(lookup, expected);
+    const resolved = findBundledPluginSource({ lookup: { kind, value } });
+    if (expectedId) {
+      expect(resolved).toMatchObject({
+        pluginId: expectedId,
+        localPath: appBundledPluginRoot(expectedId),
+      });
+    } else {
+      expect(resolved).toBeUndefined();
+    }
   });
 
   it("marks bundled sources that require plugin config before activation", () => {
