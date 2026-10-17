@@ -36,7 +36,7 @@ function scanPackage(
   overrides: Partial<Parameters<typeof scanPackageInstallSourceRuntime>[0]> = {},
 ) {
   return scanPackageInstallSourceRuntime({
-    packageDir: makeTempDir(),
+    packageDir: overrides.packageDir ?? makeTempDir(),
     extensions: ["payload.js"],
     logger: {},
     pluginId: "payload",
@@ -53,26 +53,53 @@ const approvalGuidance = [
   "  • --force does not approve install policy warnings.",
 ];
 
-async function hostLinkFixture() {
+function policyWarning(reason = "review this plugin", fingerprint = "warning-a") {
+  return { warning: { reason, fingerprint } };
+}
+
+function scanBundle(sourceDir = makeTempDir()) {
+  return scanBundleInstallSourceRuntime({
+    logger: {},
+    pluginId: "@openclaw/matrix",
+    sourceDir,
+    source: { kind: "clawhub", authority: "official", mutable: false, network: true },
+  });
+}
+
+function scanSkill(bundled: boolean) {
+  const skillName = bundled ? "peekaboo" : "local-skill";
+  return evaluateSkillInstallPolicyRuntime({
+    installId: "node",
+    logger: {},
+    skillName,
+    origin: { type: bundled ? "openclaw-bundled" : "workspace", skillName, installId: "node" },
+    source: bundled
+      ? { kind: "bundled", authority: "openclaw", mutable: false, network: false }
+      : { kind: "workspace", authority: "user", mutable: true, network: false },
+    sourceDir: bundled ? "/tmp/openclaw-bundled-skill/peekaboo" : "/tmp/local-skill",
+  });
+}
+
+async function installedPackageFixture(dependencies?: Record<string, string>) {
   const npmRoot = makeTempDir();
   const packageDir = path.join(npmRoot, "node_modules", "runtime-plugin");
-  const hostLink = path.join(packageDir, "node_modules", "openclaw");
-  await fs.mkdir(path.dirname(hostLink), { recursive: true });
+  await fs.mkdir(packageDir, { recursive: true });
   await fs.writeFile(
     path.join(packageDir, "package.json"),
-    JSON.stringify({ name: "runtime-plugin", dependencies: { openclaw: "2026.7.1" } }),
+    JSON.stringify({ name: "runtime-plugin", ...(dependencies ? { dependencies } : {}) }),
     "utf8",
   );
-  return {
-    hostLink,
-    request: {
-      allowManagedNpmRootPackagePeerSymlinks: true,
-      dependencyScanRootDir: npmRoot,
-      logger: {},
-      packageDir,
-      pluginId: "runtime-plugin",
-    },
+  return { dependencyScanRootDir: npmRoot, logger: {}, packageDir, pluginId: "runtime-plugin" };
+}
+
+async function hostLinkFixture() {
+  const request = {
+    ...(await installedPackageFixture({ openclaw: "2026.7.1" })),
+    allowManagedNpmRootPackagePeerSymlinks: true,
   };
+  const hostLink = path.join(request.packageDir, "node_modules", "openclaw");
+  await fs.mkdir(path.dirname(hostLink), { recursive: true });
+  return { hostLink, request };
 }
 
 async function addEscapingDependencyLink(rootDir: string) {
@@ -82,24 +109,16 @@ async function addEscapingDependencyLink(rootDir: string) {
   await fs.symlink(outsideRoot, dependencyLink, "junction");
 }
 
-function expectOnlyOperatorPolicyRan() {
-  expect(runInstallPolicyMock).toHaveBeenCalledTimes(1);
-  expect(getGlobalHookRunnerMock).not.toHaveBeenCalled();
-}
-
 function expectedInstallPolicyNotice(params: {
-  decision: "warn" | "block";
   findings?: string[];
   guidance?: string[];
-  reason: string;
-  targetName: string;
-  targetType: "skill" | "plugin";
+  reason?: string;
 }): string {
   const lines = [
-    params.decision === "warn" ? "Install requires approval" : "Install blocked by policy",
+    "Install requires approval",
     "",
-    `  ${params.targetType === "skill" ? "Skill" : "Plugin"}: ${params.targetName}`,
-    `  Reason: ${params.reason}`,
+    "  Plugin: payload",
+    `  Reason: ${params.reason ?? "review this plugin"}`,
   ];
   if (params.findings?.length) {
     lines.push("  Findings:", ...params.findings.map((finding) => `    • ${finding}`));
@@ -110,130 +129,86 @@ function expectedInstallPolicyNotice(params: {
   return lines.join("\n");
 }
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
+
 beforeEach(() => {
   runInstallPolicyMock.mockReset();
   getGlobalHookRunnerMock.mockReset();
 });
 
 describe("install security scan official bypass", () => {
-  it("bypasses skill install friction for bundled OpenClaw sources", async () => {
-    const result = await evaluateSkillInstallPolicyRuntime({
-      installId: "node",
-      logger: {},
-      origin: {
-        type: "openclaw-bundled",
-        skillName: "peekaboo",
-        installId: "node",
-      },
-      source: { kind: "bundled", authority: "openclaw", mutable: false, network: false },
-      skillName: "peekaboo",
-      sourceDir: "/tmp/openclaw-bundled-skill/peekaboo",
-    });
-
-    expect(result).toBeUndefined();
-    expectOnlyOperatorPolicyRan();
-  });
-
-  it("runs only operator policy for official immutable npm sources", async () => {
-    const result = await preflightPluginNpmInstallPolicyRuntime({
-      logger: {},
-      packageName: "@openclaw/matrix",
-      requestedSpecifier: "@openclaw/matrix@latest",
-      source: { kind: "npm", authority: "official", mutable: false, network: true },
-      sourcePath: "/tmp/openclaw-official-npm",
-      sourcePathKind: "directory",
-    });
-
-    expect(result).toBeUndefined();
-    expectOnlyOperatorPolicyRan();
-  });
-
-  it("lets operator policy block official sources", async () => {
-    runInstallPolicyMock.mockResolvedValueOnce({
-      blocked: {
-        code: "security_scan_blocked",
-        reason: "blocked by operator policy",
-      },
-    });
-
-    const sourceDir = makeTempDir();
-    const result = await scanBundleInstallSourceRuntime({
-      logger: {},
-      pluginId: "@openclaw/matrix",
-      sourceDir,
-      source: { kind: "clawhub", authority: "official", mutable: false, network: true },
-    });
-
-    expect(result).toEqual({
-      blocked: {
-        code: "security_scan_blocked",
-        reason: "blocked by operator policy",
-      },
-    });
-    expectOnlyOperatorPolicyRan();
-  });
-
-  it("rejects escaping dependency symlinks for official bundle sources", async () => {
-    const sourceDir = makeTempDir();
-    await addEscapingDependencyLink(sourceDir);
-
-    await expect(
-      scanBundleInstallSourceRuntime({
-        logger: {},
-        pluginId: "@openclaw/matrix",
-        sourceDir,
-        source: { kind: "clawhub", authority: "official", mutable: false, network: true },
-      }),
-    ).rejects.toThrow("node_modules symlink target outside install root");
-    expect(runInstallPolicyMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects escaping dependency symlinks for trusted official packages", async () => {
-    const packageDir = makeTempDir();
-    await addEscapingDependencyLink(packageDir);
-
-    await expect(
-      scanPackageInstallSourceRuntime({
-        extensions: ["index.js"],
-        logger: {},
-        packageDir,
-        pluginId: "@openclaw/matrix",
-        source: { kind: "npm", authority: "official", mutable: false, network: true },
-        trustedSourceLinkedOfficialInstall: true,
-      }),
-    ).rejects.toThrow("node_modules symlink target outside install root");
-    expect(runInstallPolicyMock).not.toHaveBeenCalled();
-  });
-
-  it("still runs install policy for mutable workspace skill sources", async () => {
-    runInstallPolicyMock.mockResolvedValueOnce({
-      blocked: {
-        code: "security_scan_blocked",
-        reason: "blocked by operator policy",
-      },
-    });
-
-    const result = await evaluateSkillInstallPolicyRuntime({
-      installId: "node",
-      logger: {},
-      origin: {
-        type: "workspace",
-        skillName: "local-skill",
-        installId: "node",
-      },
-      source: { kind: "workspace", authority: "user", mutable: true, network: false },
-      skillName: "local-skill",
-      sourceDir: "/tmp/local-skill",
-    });
-
-    expect(result).toEqual({
-      blocked: {
-        code: "security_scan_blocked",
-        reason: "blocked by operator policy",
-      },
-    });
+  it.each([
+    { name: "bundled skill", scan: () => scanSkill(true), blocked: false, operatorOnly: true },
+    {
+      name: "immutable official npm",
+      scan: () =>
+        preflightPluginNpmInstallPolicyRuntime({
+          logger: {},
+          packageName: "@openclaw/matrix",
+          requestedSpecifier: "@openclaw/matrix@latest",
+          source: { kind: "npm", authority: "official", mutable: false, network: true },
+          sourcePath: "/tmp/openclaw-official-npm",
+          sourcePathKind: "directory",
+        }),
+      blocked: false,
+      operatorOnly: true,
+    },
+    { name: "official bundle", scan: () => scanBundle(), blocked: true, operatorOnly: true },
+    {
+      name: "mutable workspace skill",
+      scan: () => scanSkill(false),
+      blocked: true,
+      operatorOnly: false,
+    },
+  ])("applies operator policy to $name", async ({ scan, blocked, operatorOnly }) => {
+    const denial = {
+      blocked: { code: "security_scan_blocked", reason: "blocked by operator policy" },
+    };
+    if (blocked) {
+      runInstallPolicyMock.mockResolvedValueOnce(denial);
+    }
+    expect(await scan()).toEqual(blocked ? denial : undefined);
     expect(runInstallPolicyMock).toHaveBeenCalledTimes(1);
+    if (operatorOnly) {
+      expect(getGlobalHookRunnerMock).not.toHaveBeenCalled();
+    }
   });
+
+  it.each(["bundle", "package", "installed dependencies"] as const)(
+    "rejects escaping dependency symlinks for trusted official %s",
+    async (kind) => {
+      const installed =
+        kind === "installed dependencies" ? await installedPackageFixture() : undefined;
+      const packageDir = installed?.packageDir ?? makeTempDir();
+      await addEscapingDependencyLink(packageDir);
+      const official = {
+        kind: "npm",
+        authority: "official",
+        mutable: false,
+        network: true,
+      } as const;
+      const scanning = installed
+        ? scanInstalledPackageDependencyTreeRuntime({
+            ...installed,
+            source: official,
+            trustedSourceLinkedOfficialInstall: true,
+          })
+        : kind === "bundle"
+          ? scanBundle(packageDir)
+          : scanPackage({
+              packageDir,
+              extensions: ["index.js"],
+              pluginId: "@openclaw/matrix",
+              source: official,
+              trustedSourceLinkedOfficialInstall: true,
+            });
+      await expect(scanning).rejects.toThrow("node_modules symlink target outside install root");
+      expect(runInstallPolicyMock).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("installed dependency tree scan", () => {
@@ -241,9 +216,7 @@ describe("installed dependency tree scan", () => {
     const { hostLink, request } = await hostLinkFixture();
     await fs.symlink(process.cwd(), hostLink, "junction");
 
-    const result = await scanInstalledPackageDependencyTreeRuntime(request);
-
-    expect(result).toBeUndefined();
+    await expect(scanInstalledPackageDependencyTreeRuntime(request)).resolves.toBeUndefined();
     expect(runInstallPolicyMock).toHaveBeenCalledTimes(1);
   });
 
@@ -257,64 +230,26 @@ describe("installed dependency tree scan", () => {
       "installed dependency scan found package outside install root",
     );
   });
-
-  it("rejects escaping dependency symlinks for trusted official installs", async () => {
-    const npmRoot = makeTempDir();
-    const packageDir = path.join(npmRoot, "node_modules", "runtime-plugin");
-    await fs.mkdir(packageDir, { recursive: true });
-    await fs.writeFile(
-      path.join(packageDir, "package.json"),
-      JSON.stringify({ name: "runtime-plugin" }),
-      "utf8",
-    );
-    await addEscapingDependencyLink(packageDir);
-
-    await expect(
-      scanInstalledPackageDependencyTreeRuntime({
-        dependencyScanRootDir: npmRoot,
-        logger: {},
-        packageDir,
-        pluginId: "runtime-plugin",
-        source: { kind: "npm", authority: "official", mutable: false, network: true },
-        trustedSourceLinkedOfficialInstall: true,
-      }),
-    ).rejects.toThrow("node_modules symlink target outside install root");
-    expect(runInstallPolicyMock).not.toHaveBeenCalled();
-  });
 });
 
 describe("package dependency boundaries", () => {
   it.each([
-    {
-      variable: "OPENCLAW_INSTALL_SCAN_MAX_DEPTH",
-      value: "1",
-      overflowDirectory: "one/two",
-      diagnostic: "exceeded max depth (1)",
-    },
-    {
-      variable: "OPENCLAW_INSTALL_SCAN_MAX_DIRECTORIES",
-      value: "2",
-      overflowDirectory: "two",
-      diagnostic: "exceeded max directories (2)",
-    },
+    ["OPENCLAW_INSTALL_SCAN_MAX_DEPTH", "1", "one/two", "exceeded max depth (1)"],
+    ["OPENCLAW_INSTALL_SCAN_MAX_DIRECTORIES", "2", "two", "exceeded max directories (2)"],
   ])(
-    "preserves the admission boundary for $variable",
-    async ({ variable, value, overflowDirectory, diagnostic }) => {
+    "preserves the admission boundary for %s",
+    async (variable, value, overflowDirectory, diagnostic) => {
       const packageDir = makeTempDir();
       await fs.mkdir(path.join(packageDir, "one"));
       await fs.writeFile(path.join(packageDir, "one", "index.js"), "export {};");
       const request = { extensions: ["one/index.js"], logger: {}, packageDir, pluginId: "limits" };
       vi.stubEnv(variable, value);
-      try {
-        await expect(scanPackageInstallSourceRuntime(request)).resolves.toBeUndefined();
-        expect(runInstallPolicyMock).toHaveBeenCalledTimes(1);
-        runInstallPolicyMock.mockClear();
-        await fs.mkdir(path.join(packageDir, overflowDirectory), { recursive: true });
-        await expect(scanPackageInstallSourceRuntime(request)).rejects.toThrow(diagnostic);
-        expect(runInstallPolicyMock).not.toHaveBeenCalled();
-      } finally {
-        vi.unstubAllEnvs();
-      }
+      await expect(scanPackage(request)).resolves.toBeUndefined();
+      expect(runInstallPolicyMock).toHaveBeenCalledTimes(1);
+      runInstallPolicyMock.mockClear();
+      await fs.mkdir(path.join(packageDir, overflowDirectory), { recursive: true });
+      await expect(scanPackage(request)).rejects.toThrow(diagnostic);
+      expect(runInstallPolicyMock).not.toHaveBeenCalled();
     },
   );
 
@@ -327,19 +262,10 @@ describe("package dependency boundaries", () => {
     await fs.link(source, path.join(dependency, "linked.js"));
     await fs.symlink(dependency, path.join(packageDir, "node_modules", "alias"), "junction");
     vi.stubEnv("OPENCLAW_INSTALL_SCAN_MAX_DIRECTORIES", "3");
-    try {
-      await expect(
-        scanPackageInstallSourceRuntime({
-          extensions: ["index.js"],
-          logger: {},
-          packageDir,
-          pluginId: "in-tree-links",
-        }),
-      ).resolves.toBeUndefined();
-      expect(runInstallPolicyMock).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    await expect(
+      scanPackage({ extensions: ["index.js"], packageDir, pluginId: "in-tree-links" }),
+    ).resolves.toBeUndefined();
+    expect(runInstallPolicyMock).toHaveBeenCalledTimes(1);
   });
 
   it("fails before install policy when a dependency directory cannot be read", async () => {
@@ -347,25 +273,16 @@ describe("package dependency boundaries", () => {
     const unreadable = path.join(packageDir, "dependency");
     await fs.mkdir(unreadable);
     const readDirectory = fs.readdir.bind(fs);
-    const readdir = vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+    vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
       if (String(args[0]) === unreadable) {
         throw Object.assign(new Error("directory unavailable"), { code: "EACCES" });
       }
       return readDirectory(...args);
     });
-    try {
-      await expect(
-        scanPackageInstallSourceRuntime({
-          extensions: ["index.js"],
-          logger: {},
-          packageDir,
-          pluginId: "unreadable-dependency",
-        }),
-      ).rejects.toThrow(`dependency boundary scan could not read ${unreadable}`);
-      expect(runInstallPolicyMock).not.toHaveBeenCalled();
-    } finally {
-      readdir.mockRestore();
-    }
+    await expect(
+      scanPackage({ extensions: ["index.js"], packageDir, pluginId: "unreadable-dependency" }),
+    ).rejects.toThrow(`dependency boundary scan could not read ${unreadable}`);
+    expect(runInstallPolicyMock).not.toHaveBeenCalled();
   });
 });
 
@@ -373,16 +290,10 @@ describe("plugin install policy warnings", () => {
   it("continues after one acknowledgement and a fresh evaluation of the same warning", async () => {
     const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
     runInstallPolicyMock
-      .mockResolvedValueOnce({
-        warning: { reason: "review this plugin", fingerprint: "warning-a" },
-      })
-      .mockResolvedValueOnce({
-        warning: { reason: "review this plugin", fingerprint: "warning-a" },
-      });
+      .mockResolvedValueOnce(policyWarning())
+      .mockResolvedValueOnce(policyWarning());
 
-    const result = await scanPackage({ onInstallPolicyWarning });
-
-    expect(result).toBeUndefined();
+    await expect(scanPackage({ onInstallPolicyWarning })).resolves.toBeUndefined();
     expect(onInstallPolicyWarning).toHaveBeenCalledWith({
       reason: "review this plugin",
       targetName: "payload",
@@ -417,9 +328,7 @@ describe("plugin install policy warnings", () => {
       ],
     });
 
-    const result = await scanPackage({
-      onInstallPolicyWarning,
-    });
+    const result = await scanPackage({ onInstallPolicyWarning });
 
     expect(result?.blocked?.reason).toContain("The policy warning changed after approval.");
     expect(result?.blocked?.reason).toContain("same bounded reason");
@@ -433,9 +342,7 @@ describe("plugin install policy warnings", () => {
   });
 
   it("blocks policy warnings without acknowledgement", async () => {
-    runInstallPolicyMock.mockResolvedValue({
-      warning: { reason: "review this plugin", fingerprint: "warning-a" },
-    });
+    runInstallPolicyMock.mockResolvedValue(policyWarning());
 
     const result = await scanPackage();
 
@@ -448,24 +355,16 @@ describe("plugin install policy warnings", () => {
         targetType: "plugin",
       },
       reason: expectedInstallPolicyNotice({
-        decision: "warn",
         guidance: approvalGuidance,
-        reason: "review this plugin",
-        targetName: "payload",
-        targetType: "plugin",
       }),
     });
     expect(runInstallPolicyMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a block from acknowledged policy re-evaluation terminal", async () => {
-    runInstallPolicyMock
-      .mockResolvedValueOnce({
-        warning: { reason: "review this plugin", fingerprint: "warning-a" },
-      })
-      .mockResolvedValueOnce({
-        blocked: { code: "security_scan_blocked", reason: "now blocked" },
-      });
+    runInstallPolicyMock.mockResolvedValueOnce(policyWarning()).mockResolvedValueOnce({
+      blocked: { code: "security_scan_blocked", reason: "now blocked" },
+    });
 
     const result = await scanPackage({
       onInstallPolicyWarning: vi.fn().mockResolvedValue({ status: "approved" }),
@@ -489,11 +388,7 @@ describe("plugin install policy warnings", () => {
 
     expect(warnings).toEqual([
       `${expectedInstallPolicyNotice({
-        decision: "warn",
         findings: ["[INFO] context: Informational context."],
-        reason: "review this plugin",
-        targetName: "payload",
-        targetType: "plugin",
       })}\n`,
     ]);
   });
@@ -515,17 +410,9 @@ describe("plugin install policy warnings", () => {
   it("fails closed when a changed warning exceeds the aggregate display limit", async () => {
     const { findings, maxText } = createMaximumPolicyFindings();
     runInstallPolicyMock
+      .mockResolvedValueOnce(policyWarning("review this plugin", "initial-warning"))
       .mockResolvedValueOnce({
-        warning: {
-          reason: "review this plugin",
-          fingerprint: "initial-warning",
-        },
-      })
-      .mockResolvedValueOnce({
-        warning: {
-          reason: maxText,
-          fingerprint: "oversized-warning",
-        },
+        ...policyWarning(maxText, "oversized-warning"),
         findings,
       });
     const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
@@ -559,12 +446,9 @@ describe("plugin install policy warnings", () => {
       const file = "f".repeat(700);
       const findingPrefix = `[CRITICAL] ${ruleId}: ${message} (${file}) Evidence: `;
       const withoutEvidence = expectedInstallPolicyNotice({
-        decision: "warn",
         findings: [findingPrefix],
         guidance: approvalGuidance,
         reason,
-        targetName: "payload",
-        targetType: "plugin",
       });
       const evidence = `${"e".repeat(size - withoutEvidence.length - 3)}\ne`;
       runInstallPolicyMock.mockResolvedValueOnce({
@@ -595,9 +479,7 @@ describe("plugin install policy warnings", () => {
     });
     const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
 
-    const result = await scanPackage({
-      onInstallPolicyWarning,
-    });
+    const result = await scanPackage({ onInstallPolicyWarning });
 
     expect(result?.blocked?.code).toBe("security_scan_blocked");
     expect(result?.blocked?.reason).toContain("Findings omitted");
@@ -610,27 +492,22 @@ describe("plugin install policy warnings", () => {
     runInstallPolicyMock.mockResolvedValue({ findings });
     const warnings: string[] = [];
 
-    const result = await scanPackage({
-      logger: { warn: (message) => warnings.push(message) },
-    });
+    const result = await scanPackage({ logger: { warn: (message) => warnings.push(message) } });
 
     expect(result).toBeUndefined();
     expect(warnings.join("\n")).toContain("additional findings omitted");
     expect(warnings.join("\n").length).toBeLessThanOrEqual(4_000);
   });
 
-  it.each(["security_scan_failed"] as const)(
-    "does not let acknowledgement override %s",
-    async (code) => {
-      const onInstallPolicyWarning = vi.fn(async () => ({ status: "approved" as const }));
-      runInstallPolicyMock.mockResolvedValueOnce({
-        blocked: { code, reason: "blocked by operator policy" },
-      });
+  it("does not let acknowledgement override security_scan_failed", async () => {
+    const onInstallPolicyWarning = vi.fn(async () => ({ status: "approved" as const }));
+    runInstallPolicyMock.mockResolvedValueOnce({
+      blocked: { code: "security_scan_failed", reason: "blocked by operator policy" },
+    });
 
-      const result = await scanPackage({ onInstallPolicyWarning });
+    const result = await scanPackage({ onInstallPolicyWarning });
 
-      expect(result?.blocked?.reason).toBe("blocked by operator policy");
-      expect(onInstallPolicyWarning).not.toHaveBeenCalled();
-    },
-  );
+    expect(result?.blocked?.reason).toBe("blocked by operator policy");
+    expect(onInstallPolicyWarning).not.toHaveBeenCalled();
+  });
 });
