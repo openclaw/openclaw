@@ -1,3 +1,4 @@
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
@@ -7,6 +8,27 @@ import {
 } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "command palette first open" });
+
+const holdPalette = (page: Page) =>
+  holdModuleResponse(page, controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"));
+const expectFocused = (input: Locator) =>
+  expect.poll(() => input.evaluate((element) => document.activeElement === element)).toBe(true);
+async function expectSelection(
+  input: Locator,
+  expected: { focused?: boolean; start: number; end: number; direction?: string },
+) {
+  expect(
+    await input.evaluate(
+      (element: HTMLTextAreaElement, fields) => ({
+        ...(fields.focused ? { focused: document.activeElement === element } : {}),
+        start: element.selectionStart,
+        end: element.selectionEnd,
+        ...(fields.direction ? { direction: element.selectionDirection } : {}),
+      }),
+      { focused: "focused" in expected, direction: "direction" in expected },
+    ),
+  ).toEqual(expected);
+}
 
 async function readPaletteBackdrop(page: import("playwright").Page) {
   const dialogLocator = page.locator(
@@ -28,10 +50,7 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const sessionKey = "agent:main:dashboard:cold-continuous";
       await installMockGateway(page, { sessionKey });
-      const paletteModule = await holdModuleResponse(
-        page,
-        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"),
-      );
+      const paletteModule = await holdPalette(page);
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const composer = page.locator(".agent-chat__composer-combobox textarea:visible");
@@ -47,9 +66,7 @@ suite.define(() => {
         await input.waitFor({ state: "visible" });
         await paletteModule.request;
         expect(paletteModule.requests()).toBe(1);
-        await expect
-          .poll(() => input.evaluate((element) => document.activeElement === element))
-          .toBe(true);
+        await expectFocused(input);
         const cdp = await page.context().newCDPSession(page);
         await cdp.send("Emulation.setCPUThrottlingRate", { rate: 8 });
         const keyTargets = await page.evaluateHandle(() => {
@@ -88,27 +105,13 @@ suite.define(() => {
         ).toEqual([]);
         await keyTargets.dispose();
         expect(await loaded.inputValue()).toBe(typed);
-        expect(
-          await loaded.evaluate((element: HTMLTextAreaElement) => ({
-            focused: document.activeElement === element,
-            start: element.selectionStart,
-            end: element.selectionEnd,
-          })),
-        ).toEqual({ focused: true, start: typed.length, end: typed.length });
+        await expectSelection(loaded, { focused: true, start: typed.length, end: typed.length });
         expect(await composer.inputValue()).toBe(foregroundDraft);
         expect(paletteModule.requests()).toBe(1);
         await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
         await page.keyboard.press("Escape");
-        await expect
-          .poll(() => composer.evaluate((element) => document.activeElement === element))
-          .toBe(true);
-        expect(
-          await composer.evaluate((element: HTMLTextAreaElement) => ({
-            start: element.selectionStart,
-            end: element.selectionEnd,
-            direction: element.selectionDirection,
-          })),
-        ).toEqual({ start: 3, end: 12, direction: "backward" });
+        await expectFocused(composer);
+        await expectSelection(composer, { start: 3, end: 12, direction: "backward" });
         expect(await composer.inputValue()).toBe(foregroundDraft);
         expect(page.url()).toBe(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         expect(
@@ -133,10 +136,7 @@ suite.define(() => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
         const sessionKey = "agent:main:dashboard:cold-composition-" + outcome;
         await installMockGateway(page, { sessionKey });
-        const paletteModule = await holdModuleResponse(
-          page,
-          controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"),
-        );
+        const paletteModule = await holdPalette(page);
         try {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           await page.locator(".shell").waitFor({ state: "visible" });
@@ -146,9 +146,7 @@ suite.define(() => {
           }
           await page.keyboard.press("ControlOrMeta+K");
           const input = page.locator(".cmd-palette__input");
-          await expect
-            .poll(() => input.evaluate((element) => document.activeElement === element))
-            .toBe(true);
+          await expectFocused(input);
           if (outcome === "dismiss") {
             await page.keyboard.type("Retired cold prompt");
             await input.dispatchEvent("compositionstart", { data: "に" });
@@ -156,9 +154,7 @@ suite.define(() => {
             // themselves are ignored by the keyboard owner.
             await page.keyboard.press("ControlOrMeta+K");
             await expect.poll(() => page.locator(".cmd-palette").count()).toBe(0);
-            await expect
-              .poll(() => composer.evaluate((element) => document.activeElement === element))
-              .toBe(true);
+            await expectFocused(composer);
             paletteModule.release();
             await page.waitForFunction(() => customElements.get("openclaw-command-palette"));
             expect(await page.locator(".cmd-palette").count()).toBe(0);
@@ -203,13 +199,7 @@ suite.define(() => {
           const loaded = page.locator("openclaw-command-palette .cmd-palette__input");
           await loaded.waitFor({ state: "visible" });
           expect(await loaded.inputValue()).toBe("日本");
-          expect(
-            await loaded.evaluate((element: HTMLTextAreaElement) => ({
-              focused: document.activeElement === element,
-              start: element.selectionStart,
-              end: element.selectionEnd,
-            })),
-          ).toEqual({ focused: true, start: 1, end: 2 });
+          await expectSelection(loaded, { focused: true, start: 1, end: 2 });
         } finally {
           paletteModule.release();
         }
@@ -223,10 +213,7 @@ suite.define(() => {
         // The held chat route module prevents foreground readiness and roster loading.
         awaitInitialRoster: false,
       });
-      const paletteModule = await holdModuleResponse(
-        page,
-        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"),
-      );
+      const paletteModule = await holdPalette(page);
       // Keep an unrelated route loader present so palette assertions cannot depend on it.
       const chatModule = await holdModuleResponse(
         page,
@@ -244,9 +231,7 @@ suite.define(() => {
         expect(await shell.getAttribute("aria-busy")).toBe("true");
         const input = shell.locator(".cmd-palette__input");
         expect(await input.isEditable()).toBe(true);
-        await expect
-          .poll(() => input.evaluate((element) => document.activeElement === element))
-          .toBe(true);
+        await expectFocused(input);
         await page.keyboard.type("early query");
         await page.keyboard.press("Enter");
         expect(await input.inputValue()).toBe("early query");
@@ -266,14 +251,7 @@ suite.define(() => {
         const loaded = page.locator("openclaw-command-palette .cmd-palette__input");
         await loaded.waitFor({ state: "visible" });
         expect(await loaded.inputValue()).toBe("early query");
-        expect(
-          await loaded.evaluate((element: HTMLTextAreaElement) => ({
-            focused: document.activeElement === element,
-            start: element.selectionStart,
-            end: element.selectionEnd,
-            direction: element.selectionDirection,
-          })),
-        ).toEqual({ focused: true, start: 2, end: 7, direction: "backward" });
+        await expectSelection(loaded, { focused: true, start: 2, end: 7, direction: "backward" });
         const loadedBackdrop = await readPaletteBackdrop(page);
         expect(loadedBackdrop.filter).toBe("none");
         expect(loadedBackdrop.alpha).toBeLessThanOrEqual(0.2);

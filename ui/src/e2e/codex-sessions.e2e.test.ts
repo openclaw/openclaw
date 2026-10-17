@@ -1,7 +1,13 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
-import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/index.ts";
+import type {
+  SessionCatalog,
+  SessionCatalogHost,
+  SessionCatalogSession,
+  SessionsCatalogHostEvent,
+} from "../../../packages/gateway-protocol/src/index.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
@@ -32,42 +38,78 @@ beforeEach(() => {
   }
 });
 
+const catalogMethods = ["chat.metadata", "chat.startup", "sessions.catalog.list"];
+function makeNativeSession(
+  threadId: string,
+  name: string,
+  extra: Partial<SessionCatalogSession> = {},
+): SessionCatalogSession {
+  return {
+    threadId,
+    name,
+    status: "idle",
+    archived: false,
+    canContinue: true,
+    canArchive: true,
+    ...extra,
+  };
+}
+function makeHost(
+  hostId: string,
+  label: string,
+  sessions: SessionCatalogSession[],
+  extra: Partial<SessionCatalogHost> = {},
+): SessionCatalogHost {
+  return { hostId, label, kind: "gateway", connected: true, sessions, ...extra };
+}
+function makeCatalog(
+  id: string,
+  label: string,
+  hosts: SessionCatalogHost[],
+  extra: Partial<SessionCatalog> = {},
+) {
+  return { id, label, capabilities: { continueSession: true, archive: true }, hosts, ...extra };
+}
+function liveSessions(key: string, displayName: string, updatedAt = Date.now(), extra = {}) {
+  const model = { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" };
+  return {
+    count: 1,
+    defaults: model,
+    path: "",
+    ts: updatedAt,
+    sessions: [{ ...model, displayName, key, kind: "direct", totalTokens: 0, updatedAt, ...extra }],
+  };
+}
+
+async function expectListItems(list: Locator, count: number) {
+  expect(
+    await list
+      .locator(":scope > *")
+      .evaluateAll((items) => items.map((item) => item.getAttribute("role"))),
+  ).toEqual(Array(count).fill("listitem"));
+}
+async function chooseGrouping(section: Locator, page: Page, name: string) {
+  await section.locator(".sidebar-recent-sessions__head").hover();
+  await section.locator('[data-session-catalog-view-menu="codex"]').click();
+  await page
+    .getByRole("menuitemradio", { name })
+    .evaluate((element) => (element as HTMLElement).click());
+}
+const readGrouping = (page: Page) =>
+  page.evaluate((key) => localStorage.getItem(key), catalogGroupingStorageKey);
+
 suite.define(() => {
   it("omits empty native session catalogs from the sidebar", async () => {
     const page = await suite.browser.newPage();
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      featureMethods: catalogMethods,
       methodResponses: {
         "sessions.catalog.list": {
           catalogs: [
-            {
-              id: "codex",
-              label: "Codex",
-              capabilities: { continueSession: true, archive: true },
-              hosts: [
-                {
-                  hostId: "gateway:codex",
-                  label: "Local Codex",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [],
-                },
-              ],
-            },
-            {
-              id: "claude",
-              label: "Claude Code",
+            makeCatalog("codex", "Codex", [makeHost("gateway:codex", "Local Codex", [])]),
+            makeCatalog("claude", "Claude Code", [makeHost("gateway:claude", "Local Claude", [])], {
               capabilities: { continueSession: true, archive: false },
-              hosts: [
-                {
-                  hostId: "gateway:claude",
-                  label: "Local Claude",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [],
-                },
-              ],
-            },
+            }),
           ],
         },
       },
@@ -91,88 +133,50 @@ suite.define(() => {
       collapsedSessionSectionsStorageKey,
     );
     await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      featureMethods: catalogMethods,
       methodResponses: {
-        "sessions.list": {
-          count: 1,
-          defaults: {
-            contextTokens: null,
-            model: "gpt-5.5",
-            modelProvider: "openai",
-          },
-          path: "",
-          sessions: [
-            {
-              contextTokens: null,
-              displayName: "Understanding Startup Phases and Delays",
-              hasActiveRun: false,
-              key: "agent:main:startup-phases",
-              kind: "direct",
-              label: "Understanding Startup Phases and Delays",
-              model: "gpt-5.5",
-              modelProvider: "openai",
-              status: "done",
-              totalTokens: 0,
-              updatedAt: Date.now(),
-              worktree: {
-                id: "startup-phases",
-                branch: "startup-phases",
-                repoRoot: "/workspace/openclaw",
-              },
+        "sessions.list": liveSessions(
+          "agent:main:startup-phases",
+          "Understanding Startup Phases and Delays",
+          Date.now(),
+          {
+            hasActiveRun: false,
+            label: "Understanding Startup Phases and Delays",
+            status: "done",
+            worktree: {
+              id: "startup-phases",
+              branch: "startup-phases",
+              repoRoot: "/workspace/openclaw",
             },
-          ],
-          ts: Date.now(),
-        },
+          },
+        ),
         "sessions.catalog.list": {
           catalogs: [
-            {
-              id: "codex",
-              label: "Codex Native Sessions with a Deliberately Long Provider Label",
-              capabilities: { continueSession: true, archive: true, startTerminal: true },
-              hosts: [
-                {
-                  hostId: "gateway:local",
-                  label: "Local Codex",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [
-                    {
-                      threadId: "thread-startup",
-                      name: "Trace startup labels to code paths",
-                      cwd: "/workspace/openclaw",
-                      status: "idle",
-                      archived: false,
-                      canContinue: true,
-                      canArchive: true,
-                    },
-                  ],
-                },
+            makeCatalog(
+              "codex",
+              "Codex Native Sessions with a Deliberately Long Provider Label",
+              [
+                makeHost("gateway:local", "Local Codex", [
+                  makeNativeSession("thread-startup", "Trace startup labels to code paths", {
+                    cwd: "/workspace/openclaw",
+                  }),
+                ]),
               ],
-            },
-            {
-              id: "claude",
-              label: "Claude Code",
-              capabilities: { continueSession: true, archive: false },
-              hosts: [
-                {
-                  hostId: "gateway:claude",
-                  label: "Local Claude",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [
-                    {
-                      threadId: "thread-claude",
-                      name: "Review the provider catalog UI",
-                      cwd: "/workspace/openclaw",
-                      status: "idle",
-                      archived: false,
-                      canContinue: true,
-                      canArchive: false,
-                    },
-                  ],
-                },
+              { capabilities: { continueSession: true, archive: true, startTerminal: true } },
+            ),
+            makeCatalog(
+              "claude",
+              "Claude Code",
+              [
+                makeHost("gateway:claude", "Local Claude", [
+                  makeNativeSession("thread-claude", "Review the provider catalog UI", {
+                    cwd: "/workspace/openclaw",
+                    canArchive: false,
+                  }),
+                ]),
               ],
-            },
+              { capabilities: { continueSession: true, archive: false } },
+            ),
           ],
         },
       },
@@ -234,7 +238,7 @@ suite.define(() => {
     const page = await suite.browser.newPage({ viewport: { height: 900, width: 1280 } });
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.catalog.list"],
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      featureMethods: catalogMethods,
     });
 
     try {
@@ -260,14 +264,9 @@ suite.define(() => {
               connected: true,
               nodeId: "fast",
               sessions: [
-                {
-                  threadId: "thread-fast",
-                  name: "Progressive node result",
-                  status: "idle",
-                  archived: false,
-                  canContinue: true,
+                makeNativeSession("thread-fast", "Progressive node result", {
                   canArchive: false,
-                },
+                }),
               ],
             },
           ],
@@ -311,125 +310,65 @@ suite.define(() => {
       },
     );
     await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      featureMethods: catalogMethods,
       methodResponses: {
         "config.get": {
           config: { ui: { prefs: { theme: "knot", themeMode: "dark" } } },
           hash: "catalog-knot-dark",
         },
-        "sessions.list": {
-          count: 1,
-          defaults: {
-            contextTokens: null,
-            model: "gpt-5.5",
-            modelProvider: "openai",
+        "sessions.list": liveSessions(
+          "agent:main:research",
+          "Research thread",
+          Date.parse("2026-07-29T06:00:00.000Z"),
+          {
+            hasActiveRun: false,
+            label: "Research thread",
+            status: "done",
           },
-          path: "",
-          sessions: [
-            {
-              contextTokens: null,
-              displayName: "Research thread",
-              hasActiveRun: false,
-              key: "agent:main:research",
-              kind: "direct",
-              label: "Research thread",
-              model: "gpt-5.5",
-              modelProvider: "openai",
-              status: "done",
-              totalTokens: 0,
-              updatedAt: Date.parse("2026-07-29T06:00:00.000Z"),
-            },
-          ],
-          ts: Date.parse("2026-07-29T06:00:00.000Z"),
-        },
+        ),
         "sessions.catalog.list": {
           catalogs: [
-            {
-              id: "codex",
-              label: "Codex",
-              capabilities: { continueSession: true, archive: true },
-              hosts: [
-                {
-                  hostId: "gateway:local",
-                  label: "Local Codex",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [
-                    {
-                      threadId: "thread-local",
-                      name: "Local planning session",
-                      cwd: "/Users/dev/openclaw",
-                      status: "idle",
-                      archived: false,
-                      canContinue: true,
-                      canArchive: true,
-                      createdActor: {
-                        type: "human",
-                        id: "profile-ada",
-                        identity: { type: "profile", id: "profile-ada" },
-                        label: "Ada",
-                      },
-                    },
-                    {
-                      threadId: "thread-worktree",
-                      name: "Worktree fix session",
-                      cwd: "/Users/dev/openclaw/.claude/worktrees/fix-1",
-                      status: "idle",
-                      archived: false,
-                      canContinue: true,
-                      canArchive: true,
-                      createdActor: {
-                        type: "human",
-                        id: "profile-zoe",
-                        identity: { type: "profile", id: "profile-zoe" },
-                        label: "Zoe",
-                      },
-                    },
-                    {
-                      threadId: "thread-other",
-                      name: "Other project session",
-                      cwd: "/Users/dev/other",
-                      status: "idle",
-                      archived: false,
-                      canContinue: true,
-                      canArchive: true,
-                    },
-                  ],
-                },
-                {
-                  hostId: "node:offline-a",
-                  label: "Offline Workstation",
-                  kind: "node",
-                  connected: false,
-                  sessions: [],
-                  error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
-                },
-                {
-                  hostId: "node:build",
-                  label: "Build Node",
-                  kind: "node",
-                  connected: true,
-                  sessions: [
-                    {
-                      threadId: "thread-remote",
-                      name: "Remote review session",
-                      status: "idle",
-                      archived: false,
-                      canContinue: true,
-                      canArchive: true,
-                    },
-                  ],
-                },
-                {
-                  hostId: "node:offline-b",
-                  label: "Offline Laptop",
-                  kind: "node",
-                  connected: false,
-                  sessions: [],
-                  error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
-                },
-              ],
-            },
+            makeCatalog("codex", "Codex", [
+              makeHost("gateway:local", "Local Codex", [
+                makeNativeSession("thread-local", "Local planning session", {
+                  cwd: "/Users/dev/openclaw",
+                  createdActor: {
+                    type: "human",
+                    id: "profile-ada",
+                    identity: { type: "profile", id: "profile-ada" },
+                    label: "Ada",
+                  },
+                }),
+                makeNativeSession("thread-worktree", "Worktree fix session", {
+                  cwd: "/Users/dev/openclaw/.claude/worktrees/fix-1",
+                  createdActor: {
+                    type: "human",
+                    id: "profile-zoe",
+                    identity: { type: "profile", id: "profile-zoe" },
+                    label: "Zoe",
+                  },
+                }),
+                makeNativeSession("thread-other", "Other project session", {
+                  cwd: "/Users/dev/other",
+                }),
+              ]),
+              makeHost("node:offline-a", "Offline Workstation", [], {
+                kind: "node",
+                connected: false,
+                error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
+              }),
+              makeHost(
+                "node:build",
+                "Build Node",
+                [makeNativeSession("thread-remote", "Remote review session")],
+                { kind: "node" },
+              ),
+              makeHost("node:offline-b", "Offline Laptop", [], {
+                kind: "node",
+                connected: false,
+                error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
+              }),
+            ]),
           ],
         },
       },
@@ -469,11 +408,7 @@ suite.define(() => {
       expect(await localHostList.getAttribute("aria-label")).toBe("Local Codex");
       const projectHeads = section.locator("[data-session-catalog-project]");
       await expect.poll(() => projectHeads.count()).toBe(2);
-      expect(
-        await localHostList
-          .locator(":scope > *")
-          .evaluateAll((items) => items.map((item) => item.getAttribute("role"))),
-      ).toEqual(["listitem", "listitem"]);
+      await expectListItems(localHostList, 2);
       const openclawProject = section.locator(
         '[data-session-catalog-project="project:/Users/dev/openclaw"]',
       );
@@ -489,11 +424,7 @@ suite.define(() => {
       ).toBe("2");
       const projectRows = section.locator(".sidebar-recent-session--catalog-project-child");
       await expect.poll(() => projectRows.count()).toBe(3);
-      expect(
-        await openclawProjectList
-          .locator(":scope > *")
-          .evaluateAll((items) => items.map((item) => item.getAttribute("role"))),
-      ).toEqual(["listitem", "listitem"]);
+      await expectListItems(openclawProjectList, 2);
       const buildHostList = section.locator(
         '[data-session-catalog-host="node:build"] > .sidebar-session-catalog-host__sessions',
       );
@@ -562,23 +493,11 @@ suite.define(() => {
 
       // Header actions are hover-revealed; hover the head so the button
       // regains pointer events before the click, mirroring the Threads menus.
-      const catalogHead = section.locator(".sidebar-recent-sessions__head");
-      const viewMenuButton = section.locator('[data-session-catalog-view-menu="codex"]');
-      await catalogHead.hover();
-      await viewMenuButton.click();
-      await page
-        .getByRole("menuitemradio", { name: "None" })
-        .evaluate((element) => (element as HTMLElement).click());
+      await chooseGrouping(section, page, "None");
       await expect.poll(() => projectHeads.count()).toBe(0);
       expect(await section.locator("[data-session-key]").count()).toBe(4);
-      expect(
-        await localHostList
-          .locator(":scope > *")
-          .evaluateAll((items) => items.map((item) => item.getAttribute("role"))),
-      ).toEqual(["listitem", "listitem", "listitem"]);
-      expect(
-        await page.evaluate((key) => localStorage.getItem(key), catalogGroupingStorageKey),
-      ).toBe("none");
+      await expectListItems(localHostList, 3);
+      expect(await readGrouping(page)).toBe("none");
       if (captureUiProofEnabled) {
         await section.screenshot({
           animations: "disabled",
@@ -588,17 +507,9 @@ suite.define(() => {
 
       // Person mode groups adopted (attributed) sessions and leaves native
       // threads without a creator in the flat tail.
-      await catalogHead.hover();
-      await viewMenuButton.click();
-      await page
-        .getByRole("menuitemradio", { name: "Person" })
-        .evaluate((element) => (element as HTMLElement).click());
+      await chooseGrouping(section, page, "Person");
       await expect.poll(() => projectHeads.count()).toBe(2);
-      expect(
-        await localHostList
-          .locator(":scope > *")
-          .evaluateAll((items) => items.map((item) => item.getAttribute("role"))),
-      ).toEqual(["listitem", "listitem", "listitem"]);
+      await expectListItems(localHostList, 3);
       expect(
         await section
           .locator('[data-session-catalog-project="person:profile:profile-ada"]')
@@ -611,19 +522,11 @@ suite.define(() => {
           .locator(".sidebar-session-catalog-project__label")
           .textContent(),
       ).toBe("Zoe");
-      expect(
-        await page.evaluate((key) => localStorage.getItem(key), catalogGroupingStorageKey),
-      ).toBe("person");
+      expect(await readGrouping(page)).toBe("person");
 
-      await catalogHead.hover();
-      await viewMenuButton.click();
-      await page
-        .getByRole("menuitemradio", { name: "Project" })
-        .evaluate((element) => (element as HTMLElement).click());
+      await chooseGrouping(section, page, "Project");
       await expect.poll(() => projectHeads.count()).toBe(2);
-      expect(
-        await page.evaluate((key) => localStorage.getItem(key), catalogGroupingStorageKey),
-      ).toBe("project");
+      expect(await readGrouping(page)).toBe("project");
 
       await openclawProject.click();
       await expect.poll(() => openclawProject.getAttribute("aria-expanded")).toBe("false");
@@ -668,34 +571,18 @@ suite.define(() => {
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      featureMethods: catalogMethods,
       methodResponses: {
         "sessions.catalog.list": {
           catalogs: [
-            {
-              id: "codex",
-              label: "Codex",
-              capabilities: { continueSession: true, archive: true },
-              hosts: [
-                {
-                  hostId: "gateway:codex",
-                  label: "Local Codex",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [
-                    {
-                      threadId: "thread-1",
-                      name: "Newest session",
-                      status: "idle",
-                      archived: false,
-                      canContinue: true,
-                      canArchive: true,
-                    },
-                  ],
-                  nextCursor: "page-2",
-                },
-              ],
-            },
+            makeCatalog("codex", "Codex", [
+              makeHost(
+                "gateway:codex",
+                "Local Codex",
+                [makeNativeSession("thread-1", "Newest session")],
+                { nextCursor: "page-2" },
+              ),
+            ]),
           ],
         },
       },
@@ -736,34 +623,17 @@ suite.define(() => {
   it("adopts from the native chat composer, navigates, and auto-sends", async () => {
     const page = await suite.browser.newPage();
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      featureMethods: catalogMethods,
       methodResponses: {
         "sessions.catalog.list": {
           catalogs: [
-            {
-              id: "codex",
-              label: "Codex",
-              capabilities: { continueSession: true, archive: true },
-              hosts: [
-                {
-                  hostId: "gateway:local",
-                  label: "Local Codex",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [
-                    {
-                      threadId: "thread-1",
-                      name: "Release checklist",
-                      status: "idle",
-                      source: "cli",
-                      archived: false,
-                      canContinue: true,
-                      canArchive: true,
-                    },
-                  ],
-                },
-              ],
-            },
+            makeCatalog("codex", "Codex", [
+              makeHost("gateway:local", "Local Codex", [
+                makeNativeSession("thread-1", "Release checklist", {
+                  source: "cli",
+                }),
+              ]),
+            ]),
           ],
         },
         "sessions.catalog.read": {
@@ -796,28 +666,10 @@ suite.define(() => {
     const composer = catalogPane.locator(".agent-chat__composer-combobox > textarea");
     await composer.fill("continue with the final checks /status");
     expect(await catalogPane.locator('.slash-menu[role="listbox"]').count()).toBe(0);
-    await gateway.setMethodResponse("sessions.list", {
-      count: 1,
-      defaults: {
-        contextTokens: null,
-        model: "gpt-5.5",
-        modelProvider: "openai",
-      },
-      path: "",
-      sessions: [
-        {
-          contextTokens: null,
-          displayName: "Adopted Codex session",
-          key: "agent:main:adopted-codex",
-          kind: "direct",
-          model: "gpt-5.5",
-          modelProvider: "openai",
-          totalTokens: 0,
-          updatedAt: Date.now(),
-        },
-      ],
-      ts: Date.now(),
-    });
+    await gateway.setMethodResponse(
+      "sessions.list",
+      liveSessions("agent:main:adopted-codex", "Adopted Codex session"),
+    );
     await composer.press("Enter");
     const continued = await gateway.waitForRequest("sessions.catalog.continue");
     expect(continued.params).toEqual({
