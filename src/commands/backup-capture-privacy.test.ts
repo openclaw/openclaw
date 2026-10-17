@@ -137,6 +137,36 @@ describe("private update capture exclusion", () => {
     expect(await fs.readFile(configPath, "utf8")).toBe("{}");
   });
 
+  it.each(["configured", "canonical"])(
+    "excludes an unmarked %s capture target when the state directory is linked",
+    async (rootKind) => {
+      const canonicalState = path.join(home.home, "canonical-state");
+      await fs.rename(stateDir, canonicalState);
+      await fs.symlink(canonicalState, stateDir, process.platform === "win32" ? "junction" : "dir");
+      const selectedCapture = `${rootKind === "configured" ? stateDir : canonicalState}.update-captures`;
+      if (rootKind === "configured") {
+        await fs.rm(selectedCapture, { recursive: true });
+      }
+      const privateTarget = path.join(home.home, "legacy-retained-data");
+      await fs.mkdir(privateTarget);
+      await fs.writeFile(path.join(privateTarget, "raw-private.txt"), "synthetic raw bytes");
+      await fs.symlink(
+        privateTarget,
+        selectedCapture,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      await configureAgents({ main: { workspace: home.home } });
+      const result = await createBackupArchive({ output });
+      const entries = await listArchiveEntries(result.archivePath);
+      expect(entries.some((entry) => entry.endsWith("/raw-private.txt"))).toBe(false);
+      expect(entries.some((entry) => entry.endsWith("/healthy.txt"))).toBe(true);
+      await verifyBackupArchive(result.archivePath);
+      expect(await fs.readFile(path.join(privateTarget, "raw-private.txt"), "utf8")).toBe(
+        "synthetic raw bytes",
+      );
+    },
+  );
+
   it("excludes marked orphaned and relocated artifacts from a parent workspace", async () => {
     const otherState = path.join(home.home, "profile-b");
     const orphanedRoot = `${otherState}.update-captures`;
