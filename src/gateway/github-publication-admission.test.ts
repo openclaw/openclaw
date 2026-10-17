@@ -86,31 +86,35 @@ async function sharedAdmission(surface: "local" | "deferred" | "claim") {
   };
 }
 
+async function claimFixture(environmentId: string) {
+  await persistClaimPublicationWorkspace();
+  const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+  const placements = createWorkerSessionPlacementStore({ database });
+  seedAttachedPlacementEnvironment(database, {
+    environmentId,
+    sessionId: REQUEST.sessionId,
+    ownerEpoch: 2,
+  });
+  const active = await seedActivePlacement(placements, { environmentId, ownerEpoch: 2 });
+  const claimTurn = (claimId: string, runId: string) =>
+    placements.claimTurn({
+      sessionId: active.sessionId,
+      sessionKey: active.sessionKey,
+      agentId: active.agentId,
+      claimId,
+      runId,
+      owner: { kind: "worker", environmentId, ownerEpoch: 2 },
+    });
+  return { database, placements, claimTurn };
+}
+
 describe("GitHub publication selection admission", () => {
   installGitHubPublicationTestHarness();
   afterEach(() => vi.unstubAllGlobals());
 
   it("rejects a stale turn claim after awaited identity verification", async () => {
-    await persistClaimPublicationWorkspace();
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    const placements = createWorkerSessionPlacementStore({ database });
-    seedAttachedPlacementEnvironment(database, {
-      environmentId: "environment-1",
-      sessionId: REQUEST.sessionId,
-      ownerEpoch: 2,
-    });
-    const active = await seedActivePlacement(placements, {
-      environmentId: "environment-1",
-      ownerEpoch: 2,
-    });
-    const claim = await placements.claimTurn({
-      sessionId: active.sessionId,
-      sessionKey: active.sessionKey,
-      agentId: active.agentId,
-      claimId: "claim-1",
-      runId: "run-1",
-      owner: { kind: "worker", environmentId: "environment-1", ownerEpoch: 2 },
-    });
+    const { database, placements, claimTurn } = await claimFixture("environment-1");
+    const claim = await claimTurn("claim-1", "run-1");
     const entered = createDeferredCore();
     const release = createDeferredCore();
     mocks.prepareIdentity.mockImplementationOnce(async () => {
@@ -160,26 +164,8 @@ describe("GitHub publication selection admission", () => {
   });
 
   it("rejects reuse of a worker publication idempotency key by a later turn", async () => {
-    await persistClaimPublicationWorkspace();
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    const placements = createWorkerSessionPlacementStore({ database });
-    seedAttachedPlacementEnvironment(database, {
-      environmentId: "environment-idempotency",
-      sessionId: REQUEST.sessionId,
-      ownerEpoch: 2,
-    });
-    const active = await seedActivePlacement(placements, {
-      environmentId: "environment-idempotency",
-      ownerEpoch: 2,
-    });
-    const firstClaim = await placements.claimTurn({
-      sessionId: active.sessionId,
-      sessionKey: active.sessionKey,
-      agentId: active.agentId,
-      claimId: "claim-first",
-      runId: "run-first",
-      owner: { kind: "worker", environmentId: "environment-idempotency", ownerEpoch: 2 },
-    });
+    const { placements, claimTurn } = await claimFixture("environment-idempotency");
+    const firstClaim = await claimTurn("claim-first", "run-first");
     const coordinator = createTestGitHubPublicationCoordinator({ placements });
     await coordinator.requestForClaimV2({
       claim: firstClaim,
@@ -188,14 +174,7 @@ describe("GitHub publication selection admission", () => {
       idempotencyKey: "reused-worker-call",
     });
     await placements.releaseTurn(firstClaim);
-    const secondClaim = await placements.claimTurn({
-      sessionId: active.sessionId,
-      sessionKey: active.sessionKey,
-      agentId: active.agentId,
-      claimId: "claim-second",
-      runId: "run-second",
-      owner: { kind: "worker", environmentId: "environment-idempotency", ownerEpoch: 2 },
-    });
+    const secondClaim = await claimTurn("claim-second", "run-second");
 
     await expect(
       coordinator.requestForClaimV2({
@@ -254,14 +233,7 @@ describe("GitHub publication selection admission", () => {
               },
             }
           : {}),
-        ...(method === "status" || method === "confirm" ? { requestId: fixture.generation } : {}),
-        ...(method === "confirm"
-          ? {
-              generation: fixture.generation,
-              account: personalPublicationAccount,
-              requestDigest: "a".repeat(64),
-            }
-          : {}),
+        ...(method === "status" ? { requestId: fixture.generation } : {}),
       };
       const response = await callPersonalPublicationRpc(
         fixture,

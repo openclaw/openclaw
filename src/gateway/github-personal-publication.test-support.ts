@@ -61,9 +61,7 @@ export async function preparePersonalPublicationFixtureV2(
   };
   const prepared = await preparePersonalGitHubSessionActionV2(
     { ...fixture, signal },
-    {
-      sessionKey: SESSION_KEY,
-    },
+    { sessionKey: SESSION_KEY },
   );
   onTestFinished(prepared.release);
   return prepared.action;

@@ -32,6 +32,7 @@ import { ensureGitHubPublicationSchema } from "../state/openclaw-state-db-schema
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
@@ -43,7 +44,10 @@ import {
 import { createGitHubPublicationRuntime as createRuntime } from "./github-publication-runtime.js";
 import { createGitHubPublicationCoordinator as createCoordinator } from "./github-publication.js";
 import { REQUEST } from "./worker-environments/placement-dispatch-test-fixtures.js";
-import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import {
+  createWorkerSessionPlacementStore,
+  type WorkerSessionPlacementStore,
+} from "./worker-environments/placement-store.js";
 
 const mocks = vi.hoisted(() => ({
   matchesIdentity: vi.fn(),
@@ -206,10 +210,7 @@ async function bindPublicationFixtureRequest<
         assertCurrent,
       )
     ).requester;
-  return {
-    ...request,
-    requester,
-  };
+  return { ...request, requester };
 }
 
 function withSystemRequesterFixture(coordinator: ReturnType<typeof createCoordinator>) {
@@ -242,10 +243,14 @@ export function createTestGitHubPublicationRuntime({
   return { ...runtime, coordinator: withSystemRequesterFixture(runtime.coordinator) };
 }
 
-export function createTestGitHubPublicationCoordinator({
-  getCommittedRuntimeConfig = currentGitHubPublicationConfig,
-  ...params
-}: PublicationFixtureOptions<Parameters<typeof createCoordinator>[0]>) {
+export function createTestGitHubPublicationCoordinator(
+  {
+    getCommittedRuntimeConfig = currentGitHubPublicationConfig,
+    ...params
+  }: PublicationFixtureOptions<Parameters<typeof createCoordinator>[0]> = {
+    placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
+  },
+) {
   return withSystemRequesterFixture(createCoordinator({ ...params, getCommittedRuntimeConfig }));
 }
 
@@ -256,6 +261,15 @@ export const BASE_HEAD = "a".repeat(40);
 export const OLD_HEAD = "b".repeat(40);
 export const NEW_HEAD = "c".repeat(40);
 export const WORKSPACE_TREE = "d".repeat(40);
+
+export function publicationRequest(
+  idempotencyKey: string,
+  overrides: Partial<
+    Parameters<ReturnType<typeof createTestGitHubPublicationCoordinator>["requestForSessionV2"]>[0]
+  > = {},
+) {
+  return { sessionKey: SESSION_KEY, agentId: "main", idempotencyKey, ...overrides };
+}
 
 export function commandResult(stdout = "", code = 0) {
   return {
@@ -600,6 +614,22 @@ export function installGitHubPublicationTestHarness(
         worktree: { id: "worktree-1", branch: BRANCH, repoRoot: "/repo" },
       },
     }));
+    const replies: Record<string, [string?, number?]> = {
+      "git symbolic-ref --quiet --short HEAD": [`${BRANCH}\n`],
+      [`git symbolic-ref --quiet refs/heads/${BRANCH}`]: ["", 1],
+      "git rev-parse --verify --quiet MERGE_HEAD": ["", 1],
+      "git rev-parse --verify HEAD^{commit}": [`${OLD_HEAD}\n`],
+      "git show -s --no-show-signature --format=%H%n%T%n%P%n%B HEAD": [
+        `${OLD_HEAD}\n${WORKSPACE_TREE}\n${OLD_HEAD}\nexisting commit\n`,
+      ],
+      "git config --local --includes --bool --get extensions.worktreeConfig": ["", 1],
+      "git rev-parse --git-path info/attributes": [path.join(root, "missing-info-attributes")],
+      "git rev-parse --git-path info/grafts": [path.join(root, "missing-grafts")],
+      "git var GIT_ATTR_GLOBAL": [path.join(root, "missing-global-attributes")],
+      "git var GIT_ATTR_SYSTEM": [path.join(root, "missing-global-attributes")],
+      [`git rev-parse ${BASE_HEAD}^{tree}`]: ["e".repeat(40) + "\n"],
+      "git rev-parse --verify --end-of-options origin/main^{commit}": [`${BASE_HEAD}\n`],
+    };
     let remotePublished = false;
     mocks.runCommand
       .mockReset()
@@ -607,18 +637,10 @@ export function installGitHubPublicationTestHarness(
         commands.push(argv);
         commandCalls.push({ argv, input: options?.input });
         const command = argv.join(" ");
-        if (command === "git symbolic-ref --quiet --short HEAD") {
-          return commandResult(`${BRANCH}\n`);
+        if (replies[command]) {
+          return commandResult(...replies[command]);
         }
-        if (command === `git symbolic-ref --quiet refs/heads/${BRANCH}`) {
-          return commandResult("", 1);
-        }
-        if (command === "git rev-parse --verify --quiet MERGE_HEAD") {
-          return commandResult("", 1);
-        }
-        if (command === "git rev-parse --verify HEAD^{commit}") {
-          return commandResult(`${OLD_HEAD}\n`);
-        }
+
         if (
           command.startsWith(
             "gh api --hostname github.com repos/openclaw/openclaw --jq {fork, default_branch, parent:",
@@ -631,12 +653,7 @@ export function installGitHubPublicationTestHarness(
           const branch = command.slice(baseRefPrefix.length).split(" --jq", 1)[0];
           return commandResult(JSON.stringify({ ref: `refs/heads/${branch}`, sha: BASE_HEAD }));
         }
-        if (command === "git show -s --no-show-signature --format=%H%n%T%n%P%n%B HEAD") {
-          return commandResult(`${OLD_HEAD}\n${WORKSPACE_TREE}\n${OLD_HEAD}\nexisting commit\n`);
-        }
-        if (command === "git config --local --includes --bool --get extensions.worktreeConfig") {
-          return commandResult("", 1);
-        }
+
         if (argv.includes("--includes") && argv.includes("--get-regexp")) {
           return commandResult("", 1);
         }
@@ -646,15 +663,7 @@ export function installGitHubPublicationTestHarness(
         if (argv.includes("rev-parse") && argv.includes("--git-path") && argv.at(-1) === "index") {
           return commandResult(syntheticIndex);
         }
-        if (command === "git rev-parse --git-path info/attributes") {
-          return commandResult(path.join(root, "missing-info-attributes"));
-        }
-        if (command === "git rev-parse --git-path info/grafts") {
-          return commandResult(path.join(root, "missing-grafts"));
-        }
-        if (command === "git var GIT_ATTR_GLOBAL" || command === "git var GIT_ATTR_SYSTEM") {
-          return commandResult(path.join(root, "missing-global-attributes"));
-        }
+
         if (
           argv[0] === "git" &&
           argv[1] === "config" &&
@@ -666,15 +675,11 @@ export function installGitHubPublicationTestHarness(
         if (command.endsWith("write-tree")) {
           return commandResult(`${WORKSPACE_TREE}\n`);
         }
-        if (command === `git rev-parse ${BASE_HEAD}^{tree}`) {
-          return commandResult("e".repeat(40) + "\n");
-        }
+
         if (command.startsWith("git commit-tree ")) {
           return commandResult(`${NEW_HEAD}\n`);
         }
-        if (command === "git rev-parse --verify --end-of-options origin/main^{commit}") {
-          return commandResult(`${BASE_HEAD}\n`);
-        }
+
         if (
           command.startsWith(
             "git -c credential.helper= -c credential.helper=!gh auth git-credential ls-remote",

@@ -4,6 +4,7 @@ import {
   BRANCH,
   NEW_HEAD,
   SESSION_KEY,
+  publicationRequest,
   commandCalls,
   createTestGitHubPublicationCoordinator as createGitHubPublicationCoordinator,
   githubPublicationTestMocks,
@@ -29,7 +30,6 @@ import { readGitHubPublicationRequest } from "./github-publication-store.worker.
 import * as repositoryPublicationExecutor from "./github-repository-publication-executor.js";
 import { createRepositoryPublicationFixture } from "./github-repository-publication.test-support.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
-import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const mocks = githubPublicationTestMocks();
 const checkpoint = vi.hoisted(() => vi.fn());
@@ -61,9 +61,7 @@ describe("Gateway GitHub publication attribution", () => {
     await persistPublicationTestSession();
     await prepareRealPublicationCredit();
     const trailer = "Co-authored-by: alice <7+alice@users.noreply.github.com>";
-    const coordinator = createGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
-    });
+    const coordinator = createGitHubPublicationCoordinator();
     const result = await coordinator.requestForSessionV2({
       agentId: "main",
       sessionKey: SESSION_KEY,
@@ -93,10 +91,7 @@ describe("Gateway GitHub publication attribution", () => {
 
   it.each(
     (["local", "repository"] as const).flatMap((surface) =>
-      (["preparation", "push", "pull_request"] as const).map((boundary) => ({
-        surface,
-        boundary,
-      })),
+      (["preparation", "push", "pull_request"] as const).map((boundary) => ({ surface, boundary })),
     ),
   )(
     "honors opt-out at $surface $boundary without new credited effects",
@@ -168,11 +163,7 @@ describe("Gateway GitHub publication attribution", () => {
           onTestFinished(() => intercepted.mockRestore());
         }
       }
-      const coordinator =
-        repository?.coordinator ??
-        createGitHubPublicationCoordinator({
-          placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
-        });
+      const coordinator = repository?.coordinator ?? createGitHubPublicationCoordinator();
       const result = await coordinator.requestForSessionV2({
         agentId: "main",
         sessionKey: SESSION_KEY,
@@ -374,11 +365,7 @@ describe("Gateway GitHub publication attribution", () => {
         readOnly: true,
       }),
     );
-    const coordinator = createGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({
-        database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
-      }),
-    });
+    const coordinator = createGitHubPublicationCoordinator();
 
     const result = await coordinator.requestForSessionV2({
       sessionKey: childKey,
@@ -405,17 +392,9 @@ describe("Gateway GitHub publication attribution", () => {
   it("publishes without a session footer when the configured URL is not external HTTPS", async () => {
     const config = { gateway: { publicOrigin: "http://127.0.0.1:18789" } };
     mocks.getConfigSnapshot.mockReturnValue({ config, sourceConfig: config });
-    const coordinator = createGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({
-        database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
-      }),
-    });
+    const coordinator = createGitHubPublicationCoordinator();
 
-    const result = await coordinator.requestForSessionV2({
-      sessionKey: SESSION_KEY,
-      agentId: "main",
-      idempotencyKey: "local-session-url",
-    });
+    const result = await coordinator.requestForSessionV2(publicationRequest("local-session-url"));
 
     expect(result).toMatchObject({ status: "published" });
     const post = commandCalls.find(({ argv }) => argv.includes("POST"));

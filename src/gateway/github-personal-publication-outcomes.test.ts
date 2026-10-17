@@ -315,10 +315,7 @@ describe("personal publication definitive outcomes", () => {
   it("stops offering a pending confirmation once the session is archived", async () => {
     const { generation } = fixture;
     const { requestId } = await createStoppedPersonalRequest();
-    const pending = await rpc("sessions.github.status", {
-      sessionKey: SESSION_KEY,
-      requestId,
-    });
+    const pending = await rpc("sessions.github.status", { sessionKey: SESSION_KEY, requestId });
     expect(pending[1]).toMatchObject({
       result: { status: "needs_confirmation" },
       confirmation: { generation, account },
@@ -326,10 +323,7 @@ describe("personal publication definitive outcomes", () => {
     // Archiving preserves sessionId/lifecycleRevision, so only an explicit archivedAt
     // check can retire the pending confirmation the archived confirm action would reject.
     await archiveSession();
-    const discovered = await rpc("sessions.github.status", {
-      sessionKey: SESSION_KEY,
-      requestId,
-    });
+    const discovered = await rpc("sessions.github.status", { sessionKey: SESSION_KEY, requestId });
     expect(discovered[1]).toMatchObject({
       result: { status: "failed", code: "session_changed" },
       confirmation: null,
