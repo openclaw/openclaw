@@ -1,6 +1,5 @@
 import { afterAll, describe, expect, it } from "vitest";
 import {
-  collectSessionStoreRuntimeFileBackedCompatExports,
   compareSessionAccessorDebt,
   findGatewaySessionCreateLifecycleViolations,
   findEmbeddedAgentSessionTargetViolations,
@@ -47,7 +46,7 @@ function check(
   );
 }
 
-describe("session accessor boundary guard", () => {
+describe("session accessor guards", () => {
   it("keeps Gateway read paths on non-materializing accessors", () => {
     expect(
       readOnlyGatewaySessionAccessorFiles.has("src/gateway/server-methods/sessions-read.ts"),
@@ -80,45 +79,19 @@ describe("session accessor boundary guard", () => {
     check(
       findSessionStoreRuntimeFileBackedCompatExportViolations,
       `
-        export function loadSessionStore() {}
+        export const loadSessionStore = loadSessionStoreImpl;
         export function updateSessionStore() {}
         export function resolveSessionFilePath() {}
         export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
+        export { resolveSessionFilePath as resolveLegacySessionFilePath, saveSessionStore } from "../config/sessions/paths.js";
       `,
       "retired file-backed SDK session helper",
       [2, "exports", "loadSessionStore"],
       [3, "exports", "updateSessionStore"],
       [4, "exports", "resolveSessionFilePath"],
       [5, "exports", "resolveSessionStoreEntry"],
-    );
-    check(
-      findSessionStoreRuntimeFileBackedCompatExportViolations,
-      `
-        export { resolveSessionFilePath as resolveLegacySessionFilePath } from "../config/sessions/paths.js";
-        export { saveSessionStore } from "../config/sessions/store.js";
-      `,
-      "retired file-backed SDK session helper",
-      [2, "exports", "resolveSessionFilePath"],
-      [3, "exports", "saveSessionStore"],
-    );
-  });
-
-  it("collects file-backed SDK session compatibility exports", () => {
-    expect(
-      collectSessionStoreRuntimeFileBackedCompatExports(
-        ...parseFixture(`
-        export const loadSessionStore = loadSessionStoreImpl;
-        export { resolveSessionFilePath } from "../config/sessions/paths.js";
-        export { saveSessionStore, updateSessionStore } from "../config/sessions/store.js";
-      `),
-      ),
-    ).toEqual(
-      new Map([
-        ["loadSessionStore", { line: 2, sourceName: "loadSessionStore" }],
-        ["resolveSessionFilePath", { line: 3, sourceName: "resolveSessionFilePath" }],
-        ["saveSessionStore", { line: 4, sourceName: "saveSessionStore" }],
-        ["updateSessionStore", { line: 4, sourceName: "updateSessionStore" }],
-      ]),
+      [6, "exports", "resolveSessionFilePath"],
+      [6, "exports", "saveSessionStore"],
     );
   });
 
@@ -455,8 +428,8 @@ describe("session accessor debt ratchet", () => {
   it("flags unmigrated files whose legacy call-site count exceeds the baseline", () => {
     expect(
       compareSessionAccessorDebt(
-        counts({ "src/a.ts": 3 }, { "src/new.ts": 1 }),
-        counts({ "src/a.ts": 2 }, {}),
+        counts({ "src/a.ts": 3, "src/unchanged.ts": 1 }, { "src/new.ts": 1 }),
+        counts({ "src/a.ts": 2, "src/unchanged.ts": 1 }, {}),
       ),
     ).toEqual({
       regressions: [
@@ -465,12 +438,6 @@ describe("session accessor debt ratchet", () => {
       ],
       improvements: [],
     });
-  });
-
-  it("passes when counts match the baseline", () => {
-    expect(
-      compareSessionAccessorDebt(counts({ "src/a.ts": 2 }), counts({ "src/a.ts": 2 })),
-    ).toEqual({ regressions: [], improvements: [] });
   });
 
   it("fails with a regen instruction when counts drop below the baseline", () => {

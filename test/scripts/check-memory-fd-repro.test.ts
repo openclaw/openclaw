@@ -64,270 +64,266 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario, expectedStatus 
   const preloadPath = path.join(root, "runtime.mjs");
   const journalPath = path.join(root, "journal.json");
   const outputDir = path.join(root, "output");
-  try {
-    // Synthetic unjoined Gateway lifetimes belong to this fixture, not the compiler generation.
-    const owner = createVitestResourceOwner(root);
-    fs.writeFileSync(path.join(root, "openclaw.mjs"), "export {};\n");
-    fs.writeFileSync(
+  // Synthetic unjoined Gateway lifetimes belong to this fixture, not the compiler generation.
+  const owner = createVitestResourceOwner(root);
+  fs.writeFileSync(path.join(root, "openclaw.mjs"), "export {};\n");
+  fs.writeFileSync(
+    preloadPath,
+    [
+      "import assert from 'node:assert/strict';",
+      "import cp from 'node:child_process';",
+      "import { EventEmitter } from 'node:events';",
+      "import fs from 'node:fs';",
+      "import { syncBuiltinESMExports } from 'node:module';",
+      "import net from 'node:net';",
+      "import path from 'node:path';",
+      "import { PassThrough } from 'node:stream';",
+      `const scenario = ${JSON.stringify(scenario)};`,
+      `const ownedPid = ${OWNED_PID}, foreignPid = ${FOREIGN_PID};`,
+      "const cancellation = /^(sample|settle)-(sigterm|pipe)$/.exec(scenario);",
+      "const samples = [], signals = [], events = [];",
+      "let child, syntheticRoot, configHome, launch, attemptedSummary, closed = false, replaced = false;",
+      "let wait, requestSettled = false, guardFired = false;",
+      "const write = fs.writeFileSync, remove = fs.rmSync;",
+      "const nativeKill = process.kill.bind(process);",
+      "const record = () => write(" + JSON.stringify(journalPath) + ", JSON.stringify({",
+      "  samples, signals, events, launch, attemptedSummary, closed, alive: Boolean(alive()),",
+      "  rootExists: Boolean(syntheticRoot && fs.existsSync(syntheticRoot)),",
+      "  wait, requestSettled, guardFired,",
+      "}));",
+      "const enterWait = (phase) => {",
+      "  if (cancellation?.[1] !== phase) return;",
+      // The next turn follows the invoke/log boundary and reaches the wait
+      // without observing or replacing either timer implementation.
+      "  setImmediate(() => {",
+      "    wait = { phase, samples: samples.length, requestSettled };",
+      "    if (cancellation[2] === 'sigterm') {",
+      "      events.push('parent:SIGTERM'); nativeKill(process.pid, 'SIGTERM');",
+      "    } else {",
+      "      const channel = phase === 'sample' ? 'stdout' : 'stderr';",
+      "      child[channel].destroy(Object.assign(",
+      "        new Error('injected Gateway ' + channel + ' read EIO'), { code: 'EIO' }));",
+      "    }",
+      "  });",
+      "};",
+      "fs.writeFileSync = (target, ...args) => {",
+      "  if (String(target).endsWith(path.join('.openclaw', 'openclaw.json')))",
+      "    configHome = path.dirname(path.dirname(String(target)));",
+      "  if (String(target).endsWith('/summary.json')) {",
+      "    events.push('summary'); attemptedSummary = JSON.parse(String(args[0]));",
+      "    if (scenario === 'completed-threshold-cleanup-report-error')",
+      "      throw Object.assign(new Error('summary write failed EACCES'), { code: 'EACCES' });",
+      "  }",
+      "  return write(target, ...args);",
+      "};",
+      "const assertIsolatedEnv = (env, boundary) => {",
+      "  if (scenario !== 'inherited-paths') return;",
+      "  assert.equal(env.HOME, configHome);",
+      "  assert.equal(env.USERPROFILE, configHome);",
+      "  assert.equal(env.OPENCLAW_HOME, configHome);",
+      "  assert.equal(env.OPENCLAW_STATE_DIR, path.join(configHome, '.openclaw'));",
+      "  assert.equal(env.OPENCLAW_CONFIG_PATH, path.join(configHome, '.openclaw', 'openclaw.json'));",
+      "  assert.equal(env.XDG_CONFIG_HOME, path.join(configHome, '.config'));",
+      "  assert.equal(env.XDG_CACHE_HOME, path.join(configHome, '.cache'));",
+      "  assert.equal(env.XDG_DATA_HOME, path.join(configHome, '.local', 'share'));",
+      "  assert.equal(env.XDG_STATE_HOME, path.join(configHome, '.local', 'state'));",
+      "  assert.equal(env.XDG_RUNTIME_DIR, path.join(configHome, '.run'));",
+      "  events.push('isolated:' + boundary);",
+      "};",
+      "fs.rmSync = (target, options) => {",
+      "  if (target === syntheticRoot) {",
+      "    events.push('cleanup');",
+      "    if (scenario.startsWith('primary-') || scenario.startsWith('completed-')) {",
+      "      const code = scenario.startsWith('primary-') ? scenario.split('-')[3] : 'EIO';",
+      "      throw Object.assign(new Error('workspace removal failed ' + code), { code });",
+      "    }",
+      "  }",
+      "  return remove(target, options);",
+      "};",
+      "net.createServer = () => Object.assign(new EventEmitter(), {",
+      "  unref() {},",
+      "  listen(_port, _host, callback) { queueMicrotask(callback); },",
+      "  address: () => ({ port: 43791 }),",
+      "  close(callback) { queueMicrotask(callback); },",
+      "});",
+      "const alive = () => child && child.exitCode === null && child.signalCode === null;",
+      "const finish = (code, signal = null) => {",
+      "  if (!alive()) return;",
+      "  child.exitCode = code; child.signalCode = signal;",
+      "  child.emit('exit', code, signal);",
+      "  setImmediate(() => {",
+      "    child.stdout.destroy(); child.stderr.destroy();",
+      "    closed = true; events.push('close'); child.emit('close', code, signal);",
+      "    if (cancellation) setTimeout(() => {",
+      "      guardFired = true; record();",
+      "      fs.writeSync(2, 'measurement wait outlived owned close: ' + JSON.stringify({",
+      "        wait, requestSettled, closed, alive: Boolean(alive()),",
+      "        rootExists: fs.existsSync(syntheticRoot), events,",
+      "      }) + '\\n');",
+      "      nativeKill(process.pid, 'SIGKILL');",
+      "    }, 2_000).unref();",
+      "  });",
+      "};",
+      // Live groups have live leaders; terminal groups return ESRCH. These
+      // cases do not model the Linux exited-leader/live-group ps branch.
+      "process.kill = (pid, signal) => {",
+      "  if (pid !== ownedPid && pid !== -ownedPid && pid !== foreignPid && pid !== -foreignPid)",
+      "    throw new Error('fixture refused unexpected signal target');",
+      "  if (signal === 0) {",
+      "    if (alive()) return true;",
+      "    throw Object.assign(new Error('owned process gone'), { code: 'ESRCH' });",
+      "  }",
+      "  signals.push([pid, signal]);",
+      "  if (Math.abs(pid) === ownedPid && scenario !== 'ignored-stop') finish(null, signal);",
+      "  return true;",
+      "};",
+      "cp.spawn = (_bin, args, options) => {",
+      "  assertIsolatedEnv(options.env, 'gateway');",
+      "  if (child) throw new Error('fixture permits exactly one Gateway launch');",
+      "  syntheticRoot = path.dirname(options.env.HOME);",
+      "  launch = { entry: args[0], noCompileCache: options.env.NODE_DISABLE_COMPILE_CACHE,",
+      "    devSourceRoot: options.env.OPENCLAW_DEV_SOURCE_ROOT };",
+      "  child = Object.assign(new EventEmitter(), {",
+      "    pid: ownedPid, exitCode: null, signalCode: null,",
+      "    stdout: new PassThrough(), stderr: new PassThrough(),",
+      "    kill: (signal) => process.kill(ownedPid, signal),",
+      "  });",
+      "  Object.defineProperty(child, 'stdio', {",
+      "    get: () => [null, child.stdout, child.stderr, null],",
+      "  });",
+      "  queueMicrotask(() => {",
+      "    child.stdout.write('[gateway] ready\\n');",
+      "    if (scenario === 'exited-ready') finish(0);",
+      "  });",
+      "  return child;",
+      "};",
+      "const success = (stdout = '') => ({ status: 0, signal: null, stdout, stderr: '' });",
+      "cp.spawnSync = (bin, args, options) => {",
+      "  if (bin === process.execPath && args.includes('index')) {",
+      "    assertIsolatedEnv(options.env, 'index'); return success();",
+      "  }",
+      "  if (bin !== 'lsof') throw new Error('fixture refused unexpected command ' + bin);",
+      "  if (args.includes('-v')) return success();",
+      "  if (args.some(arg => arg.startsWith('-iTCP:'))) {",
+      "    const pid = scenario === 'foreign-ready' || scenario === 'exited-ready' || replaced",
+      "      ? foreignPid : alive() ? ownedPid : null;",
+      "    return { ...success(pid ? String(pid) + '\\n' : ''), status: pid ? 0 : 1 };",
+      "  }",
+      "  const pid = Number(args[args.indexOf('-p') + 1]);",
+      "  samples.push({ pid, alive: Boolean(alive()) });",
+      "  if (cancellation?.[1] === 'settle' && samples.length === 2) enterWait('settle');",
+      "  if (scenario.startsWith('primary-')) {",
+      "    const code = scenario.split('-')[1];",
+      "    return { ...success(), status: 1, stderr: 'measurement denied ' + code };",
+      "  }",
+      "  return success('COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME\\n');",
+      "};",
+      "globalThis.fetch = async (_url, options) => {",
+      "  if (cancellation?.[1] === 'sample') {",
+      "    enterWait('sample');",
+      "    return await new Promise((_resolve, reject) => {",
+      "      options.signal.addEventListener('abort', () => {",
+      "        requestSettled = true; reject(options.signal.reason);",
+      "      }, { once: true });",
+      "    });",
+      "  }",
+      "  if (scenario === 'replaced-during') { replaced = true; finish(23); }",
+      "  if (scenario === 'stdout-error' || scenario === 'stderr-error') {",
+      "    const channel = scenario === 'stdout-error' ? 'stdout' : 'stderr';",
+      "    child[channel].destroy(Object.assign(",
+      "      new Error('injected Gateway ' + channel + ' read EIO'), { code: 'EIO' }));",
+      "  }",
+      "  requestSettled = true;",
+      "  return new Response(JSON.stringify({ ok: true, result: { results: [] } }), { status: 200 });",
+      "};",
+      "process.on('exit', record);",
+      "syncBuiltinESMExports();",
+    ].join("\n"),
+  );
+  const result = spawnSync(
+    testNodeExecPath,
+    [
+      ...resolveRuntimeWorkerArgv(scriptUrl, testNodeExecPath).slice(0, -1),
+      "--import",
       preloadPath,
-      [
-        "import assert from 'node:assert/strict';",
-        "import cp from 'node:child_process';",
-        "import { EventEmitter } from 'node:events';",
-        "import fs from 'node:fs';",
-        "import { syncBuiltinESMExports } from 'node:module';",
-        "import net from 'node:net';",
-        "import path from 'node:path';",
-        "import { PassThrough } from 'node:stream';",
-        `const scenario = ${JSON.stringify(scenario)};`,
-        `const ownedPid = ${OWNED_PID}, foreignPid = ${FOREIGN_PID};`,
-        "const cancellation = /^(sample|settle)-(sigterm|pipe)$/.exec(scenario);",
-        "const samples = [], signals = [], events = [];",
-        "let child, syntheticRoot, configHome, launch, attemptedSummary, closed = false, replaced = false;",
-        "let wait, requestSettled = false, guardFired = false;",
-        "const write = fs.writeFileSync, remove = fs.rmSync;",
-        "const nativeKill = process.kill.bind(process);",
-        "const record = () => write(" + JSON.stringify(journalPath) + ", JSON.stringify({",
-        "  samples, signals, events, launch, attemptedSummary, closed, alive: Boolean(alive()),",
-        "  rootExists: Boolean(syntheticRoot && fs.existsSync(syntheticRoot)),",
-        "  wait, requestSettled, guardFired,",
-        "}));",
-        "const enterWait = (phase) => {",
-        "  if (cancellation?.[1] !== phase) return;",
-        // The next turn follows the invoke/log boundary and reaches the wait
-        // without observing or replacing either timer implementation.
-        "  setImmediate(() => {",
-        "    wait = { phase, samples: samples.length, requestSettled };",
-        "    if (cancellation[2] === 'sigterm') {",
-        "      events.push('parent:SIGTERM'); nativeKill(process.pid, 'SIGTERM');",
-        "    } else {",
-        "      const channel = phase === 'sample' ? 'stdout' : 'stderr';",
-        "      child[channel].destroy(Object.assign(",
-        "        new Error('injected Gateway ' + channel + ' read EIO'), { code: 'EIO' }));",
-        "    }",
-        "  });",
-        "};",
-        "fs.writeFileSync = (target, ...args) => {",
-        "  if (String(target).endsWith(path.join('.openclaw', 'openclaw.json')))",
-        "    configHome = path.dirname(path.dirname(String(target)));",
-        "  if (String(target).endsWith('/summary.json')) {",
-        "    events.push('summary'); attemptedSummary = JSON.parse(String(args[0]));",
-        "    if (scenario === 'completed-threshold-cleanup-report-error')",
-        "      throw Object.assign(new Error('summary write failed EACCES'), { code: 'EACCES' });",
-        "  }",
-        "  return write(target, ...args);",
-        "};",
-        "const assertIsolatedEnv = (env, boundary) => {",
-        "  if (scenario !== 'inherited-paths') return;",
-        "  assert.equal(env.HOME, configHome);",
-        "  assert.equal(env.USERPROFILE, configHome);",
-        "  assert.equal(env.OPENCLAW_HOME, configHome);",
-        "  assert.equal(env.OPENCLAW_STATE_DIR, path.join(configHome, '.openclaw'));",
-        "  assert.equal(env.OPENCLAW_CONFIG_PATH, path.join(configHome, '.openclaw', 'openclaw.json'));",
-        "  assert.equal(env.XDG_CONFIG_HOME, path.join(configHome, '.config'));",
-        "  assert.equal(env.XDG_CACHE_HOME, path.join(configHome, '.cache'));",
-        "  assert.equal(env.XDG_DATA_HOME, path.join(configHome, '.local', 'share'));",
-        "  assert.equal(env.XDG_STATE_HOME, path.join(configHome, '.local', 'state'));",
-        "  assert.equal(env.XDG_RUNTIME_DIR, path.join(configHome, '.run'));",
-        "  events.push('isolated:' + boundary);",
-        "};",
-        "fs.rmSync = (target, options) => {",
-        "  if (target === syntheticRoot) {",
-        "    events.push('cleanup');",
-        "    if (scenario.startsWith('primary-') || scenario.startsWith('completed-')) {",
-        "      const code = scenario.startsWith('primary-') ? scenario.split('-')[3] : 'EIO';",
-        "      throw Object.assign(new Error('workspace removal failed ' + code), { code });",
-        "    }",
-        "  }",
-        "  return remove(target, options);",
-        "};",
-        "net.createServer = () => Object.assign(new EventEmitter(), {",
-        "  unref() {},",
-        "  listen(_port, _host, callback) { queueMicrotask(callback); },",
-        "  address: () => ({ port: 43791 }),",
-        "  close(callback) { queueMicrotask(callback); },",
-        "});",
-        "const alive = () => child && child.exitCode === null && child.signalCode === null;",
-        "const finish = (code, signal = null) => {",
-        "  if (!alive()) return;",
-        "  child.exitCode = code; child.signalCode = signal;",
-        "  child.emit('exit', code, signal);",
-        "  setImmediate(() => {",
-        "    child.stdout.destroy(); child.stderr.destroy();",
-        "    closed = true; events.push('close'); child.emit('close', code, signal);",
-        "    if (cancellation) setTimeout(() => {",
-        "      guardFired = true; record();",
-        "      fs.writeSync(2, 'measurement wait outlived owned close: ' + JSON.stringify({",
-        "        wait, requestSettled, closed, alive: Boolean(alive()),",
-        "        rootExists: fs.existsSync(syntheticRoot), events,",
-        "      }) + '\\n');",
-        "      nativeKill(process.pid, 'SIGKILL');",
-        "    }, 2_000).unref();",
-        "  });",
-        "};",
-        // Live groups have live leaders; terminal groups return ESRCH. These
-        // cases do not model the Linux exited-leader/live-group ps branch.
-        "process.kill = (pid, signal) => {",
-        "  if (pid !== ownedPid && pid !== -ownedPid && pid !== foreignPid && pid !== -foreignPid)",
-        "    throw new Error('fixture refused unexpected signal target');",
-        "  if (signal === 0) {",
-        "    if (alive()) return true;",
-        "    throw Object.assign(new Error('owned process gone'), { code: 'ESRCH' });",
-        "  }",
-        "  signals.push([pid, signal]);",
-        "  if (Math.abs(pid) === ownedPid && scenario !== 'ignored-stop') finish(null, signal);",
-        "  return true;",
-        "};",
-        "cp.spawn = (_bin, args, options) => {",
-        "  assertIsolatedEnv(options.env, 'gateway');",
-        "  if (child) throw new Error('fixture permits exactly one Gateway launch');",
-        "  syntheticRoot = path.dirname(options.env.HOME);",
-        "  launch = { entry: args[0], noCompileCache: options.env.NODE_DISABLE_COMPILE_CACHE,",
-        "    devSourceRoot: options.env.OPENCLAW_DEV_SOURCE_ROOT };",
-        "  child = Object.assign(new EventEmitter(), {",
-        "    pid: ownedPid, exitCode: null, signalCode: null,",
-        "    stdout: new PassThrough(), stderr: new PassThrough(),",
-        "    kill: (signal) => process.kill(ownedPid, signal),",
-        "  });",
-        "  Object.defineProperty(child, 'stdio', {",
-        "    get: () => [null, child.stdout, child.stderr, null],",
-        "  });",
-        "  queueMicrotask(() => {",
-        "    child.stdout.write('[gateway] ready\\n');",
-        "    if (scenario === 'exited-ready') finish(0);",
-        "  });",
-        "  return child;",
-        "};",
-        "const success = (stdout = '') => ({ status: 0, signal: null, stdout, stderr: '' });",
-        "cp.spawnSync = (bin, args, options) => {",
-        "  if (bin === process.execPath && args.includes('index')) {",
-        "    assertIsolatedEnv(options.env, 'index'); return success();",
-        "  }",
-        "  if (bin !== 'lsof') throw new Error('fixture refused unexpected command ' + bin);",
-        "  if (args.includes('-v')) return success();",
-        "  if (args.some(arg => arg.startsWith('-iTCP:'))) {",
-        "    const pid = scenario === 'foreign-ready' || scenario === 'exited-ready' || replaced",
-        "      ? foreignPid : alive() ? ownedPid : null;",
-        "    return { ...success(pid ? String(pid) + '\\n' : ''), status: pid ? 0 : 1 };",
-        "  }",
-        "  const pid = Number(args[args.indexOf('-p') + 1]);",
-        "  samples.push({ pid, alive: Boolean(alive()) });",
-        "  if (cancellation?.[1] === 'settle' && samples.length === 2) enterWait('settle');",
-        "  if (scenario.startsWith('primary-')) {",
-        "    const code = scenario.split('-')[1];",
-        "    return { ...success(), status: 1, stderr: 'measurement denied ' + code };",
-        "  }",
-        "  return success('COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME\\n');",
-        "};",
-        "globalThis.fetch = async (_url, options) => {",
-        "  if (cancellation?.[1] === 'sample') {",
-        "    enterWait('sample');",
-        "    return await new Promise((_resolve, reject) => {",
-        "      options.signal.addEventListener('abort', () => {",
-        "        requestSettled = true; reject(options.signal.reason);",
-        "      }, { once: true });",
-        "    });",
-        "  }",
-        "  if (scenario === 'replaced-during') { replaced = true; finish(23); }",
-        "  if (scenario === 'stdout-error' || scenario === 'stderr-error') {",
-        "    const channel = scenario === 'stdout-error' ? 'stdout' : 'stderr';",
-        "    child[channel].destroy(Object.assign(",
-        "      new Error('injected Gateway ' + channel + ' read EIO'), { code: 'EIO' }));",
-        "  }",
-        "  requestSettled = true;",
-        "  return new Response(JSON.stringify({ ok: true, result: { results: [] } }), { status: 200 });",
-        "};",
-        "process.on('exit', record);",
-        "syncBuiltinESMExports();",
-      ].join("\n"),
-    );
-    const result = spawnSync(
-      testNodeExecPath,
-      [
-        ...resolveRuntimeWorkerArgv(scriptUrl, testNodeExecPath).slice(0, -1),
-        "--import",
-        preloadPath,
-        ...resolveRuntimeWorkerArgv(scriptUrl, testNodeExecPath).slice(-1),
-        "--allow-non-darwin",
-        ...(scenario.startsWith("completed-threshold")
-          ? ["--mode", "leak", "--min-leaked-fds", "1"]
-          : ["--report-only"]),
-        "--files",
-        "1",
-        "--sample-delay-ms",
-        scenario.startsWith("sample-") ? "31003" : scenario === "delayed-success" ? "25" : "0",
-        "--settle-delay-ms",
-        scenario.startsWith("settle-") ? "32009" : scenario === "delayed-success" ? "40" : "0",
-        "--output-dir",
-        outputDir,
-      ],
-      {
-        cwd: root,
-        env: {
-          ...process.env,
-          ...(scenario === "inherited-paths"
-            ? {
-                HOME: path.join(root, "inherited-home"),
-                USERPROFILE: path.join(root, "inherited-userprofile"),
-                OPENCLAW_HOME: path.join(root, "inherited-openclaw-home"),
-                OPENCLAW_STATE_DIR: path.join(root, "inherited-state"),
-                OPENCLAW_CONFIG_PATH: path.join(root, "inherited-config.json"),
-                XDG_CONFIG_HOME: path.join(root, "inherited-xdg-config"),
-                XDG_CACHE_HOME: path.join(root, "inherited-xdg-cache"),
-                XDG_DATA_HOME: path.join(root, "inherited-xdg-data"),
-                XDG_STATE_HOME: path.join(root, "inherited-xdg-state"),
-                XDG_RUNTIME_DIR: path.join(root, "inherited-xdg-runtime"),
-              }
-            : {}),
-          TMPDIR: root,
-          TMP: root,
-          TEMP: root,
-          TSX_TSCONFIG_PATH: SOURCE_TSCONFIG_PATH,
-          OPENCLAW_MEMORY_FD_REPRO_KEEP: "0",
-          OPENCLAW_DEV_SOURCE_ROOT:
-            scenario === "owned-success-inherited-root"
-              ? path.join(root, "inherited-source")
-              : undefined,
-        },
-        encoding: "utf8",
-        timeout: 20_000,
-        killSignal: "SIGKILL",
-        maxBuffer: 1024 * 1024,
+      ...resolveRuntimeWorkerArgv(scriptUrl, testNodeExecPath).slice(-1),
+      "--allow-non-darwin",
+      ...(scenario.startsWith("completed-threshold")
+        ? ["--mode", "leak", "--min-leaked-fds", "1"]
+        : ["--report-only"]),
+      "--files",
+      "1",
+      "--sample-delay-ms",
+      scenario.startsWith("sample-") ? "31003" : scenario === "delayed-success" ? "25" : "0",
+      "--settle-delay-ms",
+      scenario.startsWith("settle-") ? "32009" : scenario === "delayed-success" ? "40" : "0",
+      "--output-dir",
+      outputDir,
+    ],
+    {
+      cwd: root,
+      env: {
+        ...process.env,
+        ...(scenario === "inherited-paths"
+          ? {
+              HOME: path.join(root, "inherited-home"),
+              USERPROFILE: path.join(root, "inherited-userprofile"),
+              OPENCLAW_HOME: path.join(root, "inherited-openclaw-home"),
+              OPENCLAW_STATE_DIR: path.join(root, "inherited-state"),
+              OPENCLAW_CONFIG_PATH: path.join(root, "inherited-config.json"),
+              XDG_CONFIG_HOME: path.join(root, "inherited-xdg-config"),
+              XDG_CACHE_HOME: path.join(root, "inherited-xdg-cache"),
+              XDG_DATA_HOME: path.join(root, "inherited-xdg-data"),
+              XDG_STATE_HOME: path.join(root, "inherited-xdg-state"),
+              XDG_RUNTIME_DIR: path.join(root, "inherited-xdg-runtime"),
+            }
+          : {}),
+        TMPDIR: root,
+        TMP: root,
+        TEMP: root,
+        TSX_TSCONFIG_PATH: SOURCE_TSCONFIG_PATH,
+        OPENCLAW_MEMORY_FD_REPRO_KEEP: "0",
+        OPENCLAW_DEV_SOURCE_ROOT:
+          scenario === "owned-success-inherited-root"
+            ? path.join(root, "inherited-source")
+            : undefined,
       },
-    );
-    expect(
-      fs.readdirSync(path.join(root, ".vitest-resource-owner", "claims")),
-      result.stderr,
-    ).toHaveLength(1);
-    if (scenario === "ignored-stop") {
-      expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
-    } else {
-      expect(() => owner.assertReleased(), result.stderr).not.toThrow();
-    }
-    expect(result.error, result.stderr).toBeUndefined();
-    expect(result.signal, result.stderr).toBeNull();
-    expect(result.status, result.stderr).toBe(expectedStatus);
-    const journal = JSON.parse(fs.readFileSync(journalPath, "utf8")) as {
-      samples: { pid: number; alive: boolean }[];
-      signals: [number, string][];
-      events: string[];
-      launch: { entry: string; noCompileCache?: string; devSourceRoot?: string };
-      closed: boolean;
-      alive: boolean;
-      rootExists: boolean;
-      wait?: { phase: string; samples: number; requestSettled: boolean };
-      requestSettled: boolean;
-      guardFired: boolean;
-      attemptedSummary?: GatewaySummary;
-    };
-    const summaryPath = path.join(outputDir, "summary.json");
-    const summary = fs.existsSync(summaryPath)
-      ? (JSON.parse(fs.readFileSync(summaryPath, "utf8")) as GatewaySummary)
-      : undefined;
-    return { result, journal, summary, fixtureRoot: root };
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+      encoding: "utf8",
+      timeout: 20_000,
+      killSignal: "SIGKILL",
+      maxBuffer: 1024 * 1024,
+    },
+  );
+  expect(
+    fs.readdirSync(path.join(root, ".vitest-resource-owner", "claims")),
+    result.stderr,
+  ).toHaveLength(1);
+  if (scenario === "ignored-stop") {
+    expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+  } else {
+    expect(() => owner.assertReleased(), result.stderr).not.toThrow();
   }
+  expect(result.error, result.stderr).toBeUndefined();
+  expect(result.signal, result.stderr).toBeNull();
+  expect(result.status, result.stderr).toBe(expectedStatus);
+  const journal = JSON.parse(fs.readFileSync(journalPath, "utf8")) as {
+    samples: { pid: number; alive: boolean }[];
+    signals: [number, string][];
+    events: string[];
+    launch: { entry: string; noCompileCache?: string; devSourceRoot?: string };
+    closed: boolean;
+    alive: boolean;
+    rootExists: boolean;
+    wait?: { phase: string; samples: number; requestSettled: boolean };
+    requestSettled: boolean;
+    guardFired: boolean;
+    attemptedSummary?: GatewaySummary;
+  };
+  const summaryPath = path.join(outputDir, "summary.json");
+  const summary = fs.existsSync(summaryPath)
+    ? (JSON.parse(fs.readFileSync(summaryPath, "utf8")) as GatewaySummary)
+    : undefined;
+  return { result, journal, summary, fixtureRoot: root };
 }
 
 async function listen(server: Server): Promise<number> {

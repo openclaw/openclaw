@@ -5,11 +5,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { createGatewayTaskSupervisorProbe } from "../../src/daemon/schtasks.task-supervisor.native-test-support.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
-import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { evaluateWorkflowExpression } from "./ci-workflow.test-support.js";
 
 const scriptPath = path.resolve("scripts/check-workflows.mts");
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 
 type WorkflowStep = {
@@ -65,10 +65,6 @@ function readWindowsProbe() {
   return { workflow, probe, native };
 }
 
-afterEach(() => {
-  cleanupTempDirs(tempDirs);
-});
-
 describe("check-workflows", () => {
   it.each([
     { version: undefined, tool: "go" },
@@ -81,7 +77,7 @@ describe("check-workflows", () => {
   ])(
     "selects $tool actionlint for installed version $version ($acquireStatus/$lintStatus)",
     ({ version, tool, acquireStatus = 0, lintStatus = 0 }) => {
-      const tempDir = makeTempDir(tempDirs, "check-workflows-");
+      const tempDir = tempDirs.make("check-workflows-");
       const binDir = path.join(tempDir, "bin");
       const markerPath = path.join(tempDir, "go-install.txt");
       const binMarkerPath = path.join(tempDir, "go-bin.txt");
@@ -186,7 +182,7 @@ describe("check-workflows", () => {
     ],
     ["hook-failure", 13, ["hook failed"]],
   ])("handles %s through the temporary Python runtime", (mode, code, errors) => {
-    const tempDir = makeTempDir(tempDirs, "check-workflows-");
+    const tempDir = tempDirs.make("check-workflows-");
     const binDir = path.join(tempDir, "bin");
     const markerPath = path.join(tempDir, "python.txt");
     const venvPath = path.join(tempDir, "venv-path.txt");

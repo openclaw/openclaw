@@ -20,86 +20,54 @@ function git(cwd: string, ...args: string[]) {
 
 describe("first-party mock export ratchet", () => {
   it("distinguishes real module pass-through, isolation, and closed or unproven factories", () => {
-    const mock = (factory: string, expected = 1, method = "mock"): [string, number] => [
-      `vi.${method}("./value.js", ${factory});`,
-      expected,
-    ];
-    const body = (code: string, expected = 1, method = "mock") =>
-      mock(`async original => {${code}}`, expected, method);
     const cases: [string, number][] = [
-      mock("() => ({ read: vi.fn() })"),
-      mock("async original => ({...await original(), read: vi.fn()})", 0),
-      mock("async original => ({...original()})"),
-      body("const actual = original(); return {...actual};"),
-      body("let result = {...await original()}; result = {}; return result;"),
-      [
+      ...[
+        'vi.mock("./value.js", () => ({ read: vi.fn() }));',
+        'vi.mock("./value.js", async original => ({...original()}));',
+        'vi.mock("./value.js", async original => {const actual = original(); return {...actual};});',
+        'vi.mock("./value.js", async original => {let result = {...await original()}; result = {}; return result;});',
         'let factory = async original => ({...await original()}); factory = () => ({}); vi.doMock("./value.js", factory);',
-        1,
-      ],
-      mock("original => original()", 0),
-      body("const actual = original(); return actual;", 0),
-      body(" original = fake; return {...await original()}; "),
-      body(" ({original} = fake); return {...await original()}; "),
-      body(" for (original of fakes) {} return {...await original()}; "),
-      body(" for (var original of [fake]) {} return await original(); ", 1, "doMock"),
-      body(" if (flag) { var original = fake; } return await original(); ", 1, "doMock"),
-      body(" for (let original of [fake]) {} return await original(); ", 0, "doMock"),
-      body(
-        " const replace = () => { original = fake; }; replace(); return {...await original()}; ",
-      ),
-      body(
-        ' const actual = await original(); switch (mode) { case "fake": const actual = {}; return {...actual}; } return {...actual}; ',
-      ),
-      body(
-        ' const actual = await original(); switch (mode) { case "real": const unrelated = 1; return {...actual, unrelated}; } return {...actual}; ',
-        0,
-      ),
-      [
+        'vi.mock("./value.js", async original => { original = fake; return {...await original()}; });',
+        'vi.mock("./value.js", async original => { ({original} = fake); return {...await original()}; });',
+        'vi.mock("./value.js", async original => { for (original of fakes) {} return {...await original()}; });',
+        'vi.doMock("./value.js", async original => { for (var original of [fake]) {} return await original(); });',
+        'vi.doMock("./value.js", async original => { if (flag) { var original = fake; } return await original(); });',
+        'vi.mock("./value.js", async original => { const replace = () => { original = fake; }; replace(); return {...await original()}; });',
+        'vi.mock("./value.js", async original => { const actual = await original(); switch (mode) { case "fake": const actual = {}; return {...actual}; } return {...actual}; });',
         'function factory(original) { return original(); } factory = () => ({}); vi.doMock("./value.js", factory);',
-        1,
-      ],
-      mock(
-        'async () => { const actual = await vi.importActual("./value.js"); return {...actual, read: vi.fn()}; }',
-        0,
-      ),
-      mock('async () => ({...await vi.importActual("./different.js"), read: vi.fn()})'),
-      ['const fake={read: vi.fn()}; vi.mock("./value.js", () => ({...fake}));', 1],
-      mock("importedFactory"),
-      ['vi.mock("./value.js");', 0],
-      mock("{spy: true}", 0),
-      [
+        'vi.mock("./value.js", async () => ({...await vi.importActual("./different.js"), read: vi.fn()}));',
+        'const fake={read: vi.fn()}; vi.mock("./value.js", () => ({...fake}));',
+        'vi.mock("./value.js", importedFactory);',
+        '// mock-isolation: \nvi.mock("./value.js", () => ({read: vi.fn()}));',
+        'function factory() { return {read: vi.fn()}; } vi.doMock("./value.js", factory);',
+        'vi.mock("./value.js", async () => { const vi = { importActual: async () => ({}) }; return {...await vi.importActual("./value.js")}; });',
+        'vi.mock("./value.js", async original => { if (flag) return; return {...await original()}; });',
+        'vi.mock("./value.js", async original => {const actual=await original(); if (flag) return {...actual}; return {read: vi.fn()};});',
+        'vi.mock("./value.js", async original => {const actual=await original(); {const actual={}; return {...actual};}});',
+        'vi.mock("./value.js", async original => { {const {original} = fake; return {...await original()};} });',
+        'vi.mock("./value.js", async original => { const actual = await original(); {const {actual} = fake; return {...actual};} });',
+        'vi.mock("./value.js", async original => { try { throw fake; } catch (original) { return {...await original()}; } });',
+        'vi.mock("./value.js", async original => { for (const original of fake) { return {...await original()}; } });',
+        'vi.mock("./value.js", async original => { const {member} = await original(); return {...member}; });',
+        'vi.mock("./value.js", async original => { const actual = await original(); {class actual {} return {...actual};} });',
+        'import { vi as mocker } from "vitest"; mocker.mock("./value.js", () => ({}));',
+      ].map((source): [string, number] => [source, 1]),
+      ...[
+        'vi.mock("./value.js", async original => ({...await original(), read: vi.fn()}));',
+        'vi.mock("./value.js", original => original());',
+        'vi.mock("./value.js", async original => {const actual = original(); return actual;});',
+        'vi.doMock("./value.js", async original => { for (let original of [fake]) {} return await original(); });',
+        'vi.mock("./value.js", async original => { const actual = await original(); switch (mode) { case "real": const unrelated = 1; return {...actual, unrelated}; } return {...actual}; });',
+        'vi.mock("./value.js", async () => { const actual = await vi.importActual("./value.js"); return {...actual, read: vi.fn()}; });',
+        'vi.mock("./value.js");',
+        'vi.mock("./value.js", {spy: true});',
         'vi.mock(import("./value.js"), async original => ({...await original(), read: vi.fn()}));',
-        0,
-      ],
-      [
         '// mock-isolation: real module boots a database\nvi.mock("./value.js", () => ({read: vi.fn()}));',
-        0,
-      ],
-      ['// mock-isolation: \nvi.mock("./value.js", () => ({read: vi.fn()}));', 1],
-      ['function factory() { return {read: vi.fn()}; } vi.doMock("./value.js", factory);', 1],
-      [
         'const factory = async () => ({...await vi.importActual("./value.js")}); vi.mock("./value.js",factory);',
-        0,
-      ],
-      mock(
-        'async () => { const vi = { importActual: async () => ({}) }; return {...await vi.importActual("./value.js")}; }',
-      ),
-      body(" if (flag) return; return {...await original()}; "),
-      ['vi.mock("third-party", () => ({read: vi.fn()}));', 0],
-      body("const actual=await original(); if (flag) return {...actual}; return {read: vi.fn()};"),
-      body("const actual=await original(); const copy={...actual}; return copy;", 0),
-      body("const actual=await original(); {const actual={}; return {...actual};}"),
-      body(" {const {original} = fake; return {...await original()};} "),
-      body(" const actual = await original(); {const {actual} = fake; return {...actual};} "),
-      body(" try { throw fake; } catch (original) { return {...await original()}; } "),
-      body(" for (const original of fake) { return {...await original()}; } "),
-      body(" const {member} = await original(); return {...member}; "),
-      body(" const actual = await original(); {class actual {} return {...actual};} "),
-      ['import { vi as mocker } from "vitest"; mocker.mock("./value.js", () => ({}));', 1],
-      [
+        'vi.mock("third-party", () => ({read: vi.fn()}));',
+        'vi.mock("./value.js", async original => {const actual=await original(); const copy={...actual}; return copy;});',
         'const source = \'vi.mock("./value.js", () => ({}));\'; // vi.mock("./value.js", () => ({}));',
-        0,
-      ],
+      ].map((source): [string, number] => [source, 0]),
     ];
     using parser = createNativeTypeScriptParser();
     const syntax = parser.parseSourceFiles(

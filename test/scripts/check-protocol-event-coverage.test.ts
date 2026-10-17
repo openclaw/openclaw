@@ -16,16 +16,15 @@ export const GATEWAY_EVENTS = [
 ];
 `;
 
-const GATEWAY_CONSTANTS_FIXTURE = `
-export const GATEWAY_EVENT_UPDATE_AVAILABLE = "update.available" as const;
-`;
+const GATEWAY_CONSTANTS_FIXTURE =
+  'export const GATEWAY_EVENT_UPDATE_AVAILABLE = "update.available" as const;\n';
 const swiftConstants = extractSwiftStaticStringConstants(`
       enum ApprovalBridge {
         static let requestedKind = "exec.approval.requested"
       }
 `);
 
-describe("extractGatewayEventNames", () => {
+describe("protocol event coverage", () => {
   it("collects literals and resolves identifiers", () => {
     const names = extractGatewayEventNames(GATEWAY_CONSTANTS_FIXTURE + GATEWAY_LIST_FIXTURE);
     expect(names).toContain("connect.challenge");
@@ -42,10 +41,7 @@ describe("extractGatewayEventNames", () => {
       /GATEWAY_EVENT_UPDATE_AVAILABLE/,
     );
   });
-});
-
-describe("extractSwiftHandledEvents", () => {
-  it("collects switch case literals and comparisons, skipping nested and non-event code", () => {
+  it("collects Swift events without resolving quoted constants or nested/non-event code", () => {
     const source = `
       static func mapEventFrame(_ evt: EventFrame) -> Event? {
         switch evt.event {
@@ -56,6 +52,7 @@ describe("extractSwiftHandledEvents", () => {
             default: return .chat
             }
         case ApprovalBridge.requestedKind: return .approval
+        case "ApprovalBridge.requestedKind": return .approval
         default: return nil
         }
       }
@@ -68,6 +65,7 @@ describe("extractSwiftHandledEvents", () => {
       if evt.event == "connect.challenge" { return }
     `;
     expect([...extractSwiftHandledEvents(source, swiftConstants)].toSorted()).toEqual([
+      "ApprovalBridge.requestedKind",
       "chat",
       "connect.challenge",
       "exec.approval.requested",
@@ -76,22 +74,6 @@ describe("extractSwiftHandledEvents", () => {
     ]);
   });
 
-  it("does not resolve qualified constants inside quoted case labels", () => {
-    const handled = extractSwiftHandledEvents(
-      `
-        switch evt.event {
-        case "ApprovalBridge.requestedKind": return .approval
-        default: return nil
-        }
-      `,
-      swiftConstants,
-    );
-
-    expect(handled).toEqual(new Set(["ApprovalBridge.requestedKind"]));
-  });
-});
-
-describe("extractKotlinHandledEvents", () => {
   it("collects literals and generated enum constants inside handler functions only", () => {
     const constants = extractKotlinEnumStringConstants(`
       enum class GatewayEvent(
@@ -147,6 +129,13 @@ describe("extractKotlinHandledEvents", () => {
         if (!isAssignment) { return }
         val other = keyEvent == "not.a.gateway.event"
       }
+      internal fun gatewayEventInvalidatesNodesDevices(event: String): Boolean = event == "node.pair.requested" || event == "node.pair.resolved"
+      fun topLevelNotAHandler(event: String) {
+        if (event == "presence") { render() }
+        when (event) {
+          "cron" -> refresh()
+        }
+      }
     `;
     const handled = extractKotlinHandledEvents(source, constants);
     expect([...handled].toSorted()).toEqual([
@@ -164,49 +153,20 @@ describe("extractKotlinHandledEvents", () => {
     ]);
   });
 
-  it("ignores event literals outside handler function bodies", () => {
-    const source = `
-      internal fun gatewayEventInvalidatesNodesDevices(event: String): Boolean = event == "node.pair.requested" || event == "node.pair.resolved"
-      fun topLevelNotAHandler(event: String) {
-        if (event == "presence") { render() }
-        when (event) {
-          "cron" -> refresh()
-        }
-      }
-      fun handleGatewayEvent(event: String) {
-        if (event == "tick") { touch() }
-      }
-    `;
-    const handled = extractKotlinHandledEvents(source);
-    expect([...handled].toSorted()).toEqual(["tick"]);
-  });
-});
-
-describe("compareEventCoverage", () => {
-  const serverEvents = ["tick", "chat", "presence", "cron"];
-
-  it("reports unhandled events missing from the allowlist", () => {
-    const errors = compareEventCoverage({
-      client: "android",
-      serverEvents,
-      handledEvents: new Set(["tick", "chat"]),
-      allowlist: { presence: "not rendered" },
-    });
-    expect(errors).toHaveLength(1);
-    expect(errors[0]).toContain('[android] gateway event "cron"');
-  });
-
-  it("reports stale allowlist entries", () => {
+  it("reports missing and stale allowances while accepting explained omissions", () => {
     const errors = compareEventCoverage({
       client: "ios",
-      serverEvents,
+      serverEvents: ["tick", "chat", "presence", "cron", "allowed", "unhandled"],
       handledEvents: new Set(["tick", "chat", "presence"]),
       allowlist: {
+        allowed: "not rendered",
         presence: "now handled, should be removed",
         "gone.event": "no longer a gateway event",
         cron: "",
       },
     });
+    expect(errors).toHaveLength(4);
+    expect(errors.some((error) => error.includes('[ios] gateway event "unhandled"'))).toBe(true);
     expect(errors.some((error) => error.includes('"presence" is now handled'))).toBe(true);
     expect(errors.some((error) => error.includes('"gone.event" is not a gateway event'))).toBe(
       true,
