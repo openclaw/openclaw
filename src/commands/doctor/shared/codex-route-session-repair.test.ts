@@ -42,21 +42,21 @@ describe("repairCodexSessionStoreRoutes", () => {
     });
 
     expect(result).toEqual(["main"]);
-    expect(getSession(store, "main").updatedAt).toBe(123);
-    expect(getSession(store, "main").modelProvider).toBe("openai");
-    expect(getSession(store, "main").model).toBe("gpt-5.5");
-    expect(getSession(store, "main").providerOverride).toBe("openai");
-    expect(getSession(store, "main").modelOverride).toBe("gpt-5.4");
-    expect(getSession(store, "main").modelOverrideSource).toBe("auto");
-    expect(getSession(store, "main").modelOverrideRouteResolution).toBe("resolved");
-    expect(getSession(store, "main").authProfileOverride).toBe("openai:chatgpt-default");
-    expect(getSession(store, "main").authProfileOverrideSource).toBe("auto");
-    expect(getSession(store, "main").authProfileOverrideCompactionCount).toBe(2);
-    expect(getSession(store, "main").agentHarnessId).toBeUndefined();
-    expect(getSession(store, "main").agentRuntimeOverride).toBe("codex");
-    expect(getSession(store, "main").fallbackNotice).toBeUndefined();
-    expect(getSession(store, "other").updatedAt).toBe(2);
-    expect(getSession(store, "other").agentHarnessId).toBe("codex");
+    const main = getSession(store, "main");
+    expect(main.updatedAt).toBe(123);
+    expect(main.modelProvider).toBe("openai");
+    expect(main.model).toBe("gpt-5.5");
+    expect(main.providerOverride).toBe("openai");
+    expect(main.modelOverride).toBe("gpt-5.4");
+    expect(main.modelOverrideSource).toBe("auto");
+    expect(main.modelOverrideRouteResolution).toBe("resolved");
+    expect(main.authProfileOverride).toBe("openai:chatgpt-default");
+    expect(main.authProfileOverrideSource).toBe("auto");
+    expect(main.authProfileOverrideCompactionCount).toBe(2);
+    expect(main.agentHarnessId).toBeUndefined();
+    expect(main.agentRuntimeOverride).toBe("codex");
+    expect(main.fallbackNotice).toBeUndefined();
+    expect(getSession(store, "other")).toMatchObject({ updatedAt: 2, agentHarnessId: "codex" });
   });
 
   it("keeps the whole provider-conflicted session namespace legacy", () => {
@@ -81,6 +81,7 @@ describe("repairCodexSessionStoreRoutes", () => {
       legacyCodexProviderIdentityKey("codex"),
       "blocked session namespace test invariant",
     );
+    const original = structuredClone(store);
 
     const result = repairCodexSessionStoreRoutes({
       store,
@@ -89,22 +90,7 @@ describe("repairCodexSessionStoreRoutes", () => {
     });
 
     expect(result).toEqual([]);
-    expect(store.blocked).toMatchObject({
-      modelProvider: "codex",
-      model: "gpt-5.6-sol",
-      providerOverride: "codex",
-      modelOverride: "codex/gpt-5.6-sol",
-      updatedAt: 1,
-    });
-    expect(store.migrate).toMatchObject({
-      modelProvider: "codex",
-      model: "gpt-5.3-mini",
-      updatedAt: 2,
-    });
-    expect(store.providerOnly).toMatchObject({
-      modelProvider: "codex",
-      updatedAt: 3,
-    });
+    expect(store).toEqual(original);
   });
 
   it("retains a fallback notice atomically when one legacy endpoint is blocked", () => {
@@ -122,6 +108,7 @@ describe("repairCodexSessionStoreRoutes", () => {
         },
       },
     };
+    const original = structuredClone(store);
     // Build the blocked identity through the production plan so the test
     // exercises the same composition doctor uses.
     const blockedIdentity = expectDefined(
@@ -143,15 +130,7 @@ describe("repairCodexSessionStoreRoutes", () => {
     });
 
     expect(result).toEqual([]);
-    expect(store.main).toMatchObject({
-      updatedAt: 1,
-      fallbackNotice: {
-        kind: "active",
-        selectedModel: "codex/gpt-5.6-sol",
-        activeModel: "openai/gpt-5.6-sol",
-        reason: "rate-limit",
-      },
-    });
+    expect(store).toEqual(original);
   });
 
   it("skips valid locked agent-harness rows while repairing ordinary legacy routes", () => {
@@ -242,17 +221,18 @@ describe("repairCodexSessionStoreRoutes", () => {
     });
 
     expect(result).toEqual(["main"]);
-    expect(getSession(store, "main").updatedAt).toBe(123);
-    expect(getSession(store, "main").providerOverride).toBe("openai");
-    expect(getSession(store, "main").modelOverride).toBe("gpt-5.5");
-    expect(getSession(store, "main").modelOverrideSource).toBe("auto");
-    expect(getSession(store, "main").modelOverrideRouteResolution).toBe("resolved");
-    expect(getSession(store, "main").authProfileOverride).toBe("openai:chatgpt-default");
-    expect(getSession(store, "main").authProfileOverrideSource).toBe("auto");
-    expect(getSession(store, "main").modelProvider).toBeUndefined();
-    expect(getSession(store, "main").model).toBeUndefined();
-    expect(getSession(store, "main").contextTokens).toBeUndefined();
-    expect(getSession(store, "main").contextTokensSource).toBeUndefined();
-    expect(getSession(store, "main").contextBudgetStatus).toBeUndefined();
+    const main = getSession(store, "main");
+    expect(main.updatedAt).toBe(123);
+    expect(main.providerOverride).toBe("openai");
+    expect(main.modelOverride).toBe("gpt-5.5");
+    expect(main.modelOverrideSource).toBe("auto");
+    expect(main.modelOverrideRouteResolution).toBe("resolved");
+    expect(main.authProfileOverride).toBe("openai:chatgpt-default");
+    expect(main.authProfileOverrideSource).toBe("auto");
+    expect(main.modelProvider).toBeUndefined();
+    expect(main.model).toBeUndefined();
+    expect(main.contextTokens).toBeUndefined();
+    expect(main.contextTokensSource).toBeUndefined();
+    expect(main.contextBudgetStatus).toBeUndefined();
   });
 });

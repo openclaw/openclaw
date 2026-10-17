@@ -1,4 +1,3 @@
-// Context engine host compatibility tests cover doctor warnings for host/context mismatches.
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -65,8 +64,8 @@ async function registerEngine(
   requiredCapabilities: ContextEngineHostCapability[],
 ): Promise<string> {
   const id = uniqueEngineId();
-  const engine: ContextEngine = {
-    info: {
+  class TestEngine extends LegacyContextEngine {
+    override readonly info = {
       id,
       name: "Doctor Host Compat",
       hostRequirements:
@@ -78,18 +77,9 @@ async function registerEngine(
               },
             }
           : undefined,
-    },
-    async ingest() {
-      return { ingested: true };
-    },
-    async assemble({ messages }) {
-      return { messages, estimatedTokens: 0 };
-    },
-    async compact() {
-      return { ok: true, compacted: false };
-    },
-  };
-  await registerTestContextEngine(id, () => engine);
+    };
+  }
+  await registerTestContextEngine(id, () => new TestEngine());
   return id;
 }
 
@@ -98,12 +88,13 @@ function configWithEngine(engineId: string, cfg: OpenClawConfig = {}): OpenClawC
     ...cfg,
     plugins: {
       ...cfg.plugins,
-      slots: {
-        ...cfg.plugins?.slots,
-        contextEngine: engineId,
-      },
+      slots: { ...cfg.plugins?.slots, contextEngine: engineId },
     },
   };
+}
+
+function doctorParams(cfg: OpenClawConfig) {
+  return { cfg, doctorFixCommand: "openclaw doctor --fix" };
 }
 
 describe("doctor context-engine host compatibility", () => {
@@ -148,10 +139,9 @@ describe("doctor context-engine host compatibility", () => {
         registry,
         release: () => resources.release(),
       });
-      const pending = collectContextEngineHostCompatibilityWarnings({
-        cfg: configWithEngine(id),
-        doctorFixCommand: "openclaw doctor --fix",
-      });
+      const pending = collectContextEngineHostCompatibilityWarnings(
+        doctorParams(configWithEngine(id)),
+      );
       try {
         expect(
           await Promise.race([
@@ -198,7 +188,7 @@ describe("doctor context-engine host compatibility", () => {
         release: async () => undefined,
       }));
       const cfg = configWithEngine(id);
-      const params = { cfg, doctorFixCommand: "openclaw doctor --fix" };
+      const params = doctorParams(cfg);
       const warnings = await collectContextEngineHostCompatibilityWarnings(params);
       expect(warnings.join("\n")).toContain(
         discovered
@@ -214,23 +204,24 @@ describe("doctor context-engine host compatibility", () => {
 
   it("uses the system agent when inspecting an explicit multi-agent roster", async () => {
     const engineId = await registerEngine([]);
-    const warnings = await collectContextEngineHostCompatibilityWarnings({
-      cfg: configWithEngine(engineId, {
-        agents: {
-          ownership: "explicit",
-          defaults: {
-            systemAgent: { agentId: "main" },
-            model: "anthropic/claude-sonnet-4-6",
+    const warnings = await collectContextEngineHostCompatibilityWarnings(
+      doctorParams(
+        configWithEngine(engineId, {
+          agents: {
+            ownership: "explicit",
+            defaults: {
+              systemAgent: { agentId: "main" },
+              model: "anthropic/claude-sonnet-4-6",
+            },
+            entries: {
+              main: { agentDir: "/tmp/openclaw-doctor-host-compat" },
+              helper: {},
+              third: {},
+            },
           },
-          entries: {
-            main: { agentDir: "/tmp/openclaw-doctor-host-compat" },
-            helper: {},
-            third: {},
-          },
-        },
-      }),
-      doctorFixCommand: "openclaw doctor --fix",
-    });
+        }),
+      ),
+    );
 
     expect(warnings).toEqual([]);
   });
@@ -238,28 +229,16 @@ describe("doctor context-engine host compatibility", () => {
   it("repairs an incompatible context engine by resetting the global slot to legacy", async () => {
     const engineId = await registerEngine(["assemble-before-prompt"]);
     const cfg = configWithEngine(engineId, {
-      plugins: {
-        slots: {
-          memory: "custom-memory",
-        },
-      },
+      plugins: { slots: { memory: "custom-memory" } },
       agents: {
         defaults: {
           model: "anthropic/claude-sonnet-4-6",
-          models: {
-            "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
-          },
+          models: { "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } } },
         },
       },
     });
-    const warnings = await collectContextEngineHostCompatibilityWarnings({
-      cfg,
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-    const result = await maybeRepairContextEngineHostCompatibility({
-      cfg,
-      doctorFixCommand: "openclaw doctor --fix",
-    });
+    const warnings = await collectContextEngineHostCompatibilityWarnings(doctorParams(cfg));
+    const result = await maybeRepairContextEngineHostCompatibility(doctorParams(cfg));
 
     expect(warnings.join("\n")).toContain(
       'remove the plugins.slots.contextEngine override and restore the default "legacy"',
@@ -282,10 +261,7 @@ describe("doctor context-engine host compatibility", () => {
         },
       },
     });
-    const result = await maybeRepairContextEngineHostCompatibility({
-      cfg,
-      doctorFixCommand: "openclaw doctor --fix",
-    });
+    const result = await maybeRepairContextEngineHostCompatibility(doctorParams(cfg));
 
     expect(result.config).toBe(cfg);
     expect(result.changes).toEqual([]);
