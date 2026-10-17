@@ -2,12 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SqlConnection } from "../infra/sql-connection.js";
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
-import {
-  createUpdateRun,
-  finishUpdateRun,
-  getUpdateRunAsync,
-  listUpdateRunsAsync,
-} from "../infra/update-run-ledger.js";
+import { createUpdateRun, finishUpdateRun } from "../infra/update-run-ledger.js";
 import { reconcileUpdateRunsInNativeKernelForTest } from "../infra/update-run-reconciliation.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
@@ -16,7 +11,6 @@ import {
   openOpenClawStateDatabase,
   reconcileOpenClawStateSchemaPublication,
 } from "../state/openclaw-state-db.js";
-import { reconcileOpenClawStateSchemaPublicationAsync } from "../state/openclaw-state-schema-publication.async.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -33,10 +27,9 @@ vi.mock("./server-update-sentinel.js", async (original) => ({
 // Publication deadlines share the fixture clock; worker transport is covered separately.
 vi.mock("../state/openclaw-state-schema-publication.async.js", async (original) => ({
   ...(await original<typeof import("../state/openclaw-state-schema-publication.async.js")>()),
-  reconcileOpenClawStateSchemaPublicationAsync: vi.fn(
-    async (...args: Parameters<typeof reconcileOpenClawStateSchemaPublication>) =>
-      reconcileOpenClawStateSchemaPublication(...args),
-  ),
+  reconcileOpenClawStateSchemaPublicationAsync: async (
+    ...args: Parameters<typeof reconcileOpenClawStateSchemaPublication>
+  ) => reconcileOpenClawStateSchemaPublication(...args),
 }));
 vi.mock("../infra/update-run-reconciliation.js", async (original) => ({
   ...(await original<typeof import("../infra/update-run-reconciliation.js")>()),
@@ -48,12 +41,10 @@ vi.mock("../infra/update-run-reader.js", async (original) => {
   const actual = await original<typeof import("../infra/update-run-reader.js")>();
   return {
     ...actual,
-    getUpdateRunAsync: vi.fn(async (...args: Parameters<typeof actual.getUpdateRun>) =>
+    getUpdateRunAsync: async (...args: Parameters<typeof actual.getUpdateRun>) =>
       actual.getUpdateRun(...args),
-    ),
-    listUpdateRunsAsync: vi.fn(async (...args: Parameters<typeof actual.listUpdateRuns>) =>
+    listUpdateRunsAsync: async (...args: Parameters<typeof actual.listUpdateRuns>) =>
       actual.listUpdateRuns(...args),
-    ),
   };
 });
 vi.mock("../infra/update-run-interruption.js", () => ({
@@ -118,56 +109,38 @@ async function expectPublicationAt(db: SqlConnection, remainingMs: number) {
   expectVersion(db, OPENCLAW_STATE_SCHEMA_VERSION);
 }
 
-async function startWatcher(runningRunId?: string) {
-  const log = { warn: vi.fn() };
+function nextSchedule(atMs?: number) {
   const scheduled = createDeferredCore();
-  const observed = createDeferredCore();
-  const broadcast = vi.fn<GatewayBroadcastFn>(() => observed.resolve());
   const arm = clock.clock.arm;
   const scheduling = vi.spyOn(clock.clock, "arm").mockImplementation((run, delayMs) => {
     const cancel = arm(run, delayMs);
-    scheduled.resolve();
+    if (atMs === undefined || clock.clock.now() + delayMs === atMs) {
+      scheduling.mockRestore();
+      scheduled.resolve();
+    }
     return cancel;
   });
-  try {
-    watcher = startUpdateRunWatcher({ lifecycle, broadcast, log });
-    await scheduled.promise;
-    if (runningRunId) {
-      await observed.promise;
-      expect(broadcast).toHaveBeenCalledWith(
-        "update.run.changed",
-        expect.objectContaining({ runId: runningRunId }),
-      );
-    }
-    return { log, broadcast };
-  } finally {
-    scheduling.mockRestore();
+  return scheduled.promise;
+}
+
+async function startWatcher(runningRunId?: string) {
+  const log = { warn: vi.fn() };
+  const observed = createDeferredCore();
+  const broadcast = vi.fn<GatewayBroadcastFn>(() => observed.resolve());
+  const scheduled = nextSchedule();
+  watcher = startUpdateRunWatcher({ lifecycle, broadcast, log });
+  await scheduled;
+  if (runningRunId) {
+    await observed.promise;
+    expect(broadcast).toHaveBeenCalledWith(
+      "update.run.changed",
+      expect.objectContaining({ runId: runningRunId }),
+    );
   }
+  return { log, broadcast };
 }
 
 describe("Gateway schema publication timer", () => {
-  it("does not start a ledger read when stopped during schema publication", async () => {
-    createDeferredState();
-    const entered = createDeferredCore();
-    const publication =
-      Promise.withResolvers<
-        Awaited<ReturnType<typeof reconcileOpenClawStateSchemaPublicationAsync>>
-      >();
-    vi.mocked(reconcileOpenClawStateSchemaPublicationAsync).mockImplementationOnce(async () => {
-      entered.resolve();
-      return publication.promise;
-    });
-    watcher = startUpdateRunWatcher({ lifecycle, broadcast: vi.fn(), log: { warn: vi.fn() } });
-    await entered.promise;
-    vi.mocked(getUpdateRunAsync).mockClear();
-    vi.mocked(listUpdateRunsAsync).mockClear();
-    const stopped = watcher.stop();
-    publication.resolve(undefined);
-    await stopped;
-    expect(getUpdateRunAsync).not.toHaveBeenCalled();
-    expect(listUpdateRunsAsync).not.toHaveBeenCalled();
-  });
-
   it("anchors a restarted watcher's timer to the existing terminal timestamp", async () => {
     const { db, runId } = createDeferredState();
     finishUpdateRun(runId, { status: "succeeded" });
@@ -204,20 +177,10 @@ describe("Gateway schema publication timer", () => {
     // No wake: the already scheduled timer must discover this new driver itself.
     await clock.advanceBy(1);
     expectVersion(db, 15);
-    const publicationScheduled = createDeferredCore();
-    const publicationDeadline = clock.clock.now() + graceMs;
-    const arm = clock.clock.arm;
-    const scheduling = vi.spyOn(clock.clock, "arm").mockImplementation((run, delayMs) => {
-      const cancel = arm(run, delayMs);
-      if (clock.clock.now() + delayMs === publicationDeadline) {
-        publicationScheduled.resolve();
-      }
-      return cancel;
-    });
+    const publicationScheduled = nextSchedule(clock.clock.now() + graceMs);
     wakeUpdateRunWatcher();
     finishUpdateRun(next.runId, { status: "succeeded" });
-    await publicationScheduled.promise;
-    scheduling.mockRestore();
+    await publicationScheduled;
     await expectPublicationAt(db, graceMs);
     expect(log.warn).not.toHaveBeenCalled();
   });

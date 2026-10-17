@@ -35,28 +35,20 @@ type ToolPolicySuite = {
 export function registerToolsInvokeUploadTests({
   getConfig,
   setConfig,
-  getPort,
   setMethodRegistry,
   hookMocks,
-  postToolsInvoke,
-  gatewayAdminHeaders,
+  postAdmin,
   invokeToolsRpc,
   setMainAllowedTools,
   invokeToolAuthed,
   expectOkInvokeResponse,
 }: ToolPolicySuite & {
-  getPort: () => number;
   setMethodRegistry: (registry: GatewayMethodRegistry) => void;
   hookMocks: {
     uploadToolExecute: Mock<AnyAgentTool["execute"]>;
     runBeforeToolCallHook: Mock<typeof runBeforeToolCallHook>;
   };
-  postToolsInvoke: (params: {
-    port: number;
-    headers?: Record<string, string>;
-    body: Record<string, unknown>;
-  }) => Promise<Response>;
-  gatewayAdminHeaders: () => Record<string, string>;
+  postAdmin: (body: Record<string, unknown>) => Promise<Response>;
   invokeToolsRpc: (
     params: Record<string, unknown>,
     scopes?: string[],
@@ -80,8 +72,6 @@ export function registerToolsInvokeUploadTests({
   const enableUploads = (enabled: boolean) => {
     getConfig().gateway = { uploads: { enabled } };
   };
-  const postAdmin = (body: Record<string, unknown>) =>
-    postToolsInvoke({ port: getPort(), headers: gatewayAdminHeaders(), body });
   const registerMethod = (name: string, handler: GatewayRequestHandler, area: string) =>
     setMethodRegistry(
       createGatewayMethodRegistry([
@@ -142,7 +132,6 @@ export function registerToolsInvokeUploadTests({
         "skills",
       );
       let reachedStorage = false;
-      let invocationError: unknown;
       const begin = defaultSkillUploadStore.begin.bind(defaultSkillUploadStore);
       using beginning = vi
         .spyOn(defaultSkillUploadStore, "begin")
@@ -156,34 +145,26 @@ export function registerToolsInvokeUploadTests({
       const rows = () => db.prepare("SELECT upload_id FROM skill_uploads ORDER BY upload_id").all();
       const before = rows();
       hookMocks.uploadToolExecute.mockImplementationOnce(async (_callId, args) => {
-        try {
-          const scope = expectDefined(getPluginRuntimeGatewayRequestScope(), "operator scope");
-          const context = expectDefined(
-            scope.resolveGatewayContext?.() ?? scope.context,
-            "Gateway context",
-          );
-          context.getRuntimeConfig = () => getConfig();
-          context.getCommittedRuntimeConfig = () => getConfig();
-          if (isRecord(args)) {
-            delete args.contentBase64;
-          }
-          await dispatchGatewayMethodInProcess("skills.upload.begin", {
-            kind: "skill-archive",
-            slug: "nested-policy",
-            sizeBytes: 5,
-          });
-          return { content: [], details: {} };
-        } catch (error) {
-          invocationError = error;
-          throw error;
+        const scope = expectDefined(getPluginRuntimeGatewayRequestScope(), "operator scope");
+        const context = expectDefined(
+          scope.resolveGatewayContext?.() ?? scope.context,
+          "Gateway context",
+        );
+        context.getRuntimeConfig = getConfig;
+        context.getCommittedRuntimeConfig = getConfig;
+        if (isRecord(args)) {
+          delete args.contentBase64;
         }
+        await dispatchGatewayMethodInProcess("skills.upload.begin", {
+          kind: "skill-archive",
+          slug: "nested-policy",
+          sizeBytes: 5,
+        });
+        return { content: [], details: {} };
       });
       const response = await postAdmin({ tool: "file_write", args: { contentBase64: "cHJvb2Y=" } });
       const body: unknown = await response.json();
-      expect(
-        reachedStorage,
-        invocationError instanceof Error ? invocationError.message : JSON.stringify(body),
-      ).toBe(true);
+      expect(reachedStorage).toBe(true);
       expect(beginning).toHaveBeenCalledOnce();
       if (disabled) {
         expect.soft(response.status).toBe(403);
@@ -305,14 +286,6 @@ export function registerToolsInvokeUploadTests({
   );
 }
 
-async function readToolErrorResponse(res: Response) {
-  const body: unknown = await res.json();
-  if (!isRecord(body) || !isRecord(body.error)) {
-    throw new Error("Expected a tool error response body");
-  }
-  return { ok: body.ok, error: body.error };
-}
-
 export function registerToolsInvokeErrorTests({
   getConfig,
   setConfig,
@@ -321,9 +294,7 @@ export function registerToolsInvokeErrorTests({
   it("maps tool input/auth errors to 400/403 and unexpected execution errors to 500", async () => {
     setConfig({
       ...getConfig(),
-      agents: {
-        entries: { main: { tools: { allow: ["tools_invoke_test"] } } },
-      },
+      agents: { entries: { main: { tools: { allow: ["tools_invoke_test"] } } } },
     });
 
     for (const [mode, status, message] of [
@@ -337,7 +308,7 @@ export function registerToolsInvokeErrorTests({
         sessionKey: "main",
       });
       expect(res.status).toBe(status);
-      expect(await readToolErrorResponse(res)).toMatchObject({
+      expect(await res.json()).toMatchObject({
         ok: false,
         error: { type: "tool_error", message },
       });
@@ -369,21 +340,20 @@ export function createClientUploadToolFixture(context: OpenClawPluginToolContext
     parameters: Type.Object({
       directory: Type.String(),
       fileName: Type.String(),
-      bytes: Type.Optional(Type.String()),
+      bytes: Type.String(),
     }),
     execute: async (_id, args) => {
       if (
         !isRecord(args) ||
         typeof args.directory !== "string" ||
-        typeof args.fileName !== "string"
+        typeof args.fileName !== "string" ||
+        typeof args.bytes !== "string"
       ) {
         throw new Error("Invalid custom plugin fixture arguments");
       }
-      if (typeof args.bytes === "string") {
-        const guard = expectDefined(context.assertInputCommitAllowed, "custom plugin input guard");
-        const storage = await fsSafe.root(args.directory);
-        await storage.write(args.fileName, args.bytes, { assertBeforeMutation: guard });
-      }
+      const guard = expectDefined(context.assertInputCommitAllowed, "custom plugin input guard");
+      const storage = await fsSafe.root(args.directory);
+      await storage.write(args.fileName, args.bytes, { assertBeforeMutation: guard });
       return { content: [], details: { accepted: true } };
     },
   };

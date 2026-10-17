@@ -1,5 +1,5 @@
-import { createServer, type IncomingMessage } from "node:http";
-import type { AddressInfo } from "node:net";
+import type { IncomingMessage } from "node:http";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -20,6 +20,7 @@ import type { authorizeScopedGatewayHttpRequestOrReply } from "./http-utils.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
+import { createToolsInvokeHttpTestServer } from "./tools-invoke-http.test-support.js";
 
 const lifecycle = vi.hoisted(() => ({
   authorize: vi.fn<typeof authorizeScopedGatewayHttpRequestOrReply>(),
@@ -71,48 +72,24 @@ function authorizedRequest(overrides: Partial<RequestAuth> = {}): RequestAuth {
   };
 }
 
-let server: ReturnType<typeof createServer> | undefined;
 let serverPort = 0;
 let resolveGatewayContext: GatewayContextResolver | undefined;
+const server = createToolsInvokeHttpTestServer({
+  handleToolsInvoke: async (req, res, options) => {
+    const handled = await handleToolsInvokeHttpRequest(req, res, {
+      ...options,
+      resolveGatewayContext,
+    });
+    lifecycle.handled();
+    return handled;
+  },
+});
 
 beforeAll(async () => {
-  server = createServer((req, res) => {
-    void handleToolsInvokeHttpRequest(req, res, {
-      auth: { mode: "none", allowTailscale: false },
-      resolveGatewayContext,
-    })
-      .then(() => {
-        lifecycle.handled();
-      })
-      .catch((error: unknown) => {
-        if (!res.destroyed && !res.writableEnded) {
-          res.statusCode = 500;
-          res.end(String(error));
-        }
-      });
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    server?.once("error", reject);
-    server?.listen(0, "127.0.0.1", () => {
-      const address = server?.address() as AddressInfo | null;
-      serverPort = address?.port ?? 0;
-      resolve();
-    });
-  });
+  serverPort = await server.listen();
 });
 
-afterAll(async () => {
-  const activeServer = server;
-  if (!activeServer) {
-    return;
-  }
-  activeServer.closeAllConnections();
-  await new Promise<void>((resolve) => {
-    activeServer.close(() => resolve());
-  });
-  server = undefined;
-});
+afterAll(() => server.close());
 
 beforeEach(() => {
   setRuntimeConfigSnapshot({});
@@ -190,34 +167,37 @@ describe("POST /tools/invoke request cancellation", () => {
     }
   });
 
-  it("never attaches a disconnect watcher to an unauthorized request", async () => {
-    lifecycle.authorize.mockImplementationOnce(async ({ res }) => {
-      res.statusCode = 401;
-      res.end("unauthorized");
-      return null;
-    });
-
-    const response = await invokeAbortProbe();
-
-    expect(response.status).toBe(401);
-    expect(lifecycle.execute).not.toHaveBeenCalled();
-  });
-
-  it("does not start a tool after the client disconnects during authorization", async () => {
-    const started = createDeferred<IncomingMessage>();
-    const released = createDeferred();
-    lifecycle.authorize.mockImplementationOnce(async ({ req }) => {
-      started.resolve(req);
-      await released.promise;
-      return { cfg: {}, requestAuth: authorizedRequest(), operatorScopes: [] };
-    });
-    await using probe = abortableProbe(released.resolve);
-    const serverRequest = await started.promise;
-    await probe.disconnect(() => serverRequest.socket.destroyed);
-    released.resolve();
-    await expect.poll(() => lifecycle.handled.mock.calls.length).toBe(1);
-    expect(lifecycle.execute).not.toHaveBeenCalled();
-  });
+  it.each(["authorization", "policy hook"])(
+    "does not start a tool after the client disconnects during %s",
+    async (phase) => {
+      const started = createDeferred<IncomingMessage | AbortSignal | undefined>();
+      const released = createDeferred();
+      if (phase === "authorization") {
+        lifecycle.authorize.mockImplementationOnce(async ({ req }) => {
+          started.resolve(req);
+          await released.promise;
+          return { cfg: {}, requestAuth: authorizedRequest(), operatorScopes: [] };
+        });
+      } else {
+        lifecycle.beforeHook.mockImplementationOnce(async ({ params, signal }) => {
+          started.resolve(signal);
+          await released.promise;
+          return { blocked: false, params };
+        });
+      }
+      await using probe = abortableProbe(released.resolve);
+      const source = await started.promise;
+      if (phase === "policy hook") {
+        expect(source).toBeInstanceOf(AbortSignal);
+      }
+      await probe.disconnect(() =>
+        source instanceof AbortSignal ? source.aborted : source?.socket.destroyed === true,
+      );
+      released.resolve();
+      await expect.poll(() => lifecycle.handled.mock.calls.length).toBe(1);
+      expect(lifecycle.execute).not.toHaveBeenCalled();
+    },
+  );
 
   it("revokes the tool signal after a successful request and releases its disconnect watcher", async () => {
     const revoked = vi.fn();
@@ -313,10 +293,7 @@ describe("POST /tools/invoke request cancellation", () => {
           const response = await invokeAbortProbe();
           expect(response.status).toBe(200);
           await expect(response.json()).resolves.toEqual({ ok: true, result: { ok: true } });
-          const capture = captures.at(-1);
-          if (!capture) {
-            throw new Error("Tool did not admit its child");
-          }
+          const capture = expectDefined(captures.at(-1), "Tool admitted its child");
           expect(capture.scope.signal?.aborted).toBe(true);
           expect(capture.scope.hasCurrentClientAuthority?.()).toBe(false);
           const authority = readAdmittedRunOperatorAuthority(capture.admitted);
@@ -328,10 +305,8 @@ describe("POST /tools/invoke request cancellation", () => {
         }
 
         expect(requestEnded).toHaveBeenCalledTimes(2);
-        const [original, replacement] = captures;
-        if (!original || !replacement) {
-          throw new Error("Expected children admitted by both HTTP requests");
-        }
+        const original = expectDefined(captures[0], "Original child");
+        const replacement = expectDefined(captures[1], "Replacement child");
         const originalAuthority = readAdmittedRunOperatorAuthority(original.admitted);
         const replacementAuthority = readAdmittedRunOperatorAuthority(replacement.admitted);
         expect(originalAuthority?.source).not.toBe(replacementAuthority?.source);
@@ -368,22 +343,5 @@ describe("POST /tools/invoke request cancellation", () => {
     const toolSignal = await started.promise;
     expect(toolSignal).toBeInstanceOf(AbortSignal);
     await probe.disconnect(() => toolSignal?.aborted === true);
-  });
-
-  it("does not start a tool after the client disconnects during its policy hook", async () => {
-    const started = createDeferred<AbortSignal | undefined>();
-    const released = createDeferred();
-    lifecycle.beforeHook.mockImplementationOnce(async ({ params, signal }) => {
-      started.resolve(signal);
-      await released.promise;
-      return { blocked: false as const, params };
-    });
-    await using probe = abortableProbe(released.resolve);
-    const hookSignal = await started.promise;
-    expect(hookSignal).toBeInstanceOf(AbortSignal);
-    await probe.disconnect(() => hookSignal?.aborted === true);
-    released.resolve();
-    await expect.poll(() => lifecycle.handled.mock.calls.length).toBe(1);
-    expect(lifecycle.execute).not.toHaveBeenCalled();
   });
 });
