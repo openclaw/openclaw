@@ -4,7 +4,6 @@ import * as sqliteSource from "../infra/sqlite-source-handle.js";
 import { verifyOpenClawDatabase } from "./openclaw-database-verify.worker.js";
 
 const target = { path: "synthetic.sqlite", label: "fixture", check: "quick" } as const;
-
 afterEach(() => vi.restoreAllMocks());
 
 function failed(error: string, terminal = false) {
@@ -98,13 +97,9 @@ it.each([
     close();
     throw Object.assign(new Error("close failed"), { code: "EIO", errcode: 10 });
   });
+  const expected = `SqliteIntegrityError: SQLite quick_check failed for fixture: scan failed (code=ERR_SQLITE_ERROR, errcode=${errcode})`;
   try {
-    await expect(verifyOpenClawDatabase(target)).resolves.toEqual(
-      failed(
-        `SqliteIntegrityError: SQLite quick_check failed for fixture: scan failed (code=ERR_SQLITE_ERROR, errcode=${errcode})`,
-        terminal,
-      ),
-    );
+    expect(await verifyOpenClawDatabase(target)).toEqual(failed(expected, terminal));
     expect(database.isOpen).toBe(false);
   } finally {
     if (database.isOpen) {
