@@ -6,9 +6,11 @@ import { ensureManagedCrabboxBinary, type CrabboxBinary } from "./crabbox-manage
 export function createCrabboxWorkerBinaryResolver(dependencies: {
   openclawRoot: string;
   signal: AbortSignal;
+  warn: (message: string) => void;
 }) {
   const pathEnv = process.env.PATH;
   const binaries = new Map<string, Promise<CrabboxBinary>>();
+  const reportedFallbacks = new Set<string>();
   let defaultCandidate: string | undefined;
   return {
     async resolve(this: void, explicit?: string, signal?: AbortSignal): Promise<CrabboxBinary> {
@@ -42,6 +44,11 @@ export function createCrabboxWorkerBinaryResolver(dependencies: {
         toErrorObject(reason, "Crabbox acquisition aborted"),
       );
       signal?.throwIfAborted();
+      // Implicit discovery may populate the cache before an explicit profile consumes it.
+      if (explicit && resolved.rejected && !reportedFallbacks.has(candidate)) {
+        reportedFallbacks.add(candidate);
+        dependencies.warn(resolved.rejected);
+      }
       return resolved;
     },
     async settle() {
