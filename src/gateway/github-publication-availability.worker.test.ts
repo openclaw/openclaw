@@ -135,8 +135,8 @@ vi.mock("../config/sessions/session-entry-read-facts.js", async (original) => {
 // mock-isolation: Use the synthetic registry without starting managed-worktree services.
 vi.mock("../agents/worktrees/service.js", () => ({
   managedWorktrees: {
-    resolveRepositoryIdentity: async () => ({
-      checkoutRoot: worktree.path,
+    resolveRepositoryIdentity: async (checkoutRoot: string) => ({
+      checkoutRoot,
       repoRoot: worktree.repoRoot,
       fingerprint: worktree.repoFingerprint,
       originUrl: "https://github.com/example/publication.git",

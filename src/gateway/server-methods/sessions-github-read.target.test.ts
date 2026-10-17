@@ -95,6 +95,56 @@ async function registerWorktree(origin?: string) {
 }
 
 describe("registered guest publication target discovery", () => {
+  it("shares repository discovery across linked sessions without sharing their registry authority", async () => {
+    await withWorktree(async (fixture, worktree) => {
+      const keys = [sessionKey];
+      for (let index = 1; index <= 2; index++) {
+        const key = `${sessionKey}-${index}`;
+        const linked = {
+          ...worktree,
+          id: `${worktree.id}-${index}`,
+          path: `${worktree.path}/linked-${index}`,
+          branch: `feature-${index}`,
+          ownerId: key,
+        };
+        await git(worktree.path, "worktree", "add", "-b", linked.branch, linked.path);
+        await insertRegistryWorktree(process.env, linked);
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: key },
+          {
+            sessionId: `linked-session-${index}`,
+            updatedAt: 1,
+            worktree: { id: linked.id, branch: linked.branch, repoRoot: linked.repoRoot },
+          },
+        );
+        keys.push(key);
+      }
+      try {
+        const lookup = vi.spyOn(managedWorktrees, "resolveRepositoryIdentity");
+        const responses = await Promise.all(
+          keys.map((key) => fixture.invoke("sessions.github.options", { sessionKey: key })),
+        );
+        for (const response of responses) {
+          expect(response).toHaveBeenCalledWith(true, sharedOptions);
+        }
+        expect(lookup).toHaveBeenCalledOnce();
+
+        // A revised registry identity cannot borrow the previous repository's positive facts.
+        await updateRegistryWorktree(process.env, `${worktree.id}-1`, {
+          repositoryIdentity: { repoRoot: worktree.repoRoot, repoFingerprint: "changed" },
+        });
+        expectFailure(await fixture.invoke("sessions.github.options", { sessionKey: keys[1] }), {
+          message: repositoryChanged,
+        });
+        expect(await options(fixture)).toHaveBeenCalledWith(true, sharedOptions);
+      } finally {
+        for (let index = 1; index <= 2; index++) {
+          await git(worktree.path, "worktree", "remove", `${worktree.path}/linked-${index}`);
+        }
+      }
+    });
+  });
+
   it("shares Git discovery across concurrent options readers", async () => {
     await withWorktree(async (fixture) => {
       const readers = 8;
