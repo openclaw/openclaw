@@ -2536,6 +2536,7 @@ src/config/sessions/session-accessor.sqlite-references.ts
 src/config/sessions/session-actor-memory-conversation-owner.ts
 src/config/sessions/session-actor-memory-lifecycle-artifacts.ts
 src/config/sessions/session-actor-memory-message-rewrite.ts
+src/config/sessions/session-actor-memory-visible-delta.ts
 src/config/sessions/session-manual-compact-entry.ts
 src/config/sessions/session-manual-compact-selection.ts
 src/config/sessions/store-maintenance-plan.ts
