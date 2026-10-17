@@ -39,9 +39,6 @@ import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn(), snapshot: vi.fn(), signal: vi.fn() }));
-vi.mock("node:timers/promises", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:timers/promises")>()),
-}));
 vi.mock("node:child_process", async (importOriginal) =>
   (await import("./update-candidate-canary-mocks.test-support.js")).mockCanaryChildProcesses(
     await importOriginal<typeof import("node:child_process")>(),
@@ -283,45 +280,42 @@ describe("update candidate canary", () => {
     },
   );
 
-  it.each([true])(
-    "identifies legacy Doctor writes even if later validation fails (%s)",
-    async (failsValidation) => {
-      runtimeError = failsValidation;
-      mocks.spawn.mockImplementationOnce(
-        (_command: string, args: string[], options: { env: NodeJS.ProcessEnv }) => {
-          expect(args).toContain("doctor");
-          const child = new FakeChild(nextPid++);
-          children.set(child.pid, child);
-          const configPath = options.env.OPENCLAW_CONFIG_PATH;
-          if (!configPath) {
-            throw new Error("Missing rehearsal config");
-          }
-          void fs
-            .readFile(configPath, "utf8")
-            .then(async (raw) => {
-              const config: unknown = JSON.parse(raw);
-              if (!isRecord(config)) {
-                throw new Error("Invalid rehearsal fixture");
-              }
-              config.meta = { lastTouchedVersion: "2026.9.4" };
-              config.wizard = { lastRunCommand: "doctor" };
-              config.plugins = { entries: { openai: { enabled: true } } };
-              await fs.writeFile(configPath, JSON.stringify(config));
-              child.emit("close", 0);
-            })
-            .catch((error: unknown) => child.emit("error", error));
-          return child;
-        },
-      );
-      stubHealthyGateway();
-      const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
-      expect(result.status).toBe(failsValidation ? "error" : "ok");
-      expect(result.doctorConfigWrites).not.toBe(true);
-      expect(result.doctorConfigChanges).toEqual(
-        ["meta", "plugins", "wizard"].map((key) => ({ kind: "key", key })),
-      );
-    },
-  );
+  it("identifies legacy Doctor writes even if later validation fails", async () => {
+    runtimeError = true;
+    mocks.spawn.mockImplementationOnce(
+      (_command: string, args: string[], options: { env: NodeJS.ProcessEnv }) => {
+        expect(args).toContain("doctor");
+        const child = new FakeChild(nextPid++);
+        children.set(child.pid, child);
+        const configPath = options.env.OPENCLAW_CONFIG_PATH;
+        if (!configPath) {
+          throw new Error("Missing rehearsal config");
+        }
+        void fs
+          .readFile(configPath, "utf8")
+          .then(async (raw) => {
+            const config: unknown = JSON.parse(raw);
+            if (!isRecord(config)) {
+              throw new Error("Invalid rehearsal fixture");
+            }
+            config.meta = { lastTouchedVersion: "2026.9.4" };
+            config.wizard = { lastRunCommand: "doctor" };
+            config.plugins = { entries: { openai: { enabled: true } } };
+            await fs.writeFile(configPath, JSON.stringify(config));
+            child.emit("close", 0);
+          })
+          .catch((error: unknown) => child.emit("error", error));
+        return child;
+      },
+    );
+    stubHealthyGateway();
+    const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
+    expect(result.status).toBe("error");
+    expect(result.doctorConfigWrites).not.toBe(true);
+    expect(result.doctorConfigChanges).toEqual(
+      ["meta", "plugins", "wizard"].map((key) => ({ kind: "key", key })),
+    );
+  });
   it.each([
     {
       label: "advisory",

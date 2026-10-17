@@ -431,21 +431,16 @@ export function registerCanaryUncertainReceiptTests({
       expect(hasCommandProcessCleanupError(failure)).toBe(true);
       const errors = collectNestedErrorCandidates(failure);
       expect(errors).toContain(uncertain);
-      if (ordering === "operation-failed") {
-        expect(errors).toContain(operationFailure);
+      const primary =
+        ordering === "operation-failed"
+          ? operationFailure
+          : ordering === "earlier-progress-failed"
+            ? earlierFailure
+            : undefined;
+      if (primary) {
+        expect(errors).toContain(primary);
         expect(errors).toContainEqual(
-          expect.objectContaining({
-            errors: [operationFailure, uncertain],
-            cause: operationFailure,
-          }),
-        );
-      } else if (ordering === "earlier-progress-failed") {
-        expect(errors).toContain(earlierFailure);
-        expect(errors).toContainEqual(
-          expect.objectContaining({
-            errors: [earlierFailure, uncertain],
-            cause: earlierFailure,
-          }),
+          expect.objectContaining({ errors: [primary, uncertain], cause: primary }),
         );
       }
       expect(onStep).not.toHaveBeenCalled();
