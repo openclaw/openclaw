@@ -22,13 +22,16 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (original) => {
   };
 });
 
-it("observes native file edits through one shared worker and joins its final exit", async ({
+it("observes real file edits through one shared worker and joins its final exit", async ({
   signal,
 }) => {
   const state = await createOpenClawTestState({ label: "local-memory-worker" });
   const owners: LocalMemoryFileWatcher[] = [];
   const unavailable = vi.fn();
-  vi.stubEnv("CHOKIDAR_USEPOLLING", "false");
+  // fs-safe supports guarded scans on Bun, but native event callbacks require Node.
+  const mode = process.versions.bun ? "poll" : "events";
+  vi.stubEnv("CHOKIDAR_USEPOLLING", mode === "poll" ? "true" : "false");
+  vi.stubEnv("CHOKIDAR_INTERVAL", "40");
   vi.stubEnv("FS_SAFE_NATIVE_MODE", "require");
   try {
     const memory = path.join(state.workspaceDir, "memory");
@@ -70,9 +73,9 @@ it("observes native file edits through one shared worker and joins its final exi
     expect(workers[0]!.threadId).toBeGreaterThan(0);
     for (const owner of owners) {
       expect(owner.health().length).toBeGreaterThan(0);
-      expect(
-        owner.health().every((entry) => entry.state === "ready" && entry.mode === "events"),
-      ).toBe(true);
+      expect(owner.health().every((entry) => entry.state === "ready" && entry.mode === mode)).toBe(
+        true,
+      );
       expect(owner.capacityDegraded).toBe(false);
     }
     await fs.writeFile(note, "first shared edit");
