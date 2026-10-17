@@ -430,7 +430,7 @@ jobs:
             ~/.cargo/git
             apps/linux/src-tauri/target
             ${{ runner.temp }}/openclaw-desktop-npm-cache/_cacache
-          key: windows-app-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/linux/src-tauri/Cargo.lock', 'pnpm-lock.yaml') }}
+          key: windows-app-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/linux/src-tauri/Cargo.lock', 'pnpm-lock.yaml') }}-payload-v3
           restore-keys: |
             windows-app-v2-${{ runner.os }}-${{ runner.arch }}-
 
@@ -459,3 +459,9 @@ jobs:
           retention-days: 14
           if-no-files-found: error
           path: apps/linux/src-tauri/target/release/bundle/nsis/*.exe
+
+      - name: Remove regenerated installer payloads before caching
+        working-directory: apps/linux/src-tauri
+        # Staging and NSIS regenerate these; Cargo may reuse its copied profile resources.
+        run: >-
+          node -e "const fs = require('node:fs'); for (const path of ['target/desktop-runtime', 'target/release/nsis', 'target/release/bundle/nsis']) fs.rmSync(path, { recursive: true, force: true });"

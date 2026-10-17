@@ -1211,6 +1211,18 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/infra/gateway-owner-lease.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["acquireGatewayOwnerLease"],
+        binding: "acquired",
+        evidence:
+          "gateway-lock.ts calls acquisition only after obtaining physical Gateway state custody. This conditional upsert is the process-lock claim; the previous owner is checked in the same transaction. Runtime renewal uses the state lease worker.",
+      },
+    ],
+  ],
+  [
     "src/state/openclaw-state-db.ts",
     [
       {

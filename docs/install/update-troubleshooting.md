@@ -111,7 +111,10 @@ the CLI fallback on the Gateway host.
 `finalize:doctor` can report `Doctor could not enter maintenance` when a Gateway
 still owns the selected state directory. A starting Gateway and a healthy serving
 Gateway retain that ownership for their entire process lifetime; waiting for
-readiness does not release the lock.
+readiness does not release the lock. A non-Gateway holder, such as a CLI
+command or embedded agent run, gets time to finish first (up to 20 minutes by
+default, less on a host whose Doctor runs slowly); Doctor prints its PID and
+progress while it waits.
 
 Maintenance admission refusals finish the update with a recorded warning when
 no data is at risk, including contention from an unknown or non-serving holder.

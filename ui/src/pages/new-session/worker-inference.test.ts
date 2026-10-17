@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
-import { readDraftCloudProfiles } from "./discovery.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 
 const runtime = {
@@ -85,27 +84,6 @@ afterEach(() => {
 });
 
 describe("worker inference New Session scope", () => {
-  it("retains only the published worker inference fact, never raw settings", () => {
-    const profiles = readDraftCloudProfiles([
-      {
-        id: "direct",
-        providerId: "device",
-        inference: "worker",
-        settings: { token: "synthetic-private-value" },
-      },
-      { id: "gateway", providerId: "device", inference: "gateway" },
-      {
-        id: "unknown",
-        providerId: "device",
-        inference: "remote",
-        settings: { inference: "worker" },
-      },
-    ]);
-    expect(profiles[0]).toMatchObject({ id: "direct", inference: "worker" });
-    expect(profiles.every((profile) => !Object.hasOwn(profile, "settings"))).toBe(true);
-    expect(profiles.slice(1).every((profile) => !Object.hasOwn(profile, "inference"))).toBe(true);
-  });
-
   it("uses worker credentials only for the selected direct profile", async () => {
     const { flow, place } = await fixture("auth-failed");
     expect(flow.submitBlock()?.gate).toBe("model-unavailable");

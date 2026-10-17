@@ -19,6 +19,7 @@ import {
 } from "./openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { readAgentDatabaseExecutionAuthority } from "./openclaw-agent-execution-authority.js";
+import type { AgentDatabaseExecutionScope } from "./openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 
@@ -209,20 +210,34 @@ function readEntries(
   );
 }
 
-it("recovers after a failed operation with successful native close", async () => {
+it("recovers retained borrowers after native loss without replaying the failed operation", async () => {
   const env = makeEnv();
   const first = capture(env);
-  await first.prepare(source);
-  expect(await first.runExisting(source, async () => "healthy")).toBe("healthy");
+  const sibling = capture(env);
+  try {
+    await first.prepare(source);
+    const claim = sibling.captureGenerationClaim();
+    const failed = vi.fn((scope: AgentDatabaseExecutionScope) =>
+      scope.execute({ type: "session.entry.read", input: { sessionKeys: [fault.marker] } }),
+    );
+    Atomics.store(faultState, 0, 2);
+    await expect(first.runExisting(source, failed)).rejects.toBeInstanceOf(Error);
+    Atomics.store(faultState, 0, 0);
+    expect(failed).toHaveBeenCalledOnce();
+    expect(() => claim.assertCurrent()).toThrow();
 
-  Atomics.store(faultState, 0, 2);
-  await expect(readEntries(first, fault.marker)).rejects.toBeInstanceOf(Error);
-  Atomics.store(faultState, 0, 0);
-  await first.release().catch(() => undefined);
-  const retry = capture(env);
-  await retry.prepare(source);
-  expect(await readEntries(retry, "recovered")).toMatchObject({ entries: [] });
-  await retry.release();
+    // Another live chat retains this borrower while the failed command settles.
+    expect(await readEntries(sibling, "recovered")).toMatchObject({ entries: [] });
+    const replacement = sibling.capturePreparedGenerationClaim();
+    expect(replacement?.identity).toBe(claim.identity);
+    expect(replacement?.incarnation).not.toBe(claim.incarnation);
+    expect(() => claim.assertCurrent()).toThrow();
+    expect(await readEntries(first, "still-healthy")).toMatchObject({ entries: [] });
+    expect(failed).toHaveBeenCalledOnce();
+  } finally {
+    Atomics.store(faultState, 0, 0);
+    await Promise.allSettled([first.release(), sibling.release()]);
+  }
 });
 
 it("reopens a native generation lost between operations before dispatch", async () => {

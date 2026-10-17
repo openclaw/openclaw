@@ -3,15 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
-import * as databaseDiscovery from "../infra/backup-database-discovery.js";
-import * as backupSnapshot from "../infra/backup-sqlite-snapshot.js";
 import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as engineInspection from "./doctor-database-engine-inspection.js";
 import {
-  collectDatabaseEngineHealthFindings,
-  collectStateRootDatabaseEngineHealthFindings,
+  collectDoctorDatabaseEngineHealthFindings,
   noteDatabaseEngines,
 } from "./doctor-database-engine.js";
 
@@ -27,18 +25,17 @@ vi.mock("../infra/bun-sqlite-library.js", async (importOriginal) => ({
 
 beforeEach(() => {
   vi.mocked(note).mockClear();
-  vi.spyOn(backupSnapshot, "discoverBackupDatabasePaths").mockResolvedValue([]);
-  vi.spyOn(databaseDiscovery, "preparePostgresBackupDiscovery").mockResolvedValue({
-    paths: [],
+  vi.spyOn(engineInspection, "inspectDoctorDatabaseEngines").mockResolvedValue({
+    observed: {},
     stateRoots: [],
-    pluginOwners: {},
+    discoveryFailed: false,
   });
   vi.mocked(ensureSqliteLibrarySelected).mockReturnValue({ source: "runtime" });
 });
 
 describe("Doctor database engines", () => {
   it("reports default SQLite store families without an experimental warning", async () => {
-    await noteDatabaseEngines({});
+    const findings = await noteDatabaseEngines({});
     expect(note).toHaveBeenCalledExactlyOnceWith(
       expect.stringContaining(
         "Shared state: default=sqlite, override=inherit, effective=sqlite (configured)",
@@ -46,12 +43,12 @@ describe("Doctor database engines", () => {
       "Database engines",
     );
     expect(vi.mocked(note).mock.calls[0]?.[0]).not.toContain("experimental");
-    expect(collectDatabaseEngineHealthFindings({})).toEqual([]);
+    expect(findings).toEqual([]);
   });
 
   it("reports selected and unported engines with one actionable warning", async () => {
     const cfg = { database: { engine: "postgres" as const } };
-    await noteDatabaseEngines(cfg);
+    const findings = await noteDatabaseEngines(cfg);
     expect(note).toHaveBeenCalledExactlyOnceWith(
       expect.stringContaining(
         "Shared state: default=postgres, override=inherit, effective=postgres (configured)",
@@ -67,7 +64,7 @@ describe("Doctor database engines", () => {
     );
     expect(output.match(/experimental/g)).toHaveLength(1);
     expect(output).toContain("Stores without a registered PostgreSQL schema remain on SQLite");
-    expect(collectDatabaseEngineHealthFindings(cfg)).toEqual([
+    expect(findings).toEqual([
       expect.objectContaining({
         severity: "warning",
         path: "database.engine",
@@ -87,7 +84,7 @@ describe("Doctor database engines", () => {
         },
       },
     };
-    await noteDatabaseEngines(cfg);
+    const findings = await noteDatabaseEngines(cfg);
     const output = String(vi.mocked(note).mock.calls[0]?.[0]);
     expect(output).toContain(
       "Workboard: default=sqlite, override=postgres, effective=postgres (configured)",
@@ -98,7 +95,36 @@ describe("Doctor database engines", () => {
     expect(output).toContain(
       "Database quarantine: default=sqlite, override=fixed local, effective=sqlite (configured)",
     );
-    expect(collectDatabaseEngineHealthFindings(cfg)).toHaveLength(1);
+    expect(findings).toHaveLength(1);
+  });
+
+  it("distinguishes configured choices from conflicting physical stores without exposing connection details", async () => {
+    const cfg = {
+      database: {
+        families: { workboard: { engine: "postgres" as const } },
+        postgres: { connection: "postgres://fixture:secret@host/database" },
+      },
+    };
+    const observed = { workboard: ["sqlite" as const], state: ["sqlite" as const] };
+    vi.mocked(engineInspection.inspectDoctorDatabaseEngines).mockResolvedValue({
+      observed,
+      stateRoots: [],
+      discoveryFailed: false,
+    });
+    const findings = await noteDatabaseEngines(cfg);
+    const output = String(vi.mocked(note).mock.calls[0]?.[0]);
+    expect(output).toContain(
+      "Workboard: default=sqlite, override=postgres, effective=postgres (configured); observed=sqlite",
+    );
+    expect(output).not.toContain("secret");
+    expect(findings).toEqual([
+      expect.objectContaining({ message: expect.stringContaining("experimental") }),
+      expect.objectContaining({
+        path: "database.families.workboard.engine",
+        message: expect.stringContaining("configured postgres, observed sqlite"),
+        fixHint: expect.stringContaining("database port --family workboard"),
+      }),
+    ]);
   });
 
   it.each(["bundled", "env", "discovered"] as const)(
@@ -135,8 +161,7 @@ describe("Doctor database engines", () => {
   });
 
   it("lists retained account and token roots with physical engines and selected-state mismatches", async () => {
-    vi.mocked(backupSnapshot.discoverBackupDatabasePaths).mockRestore();
-    vi.mocked(databaseDiscovery.preparePostgresBackupDiscovery).mockRestore();
+    vi.mocked(engineInspection.inspectDoctorDatabaseEngines).mockRestore();
     await withOpenClawTestState(
       { scenario: "minimal", prefix: "doctor-state-roots-" },
       async (state) => {
@@ -207,16 +232,18 @@ describe("Doctor database engines", () => {
             message: expect.stringContaining("configured=sqlite"),
           }),
         ]);
-        const postgresFindings = await collectStateRootDatabaseEngineHealthFindings(
-          {
-            ...config,
-            database: {
-              families: { state: { engine: "postgres" } },
-              postgres: { connection: "postgresql://unused.example.invalid/doctor-fixture" },
+        const postgresFindings = (
+          await collectDoctorDatabaseEngineHealthFindings(
+            {
+              ...config,
+              database: {
+                families: { state: { engine: "postgres" } },
+                postgres: { connection: "postgresql://unused.example.invalid/doctor-fixture" },
+              },
             },
-          },
-          { env: state.env },
-        );
+            { env: state.env },
+          )
+        ).filter((finding) => finding.message.includes("engine mismatch"));
         expect(
           postgresFindings
             .map((finding) => finding.path)
@@ -231,13 +258,15 @@ describe("Doctor database engines", () => {
   });
 
   it("reports inventory failures without exposing connection details or aborting Doctor", async () => {
-    vi.mocked(backupSnapshot.discoverBackupDatabasePaths).mockRejectedValue(
-      new Error("postgres://private-user:private-password@unavailable.invalid/database"),
-    );
+    vi.mocked(engineInspection.inspectDoctorDatabaseEngines).mockResolvedValue({
+      observed: {},
+      stateRoots: [],
+      discoveryFailed: true,
+    });
     const findings = await noteDatabaseEngines({});
     expect(findings).toEqual([
       expect.objectContaining({
-        message: "Shared state roots could not be inspected.",
+        message: "Database roots could not all be inspected.",
         fixHint: expect.stringContaining("rerun openclaw doctor"),
       }),
     ]);

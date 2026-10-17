@@ -1,8 +1,12 @@
+import "./mcp-manager.test-support.js";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { vi } from "vitest";
-import { startNodeHostMcpManager } from "./mcp.js";
 
-type ManagerDeps = NonNullable<Parameters<typeof startNodeHostMcpManager>[1]>;
+const { startNodeHostMcpManager } = await import("./mcp-manager.test-support.js");
+
+type ManagerOptions = Parameters<typeof startNodeHostMcpManager>[1];
+type ManagerDeps = Omit<ManagerOptions, "resolveTransport"> &
+  Partial<Pick<ManagerOptions, "resolveTransport">>;
 type Client = ReturnType<NonNullable<ManagerDeps["createClient"]>>;
 type CallOptions = Parameters<Client["callTool"]>[2];
 type ClientParams = {
@@ -58,7 +62,7 @@ export function startManager(
     warn: vi.fn(),
     ...deps,
     createClient: (name, options) => {
-      const client = deps.createClient!(name, options);
+      const client = deps.createClient(name, options);
       Object.assign(client, { onToolsChanged: options.onToolsChanged });
       return client;
     },

@@ -2028,6 +2028,7 @@ function completedPluginMigrationFields(
 /** Admit preflight's shared-state writers through the same schema step as later migrations. */
 export async function prepareLegacyStateDatabaseSchema(
   env: NodeJS.ProcessEnv,
+  integrityCheck?: "quick" | "full",
 ): Promise<LegacyStateMigrationStepReceipt> {
   const { receipts } = await runLegacyStateMigrationSteps([
     createStateSchemaMigrationStep({
@@ -2035,6 +2036,7 @@ export async function prepareLegacyStateDatabaseSchema(
       env,
       mode: "doctor-preparation",
       requiredness: "conditional",
+      integrityCheck,
     }),
   ]);
   return receipts[0]!;

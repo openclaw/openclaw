@@ -12,6 +12,7 @@ import {
   untrack,
 } from "solid-js";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
@@ -19,6 +20,10 @@ import { PluginView } from "../plugins/control-ui-view.solid.tsx";
 import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
 import { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 import { createSessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
+import {
+  loadStoredHiddenSessionCatalogIds,
+  SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
+} from "./app-sidebar-session-types.ts";
 import { createSessionAttention } from "./session-attention.ts";
 import { createSessionOwnerFilterQuery } from "./session-owner-filter.ts";
 import { createSidebarScroll } from "./sidebar-context-controller.ts";
@@ -68,7 +73,24 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
   const scroll = createSidebarScroll(owner);
   const projection = projectSource(owner, {
     read: (current) => current,
-    subscribe: (current, notify) => current.subscribe(notify),
+    subscribe: (current, notify) => {
+      current.catalogRendererImport.schedule();
+      const stops = [
+        current.subscribe(notify),
+        listen(window, SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT, () => {
+          current.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
+          current.requestUpdate();
+        }),
+        listen(window, "openclaw:native-gateways-changed", () => {
+          if (current.isConnected) {
+            current.sidebarMenus.closeSessionMenu();
+            notify();
+          }
+        }),
+        current.catalogRendererImport.dispose,
+      ];
+      return () => stops.forEach((stop) => stop());
+    },
     equality: "revision",
   });
   const snapshot = owner.snapshot;

@@ -57,6 +57,7 @@ import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
+import { maintenanceConfig } from "./session-cold-storage.test-support.js";
 import { captureSessionEntryCurrentCheckAsyncInternal } from "./session-entry-current-check.js";
 import {
   captureExternalSessionCommitGuard,
@@ -193,13 +194,7 @@ async function createColdCurrentSession(
     original = loadTranscriptEventsSync(scope);
     await expect(
       runSessionColdStorageMaintenance({
-        config: {
-          agents: { entries: { main: {} } },
-          session: {
-            store: storePath,
-            maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
-          },
-        },
+        config: maintenanceConfig(storePath),
       }),
     ).resolves.toMatchObject({ archivedTranscripts: 1 });
   }
@@ -240,32 +235,45 @@ async function createColdCurrentSession(
 
 type Fixture = Awaited<ReturnType<typeof createColdCurrentSession>>;
 
-it.each([
-  {
-    change: "lifecycle rebound",
-    selectedRevision: "selected",
-    patch: { lifecycleRevision: "successor" },
-  },
-  {
-    change: "missing lifecycle rebound",
-    selectedRevision: undefined,
-    patch: { lifecycleRevision: "successor" },
-  },
-  {
-    change: "archived",
-    selectedRevision: "selected",
-    patch: { archivedAt: 1 },
-  },
-  {
-    change: "initialization pending",
-    selectedRevision: "selected",
-    patch: { initializationPending: true },
-  },
-] satisfies {
-  change: string;
-  selectedRevision: string | undefined;
-  patch: Partial<SessionEntry>;
-}[])("refuses memory compaction after $change", async ({ selectedRevision, patch }) => {
+type WorkerParams = Extract<
+  Parameters<typeof archiveWorkers.runSqliteTranscriptArchiveWorkerOperation>[0],
+  { expectedMessageType: "reclaimed" }
+>;
+function interceptRestoration(rewrite: (params: WorkerParams) => WorkerParams) {
+  const original = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
+  vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
+    (params) => original(params.expectedMessageType === "reclaimed" ? rewrite(params) : params),
+  );
+}
+
+function coldDescriptor(fixture: Fixture) {
+  return readSessionColdTranscript(fixture.database(), fixture.scope.sessionId);
+}
+
+function observeCommit(beforeCommit = () => {}) {
+  const commit = { requested: false, inGrant: false };
+  interceptRestoration((params) => ({
+    ...params,
+    onCommitRequest: () => {
+      commit.requested = true;
+      beforeCommit();
+      commit.inGrant = true;
+      try {
+        params.onCommitRequest();
+      } finally {
+        commit.inGrant = false;
+      }
+    },
+  }));
+  return commit;
+}
+
+it.each<[string, string | undefined, Partial<SessionEntry>]>([
+  ["lifecycle rebound", "selected", { lifecycleRevision: "successor" }],
+  ["missing lifecycle rebound", undefined, { lifecycleRevision: "successor" }],
+  ["archived", "selected", { archivedAt: 1 }],
+  ["initialization pending", "selected", { initializationPending: true }],
+])("refuses memory compaction after %s", async (_change, selectedRevision, patch) => {
   const agentId = "main";
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-incognito-compact-authority-") };
   const scope = {
@@ -550,170 +558,141 @@ describe("cold current transcript lifecycle", () => {
   });
 
   it.each([
-    {
-      name: "keeps cold history unchanged when conversation alternatives split before restoration read",
-      boundary: "before restoration read",
-      revoked: 0,
-      bothActive: false,
-    },
-    {
-      name: "keeps cold history unchanged when conversation alternatives split after host assertion",
-      boundary: "after host assertion",
-      revoked: 0,
-      bothActive: false,
-    },
-    {
-      name: "restores cold history when only the inactive conversation alternative changes",
-      boundary: "after host assertion",
-      revoked: 1,
-      bothActive: false,
-    },
-    {
-      name: "restores cold history when another active conversation alternative survives",
-      boundary: "after host assertion",
-      revoked: 0,
-      bothActive: true,
-    },
-  ] as const)("$name", async ({ boundary, revoked, bothActive }) => {
-    const fixture = await createColdCurrentSession();
-    const foreign = boundary === "after host assertion";
-    const sourceScope = {
-      ...fixture.scope,
-      storePath: foreign
-        ? path.join(path.dirname(fixture.scope.storePath), "source.sqlite")
-        : fixture.scope.storePath,
-    };
-    if (foreign) {
-      stores.push(sourceScope.storePath);
-      await replaceSessionEntry(sourceScope, fixture.entry);
-    }
-    const sourceOptions = { agentId: sourceScope.agentId, path: sourceScope.storePath };
-    const conversations = ["active", "inactive"].map((peerId) => {
-      const identity = buildConversationIdentity({
-        channel: "reef",
-        accountId: "default",
-        kind: "direct",
-        peerId,
-        deliveryTarget: peerId,
-      });
-      if (!identity) {
-        throw new Error("Expected a valid compaction conversation");
-      }
-      return identity;
-    });
-    const preparedConversations = conversations.map((identity) => ({
-      identity,
-      encoded: prepareConversationIdentities([identity]),
-    }));
-    runOpenClawAgentWriteTransaction((database) => {
-      for (const { identity, encoded } of preparedConversations) {
-        upsertConversationIdentities(database, encoded, 1);
-        linkSessionConversation({
-          database,
-          sessionId: sourceScope.sessionId,
-          conversation: { identity, role: "participant" },
-          updatedAt: 1,
-        });
-      }
-    }, sourceOptions);
-    const current = await captureSessionEntryCurrentCheckAsyncInternal({
-      ...sourceScope,
-      alternatives: conversations.map((identity, index) => ({
-        conversations: [{ ...identity, sessionKey: sourceScope.sessionKey }],
-        isActive: () => index === 0 || bothActive,
-      })),
-      errorMessage: "Compaction conversation authority revoked",
-    });
-    const source: SessionSourceAssertion = current.source;
-    const before = fixture.snapshot();
-    const archiveBefore = await fs.readFile(fixture.archivePath);
-    let changed = false;
-    let inCommitGrant = false;
-    const revokeBinding = () => {
-      runOpenClawAgentWriteTransaction((database) => {
-        linkSessionConversation({
-          database,
-          sessionId: sourceScope.sessionId,
-          conversation: { identity: conversations[revoked]!, role: "related" },
-          updatedAt: 2,
-        });
-      }, sourceOptions);
-      changed = true;
-    };
-    if (foreign) {
-      const prepare = source.prepareSessionSource!;
-      source.prepareSessionSource = async () => {
-        const prepared = await prepare();
-        return {
-          ...prepared,
-          assertCurrent() {
-            prepared.assertCurrent();
-            if (inCommitGrant && !changed) {
-              revokeBinding();
-            }
-          },
-        };
+    ["before restoration read", 0, false],
+    ["after host assertion", 0, false],
+    ["after host assertion", 1, false],
+    ["after host assertion", 0, true],
+  ] as const)(
+    "checks conversation alternatives %s (revoked=%s, both active=%s)",
+    async (boundary, revoked, bothActive) => {
+      const fixture = await createColdCurrentSession();
+      const foreign = boundary === "after host assertion";
+      const sourceScope = {
+        ...fixture.scope,
+        storePath: foreign
+          ? path.join(path.dirname(fixture.scope.storePath), "source.sqlite")
+          : fixture.scope.storePath,
       };
-    }
-    const original = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
-    vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
-      (params) => {
-        if (params.expectedMessageType !== "reclaimed") {
-          return original(params);
+      if (foreign) {
+        stores.push(sourceScope.storePath);
+        await replaceSessionEntry(sourceScope, fixture.entry);
+      }
+      const sourceOptions = { agentId: sourceScope.agentId, path: sourceScope.storePath };
+      const conversations = ["active", "inactive"].map((peerId) => {
+        const identity = buildConversationIdentity({
+          channel: "reef",
+          accountId: "default",
+          kind: "direct",
+          peerId,
+          deliveryTarget: peerId,
+        });
+        if (!identity) {
+          throw new Error("Expected a valid compaction conversation");
         }
-        return original({
-          ...params,
-          withWriteAdmission: (run, diagnostics) =>
-            params.withWriteAdmission((refusal) => {
-              if (!refusal && !foreign && !changed) {
+        return identity;
+      });
+      const preparedConversations = conversations.map((identity) => ({
+        identity,
+        encoded: prepareConversationIdentities([identity]),
+      }));
+      runOpenClawAgentWriteTransaction((database) => {
+        for (const { identity, encoded } of preparedConversations) {
+          upsertConversationIdentities(database, encoded, 1);
+          linkSessionConversation({
+            database,
+            sessionId: sourceScope.sessionId,
+            conversation: { identity, role: "participant" },
+            updatedAt: 1,
+          });
+        }
+      }, sourceOptions);
+      const current = await captureSessionEntryCurrentCheckAsyncInternal({
+        ...sourceScope,
+        alternatives: conversations.map((identity, index) => ({
+          conversations: [{ ...identity, sessionKey: sourceScope.sessionKey }],
+          isActive: () => index === 0 || bothActive,
+        })),
+        errorMessage: "Compaction conversation authority revoked",
+      });
+      const source: SessionSourceAssertion = current.source;
+      const before = fixture.snapshot();
+      const archiveBefore = await fs.readFile(fixture.archivePath);
+      let changed = false;
+      let inCommitGrant = false;
+      const revokeBinding = () => {
+        runOpenClawAgentWriteTransaction((database) => {
+          linkSessionConversation({
+            database,
+            sessionId: sourceScope.sessionId,
+            conversation: { identity: conversations[revoked]!, role: "related" },
+            updatedAt: 2,
+          });
+        }, sourceOptions);
+        changed = true;
+      };
+      if (foreign) {
+        const prepare = source.prepareSessionSource!;
+        source.prepareSessionSource = async () => {
+          const prepared = await prepare();
+          return {
+            ...prepared,
+            assertCurrent() {
+              prepared.assertCurrent();
+              if (inCommitGrant && !changed) {
                 revokeBinding();
               }
-              return run(refusal);
-            }, diagnostics),
-          onCommitRequest: (...args) => {
-            inCommitGrant = true;
-            try {
-              params.onCommitRequest(...args);
-            } finally {
-              inCommitGrant = false;
+            },
+          };
+        };
+      }
+      interceptRestoration((params) => ({
+        ...params,
+        withWriteAdmission: (run, diagnostics) =>
+          params.withWriteAdmission((refusal) => {
+            if (!refusal && !foreign && !changed) {
+              revokeBinding();
             }
-          },
-        });
-      },
-    );
-    const compact = createCompactAuthority(fixture).trim(source);
-    const survives = revoked === 1 || bothActive;
-    if (survives) {
-      await expect(compact).resolves.toEqual({ compacted: true, kept: 3 });
-    } else {
-      await expect(compact).rejects.toThrow("Compaction conversation authority revoked");
-    }
-    expect(changed).toBe(true);
-    expect(
-      resolveCurrentConversationSession(sourceScope, conversations[revoked]!.conversationRef),
-    ).toBeUndefined();
-    expect(
-      resolveCurrentConversationSession(sourceScope, conversations[1 - revoked]!.conversationRef),
-    ).toEqual({
-      sessionKey: sourceScope.sessionKey,
-      sessionId: sourceScope.sessionId,
-    });
-    if (survives) {
+            return run(refusal);
+          }, diagnostics),
+        onCommitRequest: (...args) => {
+          inCommitGrant = true;
+          try {
+            params.onCommitRequest(...args);
+          } finally {
+            inCommitGrant = false;
+          }
+        },
+      }));
+      const compact = createCompactAuthority(fixture).trim(source);
+      const survives = revoked === 1 || bothActive;
+      if (survives) {
+        await expect(compact).resolves.toEqual({ compacted: true, kept: 3 });
+      } else {
+        await expect(compact).rejects.toThrow("Compaction conversation authority revoked");
+      }
+      expect(changed).toBe(true);
       expect(
-        readSessionColdTranscript(fixture.database(), fixture.scope.sessionId),
+        resolveCurrentConversationSession(sourceScope, conversations[revoked]!.conversationRef),
       ).toBeUndefined();
-      expect(loadTranscriptEventsSync(fixture.scope).slice(1)).toMatchObject([
-        { id: "alternate" },
-        { id: "selection" },
-      ]);
-      return;
-    }
-    expect(readSessionColdTranscript(fixture.database(), fixture.scope.sessionId)).toEqual(
-      fixture.descriptor,
-    );
-    expect(fixture.snapshot()).toEqual(before);
-    expect(await fs.readFile(fixture.archivePath)).toEqual(archiveBefore);
-  });
+      expect(
+        resolveCurrentConversationSession(sourceScope, conversations[1 - revoked]!.conversationRef),
+      ).toEqual({
+        sessionKey: sourceScope.sessionKey,
+        sessionId: sourceScope.sessionId,
+      });
+      if (survives) {
+        expect(coldDescriptor(fixture)).toBeUndefined();
+        expect(loadTranscriptEventsSync(fixture.scope).slice(1)).toMatchObject([
+          { id: "alternate" },
+          { id: "selection" },
+        ]);
+        return;
+      }
+      expect(coldDescriptor(fixture)).toEqual(fixture.descriptor);
+      expect(fixture.snapshot()).toEqual(before);
+      expect(await fs.readFile(fixture.archivePath)).toEqual(archiveBefore);
+    },
+  );
 
   it.each(["source", "lifecycle", "missing lifecycle"] as const)(
     "rechecks %s rows after cold restoration waits for write admission",
@@ -733,31 +712,23 @@ describe("cold current transcript lifecycle", () => {
       );
       let before = fixture.snapshot();
       let changed = false;
-      const original = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
-      vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
-        (params) => {
-          if (params.expectedMessageType !== "reclaimed") {
-            return original(params);
-          }
-          return original({
-            ...params,
-            withWriteAdmission: (run, diagnostics) =>
-              params.withWriteAdmission((refusal) => {
-                if (!refusal) {
-                  replaceSessionEntrySync(fixture.scope, {
-                    ...fixture.entry,
-                    ...(change === "source"
-                      ? { label: "revoked grant" }
-                      : { lifecycleRevision: "successor" }),
-                  });
-                  changed = true;
-                  before = fixture.snapshot();
-                }
-                return run(refusal);
-              }, diagnostics),
-          });
-        },
-      );
+      interceptRestoration((params) => ({
+        ...params,
+        withWriteAdmission: (run, diagnostics) =>
+          params.withWriteAdmission((refusal) => {
+            if (!refusal) {
+              replaceSessionEntrySync(fixture.scope, {
+                ...fixture.entry,
+                ...(change === "source"
+                  ? { label: "revoked grant" }
+                  : { lifecycleRevision: "successor" }),
+              });
+              changed = true;
+              before = fixture.snapshot();
+            }
+            return run(refusal);
+          }, diagnostics),
+      }));
       await expect(authority.trim()).rejects.toThrow(
         change === "source"
           ? "Compaction source authority revoked"
@@ -774,34 +745,12 @@ describe("cold current transcript lifecycle", () => {
       const fixture = await createColdCurrentSession();
       const before = fixture.snapshot();
       const authority = createCompactAuthority(fixture);
-      let commitRequested = false;
-      let inCommitGrant = false;
-      const mixed = composeCompactSource(authority.source, fixture, mode, () => inCommitGrant);
-      const original = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
-      vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
-        (params) => {
-          if (params.expectedMessageType !== "reclaimed") {
-            return original(params);
-          }
-          return original({
-            ...params,
-            onCommitRequest: () => {
-              commitRequested = true;
-              authority.revoke();
-              inCommitGrant = true;
-              try {
-                params.onCommitRequest();
-              } finally {
-                inCommitGrant = false;
-              }
-            },
-          });
-        },
-      );
+      const commit = observeCommit(authority.revoke);
+      const mixed = composeCompactSource(authority.source, fixture, mode, () => commit.inGrant);
       await expect(authority.trim(mixed.source)).rejects.toThrow(
         "Compaction source authority revoked",
       );
-      expect(commitRequested).toBe(true);
+      expect(commit.requested).toBe(true);
       expect(fixture.snapshot()).toEqual(before);
     },
   );
@@ -825,27 +774,19 @@ describe("cold current transcript lifecycle", () => {
       }
       const foreign = createCompactAuthority({ scope: sourceScope, entry: sourceEntry });
       let changed = false;
-      const original = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
-      vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
-        (params) => {
-          if (params.expectedMessageType !== "reclaimed") {
-            return original(params);
+      interceptRestoration((params) => ({
+        ...params,
+        onCommitRequest: () => {
+          if (change === "alias path") {
+            unlinkSync(sourceScope.storePath);
+            symlinkSync(seed!.snapshotPath, sourceScope.storePath);
+          } else {
+            replaceSessionEntrySync(sourceScope, { ...sourceEntry, label: "revoked grant" });
           }
-          return original({
-            ...params,
-            onCommitRequest: () => {
-              if (change === "alias path") {
-                unlinkSync(sourceScope.storePath);
-                symlinkSync(seed!.snapshotPath, sourceScope.storePath);
-              } else {
-                replaceSessionEntrySync(sourceScope, { ...sourceEntry, label: "revoked grant" });
-              }
-              changed = true;
-              params.onCommitRequest();
-            },
-          });
+          changed = true;
+          params.onCommitRequest();
         },
-      );
+      }));
       await expect(createCompactAuthority(fixture).trim(foreign.source)).rejects.toThrow(
         "Compaction source authority revoked",
       );
@@ -860,27 +801,8 @@ describe("cold current transcript lifecycle", () => {
     async (mode) => {
       const fixture = await createColdCurrentSession();
       const authority = createCompactAuthority(fixture);
-      let inCommitGrant = false;
-      const mixed = composeCompactSource(authority.source, fixture, mode, () => inCommitGrant);
-      const original = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
-      vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
-        (params) => {
-          if (params.expectedMessageType !== "reclaimed") {
-            return original(params);
-          }
-          return original({
-            ...params,
-            onCommitRequest: () => {
-              inCommitGrant = true;
-              try {
-                params.onCommitRequest();
-              } finally {
-                inCommitGrant = false;
-              }
-            },
-          });
-        },
-      );
+      const commit = observeCommit();
+      const mixed = composeCompactSource(authority.source, fixture, mode, () => commit.inGrant);
       await expect(authority.trim(mixed.source)).resolves.toEqual({
         compacted: true,
         kept: 3,
@@ -888,9 +810,7 @@ describe("cold current transcript lifecycle", () => {
       if (mode !== "prepared") {
         expect(mixed.opaque).toHaveBeenCalled();
       }
-      expect(
-        readSessionColdTranscript(fixture.database(), fixture.scope.sessionId),
-      ).toBeUndefined();
+      expect(coldDescriptor(fixture)).toBeUndefined();
       expect(loadTranscriptEventsSync(fixture.scope)).toEqual([
         fixture.original[0],
         {
@@ -935,7 +855,7 @@ describe("cold current transcript lifecycle", () => {
               : "created",
       });
     }
-    expect(readSessionColdTranscript(fixture.database(), fixture.scope.sessionId)).toBeUndefined();
+    expect(coldDescriptor(fixture)).toBeUndefined();
     expect(loadTranscriptEventsSync(fixture.scope).slice(0, fixture.original.length)).toEqual(
       fixture.original,
     );
@@ -983,9 +903,7 @@ describe("cold current transcript lifecycle", () => {
         await expect(runAction(action, fixture)).rejects.toThrow();
       }
       expect(fixture.snapshot()).toEqual(before);
-      expect(readSessionColdTranscript(fixture.database(), fixture.scope.sessionId)).toEqual(
-        fixture.descriptor,
-      );
+      expect(coldDescriptor(fixture)).toEqual(fixture.descriptor);
     },
   );
 });
