@@ -4,7 +4,7 @@ import type { ChannelDoctorConfigMutation } from "../../../channels/plugins/type
 import { getConfigValueAtPath, setConfigValueAtPath } from "../../../config/config-paths.js";
 import { resolveConfigPath, resolveIsConfigReadOnly } from "../../../config/paths.js";
 import { cloneConfigWithResolutionFacts } from "../../../config/resolution-facts.js";
-import type { ConfigFileSnapshot } from "../../../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../../../infra/env.js";
 import {
   executeSqliteQueryTakeFirstSync,
@@ -27,6 +27,13 @@ export const HISTORICAL_WEBHOOK_CHANNELS = ["telegram", "feishu", "msteams", "ne
 
 function webhookCompletionKey(env: NodeJS.ProcessEnv): string {
   return `webhookListeners:${resolveConfigPath(env)}`;
+}
+
+export function readHistoricalWebhookCompletion(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
+  return (
+    config.meta?.migrations?.webhookListeners ??
+    readConfigMachineState<true | Record<string, string[][]>>(webhookCompletionKey(env), { env })
+  );
 }
 
 /** No config bytes changed, so this completion does not depend on config rollback. */
@@ -81,9 +88,7 @@ function applyHistoricalWebhookPins(
   const marker =
     mutation.config.meta?.migrations?.webhookListeners ??
     (state.completion ??= {
-      marker: readConfigMachineState<true | Record<string, string[][]>>(webhookCompletionKey(env), {
-        env,
-      }),
+      marker: readHistoricalWebhookCompletion(mutation.config, env),
     }).marker;
   if (marker === true || mutation.warnings?.length) {
     return mutation;
