@@ -30,11 +30,38 @@ if (typeof REMOTE_WORKSPACE_MANIFEST_JS !== "string") {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-function hashMetrics() {
+const hashMetrics = () => ({ contentHashCount: 0, contentHashDurationMs: 0, memoHitCount: 0 });
+function manifest(
+  paths: string[],
+  content: string,
+  directories: string[],
+): WorkerWorkspaceManifest {
   return {
-    contentHashCount: 0,
-    contentHashDurationMs: 0,
-    memoHitCount: 0,
+    version: 1,
+    baseCommit: null,
+    directories,
+    entries: paths.map((entryPath) => ({
+      path: entryPath,
+      type: "file",
+      mode: 0o644,
+      size: Buffer.byteLength(content),
+      sha256: createHash("sha256").update(content).digest("hex"),
+    })),
+  };
+}
+function remoteCapture(workspace: string, home: string, script = REMOTE_WORKSPACE_MANIFEST_JS) {
+  type MemoResponse = {
+    manifestRef: string;
+    memo: [string, string][];
+    metrics: { contentHashCount: number; memoHitCount: number; memoTruncatedCount: number };
+  };
+  return async (memo: [string, string][]): Promise<MemoResponse> => {
+    const result = await runCommandWithTimeout(
+      [process.execPath, "-e", script, workspace, "", "memo-v1"],
+      { timeoutMs: 10_000, baseEnv: { ...process.env, HOME: home }, input: JSON.stringify(memo) },
+    );
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    return JSON.parse(result.stdout) as MemoResponse;
   };
 }
 
@@ -87,43 +114,8 @@ describe("workspace hash memo", () => {
   it("reuses local workspace nodes within one preflight but not across fences", async () => {
     const root = await fs.realpath(tempDirs.make("openclaw-workspace-preflight-memo-"));
     await fs.writeFile(path.join(root, "parent"), "base");
-    const baseContent = Buffer.from("base");
-    const currentContent = Buffer.from("worker");
-    const base: WorkerWorkspaceManifest = {
-      version: 1,
-      baseCommit: null,
-      entries: [
-        {
-          path: "parent",
-          type: "file",
-          mode: 0o644,
-          size: baseContent.length,
-          sha256: createHash("sha256").update(baseContent).digest("hex"),
-        },
-      ],
-      directories: [],
-    };
-    const current: WorkerWorkspaceManifest = {
-      version: 1,
-      baseCommit: null,
-      entries: [
-        {
-          path: "parent/child.txt",
-          type: "file",
-          mode: 0o644,
-          size: currentContent.length,
-          sha256: createHash("sha256").update(currentContent).digest("hex"),
-        },
-        {
-          path: "parent/sibling.txt",
-          type: "file",
-          mode: 0o644,
-          size: currentContent.length,
-          sha256: createHash("sha256").update(currentContent).digest("hex"),
-        },
-      ],
-      directories: ["parent"],
-    };
+    const base = manifest(["parent"], "base", []);
+    const current = manifest(["parent/child.txt", "parent/sibling.txt"], "worker", ["parent"]);
     const metrics = hashMetrics();
 
     const first = await withWorkspaceHashMemo(
@@ -188,20 +180,7 @@ describe("workspace hash memo", () => {
     workspace = await fs.realpath(workspace);
     const target = path.join(workspace, "same-size.txt");
     await fs.writeFile(target, "alpha");
-    const env = { ...process.env, HOME: home };
-    type MemoResponse = {
-      manifestRef: string;
-      memo: [string, string][];
-      metrics: { contentHashCount: number; memoHitCount: number };
-    };
-    const capture = async (memo: [string, string][]): Promise<MemoResponse> => {
-      const result = await runCommandWithTimeout(
-        [process.execPath, "-e", REMOTE_WORKSPACE_MANIFEST_JS, workspace, "", "memo-v1"],
-        { timeoutMs: 10_000, baseEnv: env, input: JSON.stringify(memo) },
-      );
-      expect(result).toMatchObject({ code: 0, stderr: "" });
-      return JSON.parse(result.stdout) as MemoResponse;
-    };
+    const capture = remoteCapture(workspace, home);
 
     const first = await capture([]);
     expect(first.metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 0 });
@@ -261,20 +240,7 @@ describe("workspace hash memo", () => {
       "const MAX_WORKSPACE_HASH_MEMO_ENTRIES = 2;",
     );
     expect(limitedScript).not.toBe(REMOTE_WORKSPACE_MANIFEST_JS);
-    const env = { ...process.env, HOME: home };
-    type MemoResponse = {
-      manifestRef: string;
-      memo: [string, string][];
-      metrics: { contentHashCount: number; memoHitCount: number; memoTruncatedCount: number };
-    };
-    const capture = async (memo: [string, string][]): Promise<MemoResponse> => {
-      const result = await runCommandWithTimeout(
-        [process.execPath, "-e", limitedScript, workspace, "", "memo-v1"],
-        { timeoutMs: 10_000, baseEnv: env, input: JSON.stringify(memo) },
-      );
-      expect(result).toMatchObject({ code: 0, stderr: "" });
-      return JSON.parse(result.stdout) as MemoResponse;
-    };
+    const capture = remoteCapture(workspace, home, limitedScript);
 
     const first = await capture([]);
     expect(

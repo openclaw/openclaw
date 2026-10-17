@@ -20,10 +20,32 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+async function inventoryFixture(count = 0) {
+  const root = await fs.realpath(tempDirs.make("workspace-inventory-"));
+  const files = Array.from({ length: count }, (_, index) => `file-${index}.txt`);
+  await Promise.all(files.map((file) => fs.writeFile(path.join(root, file), "inside")));
+  const capture = (
+    options: Omit<
+      Parameters<typeof readActualWorkspaceManifestImpl>[0],
+      "root" | "baseCommit"
+    > = {},
+  ) => readActualWorkspaceManifestImpl({ root, baseCommit: null, ...options });
+  return { root, files, capture };
+}
+
+function observeSettlement(promise: Promise<unknown>) {
+  let settled = false;
+  const markSettled = () => {
+    settled = true;
+  };
+  void promise.then(markSettled, markSettled);
+  return () => settled;
+}
+
 it.each(["before traversal", "during traversal", "root resolution", "safe-root setup"] as const)(
   "rejects an empty inventory aborted %s",
   async (phase) => {
-    const root = await fs.realpath(tempDirs.make("workspace-inventory-empty-abort-"));
+    const { root, capture } = await inventoryFixture();
     const controller = new AbortController();
     const reason = new Error("empty inventory aborted");
     const entered = createDeferred();
@@ -52,13 +74,10 @@ it.each(["before traversal", "during traversal", "root resolution", "safe-root s
       controller.abort(reason);
       gate.resolve();
     }
-    const params = {
-      root,
-      baseCommit: null,
+    const scan = capture({
       signal: controller.signal,
       ...(phase === "before traversal" ? { includePaths: new Set<string>() } : {}),
-    };
-    const scan = readActualWorkspaceManifestImpl(params);
+    });
     const rejected = expect(scan).rejects.toBe(reason);
     try {
       if (phase !== "before traversal") {
@@ -81,9 +100,7 @@ it.each(["before traversal", "during traversal", "root resolution", "safe-root s
 it.for(["metadata", "files"] as const)(
   "bounds pending promise resources while %s operations are blocked",
   async (phase, { signal }) => {
-    const root = await fs.realpath(tempDirs.make("workspace-inventory-pending-"));
-    const files = Array.from({ length: 512 }, (_, index) => `file-${index}.txt`);
-    await Promise.all(files.map((file) => fs.writeFile(path.join(root, file), "inside")));
+    const { root, files, capture } = await inventoryFixture(512);
     const gate = createDeferred();
     const allStarted = createDeferred();
     let started = 0;
@@ -120,11 +137,7 @@ it.for(["metadata", "files"] as const)(
         pendingPromises.delete(id);
       },
     }).enable();
-    const scan = readActualWorkspaceManifestImpl({
-      root,
-      baseCommit: null,
-      includePaths: new Set(files),
-    });
+    const scan = capture({ includePaths: new Set(files) });
     const cancelWait = addAbortListener(signal, () => allStarted.reject(signal.reason));
     try {
       await Promise.race([allStarted.promise, scan]);
@@ -144,10 +157,8 @@ it.for(["metadata", "files"] as const)(
 
 const fileFailures = ["symlink replacement", "caller abort"] as const;
 it.each(fileFailures)("drains admitted file reads after %s", async (failure) => {
-  const root = await fs.realpath(tempDirs.make("workspace-inventory-readers-"));
+  const { root, files, capture } = await inventoryFixture(9);
   const outside = await fs.realpath(tempDirs.make("workspace-inventory-outside-"));
-  const files = Array.from({ length: 9 }, (_, index) => `file-${index}.txt`);
-  await Promise.all(files.map((file) => fs.writeFile(path.join(root, file), "inside")));
   await fs.writeFile(path.join(outside, "target.txt"), "outside");
   const controller = new AbortController();
   const reason = new Error("manifest scan aborted");
@@ -176,21 +187,8 @@ it.each(fileFailures)("drains admitted file reads after %s", async (failure) => 
     }
     return handle;
   });
-  const scan = readActualWorkspaceManifestImpl({
-    root,
-    baseCommit: null,
-    includePaths: new Set(files),
-    signal: controller.signal,
-  });
-  let settled = false;
-  void scan.then(
-    () => {
-      settled = true;
-    },
-    () => {
-      settled = true;
-    },
-  );
+  const scan = capture({ includePaths: new Set(files), signal: controller.signal });
+  const settled = observeSettlement(scan);
   try {
     await vi.waitFor(() => expect(gates).toHaveLength(4));
     if (failure === "symlink replacement") {
@@ -201,7 +199,7 @@ it.each(fileFailures)("drains admitted file reads after %s", async (failure) => 
     }
     gates[0]!.resolve();
     await firstClosed.promise;
-    expect(settled).toBe(false);
+    expect(settled()).toBe(false);
     expect(opened).toHaveBeenCalledTimes(4);
   } finally {
     releasing = true;
@@ -228,9 +226,7 @@ const metadataFailures = [
 it.each(metadataFailures)("settles metadata after %s", async (failure) => {
   const walk = failure === "walk abort before metadata error";
   const admitted = walk ? 1 : 4;
-  const root = await fs.realpath(tempDirs.make("workspace-inventory-metadata-"));
-  const files = Array.from({ length: 9 }, (_, index) => `file-${index}.txt`);
-  await Promise.all(files.map((file) => fs.writeFile(path.join(root, file), "inside")));
+  const { root, files, capture } = await inventoryFixture(9);
   const lstat = fs.lstat.bind(fs);
   const gates: Array<ReturnType<typeof createDeferred<void>>> = [];
   const failed = createDeferred();
@@ -257,22 +253,11 @@ it.each(metadataFailures)("settles metadata after %s", async (failure) => {
     return await lstat(...args);
   });
   const opened = vi.spyOn(fs, "open");
-  const params = {
-    root,
-    baseCommit: null,
+  const scan = capture({
     ...(walk ? {} : { includePaths: new Set(files) }),
     signal: controller.signal,
-  };
-  const scan = readActualWorkspaceManifestImpl(params);
-  let settled = false;
-  void scan.then(
-    () => {
-      settled = true;
-    },
-    () => {
-      settled = true;
-    },
-  );
+  });
+  const settled = observeSettlement(scan);
   try {
     await vi.waitFor(() => expect(gates).toHaveLength(admitted));
     if (failure !== "metadata error") {
@@ -280,7 +265,7 @@ it.each(metadataFailures)("settles metadata after %s", async (failure) => {
     }
     gates[0]!.resolve();
     await failed.promise;
-    expect(settled).toBe(false);
+    expect(settled()).toBe(false);
     expect(started).toBe(admitted);
     if (failure === "metadata error") {
       // Let the rejected operation reach the scan owner before the later cancellation.
@@ -302,7 +287,7 @@ it.each(metadataFailures)("settles metadata after %s", async (failure) => {
 });
 
 it("stops an admitted directory enumeration on caller cancellation", async () => {
-  const root = await fs.realpath(tempDirs.make("workspace-inventory-directory-abort-"));
+  const { root, capture } = await inventoryFixture();
   const target = path.join(root, "directory");
   await fs.mkdir(target);
   await Promise.all(
@@ -335,13 +320,10 @@ it("stops an admitted directory enumeration on caller cancellation", async () =>
     }
     return directory;
   });
-  const params = {
-    root,
-    baseCommit: null,
+  const scan = capture({
     includePaths: new Set(["directory"]),
     signal: controller.signal,
-  };
-  const scan = readActualWorkspaceManifestImpl(params);
+  });
   const rejected = expect(scan).rejects.toBe(reason);
   try {
     await entered.promise;

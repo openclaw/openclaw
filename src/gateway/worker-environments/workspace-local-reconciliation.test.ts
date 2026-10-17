@@ -9,6 +9,7 @@ import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
+  type WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-manifest.js";
 import {
   applyStagedWorkerWorkspaceResult,
@@ -18,7 +19,28 @@ import {
 } from "./workspace-result-staging.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
+const inactiveQuiescence = { assertActive: async () => {}, resume: async () => {} };
+const emptyJournal = (): WorkerWorkspaceReconciliationJournalAdapter => ({
+  load: async () => undefined,
+  begin: async () => {},
+  commit: async () => {},
+  abort: async () => {},
+});
+async function commitFixture(root: string) {
+  await requireGit(root, ["add", "."]);
+  await requireGit(root, [
+    "-c",
+    "user.name=Workspace Fixture",
+    "-c",
+    "user.email=workspace@example.invalid",
+    "commit",
+    "--quiet",
+    "--no-gpg-sign",
+    "-m",
+    "base",
+  ]);
+  return await requireGit(root, ["rev-parse", "HEAD"]);
+}
 async function prepareUnchangedWorkspace(options?: {
   localContent?: string;
   assertCurrent?: () => void;
@@ -94,19 +116,7 @@ describe("unchanged local workspace reconciliation", () => {
     await requireGit(root, ["init", "--quiet"]);
     await fs.writeFile(path.join(root, "base.txt"), "base\n");
     await fs.writeFile(path.join(worker, "base.txt"), "base\n");
-    await requireGit(root, ["add", "."]);
-    await requireGit(root, [
-      "-c",
-      "user.name=Workspace Fixture",
-      "-c",
-      "user.email=workspace@example.invalid",
-      "commit",
-      "--quiet",
-      "--no-gpg-sign",
-      "-m",
-      "base",
-    ]);
-    const baseCommit = await requireGit(root, ["rev-parse", "HEAD"]);
+    const baseCommit = await commitFixture(root);
     const base = await captureWorkspaceManifest({ root, baseCommit });
     await fs.writeFile(
       path.join(manifests, base.manifestRef.slice(7)),
@@ -115,12 +125,10 @@ describe("unchanged local workspace reconciliation", () => {
     let committedRef = base.manifestRef;
     let remoteRef = base.manifestRef;
     const journal = {
-      load: async () => undefined,
-      begin: async () => {},
+      ...emptyJournal(),
       commit: async (ref: string) => {
         committedRef = ref;
       },
-      abort: async () => {},
     };
     const ref = workerWorkspaceResultRef("accepted-host-recovery");
     const reconcile = async (baseline: typeof base, current: typeof base, stagedRef: string) => {
@@ -163,10 +171,7 @@ describe("unchanged local workspace reconciliation", () => {
           expect(observed.manifestRef).toBe(remoteRef);
         },
       });
-      return await verifyReconciledWorkspaceFinal(reconciliation, {
-        assertActive: async () => {},
-        resume: async () => {},
-      });
+      return await verifyReconciledWorkspaceFinal(reconciliation, inactiveQuiescence);
     };
     await fs.writeFile(path.join(root, "published.txt"), "published host bytes\n");
     await requireGit(root, ["add", "--", "published.txt"]);
@@ -206,16 +211,11 @@ describe("unchanged local workspace reconciliation", () => {
       ),
     };
     await reconcile(nextBase, deleted, workerWorkspaceResultRef("accepted-host-delete"));
-    const localPresent = await fs.access(path.join(root, "published.txt")).then(
-      () => true,
-      () => false,
-    );
-    const workerPresent = await fs.access(path.join(worker, "published.txt")).then(
-      () => true,
-      () => false,
-    );
-    expect(localPresent).toBe(false);
-    expect(workerPresent).toBe(false);
+    for (const directory of [root, worker]) {
+      await expect(fs.access(path.join(directory, "published.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }
   });
 
   it.each([false, true])(
@@ -226,19 +226,7 @@ describe("unchanged local workspace reconciliation", () => {
       await requireGit(root, ["init", "--quiet"]);
       await fs.writeFile(path.join(root, "base.txt"), "base\n");
       await fs.writeFile(path.join(root, ".gitignore"), "private.txt\n");
-      await requireGit(root, ["add", "."]);
-      await requireGit(root, [
-        "-c",
-        "user.name=Workspace Fixture",
-        "-c",
-        "user.email=workspace@example.invalid",
-        "commit",
-        "--quiet",
-        "--no-gpg-sign",
-        "-m",
-        "base",
-      ]);
-      const baseCommit = await requireGit(root, ["rev-parse", "HEAD"]);
+      const baseCommit = await commitFixture(root);
       const base = await captureWorkspaceManifest({ root, baseCommit });
       await fs.mkdir(path.join(root, "added"));
       await fs.writeFile(path.join(root, "added", "gateway.txt"), "gateway content\n");
@@ -258,12 +246,7 @@ describe("unchanged local workspace reconciliation", () => {
           localPath: root,
           remoteWorkspaceDir: "/worker/workspace",
           baseManifestRef: base.manifestRef,
-          journal: {
-            load: async () => undefined,
-            begin: async () => {},
-            commit: async () => {},
-            abort: async () => {},
-          },
+          journal: emptyJournal(),
           stagedResult: { ref: workerWorkspaceResultRef("host-staged-result"), record: () => {} },
         },
         hashMemo: new Map(),
@@ -279,10 +262,7 @@ describe("unchanged local workspace reconciliation", () => {
         publishAcceptedManifest,
         verifyStable: async () => {},
       });
-      const applied = await verifyReconciledWorkspaceFinal(reconciliation, {
-        assertActive: async () => {},
-        resume: async () => {},
-      });
+      const applied = await verifyReconciledWorkspaceFinal(reconciliation, inactiveQuiescence);
       expect(applied?.manifest.entries.map((entry) => entry.path)).toEqual([
         ".gitignore",
         "added/gateway.txt",
