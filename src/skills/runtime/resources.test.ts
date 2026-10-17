@@ -10,9 +10,16 @@ import { escapeSkillXml, formatSkillsCompactForPrompt } from "../loading/skill-c
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
 import { SkillResourceDeliveryLimitError } from "./resource-delivery-error.js";
-import { materializeSkillResources, prepareSkillResourceDelivery } from "./resources.js";
+import {
+  materializeSkillResources,
+  prepareSkillResourceDelivery as prepareDelivery,
+} from "./resources.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
+const prepare = (
+  snapshot: Parameters<typeof prepareDelivery>[0],
+  selections: Parameters<typeof prepareDelivery>[2] = [],
+) => prepareDelivery(snapshot, () => {}, selections);
 const markdown = "---\ndescription: Workspace procedure\n---\n# Guide\nRun scripts/check.sh.\n";
 async function writeSkill(workspace: string, name: string, content = markdown) {
   const directory = path.join(workspace, "skills", name);
@@ -38,13 +45,11 @@ describe("prepared workspace skill resources", () => {
       }
     }
     const snapshot = await loadSnapshot(workspace);
-    const delivery = await prepareSkillResourceDelivery(snapshot, () => {});
+    const delivery = await prepare(snapshot);
     expect(delivery?.skills.map((skill) => skill.name)).toEqual(["alpha", "beta"]);
 
     await fs.appendFile(lastSupport, "a");
-    await expect(prepareSkillResourceDelivery(snapshot, () => {})).rejects.toBeInstanceOf(
-      SkillResourceDeliveryLimitError,
-    );
+    await expect(prepare(snapshot)).rejects.toBeInstanceOf(SkillResourceDeliveryLimitError);
   });
 
   it("recreates stable session paths and prompt bytes independent of delivery order", async () => {
@@ -59,7 +64,7 @@ describe("prepared workspace skill resources", () => {
     const support = path.join(alpha, "reference.md");
     await fs.writeFile(support, "original reference");
     const snapshot = await loadSnapshot(workspace);
-    const delivery = (await prepareSkillResourceDelivery(snapshot, () => {}))!;
+    const delivery = (await prepare(snapshot))!;
     const gatewaySkills = snapshot.resolvedSkills!.toReversed().map((skill) =>
       Object.assign({}, skill, {
         filePath: skill.name === "beta" ? "~/gateway/skills/beta/SKILL.md" : skill.filePath,
@@ -109,7 +114,7 @@ describe("prepared workspace skill resources", () => {
       }
 
       await fs.writeFile(support, "refreshed reference");
-      const refreshed = (await prepareSkillResourceDelivery(snapshot, () => {}))!;
+      const refreshed = (await prepare(snapshot))!;
       const third = await materializeSkillResources(refreshed, () => {}, scope);
       try {
         expect(third.rewriteReferences(support)).not.toBe(previousReference);
@@ -128,7 +133,7 @@ describe("prepared workspace skill resources", () => {
   it("rewrites unambiguous XML catalog locations without choosing between same-named sources", async () => {
     const workspace = temps.make("skill-names-");
     await writeSkill(workspace, "guide");
-    const delivery = (await prepareSkillResourceDelivery(await loadSnapshot(workspace), () => {}))!;
+    const delivery = (await prepare(await loadSnapshot(workspace)))!;
     const name = "Review & Guide";
     const materialized = await materializeSkillResources(
       {
@@ -176,7 +181,7 @@ describe("prepared workspace skill resources", () => {
       .spyOn(temporaryRoot, "resolvePreferredOpenClawTmpDir")
       .mockReturnValue(root);
     await writeSkill(workspace, "guide");
-    const delivery = (await prepareSkillResourceDelivery(await loadSnapshot(workspace), () => {}))!;
+    const delivery = (await prepare(await loadSnapshot(workspace)))!;
     const scope = { sessionId: "active-session", workspaceDir: workspace };
     const first = await materializeSkillResources(delivery, () => {}, scope);
     try {
@@ -200,7 +205,7 @@ describe("prepared workspace skill resources", () => {
     const workspace = temps.make("skill-rollback-");
     const directory = await writeSkill(workspace, "partial");
     await fs.writeFile(path.join(directory, "reference.md"), "supporting resource");
-    const delivery = await prepareSkillResourceDelivery(await loadSnapshot(workspace), () => {});
+    const delivery = await prepare(await loadSnapshot(workspace));
     let artifactRoot: string | undefined;
     let retainedFile: string | undefined;
     const originalWriteFile = fs.writeFile;
@@ -269,15 +274,12 @@ describe("prepared workspace skill resources", () => {
         ...(rehydrated ? { version: 1 } : {}),
       };
       let closed = false;
-      const cancelled = prepareSkillResourceDelivery(snapshot, () => {
+      const cancelled = prepareDelivery(snapshot, () => {
         if (closed) {
           throw new Error("Turn closed");
         }
       });
-      const active = prepareSkillResourceDelivery(
-        rehydrated ? structuredClone(snapshot) : snapshot,
-        () => {},
-      );
+      const active = prepare(rehydrated ? structuredClone(snapshot) : snapshot);
       closed = true;
       const [cancelledResult, activeResult] = await Promise.allSettled([cancelled, active]);
       expect(cancelledResult).toMatchObject({
@@ -288,7 +290,7 @@ describe("prepared workspace skill resources", () => {
         status: "fulfilled",
         value: { skills: [{ name: "independent" }] },
       });
-      expect(await prepareSkillResourceDelivery(snapshot, () => {})).toEqual(await active);
+      expect(await prepare(snapshot)).toEqual(await active);
     },
   );
 
@@ -299,24 +301,22 @@ describe("prepared workspace skill resources", () => {
       const healthyDir = await writeSkill(workspace, "healthy");
       const staleDir = await writeSkill(workspace, "stale");
       const snapshot = await loadSnapshot(workspace);
-      expect((await prepareSkillResourceDelivery(snapshot, () => {}))?.skills).toHaveLength(2);
+      expect((await prepare(snapshot))?.skills).toHaveLength(2);
 
       await fs.rm(staleDir, { recursive: true });
       await fs.symlink(path.join(workspace, "missing-stale-target"), staleDir, "dir");
 
-      await expect(prepareSkillResourceDelivery(snapshot, () => {})).resolves.toMatchObject({
+      await expect(prepare(snapshot)).resolves.toMatchObject({
         skills: [{ name: "healthy" }],
       });
       await fs.rm(healthyDir, { recursive: true });
       await fs.symlink(path.join(workspace, "missing-healthy-target"), healthyDir, "dir");
-      await expect(prepareSkillResourceDelivery(snapshot, () => {})).resolves.toEqual({
+      await expect(prepare(snapshot)).resolves.toEqual({
         version: 1,
         skills: [],
       });
       await expect(
-        prepareSkillResourceDelivery(snapshot, () => {}, [
-          { name: "stale", path: path.join(staleDir, "SKILL.md") },
-        ]),
+        prepare(snapshot, [{ name: "stale", path: path.join(staleDir, "SKILL.md") }]),
       ).rejects.toMatchObject({
         code: "INVALID_BUNDLE",
         message: expect.stringMatching(/skill="stale".*root=.*stale.*ENOENT/s),
@@ -330,9 +330,7 @@ describe("prepared workspace skill resources", () => {
     const missingPath = path.join(workspace, "skills", "missing", "SKILL.md");
 
     await expect(
-      prepareSkillResourceDelivery(await loadSnapshot(workspace), () => {}, [
-        { name: "missing", path: missingPath },
-      ]),
+      prepare(await loadSnapshot(workspace), [{ name: "missing", path: missingPath }]),
     ).rejects.toMatchObject({
       code: "INVALID_BUNDLE",
       message: expect.stringMatching(/skill="missing".*root=.*missing.*ENOENT/s),
@@ -359,7 +357,7 @@ describe("prepared workspace skill resources", () => {
     expect(snapshot.resolvedSkills).toMatchObject([
       { name: "directory-name", description: "Workspace procedure" },
     ]);
-    const delivery = await prepareSkillResourceDelivery(snapshot, () => {});
+    const delivery = await prepare(snapshot);
     expect(delivery?.skills).toMatchObject([{ name: "directory-name" }]);
     const materialized = await materializeSkillResources(delivery!, () => {});
     try {
@@ -417,9 +415,7 @@ describe("prepared workspace skill resources", () => {
         }
         await fs.symlink(target, alias);
       }
-      await expect(
-        prepareSkillResourceDelivery(await loadSnapshot(workspace), () => {}),
-      ).rejects.toMatchObject({
+      await expect(prepare(await loadSnapshot(workspace))).rejects.toMatchObject({
         code: "INVALID_BUNDLE",
         message: expect.stringMatching(/skill="linked".*root=.*linked/s),
       });
@@ -449,7 +445,7 @@ describe("prepared workspace skill resources", () => {
         return handle;
       });
       try {
-        await expect(prepareSkillResourceDelivery(snapshot, () => {})).rejects.toMatchObject({
+        await expect(prepare(snapshot)).rejects.toMatchObject({
           code: "INVALID_BUNDLE",
           message: expect.stringContaining("link target is not an included regular file"),
         });
@@ -475,7 +471,7 @@ describe("prepared workspace skill resources", () => {
     );
     await fs.mkdir(path.join(directory, "node_modules", "dependency"), { recursive: true });
     await fs.writeFile(path.join(directory, "node_modules", "dependency", "index.js"), "excluded");
-    const delivery = await prepareSkillResourceDelivery(await loadSnapshot(workspace), () => {});
+    const delivery = await prepare(await loadSnapshot(workspace));
     expect(delivery?.skills[0]?.files.map((file) => file.path)).toEqual(["SKILL.md"]);
   });
 
@@ -506,15 +502,15 @@ describe("prepared workspace skill resources", () => {
     );
     await fs.rm(omittedDir, { recursive: true });
     const before = structuredClone(snapshot);
-    const ordinary = await prepareSkillResourceDelivery(snapshot, () => {});
+    const ordinary = await prepare(snapshot);
     expect(ordinary?.skills.map((skill) => skill.name)).toEqual(["visible"]);
-    const explicit = await prepareSkillResourceDelivery(snapshot, () => {}, [
+    const explicit = await prepare(snapshot, [
       { name: "hidden", path: path.join(hiddenDir, "SKILL.md") },
     ]);
     expect(explicit?.skills.map((skill) => skill.name)).toEqual(["visible", "hidden"]);
     expect(explicit?.skills[1]?.modelVisible).toBe(true);
     expect(snapshot).toEqual(before);
-    expect(await prepareSkillResourceDelivery(snapshot, () => {})).toEqual(ordinary);
+    expect(await prepare(snapshot)).toEqual(ordinary);
     const worker = await materializeSkillResources(ordinary!, () => {});
     try {
       expect(worker.snapshot.discoverySkills?.map((skill) => skill.name)).toEqual(["visible"]);
