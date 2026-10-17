@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveFrozenTelegramScenarioOmissions } from "../../scripts/e2e/lib/npm-telegram-live/resolve-target-scenarios.mts";
 import { testing } from "../../scripts/e2e/npm-telegram-live-runner.ts";
 import { privateLocalOnlyPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DOCKER_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-live-docker.sh");
@@ -14,12 +14,25 @@ const PREPARE_PACKAGE_PATH = path.resolve(
   TEST_DIR,
   "../../scripts/e2e/lib/npm-telegram-live/prepare-package.mts",
 );
-const tempRoots: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function mkTempRoot() {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-npm-telegram-live-"));
-  tempRoots.push(root);
-  return root;
+  return tempDirs.make("openclaw-npm-telegram-live-");
+}
+
+function expectText(text: string, included: string[], excluded: string[] = []) {
+  for (const value of included) {
+    expect(text).toContain(value);
+  }
+  for (const value of excluded) {
+    expect(text).not.toContain(value);
+  }
+}
+
+function dockerEnv(script: string) {
+  const start = script.indexOf("docker_env=(");
+  const end = script.indexOf(")\n\nforward_env_if_set", start);
+  return { start, end, text: script.slice(start, end) };
 }
 
 function runHotpathCandidate(consentSupported: boolean) {
@@ -61,12 +74,6 @@ ${hotpath}`,
   return readFileSync(path.join(root, "argv.log"), "utf8").trim().split("\n");
 }
 
-afterEach(() => {
-  for (const root of tempRoots.splice(0)) {
-    rmSync(root, { force: true, recursive: true });
-  }
-});
-
 describe("package Telegram live Docker E2E", () => {
   it("installs the package candidate before forwarding runtime secrets", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
@@ -76,41 +83,37 @@ describe("package Telegram live Docker E2E", () => {
 
     expect(installRunStart).toBeGreaterThanOrEqual(0);
     expect(installRunEnd).toBeGreaterThan(installRunStart);
-    expect(installRun).toContain(
-      '-e OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"',
+    expectText(
+      installRun,
+      [
+        '-e OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"',
+        '"$timeout_bin" --kill-after=30s "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
+        "elif command -v gtimeout >/dev/null 2>&1; then",
+        'timeout_bin="gtimeout"',
+        'echo "timeout or gtimeout is required for OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=$npm_install_timeout" >&2',
+        '"$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1',
+        '"$timeout_bin" "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
+        'npm install -g "$install_source" --no-fund --no-audit',
+        '"${package_mount_args[@]}"',
+        'run_logged_print_heartbeat "npm-telegram-package-install" 60 docker_e2e_docker_run_cmd run --rm',
+      ],
+      [
+        "running package install without OPENCLAW_E2E_NPM_INSTALL_TIMEOUT",
+        '"${docker_env[@]}"',
+        "run_logged_print_heartbeat docker run --rm",
+      ],
     );
-    expect(installRun).toContain(
-      '"$timeout_bin" --kill-after=30s "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
+    expectText(
+      script,
+      [
+        'run_logged_print_heartbeat "npm-telegram-live-suite" 60 docker_e2e_run_with_harness',
+        '"${docker_env[@]}"',
+        'if [ -z "$credential_role" ] && [ "$credential_source" = "convex" ]; then',
+        'credential_role="ci"',
+        'credential_role="maintainer"',
+      ],
+      ['cat "$run_log"'],
     );
-    expect(installRun).toContain("elif command -v gtimeout >/dev/null 2>&1; then");
-    expect(installRun).toContain('timeout_bin="gtimeout"');
-    expect(installRun).toContain(
-      'echo "timeout or gtimeout is required for OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=$npm_install_timeout" >&2',
-    );
-    expect(installRun).toContain('"$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1');
-    expect(installRun).toContain(
-      '"$timeout_bin" "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
-    );
-    expect(installRun).toContain('npm install -g "$install_source" --no-fund --no-audit');
-    expect(installRun).not.toContain(
-      "running package install without OPENCLAW_E2E_NPM_INSTALL_TIMEOUT",
-    );
-    expect(installRun).toContain('"${package_mount_args[@]}"');
-    expect(installRun).not.toContain('"${docker_env[@]}"');
-    expect(installRun).toContain(
-      'run_logged_print_heartbeat "npm-telegram-package-install" 60 docker_e2e_docker_run_cmd run --rm',
-    );
-    expect(installRun).not.toContain("run_logged_print_heartbeat docker run --rm");
-    expect(script).toContain(
-      'run_logged_print_heartbeat "npm-telegram-live-suite" 60 docker_e2e_run_with_harness',
-    );
-    expect(script).not.toContain('cat "$run_log"');
-    expect(script).toContain('"${docker_env[@]}"');
-    expect(script).toContain(
-      'if [ -z "$credential_role" ] && [ "$credential_source" = "convex" ]; then',
-    );
-    expect(script).toContain('credential_role="ci"');
-    expect(script).toContain('credential_role="maintainer"');
   });
 
   it("uses unique direct-run output dirs by default", () => {
@@ -171,45 +174,38 @@ describe("package Telegram live Docker E2E", () => {
 
   it("mounts configured output paths before entering the container", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
-    const dockerEnvStart = script.indexOf("docker_env=(");
-    const dockerEnvEnd = script.indexOf(")\n\nforward_env_if_set", dockerEnvStart);
-    const dockerEnv = script.slice(dockerEnvStart, dockerEnvEnd);
-
-    expect(script).toContain('*) OUTPUT_DIR_HOST="$ROOT_DIR/$OUTPUT_DIR" ;;');
-    expect(script).toContain('mkdir -p "$OUTPUT_DIR_HOST"');
-    expect(script).toContain(
+    expectText(script, [
+      '*) OUTPUT_DIR_HOST="$ROOT_DIR/$OUTPUT_DIR" ;;',
+      'mkdir -p "$OUTPUT_DIR_HOST"',
       'printf \'schema=1\\nexit_code=%s\\nlive_output=job_log\\n\' "$rc" > "$OUTPUT_DIR_HOST/run-metadata.txt"',
+      "trap cleanup EXIT",
+      '-v "$OUTPUT_DIR_HOST:$OUTPUT_DIR_CONTAINER"',
+    ]);
+    expectText(
+      dockerEnv(script).text,
+      ['-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER_RELATIVE"'],
+      [
+        '-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER"',
+        '-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR"',
+      ],
     );
-    expect(script).toContain("trap cleanup EXIT");
-    expect(dockerEnv).toContain(
-      '-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER_RELATIVE"',
-    );
-    expect(dockerEnv).not.toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER"');
-    expect(dockerEnv).not.toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR"');
-    expect(script).toContain('-v "$OUTPUT_DIR_HOST:$OUTPUT_DIR_CONTAINER"');
   });
 
   it("uses the container temp root for OpenClaw runtime scratch files", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
-    const dockerEnvStart = script.indexOf("docker_env=(");
-    const dockerEnvEnd = script.indexOf(")\n\nforward_env_if_set", dockerEnvStart);
-    const dockerEnv = script.slice(dockerEnvStart, dockerEnvEnd);
-
-    expect(dockerEnvStart).toBeGreaterThanOrEqual(0);
-    expect(dockerEnvEnd).toBeGreaterThan(dockerEnvStart);
-    expect(dockerEnv).toContain("-e TMPDIR=/tmp");
+    const { start, end, text } = dockerEnv(script);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    expect(text).toContain("-e TMPDIR=/tmp");
   });
 
   it("forwards destructive downgrade approval only through the explicit env list", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
-    const dockerEnvStart = script.indexOf("docker_env=(");
-    const dockerEnvEnd = script.indexOf(")\n\nforward_env_if_set", dockerEnvStart);
-    const forwardingStart = script.indexOf("for key in \\", dockerEnvEnd);
+    const { end, text } = dockerEnv(script);
+    const forwardingStart = script.indexOf("for key in \\", end);
     const forwardingEnd = script.indexOf("; do", forwardingStart);
 
-    expect(script.slice(dockerEnvStart, dockerEnvEnd)).not.toContain(
-      "OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS",
-    );
+    expect(text).not.toContain("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS");
     expect(script.slice(forwardingStart, forwardingEnd)).toContain(
       "OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS",
     );
@@ -217,28 +213,31 @@ describe("package Telegram live Docker E2E", () => {
 
   it("isolates the trusted private QA harness from the installed package candidate", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
-    expect(script).toContain('cp "$ROOT_DIR/package.json" "$harness_package_json"');
-    expect(script).toContain(
-      'node --import tsx "$ROOT_DIR/scripts/e2e/lib/npm-telegram-live/prepare-package.mts" "$harness_package_json"',
+    expectText(
+      script,
+      [
+        'cp "$ROOT_DIR/package.json" "$harness_package_json"',
+        'node --import tsx "$ROOT_DIR/scripts/e2e/lib/npm-telegram-live/prepare-package.mts" "$harness_package_json"',
+        '-v "$harness_package_json:/app/package.json:ro"',
+        '-v "$harness_package_json:/app/extensions/qa-lab/node_modules/openclaw/package.json:ro"',
+        '-v "$ROOT_DIR/dist:/app/dist:ro"',
+        '-v "$ROOT_DIR/node_modules:/trusted-harness/node_modules:ro"',
+        '-v "$ROOT_DIR/packages:/app/packages:ro"',
+        '-v "$ROOT_DIR/extensions:/app/extensions:ro"',
+        '-v "$ROOT_DIR/taxonomy.yaml:/app/taxonomy.yaml:ro"',
+        '-v "$ROOT_DIR/qa/scenarios:/app/qa/scenarios:ro"',
+        "for dependency_dir in /trusted-harness/node_modules/*",
+        "for workspace_dir in /app/packages/* /app/extensions/*",
+        'link_harness_dependency "$workspace_dir" "$workspace_name"',
+        "link_harness_dependency /app openclaw",
+      ],
+      [
+        'openclaw_package_dir="/npm-global/lib/node_modules/openclaw"',
+        'cp "$openclaw_package_dir/package.json" /app/package.json',
+        "/app/node_modules/openclaw/package.json",
+        "link_installed_package_dependency",
+      ],
     );
-    expect(script).toContain('-v "$harness_package_json:/app/package.json:ro"');
-    expect(script).toContain(
-      '-v "$harness_package_json:/app/extensions/qa-lab/node_modules/openclaw/package.json:ro"',
-    );
-    expect(script).toContain('-v "$ROOT_DIR/dist:/app/dist:ro"');
-    expect(script).toContain('-v "$ROOT_DIR/node_modules:/trusted-harness/node_modules:ro"');
-    expect(script).toContain('-v "$ROOT_DIR/packages:/app/packages:ro"');
-    expect(script).toContain('-v "$ROOT_DIR/extensions:/app/extensions:ro"');
-    expect(script).toContain('-v "$ROOT_DIR/taxonomy.yaml:/app/taxonomy.yaml:ro"');
-    expect(script).toContain('-v "$ROOT_DIR/qa/scenarios:/app/qa/scenarios:ro"');
-    expect(script).toContain("for dependency_dir in /trusted-harness/node_modules/*");
-    expect(script).toContain("for workspace_dir in /app/packages/* /app/extensions/*");
-    expect(script).toContain('link_harness_dependency "$workspace_dir" "$workspace_name"');
-    expect(script).toContain("link_harness_dependency /app openclaw");
-    expect(script).not.toContain('openclaw_package_dir="/npm-global/lib/node_modules/openclaw"');
-    expect(script).not.toContain('cp "$openclaw_package_dir/package.json" /app/package.json');
-    expect(script).not.toContain("/app/node_modules/openclaw/package.json");
-    expect(script).not.toContain("link_installed_package_dependency");
   });
 
   it.each([false, true])(
@@ -467,7 +466,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
       writeOwner(`qa/scenarios/channels/${id}.yaml`, `scenario:\n  id: ${id}\n`);
     }
 
-    expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
+    const omissions = [
       "telegram-partial-failure-recovery",
       "telegram-empty-response-after-write-recovery",
       "telegram-prepared-delivery-recovery",
@@ -475,66 +474,17 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
       "telegram-provider-failure-before-output",
       "telegram-queue-invalid-mode",
       "telegram-rich-inline-composition",
-    ]);
+    ];
+    expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual(omissions);
     writeOwner("extensions/telegram/src/draft-stream.ts", "waitForInFlight();");
-    expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
-      "telegram-empty-response-after-write-recovery",
-      "telegram-prepared-delivery-recovery",
-      "telegram-progress-tool-visibility",
-      "telegram-provider-failure-before-output",
-      "telegram-queue-invalid-mode",
-      "telegram-rich-inline-composition",
-    ]);
-    writeOwner(
-      "qa/scenarios/channels/telegram-empty-response-after-write-recovery.yaml",
-      "id: telegram-empty-response-after-write-recovery\n",
-    );
-    expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
-      "telegram-prepared-delivery-recovery",
-      "telegram-progress-tool-visibility",
-      "telegram-provider-failure-before-output",
-      "telegram-queue-invalid-mode",
-      "telegram-rich-inline-composition",
-    ]);
-    writeOwner(
-      "qa/scenarios/channels/telegram-progress-tool-visibility.yaml",
-      "id: telegram-progress-tool-visibility\n",
-    );
-    expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
-      "telegram-prepared-delivery-recovery",
-      "telegram-provider-failure-before-output",
-      "telegram-queue-invalid-mode",
-      "telegram-rich-inline-composition",
-    ]);
-    writeOwner(
-      "qa/scenarios/channels/telegram-provider-failure-before-output.yaml",
-      "id: telegram-provider-failure-before-output\n",
-    );
-    expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
-      "telegram-prepared-delivery-recovery",
-      "telegram-queue-invalid-mode",
-      "telegram-rich-inline-composition",
-    ]);
-    writeOwner(
-      "qa/scenarios/channels/telegram-queue-invalid-mode.yaml",
-      "id: telegram-queue-invalid-mode\n",
-    );
-    expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
-      "telegram-prepared-delivery-recovery",
-      "telegram-rich-inline-composition",
-    ]);
-    writeOwner(
-      "qa/scenarios/channels/telegram-rich-inline-composition.yaml",
-      "id: telegram-rich-inline-composition\n",
-    );
-    expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
-      "telegram-prepared-delivery-recovery",
-    ]);
-    writeOwner(
-      "qa/scenarios/channels/telegram-prepared-delivery-recovery.yaml",
-      "id: telegram-prepared-delivery-recovery\n",
-    );
-    expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([]);
+    let remaining = omissions.slice(1);
+    expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual(remaining);
+    // Restore prepared delivery last, preserving every intermediate omission snapshot.
+    for (const id of [omissions[1]!, ...omissions.slice(3), omissions[2]!]) {
+      writeOwner(`qa/scenarios/channels/${id}.yaml`, `id: ${id}\n`);
+      remaining = remaining.filter((omitted) => omitted !== id);
+      expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual(remaining);
+    }
   });
 
   it("rejects multiple explicit RTT scenario ids", () => {
@@ -671,10 +621,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
     const summaryPath = path.join(mkTempRoot(), "qa-suite-summary.json");
     writeFileSync(
       summaryPath,
-      JSON.stringify({
-        run: { status: "completed" },
-        scenarios: [{ status: "pass" }],
-      }),
+      JSON.stringify({ run: { status: "completed" }, scenarios: [{ status: "pass" }] }),
       "utf8",
     );
 

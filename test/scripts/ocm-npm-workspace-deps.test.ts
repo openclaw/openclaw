@@ -1,9 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   buildInstallManifest,
   parseWorkspaceDependencyDirs,
@@ -18,6 +17,7 @@ import {
 import { restorePrepackArtifacts } from "../../scripts/openclaw-postpack.mjs";
 import { preparePackageChangelog } from "../../scripts/package-changelog.mjs";
 import { preparePackageDocsMap } from "../../scripts/package-docs-map.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const adapterPath = fileURLToPath(
   new URL("../../scripts/ocm-npm-workspace-deps.mts", import.meta.url),
@@ -25,10 +25,28 @@ const adapterPath = fileURLToPath(
 const packageDocsMapPath = fileURLToPath(
   new URL("../../scripts/package-docs-map.mjs", import.meta.url),
 );
-const packageChangelogPath = fileURLToPath(
-  new URL("../../scripts/package-changelog.mjs", import.meta.url),
-);
 const postpackPath = fileURLToPath(new URL("../../scripts/openclaw-postpack.mjs", import.meta.url));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sourceChangelog = `# Changelog
+
+## 2026.8.1
+- Current release notes with enough detail for package validation.
+
+## 2026.7.1
+- Previous release notes with enough detail for package validation.
+`;
+
+function packageFixture(root: string, fields: Record<string, unknown>) {
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, "package.json"), `${JSON.stringify(fields)}\n`);
+}
+
+function changelogFixture(prefix: string) {
+  const root = tempDirs.make(prefix);
+  packageFixture(root, { name: "openclaw", version: "2026.8.1" });
+  writeFileSync(join(root, "CHANGELOG.md"), sourceChangelog);
+  return root;
+}
 
 describe("OCM npm workspace dependency adapter", () => {
   it("allows Unreleased notes only for non-publishing pack commands", () => {
@@ -94,7 +112,7 @@ describe("OCM npm workspace dependency adapter", () => {
   });
 
   it("does not let a failed concurrent owner restore the active pack lifecycle", async () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-ocm-pack-owner-"));
+    const root = changelogFixture("openclaw-ocm-pack-owner-");
     const docsDir = join(root, "docs");
     const mapPath = join(docsDir, "docs_map.md");
     const receiptPath = join(root, ".artifacts", "package-docs-map", "receipt.json");
@@ -105,105 +123,70 @@ describe("OCM npm workspace dependency adapter", () => {
       "CHANGELOG.md.prepack-backup",
     );
     const sourceMap = "# Docs map source\n";
-    const sourceChangelog = `# Changelog
-
-## 2026.8.1
-- Current release notes with enough detail for package validation.
-
-## 2026.7.1
-- Previous release notes with enough detail for package validation.
-`;
     mkdirSync(docsDir, { recursive: true });
     writeFileSync(join(docsDir, "page.md"), "# Package docs\n");
     writeFileSync(mapPath, sourceMap);
-    writeFileSync(join(root, "package.json"), '{"name":"openclaw","version":"2026.8.1"}\n');
-    writeFileSync(join(root, "CHANGELOG.md"), sourceChangelog);
+    await preparePackageDocsMap(root);
+    await preparePackageChangelog(root);
+    const activeMap = readFileSync(mapPath, "utf8");
+    const activeChangelog = readFileSync(join(root, "CHANGELOG.md"), "utf8");
+    let packCalled = false;
 
-    try {
-      await preparePackageDocsMap(root);
-      await preparePackageChangelog(root);
-      const activeMap = readFileSync(mapPath, "utf8");
-      const activeChangelog = readFileSync(join(root, "CHANGELOG.md"), "utf8");
-      let packCalled = false;
+    expect(() =>
+      runPreparedRuntimePack(
+        () =>
+          execFileSync(process.execPath, [packageDocsMapPath, "prepare"], {
+            cwd: root,
+            stdio: "pipe",
+          }),
+        () => {
+          packCalled = true;
+          return 0;
+        },
+        () => execFileSync(process.execPath, [postpackPath], { cwd: root, stdio: "pipe" }),
+      ),
+    ).toThrow();
 
-      expect(() =>
-        runPreparedRuntimePack(
-          () =>
-            execFileSync(process.execPath, [packageDocsMapPath, "prepare"], {
-              cwd: root,
-              stdio: "pipe",
-            }),
-          () => {
-            packCalled = true;
-            return 0;
-          },
-          () => execFileSync(process.execPath, [postpackPath], { cwd: root, stdio: "pipe" }),
-        ),
-      ).toThrow();
+    expect(packCalled).toBe(false);
+    expect(existsSync(receiptPath)).toBe(true);
+    expect(existsSync(changelogBackupPath)).toBe(true);
+    expect(readFileSync(mapPath, "utf8")).toBe(activeMap);
+    expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).toBe(activeChangelog);
 
-      expect(packCalled).toBe(false);
-      expect(existsSync(receiptPath)).toBe(true);
-      expect(existsSync(changelogBackupPath)).toBe(true);
-      expect(readFileSync(mapPath, "utf8")).toBe(activeMap);
-      expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).toBe(activeChangelog);
-
-      await restorePrepackArtifacts(root);
-      expect(readFileSync(mapPath, "utf8")).toBe(sourceMap);
-      expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).toBe(sourceChangelog);
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
+    await restorePrepackArtifacts(root);
+    expect(readFileSync(mapPath, "utf8")).toBe(sourceMap);
+    expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).toBe(sourceChangelog);
   });
 
   it("restores a prepared legacy source fixture through its changelog owner", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-ocm-historical-pack-"));
+    const root = changelogFixture("openclaw-ocm-historical-pack-");
     const scriptsDir = join(root, "scripts");
-    const sourceChangelog = `# Changelog
-
-## 2026.8.1
-- Current release notes with enough detail for package validation.
-
-## 2026.7.1
-- Previous release notes with enough detail for package validation.
-`;
     mkdirSync(scriptsDir, { recursive: true });
-    writeFileSync(join(root, "package.json"), '{"name":"openclaw","version":"2026.8.1"}\n');
-    writeFileSync(join(root, "CHANGELOG.md"), sourceChangelog);
-
-    try {
+    mkdirSync(join(scriptsDir, "lib"), { recursive: true });
+    for (const file of [
+      "package-changelog.mjs",
+      "lib/check-limits.mts",
+      "lib/release-changelog.mjs",
+      "lib/release-notes-compaction.mjs",
+    ]) {
       writeFileSync(
-        join(scriptsDir, "package-changelog.mjs"),
-        readFileSync(packageChangelogPath, "utf8"),
+        join(scriptsDir, file),
+        readFileSync(new URL(`../../scripts/${file}`, import.meta.url)),
       );
-      mkdirSync(join(scriptsDir, "lib"), { recursive: true });
-      writeFileSync(
-        join(scriptsDir, "lib", "check-limits.mts"),
-        readFileSync(new URL("../../scripts/lib/check-limits.mts", import.meta.url)),
-      );
-      writeFileSync(
-        join(scriptsDir, "lib", "release-changelog.mjs"),
-        readFileSync(new URL("../../scripts/lib/release-changelog.mjs", import.meta.url)),
-      );
-      writeFileSync(
-        join(scriptsDir, "lib", "release-notes-compaction.mjs"),
-        readFileSync(new URL("../../scripts/lib/release-notes-compaction.mjs", import.meta.url)),
-      );
-      execFileSync(process.execPath, ["scripts/package-changelog.mjs", "prepare"], {
-        cwd: root,
-        stdio: "pipe",
-      });
-      expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).not.toBe(sourceChangelog);
-      expect(existsSync(join(root, "scripts", "openclaw-postpack.mjs"))).toBe(false);
-
-      restoreRuntimePack(process.env, root);
-
-      expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).toBe(sourceChangelog);
-      expect(
-        existsSync(join(root, ".artifacts", "package-changelog", "CHANGELOG.md.prepack-backup")),
-      ).toBe(false);
-    } finally {
-      rmSync(root, { force: true, recursive: true });
     }
+    execFileSync(process.execPath, ["scripts/package-changelog.mjs", "prepare"], {
+      cwd: root,
+      stdio: "pipe",
+    });
+    expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).not.toBe(sourceChangelog);
+    expect(existsSync(join(root, "scripts", "openclaw-postpack.mjs"))).toBe(false);
+
+    restoreRuntimePack(process.env, root);
+
+    expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).toBe(sourceChangelog);
+    expect(
+      existsSync(join(root, ".artifacts", "package-changelog", "CHANGELOG.md.prepack-backup")),
+    ).toBe(false);
   });
 
   it("resolves workspace package directories", () => {
@@ -213,29 +196,13 @@ describe("OCM npm workspace dependency adapter", () => {
   });
 
   it("replaces the root archive argument with a prepared install manifest", () => {
+    const installArgs = "install --prefix runtime --omit=dev --no-save --package-lock=false".split(
+      " ",
+    );
     expect(
-      resolveWorkspaceInstallPlan(
-        [
-          "install",
-          "--prefix",
-          "runtime",
-          "--omit=dev",
-          "--no-save",
-          "--package-lock=false",
-          "openclaw.tgz",
-        ],
-        ["/repo/packages/ai"],
-        "/repo",
-      ),
+      resolveWorkspaceInstallPlan([...installArgs, "openclaw.tgz"], ["/repo/packages/ai"], "/repo"),
     ).toEqual({
-      installArgs: [
-        "install",
-        "--prefix",
-        "runtime",
-        "--omit=dev",
-        "--no-save",
-        "--package-lock=false",
-      ],
+      installArgs,
       prefixDir: "/repo/runtime",
       rootArchive: "/repo/openclaw.tgz",
     });
@@ -261,20 +228,11 @@ describe("OCM npm workspace dependency adapter", () => {
   });
 
   it("rewrites packed workspace protocols to the local package version", () => {
-    const packageJson = {
-      dependencies: {
-        "@openclaw/ai": "workspace:*",
-        chalk: "5.6.2",
-      },
-    };
+    const packageJson = { dependencies: { "@openclaw/ai": "workspace:*", chalk: "5.6.2" } };
 
     expect(
       rewriteWorkspaceDependencyVersions(packageJson, [
-        {
-          name: "@openclaw/ai",
-          version: "2026.7.1-beta.3",
-          tarball: "/tmp/openclaw-ai.tgz",
-        },
+        { name: "@openclaw/ai", version: "2026.7.1-beta.3", tarball: "/tmp/openclaw-ai.tgz" },
       ]),
     ).toBe(1);
     expect(packageJson.dependencies).toEqual({
@@ -284,11 +242,7 @@ describe("OCM npm workspace dependency adapter", () => {
   });
 
   it("rejects package archives with an unconfigured workspace dependency", () => {
-    const packageJson = {
-      dependencies: {
-        "@openclaw/normalization-core": "workspace:*",
-      },
-    };
+    const packageJson = { dependencies: { "@openclaw/normalization-core": "workspace:*" } };
 
     expect(() => rewriteWorkspaceDependencyVersions(packageJson, [])).toThrow(
       "package archive references unconfigured workspace dependency: @openclaw/normalization-core",
@@ -296,95 +250,65 @@ describe("OCM npm workspace dependency adapter", () => {
   });
 
   it("installs a packed root with transitive local workspace dependencies", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-ocm-adapter-test-"));
-    try {
-      const archiveRoot = join(root, "archive");
-      const packagedRoot = join(archiveRoot, "package");
-      const workspaceDir = join(root, "ai");
-      const transitiveWorkspaceDir = join(root, "normalization-core");
-      const installDir = join(root, "install");
-      const rootArchive = join(root, "openclaw.tgz");
-      mkdirSync(packagedRoot, { recursive: true });
-      mkdirSync(workspaceDir, { recursive: true });
-      mkdirSync(transitiveWorkspaceDir, { recursive: true });
-      writeFileSync(
-        join(packagedRoot, "package.json"),
-        `${JSON.stringify({
-          name: "openclaw",
-          version: "1.0.0",
-          dependencies: { "@openclaw/ai": "workspace:*" },
-        })}\n`,
-      );
-      writeFileSync(
-        join(workspaceDir, "package.json"),
-        `${JSON.stringify({
-          name: "@openclaw/ai",
-          version: "1.0.0",
-          main: "index.js",
-          dependencies: { "@openclaw/normalization-core": "workspace:*" },
-        })}\n`,
-      );
-      writeFileSync(join(workspaceDir, "index.js"), "export const ready = true;\n");
-      writeFileSync(
-        join(transitiveWorkspaceDir, "package.json"),
-        `${JSON.stringify({
-          name: "@openclaw/normalization-core",
-          version: "1.0.0",
-          main: "index.js",
-        })}\n`,
-      );
-      writeFileSync(join(transitiveWorkspaceDir, "index.js"), "export const normalized = true;\n");
-      execFileSync("tar", ["-czf", rootArchive, "-C", archiveRoot, "package"]);
+    const root = tempDirs.make("openclaw-ocm-adapter-test-");
+    const archiveRoot = join(root, "archive");
+    const packagedRoot = join(archiveRoot, "package");
+    const workspaceDir = join(root, "ai");
+    const transitiveWorkspaceDir = join(root, "normalization-core");
+    const installDir = join(root, "install");
+    const rootArchive = join(root, "openclaw.tgz");
+    packageFixture(packagedRoot, {
+      name: "openclaw",
+      version: "1.0.0",
+      dependencies: { "@openclaw/ai": "workspace:*" },
+    });
+    packageFixture(workspaceDir, {
+      name: "@openclaw/ai",
+      version: "1.0.0",
+      main: "index.js",
+      dependencies: { "@openclaw/normalization-core": "workspace:*" },
+    });
+    writeFileSync(join(workspaceDir, "index.js"), "export const ready = true;\n");
+    packageFixture(transitiveWorkspaceDir, {
+      name: "@openclaw/normalization-core",
+      version: "1.0.0",
+      main: "index.js",
+    });
+    writeFileSync(join(transitiveWorkspaceDir, "index.js"), "export const normalized = true;\n");
+    execFileSync("tar", ["-czf", rootArchive, "-C", archiveRoot, "package"]);
 
-      execFileSync(
-        process.execPath,
-        [
-          adapterPath,
-          "install",
-          "--prefix",
-          installDir,
-          "--omit=dev",
-          "--no-save",
-          "--package-lock=false",
-          rootArchive,
-        ],
-        {
-          env: {
-            ...process.env,
-            OPENCLAW_OCM_REAL_NPM_BIN: process.platform === "win32" ? "npm.cmd" : "npm",
-            OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS: [workspaceDir, transitiveWorkspaceDir].join(
-              delimiter,
-            ),
-            npm_config_audit: "false",
-            npm_config_cache: join(root, "npm-cache"),
-            npm_config_fund: "false",
-          },
-          stdio: "pipe",
-        },
-      );
-
-      expect(
-        JSON.parse(readFileSync(join(installDir, "node_modules/openclaw/package.json"), "utf8"))
-          .version,
-      ).toBe("1.0.0");
-      expect(
-        JSON.parse(readFileSync(join(installDir, "node_modules/@openclaw/ai/package.json"), "utf8"))
-          .version,
-      ).toBe("1.0.0");
-      expect(
-        JSON.parse(
-          readFileSync(
-            join(installDir, "node_modules/@openclaw/normalization-core/package.json"),
-            "utf8",
+    execFileSync(
+      process.execPath,
+      [
+        adapterPath,
+        "install",
+        "--prefix",
+        installDir,
+        "--omit=dev",
+        "--no-save",
+        "--package-lock=false",
+        rootArchive,
+      ],
+      {
+        env: {
+          ...process.env,
+          OPENCLAW_OCM_REAL_NPM_BIN: process.platform === "win32" ? "npm.cmd" : "npm",
+          OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS: [workspaceDir, transitiveWorkspaceDir].join(
+            delimiter,
           ),
-        ).version,
-      ).toBe("1.0.0");
-      expect(
-        JSON.parse(readFileSync(join(installDir, "node_modules/@openclaw/ai/package.json"), "utf8"))
-          .dependencies["@openclaw/normalization-core"],
-      ).toBe("1.0.0");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
+          npm_config_audit: "false",
+          npm_config_cache: join(root, "npm-cache"),
+          npm_config_fund: "false",
+        },
+        stdio: "pipe",
+      },
+    );
+
+    const installed = (name: string) =>
+      JSON.parse(readFileSync(join(installDir, "node_modules", name, "package.json"), "utf8"));
+    for (const name of ["openclaw", "@openclaw/ai", "@openclaw/normalization-core"]) {
+      expect(installed(name).version).toBe("1.0.0");
     }
+    expect(installed("@openclaw/ai").dependencies["@openclaw/normalization-core"]).toBe("1.0.0");
   });
 });

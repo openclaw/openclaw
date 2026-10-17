@@ -295,26 +295,13 @@ describe("npm onboarding fixture consent", () => {
           : ["plugins", "install", "codex", "--accept-capabilities"],
       ]);
       const onboard = events.find((args) => args[0] === "onboard");
-      expect(onboard).toEqual([
-        "onboard",
-        "--non-interactive",
-        "--accept-risk",
-        "--mode",
-        "local",
-        "--auth-choice",
-        "openai-api-key",
-        "--secret-input-mode",
-        "ref",
-        "--gateway-port",
-        "18789",
-        "--gateway-bind",
-        "loopback",
-        "--skip-daemon",
-        "--skip-ui",
-        "--skip-skills",
-        "--skip-health",
-        "--json",
-      ]);
+      expect(onboard).toEqual(
+        (
+          "onboard --non-interactive --accept-risk --mode local --auth-choice openai-api-key " +
+          "--secret-input-mode ref --gateway-port 18789 --gateway-bind loopback " +
+          "--skip-daemon --skip-ui --skip-skills --skip-health --json"
+        ).split(" "),
+      );
       const stages = events.filter((args) => args[0] === "assertion").map((args) => args[1]);
       expect(stages).toEqual([
         "assert-onboard-state",
@@ -385,30 +372,25 @@ describe("npm onboarding fixture consent", () => {
     );
   });
 
-  it.each<{ scenario: Scenario; error: string }>([
-    { scenario: { dirtyState: true }, error: "package proof inherited existing state" },
-    {
-      scenario: { channel: "discord", consent: true, sourcePlugin: true },
-      error: "source channel fixture requires OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR",
-    },
-    {
-      scenario: { channel: "discord", companion: "missing", registry: true, sourcePlugin: true },
-      error: "missing Docker-plan package",
-    },
-    {
-      scenario: {
-        channel: "slack",
-        companion: "wrong-identity",
-        registry: true,
-        sourcePlugin: true,
-      },
-      error: "tarball identity mismatch",
-    },
-    {
-      scenario: { registry: true, corruptRegistry: true },
-      error: "manifest SHA-256 differs from the immutable tuple",
-    },
-  ])("rejects invalid fixture admission before any CLI call: $error", ({ scenario, error }) => {
+  it.each<[Scenario, string]>([
+    [{ dirtyState: true }, "package proof inherited existing state"],
+    [
+      { channel: "discord", consent: true, sourcePlugin: true },
+      "source channel fixture requires OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR",
+    ],
+    [
+      { channel: "discord", companion: "missing", registry: true, sourcePlugin: true },
+      "missing Docker-plan package",
+    ],
+    [
+      { channel: "slack", companion: "wrong-identity", registry: true, sourcePlugin: true },
+      "tarball identity mismatch",
+    ],
+    [
+      { registry: true, corruptRegistry: true },
+      "manifest SHA-256 differs from the immutable tuple",
+    ],
+  ])("rejects invalid fixture admission before any CLI call: %j (%s)", (scenario, error) => {
     const { result, events, detail } = runScenario(scenario);
     expect(result.status, detail).not.toBe(0);
     expect(detail).toContain(error);
