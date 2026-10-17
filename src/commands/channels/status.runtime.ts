@@ -96,6 +96,13 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       if (typeof account.connected === "boolean") {
         bits.push(account.connected ? "connected" : "disconnected");
       }
+      if (
+        typeof account.reconnectAttempts === "number" &&
+        Number.isInteger(account.reconnectAttempts) &&
+        account.reconnectAttempts > 0
+      ) {
+        bits.push(`restarts:${account.reconnectAttempts}`);
+      }
       for (const [key, label] of [
         ["lastInboundAt", "in"],
         ["lastOutboundAt", "out"],
