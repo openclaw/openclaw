@@ -26,10 +26,7 @@ import { matrixSyncResponse, useSyncStoreFixture } from "./sync-store.test-suppo
 
 function createSyncResponse(nextBatch: string): ISyncResponse {
   const event = {
-    content: {
-      body: "hello",
-      msgtype: "m.text",
-    },
+    content: { body: "hello", msgtype: "m.text" },
     event_id: "$message",
     origin_server_ts: 1,
     sender: "@user:example.org",
@@ -49,6 +46,7 @@ describe("SqliteBackedMatrixSyncStore", () => {
     createPluginStateSyncKeyedStoreForTests<MatrixSyncCacheRecord>("matrix", cacheOptions());
   const asyncCache = () =>
     createPluginStateKeyedStoreForTests<MatrixSyncCacheRecord>("matrix", cacheOptions());
+  const invalidCache = { savedSync: null, cleanShutdown: false };
   async function seededStore(token: string, clean = false) {
     const store = await openStore();
     await store.setSyncData(createSyncResponse(token));
@@ -210,10 +208,7 @@ describe("SqliteBackedMatrixSyncStore", () => {
       throw new Error("expected sync chunk 10");
     }
     sync.register(chunk.key, { ...chunk.value, data: "modified" });
-    expect(await readPersistedStoreFromStore(readParams)).toMatchObject({
-      savedSync: null,
-      cleanShutdown: false,
-    });
+    expect(await readPersistedStoreFromStore(readParams)).toMatchObject(invalidCache);
     await expect(hasMatrixSyncCacheStateInStore(readParams)).resolves.toBe(false);
   });
 
@@ -230,11 +225,7 @@ describe("SqliteBackedMatrixSyncStore", () => {
     );
     insert.run("current:sync:corrupt:1", "invalid JSON");
     const sync = syncCache();
-    const asyncStore = asyncCache();
-    const readParams = {
-      storageRootDir: storage.root,
-      store: asyncStore,
-    };
+    const readParams = { storageRootDir: storage.root, store: asyncCache() };
     const firstKey = "current:sync:corrupt:0";
     for (const early of ["invalid", "missing"]) {
       if (early === "invalid") {
@@ -242,10 +233,7 @@ describe("SqliteBackedMatrixSyncStore", () => {
       } else {
         sync.delete(firstKey);
       }
-      expect(await readPersistedStoreFromStore(readParams)).toMatchObject({
-        savedSync: null,
-        cleanShutdown: false,
-      });
+      expect(await readPersistedStoreFromStore(readParams)).toMatchObject(invalidCache);
       await expect(hasMatrixSyncCacheStateInStore(readParams)).resolves.toBe(false);
     }
     sync.register(firstKey, { kind: "sync-chunk", index: 0, data: "" });
@@ -258,8 +246,7 @@ describe("SqliteBackedMatrixSyncStore", () => {
   });
 
   it("ignores metadata with impossible chunk counts", async () => {
-    const store = syncCache();
-    store.register("current:meta", {
+    syncCache().register("current:meta", {
       kind: "meta",
       version: 1,
       generation: "corrupt",
@@ -273,8 +260,7 @@ describe("SqliteBackedMatrixSyncStore", () => {
   });
 
   it("fails persistence instead of silently dropping sync data when sqlite is unavailable", async () => {
-    const runtime = getMatrixRuntime();
-    vi.spyOn(runtime.state, "openKeyedStoreV2").mockImplementation(() => {
+    vi.spyOn(getMatrixRuntime().state, "openKeyedStoreV2").mockImplementation(() => {
       throw new Error("sqlite unavailable");
     });
 
@@ -285,24 +271,13 @@ describe("SqliteBackedMatrixSyncStore", () => {
   });
 
   it("claims current-token storage ownership when sync state is persisted", async () => {
-    createPluginStateSyncKeyedStoreForTests<Record<string, unknown>>(
+    const metadata = createPluginStateSyncKeyedStoreForTests<Record<string, unknown>>(
       "matrix",
       openMatrixStorageMetaStoreOptions(storage.root),
-    ).register("current", {
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      accountId: "default",
-      accessTokenHash: "token-hash",
-      deviceId: null,
-    });
-
+    );
+    metadata.register("current", { accessTokenHash: "token-hash", deviceId: null });
     await seededStore("claimed-token");
-
-    const meta = createPluginStateSyncKeyedStoreForTests<Record<string, unknown>>(
-      "matrix",
-      openMatrixStorageMetaStoreOptions(storage.root),
-    ).lookup("current");
-    expect(meta).toMatchObject({ currentTokenStateClaimed: true });
+    expect(metadata.lookup("current")).toMatchObject({ currentTokenStateClaimed: true });
   });
 
   it.each([false, true])("freezes the admitted cursor with discard=%s", async (discard) => {
@@ -317,33 +292,24 @@ describe("SqliteBackedMatrixSyncStore", () => {
     }
     await store.flush();
     const persisted = await openStore();
-    if (discard) {
-      expect(persisted.hasSavedSync()).toBe(false);
-    } else {
-      await expect(persisted.getSavedSyncToken()).resolves.toBe("before-freeze");
-    }
+    expect(persisted.hasSavedSync()).toBe(!discard);
+    await expect(persisted.getSavedSyncToken()).resolves.toBe(discard ? null : "before-freeze");
     expect(persisted.hasSavedSyncFromCleanShutdown()).toBe(!discard);
   });
 
   it("coalesces background persistence until the debounce window elapses", async () => {
     vi.useFakeTimers();
-
     const store = await openStore();
     await store.setSyncData(createSyncResponse("s111"));
     await store.setSyncData(createSyncResponse("s222"));
     await store.storeClientOptions({ lazyLoadMembers: true });
-
-    const beforeDebounce = await openStore();
-    expect(beforeDebounce.hasSavedSync()).toBe(false);
-
+    expect((await openStore()).hasSavedSync()).toBe(false);
     await vi.advanceTimersByTimeAsync(249);
-    const beforeElapsed = await openStore();
-    expect(beforeElapsed.hasSavedSync()).toBe(false);
+    expect((await openStore()).hasSavedSync()).toBe(false);
 
     await vi.advanceTimersByTimeAsync(1);
     await Promise.resolve();
     await store.flush();
-
     const persisted = await openStore();
     expect(persisted.hasSavedSync()).toBe(true);
     await expect(persisted.getSavedSyncToken()).resolves.toBe("s222");

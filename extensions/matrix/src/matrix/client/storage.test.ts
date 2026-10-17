@@ -105,28 +105,6 @@ describe("matrix client storage paths", () => {
     return resolveDefaultStoragePaths({ accessToken: "secret-token-new", deviceId });
   }
 
-  async function setupCurrentTokenBackfillScenario(claimed: boolean) {
-    const canonicalPaths = seedCanonicalStorageRoot("secret-token-new", {
-      deviceId: null,
-    });
-    if (claimed) {
-      seedThreadBinding(canonicalPaths.rootDir, "new");
-      expect(await claimCurrentTokenStorageState(canonicalPaths)).toBe(true);
-    } else {
-      seedStartupVerification(canonicalPaths.rootDir, "DEVICE123");
-    }
-
-    const oldStoragePaths = await seedOldStorageRoot();
-    fs.mkdirSync(oldStoragePaths.cryptoPath, { recursive: true });
-    if (!claimed) {
-      seedThreadBinding(oldStoragePaths.rootDir, "old");
-    } else {
-      seedStartupVerification(oldStoragePaths.rootDir, "DEVICE123");
-    }
-
-    return { canonicalPaths, oldStoragePaths };
-  }
-
   it("resolves state file paths inside the selected storage root", async () => {
     const filePath = await resolveMatrixStateFilePath({
       auth: {
@@ -343,17 +321,6 @@ describe("matrix client storage paths", () => {
     fs.mkdirSync(canonicalPaths.rootDir, { recursive: true });
     seedStorageMeta(canonicalPaths.rootDir, storageMeta(canonicalPaths.tokenHash, extra));
     return canonicalPaths;
-  }
-
-  async function expectCanonicalRootForNewDevice() {
-    const newerCanonicalPaths = seedCanonicalStorageRoot("secret-token-new", {
-      deviceId: "NEWDEVICE",
-    });
-
-    const resolvedPaths = await resolveRotatedDevice("NEWDEVICE");
-
-    expect(resolvedPaths.rootDir).toBe(newerCanonicalPaths.rootDir);
-    expect(resolvedPaths.tokenHash).toBe(newerCanonicalPaths.tokenHash);
   }
 
   it("migrates the previous account-scoped sync cache into sqlite before startup", async () => {
@@ -618,7 +585,14 @@ describe("matrix client storage paths", () => {
       metadata: false,
       startupVerificationDeviceId: "OLDDEVICE",
     });
-    await expectCanonicalRootForNewDevice();
+    const newerCanonicalPaths = seedCanonicalStorageRoot("secret-token-new", {
+      deviceId: "NEWDEVICE",
+    });
+
+    const resolvedPaths = await resolveRotatedDevice("NEWDEVICE");
+
+    expect(resolvedPaths.rootDir).toBe(newerCanonicalPaths.rootDir);
+    expect(resolvedPaths.tokenHash).toBe(newerCanonicalPaths.tokenHash);
   });
 
   it("does not reuse a populated sibling storage root with ambiguous device metadata", async () => {
@@ -629,7 +603,24 @@ describe("matrix client storage paths", () => {
   });
 
   it.each([true, false])("keeps backfilled roots sticky only when claimed: %s", async (claimed) => {
-    const { canonicalPaths, oldStoragePaths } = await setupCurrentTokenBackfillScenario(claimed);
+    const canonicalPaths = seedCanonicalStorageRoot("secret-token-new", {
+      deviceId: null,
+    });
+    if (claimed) {
+      seedThreadBinding(canonicalPaths.rootDir, "new");
+      expect(await claimCurrentTokenStorageState(canonicalPaths)).toBe(true);
+    } else {
+      seedStartupVerification(canonicalPaths.rootDir, "DEVICE123");
+    }
+
+    const oldStoragePaths = await seedOldStorageRoot();
+    fs.mkdirSync(oldStoragePaths.cryptoPath, { recursive: true });
+    if (!claimed) {
+      seedThreadBinding(oldStoragePaths.rootDir, "old");
+    } else {
+      seedStartupVerification(oldStoragePaths.rootDir, "DEVICE123");
+    }
+
     await repairCurrentTokenStorageMetaDeviceId({
       ...defaultStorageAuth,
       accessToken: "secret-token-new",
