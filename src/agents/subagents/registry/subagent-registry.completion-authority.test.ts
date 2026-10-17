@@ -21,6 +21,7 @@ import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-ru
 import { onAgentEvent, rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { loadPendingSessionDeliveries } from "../../../infra/session-delivery-queue-storage.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
+import { publishSystemEventStoreResolver } from "../../../infra/system-event-ownership.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../../plugins/runtime.js";
 import {
   getGatewayContextLifetime,
@@ -205,6 +206,7 @@ describe("registered completion source custody", () => {
             runId: `legacy-${kind}`,
             childSessionKey: `agent:main:subagent:legacy-${kind}`,
             expectsCompletionMessage: kind !== "quiet",
+            requesterStorePath: ["quiet", "delivered"].includes(kind) ? "old" : "current",
             ...(kind === "delivered"
               ? {
                   delivery: {
@@ -234,6 +236,7 @@ describe("registered completion source custody", () => {
           await resetSubagentRegistryForTests({ persist: false });
           rotateAgentEventLifecycleGeneration();
           await initSubagentRegistry();
+          publishSystemEventStoreResolver(() => "current");
           const context = createContext();
           context.resolveGatewayContext = () => context;
           await bindSubagentRunGatewayOwners({
@@ -243,15 +246,12 @@ describe("registered completion source custody", () => {
             onRecovered: () => {},
           });
         };
-        let rejectedRunId: string | undefined;
+        onTestFinished(() => publishSystemEventStoreResolver(undefined));
+        let rejected = false;
         if (failWrite) {
           const writeProbe = probe.command(stateWorker, async (command, options, scope) => {
-            if (
-              !rejectedRunId &&
-              command.type === "sessionDelivery.mutateSubagentCompletion" &&
-              command.input.mutation.kind === "block"
-            ) {
-              rejectedRunId = command.input.mutation.params.subagent.runId;
+            if (!rejected && command.type === "sessionDelivery.mutateSubagentCompletion") {
+              rejected = true;
               throw new Error("temporary completion settlement failure");
             }
             return scope.execute(command, options);
@@ -262,12 +262,13 @@ describe("registered completion source custody", () => {
         await restart();
         expect(recoveryWarn).toHaveBeenCalledTimes(4);
         if (failWrite) {
-          const runId = expectDefined(rejectedRunId, "rejected settlement");
-          expect(
-            loadSubagentRegistryFromSqlite().get(runId)?.suppressCompletionDelivery,
-          ).toBeUndefined();
+          expect(rejected).toBe(true);
+          const unsettled = [...loadSubagentRegistryFromSqlite().values()].filter(
+            (entry) => !entry.suppressCompletionDelivery,
+          );
+          expect(unsettled).toHaveLength(1);
           await retryDeferredSubagentCompletionSource(
-            expectDefined(subagentRuns.get(runId), "retryable completion"),
+            expectDefined(subagentRuns.get(unsettled[0]!.runId), "retryable completion"),
           );
         }
         expect(await loadPendingSessionDeliveries(captureOpenClawStateWorkerContext())).toEqual([]);

@@ -6,6 +6,7 @@ import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
+import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
   bindGatewayContextResolver,
@@ -57,7 +58,9 @@ async function restoreSubagentCompletionSource(
   if (
     entry.execution.status === "terminal" &&
     !entry.requesterSettleWake &&
-    entry.suppressCompletionDelivery
+    (entry.suppressCompletionDelivery ||
+      (entry.delivery?.status === "suspended" &&
+        entry.delivery.disposition === "intentional_non_delivery"))
   ) {
     return;
   }
@@ -112,8 +115,15 @@ async function restoreSubagentCompletionSource(
       // Individual completions have no requester cohort to settle this permanent failure.
       // Keep failed writes and unfinished execution retryable through the existing sweep.
       deferredCompletionSources.add(runtimeKey);
-      // The queue may hold a delivered receipt that has not reached this row yet.
-      if (entry.delivery?.queueId) {
+      // Queue receipts and replaced-store notifications retain their settlement owners.
+      if (
+        entry.delivery?.queueId ||
+        (entry.expectsCompletionMessage === true &&
+          ["pending", "in_progress"].includes(entry.delivery?.status ?? "") &&
+          entry.delivery?.deliveredAt === undefined &&
+          entry.delivery?.announcedAt === undefined &&
+          !isSystemEventStoreCurrent(entry.requesterSessionKey, storePath, entry.requesterAgentId))
+      ) {
         return;
       }
       if (entry.execution.status === "terminal" && entry.pauseReason !== "sessions_yield") {
