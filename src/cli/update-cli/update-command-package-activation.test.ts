@@ -58,6 +58,11 @@ function snapshot(root: string) {
       return { name, inode: stat.ino, bytes: stat.isFile() ? fs.readFileSync(file) : undefined };
     });
 }
+async function expectUnchanged(work: () => Promise<unknown>) {
+  const before = snapshot(fixtureRoot);
+  await work();
+  expect(snapshot(fixtureRoot)).toEqual(before);
+}
 
 function preparePreview(
   f: Pick<Awaited<ReturnType<typeof fixtures.prepare>>, "params" | "packageRoot">,
@@ -74,14 +79,12 @@ function preparePreview(
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
 }
 const preview = () => updateCommand({ dryRun: true, json: true, tag: "3.0.0" });
-function expectPreview(note: RegExp | string, targetVersion?: string) {
+function expectPreview(note: RegExp, targetVersion?: string) {
   expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
     expect.objectContaining({
       dryRun: true,
       ...(targetVersion ? { targetVersion } : {}),
-      notes: expect.arrayContaining([
-        typeof note === "string" ? expect.stringContaining(note) : expect.stringMatching(note),
-      ]),
+      notes: expect.arrayContaining([expect.stringMatching(note)]),
     }),
   );
 }
@@ -132,9 +135,7 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
       }
       const previous = fs.readFileSync(f.previousFile);
       const candidate = fs.readFileSync(f.liveFile);
-      const previewBefore = snapshot(fixtureRoot);
-      await preview();
-      expect(snapshot(fixtureRoot)).toEqual(previewBefore);
+      await expectUnchanged(preview);
       expectPreview(/Would settle.*update can proceed/);
 
       await expect(prepareUpdateCommand({ json: true })).resolves.toMatchObject({
@@ -171,34 +172,29 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
         fs.chmodSync(databasePath, 0o600);
       }
       const packageBytes = fs.readFileSync(f.liveFile);
-      const before = snapshot(fixtureRoot);
-
       if (live === "damaged candidate") {
-        await expect(preview()).rejects.toMatchObject({ code: 1 });
+        await expectUnchanged(() => expect(preview()).rejects.toMatchObject({ code: 1 }));
         expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
           expect.objectContaining({ reason: "update-recovery-pending" }),
         );
         expect(defaultRuntime.error).toHaveBeenCalledWith(
           expect.stringContaining("inventoried dist files changed"),
         );
-        expect(snapshot(fixtureRoot)).toEqual(before);
         return;
       }
-
-      await preview();
-
-      expect(snapshot(fixtureRoot)).toEqual(before);
+      await expectUnchanged(preview);
       expectPreview(/Would settle.*update can proceed/, "3.0.0");
       const previousPostCore = process.env[POST_CORE_UPDATE_ENV];
       vi.stubEnv(POST_CORE_UPDATE_ENV, "1");
       try {
-        await expect(prepareUpdateCommand({ dryRun: true, json: true })).rejects.toMatchObject({
-          name: "UpdateCommandPendingRecoveryFailure",
-        });
+        await expectUnchanged(() =>
+          expect(prepareUpdateCommand({ dryRun: true, json: true })).rejects.toMatchObject({
+            name: "UpdateCommandPendingRecoveryFailure",
+          }),
+        );
       } finally {
         vi.stubEnv(POST_CORE_UPDATE_ENV, previousPostCore);
       }
-      expect(snapshot(fixtureRoot)).toEqual(before);
       await prepareUpdateCommand({ json: true });
       expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
       expect(fs.readFileSync(f.liveFile)).toEqual(packageBytes);
@@ -219,11 +215,7 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
     fs.unlinkSync(f.launcher);
     fs.symlinkSync("../lib/node_modules/openclaw/openclaw.mjs", f.launcher);
     preparePreview(f);
-    const before = snapshot(fixtureRoot);
-
-    await preview();
-
-    expect(snapshot(fixtureRoot)).toEqual(before);
-    expectPreview("publication-retired");
+    await expectUnchanged(preview);
+    expectPreview(/publication-retired/);
   });
 });

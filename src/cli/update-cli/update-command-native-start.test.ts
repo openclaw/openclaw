@@ -49,11 +49,6 @@ function revoke() {
     db.close();
   }
 }
-function owned(operation: (args: ReturnType<typeof serviceArgs>) => Promise<unknown>) {
-  return withUpdateCommandExecutor(randomUUID(), async (executor) =>
-    operation(serviceArgs(await executor.enter(root))),
-  );
-}
 function serviceArgs(fence: UpdateRecoveryFence) {
   return {
     stdout: new PassThrough(),
@@ -61,20 +56,13 @@ function serviceArgs(fence: UpdateRecoveryFence) {
     assertCurrent: () => fence.assertCurrent(),
   };
 }
+function owned(operation: (args: ReturnType<typeof serviceArgs>) => Promise<unknown>) {
+  return withUpdateCommandExecutor(randomUUID(), async (executor) =>
+    operation(serviceArgs(await executor.enter(root))),
+  );
+}
 function expectRevoked(operation: Parameters<typeof owned>[0]) {
   return expect(owned(operation)).rejects.toThrow(/executor|ownership/i);
-}
-function mockSystemd(scope: "user" | "system" = "user", inspect = async () => {}) {
-  vi.spyOn(systemdScope, "findInstalledSystemdGatewayScope").mockImplementation(async () => {
-    await inspect();
-    return {
-      scope,
-      unitName: "openclaw-gateway.service",
-      unitPath: path.join(root, "gateway.service"),
-    };
-  });
-  vi.spyOn(systemdExec, "assertSystemdAvailable").mockResolvedValue();
-  vi.spyOn(systemdScope, "assertNoSystemGatewayOwnershipForActivation").mockResolvedValue();
 }
 function mockLaunchctl(
   respond: (command: string, calls: string[]) => Promise<typeof success> | typeof success,
@@ -90,12 +78,19 @@ function mockLaunchctl(
 it.each(["user", "system", "reset-failed"] as const)(
   "refuses systemd start after %s revokes its real executor",
   async (at) => {
-    mockSystemd(at === "system" ? "system" : "user", async () => {
+    vi.spyOn(systemdScope, "findInstalledSystemdGatewayScope").mockImplementation(async () => {
       if (at !== "reset-failed") {
         await Promise.resolve();
         revoke();
       }
+      return {
+        scope: at === "system" ? "system" : "user",
+        unitName: "openclaw-gateway.service",
+        unitPath: path.join(root, "gateway.service"),
+      };
     });
+    vi.spyOn(systemdExec, "assertSystemdAvailable").mockResolvedValue();
+    vi.spyOn(systemdScope, "assertNoSystemGatewayOwnershipForActivation").mockResolvedValue();
     if (at !== "reset-failed") {
       vi.spyOn(process, "geteuid").mockReturnValue(0);
     }
@@ -197,7 +192,6 @@ it("refuses login-item spawn when command inspection revokes the real executor",
     revoke();
     return { programArguments: [process.execPath, "gateway-test.js"] };
   });
-
   await expectRevoked(({ env, stdout, assertCurrent }) =>
     taskRuntime.startStartupEntry(env, stdout, undefined, assertCurrent),
   );

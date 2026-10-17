@@ -13,6 +13,7 @@ import { resultFixture, verificationFixture } from "./update-command-fixtures.te
 import { finishSuccessfulPackageSwitch } from "./update-command-post-update.test-support.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { maybeRestartServiceAfterFailedMutableUpdate } from "./update-command-service-recovery.js";
+import * as recoveryService from "./update-command-service.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 
 const mocks = vi.hoisted(() => ({
@@ -48,6 +49,7 @@ vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => ({
   waitForGatewayHealthyRestart: mocks.health,
 }));
 const fixture = useExecutorFixture("native-recovery-owner-");
+const recoverable = { serviceRestartSafe: true, version: "1.0.0" };
 function createOwner(stateAtRoot = false) {
   const { root, control } = fixture();
   const env = { HOME: root, OPENCLAW_STATE_DIR: stateAtRoot ? root : path.join(root, "state") };
@@ -83,7 +85,7 @@ it.each([
         serviceEnv: env,
         serviceUpdateVerdict: mocks.owned(root),
       },
-      recovery: { serviceRestartSafe: true, version: "1.0.0" },
+      recovery: { ...recoverable },
     } satisfies Parameters<typeof maybeRestartServiceAfterFailedMutableUpdate>[0];
     const changeRow = () => {
       const db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
@@ -168,7 +170,6 @@ it.each([
     expect(onGatewayStartAttempted).toHaveBeenCalledTimes(
       scenario === "missing executor" || scenario === "revoked at service" ? 0 : 1,
     );
-    // Helper recovery and executor settlement never publish a terminal ledger fact.
     expect(getUpdateRun(runId, { env })?.status).toBe("running");
   },
 );
@@ -209,10 +210,7 @@ it("retains the live update run while recovering a failed update before reportin
   });
   let recoveryRun: typeof run | undefined;
   const recoverService = vi
-    .spyOn(
-      await import("./update-command-service.js"),
-      "maybeRestartServiceAfterFailedMutableUpdate",
-    )
+    .spyOn(recoveryService, "maybeRestartServiceAfterFailedMutableUpdate")
     .mockImplementation(async (request) => {
       recoveryRun = request.updateRun;
       recoveryRun?.executorFence?.assertCurrent();
@@ -228,8 +226,7 @@ it("retains the live update run while recovering a failed update before reportin
           result: resultFixture(home, {
             status: "error",
             reason: "fixture-install-failed",
-            durationMs: 1,
-            recovery: { serviceRestartSafe: true, version: "1.0.0" },
+            recovery: { ...recoverable },
           }),
         },
       ),
@@ -245,7 +242,7 @@ it("retains the live update run while recovering a failed update before reportin
       ...verificationFixture("1.0.0"),
       pid: 4242,
       port: 18789,
-      recovery: { serviceRestartSafe: true, version: "1.0.0", service: "healthy" },
+      recovery: { ...recoverable, service: "healthy" },
     });
     expect(recorded?.steps.filter((step) => step.step === "gateway recovery verification")).toEqual(
       [{ step: "gateway recovery verification", status: "completed", exitCode: 0 }],
