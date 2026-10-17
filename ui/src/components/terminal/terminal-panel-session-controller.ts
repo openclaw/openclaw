@@ -15,6 +15,7 @@ import { terminalOpenErrorText } from "./terminal-panel-chrome.ts";
 import {
   adoptTerminalPanelSession,
   bootTerminalPanelSession,
+  captureTerminalDeliveryError,
 } from "./terminal-panel-session-boot.ts";
 import { TerminalPanelSessionRecovery } from "./terminal-panel-session-recovery.ts";
 import { focusTerminalSession } from "./terminal-panel-session-rendering.ts";
@@ -93,8 +94,7 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
     }
     ownedActiveAvailable = host.inputs.available;
     ownedHadAvailable ||= host.inputs.available;
-    const becameUnavailable = availabilityChanged && !host.inputs.available;
-    if (clientChanged || becameUnavailable) {
+    if (clientChanged || (availabilityChanged && !host.inputs.available)) {
       disposeAllTabs();
     }
     let shouldRestore =
@@ -530,22 +530,8 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
     host.publish();
   }
 
-  function captureDeliveryError(tab: TerminalPanelSessionTab): () => void {
-    // Delivery uncertainty belongs to the retained tab and identity, not the transport epoch.
-    const client = ownedActiveClient;
-    const recoveryScope = client?.recoveryScope;
-    return () => {
-      if (
-        host.isConnected &&
-        host.inputs.client === client &&
-        client?.recoveryScope === recoveryScope &&
-        !client?.offlineRecoveryRetired &&
-        state.tabs.includes(tab)
-      ) {
-        api.setError(t("terminal.deliveryFailed"));
-      }
-    };
-  }
+  const captureDeliveryError = (tab: TerminalPanelSessionTab) =>
+    captureTerminalDeliveryError(host, state, ownedActiveClient, tab, api.setError);
 
   function retireOperations(): void {
     ownedLifecycleGeneration += 1;
@@ -558,10 +544,7 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
 
   const api = {
     state,
-    setError(
-      text: string | null,
-      retryAction?: TerminalPanelError["retryAction"],
-    ): TerminalPanelError | null {
+    setError(text: string | null, retryAction?: TerminalPanelError["retryAction"]) {
       updateState({ error: text ? { text, retryAction } : null });
       return state.error;
     },

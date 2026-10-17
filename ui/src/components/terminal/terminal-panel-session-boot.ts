@@ -1,5 +1,10 @@
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
-import type { TerminalConnection, TerminalOpenResult } from "./terminal-connection.ts";
+import { t } from "../../i18n/index.ts";
+import type {
+  TerminalConnection,
+  TerminalGatewayClient,
+  TerminalOpenResult,
+} from "./terminal-connection.ts";
 import {
   disposeTerminalController,
   replaceTerminalController,
@@ -9,6 +14,7 @@ import {
   TERMINAL_OUTPUT_ENCODER,
   shellBasename,
   type TerminalPanelSessionHost,
+  type TerminalPanelSessionState,
   type TerminalPanelSessionTab,
 } from "./terminal-panel-session-types.ts";
 import { createTerminalStartupInput } from "./terminal-startup-input.ts";
@@ -16,6 +22,28 @@ import type { createTerminalTabReadiness } from "./terminal-tab-readiness.ts";
 import { terminalDynamicColors, terminalTheme } from "./terminal-theme.ts";
 
 type TerminalSink = Parameters<TerminalConnection["open"]>[1];
+
+export function captureTerminalDeliveryError(
+  host: TerminalPanelSessionHost,
+  state: TerminalPanelSessionState,
+  client: TerminalGatewayClient | null,
+  tab: TerminalPanelSessionTab,
+  setError: (text: string) => void,
+): () => void {
+  // Delivery uncertainty belongs to the retained tab and identity, not the transport epoch.
+  const recoveryScope = client?.recoveryScope;
+  return () => {
+    if (
+      host.isConnected &&
+      host.inputs.client === client &&
+      client?.recoveryScope === recoveryScope &&
+      !client?.offlineRecoveryRetired &&
+      state.tabs.includes(tab)
+    ) {
+      setError(t("terminal.deliveryFailed"));
+    }
+  };
+}
 
 export function adoptTerminalPanelSession(params: {
   tab: TerminalPanelSessionTab;
