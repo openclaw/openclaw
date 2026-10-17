@@ -317,6 +317,13 @@ Existing adoption records remain preparation-only. Native activation requires ex
 control database. No `openclaw.json` option enables it. `--no-restart` keeps an
 enabled installation preparation-only for that invocation.
 
+Preparation reuses Git objects from the verified current release while fetching
+official `main`, so the network transfer contains only missing objects. A failed
+fetch retries once in the same staging repository, with a separate five-minute
+budget per attempt. Interrupted pack transfers restart the missing pack, not the
+installed history. Before building, preparation copies the reused objects into
+its own store; the prepared release retains independent Git objects.
+
 Immutable preparation requires a separately adopted build account and toolchain.
 The build account must differ from the runtime account, have no supplementary
 groups, and match the recorded numeric identity. The updater runs dependency
