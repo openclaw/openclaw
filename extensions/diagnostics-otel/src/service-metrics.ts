@@ -98,6 +98,10 @@ export function createDiagnosticsMetrics(
         description: "Session-event field-hash vectors retained across all connections",
       },
     ),
+    sessionEventRowsResetCounter: createCounter(
+      "session_event_rows_reset",
+      "Retained session-event wire baselines retired by cause",
+    ),
     sessionEventRowsRetainedBytesGauge: meter.createGauge(
       `${metricNamePrefix}session_event_rows_retained_bytes`,
       { unit: "By", description: "Estimated memory retained by session-event field-hash vectors" },

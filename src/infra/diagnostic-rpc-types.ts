@@ -16,6 +16,20 @@ type DiagnosticSessionEventRetentionFields = {
   estimatedBytes: number;
 };
 
+export type SessionEventRowsResetCause =
+  | "close"
+  | "delivery-lost"
+  | "generation"
+  | "evicted"
+  | "projection";
+
+/** Number of retained wire baselines retired by one bounded lifecycle cause. */
+type DiagnosticSessionEventRowsResetFields = {
+  type: "sessions.event.rows.reset";
+  cause: SessionEventRowsResetCause;
+  count: number;
+};
+
 export type SessionsListBaseMissReason = "unknown-base" | "all-rows-changed";
 
 type DiagnosticSessionsListBaselineRetiredFields = {
@@ -119,4 +133,5 @@ export type DiagnosticGatewayFields =
   | DiagnosticGatewayWsFields
   | DiagnosticSessionsListBaselineRetiredFields
   | DiagnosticSessionsListRetentionFields
-  | DiagnosticSessionEventRetentionFields;
+  | DiagnosticSessionEventRetentionFields
+  | DiagnosticSessionEventRowsResetFields;

@@ -99,6 +99,14 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
         runtime.sessionEventRowsRetainedBytesGauge.record(evt.estimatedBytes);
       }
     },
+    recordSessionEventRowsReset(
+      evt: Extract<DiagnosticEventPayload, { type: "sessions.event.rows.reset" }>,
+      metadata: DiagnosticEventMetadata,
+    ) {
+      if (metadata.trusted) {
+        runtime.sessionEventRowsResetCounter.add(evt.count, { cause: evt.cause });
+      }
+    },
     recordGatewayRpc(
       evt: Extract<DiagnosticEventPayload, { type: "gateway.rpc" }>,
       metadata: DiagnosticEventMetadata,

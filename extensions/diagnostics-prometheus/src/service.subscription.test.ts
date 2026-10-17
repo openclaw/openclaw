@@ -137,6 +137,38 @@ it("exports trusted session retention gauges and clears them on retirement", () 
   }
 });
 
+it("counts retired wire baselines by cause without accepting untrusted resets", () => {
+  const metrics = createMetricsHarness();
+  try {
+    for (const cause of [
+      "close",
+      "delivery-lost",
+      "generation",
+      "evicted",
+      "projection",
+    ] as const) {
+      metrics.record({ type: "sessions.event.rows.reset", cause, count: 3 });
+      metrics.record({ type: "sessions.event.rows.reset", cause, count: 2 });
+      for (const metadata of [untrusted, { trusted: false, internal: true }]) {
+        metrics.record({ type: "sessions.event.rows.reset", cause, count: 99 }, metadata);
+      }
+    }
+    const rendered = metrics.render();
+    expect(rendered).toContain("# TYPE openclaw_session_event_rows_reset_total counter\n");
+    expect(
+      rendered.split("\n").filter((line) => line.startsWith("openclaw_session_event_rows_reset_")),
+    ).toEqual([
+      'openclaw_session_event_rows_reset_total{cause="close"} 5',
+      'openclaw_session_event_rows_reset_total{cause="delivery-lost"} 5',
+      'openclaw_session_event_rows_reset_total{cause="evicted"} 5',
+      'openclaw_session_event_rows_reset_total{cause="generation"} 5',
+      'openclaw_session_event_rows_reset_total{cause="projection"} 5',
+    ]);
+  } finally {
+    metrics.stop();
+  }
+});
+
 it("records terminal metrics without reading logs or private diagnostic content", async () => {
   const exporter = createDiagnosticsPrometheusExporter();
   const readPrivateContent = vi.fn(() => ({ toolInput: { text: "private tool input" } }));

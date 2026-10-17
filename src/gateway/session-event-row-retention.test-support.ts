@@ -6,8 +6,11 @@ import {
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
+import type { SessionEventRowsResetCause } from "../infra/diagnostic-rpc-types.js";
 
-export function observeSessionEventRowRetention() {
+export function observeSessionEventRowRetention(
+  onReset?: (event: { cause: SessionEventRowsResetCause; count: number }) => void,
+) {
   const wasEnabled = areDiagnosticsEnabledForProcess();
   setDiagnosticsEnabledForProcess(true);
   let retention: { entries: number; estimatedBytes: number } | undefined;
@@ -15,9 +18,14 @@ export function observeSessionEventRowRetention() {
     (event, metadata) => {
       if (metadata.trusted && event.type === "sessions.event.retention") {
         retention = { entries: event.entries, estimatedBytes: event.estimatedBytes };
+      } else if (metadata.trusted && event.type === "sessions.event.rows.reset") {
+        onReset?.(event);
       }
     },
-    { include: ["sessions.event.retention"], includeTrusted: ["sessions.event.retention"] },
+    {
+      include: ["sessions.event.retention", "sessions.event.rows.reset"],
+      includeTrusted: ["sessions.event.retention", "sessions.event.rows.reset"],
+    },
   );
   onTestFinished(() => {
     unsubscribe();

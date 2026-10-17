@@ -116,6 +116,7 @@ function recordDiagnosticEvent(
       return;
     case "sessions.list.retention":
     case "sessions.event.retention":
+    case "sessions.event.rows.reset":
       if (metadata.trusted) {
         recordSessionRetention(store, evt);
       }

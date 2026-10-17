@@ -928,6 +928,15 @@ is cleared. OpenTelemetry names are `openclaw.session_event_rows_retained_entrie
 and `openclaw.session_event_rows_retained_bytes`. Charges cover vectors and their
 identities; they do not retain or charge copies of the presented session rows.
 
+`openclaw_session_event_rows_reset_total{cause}` counts retained wire baselines
+retired, including each baseline in a connection-wide reset. Its bounded causes
+are `close`, `delivery-lost`, `generation`, `evicted`, and `projection`. Empty
+resets do not increment it. Ordinary session-fact changes and list reads invalidate
+ancestor certification without retiring wire baselines, so they do not increment
+this counter. The OpenTelemetry name is `openclaw.session_event_rows_reset`, with
+the same `cause` label. Like the retention gauges, it uses the existing bounded
+asynchronous diagnostics path and records no session or connection identifiers.
+
 `openclaw_chat_history_requests_total` and
 `openclaw_chat_history_response_bytes_total` attribute successful `chat.history`
 responses by `client_kind`, `source`, `shape`, `limit_bucket`, and `outcome`.

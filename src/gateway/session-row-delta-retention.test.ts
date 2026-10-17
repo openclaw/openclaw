@@ -17,7 +17,10 @@ function row(key: string, extra: Record<string, unknown> = {}): GatewaySessionRo
 }
 
 it("retains only handed-off vectors, separates ancestor admission, and restarts generations in full", async () => {
-  const readRetention = observeSessionEventRowRetention();
+  const resets: Array<{ cause: string; count: number }> = [];
+  const readRetention = observeSessionEventRowRetention(({ cause, count }) =>
+    resets.push({ cause, count }),
+  );
   const owner = new ConnectionSessionRows();
   owner.clear();
   const before = await readRetention();
@@ -37,19 +40,28 @@ it("retains only handed-off vectors, separates ancestor admission, and restarts 
       remove: ["lastRunError"],
     });
     changed.delivered();
-    expect(
-      owner.prepareRows([row(first.key, { sessionId: "replacement" })], diff).wire[0],
-    ).toHaveProperty("full");
-    owner.clear();
-    expect(owner.prepareRows([first], diff).wire[0]).toMatchObject({ version: 3, full: first });
+    const replacement = owner.prepareRows([row(first.key, { sessionId: "replacement" })], diff);
+    expect(replacement.wire[0]).toHaveProperty("full");
+    await readRetention();
+    expect(resets).toEqual([]);
+    replacement.delivered();
+    owner.clear("projection");
+    expect(owner.prepareRows([first], diff).wire[0]).toMatchObject({ version: 4, full: first });
   } finally {
     owner.clear();
   }
   expect(await readRetention()).toEqual(before);
+  expect(resets).toEqual([
+    { cause: "generation", count: 1 },
+    { cause: "projection", count: 1 },
+  ]);
 });
 
 it("evicts by handed-off row order and bounds 25 fully populated connections", async () => {
-  const readRetention = observeSessionEventRowRetention();
+  const resets: Array<{ cause: string; count: number }> = [];
+  const readRetention = observeSessionEventRowRetention(({ cause, count }) =>
+    resets.push({ cause, count }),
+  );
   const owners = Array.from({ length: 25 }, () => new ConnectionSessionRows());
   owners[0]!.clear();
   const before = await readRetention();
@@ -73,10 +85,16 @@ it("evicts by handed-off row order and bounds 25 fully populated connections", a
     owner.prepareRows([row("agent:main:overflow")], diff).delivered();
     expect(owner.prepareRows([rows[0]!], diff).wire[0]).toHaveProperty("base");
     expect(owner.prepareRows([rows[1]!], diff).wire[0]).toHaveProperty("full");
+    await readRetention();
+    expect(resets).toEqual([{ cause: "evicted", count: 1 }]);
   } finally {
     owners.forEach((owner) => owner.clear());
   }
   expect(await readRetention()).toEqual(before);
+  expect(resets).toEqual([
+    { cause: "evicted", count: 1 },
+    { cause: "close", count: 25 * SESSION_ROW_DELTA_MAX_ENTRIES },
+  ]);
 });
 
 it("sends retain:false without disturbing the LRU when vectors exceed the byte cap", async () => {

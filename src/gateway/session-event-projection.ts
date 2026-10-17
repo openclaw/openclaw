@@ -165,9 +165,6 @@ export function prepareSessionEventProjection(
       }
       const { row } = audience;
       const references = connection.references(client);
-      if (audience.hiddenAncestors.length) {
-        references.clearRows();
-      }
       for (const key of audience.hiddenAncestors) {
         references.forget(key);
       }
