@@ -1,12 +1,12 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { GatewayPendingRequests } from "../../../packages/gateway-client/src/pending-request.js";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
-import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
 import { sessionViewerPresenceForGateway } from "./session-viewer-presence.ts";
 
 const SESSION_VIEWERS_SET_METHOD = "sessions.viewers.set";
+const cleanups: Array<() => Promise<void>> = [];
 
 function createHello(mainSessionKey = "agent:main:main"): GatewayHelloOk {
   return {
@@ -20,30 +20,21 @@ function createHello(mainSessionKey = "agent:main:main"): GatewayHelloOk {
 
 function createGatewayHarness() {
   const request = vi.fn<GatewayBrowserClient["request"]>().mockResolvedValue({ sessionKeys: [] });
-  const client = { request } as unknown as GatewayBrowserClient;
-  const snapshot: ApplicationGatewaySnapshot = {
-    client,
+  const { gateway, publish: setSnapshot } = createApplicationGateway({
+    ...createApplicationGateway().gateway.snapshot,
+    client: { request } as unknown as GatewayBrowserClient,
     phase: "connected",
-    offlineStable: false,
     hello: createHello(),
-    canvasPluginSurfaceUrl: null,
     assistantAgentId: "main",
-    sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-  };
-  const { gateway, publish: setSnapshot } = createApplicationGateway(snapshot);
+  });
   const subscribe = gateway.subscribe.bind(gateway);
-  const unsubscribe = vi.fn();
+  const unsubscribe = vi.fn((detach: () => void) => detach());
   vi.spyOn(gateway, "subscribe").mockImplementation((listener) => {
     const detach = subscribe(listener);
-    return () => {
-      unsubscribe();
-      detach();
-    };
+    return () => unsubscribe(detach);
   });
   const store = sessionViewerPresenceForGateway(gateway);
-  return { client, gateway, request, unsubscribe, setSnapshot, store, owner: {} };
+  return { gateway, request, unsubscribe, setSnapshot, store, owner: {} };
 }
 
 function createPendingGatewayHarness() {
@@ -65,18 +56,18 @@ function createPendingGatewayHarness() {
       onSent: (id) => ids.push(id),
     }),
   );
+  cleanups.push(async () => {
+    harness.setSnapshot({ ...harness.gateway.snapshot, phase: "stopped", hello: null });
+    harness.store.unwatch(harness.owner);
+    pending.flush(new Error("test complete"));
+    await flushSync();
+  });
   return {
     ...harness,
     pending,
     retired,
     acknowledge(index: number) {
       pending.handleResponse({ type: "res", id: ids[index]!, ok: true, payload: {} });
-    },
-    async cleanup() {
-      harness.setSnapshot({ ...harness.gateway.snapshot, phase: "stopped", hello: null });
-      harness.store.unwatch(harness.owner);
-      pending.flush(new Error("test complete"));
-      await flushSync();
     },
   };
 }
@@ -104,192 +95,183 @@ async function setVisibility(value: DocumentVisibilityState) {
   await flushSync();
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
   vi.restoreAllMocks();
   vi.useRealTimers();
   Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
 });
 
-describe("session viewer presence store", () => {
-  it("retires lost acknowledgments and retries the final clear before detaching", async () => {
+it("retires lost acknowledgments and retries the final clear before detaching", async () => {
+  vi.useFakeTimers();
+  const harness = createPendingGatewayHarness();
+  const { store, owner } = harness;
+  store.watch(owner, ["agent:main:visible"]);
+  await flushSync();
+
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(harness.pending.hasPending).toBe(false);
+  expect(harness.retired).toEqual(["CLIENT_TIMEOUT"]);
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(harness.request).toHaveBeenCalledTimes(2);
+  harness.acknowledge(1);
+  await flushSync();
+  expect(harness.pending.hasPending).toBe(false);
+
+  store.unwatch(owner);
+  await flushSync();
+  expect(harness.unsubscribe).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(harness.pending.hasPending).toBe(false);
+  harness.acknowledge(0);
+  harness.acknowledge(2);
+  await flushSync();
+  expect(harness.unsubscribe).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(harness.request).toHaveBeenCalledTimes(4);
+  expect(harness.request.mock.calls[3]?.[1]).toEqual({ sessionKeys: [] });
+  harness.acknowledge(3);
+  await flushSync();
+  expect(harness.unsubscribe).toHaveBeenCalledOnce();
+  expect(harness.pending.hasPending).toBe(false);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it.each(["membership", "hello", "client", "unavailable"] as const)(
+  "retires a pending declaration on %s without reviving stale retries",
+  async (change) => {
     vi.useFakeTimers();
     const harness = createPendingGatewayHarness();
     const { store, owner } = harness;
-    try {
-      store.watch(owner, ["agent:main:visible"]);
-      await flushSync();
-
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(harness.pending.hasPending).toBe(false);
-      expect(harness.retired).toEqual(["CLIENT_TIMEOUT"]);
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(harness.request).toHaveBeenCalledTimes(2);
-      harness.acknowledge(1);
-      await flushSync();
-      expect(harness.pending.hasPending).toBe(false);
-
-      store.unwatch(owner);
-      await flushSync();
-      expect(harness.unsubscribe).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(harness.pending.hasPending).toBe(false);
-      harness.acknowledge(0);
-      harness.acknowledge(2);
-      await flushSync();
-      expect(harness.unsubscribe).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(harness.request).toHaveBeenCalledTimes(4);
-      expect(harness.request.mock.calls[3]?.[1]).toEqual({ sessionKeys: [] });
-      harness.acknowledge(3);
-      await flushSync();
-      expect(harness.unsubscribe).toHaveBeenCalledOnce();
-      expect(harness.pending.hasPending).toBe(false);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      await harness.cleanup();
-    }
-  });
-
-  it.each(["membership", "hello", "client", "unavailable"] as const)(
-    "retires a pending declaration on %s without reviving stale retries",
-    async (change) => {
-      vi.useFakeTimers();
-      const harness = createPendingGatewayHarness();
-      const { store, owner } = harness;
-      try {
-        store.watch(owner, ["agent:main:visible"]);
-        await flushSync();
-        const firstSignal = harness.request.mock.calls[0]?.[2]?.signal;
-
-        // Same-signature snapshots and visibility events must keep this attempt.
-        harness.setSnapshot({ ...harness.gateway.snapshot });
-        document.dispatchEvent(new Event("visibilitychange"));
-        await flushSync();
-        expect(harness.request).toHaveBeenCalledOnce();
-        expect(firstSignal?.aborted).toBe(false);
-
-        if (change === "membership") {
-          store.watch(owner, ["agent:main:replacement"]);
-        } else {
-          harness.setSnapshot({
-            ...harness.gateway.snapshot,
-            ...(change === "hello" ? { hello: createHello() } : {}),
-            ...(change === "client"
-              ? { client: { request: harness.request } as unknown as GatewayBrowserClient }
-              : {}),
-            ...(change === "unavailable" ? { phase: "reconnecting", hello: null } : {}),
-          });
-        }
-        await flushSync();
-        expect(firstSignal?.aborted).toBe(true);
-        expect(harness.retired).toEqual(["CLIENT_ABORTED"]);
-        if (change !== "unavailable") {
-          expect(harness.request).toHaveBeenCalledTimes(2);
-          harness.acknowledge(1);
-        }
-        harness.acknowledge(0);
-        await flushSync();
-        await vi.advanceTimersByTimeAsync(60_000);
-        expect(harness.request).toHaveBeenCalledTimes(change === "unavailable" ? 1 : 2);
-        expect(harness.pending.hasPending).toBe(false);
-        store.unwatch(owner);
-        if (change !== "unavailable") {
-          harness.acknowledge(2);
-        }
-        await flushSync();
-        expect(harness.unsubscribe).toHaveBeenCalledOnce();
-        expect(vi.getTimerCount()).toBe(0);
-      } finally {
-        await harness.cleanup();
-      }
-    },
-  );
-
-  it("declares the bounded union and replaces it as panes switch or close", async () => {
-    const harness = createGatewayHarness();
-    const { store } = harness;
-    const firstPane = {};
-    const secondPane = {};
-
-    store.watch(firstPane, ["main"]);
-    store.watch(secondPane, ["agent:main:other"]);
-    await flushSync();
-    expectDeclaration(harness, ["agent:main:main", "agent:main:other"]);
-
-    store.watch(firstPane, ["agent:main:replacement"]);
-    await flushSync();
-    expectDeclaration(harness, ["agent:main:other", "agent:main:replacement"]);
-
-    store.unwatch(secondPane);
-    await flushSync();
-    expectDeclaration(harness, ["agent:main:replacement"]);
-
-    store.unwatch(firstPane);
-    await flushSync();
-    expectDeclaration(harness, []);
-    expect(harness.unsubscribe).toHaveBeenCalledOnce();
-  });
-
-  it("threads the selected owner for a bare global viewer identity", async () => {
-    const harness = createGatewayHarness();
-    harness.setSnapshot({
-      ...harness.gateway.snapshot,
-      assistantAgentId: "work",
-      hello: createHello("global"),
-    });
-    const { store, owner } = harness;
-    store.watch(owner, ["global"]);
-    await flushSync();
-
-    expectDeclaration(harness, ["global"], "work");
-    store.unwatch(owner);
-    await flushSync();
-  });
-
-  it("declares empty while hidden and restores the set when visible", async () => {
-    const harness = createGatewayHarness();
-    const { store, owner } = harness;
     store.watch(owner, ["agent:main:visible"]);
     await flushSync();
+    const firstSignal = harness.request.mock.calls[0]?.[2]?.signal;
 
-    await setVisibility("hidden");
-    expectDeclaration(harness, []);
-
-    await setVisibility("visible");
-    expectDeclaration(harness, ["agent:main:visible"]);
-    store.unwatch(owner);
-    await flushSync();
-  });
-
-  it("does not treat an older empty acknowledgement as the current final clear", async () => {
-    vi.useFakeTimers();
-    const harness = createGatewayHarness();
-    const { store, owner } = harness;
-    store.watch(owner, ["agent:main:visible"]);
-    await flushSync();
-
-    await setVisibility("hidden");
-
-    const visible = createDeferred<{ sessionKeys: string[] }>();
-    const finalClear = createDeferred<never>();
-    harness.request.mockReturnValueOnce(visible.promise).mockReturnValueOnce(finalClear.promise);
-    await setVisibility("visible");
-    store.unwatch(owner);
-    await flushSync();
-    expect(harness.request).toHaveBeenCalledTimes(4);
-
+    // Same-signature snapshots and visibility events must keep this attempt.
+    harness.setSnapshot({ ...harness.gateway.snapshot });
     document.dispatchEvent(new Event("visibilitychange"));
     await flushSync();
-    expect(harness.unsubscribe).not.toHaveBeenCalled();
+    expect(harness.request).toHaveBeenCalledOnce();
+    expect(firstSignal?.aborted).toBe(false);
 
-    visible.resolve({ sessionKeys: ["agent:main:visible"] });
-    finalClear.reject(new Error("final clear temporarily unavailable"));
+    if (change === "membership") {
+      store.watch(owner, ["agent:main:replacement"]);
+    } else {
+      harness.setSnapshot({
+        ...harness.gateway.snapshot,
+        ...(change === "hello" ? { hello: createHello() } : {}),
+        ...(change === "client"
+          ? { client: { request: harness.request } as unknown as GatewayBrowserClient }
+          : {}),
+        ...(change === "unavailable" ? { phase: "reconnecting", hello: null } : {}),
+      });
+    }
     await flushSync();
-    await vi.advanceTimersByTimeAsync(30_000);
+    expect(firstSignal?.aborted).toBe(true);
+    expect(harness.retired).toEqual(["CLIENT_ABORTED"]);
+    if (change !== "unavailable") {
+      expect(harness.request).toHaveBeenCalledTimes(2);
+      harness.acknowledge(1);
+    }
+    harness.acknowledge(0);
     await flushSync();
-
-    expect(harness.request).toHaveBeenCalledTimes(5);
-    expectDeclaration(harness, []);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(harness.request).toHaveBeenCalledTimes(change === "unavailable" ? 1 : 2);
+    expect(harness.pending.hasPending).toBe(false);
+    store.unwatch(owner);
+    if (change !== "unavailable") {
+      harness.acknowledge(2);
+    }
+    await flushSync();
     expect(harness.unsubscribe).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
+
+it("declares the bounded union and replaces it as panes switch or close", async () => {
+  const harness = createGatewayHarness();
+  const { store } = harness;
+  const firstPane = {};
+  const secondPane = {};
+
+  store.watch(firstPane, ["main"]);
+  store.watch(secondPane, ["agent:main:other"]);
+  await flushSync();
+  expectDeclaration(harness, ["agent:main:main", "agent:main:other"]);
+
+  store.watch(firstPane, ["agent:main:replacement"]);
+  await flushSync();
+  expectDeclaration(harness, ["agent:main:other", "agent:main:replacement"]);
+
+  store.unwatch(secondPane);
+  await flushSync();
+  expectDeclaration(harness, ["agent:main:replacement"]);
+
+  store.unwatch(firstPane);
+  await flushSync();
+  expectDeclaration(harness, []);
+  expect(harness.unsubscribe).toHaveBeenCalledOnce();
+});
+
+it("threads the selected owner for a bare global viewer identity", async () => {
+  const harness = createGatewayHarness();
+  harness.setSnapshot({
+    ...harness.gateway.snapshot,
+    assistantAgentId: "work",
+    hello: createHello("global"),
   });
+  const { store, owner } = harness;
+  store.watch(owner, ["global"]);
+  await flushSync();
+
+  expectDeclaration(harness, ["global"], "work");
+  store.unwatch(owner);
+  await flushSync();
+});
+
+it("declares empty while hidden and restores the set when visible", async () => {
+  const harness = createGatewayHarness();
+  const { store, owner } = harness;
+  store.watch(owner, ["agent:main:visible"]);
+  await flushSync();
+
+  await setVisibility("hidden");
+  expectDeclaration(harness, []);
+
+  await setVisibility("visible");
+  expectDeclaration(harness, ["agent:main:visible"]);
+  store.unwatch(owner);
+  await flushSync();
+});
+
+it("does not treat an older empty acknowledgement as the current final clear", async () => {
+  vi.useFakeTimers();
+  const harness = createGatewayHarness();
+  const { store, owner } = harness;
+  store.watch(owner, ["agent:main:visible"]);
+  await flushSync();
+
+  await setVisibility("hidden");
+
+  const visible = createDeferred<{ sessionKeys: string[] }>();
+  const finalClear = createDeferred<never>();
+  harness.request.mockReturnValueOnce(visible.promise).mockReturnValueOnce(finalClear.promise);
+  await setVisibility("visible");
+  store.unwatch(owner);
+  await flushSync();
+  expect(harness.request).toHaveBeenCalledTimes(4);
+
+  document.dispatchEvent(new Event("visibilitychange"));
+  await flushSync();
+  expect(harness.unsubscribe).not.toHaveBeenCalled();
+
+  visible.resolve({ sessionKeys: ["agent:main:visible"] });
+  finalClear.reject(new Error("final clear temporarily unavailable"));
+  await flushSync();
+  await vi.advanceTimersByTimeAsync(30_000);
+  await flushSync();
+
+  expect(harness.request).toHaveBeenCalledTimes(5);
+  expectDeclaration(harness, []);
+  expect(harness.unsubscribe).toHaveBeenCalledOnce();
 });

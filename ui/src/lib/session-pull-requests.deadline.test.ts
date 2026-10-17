@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayPendingRequests } from "../../../packages/gateway-client/src/pending-request.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
@@ -8,12 +8,14 @@ import {
 } from "./session-pull-requests.test-support.ts";
 import { sessionPullRequestsForGateway } from "./session-pull-requests.ts";
 
-const cleanups: Array<() => Promise<void>> = [];
+let harness: ReturnType<typeof createPendingHarness>;
+let store: ReturnType<typeof sessionPullRequestsForGateway>;
+let owner: object;
 const key = "agent:main:demo";
 
 function createPendingHarness() {
   vi.useFakeTimers();
-  const harness = createGatewayHarness();
+  const gatewayHarness = createGatewayHarness();
   const ids: string[] = [];
   const retired: string[] = [];
   const pending = new GatewayPendingRequests({
@@ -25,31 +27,23 @@ function createPendingHarness() {
       }
     },
   });
-  harness.request.mockImplementation((method, params, options) =>
+  gatewayHarness.request.mockImplementation((method, params, options) =>
     pending.request({ send: () => undefined }, method, params, {
       ...options,
       onSent: (id) => ids.push(id),
     }),
   );
-  const store = sessionPullRequestsForGateway(harness.gateway);
-  const owner = {};
-  cleanups.push(async () => {
-    harness.setSnapshot({ ...harness.gateway.snapshot, phase: "stopped", hello: null });
-    store.unwatch(owner);
-    pending.flush(new Error("test complete"));
-    await flushSync();
-  });
   return {
-    ...harness,
-    store,
-    owner,
+    ...gatewayHarness,
+    store: sessionPullRequestsForGateway(gatewayHarness.gateway),
+    owner: {},
     pending,
     retired,
     hello(hello = createHello()) {
-      harness.setSnapshot({ ...harness.gateway.snapshot, hello });
+      gatewayHarness.setSnapshot({ ...gatewayHarness.gateway.snapshot, hello });
     },
     params(index: number) {
-      return harness.request.mock.calls[index]?.[1];
+      return gatewayHarness.request.mock.calls[index]?.[1];
     },
     acknowledge(index: number) {
       pending.handleResponse({ type: "res", id: ids[index]!, ok: true, payload: {} });
@@ -57,10 +51,32 @@ function createPendingHarness() {
   };
 }
 
+beforeEach(() => {
+  harness = createPendingHarness();
+  ({ store, owner } = harness);
+});
+
+async function startRefresh() {
+  store.watch(owner, [key]);
+  await flushSync();
+  harness.acknowledge(0);
+  await flushSync();
+  store.refresh(key);
+  await flushSync();
+}
+
+function expectDetached() {
+  expect(harness.unsubscribeSnapshots).toHaveBeenCalledOnce();
+  expect(harness.unsubscribeEvents).toHaveBeenCalledOnce();
+  expect(harness.pending.hasPending).toBe(false);
+  expect(vi.getTimerCount()).toBe(0);
+}
+
 afterEach(async () => {
-  for (const cleanup of cleanups.splice(0)) {
-    await cleanup();
-  }
+  harness.setSnapshot({ ...harness.gateway.snapshot, phase: "stopped", hello: null });
+  store.unwatch(owner);
+  harness.pending.flush(new Error("test complete"));
+  await flushSync();
   vi.restoreAllMocks();
   vi.useRealTimers();
   Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
@@ -68,14 +84,7 @@ afterEach(async () => {
 
 describe("pull request subscription acknowledgment lifetime", () => {
   it("retains refresh and unsubscribe intent while the connected gateway omits the capability", async () => {
-    const harness = createPendingHarness();
-    const { store, owner } = harness;
-    store.watch(owner, [key]);
-    await flushSync();
-    harness.acknowledge(0);
-    await flushSync();
-    store.refresh(key);
-    await flushSync();
+    await startRefresh();
     expect(harness.params(1)).toEqual({ sessionKeys: [key], refreshSessionKeys: [key] });
     const refreshSignal = harness.request.mock.calls[1]?.[2]?.signal;
 
@@ -118,14 +127,7 @@ describe("pull request subscription acknowledgment lifetime", () => {
   });
 
   it("retires a lost refresh acknowledgment and retries retained coalesced intent once", async () => {
-    const harness = createPendingHarness();
-    const { store, owner } = harness;
-    store.watch(owner, [key]);
-    await flushSync();
-    harness.acknowledge(0);
-    await flushSync();
-    store.refresh(key);
-    await flushSync();
+    await startRefresh();
     for (let hint = 0; hint < 3; hint += 1) {
       store.refresh(key);
       await flushSync();
@@ -148,15 +150,10 @@ describe("pull request subscription acknowledgment lifetime", () => {
 
     store.unwatch(owner);
     expect(harness.params(3)).toEqual({ sessionKeys: [] });
-    expect(harness.unsubscribeSnapshots).toHaveBeenCalledOnce();
-    expect(harness.unsubscribeEvents).toHaveBeenCalledOnce();
-    expect(harness.pending.hasPending).toBe(false);
-    expect(vi.getTimerCount()).toBe(0);
+    expectDetached();
   });
 
   it("settles a one-shot load after a lost acknowledgment and sends its final empty set", async () => {
-    const harness = createPendingHarness();
-    const { store, owner } = harness;
     const settled = vi.fn();
     void store.load(owner, key).then(settled);
     await flushSync();
@@ -165,17 +162,12 @@ describe("pull request subscription acknowledgment lifetime", () => {
     expect(harness.request).toHaveBeenCalledTimes(2);
     expect(harness.params(1)).toEqual({ sessionKeys: [] });
     expect(harness.retired).toEqual(["CLIENT_TIMEOUT", "CLIENT_ABORTED"]);
-    expect(harness.pending.hasPending).toBe(false);
-    expect(harness.unsubscribeSnapshots).toHaveBeenCalledOnce();
-    expect(harness.unsubscribeEvents).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
+    expectDetached();
   });
 
   it.each(["membership", "hello", "client", "unavailable", "hidden", "unwatch"] as const)(
     "retires a pending declaration on %s without reviving a stale retry",
     async (change) => {
-      const harness = createPendingHarness();
-      const { store, owner } = harness;
       store.watch(owner, [key]);
       await flushSync();
       const firstSignal = harness.request.mock.calls[0]?.[2]?.signal;

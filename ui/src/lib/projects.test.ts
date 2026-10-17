@@ -4,7 +4,6 @@ import type {
   ProjectsListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.ts";
-import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { markdownGitHubAliases } from "../components/markdown-github-repositories.ts";
 import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
@@ -20,10 +19,10 @@ const project: ProjectRecord = {
 
 function harness() {
   const request = vi.fn(async (): Promise<ProjectsListResult> => ({ projects: [project] }));
-  const snapshot: ApplicationGatewaySnapshot = {
+  const { gateway, publish, publishEvent } = createApplicationGateway({
+    ...createApplicationGateway().gateway.snapshot,
     client: createTestGatewayClient(request),
     phase: "connected",
-    offlineStable: false,
     hello: {
       type: "hello-ok",
       protocol: 1,
@@ -36,19 +35,13 @@ function harness() {
     },
     sessionKey: "agent:main:first",
     assistantAgentId: "main",
-    canvasPluginSurfaceUrl: null,
-    lastError: null,
-    lastErrorCode: null,
-  };
-  const { gateway, publish, publishEvent } = createApplicationGateway(snapshot);
+  });
+  const snapshot = gateway.snapshot;
   const subscribe = gateway.subscribe.bind(gateway);
-  const unsubscribe = vi.fn();
+  const unsubscribe = vi.fn((detach: () => void) => detach());
   vi.spyOn(gateway, "subscribe").mockImplementation((listener) => {
     const detach = subscribe(listener);
-    return () => {
-      unsubscribe();
-      detach();
-    };
+    return () => unsubscribe(detach);
   });
   const store = projectsForGateway(gateway);
   const detach = store.subscribe(vi.fn());
@@ -69,45 +62,44 @@ function harness() {
   };
 }
 
+it("shares one cold read across chat and the picker, preserving recents", async () => {
+  const h = harness();
+  const picker = projectsForGateway(h.gateway);
+  const detach = picker.subscribe(vi.fn());
+  onTestFinished(detach);
+  expect(picker).toBe(h.store);
+  await h.store.refresh();
+  expect(h.request).toHaveBeenCalledExactlyOnceWith("projects.list", {});
+  expect(h.store.snapshot.repositories).toEqual([
+    { owner: "openclaw", repo: "clawsweeper", aliases: ["ClawSweeper"] },
+  ]);
+  h.snapshot.sessionKey = "agent:other:second";
+  h.emit();
+  expect(h.request).toHaveBeenCalledTimes(1);
+  const recents: ProjectsListResult["recents"] = [
+    { kind: "project", projectId: project.id, displayName: project.displayName },
+  ];
+  h.request.mockResolvedValue({ projects: [project], recents });
+  await picker.refresh(true);
+  expect(picker.snapshot.result?.recents).toEqual(recents);
+});
+
 describe("registered project catalog", () => {
   let h: ReturnType<typeof harness>;
-  beforeEach(() => {
+  beforeEach(async () => {
     h = harness();
+    await h.store.refresh();
   });
   it("retires project facts on config publication and reads the current GitHub host", async () => {
-    await h.store.refresh();
     expect(h.store.snapshot.ready).toBe(true);
     h.request.mockResolvedValueOnce({ projects: [], githubHost: "new.ghe.example.test" });
     h.emitConfigChanged();
-    expect(h.store.snapshot.ready).toBe(false);
-    expect(h.store.snapshot.result).toBeNull();
+    expect(h.store.snapshot).toMatchObject({ ready: false, result: null });
     await h.store.refresh();
     expect(h.store.snapshot.result?.githubHost).toBe("new.ghe.example.test");
   });
 
-  it("shares one cold read across chat and the picker, preserving recents", async () => {
-    const picker = projectsForGateway(h.gateway);
-    const detach = picker.subscribe(vi.fn());
-    onTestFinished(detach);
-    expect(picker).toBe(h.store);
-    await h.store.refresh();
-    expect(h.request).toHaveBeenCalledExactlyOnceWith("projects.list", {});
-    expect(h.store.snapshot.repositories).toEqual([
-      { owner: "openclaw", repo: "clawsweeper", aliases: ["ClawSweeper"] },
-    ]);
-    h.snapshot.sessionKey = "agent:other:second";
-    h.emit();
-    expect(h.request).toHaveBeenCalledTimes(1);
-    const recents: ProjectsListResult["recents"] = [
-      { kind: "project", projectId: project.id, displayName: project.displayName },
-    ];
-    h.request.mockResolvedValue({ projects: [project], recents });
-    await picker.refresh(true);
-    expect(picker.snapshot.result?.recents).toEqual(recents);
-  });
-
   it("retires aliases for every consumer before an invalidating refresh can fail", async () => {
-    await h.store.refresh();
     const listener = vi.fn();
     onTestFinished(h.store.subscribe(listener));
     const failed = createDeferred<ProjectsListResult>();
@@ -128,7 +120,6 @@ describe("registered project catalog", () => {
   it.each(["client", "reconnect", "principal", "scope", "connection"])(
     "rejects a late %s result and loads the current projection",
     async (change) => {
-      await h.store.refresh();
       const old = createDeferred<ProjectsListResult>();
       h.request.mockReturnValueOnce(old.promise);
       const pending = h.store.refresh(true);
@@ -136,19 +127,15 @@ describe("registered project catalog", () => {
       h.request.mockResolvedValue({ projects: [current] });
       if (change === "client") {
         h.snapshot.client = createTestGatewayClient(h.request);
-      }
-      if (change === "reconnect") {
+      } else if (change === "reconnect") {
         h.snapshot.phase = "reconnecting";
         h.emit();
         h.snapshot.phase = "connected";
-      }
-      if (change === "principal") {
+      } else if (change === "principal") {
         h.snapshot.hello!.auth!.recoveryScope = "principal-b";
-      }
-      if (change === "scope") {
+      } else if (change === "scope") {
         h.snapshot.hello!.auth!.scopes = ["operator.read"];
-      }
-      if (change === "connection") {
+      } else if (change === "connection") {
         h.gateway.connection.gatewayUrl = "ws://replacement.test";
       }
       h.emit();
@@ -168,7 +155,6 @@ describe("registered project catalog", () => {
   );
 
   it("clears aliases on read permission loss without requesting wider access", async () => {
-    await h.store.refresh();
     h.snapshot.hello!.auth!.scopes = [];
     h.emit();
     expect(h.store.snapshot.repositories).toEqual([]);
@@ -194,7 +180,6 @@ describe("registered project catalog", () => {
     "ssh://internal/shared.git",
     "https://gitlab.com/team/%73hared.git",
   ])("keeps authorized non-GitHub basename collisions unresolved: %s", async (originUrl) => {
-    await h.store.refresh();
     await h.replace([
       {
         ...project,
@@ -218,7 +203,6 @@ describe("registered project catalog", () => {
     ["git@evil.test:openclaw/clawsweeper.git", false],
     ["/workspace/clawsweeper", false],
   ])("binds only verified GitHub clone coordinates: %s", async (originUrl, resolves) => {
-    await h.store.refresh();
     await h.replace([{ ...project, originUrl }]);
     expect(h.store.snapshot.repositories).toEqual([
       resolves
