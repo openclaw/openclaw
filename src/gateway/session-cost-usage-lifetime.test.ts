@@ -68,11 +68,42 @@ const fresh = (totalTokens: number, totalCost?: number) => ({
   totals: { totalTokens, ...(totalCost === undefined ? {} : { totalCost }) },
   cacheStatus: { status: "fresh" },
 });
+const timestamp = Date.parse("2026-09-18T12:00:00Z");
+const mainConfig = () => ({ agents: { entries: { main: {} } } });
 
-function costWindow(
-  config: Parameters<typeof loadCostUsageSummaryCached>[0]["config"],
-  timestamp: number,
+function observeProjection(config: Parameters<typeof costWindow>[0]) {
+  const publications: SessionCostUsagePublication[] = [];
+  const offUsage = onSessionCostUsageUpdated((event) => publications.push(event));
+  const warn = vi.fn();
+  const lifetime = startSessionCostUsageProjectionLifetime({ getConfig: () => config, warn });
+  return { publications, offUsage, warn, lifetime };
+}
+
+function seedUsage(name: string, agentId = "main", key = name) {
+  const target = { agentId, sessionKey: `agent:${agentId}:${key}`, sessionId: name };
+  replaceSessionEntrySync(target, { sessionId: name, updatedAt: timestamp });
+  return target;
+}
+
+function removeUsage(
+  target: Parameters<typeof readSessionEntryInWorker>[0],
+  config: Parameters<typeof costWindow>[0],
+  expectedEntry: Awaited<ReturnType<typeof readSessionEntryInWorker>>,
+  deleteTranscriptWithoutArchive = false,
 ) {
+  return expect(
+    deleteSessionEntryLifecycle({
+      ...target,
+      storePath: resolveSessionStorePathForScope(target, config),
+      target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
+      expectedEntry,
+      archiveTranscript: false,
+      deleteTranscriptWithoutArchive,
+    }),
+  ).resolves.toMatchObject({ deleted: true });
+}
+
+function costWindow(config: Parameters<typeof loadCostUsageSummaryCached>[0]["config"]) {
   return { config, startMs: timestamp - 1, endMs: timestamp + 1 };
 }
 
@@ -82,25 +113,15 @@ it("keeps usage backfill and all-agent totals available while another agent's de
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const config = { agents: { entries: { main: {}, retiring: {} } } };
     setRuntimeConfigSnapshot(config);
-    const timestamp = Date.parse("2026-09-18T12:00:00Z");
     for (const [agentId, tokens] of [
       ["main", 10],
       ["retiring", 900],
     ] as const) {
-      const target = {
-        agentId,
-        sessionKey: `agent:${agentId}:usage`,
-        sessionId: `${agentId}-usage`,
-      };
-      replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: timestamp });
+      const target = seedUsage(`${agentId}-usage`, agentId, "usage");
       await appendUsage(target, timestamp, tokens);
       await aggregation.refreshCostUsageCacheForAgent({ config, agentId });
     }
-    const cost = () =>
-      loadCostUsageSummaryCached({
-        ...costWindow(config, timestamp),
-        agentScope: "all",
-      });
+    const cost = () => loadCostUsageSummaryCached({ ...costWindow(config), agentScope: "all" });
     expect((await cost()).totals.totalTokens).toBe(910);
     const capturedRoster = createDeferred();
     const releaseRoster = createDeferred();
@@ -143,11 +164,8 @@ it("keeps usage backfill and all-agent totals available while another agent's de
       deleteFiles: false,
       phase: "draining",
     });
-    const publications: SessionCostUsagePublication[] = [];
-    const offUsage = onSessionCostUsageUpdated((event) => publications.push(event));
     const refresh = vi.spyOn(aggregation, "refreshCostUsageCacheForAgent");
-    const warn = vi.fn();
-    const lifetime = startSessionCostUsageProjectionLifetime({ getConfig: () => config, warn });
+    const { publications, offUsage, warn, lifetime } = observeProjection(config);
     try {
       releaseRoster.resolve();
       expect.soft(await cost()).toMatchObject(fresh(10, 0.1));
@@ -186,15 +204,9 @@ it("coalesces usage through alias cleanup, flushes exact reads, and recovers def
   signal,
 }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const config = { agents: { entries: { main: {} } } };
+    const config = mainConfig();
     setRuntimeConfigSnapshot(config);
-    const target = {
-      agentId: "main",
-      sessionKey: "agent:main:usage-coalescing",
-      sessionId: "usage-coalescing",
-    };
-    const timestamp = Date.parse("2026-09-18T12:00:00Z");
-    replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: timestamp });
+    const target = seedUsage("usage-coalescing");
     const append = (role: string, tokens?: number, mode: "inline" | "file-only" = "inline") =>
       appendUsage(target, timestamp, tokens, role, mode);
     await append("assistant", 10);
@@ -246,10 +258,7 @@ it("coalesces usage through alias cleanup, flushes exact reads, and recovers def
     vi.useFakeTimers();
     try {
       const cost = () =>
-        loadCostUsageSummaryCached({
-          ...costWindow(config, timestamp),
-          agentId: target.agentId,
-        });
+        loadCostUsageSummaryCached({ ...costWindow(config), agentId: target.agentId });
       expect((await cost()).totals.totalTokens).toBe(10);
       await append("user");
       await append("system");
@@ -257,19 +266,10 @@ it("coalesces usage through alias cleanup, flushes exact reads, and recovers def
       expect(refresh).not.toHaveBeenCalled();
 
       await append("assistant", 20);
-      await expect(
-        deleteSessionEntryLifecycle({
-          ...alias,
-          storePath: resolveSessionStorePathForScope(alias, config),
-          target: { canonicalKey: alias.sessionKey, storeKeys: [alias.sessionKey] },
-          expectedEntry: expectedAlias,
-          archiveTranscript: false,
-        }),
-      ).resolves.toMatchObject({ deleted: true });
+      await removeUsage(alias, config, expectedAlias);
       await vi.advanceTimersByTimeAsync(50);
       await append("assistant", 30);
       expect(refresh).not.toHaveBeenCalled();
-      // The outer RPC memo must not hide an append waiting for its quiet period.
       expect((await cost()).totals.totalTokens).toBe(60);
       expect(await overview()).toMatchObject({
         ...fresh(60),
@@ -277,7 +277,6 @@ it("coalesces usage through alias cleanup, flushes exact reads, and recovers def
       });
       expect(refresh).toHaveBeenCalledTimes(1);
 
-      // Invalidation-only publications also cover rewrites and compaction.
       await append("assistant", 40, "file-only");
       expect(await overview()).toMatchObject(fresh(100));
       expect(refresh).toHaveBeenCalledTimes(2);
@@ -286,8 +285,6 @@ it("coalesces usage through alias cleanup, flushes exact reads, and recovers def
       await lifetime.stop();
       expect(refresh).toHaveBeenCalledTimes(2);
       vi.useRealTimers();
-      // Lose the dirty queue and worker caches as on process exit, keeping only
-      // the committed transcript and the older durable rollup.
       await closeOpenClawAgentDatabasesAsync();
       await closeOpenClawStateDatabaseAsync();
       listAgents.mockRestore();
@@ -301,24 +298,8 @@ it("coalesces usage through alias cleanup, flushes exact reads, and recovers def
         await withinTest(recovered.promise, signal);
         await refresh.mock.results.at(-1)?.value;
         expect(await overview()).toMatchObject(fresh(150));
-        await expect(
-          deleteSessionEntryLifecycle({
-            ...target,
-            storePath: resolveSessionStorePathForScope(target, config),
-            target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
-            expectedEntry: await readSessionEntryInWorker(target),
-            archiveTranscript: false,
-            deleteTranscriptWithoutArchive: true,
-          }),
-        ).resolves.toMatchObject({ deleted: true });
-        expect(
-          (
-            await loadCostUsageSummaryCached({
-              ...costWindow(config, timestamp),
-              agentId: target.agentId,
-            })
-          ).totals.totalTokens,
-        ).toBe(0);
+        await removeUsage(target, config, await readSessionEntryInWorker(target), true);
+        expect((await cost()).totals.totalTokens).toBe(0);
       } finally {
         offUsage();
         await restarted.stop();
@@ -335,14 +316,8 @@ it("projects committed usage after startup preparation without borrowing its exp
   onTestFinished,
 }) => {
   const run = withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const config = { agents: { entries: { main: {} } } };
-    const target = {
-      agentId: "main",
-      sessionKey: "agent:main:usage-admission",
-      sessionId: "usage-admission",
-    };
-    const timestamp = Date.parse("2026-09-18T12:00:00Z");
-    replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: timestamp });
+    const config = mainConfig();
+    const target = seedUsage("usage-admission");
     const append = (tokens: number) =>
       appendUsage(target, timestamp, tokens, "assistant", "inline", config);
     await append(10);
@@ -380,11 +355,8 @@ it("projects committed usage after startup preparation without borrowing its exp
     });
     const requested = vi.spyOn(cacheRuntime, "requestCostUsageCacheRefresh");
     const roster = vi.spyOn(agentList, "listGatewayAgentsBasic");
-    const publications: SessionCostUsagePublication[] = [];
-    const offUsage = onSessionCostUsageUpdated((event) => publications.push(event));
-    const warn = vi.fn();
-    const lifetime = publisher.run("owner", () =>
-      startSessionCostUsageProjectionLifetime({ getConfig: () => config, warn }),
+    const { publications, offUsage, warn, lifetime } = publisher.run("owner", () =>
+      observeProjection(config),
     );
     let pendingRefreshes = -1;
     try {
@@ -404,21 +376,19 @@ it("projects committed usage after startup preparation without borrowing its exp
           await append(20);
           sessionChanges.emit({ all: true, scope: { agentId: target.agentId, topology: true } });
           await roster.mock.results.at(-1)?.value;
-          // Let any incorrectly accepted queue enter aggregation before expiring its borrow.
           if (requested.mock.calls.length > initialRequests) {
             await withinTest(nextStarted.promise, signal);
           }
           pendingRefreshes = outcomes.length - 1;
         }),
       );
-      // The admission owner's completion publication is the only recovery trigger.
       await roster.mock.results.at(-1)?.value;
       await withinTest(nextStarted.promise, signal);
       releaseRefresh.resolve();
       const settled = await withinTest(Promise.all(outcomes), signal);
       await lifetime.stop();
       const summary = await cacheRuntime.loadCostUsageSummaryFromCache({
-        ...costWindow(config, timestamp),
+        ...costWindow(config),
         agentId: target.agentId,
         requestRefresh: false,
       });

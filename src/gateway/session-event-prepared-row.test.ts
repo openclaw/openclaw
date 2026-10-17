@@ -5,6 +5,7 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js"
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
 import {
   drainSessionEventPublications,
@@ -16,20 +17,47 @@ import { readPreparedSessionRows, type SessionRowReadView } from "./session-row-
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
+const cfg = { agents: { entries: { main: {} } } };
+function fixture(keys: string[]) {
+  setRuntimeConfigSnapshot(cfg);
+  return createSessionRowProjectionFixture({
+    cfg,
+    store: Object.fromEntries(keys.map((key) => [key, { sessionId: key, updatedAt: 1 }])),
+  });
+}
+function broadcaster(
+  projection: ReturnType<typeof fixture>,
+  broadcastToConnIds: GatewayBroadcastToConnIdsFn,
+) {
+  return createLifecycleEventBroadcastHandler({
+    broadcastToConnIds,
+    getSessionRowProjection: () => projection,
+    sessionEventSubscribers: { getAll: () => new Set(["viewer"]) },
+    chatAbortControllers: new Map(),
+  });
+}
+function expectBroadcast(broadcast: unknown, sessionKey: string, payload = {}) {
+  expect(broadcast).toHaveBeenCalledExactlyOnceWith(
+    "sessions.changed",
+    expect.objectContaining({ sessionKey, reason: "rename", ...payload }),
+    new Set(["viewer"]),
+    {
+      dropIfSlow: true,
+      sessionEventSubscriptionKeys: [sessionKey],
+      prepareSessionProjection: expect.any(Function),
+    },
+  );
+}
+
 it.each([0, 7])(
   "lets I/O progress through a ready burst (publication cost %i ms)",
   async (cost) => {
     vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
     let now = 0;
     const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
-    const cfg = { agents: { entries: { main: {} } } };
-    setRuntimeConfigSnapshot(cfg);
     const keys = Array.from({ length: 12 }, (_, index) => `agent:main:burst-${index}`);
     const yieldedKey = "agent:main:burst-9";
-    const projection = createSessionRowProjectionFixture({
-      cfg,
-      store: Object.fromEntries(keys.map((key) => [key, { sessionId: key, updatedAt: 1 }])),
-    });
+    const projection = fixture(keys);
     const held = createDeferredCore();
     let preparations = 0;
     projection.withPreparedExactRows = async (queries, consume) => {
@@ -87,23 +115,13 @@ it.each(["replacement", "reset"])(
     vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
     let now = 0;
     vi.spyOn(performance, "now").mockImplementation(() => now);
-    const cfg = { agents: { entries: { main: {} } } };
-    setRuntimeConfigSnapshot(cfg);
     const changedKey = "agent:main:changed";
     const keys = ["agent:main:first", changedKey];
-    const projection = createSessionRowProjectionFixture({
-      cfg,
-      store: Object.fromEntries(keys.map((key) => [key, { sessionId: key, updatedAt: 1 }])),
-    });
+    const projection = fixture(keys);
     const broadcastToConnIds = vi.fn(() => {
       now += 7;
     });
-    const handler = createLifecycleEventBroadcastHandler({
-      broadcastToConnIds,
-      sessionEventSubscribers: { getAll: () => new Set(["viewer"]) },
-      chatAbortControllers: new Map(),
-      getSessionRowProjection: () => projection,
-    });
+    const handler = broadcaster(projection, broadcastToConnIds);
     setImmediate(() => {
       projection.setEntry(changedKey, {
         sessionId: kind === "replacement" ? "replacement" : changedKey,
@@ -122,22 +140,11 @@ it.each(["replacement", "reset"])(
     });
     await vi.runAllTimersAsync();
     await Promise.all(publications);
-    expect(broadcastToConnIds).toHaveBeenCalledOnce();
-    expect(broadcastToConnIds).toHaveBeenCalledWith(
-      "sessions.changed",
-      expect.objectContaining({ sessionKey: keys[0], reason: "rename" }),
-      new Set(["viewer"]),
-      {
-        dropIfSlow: true,
-        sessionEventSubscriptionKeys: [keys[0]],
-        prepareSessionProjection: expect.any(Function),
-      },
-    );
+    expectBroadcast(broadcastToConnIds, keys[0]!);
   },
 );
 
 it("publishes lifecycle rows after their producer drains and before publication shutdown", async () => {
-  const cfg = { agents: { entries: { main: {} } } };
   setRuntimeConfigSnapshot(cfg);
   const sessionKey = "agent:main:lifecycle-publication";
   const projection = createSessionRowProjectionFixture({
@@ -153,12 +160,7 @@ it("publishes lifecycle rows after their producer drains and before publication 
   };
   const order: string[] = [];
   const broadcastToConnIds = vi.fn(() => order.push("publication"));
-  const handler = createLifecycleEventBroadcastHandler({
-    broadcastToConnIds,
-    sessionEventSubscribers: { getAll: () => new Set(["viewer"]) },
-    chatAbortControllers: new Map(),
-    getSessionRowProjection: () => projection,
-  });
+  const handler = broadcaster(projection, broadcastToConnIds);
   const producer = new AsyncWorkScope();
   const publication = producer.run(() => handler({ sessionKey, reason: "rename" }));
   onTestFinished(async () => {
@@ -173,20 +175,9 @@ it("publishes lifecycle rows after their producer drains and before publication 
   await producer.drain();
   release.resolve();
   await Promise.all([publication, drain]);
-  expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
-    "sessions.changed",
-    expect.objectContaining({
-      sessionKey,
-      reason: "rename",
-      session: expect.objectContaining({ sessionId: "lifecycle-session", label: "Collector A" }),
-    }),
-    new Set(["viewer"]),
-    {
-      dropIfSlow: true,
-      sessionEventSubscriptionKeys: [sessionKey],
-      prepareSessionProjection: expect.any(Function),
-    },
-  );
+  expectBroadcast(broadcastToConnIds, sessionKey, {
+    session: expect.objectContaining({ sessionId: "lifecycle-session", label: "Collector A" }),
+  });
   expect(order).toEqual(["publication", "drained"]);
 });
 
@@ -210,7 +201,6 @@ it("rejects asynchronous prepared consumers", async () => {
 
 it("keeps prepared exact rows and ancestors inside the synchronous publication", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const parentKey = "agent:main:event-parent";
     const childKey = "agent:main:event-child";

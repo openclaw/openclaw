@@ -47,6 +47,10 @@ const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
 const cfg = { agents: { entries: { main: {} } } };
 const contains = expect.objectContaining;
+const result = (response: Awaited<ReturnType<typeof invoke>>, ...args: unknown[]) =>
+  expect(response).toHaveBeenCalledWith(...args);
+const calls = (response: Awaited<ReturnType<typeof invoke>>, ...args: unknown[]) =>
+  expect(response.mock.calls).toEqual([args]);
 let client: GatewayClient;
 let location: { agentId: string; path: string };
 let env: NodeJS.ProcessEnv;
@@ -109,6 +113,7 @@ async function invoke(
   handlers: GatewayRequestHandlers,
   method: string,
   params: Record<string, unknown>,
+  expected?: unknown[],
 ) {
   const respond = vi.fn<RespondFn>();
   const handler = handlers[method];
@@ -121,12 +126,25 @@ async function invoke(
     isWebchatConnect: () => true,
     respond,
   });
+  if (expected) {
+    result(respond, ...expected);
+  }
   return respond;
+}
+
+function requests(
+  handlers: GatewayRequestHandlers,
+  prefix: string,
+  defaults: Record<string, unknown> = {},
+) {
+  return (method: string, params: Record<string, unknown> = {}, expected?: unknown[]) =>
+    invoke(handlers, `${prefix}.${method}`, { ...defaults, ...params }, expected);
 }
 
 it("returns the unbound memory Goal receipt on retry and serves suggestion mutations without host SQL", async () => {
   const sessionKey = "agent:main:dashboard:incognito-controls";
   const sessionId = "controls";
+  const suggest = requests(sessionSuggestionHandlers, "session.suggestions", { sessionKey });
   await seed(sessionKey, {
     sessionId,
     lifecycleRevision: "first",
@@ -157,18 +175,13 @@ it("returns the unbound memory Goal receipt on retry and serves suggestion mutat
       operationId: "edit-once",
       issuedAtMs: Date.now(),
     };
-    const first = await invoke(sessionGoalHandlers, "sessions.goal.update", request);
-    expect(first).toHaveBeenCalledWith(
+    const first = await invoke(sessionGoalHandlers, "sessions.goal.update", request, [
       true,
       contains({ goal: contains({ objective: "After" }) }),
       undefined,
-    );
+    ]);
     const replay = await invoke(sessionGoalHandlers, "sessions.goal.update", request);
-    expect(replay).toHaveBeenCalledWith(
-      true,
-      { ...(first.mock.calls[0]![1] as object), replayed: true },
-      undefined,
-    );
+    result(replay, true, { ...(first.mock.calls[0]![1] as object), replayed: true }, undefined);
     expect(
       memorySessionActorOwners.read(location)?.readSession(sessionKey, authority)?.entry,
     ).toMatchObject({
@@ -190,10 +203,7 @@ it("returns the unbound memory Goal receipt on retry and serves suggestion mutat
       });
     let added: Awaited<ReturnType<typeof invoke>>;
     try {
-      added = await invoke(sessionSuggestionHandlers, "session.suggestions.add", {
-        sessionKey,
-        text: "Check this",
-      });
+      added = await suggest("add", { text: "Check this" });
       expect(addSpy).toHaveBeenCalledOnce();
     } finally {
       addSpy.mockRestore();
@@ -207,27 +217,13 @@ it("returns the unbound memory Goal receipt on retry and serves suggestion mutat
         }),
       }),
     ).toBeUndefined();
-    expect(added).toHaveBeenCalledWith(
-      true,
-      contains({ suggestion: contains({ text: "Check this" }) }),
-    );
+    result(added, true, contains({ suggestion: contains({ text: "Check this" }) }));
     const suggestion = (added.mock.calls[0]![1] as { suggestion: { id: string } }).suggestion;
-    const listed = await invoke(sessionSuggestionHandlers, "session.suggestions.list", {
-      sessionKey,
-    });
-    expect(listed).toHaveBeenCalledWith(
-      true,
-      contains({ suggestions: [contains({ id: suggestion.id })] }),
-    );
-    const dismissed = await invoke(sessionSuggestionHandlers, "session.suggestions.resolve", {
-      sessionKey,
-      id: suggestion.id,
-      resolution: "dismiss",
-    });
-    expect(dismissed).toHaveBeenCalledWith(
+    await suggest("list", {}, [true, contains({ suggestions: [contains({ id: suggestion.id })] })]);
+    await suggest("resolve", { id: suggestion.id, resolution: "dismiss" }, [
       true,
       contains({ suggestion: contains({ state: "dismissed" }) }),
-    );
+    ]);
     expect(host.queries).toEqual([]);
   } finally {
     host.restore();
@@ -237,6 +233,7 @@ it("returns the unbound memory Goal receipt on retry and serves suggestion mutat
 it("retains an unbound memory Side chat source for durable writes and refuses a closed transport", async () => {
   const sessionKey = "agent:main:dashboard:incognito-side-chat";
   const sessionId = "side-chat-source";
+  const ask = requests(sessionCompanionHandlers, "sessions.companion", { sessionKey });
   await seed(sessionKey, { sessionId, lifecycleRevision: "first" }, [
     { type: "session", id: sessionId, version: 3, cwd: "/synthetic" },
     {
@@ -284,16 +281,10 @@ it("retains an unbound memory Side chat source for durable writes and refuses a 
   });
   context.sessionCompanion = companion;
   try {
-    const first = await invoke(sessionCompanionHandlers, "sessions.companion.ask", {
-      sessionKey,
-      question: "Summarize",
-    });
-    expect(first.mock.calls).toEqual([[true, { answer: "Answer", ts: 10 }]]);
+    const first = await ask("ask", { question: "Summarize" });
+    calls(first, true, { answer: "Answer", ts: 10 });
     pause = true;
-    const pending = invoke(sessionCompanionHandlers, "sessions.companion.ask", {
-      sessionKey,
-      question: "Again",
-    });
+    const pending = ask("ask", { question: "Again" });
     try {
       await awaitGateBeforeSettlement(
         entered.promise,
@@ -306,7 +297,7 @@ it("retains an unbound memory Side chat source for durable writes and refuses a 
       resume.resolve();
     }
     const rejected = await pending;
-    expect(rejected).toHaveBeenCalledWith(false, undefined, contains({ code: "UNAVAILABLE" }));
+    result(rejected, false, undefined, contains({ code: "UNAVAILABLE" }));
     expect(loadSessionEntry(destination)?.label).toBe("After");
   } finally {
     resume.resolve();
@@ -324,50 +315,36 @@ it("attaches unbound memory skill pins for the next turn and refuses a detached 
     content: "---\nname: actor-skill\ndescription: Synthetic skill\n---\n# Actor skill\n",
     expectedRevision: null,
   });
-  expect(saved.mock.calls).toEqual([
-    [true, contains({ entry: contains({ skillId: expect.any(String) }) }), undefined],
-  ]);
+  calls(saved, true, contains({ entry: contains({ skillId: expect.any(String) }) }), undefined);
   const entry = (saved.mock.calls[0]![1] as { entry: { skillId: string; revision: string } }).entry;
-  const attached = await invoke(skillsLibraryHandlers, "skills.library.activate", {
-    sessionKey,
-    skillId: entry.skillId,
-    action: "attach",
-  });
-  expect(attached).toHaveBeenCalledWith(
+  const skills = requests(skillsLibraryHandlers, "skills.library", { sessionKey });
+  const selection = { skillId: entry.skillId, revision: entry.revision };
+  await skills("activate", { skillId: entry.skillId, action: "attach" }, [
     true,
     contains({
       sessionActivation: "next-turn",
-      selections: [contains({ skillId: entry.skillId, revision: entry.revision })],
+      selections: [contains(selection)],
     }),
     undefined,
-  );
-  const listed = await invoke(skillsLibraryHandlers, "skills.library.list", { sessionKey });
-  expect(listed).toHaveBeenCalledWith(
+  ]);
+  await skills("list", {}, [
     true,
     contains({ session: contains({ selections: [contains({ skillId: entry.skillId })] }) }),
     undefined,
-  );
-  const detached = await invoke(skillsLibraryHandlers, "skills.library.activate", {
-    sessionKey,
-    skillId: entry.skillId,
-    action: "detach",
-  });
-  expect(detached.mock.calls).toEqual([[true, contains({ selections: [] }), undefined]]);
-  const denied = await invoke(skillsLibraryHandlers, "skills.library.read", {
-    sessionKey,
-    skillId: entry.skillId,
-    revision: entry.revision,
-  });
-  expect(denied).toHaveBeenCalledWith(
+  ]);
+  const detached = await skills("activate", { skillId: entry.skillId, action: "detach" });
+  calls(detached, true, contains({ selections: [] }), undefined);
+  await skills("read", selection, [
     false,
     undefined,
     contains({ details: { code: "SKILL_LIBRARY_FORBIDDEN" } }),
-  );
+  ]);
 });
 
 it("restores a refused unbound memory task suggestion and retains accepted chat authority after its ACK", async () => {
   const sessionKey = "agent:main:dashboard:incognito-task-rollback";
   const sessionId = "task-rollback";
+  const tasks = requests(taskSuggestionsHandlers, "taskSuggestions");
   await seed(sessionKey, { sessionId, lifecycleRevision: "first" });
   let refuse = true;
   let acceptedAuthority: SessionMutationAuthorization | undefined;
@@ -406,7 +383,7 @@ it("restores a refused unbound memory task suggestion and retains accepted chat 
   const deletion = vi.spyOn(sessionDeleteHandlers, "sessions.delete");
   const host = observeHostDataSql();
   try {
-    const created = await invoke(taskSuggestionsHandlers, "taskSuggestions.create", {
+    const created = await tasks("create", {
       title: "Follow up",
       prompt: "Continue the synthetic task",
       tldr: "Synthetic task",
@@ -414,33 +391,20 @@ it("restores a refused unbound memory task suggestion and retains accepted chat 
       sessionKey,
       agentId: "main",
     });
-    expect(created.mock.calls).toEqual([
-      [true, contains({ taskId: expect.any(String) }), undefined],
-    ]);
+    calls(created, true, contains({ taskId: expect.any(String) }), undefined);
     const taskId = (created.mock.calls[0]![1] as { taskId: string }).taskId;
-    const rejected = await invoke(taskSuggestionsHandlers, "taskSuggestions.accept", {
-      taskId,
-      mode: "session",
-    });
-    expect(rejected.mock.calls).toEqual([
-      [false, undefined, contains({ message: "delivery refused before admission" })],
-    ]);
-    const restored = await invoke(taskSuggestionsHandlers, "taskSuggestions.list", {
-      sessionKey,
-    });
-    expect(restored.mock.calls).toEqual([
-      [true, { suggestions: [contains({ id: taskId })] }, undefined],
-    ]);
+    const acceptance = { taskId, mode: "session" };
+    const rejected = await tasks("accept", acceptance);
+    calls(rejected, false, undefined, contains({ message: "delivery refused before admission" }));
+    const restored = await tasks("list", { sessionKey });
+    calls(restored, true, { suggestions: [contains({ id: taskId })] }, undefined);
     expect(
       memorySessionActorOwners.read(location)?.readSession(sessionKey, authority)?.entry?.sessionId,
     ).toBe(sessionId);
     expect(deletion).not.toHaveBeenCalled();
     refuse = false;
-    const accepted = await invoke(taskSuggestionsHandlers, "taskSuggestions.accept", {
-      taskId,
-      mode: "session",
-    });
-    expect(accepted.mock.calls).toEqual([[true, { taskId, key: sessionKey }, undefined]]);
+    const accepted = await tasks("accept", acceptance);
+    calls(accepted, true, { taskId, key: sessionKey }, undefined);
     assert(acceptedAuthority);
     // Detached chat work prepares this same authority after the task RPC has acknowledged.
     const forwarded = await prepareSessionSourceAuthority(acceptedAuthority.assertCurrent);
