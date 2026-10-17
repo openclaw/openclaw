@@ -51,6 +51,27 @@ const skillExperienceReviewSource = {
   effectiveParentId: null,
   activeMessagePosition: 0,
 };
+function sideEffectParams(
+  ctx: Partial<Parameters<typeof runAgentEndSideEffects>[0]["ctx"]> = {},
+): Parameters<typeof runAgentEndSideEffects>[0] {
+  return {
+    skillExperienceReviewSource,
+    event: { messages: [], success: true },
+    ctx: {
+      runId: "run-1",
+      workspaceDir: "/workspace",
+      config: {},
+      foregroundPromptContext: {
+        agentId: "main",
+        agentDir: "/agent",
+        workspaceDir: "/workspace",
+        sandboxSessionKey: "agent:main:main",
+        trigger: "user",
+      },
+      ...ctx,
+    },
+  };
+}
 
 describe("agent end side effects", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -84,13 +105,9 @@ describe("agent end side effects", () => {
       const anchor = manager[sessionManagerReadMessageAnchor](appended.entryId);
       expect(anchor).toEqual(appended.anchor);
       const params = {
-        [completedTurnMessageAnchor]: captureCompletedTurnMessageAnchor(manager, appended.entryId),
-        skillExperienceReviewSource: { ...target, entryId: appended.entryId },
-        event: { messages: [], success: true },
-        ctx: {
+        ...sideEffectParams({
           runId: "receipt-run",
           workspaceDir: state.workspaceDir,
-          config: {},
           foregroundPromptContext: {
             agentId: "main",
             agentDir: state.agentDir("main"),
@@ -98,7 +115,9 @@ describe("agent end side effects", () => {
             sandboxSessionKey: target.sessionKey,
             trigger: "user",
           },
-        },
+        }),
+        [completedTurnMessageAnchor]: captureCompletedTurnMessageAnchor(manager, appended.entryId),
+        skillExperienceReviewSource: { ...target, entryId: appended.entryId },
       } satisfies Parameters<typeof runAgentEndSideEffectsAsync>[0];
       await runAgentEndSideEffectsAsync(params);
       expect(mockExperienceReview).toHaveBeenCalledExactlyOnceWith(
@@ -139,35 +158,11 @@ describe("agent end side effects", () => {
         source: "workspace",
         activation: "read",
       });
-      const params = {
-        skillExperienceReviewSource,
-        event: {
-          messages: [],
-          success: true,
-        },
-        ctx: {
-          runId: "run-1",
-          sessionKey: "agent:main:main",
-          workspaceDir: "/workspace",
-          trigger: "user",
-          foregroundPromptContext: {
-            agentId: "main",
-            agentDir: "/agent",
-            workspaceDir: "/workspace",
-            sandboxSessionKey: "agent:main:main",
-            trigger: "user",
-          },
-          config: {
-            skills: {
-              workshop: {
-                autonomous: {
-                  mode: "auto" as const,
-                },
-              },
-            },
-          },
-        },
-      } satisfies Parameters<typeof runAgentEndSideEffects>[0];
+      const params = sideEffectParams({
+        sessionKey: "agent:main:main",
+        trigger: "user",
+        config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+      });
 
       if (mode === "bundled") {
         const completion = runAgentEndSideEffectsAsync(params);
@@ -179,8 +174,7 @@ describe("agent end side effects", () => {
         expect(runAgentEndSideEffects(params)).toBeUndefined();
       }
       expect(mockRunAgentEndHook).toHaveBeenCalledTimes(1);
-      expect(mockExperienceReview).toHaveBeenCalledTimes(1);
-      expect(mockExperienceReview).toHaveBeenCalledWith(
+      expect(mockExperienceReview).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           usedSkills: [{ name: "release-runbook", source: "workspace", activation: "read" }],
           source: skillExperienceReviewSource,
@@ -200,25 +194,7 @@ describe("agent end side effects", () => {
         throw new Error(`${phase} failed`);
       });
 
-      await awaitAgentEndSideEffects({
-        skillExperienceReviewSource,
-        event: {
-          messages: [],
-          success: true,
-        },
-        ctx: {
-          runId: "run-1",
-          workspaceDir: "/workspace",
-          config: {},
-          foregroundPromptContext: {
-            agentId: "main",
-            agentDir: "/agent",
-            workspaceDir: "/workspace",
-            sandboxSessionKey: "agent:main:main",
-            trigger: "user",
-          },
-        },
-      });
+      await awaitAgentEndSideEffects(sideEffectParams());
 
       expect(mockExperienceReview).toHaveBeenCalledTimes(phase === "scheduling" ? 1 : 0);
       expect(mockAwaitAgentEndHook).toHaveBeenCalledTimes(1);
@@ -227,14 +203,8 @@ describe("agent end side effects", () => {
 
   it("skips experience review for CLI hook contexts", async () => {
     await awaitAgentEndSideEffects({
-      event: {
-        messages: [],
-        success: true,
-      },
-      ctx: {
-        runId: "run-1",
-        workspaceDir: "/workspace",
-      },
+      event: { messages: [], success: true },
+      ctx: { runId: "run-1", workspaceDir: "/workspace" },
     });
 
     expect(mockExperienceReview).not.toHaveBeenCalled();

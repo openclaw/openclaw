@@ -1,7 +1,7 @@
-// Built-in OpenClaw harness tests cover logical thinking-mode boundaries.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import { createAttemptResult, createFinalAssistant } from "./lifecycle.test-support.js";
 
 const runEmbeddedAttempt = vi.hoisted(() => vi.fn());
 const completeWithPreparedSimpleCompletionModel = vi.hoisted(() => vi.fn());
@@ -12,7 +12,9 @@ vi.mock("../simple-completion-execution.js", () => ({ completeWithPreparedSimple
 import { createOpenClawAgentHarness, isBuiltInOpenClawAgentHarness } from "./builtin-openclaw.js";
 
 describe("createOpenClawAgentHarness", () => {
+  let harness: ReturnType<typeof createOpenClawAgentHarness>;
   beforeEach(() => {
+    harness = createOpenClawAgentHarness();
     runEmbeddedAttempt.mockReset();
     runEmbeddedAttempt.mockImplementation(async (params: EmbeddedRunAttemptParams) => {
       params.onAttemptDeadlineChanged?.({ kind: "bounded", deadlineAtMs: 123_456 });
@@ -23,36 +25,16 @@ describe("createOpenClawAgentHarness", () => {
         data: { phase: params.deferTerminalLifecycle ? "finishing" : "end" },
       });
       return {
-        terminal: { kind: "ok" },
-        sessionIdUsed: "session-1",
-        messagesSnapshot: [],
+        ...createAttemptResult(),
         assistantTexts: ["done"],
-        toolMetas: [],
-        lastAssistant: undefined,
-        currentAttemptCompletedAssistant: {
-          role: "assistant",
-          content: [{ type: "text", text: "done" }],
-          stopReason: "stop",
-        },
-        didSendViaMessagingTool: false,
-        messagingToolSentTexts: [],
-        messagingToolSentMediaUrls: [],
-        messagingToolSentTargets: [],
-        cloudCodeAssistFormatError: false,
-        replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-        itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+        currentAttemptCompletedAssistant: createFinalAssistant(),
       };
     });
     completeWithPreparedSimpleCompletionModel.mockReset();
-    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
-      role: "assistant",
-      content: [{ type: "text", text: "done" }],
-      stopReason: "stop",
-    });
   });
 
   it("brands only host-created instances as the built-in runtime", () => {
-    expect(isBuiltInOpenClawAgentHarness(createOpenClawAgentHarness())).toBe(true);
+    expect(isBuiltInOpenClawAgentHarness(harness)).toBe(true);
     expect(
       isBuiltInOpenClawAgentHarness({
         id: "openclaw",
@@ -72,7 +54,6 @@ describe("createOpenClawAgentHarness", () => {
       expect(scope.getStore()).toBe(owner);
     });
     const params = { thinkLevel: "ultra", onAgentEvent };
-    const harness = createOpenClawAgentHarness();
     const pending = scope.run(owner, () => harness.runAttempt(params as never));
     params.thinkLevel = "off";
     harness.supportsTurnScopedToolRestrictions = false;
@@ -87,7 +68,6 @@ describe("createOpenClawAgentHarness", () => {
   });
 
   it("carries only explicit live harness support", async () => {
-    const harness = createOpenClawAgentHarness();
     harness.supportsTurnScopedToolRestrictions = false;
     await harness.runAttempt({ supportsTurnScopedToolRestrictions: true } as never);
     expect(runEmbeddedAttempt).toHaveBeenCalledWith({ supportsTurnScopedToolRestrictions: false });
@@ -116,8 +96,6 @@ describe("createOpenClawAgentHarness", () => {
       deferTerminalLifecycle: true,
       prepareAssistantTranscriptMessage,
     };
-    const harness = createOpenClawAgentHarness();
-
     const pending = harness.finalizeSettledTurn?.({
       attempt: attempt as never,
       settledAttempt: {} as never,
@@ -182,7 +160,7 @@ describe("createOpenClawAgentHarness", () => {
       NonNullable<ReturnType<typeof createOpenClawAgentHarness>["runIsolatedCompletionV2"]>
     >[0];
 
-    await expect(createOpenClawAgentHarness().runIsolatedCompletionV2?.(params)).rejects.toThrow(
+    await expect(harness.runIsolatedCompletionV2?.(params)).rejects.toThrow(
       "requires host-prepared authorization",
     );
     expect(completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();

@@ -62,6 +62,48 @@ function uniqueConfiguredProofEngineId() {
   configuredProofEngineIdCounter += 1;
   return `configured-runtime-settings-proof-${configuredProofEngineIdCounter}`;
 }
+async function configuredEngineLease(
+  assemble: ContextEngine["assemble"],
+  maxActiveTranscriptBytes = 1024,
+) {
+  const id = uniqueConfiguredProofEngineId();
+  await registerTestContextEngine(id, () =>
+    createContextEngine({ info: { id, name: id }, assemble }),
+  );
+  return createContextEngineLogicalTurnLease({
+    identity: { runId: id, sessionId: sessionParams.sessionId },
+    config: {
+      plugins: { slots: { contextEngine: id } },
+      agents: { defaults: { compaction: { maxActiveTranscriptBytes } } },
+    },
+  });
+}
+
+const assemblySession = {
+  sessionId: sessionParams.sessionId,
+  sessionKey: sessionParams.sessionKey,
+};
+const finalizationSession = {
+  promptError: false,
+  aborted: false,
+  yieldAborted: false,
+  sessionIdUsed: sessionParams.sessionIdUsed,
+  sessionKey: sessionParams.sessionKey,
+  sessionFile: sessionParams.sessionFile,
+  warn: () => {},
+};
+const promptDefaults = {
+  ...sessionParams,
+  modelId: "test-model",
+  promptBudget: {
+    contextTokens: 100_000,
+    reserveTokens: 0,
+    systemPrompt: "system",
+    prompt: "next",
+  },
+  repairToolUseResultPairing: true,
+  isOpenAIResponsesApi: true,
+};
 
 describe("harness context engine lifecycle", () => {
   it("repairs windowed engine input and independently repairs engine output", async () => {
@@ -105,18 +147,9 @@ describe("harness context engine lifecycle", () => {
     );
     const warn = vi.fn();
     const result = await prepareHarnessContextEnginePrompt({
-      ...sessionParams,
-      modelId: "test-model",
+      ...promptDefaults,
       messages: windowed,
       contextEngine: createContextEngine({ assemble }),
-      promptBudget: {
-        contextTokens: 100_000,
-        reserveTokens: 0,
-        systemPrompt: "system",
-        prompt: "next",
-      },
-      repairToolUseResultPairing: true,
-      isOpenAIResponsesApi: true,
       warn,
     });
     expect(assemble).toHaveBeenCalledOnce();
@@ -145,17 +178,8 @@ describe("harness context engine lifecycle", () => {
     const before = JSON.stringify(messages);
     const warn = vi.fn();
     const result = await prepareHarnessContextEnginePrompt({
-      ...sessionParams,
-      modelId: "test-model",
+      ...promptDefaults,
       messages,
-      promptBudget: {
-        contextTokens: 100_000,
-        reserveTokens: 0,
-        systemPrompt: "system",
-        prompt: "next",
-      },
-      repairToolUseResultPairing: true,
-      isOpenAIResponsesApi: true,
       warn,
     });
     expect(result.messages).toHaveLength(3);
@@ -173,7 +197,6 @@ describe("harness context engine lifecycle", () => {
   it.each(["repair", "bounding"] as const)(
     "falls back when plugin output fails during %s",
     async (phase) => {
-      const engineId = uniqueConfiguredProofEngineId();
       const messages = [textMessage("user", "Valid pipeline history", 1)];
       const original = JSON.stringify(messages);
       const malformed = textMessage("assistant", "Malformed plugin output", 2);
@@ -193,38 +216,21 @@ describe("harness context engine lifecycle", () => {
           { type: "toolCall", id: "cyclic_fixture", name: "exec", arguments: argumentsWithCycle },
         ];
       }
-      await registerTestContextEngine(engineId, () =>
-        createContextEngine({
-          info: { id: engineId, name: engineId },
-          assemble: async () => ({
-            messages: [malformed],
-            estimatedTokens: 0,
-            systemPromptAddition: "Invalid plugin instructions",
-          }),
-        }),
-      );
-      const lease = await createContextEngineLogicalTurnLease({
-        identity: { runId: engineId, sessionId: sessionParams.sessionId },
-        config: {
-          plugins: { slots: { contextEngine: engineId } },
-          agents: { defaults: { compaction: { maxActiveTranscriptBytes: 1024 } } },
-        },
-      });
+      const lease = await configuredEngineLease(async () => ({
+        messages: [malformed],
+        estimatedTokens: 0,
+        systemPromptAddition: "Invalid plugin instructions",
+      }));
       const warn = vi.fn();
       try {
         const result = await prepareHarnessContextEnginePrompt({
-          ...sessionParams,
+          ...promptDefaults,
           contextEngine: lease.engine,
           messages,
-          modelId: "test-model",
           promptBudget: {
-            contextTokens: 100_000,
-            reserveTokens: 0,
+            ...promptDefaults.promptBudget,
             systemPrompt: "Required instructions",
-            prompt: "next",
           },
-          repairToolUseResultPairing: true,
-          isOpenAIResponsesApi: true,
           warn,
         });
         expect(result.messages).toEqual(messages);
@@ -243,7 +249,6 @@ describe("harness context engine lifecycle", () => {
   it.each([false, true])(
     "counts synthetic tool results in the byte cap (engine throws=%s)",
     async (throws) => {
-      const engineId = uniqueConfiguredProofEngineId();
       const messages: AgentMessage[] = [
         textMessage("user", "old history ".repeat(500), 1),
         textMessage("user", "Run the tools", 2),
@@ -261,38 +266,21 @@ describe("harness context engine lifecycle", () => {
       ];
       const original = JSON.stringify(messages);
       const cap = Buffer.byteLength(JSON.stringify(messages.slice(1))) + 1;
-      await registerTestContextEngine(engineId, () =>
-        createContextEngine({
-          info: { id: engineId, name: engineId },
-          assemble: async ({ messages: input }) => {
-            if (throws) {
-              throw new Error("fixture assembly failure");
-            }
-            return { messages: input, estimatedTokens: 0 };
-          },
-        }),
-      );
-      const lease = await createContextEngineLogicalTurnLease({
-        identity: { runId: engineId, sessionId: sessionParams.sessionId },
-        config: {
-          plugins: { slots: { contextEngine: engineId } },
-          agents: { defaults: { compaction: { maxActiveTranscriptBytes: cap } } },
-        },
-      });
+      const lease = await configuredEngineLease(async ({ messages: input }) => {
+        if (throws) {
+          throw new Error("fixture assembly failure");
+        }
+        return { messages: input, estimatedTokens: 0 };
+      }, cap);
       try {
         const bounded = await prepareHarnessContextEnginePrompt({
-          ...sessionParams,
+          ...promptDefaults,
           contextEngine: lease.engine,
           messages,
-          modelId: "test-model",
           promptBudget: {
-            contextTokens: 100_000,
-            reserveTokens: 0,
+            ...promptDefaults.promptBudget,
             systemPrompt: "Required instructions",
-            prompt: "next",
           },
-          repairToolUseResultPairing: true,
-          isOpenAIResponsesApi: true,
           warn: vi.fn(),
         });
         expect(bounded.messages).toEqual(messages.slice(3));
@@ -305,7 +293,6 @@ describe("harness context engine lifecycle", () => {
   );
 
   it("bounds oversized assembly without changing stored messages", async () => {
-    const engineId = uniqueConfiguredProofEngineId();
     const messages = [
       textMessage("user", "old history ".repeat(500), 1),
       textMessage("assistant", "old answer", 2),
@@ -313,25 +300,11 @@ describe("harness context engine lifecycle", () => {
       textMessage("assistant", "recent answer", 4),
     ];
     const original = JSON.stringify(messages);
-    await registerTestContextEngine(engineId, () =>
-      createContextEngine({
-        info: { id: engineId, name: engineId },
-        assemble: async ({ messages: input }) => {
-          return {
-            messages: input,
-            estimatedTokens: 10_000,
-            systemPromptAddition: "Required engine instructions",
-          };
-        },
-      }),
-    );
-    const lease = await createContextEngineLogicalTurnLease({
-      identity: { runId: engineId, sessionId: sessionParams.sessionId },
-      config: {
-        plugins: { slots: { contextEngine: engineId } },
-        agents: { defaults: { compaction: { maxActiveTranscriptBytes: 1024 } } },
-      },
-    });
+    const lease = await configuredEngineLease(async ({ messages: input }) => ({
+      messages: input,
+      estimatedTokens: 10_000,
+      systemPromptAddition: "Required engine instructions",
+    }));
     const contextEngine = lease.engine;
     const params = {
       ...sessionParams,
@@ -434,8 +407,7 @@ describe("harness context engine lifecycle", () => {
 
     await assembleHarnessContextEngine({
       contextEngine: createContextEngine({ assemble }),
-      sessionId: sessionParams.sessionId,
-      sessionKey: sessionParams.sessionKey,
+      ...assemblySession,
       appendOnlyRuntimeContext: true,
       messages: [visibleUser, persistedCarrier, visibleAssistant],
       modelId: "claude-test",
@@ -460,8 +432,7 @@ describe("harness context engine lifecycle", () => {
     await expect(
       assembleHarnessContextEngine({
         contextEngine,
-        sessionId: sessionParams.sessionId,
-        sessionKey: sessionParams.sessionKey,
+        ...assemblySession,
         messages,
         modelId: "gpt-test",
       }),
@@ -498,6 +469,10 @@ describe("harness context engine lifecycle", () => {
         },
       },
     } satisfies ContextEngineRuntimeContext;
+    const capture = (
+      hook: (typeof captured)[number]["hook"],
+      params: Omit<(typeof captured)[number], "hook">,
+    ) => captured.push({ hook, ...params });
     const engine = createContextEngine({
       info: {
         id: engineId,
@@ -505,36 +480,18 @@ describe("harness context engine lifecycle", () => {
         acceptedHostParams: ["runtimeSettings", "runtimeContext", "sessionTarget"],
       },
       bootstrap: vi.fn(async (params) => {
-        captured.push({
-          hook: "bootstrap",
-          runtimeContext: params.runtimeContext,
-          runtimeSettings: params.runtimeSettings,
-          sessionTarget: params.sessionTarget,
-        });
+        capture("bootstrap", params);
         return { bootstrapped: true };
       }),
       assemble: vi.fn(async (params) => {
         captured.push({ hook: "assemble", runtimeSettings: params.runtimeSettings });
-        return {
-          messages: params.messages,
-          estimatedTokens: 0,
-        };
+        return { messages: params.messages, estimatedTokens: 0 };
       }),
       afterTurn: vi.fn(async (params) => {
-        captured.push({
-          hook: "afterTurn",
-          runtimeContext: params.runtimeContext,
-          runtimeSettings: params.runtimeSettings,
-          sessionTarget: params.sessionTarget,
-        });
+        capture("afterTurn", params);
       }),
       maintain: vi.fn(async (params) => {
-        captured.push({
-          hook: "maintain",
-          runtimeContext: params.runtimeContext,
-          runtimeSettings: params.runtimeSettings,
-          sessionTarget: params.sessionTarget,
-        });
+        capture("maintain", params);
         return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
       }),
       compact: vi.fn(async (params) => {
@@ -547,44 +504,33 @@ describe("harness context engine lifecycle", () => {
       plugins: { slots: { contextEngine: engineId } },
     });
 
-    await bootstrapHarnessContextEngine({
-      hadSessionFile: true,
+    const lifecycleParams = {
+      ...assemblySession,
       contextEngine: configuredEngine,
-      sessionId: sessionParams.sessionId,
-      sessionKey: sessionParams.sessionKey,
-      sessionTarget,
-      sessionFile: sessionParams.sessionFile,
       providerId: "openai",
       requestedModelId: "openai/gpt-5.5",
       modelId: "anthropic/claude-sonnet-4-6",
       fallbackReason: "primary_provider_5xx",
       runtimeContext: bootstrapRuntimeContext,
       tokenBudget: 2048,
+    };
+    await bootstrapHarnessContextEngine({
+      ...lifecycleParams,
+      hadSessionFile: true,
+      sessionTarget,
+      sessionFile: sessionParams.sessionFile,
       warn: () => {},
     });
 
     await assembleHarnessContextEngine({
-      contextEngine: configuredEngine,
-      sessionId: sessionParams.sessionId,
-      sessionKey: sessionParams.sessionKey,
+      ...lifecycleParams,
       messages: [textMessage("user", "visible ask", 1)],
-      tokenBudget: 2048,
-      runtimeContext: bootstrapRuntimeContext,
-      providerId: "openai",
-      requestedModelId: "openai/gpt-5.5",
-      modelId: "anthropic/claude-sonnet-4-6",
-      fallbackReason: "primary_provider_5xx",
     });
 
     await finalizeHarnessContextEngineTurn({
-      contextEngine: configuredEngine,
-      promptError: false,
-      aborted: false,
-      yieldAborted: false,
-      sessionIdUsed: sessionParams.sessionIdUsed,
-      sessionKey: sessionParams.sessionKey,
+      ...lifecycleParams,
+      ...finalizationSession,
       sessionTarget,
-      sessionFile: sessionParams.sessionFile,
       messagesSnapshot: [
         textMessage("user", "old ask", 1),
         textMessage("assistant", "old answer", 2),
@@ -592,13 +538,6 @@ describe("harness context engine lifecycle", () => {
         textMessage("assistant", "new answer", 4),
       ],
       prePromptMessageCount: 2,
-      tokenBudget: 2048,
-      runtimeContext: bootstrapRuntimeContext,
-      providerId: "openai",
-      requestedModelId: "openai/gpt-5.5",
-      modelId: "anthropic/claude-sonnet-4-6",
-      fallbackReason: "primary_provider_5xx",
-      warn: () => {},
     });
 
     const compactRuntimeSettings = buildContextEngineRuntimeSettings({
@@ -629,18 +568,11 @@ describe("harness context engine lifecycle", () => {
     expect(new Set(captured.map((entry) => entry.hook))).toEqual(
       new Set(["bootstrap", "assemble", "afterTurn", "maintain", "compact"]),
     );
-    expect(captured.find((entry) => entry.hook === "bootstrap")?.runtimeContext).toEqual(
-      bootstrapRuntimeContext,
-    );
-    expect(captured.find((entry) => entry.hook === "bootstrap")?.sessionTarget).toEqual(
-      sessionTarget,
-    );
-    expect(captured.find((entry) => entry.hook === "afterTurn")?.sessionTarget).toEqual(
-      sessionTarget,
-    );
-    expect(captured.find((entry) => entry.hook === "afterTurn")?.runtimeContext).toEqual(
-      bootstrapRuntimeContext,
-    );
+    for (const hook of ["bootstrap", "afterTurn"] as const) {
+      const capturedHook = captured.find((entry) => entry.hook === hook);
+      expect(capturedHook?.runtimeContext).toEqual(bootstrapRuntimeContext);
+      expect(capturedHook?.sessionTarget).toEqual(sessionTarget);
+    }
     expect(captured.find((entry) => entry.hook === "maintain")?.sessionTarget).toEqual(
       sessionTarget,
     );
@@ -670,12 +602,7 @@ describe("harness context engine lifecycle", () => {
   });
 
   describe("assembleHarnessContextEngine result validation", () => {
-    // Regression for #75541: plugins that return a malformed assemble result
-    // previously poisoned activeSession.messages with `undefined`, which then
-    // crashed downstream with "Cannot read properties of undefined (reading
-    // 'length')". The harness wrapper now throws a descriptive error so the
-    // runner's existing assemble try/catch can log the engine id and fall
-    // back to the pipeline messages instead of corrupting session state.
+    // #75541: malformed plugin results must fail before poisoning activeSession.messages.
     const visibleUser = textMessage("user", "ping", 1);
 
     async function runAssembleWithEngineResult(result: unknown) {
@@ -684,8 +611,7 @@ describe("harness context engine lifecycle", () => {
           info: { id: "broken-engine", name: "Broken engine" },
           assemble: vi.fn(async () => result as never),
         }),
-        sessionId: sessionParams.sessionId,
-        sessionKey: sessionParams.sessionKey,
+        ...assemblySession,
         messages: [visibleUser],
         modelId: "gpt-test",
       });
@@ -711,18 +637,15 @@ describe("harness context engine lifecycle", () => {
     const turnUser = textMessage("user", "new ask", 4);
     const turnRuntimeContext = runtimeContextMessage("new hidden context", 5);
     const turnAssistant = textMessage("assistant", "new answer", 6);
-    const ingestBatch = vi.fn(async () => ({ ingestedCount: 2 }));
+    const ingestBatch = vi.fn<NonNullable<ContextEngine["ingestBatch"]>>(async () => ({
+      ingestedCount: 2,
+    }));
 
     // The ingestBatch fallback receives only the current visible turn, with
     // hidden runtime context filtered and the pre-prompt history excluded.
     await finalizeHarnessContextEngineTurn({
       contextEngine: createContextEngine({ ingestBatch }),
-      promptError: false,
-      aborted: false,
-      yieldAborted: false,
-      sessionIdUsed: sessionParams.sessionIdUsed,
-      sessionKey: sessionParams.sessionKey,
-      sessionFile: sessionParams.sessionFile,
+      ...finalizationSession,
       messagesSnapshot: [
         beforePromptUser,
         beforePromptRuntimeContext,
@@ -735,15 +658,10 @@ describe("harness context engine lifecycle", () => {
       tokenBudget: 2048,
       runtimeContext: {},
       runMaintenance: async () => undefined,
-      warn: () => {},
       isHeartbeat: true,
     });
 
-    const ingestBatchCalls = (ingestBatch as unknown as { mock: { calls: unknown[][] } }).mock
-      .calls;
-    const ingestBatchParams = ingestBatchCalls[0]?.[0] as
-      | { isHeartbeat?: boolean; messages?: AgentMessage[]; sessionKey?: string }
-      | undefined;
+    const ingestBatchParams = ingestBatch.mock.calls[0]?.[0];
     expect(ingestBatchParams?.messages).toEqual([turnUser, turnAssistant]);
     expect(ingestBatchParams?.isHeartbeat).toBe(true);
     expect(ingestBatchParams?.sessionKey).toBe(sessionParams.sessionKey);
@@ -752,29 +670,23 @@ describe("harness context engine lifecycle", () => {
   it("forwards heartbeat state to per-message ingest fallbacks", async () => {
     const turnUser = textMessage("user", "new ask", 4);
     const turnAssistant = textMessage("assistant", "new answer", 6);
-    const ingest = vi.fn(async () => ({ ingested: true }));
+    const ingest = vi.fn<NonNullable<ContextEngine["ingest"]>>(async () => ({ ingested: true }));
 
     await finalizeHarnessContextEngineTurn({
       contextEngine: createContextEngine({ ingest }),
-      promptError: false,
-      aborted: false,
-      yieldAborted: false,
-      sessionIdUsed: sessionParams.sessionIdUsed,
-      sessionKey: sessionParams.sessionKey,
-      sessionFile: sessionParams.sessionFile,
+      ...finalizationSession,
       messagesSnapshot: [turnUser, turnAssistant],
       prePromptMessageCount: 0,
       tokenBudget: 2048,
       runtimeContext: {},
       runMaintenance: async () => undefined,
-      warn: () => {},
       isHeartbeat: true,
     });
 
-    const ingestCalls = (ingest as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const ingestCalls = ingest.mock.calls;
     expect(ingestCalls).toHaveLength(2);
     for (const call of ingestCalls) {
-      const ingestParams = call[0] as { isHeartbeat?: boolean; sessionKey?: string };
+      const ingestParams = call[0];
       expect(ingestParams.isHeartbeat).toBe(true);
       expect(ingestParams.sessionKey).toBe(sessionParams.sessionKey);
     }
@@ -785,32 +697,19 @@ describe("harness context engine lifecycle", () => {
     async (failingHook) => {
       const runMaintenance = vi.fn(async () => undefined);
       const contextEngine = createContextEngine({
-        afterTurn:
-          failingHook === "afterTurn"
-            ? vi.fn(async () => {
-                throw new Error("afterTurn failed");
-              })
-            : undefined,
-        ingestBatch:
-          failingHook === "ingestBatch"
-            ? vi.fn(async () => {
-                throw new Error("ingestBatch failed");
-              })
-            : undefined,
+        afterTurn: undefined,
+        ingestBatch: undefined,
+        [failingHook]: vi.fn(async () => {
+          throw new Error(`${failingHook} failed`);
+        }),
       });
 
       await finalizeHarnessContextEngineTurn({
         contextEngine,
-        promptError: false,
-        aborted: false,
-        yieldAborted: false,
-        sessionIdUsed: sessionParams.sessionIdUsed,
-        sessionKey: sessionParams.sessionKey,
-        sessionFile: sessionParams.sessionFile,
+        ...finalizationSession,
         messagesSnapshot: [textMessage("assistant", "done", 1)],
         prePromptMessageCount: 0,
         runMaintenance,
-        warn: () => {},
       });
 
       expect(runMaintenance).not.toHaveBeenCalled();
@@ -830,8 +729,7 @@ describe("harness context engine lifecycle", () => {
           rewrittenEntries: 0,
         })),
       }),
-      sessionId: sessionParams.sessionId,
-      sessionKey: sessionParams.sessionKey,
+      ...assemblySession,
       sessionFile: sessionParams.sessionFile,
       runMaintenance,
       warn: () => {},
@@ -857,15 +755,10 @@ describe("harness context engine lifecycle", () => {
 
     await finalizeHarnessContextEngineTurn({
       contextEngine: createContextEngine({ afterTurn, ingest, ingestBatch, maintain }),
-      promptError: false,
-      aborted: false,
+      ...finalizationSession,
       yieldAborted: true,
-      sessionIdUsed: sessionParams.sessionIdUsed,
-      sessionKey: sessionParams.sessionKey,
-      sessionFile: sessionParams.sessionFile,
       messagesSnapshot: [textMessage("user", "failed", 1)],
       prePromptMessageCount: 0,
-      warn: () => {},
     });
 
     expect(afterTurn).not.toHaveBeenCalled();

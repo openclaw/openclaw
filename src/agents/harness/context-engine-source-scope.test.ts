@@ -14,6 +14,25 @@ import {
   textMessage,
 } from "./context-engine-lifecycle.test-support.js";
 
+const assemblyParams = {
+  ...sessionParams,
+  messages: [],
+  modelId: "test-model",
+};
+const promptParams = {
+  ...assemblyParams,
+  promptBudget: { reserveTokens: 0, systemPrompt: "system", prompt: "user" },
+  repairToolUseResultPairing: false,
+  isOpenAIResponsesApi: false,
+};
+function prepareSource(id: string, source?: Parameters<typeof prepareSystemAgentRunAdmission>[4]) {
+  return prepareSystemAgentRunAdmission({}, id, "main", "test", source);
+}
+function sourceScope(release = vi.fn()) {
+  const open = vi.fn(async () => ({ checks: [], assertCurrent: () => {}, release }));
+  return { open, release, source: Object.assign(vi.fn(), { prepareSessionSourceScope: open }) };
+}
+
 describe("harness context engine source scopes", () => {
   it.each(
     (["prepared", "admitted"] as const).flatMap((phase) =>
@@ -22,14 +41,10 @@ describe("harness context engine source scopes", () => {
   )(
     "refuses $phase $sourceKind work when admission is already closed",
     async ({ phase, sourceKind }) => {
-      const release = vi.fn();
-      const open = vi.fn(async () => ({ checks: [], assertCurrent: () => {}, release }));
+      const { release, open } = sourceScope();
       const source = vi.fn();
-      const prepared = prepareSystemAgentRunAdmission(
-        {},
+      const prepared = prepareSource(
         `close-${phase}-${sourceKind}`,
-        "main",
-        "test",
         sourceKind === "scoped"
           ? Object.assign(source, { prepareSessionSourceScope: open })
           : sourceKind === "plain"
@@ -45,7 +60,7 @@ describe("harness context engine source scopes", () => {
       release.mockClear();
       prepared.close();
       const run = assembleHarnessContextEngine({
-        ...sessionParams,
+        ...assemblyParams,
         ...authority,
         contextEngine: createContextEngine({
           assemble: async ({ messages }) => {
@@ -53,8 +68,6 @@ describe("harness context engine source scopes", () => {
             return { messages, estimatedTokens: 0 };
           },
         }),
-        messages: [],
-        modelId: "test-model",
       });
       const rejected = expect(run).rejects.toThrow(/closed|no longer active/);
       try {
@@ -71,25 +84,16 @@ describe("harness context engine source scopes", () => {
   );
 
   it("refuses an unrecognized admitted carrier without replacing the canonical source", async () => {
-    const release = vi.fn();
-    const open = vi.fn(async () => ({ checks: [], assertCurrent: () => {}, release }));
-    const prepared = prepareSystemAgentRunAdmission(
-      {},
-      "unrecognized-source-context",
-      "main",
-      "test",
-      Object.assign(() => {}, { prepareSessionSourceScope: open }),
-    );
+    const { release, open, source } = sourceScope();
+    const prepared = prepareSource("unrecognized-source-context", source);
     const admitted = await prepared.admit("embedded");
     open.mockClear();
     release.mockClear();
     const assemble = (admittedRunContext: typeof admitted) =>
       assembleHarnessContextEngine({
-        ...sessionParams,
+        ...assemblyParams,
         admittedRunContext,
         contextEngine: createContextEngine(),
-        messages: [],
-        modelId: "test-model",
       });
     try {
       await expect(assemble({ ...admitted })).rejects.toThrow("no longer active");
@@ -133,30 +137,15 @@ describe("harness context engine source scopes", () => {
         };
       });
       const source = Object.assign(() => {}, { prepareSessionSourceScope: open });
-      const prepared = prepareSystemAgentRunAdmission(
-        {},
-        `failure-${operation}-${phase}`,
-        "main",
-        "test",
-        source,
-      );
+      const prepared = prepareSource(`failure-${operation}-${phase}`, source);
       const warn = vi.fn();
       const params = {
-        ...sessionParams,
+        ...promptParams,
         preparedRunAdmission: prepared,
         contextEngine: createContextEngine({
-          bootstrap: async () => {
-            return { bootstrapped: true };
-          },
-          assemble: async ({ messages }) => {
-            return { messages, estimatedTokens: 0 };
-          },
+          bootstrap: async () => ({ bootstrapped: true }),
+          assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
         }),
-        messages: [],
-        modelId: "test-model",
-        promptBudget: { reserveTokens: 0, systemPrompt: "system", prompt: "user" },
-        repairToolUseResultPairing: false,
-        isOpenAIResponsesApi: false,
         warn,
       };
       try {
@@ -184,29 +173,18 @@ describe("harness context engine source scopes", () => {
     "preserves %s plugin fallback inside one retained source scope",
     async (operation) => {
       const failure = new Error("plugin failed");
-      const release = vi.fn();
-      const open = vi.fn(async () => ({ checks: [], assertCurrent: () => {}, release }));
-      const prepared = prepareSystemAgentRunAdmission(
-        {},
-        `plugin-${operation}`,
-        "main",
-        "test",
-        Object.assign(() => {}, { prepareSessionSourceScope: open }),
-      );
+      const { release, open, source } = sourceScope();
+      const prepared = prepareSource(`plugin-${operation}`, source);
       const warn = vi.fn();
       const messages = [textMessage("user", "keep me", 1)];
       const fail = async (): Promise<never> => {
         throw failure;
       };
       const params = {
-        ...sessionParams,
+        ...promptParams,
         preparedRunAdmission: prepared,
         contextEngine: createContextEngine({ bootstrap: fail, assemble: fail }),
         messages,
-        modelId: "test-model",
-        promptBudget: { reserveTokens: 0, systemPrompt: "system", prompt: "user" },
-        repairToolUseResultPairing: false,
-        isOpenAIResponsesApi: false,
         warn,
       };
       try {
@@ -275,13 +253,7 @@ describe("harness context engine source scopes", () => {
           },
         ),
       ]);
-      const prepared = prepareSystemAgentRunAdmission(
-        {},
-        `scope-${operation}`,
-        "main",
-        "test",
-        source,
-      );
+      const prepared = prepareSource(`scope-${operation}`, source);
       const consume = async () => {
         prepared.assertSourceCurrent();
         consumerStarted.resolve();

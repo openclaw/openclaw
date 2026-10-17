@@ -43,6 +43,10 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
   { timeout: 60000 },
   async (kind, test) => {
     const body = withOpenClawTestState({ label: "acp-native-approval-effect" }, async (state) => {
+      const readPeer = async (name: string): Promise<unknown> =>
+        JSON.parse(await fs.readFile(state.path("peer", `permission-${name}.json`), "utf8"));
+      const readEffect = () =>
+        fs.readFile(path.join(state.workspaceDir, "native-effect.txt"), "utf8");
       const config: OpenClawConfig = {
         session: { store: path.join(state.sessionsDir(), "sessions.json") },
       };
@@ -68,12 +72,7 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
       const stopWatchingAuthority = registerAgentRunDelegatedAuthorityClosedHandler(
         (authority, reason) => {
           void gatewayWork.track(() =>
-            cancelAgentRuntimeBoundApprovals({
-              authority,
-              reason,
-              manager,
-              publish: () => {},
-            }),
+            cancelAgentRuntimeBoundApprovals({ authority, reason, manager, publish: () => {} }),
           );
         },
       );
@@ -113,12 +112,11 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
               allowedDecisions: kind === "always-only" ? ["deny"] : ["allow-once", "deny"],
             },
           });
-          expect(
-            JSON.parse(await fs.readFile(state.path("peer", "permission-request.json"), "utf8")),
-          ).toMatchObject({ toolCallId: "native-write", kind: "edit" });
-          await expect(
-            fs.readFile(path.join(state.workspaceDir, "native-effect.txt"), "utf8"),
-          ).rejects.toMatchObject({ code: "ENOENT" });
+          expect(await readPeer("request")).toMatchObject({
+            toolCallId: "native-write",
+            kind: "edit",
+          });
+          await expect(readEffect()).rejects.toMatchObject({ code: "ENOENT" });
           if (kind === "allow") {
             const plan = buildGatewayReloadPlan(
               diffGatewayReloadPaths(config, disabledConfig, listConfigReloadRefinementPrefixes()),
@@ -140,10 +138,7 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
               ),
             ).resolves.toMatchObject({
               ok: false,
-              error: {
-                code: "INVALID_REQUEST",
-                details: { allowedDecisions: ["deny"] },
-              },
+              error: { code: "INVALID_REQUEST", details: { allowedDecisions: ["deny"] } },
             });
           }
           if (kind === "cancel") {
@@ -160,9 +155,7 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
           );
           expect(resolution.outcome).toBe(kind === "cancel" ? "already-resolved" : "resolved");
           const result = await run;
-          expect(result.terminal).toMatchObject({
-            kind: kind === "cancel" ? "aborted" : "ok",
-          });
+          expect(result.terminal).toMatchObject({ kind: kind === "cancel" ? "aborted" : "ok" });
           expect(await manager.listPendingRecords()).toEqual([]);
           if (kind === "allow") {
             const transcript = await readVisibleSessionTranscriptMessageEntries(attempt.target);
@@ -211,22 +204,15 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
       }
       // Inspect after shutdown so a late native permission reply cannot race this assertion.
       if (kind !== "allow") {
-        await expect(
-          fs.readFile(path.join(state.workspaceDir, "native-effect.txt"), "utf8"),
-        ).rejects.toMatchObject({ code: "ENOENT" });
-      }
-      if (kind === "deny" || kind === "always-only") {
-        expect(
-          JSON.parse(await fs.readFile(state.path("peer", "permission-result.json"), "utf8")),
-        ).toMatchObject({ outcome: { outcome: "selected", optionId: "deny" } });
+        await expect(readEffect()).rejects.toMatchObject({ code: "ENOENT" });
       }
       if (kind === "allow") {
-        expect(await fs.readFile(path.join(state.workspaceDir, "native-effect.txt"), "utf8")).toBe(
-          "approved native effect",
-        );
-        expect(
-          JSON.parse(await fs.readFile(state.path("peer", "permission-result.json"), "utf8")),
-        ).toMatchObject({ outcome: { outcome: "selected", optionId: "allow" } });
+        expect(await readEffect()).toBe("approved native effect");
+      }
+      if (kind !== "cancel") {
+        expect(await readPeer("result")).toMatchObject({
+          outcome: { outcome: "selected", optionId: kind === "allow" ? "allow" : "deny" },
+        });
       }
     });
     await fixture.track(body);

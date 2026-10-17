@@ -13,7 +13,6 @@ import {
   buildExternalRunFailureReply,
   buildKnownAgentRunFailureReplyPayload,
 } from "../../auto-reply/reply/agent-runner-failure-reply.js";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { projectInFlightRunSnapshot } from "../../gateway/chat-inflight-snapshot.js";
 import { createAgentEventTestHarness } from "../../gateway/server-chat.agent-events.test-harness.js";
@@ -30,7 +29,10 @@ import {
   onInternalSessionTranscriptUpdate,
   readSessionTranscriptRunId,
 } from "../../sessions/transcript-events.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import {
   attemptFor,
   registerNative,
@@ -48,6 +50,33 @@ beforeAll(async () => {
 afterAll(async () => {
   await receipts.close();
 });
+
+async function withNativeAttempt(
+  body: (fixture: {
+    state: OpenClawTestState;
+    config: OpenClawConfig;
+    native: Awaited<ReturnType<typeof registerNative>>;
+    attempt: Awaited<ReturnType<typeof attemptFor>>;
+  }) => Promise<void>,
+  overrides: OpenClawConfig = {},
+  peer: Parameters<typeof registerNative>[3] = {},
+  agent = "opencode",
+) {
+  await withOpenClawTestState({ label: "acp-native-execution" }, async (state) => {
+    const config = {
+      ...overrides,
+      session: { store: path.join(state.sessionsDir(), "sessions.json") },
+    };
+    const native = await registerNative(state, config, "owner-agent.mjs", peer);
+    const attempt = await attemptFor(state, config, agent, "full");
+    try {
+      await body({ state, config, native, attempt });
+    } finally {
+      attempt.close();
+      await native.service.stop?.(native.context);
+    }
+  });
+}
 
 async function fixtureEnteredBeforeSettlement(
   filename: string,
@@ -101,15 +130,8 @@ const policyCases = [
 it.each(policyCases)(
   "admits $agent profile=$profile alsoAllow=$alsoAllow before native effects",
   async ({ agent, profile, alsoAllow, denied }) => {
-    await withOpenClawTestState({ label: "acp-native-policy" }, async (state) => {
-      const config: OpenClawConfig = {
-        session: { store: path.join(state.sessionsDir(), "sessions.json") },
-        tools: { profile, alsoAllow },
-      };
-      setRuntimeConfigSnapshot(config);
-      const native = await registerNative(state, config, "owner-agent.mjs");
-      const attempt = await attemptFor(state, config, agent, "full");
-      try {
+    await withNativeAttempt(
+      async ({ state, config, native, attempt }) => {
         if (!denied) {
           await appendSessionTranscriptMessageByIdentityStrict({
             ...attempt.target,
@@ -178,19 +200,14 @@ it.each(policyCases)(
             }),
           ).toEqual({
             entries: [
-              {
-                provider: `acp-${agent}`,
-                id: "initial",
-                name: "Initial",
-                nativeRuntime: `acp-${agent}`,
-              },
-              {
-                provider: `acp-${agent}`,
-                id: "selected",
-                name: "Selected",
-                nativeRuntime: `acp-${agent}`,
-              },
-            ],
+              ["initial", "Initial"],
+              ["selected", "Selected"],
+            ].map(([id, name]) => ({
+              provider: `acp-${agent}`,
+              id,
+              name,
+              nativeRuntime: `acp-${agent}`,
+            })),
             outcomes: [{ provider: `acp-${agent}`, status: "ready" }],
           });
           expect(await readVisibleSessionTranscriptMessageEntries(attempt.target)).toEqual(
@@ -198,11 +215,11 @@ it.each(policyCases)(
           );
           expect(await fs.readdir(path.join(native.peerDirectory, "effects"))).toEqual(effects);
         }
-      } finally {
-        attempt.close();
-        await native.service.stop?.(native.context);
-      }
-    });
+      },
+      { tools: { profile, alsoAllow } },
+      {},
+      agent,
+    );
   },
   60000,
 );
@@ -211,92 +228,85 @@ it.for(["complete", "revoke"] as const)(
   "publishes native assistant progress before final response and fences late output: %s",
   { timeout: 60000 },
   async (completion, { signal }) => {
-    await withOpenClawTestState({ label: "acp-native-stream" }, async (state) => {
-      const config: OpenClawConfig = {
-        session: { store: path.join(state.sessionsDir(), "sessions.json") },
-      };
-      setRuntimeConfigSnapshot(config);
-      const native = await registerNative(state, config, "owner-agent.mjs", {
-        holdPromptReply: true,
-        receiptEndpoint: receipts.endpoint,
-      });
-      const attempt = await attemptFor(state, config, "opencode", "full");
-      const updates: AgentEventPayload[] = [];
-      const gateway = createAgentEventTestHarness();
-      gateway.register(attempt.input.runId, attempt.target.sessionKey, attempt.input.runId);
-      const snapshot = () => {
-        gateway.chatRunState.flushPendingText(attempt.input.runId);
-        return projectInFlightRunSnapshot({
-          chatRunState: gateway.chatRunState,
-          runId: attempt.input.runId,
-        }).text;
-      };
-      const committedSnapshots: string[] = [];
-      const unsubscribeTranscript = onInternalSessionTranscriptUpdate((event) => {
-        if (readSessionTranscriptRunId(event.message) === attempt.input.runId) {
-          gateway.handler.retireTranscript(event);
-          committedSnapshots.push(snapshot());
+    await withNativeAttempt(
+      async ({ native, attempt }) => {
+        const updates: AgentEventPayload[] = [];
+        const gateway = createAgentEventTestHarness();
+        gateway.register(attempt.input.runId, attempt.target.sessionKey, attempt.input.runId);
+        const snapshot = () => {
+          gateway.chatRunState.flushPendingText(attempt.input.runId);
+          return projectInFlightRunSnapshot({
+            chatRunState: gateway.chatRunState,
+            runId: attempt.input.runId,
+          }).text;
+        };
+        const committedSnapshots: string[] = [];
+        const unsubscribeTranscript = onInternalSessionTranscriptUpdate((event) => {
+          if (readSessionTranscriptRunId(event.message) === attempt.input.runId) {
+            gateway.handler.retireTranscript(event);
+            committedSnapshots.push(snapshot());
+          }
+        });
+        const unsubscribe = subscribeAgentEvents(async (event) => {
+          if (event.runId !== attempt.input.runId) {
+            return;
+          }
+          await gateway.handler(event);
+          if (event.stream === "assistant") {
+            updates.push(event);
+          }
+        });
+        let finished = false;
+        const run = runAgentHarnessAttempt(attempt.input).finally(() => {
+          finished = true;
+        });
+        void run.catch(() => {});
+        try {
+          await withinTest(
+            fixtureEnteredBeforeSettlement(
+              path.join(native.peerDirectory, "prompt-reply-entered"),
+              run,
+            ),
+            signal,
+          );
+          await expect.poll(() => updates.at(-1)?.data.text).toBe("First chunk");
+          expect(finished).toBe(false);
+          expect(updates[0]?.sessionKey).toBe(attempt.target.sessionKey);
+          expect(snapshot()).toBe("First chunk");
+          if (completion === "revoke") {
+            attempt.close();
+          }
+          await fs.writeFile(path.join(native.peerDirectory, "prompt-reply-release"), "release");
+          const result = await run;
+          await unsubscribe.drain();
+          expect(result.terminal.kind).toBe(completion === "complete" ? "ok" : "failed");
+          expect(updates.map((event) => event.data.delta)).toEqual(
+            completion === "complete" ? ["First chunk", " second chunk"] : ["First chunk"],
+          );
+          if (completion === "complete") {
+            const transcript = await readVisibleSessionTranscriptMessageEntries(attempt.target);
+            const assistant = transcript.find((row) => row.role === "assistant");
+            expect(assistant?.idempotencyKey).toBe(result.assistantTranscriptIdempotencyKey);
+            expect(updates.map((event) => event.data.itemId)).toEqual([
+              assistant?.idempotencyKey,
+              assistant?.idempotencyKey,
+            ]);
+            expect(committedSnapshots).toEqual([""]);
+          } else {
+            expect(committedSnapshots).toEqual([]);
+          }
+        } finally {
+          await fs.writeFile(path.join(native.peerDirectory, "prompt-reply-release"), "release");
+          await Promise.allSettled([run]);
+          await unsubscribe();
+          unsubscribeTranscript();
+          await gateway.handler.dispose();
+          gateway.chatRunState.clear();
         }
-      });
-      const unsubscribe = subscribeAgentEvents(async (event) => {
-        if (event.runId !== attempt.input.runId) {
-          return;
-        }
-        await gateway.handler(event);
-        if (event.stream === "assistant") {
-          updates.push(event);
-        }
-      });
-      let finished = false;
-      const run = runAgentHarnessAttempt(attempt.input).finally(() => {
-        finished = true;
-      });
-      void run.catch(() => {});
-      try {
-        await withinTest(
-          fixtureEnteredBeforeSettlement(
-            path.join(native.peerDirectory, "prompt-reply-entered"),
-            run,
-          ),
-          signal,
-        );
-        await expect.poll(() => updates.at(-1)?.data.text).toBe("First chunk");
-        expect(finished).toBe(false);
-        expect(updates[0]?.sessionKey).toBe(attempt.target.sessionKey);
-        expect(snapshot()).toBe("First chunk");
-        if (completion === "revoke") {
-          attempt.close();
-        }
-        await fs.writeFile(path.join(native.peerDirectory, "prompt-reply-release"), "release");
-        const result = await run;
-        await unsubscribe.drain();
-        expect(result.terminal.kind).toBe(completion === "complete" ? "ok" : "failed");
-        expect(updates.map((event) => event.data.delta)).toEqual(
-          completion === "complete" ? ["First chunk", " second chunk"] : ["First chunk"],
-        );
-        if (completion === "complete") {
-          const transcript = await readVisibleSessionTranscriptMessageEntries(attempt.target);
-          const assistant = transcript.find((row) => row.role === "assistant");
-          expect(assistant?.idempotencyKey).toBe(result.assistantTranscriptIdempotencyKey);
-          expect(updates.map((event) => event.data.itemId)).toEqual([
-            assistant?.idempotencyKey,
-            assistant?.idempotencyKey,
-          ]);
-          expect(committedSnapshots).toEqual([""]);
-        } else {
-          expect(committedSnapshots).toEqual([]);
-        }
-      } finally {
-        await fs.writeFile(path.join(native.peerDirectory, "prompt-reply-release"), "release");
-        await Promise.allSettled([run]);
-        await unsubscribe();
-        unsubscribeTranscript();
-        await gateway.handler.dispose();
-        gateway.chatRunState.clear();
-        attempt.close();
-        await native.service.stop?.(native.context);
-      }
-    });
+      },
+      {},
+      { holdPromptReply: true, receiptEndpoint: receipts.endpoint },
+    );
   },
 );
 
@@ -308,177 +318,159 @@ it.for([
   "preserves native $operation authority while a real control is queued: $kind",
   { timeout: 60000 },
   async ({ operation, kind }, { signal }) => {
-    await withOpenClawTestState({ label: "acp-native-control-authority" }, async (state) => {
-      const config: OpenClawConfig = {
-        session: { store: path.join(state.sessionsDir(), "sessions.json") },
-      };
-      setRuntimeConfigSnapshot(config);
-      const native = await registerNative(state, config, "owner-agent.mjs", {
-        holdModeControl: true,
-        receiptEndpoint: receipts.endpoint,
-      });
-      const attempt = await attemptFor(state, config, "opencode", "full");
-      let holdingControl: Promise<void> | undefined;
-      let run: ReturnType<typeof runAgentHarnessAttempt> | undefined;
-      try {
-        const runtime = await native.service.getRuntime(native.context);
-        const nativeTarget = {
-          agentId: "main",
-          sessionKey: `agent:main:harness:acp-opencode:${attempt.input.sessionId}`,
-          agent: "opencode",
-          cwd: state.workspaceDir,
-          mode: "persistent" as const,
-          bridgeSession: {
+    await withNativeAttempt(
+      async ({ state, native, attempt }) => {
+        let holdingControl: Promise<void> | undefined;
+        let run: ReturnType<typeof runAgentHarnessAttempt> | undefined;
+        try {
+          const runtime = await native.service.getRuntime(native.context);
+          const nativeTarget = {
             agentId: "main",
-            sessionKey: attempt.target.sessionKey,
-            native: true,
-          },
-          model: operation === "model" ? "initial" : "selected",
-          modelExplicit: true,
-        };
-        const handle = await runtime.ensureSession(nativeTarget);
-        const getStatus = runtime.getStatus.bind(runtime);
-        const initial = await getStatus({ handle });
-        expect(initial.models?.currentModelId).toBe(nativeTarget.model);
-        const before = await peerStates(native.peerDirectory);
-        holdingControl = runtime.setMode({ handle, mode: "review" });
-        void holdingControl.catch(() => {});
-        await withinTest(
-          fixtureEnteredBeforeSettlement(
-            path.join(native.peerDirectory, "mode-control-entered"),
-            holdingControl,
-            "review",
-          ),
-          signal,
-        );
-        const require = createRequire(
-          new URL("../../../extensions/acpx/package.json", import.meta.url),
-        );
-        const upstream: typeof import("acpx/runtime") = await import(
-          pathToFileURL(require.resolve("acpx/runtime")).href
-        );
-        const upstreamEntered = createDeferred();
-        const method = operation === "model" ? "setModel" : "startTurn";
-        const originalOperation = upstream.AcpxRuntime.prototype[method];
-        const upstreamOperation = vi
-          .spyOn(upstream.AcpxRuntime.prototype, method)
-          .mockImplementation(
-            new Proxy(originalOperation, {
-              apply(target, receiver, args) {
-                upstreamEntered.resolve();
-                return Reflect.apply(target, receiver, args);
-              },
-            }),
+            sessionKey: `agent:main:harness:acp-opencode:${attempt.input.sessionId}`,
+            agent: "opencode",
+            cwd: state.workspaceDir,
+            mode: "persistent" as const,
+            bridgeSession: {
+              agentId: "main",
+              sessionKey: attempt.target.sessionKey,
+              native: true,
+            },
+            model: operation === "model" ? "initial" : "selected",
+            modelExplicit: true,
+          };
+          const handle = await runtime.ensureSession(nativeTarget);
+          const getStatus = runtime.getStatus.bind(runtime);
+          const initial = await getStatus({ handle });
+          expect(initial.models?.currentModelId).toBe(nativeTarget.model);
+          const before = await peerStates(native.peerDirectory);
+          holdingControl = runtime.setMode({ handle, mode: "review" });
+          void holdingControl.catch(() => {});
+          await withinTest(
+            fixtureEnteredBeforeSettlement(
+              path.join(native.peerDirectory, "mode-control-entered"),
+              holdingControl,
+              "review",
+            ),
+            signal,
           );
-        // Observe upstream admission while the earlier native control keeps its queue occupied.
-        run = runAgentHarnessAttempt(attempt.input);
-        void run.catch(() => {});
-        await withinTest(
-          Promise.race([
-            upstreamEntered.promise,
-            run.then((result) => {
-              throw new Error(`Attempt ended before native ${operation} boundary`, {
-                cause: result,
-              });
-            }),
-          ]),
-          signal,
-        );
-        expect(upstreamOperation).toHaveBeenCalledOnce();
-        if (kind === "revoke") {
-          attempt.close();
+          const require = createRequire(
+            new URL("../../../extensions/acpx/package.json", import.meta.url),
+          );
+          const upstream: typeof import("acpx/runtime") = await import(
+            pathToFileURL(require.resolve("acpx/runtime")).href
+          );
+          const upstreamEntered = createDeferred();
+          const method = operation === "model" ? "setModel" : "startTurn";
+          const originalOperation = upstream.AcpxRuntime.prototype[method];
+          const upstreamOperation = vi
+            .spyOn(upstream.AcpxRuntime.prototype, method)
+            .mockImplementation(
+              new Proxy(originalOperation, {
+                apply(target, receiver, args) {
+                  upstreamEntered.resolve();
+                  return Reflect.apply(target, receiver, args);
+                },
+              }),
+            );
+          // Observe upstream admission while the earlier native control keeps its queue occupied.
+          run = runAgentHarnessAttempt(attempt.input);
+          void run.catch(() => {});
+          await withinTest(
+            Promise.race([
+              upstreamEntered.promise,
+              run.then((result) => {
+                throw new Error(`Attempt ended before native ${operation} boundary`, {
+                  cause: result,
+                });
+              }),
+            ]),
+            signal,
+          );
+          expect(upstreamOperation).toHaveBeenCalledOnce();
+          if (kind === "revoke") {
+            attempt.close();
+          }
+          await fs.writeFile(path.join(native.peerDirectory, "mode-control-release"), "release");
+          await holdingControl;
+          const outcome = await run;
+          const records = await peerStates(native.peerDirectory);
+          const effects = await fs.readdir(path.join(native.peerDirectory, "effects"));
+          const persisted = await getStatus({ handle });
+          if (kind === "active") {
+            expect.soft(outcome?.terminal).toMatchObject({ kind: "ok" });
+            expect.soft(persisted.models?.currentModelId).toBe("selected");
+            expect.soft(records[0]?.currentModelId).toBe("selected");
+            expect.soft(records[0]?.modelChanges).toEqual(["selected"]);
+            expect.soft(records[0]?.history).toHaveLength(1);
+            expect.soft(effects).toHaveLength(1);
+          } else {
+            expect.soft(outcome?.terminal).toMatchObject({ kind: "failed" });
+            expect.soft(persisted.models?.currentModelId).toBe(nativeTarget.model);
+            expect.soft(records[0]?.currentModelId).toBe(nativeTarget.model);
+            expect.soft(records[0]?.modelChanges).toEqual(before[0]?.modelChanges);
+            expect.soft(records[0]?.history).toEqual(before[0]?.history);
+            expect.soft(effects).toEqual([]);
+          }
+        } finally {
+          await fs.writeFile(path.join(native.peerDirectory, "mode-control-release"), "release");
+          await Promise.allSettled([run, holdingControl]);
         }
-        await fs.writeFile(path.join(native.peerDirectory, "mode-control-release"), "release");
-        await holdingControl;
-        const outcome = await run;
-        const records = await peerStates(native.peerDirectory);
-        const effects = await fs.readdir(path.join(native.peerDirectory, "effects"));
-        const persisted = await getStatus({ handle });
-        if (kind === "active") {
-          expect.soft(outcome?.terminal).toMatchObject({ kind: "ok" });
-          expect.soft(persisted.models?.currentModelId).toBe("selected");
-          expect.soft(records[0]?.currentModelId).toBe("selected");
-          expect.soft(records[0]?.modelChanges).toEqual(["selected"]);
-          expect.soft(records[0]?.history).toHaveLength(1);
-          expect.soft(effects).toHaveLength(1);
-        } else {
-          expect.soft(outcome?.terminal).toMatchObject({
-            kind: "failed",
-          });
-          expect.soft(persisted.models?.currentModelId).toBe(nativeTarget.model);
-          expect.soft(records[0]?.currentModelId).toBe(nativeTarget.model);
-          expect.soft(records[0]?.modelChanges).toEqual(before[0]?.modelChanges);
-          expect.soft(records[0]?.history).toEqual(before[0]?.history);
-          expect.soft(effects).toEqual([]);
-        }
-      } finally {
-        await fs.writeFile(path.join(native.peerDirectory, "mode-control-release"), "release");
-        await Promise.allSettled([
-          ...(run ? [run] : []),
-          ...(holdingControl ? [holdingControl] : []),
-        ]);
-        attempt.close();
-        await native.service.stop?.(native.context);
-      }
-    });
+      },
+      {},
+      { holdModeControl: true, receiptEndpoint: receipts.endpoint },
+    );
   },
 );
 
 it.each(["cancel", "timeout", "revoke"] as const)(
   "preserves model authority during cold session initialization: %s",
   async (kind) => {
-    await withOpenClawTestState({ label: "acp-native-cold-authority" }, async (state) => {
-      const config: OpenClawConfig = {
-        session: { store: path.join(state.sessionsDir(), "sessions.json") },
-      };
-      setRuntimeConfigSnapshot(config);
-      const native = await registerNative(state, config, "owner-agent.mjs", {
-        holdNewSession: true,
-      });
-      const attempt = await attemptFor(state, config, "opencode", "full");
-      const controller = new AbortController();
-      attempt.input.abortSignal = controller.signal;
-      const timedOut = createDeferred();
-      if (kind === "timeout") {
-        attempt.input.timeoutMs = 3000;
-        attempt.input.onAttemptTimeout = () => timedOut.resolve();
-      }
-      const run = runAgentHarnessAttempt(attempt.input);
-      void run.catch(() => {});
-      try {
-        await waitForFixtureFile(path.join(native.peerDirectory, "session-new-entered"), run);
-        const transcriptBeforeRelease = await readVisibleSessionTranscriptMessageEntries(
-          attempt.target,
-        );
-        if (kind === "cancel") {
-          controller.abort();
-        } else if (kind === "revoke") {
-          attempt.close();
-        } else if (kind === "timeout") {
-          await timedOut.promise;
+    await withNativeAttempt(
+      async ({ native, attempt }) => {
+        const controller = new AbortController();
+        attempt.input.abortSignal = controller.signal;
+        const timedOut = createDeferred();
+        if (kind === "timeout") {
+          attempt.input.timeoutMs = 3000;
+          attempt.input.onAttemptTimeout = () => timedOut.resolve();
         }
-        await fs.writeFile(path.join(native.peerDirectory, "session-new-release"), "release");
-        const outcome = await run;
-        const records = await peerStates(native.peerDirectory);
-        const effects = await fs.readdir(path.join(native.peerDirectory, "effects"));
-        expect(records).toHaveLength(1);
-        expect.soft(outcome?.terminal).toMatchObject({
-          kind: kind === "cancel" ? "aborted" : kind === "revoke" ? "failed" : "timeout",
-        });
-        expect.soft(records[0]?.currentModelId).toBe("initial");
-        expect.soft(records[0]?.modelChanges).toEqual([]);
-        expect.soft(records[0]?.history).toEqual([]);
-        expect.soft(effects).toEqual([]);
-        expect
-          .soft(await readVisibleSessionTranscriptMessageEntries(attempt.target))
-          .toEqual(transcriptBeforeRelease);
-      } finally {
-        await fs.writeFile(path.join(native.peerDirectory, "session-new-release"), "release");
-        await Promise.allSettled([run]);
-        attempt.close();
-        await native.service.stop?.(native.context);
-      }
-    });
+        const run = runAgentHarnessAttempt(attempt.input);
+        void run.catch(() => {});
+        try {
+          await waitForFixtureFile(path.join(native.peerDirectory, "session-new-entered"), run);
+          const transcriptBeforeRelease = await readVisibleSessionTranscriptMessageEntries(
+            attempt.target,
+          );
+          if (kind === "cancel") {
+            controller.abort();
+          } else if (kind === "revoke") {
+            attempt.close();
+          } else if (kind === "timeout") {
+            await timedOut.promise;
+          }
+          await fs.writeFile(path.join(native.peerDirectory, "session-new-release"), "release");
+          const outcome = await run;
+          const records = await peerStates(native.peerDirectory);
+          const effects = await fs.readdir(path.join(native.peerDirectory, "effects"));
+          expect(records).toHaveLength(1);
+          expect.soft(outcome?.terminal).toMatchObject({
+            kind: kind === "cancel" ? "aborted" : kind === "revoke" ? "failed" : "timeout",
+          });
+          expect
+            .soft(records[0])
+            .toMatchObject({ currentModelId: "initial", modelChanges: [], history: [] });
+          expect.soft(effects).toEqual([]);
+          expect
+            .soft(await readVisibleSessionTranscriptMessageEntries(attempt.target))
+            .toEqual(transcriptBeforeRelease);
+        } finally {
+          await fs.writeFile(path.join(native.peerDirectory, "session-new-release"), "release");
+          await Promise.allSettled([run]);
+        }
+      },
+      {},
+      { holdNewSession: true },
+    );
   },
   60000,
 );
@@ -505,23 +497,11 @@ it.each([
 ])(
   "rejects host-only ACP before native effects: $label",
   async ({ config: restrictions, reason }) => {
-    await withOpenClawTestState({ label: "acp-native-containment" }, async (state) => {
-      const config: OpenClawConfig = {
-        ...restrictions,
-        session: { store: path.join(state.sessionsDir(), "sessions.json") },
-      };
-      setRuntimeConfigSnapshot(config);
-      const native = await registerNative(state, config, "owner-agent.mjs");
-      const attempt = await attemptFor(state, config, "opencode", "full");
-      try {
-        await expect(runAgentHarnessAttempt(attempt.input)).rejects.toThrow(reason);
-        expect(await peerStates(native.peerDirectory)).toEqual([]);
-        expect(await fs.readdir(path.join(native.peerDirectory, "effects"))).toEqual([]);
-      } finally {
-        attempt.close();
-        await native.service.stop?.(native.context);
-      }
-    });
+    await withNativeAttempt(async ({ native, attempt }) => {
+      await expect(runAgentHarnessAttempt(attempt.input)).rejects.toThrow(reason);
+      expect(await peerStates(native.peerDirectory)).toEqual([]);
+      expect(await fs.readdir(path.join(native.peerDirectory, "effects"))).toEqual([]);
+    }, restrictions);
   },
   60000,
 );
@@ -534,19 +514,8 @@ it.each([
 ])(
   "uses exact native consent=$consent with mandatorySandbox=$mandatorySandbox",
   async ({ consent, mandatorySandbox, permitted }) => {
-    await withOpenClawTestState({ label: "acp-native-consent" }, async (state) => {
-      const config: OpenClawConfig = {
-        session: { store: path.join(state.sessionsDir(), "sessions.json") },
-        tools: {
-          profile: "full",
-          deny: ["browser"],
-          ...(mandatorySandbox === "exec" ? { exec: { host: "sandbox" as const } } : {}),
-        },
-      };
-      setRuntimeConfigSnapshot(config);
-      const native = await registerNative(state, config, "owner-agent.mjs");
-      const attempt = await attemptFor(state, config, "opencode", "full");
-      try {
+    await withNativeAttempt(
+      async ({ config, native, attempt }) => {
         await upsertSessionEntry({
           ...attempt.target,
           entry: {
@@ -576,11 +545,15 @@ it.each([
           );
           expect(await fs.readdir(path.join(native.peerDirectory, "effects"))).toEqual([]);
         }
-      } finally {
-        attempt.close();
-        await native.service.stop?.(native.context);
-      }
-    });
+      },
+      {
+        tools: {
+          profile: "full",
+          deny: ["browser"],
+          ...(mandatorySandbox === "exec" ? { exec: { host: "sandbox" as const } } : {}),
+        },
+      },
+    );
   },
   60000,
 );

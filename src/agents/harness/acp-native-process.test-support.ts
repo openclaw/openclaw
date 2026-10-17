@@ -37,6 +37,7 @@ import {
 } from "../admitted-run-context.js";
 import { createEmptyAgentDiscoveryStores } from "../embedded-agent-runner/model.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { registerAgentHarness } from "./registry.js";
 
 const agents = ["opencode", "qwen", "pi", "kilocode"] as const;
@@ -84,15 +85,7 @@ export async function registerNative(
 ) {
   // Transcript writes read the Gateway-published runtime config; the test state resets it on exit.
   setRuntimeConfigSnapshot(config);
-  const peer = fileURLToPath(
-    {
-      "owner-agent.mjs": new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url),
-      "approval-effect-agent.mjs": new URL(
-        "../../../test/fixtures/acp/approval-effect-agent.mjs",
-        import.meta.url,
-      ),
-    }[peerName],
-  );
+  const peer = fileURLToPath(new URL(`../../../test/fixtures/acp/${peerName}`, import.meta.url));
   const peerDirectory = state.path("peer");
   await fs.mkdir(peerDirectory);
   await fs.mkdir(path.join(peerDirectory, "effects"));
@@ -113,6 +106,16 @@ export async function registerNative(
     artifactBasename: "index.js",
   });
   const getRuntimeConfig = vi.fn(() => config);
+  const args = [
+    peer,
+    peerDirectory,
+    ...(peerName === "owner-agent.mjs" ? ["--model-controls"] : []),
+    ...(peerOptions.holdModeControl ? ["--hold-mode-control"] : []),
+    ...(peerOptions.holdNewSession ? ["--hold-new-session"] : []),
+    ...(peerOptions.holdPromptReply ? ["--hold-prompt-reply"] : []),
+    ...(peerOptions.allowAlwaysOnly ? ["--allow-always-only"] : []),
+    ...(peerOptions.receiptEndpoint ? [`--receipt-module=${receiptModule}`] : []),
+  ];
   const api = createTestPluginApi({
     id: "acpx",
     config,
@@ -120,22 +123,7 @@ export async function registerNative(
       cwd: state.workspaceDir,
       stateDir: state.path("acpx-runtime"),
       agents: Object.fromEntries(
-        agents.map((agent) => [
-          agent,
-          {
-            command: process.execPath,
-            args: [
-              peer,
-              peerDirectory,
-              ...(peerName === "owner-agent.mjs" ? ["--model-controls"] : []),
-              ...(peerOptions.holdModeControl ? ["--hold-mode-control"] : []),
-              ...(peerOptions.holdNewSession ? ["--hold-new-session"] : []),
-              ...(peerOptions.holdPromptReply ? ["--hold-prompt-reply"] : []),
-              ...(peerOptions.allowAlwaysOnly ? ["--allow-always-only"] : []),
-              ...(peerOptions.receiptEndpoint ? [`--receipt-module=${receiptModule}`] : []),
-            ],
-          },
-        ]),
+        agents.map((agent) => [agent, { command: process.execPath, args: [...args] }]),
       ),
     },
     runtime: createPluginRuntimeMock({
@@ -213,18 +201,15 @@ export async function attemptFor(
     prompt: "Record the requested native effect.",
     timeoutMs: 30000,
     thinkLevel: "off",
-    model: {
+    model: makeProviderModelFixture({
       id: "selected",
       name: "Selected",
       api: "openai-completions",
       provider,
       baseUrl: "",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 32768,
       maxTokens: 2048,
-    },
+    }),
     authProfileStore: { version: 1, profiles: {} },
     userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
       message: {

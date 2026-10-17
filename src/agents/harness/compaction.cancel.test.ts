@@ -59,6 +59,39 @@ vi.mock("../../plugins/providers.js", () => ({
 
 let state: OpenClawTestState;
 let generation: ReturnType<typeof createModelGenerationFixture>;
+type Compact = NonNullable<AgentHarness["compact"]>;
+type CompactParams = Parameters<Compact>[0] & {
+  hostCapabilities?: AgentHarnessHostCapabilities;
+};
+const compacted = { ok: true, compacted: true };
+const restrictedConfig = { agents: { defaults: { model: "fixture/allowed" } } };
+const proxyModel = makeProviderModelFixture({
+  provider: "local-proxy",
+  id: "proxy-model",
+  api: "openai-responses",
+  baseUrl: "https://proxy.example/v1",
+});
+const directPlan = {
+  providerForAuth: proxyModel.provider,
+  authProfileProviderForAuth: proxyModel.provider,
+  selectedAuthMode: "api_key" as const,
+};
+
+function operatorSource(
+  overrides: Partial<Parameters<typeof createAdmittedRunOperatorAuthority>[0]> = {},
+) {
+  return createAdmittedRunOperatorAuthority({
+    profileId: "compaction-source",
+    scopes: ["operator.write"],
+    assertCurrent: () => {},
+    modelPolicy: prepareOperatorModelPolicy({
+      cfg: restrictedConfig,
+      policy: {},
+      manifestPlugins: [],
+    }),
+    ...overrides,
+  });
+}
 
 beforeEach(async () => {
   state = await createOpenClawTestState({ label: "compaction-cancel", applyEnv: false });
@@ -82,9 +115,9 @@ afterEach(async () => {
 });
 
 function registerCompactor(
-  compact: NonNullable<AgentHarness["compact"]>,
+  compact: Compact,
   harness: Pick<AgentHarness, "id" | "nativeModelPolicySupport"> = { id: "copilot" },
-  nativeCompaction?: NonNullable<AgentHarness["compact"]>,
+  nativeCompaction?: Compact,
 ) {
   registerAgentHarness(
     {
@@ -138,24 +171,13 @@ describe("harness compaction cancellation", () => {
           throw new Error("Compaction credential retired");
         }
       };
-      const model = makeProviderModelFixture({
-        provider: "local-proxy",
-        id: "proxy-model",
-        api: "openai-responses",
-        baseUrl: "https://proxy.example/v1",
-      });
-      const plan = {
-        providerForAuth: model.provider,
-        authProfileProviderForAuth: model.provider,
-        selectedAuthMode: "api_key" as const,
-      };
-      compactAuthMocks.resolveModelAsync.mockResolvedValue({ model });
+      compactAuthMocks.resolveModelAsync.mockResolvedValue({ model: proxyModel });
       compactAuthMocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue(
         createAuthProfileStoreFixture({}),
       );
       compactAuthMocks.prepareAgentRuntimeAuth.mockReturnValue({
-        plan,
-        attempts: [{ kind: "direct", plan }],
+        plan: directPlan,
+        attempts: [{ kind: "direct", plan: directPlan }],
       });
       compactAuthMocks.getApiKeyForModelCore.mockResolvedValue(
         attachProviderAuthAuthority(
@@ -163,22 +185,22 @@ describe("harness compaction cancellation", () => {
           assertCurrent,
         ),
       );
-      const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async (params) => {
+      const compact = vi.fn<Compact>(async (params) => {
         expect(params.resolvedApiKey).toBe("fixture-key");
         current = false;
         expect(() => assertProviderAuthAuthority(params.runtimeModel)).toThrow(
           "Compaction credential retired",
         );
-        return { ok: true, compacted: true };
+        return { ...compacted };
       });
       registerCompactor(compact);
       const operation = compactSession(
         {
-          provider: model.provider,
-          model: model.id,
+          provider: proxyModel.provider,
+          model: proxyModel.id,
           ...(supplied
             ? {
-                runtimeModel: attachProviderAuthAuthority(model, assertCurrent),
+                runtimeModel: attachProviderAuthAuthority(proxyModel, assertCurrent),
                 resolvedApiKey: "fixture-key",
               }
             : {}),
@@ -197,7 +219,7 @@ describe("harness compaction cancellation", () => {
         await expect(operation).rejects.toThrow("Compaction credential retired");
         expect(compact).not.toHaveBeenCalled();
       } else {
-        await expect(operation).resolves.toMatchObject({ ok: true, compacted: true });
+        await expect(operation).resolves.toMatchObject(compacted);
         expect(compact).toHaveBeenCalledOnce();
       }
     },
@@ -206,24 +228,15 @@ describe("harness compaction cancellation", () => {
   it.each(["manual", "required_preflight", "source revocation"] as const)(
     "keeps the original model authority through registered %s compaction and closes the host afterward",
     async (dispatch) => {
-      const config = { agents: { defaults: { model: "fixture/allowed" } } };
-      const modelPolicy = prepareOperatorModelPolicy({
-        cfg: config,
-        policy: {},
-        manifestPlugins: [],
-      });
       let sourceHolds = 0;
       let sourceActive = true;
       const sourceReleased = createDeferredCore();
-      const operatorAuthority = createAdmittedRunOperatorAuthority({
-        profileId: "compaction-source",
-        scopes: ["operator.write"],
+      const operatorAuthority = operatorSource({
         assertCurrent: () => {
           if (!sourceActive) {
             throw new Error("Compaction source revoked");
           }
         },
-        modelPolicy,
         retain: () => {
           sourceHolds += 1;
           return () => {
@@ -235,47 +248,41 @@ describe("harness compaction cancellation", () => {
         },
       });
       let observedHost: AgentHarnessHostCapabilities | undefined;
-      const compact = vi.fn(
-        async (
-          params: Parameters<NonNullable<AgentHarness["compact"]>>[0] & {
-            hostCapabilities?: AgentHarnessHostCapabilities;
-          },
-        ) => {
-          const host = params.hostCapabilities;
-          if (!host?.retainSourceAuthority) {
-            throw new Error("Registered compaction received no host model authority");
-          }
-          observedHost = host;
+      const compact = vi.fn(async (params: CompactParams) => {
+        const host = params.hostCapabilities;
+        if (!host?.retainSourceAuthority) {
+          throw new Error("Registered compaction received no host model authority");
+        }
+        observedHost = host;
+        host.assertActive();
+        const retained = host.retainSourceAuthority();
+        if (!retained?.bindModelExecution) {
+          throw new Error("Registered compaction lost its original operator source");
+        }
+        const execution = retained.bindModelExecution({ provider: "fixture", model: "allowed" });
+        try {
+          expect(retained.sourceIdentity).toBe(operatorAuthority.source);
+          expect(execution).toBeDefined();
+          expect(() =>
+            retained.bindModelExecution?.({ provider: "fixture", model: "denied" }),
+          ).toThrow("operator role cannot use this model");
+          await Promise.resolve();
           host.assertActive();
-          const retained = host.retainSourceAuthority();
-          if (!retained?.bindModelExecution) {
-            throw new Error("Registered compaction lost its original operator source");
+          if (dispatch === "source revocation") {
+            sourceActive = false;
           }
-          const execution = retained.bindModelExecution({ provider: "fixture", model: "allowed" });
-          try {
-            expect(retained.sourceIdentity).toBe(operatorAuthority.source);
-            expect(execution).toBeDefined();
-            expect(() =>
-              retained.bindModelExecution?.({ provider: "fixture", model: "denied" }),
-            ).toThrow("operator role cannot use this model");
-            await Promise.resolve();
-            host.assertActive();
-            if (dispatch === "source revocation") {
-              sourceActive = false;
-            }
-            execution?.assertCurrent();
-            return { ok: true, compacted: true };
-          } finally {
-            execution?.release();
-            retained.release();
-          }
-        },
-      );
+          execution?.assertCurrent();
+          return { ...compacted };
+        } finally {
+          execution?.release();
+          retained.release();
+        }
+      });
       registerCompactor(compact, { id: "codex", nativeModelPolicySupport: "exact" }, compact);
       const operation = compactSession(
         {
           agentHarnessId: "codex",
-          config,
+          config: restrictedConfig,
           trigger: "manual",
         },
         {
@@ -286,7 +293,7 @@ describe("harness compaction cancellation", () => {
       if (dispatch === "source revocation") {
         await expect(operation).rejects.toThrow("Compaction source revoked");
       } else {
-        await expect(operation).resolves.toMatchObject({ ok: true, compacted: true });
+        await expect(operation).resolves.toMatchObject(compacted);
       }
       await sourceReleased.promise;
       expect(compact).toHaveBeenCalledOnce();
@@ -301,30 +308,20 @@ describe("harness compaction cancellation", () => {
     async (stage) => {
       const controller = new AbortController();
       const cancelled = new Error("Compaction model preparation cancelled");
-      const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      const compact = vi.fn<Compact>(async () => ({
         ok: true,
         compacted: false,
       }));
       registerCompactor(compact);
       if (stage === "auth-route rematerialization") {
         compactAuthMocks.resolveModelAsync.mockResolvedValueOnce({
-          model: {
-            id: "proxy-model",
-            provider: "local-proxy",
-            api: "openai-responses",
-            baseUrl: "https://proxy.example/v1",
-          },
+          model: proxyModel,
         });
         compactAuthMocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue(
           createAuthProfileStoreFixture({
             "local-proxy:stale": createApiKeyCredential("local-proxy", "stale-key"),
           }),
         );
-        const directPlan = {
-          providerForAuth: "local-proxy",
-          authProfileProviderForAuth: "local-proxy",
-          selectedAuthMode: "api_key" as const,
-        };
         const profilePlan = {
           ...directPlan,
           forwardedAuthProfileId: "local-proxy:stale",
@@ -361,21 +358,14 @@ describe("harness compaction cancellation", () => {
   );
 
   it("preserves the unknown-model guard for a registered compactor without exact model support", async () => {
-    const config = { agents: { defaults: { model: "fixture/allowed" } } };
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = operatorSource({
       profileId: "restricted-compaction-source",
-      scopes: ["operator.write"],
-      assertCurrent: () => {},
-      modelPolicy: prepareOperatorModelPolicy({ cfg: config, policy: {}, manifestPlugins: [] }),
     });
-    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
-      ok: true,
-      compacted: true,
-    }));
+    const compact = vi.fn<Compact>(async () => ({ ...compacted }));
     registerCompactor(compact);
     await expect(
       compactSession(
-        { config, trigger: "manual" },
+        { config: restrictedConfig, trigger: "manual" },
         { sourceAuthority: { assertActive: () => {}, operatorAuthority } },
       ),
     ).rejects.toThrow("operator role cannot use this model");
@@ -388,23 +378,17 @@ describe("harness compaction cancellation", () => {
     const firstWork = new AsyncWorkScope();
     const secondWork = new AsyncWorkScope();
     const hosts: AgentHarnessHostCapabilities[] = [];
-    const compact = vi.fn(
-      async (
-        params: Parameters<NonNullable<AgentHarness["compact"]>>[0] & {
-          hostCapabilities?: AgentHarnessHostCapabilities;
-        },
-      ) => {
-        const host = params.hostCapabilities;
-        if (!host) {
-          throw new Error("Registered compaction received no host model authority");
-        }
-        hosts.push(host);
-        const tail = hosts.length === 1 ? firstTail : secondTail;
-        // A logical non-outcome leaves accepted native work draining; neither caller is revoked.
-        void trackAsyncWork(() => tail.promise);
-        return { ok: false, compacted: false, reason: "native tail pending" };
-      },
-    );
+    const compact = vi.fn(async (params: CompactParams) => {
+      const host = params.hostCapabilities;
+      if (!host) {
+        throw new Error("Registered compaction received no host model authority");
+      }
+      hosts.push(host);
+      const tail = hosts.length === 1 ? firstTail : secondTail;
+      // A logical non-outcome leaves accepted native work draining; neither caller is revoked.
+      void trackAsyncWork(() => tail.promise);
+      return { ok: false, compacted: false, reason: "native tail pending" };
+    });
     registerCompactor(compact, { id: "codex", nativeModelPolicySupport: "exact" });
     const params = {
       runId: "same-outer-run",
