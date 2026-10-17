@@ -1,6 +1,8 @@
+import { once } from "node:events";
 import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
+import { json } from "node:stream/consumers";
 import { promisify } from "node:util";
 import { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
 import { Type } from "typebox";
@@ -111,35 +113,28 @@ it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async
   const websocket = failure === "WebSocket";
   const apiKey = websocket ? syntheticLoopbackJwt() : "synthetic-loopback-key";
   const requests: Array<{ tools?: unknown[] }> = [];
-  const server = createServer((request, response) => {
-    request.setEncoding("utf8");
-    let body = "";
-    request.on("data", (chunk: string) => {
-      body += chunk;
-    });
-    request.on("end", () => {
-      requests.push(JSON.parse(body));
-      if (requests.length === 2) {
-        if (failure === "terminated") {
-          response.writeHead(200, {
-            "content-type": "text/event-stream",
-            "cache-control": "no-store",
-          });
-          response.write(`data: ${JSON.stringify(responseEvents(false)[0])}\n\n`, () =>
-            response.destroy(),
-          );
-          return;
-        }
-        response.writeHead(503, { "content-type": "application/json" });
-        response.end(
-          JSON.stringify({
-            error: { message: "upstream connect error: connection refused", type: "server_error" },
-          }),
+  const server = createServer(async (request, response) => {
+    requests.push(await json(request));
+    if (requests.length === 2) {
+      if (failure === "terminated") {
+        response.writeHead(200, {
+          "content-type": "text/event-stream",
+          "cache-control": "no-store",
+        });
+        response.write(`data: ${JSON.stringify(responseEvents(false)[0])}\n\n`, () =>
+          response.destroy(),
         );
         return;
       }
-      writeOpenAiResponsesSse(response, responseEvents(requests.length === 1));
-    });
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          error: { message: "upstream connect error: connection refused", type: "server_error" },
+        }),
+      );
+      return;
+    }
+    writeOpenAiResponsesSse(response, responseEvents(requests.length === 1));
   });
   const sockets = new WebSocketServer({ server });
   sockets.on("connection", (socket) => {
@@ -154,10 +149,8 @@ it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async
       }
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
   try {
     const address = server.address();
     if (!address || typeof address === "string") {
@@ -170,9 +163,6 @@ it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async
       ...resolved.model,
       api: websocket ? "openai-chatgpt-responses" : "openai-responses",
       provider: websocket ? "openai" : "loopback-provider",
-      input: ["text"],
-      contextWindow: 8192,
-      maxTokens: 256,
     };
     const target = {
       agentId: "main",
@@ -235,10 +225,8 @@ it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async
       // The bare transport message reaches the transcript unclassified; the
       // recovery below must therefore come from the exact `terminated` match.
       expect(assistant.errorMessage).toBe("terminated");
-      expect(isTransientNetworkError(error)).toBe(false);
-    } else {
-      expect(isTransientNetworkError(error)).toBe(true);
     }
+    expect(isTransientNetworkError(error)).toBe(failure !== "terminated");
     expect(execute).toHaveBeenCalledOnce();
     expect(itemLifecycle).toEqual({ startedCount: 1, completedCount: 1, activeCount: 0 });
     const prefix = await readVisibleSessionTranscriptMessageEntries(target);
@@ -297,18 +285,15 @@ it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async
       },
     );
     input.finalization.harness.finalizeSettledTurn = finalize;
-    const runAttempt = vi.fn();
-    input.finalization.harness.runAttempt = runAttempt;
     const before = prepareEmbeddedRunTerminal({ ...input.terminalBase, ...input.initial });
     expect(before.payloadsWithToolMedia).toEqual([expect.objectContaining({ isError: true })]);
     const result = await prepareTerminalWithSettledTurnFinalization(input);
 
     expect(result.finalizationOutcome).toBe("answered");
     expect(finalize).toHaveBeenCalledOnce();
-    expect(runAttempt).not.toHaveBeenCalled();
+    expect(input.finalization.harness.runAttempt).not.toHaveBeenCalled();
     expect(execute).toHaveBeenCalledOnce();
     expect(fs.readFileSync(note, "utf8")).toBe("saved\n");
-    expect(requests).toHaveLength(3);
     expect(requests.map((request) => request.tools?.length ?? 0)).toEqual([1, 1, 0]);
     expect(result.prepared.payloadsWithToolMedia).toEqual([
       expect.objectContaining({ text: "Note saved once." }),

@@ -32,6 +32,7 @@ const heartbeatResponse = {
   summary: "Current heartbeat report.",
 };
 const committedReply = { text: "Earlier committed reply.", sourceReplyFinal: true };
+const committedPayload = expect.objectContaining({ text: "Earlier committed reply." });
 const textAssistant = (text: string) =>
   buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] });
 
@@ -89,7 +90,6 @@ async function resolveCompletion(
       settledTurnFinalizationOutcome: settled.finalizationOutcome,
     }),
   );
-  expect(resolved.action).toBe("complete");
   if (resolved.action !== "complete") {
     throw new Error("expected terminal completion");
   }
@@ -114,19 +114,11 @@ describe("terminal preparation delivery custody", () => {
       const result = await resolveCompletion(input, settled);
       const payloads = result.payloads ?? [];
       if (observation === "missing") {
-        expect(
-          payloads.some((payload) =>
-            output === "failure-only"
-              ? payload.isError
-              : payload.text === "Current heartbeat report.",
-          ),
-        ).toBe(true);
+        const expected =
+          output === "failure-only" ? { isError: true } : { text: "Current heartbeat report." };
+        expect(payloads).toContainEqual(expect.objectContaining(expected));
       } else {
-        expect(payloads).toEqual(
-          output === "failure-only"
-            ? []
-            : [expect.objectContaining({ text: "Earlier committed reply." })],
-        );
+        expect(payloads).toEqual(output === "failure-only" ? [] : [committedPayload]);
         expect(result.sourceReplyDeliveryState).toBe("pending");
       }
     },
@@ -170,7 +162,7 @@ describe("terminal preparation delivery custody", () => {
       expect(getReplyPayloadMetadata(payloads[0]!)).toHaveProperty("sourceReplyTranscriptMirror");
       if (observation !== "missing") {
         expect(settled.prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout).toBeUndefined();
-        expect(payloads).toEqual([expect.objectContaining({ text: "Earlier committed reply." })]);
+        expect(payloads).toEqual([committedPayload]);
         expect(payloads[0]?.mediaUrls).toBeUndefined();
         expect(result.sourceReplyDeliveryState).toBe("pending");
         if (output === "media") {
@@ -192,12 +184,12 @@ describe("terminal preparation delivery custody", () => {
   );
 
   it.each([
-    { attemptDelivery: "delivered", observedDelivery: "missing" },
-    { attemptDelivery: "pending", observedDelivery: "delivered" },
-    { attemptDelivery: "missing", observedDelivery: "delivered" },
+    ["delivered", "missing"],
+    ["pending", "delivered"],
+    ["missing", "delivered"],
   ] as const)(
-    "reconciles confirmed custody ($attemptDelivery attempt, $observedDelivery observation)",
-    async ({ attemptDelivery, observedDelivery }) => {
+    "reconciles confirmed custody (%s attempt, %s observation)",
+    async (attemptDelivery, observedDelivery) => {
       const assistant = textAssistant("Do not repeat.");
       const attempt = deliveryAttempt(assistant, {
         assistantTexts: ["Do not repeat."],

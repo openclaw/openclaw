@@ -117,7 +117,6 @@ export function createSettledFinalizationTestInput(
       contextRecoveryState: createEmbeddedRunContextRecoveryState(),
       resolvedToolResultFormat: "markdown",
     },
-    lastRunPromptUsage: undefined,
     finalization: {
       preparedAttempt: { ...runParams },
       harness: {
@@ -128,7 +127,6 @@ export function createSettledFinalizationTestInput(
         finalizeSettledTurn: vi.fn(),
       },
       modelApi: "openai-responses",
-      executionContract: undefined,
       hasTerminalToolPresentation: false,
       createAttemptControls: vi.fn(laneController.createAttemptControls),
       abortSignal: laneController.abortSignal,
@@ -207,29 +205,23 @@ export function projectSettledProviderFailureAttempt(
       model: { api: assistant.api },
       trigger: "user",
     },
-    state: {
-      terminal: base.terminal,
-      beforeAgentRunBlockedBy: undefined,
-      trajectoryEndRecorded: false,
-    },
+    state: { terminal: base.terminal },
     diagnostics: { diagnosticTrace: { traceId: "trace-settled", spanId: "span-settled" } },
     setup: { sessionAgentId: "main" },
     lifecycle: { readYieldState: () => ({ yieldDetected: false }) },
     prepared: {
       bootstrap: { bootstrapPromptWarning: {} },
-      systemPrompt: { systemPromptReport: undefined },
+      systemPrompt: {},
       sessionRuntime: {
         agentSession: {
           clientToolCallSlots: [],
           hasDeliveredSourceReply: () => false,
           hookRunner: null,
         },
-        state: { promptCache: undefined },
-        cacheTrace: null,
-        transport: { streamStrategy: "default" },
+        state: {},
       },
     },
-    preparedStreamRuntime: { stream: { subscription }, cache: { observabilityEnabled: false } },
+    preparedStreamRuntime: { stream: { subscription } },
   };
   return completeEmbeddedAttemptResult(input as never, settled, prompt);
 }

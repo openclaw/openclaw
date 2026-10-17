@@ -1,6 +1,5 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { setCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata.test-support.js";
 import { loadPluginManifest } from "../../../plugins/manifest.js";
 import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
@@ -34,16 +33,13 @@ import { prepareEmbeddedRunRuntime } from "./runtime.js";
 // Keep route planning/auth commit real; isolate credential acquisition and native installation.
 vi.mock("../../model-auth.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../model-auth.js")>()),
-  getApiKeyForModelCore: async ({
-    profileId,
-  }: {
-    profileId: string;
-  }): Promise<ResolvedProviderAuth> => ({
-    apiKey: "fixture-key",
-    mode: "api-key",
-    source: "fixture",
-    profileId,
-  }),
+  getApiKeyForModelCore: async ({ profileId }: { profileId: string }) =>
+    ({
+      apiKey: "fixture-key",
+      mode: "api-key",
+      source: "fixture",
+      profileId,
+    }) satisfies ResolvedProviderAuth,
 }));
 // mock-isolation: Runtime preparation uses synthetic credentials without host auth reads.
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
@@ -104,7 +100,7 @@ describe("selected route thinking metadata at runtime preparation", () => {
     });
     const pluginRegistry = createEmptyPluginRegistry();
     pluginRegistry.providers.push({ pluginId: "openai", source: pluginDir, provider });
-    const config: OpenClawConfig = {};
+    const config = {};
     setCurrentPluginMetadataSnapshot(metadataSnapshot, { config, workspaceDir: root });
     setActivePluginRegistry(pluginRegistry, "effort-route", "default", root);
     const model = resolveBundledStaticCatalogModel({
