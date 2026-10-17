@@ -75,8 +75,11 @@ function createRuntimeFixture(input: Parameters<CreateSessionMcpRuntime>[0]): Se
   };
 }
 
-function createManager(createRuntime?: CreateSessionMcpRuntime) {
-  const manager = createSessionMcpRuntimeManager({ createRuntime });
+function createManager(
+  createRuntime?: CreateSessionMcpRuntime,
+  scheduler?: ReturnType<typeof createTestGatewayScheduler>,
+) {
+  const manager = createSessionMcpRuntimeManager({ createRuntime, scheduler });
   managers.push(manager);
   return manager;
 }
@@ -308,18 +311,14 @@ describe("MCP manager creation ownership", () => {
       const factoryContexts: ReturnType<typeof readContext>[] = [];
       const clock = createGatewaySchedulerClock(Date.now());
       const previousClock = createGatewaySchedulerClock(clock.clock.now());
-      const manager = createSessionMcpRuntimeManager({
-        scheduler: createTestGatewayScheduler(previousClock.clock),
-        createRuntime(input) {
-          factoryContexts.push(readContext());
-          const runtime = createRuntimeFixture(input);
-          runtime.dispose = vi.fn(async () => {
-            sweepContexts.push(readContext());
-          });
-          return runtime;
-        },
-      });
-      managers.push(manager);
+      const manager = createManager((input) => {
+        factoryContexts.push(readContext());
+        const runtime = createRuntimeFixture(input);
+        runtime.dispose = vi.fn(async () => {
+          sweepContexts.push(readContext());
+        });
+        return runtime;
+      }, createTestGatewayScheduler(previousClock.clock));
 
       try {
         for (const turn of ["first turn", "later turn"]) {
@@ -359,11 +358,7 @@ describe("MCP manager creation ownership", () => {
     const gatewayClock = createGatewaySchedulerClock(standaloneClock.clock.now());
     const standaloneScheduler = createTestGatewayScheduler(standaloneClock.clock);
     const gatewayScheduler = createTestGatewayScheduler(gatewayClock.clock);
-    const manager = createSessionMcpRuntimeManager({
-      scheduler: gatewayScheduler,
-      createRuntime: createRuntimeFixture,
-    });
-    managers.push(manager);
+    const manager = createManager(createRuntimeFixture, gatewayScheduler);
     const input = { ...params, cfg: { mcp: { sessionIdleTtlMs: 60_000, servers: {} } } };
     try {
       await manager.setScheduler(gatewayScheduler);
@@ -389,11 +384,7 @@ describe("MCP manager creation ownership", () => {
     const secondClock = createGatewaySchedulerClock(firstClock.clock.now());
     const firstScheduler = createTestGatewayScheduler(firstClock.clock);
     const secondScheduler = createTestGatewayScheduler(secondClock.clock);
-    const manager = createSessionMcpRuntimeManager({
-      scheduler: firstScheduler,
-      createRuntime: createRuntimeFixture,
-    });
-    managers.push(manager);
+    const manager = createManager(createRuntimeFixture, firstScheduler);
     const input = { ...params, cfg: { mcp: { sessionIdleTtlMs: 60_000, servers: {} } } };
     const runtime = await manager.getOrCreate(input);
     const cleanup = holdDisposal(runtime);
@@ -429,11 +420,7 @@ describe("MCP manager creation ownership", () => {
     const firstClock = createGatewaySchedulerClock(Date.now());
     const firstScheduler = createTestGatewayScheduler(firstClock.clock);
     const nextScheduler = createTestGatewayScheduler();
-    const manager = createSessionMcpRuntimeManager({
-      scheduler: firstScheduler,
-      createRuntime: createRuntimeFixture,
-    });
-    managers.push(manager);
+    const manager = createManager(createRuntimeFixture, firstScheduler);
     const input = { ...params, cfg: { mcp: { sessionIdleTtlMs: 60_000, servers: {} } } };
     const runtime = await manager.getOrCreate(input);
     const cleanup = holdDisposal(runtime);
@@ -493,11 +480,7 @@ describe("MCP manager creation ownership", () => {
       const originHost = new LegacyPluginSdkResourceHost();
       originHost.bindScheduler(originScheduler);
       const held = holdFactory();
-      const manager = createSessionMcpRuntimeManager({
-        scheduler: survivorScheduler,
-        createRuntime: held.createRuntime,
-      });
-      managers.push(manager);
+      const manager = createManager(held.createRuntime, survivorScheduler);
       const previous = Reflect.get(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
       const hadManager = Reflect.has(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
       Reflect.set(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY, manager);

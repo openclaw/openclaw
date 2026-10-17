@@ -32,6 +32,20 @@ vi.mock("./mcp-oauth.js", () => ({
 
 const tempDirs: string[] = [];
 const releases: Array<() => void> = [];
+const unauthenticated = async (identities: readonly McpOAuthIdentity[]) =>
+  identities.map(() => ({ state: "unauthenticated" }));
+
+async function requesterFixture() {
+  const { params, config } = await createMcpProbeFixture(tempDirs);
+  const cfg = config();
+  cfg.mcp!.servers!.calendar = {
+    transport: "streamable-http",
+    url: "https://mcp.example.test",
+    auth: "oauth",
+    oauth: { identity: "per-requester" },
+  };
+  return { ...params, cfg, requesterSenderId: "alice" };
+}
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 beforeEach(async () => {
   await disposeAllSessionMcpRuntimes();
@@ -48,11 +62,7 @@ afterEach(async () => {
   await scheduler.stop();
   Reflect.deleteProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
   cleanupTempDirs(tempDirs);
-  readAuthorization
-    .mockReset()
-    .mockImplementation(async (identities: readonly McpOAuthIdentity[]) =>
-      identities.map(() => ({ state: "unauthenticated" })),
-    );
+  readAuthorization.mockReset().mockImplementation(unauthenticated);
 });
 
 it.each([false, true])(
@@ -97,37 +107,26 @@ it("does not let stale discovery prune servers transferred to a replacement", as
 it("releases capacity when every configured server is excluded before connection", async () => {
   const { params, config } = await createMcpProbeFixture(tempDirs);
   const cfg = config();
-  await expect(
-    (async () => {
-      for (let index = 0; index <= SESSION_MCP_MAX_LIVE_RUNTIMES; index += 1) {
-        const sessionKey = `agent:main:excluded-${index}`;
-        const acquired = await acquireSessionMcpRuntime({
-          ...params,
-          sessionId: `excluded-${index}`,
-          sessionKey,
-          cfg,
-        });
-        await releaseSessionMcpRuntime(acquired, new Set());
-        expect(getSessionMcpRuntimeTestManager().listRuntimeKeys()).toEqual([]);
-        expect(getSessionMcpRuntimeTestManager().resolveSessionId(sessionKey)).toBeUndefined();
-      }
-    })(),
-  ).resolves.toBeUndefined();
+  const manager = getSessionMcpRuntimeTestManager();
+  for (let index = 0; index <= SESSION_MCP_MAX_LIVE_RUNTIMES; index += 1) {
+    const sessionKey = `agent:main:excluded-${index}`;
+    const acquired = await acquireSessionMcpRuntime({
+      ...params,
+      sessionId: `excluded-${index}`,
+      sessionKey,
+      cfg,
+    });
+    await releaseSessionMcpRuntime(acquired, new Set());
+    expect(manager.listRuntimeKeys()).toEqual([]);
+    expect(manager.resolveSessionId(sessionKey)).toBeUndefined();
+  }
 });
 
 it.each(["exported acquisition", "harness materialization"])(
   "admits requester leases through %s",
   async (surface) => {
-    const { params, config } = await createMcpProbeFixture(tempDirs);
-    const cfg = config();
-    cfg.gateway = { publicOrigin: "https://gateway.example.test" };
-    cfg.mcp!.servers!.calendar = {
-      transport: "streamable-http",
-      url: "https://mcp.example.test",
-      auth: "oauth",
-      oauth: { identity: "per-requester" },
-    };
-    const input = { ...params, cfg, requesterSenderId: "alice" };
+    const input = await requesterFixture();
+    input.cfg.gateway = { publicOrigin: "https://gateway.example.test" };
     const acquired = await acquireSessionMcpRuntime(input);
     const original = await materializeBundleMcpToolsForRun(acquired);
     const healthy = await probeMcpServer(acquired.runtime, "healthy");
@@ -138,7 +137,7 @@ it.each(["exported acquisition", "harness materialization"])(
     readAuthorization.mockImplementationOnce(async (identities) => {
       started.resolve();
       await released.promise;
-      return identities.map(() => ({ state: "unauthenticated" }));
+      return unauthenticated(identities);
     });
     const pending =
       surface === "exported acquisition"
@@ -146,13 +145,13 @@ it.each(["exported acquisition", "harness materialization"])(
         : materializeRequesterScopedMcpToolsForHarnessRunCore(input);
     void pending.catch(() => undefined);
     await started.promise;
-    manager.deferRetirement(params.sessionId, { retainAcrossReuse: true });
+    manager.deferRetirement(input.sessionId, { retainAcrossReuse: true });
     const retiring = original.dispose();
-    await expect.poll(() => manager.totalActiveLeasesForSession(params.sessionId)).toBe(0);
+    await expect.poll(() => manager.totalActiveLeasesForSession(input.sessionId)).toBe(0);
     released.resolve();
     const nextAcquired = expectDefined(await pending, "requester acquisition");
     await retiring;
-    expect(manager.totalActiveLeasesForSession(params.sessionId)).toBeGreaterThan(0);
+    expect(manager.totalActiveLeasesForSession(input.sessionId)).toBeGreaterThan(0);
     const next =
       "runtime" in nextAcquired
         ? await materializeBundleMcpToolsForRun(nextAcquired)
@@ -169,21 +168,13 @@ it.each(["exported acquisition", "harness materialization"])(
 );
 
 it("releases static admission when requester resolution fails during required retirement", async () => {
-  const { params, config } = await createMcpProbeFixture(tempDirs);
-  const cfg = config();
-  cfg.mcp!.servers!.calendar = {
-    transport: "streamable-http",
-    url: "https://mcp.example.test",
-    auth: "oauth",
-    oauth: { identity: "per-requester" },
-  };
-  const input = { ...params, cfg, requesterSenderId: "alice" };
+  const input = await requesterFixture();
   const original = await acquireSessionMcpRuntime(input);
   const healthy = await probeMcpServer(original.runtime, "healthy");
   original.releaseLease();
   const manager = getSessionMcpRuntimeTestManager();
   readAuthorization.mockImplementationOnce(async () => {
-    manager.deferRetirement(params.sessionId, { retainAcrossReuse: true });
+    manager.deferRetirement(input.sessionId, { retainAcrossReuse: true });
     throw new Error("requester authorization unavailable");
   });
   await expect(acquireSessionMcpRuntime(input)).rejects.toThrow(

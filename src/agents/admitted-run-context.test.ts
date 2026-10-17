@@ -39,16 +39,23 @@ const facts = {
   ingress: { kind: "system" as const, boundary: "test", state: "present" as const },
 };
 
-function prepareRun(input: Partial<Parameters<typeof prepareAgentRunAdmission>[0]> = {}) {
+type RunInput = Partial<Parameters<typeof prepareAgentRunAdmission>[0]> & { runId?: string };
+function prepareRun({ runId = facts.runId, ...input }: RunInput = {}) {
   return prepareAgentRunAdmission({
     cfg: {},
-    facts,
-    operationalRunInstance: createOperationalRunInstanceRef(input.facts?.runId ?? facts.runId),
+    facts: { ...facts, runId },
+    operationalRunInstance: createOperationalRunInstanceRef(input.facts?.runId ?? runId),
     ...input,
   });
 }
 
 let cleanupSink: (() => void) | undefined;
+function installSink() {
+  const sink = vi.fn((_work: ExecutionIdentityAdmissionWork) => true);
+  cleanupSink = configureExecutionIdentityAdmissionSink(sink);
+  return sink;
+}
+
 afterEach(() => {
   cleanupSink?.();
   cleanupSink = undefined;
@@ -124,13 +131,8 @@ describe("prepared run admission", () => {
     const token = createExecutionIdentityAdmissionToken(facts.runId);
     const recovery = createExecutionIdentityRecoveryAdmission({ retryOnly: true, token });
 
-    const disabled = await prepareRun({
-      recovery,
-    }).admit("embedded");
-    const laterEnabled = await prepareRun({
-      cfg: enabledConfig,
-      recovery,
-    }).admit("embedded");
+    const disabled = await prepareRun({ recovery }).admit("embedded");
+    const laterEnabled = await prepareRun({ cfg: enabledConfig, recovery }).admit("embedded");
 
     expect(disabled).not.toHaveProperty("executionIdentityToken");
     expect(laterEnabled).not.toHaveProperty("executionIdentityToken");
@@ -140,8 +142,7 @@ describe("prepared run admission", () => {
     "adopts the exact saved retry token (explicit binding=%s)",
     async (bound) => {
       const token = createExecutionIdentityAdmissionToken(bound ? "original-run" : facts.runId);
-      const sink = vi.fn((_work: ExecutionIdentityAdmissionWork) => true);
-      cleanupSink = configureExecutionIdentityAdmissionSink(sink);
+      const sink = installSink();
       const input = {
         retryOnly: true,
         token,
@@ -162,8 +163,7 @@ describe("prepared run admission", () => {
   );
 
   it("keeps missing or mismatched recovery identity unbound", async () => {
-    const sink = vi.fn((_work: ExecutionIdentityAdmissionWork) => true);
-    cleanupSink = configureExecutionIdentityAdmissionSink(sink);
+    const sink = installSink();
     const missing = await prepareRun({
       cfg: enabledConfig,
       recovery: createExecutionIdentityRecoveryAdmission({ retryOnly: true }),
@@ -190,8 +190,7 @@ describe("prepared run admission", () => {
   });
 
   it("allocates once and reuses the first runtime admission across fallback", async () => {
-    const sink = vi.fn((_work: ExecutionIdentityAdmissionWork) => true);
-    cleanupSink = configureExecutionIdentityAdmissionSink(sink);
+    const sink = installSink();
     const prepared = prepareRun({
       cfg: enabledConfig,
       recovery: createExecutionIdentityRecoveryAdmission({ retryOnly: false }),
@@ -218,25 +217,15 @@ describe("prepared run admission", () => {
   });
 
   it("keeps one claim across fallback and never revives it after outer close", async () => {
-    const prepared = prepareRun({
-      facts: { ...facts, runId: "run-lease" },
-      admissionSource: "operator-schedule",
-    });
-    const admitted = await resolvePreparedRunAdmission({
-      runId: "run-lease",
-      runtimeKind: "embedded",
-      preparedRunAdmission: prepared,
-    });
+    const prepared = prepareRun({ runId: "run-lease", admissionSource: "operator-schedule" });
+    const input = { runId: "run-lease", preparedRunAdmission: prepared };
+    const admitted = await resolvePreparedRunAdmission({ ...input, runtimeKind: "embedded" });
     const first = getAdmittedRunDelegatedAuthority(admitted)!;
     expect(getAdmittedRunSource(first)).toBe("operator-schedule");
     expect(getAdmittedRunSource({ ...first })).toBeUndefined();
     expect(validateAgentRunDelegatedAuthority(first)).toBe(true);
     await expect(
-      resolvePreparedRunAdmission({
-        runId: "run-lease",
-        runtimeKind: "plugin-harness",
-        preparedRunAdmission: prepared,
-      }),
+      resolvePreparedRunAdmission({ ...input, runtimeKind: "plugin-harness" }),
     ).resolves.toBe(admitted);
     expect(getAdmittedRunDelegatedAuthority(admitted)).toBe(first);
     prepared.close();
@@ -251,10 +240,7 @@ describe("prepared run admission", () => {
     "keeps the original source %s when another admission reuses its live authority",
     async (admissionSource) => {
       const operationalRunInstance = createOperationalRunInstanceRef("source-binding");
-      const input = {
-        facts: { ...facts, runId: "source-binding" },
-        operationalRunInstance,
-      };
+      const input = { runId: "source-binding", operationalRunInstance };
       const original = prepareRun({ ...input, admissionSource });
       const replacement = prepareRun({
         ...input,
@@ -277,10 +263,7 @@ describe("prepared run admission", () => {
   it.each(["replacement", "rotation", "abort"] as const)(
     "invalidates admitted authority after %s",
     async (end) => {
-      const input = {
-        facts: { ...facts, runId: "source-lifetime" },
-        admissionSource: "operator-schedule" as const,
-      };
+      const input = { runId: "source-lifetime", admissionSource: "operator-schedule" as const };
       const original = prepareRun(input);
       const replacement = prepareRun(input);
       try {
@@ -316,7 +299,7 @@ describe("prepared run admission", () => {
     const failure = new Error("Completed-turn transcript anchor changed");
     let sourceFailure: Error | undefined;
     const prepared = prepareRun({
-      facts: { ...facts, runId: "source-failure" },
+      runId: "source-failure",
       assertSourceCurrent: () => {
         if (sourceFailure) {
           throw sourceFailure;
@@ -350,9 +333,7 @@ describe("prepared run admission", () => {
   });
 
   it("closes generic authority while keeping a recovery-only lease active", async () => {
-    const prepared = prepareRun({
-      facts: { ...facts, runId: "run-private-lease" },
-    });
+    const prepared = prepareRun({ runId: "run-private-lease" });
     const admitted = await prepared.admit("embedded");
     const authority = getAdmittedRunDelegatedAuthority(admitted);
     const recovery = retainAdmittedRunBeforeToolCallRecovery(admitted);
@@ -375,7 +356,7 @@ describe("prepared run admission", () => {
       let current = true;
       let sourceHolds = 0;
       const source = prepareRun({
-        facts: { ...facts, runId: "native-source-lease" },
+        runId: "native-source-lease",
         operatorAuthority: createAdmittedRunOperatorAuthority({
           profileId: "native-operator",
           scopes: ["operator.write"],
@@ -404,7 +385,7 @@ describe("prepared run admission", () => {
       try {
         if (refusedRebind) {
           const refused = prepareRun({
-            facts: { ...facts, runId: "native-source-lease" },
+            runId: "native-source-lease",
             operationalRunInstance: admitted.operationalRunInstance,
             assertSourceCurrent: () => {},
           });
