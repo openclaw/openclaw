@@ -22,6 +22,8 @@ export const SCHEMA_MIGRATION_HISTORICAL_REPAIR_TABLES: Readonly<
     "auth_profile_store",
     "auth_profile_state",
     "session_nodes",
+    "session_entry_snapshots",
+    "session_windows",
     "session_key_contract",
     "session_canonical_validation_pending",
     "memory_index_chunks",

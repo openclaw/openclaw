@@ -230,6 +230,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
             apply: true,
             cfg: params.config,
             env: stateEnv,
+            integrityCheck: params.integrityCheck,
             targets: preparedRepairTargets?.map((target) => ({
               agentId: target.agentId,
               storePath: target.path,

@@ -186,6 +186,10 @@ function* openOpenClawAgentDatabaseSteps(
   repairAdmission?: OpenClawAgentDatabaseRepairAdmission,
 ): SqliteIntegrityOperation<OpenClawAgentDatabase> {
   const engineInput = agentEngineInput();
+  const integrityCheck = engineInput
+    ? undefined
+    : (repairAdmission?.integrityCheck ??
+      getOpenClawDatabaseMaintenanceScope()?.sqliteIntegrityCheck);
   if (engineInput) {
     assertEngineStoreExecutionAllowed();
   }
@@ -436,7 +440,7 @@ function* openOpenClawAgentDatabaseSteps(
           verification,
           isValidatedReopen && reuseAdmittedIntegrity,
           reusedSchema,
-          repairAdmission?.integrityCheck,
+          integrityCheck,
         );
         assertCurrent(validationDatabase);
         if (!diagnostics.integrityGateOutcome || diagnostics.integrityGateOutcome === "cached") {
@@ -474,7 +478,7 @@ function* openOpenClawAgentDatabaseSteps(
             undefined,
             undefined,
             false,
-            repairAdmission?.integrityCheck,
+            integrityCheck,
           );
         }
         finishPhase("schema");
@@ -533,8 +537,7 @@ function* openOpenClawAgentDatabaseSteps(
           path: pathname,
           env: options.env,
           // A temporary QUICK repair handle must not publish FULL runtime admission.
-          admittedDb:
-            !engineInput && repairAdmission?.integrityCheck === "quick" ? undefined : selected,
+          admittedDb: integrityCheck === "quick" ? undefined : selected,
         },
         registrationObserver,
       );

@@ -206,6 +206,7 @@ async function runDoctorConfigPreflightOperation(
         cfg: automaticConfigRepair?.config ?? baseConfig,
         env: process.env,
         deferSchemaRepair: repair,
+        integrityCheck: options.integrityCheck,
       }),
     );
     if (!repair && entryState.found > 0) {
@@ -349,6 +350,7 @@ async function runDoctorConfigPreflightOperation(
       apply: true,
       cfg: automaticConfigRepair?.config ?? baseConfig,
       env: process.env,
+      integrityCheck: options.integrityCheck,
     });
   }
   // Import retired locators before removing them from the authored config.

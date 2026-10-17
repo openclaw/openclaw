@@ -224,6 +224,7 @@ export async function noteSessionTranscriptHealth(options?: {
         ...(params.cfg ? { cfg: params.cfg } : {}),
         env: params.env,
         mode: params.shouldRepair ? "import" : "dry-run",
+        integrityCheck: params.integrityCheck,
       },
       maintenanceAuthority,
     );
@@ -238,6 +239,7 @@ export async function noteSessionTranscriptHealth(options?: {
       apply: params.shouldRepair,
       cfg: params.cfg ?? {},
       env: params.env,
+      integrityCheck: params.integrityCheck,
     };
     const canonicalKeyReport = await repairCanonicalSessionKeys(repairParams);
     // Preview reuses its read-only inventory; import and key repair can create stores.
