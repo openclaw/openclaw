@@ -14,6 +14,13 @@ import {
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const renewedCookie = "synthetic_app_session=renewed; Path=/; HttpOnly; SameSite=None; Secure";
+const text = (value: string) => ({ type: "text", text: value });
+const imageContent = (url: string, alt: string, extra: Record<string, unknown> = {}) => ({
+  type: "image",
+  url,
+  alt,
+  ...extra,
+});
 let signInUrl: string;
 let callbackUrl: string;
 const forwardedCredentials: boolean[] = [];
@@ -69,7 +76,11 @@ suite.define(() => {
       await suite.withPage(
         { viewport: { width: 1280, height: 900 }, locale: "en-US", serviceWorkers },
         async ({ context, page }) => {
-          const artifactDir = suite.artifactDir;
+          const screenshot = (name: string) =>
+            page.screenshot({
+              animations: "disabled",
+              path: path.join(suite.artifactDir, name),
+            });
           const expired = async (route: Route) =>
             !(await route.request().allHeaders()).cookie?.includes("synthetic_app_session=renewed");
           let metadataRequests = 0;
@@ -78,6 +89,7 @@ suite.define(() => {
           let renewals = 0;
           const mediaGate = createDeferred();
           const probeGate = createDeferred();
+          const redirect = () => ({ status: 302, headers: { location: signInUrl } });
           const image = Buffer.from(
             await page.evaluate(() => {
               const canvas = document.createElement("canvas");
@@ -102,34 +114,23 @@ suite.define(() => {
               {
                 role: "user",
                 content: [
-                  {
-                    type: "image",
-                    url: "media://inbound/sign-in-proof.png",
-                    alt: "Synthetic attachment",
-                  },
-                  {
-                    type: "image",
-                    url: "media://inbound/second-sign-in-proof.png",
-                    alt: "Second synthetic attachment",
-                  },
-                  { type: "text", text: "Please compare these two synthetic screenshots." },
+                  imageContent("media://inbound/sign-in-proof.png", "Synthetic attachment"),
+                  imageContent(
+                    "media://inbound/second-sign-in-proof.png",
+                    "Second synthetic attachment",
+                  ),
+                  text("Please compare these two synthetic screenshots."),
                 ],
               },
               {
                 role: "assistant",
                 content: [
-                  {
-                    type: "image",
-                    url: "/api/chat/media/outgoing/agent%3Amain%3Amain/sign-in-proof/full",
-                    alt: "Synthetic generated image",
-                    mimeType: "image/png",
-                    width: 640,
-                    height: 320,
-                  },
-                  {
-                    type: "text",
-                    text: "The conversation stays connected while website access is renewed.",
-                  },
+                  imageContent(
+                    "/api/chat/media/outgoing/agent%3Amain%3Amain/sign-in-proof/full",
+                    "Synthetic generated image",
+                    { mimeType: "image/png", width: 640, height: 320 },
+                  ),
+                  text("The conversation stays connected while website access is renewed."),
                 ],
               },
             ],
@@ -152,7 +153,7 @@ suite.define(() => {
             await probeGate.promise;
             await route.fulfill(
               (await expired(route))
-                ? { status: 302, headers: { location: signInUrl } }
+                ? redirect()
                 : request.headers().authorization === "Bearer synthetic-recovery-device-token"
                   ? { status: 200, contentType: "application/json", body: "" }
                   : { status: 401 },
@@ -175,34 +176,29 @@ suite.define(() => {
               },
             ]);
           }
-          await context.route("**/api/chat/media/outgoing/**", async (route) => {
-            outgoingRequests += 1;
+          const serveMedia = async (route: Route, metadata: boolean) => {
             await mediaGate.promise;
             await route.fulfill(
               (await expired(route))
-                ? { status: 302, headers: { location: signInUrl } }
-                : { contentType: "image/png", body: image },
+                ? redirect()
+                : metadata
+                  ? {
+                      contentType: "application/json",
+                      body: JSON.stringify({ available: true, width: 640, height: 320 }),
+                    }
+                  : { contentType: "image/png", body: image },
             );
+          };
+          await context.route("**/api/chat/media/outgoing/**", (route) => {
+            outgoingRequests += 1;
+            return serveMedia(route, false);
           });
-          await context.route("**/__openclaw__/assistant-media?**", async (route) => {
+          await context.route("**/__openclaw__/assistant-media?**", (route) => {
             const metadata = new URL(route.request().url()).searchParams.get("meta") === "1";
             if (metadata) {
               metadataRequests += 1;
             }
-            await mediaGate.promise;
-            if (await expired(route)) {
-              await route.fulfill({
-                status: 302,
-                headers: { location: signInUrl },
-              });
-            } else if (metadata) {
-              await route.fulfill({
-                contentType: "application/json",
-                body: JSON.stringify({ available: true, width: 640, height: 320 }),
-              });
-            } else {
-              await route.fulfill({ contentType: "image/png", body: image });
-            }
+            return serveMedia(route, metadata);
           });
           const rootUrl = new URL("/", suite.server.baseUrl).href;
           await context.route(rootUrl, (route) =>
@@ -241,13 +237,15 @@ suite.define(() => {
           }
           const originalUrl = page.url();
           const initialConnects = (await gateway.getRequests("connect")).length;
+          const expectConversationRetained = async () => {
+            expect(await composer.inputValue()).toBe(draft);
+            expect(page.url()).toBe(originalUrl);
+            expect(await gateway.getRequests("connect")).toHaveLength(initialConnects);
+          };
           expect(initialConnects).toBe(1);
           mediaGate.resolve();
           await page.getByRole("button", { name: "Retry", exact: true }).first().waitFor();
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(artifactDir, "01-image-unavailable.png"),
-          });
+          await screenshot("01-image-unavailable.png");
           probeGate.resolve();
           const modal = page
             .locator("openclaw-modal-dialog")
@@ -257,9 +255,7 @@ suite.define(() => {
             expect(await modal.count()).toBe(1);
             expect(probes).toBe(2);
             expect(metadataRequests).toBe(2);
-            expect(await composer.inputValue()).toBe(draft);
-            expect(page.url()).toBe(originalUrl);
-            expect(await gateway.getRequests("connect")).toHaveLength(initialConnects);
+            await expectConversationRetained();
             const expectDialogToFit = async () => {
               expect(
                 await modal.evaluate((element) => {
@@ -274,16 +270,10 @@ suite.define(() => {
               ).toEqual({ descriptionOverflows: false, outsideViewport: false });
             };
             await expectDialogToFit();
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(artifactDir, "02-sign-in-required.png"),
-            });
+            await screenshot("02-sign-in-required.png");
             await page.setViewportSize({ width: 390, height: 844 });
             await expectDialogToFit();
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(artifactDir, "03-sign-in-required-mobile.png"),
-            });
+            await screenshot("03-sign-in-required-mobile.png");
             await page.setViewportSize({ width: 1280, height: 900 });
             // Let the generated preview exhaust its single automatic retry before
             // signing in; restoration must wake that existing failed resource.
@@ -316,13 +306,8 @@ suite.define(() => {
           expect(forwardedCredentials).not.toContain(true);
           expect(await page.locator("iframe").count()).toBe(0);
           expect(context.pages()).toHaveLength(renewal === "automatic" ? 1 : 2);
-          expect(await composer.inputValue()).toBe(draft);
-          expect(page.url()).toBe(originalUrl);
-          expect(await gateway.getRequests("connect")).toHaveLength(initialConnects);
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(artifactDir, "04-content-recovered.png"),
-          });
+          await expectConversationRetained();
+          await screenshot("04-content-recovered.png");
           await composer.press("Enter");
           const sent = await gateway.waitForRequest("chat.send");
           expect(sent.params).toMatchObject({ message: draft, sessionKey: "agent:main:main" });

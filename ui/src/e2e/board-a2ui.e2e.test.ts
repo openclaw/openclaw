@@ -47,6 +47,58 @@ let sandboxPortClaim: TestPortClaim | undefined;
 let rendererServer: HttpServer;
 let rendererOrigin: string;
 const contexts = new Set<BrowserContext>();
+type Protocol = keyof typeof bundleFiles;
+
+function textComponent(version: Protocol, id: string, text: string) {
+  return version === "v0.8"
+    ? { id, component: { Text: { text: { literalString: text } } } }
+    : { id, component: "Text", text };
+}
+
+function refreshButton(context: Record<string, string> = {}) {
+  return {
+    id: "action",
+    component: "Button",
+    child: "action-label",
+    variant: "primary",
+    action: { event: { name: "refresh", context } },
+  };
+}
+
+function updateComponents(version: Protocol, components: unknown[]) {
+  const update = { surfaceId: "main", components };
+  return version === "v0.8" ? { surfaceUpdate: update } : { version, updateComponents: update };
+}
+
+function buildInitialMessages(version: Protocol) {
+  const components = [
+    version === "v0.8"
+      ? { id: "root", component: { Column: { children: { explicitList: ["title", "action"] } } } }
+      : { id: "root", component: "Column", children: ["title", "action"] },
+    textComponent(version, "title", "A2UI board widget"),
+    version === "v0.8"
+      ? {
+          id: "action",
+          component: {
+            Button: { child: "action-label", action: { name: "refresh", context: [] } },
+          },
+        }
+      : refreshButton(),
+    textComponent(version, "action-label", "Refresh data"),
+  ];
+  const update = updateComponents(version, components);
+  return version === "v0.8"
+    ? [update, { beginRendering: { surfaceId: "main", root: "root" } }]
+    : [{ version, createSurface: { surfaceId: "main", catalogId: basicCatalog } }, update];
+}
+
+async function closeServer(server: HttpServer | undefined) {
+  if (server) {
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  }
+}
 
 async function openDashboard(page: Page): Promise<void> {
   const settingsKey = controlUiBundledSettingsStorageKey(controlUi.baseUrl);
@@ -123,17 +175,9 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
       await context.close();
     }
     await browser?.close();
-    if (sandboxServer) {
-      await new Promise<void>((resolve) => {
-        sandboxServer.close(() => resolve());
-      });
-    }
+    await closeServer(sandboxServer);
     await sandboxPortClaim?.release();
-    if (rendererServer) {
-      await new Promise<void>((resolve) => {
-        rendererServer.close(() => resolve());
-      });
-    }
+    await closeServer(rendererServer);
     await controlUi?.close();
   });
 
@@ -234,60 +278,7 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
       });
       const origin = new URL(controlUi.baseUrl).origin;
       const rendererUrl = `${rendererOrigin}/__openclaw__/cap/canvas-proof/__openclaw__/a2ui/${bundleFiles[version]}`;
-      const messages =
-        version === "v0.8"
-          ? [
-              {
-                surfaceUpdate: {
-                  surfaceId: "main",
-                  components: [
-                    {
-                      id: "root",
-                      component: { Column: { children: { explicitList: ["title", "action"] } } },
-                    },
-                    {
-                      id: "title",
-                      component: { Text: { text: { literalString: "A2UI board widget" } } },
-                    },
-                    {
-                      id: "action",
-                      component: {
-                        Button: { child: "action-label", action: { name: "refresh", context: [] } },
-                      },
-                    },
-                    {
-                      id: "action-label",
-                      component: { Text: { text: { literalString: "Refresh data" } } },
-                    },
-                  ],
-                },
-              },
-              { beginRendering: { surfaceId: "main", root: "root" } },
-            ]
-          : [
-              {
-                version: "v0.9",
-                createSurface: { surfaceId: "main", catalogId: basicCatalog },
-              },
-              {
-                version: "v0.9",
-                updateComponents: {
-                  surfaceId: "main",
-                  components: [
-                    { id: "root", component: "Column", children: ["title", "action"] },
-                    { id: "title", component: "Text", text: "A2UI board widget" },
-                    {
-                      id: "action",
-                      component: "Button",
-                      child: "action-label",
-                      variant: "primary",
-                      action: { event: { name: "refresh", context: {} } },
-                    },
-                    { id: "action-label", component: "Text", text: "Refresh data" },
-                  ],
-                },
-              },
-            ];
+      const messages = buildInitialMessages(version);
       const boot = JSON.stringify({ messages, actionTier: "state" }).replaceAll("<", "\\u003c");
       const documentHtml = buildWidgetDocument(
         "A2UI controls",
@@ -371,27 +362,10 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
       expect(await outer.getAttribute("inert")).toBeNull();
       if (rejectsAction) {
         actionStage = "installing oversized action";
-        await widgetFrame.evaluate(() => {
-          Reflect.get(globalThis, "openclawA2UI").applyMessages([
-            {
-              version: "v0.9",
-              updateComponents: {
-                surfaceId: "main",
-                components: [
-                  {
-                    id: "action",
-                    component: "Button",
-                    child: "action-label",
-                    variant: "primary",
-                    action: {
-                      event: { name: "refresh", context: { diagnostic: "x".repeat(8193) } },
-                    },
-                  },
-                ],
-              },
-            },
-          ]);
-        });
+        await widgetFrame.evaluate(
+          (message) => Reflect.get(globalThis, "openclawA2UI").applyMessages([message]),
+          updateComponents("v0.9", [refreshButton({ diagnostic: "x".repeat(8193) })]),
+        );
         actionStage = "clicking oversized action";
         await clickBoardWidgetControl(page, widgetFrame.getByText("Refresh data"));
         actionStage = "waiting for rejected-action alert";
@@ -433,29 +407,9 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
       actionStage = "updating the retained widget surface";
       const surface = await widgetFrame.locator("a2ui-surface").elementHandle();
       expect(surface).not.toBeNull();
-      const titleUpdate =
-        version === "v0.8"
-          ? {
-              surfaceUpdate: {
-                surfaceId: "main",
-                components: [
-                  {
-                    id: "title",
-                    component: { Text: { text: { literalString: "A2UI board widget updated" } } },
-                  },
-                ],
-              },
-            }
-          : {
-              version: "v0.9",
-              updateComponents: {
-                surfaceId: "main",
-                components: [{ id: "title", component: "Text", text: "A2UI board widget updated" }],
-              },
-            };
       await widgetFrame.evaluate(
         (message) => Reflect.get(globalThis, "openclawA2UI").applyMessages([message]),
-        titleUpdate,
+        updateComponents(version, [textComponent(version, "title", "A2UI board widget updated")]),
       );
       await widgetFrame.getByText("A2UI board widget updated", { exact: true }).waitFor();
       expect(

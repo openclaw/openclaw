@@ -38,6 +38,14 @@ suite.define(() => {
             byteLength: bytes.length,
             mime: "image/jpeg",
           };
+          const textMessage = (role: "user" | "assistant", text: string) => ({
+            role,
+            content: [{ type: "text", text }],
+          });
+          const prefs = () => ({
+            status: "ok",
+            entries: { "ui.theme": "claw", "ui.themeMode": mode, "ui.background": preference },
+          });
           const gateway = await installMockGateway(page, {
             assistantName: "Assistant",
             agentModel: "demo/example",
@@ -50,30 +58,19 @@ suite.define(() => {
               "users.background.get",
             ],
             historyMessages: [
-              {
-                role: "user",
-                content: [{ type: "text", text: "Keep the writing surface solid." }],
-              },
-              {
-                role: "assistant",
-                content: [
-                  {
-                    type: "text",
-                    text: Array.from(
-                      { length: 18 },
-                      (_, index) =>
-                        `A clear response on the chosen backdrop. Paragraph ${index + 1} keeps the transcript long enough to exercise scrolling.`,
-                    ).join("\n\n"),
-                  },
-                ],
-              },
+              textMessage("user", "Keep the writing surface solid."),
+              textMessage(
+                "assistant",
+                Array.from(
+                  { length: 18 },
+                  (_, index) =>
+                    `A clear response on the chosen backdrop. Paragraph ${index + 1} keeps the transcript long enough to exercise scrolling.`,
+                ).join("\n\n"),
+              ),
             ],
             methodResponses: {
               "config.get": configResponse({ themeMode: mode }, "presentation"),
-              "users.prefs.get": {
-                status: "ok",
-                entries: { "ui.theme": "claw", "ui.themeMode": mode, "ui.background": preference },
-              },
+              "users.prefs.get": prefs(),
               "users.prefs.set": { status: "ok" },
               "users.background.get": { status: "ok", asset, preference },
             },
@@ -82,10 +79,7 @@ suite.define(() => {
             route.fulfill({ status: 200, contentType: "image/jpeg", body: bytes }),
           );
           const sync = async () => {
-            await gateway.setMethodResponse("users.prefs.get", {
-              status: "ok",
-              entries: { "ui.theme": "claw", "ui.themeMode": mode, "ui.background": preference },
-            });
+            await gateway.setMethodResponse("users.prefs.get", prefs());
             await gateway.setMethodResponse("users.background.get", {
               status: "ok",
               asset,
@@ -97,13 +91,11 @@ suite.define(() => {
               .locator(".new-session-page openclaw-session-background img")
               .waitFor({ state: "visible" });
             return await page.evaluate(() => {
-              const background = document.querySelector<HTMLElement>(
-                ".new-session-page openclaw-session-background",
-              )!;
-              const canvas = document.querySelector<HTMLElement>(".content--new-session")!;
-              const composer = document.querySelector<HTMLElement>(
-                ".new-session-page .agent-chat__input",
-              )!;
+              const element = (selector: string) => document.querySelector<HTMLElement>(selector)!;
+              const background = element(".new-session-page openclaw-session-background");
+              const canvas = element(".content--new-session");
+              const composer = element(".new-session-page .agent-chat__input");
+              const imageStyle = getComputedStyle(background.querySelector("img")!);
               const b = background.getBoundingClientRect(),
                 c = canvas.getBoundingClientRect(),
                 input = composer.getBoundingClientRect();
@@ -119,8 +111,8 @@ suite.define(() => {
                 composerMiddle: input.top + input.height / 2,
                 composerLeft: input.left,
                 composerRight: input.right,
-                mask: getComputedStyle(background.querySelector("img")!).maskImage,
-                opacity: Number(getComputedStyle(background.querySelector("img")!).opacity),
+                mask: imageStyle.maskImage,
+                opacity: Number(imageStyle.opacity),
                 underpaint: getComputedStyle(background).backgroundColor,
                 composerBackground: getComputedStyle(composer).backgroundColor,
                 width: innerWidth,
@@ -128,6 +120,17 @@ suite.define(() => {
               };
             });
           };
+          const expectAlignedFade = () =>
+            expect
+              .poll(async () => {
+                const g = await newPageGeometry();
+                return Math.abs(g.fade - g.composerMiddle);
+              })
+              .toBeLessThan(2);
+          const transcriptFade = () =>
+            page
+              .locator(".chat-main__conversation")
+              .evaluate((element) => getComputedStyle(element, "::before").content);
           await page.goto(suite.server.baseUrl + "new");
           await expect.poll(async () => (await newPageGeometry()).fade).toBeGreaterThan(0);
           for (const viewport of [
@@ -135,12 +138,7 @@ suite.define(() => {
             { width: 390, height: 844 },
           ]) {
             await page.setViewportSize(viewport);
-            await expect
-              .poll(async () => {
-                const g = await newPageGeometry();
-                return Math.abs(g.fade - g.composerMiddle);
-              })
-              .toBeLessThan(2);
+            await expectAlignedFade();
             const g = await newPageGeometry();
             expect(Math.abs(g.left - g.canvasLeft)).toBeLessThan(1);
             expect(Math.abs(g.right - g.canvasRight)).toBeLessThan(1);
@@ -155,12 +153,7 @@ suite.define(() => {
           await page.setViewportSize({ width: 1440, height: 1000 });
           const editor = page.locator(".new-session-page .agent-chat__input textarea");
           await editor.fill("One\nTwo\nThree\nFour\nFive\nSix");
-          await expect
-            .poll(async () => {
-              const g = await newPageGeometry();
-              return Math.abs(g.fade - g.composerMiddle);
-            })
-            .toBeLessThan(2);
+          await expectAlignedFade();
           await editor.fill("");
           await page.goto(suite.server.baseUrl + "settings/appearance");
           const section = page.locator("#settings-appearance-background");
@@ -206,51 +199,36 @@ suite.define(() => {
               .waitFor({ state: "visible" });
             await page.getByText("Keep the writing surface solid.", { exact: true }).waitFor();
             const surfaces = await page.evaluate(() => {
-              const bg = document
-                .querySelector(".sidebar-region__background")!
-                .getBoundingClientRect();
-              const header = document
-                .querySelector(".sidebar-region__header")!
-                .getBoundingClientRect();
+              const element = (selector: string) => document.querySelector(selector)!;
+              const style = (selector: string, pseudo?: string) =>
+                getComputedStyle(element(selector), pseudo);
+              const header = ".sidebar-region__header";
+              const headerFade = style(header, "::before");
               return {
-                headerFadeBottom: getComputedStyle(
-                  document.querySelector(".sidebar-region__header")!,
-                  "::before",
-                ).bottom,
-                transcriptFade: getComputedStyle(
-                  document.querySelector(".chat-main__conversation")!,
-                  "::before",
-                ).content,
-                backgroundTop: bg.top,
-                headerTop: header.top,
-                bubble: getComputedStyle(document.querySelector(".chat-group.user .chat-bubble")!)
-                  .backgroundColor,
-                composer: getComputedStyle(document.querySelector(".chat .agent-chat__input")!)
-                  .backgroundColor,
-                header: getComputedStyle(document.querySelector(".chat-pane__header")!)
-                  .backgroundColor,
-                fade: getComputedStyle(
-                  document.querySelector(".sidebar-region__header")!,
-                  "::before",
-                ).backgroundImage,
+                headerFadeBottom: headerFade.bottom,
+                transcriptFade: style(".chat-main__conversation", "::before").content,
+                backgroundTop: element(".sidebar-region__background").getBoundingClientRect().top,
+                headerTop: element(header).getBoundingClientRect().top,
+                bubble: style(".chat-group.user .chat-bubble").backgroundColor,
+                composer: style(".chat .agent-chat__input").backgroundColor,
+                header: style(".chat-pane__header").backgroundColor,
+                fade: headerFade.backgroundImage,
               };
             });
             expect(Math.abs(surfaces.backgroundTop - surfaces.headerTop)).toBeLessThan(1);
             expect(surfaces.bubble).toMatch(/^rgb\(/);
             expect(surfaces.composer).toMatch(/^rgb\(/);
-            expect(surfaces.header).toBe("rgba(0, 0, 0, 0)");
+            expect(surfaces).toMatchObject({
+              header: "rgba(0, 0, 0, 0)",
+              headerFadeBottom: "0px",
+              transcriptFade: "none",
+            });
             expect(surfaces.fade).toContain("linear-gradient");
-            expect(surfaces.headerFadeBottom).toBe("0px");
-            expect(surfaces.transcriptFade).toBe("none");
             for (const edge of ["top", "bottom"] as const) {
               await page.locator(".chat-thread").evaluate((thread, position) => {
                 thread.scrollTop = position === "top" ? 0 : thread.scrollHeight;
               }, edge);
-              expect(
-                await page
-                  .locator(".chat-main__conversation")
-                  .evaluate((element) => getComputedStyle(element, "::before").content),
-              ).toBe("none");
+              expect(await transcriptFade()).toBe("none");
             }
             const contrast = await page.evaluate((colorMode) => {
               const image = document.querySelector<HTMLImageElement>(
@@ -313,11 +291,7 @@ suite.define(() => {
           await page.goto(suite.server.baseUrl + "chat");
           await page.getByText("Keep the writing surface solid.", { exact: true }).waitFor();
           expect(await page.locator(".sidebar-region__background img").count()).toBe(0);
-          expect(
-            await page
-              .locator(".chat-main__conversation")
-              .evaluate((element) => getComputedStyle(element, "::before").content),
-          ).toBe('""');
+          expect(await transcriptFade()).toBe('""');
         },
       );
     },

@@ -36,6 +36,42 @@ beforeEach(() => {
 let browser: Browser;
 let controlUi: ControlUiE2eServer;
 const contexts = new Set<BrowserContext>();
+const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
+const viewport = { width: 1400, height: 900 };
+
+async function newPage(size = viewport, record = false) {
+  const context = await browser.newContext({
+    viewport: size,
+    ...(record && recordProof ? { recordVideo: { dir: proofDir, size } } : {}),
+  });
+  contexts.add(context);
+  return { context, page: await context.newPage() };
+}
+
+async function closePage(page: Page, videoName?: string) {
+  const video = page.video();
+  const context = page.context();
+  await context.close();
+  contexts.delete(context);
+  if (recordProof && videoName && video) {
+    await video.saveAs(path.join(proofDir, `${videoName}.webm`));
+  }
+}
+
+async function screenshot(page: Page, name: string) {
+  if (recordProof) {
+    await page.screenshot({ path: path.join(proofDir, `${name}.png`) });
+  }
+}
+
+function installBoard(page: Page, options: Parameters<typeof installMockGateway>[1] = {}) {
+  return installMockGateway(page, {
+    sessionKey,
+    featureMethods: ["board.get", "chat.metadata", "chat.startup"],
+    methodResponses: { "board.get": boardSnapshot() },
+    ...options,
+  });
+}
 
 type TranscriptGeometry = {
   width: number;
@@ -181,16 +217,10 @@ describeControlUiE2e("Board split transcript restore", () => {
   });
 
   it("repaints the transcript after expanded -> split", async () => {
-    const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
-    contexts.add(context);
-    const page = await context.newPage();
+    const { page } = await newPage();
     const now = Date.now();
-    await installMockGateway(page, {
-      sessionKey,
+    await installBoard(page, {
       featureMethods: ["board.get", "chat.history", "chat.metadata", "chat.startup"],
-      methodResponses: {
-        "board.get": boardSnapshot(),
-      },
       historyMessages: Array.from({ length: 40 }, (_, index) => ({
         role: index % 2 === 0 ? "user" : "assistant",
         content: `Message number ${index}: the quick brown fox jumps over the lazy dog to give this bubble a realistic height.`,
@@ -224,15 +254,11 @@ describeControlUiE2e("Board split transcript restore", () => {
   }, 120_000);
 
   it("keeps adjacent chat rows separated throughout a real dashboard-panel resize", async () => {
-    const context = await browser.newContext({ viewport: { width: 1720, height: 1250 } });
-    contexts.add(context);
+    const { context, page } = await newPage({ width: 1720, height: 1250 });
     try {
-      const page = await context.newPage();
       const now = Date.now();
-      await installMockGateway(page, {
-        sessionKey,
+      await installBoard(page, {
         featureMethods: ["board.get", "chat.history", "chat.metadata", "chat.startup"],
-        methodResponses: { "board.get": boardSnapshot() },
         historyMessages: [
           {
             role: "assistant",
@@ -287,17 +313,8 @@ describeControlUiE2e("Board split transcript restore", () => {
   }, 120_000);
 
   it("transitions between expanded and split dashboard panel states", async () => {
-    const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
-    const context = await browser.newContext({
-      viewport: { width: 1400, height: 900 },
-      ...(recordProof
-        ? { recordVideo: { dir: proofDir, size: { width: 1400, height: 900 } } }
-        : {}),
-    });
-    contexts.add(context);
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      sessionKey,
+    const { page } = await newPage(viewport, true);
+    const gateway = await installBoard(page, {
       terminalEnabled: true,
       featureMethods: [
         "board.get",
@@ -326,7 +343,7 @@ describeControlUiE2e("Board split transcript restore", () => {
       if (!recordProof) {
         return;
       }
-      await page.screenshot({ path: path.join(proofDir, `${name}.png`) });
+      await screenshot(page, name);
       await page.waitForTimeout(500);
     };
     await sidePanel.locator('[data-region-header="side"]').waitFor();
@@ -374,25 +391,13 @@ describeControlUiE2e("Board split transcript restore", () => {
     expect(await gateway.getRequests("board.update")).toHaveLength(0);
     await recordStep("transition-04-split-reopened");
     if (recordProof) {
-      const video = page.video();
-      await context.close();
-      contexts.delete(context);
-      await video?.saveAs(path.join(proofDir, "dashboard-side-panel-transition.webm"));
+      await closePage(page, "dashboard-side-panel-transition");
     }
   }, 120_000);
 
   it("activates Side chat from a split dashboard panel", async () => {
-    const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
-    const context = await browser.newContext({
-      viewport: { width: 1400, height: 900 },
-      ...(recordProof
-        ? { recordVideo: { dir: proofDir, size: { width: 1400, height: 900 } } }
-        : {}),
-    });
-    contexts.add(context);
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      sessionKey,
+    const { page } = await newPage(viewport, true);
+    await installBoard(page, {
       featureMethods: [
         "board.get",
         "board.update",
@@ -417,9 +422,7 @@ describeControlUiE2e("Board split transcript restore", () => {
       await sidePanel.locator('[data-region-header="side"]').waitFor();
       await openChatSidePanelType(page, "Side chat");
       await expectSidePanelTabs(page, ["Dashboard", "Side chat"]);
-      if (recordProof) {
-        await page.screenshot({ path: path.join(proofDir, "01-side-chat-added.png") });
-      }
+      await screenshot(page, "01-side-chat-added");
 
       await sidePanel.locator(".tabstrip-tab").filter({ hasText: "Side chat" }).click();
       await sidePanel.locator('[data-panel-slot="companion"]:not([hidden])').waitFor();
@@ -430,31 +433,15 @@ describeControlUiE2e("Board split transcript restore", () => {
             .evaluate((panel) => panel.hasAttribute("hidden")),
         )
         .toBe(true);
-      if (recordProof) {
-        await page.screenshot({ path: path.join(proofDir, "02-side-chat-active.png") });
-      }
+      await screenshot(page, "02-side-chat-active");
     } finally {
-      const video = page.video();
-      await context.close();
-      contexts.delete(context);
-      if (recordProof && video) {
-        await video.saveAs(path.join(proofDir, "dashboard-side-chat-tabs.webm"));
-      }
+      await closePage(page, "dashboard-side-chat-tabs");
     }
   }, 120_000);
 
   it("does not offer Discussion when the gateway has no discussion provider", async () => {
-    const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
-    const context = await browser.newContext({
-      viewport: { width: 1400, height: 900 },
-      ...(recordProof
-        ? { recordVideo: { dir: proofDir, size: { width: 1400, height: 900 } } }
-        : {}),
-    });
-    contexts.add(context);
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      sessionKey,
+    const { page } = await newPage(viewport, true);
+    const gateway = await installBoard(page, {
       featureMethods: ["board.get", "chat.metadata", "chat.startup", "session.discussion.info"],
       methodResponses: {
         "board.get": boardSnapshot(),
@@ -477,30 +464,15 @@ describeControlUiE2e("Board split transcript restore", () => {
           layoutMenu.locator('[role^="menuitem"]').filter({ hasText: "Discussion" }).count(),
         )
         .toBe(0);
-      if (recordProof) {
-        await page.screenshot({ path: path.join(proofDir, "03-discussion-hidden.png") });
-      }
+      await screenshot(page, "03-discussion-hidden");
     } finally {
-      const video = page.video();
-      await context.close();
-      contexts.delete(context);
-      if (recordProof && video) {
-        await video.saveAs(path.join(proofDir, "dashboard-discussion-unavailable.webm"));
-      }
+      await closePage(page, "dashboard-discussion-unavailable");
     }
   }, 120_000);
 
   it("retains a sole Dashboard when minimized and reopened from Layout", async () => {
-    const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
-    contexts.add(context);
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      sessionKey,
-      featureMethods: ["board.get", "chat.metadata", "chat.startup"],
-      methodResponses: {
-        "board.get": boardSnapshot(),
-      },
-    });
+    const { page } = await newPage();
+    const gateway = await installBoard(page);
     await showDashboard(page);
 
     const sidePanel = page.locator(".side-panel");
@@ -508,35 +480,20 @@ describeControlUiE2e("Board split transcript restore", () => {
     await expectSidePanelTabs(page, ["Dashboard"]);
     const dashboard = await page.locator("openclaw-board-view").elementHandle();
     expect(dashboard).not.toBeNull();
-    await selectChatLayoutAction(page, "Minimize side panel");
-
-    await expectMinimizedDashboard(page);
-    expect(await dashboard!.evaluate((element) => element.isConnected)).toBe(true);
-    expect(await gateway.getRequests("board.update")).toHaveLength(0);
-
-    await selectChatLayoutAction(page, "Side panel");
-    await sidePanel.locator('[data-region-header="side"]').waitFor();
-    await expectSidePanelTabs(page, ["Dashboard"]);
-    expect(
-      await page
-        .locator("openclaw-board-view")
-        .evaluate((element, previous) => element === previous, dashboard),
-    ).toBe(true);
-    expect(await gateway.getRequests("board.update")).toHaveLength(0);
-
-    await selectChatLayoutAction(page, "Minimize side panel");
-    await expectMinimizedDashboard(page);
-    expect(await dashboard!.evaluate((element) => element.isConnected)).toBe(true);
-    expect(await gateway.getRequests("board.update")).toHaveLength(0);
-
-    await selectChatLayoutAction(page, "Side panel");
-    await sidePanel.locator('[data-region-header="side"]').waitFor();
-    await expectSidePanelTabs(page, ["Dashboard"]);
-    expect(
-      await page
-        .locator("openclaw-board-view")
-        .evaluate((element, previous) => element === previous, dashboard),
-    ).toBe(true);
-    expect(await gateway.getRequests("board.update")).toHaveLength(0);
+    for (let cycle = 0; cycle < 2; cycle++) {
+      await selectChatLayoutAction(page, "Minimize side panel");
+      await expectMinimizedDashboard(page);
+      expect(await dashboard!.evaluate((element) => element.isConnected)).toBe(true);
+      expect(await gateway.getRequests("board.update")).toHaveLength(0);
+      await selectChatLayoutAction(page, "Side panel");
+      await sidePanel.locator('[data-region-header="side"]').waitFor();
+      await expectSidePanelTabs(page, ["Dashboard"]);
+      expect(
+        await page
+          .locator("openclaw-board-view")
+          .evaluate((element, previous) => element === previous, dashboard),
+      ).toBe(true);
+      expect(await gateway.getRequests("board.update")).toHaveLength(0);
+    }
   }, 120_000);
 });
