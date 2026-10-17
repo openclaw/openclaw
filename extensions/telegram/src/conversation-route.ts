@@ -14,6 +14,7 @@ import {
   resolveAgentRoute,
   resolveThreadSessionKeys,
   buildAgentMainSessionKey,
+  normalizeAgentId,
   sanitizeAgentId,
 } from "openclaw/plugin-sdk/routing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -234,6 +235,38 @@ export function resolveTelegramConversationBaseSessionKey(
     resolveDefaultTelegramAccountId(params.cfg),
     params,
   );
+}
+
+export function resolveTelegramOutboundDirectBaseSessionKey(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  accountId: string;
+  chatId: string;
+  sessionKey: string;
+}): string {
+  // Mirror inbound routing: a named account with an explicit binding to this
+  // agent is not a fallback, so it must not be forced into per-account scope.
+  const inboundRoute = resolveAgentRoute({
+    cfg: params.cfg,
+    channel: "telegram",
+    accountId: params.accountId,
+    peer: { kind: "direct", id: params.chatId },
+  });
+  return resolveTelegramConversationBaseSessionKey({
+    cfg: params.cfg,
+    route: {
+      agentId: params.agentId,
+      accountId: params.accountId,
+      matchedBy:
+        normalizeAgentId(inboundRoute.agentId) === normalizeAgentId(params.agentId)
+          ? inboundRoute.matchedBy
+          : "default",
+      sessionKey: params.sessionKey,
+    },
+    chatId: params.chatId,
+    isGroup: false,
+    senderId: params.chatId,
+  });
 }
 
 export function resolveTelegramTargetSession(params: {

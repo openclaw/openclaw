@@ -68,7 +68,7 @@ import {
 } from "./command-ui.js";
 import { resolveTelegramConfigAccessorAccount, telegramConfigAdapter } from "./config-adapter.js";
 import { prepareTelegramConversationRouteOwnersAsync } from "./conversation-route-owner.js";
-import { resolveTelegramConversationBaseSessionKey } from "./conversation-route.js";
+import { resolveTelegramOutboundDirectBaseSessionKey } from "./conversation-route.js";
 import {
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
@@ -439,17 +439,12 @@ function resolveTelegramOutboundSessionRoute(params: {
   if (isGroup) {
     return baseRoute;
   }
-  const inboundBaseSessionKey = resolveTelegramConversationBaseSessionKey({
+  const inboundBaseSessionKey = resolveTelegramOutboundDirectBaseSessionKey({
     cfg: params.cfg,
-    route: {
-      agentId: params.agentId,
-      accountId,
-      matchedBy: "default",
-      sessionKey: baseRoute.sessionKey,
-    },
+    agentId: params.agentId,
+    accountId,
     chatId,
-    isGroup: false,
-    senderId: chatId,
+    sessionKey: baseRoute.sessionKey,
   });
   const directBaseRoute = {
     ...baseRoute,
