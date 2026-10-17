@@ -13,8 +13,8 @@ import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
+import { BrowserTabCardHost } from "./browser-tab-card.tsx";
 import { createActivityGroupHarness } from "./chat-message-native.test-support.tsx";
-import { ToolPreview } from "./widget-card-view.tsx";
 
 const hosts: HTMLElement[] = [];
 const activityGroups = new Map<HTMLElement, ReturnType<typeof createActivityGroupHarness>>();
@@ -154,10 +154,10 @@ async function card(
   const host = container();
   mountSolid(
     () => (
-      <ToolPreview
+      <BrowserTabCardHost
         preview={{ kind: "browser-tab", ...tab, url: "https://example.com/page" }}
-        surface="chat_tool"
-        options={{ browserTabRevision: "one", browserTabLatest: latest }}
+        revision="one"
+        latest={latest}
       />
     ),
     { container: host },

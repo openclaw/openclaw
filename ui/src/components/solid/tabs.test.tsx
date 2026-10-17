@@ -63,8 +63,8 @@ it("keeps controlled selection authoritative through rejection, acceptance, and 
   expect(onSelect).toHaveBeenCalledTimes(2);
 });
 
-it("preserves local selection and manual focus, then resets on a new default", () => {
-  const [initial, setInitial] = createSignal<string | null>("a");
+it("preserves controlled selection and manual focus through reorder and activation changes", () => {
+  const [active, setActive] = createSignal<string | null>("a");
   const [manual, setManual] = createSignal(true);
   const [items, setItems] = createSignal([
     { value: "a", label: "Alpha" },
@@ -74,9 +74,12 @@ it("preserves local selection and manual focus, then resets on a new default", (
   const view = render(() => (
     <Tabs
       items={items()}
-      defaultActive={initial()}
+      active={active()}
+      onSelect={(value) => {
+        setActive(value);
+      }}
       activation={manual() ? "manual" : "auto"}
-      ariaLabel="Local"
+      ariaLabel="Controlled"
     />
   ));
   flush();
@@ -93,7 +96,7 @@ it("preserves local selection and manual focus, then resets on a new default", (
   setItems((current) => current.toReversed());
   flush();
   expect(beta.hasAttribute("active")).toBe(true);
-  setInitial(null);
+  setActive(null);
   flush();
   expect(view.queryByRole("tab", { selected: true })).toBeNull();
   setManual(false);

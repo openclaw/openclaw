@@ -144,7 +144,9 @@ it("reads saved intent once per attachment and preserves explicit choices across
 
 it("clamps to viewport changes only while attached", () => {
   let width = 520;
-  const dock = createDock("test-resize-lifetime", { maxWidth: () => width });
+  const layout = createLayout("right");
+  vi.spyOn(layout, "maxWidth").mockImplementation(() => width);
+  const dock = createDock("test-resize-lifetime", { layout });
   dock.connect();
   dock.setOpen(true);
   width = 420;
@@ -193,10 +195,11 @@ describe("DockLayout inline columns", () => {
       supportedDocks: ["right"],
       defaultWidth: 280,
     });
+    vi.spyOn(layout, "maxWidth").mockReturnValue(420);
     const reservation = "--oc-test-inline-reserve-right";
     document.documentElement.style.setProperty(reservation, "17px");
     const host = { notify: vi.fn(), isEmbedded: () => true };
-    const options = { ...host, layout, maxWidth: () => 420 };
+    const options = { ...host, layout };
     const controller = createDock("test-inline", options);
     controller.connect();
     const { container, unmount } = mountResizer(host, controller);

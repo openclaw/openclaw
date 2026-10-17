@@ -35,8 +35,8 @@ function stepClass(props: WizardStepControlsProps, name: string) {
   return `${props.presentation === "channels" ? "channels-wizard" : "wizard-step"}__${name}`;
 }
 
-export function WizardBusyButton(props: { statusLabel: string; buttonLabel?: string }) {
-  const label = () => props.buttonLabel ?? t("modelSetup.wizard.continue");
+export function WizardBusyButton(props: { statusLabel: string }) {
+  const label = () => t("modelSetup.wizard.continue");
   return (
     <button type="button" class="btn primary" disabled aria-busy="true" aria-label={label()}>
       <span class="btn__label">{label()}</span>
