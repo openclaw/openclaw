@@ -10,6 +10,7 @@ import {
 import { createGatewayRequestMock } from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
+  chatHistoryRequests,
   resetChatHistoryProjection,
   synchronizeInitialChatSnapshotConnection,
 } from "./chat-history-state.ts";
@@ -318,6 +319,32 @@ describe("first chat startup snapshot ordering", () => {
       expect.objectContaining({ sessionKey, cursor: "stored-cursor" }),
       { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
+  });
+
+  it("uses the restored cursor when the cache settles during stream admission", async () => {
+    const h = mountPane();
+    const admission = createDeferred<boolean>();
+    chatHistoryRequests(h.state).subscriptionReady = admission.promise;
+    h.request.mockResolvedValueOnce({
+      kind: "delta",
+      messages: [],
+      sessionInfo: h.liveResult.sessionInfo,
+      deltaCursor: "live-cursor",
+    });
+    h.connect();
+    const loading = h.start();
+    h.read.resolve(stored);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.state.chatMessages).toEqual(stored.messages);
+    expect(h.request).not.toHaveBeenCalled();
+    admission.resolve(true);
+    await loading;
+    expect(h.request).toHaveBeenCalledExactlyOnceWith(
+      "chat.startup",
+      expect.objectContaining({ sessionKey, cursor: "stored-cursor" }),
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
+    );
+    expect(h.state.chatMessages).toEqual(stored.messages);
   });
 
   it("shares an immediate startup between callers while the local read is pending", async () => {
