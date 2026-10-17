@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { channel } from "node:diagnostics_channel";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -44,6 +45,8 @@ async function loadOwners() {
     lifecycle,
     engine,
     maintenance,
+    transcriptStore,
+    transcriptFts,
   ] = await Promise.all([
     import("./openclaw-agent-db.js"),
     import("./openclaw-agent-db-readonly.js"),
@@ -64,6 +67,8 @@ async function loadOwners() {
     import("../config/sessions/session-accessor.sqlite-lifecycle.js"),
     import("./openclaw-agent-db-engine.js"),
     import("./openclaw-agent-db-maintenance-lease.js"),
+    import("../config/sessions/session-accessor.sqlite-transcript-store.js"),
+    import("../config/sessions/session-transcript-fts.js"),
   ]);
   return {
     openOpenClawAgentDatabase: database.openOpenClawAgentDatabase,
@@ -92,6 +97,8 @@ async function loadOwners() {
     admitAgentEngineSearchExtensions: engine.admitAgentEngineSearchExtensions,
     openAgentEngineStore: engine.openAgentEngineStore,
     withAgentDatabaseMaintenanceLease: maintenance.withAgentDatabaseMaintenanceLease,
+    appendTranscriptEventsInTransaction: transcriptStore.appendTranscriptEventsInTransaction,
+    createSessionTranscriptFtsInserter: transcriptFts.createSessionTranscriptFtsInserter,
   };
 }
 
@@ -681,6 +688,115 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       expect.objectContaining({ sessionId: sibling.sessionId, messageId: "search-sibling-user" }),
     ]);
   });
+
+  it("indexes only accepted searchable messages from a transcript append batch", async () => {
+    const target = {
+      agentId: "actor",
+      sessionId: "fts-append-batch",
+      sessionKey: "agent:actor:fts-append-batch",
+      storePath: path.join(root, "agents", "actor", "sessions", "sessions.json"),
+      env: process.env,
+    };
+    await owners.upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const event = (id: string, parentId: string | null, role: string, content: string) => ({
+      type: "message",
+      id,
+      parentId,
+      timestamp: 1,
+      message: { role, content },
+    });
+    withEngineStoreAdmission(() =>
+      owners.runOpenClawAgentWriteTransaction(
+        (database) => {
+          expect(
+            owners.appendTranscriptEventsInTransaction(database, target, [
+              event("batch-user", null, "user", "batchneedle accepted origin"),
+              event("batch-user", null, "user", "batchneedle rejected duplicate"),
+              event("batch-tool", "batch-user", "toolResult", "batchneedle hidden tool"),
+              event("batch-reply", "batch-tool", "assistant", "batchneedle accepted reply"),
+            ]),
+          ).toBe(3);
+        },
+        { agentId: target.agentId },
+      ),
+    );
+    const search = (query: string) => owners.searchSessionTranscripts({ ...target, query });
+    expect((await search("batchneedle")).hits.map((hit) => hit.messageId).toSorted()).toEqual([
+      "batch-reply",
+      "batch-user",
+    ]);
+    expect((await search("rejected")).hits).toEqual([]);
+    expect((await search("hidden")).hits).toEqual([]);
+  });
+
+  it.each([4, 67])(
+    "preserves FTS row identity for %i nullable and repeated message IDs in bounded statements",
+    async (count) => {
+      const sessionId = `fts-identities-${count}`;
+      const options = { agentId: "actor" };
+      const database = withEngineStoreAdmission(() => owners.openOpenClawAgentDatabase(options));
+      assert(isPostgresSqlConnection(database.db));
+      const facts = getPostgresPhysicalFacts(database.db);
+      assert(facts);
+      // Cold restoration preserves these nullable/repeated stored IDs; normal
+      // transcript append filters absent IDs and deduplicates event identities.
+      const entries = Array.from({ length: count }, (_, index) => ({
+        messageId: index % 4 < 2 ? null : "repeated",
+        text: `ftskeytoken${index}`,
+        role: index % 2 ? "assistant" : "user",
+        timestamp: index,
+      }));
+      let statements = 0;
+      const observation = channel("openclaw.database.statement");
+      const observe = (value: unknown) => {
+        if (isRecord(value) && value.engine === "postgres") {
+          statements += 1;
+        }
+      };
+      withEngineStoreAdmission(() =>
+        owners.runOpenClawAgentWriteTransaction(({ db }) => {
+          const insert = owners.createSessionTranscriptFtsInserter(db, sessionId);
+          observation.subscribe(observe);
+          try {
+            insert(entries);
+          } finally {
+            observation.unsubscribe(observe);
+          }
+        }, options),
+      );
+      const persisted = await client.query(
+        `SELECT r.id = f.rowid AS same_id, r.message_id AS owner_message_id,
+          f.message_id, f.text, f.role, f.timestamp
+          FROM "${facts.namespace}".session_transcript_fts_rows r
+          LEFT JOIN "${facts.namespace}".session_transcript_fts f ON f.rowid = r.id
+          WHERE r.session_id = $1 ORDER BY r.id`,
+        [sessionId],
+      );
+      expect(persisted.rows).toEqual(
+        entries.map((entry) => ({
+          same_id: true,
+          owner_message_id: entry.messageId,
+          message_id: entry.messageId,
+          text: entry.text,
+          role: entry.role,
+          timestamp: entry.timestamp,
+        })),
+      );
+      for (const index of [0, 1, 2, 3]) {
+        const searched = await client.query(
+          `SELECT message_id, text FROM "${facts.namespace}".session_transcript_fts
+            WHERE session_id = $1 AND openclaw_search @@
+              plainto_tsquery('"${facts.namespace}".openclaw_simple_unaccent', $2)`,
+          [sessionId, `ftskeytoken${index}`],
+        );
+        expect(searched.rows).toEqual([
+          { message_id: index < 2 ? null : "repeated", text: `ftskeytoken${index}` },
+        ]);
+      }
+      // Each observed PostgreSQL statement makes one bridge/server request.
+      expect(statements).toBe(count === 4 ? 1 : 2);
+    },
+  );
 
   it("reads persisted auth through the selected owner and agent worker", async () => {
     const {
