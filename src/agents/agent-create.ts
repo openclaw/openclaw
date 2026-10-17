@@ -121,6 +121,8 @@ type CreateAgentParams = {
   transformConfig?: typeof transformConfigFileWithRetry;
   /** Revalidate delegated authority before each new persistent effect. */
   beforePersistentApply?: () => void;
+  /** Doctor may restore only the backed-up stores selected by its recovery policy. */
+  restorePaths?: readonly string[];
   /** Admit new identity input until its first successful publication. */
   assertIdentityInputAllowed?: () => void;
   /** Prepare guided staged state at the last reversible edge before config publication. */
@@ -387,7 +389,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
         held,
         recoveryPathMatcher,
         explicitAgentDir,
-      );
+      ).filter((pathname) => params.restorePaths?.includes(pathname) ?? true);
       if (recoveryPaths.length === 0 && held.some((entry) => entry.agentId === agentId)) {
         return createError(
           "already-exists",
@@ -685,7 +687,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
         await resolveAgentDeletionRecoveryHoldsInWorker(
           recoveryHoldPredicate(),
           selectedPaths,
-          assertRecoveryPathCurrent,
+          params.restorePaths ? beforePersistentApply : assertRecoveryPathCurrent,
         );
       }
       return result;

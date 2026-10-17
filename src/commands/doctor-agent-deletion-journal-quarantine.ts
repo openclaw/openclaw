@@ -272,6 +272,11 @@ export async function quarantineAgentDeletionJournal(params: {
         invalidateAgentDeletionJournalStatus(database.db, row.agent_id);
       }
       return recordAgentDeletionRecoveryHolds(database, held, {
+        excludeMissingJournal: held.filter((target) =>
+          source.invalid.some(
+            (row) => normalizeAgentId(row.agent_id) === normalizeAgentId(target.agentId),
+          ),
+        ),
         description:
           warnings.length === 0
             ? "Quarantined unusable agent deletion records; stores remain held for explicit recovery."
