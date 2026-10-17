@@ -9,6 +9,7 @@ import { writePluginInstallIndexForE2E } from "../../scripts/e2e/lib/plugin-inde
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
+import { writeJson } from "./upgrade-survivor-io.test-support.js";
 import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -32,7 +33,7 @@ function tarball(
 ) {
   const staging = join(root, `${filename}-source`);
   mkdirSync(join(staging, "package"), { recursive: true });
-  writeFileSync(join(staging, "package/package.json"), JSON.stringify({ name, version }));
+  writeJson(join(staging, "package/package.json"), { name, version });
   writeFileSync(join(staging, "package/build.txt"), bytes);
   execFileSync("tar", ["-czf", filename, "-C", staging, "package"], { cwd: outputDir });
   return join(outputDir, filename);
@@ -75,21 +76,18 @@ it.for([
     );
     const core = tarball(root, "core.tgz", "openclaw", version, "candidate core");
     const manifest = join(artifact, "prepublish-plugin-registry.json");
-    writeFileSync(
-      manifest,
-      JSON.stringify({
-        schema: "openclaw.prepublish-plugin-registry/v1",
-        schemaVersion: 1,
-        sourceSha: SOURCE_SHA,
-        candidateVersion: version,
-        packages: packages.map(({ name, candidate }) => ({
-          name,
-          version,
-          tarball: basename(candidate),
-          sha256: digest(candidate, "sha256"),
-        })),
-      }),
-    );
+    writeJson(manifest, {
+      schema: "openclaw.prepublish-plugin-registry/v1",
+      schemaVersion: 1,
+      sourceSha: SOURCE_SHA,
+      candidateVersion: version,
+      packages: packages.map(({ name, candidate }) => ({
+        name,
+        version,
+        tarball: basename(candidate),
+        sha256: digest(candidate, "sha256"),
+      })),
+    });
     const npm = join(bin, "npm");
     writeFileSync(
       npm,
@@ -254,7 +252,7 @@ read -r done
 
         const installPath = join(state, `npm/projects/fixture/node_modules/${name}`);
         mkdirSync(installPath, { recursive: true });
-        writeFileSync(join(installPath, "package.json"), JSON.stringify({ name, version }));
+        writeJson(join(installPath, "package.json"), { name, version });
         const writeRecord = (archive: string) =>
           writePluginInstallIndexForE2E(
             {

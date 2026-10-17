@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { publishDiagnostics } from "../../scripts/e2e/lib/upgrade-survivor/diagnostics.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { expectStatus, readJson, writeJson } from "./upgrade-survivor-io.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const source = readFileSync(resolve("scripts/e2e/lib/upgrade-survivor/run.sh"), "utf8");
@@ -15,7 +16,6 @@ const update = source.slice(
   source.indexOf("is_extended_stable_release_version() {"),
   source.indexOf("assert_sibling_published_refusal() {"),
 );
-const outer = "recovery-update-restart";
 
 it.skipIf(process.platform === "win32").each([
   { fault: "future-tarball", phase: "prepare-restart-package", code: 124 },
@@ -87,7 +87,7 @@ run_completed=1
     ],
     { env: { PATH: process.env.PATH, HOME: root }, encoding: "utf8", timeout: 5_000 },
   );
-  expect(result.status, result.stderr).toBe(code);
+  expectStatus(result, code);
   const lines = result.stdout.split("\n");
   expect(lines.filter((line) => line.startsWith("budget\t"))).toEqual([
     "budget\t1500s\tfuture-tarball",
@@ -97,7 +97,7 @@ run_completed=1
     expect(lines).toContain(`capture\t${phase}\t${code}`);
   } else {
     for (const file of ["restart-fixture.json", "restart-runtime-fixture.json"]) {
-      expect(JSON.parse(readFileSync(join(root, file), "utf8"))).toEqual({
+      expect(readJson(join(root, file))).toEqual({
         targetVersion: "2026.10.3",
       });
     }
@@ -168,7 +168,7 @@ repair_update_restart_auth
     ],
     { env: { PATH: process.env.PATH, HOME: root }, encoding: "utf8", timeout: 5_000 },
   );
-  expect(result.status, result.stderr).toBe(code);
+  expectStatus(result, code);
   expect(result.stdout.trim().split("\n")).toEqual(
     code === 0
       ? ["stop", "inference", "fixture", "manager", "prepared", "auth", "update"]
@@ -205,7 +205,7 @@ it.skipIf(process.platform === "win32").each([
   ({ fault, code, stage, checks }) => {
     const root = dirs.make("survivor-recovery-phase-");
     const initial = fault === "initial-command";
-    const phase = initial ? "update-candidate" : outer;
+    const phase = initial ? "update-candidate" : "recovery-update-restart";
     const expectedPhase = stage ? `recovery-update-${stage}` : phase;
     const result = spawnSync(
       "bash",
@@ -299,7 +299,7 @@ run_completed=1
         timeout: 10_000,
       },
     );
-    expect(result.status, result.stderr).toBe(code);
+    expectStatus(result, code);
     const lines = result.stdout.split("\n");
     expect(lines.filter((line) => line.startsWith("check\t"))).toEqual(
       checks.map((check) => `check\t${check}`),
@@ -331,11 +331,11 @@ run_completed=1
     // Existing publisher/schema: only the phase value changes, never the wire shape.
     mkdirSync(join(root, "diagnostics"));
     const raw = { phase: expectedPhase, exitStatus: code, signal: signal || null };
-    writeFileSync(join(root, "diagnostics/raw.json"), JSON.stringify(raw));
+    writeJson(join(root, "diagnostics/raw.json"), raw);
     const destination = join(root, "public");
     expect(publishDiagnostics(root, destination, (text: string) => text)).toEqual(raw);
     const published = readFileSync(join(destination, "failure.json"), "utf8");
-    writeFileSync(join(root, "diagnostics/raw.json"), JSON.stringify({ ...raw, phase }));
+    writeJson(join(root, "diagnostics/raw.json"), { ...raw, phase });
     const control = join(root, "control");
     publishDiagnostics(root, control, (text: string) => text);
     expect(published.replace(expectedPhase, phase)).toBe(

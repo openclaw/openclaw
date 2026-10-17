@@ -17,6 +17,7 @@ import {
 } from "../../scripts/e2e/lib/upgrade-survivor/recovery-cleanup-fixture.mjs";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { expectStatus, readJson, writeJson } from "./upgrade-survivor-io.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const temporary = () => fs.realpathSync(tempDirs.make("upgrade-recovery-assertions-"));
@@ -135,13 +136,13 @@ if (args[0] === "view") {
     async (entry) => {
       const fixture = await packageEvidence(entry);
       expect(fixture.result.error).toBeUndefined();
-      expect(fixture.result.status, fixture.result.stderr).toBe(0);
+      expectStatus(fixture.result);
       const exactSpec = `openclaw@${entry.installedVersion}`;
       expect(fixture.calls).toEqual([
         ["view", exactSpec, "version", "dist", "--json"],
         ["pack", exactSpec, "--ignore-scripts", "--dry-run", "--json"],
       ]);
-      expect(JSON.parse(fs.readFileSync(fixture.evidencePath, "utf8"))).toMatchObject({
+      expect(readJson(fixture.evidencePath)).toMatchObject({
         baseline: fixture.metadata,
         candidate: { sha256: fixture.candidateSha256 },
       });
@@ -177,10 +178,7 @@ describe("recovery survivor evidence", () => {
       const store = path.join(sessions, "sessions.json");
       const transcript = path.join(sessions, "old.jsonl");
       writeRecoveryTranscript(transcript, "old", 3);
-      fs.writeFileSync(
-        store,
-        JSON.stringify({ "agent:main:old": { sessionId: "old", sessionFile: transcript } }),
-      );
+      writeJson(store, { "agent:main:old": { sessionId: "old", sessionFile: transcript } });
       const originals = [transcript, store].map((source) => ({
         source,
         disposition: "candidate",
@@ -207,31 +205,25 @@ describe("recovery survivor evidence", () => {
         fs.mkdirSync(path.dirname(database), { recursive: true });
         fs.writeFileSync(database, databaseBytes);
       }
-      fs.writeFileSync(
-        path.join(manifests, "session-sqlite-fixture.json"),
-        JSON.stringify({
-          manifestVersion: 3,
-          runId: "session-sqlite-fixture",
-          completedAt: "2026-09-26T00:00:00.000Z",
-          targets: [
-            { agentId: "main", storePath: store, sqlitePath: database, completedMoves: moves },
-            {
-              agentId: "ops",
-              storePath: store,
-              sqlitePath: unusedDatabase,
-              completedMoves: [moves[1]],
-            },
-          ],
-        }),
-      );
-      fs.writeFileSync(
-        path.join(artifacts, "recovery-fixture.json"),
-        JSON.stringify({
-          originals,
-          spec: { sessions: 1, eventsPerSession: 3 },
-          preDoctorPaths: [],
-        }),
-      );
+      writeJson(path.join(manifests, "session-sqlite-fixture.json"), {
+        manifestVersion: 3,
+        runId: "session-sqlite-fixture",
+        completedAt: "2026-09-26T00:00:00.000Z",
+        targets: [
+          { agentId: "main", storePath: store, sqlitePath: database, completedMoves: moves },
+          {
+            agentId: "ops",
+            storePath: store,
+            sqlitePath: unusedDatabase,
+            completedMoves: [moves[1]],
+          },
+        ],
+      });
+      writeJson(path.join(artifacts, "recovery-fixture.json"), {
+        originals,
+        spec: { sessions: 1, eventsPerSession: 3 },
+        preDoctorPaths: [],
+      });
       fs.writeFileSync(path.join(artifacts, "recovery-update-metrics.log"), "");
       const evidence = path.join(artifacts, "recovery-evidence.json");
       const result = await runNodeScript(
@@ -253,8 +245,8 @@ describe("recovery survivor evidence", () => {
         expect(result.stderr).toContain(database);
         expect(fs.existsSync(evidence)).toBe(false);
       } else {
-        expect(result.status, result.stderr).toBe(0);
-        expect(JSON.parse(fs.readFileSync(evidence, "utf8"))).toMatchObject({
+        expectStatus(result);
+        expect(readJson(evidence)).toMatchObject({
           migrationBeforeStandaloneDoctor: true,
           destinations: [{ file: database, bytes: Buffer.byteLength(databaseBytes) }],
         });
@@ -280,11 +272,9 @@ describe("recovery survivor evidence", () => {
   it("produces independently indexed clean and protected originals with linked large history", () => {
     const root = temporary();
     const fixture = seedRecoveryFixture(root, { sessions: 2, eventsPerSession: 5 });
-    const clean = JSON.parse(
-      fs.readFileSync(path.join(root, "agents/recovery-clean/sessions/sessions.json"), "utf8"),
-    );
-    const protectedStore = JSON.parse(
-      fs.readFileSync(path.join(root, "agents/recovery-protected/sessions/sessions.json"), "utf8"),
+    const clean = readJson(path.join(root, "agents/recovery-clean/sessions/sessions.json"));
+    const protectedStore = readJson(
+      path.join(root, "agents/recovery-protected/sessions/sessions.json"),
     );
     expect(Object.keys(clean)).toHaveLength(4);
     expect(protectedStore["invalid-index-entry"]).toBe(42);
@@ -401,22 +391,13 @@ describe("recovery survivor evidence", () => {
     const preview = {
       status: "preview",
       dryRun: true,
-      artifacts: [
-        {
-          path: "/synthetic/clean",
-          outcome: "candidate",
-          bytes: 12,
-          reason: "verified",
-          runs: ["run"],
-        },
-        {
-          path: "/synthetic/protected",
-          outcome: "protected",
-          bytes: 17,
-          reason: "unimported",
-          runs: ["run"],
-        },
-      ],
+      artifacts: originals.map(({ archive, disposition, identity }) => ({
+        path: archive,
+        outcome: disposition,
+        bytes: identity.size,
+        reason: disposition === "candidate" ? "verified" : "unimported",
+        runs: ["run"],
+      })),
       totals: { candidateBytes: 12, protectedBytes: 17 },
     };
     expect(() => assertRecoveryInventory(preview, originals)).not.toThrow();
@@ -435,18 +416,16 @@ describe("recovery survivor evidence", () => {
     const protectedPath = path.join(root, "protected");
     fs.writeFileSync(removedPath, "eligible payload");
     fs.writeFileSync(protectedPath, "unique history");
-    const originals = [
-      {
-        archive: removedPath,
-        disposition: "candidate",
-        identity: recoveryFileIdentity(removedPath),
-      },
-      {
-        archive: protectedPath,
-        disposition: "protected",
-        identity: recoveryFileIdentity(protectedPath),
-      },
-    ];
+    const originals = (
+      [
+        [removedPath, "candidate"],
+        [protectedPath, "protected"],
+      ] as const
+    ).map(([archive, disposition]) => ({
+      archive,
+      disposition,
+      identity: recoveryFileIdentity(archive),
+    }));
     const bytes = originals[0]!.identity.size;
     const preview = { artifacts: [{ path: removedPath, outcome: "candidate", bytes }] };
     const report = {
@@ -468,28 +447,19 @@ describe("recovery survivor evidence", () => {
         artifact: { disposal: { state: "disposed", disposedAt: "2026-07-01T00:00:00Z" } },
       },
     ];
-    expect(() => assertRecoveryApplied(report, preview, originals, receipts)).toThrow(
-      /still exists/,
-    );
+    const apply = (result = report, moves = receipts) =>
+      assertRecoveryApplied(result, preview, originals, moves);
+    expect(() => apply()).toThrow(/still exists/);
     fs.rmSync(removedPath);
-    expect(assertRecoveryApplied(report, preview, originals, receipts)).toEqual([removedPath]);
-    expect(() => assertRecoveryApplied(report, preview, originals, [])).toThrow(/receipt/);
+    expect(apply()).toEqual([removedPath]);
+    expect(() => apply(report, [])).toThrow(/receipt/);
+    const incomplete = { archivePath: removedPath, artifact: { disposal: { state: "retained" } } };
     expect(() =>
-      assertRecoveryApplied(report, preview, originals, [
-        ...receipts,
-        { archivePath: removedPath, artifact: { disposal: { state: "retained" } } },
-      ]),
+      assertRecoveryApplied(report, preview, originals, [...receipts, incomplete]),
     ).toThrow(/receipt/);
-    expect(() =>
-      assertRecoveryApplied(
-        { ...report, totals: { removedFiles: 1, removedBytes: 0 } },
-        preview,
-        originals,
-        receipts,
-      ),
-    ).toThrow();
+    expect(() => apply({ ...report, totals: { removedFiles: 1, removedBytes: 0 } })).toThrow();
     fs.writeFileSync(protectedPath, "lost unique history");
-    expect(() => assertRecoveryApplied(report, preview, originals, receipts)).toThrow(/protected/);
+    expect(() => apply()).toThrow(/protected/);
   });
 
   it("detects public history loss, reordering, and changed session identity", () => {
@@ -499,35 +469,14 @@ describe("recovery survivor evidence", () => {
       content: [{ type: "text", text: id }],
     }));
     const messages = expected.map(({ id, ...message }) => ({ ...message, __openclaw: { id } }));
-    expect(() =>
-      assertRecoveryHistory({ sessionId: "session", messages }, "session", expected),
-    ).not.toThrow();
-    expect(() =>
-      assertRecoveryHistory({ sessionId: "replacement", messages }, "session", expected),
-    ).toThrow(/identity/);
-    expect(() =>
-      assertRecoveryHistory(
-        { sessionId: "session", messages: messages.slice(1) },
-        "session",
-        expected,
-      ),
-    ).toThrow(/content or order/);
-    expect(() =>
-      assertRecoveryHistory(
-        { sessionId: "session", messages: messages.toReversed() },
-        "session",
-        expected,
-      ),
-    ).toThrow(/content or order/);
-    expect(() =>
-      assertRecoveryHistory(
-        {
-          sessionId: "session",
-          messages: messages.map(({ role, content }) => ({ role, content })),
-        },
-        "session",
-        expected,
-      ),
-    ).toThrow(/message identity/);
+    const history = (entries: unknown[] = messages, sessionId = "session") =>
+      assertRecoveryHistory({ sessionId, messages: entries }, "session", expected);
+    expect(() => history()).not.toThrow();
+    expect(() => history(messages, "replacement")).toThrow(/identity/);
+    expect(() => history(messages.slice(1))).toThrow(/content or order/);
+    expect(() => history(messages.toReversed())).toThrow(/content or order/);
+    expect(() => history(messages.map(({ role, content }) => ({ role, content })))).toThrow(
+      /message identity/,
+    );
   });
 });
