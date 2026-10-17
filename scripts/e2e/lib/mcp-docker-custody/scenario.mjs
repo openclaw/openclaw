@@ -117,8 +117,13 @@ async function exercise(mode) {
       agents: { defaults: { workspace: path.join(directory, "workspace") } },
       plugins: { enabled: false },
       mcp: {
-        servers:
-          mode === "add"
+        servers: {
+          unrelated: {
+            command: "docker",
+            args: ["run", "--rm", "-i", image, "true"],
+            env: { DOCKER_HOST: "unix:///tmp/openclaw-no-daemon.sock" },
+          },
+          ...(mode === "add"
             ? {}
             : {
                 fixture: {
@@ -126,7 +131,8 @@ async function exercise(mode) {
                   transport: "stdio",
                   ...(mode === "configure" ? { enabled: false } : {}),
                 },
-              },
+              }),
+        },
       },
     }),
   );
@@ -135,7 +141,20 @@ async function exercise(mode) {
       ? ["add", "fixture", "--command", server.command, ...server.args.map((arg) => `--arg=${arg}`)]
       : mode === "configure"
         ? ["configure", "fixture", "--enable", "--parallel", "--probe"]
-        : ["probe", "fixture", "--json"];
+        : mode === "doctor"
+          ? ["doctor", "fixture", "--probe", "--json"]
+          : ["probe", "fixture", "--json"];
+  if (mode === "close") {
+    for (const command of [
+      ["probe", "missing", "--json"],
+      ["doctor", "missing", "--probe", "--json"],
+    ]) {
+      const invalid = await startMcpCommand(stateDir, command).done;
+      assert.equal(invalid.code, 1, JSON.stringify(invalid));
+      assert.match(invalid.stdout, /No MCP server named/);
+      assert.doesNotMatch(invalid.stderr, /Docker MCP recovery/);
+    }
+  }
   const before = await docker(["ps", "-aq", "--no-trunc", "--filter", `name=^/${name}$`]);
   assert.equal(before, "", "fixture name must not predate this launch");
   const startedAt = performance.now();
@@ -199,6 +218,7 @@ async function exercise(mode) {
     }
     const result = await cli.done;
     assert.doesNotMatch(result.stderr, /cleanup is unconfirmed/iu);
+    assert.doesNotMatch(result.stderr, /Docker MCP recovery/);
     assert.equal(result.signal, null, JSON.stringify(result));
     if (mode === "timeout") {
       assert.notEqual(
@@ -280,7 +300,15 @@ async function exercise(mode) {
 }
 
 try {
-  for (const mode of ["close", "add", "configure", "timeout", "shell-close", "recovery"]) {
+  for (const mode of [
+    "close",
+    "doctor",
+    "add",
+    "configure",
+    "timeout",
+    "shell-close",
+    "recovery",
+  ]) {
     await exercise(mode);
   }
   console.log("Docker MCP custody CLI proof passed");

@@ -33,6 +33,8 @@ const DOCKER_SEED_LANES_BY_PATH: Readonly<Record<string, readonly DockerSeedLane
   "src/agents/mcp-stdio-transport.ts": ["mcp-docker-custody"],
   "src/gateway/server-startup-bootstrap.ts": ["mcp-docker-custody"],
   "src/cli/mcp-cli-state-owner.ts": ["mcp-docker-custody"],
+  "src/cli/mcp-cli.ts": ["mcp-docker-custody"],
+  "src/cli/mcp-cli-probe.ts": ["mcp-docker-custody"],
   "scripts/e2e/docker-openai-seed.ts": MCP_DOCKER_SEED_LANES,
   "scripts/e2e/lib/mcp-code-mode-probe-server.ts": ["mcp-code-mode-gateway"],
   "scripts/e2e/lib/mcp-code-mode/scenario.sh": ["mcp-code-mode-gateway"],

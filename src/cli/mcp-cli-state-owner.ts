@@ -18,11 +18,6 @@ export function offlineMcpAction<Args extends unknown[], T>(
       target: "MCP credentials and configuration",
       onForeignOwner: "refuse",
       runLocal: async (owner) => {
-        if (command === "probe" || command === "doctor --probe") {
-          const { recoverConfiguredMcpDockerServers } =
-            await import("../agents/mcp-docker-recovery.js");
-          await recoverConfiguredMcpDockerServers(owner.config);
-        }
         owner.assertCurrent();
         return action(owner, ...args);
       },
