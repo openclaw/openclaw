@@ -46,13 +46,31 @@ function createMembershipContext(params?: { newStatus?: "left" | "member" }) {
   };
 }
 
-async function registerJoinHandler(config: OpenClawConfig) {
+async function registerJoinHandler(
+  config: OpenClawConfig = {
+    channels: { telegram: { groupPolicy: "open" } },
+  },
+) {
   getLoadConfigMock().mockReturnValue(config);
   await createTelegramBotCore({
     token: "tok",
     botInfo: telegramBotInfoForTest,
   });
   return getOnHandler("my_chat_member");
+}
+
+async function replayJoin(
+  options: Partial<NonNullable<Parameters<typeof runWithTelegramSpooledReplayUpdate>[2]>> = {},
+) {
+  const handler = await registerJoinHandler();
+  const context = createMembershipContext();
+  return runWithTelegramSpooledReplayUpdate(context.update, () => handler(context), {
+    abortSignal: new AbortController().signal,
+    onAdopted: vi.fn(),
+    onDeferred: vi.fn(),
+    onAbandoned: vi.fn(),
+    ...options,
+  });
 }
 
 describe("Telegram group join introductions", () => {
@@ -62,12 +80,7 @@ describe("Telegram group join introductions", () => {
 
   it("reports the bot's native group join with metadata-only room context", async () => {
     const config: OpenClawConfig = {
-      channels: {
-        telegram: {
-          groupPolicy: "open",
-          groupAllowFrom: ["99999"],
-        },
-      },
+      channels: { telegram: { groupPolicy: "open", groupAllowFrom: ["99999"] } },
     };
     getChatSpy.mockResolvedValue({
       id: TELEGRAM_GROUP_CHAT_ID,
@@ -105,9 +118,7 @@ describe("Telegram group join introductions", () => {
   });
 
   it("ignores a departure", async () => {
-    const handler = await registerJoinHandler({
-      channels: { telegram: { groupPolicy: "open" } },
-    });
+    const handler = await registerJoinHandler();
 
     await handler(createMembershipContext({ newStatus: "left" }));
 
@@ -149,13 +160,8 @@ describe("Telegram group join introductions", () => {
   });
 
   it("does not start an introduction after its ingress owner was aborted", async () => {
-    const handler = await registerJoinHandler({ channels: { telegram: { groupPolicy: "open" } } });
-    const context = createMembershipContext();
-    const frame = await runWithTelegramSpooledReplayUpdate(context.update, () => handler(context), {
+    const frame = await replayJoin({
       abortSignal: AbortSignal.abort(new Error("account stopped")),
-      onAdopted: vi.fn(),
-      onDeferred: vi.fn(),
-      onAbandoned: vi.fn(),
     });
 
     expect(reportChannelRoomJoinMock).not.toHaveBeenCalled();
@@ -174,13 +180,8 @@ describe("Telegram group join introductions", () => {
       await commit.promise;
       return { kind: "posted" };
     });
-    const handler = await registerJoinHandler({ channels: { telegram: { groupPolicy: "open" } } });
-    const context = createMembershipContext();
-    const frame = runWithTelegramSpooledReplayUpdate(context.update, () => handler(context), {
+    const frame = replayJoin({
       abortSignal: abort.signal,
-      onAdopted: vi.fn(),
-      onDeferred: vi.fn(),
-      onAbandoned: vi.fn(),
       onAdoptionFinalizing: finalizing,
     });
     try {
@@ -203,16 +204,7 @@ describe("Telegram group join introductions", () => {
       participant = getTelegramSpooledReplayDeferredParticipant();
       throw error;
     });
-    const handler = await registerJoinHandler({ channels: { telegram: { groupPolicy: "open" } } });
-    const context = createMembershipContext();
-    await expect(
-      runWithTelegramSpooledReplayUpdate(context.update, () => handler(context), {
-        abortSignal: new AbortController().signal,
-        onAdopted: vi.fn(),
-        onDeferred: vi.fn(),
-        onAbandoned: vi.fn(),
-      }),
-    ).rejects.toBe(error);
+    await expect(replayJoin()).rejects.toBe(error);
     await expect(participant?.task).resolves.toEqual({ kind: "failed-retryable", error });
   });
 });

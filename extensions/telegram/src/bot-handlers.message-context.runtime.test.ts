@@ -18,6 +18,7 @@ import {
   createTelegramMessageContextRuntime,
   createTelegramMessageSessionRuntime,
 } from "./bot-handlers.message-context.js";
+import type { TelegramMessageContextOptions } from "./bot-message-context.types.js";
 import { telegramPromptContextHistory } from "./group-history-window.js";
 import { readTelegramHistory } from "./history-policy.js";
 import {
@@ -45,10 +46,6 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async (importOriginal) => (
   resolveStorePath: resolveStorePathMock,
 }));
 
-/**
- * Builds the runtime against the real message cache so the reaction path's topic
- * recovery is proven through the cache it actually reads, not a stub.
- */
 function createRuntime(cfg: OpenClawConfig = {}) {
   storeScopeId += 1;
   resolveStorePathMock.mockReturnValue(
@@ -61,6 +58,23 @@ function createRuntime(cfg: OpenClawConfig = {}) {
     opts: {},
     telegramCfg: cfg.channels?.telegram ?? {},
   });
+}
+
+function promptContext(
+  runtime: ReturnType<typeof createRuntime>,
+  cfg: OpenClawConfig,
+  msg: Message,
+  options?: TelegramMessageContextOptions,
+  replyChain: Parameters<typeof runtime.buildPromptContextForMessage>[2] = [],
+) {
+  return runtime.buildPromptContextForMessage(
+    { message: msg, getFile: vi.fn() },
+    msg,
+    replyChain,
+    cfg,
+    cfg.channels?.telegram ?? {},
+    options,
+  );
 }
 
 function forumMessage(messageId: number, threadId?: number): Message {
@@ -189,7 +203,6 @@ describe("automatic Telegram retained history workload", () => {
     resolveStorePathMock.mockReturnValue(storePath);
     return {
       cfg,
-      telegramCfg,
       runtime: createTelegramMessageContextRuntime({
         cfg,
         telegramCfg,
@@ -279,18 +292,10 @@ describe("automatic Telegram retained history workload", () => {
   });
 
   it("does not read storage when automatic history is zero and there is no reply", async () => {
-    const { runtime, cfg, telegramCfg } = historyRuntime({ groupPolicy: "open", historyLimit: 0 });
+    const { runtime, cfg } = historyRuntime({ groupPolicy: "open", historyLimit: 0 });
     const msg = archivedMessage(archiveSize + 1);
     const replyChain = await runtime.buildReplyChainForMessage(msg);
-    expect(
-      await runtime.buildPromptContextForMessage(
-        { message: msg, getFile: vi.fn() },
-        msg,
-        replyChain,
-        cfg,
-        telegramCfg,
-      ),
-    ).toEqual([]);
+    expect(await promptContext(runtime, cfg, msg, undefined, replyChain)).toEqual([]);
     expect(reads).toEqual({ pages: 0, rows: 0, lookups: 0, fullReads: 0 });
   });
 
@@ -305,22 +310,15 @@ describe("automatic Telegram retained history workload", () => {
   ])(
     "does not extend the physical window to fill $name matches",
     async ({ threadId, restricted, expected }) => {
-      const { runtime, cfg, telegramCfg } = historyRuntime(
+      const { runtime, cfg } = historyRuntime(
         restricted
           ? { groupPolicy: "allowlist", groupAllowFrom: ["10"], groups: { "*": { enabled: true } } }
           : { groupPolicy: "open" },
       );
       const msg = archivedMessage(archiveSize + 1);
-      const context = await runtime.buildPromptContextForMessage(
-        { message: msg, getFile: vi.fn() },
-        msg,
-        [],
-        cfg,
-        telegramCfg,
-        {
-          threadSpec: threadId === undefined ? { scope: "none" } : { scope: "forum", id: threadId },
-        },
-      );
+      const context = await promptContext(runtime, cfg, msg, {
+        threadSpec: threadId === undefined ? { scope: "none" } : { scope: "forum", id: threadId },
+      });
       expect(telegramPromptContextHistory(context).map((entry) => entry.messageId)).toEqual(
         expected,
       );
@@ -354,15 +352,8 @@ describe("automatic Telegram retained history workload", () => {
       promptContextAmbientWatermark: { messageId: "50504", timestampMs: (date + 50_504) * 1000 },
     };
     for (let reopen = 0; reopen < 2; reopen++) {
-      const { runtime, cfg, telegramCfg } = historyRuntime();
-      const context = await runtime.buildPromptContextForMessage(
-        { message: msg, getFile: vi.fn() },
-        msg,
-        [],
-        cfg,
-        telegramCfg,
-        options,
-      );
+      const { runtime, cfg } = historyRuntime();
+      const context = await promptContext(runtime, cfg, msg, options);
       expect(telegramPromptContextHistory(context).map((entry) => entry.messageId)).toEqual([
         "50509",
         "50510",
@@ -395,34 +386,25 @@ describe("Telegram same-turn reset context", () => {
     clearTelegramRuntimeForTest();
   });
 
-  it.each(["group"] as const)(
-    "keeps soft-reset context but drops a hard reset in %s chats",
-    async (type) => {
-      const telegramCfg: TelegramAccountConfig = { groupPolicy: "open" };
-      const cfg: OpenClawConfig = { channels: { telegram: telegramCfg } };
-      const previous = {
-        chat: { id: 7, type, title: "Room" },
-        message_id: 100,
-        date: 1_736_380_800,
-        text: "Keep this context for a soft reset.",
-        from: { id: 10, is_bot: false, first_name: "Participant" },
-      } satisfies Message;
-      for (const text of ["/new", "/reset@openclaw_bot", "/reset soft continue"]) {
-        const runtime = createRuntime(cfg);
-        await runtime.recordMessageForReplyChain(previous);
-        const msg = { ...previous, message_id: 101, date: previous.date + 1, text };
-        await runtime.recordMessageForReplyChain(msg);
-        const context = await runtime.buildPromptContextForMessage(
-          { message: msg, getFile: vi.fn() },
-          msg,
-          [],
-          cfg,
-          telegramCfg,
-        );
-        expect(telegramPromptContextHistory(context).map((entry) => entry.messageId)).toEqual(
-          text.includes("soft") ? ["100"] : [],
-        );
-      }
-    },
-  );
+  it("keeps soft-reset context but drops a hard reset in group chats", async () => {
+    const telegramCfg: TelegramAccountConfig = { groupPolicy: "open" };
+    const cfg: OpenClawConfig = { channels: { telegram: telegramCfg } };
+    const previous = {
+      chat: { id: 7, type: "group", title: "Room" },
+      message_id: 100,
+      date: 1_736_380_800,
+      text: "Keep this context for a soft reset.",
+      from: { id: 10, is_bot: false, first_name: "Participant" },
+    } satisfies Message;
+    for (const text of ["/new", "/reset@openclaw_bot", "/reset soft continue"]) {
+      const runtime = createRuntime(cfg);
+      await runtime.recordMessageForReplyChain(previous);
+      const msg = { ...previous, message_id: 101, date: previous.date + 1, text };
+      await runtime.recordMessageForReplyChain(msg);
+      const context = await promptContext(runtime, cfg, msg);
+      expect(telegramPromptContextHistory(context).map((entry) => entry.messageId)).toEqual(
+        text.includes("soft") ? ["100"] : [],
+      );
+    }
+  });
 });

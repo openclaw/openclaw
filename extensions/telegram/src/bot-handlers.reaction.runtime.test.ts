@@ -162,11 +162,21 @@ function forumReactionContext(overrides?: {
   };
 }
 
-function systemEventOptions(): { sessionKey?: string; contextKey?: string } {
-  return (enqueueRoutedSystemEvent.mock.calls[0]?.[1] ?? {}) as {
-    sessionKey?: string;
-    contextKey?: string;
-  };
+function reactionEvent(emoji = FIRE_EMOJI, chatId?: number) {
+  return expect.objectContaining({
+    text: `Telegram reaction added: ${emoji} by Bob (@bob_user) on msg 100`,
+    ...(chatId === undefined
+      ? {}
+      : { contextKey: `telegram:reaction:add:${chatId}:100:10:${emoji}` }),
+  });
+}
+
+function expectRoutedTo(...parts: string[]) {
+  expect(enqueueRoutedSystemEvent).toHaveBeenCalledTimes(1);
+  const sessionKey = String(enqueueRoutedSystemEvent.mock.calls[0]?.[1]?.sessionKey);
+  for (const part of parts) {
+    expect(sessionKey).toContain(part);
+  }
 }
 
 describe("registerTelegramReactionHandler forum topic recovery", () => {
@@ -236,22 +246,11 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
           ],
         },
       });
-      expect(peekSystemEventEntries(sessionKey)).toEqual([
-        expect.objectContaining({
-          text: "Telegram reaction added: \u{1F44D} by Bob (@bob_user) on msg 100",
-          contextKey:
-            chatType === "private"
-              ? "telegram:reaction:add:5678:100:10:\u{1F44D}"
-              : "telegram:reaction:add:-1005678:100:10:\u{1F44D}",
-        }),
-        expect.objectContaining({
-          text: "Telegram reaction added: \u{1F389} by Bob (@bob_user) on msg 100",
-          contextKey:
-            chatType === "private"
-              ? "telegram:reaction:add:5678:100:10:\u{1F389}"
-              : "telegram:reaction:add:-1005678:100:10:\u{1F389}",
-        }),
-      ]);
+      expect(peekSystemEventEntries(sessionKey)).toEqual(
+        ["\u{1F44D}", "\u{1F389}"].map((emoji) =>
+          reactionEvent(emoji, chatType === "private" ? 5678 : FORUM_CHAT_ID),
+        ),
+      );
     },
   );
 
@@ -264,22 +263,14 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
     await registerHandler(cfg, () => false)(context);
     expect(peekSystemEventEntries("agent:main:main")).toEqual([]);
     await registerHandler(cfg, () => true)(context);
-    expect(peekSystemEventEntries("agent:main:main")).toEqual([
-      expect.objectContaining({
-        text: "Telegram reaction added: \u{1F525} by Bob (@bob_user) on msg 100",
-      }),
-    ]);
+    expect(peekSystemEventEntries("agent:main:main")).toEqual([reactionEvent()]);
     resetSystemEventsForTest();
     cfg.channels!.telegram!.reactionNotifications = "off";
     await registerHandler(cfg, () => true)(context);
     expect(peekSystemEventEntries("agent:main:main")).toEqual([]);
     cfg.channels!.telegram!.reactionNotifications = "all";
     await registerHandler(cfg, () => false)(context);
-    expect(peekSystemEventEntries("agent:main:main")).toEqual([
-      expect.objectContaining({
-        text: "Telegram reaction added: \u{1F525} by Bob (@bob_user) on msg 100",
-      }),
-    ]);
+    expect(peekSystemEventEntries("agent:main:main")).toEqual([reactionEvent()]);
   });
 
   it("does not queue bot actors, unchanged reactions, or removals", async () => {
@@ -335,11 +326,7 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
 
     await registerHandler(cfg)(forumReactionContext({ isForum: false }));
 
-    expect(peekSystemEventEntries("agent:research:global")).toEqual([
-      expect.objectContaining({
-        text: `Telegram reaction added: ${FIRE_EMOJI} by Bob (@bob_user) on msg 100`,
-      }),
-    ]);
+    expect(peekSystemEventEntries("agent:research:global")).toEqual([reactionEvent()]);
     expect(peekSystemEventEntries("agent:main:global")).toEqual([]);
   });
 
@@ -353,8 +340,7 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
 
     await handler(forumReactionContext());
 
-    expect(enqueueRoutedSystemEvent).toHaveBeenCalledTimes(1);
-    expect(String(systemEventOptions().sessionKey)).toContain("topicbot");
+    expectRoutedTo("topicbot");
   });
 
   it("applies the recovered topic's disabled config instead of the General topic's", async () => {
@@ -400,9 +386,8 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
 
     await handler(forumReactionContext({ isForum: false, isDirectMessages: true }));
 
-    expect(enqueueRoutedSystemEvent).toHaveBeenCalledTimes(1);
-    expect(String(systemEventOptions().sessionKey)).toContain("direct-topic-agent");
-    expect(String(systemEventOptions().sessionKey)).toContain(
+    expectRoutedTo(
+      "direct-topic-agent",
       `telegram:group:${FORUM_CHAT_ID}:direct-topic:${FORUM_TOPIC_ID}`,
     );
   });

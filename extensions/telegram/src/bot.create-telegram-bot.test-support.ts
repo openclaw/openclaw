@@ -19,6 +19,14 @@ export const telegramBotInfoForTest = {
   allows_users_to_create_topics: false,
 } satisfies TelegramBotInfo;
 
+function fileRef(fileId: string) {
+  return { file_id: fileId, file_unique_id: `unique-${fileId}` };
+}
+
+function photoRef(fileId: string) {
+  return [{ ...fileRef(fileId), width: 1, height: 1 }];
+}
+
 export function createChannelPostContext(params: {
   messageId: number;
   date: number;
@@ -38,26 +46,14 @@ export function createChannelPostContext(params: {
       ...(params.caption ? { caption: params.caption } : {}),
       ...(params.text ? { text: params.text } : {}),
       ...(params.mediaGroupId ? { media_group_id: params.mediaGroupId } : {}),
-      ...(photoFileId
-        ? {
-            photo: [
-              {
-                file_id: photoFileId,
-                file_unique_id: `unique-${photoFileId}`,
-                width: 1,
-                height: 1,
-              },
-            ],
-          }
-        : {}),
+      ...(photoFileId ? { photo: photoRef(photoFileId) } : {}),
     },
     me: { username: "openclaw_bot" },
     getFile: async () =>
       params.getFileResult ??
       (photoFileId
         ? {
-            file_id: photoFileId,
-            file_unique_id: `unique-${photoFileId}`,
+            ...fileRef(photoFileId),
             file_path: `photos/${photoFileId}.jpg`,
           }
         : {}),
@@ -141,29 +137,18 @@ export function createTelegramPrivateMediaContext(params: {
       ...(params.fileName
         ? {
             document: {
-              file_id: params.fileId,
-              file_unique_id: `unique-${params.fileId}`,
+              ...fileRef(params.fileId),
               file_name: params.fileName,
             },
           }
-        : {
-            photo: [
-              {
-                file_id: params.fileId,
-                file_unique_id: `unique-${params.fileId}`,
-                width: 1,
-                height: 1,
-              },
-            ],
-          }),
+        : { photo: photoRef(params.fileId) }),
       from: { id: 55, is_bot: false, first_name: "u" },
     },
     me: { username: "openclaw_bot" },
     getFile:
       params.getFile ??
       (async () => ({
-        file_id: params.fileId,
-        file_unique_id: `unique-${params.fileId}`,
+        ...fileRef(params.fileId),
         file_path: `documents/${params.fileId}`,
       })),
   };

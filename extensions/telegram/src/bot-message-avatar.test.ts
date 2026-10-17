@@ -10,7 +10,10 @@ vi.mock("./bot/delivery.resolve-media.js", async (importOriginal) => ({
 }));
 
 const photo = { file_id: "photo-one", file_unique_id: "unique-one", width: 160, height: 160 };
-function context(id = 1000000001): Pick<TelegramContext, "message" | "me"> {
+function context(
+  id = 1000000001,
+  overrides: Partial<TelegramContext["message"]> = {},
+): Pick<TelegramContext, "message" | "me"> {
   return {
     me: telegramBotInfoForTest,
     message: {
@@ -19,10 +22,11 @@ function context(id = 1000000001): Pick<TelegramContext, "message" | "me"> {
       chat: { id, type: "private", first_name: "Riley" },
       from: { id, is_bot: false, first_name: "Riley" },
       text: "hello",
+      ...overrides,
     },
   };
 }
-function account(accountId = "sample-bot") {
+function account(accountId = "sample-bot", abortSignal?: AbortSignal) {
   const api = {
     getUserProfilePhotos: vi
       .fn<Parameters<typeof createTelegramDirectAvatarResolver>[0]["api"]["getUserProfilePhotos"]>()
@@ -35,7 +39,12 @@ function account(accountId = "sample-bot") {
   };
   return {
     api,
-    resolve: createTelegramDirectAvatarResolver({ api, accountId, token: "test-token" }),
+    resolve: createTelegramDirectAvatarResolver({
+      api,
+      accountId,
+      token: "test-token",
+      abortSignal,
+    }),
   };
 }
 
@@ -112,18 +121,12 @@ describe("Telegram native direct portraits", () => {
 
   it("forwards native account cancellation to the grammY request", async () => {
     const controller = new AbortController();
-    const { api } = account();
+    const { api, resolve } = account("sample-bot", controller.signal);
     const aborted = vi.fn();
     api.getUserProfilePhotos.mockImplementationOnce(async (_id, _options, signal) => {
       signal?.addEventListener("abort", aborted);
       controller.abort();
       throw new Error("request aborted");
-    });
-    const resolve = createTelegramDirectAvatarResolver({
-      api,
-      accountId: "sample-bot",
-      token: "test-token",
-      abortSignal: controller.signal,
     });
     expect(resolve(context(), {})).toBeUndefined();
     await vi.advanceTimersByTimeAsync(0);
@@ -177,31 +180,14 @@ describe("Telegram native direct portraits", () => {
 
   it("does not use a group photo, bot photo, or a private chat's different peer", () => {
     const { api, resolve } = account();
-    const ctx = context();
-    expect(
-      resolve(
-        { ...ctx, message: { ...ctx.message, chat: { id: -123, type: "group", title: "Group" } } },
-        {},
-      ),
-    ).toBeUndefined();
-    expect(
-      resolve(
-        {
-          ...ctx,
-          message: { ...ctx.message, from: { id: 1000000002, is_bot: false, first_name: "Other" } },
-        },
-        {},
-      ),
-    ).toBeUndefined();
-    expect(
-      resolve(
-        {
-          ...ctx,
-          message: { ...ctx.message, from: { id: 1000000001, is_bot: true, first_name: "Bot" } },
-        },
-        {},
-      ),
-    ).toBeUndefined();
+    const rejected: Partial<TelegramContext["message"]>[] = [
+      { chat: { id: -123, type: "group", title: "Group" } },
+      { from: { id: 1000000002, is_bot: false, first_name: "Other" } },
+      { from: { id: 1000000001, is_bot: true, first_name: "Bot" } },
+    ];
+    for (const message of rejected) {
+      expect(resolve(context(1000000001, message), {})).toBeUndefined();
+    }
     expect(api.getUserProfilePhotos).not.toHaveBeenCalled();
   });
 });
