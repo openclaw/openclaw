@@ -349,7 +349,7 @@ try {
               ...shareSidebarSessionRows(
                 result.sessions,
                 typeof params.ifRowsRevision === "string" ? params.ifRowsRevision : undefined,
-                runTransfer === "delta" ? previousRows : undefined,
+                runTransfer === "delta" && previousRows ? [previousRows] : undefined,
               ),
             }
           : result;
