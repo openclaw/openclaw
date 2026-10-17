@@ -1,6 +1,3 @@
-/**
- * Gateway server lane configuration tests.
- */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -39,61 +36,30 @@ describe("applyGatewayLaneConcurrency", () => {
     resetCommandQueueStateForTest();
   });
 
-  it("keeps the shared nested lane at its default concurrency", async () => {
-    applyConfigLaneConcurrency({} as OpenClawConfig, { gatewayStart: true });
-
-    let startedRuns = 0;
+  it("restores the suspended shared nested lane to its default concurrency on startup", async () => {
+    setCommandLaneConcurrency(CommandLane.Nested, 0);
+    applyConfigLaneConcurrency({}, { gatewayStart: true });
     const releaseRuns = createDeferred();
-    const run = async () => {
-      startedRuns += 1;
-      await releaseRuns.promise;
-    };
-
+    const run = vi.fn(() => releaseRuns.promise);
     const first = enqueueCommandInLane(CommandLane.Nested, run, { warnAfterMs: 10_000 });
     const second = enqueueCommandInLane(CommandLane.Nested, run, { warnAfterMs: 10_000 });
     await Promise.resolve();
-
-    expect(startedRuns).toBe(1);
-
+    expect(run).toHaveBeenCalledOnce();
     releaseRuns.resolve();
     await Promise.all([first, second]);
-  });
-
-  it("restores a suspended shared nested lane on gateway startup", async () => {
-    setCommandLaneConcurrency(CommandLane.Nested, 0);
-    applyConfigLaneConcurrency({} as OpenClawConfig, { gatewayStart: true });
-
-    let started = false;
-    await enqueueCommandInLane(
-      CommandLane.Nested,
-      async () => {
-        started = true;
-      },
-      { warnAfterMs: 10_000 },
-    );
-
-    expect(started).toBe(true);
+    expect(run).toHaveBeenCalledTimes(2);
   });
 
   it("does not resume a suspended shared nested lane during live config publication", async () => {
     setCommandLaneConcurrency(CommandLane.Nested, 0);
-    applyConfigLaneConcurrency({} as OpenClawConfig);
-
-    let started = false;
-    const nestedRun = enqueueCommandInLane(
-      CommandLane.Nested,
-      async () => {
-        started = true;
-      },
-      { warnAfterMs: 10_000 },
-    );
+    applyConfigLaneConcurrency({});
+    const run = vi.fn(async () => {});
+    const nestedRun = enqueueCommandInLane(CommandLane.Nested, run, { warnAfterMs: 10_000 });
     await Promise.resolve();
-
-    expect(started).toBe(false);
-
+    expect(run).not.toHaveBeenCalled();
     setCommandLaneConcurrency(CommandLane.Nested, 1);
     await nestedRun;
-    expect(started).toBe(true);
+    expect(run).toHaveBeenCalledOnce();
   });
 
   it.each([2])(
@@ -133,20 +99,15 @@ describe("applyGatewayLaneConcurrency", () => {
   it("keeps recall capacity separate from a parent occupying the child lane", async () => {
     applyConfigLaneConcurrency({ agents: { defaults: { subagents: { maxConcurrent: 1 } } } });
     const release = createDeferred();
-    let helperStarted = false;
-    let siblingStarted = false;
+    const helper = vi.fn(() => release.promise);
+    const siblingRun = vi.fn(async () => {});
     const parent = enqueueCommandInLane(CommandLane.Subagent, () =>
-      enqueueCommandInLane("active-memory", async () => {
-        helperStarted = true;
-        await release.promise;
-      }),
+      enqueueCommandInLane("active-memory", helper),
     );
-    const sibling = enqueueCommandInLane(CommandLane.Subagent, async () => {
-      siblingStarted = true;
-    });
+    const sibling = enqueueCommandInLane(CommandLane.Subagent, siblingRun);
     try {
-      await vi.waitFor(() => expect(helperStarted).toBe(true));
-      expect(siblingStarted).toBe(false);
+      await vi.waitFor(() => expect(helper).toHaveBeenCalledOnce());
+      expect(siblingRun).not.toHaveBeenCalled();
       expect(getCommandLaneSnapshot(CommandLane.Subagent)).toMatchObject({
         activeCount: 1,
         queuedCount: 1,
@@ -155,7 +116,7 @@ describe("applyGatewayLaneConcurrency", () => {
       release.resolve();
       await Promise.all([parent, sibling]);
     }
-    expect(siblingStarted).toBe(true);
+    expect(siblingRun).toHaveBeenCalledOnce();
   });
 
   it("applies recall cap changes without releasing occupied capacity or reordering waiters", async () => {
@@ -201,19 +162,17 @@ describe("applyGatewayLaneConcurrency", () => {
     const owner = createBackgroundWorkOwner({ owner: "plugin:reload-test", maxConcurrent: 3 });
     const gates = Array.from({ length: 3 }, () => createDeferred());
     const active = gates.map((gate) => owner.enqueue(async () => await gate.promise));
-    let nextStarted = false;
-    const next = owner.enqueue(async () => {
-      nextStarted = true;
-    });
+    const nextRun = vi.fn(async () => {});
+    const next = owner.enqueue(nextRun);
     try {
       applyConfigLaneConcurrency({ hooks: { enabled: true } });
       applyConfigLaneConcurrency({ hooks: { enabled: false } });
       expect(getBackgroundWorkSnapshot()).toMatchObject({ activeCount: 3, queuedCount: 1 });
-      expect(nextStarted).toBe(false);
+      expect(nextRun).not.toHaveBeenCalled();
     } finally {
       gates.forEach((gate) => gate.resolve());
       await Promise.all([...active, next]);
     }
-    expect(nextStarted).toBe(true);
+    expect(nextRun).toHaveBeenCalledOnce();
   });
 });

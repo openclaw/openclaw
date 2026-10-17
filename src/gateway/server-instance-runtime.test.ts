@@ -3,6 +3,7 @@ import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-clien
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { GatewayNativeApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
+import type { GatewayApprovalEventSubscriber } from "../infra/approval-gateway-runtime.types.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import { findDeliveryIntentOwner } from "../infra/outbound/delivery-queue-storage.js";
 import {
@@ -12,7 +13,7 @@ import {
 } from "../plugins/runtime.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 // First dispatch lazily loads these modules; keep cold compilation outside the test deadline.
 import "./agent-turn/agent-request-preflight.js";
@@ -51,6 +52,32 @@ function createRegistry(handlers: GatewayRequestHandlers) {
   );
 }
 
+function createRuntime(options: Partial<Parameters<typeof createGatewayInstanceRuntime>[0]> = {}) {
+  return createGatewayInstanceRuntime({
+    getContext: createContext,
+    getMethodRegistry: () => createRegistry({}),
+    isDispatchAvailable: () => true,
+    ...options,
+  });
+}
+
+function subscribe(
+  runtime: ReturnType<typeof createRuntime>,
+  onRequested: GatewayApprovalEventSubscriber["onRequested"],
+  shouldHandle: GatewayApprovalEventSubscriber["shouldHandle"] = () => true,
+) {
+  return runtime.nativeApprovals.subscribe({
+    eventKinds: new Set(["exec"]),
+    shouldHandle,
+    onRequested,
+    onResolved: vi.fn(),
+  });
+}
+
+function approvalRequest(id: string, request = {}) {
+  return { id, request, createdAtMs: 1, expiresAtMs: 2 };
+}
+
 describe("createGatewayInstanceRuntime", () => {
   it.each([false, true])(
     "revalidates recovery authority across admission (dedicated principal=%s)",
@@ -58,11 +85,7 @@ describe("createGatewayInstanceRuntime", () => {
       const context = createContext();
       const payload = { runId: "bound-recovery", status: "ok", summary: "completed" };
       context.dedupe.set("agent:bound-recovery", { ts: Date.now(), ok: true, payload });
-      const runtime = createGatewayInstanceRuntime({
-        getContext: () => context,
-        getMethodRegistry: () => createRegistry({}),
-        isDispatchAvailable: () => true,
-      });
+      const runtime = createRuntime({ getContext: () => context });
       let requesterCurrent = true;
       const options = {
         expectFinal: true,
@@ -97,7 +120,7 @@ describe("createGatewayInstanceRuntime", () => {
     const registry = createRegistry({ agent: rawAgent });
     const context = createContext();
     const preparing = createDeferred<number | undefined>();
-    const runtime = createGatewayInstanceRuntime({
+    const runtime = createRuntime({
       getContext: () => context,
       getMethodRegistry: () => registry,
       isDispatchAvailable: () => available,
@@ -178,7 +201,6 @@ describe("createGatewayInstanceRuntime", () => {
 
   it("sends recovery notices through normal outbound without invoking plugin actions", async () => {
     await withOpenClawTestState({ layout: "state-only", prefix: "recovery-notice-" }, async () => {
-      let releasePlatformDispatch: (() => void) | undefined;
       let platformDispatchHold: Promise<void> | undefined;
       const visibleSend = vi.fn();
       const sendText = vi.fn(async (ctx: { onPlatformSendDispatch?: () => Promise<void> }) => {
@@ -191,20 +213,11 @@ describe("createGatewayInstanceRuntime", () => {
         throw new Error("recovery notice must not invoke message actions");
       });
       const plugin: ChannelPlugin = {
-        id: "signal",
-        meta: {
+        ...createChannelTestPluginBase({
           id: "signal",
           label: "Signal",
-          selectionLabel: "Signal",
-          docsPath: "/channels/signal",
-          blurb: "Signal-shaped recovery test plugin.",
-        },
-        capabilities: { chatTypes: ["direct"] },
-        config: {
-          listAccountIds: () => ["work"],
-          resolveAccount: () => ({}),
-          isConfigured: () => true,
-        },
+          config: { listAccountIds: () => ["work"], isConfigured: () => true },
+        }),
         actions: {
           describeMessageTool: () => ({ actions: ["send"] }),
           supportsAction: () => false,
@@ -226,11 +239,7 @@ describe("createGatewayInstanceRuntime", () => {
         ...createContext(),
         getRuntimeConfig: () => ({ channels: { signal: { enabled: true } } }),
       } as GatewayRequestContext;
-      const runtime = createGatewayInstanceRuntime({
-        getContext: () => context,
-        getMethodRegistry: () => createRegistry({}),
-        isDispatchAvailable: () => true,
-      });
+      const runtime = createRuntime({ getContext: () => context });
 
       try {
         const idempotencyKey = "main-session-restart-recovery:run-1:failed-notice";
@@ -251,9 +260,8 @@ describe("createGatewayInstanceRuntime", () => {
         expect(visibleSend).toHaveBeenCalledOnce();
 
         let ownerCurrent = true;
-        platformDispatchHold = new Promise<void>((resolve) => {
-          releasePlatformDispatch = resolve;
-        });
+        const platformDispatch = createDeferred();
+        platformDispatchHold = platformDispatch.promise;
         const staleDelivery = runtime.recovery.sendRecoveryNotice({
           ...notice,
           idempotencyKey: "main-session-restart-recovery:run-2:failed-notice",
@@ -265,7 +273,7 @@ describe("createGatewayInstanceRuntime", () => {
           "main-session-restart-recovery:run-2:failed-notice",
         );
         ownerCurrent = false;
-        releasePlatformDispatch?.();
+        platformDispatch.resolve();
 
         await expect(staleDelivery).rejects.toThrow(
           "Recovery notice owner retired before delivery",
@@ -306,30 +314,12 @@ describe("createGatewayInstanceRuntime", () => {
 
   it("keeps approval subscribers isolated by Gateway instance and unregisters exactly once", async () => {
     const registry = createRegistry({});
-    const first = createGatewayInstanceRuntime({
-      getContext: createContext,
-      getMethodRegistry: () => registry,
-      isDispatchAvailable: () => true,
-    });
-    const second = createGatewayInstanceRuntime({
-      getContext: createContext,
-      getMethodRegistry: () => registry,
-      isDispatchAvailable: () => true,
-    });
+    const first = createRuntime({ getMethodRegistry: () => registry });
+    const second = createRuntime({ getMethodRegistry: () => registry });
     expect(getGatewayRecoveryRuntime()).toBe(second.recovery);
     const onRequested = vi.fn();
-    const unsubscribe = first.nativeApprovals.subscribe({
-      eventKinds: new Set(["exec"]),
-      shouldHandle: () => true,
-      onRequested,
-      onResolved: vi.fn(),
-    });
-    const request = {
-      id: "approval-1",
-      request: {},
-      createdAtMs: 1,
-      expiresAtMs: 2,
-    } as ExecApprovalRequest;
+    const unsubscribe = subscribe(first, onRequested);
+    const request = approvalRequest("approval-1") as ExecApprovalRequest;
 
     expect(second.approvalEvents.publishRequested("exec", request)).toBe(0);
     expect(first.approvalEvents.publishRequested("plugin", request)).toBe(0);
@@ -341,12 +331,7 @@ describe("createGatewayInstanceRuntime", () => {
     expect(first.approvalEvents.publishRequested("exec", request)).toBe(0);
 
     const declined = vi.fn();
-    first.nativeApprovals.subscribe({
-      eventKinds: new Set(["exec"]),
-      shouldHandle: async () => false,
-      onRequested: declined,
-      onResolved: vi.fn(),
-    });
+    subscribe(first, declined, async () => false);
     expect(await first.approvalEvents.publishRequestedAsync("exec", request)).toBe(0);
     expect(declined).not.toHaveBeenCalled();
     first.close();
@@ -357,34 +342,17 @@ describe("createGatewayInstanceRuntime", () => {
 
   it("refuses synchronous publication before sending when a subscriber requires async eligibility", async () => {
     const logError = vi.fn();
-    const runtime = createGatewayInstanceRuntime({
-      getContext: createContext,
-      getMethodRegistry: () => createRegistry({}),
-      isDispatchAvailable: () => true,
-      logError,
-    });
+    const runtime = createRuntime({ logError });
     const pending = createDeferred<boolean>();
     const onRequested = vi.fn();
-    runtime.nativeApprovals.subscribe({
-      eventKinds: new Set(["exec"]),
-      shouldHandle: () => true,
-      onRequested,
-      onResolved: vi.fn(),
-    });
-    runtime.nativeApprovals.subscribe({
-      eventKinds: new Set(["exec"]),
-      shouldHandle: () => pending.promise,
-      onRequested,
-      onResolved: vi.fn(),
-    });
+    subscribe(runtime, onRequested);
+    subscribe(runtime, onRequested, () => pending.promise);
     try {
       expect(() =>
-        runtime.approvalEvents.publishRequested("exec", {
-          id: "legacy-async-eligibility",
-          request: {},
-          createdAtMs: 1,
-          expiresAtMs: 2,
-        }),
+        runtime.approvalEvents.publishRequested(
+          "exec",
+          approvalRequest("legacy-async-eligibility"),
+        ),
       ).toThrow("use approvalEvents.publishRequestedAsync");
       expect(onRequested).not.toHaveBeenCalled();
       pending.reject(new Error("eligibility rejected"));
@@ -400,24 +368,13 @@ describe("createGatewayInstanceRuntime", () => {
     "retires native approval delivery when %s wins an async eligibility wait",
     async (retire) => {
       const eligibility = createDeferred<boolean>();
-      const runtime = createGatewayInstanceRuntime({
-        getContext: createContext,
-        getMethodRegistry: () => createRegistry({}),
-        isDispatchAvailable: () => true,
-      });
+      const runtime = createRuntime();
       const onRequested = vi.fn();
-      const unsubscribe = runtime.nativeApprovals.subscribe({
-        eventKinds: new Set(["exec"]),
-        shouldHandle: () => eligibility.promise,
-        onRequested,
-        onResolved: vi.fn(),
-      });
-      const publication = runtime.approvalEvents.publishRequestedAsync("exec", {
-        id: "pending-eligibility",
-        request: { command: "echo test" },
-        createdAtMs: 1,
-        expiresAtMs: 2,
-      });
+      const unsubscribe = subscribe(runtime, onRequested, () => eligibility.promise);
+      const publication = runtime.approvalEvents.publishRequestedAsync(
+        "exec",
+        approvalRequest("pending-eligibility", { command: "echo test" }),
+      );
       if (retire === "unsubscribe") {
         unsubscribe();
       } else if (retire === "resolve") {
@@ -433,11 +390,7 @@ describe("createGatewayInstanceRuntime", () => {
   );
 
   it("rejects methods outside each closed internal principal", async () => {
-    const runtime = createGatewayInstanceRuntime({
-      getContext: createContext,
-      getMethodRegistry: () => createRegistry({}),
-      isDispatchAvailable: () => true,
-    });
+    const runtime = createRuntime();
 
     await expect(
       runtime.nativeApprovals.request("config.get" as GatewayNativeApprovalMethod, {}),
@@ -450,14 +403,13 @@ describe("createGatewayInstanceRuntime", () => {
 
   it("preserves a trusted approval resolver display name", async () => {
     const context = createContext();
-    const runtime = createGatewayInstanceRuntime({
+    const runtime = createRuntime({
       getContext: () => context,
       getMethodRegistry: () =>
         createRegistry({
           "exec.approval.list": ({ client, respond }) =>
             respond(true, { displayName: client?.connect.client.displayName }),
         }),
-      isDispatchAvailable: () => true,
     });
 
     await expect(
@@ -476,7 +428,7 @@ describe("createGatewayInstanceRuntime", () => {
       const { promise: started, resolve: markStarted } = createDeferred();
       const { promise: handlerCanFinish, resolve: finishHandler } = createDeferred();
       const context = createContext();
-      const runtime = createGatewayInstanceRuntime({
+      const runtime = createRuntime({
         getContext: () => context,
         getMethodRegistry: () =>
           createRegistry({
@@ -485,7 +437,6 @@ describe("createGatewayInstanceRuntime", () => {
               await handlerCanFinish;
             },
           }),
-        isDispatchAvailable: () => true,
       });
 
       try {

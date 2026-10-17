@@ -1,5 +1,5 @@
 import "./server-worker-free.test-support.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -80,6 +80,25 @@ vi.mock("./server/health-state.js", () => ({
   setBroadcastHealthUpdate: vi.fn(),
 }));
 
+type TimerOptions = Parameters<
+  typeof import("./server-maintenance.js").startGatewayMaintenanceTimers
+>[0];
+
+function createMaintenanceDeps() {
+  return {
+    ...createGatewayMaintenanceStateForTest(),
+    logHealth: { info: vi.fn(), error: vi.fn() },
+    runWorktreeGc: vi.fn(async () => undefined),
+    runDeliveryQueueMediaGc: vi.fn(async () => undefined),
+    runManagedOutgoingMediaGc: vi.fn(async () => undefined),
+  };
+}
+
+async function startMaintenance(params: TimerOptions) {
+  const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+  return startGatewayMaintenanceTimers(params);
+}
+
 async function stopMaintenanceTimers(
   timers: ReturnType<typeof import("./server-maintenance.js").startGatewayMaintenanceTimers>,
   failure?: Error,
@@ -93,6 +112,10 @@ async function stopMaintenanceTimers(
 }
 
 describe("gateway telemetry maintenance", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    generateSecureIntMock.mockReturnValue(0);
+  });
   afterEach(() => {
     const defaultAdapterCalls = forbiddenDefaultAdapter.mock.calls;
     forbiddenDefaultAdapter.mockClear();
@@ -113,8 +136,6 @@ describe("gateway telemetry maintenance", () => {
   ] as const)(
     "joins admitted %s work and cleanup before settling stop (failure=%s)",
     async (owner, fails) => {
-      vi.useFakeTimers();
-      generateSecureIntMock.mockReturnValue(0);
       checkTelemetryUpdateMock.mockResolvedValue(null);
       const failure = fails ? new Error("cold-storage stop failed") : undefined;
       if (failure) {
@@ -145,7 +166,7 @@ describe("gateway telemetry maintenance", () => {
         cleanupWork = trackAsyncWork(() => cleanup.promise);
         cleanupStarted.resolve();
       };
-      const state = createGatewayMaintenanceStateForTest();
+      const state = createMaintenanceDeps();
       if (owner === "health") {
         state.clients.add({
           connect: {
@@ -160,8 +181,7 @@ describe("gateway telemetry maintenance", () => {
           scheduler.schedule({ id: "device-pair-test", atMs: scheduler.now(), run });
         }
       });
-      const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
-      const timers = startGatewayMaintenanceTimers({
+      const timers = await startMaintenance({
         ...state,
         refreshGatewayHealthSnapshot: async () => {
           if (owner === "health") {
@@ -174,8 +194,6 @@ describe("gateway telemetry maintenance", () => {
             await run();
           }
         },
-        runDeliveryQueueMediaGc: async () => undefined,
-        runManagedOutgoingMediaGc: async () => undefined,
       });
       try {
         await vi.advanceTimersByTimeAsync(
@@ -186,15 +204,12 @@ describe("gateway telemetry maintenance", () => {
           markGatewayRestartDraining();
         }
         let stopped = false;
-        const stopping = timers.stopPeriodicTasks().then(
-          () => {
+        const stopping = timers
+          .stopPeriodicTasks()
+          .catch((error: unknown) => error)
+          .finally(() => {
             stopped = true;
-          },
-          (error: unknown) => {
-            stopped = true;
-            return error;
-          },
-        );
+          });
         await vi.advanceTimersByTimeAsync(0);
         expect(stopped).toBe(false);
 
@@ -224,31 +239,22 @@ describe("gateway telemetry maintenance", () => {
   it.each(["restart", "local", "scheduler"] as const)(
     "retires periodic producers at %s drain before their owners close",
     async (drain) => {
-      vi.useFakeTimers();
       vi.spyOn(process, "cpuUsage").mockReturnValue({ user: 0, system: 0 });
-      generateSecureIntMock.mockReturnValue(0);
       const check = createDeferredCore<null>();
       const thaw = createDeferredCore<boolean>();
       checkTelemetryUpdateMock.mockReturnValue(check.promise);
       const restartRunningChannels = vi.fn(
         (_mode: "new-thaw" | "deferred-retry", _shouldContinue?: () => boolean) => thaw.promise,
       );
-      const state = createGatewayMaintenanceStateForTest();
+      const state = createMaintenanceDeps();
       const refreshGatewayHealthSnapshot = vi.fn(state.refreshGatewayHealthSnapshot);
       const broadcast = vi.fn();
-      const runWorktreeGc = vi.fn(async () => undefined);
-      const runDeliveryQueueMediaGc = vi.fn(async () => undefined);
-      const logHealth = { info: vi.fn(), error: vi.fn() };
-      const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
-      const timers = startGatewayMaintenanceTimers({
+      const { runWorktreeGc, runDeliveryQueueMediaGc, logHealth } = state;
+      const timers = await startMaintenance({
         ...state,
         restartRunningChannels,
         refreshGatewayHealthSnapshot,
         broadcast,
-        runWorktreeGc,
-        runDeliveryQueueMediaGc,
-        runManagedOutgoingMediaGc: async () => undefined,
-        logHealth,
       });
       try {
         vi.setSystemTime(Date.now() + 75_000);
@@ -296,22 +302,14 @@ describe("gateway telemetry maintenance", () => {
   );
 
   it("jitter-retries failed checks, coalesces pending checks and joins them on stop", async () => {
-    vi.useFakeTimers();
     generateSecureIntMock.mockReturnValue(150_000);
     const check = createDeferredCore<null>();
     checkTelemetryUpdateMock
       .mockRejectedValueOnce(new Error("offline"))
       .mockReturnValue(check.promise);
-    const logHealth = { info: vi.fn(), error: vi.fn() };
-    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
-    const maintenanceState = createGatewayMaintenanceStateForTest();
-    const timers = startGatewayMaintenanceTimers({
-      ...maintenanceState,
-      logHealth,
-      runWorktreeGc: async () => undefined,
-      runDeliveryQueueMediaGc: async () => undefined,
-      runManagedOutgoingMediaGc: async () => undefined,
-    });
+    const maintenanceState = createMaintenanceDeps();
+    const { logHealth } = maintenanceState;
+    const timers = await startMaintenance(maintenanceState);
 
     expect(generateSecureIntMock).toHaveBeenNthCalledWith(1, 5 * 60_000);
     await vi.advanceTimersByTimeAsync(120_000);
@@ -354,17 +352,11 @@ describe("gateway telemetry maintenance", () => {
   });
 
   it("never checks telemetry for Nix-managed gateways", async () => {
-    vi.useFakeTimers();
-    generateSecureIntMock.mockReturnValue(0);
     const broadcast = vi.fn();
-    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
-    const timers = startGatewayMaintenanceTimers({
-      ...createGatewayMaintenanceStateForTest(),
+    const timers = await startMaintenance({
+      ...createMaintenanceDeps(),
       broadcast,
       isNixMode: true,
-      runWorktreeGc: async () => undefined,
-      runDeliveryQueueMediaGc: async () => undefined,
-      runManagedOutgoingMediaGc: async () => undefined,
     });
 
     await vi.advanceTimersByTimeAsync(10 * 60_000);

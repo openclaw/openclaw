@@ -36,23 +36,82 @@ import {
   readLocalWorkspaceProjection,
 } from "./worker-environments/local-workspace-store.test-support.js";
 
-it("settles an accepted catalog refresh before Gateway close retires its state writer", async ({
-  signal,
-}) => {
-  const fixture = await createGatewayMetadataCloseFixture("gateway-catalog-write-close");
-  const accepted = createDeferredCore();
-  const release = createDeferredCore();
-  const parentClosed = createDeferredCore();
-  let refreshing: ReturnType<typeof refreshRemoteModelCatalog> | undefined;
-  let closing: Promise<void> | undefined;
+async function withClosingGateway(
+  name: string,
+  signal: AbortSignal,
+  run: (context: Awaited<ReturnType<typeof prepareClosingGateway>>) => Promise<void>,
+) {
+  const context = await prepareClosingGateway(name, signal);
+  try {
+    await run(context);
+  } finally {
+    context.release.resolve();
+    await Promise.allSettled(context.pending);
+    vi.restoreAllMocks();
+    await context.fixture.cleanup();
+  }
+}
+
+async function prepareClosingGateway(name: string, signal: AbortSignal) {
+  const fixture = await createGatewayMetadataCloseFixture(name);
   try {
     const port = await fixture.reservePort();
     const server = await fixture.start(port);
     const kernel = fixture.kernels.get(port);
     assert(kernel);
+    const options = { env: fixture.state.env };
+    const shared = openOpenClawStateDatabase(options).db;
+    const accepted = createDeferredCore();
+    const release = createDeferredCore();
+    const pending: Promise<unknown>[] = [];
+    const track = <T>(task: Promise<T>) => {
+      pending.push(task);
+      return task;
+    };
+    return {
+      fixture,
+      port,
+      kernel,
+      options,
+      shared,
+      accepted,
+      release,
+      pending,
+      track,
+      holdCommand(type: string) {
+        probe.command(stateWorker, async (command, executeOptions, scope) => {
+          if (command.type === type) {
+            accepted.resolve();
+            await release.promise;
+          }
+          return scope.execute(command, executeOptions);
+        });
+      },
+      async admitted(task: Promise<unknown>, message: string) {
+        await withinTest(awaitGateBeforeSettlement(accepted.promise, task, message), signal);
+      },
+      async beginClose(abortSignal = kernel.connectionWork.signal) {
+        const parentClosed = createDeferredCore();
+        abortSignal.addEventListener("abort", () => parentClosed.resolve(), { once: true });
+        const closing = track(server.close({ reason: name }));
+        await withinTest(parentClosed.promise, signal);
+        return { closing };
+      },
+    };
+  } catch (error) {
+    vi.restoreAllMocks();
+    await fixture.cleanup();
+    throw error;
+  }
+}
+
+it("settles an accepted catalog refresh before Gateway close retires its state writer", async ({
+  signal,
+}) => {
+  await withClosingGateway("gateway-catalog-write-close", signal, async (context) => {
+    const { fixture, kernel, shared, release } = context;
     const lifecycle = createGatewayUpdateLifecycle(kernel.scheduler);
     kernel.runtimeState.stopGatewayUpdateCheck = lifecycle.stop;
-    const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
     const bundle = {
       schemaVersion: 2,
       sourceCommit: "synthetic",
@@ -60,36 +119,24 @@ it("settles an accepted catalog refresh before Gateway close retires its state w
       providers: { anthropic: {} },
       models: [{ id: "catalog-close", provider: "anthropic", pricing: { status: "unknown" } }],
     };
-    probe.command(stateWorker, async (command, executeOptions, scope) => {
-      if (command.type === "modelCatalog.remote.write") {
-        accepted.resolve();
-        await release.promise;
-      }
-      return scope.execute(command, executeOptions);
-    });
-    refreshing = lifecycle.run((catalogSignal) =>
-      refreshRemoteModelCatalog({
-        config: {},
-        force: true,
-        signal: catalogSignal,
-        databaseOptions: { env: fixture.state.env },
-        bundledGeneratedAt: () => bundle.generatedAt - 1,
-        fetchImpl: async () => new Response(JSON.stringify(bundle)),
-      }),
-    );
-    await withinTest(
-      awaitGateBeforeSettlement(
-        accepted.promise,
-        refreshing,
-        "Catalog refresh settled before handing its accepted write to the state worker",
+    context.holdCommand("modelCatalog.remote.write");
+    const refreshing = context.track(
+      lifecycle.run((catalogSignal) =>
+        refreshRemoteModelCatalog({
+          config: {},
+          force: true,
+          signal: catalogSignal,
+          databaseOptions: { env: fixture.state.env },
+          bundledGeneratedAt: () => bundle.generatedAt - 1,
+          fetchImpl: async () => new Response(JSON.stringify(bundle)),
+        }),
       ),
-      signal,
     );
-    kernel.scheduler.signal.addEventListener("abort", () => parentClosed.resolve(), {
-      once: true,
-    });
-    closing = server.close({ reason: "catalog write close regression" });
-    await withinTest(parentClosed.promise, signal);
+    await context.admitted(
+      refreshing,
+      "Catalog refresh settled before handing its accepted write to the state worker",
+    );
+    const { closing } = await context.beginClose(kernel.scheduler.signal);
     expect(lifecycle.signal.aborted).toBe(true);
     const lateWork = vi.fn(async () => undefined);
     await expect(lifecycle.run(lateWork)).rejects.toThrow();
@@ -105,37 +152,20 @@ it("settles an accepted catalog refresh before Gateway close retires its state w
     expect(
       JSON.parse(readRemoteModelCatalog({ env: fixture.state.env })?.bundle_json ?? "null"),
     ).toEqual(bundle);
-  } finally {
-    release.resolve();
-    await Promise.allSettled([refreshing, closing]);
-    vi.restoreAllMocks();
-    await fixture.cleanup();
-  }
+  });
 });
 
 it("joins accepted notices, signal cleanup, and upstream deletion after the Gateway close prelude aborts", async ({
   signal,
 }) => {
-  const fixture = await createGatewayMetadataCloseFixture("gateway-notice-sweep-close");
-  const accepted = createDeferredCore();
-  const release = createDeferredCore();
-  const parentClosed = createDeferredCore();
-  let sweeping: Promise<void> | undefined;
-  let cleaning: Promise<void> | undefined;
-  let closing: Promise<void> | undefined;
-  try {
-    const port = await fixture.reservePort();
-    const server = await fixture.start(port);
-    const kernel = fixture.kernels.get(port);
-    assert(kernel);
+  await withClosingGateway("gateway-notice-sweep-close", signal, async (context) => {
+    const { fixture, port, kernel, options, shared, release } = context;
     const watcher = "agent:main:subagent:startup-notice-watcher";
     const target = "agent:main:subagent:startup-notice-target";
     await upsertSessionEntryCore(
       { sessionKey: watcher, env: fixture.state.env },
       { sessionId: "startup-notice-watcher", updatedAt: Date.now() },
     );
-    const options = { env: fixture.state.env };
-    const shared = openOpenClawStateDatabase(options).db;
     shared
       .prepare(
         `INSERT INTO session_watch_cursors
@@ -149,13 +179,7 @@ it("joins accepted notices, signal cleanup, and upstream deletion after the Gate
         resolvePhysicalSessionStorePath({ sessionKey: watcher, env: fixture.state.env }),
         Date.now(),
       );
-    probe.command(stateWorker, async (command, executeOptions, scope) => {
-      if (command.type === "sessionState.sweep") {
-        accepted.resolve();
-        await release.promise;
-      }
-      return scope.execute(command, executeOptions);
-    });
+    context.holdCommand("sessionState.sweep");
     const logs = { info() {}, warn() {}, error() {} };
     // Startup tracks the original promise without lending its connection scope to storage.
     const operation = Promise.resolve().then(() =>
@@ -175,14 +199,10 @@ it("joins accepted notices, signal cleanup, and upstream deletion after the Gate
         refreshLatestUpdateRestartSentinel: async () => {},
       }),
     );
-    sweeping = kernel.connectionWork.track(() => operation);
-    await withinTest(
-      awaitGateBeforeSettlement(
-        accepted.promise,
-        sweeping,
-        "Startup observers settled before their notice write reached the state worker",
-      ),
-      signal,
+    const sweeping = context.track(kernel.connectionWork.track(() => operation));
+    await context.admitted(
+      sweeping,
+      "Startup observers settled before their notice write reached the state worker",
     );
     const resetWatcher = `${watcher}-reset`;
     const deletedTarget = `${target}-deleted`;
@@ -212,16 +232,14 @@ it("joins accepted notices, signal cleanup, and upstream deletion after the Gate
       )
       .run(deletedTarget, Date.now());
     let cleanupSettled = false;
-    cleaning = kernel.connectionWork.track(async () => {
-      await handleSessionStateSessionReset(resetWatcher, options);
-      await handleSessionStateSessionDeleted(deletedTarget, "main", options);
-      cleanupSettled = true;
-    });
-    kernel.connectionWork.signal.addEventListener("abort", () => parentClosed.resolve(), {
-      once: true,
-    });
-    closing = server.close({ reason: "startup notice close regression" });
-    await withinTest(parentClosed.promise, signal);
+    const cleaning = context.track(
+      kernel.connectionWork.track(async () => {
+        await handleSessionStateSessionReset(resetWatcher, options);
+        await handleSessionStateSessionDeleted(deletedTarget, "main", options);
+        cleanupSettled = true;
+      }),
+    );
+    const { closing } = await context.beginClose();
     expect(kernel.scheduler.signal.aborted).toBe(true);
     expect(shared.isOpen).toBe(true);
     expect(cleanupSettled).toBe(false);
@@ -248,60 +266,29 @@ it("joins accepted notices, signal cleanup, and upstream deletion after the Gate
         .prepare("SELECT 1 FROM session_state_events WHERE session_key = ?")
         .get(deletedTarget),
     ).toBeUndefined();
-  } finally {
-    release.resolve();
-    await Promise.allSettled([sweeping, cleaning, closing]);
-    vi.restoreAllMocks();
-    await fixture.cleanup();
-  }
+  });
 });
 
 it("joins accepted workspace persistence and releases its lease after the Gateway close prelude", async ({
   signal,
 }) => {
-  const fixture = await createGatewayMetadataCloseFixture("gateway-workspace-write-close");
-  const accepted = createDeferredCore();
-  const release = createDeferredCore();
-  const parentClosed = createDeferredCore();
-  let writing: Promise<unknown> | undefined;
-  let closing: Promise<void> | undefined;
   let custody: LocalWorkspaceStore | undefined;
   const worktreeId = "local-workspace-close";
-  try {
-    const port = await fixture.reservePort();
-    const server = await fixture.start(port);
-    const kernel = fixture.kernels.get(port);
-    assert(kernel);
-    const options = { env: fixture.state.env };
-    const shared = openOpenClawStateDatabase(options).db;
-    probe.command(stateWorker, async (command, executeOptions, scope) => {
-      if (command.type === "localWorkspace.mutate") {
-        accepted.resolve();
-        await release.promise;
-      }
-      return scope.execute(command, executeOptions);
-    });
-    writing = kernel.connectionWork.track(() =>
-      withLocalWorkspaceStore({ worktreeId, ...options }, async (store) => {
-        custody = store;
-        return store.create(
-          localWorkspaceProjectionFixture(worktreeId, fixture.state.workspaceDir),
-        );
-      }),
-    );
-    await withinTest(
-      awaitGateBeforeSettlement(
-        accepted.promise,
-        writing,
-        "Workspace write settled before admission",
+  await withClosingGateway("gateway-workspace-write-close", signal, async (context) => {
+    const { fixture, kernel, options, shared, release } = context;
+    context.holdCommand("localWorkspace.mutate");
+    const writing = context.track(
+      kernel.connectionWork.track(() =>
+        withLocalWorkspaceStore({ worktreeId, ...options }, async (store) => {
+          custody = store;
+          return store.create(
+            localWorkspaceProjectionFixture(worktreeId, fixture.state.workspaceDir),
+          );
+        }),
       ),
-      signal,
     );
-    kernel.connectionWork.signal.addEventListener("abort", () => parentClosed.resolve(), {
-      once: true,
-    });
-    closing = server.close({ reason: "workspace write close regression" });
-    await withinTest(parentClosed.promise, signal);
+    await context.admitted(writing, "Workspace write settled before admission");
+    const { closing } = await context.beginClose();
     expect(kernel.scheduler.signal.aborted).toBe(true);
     const lateWork = vi.fn(async () => undefined);
     await expect(
@@ -324,29 +311,14 @@ it("joins accepted workspace persistence and releases its lease after the Gatewa
         .db.prepare("SELECT count(*) AS count FROM state_leases WHERE scope = ? AND lease_key = ?")
         .get("workspace.local-reconciliation", worktreeId),
     ).toEqual({ count: 0 });
-  } finally {
-    release.resolve();
-    await Promise.allSettled([writing, closing]);
-    vi.restoreAllMocks();
-    await fixture.cleanup();
-  }
+  });
 });
 
 it.for(["personal", "shared-peer"] as const)(
   "joins %s OAuth settlement after the close prelude cancels its observer",
   async (kind, { signal }) => {
-    const fixture = await createGatewayMetadataCloseFixture("gateway-personal-refresh-close");
-    const accepted = createDeferredCore();
-    const release = createDeferredCore();
-    const parentClosed = createDeferredCore();
-    let resolving: Promise<unknown> | undefined;
-    let closing: Promise<void> | undefined;
-    try {
-      const port = await fixture.reservePort();
-      const server = await fixture.start(port);
-      const kernel = fixture.kernels.get(port);
-      assert(kernel);
-      const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
+    await withClosingGateway("gateway-personal-refresh-close", signal, async (context) => {
+      const { fixture, kernel, shared, accepted, release } = context;
       const owner = ensureProfileForEmail("close-personal@example.test");
       const credential: OAuthCredential = {
         type: "oauth",
@@ -385,29 +357,20 @@ it.for(["personal", "shared-peer"] as const)(
         buildApiKey: async (_provider, value) => value.access,
         readBootstrapCredential: () => null,
       });
-      resolving = kernel.connectionWork
-        .track(() =>
-          manager.resolveOAuthAccess({
-            profileId,
-            credential,
-            store: { version: 1, profiles: { [profileId]: credential } },
-            signal: kernel.connectionWork.signal,
-          }),
-        )
-        .catch((error: unknown) => error);
-      await withinTest(
-        awaitGateBeforeSettlement(
-          accepted.promise,
-          resolving,
-          "Refresh did not acquire its durable claim",
-        ),
-        signal,
+      const resolving = context.track(
+        kernel.connectionWork
+          .track(() =>
+            manager.resolveOAuthAccess({
+              profileId,
+              credential,
+              store: { version: 1, profiles: { [profileId]: credential } },
+              signal: kernel.connectionWork.signal,
+            }),
+          )
+          .catch((error: unknown) => error),
       );
-      kernel.connectionWork.signal.addEventListener("abort", () => parentClosed.resolve(), {
-        once: true,
-      });
-      closing = server.close({ reason: "personal OAuth settlement regression" });
-      await withinTest(parentClosed.promise, signal);
+      await context.admitted(resolving, "Refresh did not acquire its durable claim");
+      const { closing } = await context.beginClose();
       expect(await resolving).toBeInstanceOf(Error);
       expect(shared.isOpen).toBe(true);
       release.resolve();
@@ -419,11 +382,6 @@ it.for(["personal", "shared-peer"] as const)(
         expect(loadPersistedAuthProfileStore()?.profiles[profileId]).toEqual(replacement);
         expect(loadPersistedAuthProfileStore(peerDir)?.profiles[profileId]).toBeUndefined();
       }
-    } finally {
-      release.resolve();
-      await Promise.allSettled([resolving, closing]);
-      vi.restoreAllMocks();
-      await fixture.cleanup();
-    }
+    });
   },
 );

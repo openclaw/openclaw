@@ -58,6 +58,28 @@ vi.mock("./session-cost-usage-lifetime.js", () => ({
 
 const roots: string[] = [];
 
+function sidecarFixture() {
+  const clock = createGatewaySchedulerClock(Date.now());
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const owner = createGatewaySidecarStopOwner();
+  return {
+    clock,
+    scheduler,
+    owner,
+    attach: (overrides: Partial<Parameters<typeof attachInitialGatewayLifetimeSidecars>[0]> = {}) =>
+      attachInitialGatewayLifetimeSidecars({
+        scheduler,
+        chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
+        gatewayRequestContext: {} as never,
+        flushPendingSessionsChangedEvents: vi.fn(),
+        minimalTestGateway: false,
+        logWarning: vi.fn(),
+        publishSidecars: owner.publish,
+        ...overrides,
+      }),
+  };
+}
+
 function createStateDir(): string {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sidecars-")));
   roots.push(root);
@@ -106,9 +128,7 @@ describe("gateway lifetime sidecars", () => {
 
   test("keeps scheduled secret expiry responsive and joins its accepted sweep on shutdown", async () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: createStateDir() }, async () => {
-      const clock = createGatewaySchedulerClock(Date.now());
-      const scheduler = createTestGatewayScheduler(clock.clock);
-      const owner = createGatewaySidecarStopOwner();
+      const { clock, owner, attach } = sidecarFixture();
       const sweeps: Promise<number>[] = [];
       const purge = secretStore.purgeExpiredSecretStoreEntries;
       const openingMessages = vi.spyOn(Worker.prototype, "postMessage");
@@ -119,15 +139,7 @@ describe("gateway lifetime sidecars", () => {
           sweeps.push(Promise.resolve(result));
           return result;
         });
-      await attachInitialGatewayLifetimeSidecars({
-        scheduler,
-        chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
-        gatewayRequestContext: {} as never,
-        flushPendingSessionsChangedEvents: vi.fn(),
-        minimalTestGateway: false,
-        logWarning: vi.fn(),
-        publishSidecars: owner.publish,
-      });
+      await attach();
       await clock.wake();
       expect(await Promise.all(sweeps)).toEqual([0]);
       const context = captureOpenClawStateWorkerContext();
@@ -218,20 +230,10 @@ describe("gateway lifetime sidecars", () => {
 
   test("parks empty secret maintenance and resumes from an in-process write", async () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: createStateDir() }, async () => {
-      const clock = createGatewaySchedulerClock(Date.now());
-      const scheduler = createTestGatewayScheduler(clock.clock);
-      const owner = createGatewaySidecarStopOwner();
+      const { clock, scheduler, owner, attach } = sidecarFixture();
       const purge = vi.spyOn(secretStore, "purgeExpiredSecretStoreEntries");
       try {
-        await attachInitialGatewayLifetimeSidecars({
-          scheduler,
-          chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
-          gatewayRequestContext: {} as never,
-          flushPendingSessionsChangedEvents: vi.fn(),
-          minimalTestGateway: false,
-          logWarning: vi.fn(),
-          publishSidecars: owner.publish,
-        });
+        await attach();
         await clock.wake();
         const initial = purge.mock.calls.length;
         await clock.advanceBy(5 * 60_000);
@@ -251,21 +253,11 @@ describe("gateway lifetime sidecars", () => {
   });
 
   test("does not sweep secrets in a minimal gateway", async () => {
-    const clock = createGatewaySchedulerClock(Date.now());
-    const scheduler = createTestGatewayScheduler(clock.clock);
-    const owner = createGatewaySidecarStopOwner();
+    const { clock, owner, attach } = sidecarFixture();
     vi.spyOn(secretStore, "getSecretStoreExpiryDeadline").mockReturnValue(null);
     const purge = vi.spyOn(secretStore, "purgeExpiredSecretStoreEntries").mockResolvedValue(0);
     try {
-      await attachInitialGatewayLifetimeSidecars({
-        scheduler,
-        chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
-        gatewayRequestContext: {} as never,
-        flushPendingSessionsChangedEvents: vi.fn(),
-        minimalTestGateway: true,
-        logWarning: vi.fn(),
-        publishSidecars: owner.publish,
-      });
+      await attach({ minimalTestGateway: true });
       await clock.wake();
       await clock.advanceBy(60_000);
       expect(purge).not.toHaveBeenCalled();
@@ -323,16 +315,13 @@ describe("gateway lifetime sidecars", () => {
       await prepared.promise;
       return prepare(queries, consume);
     });
-    const owner = createGatewaySidecarStopOwner();
+    const { owner, attach } = sidecarFixture();
     try {
-      await attachInitialGatewayLifetimeSidecars({
+      await attach({
         scheduler: createTestGatewayScheduler(),
-        chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
         gatewayRequestContext: context,
         flushPendingSessionsChangedEvents,
         minimalTestGateway: true,
-        logWarning: vi.fn(),
-        publishSidecars: owner.publish,
       });
       await owner.stop();
       emitSessionsChanged(context, { reason: "patch", sessionKey });
@@ -358,8 +347,7 @@ describe("gateway lifetime sidecars", () => {
   });
 
   test("owns and joins GitHub publication recovery when worker placement is unavailable", async () => {
-    const clock = createGatewaySchedulerClock(Date.now());
-    const scheduler = createTestGatewayScheduler(clock.clock);
+    const { clock, scheduler, owner, attach } = sidecarFixture();
     const entered = createDeferred();
     const release = createDeferred();
     const reconcileGitHubPublications = vi
@@ -369,21 +357,14 @@ describe("gateway lifetime sidecars", () => {
         entered.resolve();
         return release.promise;
       });
-    const owner = createGatewaySidecarStopOwner();
     const checkpoint = new MessageChannel();
     const warn = vi.fn();
     vi.spyOn(secretStore, "getSecretStoreExpiryDeadline").mockReturnValue(null);
     vi.spyOn(secretStore, "purgeExpiredSecretStoreEntries").mockResolvedValue(0);
 
-    await attachInitialGatewayLifetimeSidecars({
-      scheduler,
-      chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
-      gatewayRequestContext: {} as never,
-      flushPendingSessionsChangedEvents: vi.fn(),
-      minimalTestGateway: false,
+    await attach({
       logWarning: warn,
       reconcileGitHubPublications,
-      publishSidecars: owner.publish,
     });
     let scheduled: void | Promise<void> = undefined;
     let stopping: Promise<void> | undefined;
@@ -422,7 +403,7 @@ describe("gateway lifetime sidecars", () => {
   });
 
   test("attaches and retires authorization lifecycles with the Gateway", async () => {
-    const owner = createGatewaySidecarStopOwner();
+    const { owner, attach } = sidecarFixture();
     const context: Pick<
       GatewayRequestContext,
       "getRuntimeConfig" | "githubOAuthService" | "modelAccountConnectService"
@@ -431,14 +412,10 @@ describe("gateway lifetime sidecars", () => {
     };
     const warn = vi.fn();
 
-    await attachInitialGatewayLifetimeSidecars({
+    await attach({
       scheduler: createTestGatewayScheduler(),
-      chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
       gatewayRequestContext: context as never,
-      flushPendingSessionsChangedEvents: vi.fn(),
-      minimalTestGateway: false,
       logWarning: warn,
-      publishSidecars: owner.publish,
     });
 
     expect(oauth.create).toHaveBeenCalledWith({
