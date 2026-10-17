@@ -639,7 +639,10 @@ describe("chat sidebar region", () => {
     );
     expect(
       Array.from(root(region).querySelectorAll(".side-panel-type-menu__item"), (item) =>
-        item.textContent?.replace(/\s+/gu, " ").trim(),
+        [".oc-menu-item__label", ".oc-menu-item__details"]
+          .map((selector) => item.querySelector(selector)?.textContent?.trim())
+          .filter(Boolean)
+          .join(" "),
       ),
     ).toEqual([
       "Terminal Ctrl+`",

@@ -182,6 +182,7 @@ export function createPluginsPage(options: {
   onSettled(() => {
     const runtimeConfig = context.runtimeConfig;
     let configAutoSaveStatus = runtimeConfig.state.configAutoSaveStatus;
+    // Preserve saving-to-saved receipts so plugin edits refresh the catalog even within one render turn.
     return runtimeConfig.subscribe(() => {
       const nextStatus = runtimeConfig.state.configAutoSaveStatus;
       const completedSave = configAutoSaveStatus === "saving" && nextStatus === "saved";

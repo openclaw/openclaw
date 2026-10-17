@@ -37,6 +37,8 @@
 
 .session-menu__item,
 .sidebar-session-sort-menu__item {
+  --oc-menu-item-padding-inline: 8px;
+
   box-sizing: border-box;
   display: flex;
   align-items: center;

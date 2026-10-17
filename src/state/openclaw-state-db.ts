@@ -700,7 +700,6 @@ function assertStateDatabaseSchemaAdmission(database: OpenClawStateDatabase): vo
 }
 
 export {
-  recordOpenClawStateDatabaseOpenFailure,
   clearOpenClawStateDatabaseOpenFailure,
   closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabase,

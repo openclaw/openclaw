@@ -168,9 +168,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
       onProjectMissing: () => place?.clearProjectSelection(),
       onSelectProject: (projectId) => place?.selectProjectId(projectId),
       onApprovedListing: (listing) => place?.recordGatewayApprovedListing(listing),
-      querySelector: () => null,
       activeElement: () => null,
-      body: () => null,
     },
   );
   const place = new DraftPlaceState(

@@ -405,8 +405,6 @@ export function readOpenClawStateDatabaseCommand(
     };
   }
   if (
-    command.type === "userProfiles.authority.resolve" ||
-    command.type === "userProfiles.aliases.resolve" ||
     command.type === "userProfiles.catalogIdentity" ||
     command.type === "userProfiles.githubIdentity.cached" ||
     command.type === "userProfiles.githubAttribution.resolve" ||
@@ -415,8 +413,7 @@ export function readOpenClawStateDatabaseCommand(
     command.type === "userProfiles.reconcile" ||
     command.type === "userProfiles.catalog" ||
     command.type === "userProfiles.avatar.inspect" ||
-    command.type === "userProfiles.avatar.read" ||
-    command.type === "userProfiles.email.resolve"
+    command.type === "userProfiles.avatar.read"
   ) {
     return readUserProfileCommand(db, command);
   }

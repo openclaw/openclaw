@@ -314,6 +314,20 @@ it("compares base to working tree or index using only changed files, and permits
 it.each([
   { file: "src/infra/sqlite-strict.ts", sql: "PRAGMA foreign_keys = OFF", result: 0, owner: true },
   { file: "src/consumer.ts", sql: "PRAGMA foreign_keys = OFF", result: 1, owner: false },
+  { file: "src/infra/sqlite-snapshot.ts", sql: "PRAGMA auto_vacuum", result: 0, owner: true },
+  { file: "src/consumer.ts", sql: "PRAGMA auto_vacuum", result: 1, owner: false },
+  {
+    file: "src/infra/sqlite-snapshot.ts",
+    sql: "INSERT OR IGNORE INTO t VALUES (1)",
+    result: 1,
+    owner: true,
+  },
+  {
+    file: "src/infra/sqlite-snapshot.ts",
+    sql: "SELECT json_extract(value, '$') FROM t",
+    result: 1,
+    owner: true,
+  },
   {
     file: "src/infra/sqlite-strict.ts",
     sql: "INSERT OR IGNORE INTO t VALUES (1)",

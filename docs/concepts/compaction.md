@@ -243,6 +243,11 @@ It shows a notice even with compaction notifications disabled; resend any
 essential details from omitted history. The bound applies to selected history,
 not the fixed instructions, tool definitions, or current request.
 
+Manual compaction also reports `transcript_bytes` pressure to the context engine
+when the configured positive threshold is reached and automatic compaction is
+enabled. This lets an owning engine apply the same byte-pressure policy during
+manual recovery as during preflight.
+
 Suppressed byte-compaction retries still use a bounded view on subsequent turns.
 Native compaction that leaves the host transcript unchanged preserves retry
 suppression. Host compaction clears or refreshes it; changing the session or

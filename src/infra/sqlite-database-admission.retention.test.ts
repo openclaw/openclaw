@@ -8,7 +8,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
 import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { PostgresSyncConnection } from "./postgres-sync/connection.js";
@@ -38,6 +37,7 @@ import {
   retireSqliteDatabaseAdmissionForPath,
   retainSqliteDatabaseAdmissionLocation,
   revokeSqliteDatabaseAdmissions,
+  revokeSqliteDatabaseAdmissionsForPath,
   trackSqliteDatabaseAdmissionWorker,
   withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
@@ -593,24 +593,17 @@ it.each([false, true])(
   },
 );
 
-it("quarantine invalidates scoped receipts and admission facts with a live handle", () => {
-  const root = tempDirs.make("sqlite-admission-quarantine-");
+it("path revocation invalidates scoped receipts and admission facts with a live handle", () => {
+  const root = tempDirs.make("sqlite-admission-path-revocation-");
   const location = path.join(root, "proof.sqlite");
   using database = createDatabase(location);
-  const beforeQuarantine = readSqliteDatabaseScopedWriteToken(database, "proof");
+  const beforeRevocation = readSqliteDatabaseScopedWriteToken(database, "proof");
   publishSqliteDatabaseAdmission(database, key, "healthy");
   publishSqliteDatabaseAdmission(database, schemaKey, "admitted");
 
-  expect(
-    recordOpenClawDatabaseQuarantine({
-      env: { OPENCLAW_STATE_DIR: root },
-      path: location,
-      kind: "agent",
-      reason: "synthetic verified damage",
-    }),
-  ).toBe(true);
+  revokeSqliteDatabaseAdmissionsForPath(location);
 
-  expect(readSqliteDatabaseScopedWriteToken(database, "proof")).not.toBe(beforeQuarantine);
+  expect(readSqliteDatabaseScopedWriteToken(database, "proof")).not.toBe(beforeRevocation);
   expect(getSqliteDatabaseAdmission(database, key)).toBeUndefined();
   expect(getSqliteDatabaseAdmission(database, schemaKey)).toBeUndefined();
 });

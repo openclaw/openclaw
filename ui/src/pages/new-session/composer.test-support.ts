@@ -11,7 +11,7 @@ import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import {
   createNewSessionComposerTextarea,
   type NewSessionComposerTextarea,
-} from "./composer-controller.ts";
+} from "./composer-textarea.ts";
 import { NewSessionComposer, type NewSessionComposerOptions } from "./composer.tsx";
 import type { NewSessionVisibility } from "./create-params.ts";
 import { NewSessionModelControl } from "./model-control.ts";

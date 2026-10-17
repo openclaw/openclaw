@@ -10,6 +10,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { ADMIN_SCOPE, QUESTIONS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
+import { concatGatewayFrame } from "./serialized-json.js";
 import {
   createGatewayLiveTextDelivery,
   type LiveTextPublication,
@@ -176,13 +177,7 @@ function frameWithSequence(
     prefix += payload.prefix;
     suffix = payload.suffix + suffix;
   }
-  const frame = Buffer.allocUnsafe(
-    Buffer.byteLength(prefix) + bytes.length + Buffer.byteLength(suffix),
-  );
-  const offset = frame.write(prefix);
-  bytes.copy(frame, offset);
-  frame.write(suffix, offset + bytes.length);
-  return frame;
+  return concatGatewayFrame([Buffer.from(prefix), bytes, Buffer.from(suffix)]);
 }
 
 export function createGatewayBroadcaster(params: {

@@ -15,7 +15,7 @@ const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
   it.each(["named", "failed"])(
-    "replaces the naming blob when title generation is %s",
+    "replaces the title placeholder when title generation is %s",
     async (outcome) => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
         const key = "agent:main:dashboard:title-settlement";
@@ -126,17 +126,29 @@ suite.define(() => {
           expect(await oldRow.locator('[aria-current="page"]').count()).toBe(0);
           expect(await provisional.locator("button, a[href]").count()).toBe(0);
           expect(await provisional.locator(".session-title-placeholder").count()).toBe(1);
-          const blob = provisional.locator(".session-title-placeholder > span");
-          expect(
-            await blob.evaluate((element) => getComputedStyle(element).backgroundColor),
-          ).not.toBe("rgba(0, 0, 0, 0)");
-          expect(await blob.evaluate((element) => getComputedStyle(element).animationName)).toBe(
-            "session-title-wave",
-          );
+          const bars = page.locator(".session-title-placeholder > span");
+          expect(await bars.count()).toBe(2);
+          for (const bar of await bars.all()) {
+            const style = await bar.evaluate((element) => {
+              const computed = getComputedStyle(element);
+              return {
+                radius: computed.borderRadius,
+                transform: computed.transform,
+                background: computed.backgroundColor,
+                animation: getComputedStyle(element, "::after").animationName,
+              };
+            });
+            expect(style.radius).toBe("3px");
+            expect(style.transform).toBe("none");
+            expect(style.background).not.toBe("rgba(0, 0, 0, 0)");
+            expect(style.animation).toBe("shimmer");
+          }
           await page.emulateMedia({ reducedMotion: "reduce" });
-          expect(await blob.evaluate((element) => getComputedStyle(element).animationName)).toBe(
-            "none",
-          );
+          for (const bar of await bars.all()) {
+            expect(
+              await bar.evaluate((element) => getComputedStyle(element, "::after").animationName),
+            ).toBe("none");
+          }
           expect(await page.locator(".chat-pane__header .session-title-placeholder").count()).toBe(
             1,
           );

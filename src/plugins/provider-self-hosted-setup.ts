@@ -1,16 +1,9 @@
-import {
-  findNormalizedProviderValue,
-  normalizeProviderId,
-} from "@openclaw/model-catalog-core/provider-id";
-import {
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { upsertAuthProfileWithLockOrThrow } from "../agents/auth-profiles/upsert-with-lock.js";
 import { CUSTOM_LOCAL_AUTH_MARKER, isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
-import { parseConfiguredModelVisibilityEntries } from "../agents/model-selection-shared.js";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
@@ -24,7 +17,6 @@ import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import type {
   ProviderAuthMethodNonInteractiveContext,
   ProviderAuthResult,
-  ProviderCatalogContext,
   ProviderNonInteractiveApiKeyResult,
 } from "./types.js";
 
@@ -153,39 +145,6 @@ export async function promptAndConfigureOpenAICompatibleSelfHostedProviderAuth(
     profiles: [{ profileId: configured.profileId, credential }],
     configPatch: configured.config,
     defaultModel: configured.modelRef,
-  };
-}
-
-export async function discoverOpenAICompatibleSelfHostedProvider<
-  T extends Record<string, unknown>,
->(params: {
-  ctx: ProviderCatalogContext;
-  providerId: string;
-  buildProvider: (params: { apiKey?: string; baseUrl?: string }) => Promise<T>;
-}): Promise<{ provider: T & { apiKey: string } } | null> {
-  const configuredProvider = findNormalizedProviderValue(
-    params.ctx.config.models?.providers,
-    params.providerId,
-  );
-  const configuredBaseUrl = normalizeOptionalString(configuredProvider?.baseUrl);
-  if (configuredProvider) {
-    const visibility = parseConfiguredModelVisibilityEntries({ cfg: params.ctx.config });
-    if (!visibility.providerWildcards.has(normalizeProviderId(params.providerId))) {
-      return null;
-    }
-  }
-  const { apiKey, discoveryApiKey } = params.ctx.resolveProviderApiKey(params.providerId);
-  if (!apiKey) {
-    return null;
-  }
-  return {
-    provider: {
-      ...(await params.buildProvider({
-        apiKey: discoveryApiKey,
-        ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),
-      })),
-      apiKey,
-    },
   };
 }
 

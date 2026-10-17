@@ -320,7 +320,11 @@ it.each([
     emitChildProcessSpawnSample();
     setDiagnosticsEnabledForProcess(true);
     const { child } = createSession();
-    expect(mock.spawn).toHaveBeenCalledWith(execPath, expect.any(Array), expect.any(Object));
+    expect(mock.spawn).toHaveBeenCalledWith(
+      execPath,
+      expect.any(Array),
+      expect.objectContaining({ windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"] }),
+    );
     now = 60_000;
     emitChildProcessSpawnSample();
     expect(events).toEqual([]);
