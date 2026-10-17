@@ -49,6 +49,15 @@ function trackHistoryReads(db: EngineConnection) {
     /^select\b/i.test(sql) && sql.includes('from "task_runs"') ? "history" : null,
   );
 }
+function recover(db: EngineConnection, storeKey: string, receiptId: string, startedAt = 10) {
+  return findCronRunRecoveryInDatabase({
+    database: db,
+    storeKey,
+    jobId: "job",
+    startedAt,
+    receiptId,
+  });
+}
 function historyRecord(id: string, fields: Partial<CronRunRecord> = {}): CronRunRecord {
   return {
     id,
@@ -153,12 +162,17 @@ it("seeks linked runs before pagination without confusing public ids or ambiguou
     target,
     ...Array.from({ length: 50 }, (_, i) => record(`recent-${i}`, `session-${i}`, 100 + i)),
   ];
-  const seek = (runId: string, rows = records) =>
+  const seek = (
+    runId: string,
+    rows = records,
+    entryFilter?: ReadCronRunHistoryPageOptions["entryFilter"],
+  ) =>
     projectCronRunHistoryPage(rows, {
       storeKey: "store",
       jobId: "job",
       runId,
       limit: 1,
+      entryFilter,
     }).entries.map((entry) => entry.runId);
   for (const alias of ["target", "target-session", "cron:job:10"]) {
     expect(seek(alias)).toEqual(["target"]);
@@ -171,25 +185,17 @@ it("seeks linked runs before pagination without confusing public ids or ambiguou
     [],
   );
   expect(
-    projectCronRunHistoryPage([...records, record("hidden", "target-session", 20)], {
-      storeKey: "store",
-      jobId: "job",
-      runId: "target-session",
-      entryFilter: (entry) => entry.runId === "target",
-    }).entries,
+    seek(
+      "target-session",
+      [...records, record("hidden", "target-session", 20)],
+      (entry) => entry.runId === "target",
+    ),
   ).toEqual([]);
   expect(seek("target", [...records, record("alias-collision", "target", 20)])).toEqual(["target"]);
   expect(
     seek("target-session", [...records, record("other-job", "target-session", 20, "other")]),
   ).toEqual(["target"]);
-  expect(
-    projectCronRunHistoryPage(records, {
-      storeKey: "store",
-      jobId: "job",
-      runId: "target",
-      entryFilter: () => false,
-    }).entries,
-  ).toEqual([]);
+  expect(seek("target", records, () => false)).toEqual([]);
 });
 
 it("retains history across worker reads, isolates stores, and recovers only an exact receipt", async () => {
@@ -198,26 +204,12 @@ it("retains history across worker reads, isolates stores, and recovers only an e
       recordCronRunInDatabase(db, outcome(storeKey, "first"));
       recordCronRunInDatabase(db, outcome(storeKey, "second"));
       recordCronRunInDatabase(db, outcome(storeKey + "-other", "first"));
-      const recovered = findCronRunRecoveryInDatabase({
-        database: db,
-        storeKey,
-        jobId: "job",
-        startedAt: 10,
-        receiptId: "second",
-      });
+      const recovered = recover(db, storeKey, "second");
       expect(recovered.finalized?.entry).toMatchObject({
         runId: "second",
         sessionId: "recorded-generation",
       });
-      expect(
-        findCronRunRecoveryInDatabase({
-          database: db,
-          storeKey,
-          jobId: "job",
-          startedAt: 10,
-          receiptId: "missing",
-        }).finalized,
-      ).toBeUndefined();
+      expect(recover(db, storeKey, "missing").finalized).toBeUndefined();
       // A late result cannot replace the first durable outcome for this exact run.
       const reads = trackHistoryReads(db);
       try {
@@ -613,15 +605,7 @@ it("normalizes released lifecycle rows before history, recovery, and retention",
       lastEventAt: 300,
       runId: undefined,
     });
-    expect(
-      findCronRunRecoveryInDatabase({
-        database: db,
-        storeKey,
-        jobId: "job",
-        startedAt: 100,
-        receiptId: "succeeded",
-      }).finalized?.entry.ts,
-    ).toBe(200);
+    expect(recover(db, storeKey, "succeeded", 100).finalized?.entry.ts).toBe(200);
     expect(
       projectCronRunHistoryPage(records, { storeKey, jobId: "job" }).entries.map(
         (entry) => entry.ts,

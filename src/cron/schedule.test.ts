@@ -30,32 +30,26 @@ describe("cron schedule", () => {
 
   describe("daylight-saving transitions", () => {
     it.each([
-      {
-        label: "Lord Howe repeated half-hour skips duplicate per-second occurrences",
-        timezone: "Australia/Lord_Howe",
-        expression: "* * * * * *",
-        now: "2026-04-04T15:10:00.000Z",
-        next: "2026-04-04T15:30:00.000Z",
-        previous: "2026-04-04T14:59:59.000Z",
-      },
-      {
-        label: "New York preserves the final valid second before a spring-forward gap",
-        timezone: "America/New_York",
-        expression: "59 59 1,2 * * *",
-        now: "2027-03-14T07:05:00.000Z",
-        next: "2027-03-15T05:59:59.000Z",
-        previous: "2027-03-14T06:59:59.000Z",
-      },
-      {
-        label: "Oslo skips a nonexistent spring-forward reminder",
-        timezone: "Europe/Oslo",
-        expression: "30 2 * * *",
-        now: "2026-03-29T00:45:00.000Z",
-        next: "2026-03-30T00:30:00.000Z",
-        previous: "2026-03-28T01:30:00.000Z",
-      },
-    ])("$label", ({ timezone, expression, now, next, previous }) => {
-      expectOccurrences({ kind: "cron", expr: expression, tz: timezone }, now, next, previous);
+      [
+        "Lord Howe repeated half-hour skips duplicate per-second occurrences",
+        "Australia/Lord_Howe",
+        "* * * * * *",
+        ["2026-04-04T15:10:00.000Z", "2026-04-04T15:30:00.000Z", "2026-04-04T14:59:59.000Z"],
+      ],
+      [
+        "New York preserves the final valid second before a spring-forward gap",
+        "America/New_York",
+        "59 59 1,2 * * *",
+        ["2027-03-14T07:05:00.000Z", "2027-03-15T05:59:59.000Z", "2027-03-14T06:59:59.000Z"],
+      ],
+      [
+        "Oslo skips a nonexistent spring-forward reminder",
+        "Europe/Oslo",
+        "30 2 * * *",
+        ["2026-03-29T00:45:00.000Z", "2026-03-30T00:30:00.000Z", "2026-03-28T01:30:00.000Z"],
+      ],
+    ] as const)("%s", (_label, tz, expr, [now, next, previous]) => {
+      expectOccurrences({ kind: "cron", expr, tz }, now, next, previous);
     });
 
     it("skips nonexistent future occurrences but preserves historical timezone rules", () => {
@@ -126,14 +120,14 @@ describe("cron schedule", () => {
   });
 
   it("rejects every schedule numbers outside the ECMAScript Date range", () => {
-    expect(
-      computeNextRunAtMs({ kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS + 1 }, 0),
-    ).toBeUndefined();
-    expect(
-      computeNextRunAtMs({ kind: "every", everyMs: 1, anchorMs: MAX_DATE_TIMESTAMP_MS + 1 }, 0),
-    ).toBeUndefined();
-    expect(computeNextRunAtMs({ kind: "every", everyMs: 0.5, anchorMs: 0 }, 0)).toBeUndefined();
-    expect(computeNextRunAtMs({ kind: "every", everyMs: 1, anchorMs: -1 }, 0)).toBeUndefined();
+    for (const fields of [
+      { everyMs: MAX_DATE_TIMESTAMP_MS + 1 },
+      { everyMs: 1, anchorMs: MAX_DATE_TIMESTAMP_MS + 1 },
+      { everyMs: 0.5, anchorMs: 0 },
+      { everyMs: 1, anchorMs: -1 },
+    ]) {
+      expect(computeNextRunAtMs({ kind: "every", ...fields }, 0)).toBeUndefined();
+    }
   });
 
   it("returns undefined instead of throwing for an invalid NaN cursor", () => {
