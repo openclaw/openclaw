@@ -277,34 +277,28 @@ it("settles snapshot chunks and exclusive removal claims without caller-thread S
   const { env, database, claim, context, claimRemoval, finalize } = await fixture();
   const sql = observeMainThreadSql();
   try {
-    const mismatch = claimRemoval({
-      workerAuthority: {
-        predicates: [{ kind: "session-owner", id: claim.worktreeId, sessionKey: "other" }],
-      },
-    });
-    await expect(mismatch).rejects.toBeInstanceOf(SessionWorktreeLifecycleError);
-    await expect(mismatch).rejects.toMatchObject({ reason: "owner-mismatch" });
-    await expect(
-      claimRemoval({
-        workerAuthority: {
-          predicates: [{ kind: "activity", id: claim.worktreeId, lastActiveAt: 99 }],
+    for (const [predicate, error] of [
+      [
+        { kind: "session-owner", id: claim.worktreeId, sessionKey: "other" },
+        SessionWorktreeLifecycleError,
+      ],
+      [{ kind: "activity", id: claim.worktreeId, lastActiveAt: 99 }, WorktreeRemovalLockError],
+      [
+        {
+          kind: "source-record",
+          id: "missing-source",
+          repoRoot: "synthetic",
+          repoFingerprint: "synthetic",
         },
-      }),
-    ).rejects.toBeInstanceOf(WorktreeRemovalLockError);
-    await expect(
-      claimRemoval({
-        workerAuthority: {
-          predicates: [
-            {
-              kind: "source-record",
-              id: "missing-source",
-              repoRoot: "synthetic",
-              repoFingerprint: "synthetic",
-            },
-          ],
-        },
-      }),
-    ).rejects.toBeInstanceOf(SessionWorktreeSourceChangedError);
+        SessionWorktreeSourceChangedError,
+      ],
+    ] as const) {
+      const mismatch = claimRemoval({ workerAuthority: { predicates: [predicate] } });
+      await expect(mismatch).rejects.toBeInstanceOf(error);
+      if (predicate.kind === "session-owner") {
+        await expect(mismatch).rejects.toMatchObject({ reason: "owner-mismatch" });
+      }
+    }
     await claimRemoval();
     await expect(
       Promise.resolve().then(() => claimRemoval({ token: "second" })),

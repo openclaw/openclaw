@@ -134,6 +134,10 @@ describe("createManagedWorktreeOwnerPolicy", () => {
     policy.withOwnerCleanup(cleanupRecord, (withOwnerMutation) => withOwnerMutation(run));
   const expectState = (state: ReturnType<typeof policy.readOwnerState>, ownerId = key) =>
     expect(policy.readOwnerState("session", ownerId)).toBe(state);
+  const expectCleanupState = (state: ReturnType<typeof policy.readOwnerState>) =>
+    policy.withOwnerCleanup(cleanupRecord, async () => expectState(state));
+  const emitRemoval = (sessionKey: string) =>
+    sessionChanges.emit({ sessionKey, scope: "session-entry", facts: { kind: "removed" } });
 
   it("uses the worker for cleanup facts and invalidates them after an in-process write", async () => {
     const stateDir = tempDirs.make("worktree-owner-worker-");
@@ -286,25 +290,14 @@ describe("createManagedWorktreeOwnerPolicy", () => {
   it("uses one worker owner read through cleanup and refuses committed changes before deletion", async () => {
     await mutateOwner(async () => {
       expectState("retired");
-      sessionChanges.emit({
-        sessionKey: `${key}:unrelated`,
-        scope: "session-entry",
-        facts: { kind: "removed" },
-      });
+      emitRemoval(`${key}:unrelated`);
       expectState("retired");
-      sessionChanges.emit({
-        sessionKey: key,
-        scope: "session-entry",
-        facts: { kind: "removed" },
-      });
+      emitRemoval(key);
       expectState("active");
     });
     expect(readOwners).toHaveBeenCalledTimes(1);
     expectState("active");
-    // A later cleanup acquires fresh facts instead of retaining the invalidated lifetime.
-    await policy.withOwnerCleanup(cleanupRecord, async () => {
-      expectState("retired");
-    });
+    await expectCleanupState("retired");
   });
 
   it("exempts its own cleanup fence while preserving new work admission", async () => {
@@ -324,9 +317,7 @@ describe("createManagedWorktreeOwnerPolicy", () => {
     const census = await policy.prepareOwners([cleanupRecord]);
     expect(census.readOwnerState?.("session", key)).toBe("retired");
     ownerEntry({ sessionId: key, updatedAt: Date.now() });
-    await policy.withOwnerCleanup(cleanupRecord, async () => {
-      expectState("active");
-    });
+    await expectCleanupState("active");
   });
 
   it("classifies recent, idle, archived and missing owners through the async census", async () => {
