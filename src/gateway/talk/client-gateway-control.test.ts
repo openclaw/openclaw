@@ -35,6 +35,26 @@ function controlOptions(
   };
 }
 
+type ControlOwner = ReturnType<typeof createTalkClientGatewayControlOwner>;
+
+async function activate(owner: ControlOwner, closeProvider = vi.fn(async () => undefined)) {
+  await owner.adoptProvider(closeProvider);
+  owner.activate();
+}
+
+function consult(owner: ControlOwner, itemId: string, callId: string, question: string) {
+  owner.control.onToolCall?.({
+    itemId,
+    callId,
+    name: "openclaw_agent_consult",
+    args: { question },
+  });
+}
+
+function responseEvent(owner: ControlOwner, type: string, responseId: string) {
+  owner.control.onEvent?.({ direction: "server", type, responseId });
+}
+
 describe("Talk client Gateway control owner", () => {
   it.each(["failed", "incomplete"] as const)(
     "keeps Gateway-controlled browser Talk reusable after a %s response",
@@ -52,35 +72,18 @@ describe("Talk client Gateway control owner", () => {
           closeLogicalSession,
         }),
       );
-      await owner.adoptProvider(closeProvider);
-      owner.activate();
-      owner.control.onEvent?.({
-        direction: "server",
-        type: "response.created",
-        responseId: "response-1",
-      });
+      await activate(owner, closeProvider);
+      responseEvent(owner, "response.created", "response-1");
       const firstOutcome = {
         status,
         responseId: "response-1",
         message: `provider ${status}`,
       } as const;
       owner.control.onResponseDone?.(firstOutcome);
-      owner.control.onEvent?.({
-        direction: "server",
-        type: "response.done",
-        responseId: "response-1",
-      });
-      owner.control.onEvent?.({
-        direction: "server",
-        type: "response.created",
-        responseId: "response-2",
-      });
+      responseEvent(owner, "response.done", "response-1");
+      responseEvent(owner, "response.created", "response-2");
       owner.control.onResponseDone?.({ status: "completed", responseId: "response-2" });
-      owner.control.onEvent?.({
-        direction: "server",
-        type: "response.done",
-        responseId: "response-2",
-      });
+      responseEvent(owner, "response.done", "response-2");
 
       expect(talkEvents.filter((event) => event.type === "session.error")).toHaveLength(1);
       expect(talkEvents.filter((event) => event.type === "turn.ended")).toHaveLength(2);
@@ -143,16 +146,10 @@ describe("Talk client Gateway control owner", () => {
         }),
       );
       owner.control.bindBridge(bridge);
-      await owner.adoptProvider(closeProvider);
-      owner.activate();
+      await activate(owner, closeProvider);
 
       owner.control.onTranscript?.("user", "check the repository", true);
-      owner.control.onToolCall?.({
-        itemId: "item-consult",
-        callId: "call-consult",
-        name: "openclaw_agent_consult",
-        args: { question: "check the repository" },
-      });
+      consult(owner, "item-consult", "call-consult", "check the repository");
       await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
       const cancelToolCall = (callId: string) =>
         owner.control.onToolCall?.({
@@ -261,8 +258,7 @@ describe("Talk client Gateway control owner", () => {
       } else {
         owner.control.bindBridge(bridge);
       }
-      await owner.adoptProvider(vi.fn(async () => undefined));
-      owner.activate();
+      await activate(owner);
       const delegationController = new AbortController();
       const delegation =
         entry === "delegation"
@@ -271,12 +267,7 @@ describe("Talk client Gateway control owner", () => {
               .catch((error: unknown) => error)
           : undefined;
       if (entry === "tool") {
-        owner.control.onToolCall?.({
-          itemId: "item-long",
-          callId: "call-long",
-          name: "openclaw_agent_consult",
-          args: { question: "long task" },
-        });
+        consult(owner, "item-long", "call-long", "long task");
       }
       try {
         await runStarted.promise;
@@ -358,20 +349,14 @@ describe("Talk client Gateway control owner", () => {
       let replacement: ReturnType<typeof createTalkClientGatewayControlOwner> | undefined;
       let delegation: Promise<unknown> | undefined;
       let steering: Promise<unknown> | undefined;
-      await owner.adoptProvider(vi.fn(async () => undefined));
-      owner.activate();
+      await activate(owner);
       try {
         if (entry === "delegation") {
           delegation = owner
             .runAgentConsult({ prompt: "queued task" })
             .catch((error: unknown) => error);
         } else {
-          owner.control.onToolCall?.({
-            itemId: "item-flush",
-            callId: "call-flush",
-            name: "openclaw_agent_consult",
-            args: { question: "queued task" },
-          });
+          consult(owner, "item-flush", "call-flush", "queued task");
         }
         await vi.waitFor(() => expect(flushTranscript).toHaveBeenCalledOnce());
         if (entry === "delegation") {
@@ -387,8 +372,7 @@ describe("Talk client Gateway control owner", () => {
             ...common,
             flushTranscript: vi.fn(async () => undefined),
           });
-          await replacement.adoptProvider(vi.fn(async () => undefined));
-          replacement.activate();
+          await activate(replacement);
         } else {
           void owner.close();
         }
@@ -457,11 +441,9 @@ describe("Talk client Gateway control owner", () => {
       let replacement: ReturnType<typeof createTalkClientGatewayControlOwner> | undefined;
       replaceOwner = async () => {
         replacement = createTalkClientGatewayControlOwner(common);
-        await replacement.adoptProvider(vi.fn(async () => undefined));
-        replacement.activate();
+        await activate(replacement);
       };
-      await owner.adoptProvider(vi.fn(async () => undefined));
-      owner.activate();
+      await activate(owner);
       if (mode === "owned") {
         owner.runAgentConsult.adoptCompletionClaims?.();
       }
@@ -514,15 +496,13 @@ describe("Talk client Gateway control owner", () => {
     });
     const owner = createTalkClientGatewayControlOwner(common);
     const replacement = createTalkClientGatewayControlOwner(common);
-    await owner.adoptProvider(vi.fn(async () => undefined));
-    owner.activate();
+    await activate(owner);
     owner.runAgentConsult.adoptCompletionClaims?.();
     await expect(owner.runAgentConsult({ prompt: "work", requesterFinal })).resolves.toEqual({
       text: "delegated",
       yielded: true,
     });
-    await replacement.adoptProvider(vi.fn(async () => undefined));
-    replacement.activate();
+    await activate(replacement);
 
     try {
       expect(revokeRequesterFinal).toHaveBeenCalledOnce();
@@ -581,8 +561,7 @@ describe("Talk client Gateway control owner", () => {
         flushTranscript,
       }),
     );
-    await owner.adoptProvider(vi.fn(async () => undefined));
-    owner.activate();
+    await activate(owner);
     owner.runAgentConsult.adoptCompletionClaims?.();
 
     const first = owner.runAgentConsult({ prompt: "first task" });
@@ -656,19 +635,13 @@ describe("Talk client Gateway control owner", () => {
           transitioned.resolve();
         });
       });
-      await owner.adoptProvider(vi.fn(async () => undefined));
-      owner.activate();
+      await activate(owner);
       let delegation: Promise<unknown> | undefined;
       try {
         if (entry === "delegation") {
           delegation = owner.runAgentConsult({ prompt: "queued task" }).catch(() => undefined);
         } else {
-          owner.control.onToolCall?.({
-            itemId: "item-flush-completion",
-            callId: "call-flush-completion",
-            name: "openclaw_agent_consult",
-            args: { question: "queued task" },
-          });
+          consult(owner, "item-flush-completion", "call-flush-completion", "queued task");
         }
         await vi.waitFor(() => expect(flushTranscript).toHaveBeenCalledOnce());
         flush.resolve();
@@ -777,8 +750,7 @@ describe("native Talk control admission", () => {
       const owner = createTalkClientGatewayControlOwner(common);
       const bridge = controlBridge();
       owner.control.bindBridge(bridge);
-      await owner.adoptProvider(vi.fn(async () => undefined));
-      owner.activate();
+      await activate(owner);
       let replacement: ReturnType<typeof createTalkClientGatewayControlOwner> | undefined;
       const respond = vi.fn();
       const handleInput = owner.control.handleDelegationInput!;
@@ -790,8 +762,7 @@ describe("native Talk control admission", () => {
         await vi.waitFor(() => expect(controlAgentRun).toHaveBeenCalledOnce());
         if (ending === "replace") {
           replacement = createTalkClientGatewayControlOwner(common);
-          await replacement.adoptProvider(vi.fn(async () => undefined));
-          replacement.activate();
+          await activate(replacement);
         } else if (ending === "disconnect") {
           connected = false;
         }
@@ -844,8 +815,7 @@ describe("Talk client reusable Gateway consults", () => {
       );
       const bridge = controlBridge();
       owner.control.bindBridge(bridge);
-      await owner.adoptProvider(closeProvider);
-      owner.activate();
+      await activate(owner, closeProvider);
       const unregister = registerTalkVoiceSession({
         voiceSessionId,
         connId,
@@ -862,12 +832,12 @@ describe("Talk client reusable Gateway consults", () => {
       let changing: ReturnType<typeof requestTalkVoiceChange> | undefined;
       let authorityCurrent = true;
       try {
-        owner.control.onToolCall?.({
-          itemId: "item-voice-change",
-          callId: "call-voice-change",
-          name: "openclaw_agent_consult",
-          args: { question: "Change your voice and keep working" },
-        });
+        consult(
+          owner,
+          "item-voice-change",
+          "call-voice-change",
+          "Change your voice and keep working",
+        );
         await vi.waitFor(() => expect(runToolAgentConsult).toHaveBeenCalledOnce());
         const runSignal = runToolAgentConsult.mock.calls[0]?.[1];
         expect(runSignal?.aborted).toBe(false);

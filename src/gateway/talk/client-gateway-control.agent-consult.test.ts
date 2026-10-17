@@ -1,6 +1,7 @@
 import { copyFileSync, renameSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
@@ -50,6 +51,43 @@ import {
 import type { ConsultParams } from "./client-gateway-control.agent-consult.test-support.js";
 import { resolveTalkAgentConsultAuthority } from "./client-gateway-control.js";
 
+const steeringResult = {
+  ok: true,
+  mode: "steer",
+  sessionKey: "agent:researcher:talk",
+  sessionId: "session-talk",
+  active: true,
+  queued: true,
+  target: "embedded",
+  message: "Steering accepted.",
+  speak: true,
+  show: true,
+  suppress: false,
+};
+
+function publishBackend(
+  handle: ReturnType<typeof createEmbeddedRunHandle>,
+  operationalRunInstance: OperationalRunInstanceRef,
+  project: (overlay: ReplyToolAuthorityOverlay) => string,
+  source: "reply" | "attempt",
+  assertActive = () => {},
+) {
+  return withGatewayToolCallerIdentity(
+    {
+      agentId: "researcher",
+      sessionKey: "agent:researcher:talk",
+      operationalRunInstance,
+      embeddedRunToolAuthorityBinding: () => ({
+        source,
+        project,
+        projectAsync: async (overlay) => project(overlay),
+        assertActive,
+      }),
+    },
+    () => setActiveEmbeddedRun("session-talk", handle, "agent:researcher:talk"),
+  );
+}
+
 describe("Talk client agent consult admission", () => {
   beforeEach(resetConsultFixture);
 
@@ -77,20 +115,7 @@ describe("Talk client agent consult admission", () => {
     mocks.runEmbeddedAgentCore.mockImplementationOnce(async () => {
       announced.resolve();
       await publish.promise;
-      await withGatewayToolCallerIdentity(
-        {
-          agentId: "researcher",
-          sessionKey: "agent:researcher:talk",
-          operationalRunInstance,
-          embeddedRunToolAuthorityBinding: () => ({
-            source: "reply",
-            project: projectToolAuthority,
-            projectAsync: async (overlay) => projectToolAuthority(overlay),
-            assertActive: () => {},
-          }),
-        },
-        () => setActiveEmbeddedRun("session-talk", handle, "agent:researcher:talk"),
-      );
+      await publishBackend(handle, operationalRunInstance, projectToolAuthority, "reply");
       await finish.promise;
       clearActiveEmbeddedRun("session-talk", handle, "agent:researcher:talk");
       return { payloads: [] };
@@ -167,41 +192,15 @@ describe("Talk client agent consult admission", () => {
     const secondProject = vi.fn((_overlay: ReplyToolAuthorityOverlay) => "second-authority");
     mocks.createOperationalRunInstanceRef.mockReturnValueOnce(operationalRunInstance);
     mocks.runEmbeddedAgentCore.mockImplementationOnce(async () => {
-      await withGatewayToolCallerIdentity(
-        {
-          agentId: "researcher",
-          sessionKey: "agent:researcher:talk",
-          operationalRunInstance,
-          embeddedRunToolAuthorityBinding: () => ({
-            source: "attempt",
-            project: firstProject,
-            projectAsync: async (overlay) => firstProject(overlay),
-            assertActive: () => {
-              if (!firstLive) {
-                throw new Error("first attempt expired");
-              }
-            },
-          }),
-        },
-        () => setActiveEmbeddedRun("session-talk", firstHandle, "agent:researcher:talk"),
-      );
+      await publishBackend(firstHandle, operationalRunInstance, firstProject, "attempt", () => {
+        if (!firstLive) {
+          throw new Error("first attempt expired");
+        }
+      });
       await Promise.resolve();
       firstLive = false;
       clearActiveEmbeddedRun("session-talk", firstHandle, "agent:researcher:talk");
-      await withGatewayToolCallerIdentity(
-        {
-          agentId: "researcher",
-          sessionKey: "agent:researcher:talk",
-          operationalRunInstance,
-          embeddedRunToolAuthorityBinding: () => ({
-            source: "attempt",
-            project: secondProject,
-            projectAsync: async (overlay) => secondProject(overlay),
-            assertActive: () => {},
-          }),
-        },
-        () => setActiveEmbeddedRun("session-talk", secondHandle, "agent:researcher:talk"),
-      );
+      await publishBackend(secondHandle, operationalRunInstance, secondProject, "attempt");
       secondPublished.resolve();
       await finish.promise;
       clearActiveEmbeddedRun("session-talk", secondHandle, "agent:researcher:talk");
@@ -212,19 +211,7 @@ describe("Talk client agent consult admission", () => {
       if (overlay) {
         await params.prepareToolAuthorityOverlay?.(overlay);
       }
-      return {
-        ok: true,
-        mode: "steer",
-        sessionKey: "agent:researcher:talk",
-        sessionId: "session-talk",
-        active: true,
-        queued: true,
-        target: "embedded",
-        message: "Steering accepted.",
-        speak: true,
-        show: true,
-        suppress: false,
-      };
+      return steeringResult;
     });
     const runner = createConsultRunner({
       context: { chatAbortControllers, logGateway: { warn: vi.fn() } } as never,
@@ -260,35 +247,9 @@ describe("Talk client agent consult admission", () => {
     );
     mocks.createOperationalRunInstanceRef.mockReturnValueOnce(admittedRun);
     mocks.runEmbeddedAgentCore.mockImplementationOnce(async () => {
-      await withGatewayToolCallerIdentity(
-        {
-          agentId: "researcher",
-          sessionKey: "agent:researcher:talk",
-          operationalRunInstance: admittedRun,
-          embeddedRunToolAuthorityBinding: () => ({
-            source: "attempt",
-            project: ownerProject,
-            projectAsync: async (overlay) => ownerProject(overlay),
-            assertActive: () => {},
-          }),
-        },
-        () => setActiveEmbeddedRun("session-talk", firstHandle, "agent:researcher:talk"),
-      );
+      await publishBackend(firstHandle, admittedRun, ownerProject, "attempt");
       clearActiveEmbeddedRun("session-talk", firstHandle, "agent:researcher:talk");
-      await withGatewayToolCallerIdentity(
-        {
-          agentId: "researcher",
-          sessionKey: "agent:researcher:talk",
-          operationalRunInstance: replacementRun,
-          embeddedRunToolAuthorityBinding: () => ({
-            source: "attempt",
-            project: replacementProject,
-            projectAsync: async (overlay) => replacementProject(overlay),
-            assertActive: () => {},
-          }),
-        },
-        () => setActiveEmbeddedRun("session-talk", secondHandle, "agent:researcher:talk"),
-      );
+      await publishBackend(secondHandle, replacementRun, replacementProject, "attempt");
       secondPublished.resolve();
       await finish.promise;
       clearActiveEmbeddedRun("session-talk", secondHandle, "agent:researcher:talk");
@@ -395,20 +356,7 @@ describe("Talk client agent consult admission", () => {
       return { text: "current" };
     });
     mocks.runEmbeddedAgentCore.mockImplementationOnce(async () => {
-      await withGatewayToolCallerIdentity(
-        {
-          agentId: "researcher",
-          sessionKey: "agent:researcher:talk",
-          operationalRunInstance: currentRun,
-          embeddedRunToolAuthorityBinding: () => ({
-            source: "attempt",
-            project,
-            projectAsync: async (overlay) => project(overlay),
-            assertActive: () => {},
-          }),
-        },
-        () => setActiveEmbeddedRun("session-talk", secondHandle, "agent:researcher:talk"),
-      );
+      await publishBackend(secondHandle, currentRun, project, "attempt");
       secondPublished.resolve();
       await finishSecond.promise;
       clearActiveEmbeddedRun("session-talk", secondHandle, "agent:researcher:talk");
@@ -419,19 +367,7 @@ describe("Talk client agent consult admission", () => {
       if (overlay) {
         await params.prepareToolAuthorityOverlay?.(overlay);
       }
-      return {
-        ok: true,
-        mode: "steer",
-        sessionKey: "agent:researcher:talk",
-        sessionId: "session-talk",
-        active: true,
-        queued: true,
-        target: "embedded",
-        message: "Steering accepted.",
-        speak: true,
-        show: true,
-        suppress: false,
-      };
+      return steeringResult;
     });
     const runner = createConsultRunner({
       context: { chatAbortControllers, logGateway: { warn: vi.fn() } } as never,
@@ -537,20 +473,7 @@ describe("Talk client agent consult admission", () => {
     mocks.createOperationalRunInstanceRef.mockReturnValueOnce(operationalRunInstance);
     mocks.runEmbeddedAgentCore.mockImplementationOnce(async () => {
       const project = (_overlay: ReplyToolAuthorityOverlay) => "authority";
-      await withGatewayToolCallerIdentity(
-        {
-          agentId: "researcher",
-          sessionKey: "agent:researcher:talk",
-          operationalRunInstance,
-          embeddedRunToolAuthorityBinding: () => ({
-            source: "attempt",
-            project,
-            projectAsync: async (overlay) => project(overlay),
-            assertActive: () => {},
-          }),
-        },
-        () => setActiveEmbeddedRun("session-talk", handle, "agent:researcher:talk"),
-      );
+      await publishBackend(handle, operationalRunInstance, project, "attempt");
       await finish.promise;
       clearActiveEmbeddedRun("session-talk", handle, "agent:researcher:talk");
       return { payloads: [] };
