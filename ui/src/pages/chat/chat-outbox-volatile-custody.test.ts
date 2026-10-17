@@ -25,15 +25,37 @@ import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 useChatSendBrowserFixture();
 
+function failStorageWrites(error: Error = new Error("quota")) {
+  return vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
+    throw error;
+  });
+}
+
+function accountScope(host: ReturnType<typeof makeChatHost>, initial = "owner-a") {
+  let account = initial;
+  vi.spyOn(host.client!, "recoveryScope", "get").mockImplementation(() => account);
+  return (next: string, advanceEpoch = false, source = host) => {
+    account = next;
+    if (advanceEpoch) {
+      host.connectionEpoch += 1;
+    }
+    chatOutboxOwner(source).syncHost(source);
+  };
+}
+
+function subscribe(host: ReturnType<typeof makeChatHost>) {
+  const stop = chatOutboxOwner(host).subscribe(host);
+  onTestFinished(stop);
+  return stop;
+}
+
 it.each([
   { subscribed: false, replacement: false },
   { subscribed: true, replacement: true },
 ])(
   "retains a genuinely volatile send across account return ($subscribed/$replacement)",
   async ({ subscribed, replacement }) => {
-    vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
-      throw new DOMException("quota exceeded", "QuotaExceededError");
-    });
+    failStorageWrites(new DOMException("quota exceeded", "QuotaExceededError"));
     let account = "opaque-owner-a";
     let attempts = 0;
     const host = makeChatHost({
@@ -106,9 +128,7 @@ it.each([
 it.each(["retry", "discard"])(
   "keeps rejected initial-turn attachment bytes until explicit %s",
   async (action) => {
-    vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
-      throw new DOMException("quota", "QuotaExceededError");
-    });
+    failStorageWrites(new DOMException("quota", "QuotaExceededError"));
     const { context, request } = createDraftFixture({
       request: async (method, params) => {
         if (method === "chat.send") {
@@ -119,7 +139,6 @@ it.each(["retry", "discard"])(
       },
     });
     const client = context.gateway.snapshot.client!;
-    const originalAccount = client.recoveryScope;
     const sessionKey = "agent:main:rejected-file";
     const attachment = registerChatAttachmentPayload({
       attachment: {
@@ -155,6 +174,12 @@ it.each(["retry", "discard"])(
       sessionKey,
       settings: { gatewayUrl: context.gateway.connection.gatewayUrl },
     });
+    const originalAccount = client.recoveryScope;
+    const select = (value: string) => {
+      Object.defineProperty(client, "recoveryScope", { configurable: true, value });
+      host.connectionEpoch += 1;
+      chatOutboxOwner(host).syncHost(host);
+    };
     const owner = chatOutboxOwner(host);
     const discarded = vi.fn();
     const stop = owner.subscribe(host, discarded);
@@ -163,11 +188,6 @@ it.each(["retry", "discard"])(
     expect(listStoredChatOutboxes(host)).toEqual([]);
     const original = host.chatQueue[0]!;
     expect(original).toMatchObject({ text: "Private rejected turn", sendState: "failed" });
-    const select = (value: string) => {
-      Object.defineProperty(client, "recoveryScope", { configurable: true, value });
-      host.connectionEpoch += 1;
-      chatOutboxOwner(host).syncHost(host);
-    };
     select("another-opaque-owner");
     expect(host.chatQueue).toEqual([]);
     expect(removeQueuedMessage(host, original.id, { discard: true })).toBe("absent");
@@ -210,12 +230,9 @@ it.each(["retry", "discard"])(
 );
 
 it("parks an in-flight memory turn without resurrecting its retired sending operation", async () => {
-  vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
-    throw new Error("quota");
-  });
+  failStorageWrites();
   const entered = createDeferred();
   const reply = createDeferred<unknown>();
-  let account = "owner-a";
   const host = makeChatHost({
     chatMessage: "In flight unsaved input",
     requestHandlers: {
@@ -225,21 +242,16 @@ it("parks an in-flight memory turn without resurrecting its retired sending oper
       },
     },
   });
-  vi.spyOn(host.client!, "recoveryScope", "get").mockImplementation(() => account);
-  const stop = chatOutboxOwner(host).subscribe(host);
-  onTestFinished(stop);
+  const select = accountScope(host);
+  subscribe(host);
   const sending = handleSendChat(host);
   await entered.promise;
   const original = host.chatQueue[0]!;
   expect(original.sendState).toBe("sending");
   try {
-    account = "owner-b";
-    host.connectionEpoch += 1;
-    chatOutboxOwner(host).syncHost(host);
+    select("owner-b", true);
     expect(host.chatQueue).toEqual([]);
-    account = "owner-a";
-    host.connectionEpoch += 1;
-    chatOutboxOwner(host).syncHost(host);
+    select("owner-a", true);
     expect(host.chatQueue).toEqual([
       expect.objectContaining({
         id: original.id,
@@ -260,13 +272,12 @@ it("parks an in-flight memory turn without resurrecting its retired sending oper
 });
 
 it("does not revive submission authority or old presentation over a newer durable edit", async () => {
-  let account = "owner-a";
   const host = makeChatHost({
     connected: false,
     chatMessage: "Original durable turn",
     requestHandlers: {},
   });
-  vi.spyOn(host.client!, "recoveryScope", "get").mockImplementation(() => account);
+  const select = accountScope(host);
   const owner = chatOutboxOwner(host);
   const stop = owner.subscribe(host);
   onTestFinished(stop);
@@ -283,16 +294,14 @@ it("does not revive submission authority or old presentation over a newer durabl
   })!;
   expect(owner.hasPendingSubmission(outbox, idle)).toBe(true);
   expect(host.chatQueue[0]?.sendState).toBe("submitting");
-  account = "owner-b";
-  chatOutboxOwner(host).syncHost(host);
+  select("owner-b");
   expect(host.chatQueue).toEqual([]);
   const peer = makeChatHost({ client: createTestGatewayClient(host.request) });
   vi.spyOn(peer.client!, "recoveryScope", "get").mockReturnValue("owner-a");
   expect(
     updateQueuedMessage(peer, idle.id, (item) => ({ ...item, text: "New durable edit" })),
   ).toMatchObject({ text: "New durable edit" });
-  account = "owner-a";
-  chatOutboxOwner(host).syncHost(host);
+  select("owner-a");
   const current = host.chatQueue[0]!;
   expect(current).toMatchObject({ text: "New durable edit", sendState: "waiting-idle" });
   expect(owner.hasPendingSubmission(outbox, current)).toBe(false);
@@ -309,10 +318,7 @@ it("does not revive submission authority or old presentation over a newer durabl
 });
 
 it("moves peer panes together while retaining each volatile input under its original owner", async () => {
-  vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
-    throw new Error("quota");
-  });
-  let account = "owner-a";
+  failStorageWrites();
   const left = makeChatHost({
     chatMessage: "Left private input",
     requestHandlers: {
@@ -322,25 +328,19 @@ it("moves peer panes together while retaining each volatile input under its orig
     },
   });
   const right = makeChatHost({ client: left.client, chatMessage: "Right private input" });
-  vi.spyOn(left.client!, "recoveryScope", "get").mockImplementation(() => account);
-  const stopLeft = chatOutboxOwner(left).subscribe(left);
-  const stopRight = chatOutboxOwner(right).subscribe(right);
-  onTestFinished(() => {
-    stopLeft();
-    stopRight();
-  });
+  const select = accountScope(left);
+  subscribe(left);
+  subscribe(right);
   await handleSendChat(left);
   await handleSendChat(right);
   const leftInput = left.chatQueue[0]!;
   const rightInput = right.chatQueue[0]!;
   expect(leftInput.text).toBe("Left private input");
   expect(rightInput.text).toBe("Right private input");
-  account = "owner-b";
-  chatOutboxOwner(left).syncHost(left);
+  select("owner-b");
   expect(left.chatQueue).toEqual([]);
   expect(right.chatQueue).toEqual([]);
-  account = "owner-a";
-  chatOutboxOwner(right).syncHost(right);
+  select("owner-a", false, right);
   expect(left.chatQueue).toEqual([
     expect.objectContaining({ id: leftInput.id, text: leftInput.text }),
   ]);
@@ -362,10 +362,7 @@ it.each([
 ])(
   "retires saved volatile custody before peer discard ($returnBeforeDiscard/$offscreen)",
   async ({ returnBeforeDiscard, offscreen }) => {
-    const failedStorage = vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
-      throw new Error("quota");
-    });
-    let account = "owner-a";
+    const failedStorage = failStorageWrites();
     const source = makeChatHost({
       chatMessage: "Old volatile text",
       requestHandlers: {
@@ -374,13 +371,11 @@ it.each([
         },
       },
     });
-    vi.spyOn(source.client!, "recoveryScope", "get").mockImplementation(() => account);
-    const stop = chatOutboxOwner(source).subscribe(source);
-    onTestFinished(stop);
+    const select = accountScope(source);
+    subscribe(source);
     await handleSendChat(source);
     const original = source.chatQueue[0]!;
-    account = "owner-b";
-    chatOutboxOwner(source).syncHost(source);
+    select("owner-b");
     failedStorage.mockRestore();
     const peer = makeChatHost({ client: createTestGatewayClient(source.request) });
     vi.spyOn(peer.client!, "recoveryScope", "get").mockReturnValue("owner-a");
@@ -394,8 +389,7 @@ it.each([
       }),
     ).toBe("admitted");
     if (returnBeforeDiscard) {
-      account = "owner-a";
-      chatOutboxOwner(source).syncHost(source);
+      select("owner-a");
       expect(source.chatQueue[0]?.text).toBe("Newer durable peer edit");
       expect(chatOutboxOwner(source).hasVolatile(source, original.id)).toBe(false);
     }
@@ -413,14 +407,11 @@ it.each([
     } else {
       expect(removeQueuedMessage(peer, original.id, { discard: true })).toBe("removed");
     }
-    account = "owner-a";
-    chatOutboxOwner(source).syncHost(source);
+    select("owner-a");
     expect(source.chatQueue).toEqual([]);
     expect(chatOutboxOwner(source).allItems(source)).toEqual([]);
-    account = "owner-b";
-    chatOutboxOwner(source).syncHost(source);
-    account = "owner-a";
-    chatOutboxOwner(source).syncHost(source);
+    select("owner-b");
+    select("owner-a");
     expect(source.chatQueue).toEqual([]);
   },
 );

@@ -31,6 +31,22 @@ const recovery = {
   expectedNativeRuntimeConsent: null,
 } satisfies NonNullable<AgentRuntimeRestrictionErrorDetails["recovery"]>;
 
+function restrictionError(details: AgentRuntimeRestrictionErrorDetails) {
+  return new GatewayRequestError({
+    code: "INVALID_REQUEST",
+    message: "Native runtime restricted",
+    details,
+  });
+}
+
+const restrictionDetails: AgentRuntimeRestrictionErrorDetails = {
+  code: "AGENT_RUNTIME_RESTRICTED",
+  runtimeId: "opencode",
+  runtimeLabel: "OpenCode",
+  reason: "sandbox",
+  recovery,
+};
+
 function fixture(
   options: {
     details?: Partial<AgentRuntimeRestrictionErrorDetails>;
@@ -70,11 +86,7 @@ function fixture(
   const initialResult = options.unbound ? { ...result, count: 0, sessions: [] } : result;
   let materialized = !options.unbound;
   const details: AgentRuntimeRestrictionErrorDetails = {
-    code: "AGENT_RUNTIME_RESTRICTED",
-    runtimeId: "opencode",
-    runtimeLabel: "OpenCode",
-    reason: "sandbox",
-    recovery,
+    ...restrictionDetails,
     ...options.details,
   };
   let patches = 0;
@@ -111,11 +123,7 @@ function fixture(
       "sessions.patch": () => {
         patches += 1;
         if (patches === 1 && !options.send) {
-          throw new GatewayRequestError({
-            code: "INVALID_REQUEST",
-            message: "Native runtime restricted",
-            details,
-          });
+          throw restrictionError(details);
         }
         if (options.rejectRecovery) {
           throw new GatewayRequestError({
@@ -174,6 +182,14 @@ function click(modal: Element, label: string) {
     throw new Error("Missing confirmation action: " + label);
   }
   button.click();
+}
+
+function expectNoPatchFields(host: ReturnType<typeof fixture>["host"], ...fields: string[]) {
+  for (const [, params] of requestCalls(host.request, "sessions.patch")) {
+    for (const field of fields) {
+      expect(params).not.toHaveProperty(field);
+    }
+  }
 }
 
 it.each([false, true])(
@@ -325,9 +341,7 @@ it.each([
   }
   await expect(selection).resolves.toBe(false);
   const patches = requestCalls(host.request, "sessions.patch");
-  expect(
-    patches.some(([, params]) => params && typeof params === "object" && "sandboxMode" in params),
-  ).toBe(false);
+  expectNoPatchFields(host, "sandboxMode");
   expect(patches).toHaveLength(change === "newer-selection" ? 2 : 1);
   expect(host.chatMessage).toBe("Keep this draft; never replay it");
 });
@@ -365,19 +379,7 @@ it("does not open a late refusal on a replacement connection", async () => {
   host.request.mockImplementationOnce(() => response.promise);
   const selection = switchChatModel(host, "fixture/selected", "global", "opencode");
   host.connectionEpoch = (host.connectionEpoch ?? 0) + 1;
-  response.reject(
-    new GatewayRequestError({
-      code: "INVALID_REQUEST",
-      message: "Native runtime restricted",
-      details: {
-        code: "AGENT_RUNTIME_RESTRICTED",
-        runtimeId: "opencode",
-        runtimeLabel: "OpenCode",
-        reason: "sandbox",
-        recovery,
-      },
-    }),
-  );
+  response.reject(restrictionError(restrictionDetails));
   await expect(selection).resolves.toBe(false);
   expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
   expect(host.chatError ?? null).toBeNull();
@@ -391,9 +393,7 @@ it("retries a first turn using remembered consent without repinning its model", 
   const patches = requestCalls(host.request, "sessions.patch");
   expect(patches).toHaveLength(1);
   expect(patches[0]?.[1]).toMatchObject({ permissionMode: "full", sandboxMode: "off" });
-  expect(patches[0]?.[1]).not.toHaveProperty("agentRuntime");
-  expect(patches[0]?.[1]).not.toHaveProperty("model");
-  expect(patches[0]?.[1]).not.toHaveProperty("nativeRuntimeConsent");
+  expectNoPatchFields(host, "agentRuntime", "model", "nativeRuntimeConsent");
 });
 
 it.each(["repeated refusal", "newer draft", "unbound session"] as const)(
@@ -428,8 +428,7 @@ it.each(["repeated refusal", "newer draft", "unbound session"] as const)(
           expectedSessionId: recovery.sessionId,
           nativeRuntimeConsent: "opencode",
         });
-        expect(patches[0]?.[1]).not.toHaveProperty("model");
-        expect(patches[0]?.[1]).not.toHaveProperty("agentRuntime");
+        expectNoPatchFields(host, "model", "agentRuntime");
         expect(host.request.mock.calls.some(([method]) => method === "sessions.create")).toBe(
           false,
         );
@@ -459,15 +458,7 @@ it.each(["newer-selection", "server-selection", "session"] as const)(
       click(modal, "Continue for this chat");
     }
     await sending;
-    expect(
-      host.request.mock.calls.some(
-        ([method, params]) =>
-          method === "sessions.patch" &&
-          params != null &&
-          typeof params === "object" &&
-          "nativeRuntimeConsent" in params,
-      ),
-    ).toBe(false);
+    expectNoPatchFields(host, "nativeRuntimeConsent");
     expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
   },
 );
