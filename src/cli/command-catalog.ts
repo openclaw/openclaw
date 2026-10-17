@@ -544,7 +544,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["channels", "logs"],
     exact: true,
-    policy: { loadPlugins: "never", networkProxy: "bypass" },
+    policy: { configGuard: "validate", loadPlugins: "never", networkProxy: "bypass" },
   },
   ...["remove", "resolve"].map((subcommand): CliCommandCatalogEntry => ({
     commandPath: ["channels", subcommand],

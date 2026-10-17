@@ -43,7 +43,6 @@ describe("chat transcript geometry", () => {
         });
       }
       const host = document.createElement("div");
-      const notify = vi.fn();
       vi.stubGlobal("innerWidth", 800);
       vi.stubGlobal("innerHeight", 600);
       const readHostWidth = vi.fn(() => 800);
@@ -52,7 +51,7 @@ describe("chat transcript geometry", () => {
         clientWidth: { get: readHostWidth },
         clientHeight: { get: readHostHeight },
       });
-      const transcript = createChatTranscript(notify, () => paneId);
+      const transcript = createChatTranscript(() => paneId);
       const rows = Array.from({ length: 100 }, (_, index) => ({
         kind: "content" as const,
         key: `row:${index}`,
@@ -351,13 +350,12 @@ describe("chat transcript geometry", () => {
       });
     }
     const geometryEventTarget = document.body.appendChild(document.createElement("div"));
-    const notify = vi.fn();
     const viewportChanged = vi.fn();
-    const main = createChatTranscript(notify, () => "pane-geometry-main", {
+    const main = createChatTranscript(() => "pane-geometry-main", {
       geometryEventTarget,
       onViewportResize: viewportChanged,
     });
-    const detail = createChatTranscript(notify, () => "pane-geometry-detail", {
+    const detail = createChatTranscript(() => "pane-geometry-detail", {
       geometryEventTarget,
     });
     // Another pane may precede main chat in DOM order; neither observer nor

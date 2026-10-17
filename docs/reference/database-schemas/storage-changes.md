@@ -2895,6 +2895,28 @@ execute commands, or require a database restore. The maintainer-authorized
 restart-continuity repair accepts this narrowly scoped durability change; owner
 and separate-Gateway-process tests cover lifecycle cleanup and restart handoff.
 
+## Memory index batch revisions
+
+Agent schema 31 removes the six row revision triggers on `memory_index_sources`
+and `memory_index_chunks`. The publication and Forget writers advance
+`memory_index_state.revision` once inside each transaction that changes the
+index, including source refresh, replacement, deletion, reset, shadow publication,
+and purge. Readers cannot observe committed index rows with a previous revision;
+rollback discards both the row changes and the revision advance. Revision values
+identify index changes, not the number of affected rows.
+
+The migration does not rewrite memory content, embeddings, source identities, or
+the current revision. SQLite and PostgreSQL advance together. PostgreSQL also
+retires the two obsolete revision trigger functions, while retaining vector and
+full-text projection triggers. Historical admission and rollback keep the old
+trigger definitions. Fresh and shadow memory stores use the same writer-owned
+revision contract.
+
+The declared SQLite backup covers the source and chunk tables and schema metadata.
+Other retained tables and planner statistics stay unchanged. Older binaries
+require the verified pre-upgrade backup and matching schema; manually lowering
+version markers cannot restore their revision-update contract.
+
 ## Review checkpoint for material changes
 
 An explicit maintainer repair-and-land request covers internal scheduling,

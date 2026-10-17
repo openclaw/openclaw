@@ -819,6 +819,14 @@ through activation, readiness, and recovery, including native service commands.
 Expiry reports `update-activation-timeout` or pending recovery; it does not start
 another recovery phase. Outstanding writers retain ownership until they settle.
 
+The same deadline cancels runtime-retention inventory, its file-hashing workers,
+and materialization before activation. Retention makes one attempt and stops if
+dependency discovery cannot make progress; it does not repeatedly copy a changing
+tree. If retention fails, the serving installation stays untouched. Retry after
+addressing the reported storage or dependency problem. This protection belongs
+to the installed updater, so selecting a newer candidate cannot fix an older
+updater that is already stuck in retention.
+
 After activation or rollback is verified, obsolete package and launcher backup
 trees share a five-minute cleanup budget. Expiry retains the remaining backups
 and records their paths as a warning without undoing the verified installation.

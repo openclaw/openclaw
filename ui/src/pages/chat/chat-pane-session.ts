@@ -52,7 +52,33 @@ import {
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 
+const NO_PULL_REQUESTS: ControlUiSessionPullRequest[] = [];
+
 export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
+  readonly repository: {
+    target: { store: ReturnType<typeof sessionPullRequestsForGateway>; key: string } | null;
+    dismissedIds: ReadonlySet<string>;
+  } = { target: null, dismissedIds: new Set() };
+  private previousRepository: ReturnType<typeof sessionGitHubRepository> = null;
+
+  private readPullRequestSnapshot(): ControlUiSessionPullRequestSnapshot | undefined {
+    const target = this.repository.target;
+    return target?.store.get(target.key);
+  }
+
+  protected get sessionPullRequests(): ControlUiSessionPullRequest[] {
+    return this.readPullRequestSnapshot()?.pullRequests ?? NO_PULL_REQUESTS;
+  }
+  protected get sessionPullRequestsBranch(): ControlUiSessionBranch | undefined {
+    return this.readPullRequestSnapshot()?.branch;
+  }
+  protected get githubRepo() {
+    return sessionGitHubRepository(this.readPullRequestSnapshot());
+  }
+  protected get sessionPullRequestsStatus(): ControlUiSessionPullRequestSnapshot["status"] {
+    return this.readPullRequestSnapshot()?.status ?? "ready";
+  }
+
   private deferredSessionHydration: { resume?: () => void } | null = null;
   /** Hidden-run acknowledgements in flight or sent, keyed by run and activity revision. */
   private readonly hiddenRunReadRequests = new Map<
@@ -93,39 +119,13 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
 
   protected get visibleSessionPullRequests(): ControlUiSessionPullRequest[] {
     return this.sessionPullRequests.filter(
-      (pullRequest) => !this.dismissedSessionPullRequestIds.has(chatPullRequestId(pullRequest)),
+      (pullRequest) => !this.repository.dismissedIds.has(chatPullRequestId(pullRequest)),
     );
   }
 
   protected get sessionPullRequestsBranchDismissed(): boolean {
     const branch = this.sessionPullRequestsBranch;
-    return branch !== undefined && this.dismissedSessionPullRequestIds.has(chatBranchId(branch));
-  }
-
-  private applyPullRequestPresentation(
-    result?: ControlUiSessionPullRequestSnapshot,
-    dismissed = this.dismissedSessionPullRequestIds,
-  ): void {
-    const pullRequests = result?.pullRequests ?? [];
-    const repository = sessionGitHubRepository(result);
-    const status = result?.status ?? "ready";
-    const changed =
-      (this.sessionPullRequests !== pullRequests &&
-        (this.sessionPullRequests.length > 0 || pullRequests.length > 0)) ||
-      this.sessionPullRequestsBranch !== result?.branch ||
-      this.githubRepo?.owner !== repository?.owner ||
-      this.githubRepo?.repo !== repository?.repo ||
-      this.sessionPullRequestsStatus !== status ||
-      this.dismissedSessionPullRequestIds.size !== dismissed.size ||
-      [...dismissed].some((id) => !this.dismissedSessionPullRequestIds.has(id));
-    this.sessionPullRequests = pullRequests;
-    this.sessionPullRequestsBranch = result?.branch;
-    this.githubRepo = repository;
-    this.sessionPullRequestsStatus = status;
-    this.dismissedSessionPullRequestIds = dismissed;
-    if (changed) {
-      this.invalidate();
-    }
+    return branch !== undefined && this.repository.dismissedIds.has(chatBranchId(branch));
   }
 
   protected refreshSessionPullRequests(
@@ -147,13 +147,15 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       if (scope) {
         sessionPullRequestsForGateway(scope.context.gateway).unwatch(this);
       }
-      this.applyPullRequestPresentation();
+      this.repository.target = null;
+      this.previousRepository = null;
       return false;
     }
     const sessionKey = scope.state.sessionKey;
     if (!sessionKey.trim() || parseCatalogSessionKey(sessionKey)) {
       sessionPullRequestsForGateway(scope.context.gateway).unwatch(this);
-      this.applyPullRequestPresentation();
+      this.repository.target = null;
+      this.previousRepository = null;
       return false;
     }
     const pullRequestEpoch = scope.context.sessions.capturePullRequestEpoch(sessionKey);
@@ -170,18 +172,31 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       return refreshAdmitted;
     }
     if (!result) {
-      if (this.sessionPullRequests.length > 0 || this.sessionPullRequestsBranch !== undefined) {
+      if (this.previousRepository) {
         scope.context.sessions.setPullRequestSummary(sessionKey, undefined, pullRequestEpoch);
       }
-      this.applyPullRequestPresentation(undefined, new Set());
+      this.repository.target = null;
+      this.repository.dismissedIds = new Set();
+      this.previousRepository = null;
       return refreshAdmitted;
     }
     const repository = sessionGitHubRepository(result);
     const repositoryChanged =
-      this.githubRepo != null &&
+      this.previousRepository != null &&
       repository !== null &&
-      (this.githubRepo.owner !== repository.owner || this.githubRepo.repo !== repository.repo);
-    this.applyPullRequestPresentation(result, listDismissedChatPullRequests(sessionKey));
+      (this.previousRepository.owner !== repository.owner ||
+        this.previousRepository.repo !== repository.repo);
+    this.previousRepository = repository;
+    if (this.repository.target?.store !== store || this.repository.target.key !== pullRequestKey) {
+      this.repository.target = { store, key: pullRequestKey };
+    }
+    const dismissed = listDismissedChatPullRequests(sessionKey);
+    if (
+      this.repository.dismissedIds.size !== dismissed.size ||
+      [...dismissed].some((id) => !this.repository.dismissedIds.has(id))
+    ) {
+      this.repository.dismissedIds = dismissed;
+    }
     if (!result.rateLimited || result.pullRequests.length > 0 || repositoryChanged) {
       const previousSummary = scope.context.sessions.pullRequestSummary(sessionKey);
       scope.context.sessions.setPullRequestSummary(
@@ -191,8 +206,8 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       );
     }
     const published =
-      this.githubPublication?.result?.status === "published"
-        ? this.githubPublication?.result
+      this.publication.binding?.result?.status === "published"
+        ? this.publication.binding?.result
         : undefined;
     const publishedPullRequest = published
       ? result.pullRequests.find((pullRequest) => pullRequest.url === published.url)
@@ -205,7 +220,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
           publishedPullRequest.state !== "open" &&
           publishedPullRequest.state !== "draft"))
     ) {
-      this.githubPublication?.reset();
+      this.publication.binding?.reset();
     }
     return refreshAdmitted;
   }
@@ -215,13 +230,11 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       retirePullRequestRefreshes(this.state);
     }
     sessionPullRequestsForGateway(this.context.gateway).unwatch(this);
-    this.sessionPullRequests = [];
-    this.sessionPullRequestsBranch = undefined;
-    this.githubRepo = null;
-    this.sessionPullRequestsStatus = "ready";
-    this.githubPublication?.detach();
-    this.githubPublication = null;
-    this.dismissedSessionPullRequestIds = new Set();
+    this.repository.target = null;
+    this.previousRepository = null;
+    this.publication.binding?.detach();
+    this.publication.binding = null;
+    this.repository.dismissedIds = new Set();
   }
 
   protected readonly dismissSessionPullRequest = (
@@ -239,8 +252,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     if (!sessionKey) {
       return;
     }
-    this.dismissedSessionPullRequestIds = dismissChatPullRequest(sessionKey, id);
-    this.invalidate();
+    this.repository.dismissedIds = dismissChatPullRequest(sessionKey, id);
   }
 
   protected deferSessionHydrationUntilTranscript(

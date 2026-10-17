@@ -42,7 +42,10 @@ async function callStatus(
     client: { connect: { role: "operator", scopes } } as never,
     isWebchatConnect: () => false,
   });
-  return respond;
+  expect(respond).toHaveBeenCalledOnce();
+  expect(respond.mock.calls[0]?.[0]).toBe(true);
+  expect(respond.mock.calls[0]?.[2]).toBeUndefined();
+  return respond.mock.calls[0]?.[1];
 }
 
 function healthSnapshot(stateDir: string, overrides: Partial<HealthSummary> = {}): HealthSummary {
@@ -110,10 +113,7 @@ describe("Gateway status owner routing", () => {
         for (const timeoutMs of [25_000, 325_000]) {
           recorded = { timeoutMs, reserveMs: 10_000, nativeStopBudget: true };
           const response = await callStatus(config, undefined, {}, host.capability);
-          expect(response).toHaveBeenCalledOnce();
-          expect(response.mock.calls[0]?.[0]).toBe(true);
-          expect(response.mock.calls[0]?.[2]).toBeUndefined();
-          expect(response.mock.calls[0]?.[1]).toMatchObject({
+          expect(response).toMatchObject({
             pid: process.pid,
             shutdownBudget: {
               ...recorded,
@@ -124,9 +124,9 @@ describe("Gateway status owner routing", () => {
         }
         current = false;
         const replaced = await callStatus(config, undefined, {}, host.capability);
-        expect(replaced.mock.calls[0]?.[1].shutdownBudget).toBeUndefined();
+        expect(replaced.shutdownBudget).toBeUndefined();
         const absent = await callStatus(config);
-        expect(absent.mock.calls[0]?.[1].shutdownBudget).toBeUndefined();
+        expect(absent.shutdownBudget).toBeUndefined();
       } finally {
         release();
         await host.retire();
@@ -149,19 +149,23 @@ describe("Gateway status owner routing", () => {
         };
         const snapshot = healthSnapshot(stateDir, { modelRuntime: degraded });
         const readHealth = createHealthReader(snapshot);
-        const read = () =>
-          surface === "status" ? callStatus(config) : readHealth(surface === "refreshed health");
+        const read = async () => {
+          if (surface === "status") {
+            return await callStatus(config);
+          }
+          const respond = await readHealth(surface === "refreshed health");
+          expect(respond.mock.calls[0]?.[0]).toBe(true);
+          return respond.mock.calls[0]?.[1];
+        };
 
         setPreparedModelRuntimeStartupStatus(degraded);
         const acquiring = await read();
-        expect(acquiring.mock.calls[0]?.[0]).toBe(true);
-        expect(acquiring.mock.calls[0]?.[1]).toMatchObject({ modelRuntime: degraded });
+        expect(acquiring).toMatchObject({ modelRuntime: degraded });
 
         const complete = { degraded: false, pendingAgents: [] };
         setPreparedModelRuntimeStartupStatus(complete);
         const recovered = await read();
-        expect(recovered.mock.calls[0]?.[0]).toBe(true);
-        expect(recovered.mock.calls[0]?.[1].modelRuntime).toEqual(complete);
+        expect(recovered.modelRuntime).toEqual(complete);
       });
     },
   );
@@ -219,11 +223,10 @@ describe("Gateway status owner routing", () => {
       } satisfies OpenClawConfig;
 
       const ordinary = await callStatus(config);
-      expect(ordinary.mock.calls[0]?.[1]).not.toHaveProperty("cliProjection");
+      expect(ordinary).not.toHaveProperty("cliProjection");
 
       const requested = await callStatus(config, ["operator.read"], { includeCliProjection: true });
-      expect(requested.mock.calls[0]?.[0]).toBe(true);
-      expect(requested.mock.calls[0]?.[1]).toMatchObject({
+      expect(requested).toMatchObject({
         cliProjection: {
           agents: {
             defaultId: null,
@@ -271,27 +274,23 @@ describe("Gateway status owner routing", () => {
             recordStartupMigrationWarnings([warning]);
           }
           const reader = await callStatus(config);
-          expect(reader.mock.calls[0]?.[0]).toBe(true);
-          expect(reader.mock.calls[0]?.[1][field]).toContain(hint);
-          expect(reader.mock.calls[0]?.[1][field]).not.toContain(stateDir);
-          expect(reader.mock.calls[0]?.[1][field]).not.toContain(
-            recovery ? "private store" : "EACCES",
-          );
+          expect(reader[field]).toContain(hint);
+          expect(reader[field]).not.toContain(stateDir);
+          expect(reader[field]).not.toContain(recovery ? "private store" : "EACCES");
           const admin = await callStatus(config, ["operator.admin"]);
-          expect(admin.mock.calls[0]?.[0]).toBe(true);
-          expect(admin.mock.calls[0]?.[1][field]).toContain(warning);
+          expect(admin[field]).toContain(warning);
           if (!recovery) {
-            expect(admin.mock.calls[0]?.[1][field]).toContain(hint);
+            expect(admin[field]).toContain(hint);
             return;
           }
 
           recordStartupRecoveryStoreResult({ target, outcome: { ok: true } });
           const healed = await callStatus(config, ["operator.admin"]);
-          expect(healed.mock.calls[0]?.[1].startupRecoveryWarning).toBeUndefined();
+          expect(healed.startupRecoveryWarning).toBeUndefined();
 
           rotateAgentEventLifecycleGeneration();
           const restarted = await callStatus(config, ["operator.admin"]);
-          expect(restarted.mock.calls[0]?.[1].startupRecoveryWarning).toBeUndefined();
+          expect(restarted.startupRecoveryWarning).toBeUndefined();
         } finally {
           rotateAgentEventLifecycleGeneration();
         }
@@ -319,11 +318,16 @@ describe("Gateway status owner routing", () => {
           external: 2048,
           arrayBuffers: 1024,
         });
+        const idlePool = {
+          maxWorkers: 1,
+          workers: 0,
+          workersCreated: 0,
+          activeTasks: 0,
+          pendingTasks: 0,
+        };
         const respond = await callStatus(config);
 
-        expect(respond).toHaveBeenCalledTimes(1);
-        expect(respond.mock.calls[0]?.[0]).toBe(true);
-        expect(respond.mock.calls[0]?.[1]).toEqual(
+        expect(respond).toEqual(
           expect.objectContaining({
             processMemory: {
               rssBytes: 5120,
@@ -333,39 +337,23 @@ describe("Gateway status owner routing", () => {
               arrayBuffersBytes: 1024,
             },
             workerPools: {
-              transcriptReconciliation: {
-                maxWorkers: 1,
-                workers: 0,
-                workersCreated: 0,
-                activeTasks: 0,
-                pendingTasks: 0,
-              },
-              modelCatalog: {
-                maxWorkers: 1,
-                workers: 0,
-                workersCreated: 0,
-                activeTasks: 0,
-                pendingTasks: 0,
-                workerFailures: 0,
-              },
+              transcriptReconciliation: idlePool,
+              modelCatalog: { ...idlePool, workerFailures: 0 },
             },
           }),
         );
-        expect(respond.mock.calls[0]?.[2]).toBeUndefined();
         const selected = resolveRequestedSessionAgentId(config, "main");
         if (agentId) {
           expect(selected).toEqual({ ok: true, agentId });
         } else {
           expect(selected).toMatchObject({ ok: false });
         }
-        expect(resolveRequestedSessionAgentId(config, "agent:molty:main")).toEqual({
-          ok: true,
-          agentId: "molty",
-        });
-        expect(resolveRequestedSessionAgentId(config, "agent:main:main")).toEqual({
-          ok: true,
-          agentId: "main",
-        });
+        for (const id of ["molty", "main"]) {
+          expect(resolveRequestedSessionAgentId(config, `agent:${id}:main`)).toEqual({
+            ok: true,
+            agentId: id,
+          });
+        }
       });
     },
   );

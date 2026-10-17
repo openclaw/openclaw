@@ -111,6 +111,7 @@ describe("terminal reply recovery", () => {
           "chat.history",
           {
             sessionKey: state.sessionKey,
+            knownState: {},
             ...historyBudget,
           },
           { signal: expect.any(AbortSignal), timeoutMs: 30_000 },

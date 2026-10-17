@@ -248,6 +248,34 @@ describe("backupVerifyCommand", () => {
     vi.mocked(tar.x).mockReset().mockImplementation(actualTar.x);
   });
 
+  it.each(["first", "last"])("reads the archive once with its manifest %s", async (position) => {
+    const archive = path.join(tempDirs.make("openclaw-backup-single-pass-"), "backup.tar.gz");
+    const payloadPath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/payload.txt`;
+    const manifest = encodeTarEntry({
+      // Repeated separators are accepted archive spelling, including for a final manifest.
+      path: `${TEST_ARCHIVE_ROOT}//manifest.json`,
+      contents: JSON.stringify(createBackupManifest(payloadPath)),
+    });
+    const payload = encodeTarEntry({ path: payloadPath, contents: "payload\n" });
+    await fs.writeFile(
+      archive,
+      gzipSync(
+        Buffer.concat([
+          ...(position === "first" ? [manifest, payload] : [payload, manifest]),
+          Buffer.alloc(1024),
+        ]),
+      ),
+    );
+
+    await expect(verifyBackupArchive(archive)).resolves.toMatchObject({
+      ok: true,
+      assetCount: 1,
+      entryCount: 2,
+    });
+    // Each file-backed tar listing opens and decompresses the entire gzip stream.
+    expect(tar.t).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     {
       name: "missing archive",
@@ -738,12 +766,14 @@ describe("backupVerifyCommand", () => {
   });
 
   it("rejects oversized manifest entries without retaining the full body", async () => {
-    await expectRejectedManifest(
-      {
-        manifestContent: "x".repeat(1024 * 1024 + 1),
-      },
-      /Backup manifest exceeds 1048576 byte limit/,
+    const archive = await createArchiveWithManifestContent({
+      manifestContent: "x".repeat(1024 * 1024 + 1),
+    });
+    const collect = vi.spyOn(tar.ReadEntry.prototype, "concat");
+    await expect(verifyBackupArchive(archive)).rejects.toThrow(
+      /Backup manifest exceeds 1048576 byte limit/u,
     );
+    expect(collect).not.toHaveBeenCalled();
   });
 
   it("rejects unsafe archive paths", async () => {
@@ -919,6 +949,8 @@ describe("backupVerifyCommand", () => {
       await expectRejectedArchive(
         {
           manifestAssetArchivePath: payloadArchivePath,
+          // Inventory failures must win over a manifest body collected earlier in the scan.
+          manifestContent: "{invalid",
           payloads: options.payloads,
           buildTarEntries: options.buildTarEntries,
         },

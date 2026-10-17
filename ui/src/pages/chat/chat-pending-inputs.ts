@@ -13,13 +13,18 @@ import { extractText } from "../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
+import { requestChatAbort } from "./chat-abort-request.ts";
+import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
 import type { ChatPendingInputView, PendingInputRequest } from "./chat-pending-inputs.types.ts";
 import { confirmQueuedMessageCustody, removeQueuedMessage } from "./chat-queue.ts";
 import type { ChatState } from "./chat-state-contract.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import { publishChatRunState } from "./chat-state-render.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { buildMessageItems, messageMatchesSearchQuery } from "./chat-thread-items.ts";
+import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
 import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
@@ -149,6 +154,39 @@ export function getChatPendingInputs(state: ChatState): ChatPendingInputView | u
     view.agentId === resolveUiSelectedSessionAgentId(state)
     ? view
     : undefined;
+}
+
+export function cancelPendingQueuedChatInput(state: ChatPageHost, id: string): boolean {
+  const view = getChatPendingInputs(state);
+  const input = view?.queuedInputs.find(
+    (item) => `pending-input:${item.id}` === id && item.queued && item.state === "queued",
+  );
+  const client = state.client;
+  if (!view || !input?.runId) {
+    return false;
+  }
+  if (!client || !state.connected) {
+    return true;
+  }
+  const connectionIsCurrent = captureChatConnectionOwner(state);
+  const current = () => getChatPendingInputs(state) === view && connectionIsCurrent();
+  void requestChatAbort(client, {
+    sessionKey: view.sessionKey,
+    agentId: view.agentId,
+    runId: input.runId,
+    ...(isIncognitoComposerScope(state, view) ? {} : { discardPendingInput: true }),
+  }).then(async (result) => {
+    if (!current()) {
+      return;
+    }
+    if (!result.ok) {
+      state.chatError = formatUiError(result.error);
+      state.requestUpdate?.();
+      return;
+    }
+    await loadChatHistory(state, { supersedeInFlight: true });
+  });
+  return true;
 }
 
 export function clearChatPendingInputs(state: ChatState): void {

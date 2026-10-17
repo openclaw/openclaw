@@ -460,7 +460,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         if (event.event === "presence") {
           const hadMultipleIdentities = this.hasMultipleIdentities();
           const presence = readPresenceEntries(event.payload);
-          this.presencePayload = presence ? { presence } : undefined;
+          this.presence.update(presence ? { presence } : undefined);
           this.pruneTypingActors();
           if (!this.hasMultipleIdentities()) {
             this.resetSessionSuggestions();
@@ -701,8 +701,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.sessionDiscussionPanels.clear();
     this.taskSuggestionsRequestVersion += 1;
     this.setTaskSuggestions([]);
-    this.taskSuggestionBusyIds.clear();
-    this.taskSuggestionOperations.clear();
+    this.tasks.busyIds = new Set();
+    this.tasks.operations = new Map();
     this.resetSessionSuggestions();
     this.resetSessionReactions();
     this.clearTypingActors();
@@ -716,9 +716,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     }
     this.swarm.hydrator?.dispose();
     this.swarm.hydrator = null;
-    this.headerWorktreePaths.clear();
-    this.headerBranches.clear();
-    this.presencePayload = undefined;
+    this.headerPresentation.worktreePaths = new Map();
+    this.headerPresentation.branches = new Map();
+    this.presence.update(undefined);
     this.announceCommandPaletteTarget(null);
     dismissConfirmedActionPopovers(this.element);
     resetChatViewState(this.presentationId);

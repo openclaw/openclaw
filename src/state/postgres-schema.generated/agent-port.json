@@ -427,54 +427,6 @@
   ],
   "triggers": [
     {
-      "name": "memory_index_chunks_revision_after_delete",
-      "table": "memory_index_chunks",
-      "range": [
-        32397,
-        32584
-      ]
-    },
-    {
-      "name": "memory_index_chunks_revision_after_insert",
-      "table": "memory_index_chunks",
-      "range": [
-        32019,
-        32206
-      ]
-    },
-    {
-      "name": "memory_index_chunks_revision_after_update",
-      "table": "memory_index_chunks",
-      "range": [
-        32208,
-        32395
-      ]
-    },
-    {
-      "name": "memory_index_sources_revision_after_delete",
-      "table": "memory_index_sources",
-      "range": [
-        31828,
-        32017
-      ]
-    },
-    {
-      "name": "memory_index_sources_revision_after_insert",
-      "table": "memory_index_sources",
-      "range": [
-        31446,
-        31635
-      ]
-    },
-    {
-      "name": "memory_index_sources_revision_after_update",
-      "table": "memory_index_sources",
-      "range": [
-        31637,
-        31826
-      ]
-    },
-    {
       "name": "session_conversations_route_context_invalidate_after_update",
       "table": "session_conversations",
       "range": [
@@ -545,6 +497,6 @@
   ],
   "postData": [
     29373,
-    46741
+    45231
   ]
 }

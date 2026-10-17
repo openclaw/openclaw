@@ -1888,6 +1888,7 @@ src/state/openclaw-agent-execution-scope.ts
 src/state/openclaw-agent-execution.ts
 src/state/openclaw-agent-goal-operations-schema.ts
 src/state/openclaw-agent-json-predicate-schema.ts
+src/state/openclaw-agent-memory-revision-migration.ts
 src/state/openclaw-agent-message-tool-outcome-schema.ts
 src/state/openclaw-agent-outbox-sequence-migration.ts
 src/state/openclaw-agent-participants-migration.ts
@@ -1977,6 +1978,8 @@ src/state/openclaw-state-db-startup-checkpoint.ts
 src/state/openclaw-state-db-table-retirements.ts
 src/state/openclaw-state-db-task-delivery-recovery.ts
 src/state/openclaw-state-db-transaction.ts
+src/state/openclaw-state-postgres-snapshot-context.ts
+src/state/openclaw-state-postgres-snapshot.ts
 src/state/openclaw-state-schema-retired.ts
 src/state/openclaw-state-schema-runtime.ts
 src/state/postgres-schema.generated/agent-runtime.ts
@@ -2196,6 +2199,7 @@ src/config/sessions/session-accessor.sqlite-read.ts
 src/config/sessions/session-accessor.sqlite-sharing-acquisition.ts
 src/config/sessions/session-accessor.sqlite-transcript-parent.ts
 src/config/sessions/session-accessor.sqlite-transcript-state.ts
+src/config/sessions/session-accessor.sqlite-transcript-state.queries.ts
 src/config/sessions/session-accessor.sqlite-transcript-stats.ts
 src/config/sessions/session-accessor.sqlite-transcript-watermark.ts
 src/config/sessions/session-canonical-validation.ts
@@ -2538,6 +2542,7 @@ src/config/sessions/session-accessor.sqlite-references.ts
 src/config/sessions/session-actor-memory-conversation-owner.ts
 src/config/sessions/session-actor-memory-lifecycle-artifacts.ts
 src/config/sessions/session-actor-memory-message-rewrite.ts
+src/config/sessions/session-actor-memory-visible-delta.ts
 src/config/sessions/session-manual-compact-entry.ts
 src/config/sessions/session-manual-compact-selection.ts
 src/config/sessions/store-maintenance-plan.ts

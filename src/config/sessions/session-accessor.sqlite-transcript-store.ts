@@ -11,18 +11,12 @@ import {
 } from "../../infra/sqlite-database-admission.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { advanceCliHistoryBoundaryInTransaction } from "./session-accessor.sqlite-cli-history-boundary.js";
-import type {
-  TranscriptEvent,
-  TranscriptMessageAppendOptions,
-} from "./session-accessor.sqlite-contract.js";
+import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { preserveSessionEntryCacheAcrossWrite } from "./session-accessor.sqlite-entry-cache.js";
 import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   createTranscriptIdentityReader,
-  findAssistantTranscriptEventInDatabase,
   readEventTimestamp,
-  readTranscriptEventId,
-  readTranscriptEventMessage,
   type SqliteTranscriptSnapshotRow,
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
@@ -35,7 +29,6 @@ import {
   createTranscriptIdentityInserter,
   readIdempotencyKeyOwner,
   readTranscriptEventIdentity,
-  readTranscriptMessageByIdentity,
 } from "./session-accessor.sqlite-transcript-identity.js";
 import {
   deleteTranscriptEventsInTransaction,
@@ -45,6 +38,7 @@ import {
   readTranscriptGenerationInTransaction,
   readTranscriptMutationStateInTransaction,
   readNextTranscriptSeq,
+  readTranscriptAppendStateInTransaction,
   rotateTranscriptGenerationInTransaction,
   touchTranscriptMutationInTransaction,
   touchTranscriptWindowRecency,
@@ -60,6 +54,7 @@ import {
   writableSessionActorNavigation,
 } from "./session-actor-transaction.js";
 import { withSessionActorTranscriptRewrite } from "./session-actor-transcript-publication.worker.js";
+import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { modelContextPageWriteScope } from "./session-model-context-pages.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
@@ -107,9 +102,15 @@ export function appendTranscriptEventInTransaction(
     () => {
       const db = getSessionKysely(database.db);
       const actor = readSessionActorTransactionState(database, scope);
+      const initial =
+        !cursor.initialized && !actor
+          ? readTranscriptAppendStateInTransaction(database, scope)
+          : undefined;
       const createdAt = readEventTimestamp(persistedEvent) ?? Date.now();
       let windowUpdatedAt = createdAt;
-      const windowExists = Boolean(cursor.initialized || actor?.window);
+      const windowExists = Boolean(
+        cursor.initialized || actor?.window || initial?.roots[0]?.persisted_session_key,
+      );
       // The existing window can share the final watermark write. Rejected identities
       // still need their recency-only write, without advancing the transcript fence.
       const deferWindowTouch =
@@ -129,10 +130,24 @@ export function appendTranscriptEventInTransaction(
           allowStoredAlias: options.allowStoredAlias === true,
           onPlaceholderInserted: options.onPlaceholderInserted,
           deferExistingWindowTouch: deferWindowTouch,
+          preparedRoots: initial?.roots,
         });
-        preserveSessionEntryCacheAcrossWrite(database, () =>
-          ensureTranscriptGenerationInTransaction(database, scope.sessionId),
-        );
+        if (!initial?.generation) {
+          preserveSessionEntryCacheAcrossWrite(database, () =>
+            ensureTranscriptGenerationInTransaction(database, scope.sessionId),
+          );
+        }
+        if (initial) {
+          if (initial.cold) {
+            throw new SessionTranscriptColdError(scope.sessionId);
+          }
+          cursor.nextSeq = initial.nextSeq;
+          cursor.appendToIndex = createTranscriptIndexAppenderInTransaction(
+            database.db,
+            scope.sessionId,
+            { state: initial.projection },
+          );
+        }
         cursor.initialized = true;
       }
       if (windowExists) {
@@ -697,26 +712,6 @@ export function updateSqliteTranscriptEventJsonInTransaction(
       readTranscriptMutationStateInTransaction(database, sessionId).updatedAt,
     );
   });
-}
-
-export function readTranscriptMessageByScopedIdempotencyKey(
-  database: Pick<OpenClawAgentDatabase, "db">,
-  scope: ResolvedTranscriptScope,
-  idempotencyKey: string,
-  lookup: TranscriptMessageAppendOptions<unknown>["idempotencyLookup"],
-): { messageId: string; message: unknown } | undefined {
-  if (lookup !== "scan-assistant") {
-    const identity = readIdempotencyKeyOwner(database, scope.sessionId, idempotencyKey);
-    return identity ? readTranscriptMessageByIdentity(database, scope, identity) : undefined;
-  }
-  const found = findAssistantTranscriptEventInDatabase(database, scope.sessionId, idempotencyKey);
-  if (!found) {
-    return undefined;
-  }
-  const message = readTranscriptEventMessage(found.event);
-  return message
-    ? { messageId: readTranscriptEventId(found.event) ?? idempotencyKey, message }
-    : undefined;
 }
 
 export function sanitizeTranscriptMessageForStorage<TMessage>(message: TMessage): TMessage {

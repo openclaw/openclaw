@@ -80,8 +80,8 @@ describe.skipIf(!connection)("agent database port", () => {
     ).toEqual([]);
   });
 
-  it.each([27, 28, 29])(
-    "round-trips the text-only version %s before migration",
+  it.each([27, 28, 29, 30])(
+    "round-trips version %s with its historical trajectory layout and revision triggers",
     async (version) => {
       const descriptor = await agentPortProvider.loadDescriptor(undefined, version);
       using source = openNodeSqliteDatabase(":memory:");
@@ -95,7 +95,8 @@ describe.skipIf(!connection)("agent database port", () => {
     `);
       const event = '{ "type": "legacy", "data": { "text": "café 🦞" } }';
       source
-        .prepare("INSERT INTO trajectory_runtime_events VALUES ('session', 0, NULL, ?, 1)")
+        .prepare(`INSERT INTO trajectory_runtime_events
+          (session_id, seq, run_id, event_json, created_at) VALUES ('session', 0, NULL, ?, 1)`)
         .run(event);
       const namespace = `agent_legacy_${randomUUID().replaceAll("-", "")}`;
       const storeId = randomUUID();
@@ -107,10 +108,25 @@ describe.skipIf(!connection)("agent database port", () => {
         storeId,
         assertCurrent() {},
       });
+      const trajectoryColumns =
+        version < 30
+          ? {}
+          : {
+              event_utf8_bytes: null,
+              event_payload: null,
+              event_codec: null,
+            };
       expect(
         (await client.query(`SELECT * FROM "${namespace}".trajectory_runtime_events`)).rows,
       ).toEqual([
-        { session_id: "session", seq: "0", run_id: null, event_json: event, created_at: "1" },
+        {
+          session_id: "session",
+          seq: "0",
+          run_id: null,
+          event_json: event,
+          created_at: "1",
+          ...trajectoryColumns,
+        },
       ]);
       expect(
         (
@@ -126,6 +142,11 @@ describe.skipIf(!connection)("agent database port", () => {
           ? { proisstrict: false, proconfig: null }
           : { proisstrict: true, proconfig: ["search_path=pg_catalog"] },
       ]);
+      await client.query(`INSERT INTO "${namespace}".memory_index_sources (path, source, hash, mtime, size)
+          VALUES ('retained.md', 'memory', 'hash', 1, 1);`);
+      expect(
+        (await client.query(`SELECT revision FROM "${namespace}".memory_index_state`)).rows,
+      ).toEqual([{ revision: "1" }]);
       using restored = openNodeSqliteDatabase(":memory:");
       await materializeDatabasePort({
         source: { engine: "postgres", db: client, namespace },
@@ -135,8 +156,20 @@ describe.skipIf(!connection)("agent database port", () => {
         assertCurrent() {},
       });
       expect(restored.prepare("SELECT * FROM trajectory_runtime_events").all()).toEqual([
-        { session_id: "session", seq: 0, run_id: null, event_json: event, created_at: 1 },
+        {
+          session_id: "session",
+          seq: 0,
+          run_id: null,
+          event_json: event,
+          created_at: 1,
+          ...trajectoryColumns,
+        },
       ]);
+      restored.exec(`INSERT INTO memory_index_sources (path, source, hash, mtime, size)
+          VALUES ('retained.md', 'memory', 'hash', 1, 1);`);
+      expect(restored.prepare("SELECT revision FROM memory_index_state").get()).toEqual({
+        revision: 1,
+      });
     },
   );
 

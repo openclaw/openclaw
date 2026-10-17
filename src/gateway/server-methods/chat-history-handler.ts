@@ -1,3 +1,4 @@
+import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
@@ -92,6 +93,7 @@ export async function handleChatHistoryRequest({
     limit,
     offset,
     cursor,
+    knownState,
     messageId: wireMessageId,
     sessionId: wireSessionId,
     maxChars,
@@ -327,6 +329,33 @@ export async function handleChatHistoryRequest({
       client,
       agentId: sessionAgentId,
       catalog: defaultModelCatalog,
+    };
+    const presentHistory = (
+      payload: Parameters<typeof projectOperatorModelRead>[1] & {
+        pendingInputs: typeof pendingInputs;
+      },
+    ) => {
+      const projected = projectOperatorModelRead(modelReadScope, payload);
+      if (knownState === undefined) {
+        return projected;
+      }
+      // Hash the authorized wire projection: receipts never skip current-state reads or policy.
+      const stateRevision = {
+        pendingInputs: sha256StableValue(projected.pendingInputs).digest,
+        sessionInfo: projected.sessionInfo
+          ? sha256StableValue({ ...projected.sessionInfo, snapshotAt: undefined }).digest
+          : undefined,
+      };
+      return {
+        ...projected,
+        stateRevision,
+        ...(deltaCursor !== undefined && knownState?.pendingInputs === stateRevision.pendingInputs
+          ? { pendingInputs: undefined }
+          : {}),
+        ...(deltaCursor !== undefined && knownState?.sessionInfo === stateRevision.sessionInfo
+          ? { sessionInfo: undefined, sessionInfoSnapshotAt: projected.sessionInfo?.snapshotAt }
+          : {}),
+      };
     };
     const query = {
       key: canonicalKey,
@@ -570,7 +599,7 @@ export async function handleChatHistoryRequest({
               ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
               ...(startupMetadata ? { metadata: startupMetadata } : {}),
             };
-            respond(true, projectOperatorModelRead(modelReadScope, payload));
+            respond(true, presentHistory(payload));
             return undefined;
           });
         };
@@ -608,10 +637,10 @@ export async function handleChatHistoryRequest({
               ((await retainedTranscript.verifyRetainedState?.()) ?? true),
             requireCurrentSession: retainedTranscript.requireCurrentSession === true,
             sharing: currentSharing,
-            publish: () => respond(true, projectOperatorModelRead(modelReadScope, payload)),
+            publish: () => respond(true, presentHistory(payload)),
           });
       }
-      respond(true, projectOperatorModelRead(modelReadScope, payload));
+      respond(true, presentHistory(payload));
       return undefined;
     });
     await publishDelta?.();

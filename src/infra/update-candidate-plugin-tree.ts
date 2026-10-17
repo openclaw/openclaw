@@ -168,10 +168,12 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
     !params.roots.has(root) &&
     ((insideHost(root) && !isRetainedDependency(root)) || hostRoots.has(root));
   function addRoot(source: string) {
-    if (!roots.has(source)) {
-      roots.set(source, params.project(source));
-      invalidateRoots();
+    if (roots.has(source)) {
+      return false;
     }
+    roots.set(source, params.project(source));
+    invalidateRoots();
+    return true;
   }
   async function readEntry(file: string): Promise<UpdateCandidatePluginEntry> {
     const stat = await fs.lstat(file, { bigint: true });
@@ -522,7 +524,9 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
         );
       }
       assertUpdateCandidatePluginCopySource(owner, privateRoot);
-      addRoot(owner);
+      if (!addRoot(owner)) {
+        throw new Error(`Plugin dependency discovery made no progress for ${file} -> ${real}`);
+      }
       added = true;
     }
     if (!added) {

@@ -92,7 +92,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       session: selectedSession,
       agentWorkspace,
       worktreePath: selectedSession?.worktree
-        ? this.headerWorktreePaths.get(selectedSession.worktree.id)?.path
+        ? this.headerPresentation.worktreePaths.get(selectedSession.worktree.id)?.path
         : undefined,
     });
     if (this.inputRegion === "page") {
