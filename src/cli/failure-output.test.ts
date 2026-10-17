@@ -12,6 +12,12 @@ import {
   toPluginCommandFailure,
 } from "./failure-output.js";
 
+function failure(
+  options: Partial<Parameters<typeof formatCliFailureLines>[0]> & { error: unknown },
+) {
+  return formatCliFailureLines({ title: "The CLI command failed.", env: {}, ...options });
+}
+
 describe("toPluginCommandFailure", () => {
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_DEBUG", "0");
@@ -20,12 +26,10 @@ describe("toPluginCommandFailure", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([Object.assign(new Error("already reported"), { name: "ExitError" })])(
-    "keeps $name identity and existing rendering policy",
-    (error) => {
-      expect(toPluginCommandFailure(error)).toBe(error);
-    },
-  );
+  it("keeps ExitError identity and existing rendering policy", () => {
+    const error = Object.assign(new Error("already reported"), { name: "ExitError" });
+    expect(toPluginCommandFailure(error)).toBe(error);
+  });
 
   it("keeps debug details except for Commander-coded action failures", () => {
     vi.stubEnv("OPENCLAW_DEBUG", "1");
@@ -56,14 +60,14 @@ describe("formatCliJsonFailure", () => {
           message: diagnostic,
         },
       });
-      const output = formatCliFailureLines({ title: "Command failed", error, env: {} }).join("\n");
+      const output = failure({ title: "Command failed", error, env: {} }).join("\n");
       expect(output).toContain("openclaw gateway status");
       expect(output).not.toContain("PRIVATE_CANARY");
       expect(output).not.toContain("/state/");
       expect(output.includes("may have completed")).toBe(requestDispatched);
       expect(formatCliJsonFailure(error, { env: {} }).error.message).toBe(diagnostic);
       expect(
-        formatCliFailureLines({
+        failure({
           title: "Command failed",
           error,
           env: { OPENCLAW_DEBUG: "1" },
@@ -85,11 +89,10 @@ describe("formatCliJsonFailure", () => {
       targetVersion: "2026.9.4",
       cause: new Error("content migration failed"),
     });
-    const output = formatCliFailureLines({
+    const output = failure({
       title: "Update failed",
       error,
       argv: ["node", "openclaw", "update", "--json"],
-      env: {},
     }).join("\n");
     expect(output).toContain("[openclaw] OpenClaw needs a manual recovery step.");
     expect(output).toContain("Let the updater restore the previous package and exit");
@@ -146,13 +149,11 @@ describe("formatCliFailureLines", () => {
     ["--profile", "work", "gateway", "run"],
   ])("prints the redacted Gateway startup reason without debug: %j", (...args) => {
     const token = "sk-abcdefghijklmnopqrstuv";
-    const lines = formatCliFailureLines({
-      title: "The CLI command failed.",
+    const lines = failure({
       error: new Error(`Gateway startup failed. Authorization: Bearer ${token}`, {
         cause: new Error("private nested diagnostic"),
       }),
       argv: ["node", "openclaw", ...args],
-      env: {},
     });
     const output = lines.join("\n");
 
@@ -167,11 +168,9 @@ describe("formatCliFailureLines", () => {
     ["sessions", "list"],
   ])("keeps ordinary command failures terse: %j", (...args) => {
     expect(
-      formatCliFailureLines({
-        title: "The CLI command failed.",
+      failure({
         error: new Error("internal detail"),
         argv: ["node", "openclaw", ...args],
-        env: {},
       }),
     ).toEqual([
       "[openclaw] The CLI command failed.",
@@ -179,29 +178,21 @@ describe("formatCliFailureLines", () => {
     ]);
   });
 
-  it.each([
-    [
-      "offline maintenance refusal",
-      Object.assign(
-        new StateDatabaseOfflineMaintenanceError(
-          "/tmp/openclaw.sqlite",
-          `${maintenanceReason} Authorization: Bearer sk-abcdefghijklmnopqrstuv`,
-        ),
-        { cause: new Error("private nested diagnostic") },
+  it("prints the actionable offline maintenance refusal without debug", () => {
+    const error = Object.assign(
+      new StateDatabaseOfflineMaintenanceError(
+        "/tmp/openclaw.sqlite",
+        `${maintenanceReason} Authorization: Bearer sk-abcdefghijklmnopqrstuv`,
       ),
-      maintenanceReason,
-      ["plugins", "disable", "github"],
-    ],
-  ])("prints the actionable state refusal without debug: %s", (_label, error, reason, args) => {
-    const lines = formatCliFailureLines({
-      title: "The CLI command failed.",
+      { cause: new Error("private nested diagnostic") },
+    );
+    const lines = failure({
       error,
-      argv: ["node", "openclaw", ...args],
-      env: {},
+      argv: ["node", "openclaw", "plugins", "disable", "github"],
     });
     const output = lines.join("\n");
 
-    expect(output).toContain(`[openclaw] Reason: ${reason}`);
+    expect(output).toContain(`[openclaw] Reason: ${maintenanceReason}`);
     expect(lines).toHaveLength(2);
     expect(output).not.toContain("sk-abcdefghijklmnopqrstuv");
     expect(output).not.toContain("private nested diagnostic");
@@ -218,17 +209,16 @@ describe("formatCliFailureLines", () => {
       machineOutput: "first\nsecond\n",
     });
     const written = new ExpectedCliError({
-      message: "bad input",
-      humanOutput: "\u001B[31mfirst\u001B[39m\nsecond\n",
+      ...pending,
+      message: pending.message,
       humanOutputWritten: true,
-      machineOutput: "first\nsecond\n",
     });
 
-    expect(formatCliFailureLines({ title: "ignored", error: pending, env })).toEqual([
+    expect(failure({ title: "ignored", error: pending, env })).toEqual([
       "\u001B[31mfirst\u001B[39m",
       "second",
     ]);
-    expect(formatCliFailureLines({ title: "ignored", error: written, env })).toEqual([]);
+    expect(failure({ title: "ignored", error: written, env })).toEqual([]);
   });
 
   it("preserves config validation details when diagnostics have not been emitted", () => {
@@ -237,52 +227,38 @@ describe("formatCliFailureLines", () => {
       { diagnosticEmitted: false, cause: new Error("internal config loader detail") },
     );
 
-    expect(
-      formatCliFailureLines({ title: "The CLI command failed.", error, argv: [], env: {} }),
-    ).toEqual([
+    expect(failure({ error, argv: [] })).toEqual([
       "[openclaw] The CLI command failed.",
       "[openclaw] Reason: Invalid config at /custom/openclaw.json:\n- gateway.port: Expected a number",
       "[openclaw] For help, run `openclaw doctor`.",
     ]);
   });
 
-  it.each([
-    {
-      label: "missing gateway credentials",
-      createError: () =>
-        new GatewayCredentialsRequiredError({
-          method: "device.pair.list",
-          configPath: "/tmp/openclaw.json",
-        }),
-    },
-  ])(
-    "routes $label through the shared expected-condition predicate without crash framing",
-    ({ createError }) => {
-      const error = createError();
+  it("routes missing gateway credentials through the expected-condition predicate without crash framing", () => {
+    const error = new GatewayCredentialsRequiredError({
+      method: "device.pair.list",
+      configPath: "/tmp/openclaw.json",
+    });
 
-      expect(isExpectedCliError(error)).toBe(true);
-      const lines = formatCliFailureLines({
-        title: "The CLI command failed.",
-        error,
-        env: { OPENCLAW_DEBUG: "1" },
-      });
+    expect(isExpectedCliError(error)).toBe(true);
+    const lines = failure({
+      error,
+      env: { OPENCLAW_DEBUG: "1" },
+    });
 
-      expect(lines).toEqual(error.message.split("\n"));
-      const output = lines.join("\n");
-      expect(output).not.toContain("[openclaw] The CLI command failed.");
-      expect(output).not.toContain("[openclaw] Reason:");
-      expect(output).not.toContain("OPENCLAW_DEBUG");
-      expect(output).not.toContain("Stack:");
-      expect(output).not.toContain("openclaw doctor");
-    },
-  );
+    expect(lines).toEqual(error.message.split("\n"));
+    const output = lines.join("\n");
+    expect(output).not.toContain("[openclaw] The CLI command failed.");
+    expect(output).not.toContain("[openclaw] Reason:");
+    expect(output).not.toContain("OPENCLAW_DEBUG");
+    expect(output).not.toContain("Stack:");
+    expect(output).not.toContain("openclaw doctor");
+  });
 
-  it.each(["--verbose"])("prints stack details for the root %s option", (debugFlag) => {
-    const lines = formatCliFailureLines({
-      title: "The CLI command failed.",
+  it("prints stack details for the root --verbose option", () => {
+    const lines = failure({
       error: new Error("boom", { cause: new Error("transport detail") }),
-      argv: ["node", "openclaw", "proxy", "run", debugFlag],
-      env: {},
+      argv: ["node", "openclaw", "proxy", "run", "--verbose"],
     });
 
     expect(lines).toContain("[openclaw] Reason: boom | transport detail");
@@ -290,12 +266,10 @@ describe("formatCliFailureLines", () => {
     expect(lines).toContain("[openclaw] Error: boom");
   });
 
-  it.each(["--verbose"])("does not enable root stack traces for a child %s option", (debugFlag) => {
-    const lines = formatCliFailureLines({
-      title: "The CLI command failed.",
+  it("does not enable root stack traces for a child --verbose option", () => {
+    const lines = failure({
       error: new Error("boom"),
-      argv: ["node", "openclaw", "proxy", "run", "--", "child", debugFlag],
-      env: {},
+      argv: ["node", "openclaw", "proxy", "run", "--", "child", "--verbose"],
     });
 
     expect(lines).not.toContain("[openclaw] Stack:");

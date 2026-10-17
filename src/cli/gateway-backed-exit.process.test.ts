@@ -37,6 +37,52 @@ import {
 const ONE_SHOT_EXIT_BUDGET_MS = 5_000;
 const cliEntrypoint = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli);
 
+async function remoteFixture(root: string, remote: { url: string; token?: string }) {
+  return { root, ...(await prepareGatewayCliFixture(root, { mode: "remote", remote })) };
+}
+
+function seedDeviceAuth(root: string, stateDir: string, url: string, token: string) {
+  const env = { ...process.env, HOME: root, OPENCLAW_HOME: root, OPENCLAW_STATE_DIR: stateDir };
+  const identity = loadOrCreateDeviceIdentity({ env });
+  seedOriginDeviceToken({
+    gatewayScope: gatewayOriginScope(url),
+    deviceId: identity.deviceId,
+    role: "operator",
+    token,
+    scopes: ["operator.admin"],
+    env,
+  });
+  closeOpenClawStateDatabaseForTest();
+  prepareSharedStateReadArtifacts(stateDir);
+  return { identity, env };
+}
+
+const statusArgs = (url: string, token: string) => [
+  "gateway",
+  "status",
+  "--url",
+  url,
+  "--token",
+  token,
+  "--require-rpc",
+  "--json",
+  "--timeout",
+  "2000",
+];
+
+function expectGuidance(stderr: string, message: string) {
+  expect(stderr).toContain(message);
+  for (const text of [
+    "The CLI command failed",
+    "Could not start the CLI",
+    "OPENCLAW_DEBUG",
+    "Stack:",
+    "openclaw doctor",
+  ]) {
+    expect(stderr).not.toContain(text);
+  }
+}
+
 describe("gateway-backed CLI process exit", () => {
   it.each([
     { status: "ok" as const, text: "pong", exitCode: 0 },
@@ -44,16 +90,11 @@ describe("gateway-backed CLI process exit", () => {
   ])("exits $exitCode after an agent turn reports $status", async ({ status, text, exitCode }) => {
     const root = tempDirs.make(`openclaw-agent-turn-${status}-`);
     const gateway = await startAgentTurnGateway({ status, text });
-    const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
-      mode: "remote",
-      remote: { url: gateway.url, token: gateway.token },
-    });
+    const fixture = await remoteFixture(root, { url: gateway.url, token: gateway.token });
 
     const result = await runIsolatedGatewayCli({
       args: ["agent", "--agent", "main", "--message", "ping", "--json"],
-      root,
-      stateDir,
-      configPath,
+      ...fixture,
     });
 
     expect(result, result.stderr).toMatchObject({ code: exitCode, signal: null, stderr: "" });
@@ -68,16 +109,11 @@ describe("gateway-backed CLI process exit", () => {
     const root = tempDirs.make("openclaw-nodes-timeout-");
     const token = "test-token";
     const gateway = await startNodePairingGateway({ token });
-    const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
-      mode: "remote",
-      remote: { url: gateway.url, token },
-    });
+    const fixture = await remoteFixture(root, { url: gateway.url, token });
 
     const result = await runIsolatedGatewayCli({
       args: ["nodes", "list", "--timeout", "10000", "--json"],
-      root,
-      stateDir,
-      configPath,
+      ...fixture,
     });
 
     expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
@@ -97,34 +133,14 @@ describe("gateway-backed CLI process exit", () => {
       { deviceToken: storedToken },
       "issued-device-token",
     );
-    const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
-      mode: "remote",
-      remote: { url: gateway.url },
-    });
-    const stateEnv = {
-      ...process.env,
-      HOME: root,
-      OPENCLAW_HOME: root,
-      OPENCLAW_STATE_DIR: stateDir,
-    };
-    const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
-    seedOriginDeviceToken({
-      gatewayScope: gatewayOriginScope(gateway.url),
-      deviceId: identity.deviceId,
-      role: "operator",
-      token: storedToken,
-      scopes: ["operator.admin"],
-      env: stateEnv,
-    });
-    closeOpenClawStateDatabaseForTest();
-    prepareSharedStateReadArtifacts(stateDir);
+    const fixture = await remoteFixture(root, { url: gateway.url });
+    const { stateDir } = fixture;
+    const { identity, env: stateEnv } = seedDeviceAuth(root, stateDir, gateway.url, storedToken);
     const before = await snapshotDirectoryContents(stateDir);
 
     const result = await runIsolatedGatewayCli({
       args: ["nodes", "approve", "request-1", "--json"],
-      root,
-      stateDir,
-      configPath,
+      ...fixture,
     });
 
     expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
@@ -148,34 +164,14 @@ describe("gateway-backed CLI process exit", () => {
       { deviceToken: storedToken },
       "issued-device-token",
     );
-    const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
-      mode: "remote",
-      remote: { url: gateway.url },
-    });
-    const stateEnv = {
-      ...process.env,
-      HOME: root,
-      OPENCLAW_HOME: root,
-      OPENCLAW_STATE_DIR: stateDir,
-    };
-    const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
-    seedOriginDeviceToken({
-      gatewayScope: gatewayOriginScope(gateway.url),
-      deviceId: identity.deviceId,
-      role: "operator",
-      token: storedToken,
-      scopes: ["operator.admin"],
-      env: stateEnv,
-    });
-    closeOpenClawStateDatabaseForTest();
-    prepareSharedStateReadArtifacts(stateDir);
+    const fixture = await remoteFixture(root, { url: gateway.url });
+    const { stateDir } = fixture;
+    const { identity, env: stateEnv } = seedDeviceAuth(root, stateDir, gateway.url, storedToken);
     const before = await snapshotSharedStateArtifacts(stateDir);
 
     const result = await runIsolatedGatewayCli({
       args: ["gateway", "call", "diagnostics.stability", "--json"],
-      root,
-      stateDir,
-      configPath,
+      ...fixture,
     });
 
     expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
@@ -193,64 +189,28 @@ describe("gateway-backed CLI process exit", () => {
     expect(await snapshotSharedStateArtifacts(stateDir)).toEqual(before);
   });
 
-  it.each([{ label: "seeded", seeded: true }])(
-    "requires a reachable status RPC without changing $label shared state",
-    async ({ label, seeded }) => {
-      const root = tempDirs.make(`openclaw-gateway-status-${label}-`);
-      const token = "configured-token";
-      const gateway = await startGatewayStabilityRpcServer({ token }, "issued-device-token");
-      const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
-        mode: "remote",
-        remote: { url: gateway.url, token },
-      });
-      const stateEnv = {
-        ...process.env,
-        HOME: root,
-        OPENCLAW_HOME: root,
-        OPENCLAW_STATE_DIR: stateDir,
-      };
-      if (seeded) {
-        const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
-        seedOriginDeviceToken({
-          gatewayScope: gatewayOriginScope(gateway.url),
-          deviceId: identity.deviceId,
-          role: "operator",
-          token,
-          scopes: ["operator.admin"],
-          env: stateEnv,
-        });
-        closeOpenClawStateDatabaseForTest();
-        prepareSharedStateReadArtifacts(stateDir);
-      }
-      const before = await snapshotSharedStateArtifacts(stateDir);
-      expect(Object.keys(before).includes("openclaw.sqlite")).toBe(seeded);
+  it("requires a reachable status RPC without changing seeded shared state", async () => {
+    const root = tempDirs.make("openclaw-gateway-status-seeded-");
+    const token = "configured-token";
+    const gateway = await startGatewayStabilityRpcServer({ token }, "issued-device-token");
+    const fixture = await remoteFixture(root, { url: gateway.url, token });
+    const { stateDir } = fixture;
+    seedDeviceAuth(root, stateDir, gateway.url, token);
+    const before = await snapshotSharedStateArtifacts(stateDir);
+    expect(Object.keys(before).includes("openclaw.sqlite")).toBe(true);
 
-      const result = await runIsolatedGatewayCli({
-        args: [
-          "gateway",
-          "status",
-          "--url",
-          gateway.url,
-          "--token",
-          token,
-          "--require-rpc",
-          "--json",
-          "--timeout",
-          "2000",
-        ],
-        root,
-        stateDir,
-        configPath,
-      });
+    const result = await runIsolatedGatewayCli({
+      args: statusArgs(gateway.url, token),
+      ...fixture,
+    });
 
-      expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        rpc: { ok: true, kind: "read" },
-      });
-      expect(gateway.calls).toEqual(["status"]);
-      expect(await snapshotSharedStateArtifacts(stateDir)).toEqual(before);
-    },
-  );
+    expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      rpc: { ok: true, kind: "read" },
+    });
+    expect(gateway.calls).toEqual(["status"]);
+    expect(await snapshotSharedStateArtifacts(stateDir)).toEqual(before);
+  });
 
   it.runIf(process.platform !== "win32")(
     "runs gateway status through one OpenClaw entry process",
@@ -260,10 +220,8 @@ describe("gateway-backed CLI process exit", () => {
       const preloadPath = path.join(root, "track-entry-pid.mjs");
       const token = "configured-token";
       const gateway = await startGatewayStabilityRpcServer({ token }, "issued-device-token");
-      const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
-        mode: "remote",
-        remote: { url: gateway.url, token },
-      });
+      const fixture = await remoteFixture(root, { url: gateway.url, token });
+      const { stateDir } = fixture;
       expect(await snapshotSharedStateArtifacts(stateDir)).toEqual({});
       await fs.writeFile(
         preloadPath,
@@ -278,21 +236,8 @@ describe("gateway-backed CLI process exit", () => {
       );
 
       const result = await runIsolatedGatewayCli({
-        args: [
-          "gateway",
-          "status",
-          "--url",
-          gateway.url,
-          "--token",
-          token,
-          "--require-rpc",
-          "--json",
-          "--timeout",
-          "2000",
-        ],
-        root,
-        stateDir,
-        configPath,
+        args: statusArgs(gateway.url, token),
+        ...fixture,
         env: {
           ...withRuntimePreload({}, preloadPath),
           OPENCLAW_ENTRY_PID_LOG: pidLogPath,
@@ -446,52 +391,32 @@ describe("gateway-backed CLI process exit", () => {
     });
 
     expect(result).toMatchObject({ code: 1, signal: null, stdout: "" });
-    expect(result.stderr).toContain("gateway url override requires explicit credentials");
     // The shared console redaction masks the word after "--password"; assert around it.
     expect(result.stderr).toContain("Fix: pass --token or --password");
     expect(result.stderr).toContain("--url (or gatewayToken in tools).");
     expect(result.stderr).toContain("remove --url to use the configured target.");
     expect(result.stderr).toContain(`Config: ${configPath}`);
-    expect(result.stderr).not.toContain("The CLI command failed");
-    expect(result.stderr).not.toContain("Could not start the CLI");
-    expect(result.stderr).not.toContain("OPENCLAW_DEBUG");
-    expect(result.stderr).not.toContain("Stack:");
-    expect(result.stderr).not.toContain("openclaw doctor");
+    expectGuidance(result.stderr, "gateway url override requires explicit credentials");
   });
 
-  it.each([
-    { label: "machine", args: ["cron", "show", "missing-job", "--json"], machineOutput: true },
-  ])(
-    "renders a $label-mode cron lookup miss as expected guidance, not a crash",
-    async ({ label, args, machineOutput }) => {
-      const root = tempDirs.make(`openclaw-cron-lookup-miss-${label}-`);
-      const token = "test-token";
-      const gateway = await startCronLookupMissGateway(token, "missing-job");
-      const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
-        mode: "remote",
-        remote: { url: gateway.url, token },
-      });
+  it("renders a machine-mode cron lookup miss as expected guidance, not a crash", async () => {
+    const root = tempDirs.make("openclaw-cron-lookup-miss-machine-");
+    const token = "test-token";
+    const gateway = await startCronLookupMissGateway(token, "missing-job");
+    const fixture = await remoteFixture(root, { url: gateway.url, token });
+    const result = await runIsolatedGatewayCli({
+      ...fixture,
+      args: ["cron", "show", "missing-job", "--json"],
+    });
 
-      const result = await runIsolatedGatewayCli({ args, root, stateDir, configPath });
-
-      const message =
-        "Automation not found: missing-job. Run `openclaw cron list` to see recent automation ids.";
-      expect(result).toMatchObject({ code: 1, signal: null });
-      if (machineOutput) {
-        expect(JSON.parse(result.stdout)).toEqual({
-          ok: false,
-          error: { type: "cli_error", message },
-        });
-      } else {
-        expect(result.stdout).toBe("");
-      }
-      expect(result.stderr).toContain(message);
-      expect(result.stderr).not.toContain("The CLI command failed");
-      expect(result.stderr).not.toContain("Could not start the CLI");
-      expect(result.stderr).not.toContain("OPENCLAW_DEBUG");
-      expect(result.stderr).not.toContain("Stack:");
-      expect(result.stderr).not.toContain("openclaw doctor");
-      expect(gateway.calls).toEqual(["cron.get", "cron.list"]);
-    },
-  );
+    const message =
+      "Automation not found: missing-job. Run `openclaw cron list` to see recent automation ids.";
+    expect(result).toMatchObject({ code: 1, signal: null });
+    expect(JSON.parse(result.stdout)).toEqual({
+      ok: false,
+      error: { type: "cli_error", message },
+    });
+    expectGuidance(result.stderr, message);
+    expect(gateway.calls).toEqual(["cron.get", "cron.list"]);
+  });
 });
