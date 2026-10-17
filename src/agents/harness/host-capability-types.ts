@@ -22,6 +22,8 @@ type AgentHarnessPreparedEnvironment = Readonly<{
   localToolPathPrepend?: readonly string[];
   /** Non-secret fact used to select the local GitHub identity overlay. */
   managedLocalIdentity: boolean;
+  /** Use this host's tool surface when the runtime cannot bind credentials at process launch. */
+  hostExecutionRequired?: true;
 }>;
 
 type AgentHarnessToolSurfaceOptions = Omit<
@@ -40,6 +42,22 @@ export type AgentHarnessHostCapabilities = Readonly<{
   version: 1;
   /** Fails closed unless this exact admitted run capability remains active. */
   assertActive: () => void;
+  /**
+   * Freeze the host continuation count before tools or inference, using the native
+   * owner's admitted Gateway-local cwd. Never pass a remote/container path.
+   * Repeat calls must use the same cwd; omission preserves the harness result budget.
+   */
+  prepareContinuationRetryCount?: (workspace: Readonly<{ cwd: string }>) => void;
+  /** Capture admitted request ancestry for descendants that outlive this foreground turn. */
+  captureRequestCustody?: () =>
+    | import("../../infra/exec-request-context.js").ExecRequestCustody
+    | undefined;
+  /** Native runtimes must install pre-tool admission for these pending workspace operations. */
+  workspaceReadiness?: Readonly<{
+    toolNames: readonly string[];
+    /** Await the existing workspace owner while preserving this run's authority. */
+    waitUntilReady: () => Promise<void>;
+  }>;
   /** Native delegation without person selection must remain unambiguous at admission. */
   assertNativeSubagentSpawnAllowed?: () => void;
   /** Binds the actual native model; returns undefined only for runs without an operator source. */
@@ -131,7 +149,7 @@ export type AgentHarnessHostCapabilities = Readonly<{
   activeComputerContext?: () => string;
   /** Applies the exact host caller binding to a plugin-built tool surface. */
   bindToolSurface: (tools: AnyAgentTool[], options?: Readonly<{ cwd?: string }>) => AnyAgentTool[];
-  /** @deprecated Await createToolSurfaceAsync for fresh worker-backed exec policy. */
+  /** @deprecated Await createToolSurfaceAsync for worker-backed exec policy. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   createToolSurface?: (
     options: AgentHarnessToolSurfaceOptions,
     bindingOptions?: Readonly<{ cwd?: string }>,

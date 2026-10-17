@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
+import { selectSidebarView } from "../app-sidebar-setup.ts";
 import { createGateway, createSessions, mountSidebar, TWO_AGENTS } from "../app-sidebar.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar transient menus", () => {
   it("keeps the session filters open after a choice and closes from the trigger", async () => {
@@ -44,17 +45,12 @@ describe("AppSidebar transient menus", () => {
     await sidebar.updateComplete;
     const firstMenu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
     const settingsItem = firstMenu?.querySelector<HTMLElement>(
-      'wa-dropdown-item[value="command:agent-settings"]',
+      '[data-value="command:agent-settings"]',
     );
     expect(firstMenu).not.toBeNull();
     expect(firstMenu?.closest("openclaw-menu-surface")).toBeNull();
     expect(settingsItem).not.toBeNull();
-    firstMenu?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        detail: { item: settingsItem },
-      }),
-    );
+    settingsItem?.click();
     await sidebar.updateComplete;
 
     trigger.click();
@@ -62,71 +58,88 @@ describe("AppSidebar transient menus", () => {
     const replacement = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
     expect(replacement).not.toBe(firstMenu);
 
-    firstMenu?.dispatchEvent(new CustomEvent("wa-after-hide", { bubbles: true, composed: true }));
+    firstMenu?.dispatchEvent(
+      new CustomEvent("overlay-after-hide", { bubbles: true, composed: true }),
+    );
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBe(replacement);
   });
 
-  it("ignores a stale More-menu hide after opening its replacement", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    const pagesLabel = sidebar.querySelector(".sidebar-nav .sidebar-recent-sessions__label-text");
-    expect(pagesLabel?.classList.contains("sr-only")).toBe(true);
-    expect(pagesLabel?.textContent).toBe("Pages");
-    const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-nav__head-action");
-    if (!trigger) {
-      throw new Error("expected Pages menu trigger");
-    }
+  async function openPinMenu(
+    sidebar: Awaited<ReturnType<typeof mountSidebar>>["sidebar"],
+    entry: string,
+  ) {
+    const pin = sidebar.querySelector<HTMLElement>(
+      `.sidebar-rail [data-sidebar-entry="${entry}"]`,
+    )!;
+    expect(pin).not.toBeNull();
+    pin.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, composed: true, cancelable: true }),
+    );
+    await sidebar.updateComplete;
+    const menu = sidebar.querySelector<HTMLElement>(".sidebar-rail-pin-menu")!;
+    expect(menu).not.toBeNull();
+    expect(menu.getAttribute("role")).toBe("menu");
+    expect(menu.closest("openclaw-menu-surface")).toBeNull();
+    return menu;
+  }
 
-    trigger.click();
+  it("ignores a removed pin menu's stale hide after Pages recreates that shortcut", async () => {
+    const { sidebar } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      createSessions("main", ["agent:main:main"]),
+    );
+    sidebar.sidebarEntries = ["route:usage"];
+    const update = vi.fn((entries: string[]) => {
+      sidebar.sidebarEntries = entries;
+    });
+    sidebar.onUpdateSidebarEntries = update;
     await sidebar.updateComplete;
-    const firstMenu = sidebar.querySelector<HTMLElement>(".sidebar-more-menu");
-    expect(firstMenu).not.toBeNull();
-    expect(firstMenu?.closest("openclaw-menu-surface")).toBeNull();
-    trigger.click();
+    const first = await openPinMenu(sidebar, "route:usage");
+    first.querySelector<HTMLElement>('[data-value="remove"]')!.click();
     await sidebar.updateComplete;
-    trigger.click();
+    expect(sidebar.sidebarEntries).toEqual([]);
+    expect(first.isConnected).toBe(false);
+    await selectSidebarView(sidebar, "pages");
+    const page = sidebar.querySelector('.sidebar-pages [data-sidebar-entry="route:usage"]')!;
+    page
+      .closest(".sidebar-pages__entry")!
+      .querySelector<HTMLButtonElement>('[aria-label="Pin"]')!
+      .click();
     await sidebar.updateComplete;
-    const replacement = sidebar.querySelector<HTMLElement>(".sidebar-more-menu");
-    expect(replacement).not.toBe(firstMenu);
-
-    firstMenu?.dispatchEvent(new CustomEvent("wa-after-hide", { bubbles: true, composed: true }));
+    const replacement = await openPinMenu(sidebar, "route:usage");
+    expect(replacement).not.toBe(first);
+    const writes = update.mock.calls.length;
+    first.dispatchEvent(new CustomEvent("overlay-after-hide", { bubbles: true, composed: true }));
     await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-more-menu")).toBe(replacement);
+    expect(replacement.isConnected).toBe(true);
+    expect(replacement.getAttribute("role")).toBe("menu");
+    expect(sidebar.sidebarEntries).toEqual(["route:usage"]);
+    expect(update).toHaveBeenCalledTimes(writes);
   });
 
-  it("ignores a stale Customize-menu hide after opening its replacement", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    const nav = sidebar.querySelector<HTMLElement>(".sidebar-nav");
-    if (!nav) {
-      throw new Error("expected sidebar navigation");
-    }
-
-    nav.dispatchEvent(
-      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 }),
+  it("keeps a second pin's menu and target independent of an earlier menu's hide", async () => {
+    const { sidebar } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      createSessions("main", ["agent:main:main"]),
     );
+    sidebar.sidebarEntries = ["route:usage", "route:plugins"];
+    sidebar.onUpdateSidebarEntries = (entries) => {
+      sidebar.sidebarEntries = entries;
+    };
     await sidebar.updateComplete;
-    const firstMenu = sidebar.querySelector<HTMLElement>(".sidebar-customize-menu");
-    expect(firstMenu).not.toBeNull();
-    expect(firstMenu?.closest("openclaw-menu-surface")).toBeNull();
-    firstMenu?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        detail: { item: { value: "reset" } },
-      }),
-    );
+    const first = await openPinMenu(sidebar, "route:usage");
+    const replacement = await openPinMenu(sidebar, "route:plugins");
+    expect(replacement).not.toBe(first);
+    first.dispatchEvent(new CustomEvent("overlay-after-hide", { bubbles: true, composed: true }));
     await sidebar.updateComplete;
-
-    nav.dispatchEvent(
-      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 24, clientY: 24 }),
-    );
+    expect(replacement.getAttribute("role")).toBe("menu");
+    replacement.querySelector<HTMLElement>('[data-value="remove"]')!.click();
     await sidebar.updateComplete;
-    const replacement = sidebar.querySelector<HTMLElement>(".sidebar-customize-menu");
-    expect(replacement).not.toBe(firstMenu);
-
-    firstMenu?.dispatchEvent(new CustomEvent("wa-after-hide", { bubbles: true, composed: true }));
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-customize-menu")).toBe(replacement);
+    expect(sidebar.sidebarEntries).toEqual(["route:usage"]);
+    expect(sidebar.querySelector('.sidebar-rail [data-sidebar-entry="route:plugins"]')).toBeNull();
+    expect(
+      sidebar.querySelector('.sidebar-rail [data-sidebar-entry="route:usage"]'),
+    ).not.toBeNull();
   });
 });

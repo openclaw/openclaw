@@ -125,18 +125,14 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     Boolean(prepared.ackReactionPromise) &&
     Boolean(reactionMessageTs) &&
     cfg.messages?.statusReactions?.enabled === true;
+  const updateReaction = (send: typeof reactSlackMessage, targetTs: string, emoji: string) =>
+    send(message.channel, targetTs, emoji, { token: ctx.botToken, client: slackClient });
   const slackStatusAdapter: StatusReactionAdapter = {
     setReaction: async (emoji) => {
-      await reactSlackMessage(message.channel, reactionMessageTs ?? "", emoji, {
-        token: ctx.botToken,
-        client: slackClient,
-      });
+      await updateReaction(reactSlackMessage, reactionMessageTs ?? "", emoji);
     },
     removeReaction: async (emoji) => {
-      await removeSlackReaction(message.channel, reactionMessageTs ?? "", emoji, {
-        token: ctx.botToken,
-        client: slackClient,
-      });
+      await updateReaction(removeSlackReaction, reactionMessageTs ?? "", emoji);
     },
   };
   const statusReactions = createStatusReactionController({
@@ -182,6 +178,15 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   // Session status is a state write, not a typing keepalive. Start it once
   // before visible output; the dispatcher owns the delivered/preview gate.
   const threadStatusGate = { hasVisibleOutput: () => false };
+  const onTypingError = (action: "start" | "stop", error: unknown) => {
+    logTypingFailure({
+      log: (messageValue) => runtime.error?.(danger(messageValue)),
+      channel: "slack",
+      action,
+      target: typingTarget,
+      error,
+    });
+  };
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg,
     agentId: route.agentId,
@@ -203,12 +208,11 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
         }
         if (typingReaction && message.ts) {
           didAddTypingReaction = true;
-          await reactSlackMessage(message.channel, message.ts, typingReaction, {
-            token: ctx.botToken,
-            client: slackClient,
-          }).catch((err: unknown) => {
-            logVerbose(`slack send: typing reaction failed: ${formatSlackError(err)}`);
-          });
+          await updateReaction(reactSlackMessage, message.ts, typingReaction).catch(
+            (err: unknown) => {
+              logVerbose(`slack send: typing reaction failed: ${formatSlackError(err)}`);
+            },
+          );
         }
       },
       stop: async () => {
@@ -237,32 +241,15 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
         // still adds the reaction, and that reaction must still be removed.
         if (didAddTypingReaction && typingReaction && message.ts) {
           didAddTypingReaction = false;
-          await removeSlackReaction(message.channel, message.ts, typingReaction, {
-            token: ctx.botToken,
-            client: slackClient,
-          }).catch((err: unknown) => {
-            logVerbose(`slack send: typing reaction removal failed: ${formatSlackError(err)}`);
-          });
+          await updateReaction(removeSlackReaction, message.ts, typingReaction).catch(
+            (err: unknown) => {
+              logVerbose(`slack send: typing reaction removal failed: ${formatSlackError(err)}`);
+            },
+          );
         }
       },
-      onStartError: (err) => {
-        logTypingFailure({
-          log: (messageValue) => runtime.error?.(danger(messageValue)),
-          channel: "slack",
-          action: "start",
-          target: typingTarget,
-          error: err,
-        });
-      },
-      onStopError: (err) => {
-        logTypingFailure({
-          log: (messageLocal) => runtime.error?.(danger(messageLocal)),
-          channel: "slack",
-          action: "stop",
-          target: typingTarget,
-          error: err,
-        });
-      },
+      onStartError: (err) => onTypingError("start", err),
+      onStopError: (err) => onTypingError("stop", err),
     },
   });
 

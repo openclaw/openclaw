@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../io.js";
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
@@ -41,6 +42,7 @@ function legacyMirrorMessage(text = "Chart") {
 }
 
 describe("assistant mirror media identity", () => {
+  afterAll(clearRuntimeConfigSnapshot);
   const fixture = useTempSessionsFixture("transcript-media-identity-");
 
   async function createScope() {
@@ -50,6 +52,7 @@ describe("assistant mirror media identity", () => {
       sessionKey: "agent:main:legacy-media",
       storePath: fixture.storePath(),
     };
+    setRuntimeConfigSnapshot({ session: { store: scope.storePath } });
     await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     return scope;
   }

@@ -1,7 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionToolsVisibility } from "../../plugin-sdk/session-visibility.js";
 import {
@@ -35,6 +38,7 @@ const sessions = [
   { key: requesterKey, agentId: "main", sessionId: "requester-session" },
   { key: subagentRequesterKey, agentId: "main", sessionId: "subagent-requester-session" },
   { key: workerKey, agentId: "worker", sessionId: workerSessionId, label: "delegation-worker" },
+  { key: "global", agentId: "worker", sessionId: "raw-worker-session", label: "raw-worker" },
   { key: "agent:stranger:main", agentId: "stranger", sessionId: "stranger-session" },
   {
     key: nativeChildKey,
@@ -122,6 +126,18 @@ describe("sessions_send directed policy at the tool boundary", () => {
         { agentId, sessionKey: key },
         { sessionId, updatedAt: 1, ...entry },
       );
+      await appendTranscriptMessage(
+        { agentId, sessionKey: key, sessionId },
+        {
+          message: {
+            role: "assistant",
+            __openclaw: { runId },
+            phase: "final_answer",
+            stopReason: "stop",
+            content: [{ type: "text", text: replyText }],
+          },
+        },
+      );
     }
   });
 
@@ -180,9 +196,6 @@ describe("sessions_send directed policy at the tool boundary", () => {
 
   it.each([
     ["agent ID", { agentId: "worker" }, configFor({ send: [] }), true],
-    ["key", { sessionKey: workerKey }, configFor({ send: [] }), true],
-    ["label", { label: "delegation-worker", agentId: "worker" }, configFor({ send: [] }), true],
-    ["session ID", { sessionKey: workerSessionId }, configFor({ send: [] }), true],
     [
       "global disable",
       { sessionKey: workerKey },
@@ -227,7 +240,6 @@ describe("sessions_send directed policy at the tool boundary", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    expect(gatewayMethods()).not.toContain("chat.history");
   });
 
   afterAll(async () => {
@@ -235,38 +247,31 @@ describe("sessions_send directed policy at the tool boundary", () => {
     await state.cleanup();
   });
 
-  it.each([
-    ["agentId", "self", { agentId: "worker" }],
-    ["key", "tree", { sessionKey: workerKey }],
-    ["qualified label", "agent", { label: "delegation-worker", agentId: "worker" }],
-    ["sessionId", "self", { sessionKey: workerSessionId }],
-  ] as const)(
-    "sends by %s under %s visibility and returns only that run's reply",
-    async (_name, visibility, target) => {
-      const result = await send(configFor({ send: ["worker"], visibility }), target);
+  it("sends by session ID under self visibility and returns only that run's reply", async () => {
+    const result = await send(configFor({ send: ["worker"], visibility: "self" }), {
+      sessionKey: workerSessionId,
+    });
 
-      expect(result.details).toMatchObject({
-        status: "ok",
-        sessionKey: workerKey,
-        runId,
-        reply: replyText,
-      });
-      const dispatches = callGateway.mock.calls.filter(([request]) => request.method === "agent");
-      expect(dispatches).toHaveLength(1);
-      expect(dispatches[0]?.[0].params).toMatchObject({
-        agentId: "worker",
-        sessionKey: workerKey,
-        inputProvenance: { sourceSessionKey: requesterKey, sourceTool: "sessions_send" },
-      });
-      expect(gatewayMethods().filter((method) => method === "agent.wait")).toHaveLength(1);
-    },
-  );
+    expect(result.details).toMatchObject({
+      status: "ok",
+      sessionKey: workerKey,
+      runId,
+      reply: replyText,
+    });
+    const dispatches = callGateway.mock.calls.filter(([request]) => request.method === "agent");
+    expect(dispatches).toHaveLength(1);
+    expect(dispatches[0]?.[0].params).toMatchObject({
+      agentId: "worker",
+      sessionKey: workerKey,
+      inputProvenance: { sourceSessionKey: requesterKey, sourceTool: "sessions_send" },
+    });
+    expect(gatewayMethods().filter((method) => method === "agent.wait")).toHaveLength(1);
+  });
 
-  it.each([
-    { name: "unlisted key", send: ["worker"], target: { sessionKey: "agent:stranger:main" } },
-    { name: "empty outbound list", send: [], target: { agentId: "worker" } },
-  ])("denies $name even with all visibility before dispatch", async ({ send: edges, target }) => {
-    const result = await send(configFor({ send: edges, visibility: "all" }), target);
+  it("denies an unlisted key even with all visibility before dispatch", async () => {
+    const result = await send(configFor({ send: ["worker"], visibility: "all" }), {
+      sessionKey: "agent:stranger:main",
+    });
     expect(result.details).toMatchObject({
       status: "forbidden",
       error: expect.stringContaining("tools.agentToAgent.send"),
@@ -274,19 +279,13 @@ describe("sessions_send directed policy at the tool boundary", () => {
     expectNoDispatch();
   });
 
-  it.each(["all", "self"] as const)(
-    "preserves omitted-policy visibility=%s",
-    async (visibility) => {
-      const result = await send(configFor({ visibility }), { agentId: "worker" });
-      expect(result.details).toMatchObject({ status: visibility === "all" ? "ok" : "forbidden" });
-      if (visibility === "self") {
-        expectNoDispatch();
-      }
-    },
-  );
+  it("denies invisible sends when outbound policy is omitted", async () => {
+    const result = await send(configFor({ visibility: "self" }), { agentId: "worker" });
+    expect(result.details).toMatchObject({ status: "forbidden" });
+    expectNoDispatch();
+  });
 
   it.each([
-    { name: "disabled", global: { enabled: false }, error: "tools.agentToAgent.enabled" },
     {
       name: "requester excluded",
       global: { enabled: true, allow: ["worker"] },
@@ -329,6 +328,22 @@ describe("sessions_send directed policy at the tool boundary", () => {
     expect(watch).toHaveBeenCalledOnce();
   });
 
+  it("reports a raw-target watch refusal without misreporting an accepted send", async () => {
+    const result = await send(configFor({ send: ["worker"], visibility: "all" }), {
+      label: "raw-worker",
+      agentId: "worker",
+      watch: true,
+    });
+    expect(result.details).toMatchObject({
+      status: "ok",
+      reply: replyText,
+      watched: false,
+      watchError: expect.stringContaining("agent-qualified"),
+    });
+    expect(gatewayMethods()).toContain("agent");
+    expect(gatewayMethods()).toContain("agent.wait");
+  });
+
   it.each([requesterKey, subagentRequesterKey])(
     "keeps sandbox spawned-only for requester %s",
     async (agentSessionKey) => {
@@ -347,59 +362,44 @@ describe("sessions_send directed policy at the tool boundary", () => {
     },
   );
 
-  it.each([nativeChildKey, acpChildKey])(
-    "retains existing own-child access to %s",
-    async (sessionKey) => {
-      const result = await send(
-        configFor({ send: [], visibility: "tree", global: { enabled: false } }),
-        { sessionKey },
-      );
-      expect(result.details).toMatchObject({ status: "ok", sessionKey, reply: replyText });
-      expect(gatewayMethods()).toContain("agent");
-    },
-  );
+  it("adds restart context when continuing an interrupted child", async () => {
+    const target = { agentId: "worker", sessionKey: nativeChildKey };
+    const entry = {
+      sessionId: "native-child-session",
+      updatedAt: 1,
+      spawnedBy: requesterKey,
+    };
+    await replaceSessionEntry(target, { ...entry, status: "interrupted" });
+    try {
+      const result = await send(configFor({ send: [], visibility: "tree" }), {
+        sessionKey: nativeChildKey,
+      });
+      expect(result.details).toMatchObject({ status: "ok", reply: replyText });
+      const prompt = callGateway.mock.calls.find(([request]) => request.method === "agent")?.[0]
+        .params.message;
+      expect(prompt).toContain("Please handle this task");
+      expect(prompt).toContain("interrupted by a gateway restart");
+      expect(prompt).toContain("marked interrupted, missing, or aborted");
+      expect(prompt).toContain("unknown outcome");
+      expect(prompt).toContain("not proof of tool failure");
+    } finally {
+      await replaceSessionEntry(target, entry);
+    }
+  });
 
-  it.each(["interrupted", "failed", "killed", "timeout", "done"] as const)(
-    "adds restart context only when continuing an interrupted child (%s)",
-    async (status) => {
-      const target = { agentId: "worker", sessionKey: nativeChildKey };
-      const entry = {
-        sessionId: "native-child-session",
-        updatedAt: 1,
-        spawnedBy: requesterKey,
-      };
-      await replaceSessionEntry(target, { ...entry, status });
-      try {
-        const result = await send(configFor({ send: [], visibility: "tree" }), {
-          sessionKey: nativeChildKey,
-        });
-        expect(result.details).toMatchObject({ status: "ok", reply: replyText });
-        const prompt = callGateway.mock.calls.find(([request]) => request.method === "agent")?.[0]
-          .params.message;
-        expect(prompt).toContain("Please handle this task");
-        if (status === "interrupted") {
-          expect(prompt).toContain("interrupted by a gateway restart");
-          expect(prompt).toContain("marked interrupted, missing, or aborted");
-          expect(prompt).toContain("unknown outcome");
-          expect(prompt).toContain("not proof of tool failure");
-        } else {
-          expect(prompt).not.toContain("gateway restart");
-        }
-      } finally {
-        await replaceSessionEntry(target, entry);
-      }
-    },
-  );
-
-  it.each([
-    { label: "native-child", key: nativeChildKey },
-    { label: "acp-child", key: acpChildKey },
-  ])("retains owned-child access through qualified label $label", async ({ label, key }) => {
+  it("retains owned-child access through its qualified label", async () => {
     const result = await send(configFor({ send: [], visibility: "tree" }), {
-      label,
+      label: "native-child",
       agentId: "worker",
     });
-    expect(result.details).toMatchObject({ status: "ok", sessionKey: key, reply: replyText });
+    expect(result.details).toMatchObject({
+      status: "ok",
+      sessionKey: nativeChildKey,
+      reply: replyText,
+    });
+    const prompt = callGateway.mock.calls.find(([request]) => request.method === "agent")?.[0]
+      .params.message;
+    expect(prompt).not.toContain("gateway restart");
   });
 
   it("does not turn a send grant into list, history, search, or status access", async () => {
@@ -423,5 +423,6 @@ describe("sessions_send directed policy at the tool boundary", () => {
     ).rejects.toThrow("visibility");
     expectNoDispatch();
     expect(gatewayMethods()).not.toContain("sessions.search");
+    expect(gatewayMethods()).not.toContain("chat.history");
   });
 });

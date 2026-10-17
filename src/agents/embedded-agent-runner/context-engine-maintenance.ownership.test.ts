@@ -4,19 +4,17 @@ import { describe, expect, it, vi } from "vitest";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
+import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { SessionManager } from "../sessions/index.js";
-import {
-  runContextEngineMaintenance,
-  waitForDeferredTurnMaintenanceForSession,
-} from "./context-engine-maintenance.js";
+import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 
 vi.mock("./context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: () => ({}),
@@ -44,7 +42,7 @@ async function withTranscriptOwners(
     try {
       await run(owners);
     } finally {
-      await waitForDeferredTurnMaintenanceForSession(owners.target.sessionKey);
+      await waitForSessionMaintenance(owners.target.sessionKey);
       resetCommandQueueStateForTest();
     }
   });
@@ -185,7 +183,7 @@ describe("context-engine maintenance transcript ownership", () => {
         try {
           await run;
           await Promise.all(deferred);
-          expect(openAsync).toHaveBeenCalledExactlyOnceWith(target);
+          expect(openAsync).toHaveBeenCalledOnce();
           expect(lock).not.toHaveBeenCalled();
           expect(published).toHaveBeenCalledExactlyOnceWith({
             agentId: target.agentId,
@@ -260,60 +258,52 @@ describe("context-engine maintenance transcript ownership", () => {
     });
   });
 
-  it.each(["lock", "maintenance"] as const)(
-    "fences caller memory authority after awaited %s",
-    async (stage) => {
-      await withTranscriptOwners(async ({ memory, durableBefore, target, entryId, params }) => {
-        const before = structuredClone(memory.getPersistedEntries());
-        const entered = vi.fn();
-        const release = createDeferredCore();
-        const controller = new AbortController();
-        const closed = new Error("caller maintenance owner closed");
-        let active = true;
-        const run = runContextEngineMaintenance({
-          ...params,
-          executionMode: "background",
-          sessionManager: memory,
-          abortSignal: controller.signal,
-          assertActive: () => {
-            controller.signal.throwIfAborted();
-            if (!active) {
-              throw closed;
-            }
-          },
-          withSessionManagerRewriteLock: async (operation) => {
-            entered();
-            await release.promise;
-            return await operation();
-          },
-          contextEngine: createEngine(async ({ runtimeContext, abortSignal }) => {
-            expect(abortSignal).toBe(controller.signal);
-            if (stage === "maintenance") {
-              entered();
-              await release.promise;
-              return { changed: false, rewrittenEntries: 0, bytesFreed: 0 };
-            }
-            return await runtimeContext!.rewriteTranscriptEntries!({
-              replacements: [{ entryId, message: replacement }],
-            });
-          }),
-        });
-        const outcome = run.then(
-          (result) => result,
-          (error: unknown) => error,
-        );
-        try {
-          await vi.waitFor(() => expect(entered).toHaveBeenCalledOnce());
-          active = false;
-          release.resolve();
-          expect(await outcome).toBe(closed);
-          expect(memory.getPersistedEntries()).toEqual(before);
-          expect(await loadTranscriptEvents(target)).toEqual(durableBefore);
-        } finally {
-          release.resolve();
-          await Promise.allSettled([run, outcome]);
-        }
+  it("checks caller memory authority before rewriting after the awaited lock", async () => {
+    await withTranscriptOwners(async ({ memory, durableBefore, target, entryId, params }) => {
+      const before = structuredClone(memory.getPersistedEntries());
+      const entered = vi.fn();
+      const release = createDeferredCore();
+      const controller = new AbortController();
+      const closed = new Error("caller maintenance owner closed");
+      let active = true;
+      const run = runContextEngineMaintenance({
+        ...params,
+        executionMode: "background",
+        sessionManager: memory,
+        abortSignal: controller.signal,
+        assertActive: () => {
+          controller.signal.throwIfAborted();
+          if (!active) {
+            throw closed;
+          }
+        },
+        withSessionManagerRewriteLock: async (operation) => {
+          entered();
+          await release.promise;
+          return await operation();
+        },
+        contextEngine: createEngine(async ({ runtimeContext, abortSignal }) => {
+          expect(abortSignal).toBe(controller.signal);
+          return await runtimeContext!.rewriteTranscriptEntries!({
+            replacements: [{ entryId, message: replacement }],
+          });
+        }),
       });
-    },
-  );
+      const outcome = run.then(
+        (result) => result,
+        (error: unknown) => error,
+      );
+      try {
+        await vi.waitFor(() => expect(entered).toHaveBeenCalledOnce());
+        active = false;
+        release.resolve();
+        expect(await outcome).toBe(closed);
+        expect(memory.getPersistedEntries()).toEqual(before);
+        expect(await loadTranscriptEvents(target)).toEqual(durableBefore);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([run, outcome]);
+      }
+    });
+  });
 });

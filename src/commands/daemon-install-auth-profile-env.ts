@@ -14,33 +14,29 @@ export async function resolveAuthProfileStoreForServiceEnv(
     return authStore;
   }
   // Keep the daemon install cold path cheap when there is no auth store to read.
-  const { hasAnyAuthProfileStoreSource } =
+  const { hasAnyAuthProfileStoreSourceAsync } =
     await import("./daemon-install-auth-profiles-source.runtime.js");
-  if (!hasAnyAuthProfileStoreSource()) {
+  if (!(await hasAnyAuthProfileStoreSourceAsync())) {
     return undefined;
   }
-  const { loadAuthProfileStoreForSecretsRuntime } =
+  const { loadAuthProfileStoreForSecretsRuntimeAsync } =
     await import("./daemon-install-auth-profiles-store.runtime.js");
-  return loadAuthProfileStoreForSecretsRuntime();
+  return loadAuthProfileStoreForSecretsRuntimeAsync();
 }
 
 export function collectAuthProfileSecretRefs(authStore: AuthProfileStore | undefined): SecretRef[] {
   if (!authStore) {
     return [];
   }
-  const refs: SecretRef[] = [];
-  for (const credential of Object.values(authStore.profiles)) {
+  return Object.values(authStore.profiles).flatMap((credential) => {
     const ref =
       credential.type === "api_key"
         ? credential.keyRef
         : credential.type === "token"
           ? credential.tokenRef
           : undefined;
-    if (ref) {
-      refs.push(ref);
-    }
-  }
-  return refs;
+    return ref ? [ref] : [];
+  });
 }
 
 export function collectAuthProfileServiceEnvVars(params: {

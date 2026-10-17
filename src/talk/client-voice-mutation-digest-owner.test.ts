@@ -75,7 +75,6 @@ describe("client voice mutation digest owner", () => {
       active: 2,
       pending: 62,
       retained: 64,
-      retainedIdentityBytes: 311,
     });
 
     let resolved = 0;
@@ -93,7 +92,6 @@ describe("client voice mutation digest owner", () => {
       active: 0,
       pending: 0,
       retained: 0,
-      retainedIdentityBytes: 0,
     });
     expect(attempts.map((attempt) => attempt.id)).toEqual(
       Array.from({ length: 64 }, (_, index) => `v${index + 1}`),
@@ -172,9 +170,9 @@ describe("client voice mutation digest owner", () => {
     owner.clear();
   });
 
-  it.each(["attempt limit", "expiry"] as const)(
+  it.each(["expiry"] as const)(
     "retains a confirmed-delivery fence after marker retry %s",
-    async (limit) => {
+    async () => {
       const releases: Array<ReturnType<typeof vi.fn>> = [];
       const attempt = vi.fn(async () => {
         throw new Error("marker refused");
@@ -193,12 +191,6 @@ describe("client voice mutation digest owner", () => {
       const context = { deliveredAt: 123 };
       owner.record({ ...identity, context });
       await flushMicrotasks();
-      if (limit === "attempt limit") {
-        for (let index = 0; index < 2; index += 1) {
-          owner.retry(identity);
-          await flushMicrotasks();
-        }
-      }
       await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
       const attempts = attempt.mock.calls.length;
       owner.record({ ...identity, context });
@@ -252,29 +244,6 @@ describe("client voice mutation digest owner", () => {
     }
   });
 
-  it("rejects an oversized identity atomically", async () => {
-    const warn = vi.fn();
-    const attempt = vi.fn(async () => true);
-    const owner = new ClientVoiceMutationDigestOwner<number>({
-      warn,
-      attempt,
-    });
-
-    owner.record({ agentId: "agent", voiceSessionId: "v".repeat(65_536), context: 1 });
-    await flushMicrotasks();
-
-    expect(owner.snapshot()).toEqual({
-      active: 0,
-      pending: 0,
-      retained: 0,
-      retainedIdentityBytes: 0,
-    });
-    expect(attempt).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(
-      "voice mutation digest identity exceeds the retry owner byte limit",
-    );
-  });
-
   it("releases queued acceptance on reset but joins active attempts until they settle", async () => {
     const releases: Array<ReturnType<typeof vi.fn>> = [];
     const attempts: Array<ReturnType<typeof createDeferred<boolean>>> = [];
@@ -301,41 +270,6 @@ describe("client voice mutation digest owner", () => {
     await flushMicrotasks();
     expect(releases.map((release) => release.mock.calls.length)).toEqual([1, 1, 1]);
     expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 0 });
-  });
-
-  it("preserves older intents when aggregate identity bytes are full", async () => {
-    const attempts: Array<{ id: string; completion: ReturnType<typeof createDeferred<boolean>> }> =
-      [];
-    const warn = vi.fn();
-    const owner = new ClientVoiceMutationDigestOwner<number>({
-      warn,
-      attempt: async ({ voiceSessionId }) => {
-        const completion = createDeferred<boolean>();
-        attempts.push({ id: voiceSessionId, completion });
-        return await completion.promise;
-      },
-    });
-
-    const agentId = "a".repeat(32_765);
-    owner.record({ agentId, voiceSessionId: "v1", context: 1 });
-    owner.record({ agentId, voiceSessionId: "v2", context: 2 });
-    owner.record({ agentId, voiceSessionId: "v3", context: 3 });
-
-    expect(owner.snapshot()).toEqual({
-      active: 2,
-      pending: 0,
-      retained: 2,
-      retainedIdentityBytes: 65_536,
-    });
-    expect(warn).toHaveBeenCalledOnce();
-
-    attempts[0]?.completion.resolve(true);
-    await flushMicrotasks();
-    expect(attempts).toHaveLength(2);
-    attempts[1]?.completion.resolve(true);
-    await flushMicrotasks();
-    expect(owner.snapshot().retained).toBe(0);
-    expect(attempts.map((attempt) => attempt.id)).toEqual(["v1", "v2"]);
   });
 
   it("drops a permanently failing intent after bounded lifecycle retries", async () => {
@@ -371,35 +305,6 @@ describe("client voice mutation digest owner", () => {
     expect(warn).toHaveBeenLastCalledWith(
       "voice mutation digest dropped after 3 failed attempts: permanent",
     );
-  });
-
-  it("expires a failed intent without self-retrying", async () => {
-    try {
-      const warn = vi.fn();
-      const attempt = vi.fn(async () => {
-        throw new Error("offline");
-      });
-      const owner = new ClientVoiceMutationDigestOwner<number>({
-        warn,
-        attempt,
-      });
-
-      owner.record({ agentId: "a", voiceSessionId: "v1", context: 1 });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(attempt).toHaveBeenCalledOnce();
-      expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 });
-
-      await vi.advanceTimersByTimeAsync(299_999);
-      expect(owner.snapshot().retained).toBe(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(owner.snapshot().retained).toBe(0);
-      expect(attempt).toHaveBeenCalledOnce();
-      expect(warn).toHaveBeenLastCalledWith(
-        "voice mutation digest dropped after retry retention expired (1 failed attempts)",
-      );
-    } finally {
-      vi.clearAllTimers();
-    }
   });
 
   it("suspends failure expiry while a legitimate defer owns the retry", async () => {

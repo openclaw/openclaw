@@ -1,7 +1,6 @@
 import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as toTrimmedString } from "@openclaw/normalization-core/string-coerce";
-import { Value } from "typebox/value";
-import { AgentActivityItemSchema } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
 import {
   MAX_TOOL_APPROVAL_REVIEWS,
   normalizeToolApprovalReview,
@@ -16,9 +15,15 @@ import {
 import { readLiveDiffStat } from "../../lib/chat/tool-call-diff.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
+import {
+  cleanAgentActivityItem,
+  isAgentActivityItem,
+} from "../../lib/protocol-validators.generated/activity.js";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
+import { updateChatReasoning } from "./chat-reasoning.ts";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
-import { getChatRunOwner } from "./history-merge.ts";
+import { getChatRunOwner, getChatRunProjection } from "./history-merge.ts";
+import { observedRunInputSendId } from "./stream-causal-boundary.ts";
 import type { AgentEventPayload, ToolStreamEntry, ToolStreamHost } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { handlePreambleProgress } from "./tool-stream-preamble.ts";
@@ -39,6 +44,10 @@ const TOOL_STREAM_LIMIT = 50;
 const RUN_USAGE_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
 const TOOL_OUTPUT_CHAR_LIMIT = 120_000;
+
+function isPolicyState(value: unknown): value is keyof typeof PROVIDER_POLICY_PRECEDENCE {
+  return typeof value === "string" && Object.hasOwn(PROVIDER_POLICY_PRECEDENCE, value);
+}
 
 function extractToolOutputText(value: unknown): string | null {
   const record = readRecord(value);
@@ -148,18 +157,8 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
       ? { __openclawToolStreamDiffStat: entry.liveDiffStat }
       : {}),
     __openclawToolStreamReceivedAt: entry.receivedAt,
+    ...(entry.afterUserSendId ? { openclawToolStreamAfterSendId: entry.afterUserSendId } : {}),
   };
-}
-
-function trimToolStream(host: ToolStreamHost) {
-  if (host.toolStreamOrder.length <= TOOL_STREAM_LIMIT) {
-    return;
-  }
-  const overflow = host.toolStreamOrder.length - TOOL_STREAM_LIMIT;
-  const removed = host.toolStreamOrder.splice(0, overflow);
-  for (const id of removed) {
-    host.toolStreamById.delete(id);
-  }
 }
 
 function flushToolStreamSync(host: ToolStreamHost) {
@@ -167,7 +166,14 @@ function flushToolStreamSync(host: ToolStreamHost) {
   syncToolStreamMessages(host);
 }
 
-function scheduleToolStreamSync(host: ToolStreamHost, force = false) {
+function publishToolStreamEntry(host: ToolStreamHost, entry: ToolStreamEntry, force: boolean) {
+  entry.message = buildToolStreamMessage(entry);
+  if (host.toolStreamOrder.length > TOOL_STREAM_LIMIT) {
+    const overflow = host.toolStreamOrder.length - TOOL_STREAM_LIMIT;
+    for (const id of host.toolStreamOrder.splice(0, overflow)) {
+      host.toolStreamById.delete(id);
+    }
+  }
   if (force) {
     flushToolStreamSync(host);
     return;
@@ -177,8 +183,6 @@ function scheduleToolStreamSync(host: ToolStreamHost, force = false) {
   }
   host.toolStreamSyncTimer = window.setTimeout(() => {
     flushToolStreamSync(host);
-    // The initial event rendered before this deferred projection existed.
-    host.requestUpdate?.();
   }, TOOL_STREAM_THROTTLE_MS);
 }
 
@@ -192,6 +196,8 @@ function toolReviewSequenceIdentity(ownerIdentity: string, reviewId: string): st
 
 function acceptActivityEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
   const seq = Number.isSafeInteger(payload.seq) ? payload.seq : 0;
+  let identity: string;
+  let resultOwner: string | undefined;
   if (payload.stream === "tool") {
     const toolCallId = toTrimmedString(payload.data?.toolCallId);
     if (!toolCallId) {
@@ -210,37 +216,27 @@ function acceptActivityEvent(host: ToolStreamHost, payload: AgentEventPayload): 
     if (reviewId && reviewFloor !== undefined && seq <= reviewFloor) {
       return false;
     }
-    const identity = reviewId ? toolReviewSequenceIdentity(ownerIdentity, reviewId) : ownerIdentity;
-    const previous = host.activityEventSeqById?.get(identity);
-    if (previous !== undefined && seq <= previous) {
-      return false;
-    }
-    const sequences = (host.activityEventSeqById ??= new Map());
-    sequences.set(identity, seq);
+    identity = reviewId ? toolReviewSequenceIdentity(ownerIdentity, reviewId) : ownerIdentity;
     if (phase === "result") {
-      sequences.set(terminalIdentity, seq);
-      for (const key of sequences.keys()) {
-        if (key.startsWith(`${ownerIdentity}:review:`)) {
-          sequences.delete(key);
-        }
-      }
+      resultOwner = ownerIdentity;
     }
-    return true;
-  }
-  let identity: string;
-  const terminalLifecycle =
-    payload.stream === "lifecycle" &&
-    (payload.data?.phase === "end" || payload.data?.phase === "error");
-  if (payload.stream === "compaction" || terminalLifecycle) {
-    // One visible compaction per run: older items and retry completions must
-    // not replace a newer operation restored or received on the live stream.
-    identity = `compaction:${payload.runId}`;
-  } else if (payload.stream === "item") {
-    const itemId =
-      toTrimmedString(payload.data.itemId) ?? toTrimmedString(payload.data.id) ?? "latest";
-    identity = `item:${payload.runId}:${itemId}`;
   } else {
-    return true;
+    const terminalLifecycle =
+      payload.stream === "lifecycle" &&
+      (payload.data?.phase === "end" || payload.data?.phase === "error");
+    if (payload.stream === "compaction" || terminalLifecycle) {
+      // One visible compaction per run: older items and retry completions must
+      // not replace a newer operation restored or received on the live stream.
+      identity = `compaction:${payload.runId}`;
+    } else if (payload.stream === "thinking") {
+      identity = `thinking:${payload.runId}`;
+    } else if (payload.stream === "item") {
+      const itemId =
+        toTrimmedString(payload.data.itemId) ?? toTrimmedString(payload.data.id) ?? "latest";
+      identity = `item:${payload.runId}:${itemId}`;
+    } else {
+      return true;
+    }
   }
   const previous = host.activityEventSeqById?.get(identity);
   if (previous !== undefined && seq <= previous) {
@@ -248,6 +244,14 @@ function acceptActivityEvent(host: ToolStreamHost, payload: AgentEventPayload): 
   }
   const sequences = (host.activityEventSeqById ??= new Map());
   sequences.set(identity, seq);
+  if (resultOwner) {
+    sequences.set(`${resultOwner}:result`, seq);
+    for (const key of sequences.keys()) {
+      if (key.startsWith(`${resultOwner}:review:`)) {
+        sequences.delete(key);
+      }
+    }
+  }
   return true;
 }
 
@@ -263,19 +267,21 @@ function handleUsageEvent(host: ToolStreamHost, payload: AgentEventPayload): boo
   } else if (!host.chatRunId || payload.runId !== host.chatRunId) {
     return true;
   }
+  const unavailable = readRecord(payload.data?.usageReport)?.state === "unavailable";
   const rawOutputTokens = payload.data?.outputTokens;
-  if (typeof rawOutputTokens !== "number" || !Number.isFinite(rawOutputTokens)) {
+  if (!unavailable && (typeof rawOutputTokens !== "number" || !Number.isFinite(rawOutputTokens))) {
     return true;
   }
-  const outputTokens = Math.floor(rawOutputTokens);
-  if (outputTokens < 0) {
+  const outputTokens =
+    typeof rawOutputTokens === "number" && !unavailable ? Math.floor(rawOutputTokens) : null;
+  if (outputTokens !== null && outputTokens < 0) {
     return true;
   }
   const current = host.chatRunUsageById?.get(payload.runId);
   if (current && payload.seq <= current.seq) {
     return true;
   }
-  // Keep the sequence with its count across stream resets and terminal events:
+  // Keep the sequence with its count or unavailable fact across stream resets:
   // recovery snapshots must not overwrite newer live usage or erase the recap.
   const usageByRun = new Map(host.chatRunUsageById);
   usageByRun.delete(payload.runId);
@@ -302,14 +308,7 @@ function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): bo
       return true;
     }
     const state = data.state;
-    if (
-      state !== "buffering" &&
-      state !== "blocked" &&
-      state !== "fallback" &&
-      state !== "escalated" &&
-      state !== "unavailable" &&
-      state !== "cleared"
-    ) {
+    if (state !== "cleared" && !isPolicyState(state)) {
       return true;
     }
     const owner = host.chatRunId ?? getChatRunOwner(host) ?? host.providerPolicyNotice?.runId;
@@ -406,6 +405,13 @@ function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): bo
     timestamp: payload.ts,
     kind,
   };
+  if (systemNotice && data.kind === "permission_missing") {
+    const request = readNodePermissionRequest(data.permissionMissing);
+    if (!request) {
+      return true;
+    }
+    notice.permissionMissing = request;
+  }
   if (systemNotice) {
     notice.source = "system";
   }
@@ -429,8 +435,7 @@ function applyToolReviewEvent(
   entry: ToolStreamEntry,
   review: ToolApprovalReview,
 ) {
-  const toolCallId = entry.toolCallId;
-  const ownerIdentity = toolActivityIdentity(payload.runId, toolCallId);
+  const ownerIdentity = toolActivityIdentity(payload.runId, entry.toolCallId);
   const sequences = (host.activityEventSeqById ??= new Map());
   const sequenceFor = (candidate: ToolApprovalReview) =>
     sequences.get(toolReviewSequenceIdentity(ownerIdentity, candidate.id)) ?? 0;
@@ -467,7 +472,11 @@ function applyToolReviewEvent(
   );
 }
 
-export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload): boolean {
+export function handleAgentEvent(
+  host: ToolStreamHost,
+  payload?: AgentEventPayload,
+  source: "live" | "history" = "live",
+): boolean {
   if (!payload) {
     return false;
   }
@@ -492,26 +501,49 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     }
   }
 
+  if (payload.stream === "thinking") {
+    const run = getChatRunProjection(host, payload.runId);
+    const ownsRun =
+      host.chatRunId === payload.runId ||
+      (!host.chatRunId &&
+        host.chatQueue?.some(
+          (item) => item.sendState === "sending" && item.sendRunId === payload.runId,
+        ));
+    if (
+      !ownsRun ||
+      !acceptsToolStreamSession(host, payload) ||
+      (run && run.status !== "streaming")
+    ) {
+      return false;
+    }
+    const changed = updateChatReasoning(host, payload);
+    if (changed && payload.data.phase !== "persisted") {
+      reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
+    }
+    return changed;
+  }
+
   if (
     handleUsageEvent(host, payload) ||
     handleNoticeEvent(host, payload) ||
     handleStreamStatus(host, payload) ||
-    handlePreambleProgress(host, payload)
+    handlePreambleProgress(host, payload, source)
   ) {
     return true;
   }
 
   const activityItem =
-    payload.stream === "item"
-      ? Value.Clean(AgentActivityItemSchema, { ...payload.data })
-      : undefined;
-  if (Value.Check(AgentActivityItemSchema, activityItem)) {
+    payload.stream === "item" ? cleanAgentActivityItem({ ...payload.data }) : undefined;
+  if (isAgentActivityItem(activityItem)) {
     // Analysis items (Codex reasoning, context compaction) are not tool calls;
     // a tool card would show a fabricated empty input and a completion.
     if (!acceptsToolStreamSession(host, payload) || activityItem.kind === "analysis") {
       return true;
     }
     const item = activityItem;
+    if (item.kind === "tool" && item.phase === "start") {
+      reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
+    }
     const toolCallId = item.toolCallId ?? item.itemId;
     const identity = buildToolStreamIdentity(payload.runId, toolCallId);
     let entry = host.toolStreamById.get(identity);
@@ -523,6 +555,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
         name: item.name ?? item.title,
         startedAt: item.startedAt ?? payload.ts,
         receivedAt: Date.now(),
+        afterUserSendId:
+          source === "live" ? observedRunInputSendId(host.chatMessages, payload.runId) : undefined,
         message: {},
       };
       host.toolStreamById.set(identity, entry);
@@ -532,9 +566,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       ...(entry.activity ?? []).filter((previous) => previous.itemId !== item.itemId),
       item,
     ];
-    entry.message = buildToolStreamMessage(entry);
-    trimToolStream(host);
-    scheduleToolStreamSync(host, item.phase === "end");
+    publishToolStreamEntry(host, entry, item.phase === "end");
     return true;
   }
 
@@ -601,6 +633,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       name,
       startedAt: typeof payload.ts === "number" ? payload.ts : now,
       receivedAt: now,
+      afterUserSendId:
+        source === "live" ? observedRunInputSendId(host.chatMessages, payload.runId) : undefined,
       message: {},
     };
     host.toolStreamById.set(toolStreamIdentity, entry);
@@ -640,8 +674,6 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   if (approvalReview) {
     applyToolReviewEvent(host, payload, entry, approvalReview);
   }
-  entry.message = buildToolStreamMessage(entry);
-  trimToolStream(host);
-  scheduleToolStreamSync(host, phase === "result" || approvalReview !== null);
+  publishToolStreamEntry(host, entry, phase === "result" || approvalReview !== null);
   return true;
 }

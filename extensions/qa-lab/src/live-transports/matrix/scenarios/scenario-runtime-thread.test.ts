@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mockMatrixQaHttp } from "../substrate/http.test-support.js";
 import { runAllowBotsMentionsMentionedRoomScenario } from "./scenario-runtime-allowbots.js";
 import { createMatrixQaE2eeTestContext } from "./scenario-runtime-e2ee.test-helpers.js";
 import { runMatrixQaCanary } from "./scenario-runtime-thread.js";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => vi.restoreAllMocks());
 
 describe("Matrix top-level scenario artifacts", () => {
   it.each(["canary", "observer"] as const)(
@@ -22,7 +23,7 @@ describe("Matrix top-level scenario artifacts", () => {
       const actorId = scenario === "canary" ? "driver" : "observer";
       let marker = "";
       let triggerBody = "";
-      vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      mockMatrixQaHttp(async (input, init) => {
         expect(new Headers(init?.headers).get("authorization")).toBe(
           `Bearer ${context[`${actorId}AccessToken`]}`,
         );

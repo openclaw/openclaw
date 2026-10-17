@@ -14,6 +14,10 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { runEmbeddedAgent } from "../../agents/embedded-agent-runner/run-orchestrator.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
@@ -99,6 +103,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
     resetCommandQueueStateForTest();
     vi.unstubAllEnvs();
     vi.clearAllMocks();
@@ -122,6 +127,7 @@ async function createConversation() {
       },
     },
   };
+  setRuntimeConfigSnapshot(config);
   const proof = await metadata.run(
     () => createSystemAgentVerifiedInferenceTestFixture(config),
     config,

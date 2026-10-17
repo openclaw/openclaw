@@ -130,6 +130,30 @@ type TailscaleServeGatewayInspection =
   | { status: "unavailable" }
   | { status: "invalid" };
 
+/** Reads backend state without changing connectivity or Serve configuration. */
+export async function inspectTailscaleBackendStateWithRunner(
+  runCommandWithTimeout: TailscaleStatusCommandRunner,
+): Promise<{ status: "ok"; state: string } | { status: "unavailable" | "invalid" }> {
+  let invalid = false;
+  const schema = z.object({ BackendState: z.string().min(1) });
+  for (const candidate of TAILSCALE_STATUS_COMMAND_CANDIDATES) {
+    try {
+      const result = await runCommandWithTimeout([candidate, "status", "--json"], {
+        timeoutMs: 5000,
+      });
+      // Logged-out backends can report valid status JSON with a nonzero exit.
+      const parsed = parsePossiblyNoisyStatus(schema, result.stdout);
+      if (parsed) {
+        return { status: "ok", state: parsed.BackendState };
+      }
+      invalid ||= result.code === 0;
+    } catch {
+      continue;
+    }
+  }
+  return { status: invalid ? "invalid" : "unavailable" };
+}
+
 /** Inspects persistent Serve routes without collapsing malformed output into route absence. */
 export async function inspectTailscaleServeGatewayUrlsWithRunner(
   gatewayPort: number,

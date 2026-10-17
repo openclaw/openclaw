@@ -7,6 +7,11 @@ import {
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import { isRuntimeToolAllowed } from "../agents/tool-policy-match.js";
 import { withPostAdmissionExecutionOwnerBinding } from "../audit/execution-owner-binding.js";
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceAuthority,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronAuthenticatedChannelRequester } from "../gateway/cron-creator-authority-grant.types.js";
 import {
@@ -14,6 +19,7 @@ import {
   revokeMessageActionTurnCapability,
 } from "../gateway/message-action-turn-capability.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
+import { drainAgentRunTerminalWrites } from "../infra/agent-run-terminal-writes.js";
 import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
@@ -47,7 +53,13 @@ export function prepareCronRunAdmission(params: {
   const operationalRunInstance = createOperationalRunInstanceRef(runId);
   const resolveGatewayContext =
     params.resolveGatewayContext ?? getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
-  let assertAdmitted: (() => void) | undefined;
+  let assertAdmitted: SessionSourceAssertion | undefined;
+  const readAdmittedSource = () => {
+    if (!assertAdmitted) {
+      throw new Error("cron message delivery requires its admitted run");
+    }
+    return assertAdmitted;
+  };
   const basePreparedRunAdmission = prepareAgentRunAdmission({
     operationalRunInstance,
     admissionSource: params.admissionSource,
@@ -99,34 +111,18 @@ export function prepareCronRunAdmission(params: {
             : undefined,
         deliveryAttempt: {
           beforeAttempt: () => deliveryAttemptFence.beforeAttempt(),
-          assertCurrent: () => {
-            if (!assertAdmitted) {
-              throw new Error("cron message delivery requires its admitted run");
-            }
-            assertAdmitted();
-            deliveryAttemptFence.assertCurrent();
-          },
+          assertCurrent: composeSessionSourceAssertion([
+            Object.assign(() => readAdmittedSource()(), {
+              prepareSessionSource: () => prepareSessionSourceAuthority(readAdmittedSource()),
+            }),
+            deliveryAttemptFence.assertCurrent,
+          ]),
         },
         ...(scheduledMessageAuthority && scheduledToolPolicy
           ? {
               scheduled: {
                 policy: scheduledToolPolicy,
                 assertCurrent: scheduledMessageAuthority,
-                ...(scheduledMessageAuthority.prepareUse
-                  ? {
-                      prepareUse: (sourceSensitive: boolean, assertCurrent?: () => void) => {
-                        const prepare = (
-                          sourceSensitive
-                            ? scheduledMessageSourceAuthority
-                            : scheduledMessageAuthority
-                        )?.prepareUse;
-                        if (!prepare) {
-                          throw new Error("Cron message source has no prepared authority");
-                        }
-                        return prepare(assertCurrent);
-                      },
-                    }
-                  : {}),
                 ...(scheduledMessageSourceAuthority
                   ? { assertSourceCurrent: scheduledMessageSourceAuthority }
                   : {}),
@@ -137,6 +133,10 @@ export function prepareCronRunAdmission(params: {
         expiresWithRun: true,
       })
     : undefined;
+  const close = () => {
+    revokeMessageActionTurnCapability(messageActionTurnCapability);
+    preparedRunAdmission.close();
+  };
   return {
     preparedRunAdmission,
     standingGrantAuthority: captureCronJobStandingGrantAuthority({
@@ -144,9 +144,9 @@ export function prepareCronRunAdmission(params: {
       operationalRunInstance,
     }),
     messageActionTurnCapability,
-    close: () => {
-      revokeMessageActionTurnCapability(messageActionTurnCapability);
-      preparedRunAdmission.close();
+    close,
+    finish: async () => {
+      await drainAgentRunTerminalWrites(preparedRunAdmission.operationalRunInstance).finally(close);
     },
   };
 }

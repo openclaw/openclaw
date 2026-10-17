@@ -13,7 +13,7 @@ import {
   withinTest,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { CodexAppServerClient, isCodexAppServerConnectionClosedError } from "./client.js";
+import { CodexAppServerClient } from "./client.js";
 import * as processSnapshot from "./transport-process-snapshot.js";
 import { closeCodexAppServerTransportAndWait, hasCodexAppServerNaturalExit } from "./transport.js";
 
@@ -39,7 +39,7 @@ async function waitForNativeExit(
   try {
     for (;;) {
       signal.throwIfAborted();
-      const snapshot = await withinTest(readSnapshot(Date.now() + 2_000), signal);
+      const snapshot = await withinTest(readSnapshot(performance.now() + 2_000), signal);
       expect(snapshot.some((row) => row.pid === process.pid)).toBe(true);
       const native = snapshot.find((row) => row.pid === pid);
       if (!native || native.state.startsWith("Z")) {
@@ -225,7 +225,6 @@ child.on("exit", (code, signal) => {
         nativeExited = true;
         const error = await started;
         expect(error).toBeInstanceOf(Error);
-        expect(isCodexAppServerConnectionClosedError(error)).toBe(false);
         expect((error as Error).message).toContain(
           failure === "inspection" ? "Cannot inspect Codex processes" : "512-row limit",
         );

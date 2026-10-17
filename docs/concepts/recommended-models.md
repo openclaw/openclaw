@@ -11,7 +11,8 @@ read_when:
 
 OpenClaw keeps one global, ordered list of recommended models. It names the
 models OpenClaw suggests first, independent of which provider serves them, so
-one entry covers every provider that serves that model.
+one entry covers every provider that serves that model. A provider may also
+publish its own featured list, which leads that provider's recommendations.
 
 Maintainers curate the list by hand in
 [`scripts/lib/recommended-models.json`](https://github.com/openclaw/openclaw/blob/main/scripts/lib/recommended-models.json)
@@ -28,12 +29,34 @@ and catalog v1 carries none. Model pickers list a provider's recommended models
 first and collapse its other models under **All models**; see
 [Models](/concepts/models#selection-source-and-fallback-strictness).
 
+After an upgrade, a compatible stored catalog can still supply recommendations
+even when it is older than the installed build. Its older model rows and prices
+are not used. Pickers match recommendations only against currently available
+rows, so a recommendation cannot bring back a retired or hidden model.
+
+## Provider featured lists
+
+Some providers publish the models they want to feature. NVIDIA is currently the
+only one; its feed is
+`https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json`.
+At publication, each featured id is matched to that provider's served rows by
+normalized id, so `z-ai/glm-5-3` matches `z-ai/glm-5.3`. That provider's
+`recommendedModels` lists its featured models first, in feed order and under
+its own ids, then the global list's matches that are not already included.
+
+Provider picks win as listed: the family rule only trims the global part, so a
+featured model stays even when the provider also serves a newer listed member
+of its family. Featured ids the provider does not serve, or serves only as
+deprecated, disabled, or replaced rows, are skipped and logged. When the feed
+is unavailable, malformed, empty, or matches no served model, the provider gets
+the global list alone.
+
 ## Entry format
 
-The file is a JSON array of canonical model ids, best first. It holds ids only:
+The file is a JSON array of normalized model ids, best first. It holds ids only:
 no scores, providers, or comments.
 
-A canonical id is the vendor-neutral name of a model:
+A normalized id is the vendor-neutral name of a model:
 
 - lowercase, without a vendor or route prefix (`claude-opus-5.5`, not `anthropic/claude-opus-5.5`)
 - dotted versions (`claude-opus-4.5`, not `claude-opus-4-5`; `glm-5.3`, not `glm-5p3`)

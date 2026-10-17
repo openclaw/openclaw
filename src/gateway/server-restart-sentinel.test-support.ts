@@ -4,7 +4,9 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { deliverQueuedSessionDelivery } from "./server-restart-sentinel.js";
 
-type LoadedSessionEntryBase = ReturnType<typeof import("./session-utils.js").loadSessionEntry>;
+type LoadedSessionEntryBase = Awaited<
+  ReturnType<typeof import("./session-entry-load.test-support.js").loadSessionEntryAsync>
+>;
 export type RestartSentinelSessionFixture = Omit<LoadedSessionEntryBase, "agentId"> &
   Partial<Pick<LoadedSessionEntryBase, "agentId">>;
 
@@ -167,7 +169,10 @@ export function expectRestartSentinelTranscriptBroadcast(
       }),
     }),
     params.subscribers,
-    { prepareSessionProjection: expect.any(Function) },
+    {
+      sessionEventSubscriptionKeys: [params.sessionKey],
+      prepareSessionProjection: expect.any(Function),
+    },
   );
 }
 
@@ -177,10 +182,12 @@ type ResolveSessionTarget =
 
 export function configureRestartSessionEventMocks(
   mocks: {
-    loadSessionEntry: (
+    loadSessionEntryAsync: (
       key: string,
-      options?: Parameters<typeof import("./session-utils.js").loadSessionEntry>[1],
-    ) => RestartSentinelSessionFixture;
+      options?: Parameters<
+        typeof import("./session-entry-load.test-support.js").loadSessionEntryAsync
+      >[1],
+    ) => Promise<RestartSentinelSessionFixture>;
     resolveSessionTarget: Mock<ResolveSessionTarget>;
     captureSessionEventTarget: Mock<SessionEventHandoff["captureSessionEventTargetForHost"]>;
     enqueueSessionEvent: Mock<SessionEventHandoff["enqueueSessionEventForHost"]>;
@@ -191,7 +198,7 @@ export function configureRestartSessionEventMocks(
     .mockReset()
     .mockImplementation(async ({ key, agentId, env, assertActive }) => {
       assertActive?.();
-      const loaded = mocks.loadSessionEntry(key, { agentId, env });
+      const loaded = await mocks.loadSessionEntryAsync(key, { agentId, env });
       return {
         ...loaded,
         agentId: loaded.agentId ?? agentId ?? "main",

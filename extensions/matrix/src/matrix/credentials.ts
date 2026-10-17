@@ -1,5 +1,5 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { openMatrixCredentialsAsyncStore, openMatrixCredentialsStore } from "./credentials-read.js";
+import { openMatrixCredentialsAsyncStore } from "./credentials-read.js";
 import {
   isMatrixCredentialRevocation,
   matrixCredentialsStoreKey,
@@ -104,8 +104,5 @@ async function updateMatrixCredentials(
 ): Promise<void> {
   const store = openMatrixCredentialsAsyncStore(env);
   const key = matrixCredentialsStoreKey(accountId);
-  await updateMatrixKeyedState(store, key, update, () => {
-    // Matrix's published >=2026.9.4 host floor predates data-only comparisons.
-    return openMatrixCredentialsStore(env).update(key, update);
-  });
+  await updateMatrixKeyedState(store, key, update);
 }

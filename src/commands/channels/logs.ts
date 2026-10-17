@@ -36,10 +36,7 @@ function listManifestChannels(): ManifestChannel[] {
 }
 
 function parseChannelFilter(raw?: string): ChannelLogFilter {
-  if (raw === undefined) {
-    return { channel: "all", pluginIds: new Set() };
-  }
-  const trimmed = normalizeLowercaseStringOrEmpty(raw);
+  const trimmed = raw === undefined ? "all" : normalizeLowercaseStringOrEmpty(raw);
   if (trimmed === "all") {
     return { channel: "all", pluginIds: new Set() };
   }
@@ -86,7 +83,7 @@ export async function channelsLogsCommand(
 ) {
   const filter = parseChannelFilter(opts.channel);
   const { channel } = filter;
-  const limit = parseLogsPositiveInt(opts.lines ?? undefined, DEFAULT_LIMIT, "--lines");
+  const limit = parseLogsPositiveInt(opts.lines, DEFAULT_LIMIT, "--lines");
 
   const tail = await readConfiguredParsedLogTail({
     limit,

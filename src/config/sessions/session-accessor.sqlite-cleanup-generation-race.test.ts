@@ -15,7 +15,7 @@ import {
   readSqliteSessionGenerationWindows,
 } from "./session-accessor.sqlite-generation-copy.js";
 import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 const archiveMaterializationHook = vi.hoisted<{

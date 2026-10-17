@@ -41,9 +41,9 @@ import {
   type QueuedSessionDelivery,
 } from "../infra/session-delivery-queue.records.js";
 import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-control-plane-sentinel.js";
-import { recordUpdateRunVerification } from "../infra/update-run-ledger.js";
 import { renderUpdateRunSummary } from "../infra/update-run-notice.js";
 import { updateRunReportInputFromSentinel } from "../infra/update-run-report.js";
+import { recordUpdateRunVerificationAsync as recordUpdateRunVerification } from "../infra/update-run-write.async.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
@@ -52,7 +52,7 @@ import {
   normalizeDeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
-import { deliverQueuedGeneratedMediaAgentTurn } from "./server-restart-sentinel-agent-delivery.js";
+import { deliverQueuedGeneratedMediaCompletion } from "./server-restart-sentinel-agent-delivery.js";
 import {
   buildQueuedRestartContinuation,
   isRestartContinuationBusyPayload,
@@ -104,7 +104,7 @@ export async function deliverQueuedSessionDelivery(params: {
   params.queueContext.admission.assertCurrent();
   const queuedEntry = resolveCorrelatedSubagentDelivery(params.entry);
   if (queuedEntry.kind === "agentTurn" && queuedEntry.requesterBinding) {
-    await deliverQueuedGeneratedMediaAgentTurn({
+    await deliverQueuedGeneratedMediaCompletion({
       ...params,
       ...queuedEntry.requesterBinding,
       entry: queuedEntry,
@@ -152,8 +152,9 @@ export async function deliverQueuedSessionDelivery(params: {
   }
 
   if (
-    await deliverQueuedGeneratedMediaAgentTurn({
+    await deliverQueuedGeneratedMediaCompletion({
       entry: queuedEntry,
+      deps: params.deps,
       runtimeContextFragments: queuedEntry.runtimeContextFragments,
       canonicalKey,
       agentId,
@@ -429,7 +430,7 @@ async function loadRestartSentinelStartupTask(params: {
         !updateRun.origin.sessionKey &&
         !updateRun.origin.deliveryContext
       ) {
-        recordUpdateRunNoticeSkipped(updateRun.runId, "no delivery target", env);
+        await recordUpdateRunNoticeSkipped(updateRun.runId, "no delivery target", env);
         await clearRestartSentinelIfRevision(sentinelRevision, env);
         return { status: "ran" as const };
       }
@@ -490,7 +491,7 @@ async function loadRestartSentinelStartupTask(params: {
     });
     queueContext.admission.assertCurrent();
     if (target.kind === "none") {
-      recordUpdateRunNoticeSkipped(updateRunId, target.reason, env);
+      await recordUpdateRunNoticeSkipped(updateRunId, target.reason, env);
       // A diagnostic wake would bypass the same owner-only notice decision.
       await clearRestartSentinelIfRevision(sentinelRevision, env);
       return { status: "ran" as const };
@@ -522,7 +523,7 @@ async function loadRestartSentinelStartupTask(params: {
       }).catch((error: unknown) => ({ ok: false as const, reason: formatErrorMessage(error) }));
       internalNoticeWritten = notice.ok;
       if (notice.ok && updateRunId) {
-        recordUpdateRunVerification(updateRunId, { noticeDelivered: true }, { env });
+        await recordUpdateRunVerification(updateRunId, { noticeDelivered: true }, { env });
       }
       if (!notice.ok) {
         log.warn(
@@ -631,7 +632,7 @@ async function loadRestartSentinelStartupTask(params: {
             noticeContext,
           );
           if (delivered && updateRunId) {
-            recordUpdateRunVerification(updateRunId, { noticeDelivered: true }, { env });
+            await recordUpdateRunVerification(updateRunId, { noticeDelivered: true }, { env });
           }
         } else if (noticeQueueId && !noticeQueueCreated) {
           log.info(`${summary}: durable restart notice already owned`, {

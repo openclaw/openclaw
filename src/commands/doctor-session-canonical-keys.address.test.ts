@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadExactSessionEntryReadOnly,
   loadTranscriptEvents,
@@ -28,6 +29,7 @@ describe("Doctor stored session addresses", () => {
           agents: { entries: { main: {} } },
           session: variant === "global" ? { scope: "global", store } : { mainKey: "work", store },
         };
+        setRuntimeConfigSnapshot(cfg);
         const literal = "agent:main:main";
         const destination = variant === "global" ? "global" : "agent:main:work";
         const child = "agent:main:child";
@@ -102,6 +104,7 @@ describe("Doctor stored session addresses", () => {
         agents: { entries: { ops: {} } },
         session: { mainKey: "work", store },
       };
+      setRuntimeConfigSnapshot(cfg);
       const sessionKey = `agent:main:${suffix}`;
       insertLegacySession({
         ...scope,

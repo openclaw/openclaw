@@ -807,9 +807,11 @@ export function assertLegacyOperatorCronOwners(listing, baseline) {
       expected.agentId,
       `legacy operator cron owner unresolved or changed: ${expected.name}`,
     );
+    // Doctor may pin an ownerless legacy-roster job to its historical owner
+    // (docs/gateway/doctor/state-and-sessions.md); authored owners never move.
     assert.equal(
       after.agentId,
-      before.agentId,
+      before.agentId ?? after.agentId,
       `legacy operator cron explicit owner changed: ${expected.name}`,
     );
   }

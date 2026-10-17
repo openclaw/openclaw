@@ -28,15 +28,12 @@ export function parseTelegramOpaqueCallbackData(data?: string | null): string | 
   }
   const encoded = data.slice(TELEGRAM_OPAQUE_CALLBACK_PREFIX.length);
   const separatorIndex = encoded.indexOf(":");
-  if (separatorIndex <= 0) {
-    return null;
-  }
-  const checksum = encoded.slice(0, separatorIndex);
   const value = encoded.slice(separatorIndex + 1);
-  if (!value || checksum !== checksumTelegramOpaqueCallbackValue(value)) {
-    return null;
-  }
-  return value;
+  return separatorIndex > 0 &&
+    value &&
+    encoded.slice(0, separatorIndex) === checksumTelegramOpaqueCallbackValue(value)
+    ? value
+    : null;
 }
 
 function checksumTelegramOpaqueCallbackValue(value: string): string {

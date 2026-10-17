@@ -153,15 +153,23 @@ export class CodexNativeSubagentSubmissionOwner {
     }
   }
 
-  restore(state: ParentState, owner: ParentOwner): void {
+  async restore(state: ParentState, owner: ParentOwner): Promise<void> {
+    const custody = owner.completionCustody?.retain();
     try {
-      for (const receipt of state.submissionStore?.read() ?? []) {
-        this.capture(state, receipt, undefined, false, owner.completionCustody);
+      const receipts = (await state.submissionStore?.read()) ?? [];
+      await state.submissionStore?.assertCurrentAsync();
+      if (this.disposed || !this.isCurrent(state) || (custody && !custody.isCurrent())) {
+        return;
+      }
+      for (const receipt of receipts) {
+        this.capture(state, receipt, undefined, false, custody);
       }
     } catch (error) {
       embeddedAgentLog.warn("Cannot recover native follow-up submission receipts", {
         error: formatErrorMessage(error),
       });
+    } finally {
+      custody?.release();
     }
   }
 
@@ -282,7 +290,7 @@ export class CodexNativeSubagentSubmissionOwner {
     const foreground = state.owners.size > 0;
     const custody: SubmissionCustody = {
       completionCustody: completionCustody?.retain(),
-      receipt: Object.freeze({ ...receipt }),
+      receipt,
       owner,
       release: foreground ? this.dependencies.retain(state, receipt.childThreadId) : () => {},
       recorded: Promise.resolve(),
@@ -302,22 +310,21 @@ export class CodexNativeSubagentSubmissionOwner {
       custody.recorded = this.track(
         state,
         (async () => {
-          try {
-            if (
-              !(await state.submissionStore!.record(receipt, () =>
-                this.dependencies.assertPersistenceCurrent(state),
-              ))
-            ) {
-              throw new Error("Native submission binding changed before receipt persistence.");
-            }
-          } catch (error) {
-            embeddedAgentLog.warn(
-              "Accepted native follow-up lost restart protection; retaining local observation",
-              { error: formatErrorMessage(error) },
-            );
+          if (
+            !(await state.submissionStore!.record(receipt, () =>
+              this.dependencies.assertPersistenceCurrent(state),
+            ))
+          ) {
+            throw new Error("Native submission binding changed before receipt persistence.");
           }
         })(),
       );
+      void custody.recorded.catch((error: unknown) => {
+        embeddedAgentLog.warn(
+          "Accepted native follow-up lost restart protection; retaining local observation",
+          { error: formatErrorMessage(error) },
+        );
+      });
     }
     const observed = this.modelInputs.readObservedSubmissionTurn(
       state,
@@ -361,7 +368,7 @@ export class CodexNativeSubagentSubmissionOwner {
       }
       custody.phase = "settled";
       const settlement = (async () => {
-        await custody.recorded;
+        await custody.recorded.catch(() => {});
         try {
           if (
             (child.nativeCompletionDelivered ||
@@ -384,6 +391,36 @@ export class CodexNativeSubagentSubmissionOwner {
       })();
       void this.track(state, settlement);
     }
+  }
+
+  settleCancelled(state: ParentState, child: ChildState, assertCurrent: () => void): Promise<void> {
+    const settlement = async () => {
+      const assertAdmission = () => {
+        this.dependencies.assertPersistenceCurrent(state);
+        assertCurrent();
+      };
+      assertAdmission();
+      for (const custody of this.pending.get(state)?.values() ?? []) {
+        if (
+          codexNativeSubagentRunId(custody.receipt.childThreadId, custody.receipt.submissionId) !==
+          child.runId
+        ) {
+          continue;
+        }
+        await custody.recorded;
+        assertAdmission();
+        if (
+          state.submissionStore &&
+          !(await state.submissionStore.consume(custody.receipt, assertAdmission))
+        ) {
+          throw new Error("Cancelled native follow-up receipt was not acknowledged.");
+        }
+        // The receipt is committed; a later assignment failure must not consume it again.
+        this.finishCustody(state, custody);
+        assertAdmission();
+      }
+    };
+    return this.track(state, settlement());
   }
 
   private async reconcile(state: ParentState, custody: SubmissionCustody): Promise<void> {

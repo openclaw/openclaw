@@ -18,18 +18,18 @@ import type {
   PreparedModelRuntimeCatalogFacts,
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
+import { prepareConfiguredModelFacts } from "./prepared-model-runtime.configured-facts.js";
 import {
   assertPreparedModelRuntimeInputCurrent,
   assertPreparedModelRuntimeCandidatesCurrent,
   PreparedModelRuntimePublicationSupersededError,
 } from "./prepared-model-runtime.errors.js";
 import {
-  fingerprintPreparedRuntimeFacts,
-  prepareConfiguredModelFacts,
   prepareConfiguredRuntimeFactsBatch,
   prepareWorkspaceBuildGroup,
   type PreparedConfiguredModelRegistries,
 } from "./prepared-model-runtime.facts.js";
+import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.fingerprint.js";
 import {
   createPreparedModelRuntimeSnapshot,
   prepareFullCatalogFacts,
@@ -99,6 +99,7 @@ async function buildSnapshotBatch(
   onStage?: (stage: string) => void,
   onPrepared?: (input: PreparedModelRuntimeInput, result: PreparedModelRuntimeBuildResult) => void,
   signal?: AbortSignal,
+  providerDiscoveryTimeoutMs?: number,
 ): Promise<PreparedModelRuntimeBuildResult[]> {
   const configs = new Map<
     OpenClawConfig,
@@ -345,6 +346,8 @@ async function buildSnapshotBatch(
               agentFacts,
               pluginGeneration,
               catalogMode,
+              true,
+              { providerDiscoveryTimeoutMs },
             );
             assertPreparedModelRuntimeInputCurrent(input, candidate.isBuildCurrent);
             catalogSources.set(input, catalogSource);
@@ -471,6 +474,7 @@ export function startSerializedSnapshotBuildBatch(
     onPrepared: (input: PreparedModelRuntimeInput, result: PreparedModelRuntimeBuildResult) => void;
   },
   acquisitionSignal?: AbortSignal,
+  providerDiscoveryTimeoutMs?: number,
 ): {
   pending: Promise<PreparedModelRuntimeBuildResult[]>;
   completion: Promise<void>;
@@ -536,6 +540,7 @@ export function startSerializedSnapshotBuildBatch(
           }
         : undefined,
       signal,
+      providerDiscoveryTimeoutMs,
     );
   })();
   let abandoned = false;

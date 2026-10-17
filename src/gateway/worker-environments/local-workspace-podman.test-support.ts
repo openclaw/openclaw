@@ -7,6 +7,7 @@ import { expect, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { requireGit } from "../../agents/worktrees/git.js";
+import { updateRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { readLocalWorkspaceProjection } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 
@@ -47,8 +48,7 @@ export async function proveRequiredPodmanWorkspace(
     await import("../../agents/worktrees/service.js");
   const { captureGitHubPublicationWorkspaceSnapshot } =
     await import("../github-publication-git-transport.js");
-  let now = Date.now();
-  const service = new ManagedWorktreeService({ now: () => now });
+  const service = new ManagedWorktreeService();
   owner.worktree.repoFingerprint = (
     await service.resolveRepositoryIdentity(owner.worktree.path)
   ).fingerprint;
@@ -440,7 +440,9 @@ export async function proveRequiredPodmanWorkspace(
     expect(
       (await service.remove({ id: owner.worktree.id, reason: "live-proof-retention" })).removed,
     ).toBe(true);
-    now += SNAPSHOT_RETENTION_MS + 1;
+    await updateRegistryWorktree(process.env, owner.worktree.id, {
+      removedAt: Date.now() - SNAPSHOT_RETENTION_MS - 1,
+    });
     expect((await service.gc()).snapshotsPruned).toBe(1);
     expect(await readLocalWorkspaceProjection(owner.worktree.id)).toBeUndefined();
     await expect(fs.stat(sandbox.workspaceDir)).rejects.toMatchObject({ code: "ENOENT" });

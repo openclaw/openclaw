@@ -17,8 +17,35 @@ import {
 } from "../test-utils/talk-test-provider.js";
 import { isSecretsApplyPlan } from "./plan.js";
 import { isValidExecSecretRefId, isValidFileSecretRefId } from "./ref-contract.js";
+import { listSecretTargetRegistryEntries } from "./target-registry.js";
 
 describe("exec SecretRef id parity", () => {
+  it.each(["tools.github.app.privateKey", "agents.entries.*.tools.github.app.privateKey"])(
+    "rejects traversal exec refs on the registered App key surface %s",
+    (targetType) => {
+      const entry = listSecretTargetRegistryEntries().find(
+        (target) => target.targetType === targetType,
+      );
+      expect(entry?.includeInPlan).toBe(true);
+      const pathSegments = targetType.split(".").map((part) => (part === "*" ? "main" : part));
+      const plan = (id: string) => ({
+        version: 1,
+        protocolVersion: 1,
+        generatedAt: "2026-10-13T00:00:00.000Z",
+        generatedBy: "manual",
+        targets: [
+          {
+            type: targetType,
+            path: pathSegments.join("."),
+            pathSegments,
+            ref: { source: "exec", provider: "vault", id },
+          },
+        ],
+      });
+      expect(isSecretsApplyPlan(plan("apps/signing-key"))).toBe(true);
+      expect(isSecretsApplyPlan(plan("../apps/signing-key"))).toBe(false);
+    },
+  );
   const validateGatewaySecretRef = Compile(GatewaySecretRefSchema);
   const pluginSdkSecretInput = buildSecretInputSchema();
   const validEnvSecretRefIds = ["OPENAI_API_KEY", "A", "A_1", `A${"B".repeat(127)}`];

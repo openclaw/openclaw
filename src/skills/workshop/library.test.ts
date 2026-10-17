@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -46,6 +47,48 @@ async function readLive(name: string) {
 }
 
 describe("workshop library", () => {
+  it("reports unreadable skill files instead of returning an incomplete inventory", async () => {
+    const skillDir = path.join(resolveWorkshopSkillsDir({}, "main"), "oversized");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), Buffer.alloc(1024 * 1024 + 1, "x"));
+
+    await expect(listWorkshopSkills({}, "main")).rejects.toThrow(
+      /file exceeds limit of 1048576 bytes/,
+    );
+  });
+
+  it("skips directories without SKILL.md but still lists hand-edited broken frontmatter", async () => {
+    const skillsRoot = resolveWorkshopSkillsDir({}, "main");
+    await fs.mkdir(path.join(skillsRoot, "missing"), { recursive: true });
+    await fs.mkdir(path.join(skillsRoot, "broken"));
+    await fs.writeFile(path.join(skillsRoot, "broken", "SKILL.md"), "---\nname: [\n---\n");
+
+    expect(await listWorkshopSkills({}, "main")).toMatchObject([
+      { name: "broken", description: "", files: ["SKILL.md"] },
+    ]);
+  });
+
+  it("reuses retained changes across runs and refreshes after a workshop write", async () => {
+    const reads = vi.spyOn(stateWorker, "executeOpenClawStateWorker");
+    try {
+      expect(await listWorkshopChanges("main", { runId: "before" })).toEqual([]);
+      const count = reads.mock.calls.length;
+      expect(await listWorkshopChanges("main", { runId: "another" })).toEqual([]);
+      expect(reads.mock.calls).toHaveLength(count);
+
+      await createWorkshopSkill(ctx, { name: "deploy", content: skill("deploy", "1. Deploy.") });
+      const changes = await listWorkshopChanges("main", { runId: "run-1" });
+      expect(changes).toMatchObject([{ action: "create", skillName: "deploy" }]);
+      changes[0]!.summary = "caller mutation";
+      expect(await listWorkshopChanges("main", { beforeMs: changes[0]!.createdAtMs })).toEqual([]);
+      expect(await listWorkshopChanges("main", { runId: "run-1" })).toMatchObject([
+        { summary: "created: Deploy staging builds" },
+      ]);
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
   it("versions every mutation so restore undoes it, and undoing the undo is possible", async () => {
     await createWorkshopSkill(ctx, {
       name: "deploy",
@@ -164,6 +207,15 @@ describe("workshop library", () => {
     expect(await listWorkshopArchive({}, "main")).toEqual([]);
   });
 
+  it("rejects a patch whose old text matches overlapping places", async () => {
+    await createWorkshopSkill(ctx, { name: "deploy", content: skill("deploy", "run\nrun\nrun") });
+
+    await expect(
+      patchWorkshopSkill(ctx, { name: "deploy", oldText: "run\nrun", newText: "go" }),
+    ).rejects.toThrow(/matches 2 places/);
+    expect(await readLive("deploy")).toBe(skill("deploy", "run\nrun\nrun"));
+  });
+
   it("never lists or reads a symlinked saved version", async () => {
     await createWorkshopSkill(ctx, { name: "deploy", content: skill("deploy", "step 1") });
     const outside = path.join(state.root, "outside");
@@ -272,6 +324,33 @@ describe("workshop library", () => {
       "Learning is off.",
     );
     expect(await readLive("deploy")).toContain("step 1");
+  });
+
+  it("retains the original live copy when restore publication and rollback both fail", async () => {
+    await createWorkshopSkill(ctx, { name: "deploy", content: skill("deploy", "step 0") });
+    await patchWorkshopSkill(ctx, { name: "deploy", oldText: "step 0", newText: "step 1" });
+    const live = path.join(resolveWorkshopSkillsDir({}, "main"), "deploy");
+    let previous = "";
+    const rename = fs.rename;
+    const publishing = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (from === live) {
+        previous = String(to);
+      } else if (to === live) {
+        throw new Error(from === previous ? "rollback blocked" : "publication blocked");
+      }
+      await rename(from, to);
+    });
+    try {
+      await expect(restoreWorkshopSkill(ctx, { name: "deploy" })).rejects.toThrow(
+        "rollback blocked",
+      );
+    } finally {
+      publishing.mockRestore();
+    }
+    expect(previous).toContain(".restore-previous-");
+    expect(await fs.readFile(path.join(previous, "SKILL.md"), "utf8")).toBe(
+      skill("deploy", "step 1"),
+    );
   });
 
   it("keeps a longer legacy skill manageable while new names stay within 63 characters", async () => {

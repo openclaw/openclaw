@@ -123,140 +123,119 @@ export async function runMatrixQaE2eeCliAccountAddEnableE2eeScenario(
   }
 }
 
-export async function runMatrixQaE2eeCliEncryptionSetupScenario(
+export function runMatrixQaE2eeCliEncryptionSetupScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
-  const accountId = "cli-encryption-setup";
-  const account = await registerMatrixQaCliE2eeAccount({
-    context,
-    deviceName: "OpenClaw Matrix QA CLI Encryption Setup Owner",
-    scenarioId: "matrix-e2ee-cli-encryption-setup",
-  });
-  const cliDevice = await loginMatrixQaCliDevice(
-    context.baseUrl,
-    account,
-    "OpenClaw Matrix QA CLI Encryption Setup Device",
-    "Matrix E2EE CLI encryption setup",
-  );
-  const cli = await createMatrixQaCliE2eeSetupRuntime({
-    artifactLabel: "cli-encryption-setup",
-    context,
-    initialConfig: buildMatrixQaCliE2eeAccountConfig({
-      accountId,
-      accessToken: cliDevice.accessToken,
-      baseUrl: context.baseUrl,
-      deviceId: cliDevice.deviceId,
-      encryption: false,
-      name: "Matrix QA CLI Encryption Setup",
-      password: account.password,
-      userId: cliDevice.userId,
-    }),
-  });
-  try {
-    const { artifacts: setupArtifacts, payload: setupPayload } = await runMatrixQaSetupCliJson(
-      cli,
-      "encryption-setup",
-      ["matrix", "encryption", "setup", "--account", accountId, "--json"],
-    );
-    const setup = setupPayload as MatrixQaCliEncryptionSetupStatus;
-    assertMatrixQaCliEncryptionSetupResult(
-      setup,
-      accountId,
-      true,
-      "Matrix CLI encryption setup did not report a successful E2EE upgrade",
-    );
-    assertMatrixQaCliE2eeStatus("Matrix CLI encryption setup", setup.status);
-
-    const { artifacts: statusArtifacts, payload: statusPayload } = await runMatrixQaSetupCliJson(
-      cli,
-      "verify-status",
-      ["matrix", "verify", "status", "--account", accountId, "--json"],
-    );
-    const status = statusPayload as MatrixQaCliVerificationStatus;
-    assertMatrixQaCliE2eeStatus("Matrix CLI encryption setup status", status);
-
-    return {
-      artifacts: {
-        accountId,
-        cliDeviceId: status.deviceId ?? cliDevice.deviceId,
-        encryptionChanged: setup.encryptionChanged,
-        setupSuccess: setup.success,
-        verificationBootstrapSuccess: setup.bootstrap.success,
-      },
-      details: [
-        "Matrix CLI encryption setup upgraded an existing account and bootstrapped verification",
-        `encryption setup stdout: ${setupArtifacts.stdoutPath}`,
-        `encryption setup stderr: ${setupArtifacts.stderrPath}`,
-        `verify status stdout: ${statusArtifacts.stdoutPath}`,
-        `verify status stderr: ${statusArtifacts.stderrPath}`,
-        `cli device: ${status.deviceId ?? cliDevice.deviceId}`,
-        `cli verified by owner: ${status.verified ? "yes" : "no"}`,
-        `cli backup usable: ${isMatrixQaCliBackupUsable(status.backup) ? "yes" : "no"}`,
-      ].join("\n"),
-    };
-  } finally {
-    await cli.dispose();
-  }
+  return runMatrixQaCliEncryptionSetup(context, false);
 }
 
-export async function runMatrixQaE2eeCliEncryptionSetupIdempotentScenario(
+export function runMatrixQaE2eeCliEncryptionSetupIdempotentScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
-  const accountId = "cli-encryption-idempotent";
+  return runMatrixQaCliEncryptionSetup(context, true);
+}
+
+async function runMatrixQaCliEncryptionSetup(
+  context: MatrixQaScenarioContext,
+  idempotent: boolean,
+): Promise<MatrixQaScenarioExecution> {
+  const accountId = idempotent ? "cli-encryption-idempotent" : "cli-encryption-setup";
+  const artifactLabel = idempotent ? "cli-encryption-setup-idempotent" : "cli-encryption-setup";
+  const deviceLabel = idempotent ? "Encryption Idempotent" : "Encryption Setup";
   const account = await registerMatrixQaCliE2eeAccount({
     context,
-    deviceName: "OpenClaw Matrix QA CLI Encryption Idempotent Owner",
-    scenarioId: "matrix-e2ee-cli-encryption-setup-idempotent",
+    deviceName: `OpenClaw Matrix QA CLI ${deviceLabel} Owner`,
+    scenarioId: idempotent
+      ? "matrix-e2ee-cli-encryption-setup-idempotent"
+      : "matrix-e2ee-cli-encryption-setup",
   });
   const cliDevice = await loginMatrixQaCliDevice(
     context.baseUrl,
     account,
-    "OpenClaw Matrix QA CLI Encryption Idempotent Device",
-    "Matrix E2EE CLI idempotent setup",
+    `OpenClaw Matrix QA CLI ${deviceLabel} Device`,
+    idempotent ? "Matrix E2EE CLI idempotent setup" : "Matrix E2EE CLI encryption setup",
   );
   const cli = await createMatrixQaCliE2eeSetupRuntime({
-    artifactLabel: "cli-encryption-setup-idempotent",
+    artifactLabel,
     context,
     initialConfig: buildMatrixQaCliE2eeAccountConfig({
       accountId,
       accessToken: cliDevice.accessToken,
       baseUrl: context.baseUrl,
       deviceId: cliDevice.deviceId,
-      encryption: true,
-      name: "Matrix QA CLI Encryption Setup Idempotent",
+      encryption: idempotent,
+      name: idempotent
+        ? "Matrix QA CLI Encryption Setup Idempotent"
+        : "Matrix QA CLI Encryption Setup",
       password: account.password,
       userId: cliDevice.userId,
     }),
   });
   try {
-    const setupArgs = ["matrix", "encryption", "setup", "--account", accountId, "--json"];
-    const { artifacts: firstArtifacts, payload: firstPayload } = await runMatrixQaSetupCliJson(
-      cli,
-      "encryption-setup-first",
-      setupArgs,
-    );
-    const first = firstPayload as MatrixQaCliEncryptionSetupStatus;
-    assertMatrixQaCliEncryptionSetupResult(
-      first,
-      accountId,
-      false,
-      "Matrix CLI encryption setup was not idempotent on first run",
-    );
-    assertMatrixQaCliE2eeStatus("Matrix CLI encryption setup idempotent first run", first.status);
+    if (!idempotent) {
+      const { artifacts: setupArtifacts, payload: setupPayload } = await runMatrixQaSetupCliJson(
+        cli,
+        "encryption-setup",
+        ["matrix", "encryption", "setup", "--account", accountId, "--json"],
+      );
+      const setup = setupPayload as MatrixQaCliEncryptionSetupStatus;
+      assertMatrixQaCliEncryptionSetupResult(
+        setup,
+        accountId,
+        true,
+        "Matrix CLI encryption setup did not report a successful E2EE upgrade",
+      );
+      assertMatrixQaCliE2eeStatus("Matrix CLI encryption setup", setup.status);
 
-    const { artifacts: secondArtifacts, payload: secondPayload } = await runMatrixQaSetupCliJson(
-      cli,
-      "encryption-setup-second",
-      setupArgs,
-    );
-    const second = secondPayload as MatrixQaCliEncryptionSetupStatus;
-    assertMatrixQaCliEncryptionSetupResult(
-      second,
-      accountId,
-      false,
-      "Matrix CLI encryption setup was not idempotent on second run",
-    );
-    assertMatrixQaCliE2eeStatus("Matrix CLI encryption setup idempotent second run", second.status);
+      const { artifacts: statusArtifacts, payload: statusPayload } = await runMatrixQaSetupCliJson(
+        cli,
+        "verify-status",
+        ["matrix", "verify", "status", "--account", accountId, "--json"],
+      );
+      const status = statusPayload as MatrixQaCliVerificationStatus;
+      assertMatrixQaCliE2eeStatus("Matrix CLI encryption setup status", status);
+
+      return {
+        artifacts: {
+          accountId,
+          cliDeviceId: status.deviceId ?? cliDevice.deviceId,
+          encryptionChanged: setup.encryptionChanged,
+          setupSuccess: setup.success,
+          verificationBootstrapSuccess: setup.bootstrap.success,
+        },
+        details: [
+          "Matrix CLI encryption setup upgraded an existing account and bootstrapped verification",
+          `encryption setup stdout: ${setupArtifacts.stdoutPath}`,
+          `encryption setup stderr: ${setupArtifacts.stderrPath}`,
+          `verify status stdout: ${statusArtifacts.stdoutPath}`,
+          `verify status stderr: ${statusArtifacts.stderrPath}`,
+          `cli device: ${status.deviceId ?? cliDevice.deviceId}`,
+          `cli verified by owner: ${status.verified ? "yes" : "no"}`,
+          `cli backup usable: ${isMatrixQaCliBackupUsable(status.backup) ? "yes" : "no"}`,
+        ].join("\n"),
+      };
+    }
+    const runIdempotentSetup = async (ordinal: "first" | "second") => {
+      const { artifacts, payload } = await runMatrixQaSetupCliJson(
+        cli,
+        `encryption-setup-${ordinal}`,
+        ["matrix", "encryption", "setup", "--account", accountId, "--json"],
+      );
+      const setup = payload as MatrixQaCliEncryptionSetupStatus;
+      assertMatrixQaCliEncryptionSetupResult(
+        setup,
+        accountId,
+        false,
+        `Matrix CLI encryption setup was not idempotent on ${ordinal} run`,
+      );
+      assertMatrixQaCliE2eeStatus(
+        `Matrix CLI encryption setup idempotent ${ordinal} run`,
+        setup.status,
+      );
+      return { artifacts, setup };
+    };
+    const { artifacts: firstArtifacts, setup: first } = await runIdempotentSetup("first");
+    const { artifacts: secondArtifacts, setup: second } = await runIdempotentSetup("second");
 
     return {
       artifacts: {

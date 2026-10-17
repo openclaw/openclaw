@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureSqliteWorkerOpen } from "./sqlite-worker-broker-admission.js";
 import { createSqliteWorkerLifecycle } from "./sqlite-worker-broker-lifecycle.js";
@@ -11,6 +12,7 @@ import {
   withSqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
+import { readSqliteWorkerRequestCustody } from "./sqlite-worker-request-custody.js";
 
 const createCpuTrackedWorker = vi.hoisted(() => vi.fn());
 vi.mock("./worker-cpu.js", () => ({ createCpuTrackedWorker }));
@@ -58,175 +60,44 @@ describe("SQLite worker slots", () => {
       input: undefined,
     });
     const replyOwner = () => ({ fail: vi.fn(), finish: vi.fn(), dispatch: vi.fn() });
-    const source = { moduleUrl: options.moduleUrl.href, carrierUrl: options.carrierUrl };
-    const close = (succeeded = true) =>
-      lifecycle.closeHost({
-        inputAdmission: {
-          invalidatePreparations() {},
-          joinOpens: () =>
-            succeeded ? Promise.resolve() : Promise.reject(new Error("fixture close refused")),
-          joinPreparations: () => Promise.resolve(),
-        },
-        operations: [],
-        waiters: [],
-      });
-    return { lifecycle, close, slots, workers, options, source, replyOwner };
+    return { lifecycle, slots, workers, options, replyOwner };
   }
 
-  it("reserves ordinary capacity and joins explicit prepared-runtime cancellation", async () => {
-    const { lifecycle, slots, workers, source, replyOwner } = runtimeFixture(false);
-    const prepared = lifecycle.prepareRuntime(source, 1, replyOwner);
-    assert(prepared);
-    expect(lifecycle.prepareRuntime(source, 1, replyOwner)).toBeUndefined();
-    let released = false;
-    const releasing = prepared.release().then(() => {
-      released = true;
+  it("cancels a slot waiter while the retiring worker keeps ownership until exit", async ({
+    signal,
+  }) => {
+    const { lifecycle, slots, workers, options, replyOwner } = runtimeFixture(false);
+    const slot = lifecycle.createSlot(options, false, replyOwner);
+    const custody = slot.custody.createRequest();
+    custody.activate();
+    custody.accept();
+    let retired = false;
+    const retirement = lifecycle.retire(slot).then(() => {
+      retired = true;
     });
-    await Promise.resolve();
-    expect(released).toBe(false);
-    expect(lifecycle.prepareRuntime(source, 1, replyOwner)).toBeUndefined();
-    workers[0]?.emit("exit", 0);
-    await releasing;
-    expect(slots.size).toBe(0);
-    const replacement = lifecycle.prepareRuntime(source, 1, replyOwner);
-    assert(replacement);
-    const replacing = replacement.release();
-    workers[1]?.emit("exit", 0);
-    await replacing;
-  });
-
-  it("yields optional capacity to an accepted ephemeral opener and later opens cold", async () => {
-    const { lifecycle, close, slots, workers, options, source, replyOwner } = runtimeFixture();
-    const prepared = lifecycle.prepareRuntime(source, 1, replyOwner);
-    assert(prepared);
-    const ephemeral = await lifecycle.acquireSlot(
-      {
-        ...options,
-        target: { kind: "ephemeral", handle: "accepted", incarnation: "first" },
-      },
-      source.moduleUrl,
+    expect(readSqliteWorkerRequestCustody(custody.descriptor)).toBe(false);
+    expect(custody.dispatched).toBe(true);
+    const cancel = new AbortController();
+    const waiting = lifecycle.acquireSlot(
+      { ...options, signal: cancel.signal },
       { maxWorkers: 1, maxStores: 1 },
       replyOwner,
     );
-    expect(workers).toHaveLength(2);
-    expect(workers[0]?.terminate).toHaveBeenCalledOnce();
-    expect(ephemeral.ephemeral).toBe(true);
-    expect(ephemeral.pendingOpens).toBe(1);
-    expect(slots.size).toBe(1);
-    await expect(
-      lifecycle.rejectSlotAdmission(ephemeral, new Error("fixture open finished")),
-    ).rejects.toThrow("fixture open finished");
-    await close();
-    const opening = { ...options, runtimePreparation: prepared };
-    const cold = await lifecycle.acquireSlot(
-      opening,
-      source.moduleUrl,
-      { maxWorkers: 1, maxStores: 1 },
-      replyOwner,
-    );
-    expect(workers).toHaveLength(3);
-    expect(cold.worker).not.toBe(ephemeral.worker);
-    expect(cold.pendingOpens).toBe(1);
-    expect(slots.size).toBe(1);
-    await expect(
-      lifecycle.acquireSlot(opening, source.moduleUrl, { maxWorkers: 1, maxStores: 1 }, replyOwner),
-    ).rejects.toMatchObject({ code: "closed" });
-    await prepared.release();
-    expect(slots.has(cold)).toBe(true);
-    await expect(
-      lifecycle.rejectSlotAdmission(cold, new Error("fixture open finished")),
-    ).rejects.toThrow("fixture open finished");
-  });
-
-  it.each(
-    [
-      "before-close",
-      "second-close",
-      "failed-close",
-      "wrong-generation",
-      "wrong-module",
-      "wrong-carrier",
-    ].flatMap((failure) => [false, true].map((preempted) => ({ failure, preempted }))),
-  )(
-    "refuses and retires $failure prepared runtime custody (preempted: $preempted)",
-    async ({ failure, preempted }) => {
-      const { lifecycle, close, slots, workers, options, source, replyOwner } = runtimeFixture();
-      const prepared = lifecycle.prepareRuntime(source, 1, replyOwner);
-      assert(prepared);
-      if (preempted) {
-        const accepted = await lifecycle.acquireSlot(
-          options,
-          source.moduleUrl,
-          { maxWorkers: 1, maxStores: 1 },
-          replyOwner,
-        );
-        await expect(
-          lifecycle.rejectSlotAdmission(accepted, new Error("fixture open finished")),
-        ).rejects.toThrow("fixture open finished");
-      }
-      if (failure === "failed-close") {
-        await expect(close(false)).rejects.toThrow("SQLite worker host cleanup failed");
-      } else if (failure !== "before-close") {
-        await close();
-      }
-      if (failure === "second-close") {
-        await close();
-      }
-      const opening = {
-        ...options,
-        runtimePreparation: prepared,
-        ...(failure === "wrong-generation"
-          ? { runtimeGeneration: { resolve: (url: URL) => url, retain() {} } }
-          : {}),
-        ...(failure === "wrong-carrier" ? { carrierUrl: new URL("file:///other-carrier.js") } : {}),
-      };
-      await expect(
-        lifecycle.acquireSlot(
-          opening,
-          failure === "wrong-module" ? "file:///other.js" : source.moduleUrl,
-          { maxWorkers: 1, maxStores: 1 },
-          replyOwner,
-        ),
-      ).rejects.toMatchObject({ code: "closed" });
-      expect(slots.size).toBe(0);
-      expect(workers[0]?.terminate).toHaveBeenCalledOnce();
-    },
-  );
-
-  it("consumes captured preparation once without transferring another broker's custody", async () => {
-    const { lifecycle, close, slots, options, source, replyOwner } = runtimeFixture();
-    const prepared = lifecycle.prepareRuntime(source, 1, replyOwner);
-    assert(prepared);
-    await close();
-    const foreign = runtimeFixture().lifecycle;
-    const opening = captureSqliteWorkerOpen(
-      {
-        moduleUrl: options.moduleUrl,
-        databasePath: options.databasePath,
-        input: undefined,
-      },
-      undefined,
-      undefined,
-      { runtimePreparation: prepared },
-    );
-    await expect(
-      foreign.acquireSlot(opening, source.moduleUrl, { maxWorkers: 1, maxStores: 1 }, replyOwner),
-    ).rejects.toMatchObject({ code: "closed" });
-    const adopted = await lifecycle.acquireSlot(
-      opening,
-      source.moduleUrl,
-      { maxWorkers: 1, maxStores: 1 },
-      replyOwner,
-    );
-    expect(adopted.pendingOpens).toBe(1);
-    await expect(
-      lifecycle.acquireSlot(opening, source.moduleUrl, { maxWorkers: 1, maxStores: 1 }, replyOwner),
-    ).rejects.toMatchObject({ code: "closed" });
-    await prepared.release();
-    expect(slots.has(adopted)).toBe(true);
-    await expect(
-      lifecycle.rejectSlotAdmission(adopted, new Error("opening revoked")),
-    ).rejects.toThrow("opening revoked");
+    const reason = new Error("opening deadline expired while previous worker retires");
+    const rejected = expect(waiting).rejects.toBe(reason);
+    cancel.abort(reason);
+    try {
+      await withinTest(rejected, signal);
+      expect(retired).toBe(false);
+      expect(workers).toHaveLength(1);
+      expect(workers[0]?.terminate).toHaveBeenCalledTimes(1);
+    } finally {
+      workers[0]?.emit("exit", 0);
+      await retirement;
+      await Promise.allSettled([waiting]);
+    }
+    expect(retired).toBe(true);
+    expect(workers).toHaveLength(1);
     expect(slots.size).toBe(0);
   });
 
@@ -393,17 +264,26 @@ describe("SQLite worker slots", () => {
       );
       const nativeStopped = createDeferredCore();
       const markNativeStopped = vi.fn(nativeStopped.resolve);
+      const custody = slot.custody.createRequest();
+      custody.activate();
+      custody.accept();
+      custody.post();
       const actor: Actor = {
         id: 1,
         key: "fixture",
         databasePath: "/state/openclaw.sqlite",
+        stateAccess: {
+          canonicalPath: "/state/openclaw.sqlite",
+          assertAccessAllowed() {},
+          assertReadAllowed() {},
+        },
         pathReferences: new Map(),
         moduleUrl: "file:///openclaw/dist/device-auth-store.sqlite.js",
         inputHash: "fixture",
         slot,
         references: 0,
         opened: Promise.resolve(),
-        openDispatch: { dispatched: true },
+        openDispatch: { custody },
         initialized: true,
         backendClosed: false,
         nativeStopped: nativeStopped.promise,

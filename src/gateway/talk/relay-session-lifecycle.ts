@@ -1,4 +1,5 @@
-import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+const MAX_RELAY_SESSIONS_PER_CONN = 2;
+const MAX_RELAY_SESSIONS_GLOBAL = 64;
 
 type TalkRelayLifecycleSession = {
   connId: string;
@@ -9,24 +10,28 @@ type CloseTalkRelaySession<TSession extends TalkRelayLifecycleSession> = (
   session: TSession,
 ) => void;
 
-function isExpiredTalkRelaySession(
-  session: TalkRelayLifecycleSession,
-  validNowMs: number,
-): boolean {
-  const expiresAtMs = asDateTimestampMs(session.expiresAtMs);
-  return expiresAtMs === undefined || validNowMs > expiresAtMs;
+export function assertTalkRelaySessionCapacity(
+  sessions: readonly Pick<TalkRelayLifecycleSession, "connId">[],
+  connId: string,
+  label: "realtime relay" | "transcription Talk",
+): void {
+  if (sessions.length >= MAX_RELAY_SESSIONS_GLOBAL) {
+    throw new Error(`Too many active ${label} sessions`);
+  }
+  if (
+    sessions.filter((session) => session.connId === connId).length >= MAX_RELAY_SESSIONS_PER_CONN
+  ) {
+    throw new Error(`Too many active ${label} sessions for this connection`);
+  }
 }
 
 export function closeExpiredTalkRelaySessions<TSession extends TalkRelayLifecycleSession>(params: {
   sessions: Iterable<TSession>;
   closeSession: CloseTalkRelaySession<TSession>;
 }): void {
-  const validNowMs = asDateTimestampMs(Date.now());
-  if (validNowMs === undefined) {
-    return;
-  }
+  const now = Date.now();
   for (const session of params.sessions) {
-    if (isExpiredTalkRelaySession(session, validNowMs)) {
+    if (now > session.expiresAtMs) {
       params.closeSession(session);
     }
   }
@@ -75,8 +80,7 @@ export function requireActiveTalkRelaySession<TSession extends TalkRelayLifecycl
   if (!session || session.connId !== params.connId) {
     throw new Error(params.unknownSessionMessage);
   }
-  const nowMs = asDateTimestampMs(Date.now());
-  if (nowMs === undefined || isExpiredTalkRelaySession(session, nowMs)) {
+  if (Date.now() > session.expiresAtMs) {
     params.closeSession(session);
     throw new Error(params.unknownSessionMessage);
   }

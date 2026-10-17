@@ -106,7 +106,7 @@ type FirecrawlScrapeParams = {
   signal?: AbortSignal;
 };
 
-export function assertFirecrawlScrapeTargetAllowed(url: string): void {
+function assertFirecrawlScrapeTargetAllowed(url: string): void {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -183,6 +183,14 @@ async function resolveEndpoint(
   return { url: url.toString(), mode };
 }
 
+function readFirecrawlErrorDetail(payload: Record<string, unknown>, fallback: string): string {
+  return typeof payload.error === "string"
+    ? payload.error
+    : typeof payload.message === "string"
+      ? payload.message
+      : fallback;
+}
+
 async function postFirecrawlJson<T>(
   params: FirecrawlResolvedEndpoint & {
     timeoutSeconds: number;
@@ -224,12 +232,7 @@ async function postFirecrawlJson<T>(
           // Non-JSON errors keep their bounded text body.
         }
         if (payload) {
-          detail =
-            typeof payload.error === "string"
-              ? payload.error
-              : typeof payload.message === "string"
-                ? payload.message
-                : detail;
+          detail = readFirecrawlErrorDetail(payload, detail);
         } else if (errorBody.text) {
           detail = errorBody.text;
         }
@@ -363,14 +366,10 @@ export async function runFirecrawlSearch(
   const count = resolveIntegerOption(params.count, DEFAULT_SEARCH_COUNT, { min: 1, max: 100 });
   const timeoutSeconds = resolveFirecrawlSearchTimeoutSeconds(params.timeoutSeconds);
   const scrapeResults = params.scrapeResults === true;
-  const sources = Array.isArray(params.sources) ? params.sources.filter(Boolean) : [];
-  const categories = Array.isArray(params.categories) ? params.categories.filter(Boolean) : [];
-  const includeDomains = Array.isArray(params.includeDomains)
-    ? params.includeDomains.filter(Boolean)
-    : [];
-  const excludeDomains = Array.isArray(params.excludeDomains)
-    ? params.excludeDomains.filter(Boolean)
-    : [];
+  const sources = params.sources?.filter(Boolean) ?? [];
+  const categories = params.categories?.filter(Boolean) ?? [];
+  const includeDomains = params.includeDomains?.filter(Boolean) ?? [];
+  const excludeDomains = params.excludeDomains?.filter(Boolean) ?? [];
   if (includeDomains.length > 0 && excludeDomains.length > 0) {
     throw new Error("Firecrawl search accepts includeDomains or excludeDomains, not both.");
   }
@@ -435,12 +434,7 @@ export async function runFirecrawlSearch(
         "Firecrawl Search API error",
       );
       if (payloadValue.success === false) {
-        const error =
-          typeof payloadValue.error === "string"
-            ? payloadValue.error
-            : typeof payloadValue.message === "string"
-              ? payloadValue.message
-              : "unknown error";
+        const error = readFirecrawlErrorDetail(payloadValue, "unknown error");
         const safeError = wrapWebContent(
           truncateSanitizedExternalContent(error, 1_000).text,
           "web_search",
@@ -603,12 +597,7 @@ export async function runFirecrawlScrape(params: FirecrawlScrapeParams) {
         maxBytes: FIRECRAWL_SCRAPE_RESPONSE_MAX_BYTES,
       });
       if (data.success === false) {
-        const detail =
-          typeof data.error === "string"
-            ? data.error
-            : typeof data.message === "string"
-              ? data.message
-              : response.statusText;
+        const detail = readFirecrawlErrorDetail(data, response.statusText);
         throw new Error(
           `Firecrawl fetch failed (${response.status}): ${wrapWebContent(
             truncateSanitizedExternalContent(detail, FIRECRAWL_SCRAPE_METADATA_MAX_CHARS).text,
@@ -628,7 +617,6 @@ export async function runFirecrawlScrape(params: FirecrawlScrapeParams) {
 }
 
 export const testing = {
-  assertFirecrawlScrapeTargetAllowed,
   parseFirecrawlScrapePayload,
   resolveEndpoint,
   resolveSearchItems,

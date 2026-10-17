@@ -175,7 +175,7 @@ async function waitForPersistenceReceipt(
   requestedTimeoutMs: number | undefined,
 ): Promise<void> {
   const timeoutMs =
-    typeof requestedTimeoutMs === "number" &&
+    requestedTimeoutMs !== undefined &&
     Number.isFinite(requestedTimeoutMs) &&
     requestedTimeoutMs > 0
       ? requestedTimeoutMs

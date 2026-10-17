@@ -29,7 +29,7 @@ export type RegisterSubagentRunParams = {
   runId: string;
   requesterTurnRunId?: string;
   childSessionKey: string;
-  childAgentId?: string;
+  childAgentId: string;
   sessionEntry?: SubagentRunRecord["childSessionIdentity"];
   controllerSessionKey?: string;
   requesterSessionKey: string;
@@ -38,7 +38,6 @@ export type RegisterSubagentRunParams = {
   requesterDisplayKey: string;
   task: string;
   taskName?: string;
-  agentId?: string;
   requesterAgentId?: string;
   cleanup: "delete" | "keep";
   label?: string;
@@ -71,6 +70,7 @@ export function createSubagentRegistrationRecord(
     now: number;
     generation: number;
     lifecycleGeneration: string;
+    childAgentId: string;
     requesterAgentId?: string;
     requesterOrigin?: SubagentRunRecord["requesterOrigin"];
     swarmWaitOwnerSessionKeys?: string[];
@@ -87,6 +87,7 @@ export function createSubagentRegistrationRecord(
     taskRunId: runId,
     ...(requesterTurnRunId ? { requesterTurnRunId } : {}),
     childSessionKey: registerParams.childSessionKey.trim(),
+    childAgentId: prepared.childAgentId,
     childSessionIdentity: registerParams.sessionEntry
       ? {
           sessionId: registerParams.sessionEntry.sessionId,

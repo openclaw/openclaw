@@ -85,22 +85,18 @@ export async function executeBrowserLifecycleAction({
   sandboxBridgeUrl?: string;
   signal?: AbortSignal;
 }): Promise<AgentToolResult<unknown>> {
-  const readBrowserStatus = async () =>
-    await browserStatus(proxyRequest ?? baseUrl, {
-      profile,
-      timeoutMs: toolTimeoutMs,
-      signal,
-    });
   switch (action) {
     case "doctor":
       return jsonResult(await browserDoctor(proxyRequest ?? baseUrl, { profile, signal }));
     case "status":
-      return jsonResult(await readBrowserStatus());
     case "start":
     case "stop": {
-      const updateBrowser = action === "start" ? browserStart : browserStop;
-      await updateBrowser(proxyRequest ?? baseUrl, { profile, timeoutMs: toolTimeoutMs, signal });
-      return jsonResult(await readBrowserStatus());
+      const options = { profile, timeoutMs: toolTimeoutMs, signal };
+      if (action !== "status") {
+        const updateBrowser = action === "start" ? browserStart : browserStop;
+        await updateBrowser(proxyRequest ?? baseUrl, options);
+      }
+      return jsonResult(await browserStatus(proxyRequest ?? baseUrl, options));
     }
     case "profiles": {
       // Importable system profiles are host-local (import runs on the host),

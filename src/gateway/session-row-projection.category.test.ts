@@ -202,8 +202,12 @@ it("reconciles more category rows than exact admission permits and survives arch
       expect(projection.capture(oldest)?.materialized).toBeUndefined();
       expect(projection.sharingTargetState(oldest)).toEqual({ status: "pending" });
       expect(() => projection.selectEntries({ key: oldest.key })).toThrow(SessionRowFactsPending);
+      expect(() => projection.selectEntries({ key: oldest.key }, true)).toThrow(
+        SessionRowFactsPending,
+      );
       await projection.prepareMembership();
       expect(projection.needsMembershipPreparation()).toBe(false);
+      expect(projection.selectEntries({ key: oldest.key }, true)).toHaveLength(1);
       expect(admitted.length).toBeGreaterThan(0);
       expect(admitted.every((keys) => keys.length <= MAX_SESSION_ROW_FACTS_KEYS)).toBe(true);
       expect(reads.every((keys) => keys.length <= MAX_SESSION_ROW_FACTS_KEYS)).toBe(true);

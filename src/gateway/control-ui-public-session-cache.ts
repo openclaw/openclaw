@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getSecretRedactionRegistryRevision } from "../logging/secret-redaction-registry.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
@@ -8,7 +7,7 @@ const MAX_ENTRIES = 128;
 const MAX_BYTES = 16 * 1024 * 1024;
 
 export type PublicSessionRepresentation = {
-  readonly body: string;
+  readonly body: string | Buffer;
   readonly etag: string;
   isCurrent(): boolean;
 };
@@ -17,7 +16,6 @@ type Entry = {
   sessionKey: string;
   config: OpenClawConfig;
   current: boolean;
-  redactionRevision: number;
   bytes: number;
   representation?: PublicSessionRepresentation;
 };
@@ -53,10 +51,7 @@ export function createPublicSessionRepresentationCache() {
       if (!active || !entry) {
         return undefined;
       }
-      if (
-        entry.config !== config ||
-        entry.redactionRevision !== getSecretRedactionRegistryRevision()
-      ) {
+      if (entry.config !== config) {
         remove(key, entry);
         return undefined;
       }
@@ -83,16 +78,14 @@ export function createPublicSessionRepresentationCache() {
         config,
         current: active,
         bytes: 0,
-        redactionRevision: getSecretRedactionRegistryRevision(),
       };
-      const isCurrent = () =>
-        active && entry.current && entry.redactionRevision === getSecretRedactionRegistryRevision();
+      const isCurrent = () => active && entry.current;
       if (active) {
         entries.set(key, entry);
       }
       return {
         isCurrent,
-        complete(body: string): PublicSessionRepresentation | undefined {
+        complete(body: string | Buffer): PublicSessionRepresentation | undefined {
           if (!isCurrent()) {
             return undefined;
           }
@@ -109,6 +102,9 @@ export function createPublicSessionRepresentationCache() {
             remove(key, entry);
             return representation;
           }
+          // Completion, not build admission, makes this representation most recently used.
+          entries.delete(key);
+          entries.set(key, entry);
           for (const [oldestKey, oldest] of entries) {
             if (bytes + size <= MAX_BYTES) {
               break;

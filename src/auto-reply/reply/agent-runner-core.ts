@@ -34,7 +34,6 @@ import {
 } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type {
   ReplyAgentTurnContext,
@@ -226,9 +225,11 @@ export async function resolveTerminalReplyDelivery(params: {
     minimumAssistantMessageIndex,
     (error) => logVerbose(`reply delivery observation failed; retaining custody: ${String(error)}`),
   );
-  if (sourceDelivery === "delivered" || params.sourceReplyDeliveryState !== undefined) {
+  if (sourceDelivery === "delivered") {
     return sourceDelivery;
   }
+  // Runtime facts can miss host-owned block/direct sends. Their terminal
+  // receipts still confirm delivery or retain custody before recovery.
   let pending =
     sourceDelivery === "pending" ||
     blockReplyPipeline?.hasRetryBlockedTerminalDelivery?.(minimumAssistantMessageIndex) === true;
@@ -332,19 +333,13 @@ export async function refreshSessionEntryFromStore(params: {
   }
 }
 
-export function resolveAdmittedRunSessionFile(params: {
-  sessionFile?: string;
-  sessionKey?: string;
-}): string | undefined {
-  return normalizeOptionalString(params.sessionKey) ?? params.sessionFile;
-}
-
 export async function handleReplyAgentRunError(
   error: unknown,
   context: {
     resolveVisibleReplyDelivery: () => Promise<boolean>;
     isHeartbeat: boolean;
     replyExpectation: ReplyExpectation;
+    userTurnAccepted?: boolean;
     isRestartRecoveryArmed: () => Promise<boolean>;
     replyOperation: ReplyOperation;
     resolvedVerboseLevel: VerboseLevel;
@@ -364,13 +359,13 @@ export async function handleReplyAgentRunError(
   } = context;
 
   if (isReplyOperationSuperseded(replyOperation)) {
-    return { text: SILENT_REPLY_TOKEN };
+    return {};
   }
   if (
     replyOperation.result?.kind === "aborted" &&
     replyOperation.result.code === "aborted_by_user"
   ) {
-    return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
+    return returnWithQueuedFollowupDrain({});
   }
   if (
     replyOperation.result?.kind === "aborted" &&
@@ -381,7 +376,7 @@ export async function handleReplyAgentRunError(
       isReplyOperationSuperseded(replyOperation) ||
       resolveReplyOperationAbortReason(replyOperation) === "user"
     ) {
-      return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
+      return returnWithQueuedFollowupDrain({});
     }
     return returnWithQueuedFollowupDrain(
       markReplyPayloadForSourceSuppressionDelivery({
@@ -418,7 +413,11 @@ export async function handleReplyAgentRunError(
     return returnWithQueuedFollowupDrain(knownFailurePayload);
   }
   const visibleReplyDelivered = await resolveVisibleReplyDelivery();
-  if (!isHeartbeat && visibleReplyDelivered && !replyOperation.abortSignal.aborted) {
+  if (
+    !isHeartbeat &&
+    (visibleReplyDelivered || context.userTurnAccepted) &&
+    !replyOperation.abortSignal.aborted
+  ) {
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(
       buildTerminalAgentRunFailureReplyPayload({ replyExpectation, visibleReplyDelivered }),
@@ -494,7 +493,7 @@ export type RunReplyAgentParams = ReplyAgentTurnContext & {
   shouldFollowup: boolean;
   hasQueuedFollowups?: boolean;
   isActive: boolean;
-  isRunActive?: () => boolean;
+  isRunActive?: () => boolean | Promise<boolean>;
   typing: TypingController;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;

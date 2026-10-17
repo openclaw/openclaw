@@ -2,18 +2,28 @@
 // the already-parallel main package graph.
 import type { UserConfig } from "tsdown";
 import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration-boundary.mts";
+import { cacheTsdownRuntimeConfigs } from "./scripts/lib/tsdown-runtime-cache.mts";
 
 const externalDependencies = [
   "@anthropic-ai/sdk",
   "@google/genai",
-  "@mistralai/mistralai",
+  "@opentelemetry/api",
+  "@opentelemetry/exporter-trace-otlp-http",
+  "@opentelemetry/resources",
+  "@opentelemetry/sdk-trace-base",
+  "@opentelemetry/semantic-conventions",
   "openai",
   "typebox",
+  "zod",
+  "zod-to-json-schema",
 ] as const;
 
 const config = {
   clean: true,
-  dts: process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD !== "1",
+  dts:
+    process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1"
+      ? false
+      : { tsconfig: "tsconfig.packages.json" },
   hooks: createDeclarationBoundaryHooks(),
   entry: {
     index: "packages/ai/src/index.ts",
@@ -38,9 +48,12 @@ const config = {
   env: { NODE_ENV: "production" },
   format: "esm",
   outDir: "packages/ai/dist",
+  copy: [{ from: "node_modules/@mistralai/mistralai/LICENSE", rename: "mistral.LICENSE" }],
   platform: "node",
   target: "node22",
   deps: {
+    // Ship the chat client's reachable code, not the SDK's full API/source tree.
+    alwaysBundle: [/^@mistralai\/mistralai(?:\/|$)/u],
     neverBundle(id) {
       return externalDependencies.some(
         (dependency) => id === dependency || id.startsWith(`${dependency}/`),
@@ -49,4 +62,4 @@ const config = {
   },
 } satisfies UserConfig;
 
-export default config;
+export default cacheTsdownRuntimeConfigs([config])[0]!;

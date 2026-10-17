@@ -17,7 +17,7 @@ import {
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scanRoots = ["src", "extensions", "ui"] as const;
-const sourceExtensions = [".ts"] as const;
+const sourceExtensions = [".ts", ".tsx"] as const;
 const ignoredPathPartPattern =
   /(^|\/)(node_modules|dist|build|coverage|\.artifacts|\.git|assets)(\/|$)/;
 

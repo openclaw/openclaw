@@ -1,8 +1,13 @@
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { resolveConfigPath } from "../../config/paths.js";
+import { resolveIdentityPathViaExistingAncestorSync as canonicalPath } from "../../infra/boundary-path.js";
+import { readGatewayLockProcessCmdline as readCmdline } from "../../infra/gateway-lock-process.js";
+import { readLockPayload, resolveGatewayLockPaths as lockPaths } from "../../infra/gateway-lock.js";
+import { classifyOpenClawArgv as classify } from "../../infra/gateway-process-argv.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
+import { isPidAlive } from "../../shared/pid-alive.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import {
   captureTargetDatabaseSchemaContext,
@@ -19,7 +24,6 @@ import {
 import {
   captureOwnedManagedUpdatePreflightContext,
   resolveOwnedManagedUpdatePreflightEnv,
-  revalidateUpdateDatabaseContext,
 } from "./update-command-managed-context.js";
 import { collectServiceInspectionFailureFacts } from "./update-command-result.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
@@ -97,6 +101,25 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
             collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict),
         },
       );
+    }
+    if (
+      params.updateInstallKind === "package" &&
+      inspected.serviceUpdateVerdict?.kind === "unavailable"
+    ) {
+      const owner = await readLockPayload(lockPaths(process.env).ownerLockPath);
+      const live = owner && isPidAlive(owner.pid) && (owner.role ?? "gateway") === "gateway";
+      const argv = live ? readCmdline(owner.pid, process.platform, params.timeoutMs) : null;
+      const entry = classify(argv ?? [], { requirePackageIdentity: true, pid: owner?.pid });
+      if (
+        live &&
+        ((process.platform === "win32" && (!argv || entry.kind === "unclassified")) ||
+          (entry.kind === "openclaw" &&
+            entry.packageIdentity &&
+            canonicalPath(entry.packageIdentity.root) === canonicalPath(params.roots[0] ?? root)))
+      ) {
+        const failure = createUpdatePreflightFailure("gateway-stop-unverified");
+        throw new UpdatePreMutationError("gateway-stop-unverified", failure.message, failure);
+      }
     }
     if (
       foreground &&
@@ -177,7 +200,7 @@ export async function inspectUpdateDatabaseContexts(
   });
 }
 
-/** Recheck the admitted service and stores together before mutable update work. */
+/** Check target schema support; native service effects validate their own authority. */
 export async function revalidateUpdateDatabaseContexts(
   params: Omit<Parameters<typeof inspectUpdateDatabaseContexts>[0], "roots" | "expectedServices">,
   admission: Awaited<ReturnType<typeof inspectUpdateDatabaseContexts>> | undefined,
@@ -189,13 +212,6 @@ export async function revalidateUpdateDatabaseContexts(
       "Database admission was not inspected.",
     );
   }
-  await inspectUpdateManagedServices({
-    ...params,
-    roots: [...admission.services.keys()],
-    expectedServices: admission.services,
-    expectedForeground: admission.foreground,
-  });
-  admission.contexts = await Promise.all(admission.contexts.map(revalidateUpdateDatabaseContext));
   const installedContexts = params.candidateAdmissionChecks?.includes("database-schema")
     ? admission.contexts.filter((context) => !isCandidateAdmissionContextCovered(context.env))
     : admission.contexts;

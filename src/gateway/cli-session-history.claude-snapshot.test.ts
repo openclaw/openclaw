@@ -5,6 +5,8 @@ import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { readClaudeCliFallbackSeed } from "./cli-session-history.claude.js";
 import {
   readClaudeCliSessionMessagesAsync,
   createClaudeTextHistoryLines,
@@ -17,6 +19,36 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function readRecord(value: unknown): Record<string, unknown> {
   return requireGatewayRecord(value, "record");
 }
+
+it("imports and seeds history only from the selected Claude config root", async () => {
+  await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+    const configDir = path.join(homeDir, "selected-claude");
+    const projectDir = path.join(configDir, "projects", "configured-workspace");
+    const selectedFile = path.join(projectDir, path.basename(filePath));
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(
+      selectedFile,
+      createClaudeTextHistoryLines([
+        { role: "assistant", uuid: "selected-account", content: "Selected account answer" },
+      ]),
+    );
+    await withEnvAsync({ CLAUDE_CONFIG_DIR: configDir }, async () => {
+      expect(await readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId })).toMatchObject([
+        { role: "assistant", content: "Selected account answer" },
+      ]);
+      expect(await readClaudeCliFallbackSeed({ cliSessionId: sessionId })).toMatchObject({
+        recentTurns: [{ role: "assistant", content: "Selected account answer" }],
+      });
+      // Explicit offline homes remain isolated from the running Gateway's account.
+      expect(
+        await readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId, homeDir }),
+      ).toHaveLength(3);
+      await fs.rm(selectedFile);
+      expect(await readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId })).toEqual([]);
+      expect(await readClaudeCliFallbackSeed({ cliSessionId: sessionId })).toBeUndefined();
+    });
+  });
+});
 
 it("reads changed Claude sources and preserves discovery precedence", async () => {
   await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
@@ -115,7 +147,7 @@ it("projects oversized Claude messages off-thread using one worker per snapshot"
   const homeDir = tempDirs.make("openclaw-claude-snapshot-");
   const sessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
   const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
-  const record = (uuid: string, content: string) =>
+  const record = (uuid: string, content: unknown) =>
     JSON.stringify({
       type: "user",
       uuid,
@@ -130,7 +162,9 @@ it("projects oversized Claude messages off-thread using one worker per snapshot"
       record("oversized-user-0", oversized),
       "!".repeat(2 * 1024 * 1024),
       record("oversized-user-1", oversized),
-      record("oversized-user-2", oversized),
+      record("oversized-tool-result", [
+        { type: "tool_result", tool_use_id: "tool-1", content: oversized },
+      ]),
       record("visible-after-oversized", "visible"),
     ].join("\n"),
     "utf8",
@@ -143,12 +177,23 @@ it("projects oversized Claude messages off-thread using one worker per snapshot"
     const messages = await readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId, homeDir });
 
     expect(messages).toHaveLength(4);
-    for (let index = 0; index < 3; index++) {
+    for (let index = 0; index < 2; index++) {
       expect(messages[index]).toMatchObject({
         __openclaw: { externalId: `oversized-user-${index}` },
         content: expect.stringContaining("exceeded 1 MiB"),
       });
     }
+    // A tool result must keep its shape, or the placeholder renders as a user turn.
+    expect(messages[2]).toMatchObject({
+      __openclaw: { externalId: "oversized-tool-result" },
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "tool-1",
+          content: expect.stringContaining("exceeded 1 MiB"),
+        },
+      ],
+    });
     expect(messages[3]).toMatchObject({
       __openclaw: { externalId: "visible-after-oversized" },
       content: "visible",

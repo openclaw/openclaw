@@ -94,14 +94,8 @@ export async function serveControlUiSessionEntry(
         })
       : null;
   if (!selected || !projection || !requestAuth.hasCurrentClientAuthority()) {
-    if (probe) {
-      res.statusCode = 403;
-      res.end();
-    } else {
-      res.statusCode = 303;
-      res.setHeader("Location", path);
-      res.end();
-    }
+    res.statusCode = 403;
+    res.end(probe ? undefined : "Session unavailable. Reload the conversation or log in again.");
     return true;
   }
   const isCurrent = () => requestAuth.hasCurrentClientAuthority() && selected.isCurrent();
@@ -109,6 +103,7 @@ export async function serveControlUiSessionEntry(
     res.statusCode = isCurrent() ? 204 : 403;
     res.end();
   } else {
+    res.setHeader("X-OpenClaw-Session-Entry", "1");
     await params.serveApp(path, isCurrent);
   }
   return true;

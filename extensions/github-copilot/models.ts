@@ -62,6 +62,8 @@ export function resolveCopilotForwardCompatModel(
     input: staticOverride?.input ?? ["text", "image"],
     cost: staticOverride?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: staticOverride?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+    // Only the unknown-model estimate is replaceable; curated static sizing stays authoritative.
+    ...(staticOverride?.contextWindow === undefined ? { contextWindowSource: "synthetic" } : {}),
     ...(staticOverride?.contextTokens !== undefined
       ? { contextTokens: staticOverride.contextTokens }
       : {}),
@@ -84,6 +86,7 @@ type CopilotApiModelEntry = {
   policy?: {
     state?: string;
   };
+  supported_endpoints?: unknown;
   capabilities?: {
     type?: string;
     limits?: {
@@ -151,8 +154,8 @@ function compareCopilotStarterCandidates(
     return categoryDelta;
   }
   const contextDelta =
-    (right.contextWindow ?? DEFAULT_CONTEXT_WINDOW) -
-    (left.contextWindow ?? DEFAULT_CONTEXT_WINDOW);
+    (right.contextWindow ?? Math.max(right.contextTokens ?? 0, DEFAULT_CONTEXT_WINDOW)) -
+    (left.contextWindow ?? Math.max(left.contextTokens ?? 0, DEFAULT_CONTEXT_WINDOW));
   if (contextDelta !== 0) {
     return contextDelta;
   }
@@ -181,14 +184,37 @@ type CopilotCatalogModel = Omit<ModelDefinitionConfig, "input"> & {
   input: ProviderRuntimeModel["input"];
 };
 
-function resolveCopilotApiForVendor(
-  vendor: string | undefined,
-  modelId: string,
-): "anthropic-messages" | "openai-completions" | "openai-responses" {
-  if (vendor && vendor.toLowerCase() === "anthropic") {
-    return "anthropic-messages";
-  }
-  return resolveCopilotTransportApi(modelId);
+const COPILOT_TRANSPORT_ENDPOINTS = {
+  "anthropic-messages": "/messages",
+  "openai-completions": "/chat/completions",
+  "openai-responses": "/responses",
+} as const;
+
+function resolveCopilotApi(
+  entry: CopilotApiModelEntry,
+): ReturnType<typeof resolveCopilotTransportApi> {
+  const preferred =
+    entry.vendor?.toLowerCase() === "anthropic"
+      ? "anthropic-messages"
+      : resolveCopilotTransportApi(entry.id ?? "");
+  const endpoints = new Set(
+    Array.isArray(entry.supported_endpoints)
+      ? entry.supported_endpoints
+          .filter((endpoint): endpoint is string => typeof endpoint === "string")
+          .map((endpoint) =>
+            endpoint
+              .trim()
+              .replace(/^\/v1(?=\/)/, "")
+              .replace(/\/+$/, ""),
+          )
+      : [],
+  );
+  // Account discovery owns supported transports; naming is only a preference or missing-data fallback.
+  return (
+    ([preferred, "openai-responses", "openai-completions", "anthropic-messages"] as const).find(
+      (api) => endpoints.has(COPILOT_TRANSPORT_ENDPOINTS[api]),
+    ) ?? preferred
+  );
 }
 
 function mergeCopilotCompat(
@@ -236,13 +262,27 @@ function mapCopilotApiModelToDefinition(
   const supportsVision = supports?.vision === true;
   const input: CopilotCatalogModel["input"] = supportsVision ? ["text", "image"] : ["text"];
 
-  const contextWindow =
-    asPositiveSafeInteger(limits?.max_context_window_tokens) ?? DEFAULT_CONTEXT_WINDOW;
+  const nativeContextWindow = asPositiveSafeInteger(limits?.max_context_window_tokens);
+  // Catalogs retain provider facts; runtime construction supplies an estimate for omissions.
   const contextTokens = asPositiveSafeInteger(limits?.max_prompt_tokens);
   const maxTokens = asPositiveSafeInteger(limits?.max_output_tokens) ?? DEFAULT_MAX_TOKENS;
-  const compat = mergeCopilotCompat(resolveCopilotModelCompat(id), supports?.reasoning_effort);
-  const api = resolveCopilotApiForVendor(entry.vendor, id);
-  const thinkingLevelMap = resolveCopilotThinkingLevelMap(id, compat, api);
+  const api = resolveCopilotApi(entry);
+  const compat = mergeCopilotCompat(resolveCopilotModelCompat(id, api), supports?.reasoning_effort);
+  // Copilot lists effort levels instead of Anthropic's capability tree. Only
+  // adaptive-thinking Claude models offer xhigh, so a listed Claude id that
+  // OpenClaw does not know yet still gets adaptive thinking, not manual budgets.
+  const efforts = compat?.supportedReasoningEfforts;
+  const params =
+    api === "anthropic-messages" && efforts?.includes("xhigh")
+      ? {
+          claudeCapabilities: {
+            adaptiveThinking: true,
+            xhighEffort: true,
+            maxEffort: efforts.includes("max"),
+          },
+        }
+      : undefined;
+  const thinkingLevelMap = resolveCopilotThinkingLevelMap(id, compat, api, params);
 
   const definition: CopilotCatalogModel = {
     id,
@@ -251,11 +291,12 @@ function mapCopilotApiModelToDefinition(
     reasoning,
     input,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow,
+    ...(nativeContextWindow !== undefined ? { contextWindow: nativeContextWindow } : {}),
     ...(contextTokens !== undefined ? { contextTokens } : {}),
     maxTokens,
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     ...(compat ? { compat } : {}),
+    ...(params ? { params } : {}),
   };
   copilotModelSelectionMetadata.set(definition, {
     category: normalizeOptionalLowercaseString(entry.model_picker_category),

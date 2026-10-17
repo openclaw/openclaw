@@ -161,7 +161,6 @@ describe("Codex app-server attempt context", () => {
 
   it.each([
     { name: "deferred native tools", enabled: true, lightweight: false },
-    { name: "filtered native tools", enabled: false, lightweight: false },
     { name: "lightweight cron", enabled: true, lightweight: true },
   ])(
     "filters provider guidance independently of workspace routing: $name",
@@ -313,18 +312,6 @@ describe("Codex app-server attempt context", () => {
       overrides: { toolsAllow: ["openclaw"], pluginHarnessToolPolicyRestricted: true },
     },
     {
-      name: "lightweight cron",
-      ringZeroActive: false,
-      inheritedWorkspace: true,
-      overrides: { bootstrapContextMode: "lightweight", bootstrapContextRunKind: "cron" },
-    },
-    {
-      name: "tool-disabled restricted",
-      ringZeroActive: false,
-      inheritedWorkspace: false,
-      overrides: { pluginHarnessToolPolicyRestricted: true, disableTools: true },
-    },
-    {
       name: "message-only restricted",
       ringZeroActive: false,
       inheritedWorkspace: false,
@@ -402,7 +389,6 @@ describe("Codex app-server attempt context", () => {
           contextEngine: expectedBinding,
         } as never,
         expectedBinding,
-        projection: projection!,
         dynamicToolsFingerprint: "same-tools",
       }),
     ).toEqual({
@@ -417,7 +403,6 @@ describe("Codex app-server attempt context", () => {
           contextEngine: expectedBinding,
         } as never,
         expectedBinding,
-        projection: projection!,
         dynamicToolsFingerprint: "new-tools",
       }),
     ).toEqual({

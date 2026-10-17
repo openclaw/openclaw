@@ -1,10 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
-  openOpenClawAgentSqliteWorkerStore,
-  runOpenClawAgentWriteAdmission,
+  openOpenClawAgentSqliteWorkerStoreV2,
   resolveOpenClawAgentSqlitePath,
+  type OpenClawAgentDatabaseExecution,
   type SqliteWorkerStore,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import type {
@@ -17,33 +16,31 @@ const loadEntrypoints = createLazyRuntimeModule(
   () => import("./memory/manager-cpu-entrypoints.js"),
 );
 
-/** Keep Forget's supplied borrow; the canonical worker checks it at every grant. */
+/** Keep Forget's retained executor current across replans and every worker grant. */
 export async function withMemoryForgetWorker<T>(
-  options: Parameters<typeof openOpenClawAgentSqliteWorkerStore>[0],
-  db: DatabaseSync,
+  options: Parameters<typeof openOpenClawAgentSqliteWorkerStoreV2>[0],
+  execution: OpenClawAgentDatabaseExecution,
   input: Extract<MemoryEntryOriginBinding, { kind: "forget" }>,
   operation: (scope: Pick<SqliteWorkerStore<MemoryEntryOriginOperations>, "execute">) => Promise<T>,
 ): Promise<T> {
   const { memoryCpuProcessEntrypoints } = await loadEntrypoints();
-  return withMemoryIndexGeneration(resolveOpenClawAgentSqlitePath(options), "mutation", () =>
-    runOpenClawAgentWriteAdmission(
-      options,
-      async (_identity, assertAdmission) => {
-        const worker = await openOpenClawAgentSqliteWorkerStore<MemoryEntryOriginOperations>(
-          options,
-          db,
-          {
-            moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.entryOrigins),
-            input,
-          },
-        );
-        try {
-          return await worker.run(operation, assertAdmission);
-        } finally {
-          await worker.close();
-        }
-      },
-      true,
-    ),
+  const assertCurrent = () => execution.assertCurrent();
+  const worker = await openOpenClawAgentSqliteWorkerStoreV2<MemoryEntryOriginOperations>(
+    options,
+    { version: 2, assertCurrent },
+    {
+      moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.entryOrigins),
+      input,
+    },
   );
+  try {
+    await worker.prepare();
+    return await withMemoryIndexGeneration(
+      resolveOpenClawAgentSqlitePath(options),
+      "mutation",
+      () => worker.run(operation, assertCurrent),
+    );
+  } finally {
+    await worker.close();
+  }
 }

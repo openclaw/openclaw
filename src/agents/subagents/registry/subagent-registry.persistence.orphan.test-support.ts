@@ -26,6 +26,7 @@ export function registerSubagentOrphanTaskCases({
         [runId]: {
           runId,
           childSessionKey,
+          childSessionIdentity: { sessionId: `sess-${runId}` },
           requesterSessionKey: "agent:main:main",
           requesterDisplayKey: "main",
           task: "stale unended restored work",

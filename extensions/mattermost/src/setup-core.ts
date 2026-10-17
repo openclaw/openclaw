@@ -1,18 +1,16 @@
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   defineChannelSetupContract,
   type ChannelSetupAdapter,
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
-  migrateBaseNameToDefaultAccount,
+  prepareScopedSetupConfig,
 } from "openclaw/plugin-sdk/setup";
 import { createSetupInputPresenceValidator } from "openclaw/plugin-sdk/setup-runtime";
-import type { ResolvedMattermostAccount } from "./mattermost/accounts.js";
 import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
 
 const channel = "mattermost" as const;
@@ -22,33 +20,20 @@ type MattermostSetupInput = ChannelSetupInput & {
   httpUrl?: string;
 };
 
-export function isMattermostConfigured(account: ResolvedMattermostAccount): boolean {
-  const tokenConfigured =
-    Boolean(account.botToken?.trim()) || hasConfiguredSecretInput(account.config.botToken);
-  return tokenConfigured && Boolean(account.baseUrl);
-}
-
 export function applyMattermostSetupConfigPatch(params: {
   cfg: OpenClawConfig;
   accountId: string;
   name?: string;
   patch: Record<string, unknown>;
 }): OpenClawConfig {
-  const namedConfig = applyAccountNameToChannelSection({
-    cfg: params.cfg,
-    channelKey: channel,
-    accountId: params.accountId,
-    name: params.name,
-  });
-  const next =
-    params.accountId !== DEFAULT_ACCOUNT_ID
-      ? migrateBaseNameToDefaultAccount({
-          cfg: namedConfig,
-          channelKey: channel,
-        })
-      : namedConfig;
   return applySetupAccountConfigPatch({
-    cfg: next,
+    cfg: prepareScopedSetupConfig({
+      cfg: params.cfg,
+      channelKey: channel,
+      accountId: params.accountId,
+      name: params.name,
+      migrateBaseName: true,
+    }),
     channelKey: channel,
     accountId: params.accountId,
     patch: params.patch,

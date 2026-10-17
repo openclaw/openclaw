@@ -301,9 +301,7 @@ describe("private node runtime installation", () => {
       await expect(
         fs.access(path.join(candidate.packageRoot, "node-host-launcher.mjs")),
       ).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(
-        fs.access(path.join(recovered.packageRoot, "node-host-launcher.mjs")),
-      ).resolves.toBeUndefined();
+      await fs.access(path.join(recovered.packageRoot, "node-host-launcher.mjs"));
     });
   });
 

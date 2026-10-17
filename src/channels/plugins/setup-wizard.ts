@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { resolveChannelAllowFrom } from "../account-resolution.js";
 import { writeChannelSection } from "./config-helpers.js";
 import { resolveChannelSetupExecutionAdapter } from "./setup-contract.js";
 import { configureChannelAccessWithAllowlist } from "./setup-group-access-configure.js";
@@ -103,75 +104,6 @@ async function buildStatus(
   };
 }
 
-// Channel-owned contracts own config writes; released legacy adapters remain
-// supported through the single setup execution compatibility boundary.
-function applySetupInput(params: {
-  plugin: ChannelSetupPlugin;
-  cfg: OpenClawConfig;
-  accountId: string;
-  input: ChannelSetupInput;
-}) {
-  const setup = resolveChannelSetupExecutionAdapter(params.plugin);
-  if (!setup?.applyAccountConfig) {
-    throw new Error(`${params.plugin.id} does not support setup`);
-  }
-  let input: unknown = params.input;
-  if (params.plugin.setupContract) {
-    const parsed = params.plugin.setupContract.parseInput(input);
-    if (!parsed.ok) {
-      throw new Error(parsed.error);
-    }
-    input = parsed.value;
-  }
-  const resolvedAccountId =
-    setup.resolveAccountId?.({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      input,
-    }) ?? params.accountId;
-  const validationError = setup.validateInput?.({
-    cfg: params.cfg,
-    accountId: resolvedAccountId,
-    input,
-  });
-  if (validationError) {
-    throw new Error(validationError);
-  }
-  let next = setup.applyAccountConfig({
-    cfg: params.cfg,
-    accountId: resolvedAccountId,
-    input,
-  });
-  if (params.input.name?.trim() && setup.applyAccountName) {
-    next = setup.applyAccountName({
-      cfg: next,
-      accountId: resolvedAccountId,
-      name: params.input.name,
-    });
-  }
-  return next;
-}
-
-function collectCredentialValues(params: {
-  wizard: ChannelSetupWizard;
-  cfg: OpenClawConfig;
-  accountId: string;
-}): ChannelSetupWizardCredentialValues {
-  const values: ChannelSetupWizardCredentialValues = {};
-  for (const credential of params.wizard.credentials) {
-    const resolvedValue = normalizeOptionalString(
-      credential.inspect({
-        cfg: params.cfg,
-        accountId: params.accountId,
-      }).resolvedValue,
-    );
-    if (resolvedValue) {
-      values[credential.inputKey] = resolvedValue;
-    }
-  }
-  return values;
-}
-
 function resolveTextInputKeepMessage(
   input: ChannelSetupWizardTextInput,
   currentValue: string,
@@ -246,7 +178,19 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
         : { cfg, restore: (currentCfg: OpenClawConfig) => currentCfg };
       let next = accountScope.cfg;
       const accountContext = (currentCfg = next) => ({ cfg: currentCfg, accountId });
-      let credentialValues = collectCredentialValues({ wizard, ...accountContext() });
+      const collectCredentialValues = (currentCfg = next): ChannelSetupWizardCredentialValues => {
+        const values: ChannelSetupWizardCredentialValues = {};
+        for (const credential of wizard.credentials) {
+          const resolvedValue = normalizeOptionalString(
+            credential.inspect(accountContext(currentCfg)).resolvedValue,
+          );
+          if (resolvedValue) {
+            values[credential.inputKey] = resolvedValue;
+          }
+        }
+        return values;
+      };
+      let credentialValues = collectCredentialValues();
       const stepContext = (currentCfg = next) => ({
         ...accountContext(currentCfg),
         credentialValues,
@@ -269,8 +213,41 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
           delete credentialValues[key];
         }
       };
-      const applyInput = (input: ChannelSetupInput, currentCfg = next) =>
-        applySetupInput({ plugin, ...accountContext(currentCfg), input });
+      // Channel-owned contracts own config writes; released legacy adapters remain
+      // supported through the single setup execution compatibility boundary.
+      const applyInput = (setupInput: ChannelSetupInput, currentCfg = next) => {
+        const setup = resolveChannelSetupExecutionAdapter(plugin);
+        if (!setup?.applyAccountConfig) {
+          throw new Error(`${plugin.id} does not support setup`);
+        }
+        let input: unknown = setupInput;
+        if (plugin.setupContract) {
+          const parsed = plugin.setupContract.parseInput(input);
+          if (!parsed.ok) {
+            throw new Error(parsed.error);
+          }
+          input = parsed.value;
+        }
+        const setupParams = (selectedAccountId: string) => ({
+          cfg: currentCfg,
+          accountId: selectedAccountId,
+          input,
+        });
+        const resolvedAccountId = setup.resolveAccountId?.(setupParams(accountId)) ?? accountId;
+        const validationError = setup.validateInput?.(setupParams(resolvedAccountId));
+        if (validationError) {
+          throw new Error(validationError);
+        }
+        let applied = setup.applyAccountConfig(setupParams(resolvedAccountId));
+        if (setupInput.name?.trim() && setup.applyAccountName) {
+          applied = setup.applyAccountName({
+            cfg: applied,
+            accountId: resolvedAccountId,
+            name: setupInput.name,
+          });
+        }
+        return applied;
+      };
       let usedEnvShortcut = false;
       const showNote = async (note: ChannelSetupWizard["introNote"]) => {
         if (note && (!note.shouldShow || (await note.shouldShow(stepContext())))) {
@@ -287,7 +264,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
         });
         if (useEnvShortcut) {
           next = await wizard.envShortcut.apply(accountContext());
-          credentialValues = collectCredentialValues({ wizard, ...accountContext() });
+          credentialValues = collectCredentialValues();
           usedEnvShortcut = true;
         }
       }
@@ -509,7 +486,8 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             allowFrom.helpTitle ?? `${plugin.meta.label} allowlist`,
           );
         }
-        const existingAllowFrom = plugin.config.resolveAllowFrom?.(accountContext()) ?? [];
+        const existingAllowFrom =
+          (await resolveChannelAllowFrom({ plugin, ...accountContext() })) ?? [];
         const unique = await promptResolvedAllowFrom({
           prompter,
           existing: existingAllowFrom,

@@ -1,5 +1,4 @@
 import type { Message } from "grammy/types";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
@@ -70,7 +69,6 @@ export async function editMessageReplyMarkupTelegram(
           throw err;
         }
       }
-      logVerbose(`[telegram] Edited reply markup for message ${messageId} in chat ${chatId}`);
       return { ok: true, messageId: String(messageId), chatId };
     },
   );
@@ -102,7 +100,6 @@ export async function editMessageTelegram(
       const useRichMessages = resolveTelegramRichMessages(richMessagesParams);
       const tableMode = resolveTelegramTableMode(richMessagesParams);
       const htmlText = renderTelegramHtmlText(text, { textMode, tableMode });
-      const plainText = textMode === "html" ? telegramHtmlToPlainTextFallback(htmlText) : text;
 
       // Reply markup semantics:
       // - buttons === undefined → don't send reply_markup (keep existing)
@@ -180,49 +177,44 @@ export async function editMessageTelegram(
         return accepted!.result;
       };
 
-      const performCaptionEdit = () =>
-        withTelegramPlainFallback({
+      const editCaption = (caption: string, html: boolean, label = "editMessageCaption") =>
+        edit(
+          () =>
+            api.editMessageCaption(chatId, messageId, {
+              caption,
+              ...(html ? { parse_mode: "HTML" as const } : {}),
+              ...replyMarkupParams,
+            }),
+          label,
+        );
+      const performCaptionEdit = () => {
+        const caption = renderTelegramHtmlText(text, {
+          textMode,
+          tableMode,
+          downgradeRichPromptTags: true,
+        });
+        return withTelegramPlainFallback({
           kind: "html",
           context: "editMessageCaption",
-          plainText,
+          plainText: telegramHtmlToPlainTextFallback(caption),
           warn: (message) => sendLogger.warn(message),
-          sendFormatted: () =>
-            edit(
-              () =>
-                api.editMessageCaption(chatId, messageId, {
-                  caption: htmlText,
-                  parse_mode: "HTML",
-                  ...replyMarkupParams,
-                }),
-              "editMessageCaption",
-            ),
-          sendPlain: (_plan, label) =>
-            edit(
-              () =>
-                api.editMessageCaption(chatId, messageId, {
-                  caption: plainText,
-                  ...replyMarkupParams,
-                }),
-              label,
-            ),
+          sendFormatted: () => editCaption(caption, true),
+          sendPlain: (plan, label) => editCaption(plan.plainText, false, label),
         });
+      };
 
       let editedMessage: TelegramOutboundPromptContextMessage | true | undefined;
       try {
         const editMode = opts.editMode ?? "text";
-        if (editMode === "caption") {
-          editedMessage = await performCaptionEdit();
-        } else {
-          try {
-            editedMessage = await performTextEdit();
-          } catch (err) {
-            if (editMode === "auto" && isTelegramMessageHasNoTextError(err)) {
-              editedMessage = await performCaptionEdit();
-            } else {
-              throw err;
-            }
-          }
-        }
+        editedMessage =
+          editMode === "caption"
+            ? await performCaptionEdit()
+            : await performTextEdit().catch((err: unknown) => {
+                if (editMode === "auto" && isTelegramMessageHasNoTextError(err)) {
+                  return performCaptionEdit();
+                }
+                throw err;
+              });
       } catch (err) {
         if (!isTelegramMessageNotModifiedError(err)) {
           throw err;
@@ -246,7 +238,6 @@ export async function editMessageTelegram(
         });
       }
 
-      logVerbose(`[telegram] Edited message ${messageId} in chat ${chatId}`);
       return { ok: true, messageId: String(messageId), chatId };
     },
     (err) =>

@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveGroupToolPolicy } from "../../agents/agent-tools.policy.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
+import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { prepareSessionPendingInputDedupeRecovery } from "../../config/sessions/session-accessor.pending-inputs.js";
@@ -27,7 +28,7 @@ import { emitMessageReceivedHooks as emitSharedMessageReceivedHooks } from "./me
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
-import { isDuplicateRestartRecoverySource } from "./restart-recovery-claim.js";
+import { isDuplicateRestartRecoverySource } from "./restart-recovery-source.js";
 import { resolveDispatchConversationBinding } from "./session-conversation-binding.js";
 import {
   resolveReplyMessageToolAvailability,
@@ -180,16 +181,17 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     resolveSourceReplyExpectation({ ctx, cfg, isHeartbeat: params.replyOptions?.isHeartbeat }),
     "empty",
   );
-  const { configuredVisibleReplies, harnessDefaultVisibleReplies } = resolveVisibleRepliesPolicy({
-    cfg,
-    chatType,
-    ctx,
-    entry: sessionStoreEntry.entry,
-    sessionAgentId,
-    sessionKey: acpDispatchSessionKey,
-    sessionStore: sessionStoreEntry.store,
-    turnModelOverride: resolveTurnModelOverride(params.replyOptions),
-  });
+  const { configuredVisibleReplies, harnessDefaultVisibleReplies } =
+    await resolveVisibleRepliesPolicy({
+      cfg,
+      chatType,
+      ctx,
+      entry: sessionStoreEntry.entry,
+      sessionAgentId,
+      sessionKey: acpDispatchSessionKey,
+      sessionStore: sessionStoreEntry.store,
+      turnModelOverride: resolveTurnModelOverride(params.replyOptions),
+    });
   const effectiveVisibleReplies = configuredVisibleReplies ?? harnessDefaultVisibleReplies;
   const prefersMessageToolDelivery =
     params.replyOptions?.sourceReplyDeliveryMode === "message_tool_only" ||
@@ -217,26 +219,30 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     senderUsername: normalizeOptionalString(ctx.SenderUsername),
     senderE164: normalizeOptionalString(ctx.SenderE164),
   });
-  const messageToolAvailable = resolveReplyMessageToolAvailability({
-    cfg,
-    sessionAgentId,
-    sessionKey: acpDispatchSessionKey,
-    groupPolicy,
-    prefersMessageToolDelivery,
-  });
+  const messageToolAvailable = await withPreparedSessionCapabilityRead(() =>
+    resolveReplyMessageToolAvailability({
+      cfg,
+      sessionAgentId,
+      sessionKey: acpDispatchSessionKey,
+      groupPolicy,
+      prefersMessageToolDelivery,
+    }),
+  );
   // The stable mode's tool-only downgrade must be sender-independent, or a
   // sender-scoped message denial hashes a different binding policy than the
   // sender-less synthetic turns on the same session. Only tool-only candidates
   // can downgrade, so skip the second policy pass otherwise.
   const sessionStableMessageToolAvailable =
     effectiveVisibleReplies === "message_tool"
-      ? resolveStableMessageToolAvailability({
-          cfg,
-          ctx,
-          sessionEntry: sessionStoreEntry.entry,
-          sessionAgentId,
-          sessionKey: acpDispatchSessionKey,
-        })
+      ? await withPreparedSessionCapabilityRead(() =>
+          resolveStableMessageToolAvailability({
+            cfg,
+            ctx,
+            sessionEntry: sessionStoreEntry.entry,
+            sessionAgentId,
+            sessionKey: acpDispatchSessionKey,
+          }),
+        )
       : undefined;
   const sourceReplyPolicyParams = {
     cfg,

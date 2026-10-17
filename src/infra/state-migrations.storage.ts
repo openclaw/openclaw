@@ -6,6 +6,7 @@ export function archiveLegacyImportSource(params: {
   label: string;
   changes: string[];
   warnings: string[];
+  deduplicate?: boolean;
 }): void {
   try {
     fs.chmodSync(params.sourcePath, 0o600);
@@ -15,7 +16,7 @@ export function archiveLegacyImportSource(params: {
   }
   try {
     let sourceSha256: string | undefined;
-    // Reuse any identical archive, including a numbered collision from an earlier run.
+    // By default, reuse identical archives, including numbered collisions from earlier runs.
     for (let index = 1; ; index++) {
       const targetPath =
         index === 1 ? `${params.sourcePath}.migrated` : `${params.sourcePath}.migrated.${index}`;
@@ -30,6 +31,9 @@ export function archiveLegacyImportSource(params: {
         }
         params.changes.push(`Archived ${params.label} legacy source → ${targetPath}`);
         return;
+      }
+      if (params.deduplicate === false) {
+        continue;
       }
       // Legacy sources can exceed whole-file allocation limits; hash only collisions.
       sourceSha256 ??= sha256FileSync(params.sourcePath);

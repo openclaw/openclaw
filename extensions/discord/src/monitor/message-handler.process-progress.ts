@@ -1,7 +1,7 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { StatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import type { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 
@@ -10,7 +10,7 @@ type CallbackPayload<K extends keyof ReplyOptions> =
   NonNullable<ReplyOptions[K]> extends (...args: infer Args) => unknown ? Args[0] : never;
 type DraftPreview = ReturnType<typeof createDiscordDraftPreviewController>;
 
-export function createDiscordMessageProgressRuntime(params: {
+export async function createDiscordMessageProgressRuntime(params: {
   ctx: DiscordMessagePreflightContext;
   sessionKey?: string;
   sourceRepliesAreToolOnly: boolean;
@@ -26,7 +26,7 @@ export function createDiscordMessageProgressRuntime(params: {
   const { ctx, draftPreview } = params;
   const { cfg, route, abortSignal } = ctx;
   // Reasoning delivery follows the session /reasoning level, not streaming config.
-  const reasoningLevel = ((): "on" | "stream" | "off" => {
+  const reasoningLevel = await (async (): Promise<"on" | "stream" | "off"> => {
     const agentEntryDefault = resolveAgentConfig(cfg, route.agentId ?? "main")?.reasoningDefault;
     const cfgDefault = agentEntryDefault ?? cfg.agents?.defaults?.reasoningDefault;
     const configDefault: "on" | "stream" | "off" =
@@ -36,11 +36,13 @@ export function createDiscordMessageProgressRuntime(params: {
     }
     try {
       const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
-      const level = getSessionEntry({
-        agentId: route.agentId,
-        sessionKey: params.sessionKey,
-        storePath,
-      })?.reasoningLevel;
+      const level = (
+        await getSessionEntryAsync({
+          agentId: route.agentId,
+          sessionKey: params.sessionKey,
+          storePath,
+        })
+      )?.reasoningLevel;
       if (level === "on" || level === "stream" || level === "off") {
         return level;
       }
@@ -55,17 +57,13 @@ export function createDiscordMessageProgressRuntime(params: {
   // Yield only the draft content that has a durable counterpart.
   let shouldYieldDraftCommentary = async () => false;
   let turnCommentaryVisible = false;
-  const handleAssistantMessageBoundary = () => {
-    if (draftPreview.handleAssistantMessageBoundary()) {
-      params.onTurnReset();
-    }
-  };
-
   const replyOptions: Partial<ReplyOptions> = {
     progressRequiresReply: draftPreview.isProgressMode ? true : undefined,
     onAssistantMessageStart: draftPreview.draftStream
       ? () => {
-          handleAssistantMessageBoundary();
+          if (draftPreview.handleAssistantMessageBoundary()) {
+            params.onTurnReset();
+          }
           return false;
         }
       : undefined,

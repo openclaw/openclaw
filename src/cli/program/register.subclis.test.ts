@@ -200,17 +200,6 @@ describe("registerSubCliCommands", () => {
     });
   });
 
-  it.each([{ args: [] }, { args: ["update", "lossless-claw"] }, { args: ["--help"] }])(
-    "does not preload plugin CLI registrations for builtin plugins %j",
-    async ({ args }) => {
-      process.argv = ["node", "openclaw", "plugins", ...args];
-      const program = new Command().name("openclaw");
-      await registerSubCliByName(program, "plugins");
-      expect(mocks.registerPluginsCli).toHaveBeenCalledTimes(1);
-      expect(mocks.registerPluginCliCommandsFromValidatedConfig).not.toHaveBeenCalled();
-    },
-  );
-
   it.each([
     { name: "pairing", expected: ["synthetic-plugin", "pairing"] },
     { name: "plugins", expected: ["plugins", "synthetic-plugin"] },

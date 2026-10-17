@@ -72,7 +72,6 @@ export class MatrixClient extends MatrixClientVerification {
     }
 
     await this.ensureStartedForCryptoControlPlane();
-    await this.ensureCryptoSupportInitialized();
     const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
     if (!crypto) {
       return await fail("Matrix crypto is not available (start client with encryption enabled)");
@@ -393,7 +392,6 @@ export class MatrixClient extends MatrixClientVerification {
     let rawRecoveryKey: string | undefined;
     try {
       await this.ensureStartedForCryptoControlPlane();
-      await this.ensureCryptoSupportInitialized();
       const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
       if (!crypto) {
         throw new Error("Matrix crypto is not available (start client with encryption enabled)");
@@ -526,7 +524,6 @@ export class MatrixClient extends MatrixClientVerification {
         this.currentSyncState = state;
         this.currentSyncError = error;
         this.currentSyncFromCache = fromCache;
-        this.currentSyncRevision += 1;
       },
     });
   }

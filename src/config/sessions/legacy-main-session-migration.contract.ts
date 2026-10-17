@@ -1,5 +1,8 @@
 import type { OpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import type { SqliteSessionGenerationClaim } from "./session-accessor.sqlite-generation.types.js";
+import type {
+  SqliteSessionGenerationClaim,
+  SqliteSessionGenerationComparison,
+} from "./session-accessor.sqlite-generation.types.js";
 import type { SessionEntry } from "./types.js";
 
 export type LegacyMainSessionMigrationMode = "detect" | "doctor-fix";
@@ -44,12 +47,16 @@ export type PhysicalStore = {
   path: string;
 };
 
-export type SessionClaim = {
+export type SessionComparisonClaim = {
   canonicalKey: string;
-  databaseIdentity: OpenClawAgentDatabaseIdentity;
   entry: SessionEntry;
-  generations: SqliteSessionGenerationClaim[];
+  generations: SqliteSessionGenerationComparison[];
   key: string;
-  nodeArtifactFingerprint: string;
   store: PhysicalStore;
+};
+
+export type SessionClaim = Omit<SessionComparisonClaim, "generations"> & {
+  databaseIdentity: OpenClawAgentDatabaseIdentity;
+  generations: SqliteSessionGenerationClaim[];
+  nodeArtifactFingerprint: string;
 };

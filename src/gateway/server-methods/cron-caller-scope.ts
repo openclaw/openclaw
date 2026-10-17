@@ -193,7 +193,7 @@ export function readCronCallerScope(
       ? requester
       : undefined;
   const surfaceProvenance: CronToolsAllowProvenance | undefined =
-    !manageAll && identity.cronToolsAllowCapture === "final-executable-surface"
+    identity.cronToolsAllowCapture === "final-executable-surface"
       ? { version: 1, source: "final-executable-surface", callerOrigin }
       : undefined;
   const authenticatedRequesterProvenance = authenticatedCallerOrigin
@@ -232,7 +232,7 @@ export function readCronCallerScope(
           },
         }
       : {}),
-    ...(!manageAll && identity.cronCreatorAuthorityGrant
+    ...(identity.cronCreatorAuthorityGrant
       ? { cronCreatorAuthorityGrant: identity.cronCreatorAuthorityGrant }
       : {}),
   };

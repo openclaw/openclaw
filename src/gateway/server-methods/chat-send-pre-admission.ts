@@ -3,21 +3,21 @@ import { isMainSessionRecoveryReconciliationCandidate } from "../../agents/main-
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
-import { loadExactSessionEntryCandidates } from "../../config/sessions/session-accessor.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
-import { errorShapeFromError } from "../error-shape.js";
 import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { withGatewaySessionEntry } from "../session-utils-store.js";
-import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "../session-utils.js";
+import {
+  loadGatewaySessionEntryReadOnlyInWorker,
+  resolveGatewaySessionStoreTargetInWorker,
+} from "../session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "../session-worker-placement-context.js";
-import { formatForLog } from "../ws-log.js";
 import {
   buildAbortedChatSendPayload,
   readPreRegisteredRun,
@@ -30,10 +30,11 @@ import {
   withAbortedPartialPersistenceWarning,
 } from "./chat-aborted-partial.js";
 import { resolveDurableChatClaim } from "./chat-restart-recovery.js";
+import { assertExpectedLeafActiveAsync } from "./chat-send-active-leaf.js";
 import {
-  ACTIVE_LEAF_CHANGED_ERROR_REASON,
-  assertExpectedLeafActive,
-} from "./chat-send-active-leaf.js";
+  respondChatSendAdmissionError,
+  respondChatSessionRoutingChanged,
+} from "./chat-send-admission-errors.js";
 import { prepareGoalChatSendRetry } from "./chat-send-goal-retry.js";
 import type { ChatSendPreAdmissionParams } from "./chat-send-pre-admission.types.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
@@ -43,79 +44,9 @@ import {
   readChatSendRetryComparison,
   type ChatSendRetryComparison,
 } from "./chat-send-retry-comparison.js";
-import {
-  captureAdmittedChatSendSessionSettings,
-  SESSION_SETTINGS_CHANGED_ERROR_REASON,
-} from "./chat-send-session-settings.js";
+import { captureAdmittedChatSendSessionSettings } from "./chat-send-session-settings.js";
 import type { LoadedChatSendSession } from "./chat-send-session.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
-
-export function respondChatSessionRoutingChanged(respond: GatewayRequestHandlerOptions["respond"]) {
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, "session routing changed; review and retry", {
-      details: { reason: SESSION_ROUTING_CHANGED_ERROR_REASON },
-    }),
-  );
-}
-
-export function respondChatSendAdmissionError(
-  error: unknown,
-  respond: GatewayRequestHandlerOptions["respond"],
-): void {
-  const reason = error instanceof Error ? error.message : undefined;
-  if (reason === "goal-session-busy") {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        "This session still has active or queued work. Wait for it to finish, then retry the Goal.",
-        { retryable: true, details: { reason: "goal-session-busy" } },
-      ),
-    );
-    return;
-  }
-  if (reason === SESSION_ROUTING_CHANGED_ERROR_REASON) {
-    respondChatSessionRoutingChanged(respond);
-    return;
-  }
-  if (
-    reason === ACTIVE_LEAF_CHANGED_ERROR_REASON ||
-    reason === SESSION_SETTINGS_CHANGED_ERROR_REASON
-  ) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        reason === ACTIVE_LEAF_CHANGED_ERROR_REASON
-          ? "active branch changed; review and retry"
-          : "Session settings changed before send. Retry.",
-        { details: { reason } },
-      ),
-    );
-    return;
-  }
-  if (isSessionTranscriptProjectionUnavailableError(error)) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, "session transcript is rebuilding; retry shortly", {
-        details: { method: "chat.send" },
-        retryable: true,
-        retryAfterMs: 250,
-      }),
-    );
-    return;
-  }
-  respond(
-    false,
-    undefined,
-    errorShapeFromError(ErrorCodes.INVALID_REQUEST, error, { message: formatForLog(error) }),
-  );
-}
 
 type ChatSendRetryParams = Pick<
   ChatSendPreAdmissionParams,
@@ -185,17 +116,17 @@ export function resolveChatSendRequestConflict(
   ) {
     return conflict(true);
   }
-  const retryEntries =
+  const ownsPendingReservation =
     ownPendingAttemptId !== undefined &&
     readPreRegisteredRun({
       key: session.pendingChatSendKey,
       entry: entries[1],
       keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
-    })?.payload.attemptId === ownPendingAttemptId
-      ? entries.slice(0, 1)
-      : entries;
+    })?.payload.attemptId === ownPendingAttemptId;
+  const retryEntries = ownsPendingReservation ? entries.slice(0, 1) : entries;
   if (
     !comparison &&
+    request.requestIdentity !== undefined &&
     retryEntries.some((entry) => entry?.requestIdentity === request.requestIdentity)
   ) {
     return undefined;
@@ -205,7 +136,7 @@ export function resolveChatSendRequestConflict(
     sameDurableSource ||
     hasRestartRecoveryTerminalRun(session.entry, session.clientRunId) ||
     context.chatRunState.hasAbortMarker(session.clientRunId) ||
-    context.chatAbortControllers.has(session.clientRunId) ||
+    (!ownsPendingReservation && context.chatAbortControllers.has(session.clientRunId)) ||
     context.chatQueuedTurns?.has(session.clientRunId);
   if (!knownRetry) {
     return undefined;
@@ -330,6 +261,50 @@ export async function runChatSendPreAdmission(
     sessionRoutingChanged,
   } = session;
 
+  const reloadEntry = async () =>
+    (
+      await loadGatewaySessionEntryReadOnlyInWorker({
+        excludeInternalEffects: true,
+        cfg,
+        key: sessionLoadKey,
+        ...sessionLoadOptions,
+      })
+    ).entry;
+  const resolveClaim = (currentEntry: typeof entry, warn: (message: string) => void) =>
+    resolveDurableChatClaim({
+      canonicalSessionKey: sessionKey,
+      cfg,
+      clientRunId,
+      entry: currentEntry,
+      persistedSessionKey: legacyKey ?? sessionKey,
+      reloadEntry,
+      storePath,
+      recoveryRuntime: context.recoveryRuntime,
+      warn,
+    });
+  const warnRecovery = (message: string) =>
+    context.logGateway.warn(`failed to retry durable chat recovery ${clientRunId}: ${message}`);
+  const consumeNewDispatchDecision = () => {
+    // Cached/in-flight retries stay bound to their original target. Gate only a new dispatch.
+    if (sessionRoutingChanged(cfg)) {
+      respondChatSessionRoutingChanged(respond);
+      return false;
+    }
+    const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry, {
+      allowPendingWorkspace: true,
+      restartResume: request.restartResume,
+      providerReviewAcknowledgment: request.providerReviewAcknowledgment,
+      runId: clientRunId,
+    });
+    if (archivedSessionError) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
+      return false;
+    }
+    return true;
+  };
+  const requiresReconciliation = entry && isMainSessionRecoveryReconciliationCandidate(entry);
+  let preparedClaim: ReturnType<typeof resolveClaim> | undefined;
+  let initialDecisionCompleted = false;
   let retryChecked = false;
   const consumeInitialDecision = () => {
     const sendPolicy = resolveSendPolicy({
@@ -351,37 +326,46 @@ export async function runChatSendPreAdmission(
       try {
         const handled = respondChatSendRetry(params);
         retryChecked = true;
-        return !handled;
+        if (handled) {
+          return false;
+        }
       } catch (error) {
         if (!isSessionTranscriptProjectionUnavailableError(error)) {
           throw error;
         }
         // Missing comparison facts are prepared below, then consumed with fresh authority.
       }
+      if (retryChecked && !requiresReconciliation) {
+        preparedClaim = resolveClaim(entry, warnRecovery);
+        if (preparedClaim instanceof Promise) {
+          // Reader settlement may reject after recovery starts; retain its accepted work.
+          void preparedClaim.catch(() => {});
+        } else if (preparedClaim.kind === "continue") {
+          initialDecisionCompleted = true;
+          return consumeNewDispatchDecision();
+        }
+      }
     }
     return true;
   };
   // Stop owns its current-authority checks and typed cancellation errors below.
-  if (
-    !(stopCommand
-      ? consumeInitialDecision()
-      : await consumeChatSendCurrent(params, consumeInitialDecision))
-  ) {
-    return false;
+  try {
+    if (
+      !(stopCommand
+        ? consumeInitialDecision()
+        : await consumeChatSendCurrent(params, consumeInitialDecision))
+    ) {
+      return false;
+    }
+  } catch (error) {
+    if (preparedClaim instanceof Promise) {
+      await Promise.allSettled([preparedClaim]);
+    }
+    throw error;
   }
-
-  const resolveClaim = (currentEntry: typeof entry, warn: (message: string) => void) =>
-    resolveDurableChatClaim({
-      canonicalSessionKey: sessionKey,
-      cfg,
-      clientRunId,
-      entry: currentEntry,
-      persistedSessionKey: legacyKey ?? sessionKey,
-      reloadEntry: () => loadSessionEntry(sessionLoadKey, sessionLoadOptions).entry,
-      storePath,
-      recoveryRuntime: context.recoveryRuntime,
-      warn,
-    });
+  if (initialDecisionCompleted) {
+    return true;
+  }
 
   if (request.goalOperation) {
     const prepared = await prepareGoalChatSendRetry(params);
@@ -428,24 +412,26 @@ export async function runChatSendPreAdmission(
       }
       try {
         params.assertCurrent?.();
+      } catch (error) {
+        guard.failure = { error };
+        throw error;
+      }
+    };
+    const beforeAbort = async () => {
+      try {
         if (request.p.queueMode !== "steer" && session.expectedLeafEntryId !== undefined) {
-          assertExpectedLeafActive(
+          await assertExpectedLeafActiveAsync(
             {
               canonicalKey: sessionKey,
               storePath: stopStorePath,
-              entry: loadExactSessionEntryCandidates({
-                ...(session.readSource
-                  ? { readSource: session.readSource }
-                  : { storePath: stopStorePath, agentId: session.agentId }),
-                sessionKeys: [sessionKey],
-                readOnly: true,
-              })[0]?.entry,
+              entry,
             },
             session.agentId,
             session.expectedLeafEntryId,
             session.requestedSessionId,
           );
         }
+        assertCurrent();
       } catch (error) {
         guard.failure = { error };
         throw error;
@@ -476,8 +462,17 @@ export async function runChatSendPreAdmission(
         stopReason: "stop",
         requester: resolveChatAbortRequester(client),
         assertCurrent,
+        beforeAbort,
         cascadeDescendants: true,
       });
+      // A stale child refusal can precede beforeAbort; the request's leaf error wins.
+      if (!guard.failure && (res.error || (res.descendants && res.descendants.status !== "ok"))) {
+        try {
+          await beforeAbort();
+        } catch (error) {
+          throw abortedPartialPersistenceError(error, res.warning);
+        }
+      }
       // Descendant cancellation aggregates errors; preserve the admission reason.
       if (guard.failure) {
         throw abortedPartialPersistenceError(guard.failure.error, res.warning);
@@ -522,19 +517,35 @@ export async function runChatSendPreAdmission(
   // Same-ID retries must enter durable recovery after reconciliation, before admission
   // can mistake the restored claim for an already dispatched turn.
   let durableEntry = entry;
-  if (entry && isMainSessionRecoveryReconciliationCandidate(entry)) {
+  if (requiresReconciliation) {
     const { reconcileOrphanedGatewaySessionRecovery } =
       await import("../session-recovery-service.js");
     try {
-      const recoveryEntry = loadSessionEntry(sessionLoadKey, sessionLoadOptions).entry;
+      const recoveryEntry = entry;
       if (recoveryEntry) {
-        const comparison = await prepareChatSendRetryComparison({
-          ...params,
-          session: { ...session, entry: recoveryEntry },
+        const comparison = await prepareChatSendRetryComparison(params);
+        const conflict = resolveChatSendRequestConflict(params, comparison);
+        if (conflict) {
+          throw new Error(conflict.message);
+        }
+        const workStartError = resolveSessionWorkStartError(sessionKey, recoveryEntry, {
+          allowPendingWorkspace: true,
+          providerReviewAcknowledgment: request.providerReviewAcknowledgment,
+          runId: clientRunId,
+          expectedSessionId: session.requestedSessionId ?? session.backingSessionId,
+        });
+        if (workStartError) {
+          throw new Error(workStartError);
+        }
+        captureAdmittedChatSendSessionSettings({
+          commit: false,
+          entry: recoveryEntry,
+          expectedPermissionMode: request.p.expectedPermissionMode,
+          expectedToolOverrides: request.p.expectedToolOverrides,
         });
         await reconcileOrphanedGatewaySessionRecovery({
           cfg,
-          target: resolveGatewaySessionStoreTarget({
+          target: await resolveGatewaySessionStoreTargetInWorker({
             cfg,
             key: sessionKey,
             agentId: session.agentId,
@@ -546,42 +557,11 @@ export async function runChatSendPreAdmission(
             if (sessionRoutingChanged(context.getRuntimeConfig())) {
               throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
             }
-            const current = loadSessionEntry(sessionLoadKey, sessionLoadOptions);
-            const conflict = resolveChatSendRequestConflict(
-              { ...params, session: { ...session, entry: current.entry } },
-              comparison,
-            );
-            if (conflict) {
-              throw new Error(conflict.message);
-            }
-            const workStartError = resolveSessionWorkStartError(sessionKey, current.entry, {
-              allowPendingWorkspace: true,
-              providerReviewAcknowledgment: request.providerReviewAcknowledgment,
-              runId: session.clientRunId,
-              expectedSessionId: session.requestedSessionId ?? session.backingSessionId,
-            });
-            if (workStartError) {
-              throw new Error(workStartError);
-            }
-            if (request.p.queueMode !== "steer" && session.expectedLeafEntryId !== undefined) {
-              assertExpectedLeafActive(
-                current,
-                session.agentId,
-                session.expectedLeafEntryId,
-                session.requestedSessionId,
-              );
-            }
-            captureAdmittedChatSendSessionSettings({
-              commit: false,
-              entry: current.entry,
-              expectedPermissionMode: request.p.expectedPermissionMode,
-              expectedToolOverrides: request.p.expectedToolOverrides,
-            });
           },
           workerPlacementContext: resolveSessionWorkerPlacementContext(context),
         });
       }
-      durableEntry = loadSessionEntry(sessionLoadKey, sessionLoadOptions).entry;
+      durableEntry = await reloadEntry();
     } catch (error) {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
@@ -589,12 +569,11 @@ export async function runChatSendPreAdmission(
       respondChatSendAdmissionError(error, respond);
       return false;
     }
-    params.assertCurrent?.();
+    // Reconciliation yields while other session writes may still be publishing.
+    await consumeChatSendCurrent(params, () => undefined);
   }
 
-  const durableClaim = await resolveClaim(durableEntry, (message) =>
-    context.logGateway.warn(`failed to retry durable chat recovery ${clientRunId}: ${message}`),
-  );
+  const durableClaim = await (preparedClaim ?? resolveClaim(durableEntry, warnRecovery));
   const retrySession = {
     ...session,
     entry:
@@ -671,20 +650,6 @@ export async function runChatSendPreAdmission(
       return false;
     }
 
-    // Cached/in-flight retries stay bound to their original target. Gate only a new dispatch.
-    if (sessionRoutingChanged(cfg)) {
-      respondChatSessionRoutingChanged(respond);
-      return false;
-    }
-    const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry, {
-      allowPendingWorkspace: true,
-      providerReviewAcknowledgment: request.providerReviewAcknowledgment,
-      runId: clientRunId,
-    });
-    if (archivedSessionError) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
-      return false;
-    }
-    return true;
+    return consumeNewDispatchDecision();
   });
 }

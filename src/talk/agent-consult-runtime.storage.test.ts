@@ -27,7 +27,73 @@ afterEach(async () => {
 });
 
 describe("voice consult concrete store ownership", () => {
-  it("preserves live run identity through transcript storage and redaction", async () => {
+  it("refreshes consult policy and delivery after an in-process write", async () => {
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: { workspace: state.workspaceDir } } },
+    };
+    const runEmbeddedAgent = vi.fn(async () => ({
+      payloads: [{ text: "Checked" }],
+      meta: { durationMs: 0 },
+    }));
+    const agentRuntime = { ...createRuntimeAgent(), runEmbeddedAgent };
+    const sessionKey = "agent:main:voice-preparation";
+    const storePath = state.statePath("consult", "sessions.sqlite");
+    const target = { agentId: "main", sessionKey, storePath };
+    const consult = () =>
+      consultRealtimeVoiceAgent({
+        cfg,
+        agentRuntime,
+        logger: { warn: vi.fn() },
+        ...target,
+        messageProvider: "voice",
+        lane: "talk",
+        runIdPrefix: "policy-consult",
+        args: { question: "Check this" },
+        transcript: [],
+        surface: "test voice",
+        userLabel: "User",
+      });
+
+    await replaceSessionEntry(target, {
+      sessionId: "voice-session",
+      updatedAt: 1,
+      permissionMode: "workspace",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "chat:initial", accountId: "initial-account" },
+      }),
+    });
+    await expect(consult()).resolves.toEqual({ text: "Checked" });
+    expect(runEmbeddedAgent).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        permissionMode: "workspace",
+        messageProvider: "telegram",
+        messageTo: "chat:initial",
+        agentAccountId: "initial-account",
+      }),
+    );
+
+    await replaceSessionEntry(target, {
+      sessionId: "voice-session",
+      updatedAt: 2,
+      permissionMode: "guarded",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "discord", to: "channel:updated", accountId: "updated-account" },
+      }),
+    });
+    await expect(consult()).resolves.toEqual({ text: "Checked" });
+    expect(runEmbeddedAgent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        permissionMode: "guarded",
+        messageProvider: "discord",
+        messageTo: "channel:updated",
+        agentAccountId: "updated-account",
+      }),
+    );
+  });
+
+  it("preserves live run identity and source text through transcript storage", async () => {
     const runIdPrefix = "zoom-meetings:zoom_meeting_11111111-2222-4333-8444-123456789012";
     const cfg: OpenClawConfig = {
       agents: { entries: { main: { workspace: state.workspaceDir } } },
@@ -54,7 +120,7 @@ describe("voice consult concrete store ownership", () => {
       expect(persisted.map((entry) => readSessionMessageIdentity(entry.message)?.runId)).toEqual(
         runIds,
       );
-      expect(JSON.stringify(persisted)).not.toContain(secret);
+      expect(JSON.stringify(persisted)).toContain(secret);
       return { payloads: [{ text: "Checked" }], meta: { durationMs: 0 } };
     });
     const agentRuntime = { ...createRuntimeAgent(), runEmbeddedAgent };

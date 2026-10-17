@@ -255,9 +255,16 @@ describe("web channel package-root monitor", () => {
     expect(resolvePluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
-  it.each(["entry", "root"] as const)(
-    "loads a cold TypeScript embedding from the %s directory with entry sidecar precedence",
-    async (location) => {
+  it.each([
+    { location: "entry", preparedConfig: true },
+    { location: "root", preparedConfig: true },
+    { location: "root", preparedConfig: false },
+  ] as const)(
+    "loads a cold TypeScript embedding from $location with entry sidecar precedence (prepared config: $preparedConfig)",
+    async ({ location, preparedConfig }) => {
+      if (!preparedConfig) {
+        clearRuntimeConfigSnapshot();
+      }
       expect(getPluginRegistryForContext()).toBeNull();
       const root = fs.realpathSync(temp.make("openclaw-web-runtime-cold-"));
       const entryDirectory = path.join(root, "entry");

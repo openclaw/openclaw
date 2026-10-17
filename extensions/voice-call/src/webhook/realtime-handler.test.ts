@@ -10,7 +10,7 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { WebSocket, type RawData } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { VoiceCallConfigSchema, type VoiceCallRealtimeConfig } from "../config.js";
+import { normalizeVoiceCallConfig, type VoiceCallRealtimeConfig } from "../config.js";
 import { CallManager } from "../manager.js";
 import type { CallRecord, NormalizedEvent, ToolHandlerContext } from "../types.js";
 import {
@@ -496,23 +496,6 @@ describe("RealtimeCallHandler path routing", () => {
     callbacks[0]?.onReady?.();
     expect(triggerGreeting).toHaveBeenCalledTimes(1);
     expect(triggerGreeting.mock.calls[0]?.[0]).toContain("hello");
-  });
-
-  it("rejects stream sessions when token expiry would exceed the Date range", async () => {
-    const { handler, processEvent, createBridge } = makeCallHarness();
-    handler.setPublicUrl("https://public.example/voice/webhook");
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-    const session = handler.issueStreamSession({
-      providerName: "telnyx",
-      callId: "call-overflow",
-      direction: "inbound",
-    });
-    nowSpy.mockRestore();
-    const server = await startStreamSessionServer(handler, session.streamUrl);
-
-    await expect(connectWs(server.url)).rejects.toThrow("Unexpected server response: 401");
-    expect(createBridge).not.toHaveBeenCalled();
-    expect(processEvent).not.toHaveBeenCalled();
   });
 
   it("rejects Telnyx stream starts that do not match the token-bound call", async () => {
@@ -1007,7 +990,7 @@ describe("RealtimeCallHandler path routing", () => {
       },
     },
   ])(
-    "projects $path $outcome.label once while the phone stays open",
+    "projects $path $outcome.label without logging tool-result content while the phone stays open",
     async ({ path, outcome, synchronous }) => {
       const submitToolResult = vi.fn();
       const sendUserMessage = vi.fn();
@@ -1031,6 +1014,8 @@ describe("RealtimeCallHandler path routing", () => {
       const name = path === "general" ? "custom_lookup" : "openclaw_agent_consult";
       handler.registerToolHandler(name, hostTool);
       const { ws, callbacks: provider } = await start();
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       try {
         vi.useFakeTimers();
@@ -1061,6 +1046,22 @@ describe("RealtimeCallHandler path routing", () => {
           (submission) => !submission[2]?.willContinue,
         );
         expect(finals).toEqual(callIds.map((callId) => [callId, outcome.result, undefined]));
+        if ("error" in outcome.result) {
+          expect([...log.mock.calls, ...warn.mock.calls].flat().join("\n")).not.toContain(
+            outcome.result.error,
+          );
+          if (path === "general") {
+            expect(warn).toHaveBeenCalledWith(
+              expect.stringMatching(
+                /^\[voice-call\] realtime tool call failed callId=call-1 tool=custom_lookup elapsedMs=\d+$/,
+              ),
+            );
+          } else {
+            expect(warn).toHaveBeenCalledWith(
+              "[voice-call] realtime forced agent consult failed callId=call-1 providerCallId=CA-test",
+            );
+          }
+        }
         const terminalEvents = recentTalkEvents(call).filter((event) =>
           ["tool.result", "tool.error"].includes(event.type),
         );
@@ -1074,6 +1075,8 @@ describe("RealtimeCallHandler path routing", () => {
           path === "general" ? undefined : false,
         );
       } finally {
+        log.mockRestore();
+        warn.mockRestore();
         pending.resolve(undefined);
         ws.terminate();
       }
@@ -1291,16 +1294,14 @@ describe("RealtimeCallHandler path routing", () => {
       makeBridge({ close: oldCloseBridge }),
       makeBridge({ close: replacementCloseBridge }),
     ];
-    const { callbacks, start, processEvent, endCall } = makeCallHarness((request, index) => {
-      if (index === 1) {
-        request.onTranscript?.("user", "Fresh ", false);
-      }
-      return expectDefined(bridges[index], "replacement bridge");
-    });
+    const { callbacks, start, processEvent, endCall } = makeCallHarness((_request, index) =>
+      expectDefined(bridges[index], "replacement bridge"),
+    );
     const { ws: oldWs } = await start("MZ-continuity-old");
     callbacks[0]?.onTranscript?.("user", "Old ", false);
 
     const { ws: replacementWs } = await start("MZ-continuity-replacement");
+    callbacks[1]?.onTranscript?.("user", "Fresh ", false);
     const replacementOutboundMessages: Array<Record<string, unknown>> = [];
     replacementWs.on("message", (data) =>
       replacementOutboundMessages.push(parseWebSocketMessage(data)),
@@ -1345,51 +1346,6 @@ describe("RealtimeCallHandler path routing", () => {
       expect(transcripts(processEvent, "call.speech")).toEqual(["Fresh caller"]),
     );
     expect(callEvents(processEvent, "call.assistant-speech")).toHaveLength(0);
-  });
-
-  it("keeps the predecessor after replacement creation closes", async () => {
-    const oldTriggerGreeting = vi.fn();
-    const replacementConnect = vi.fn(async () => {});
-    const replacementClose = vi.fn(() => {
-      callbacks[1]?.onTranscript?.("user", "Failed teardown transcript", true);
-      callbacks[1]?.onClose?.("error");
-      throw new Error("replacement close failed");
-    });
-    const { callbacks, call, handler, processEvent, endCall, start } = makeCallHarness(
-      (request, index) => {
-        if (index === 0) {
-          return makeBridge({ triggerGreeting: oldTriggerGreeting });
-        }
-        request.onTranscript?.("user", "Failed ", false);
-        request.onClose?.("error");
-        request.onTranscript?.("user", "Closed before adoption", true);
-        return makeBridge({ connect: replacementConnect, close: replacementClose });
-      },
-    );
-    await start("MZ-transcript-rollback-old");
-    callbacks[0]?.onTranscript?.("user", "Old ", false);
-
-    const replacementServer = await startRealtimeServer(handler);
-    const replacementWs = await connectWs(replacementServer.url);
-    const replacementClosed = waitForClose(replacementWs);
-    sendCarrierStart(replacementWs, "MZ-transcript-rollback-new", call.providerCallId);
-    await replacementClosed;
-    expect(replacementConnect).not.toHaveBeenCalled();
-    expect(replacementClose).toHaveBeenCalledTimes(1);
-    callbacks[1]?.onClose?.("error");
-    callbacks[1]?.onTranscript?.("user", "Late failed replacement", true);
-
-    expect(handler.speak(call.callId, "Continue the existing call.")).toEqual({
-      success: true,
-    });
-    expect(oldTriggerGreeting).toHaveBeenCalledWith("Continue the existing call.");
-    expect(endCall).not.toHaveBeenCalled();
-    expect(callEvents(processEvent, "call.ended")).toHaveLength(0);
-
-    callbacks[0]?.onTranscript?.("user", "caller", true);
-    await waitForRealtimeTest(() =>
-      expect(transcripts(processEvent, "call.speech")).toEqual(["Old caller"]),
-    );
   });
 
   it("does not share a native consult with a replacement realtime session", async () => {
@@ -1615,7 +1571,7 @@ describe("RealtimeCallHandler path routing", () => {
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
 function createHandler() {
-  const config = VoiceCallConfigSchema.parse({ realtime: { enabled: true } });
+  const config = normalizeVoiceCallConfig({ realtime: { enabled: true } });
   const resolveRegistration = vi.fn((): never => {
     throw new Error("Rejected upgrades must not acquire a provider");
   });

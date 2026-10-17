@@ -29,41 +29,26 @@ let compiledCoreSecretTargetRegistryState: CompiledSecretTargetRegistryState | n
 
 // Channel contract entries are process-stable; plugin install/reload is the owner of freshness.
 const compiledChannelOpenClawTargets = new Map<string, CompiledTargetRegistryEntry[] | null>();
+const compiledPluginConfigTargets = new Map<string, CompiledTargetRegistryEntry[]>();
+const compiledPluginConfigTargetsWithChannels = new Map<string, CompiledTargetRegistryEntry[]>();
 
-function buildTargetTypeIndex(
-  compiledSecretTargetRegistry: CompiledTargetRegistryEntry[],
-): Map<string, CompiledTargetRegistryEntry[]> {
-  const byType = new Map<string, CompiledTargetRegistryEntry[]>();
-  const append = (type: string, entry: CompiledTargetRegistryEntry) => {
-    const existing = byType.get(type);
-    if (existing) {
-      existing.push(entry);
-      return;
-    }
-    byType.set(type, [entry]);
-  };
-  for (const entry of compiledSecretTargetRegistry) {
-    append(entry.targetType, entry);
-    for (const alias of entry.targetTypeAliases ?? []) {
-      append(alias, entry);
-    }
-  }
-  return byType;
-}
-
-function buildConfigTargetIdIndex(
+function indexSecretTargets(
   entries: CompiledTargetRegistryEntry[],
+  key: "id" | "targetType",
 ): Map<string, CompiledTargetRegistryEntry[]> {
-  const byId = new Map<string, CompiledTargetRegistryEntry[]>();
+  const index = new Map<string, CompiledTargetRegistryEntry[]>();
   for (const entry of entries) {
-    const existing = byId.get(entry.id);
-    if (existing) {
-      existing.push(entry);
-      continue;
+    const keys = [entry[key], ...(key === "targetType" ? (entry.targetTypeAliases ?? []) : [])];
+    for (const value of keys) {
+      const existing = index.get(value);
+      if (existing) {
+        existing.push(entry);
+      } else {
+        index.set(value, [entry]);
+      }
     }
-    byId.set(entry.id, [entry]);
   }
-  return byId;
+  return index;
 }
 
 function compileSecretTargetRegistryState(registry: SecretTargetRegistryEntry[]) {
@@ -76,12 +61,12 @@ function compileSecretTargetRegistryState(registry: SecretTargetRegistryEntry[])
   );
   return {
     authProfilesCompiledSecretTargets,
-    authProfilesTargetsById: buildConfigTargetIdIndex(authProfilesCompiledSecretTargets),
+    authProfilesTargetsById: indexSecretTargets(authProfilesCompiledSecretTargets, "id"),
     compiledSecretTargetRegistry,
     knownTargetIds: new Set(compiledSecretTargetRegistry.map((entry) => entry.id)),
     openClawCompiledSecretTargets,
-    openClawTargetsById: buildConfigTargetIdIndex(openClawCompiledSecretTargets),
-    targetsByType: buildTargetTypeIndex(compiledSecretTargetRegistry),
+    openClawTargetsById: indexSecretTargets(openClawCompiledSecretTargets, "id"),
+    targetsByType: indexSecretTargets(compiledSecretTargetRegistry, "targetType"),
   };
 }
 
@@ -100,8 +85,8 @@ function getConfiguredSecretTargetRegistryState(
 ) {
   return compileSecretTargetRegistryState(
     manifestRegistry
-      ? buildSecretTargetRegistryFromPlugins(manifestRegistry.plugins)
-      : getSecretTargetRegistry({ config, env }),
+      ? buildSecretTargetRegistryFromPlugins(manifestRegistry.plugins, { config })
+      : getSecretTargetRegistry({ config, env, configuredOnly: true }),
   );
 }
 
@@ -137,6 +122,49 @@ function getCompiledChannelOpenClawTargets(
       .map(compileTargetRegistryEntry) ?? null;
   compiledChannelOpenClawTargets.set(normalizedChannelId, compiledEntries);
   return compiledEntries;
+}
+
+function getPluginOwnedConfigPathEntries(
+  pathTokens: readonly ConcreteConfigPathSegment[],
+  broaderDiscovery = false,
+): CompiledTargetRegistryEntry[] {
+  // Config schema ownership is the boundary: core owns all roots except channels and
+  // plugins.entries.<id>.config. Raw channel contracts are not constrained by their TS type,
+  // but cannot extend core config schemas. Do not discover plugins to reject a core path.
+  if (pathTokens[0] === "plugins") {
+    const pluginId = pathTokens[2];
+    if (
+      pathTokens[1] !== "entries" ||
+      typeof pluginId !== "string" ||
+      !pluginId ||
+      pathTokens[3] !== "config"
+    ) {
+      return [];
+    }
+    const cache = broaderDiscovery
+      ? compiledPluginConfigTargetsWithChannels
+      : compiledPluginConfigTargets;
+    let entries = cache.get(pluginId);
+    if (!entries) {
+      entries = getSecretTargetRegistry({
+        pluginConfig: { pluginIds: [pluginId], includeChannelContracts: broaderDiscovery },
+      }).map(compileTargetRegistryEntry);
+      cache.set(pluginId, entries);
+    }
+    return entries;
+  }
+  const channelId = pathTokens[0] === "channels" ? pathTokens[1] : undefined;
+  if (typeof channelId !== "string" || !channelId) {
+    return [];
+  }
+  // Any channel, including a bundled ID, can have additional external manifest owners.
+  // Preserve the direct contract's precedence; a miss needs broader discovery.
+  return broaderDiscovery
+    ? getCompiledSecretTargetRegistryState().openClawCompiledSecretTargets.filter(
+        (entry) =>
+          entry.pathTokens[0]?.kind === "literal" && entry.pathTokens[0].value === "channels",
+      )
+    : (getCompiledChannelOpenClawTargets(channelId) ?? []);
 }
 
 function normalizeAllowedTargetIds(targetIds?: Iterable<string>): Set<string> | null {
@@ -274,11 +302,18 @@ function toResolvedPlanTarget(
   };
 }
 
-/**
- * Lists the full secrets target registry in public, serializable form.
- */
-export function listSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
-  return getCompiledSecretTargetRegistryState().compiledSecretTargetRegistry.map((entry) =>
+/** Lists all entries or a config path's candidate owners. */
+export function listSecretTargetRegistryEntries(options?: {
+  configPath: readonly ConcreteConfigPathSegment[];
+}): SecretTargetRegistryEntry[] {
+  const configPath = options?.configPath;
+  const entries = configPath
+    ? [
+        ...getCompiledCoreSecretTargetRegistryState().openClawCompiledSecretTargets,
+        ...getPluginOwnedConfigPathEntries(configPath, true),
+      ]
+    : getCompiledSecretTargetRegistryState().compiledSecretTargetRegistry;
+  return entries.map((entry) =>
     Object.assign(
       { id: entry.id, targetType: entry.targetType },
       entry.targetTypeAliases ? { targetTypeAliases: [...entry.targetTypeAliases] } : {},
@@ -305,9 +340,21 @@ export function listSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
 }
 
 export function isKnownSecretTargetId(value: unknown): value is string {
-  return (
-    typeof value === "string" && getCompiledSecretTargetRegistryState().knownTargetIds.has(value)
-  );
+  if (typeof value !== "string") {
+    return false;
+  }
+  if (getCompiledCoreSecretTargetRegistryState().knownTargetIds.has(value)) {
+    return true;
+  }
+  for (const entries of [
+    ...compiledPluginConfigTargets.values(),
+    ...compiledPluginConfigTargetsWithChannels.values(),
+  ]) {
+    if (entries.some((entry) => entry.id === value)) {
+      return true;
+    }
+  }
+  return getCompiledSecretTargetRegistryState().knownTargetIds.has(value);
 }
 
 /** Checks the static core registry without materializing plugin/channel contracts. */
@@ -332,17 +379,22 @@ export function resolvePlanTargetAgainstRegistry(candidate: {
   }
   const explicitChannelId =
     candidate.pathSegments[0] === "channels" ? (candidate.pathSegments[1]?.trim() ?? "") : "";
-  if (explicitChannelId) {
-    if (/[\\/:]/.test(explicitChannelId)) {
-      return null;
-    }
-    const channelEntries = getCompiledChannelOpenClawTargets(explicitChannelId) ?? [];
-    const channelTypeEntries = buildTargetTypeIndex(channelEntries).get(candidate.type);
-    if (channelTypeEntries) {
-      return resolvePlanTargetAgainstEntries(candidate, channelTypeEntries);
-    }
+  if (explicitChannelId && /[\\/:]/.test(explicitChannelId)) {
+    return null;
   }
-  const entries = getCompiledSecretTargetRegistryState().targetsByType.get(candidate.type);
+  const pathTokens = candidate.pathTokens ?? candidate.pathSegments;
+  const directEntries = indexSecretTargets(
+    getPluginOwnedConfigPathEntries(pathTokens),
+    "targetType",
+  ).get(candidate.type);
+  const directTarget = resolvePlanTargetAgainstEntries(candidate, directEntries);
+  if (directTarget) {
+    return directTarget;
+  }
+  const entries = indexSecretTargets(
+    getPluginOwnedConfigPathEntries(pathTokens, true),
+    "targetType",
+  ).get(candidate.type);
   return resolvePlanTargetAgainstEntries(candidate, entries);
 }
 
@@ -403,7 +455,7 @@ export function resolveSecretPlanTargetByPathCore(params: {
   }
   return resolvePlanTargetAgainstEntries(
     { pathSegments: params.pathSegments, pathTokens: params.pathTokens },
-    getCompiledSecretTargetRegistryState().authProfilesCompiledSecretTargets,
+    getCompiledCoreSecretTargetRegistryState().authProfilesCompiledSecretTargets,
   );
 }
 
@@ -420,17 +472,9 @@ export function resolveConfigSecretTargetByPath(
     return coreTarget;
   }
 
-  const explicitChannelId = pathSegments[0] === "channels" ? (pathSegments[1]?.trim() ?? "") : "";
-  const explicitChannelEntries = explicitChannelId
-    ? getCompiledChannelOpenClawTargets(explicitChannelId)
-    : null;
-  // Channel-owned contracts get first chance for explicit channel paths before bundled defaults.
   return (
-    resolvePlanTargetAgainstEntries(candidate, explicitChannelEntries ?? []) ??
-    resolvePlanTargetAgainstEntries(
-      candidate,
-      getCompiledSecretTargetRegistryState().openClawCompiledSecretTargets,
-    )
+    resolvePlanTargetAgainstEntries(candidate, getPluginOwnedConfigPathEntries(pathTokens)) ??
+    resolvePlanTargetAgainstEntries(candidate, getPluginOwnedConfigPathEntries(pathTokens, true))
   );
 }
 
@@ -455,32 +499,36 @@ export function discoverConfigSecretTargetsByIds(
   const env = options.env ?? process.env;
   const allowedTargetIds = normalizeAllowedTargetIds(targetIds);
   const coreState = getCompiledCoreSecretTargetRegistryState();
-  const hasOnlyCoreTargetIds =
-    allowedTargetIds !== null &&
-    Array.from(allowedTargetIds).every((targetId) => coreState.knownTargetIds.has(targetId));
+  const hasPluginEntries = configHasPluginEntries(config);
+  // Absent plugin-owned subtrees cannot contribute targets, even for unknown requested IDs.
+  const canUseCoreTargets =
+    (!hasPluginEntries && Object.keys(config.channels ?? {}).length === 0) ||
+    (allowedTargetIds !== null &&
+      Array.from(allowedTargetIds).every((targetId) => coreState.knownTargetIds.has(targetId)));
   const configuredChannelEntries =
-    !options.manifestRegistry && !hasOnlyCoreTargetIds && !configHasPluginEntries(config)
+    !options.manifestRegistry && !canUseCoreTargets && !hasPluginEntries
       ? getConfiguredChannelOpenClawTargets(config, env)
       : null;
-  const configuredEntries = hasOnlyCoreTargetIds
+  const configuredEntries = canUseCoreTargets
     ? coreState.openClawCompiledSecretTargets
     : configuredChannelEntries
       ? [...coreState.openClawCompiledSecretTargets, ...configuredChannelEntries]
       : null;
   const configuredEntriesById = configuredEntries
-    ? buildConfigTargetIdIndex(configuredEntries)
+    ? indexSecretTargets(configuredEntries, "id")
     : null;
   const canUseConfiguredEntries =
     configuredEntries !== null &&
-    (allowedTargetIds === null ||
+    (canUseCoreTargets ||
+      allowedTargetIds === null ||
       Array.from(allowedTargetIds).every((targetId) => configuredEntriesById?.has(targetId)));
   const registryState = canUseConfiguredEntries
     ? null
     : getConfiguredSecretTargetRegistryState(config, env, options.manifestRegistry);
   const discoveryEntries = resolveDiscoveryEntries({
     allowedTargetIds,
-    defaultEntries: configuredEntries ?? registryState?.openClawCompiledSecretTargets ?? [],
-    entriesById: configuredEntriesById ?? registryState?.openClawTargetsById ?? new Map(),
+    defaultEntries: registryState?.openClawCompiledSecretTargets ?? configuredEntries ?? [],
+    entriesById: registryState?.openClawTargetsById ?? configuredEntriesById ?? new Map(),
   });
   return discoverSecretTargetsFromEntries(config, discoveryEntries);
 }

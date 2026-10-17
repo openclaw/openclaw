@@ -70,7 +70,9 @@ it.each([
         type: "hello-ok",
         protocol: 1,
         auth: { role: "operator", scopes: [], method: "trusted-proxy", recoveryScope: "account-a" },
-        snapshot: { presence: [{ instanceId: source.instanceId, user: { id: "profile-a" } }] },
+        snapshot: {
+          presence: [{ ts: 0, instanceId: source.instanceId, user: { id: "profile-a" } }],
+        },
       });
     }
     const rejected = vi.fn();
@@ -170,7 +172,9 @@ it.each(["unreplaced", "local replacement", "peer replacement"])(
         type: "hello-ok",
         protocol: 1,
         auth: { role: "operator", scopes: [], method: "trusted-proxy", recoveryScope: "account-a" },
-        snapshot: { presence: [{ instanceId: source.instanceId, user: { id: "profile-a" } }] },
+        snapshot: {
+          presence: [{ ts: 0, instanceId: source.instanceId, user: { id: "profile-a" } }],
+        },
       });
       if (publication === "unreplaced") {
         persistBootRecord(record(scope));

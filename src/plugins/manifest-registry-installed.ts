@@ -155,10 +155,12 @@ function normalizePackageChannelPersistedAuthState(
   }
   const specifier = normalizeOptionalString(persistedAuthState.specifier);
   const exportName = normalizeOptionalString(persistedAuthState.exportName);
-  return specifier || exportName
+  const exportNameAsync = normalizeOptionalString(persistedAuthState.exportNameAsync);
+  return specifier || exportName || exportNameAsync
     ? omitUndefinedManifestFields({
         specifier,
         exportName,
+        exportNameAsync,
         backingStore:
           persistedAuthState.backingStore === "plugin-state"
             ? ("plugin-state" as const)

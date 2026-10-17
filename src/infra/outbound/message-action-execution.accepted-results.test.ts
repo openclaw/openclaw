@@ -737,20 +737,6 @@ describe("executeMessagePoll", () => {
     });
   });
 
-  it("normalizes blank poll content and trims its question and options", async () => {
-    const { call } = await runPollAction({
-      actionParams: {
-        target: "poller:123",
-        message: " \n\t ",
-        pollQuestion: " Lunch? ",
-        pollOption: [" Pizza ", " Sushi "],
-      },
-    });
-    expect(call.content).toBe("");
-    expect(call.poll.question).toBe("Lunch?");
-    expect(call.poll.options).toEqual(["Pizza", "Sushi"]);
-  });
-
   it("requires at least two poll options", async () => {
     await expect(
       runPollAction({

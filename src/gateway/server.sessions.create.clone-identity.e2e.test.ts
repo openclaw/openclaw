@@ -15,7 +15,7 @@ import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-ad
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { controlUiClient } from "./server.sessions.create.projects.test-support.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
 import { dispatchInboundMessageMock } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -124,14 +124,14 @@ test.each(
       expect(created.ok, JSON.stringify(created.error)).toBe(true);
       expect(created.payload).toMatchObject({ runStarted: true });
       const { key, runId } = created.payload!;
-      const target = loadGatewaySessionEntryReadOnly(key, { agentId: "main" });
+      const target = await loadGatewaySessionEntryReadOnlyAsync(key, { agentId: "main" });
       const released = getSessionWorkAdmissionRelease({
         scope: target.storePath,
         identities: [key],
       });
       await released;
       expect(context.chatAbortControllers.has(runId)).toBe(false);
-      const entry = loadGatewaySessionEntryReadOnly(key, { agentId: "main" }).entry;
+      const entry = (await loadGatewaySessionEntryReadOnlyAsync(key, { agentId: "main" })).entry;
       expect(
         entry,
         JSON.stringify({
@@ -195,6 +195,8 @@ test.each(
       expect(git.requests.every((authorization) => authorization === AUTHORIZATION)).toBe(true);
       expect(created.entry?.projectId, errors()).toBeDefined();
       expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+      expect(errors()).toBe("[]");
+      expect(created.entry?.pendingWorktree).toBeUndefined();
       expect(await fs.readFile(path.join(created.entry!.spawnedCwd!, "input.txt"), "utf8")).toBe(
         "later private content\n",
       );

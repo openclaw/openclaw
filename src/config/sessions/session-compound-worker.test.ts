@@ -4,13 +4,15 @@ import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/pro
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import { createChatSendGoalCommitGuard } from "../../gateway/server-methods/chat-send-work-admission.js";
-import { loadSessionEntry as loadGatewaySessionEntry } from "../../gateway/session-utils.js";
+import { loadSessionEntryAsync as loadGatewaySessionEntryAsync } from "../../gateway/session-entry-load.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   stageSessionPendingInput,
   withSessionPendingInputPersistence,
@@ -20,7 +22,7 @@ import { resetSessionEntryLifecycle } from "./session-accessor.sqlite-lifecycle.
 import { readCommittedTranscriptMessageSequence } from "./session-accessor.sqlite-transcript-sequences.js";
 import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-turn.js";
 import type { SessionTranscriptTurnPersistOptions } from "./session-accessor.types.js";
-import { createSessionCompoundWorkerFixture as fixture } from "./session-compound-worker.test-support.js";
+import { createSessionCompoundWorkerFixture as baseFixture } from "./session-compound-worker.test-support.js";
 import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import * as transcriptReconcile from "./session-transcript-reconcile.js";
@@ -35,34 +37,62 @@ const delivery = vi.hoisted(() => ({
 }));
 vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>();
+  const withDelivery = (
+    owner: ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution>,
+  ): typeof owner => {
+    return {
+      ...owner,
+      get fileIdentity() {
+        return owner.fileIdentity;
+      },
+      runExisting: (source, operation, options) =>
+        owner.runExisting(
+          source,
+          (worker) =>
+            operation({
+              execute: async (command, commandOptions) => {
+                const result = await worker.execute(command, commandOptions);
+                delivery.afterCommit?.(command.type);
+                return result;
+              },
+            }),
+          options,
+        ),
+    };
+  };
   return {
     ...actual,
     captureOpenClawAgentDatabaseExecution: (
       ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
-    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution> => {
-      const owner = actual.captureOpenClawAgentDatabaseExecution(...args);
-      return {
-        ...owner,
-        get fileIdentity() {
-          return owner.fileIdentity;
-        },
-        runExisting: (source, operation, options) =>
-          owner.runExisting(
-            source,
-            (worker) =>
-              operation({
-                execute: async (command, commandOptions) => {
-                  const result = await worker.execute(command, commandOptions);
-                  delivery.afterCommit?.(command.type);
-                  return result;
-                },
-              }),
-            options,
-          ),
-      };
-    },
+    ) => withDelivery(actual.captureOpenClawAgentDatabaseExecution(...args)),
+    captureOpenClawAgentDatabasePreparationExecution: (
+      ...args: Parameters<typeof actual.captureOpenClawAgentDatabasePreparationExecution>
+    ) => withDelivery(actual.captureOpenClawAgentDatabasePreparationExecution(...args)),
   };
 });
+
+function fixture() {
+  setRuntimeConfigSnapshot({});
+  const f = baseFixture();
+  return {
+    ...f,
+    append: (options: SessionTranscriptTurnPersistOptions) =>
+      appendExpectedSessionTranscriptTurn(f.scope, {
+        expectedSessionId: f.scope.sessionId,
+        sessionFile: "synthetic-session.jsonl",
+        ...options,
+      }),
+    reset: (
+      options: Omit<Parameters<typeof resetSessionEntryLifecycle>[0], "target" | "storePath">,
+    ) =>
+      resetSessionEntryLifecycle({
+        ...f.scope,
+        target: f.target,
+        resetBoundary: { context: "clear", reason: "new", cwd: "/synthetic/workspace" },
+        ...options,
+      }),
+  };
+}
 
 const resetFault = useSqliteWorkerFault([
   {
@@ -92,9 +122,7 @@ it.each(["turn", "reset"] as const)(
         }
       };
       if (operation === "turn") {
-        const result = await appendExpectedSessionTranscriptTurn(f.scope, {
-          expectedSessionId: f.scope.sessionId,
-          sessionFile: "synthetic-session.jsonl",
+        const result = await f.append({
           messages: [
             { eventId: "acknowledged-turn", message: { role: "user", content: "committed" } },
           ],
@@ -106,10 +134,7 @@ it.each(["turn", "reset"] as const)(
         expect(f.events().filter((event) => event.id === "acknowledged-turn")).toHaveLength(1);
       } else {
         const buildNextEntry = vi.fn(() => ({ sessionId: "acknowledged-reset", updatedAt: 2 }));
-        const result = await resetSessionEntryLifecycle({
-          ...f.scope,
-          target: f.target,
-          resetBoundary: { context: "clear", reason: "new", cwd: "/synthetic/workspace" },
+        const result = await f.reset({
           buildNextEntry,
           afterEntryMutation: committed,
         });
@@ -138,9 +163,7 @@ it("rolls back the turn and its pending-input custody after an idempotency confl
     try {
       await expect(
         pending!.run(() =>
-          appendExpectedSessionTranscriptTurn(f.scope, {
-            expectedSessionId: f.scope.sessionId,
-            sessionFile: "synthetic-session.jsonl",
+          f.append({
             messages: [
               { message: pending!.message },
               {
@@ -199,38 +222,29 @@ it.each([
       if (operation === "turn") {
         expect(pending).toBeDefined();
       }
-      const createAdmission = admission.createSqliteWorkerOperationAdmission;
       let finalGrant = false;
-      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (callback, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === stage && (operation === "turn" || resetPrepared)) {
-              finalGrant = true;
-              if (pending) {
-                expect(pending.state).toBe("queued");
-              }
-              current = false;
-            }
-            callback(request, grant);
-          }, attachment),
-      );
+      probe.admission(admission, (request, grant, callback) => {
+        if (request.stage === stage && (operation === "turn" || resetPrepared)) {
+          finalGrant = true;
+          if (pending) {
+            expect(pending.state).toBe("queued");
+          }
+          current = false;
+        }
+        callback(request, grant);
+      });
       const committed = vi.fn();
       try {
         const work =
           operation === "turn"
             ? pending!.run(() =>
-                appendExpectedSessionTranscriptTurn(f.scope, {
-                  expectedSessionId: f.scope.sessionId,
-                  sessionFile: "synthetic-session.jsonl",
+                f.append({
                   messages: [{ message: pending!.message }],
                   onMessageCommitted: committed,
                 }),
               )
-            : resetSessionEntryLifecycle({
-                ...f.scope,
-                target: f.target,
+            : f.reset({
                 commitGuard: assertCurrent,
-                resetBoundary: { context: "clear", reason: "new", cwd: "/synthetic/workspace" },
                 buildNextEntry() {
                   resetPrepared = true;
                   return { sessionId: "revoked-reset", updatedAt: 2 };
@@ -265,9 +279,7 @@ it.for(["turn", "reset"] as const)(
           order.push("reset:identity");
         }
       });
-      const first = appendExpectedSessionTranscriptTurn(f.scope, {
-        expectedSessionId: f.scope.sessionId,
-        sessionFile: "synthetic-session.jsonl",
+      const first = f.append({
         messages: [{ eventId: "first-turn", message: { role: "user", content: "first" } }],
         onMessageCommitted(_message, accept) {
           order.push("turn:callback");
@@ -286,9 +298,7 @@ it.for(["turn", "reset"] as const)(
         );
         second =
           operation === "turn"
-            ? appendExpectedSessionTranscriptTurn(f.scope, {
-                expectedSessionId: f.scope.sessionId,
-                sessionFile: "synthetic-session.jsonl",
+            ? f.append({
                 messages: [
                   {
                     eventId: "second-turn",
@@ -303,9 +313,7 @@ it.for(["turn", "reset"] as const)(
                   order.push("second:callback");
                 },
               })
-            : resetSessionEntryLifecycle({
-                ...f.scope,
-                target: f.target,
+            : f.reset({
                 resetBoundary: {
                   context: "preserve-tail",
                   reason: "reset",
@@ -355,10 +363,7 @@ it("commits a reset with zero host SQL", async () => {
     const committed = vi.fn();
     const sql = observeHostDataSql();
     try {
-      const result = await resetSessionEntryLifecycle({
-        ...f.scope,
-        target: f.target,
-        resetBoundary: { context: "clear", reason: "new", cwd: "/synthetic/workspace" },
+      const result = await f.reset({
         buildNextEntry: () => ({ sessionId: "host-sql-reset", updatedAt: 2 }),
         afterEntryMutation: committed,
       });
@@ -380,9 +385,7 @@ it("commits a reset with zero host SQL", async () => {
 it("reconciles a dirty reset transcript through the host owner after commit", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();
-    await appendExpectedSessionTranscriptTurn(f.scope, {
-      expectedSessionId: f.scope.sessionId,
-      sessionFile: "synthetic-session.jsonl",
+    await f.append({
       messages: [
         { eventId: "dirty-reset-seed", message: { role: "user", content: "Retained history" } },
       ],
@@ -400,9 +403,7 @@ it("reconciles a dirty reset transcript through the host owner after commit", as
     const reconcile = vi.spyOn(transcriptReconcile, "startSessionTranscriptIndexReconcile");
     const databaseOptions = { agentId: f.scope.agentId, path: f.database.path };
     try {
-      await resetSessionEntryLifecycle({
-        ...f.scope,
-        target: f.target,
+      await f.reset({
         resetBoundary: {
           context: "clear",
           reason: "new",
@@ -448,9 +449,7 @@ it.for([false, true])(
         return { sessionId: "rejected-reset", updatedAt: 3 };
       });
       const committed = vi.fn();
-      const work = resetSessionEntryLifecycle({
-        ...f.scope,
-        target: f.target,
+      const work = f.reset({
         resetBoundary: withBoundary
           ? {
               context: "clear",
@@ -513,10 +512,7 @@ it("rolls collaboration cleanup back with a refused reset and clears only the co
     const entryBefore = f.read();
     const committed = vi.fn();
     const reset = () =>
-      resetSessionEntryLifecycle({
-        ...f.scope,
-        target: f.target,
-        resetBoundary: { context: "clear", reason: "new", cwd: "/synthetic/workspace" },
+      f.reset({
         buildNextEntry: () => ({ sessionId: "collaboration-reset", updatedAt: 2 }),
         afterEntryMutation: committed,
       });
@@ -557,9 +553,7 @@ it("preserves worker custody refusal identity so callers cannot fall back to ano
     expect(pending).toBeDefined();
     try {
       await expect(
-        appendExpectedSessionTranscriptTurn(f.scope, {
-          expectedSessionId: f.scope.sessionId,
-          sessionFile: "synthetic-session.jsonl",
+        f.append({
           messages: [{ message }],
         }),
       ).rejects.toBeInstanceOf(SessionPendingInputCustodyError);
@@ -592,16 +586,12 @@ it("commits a pending-input turn with zero host SQL", async () => {
         observedCustody.push(pending!.state);
       }
     });
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (callback, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            grantStates.push(pending!.state);
-          }
-          callback(request, grant);
-        }, attachment),
-    );
+    probe.admission(admission, (request, grant, callback) => {
+      if (request.stage === "commit") {
+        grantStates.push(pending!.state);
+      }
+      callback(request, grant);
+    });
     const committed = vi.fn<NonNullable<SessionTranscriptTurnPersistOptions["onMessageCommitted"]>>(
       (message) => {
         expect(pending!.state).toBe("consumed");
@@ -617,9 +607,7 @@ it("commits a pending-input turn with zero host SQL", async () => {
     const sql = observeHostDataSql();
     try {
       const turn = await pending!.run(() =>
-        appendExpectedSessionTranscriptTurn(f.scope, {
-          expectedSessionId: f.scope.sessionId,
-          sessionFile: "synthetic-session.jsonl",
+        f.append({
           touchSessionEntry: true,
           messages: [{ message: pending!.message }],
           onMessageCommitted: committed,
@@ -665,9 +653,7 @@ it("evaluates the latest-assistant predicate against earlier writes in the same 
     };
     const sql = observeHostDataSql();
     try {
-      const result = await appendExpectedSessionTranscriptTurn(f.scope, {
-        expectedSessionId: f.scope.sessionId,
-        sessionFile: "synthetic-session.jsonl",
+      const result = await f.append({
         messages: [
           { eventId: "first-assistant", message },
           {
@@ -693,9 +679,7 @@ it("evaluates the latest-assistant predicate against earlier writes in the same 
       { id: "first-assistant", message },
     ]);
     const prepare = vi.fn(() => undefined);
-    const dependent = await appendExpectedSessionTranscriptTurn(f.scope, {
-      expectedSessionId: f.scope.sessionId,
-      sessionFile: "synthetic-session.jsonl",
+    const dependent = await f.append({
       messages: [
         {
           message: { ...message, idempotencyKey: "dependent" },
@@ -732,9 +716,7 @@ it("replays an exactly consumed input after its live custody has finished", asyn
     });
     expect(pending).toBeDefined();
     const append = (message: unknown) =>
-      appendExpectedSessionTranscriptTurn(f.scope, {
-        expectedSessionId: f.scope.sessionId,
-        sessionFile: "synthetic-session.jsonl",
+      f.append({
         messages: [{ message }],
       });
     try {
@@ -768,9 +750,7 @@ it("prepares a goal message with the same intent that commits with the goal", as
       observed = structuredClone(message);
       return message;
     });
-    const result = await appendExpectedSessionTranscriptTurn(f.scope, {
-      expectedSessionId: f.scope.sessionId,
-      sessionFile: "synthetic-session.jsonl",
+    const result = await f.append({
       sessionTurnMutation: {
         kind: "goal",
         runId: "goal-run",
@@ -808,9 +788,7 @@ it("prepares a goal message with the same intent that commits with the goal", as
     );
     const invalidPrepare = vi.fn((message: unknown) => message);
     await expect(
-      appendExpectedSessionTranscriptTurn(f.scope, {
-        expectedSessionId: f.scope.sessionId,
-        sessionFile: "synthetic-session.jsonl",
+      f.append({
         sessionTurnMutation: {
           kind: "goal",
           runId: "invalid-goal-run",
@@ -838,14 +816,17 @@ it.each(["commit", "captured-root", "native-replay"])(
   "keeps real first-Goal admission grants free of host session SQL (%s)",
   async (mode) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       if (mode === "native-replay") {
-        await state.writeConfig({
+        const config = {
           agents: { entries: { main: { workspace: state.workspaceDir } } },
           session: { store: state.statePath("alternate", "{agentId}", "sessions.json") },
-        });
+        };
+        await state.writeConfig(config);
+        setRuntimeConfigSnapshot(config);
       }
       const key = "agent:main:compound-goal-guard";
-      const target = loadGatewaySessionEntry(key, { agentId: "main" });
+      const target = await loadGatewaySessionEntryAsync(key, { agentId: "main" });
       const initialSessionEntry = { sessionId: "guarded-first-goal", updatedAt: Date.now() };
       const guard = createChatSendGoalCommitGuard({
         client: null,
@@ -877,21 +858,17 @@ it.each(["commit", "captured-root", "native-replay"])(
       const sql = observeHostDataSql();
       const grants: string[] = [];
       let commitSeen = false;
-      const create = admission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (callback, attachment) =>
-          create((request, grant) => {
-            const before = sql.queries.length;
-            try {
-              callback(request, grant);
-            } finally {
-              if (request.stage === "commit") {
-                commitSeen = true;
-                grants.push(...sql.queries.slice(before));
-              }
-            }
-          }, attachment),
-      );
+      probe.admission(admission, (request, grant, callback) => {
+        const before = sql.queries.length;
+        try {
+          callback(request, grant);
+        } finally {
+          if (request.stage === "commit") {
+            commitSeen = true;
+            grants.push(...sql.queries.slice(before));
+          }
+        }
+      });
       try {
         const scope = {
           env,
@@ -929,9 +906,9 @@ it.each(["commit", "captured-root", "native-replay"])(
             },
             { ...initialSessionEntry, sessionId: "competing-goal-session" },
           );
-          expect(() => loadGatewaySessionEntry(key, { agentId: "main" }, target.cfg)).toThrow(
-            /duplicate/i,
-          );
+          await expect(
+            loadGatewaySessionEntryAsync(key, { agentId: "main" }, target.cfg),
+          ).rejects.toThrow(/duplicate/i);
           await expect(
             appendExpectedSessionTranscriptTurn(scope, {
               ...options,

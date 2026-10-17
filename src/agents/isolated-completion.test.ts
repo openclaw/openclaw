@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
@@ -47,10 +48,12 @@ it.each([undefined, "session-activity-summary", "conversation-label", "session-o
         isolatedCompletion: true,
         disableTools: true,
         disableCliLiveSession: true,
-        timeoutMs: 1_000,
+        timeoutMs: expect.any(Number),
         model: "gpt-test",
       }),
     );
+    expect(mocks.runCliAgent.mock.calls[0]?.[0].timeoutMs).toBeGreaterThan(0);
+    expect(mocks.runCliAgent.mock.calls[0]?.[0].timeoutMs).toBeLessThanOrEqual(1_000);
     expect(mocks.runCliAgent.mock.calls[0]?.[0].trigger).toBeUndefined();
   },
 );
@@ -117,20 +120,7 @@ it.each([false, true])(
       timeoutMs: 1_000,
     };
 
-    if (auth) {
-      expect(prepared).not.toHaveProperty("agentHarnessRuntimeOverride");
-      await expect(runIsolatedCompletion(request)).resolves.toMatchObject({
-        text: "Utility result",
-      });
-      expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledOnce();
-      expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledWith(
-        expect.objectContaining({ provider: "anthropic", modelId: "claude-haiku-4-5" }),
-        expect.anything(),
-      );
-      expect(dispatch).toHaveBeenCalledOnce();
-      expect(mocks.runCliAgent).not.toHaveBeenCalled();
-      return;
-    }
+    expect(prepared.agentHarnessRuntimeOverride).toBe("claude-cli");
 
     await expect(runIsolatedCompletion(request)).resolves.toMatchObject({
       text: "Utility result",
@@ -149,13 +139,15 @@ it.each([false, true])(
       }),
     );
 
-    // Without the borrowed owner, the same credentialless request reproduces #138789.
-    await expect(
-      runIsolatedCompletion({ ...request, agentHarnessRuntimeOverride: undefined }),
-    ).rejects.toThrow('No API key found for provider "anthropic"');
-    expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledOnce();
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(mocks.runCliAgent).toHaveBeenCalledOnce();
+    if (!auth) {
+      // Without the borrowed owner, the same credentialless request reproduces #138789.
+      await expect(
+        runIsolatedCompletion({ ...request, agentHarnessRuntimeOverride: undefined }),
+      ).rejects.toThrow('No API key found for provider "anthropic"');
+      expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledOnce();
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(mocks.runCliAgent).toHaveBeenCalledOnce();
+    }
   },
 );
 
@@ -225,7 +217,7 @@ describe("runIsolatedCompletion", () => {
     "rotates quota failures within one deadline: $errorMessage ($elapsedMs ms)",
     async ({ errorMessage, elapsedMs }) => {
       prepareQuotaProfiles();
-      const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
       const dispatch = vi
         .fn()
         .mockImplementationOnce(async () => {
@@ -335,10 +327,10 @@ describe("runIsolatedCompletion", () => {
       );
       expect(error).toMatchObject({
         code: "output-rejected",
-        message: expect.stringContaining(`stop reason ${assistant.stopReason}`),
+        message: assistant.errorMessage,
       });
       if (kind === "terminal") {
-        expect(resolveModelFallbackError(error)).toMatchObject({ kind: "unknown" });
+        expect(resolveModelFallbackError(error)).toMatchObject({ kind: "terminal" });
       }
       expect(dispatch).toHaveBeenCalledOnce();
       expect(releaseRuntimeLease).toHaveBeenCalledOnce();
@@ -781,7 +773,7 @@ describe("runIsolatedCompletion", () => {
     async ({ requestedProfile, selectedProfile }) => {
       mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
       mocks.cliBackendAcceptsAuthProfileForwarding.mockReturnValue(true);
-      mocks.resolveCliExecutionAuthProfileId.mockReturnValue(selectedProfile);
+      mocks.resolveCliExecutionAuthProfileId.mockResolvedValue(selectedProfile);
       mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "isolated result" }] });
 
       await expect(

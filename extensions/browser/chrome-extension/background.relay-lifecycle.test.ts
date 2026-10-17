@@ -464,6 +464,13 @@ describe("native attachment retirement ordering", () => {
     try {
       f.old.receive({ type: "createTab", seq: 80, url: "https://example.com/new", focus: true });
       await vi.waitFor(() => expect(f.h.windowsUpdate).toHaveBeenCalled());
+      f.h.updateTab(createdTabId, { title: "Still focusing" });
+      await vi.waitFor(() =>
+        expect(frames(f.old).findLast((frame) => frame.type === "tabs")?.tabs).toEqual([
+          expect.objectContaining({ tabId }),
+        ]),
+      );
+      expect(f.h.debuggerDetach).not.toHaveBeenCalled();
       await reply(f.old, 81, { type: "detach", tabId: createdTabId });
       expect(await reply(f.old, 82, { type: "attach", tabId: createdTabId })).toMatchObject({
         type: "result",

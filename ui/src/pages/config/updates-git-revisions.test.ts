@@ -1,20 +1,19 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { beforeEach, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import {
   createUpdatesViewDom,
   createUpdatesViewProps as createProps,
 } from "./updates.test-support.ts";
-import { renderUpdates } from "./updates.ts";
 
-let container: HTMLDivElement;
+let container: ReturnType<typeof createUpdatesViewDom>["container"];
+let mountUpdates: ReturnType<typeof createUpdatesViewDom>["mountUpdates"];
 let row: ReturnType<typeof createUpdatesViewDom>["row"];
 
 beforeEach(async () => {
   await i18n.setLocale("en");
-  ({ container, row } = createUpdatesViewDom());
+  ({ container, row, mountUpdates } = createUpdatesViewDom());
 });
 
 it("renders bounded dev commit details only when supplied", () => {
@@ -54,7 +53,7 @@ it("renders bounded dev commit details only when supplied", () => {
       },
     },
   });
-  render(renderUpdates(props), container);
+  mountUpdates(props);
 
   expect(row("Commits").querySelectorAll("[role='listitem']")).toHaveLength(2);
   expect(row("Commits").textContent).toContain("b123456");
@@ -74,20 +73,17 @@ it("renders bounded dev commit details only when supplied", () => {
     upstreamSha: "c".repeat(40),
     commitsBehind: 2,
   };
-  render(
-    renderUpdates(
-      createProps({
-        update: {
-          ...props.update,
-          updateSchedule: {
-            channel: "dev",
-            autoEnabled: false,
-            install: { kind: "git", git: refreshedGit },
-          },
+  mountUpdates(
+    createProps({
+      update: {
+        ...props.update,
+        updateSchedule: {
+          channel: "dev",
+          autoEnabled: false,
+          install: { kind: "git", git: refreshedGit },
         },
-      }),
-    ),
-    container,
+      },
+    }),
   );
   expect(container.querySelector(".updates-commit-list")).toBeNull();
   expect(
@@ -96,6 +92,6 @@ it("renders bounded dev commit details only when supplied", () => {
     ),
   ).toEqual(["aaaaaaaa", "cccccccc"]);
 
-  render(renderUpdates(createProps()), container);
+  mountUpdates(createProps());
   expect(container.querySelector(".updates-commit-list")).toBeNull();
 });

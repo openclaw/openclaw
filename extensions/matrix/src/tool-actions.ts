@@ -20,7 +20,6 @@ import {
   editMatrixMessage,
   readMatrixMessage,
   readMatrixMessages,
-  sendMatrixMessage,
 } from "./matrix/actions/messages.js";
 import { pinMatrixMessage, unpinMatrixMessage, listMatrixPins } from "./matrix/actions/pins.js";
 import { voteMatrixPoll } from "./matrix/actions/polls.js";
@@ -52,7 +51,7 @@ import {
 } from "./matrix/actions/verification.js";
 import { withAuthorizedMatrixReadTarget } from "./matrix/read-policy.js";
 import type { MatrixClient } from "./matrix/sdk.js";
-import { reactMatrixMessage } from "./matrix/send.js";
+import { reactMatrixMessage, sendMessageMatrix } from "./matrix/send.js";
 import { applyMatrixProfileUpdate } from "./profile-update.js";
 import type { CoreConfig, MatrixAccountConfig } from "./types.js";
 
@@ -179,12 +178,12 @@ export async function handleMatrixAction(
           ? params.audioAsVoice
           : undefined;
     const { clientOpts } = prepareAction("messages");
-    const result = await sendMatrixMessage(to, content, {
-      mediaUrl: mediaUrl ?? undefined,
+    const result = await sendMessageMatrix(to, content, {
+      mediaUrl,
       ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
       mediaLocalRoots: ctx.mediaLocalRoots,
-      replyToId: replyToId ?? undefined,
-      threadId: threadId ?? undefined,
+      replyToId,
+      threadId,
       audioAsVoice,
       ...clientOpts,
     });
@@ -228,7 +227,7 @@ export async function handleMatrixAction(
     const reactions = await withReadTarget(roomId, async (resolvedRoom, actionOpts) =>
       listMatrixReactions(resolvedRoom, messageId, {
         ...actionOpts,
-        limit: limit ?? undefined,
+        limit,
       }),
     );
     return jsonResult({ ok: true, reactions });
@@ -280,10 +279,10 @@ export async function handleMatrixAction(
         };
       }
       const messages = await readMatrixMessages(resolvedRoom, {
-        limit: limit ?? undefined,
-        before: before ?? undefined,
-        after: after ?? undefined,
-        threadId: threadId ?? undefined,
+        limit,
+        before,
+        after,
+        threadId,
         ...actionOpts,
       });
       return {

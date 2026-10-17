@@ -1,21 +1,15 @@
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import {
-  openOpenClawAgentDatabase,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import {
-  hasTerminalMainSessionTranscriptNewerThanRegistrySync,
-  resolveSessionLifecycleTimestamps,
-} from "./lifecycle.js";
+import { hasTerminalMainSessionTranscriptNewerThanRegistryAsync } from "./lifecycle-read.js";
+import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
 import {
   appendTranscriptEvent,
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { SessionEntry } from "./types.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-lifecycle-");
@@ -74,8 +68,8 @@ describe("terminal main session transcript freshness", () => {
     };
   }
 
-  function check(entry: SessionEntry, sessionKey: string): boolean {
-    return hasTerminalMainSessionTranscriptNewerThanRegistrySync({
+  function check(entry: SessionEntry, sessionKey: string): Promise<boolean> {
+    return hasTerminalMainSessionTranscriptNewerThanRegistryAsync({
       agentId: "main",
       entry,
       sessionKey,
@@ -91,19 +85,12 @@ describe("terminal main session transcript freshness", () => {
     });
 
     expect(entry.updatedAt).toBe(registryTimestampMs);
-    const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
-    if (!target.path) {
-      throw new Error("expected SQLite database path");
-    }
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
-    const reads = trackSqliteStatementExecutions(database.db, ["events"], (query) =>
-      query.includes('"transcript_events"') ? "events" : null,
-    );
+    const sql = observeHostDataSql();
     try {
-      expect(check(entry, sessionKey)).toBe(true);
-      expect(reads.counts.events).toBe(0);
+      expect(await check(entry, sessionKey)).toBe(true);
+      expect(sql.queries).toEqual([]);
     } finally {
-      reads.restore();
+      sql.restore();
     }
   });
 
@@ -113,7 +100,7 @@ describe("terminal main session transcript freshness", () => {
       updatedAt: Date.now() - 10_000,
     });
 
-    expect(check(entry, sessionKey)).toBe(false);
+    expect(await check(entry, sessionKey)).toBe(false);
   });
 
   it("keeps a yielded main session reusable after a child transcript admission", async () => {
@@ -124,7 +111,7 @@ describe("terminal main session transcript freshness", () => {
 
     expect(entry.status).toBeUndefined();
     expect(entry.endedAt).toBeDefined();
-    expect(check(entry, sessionKey)).toBe(false);
+    expect(await check(entry, sessionKey)).toBe(false);
   });
 
   it("uses SQLite freshness for entries that still contain legacy transcript paths", async () => {
@@ -134,7 +121,7 @@ describe("terminal main session transcript freshness", () => {
       updatedAt: Date.now() - 10_000,
     });
 
-    expect(check(entry, sessionKey)).toBe(true);
+    expect(await check(entry, sessionKey)).toBe(true);
   });
 
   it("preserves Date.parse semantics for a numeric-looking transcript header", async () => {
@@ -161,7 +148,7 @@ describe("terminal main session transcript freshness", () => {
       status: "killed",
       updatedAt: now,
     });
-    expect(check(entry, sessionKey)).toBe(true);
+    expect(await check(entry, sessionKey)).toBe(true);
 
     await upsertSessionEntryCore({ agentId: "main", sessionKey, storePath }, entry);
     const refreshed = loadSessionEntry({ agentId: "main", sessionKey, storePath });
@@ -170,7 +157,7 @@ describe("terminal main session transcript freshness", () => {
     if (!refreshed) {
       throw new Error("expected refreshed session entry");
     }
-    expect(check(refreshed, sessionKey)).toBe(false);
+    expect(await check(refreshed, sessionKey)).toBe(false);
   });
 
   it("does not rotate non-main sessions or rows newer than the transcript", async () => {
@@ -196,7 +183,7 @@ describe("terminal main session transcript freshness", () => {
       throw new Error("expected refreshed registry entry");
     }
 
-    expect(check(nonMain.entry, nonMain.sessionKey)).toBe(false);
-    expect(check(refreshedRegistry, newerRegistry.sessionKey)).toBe(false);
+    expect(await check(nonMain.entry, nonMain.sessionKey)).toBe(false);
+    expect(await check(refreshedRegistry, newerRegistry.sessionKey)).toBe(false);
   });
 });

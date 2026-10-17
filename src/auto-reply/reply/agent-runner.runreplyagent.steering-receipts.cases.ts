@@ -96,7 +96,7 @@ export function registerSteeringReceiptCases({
         },
       },
     });
-    active.bindToolAuthoritySnapshot(
+    await active.bindToolAuthoritySnapshotAsync(
       prepareReplyToolAuthority({
         ...followupRun,
         run: {
@@ -108,7 +108,7 @@ export function registerSteeringReceiptCases({
         },
       }),
     );
-    active.bindToolAuthorityRoute({ provider: "openai", model: "gpt-fallback" });
+    await active.bindToolAuthorityRouteAsync({ provider: "openai", model: "gpt-fallback" });
     active.setPhase("running");
     try {
       await expect(run()).resolves.toBeUndefined();

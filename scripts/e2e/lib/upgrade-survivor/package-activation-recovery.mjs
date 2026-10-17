@@ -3,8 +3,8 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import { readDatabase } from "./observations.mjs";
 
 const digest = (file) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 const identity = (file) => {
@@ -191,13 +191,9 @@ function main([command, artifacts, ...args]) {
     if (fault.cut === "verification") {
       assert.equal(read(`${fault.evidence}.doctor`).exitCode, 1);
     }
-    const db = new DatabaseSync(fault.journal, { readOnly: true });
-    let row;
-    try {
-      row = db.prepare("SELECT * FROM package_activation WHERE slot = 1").get();
-    } finally {
-      db.close();
-    }
+    const row = readDatabase(fault.journal, (db) =>
+      db.prepare("SELECT * FROM package_activation WHERE slot = 1").get(),
+    );
     assert.equal(
       row.phase,
       "publication-complete",
@@ -252,17 +248,14 @@ function main([command, artifacts, ...args]) {
     );
     assertCandidate();
     const row = read(fault.evidence).row;
-    const db = new DatabaseSync(fault.journal, { readOnly: true });
-    try {
+    readDatabase(fault.journal, (db) => {
       const actual = db.prepare("SELECT * FROM package_activation WHERE slot = 1").get();
       assert.deepEqual(
         { ...actual },
         row,
         "the rejected old updater must not alter its recovery obligation",
       );
-    } finally {
-      db.close();
-    }
+    });
     value.status = "passed";
     value.targetSelector = "unmodified-released-9.8";
     value.firstHop = {

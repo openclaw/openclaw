@@ -27,11 +27,15 @@ const MID_TURN_PRECHECK_ERROR_MESSAGE = new MidTurnPrecheckSignal({
 
 function interceptTranscriptCommit(databasePath: string, onCommit: () => void) {
   return probe.admission(workerAdmission, (request, grant, admit) => {
+    const facts =
+      isRecord(request.facts) && request.facts.kind === "session-manager-authority"
+        ? request.facts.domainFacts
+        : request.facts;
     if (
       request.stage === "commit" &&
-      isRecord(request.facts) &&
-      isRecord(request.facts.identity) &&
-      request.facts.identity.nativeLocation === databasePath
+      isRecord(facts) &&
+      isRecord(facts.identity) &&
+      facts.identity.nativeLocation === databasePath
     ) {
       onCommit();
     }

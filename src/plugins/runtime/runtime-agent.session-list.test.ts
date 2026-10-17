@@ -1,15 +1,20 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../../config/sessions/session-accessor.sqlite-participants.native.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 
 it("lists exact selected keys without losing full entry fields", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const runtime = createRuntimeAgent();
     for (const name of ["selected", "other", "alpha"]) {
       await runtime.session.upsertSessionEntry({
@@ -84,5 +89,47 @@ it("lists exact selected keys without losing full entry fields", async () => {
     fs.renameSync(pathname, `${pathname}.previous`);
     fs.copyFileSync(`${pathname}.previous`, pathname);
     assertions.forEach((assertCurrent) => expect(assertCurrent).toThrow());
+  });
+});
+
+it("refreshes asynchronous descriptive reads after a native session replacement", async () => {
+  await withOpenClawTestState({ label: "plugin-runtime-async-session-read" }, async () => {
+    setRuntimeConfigSnapshot({});
+    const runtime = createRuntimeAgent();
+    const scope = { agentId: "main", sessionKey: "agent:main:clickclack:channel:discussion" };
+    const read = runtime.session.getSessionEntryAsync;
+    if (!read) {
+      throw new Error("Expected the current runtime's asynchronous session reader");
+    }
+    const initial = { sessionId: "original", updatedAt: 100, displayName: "Original title" };
+    await runtime.session.upsertSessionEntry({ ...scope, entry: initial });
+    expect(await read({ ...scope, readConsistency: "latest" })).toMatchObject(initial);
+
+    const replacement = {
+      ...initial,
+      sessionId: "replacement",
+      displayName: "Replacement title",
+    };
+    replaceSessionEntrySync(scope, replacement);
+    expect(await read({ ...scope, readConsistency: "latest" })).toMatchObject(replacement);
+
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      await withPluginRuntimePluginScope({ pluginId: "session-runtime-read-warning" }, async () => {
+        expect(await read(scope)).toMatchObject(replacement);
+        expect(warning).not.toHaveBeenCalled();
+        for (let index = 0; index < 2; index++) {
+          expect(runtime.session.getSessionEntry(scope)).toMatchObject(replacement);
+        }
+      });
+      expect(warning).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(
+          "runtime.agent.session.getSessionEntry is deprecated; use runtime.agent.session.getSessionEntryAsync",
+        ),
+        { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+      );
+    } finally {
+      warning.mockRestore();
+    }
   });
 });

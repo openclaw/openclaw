@@ -5,6 +5,10 @@ import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
+import {
+  attachInternalToolResultContentSource,
+  copyInternalToolResultState,
+} from "./runtime/internal-hooks.js";
 import { resolveToolResultFailureKind } from "./tool-result-error.js";
 import {
   applyToolCatalogCompaction,
@@ -186,7 +190,8 @@ function formatToolSearchBatchResponse(
     payload = render();
     ({ text } = renderToolSearchControlText(JSON.stringify(payload, null, 2), networkContent));
   }
-  return textResult(text, payload);
+  const result = textResult(text, payload);
+  return networkContent ? attachInternalToolResultContentSource(result, "network") : result;
 }
 
 function shouldExposeControlTool(name: string, mode: ToolSearchMode): boolean {
@@ -214,6 +219,67 @@ export function applyToolSearchCatalog(params: {
 
 export { applyToolSchemaDirectoryCatalog };
 
+const describeParameters = Type.Object({
+  id: Type.String({ description: "Tool search result id or tool name." }),
+});
+const callParameters = Type.Object({
+  id: Type.String({ description: "Tool search result id or tool name." }),
+  args: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "Tool input." })),
+});
+// The resolved limit is bounded to 1..MAX_TOOL_SEARCH_RESULTS. Stable source schemas
+// let the session descriptor owner reuse its normalized, published parameters.
+const searchParametersByLimit = new Map<number, AnyAgentTool["parameters"]>();
+
+function resolveSearchParameters(searchDefaultLimit: number): AnyAgentTool["parameters"] {
+  const cached = searchParametersByLimit.get(searchDefaultLimit);
+  if (cached) {
+    return cached;
+  }
+  const parameters = Type.Object({
+    query: Type.Optional(
+      Type.Union([Type.String(), Type.Null()], {
+        description:
+          "Single search query, in English. A non-empty query joins a non-empty batch first. Null or blank is ignored beside a non-empty batch.",
+      }),
+    ),
+    limit: Type.Optional(
+      Type.Union([Type.Integer({ minimum: 1 }), Type.Null()], {
+        description:
+          "Maximum number of single-search results. Omitted or null uses the default. With only batch queries, omit this or set it to null; set limits on each batch entry.",
+      }),
+    ),
+    queries: Type.Optional(
+      Type.Union(
+        [
+          // Let the parser handle empty or null batch placeholders beside a scalar.
+          Type.Array(
+            Type.Object({
+              query: Type.String({
+                minLength: 1,
+                maxLength: MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
+                description: "Search query, in English. Describe the capability you need.",
+              }),
+              limit: Type.Optional(
+                Type.Integer({
+                  minimum: 1,
+                  description: `Maximum results for this query. Defaults to ${searchDefaultLimit} when omitted.`,
+                }),
+              ),
+            }),
+            { maxItems: MAX_TOOL_SEARCH_BATCH_QUERIES },
+          ),
+          Type.Null(),
+        ],
+        {
+          description: `Independent searches. Prefer this alone for several searches; a non-empty query beside it runs as the first entry. Their effective limits may total at most ${MAX_TOOL_SEARCH_RESULTS}; an omitted item limit counts as ${searchDefaultLimit}. The serialized query strings may use at most ${MAX_TOOL_SEARCH_BATCH_QUERY_BYTES} UTF-8 bytes in total.`,
+        },
+      ),
+    ),
+  });
+  searchParametersByLimit.set(searchDefaultLimit, parameters);
+  return parameters;
+}
+
 /** Create Tool Search control tools for the current run/session context. */
 export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[] {
   const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
@@ -223,48 +289,8 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       name: TOOL_SEARCH_RAW_TOOL_NAME,
       label: "Tool Search",
       description:
-        "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; a non-empty query joins a non-empty batch first, with its own limit. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to tool_call; use tool_describe only when you need its input schema.",
-      parameters: Type.Object({
-        query: Type.Optional(
-          Type.Union([Type.String(), Type.Null()], {
-            description:
-              "Single search query, in English. A non-empty query joins a non-empty batch first. Null or blank is ignored beside a non-empty batch.",
-          }),
-        ),
-        limit: Type.Optional(
-          Type.Union([Type.Integer({ minimum: 1 }), Type.Null()], {
-            description:
-              "Maximum number of single-search results. Omitted or null uses the default. With only batch queries, omit this or set it to null; set limits on each batch entry.",
-          }),
-        ),
-        queries: Type.Optional(
-          Type.Union(
-            [
-              // Let the parser handle empty or null batch placeholders beside a scalar.
-              Type.Array(
-                Type.Object({
-                  query: Type.String({
-                    minLength: 1,
-                    maxLength: MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
-                    description: "Search query, in English. Describe the capability you need.",
-                  }),
-                  limit: Type.Optional(
-                    Type.Integer({
-                      minimum: 1,
-                      description: `Maximum results for this query. Defaults to ${config.searchDefaultLimit} when omitted.`,
-                    }),
-                  ),
-                }),
-                { maxItems: MAX_TOOL_SEARCH_BATCH_QUERIES },
-              ),
-              Type.Null(),
-            ],
-            {
-              description: `Independent searches. Prefer this alone for several searches; a non-empty query beside it runs as the first entry. Their effective limits may total at most ${MAX_TOOL_SEARCH_RESULTS}; an omitted item limit counts as ${config.searchDefaultLimit}. The serialized query strings may use at most ${MAX_TOOL_SEARCH_BATCH_QUERY_BYTES} UTF-8 bytes in total.`,
-            },
-          ),
-        ),
-      }),
+        "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; a non-empty query joins a non-empty batch first, with its own limit. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to dispatch_action; use tool_describe only when you need its input schema.",
+      parameters: resolveSearchParameters(config.searchDefaultLimit),
       execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
         const request = readToolSearchRequest(args, config);
         if (request.kind === "single") {
@@ -294,9 +320,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       label: "Tool Describe",
       description:
         "Load the full schema and metadata for one search result when its input is not already clear.",
-      parameters: Type.Object({
-        id: Type.String({ description: "Tool search result id or tool name." }),
-      }),
+      parameters: describeParameters,
       prepareArguments: prepareToolSearchDispatcherArguments,
       execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> =>
         formatToolSearchControlResult(
@@ -309,12 +333,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       name: TOOL_CALL_RAW_TOOL_NAME,
       label: "Tool Call",
       description: "Call an exact Tool Search result id or name through OpenClaw.",
-      parameters: Type.Object({
-        id: Type.String({ description: "Tool search result id or tool name." }),
-        args: Type.Optional(
-          Type.Record(Type.String(), Type.Unknown(), { description: "Tool input." }),
-        ),
-      }),
+      parameters: callParameters,
       prepareArguments: prepareToolSearchDispatcherArguments,
       execute: async (
         toolCallId: string,
@@ -339,31 +358,25 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
             onUpdate,
           });
           const { id, name, source } = callResult.tool;
+          const { details: _details, ...modelResult } = callResult.result;
           const images = callResult.result.content.filter((block) => block.type === "image");
-          const modelResult =
-            images.length > 0
-              ? {
-                  ...callResult.result,
-                  content: callResult.result.content.filter((block) => block.type !== "image"),
-                }
-              : callResult.result;
+          if (images.length > 0) {
+            modelResult.content = modelResult.content.filter((block) => block.type !== "image");
+          }
           // Invocation results need identity, not another copy of the discovery metadata.
           // Keep the full target result in details; forward its already-projected images as content.
-          const wrappedResult = {
-            ...formatToolSearchControlResult(
-              { tool: { id, name, source }, result: modelResult },
-              runtime,
-              { parentToolCallId: toolCallId, images },
-            ),
-            details: callResult,
-          };
+          const controlResult = formatToolSearchControlResult(
+            { tool: { id, name, source }, result: modelResult },
+            runtime,
+            { parentToolCallId: toolCallId, images },
+          );
           const failureKind = resolveToolResultFailureKind(callResult.result);
-          if (!failureKind) {
-            return wrappedResult;
-          }
           // Keep the model-visible `{ tool, result }` envelope stable while the
           // outer lifecycle reads its own canonical failure marker from details.
-          return { ...wrappedResult, details: { ...callResult, status: failureKind } };
+          return copyInternalToolResultState(controlResult, {
+            ...controlResult,
+            details: failureKind ? { ...callResult, status: failureKind } : callResult,
+          });
         } catch (error) {
           throw formatToolSearchControlError(error, runtime, toolCallId, signal ?? ctx.abortSignal);
         }

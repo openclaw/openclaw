@@ -1,9 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import {
-  bindMessageInjectionAdmission,
-  MessageInjectionAcceptedUnconfirmedError,
-} from "../../auto-reply/reply/message-injection-authority.js";
+import { bindMessageInjectionAdmission } from "../../auto-reply/reply/message-injection-authority.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   beginReplyMessageInjectionTarget,
@@ -22,7 +19,6 @@ import {
   createEmbeddedRunHandle,
   testing as embeddedTesting,
 } from "../embedded-agent-runner/runs.test-support.js";
-import { QuestionAnswerUnconfirmedError } from "../harness/gateway-question-dispatch.js";
 import {
   createAssistant,
   createTestSession,
@@ -40,9 +36,69 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+async function setupSteering(sessionId: string, prepare?: () => Promise<void>, fakeTimers = false) {
+  const context = await createTestSession();
+  if (fakeTimers) {
+    vi.useFakeTimers();
+  }
+  const { session } = context;
+  const streaming = createDeferredCore();
+  const held = holdAssistantResponse("active response");
+  streamMocks.streamSimple.mockImplementationOnce(() => {
+    streaming.resolve();
+    return held.response;
+  });
+  const sessionKey = `agent:main:${sessionId}`;
+  const operation = createTestReplyOperation({ sessionId, sessionKey });
+  const queueMessage: ReplyBackendMessageInjectionV2["queueMessage"] = (
+    text,
+    options,
+    assertCurrent,
+  ) =>
+    steerActiveSessionWithOptionalDeliveryWait(
+      session,
+      text,
+      options,
+      undefined,
+      () => {
+        assertCurrent();
+        return true;
+      },
+      undefined,
+      prepare,
+    );
+  const cancel = vi.fn();
+  const handle = {
+    ...createEmbeddedRunHandle({ runId: sessionId, supportsTranscriptCommitWait: true }),
+    kind: "embedded" as const,
+    cancel,
+    messageInjectionV2: { version: 2 as const, isAvailable: () => true, queueMessage },
+  };
+  operation.attachBackend(handle);
+  operation.setPhase("running");
+  setActiveEmbeddedRun(sessionId, handle, sessionKey);
+  const queue = (
+    surface: "registry" | "embedded" | "session",
+    text: string,
+    options: Parameters<typeof queueMessage>[1],
+  ) => {
+    if (surface === "session") {
+      return queueMessage(text, options, () => {}, "run");
+    }
+    if (surface === "embedded") {
+      return queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, text, options);
+    }
+    const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey)!;
+    return beginReplyMessageInjectionTarget(target, text, options).then((attempt) =>
+      finalizeReplyMessageInjectionAttempt({ target, attempt }),
+    );
+  };
+  return { ...context, held, streaming, operation, cancel, queue };
+}
+
 it.each(
   (["registry", "embedded"] as const).flatMap((surface) =>
-    (["none", "error", "unconfirmed", "question-unconfirmed"] as const).map((observer) => ({
+    (["none", "error"] as const).map((observer) => ({
       surface,
       observer,
     })),
@@ -50,35 +106,10 @@ it.each(
 )(
   "classifies withdrawn $surface steering after $observer settlement",
   async ({ surface, observer }) => {
-    const { session } = await createTestSession();
-    const streaming = createDeferredCore();
+    const { session, streaming, held, operation, queue } = await setupSteering(
+      `withdrawal-${surface}-${observer}`,
+    );
     const accepted = createDeferredCore();
-    const held = holdAssistantResponse("active response");
-    streamMocks.streamSimple.mockImplementationOnce(() => {
-      streaming.resolve();
-      return held.response;
-    });
-    const sessionId = `withdrawal-${surface}-${observer}`;
-    const sessionKey = `agent:main:${sessionId}`;
-    const operation = createTestReplyOperation({ sessionId, sessionKey });
-    const injection: ReplyBackendMessageInjectionV2 = {
-      version: 2,
-      isAvailable: () => true,
-      queueMessage: (text, options, assertCurrent) =>
-        steerActiveSessionWithOptionalDeliveryWait(session, text, options, undefined, () => {
-          assertCurrent();
-          return true;
-        }),
-    };
-    const handle = {
-      ...createEmbeddedRunHandle({ runId: sessionId, supportsTranscriptCommitWait: true }),
-      kind: "embedded" as const,
-      cancel() {},
-      messageInjectionV2: injection,
-    };
-    operation.attachBackend(handle);
-    operation.setPhase("running");
-    setActiveEmbeddedRun(sessionId, handle, sessionKey);
     const active = session.prompt("active prompt");
     let terminated = false;
     let outcome: Promise<unknown> | undefined;
@@ -92,29 +123,12 @@ it.each(
           }
         },
         onQueueSettled: () => {
-          if (observer === "unconfirmed") {
-            throw new MessageInjectionAcceptedUnconfirmedError();
-          }
-          if (observer === "question-unconfirmed") {
-            throw new QuestionAnswerUnconfirmedError(new Error("question receipt unavailable"));
-          }
           if (observer === "error") {
             throw new Error("settlement observer failed");
           }
         },
       };
-      if (surface === "registry") {
-        const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey)!;
-        outcome = beginReplyMessageInjectionTarget(target, "withdraw this input", options).then(
-          (attempt) => finalizeReplyMessageInjectionAttempt({ target, attempt }),
-        );
-      } else {
-        outcome = queueEmbeddedAgentMessageWithOutcomeAsync(
-          sessionId,
-          "withdraw this input",
-          options,
-        );
-      }
+      outcome = queue(surface, "withdraw this input", options);
       await awaitGateBeforeSettlement(accepted.promise, outcome, "Steering was not accepted");
       expect(session.getSteeringMessages()).toEqual(["withdraw this input"]);
       expect(session.agent.hasQueuedMessages()).toBe(true);
@@ -127,11 +141,8 @@ it.each(
       expect(session.getSteeringMessages()).toEqual([]);
       expect(session.agent.hasQueuedMessages()).toBe(false);
       expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-      const unconfirmed = observer === "unconfirmed" || observer === "question-unconfirmed";
       expect(result).toMatchObject(
-        surface === "registry"
-          ? { status: unconfirmed ? "indeterminate" : "rejected" }
-          : { queued: unconfirmed },
+        surface === "registry" ? { status: "rejected" } : { queued: false },
       );
     } finally {
       if (!terminated) {
@@ -151,15 +162,13 @@ it.each([
 ])(
   "retains $surface input when persistence fails before $admission admission settles",
   async ({ surface, admission }) => {
-    const { session, sessionManager } = await createTestSession();
-    vi.useFakeTimers();
-    const streaming = createDeferredCore();
     const installed = createDeferredCore();
     const release = createDeferredCore();
     const accepted = createDeferredCore();
-    const held = holdAssistantResponse("active response");
     const queueIdentity = `persistence-${surface}-${admission}`;
-    const sessionKey = `agent:main:${queueIdentity}`;
+    const prepare = async () => {};
+    const { session, sessionManager, streaming, held, operation, cancel, queue } =
+      await setupSteering(queueIdentity, prepare, true);
     const persistenceError = new Error("queued transcript append failed");
     const append = sessionManager.appendMessageAsync.bind(sessionManager);
     const persistenceFailed = vi.fn();
@@ -171,11 +180,6 @@ it.each([
       return await append(message, options);
     });
     const steering = vi.spyOn(session, "steer");
-    streamMocks.streamSimple.mockImplementationOnce(() => {
-      streaming.resolve();
-      return held.response;
-    });
-    const prepare = async () => {};
     bindMessageInjectionAdmission(prepare, async (consume) => {
       const admissionResult = consume();
       installed.resolve();
@@ -187,38 +191,8 @@ it.each([
       }
       return admissionResult;
     });
-    const queueMessage: ReplyBackendMessageInjectionV2["queueMessage"] = (
-      text,
-      options,
-      assertCurrent,
-    ) =>
-      steerActiveSessionWithOptionalDeliveryWait(
-        session,
-        text,
-        options,
-        undefined,
-        () => {
-          assertCurrent();
-          return true;
-        },
-        undefined,
-        prepare,
-      );
-    const operation = createTestReplyOperation({ sessionId: queueIdentity, sessionKey });
-    const cancel = vi.fn();
-    const handle = {
-      ...createEmbeddedRunHandle({ runId: queueIdentity, supportsTranscriptCommitWait: true }),
-      kind: "embedded" as const,
-      cancel,
-      messageInjectionV2: { version: 2 as const, isAvailable: () => true, queueMessage },
-    };
-    operation.attachBackend(handle);
-    operation.setPhase("running");
-    setActiveEmbeddedRun(queueIdentity, handle, sessionKey);
     const active = session.prompt("active prompt");
-    let settled = false;
-    let result: unknown;
-    let failure: unknown;
+    let settlement: { result?: unknown; failure?: unknown } | undefined;
     let waiting: Promise<void> | undefined;
     const onQueueAccepted = vi.fn((value: boolean) => {
       if (value) {
@@ -228,27 +202,13 @@ it.each([
     try {
       await awaitGateBeforeSettlement(streaming.promise, active, "Active prompt never streamed");
       const options = { waitForTranscriptCommit: true, queueIdentity, onQueueAccepted };
-      const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey)!;
-      const outcome =
-        surface === "registry"
-          ? beginReplyMessageInjectionTarget(target, "input with failed persistence", options).then(
-              (attempt) => finalizeReplyMessageInjectionAttempt({ target, attempt }),
-            )
-          : surface === "embedded"
-            ? queueEmbeddedAgentMessageWithOutcomeAsync(
-                queueIdentity,
-                "input with failed persistence",
-                options,
-              )
-            : queueMessage("input with failed persistence", options, () => {}, "run");
+      const outcome = queue(surface, "input with failed persistence", options);
       waiting = outcome.then(
         (value) => {
-          result = value;
-          settled = true;
+          settlement = { result: value };
         },
         (error: unknown) => {
-          failure = error;
-          settled = true;
+          settlement = { failure: error };
         },
       );
       await awaitGateBeforeSettlement(installed.promise, waiting, "Steering was not installed");
@@ -262,11 +222,12 @@ it.each([
       expect(session.agent.hasQueuedMessages()).toBe(false);
       expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
       if (admission !== "reported") {
-        expect(settled).toBe(false);
+        expect(settlement).toBeUndefined();
         expect(onQueueAccepted).not.toHaveBeenCalled();
       }
       release.resolve();
       await waiting;
+      const { result, failure } = settlement!;
       if (surface === "session") {
         expect(failure).toBe(persistenceError);
       } else {

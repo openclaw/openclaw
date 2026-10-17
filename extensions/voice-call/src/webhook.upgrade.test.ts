@@ -6,7 +6,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import { describe, expect, it, vi } from "vitest";
-import { VoiceCallConfigSchema, validateProviderConfig } from "./config.js";
+import { normalizeVoiceCallConfig, validateProviderConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import { MockProvider } from "./providers/mock.js";
@@ -31,7 +31,7 @@ vi.mock("./realtime-transcription.runtime.js", () => ({
 
 function createServer(streaming = false, streamPath = "/voice/stream/realtime") {
   const twilio = { accountSid: "fixture-account", authToken: "fixture-token" };
-  const config = VoiceCallConfigSchema.parse({
+  const config = normalizeVoiceCallConfig({
     enabled: true,
     provider: streaming ? "twilio" : "mock",
     fromNumber: streaming ? "+15555550100" : undefined,

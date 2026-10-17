@@ -48,6 +48,16 @@ data and restrict the target agent's tools and workspace separately.
 | `gmail`                     | unset                           | Gmail transport and processing defaults; see [Gmail integration](/gateway/config-hooks#gmail-integration).                                                                                                        |
 | `internal`                  | separate subsystem              | Internal event-hook configuration; see [Hooks](/automation/hooks). It does not enable HTTP ingress.                                                                                                               |
 
+If an enabled hook token contains an unresolved authored environment reference,
+Gateway startup continues with external HTTP hooks disabled and logs a warning.
+Supply the referenced secret to the Gateway process and reload or restart to
+enable the endpoints. An unresolved token in a hot reload is rejected; the
+previous valid hooks configuration remains active. Internal event hooks are a
+separate subsystem. `openclaw doctor` reports unresolved hook credentials in its
+current environment and gives recovery guidance; it does not generate a
+replacement secret or overwrite the configured reference. The CLI and Gateway
+service can have different environments.
+
 `hooks.token` should be distinct from active Gateway shared-secret auth
 (`gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN` or `gateway.auth.password` /
 `OPENCLAW_GATEWAY_PASSWORD`). Startup logs a non-fatal warning on reuse;
@@ -154,7 +164,7 @@ Without a default, the allowlist must admit generated `hook:` keys.
 A logical hook key is not always the stored session key. Isolated runs use fresh
 automation run sessions even when the hook key is stable. Persistence controls
 conversation reuse, not tool permissions or sandboxing. Requests sharing a
-canonical logical key are serialized through completion, even in isolated mode.
+normalized logical key are serialized through completion, even in isolated mode.
 A fixed `defaultSessionKey` therefore orders those requests but can make a later
 single request hit the admission timeout while an earlier run is still active.
 
@@ -258,7 +268,7 @@ pending items return non-2xx with `ok: false`, an incomplete-batch `error`, admi
 
 Agent fan-out derives replay identity from each rendered action even without an
 explicit idempotency key. Identical retries reconcile pending/admitted items
-within the cache lifetime; keep transforms deterministic for retries. Wake
+within the cache lifetime; keep transform results the same for identical retries. Wake
 actions dispatch immediately and have no replay identity, including mixed
 wake/agent batches. Their response includes `eventOutcome: "queued"` if any wake
 was accepted by its queue, or `"coalesced"` if every wake was coalesced by its queue.

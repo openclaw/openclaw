@@ -1,3 +1,4 @@
+import type { ActionsBlock } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
@@ -166,11 +167,6 @@ function resolveSlackOptionTarget(
   return value ? { kind: "reply", value } : undefined;
 }
 
-function readSlackBlockId(block: SlackBlock): string | undefined {
-  const value = (block as { block_id?: unknown }).block_id;
-  return typeof value === "string" ? value : undefined;
-}
-
 function readSlackOpenClawBlockIndex(blockId: string, prefix: string): number | undefined {
   if (!blockId.startsWith(prefix)) {
     return undefined;
@@ -196,8 +192,8 @@ export function resolveSlackBlockOffsets(
     if (mode === "all" && hasSlackDataVisualizationBlock([block])) {
       dataVisualizationCountOffset += 1;
     }
-    const blockId = readSlackBlockId(block);
-    if (!blockId) {
+    const blockId = block.block_id;
+    if (typeof blockId !== "string" || !blockId) {
       continue;
     }
     buttonIndexOffset = Math.max(
@@ -271,10 +267,12 @@ function compileSlackPresentationBlocks(
       text: buildSlackPlainText(presentation.title, SLACK_HEADER_TEXT_MAX),
     });
   }
-  let buttonIndex = options.buttonIndexOffset ?? 0;
+  const controlIndices = {
+    buttons: options.buttonIndexOffset ?? 0,
+    select: options.selectIndexOffset ?? 0,
+  };
   let tableIndex = 0;
   let dataVisualizationCount = options.dataVisualizationCountOffset ?? 0;
-  let selectIndex = options.selectIndexOffset ?? 0;
   for (const block of presentation.blocks) {
     if (block.type === "text" || block.type === "context") {
       const text = block.text.trim();
@@ -295,25 +293,26 @@ function compileSlackPresentationBlocks(
       continue;
     }
     if (block.type === "buttons" || block.type === "select") {
-      const rendered =
+      const index = controlIndices[block.type] + 1;
+      const elements =
         block.type === "buttons"
-          ? buildSlackPresentationButtonBlock(
+          ? buildSlackPresentationButtonElements(
               block,
-              buttonIndex + 1,
+              index,
               options.questionOptionIndices,
               requireComplete,
             )
-          : buildSlackPresentationSelectBlock(block, selectIndex + 1, requireComplete);
-      if (!rendered) {
+          : buildSlackPresentationSelectElements(block, index, requireComplete);
+      if (!elements) {
         return undefined;
       }
-      if (rendered.length > 0) {
-        if (block.type === "buttons") {
-          buttonIndex += 1;
-        } else {
-          selectIndex += 1;
-        }
-        blocks.push(...rendered);
+      if (elements.length > 0) {
+        controlIndices[block.type] = index;
+        blocks.push({
+          type: "actions",
+          block_id: `openclaw_reply_${block.type}_${index}`,
+          elements,
+        });
       }
       continue;
     }
@@ -347,12 +346,12 @@ function compileSlackPresentationBlocks(
   return blocks;
 }
 
-function buildSlackPresentationButtonBlock(
+function buildSlackPresentationButtonElements(
   block: MessagePresentationButtonsBlock,
   buttonIndex: number,
   questionOptionIndices: AskUserQuestionOptionIndices | undefined,
   requireComplete: boolean,
-): SlackBlock[] | undefined {
+): ActionsBlock["elements"] | undefined {
   let complete = true;
   const elements = block.buttons.flatMap((button, choiceIndex) => {
     const target = resolveSlackButtonTarget(button, questionOptionIndices);
@@ -385,15 +384,7 @@ function buildSlackPresentationButtonBlock(
   if (requireComplete && (!complete || elements.length > SLACK_ACTION_BLOCK_ELEMENTS_MAX)) {
     return undefined;
   }
-  return elements.length > 0
-    ? [
-        {
-          type: "actions",
-          block_id: `openclaw_reply_buttons_${buttonIndex}`,
-          elements: elements.slice(0, SLACK_ACTION_BLOCK_ELEMENTS_MAX),
-        },
-      ]
-    : [];
+  return elements.slice(0, SLACK_ACTION_BLOCK_ELEMENTS_MAX);
 }
 
 /** Admit tables together: one invalid or over-budget table keeps every table on the text path. */
@@ -419,11 +410,11 @@ function buildSlackPresentationTables(
   return tables;
 }
 
-function buildSlackPresentationSelectBlock(
+function buildSlackPresentationSelectElements(
   block: MessagePresentationSelectBlock,
   selectIndex: number,
   requireComplete: boolean,
-): SlackBlock[] | undefined {
+): ActionsBlock["elements"] | undefined {
   const placeholder = normalizeOptionalString(block.placeholder) ?? "Choose an option";
   const candidates = block.options.map((option) => {
     const target = resolveSlackOptionTarget(option);
@@ -451,19 +442,13 @@ function buildSlackPresentationSelectBlock(
   return options.length > 0 && optionKinds.size === 1
     ? [
         {
-          type: "actions",
-          block_id: `openclaw_reply_select_${selectIndex}`,
-          elements: [
-            {
-              type: "static_select",
-              action_id: `${SLACK_SELECT_ACTION_IDS[options[0]!.kind]}:${selectIndex}`,
-              placeholder: buildSlackPlainText(placeholder, SLACK_ACTION_LABEL_MAX),
-              options: options.map((option) => ({
-                text: buildSlackPlainText(option.label, SLACK_ACTION_LABEL_MAX),
-                value: option.value,
-              })),
-            },
-          ],
+          type: "static_select",
+          action_id: `${SLACK_SELECT_ACTION_IDS[options[0]!.kind]}:${selectIndex}`,
+          placeholder: buildSlackPlainText(placeholder, SLACK_ACTION_LABEL_MAX),
+          options: options.map((option) => ({
+            text: buildSlackPlainText(option.label, SLACK_ACTION_LABEL_MAX),
+            value: option.value,
+          })),
         },
       ]
     : [];

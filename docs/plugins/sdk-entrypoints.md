@@ -16,6 +16,16 @@ All plugin APIs are [experimental](/plugins/sdk-overview#api-stability),
 including these entry helpers. Pin and test the OpenClaw host versions your
 plugin supports.
 
+Gateway adapters use the existing `core` or `gateway-runtime`
+`GatewayRequestHandlerOptions.context.githubPublicationService` contract for
+GitHub publication. Prepare its required capabilities with
+`prepareGitHubPublicationRequesterV2` or `preparePersonalGitHubSessionActionV2`
+from `gateway-runtime`, using admitted handler options, and release them after
+the operation settles. The host's worker and source-fence modules remain private.
+Migrate wrappers and lifecycle calls using the
+[GitHub publication method mapping](/plugins/sdk-migration/how-to-migrate#await-github-publication-operations),
+without adding imports from Gateway internals.
+
 <Tip>
   **Looking for a walkthrough?** See [Tool Plugins](/plugins/tool-plugins),
   [Channel Plugins](/plugins/sdk-channel-plugins), or
@@ -51,6 +61,10 @@ OpenClaw classifies loaded plugins by their registration behavior:
 | **non-capability**    | Tools/commands/services but no capabilities        |
 
 Use `openclaw plugins inspect <id>` to see a plugin's shape.
+
+Managed agent-database schema extension belongs to private worker backends, not
+the typed public Plugin SDK. Bundled backend authors should follow the
+[private worker schema-extension contract](/reference/database-schemas/worker-access#private-worker-schema-extensions).
 
 ## Related
 
@@ -162,7 +176,7 @@ restrict this bridge to native bootstrap documents and the configured
 `bootstrap-extra-files` patterns. Check `canList` for directory metadata,
 `canRead` for file bytes, and `canWrite` for the four owner-editable documents.
 Directory access does not grant reads of other files. The underlying bridge
-still enforces filesystem containment and returns the read's canonical source.
+still enforces filesystem containment and returns the read's resolved source.
 
 Workspace access that has not started or has stopped throws
 `WorkspaceAccessUnavailableError`. Use `isWorkspaceAccessUnavailableError(error)`
@@ -172,7 +186,7 @@ The error code is `WORKSPACE_ACCESS_UNAVAILABLE`; do not match message text.
 The optional `memoryFiles` provider keeps workspace Memory files on the host while
 the native index, embedding providers and original sessions stay on Gateway. It
 supplies discovery, file inspection, reads and change notifications. Both indexing
-and `memory_get` use it; index publication rechecks the host file. The canonical
+and `memory_get` use it; index publication rechecks the host file. The resolved
 source returned with a read supplies provenance, without resolving a stale Gateway
 copy. Stopping the workspace binding revokes retained file access and subscriptions.
 The Memory file worker supports `--files <workspace>` for native file
@@ -190,6 +204,10 @@ A remote binding without maintenance support fails instead of using Gateway file
 The file worker implements these operations and native change notifications.
 The paired-node file-transfer adapter connects these operations through the
 existing service-owned node channel and node file policy.
+Requester-scoped `writeDreams` and `appendCorpus` calls carry `assertCurrent`
+separately from the serialized request. Transports must retain that callback in
+node dispatch and recheck it after preparation, immediately before starting the
+remote write. Refusal closes the prepared channel and waits for accepted cleanup.
 
 Task-time Skill preparation uses remote discovery. Channel-native menus use
 Gateway-owned Skills without waiting for the Harness; remote menu support is
@@ -218,7 +236,7 @@ File-inspecting Gateway policies receive a temporary tree from the existing Skil
 resource reader; Gateway-owned sources remain local. Resource bundle limits apply.
 
 `readWorkspaceSkillResources` lazily reuses the bounded native bundle reader.
-File-transfer adapters can check each file's requested and verified canonical paths
+File-transfer adapters can check each file's requested and verified resolved filesystem paths
 before returning a bundle; admitting the Skill directory alone does not admit every child.
 
 Hosts can provide `watchSkills(request, onChange, signal)` to notify the existing
@@ -292,6 +310,13 @@ and channel-provided joiner before prompt hooks run. Frame ordinary chat
 with prose section labels so a leading file path cannot become a native slash command. Keep
 one admitted user turn while assigning each provider attempt its own request and reply identity.
 
+The result's `developerInstructions` includes plugin system context. When that
+context is present, `threadDeveloperInstructions` contains the policy without
+the context, and `turnDeveloperInstructions` contains the wrapped context.
+Harnesses with separate persistent and per-turn instruction carriers can use
+these fields to refresh context without reloading their session. Hook
+`systemPrompt` replacements remain part of `threadDeveloperInstructions`.
+
 Host `requestApproval` normalizes the title and description within the shared display bounds
 and preserves full action evidence in `detail`. Its response acknowledges the request with
 an ID. Call `waitForApproval` with
@@ -301,3 +326,56 @@ the native operation.
 Use the plugin approval timeout independently of the agent-run timeout. Authenticated
 Control UI reviewers can inspect `detail`, while channel messages retain
 the bounded description. Oversized detail is rejected by the existing request schema.
+
+## Session persistence
+
+`agent-sessions` exposes awaited SessionManager mutations and versioned extension
+actions. `session-store-runtime` provides `prepareSessionEntryPatch` for host
+preparation followed by a conditional worker commit, and `applySessionEntryPatch`
+for already prepared data. `session-transcript-runtime` provides
+`withSessionTranscriptWrite` and duplicate-aware message preparation. Released
+synchronous and opaque transaction callback forms remain deprecated through
+2026-12-31, with removal in the first January 2027 stable release. See [session entry migration](/plugins/sdk-migration/how-to-migrate#prepare-session-entry-changes)
+and [transcript migration](/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation).
+
+For ordinary session preparation, await `getSessionEntryAsync`,
+`readSessionUpdatedAtAsync`, `getConversationSessionAsync`, or
+`readAmbientTranscriptWatermarkAsync` from `session-store-runtime`. Native command
+preparation uses `resolveStoredModelOverrideAsync` and
+`resolveCommandArgMenuAsync` from `command-auth-native`; the menu helper is also
+available from `native-command-registry`. Their synchronous compatibility APIs
+remain deprecated through 2026-12-31. See
+[session and command preparation](/plugins/sdk-migration#session-and-command-preparation).
+
+## Stateful CLI commands
+
+`openclaw/plugin-sdk/cli-state-owner` exports `runWithLocalStateOwner`. Supply the
+Gateway `method`, serializable `params`, a diagnostic `target`, and `runLocal`.
+Open databases and load mutation-capable runtime state only inside `runLocal`;
+its scope supplies the admitted config, environment, abort signal, and current
+owner assertion. Close plugin-owned stores before the callback returns.
+
+Commands that use configured database families set `databaseEngine: "configured"`.
+The helper resolves the selected config's engines after acquiring offline ownership,
+before runtime config can write state, and retains that selection through resource
+settlement. Commands routed to a running Gateway use its engines and do not need
+the PostgreSQL credentials in the CLI process.
+
+The helper routes to the local Gateway with its expected owner ID, or retains
+exclusive offline ownership through resource settlement. It never replays an
+uncertain Gateway mutation locally. Use `onForeignOwner: "refuse"` for commands
+that require an offline Gateway. Optional `scopes` preserves the command's
+existing authorization contract; the default is `operator.admin`.
+After a multi-request operation has started on the Gateway, reject `runLocal`
+before accessing config or performing local work if a later request loses its owner.
+
+Gateway handlers can use `captureLocalStateMutationGuard` from
+`openclaw/plugin-sdk/gateway-runtime` to bind the expected owner and current
+request authority, then pass the returned assertion to their existing writer
+admission and privileged-effect boundaries. `isImplicitLocalGatewayTargetFromCli`
+from that same entrypoint preserves explicit and configured remote CLI targets.
+`runWithLocalStateMutationOwner` adds the existing channel authority scope for
+plugin transport effects and disclosure; pass its assertion into the plugin's
+database writer and file publication boundaries too. Versioned owner-bound RPC
+names let CLI callers require updated plugin handlers without assuming that an
+updated Gateway also upgraded an independently installed plugin.

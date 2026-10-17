@@ -261,17 +261,14 @@ function notePluginVersionReadiness(readiness: PluginVersionRestartReadiness | u
   const repairs = drift.drifts.map((entry) => ({
     entry,
     command: resolvePluginVersionDriftUpdateCommand(entry),
+    registryLag: resolvePluginVersionDriftRegistryLag(entry),
   }));
   const updateCommands = repairs
     .map(({ command }) => command)
     .filter((command): command is string => Boolean(command))
     .map((command) => formatCliCommand(command));
-  const registryLagRepairs = repairs.filter(({ entry }) =>
-    Boolean(resolvePluginVersionDriftRegistryLag(entry)),
-  );
-  const unresolvedRepairs = repairs.filter(
-    ({ entry, command }) => !command && !resolvePluginVersionDriftRegistryLag(entry),
-  );
+  const registryLagRepairs = repairs.filter(({ registryLag }) => registryLag);
+  const unresolvedRepairs = repairs.filter(({ command, registryLag }) => !command && !registryLag);
   const lines = [
     ...(readiness.runningGatewayVersion
       ? [`Running Gateway: OpenClaw ${readiness.runningGatewayVersion}`]
@@ -287,10 +284,10 @@ function notePluginVersionReadiness(readiness: PluginVersionRestartReadiness | u
           : drift.gatewayVersion;
       return `- ${entry.pluginId}: ${entry.installedVersion} (${sourceLabel}) -> expected ${expectedVersion}`;
     }),
-    ...registryLagRepairs.map(({ entry }) => {
-      const registryLag = resolvePluginVersionDriftRegistryLag(entry);
-      return `${entry.pluginId} already holds registry version ${registryLag?.registryVersion}; no release reaches ${registryLag?.expectedVersion} yet, so no update command applies.`;
-    }),
+    ...registryLagRepairs.map(
+      ({ entry, registryLag }) =>
+        `${entry.pluginId} already holds registry version ${registryLag?.registryVersion}; no release reaches ${registryLag?.expectedVersion} yet, so no update command applies.`,
+    ),
     ...unresolvedRepairs.map(
       ({ entry }) =>
         `Repair target resolution failed for ${entry.pluginId}: ${pluginTargetResolutionError(entry)}. No install command generated.`,

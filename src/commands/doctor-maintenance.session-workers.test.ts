@@ -1,5 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import {
   deleteSessionEntryLifecycle,
@@ -7,13 +8,11 @@ import {
   loadTranscriptEvents,
   loadTranscriptEventsSync,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { markCanonicalSessionValidationPending } from "../config/sessions/session-canonical-key.js";
 import { certifySessionCanonicalValidationPending } from "../config/sessions/session-canonical-validation-readiness.js";
-import {
-  hasPendingCanonicalSessionValidation,
-  seedCanonicalSessionValidation,
-} from "../config/sessions/session-canonical-validation.js";
+import { hasPendingCanonicalSessionValidation } from "../config/sessions/session-canonical-validation.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import {
   restoreSessionColdTranscript,
@@ -49,6 +48,7 @@ describe("Doctor maintenance with session workers", () => {
     await withOpenClawTestState(
       { scenario: "external-service", label: "doctor-canonical-worker" },
       async (state) => {
+        setRuntimeConfigSnapshot({});
         const options = { agentId: "main", env: state.env };
         const scopes = ["first", "second"].map((name) => ({
           agentId: options.agentId,
@@ -77,7 +77,7 @@ describe("Doctor maintenance with session workers", () => {
               ).rows;
             const before = rows();
             expect(before).toHaveLength(2);
-            runOpenClawAgentWriteTransaction(seedCanonicalSessionValidation, options);
+            runOpenClawAgentWriteTransaction(markCanonicalSessionValidationPending, options);
             expect(hasPendingCanonicalSessionValidation(database)).toBe(true);
 
             await certifySessionCanonicalValidationPending(options);

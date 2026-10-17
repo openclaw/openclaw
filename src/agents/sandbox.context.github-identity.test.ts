@@ -14,7 +14,7 @@ import {
 import { registerSandboxBackend } from "./sandbox/backend.js";
 import type { CreateSandboxBackendParams } from "./sandbox/backend.types.js";
 import { resolveSandboxContext } from "./sandbox/context.js";
-import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import { resolvePreparedSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { resolveSandboxMountSelection } from "./sandbox/workspace-mounts.js";
 
 const backend = vi.hoisted(() =>
@@ -101,7 +101,7 @@ function resolve(config: OpenClawConfig, agentId = "release", required = false, 
     config,
     sessionKey,
     workspaceDir: config.agents?.defaults?.workspace,
-    preparedRuntimeStatus: resolveSandboxRuntimeStatus({
+    preparedRuntimeStatus: resolvePreparedSandboxRuntimeStatus({
       cfg: config,
       sessionKey,
       preparedSessionEntry: required

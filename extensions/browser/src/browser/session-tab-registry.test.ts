@@ -122,6 +122,46 @@ describe("session tab registry", () => {
     expect(results.reduce((total, closed) => total + closed, 0)).toBe(1);
   });
 
+  it("preserves lifecycle cleanup after activity cancels a shared sweep", async () => {
+    const tab = {
+      sessionKey: "agent:main:main",
+      targetId: "touched-during-sweep",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9222" } as const,
+    };
+    await trackSessionBrowserTab({ ...tab, now: 1_000 });
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const closeTab = vi.fn(async () => {});
+    const sweep = sweepTrackedBrowserTabs({
+      now: 10_000,
+      idleMs: 1,
+      closeTab,
+      prepareCurrent: async () => {
+        entered.resolve();
+        await release.promise;
+        return true;
+      },
+    });
+    const lifecycle: Array<Promise<number>> = [];
+    try {
+      await entered.promise;
+      lifecycle.push(
+        closeTrackedBrowserTabsForSessions({ sessionKeys: [tab.sessionKey], closeTab }),
+        closeTrackedBrowserTabsForSessions({ sessionKeys: [tab.sessionKey], closeTab }),
+      );
+      await touchSessionBrowserTab({ ...tab, now: 11_000 });
+    } finally {
+      release.resolve();
+    }
+    await expect(sweep).resolves.toBe(0);
+    const results = await Promise.all(lifecycle);
+    expect(results.reduce((total, closed) => total + closed, 0)).toBe(1);
+    expect(closeTab).toHaveBeenCalledOnce();
+    await expect(
+      closeTrackedBrowserTabsForSessions({ sessionKeys: [tab.sessionKey], closeTab }),
+    ).resolves.toBe(0);
+  });
+
   it.each(["lifecycle", "sweep"] as const)(
     "preserves %s activity semantics while cleanup authority prepares",
     async (kind) => {
@@ -149,49 +189,6 @@ describe("session tab registry", () => {
       expect(clientMocks.browserCloseTabByRawTargetId).toHaveBeenCalledTimes(
         kind === "lifecycle" ? 1 : 0,
       );
-    },
-  );
-
-  it.each([false, true])(
-    "shares lifecycle cleanup after a preparing sweep is revoked (closeFails=%s)",
-    async (closeFails) => {
-      const tab = { sessionKey: "agent:main:main", targetId: "touched-sweep" };
-      await trackSessionBrowserTab({ ...tab, now: 1_000 });
-      const release = createDeferred<void>();
-      const sweep = sweepTrackedBrowserTabs({
-        now: 10_000,
-        idleMs: 1,
-        prepareCurrent: async () => {
-          await release.promise;
-          return true;
-        },
-      });
-      const closeTab = vi.fn(() => {
-        if (closeFails) {
-          throw new Error("close failed");
-        }
-        return Promise.resolve();
-      });
-      const lifecycle = () =>
-        closeTrackedBrowserTabsForSessions({ sessionKeys: [tab.sessionKey], closeTab });
-      const pending = [sweep, lifecycle(), lifecycle()];
-      try {
-        await touchSessionBrowserTab({ ...tab, now: 11_000 });
-      } finally {
-        release.resolve();
-      }
-
-      await expect(Promise.all(pending)).resolves.toEqual([0, closeFails ? 0 : 1, 0]);
-      expect(clientMocks.browserCloseTabByRawTargetId).not.toHaveBeenCalled();
-      expect(closeTab).toHaveBeenCalledOnce();
-      const retryClose = vi.fn(async () => {});
-      await expect(
-        closeTrackedBrowserTabsForSessions({
-          sessionKeys: [tab.sessionKey],
-          closeTab: retryClose,
-        }),
-      ).resolves.toBe(closeFails ? 1 : 0);
-      expect(retryClose).toHaveBeenCalledTimes(closeFails ? 1 : 0);
     },
   );
 
@@ -259,7 +256,7 @@ describe("session tab registry", () => {
       } finally {
         release.resolve();
       }
-      await expect(cleanup).resolves.toBe(replacementPhase === "during-prepare" ? 0 : 1);
+      await expect(cleanup).resolves.toBe(replacementPhase === "during-close" ? 1 : 0);
       expect(clientMocks.browserCloseTabByRawTargetId).not.toHaveBeenCalled();
       const freshClose = vi.fn(async () => {});
       await expect(
@@ -304,43 +301,6 @@ describe("session tab registry", () => {
         }),
       ).resolves.toBe(replace ? 1 : 0);
       expect(freshClose).toHaveBeenCalledTimes(replace ? 1 : 0);
-    },
-  );
-
-  it.each([false, true])(
-    "binds a queued lifecycle request to its registration (replace=%s)",
-    async (replace) => {
-      const tab = { sessionKey: "agent:main:main", targetId: "queued-target" };
-      await trackSessionBrowserTab({ ...tab, now: 1_000 });
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
-      const firstClose = vi.fn(async () => {
-        entered.resolve();
-        await release.promise;
-      });
-      const first = closeTrackedBrowserTabsForSessions({
-        sessionKeys: [tab.sessionKey],
-        closeTab: firstClose,
-      });
-      const nextClose = vi.fn(async () => {});
-      let second: Promise<number>;
-      try {
-        await entered.promise;
-        if (replace) {
-          await untrackSessionBrowserTab(tab);
-          await trackSessionBrowserTab({ ...tab, now: 1_000 });
-        }
-        second = closeTrackedBrowserTabsForSessions({
-          sessionKeys: [tab.sessionKey],
-          closeTab: nextClose,
-        });
-        expect(nextClose).not.toHaveBeenCalled();
-      } finally {
-        release.resolve();
-      }
-      await expect(first).resolves.toBe(1);
-      await expect(second).resolves.toBe(replace ? 1 : 0);
-      expect(nextClose).toHaveBeenCalledTimes(replace ? 1 : 0);
     },
   );
 

@@ -49,13 +49,6 @@ export function parseTelegramAllowFromId(raw: string): string | null {
   return isNumericTelegramSenderUserId(stripped) ? stripped : null;
 }
 
-export async function resolveTelegramAllowFromEntries({ entries }: { entries: string[] }) {
-  return entries.map((entry) => {
-    const id = parseTelegramAllowFromId(entry);
-    return { input: entry, resolved: Boolean(id), id };
-  });
-}
-
 export async function promptTelegramAllowFromForAccount(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
@@ -76,13 +69,25 @@ export async function promptTelegramAllowFromForAccount(params: {
     parseInputs: splitSetupEntries,
     parseId: parseTelegramAllowFromId,
     invalidWithoutTokenNote: t("wizard.telegram.allowFromInvalid"),
-    resolveEntries: resolveTelegramAllowFromEntries,
+    resolveEntries: async ({ entries }) =>
+      entries.map((input) => {
+        const id = parseTelegramAllowFromId(input);
+        return { input, resolved: Boolean(id), id };
+      }),
   });
+  return applyTelegramAllowFrom(params.cfg, accountId, unique);
+}
+
+export function applyTelegramAllowFrom(
+  cfg: OpenClawConfig,
+  accountId: string,
+  allowFrom: string[],
+) {
   return patchChannelConfigForAccount({
-    cfg: params.cfg,
+    cfg,
     channel,
     accountId,
-    patch: { dmPolicy: "allowlist", allowFrom: unique },
+    patch: { dmPolicy: "allowlist", allowFrom },
     setupSurface: telegramSetupAdapter,
   });
 }

@@ -1,14 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { messageRecoveryKey } from "../chat-message-recovery.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import { setExpansionState } from "../chat-thread.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
+import { saveChatSessionScrollPosition } from "../scroll.ts";
+import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
 import { getTranscriptState } from "./chat-thread-interactions.ts";
-import { renderChatThread } from "./chat-thread.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import {
   installTranscriptDomMocks,
@@ -28,64 +29,89 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("projects unchanged renders and streaming deltas without rereading 3,000 retained messages", () => {
-  let reads = 0;
-  const messages = Array.from(
-    { length: 3_000 },
-    (_, index) =>
-      new Proxy(
-        {
-          role: index % 2 ? "assistant" : "user",
-          content: `Message ${index}`,
-          timestamp: index + 1,
-          __openclaw: { id: `message-${index}`, runId: `finished-${index >> 1}` },
-        },
-        {
-          get(target, property, receiver) {
-            reads += 1;
-            return Reflect.get(target, property, receiver);
+it.each(["answer", "reasoning"] as const)(
+  "projects %s deltas without rereading 3,000 retained messages",
+  (kind) => {
+    let reads = 0;
+    const messages = Array.from(
+      { length: 3_000 },
+      (_, index) =>
+        new Proxy(
+          {
+            role: index % 2 ? "assistant" : "user",
+            content: `Message ${index}`,
+            timestamp: index + 1,
+            __openclaw: { id: `message-${index}`, runId: `finished-${index >> 1}` },
           },
-        },
-      ),
-  );
-  const props = {
-    ...threadProps("projection-scale", "agent:main:projection-scale", messages),
-    runId: "active",
-    runActive: true,
-    stream: "Reply",
-    streamStartedAt: 4_000,
-  };
-  const transcript = createTestTranscript(props.paneId);
-  const build = vi.spyOn(chatThreadBuild, "buildChatItems");
-  const project = () =>
-    transcript.renderSession(props.sessionKey, (session) => {
-      projectChatTranscript(props, session);
-      return html``;
-    });
-  try {
-    project();
-    expect(reads).toBeGreaterThan(0);
-    transcript.renderSession(props.sessionKey, (session) => {
-      setExpansionState(
-        session.expandedAssistantMessages,
-        messageRecoveryKey(undefined, "message-1"),
-        { status: "loaded", markdown: "Full answer", revision: 1 },
-      );
-      return html``;
-    });
-    project();
-    build.mockClear();
-    for (const stream of ["Reply", "Reply continues", "Reply continues again"]) {
-      props.stream = stream;
-      reads = 0;
+          {
+            get(target, property, receiver) {
+              reads += 1;
+              return Reflect.get(target, property, receiver);
+            },
+          },
+        ),
+    );
+    const earlierReasoning = { itemId: "earlier", text: "Earlier thought", startedAt: 3_500 };
+    const props = {
+      ...threadProps("projection-scale", "agent:main:projection-scale", messages),
+      runId: "active",
+      runActive: true,
+      stream: kind === "answer" ? "Reply" : "",
+      streamStartedAt: 4_000,
+      showThinking: true,
+      selectedSession: {
+        key: "agent:main:projection-scale",
+        kind: "direct" as const,
+        updatedAt: 1,
+        reasoningLevel: "on",
+      },
+      reasoning:
+        kind === "reasoning"
+          ? {
+              runId: "active",
+              items: [earlierReasoning, { itemId: "thinking", text: "Reply", startedAt: 4_000 }],
+            }
+          : null,
+    };
+    const transcript = createTestTranscript(props.paneId);
+    const build = vi.spyOn(chatThreadBuild, "buildChatItems");
+    const project = () =>
+      transcript.renderSession(props.sessionKey, (session) => {
+        projectChatTranscript(props, session);
+        return null;
+      });
+    try {
       project();
-      expect(build).not.toHaveBeenCalled();
-      expect(reads, stream).toBe(0);
+      expect(reads).toBeGreaterThan(0);
+      transcript.renderSession(props.sessionKey, (session) => {
+        setExpansionState(
+          session.expandedAssistantMessages,
+          messageRecoveryKey(undefined, "message-1"),
+          { status: "loaded", markdown: "Full answer", revision: 1 },
+        );
+        return null;
+      });
+      project();
+      build.mockClear();
+      for (const stream of ["Reply", "Reply continues", "Reply continues again"]) {
+        if (kind === "answer") {
+          props.stream = stream;
+        } else {
+          props.reasoning = {
+            runId: "active",
+            items: [earlierReasoning, { itemId: "thinking", text: stream, startedAt: 4_000 }],
+          };
+        }
+        reads = 0;
+        project();
+        expect(build).not.toHaveBeenCalled();
+        expect(reads, stream).toBe(0);
+      }
+    } finally {
+      transcript.dispose();
     }
-  } finally {
-    transcript.hostDisconnected();
-  }
-});
+  },
+);
 
 function personMessage(id: string, name: string, timestamp: number) {
   return {
@@ -106,13 +132,74 @@ function drawThread(props: ReturnType<typeof threadProps>) {
   const container = document.body.appendChild(document.createElement("div"));
   return {
     container,
-    draw: () => render(renderChatThread(props, transcript), container),
+    draw: () => {
+      render(renderChatThread(props, transcript), container);
+      flush();
+      transcript.start();
+      transcript.update();
+      flush();
+    },
     dispose: () => {
-      render(nothing, container);
-      transcript.hostDisconnected();
+      render(null, container);
+      transcript.dispose();
     },
   };
 }
+
+it("renders browser previews in their own row outside the work summary", () => {
+  const props = threadProps(
+    "projection-browser-preview",
+    "agent:main:dashboard:projection-browser-preview",
+    [
+      { role: "user", content: "Inspect the example page", timestamp: 1_000 },
+      {
+        role: "assistant",
+        content: "I will inspect the example page.",
+        timestamp: 2_000,
+        phase: "final_answer",
+      },
+      {
+        role: "toolResult",
+        toolCallId: "browser-call",
+        toolName: "browser",
+        timestamp: 3_000,
+        content: "Opened",
+        details: {
+          browserTab: {
+            profile: "managed",
+            target: "host",
+            targetId: "example-tab",
+            url: "https://example.com",
+            title: "Example page",
+          },
+        },
+      },
+      { role: "assistant", content: "The page is ready.", timestamp: 4_000 },
+    ],
+  );
+  props.showToolCalls = true;
+  saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
+    scrollTop: 0,
+    anchorToEnd: false,
+  });
+  const view = drawThread(props);
+  try {
+    view.draw();
+    const card = view.container.querySelector("openclaw-browser-tab-card");
+    const previews = card?.closest(".chat-group--turn-block");
+    expect(card).not.toBeNull();
+    expect(previews).not.toBeNull();
+    expect(card?.preview?.url).toBe("https://example.com");
+    expect(card?.preview?.title).toBe("Example page");
+    expect(previews?.closest(".chat-work-group")).toBeNull();
+    expect(view.container.querySelector(".chat-work-group")).not.toBeNull();
+    expect(view.container.textContent).toContain("I will inspect the example page.");
+    expect(view.container.textContent).toContain("The page is ready.");
+    expect(view.container.textContent).not.toContain("[object Object]");
+  } finally {
+    view.dispose();
+  }
+});
 
 it("refreshes sender names for a replaced sender and a changed signed-in viewer", () => {
   const own = personMessage("alex", "Alex", 1);
@@ -247,13 +334,14 @@ it("keeps search and gallery caches warm while refreshing streamed and replaced 
     streamStartedAt: 3,
   };
   const state = getTranscriptState(props.paneId);
-  Object.assign(state, { searchOpen: true, searchQuery: "needle" });
+  state.search.toggle();
+  state.search.setQuery("needle");
   const transcript = createTestTranscript(props.paneId);
   const build = vi.spyOn(chatThreadBuild, "buildChatItems");
   const project = () => {
     transcript.renderSession(props.sessionKey, (session) => {
       projectChatTranscript(props, session);
-      return html``;
+      return null;
     });
     return state.transcriptRenderContext.turnVideoMessages
       ?.values()
@@ -280,7 +368,7 @@ it("keeps search and gallery caches warm while refreshing streamed and replaced 
     props.messages = [replacement, hit];
     expect(project()).toEqual([replacement, hit, liveMessage()]);
   } finally {
-    transcript.hostDisconnected();
+    transcript.dispose();
   }
 });
 
@@ -298,18 +386,19 @@ it("opens the visible forwarded disclosure when replying across search after a p
   const props = threadProps("projection-reply-owner", "agent:main:main", [later, answer]);
   const state = getTranscriptState(props.paneId);
   const view = drawThread(props);
-  props.onRequestUpdate = view.draw;
   try {
     view.draw();
     props.messages = [forwarded("earlier", "Hidden original", 1), later, answer];
     view.draw();
-    Object.assign(state, { searchOpen: true, searchQuery: "needle" });
+    state.search.toggle();
+    state.search.setQuery("needle");
     view.draw();
     expect(view.container.textContent).not.toContain("Hidden original");
 
     state.transcriptRenderContext.onOpenReply?.("earlier");
+    flush();
 
-    expect(state.searchOpen).toBe(false);
+    expect(state.search.snapshot.open).toBe(false);
     expect(view.container.querySelector<HTMLDetailsElement>(".chat-session-activity")?.open).toBe(
       true,
     );

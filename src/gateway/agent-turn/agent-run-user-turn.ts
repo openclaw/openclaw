@@ -12,7 +12,9 @@ import {
 } from "../../agents/bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults } from "../../agents/bash-tools.exec-types.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { readSessionSubmittedInput } from "../../config/sessions/session-accessor.pending-inputs.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deleteMediaBuffer } from "../../media/store.js";
 import {
@@ -23,9 +25,11 @@ import {
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
+import { retainsUserTurnTranscriptMedia } from "../../sessions/user-turn-transcript-media.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
 import {
   buildRunUserTurnIdempotencyKey,
+  buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
   type UserTurnInput,
   type UserTurnTranscriptRecorder,
@@ -42,7 +46,8 @@ import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
 import { gatewayClientSenderFields } from "../server-methods/gateway-client-identity.js";
 import { resolveGatewayInputParticipant } from "../session-input-participant.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { readSessionSendDeliveryAdmission } from "../session-send-delivery.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { formatForLog } from "../ws-log.js";
 import {
   shouldSuppressAgentPromptPersistence,
@@ -53,6 +58,8 @@ import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.
 
 export type PreparedAgentRunUserTurn = {
   privateCompletion?: true;
+  /** Trusted input-owner policy; not accepted from the wire request. */
+  replyExpectation?: ReplyExpectation;
   bashElevated?: ExecElevatedDefaults;
   claimedExecApprovalFollowupHandoffId?: string;
   execApprovalFollowupHandoffClaimId: string;
@@ -133,8 +140,10 @@ export function recordAgentRunUserTurnParticipant(
 
 export async function prepareAgentRunUserTurn(params: {
   assertCurrent: () => void;
+  onUserTurnMediaPersisted: () => void;
   assertCompletionCurrent?: () => void;
   privateCompletion?: true;
+  replyExpectation?: ReplyExpectation;
   settleWakeReplay?: RequesterSettleWakeReplay;
   abortSignal?: AbortSignal;
   getAbortStopReason?: () => string;
@@ -143,6 +152,8 @@ export async function prepareAgentRunUserTurn(params: {
   cfg: OpenClawConfig;
   cfgForAgent?: OpenClawConfig;
   sessionEntry?: SessionEntry;
+  /** Exact creation target carried only by the host-bound fresh-child admission. */
+  freshChildStorePath?: string;
   resolvedSessionKey?: string;
   requestedSessionKeyRaw?: string;
   admittedSessionId: string;
@@ -164,7 +175,8 @@ export async function prepareAgentRunUserTurn(params: {
 }): Promise<PreparedAgentRunUserTurn> {
   const execApprovalFollowupHandoffClaimId = randomUUID();
   let claimedExecApprovalFollowupHandoffId: string | undefined;
-  let durableMediaIds: string[] = [];
+  let createdMediaIds: string[] = [];
+  let recorder: UserTurnTranscriptRecorder | undefined;
   try {
     const claimFollowup = (sessionKey: string | undefined) =>
       claimExecApprovalFollowupRuntimeHandoff({
@@ -174,18 +186,16 @@ export async function prepareAgentRunUserTurn(params: {
         sessionKey,
         claimId: execApprovalFollowupHandoffClaimId,
       });
-    let execApprovalFollowupRuntimeHandoff =
-      params.canUseInternalRuntimeHandoff && params.execApprovalFollowupApprovalId
-        ? claimFollowup(params.resolvedSessionKey)
-        : undefined;
-    if (
-      !execApprovalFollowupRuntimeHandoff &&
-      params.canUseInternalRuntimeHandoff &&
-      params.execApprovalFollowupApprovalId &&
-      params.requestedSessionKeyRaw &&
-      params.requestedSessionKeyRaw !== params.resolvedSessionKey
-    ) {
-      execApprovalFollowupRuntimeHandoff = claimFollowup(params.requestedSessionKeyRaw);
+    let execApprovalFollowupRuntimeHandoff: ReturnType<typeof claimFollowup>;
+    if (params.canUseInternalRuntimeHandoff && params.execApprovalFollowupApprovalId) {
+      execApprovalFollowupRuntimeHandoff = claimFollowup(params.resolvedSessionKey);
+      if (
+        !execApprovalFollowupRuntimeHandoff &&
+        params.requestedSessionKeyRaw &&
+        params.requestedSessionKeyRaw !== params.resolvedSessionKey
+      ) {
+        execApprovalFollowupRuntimeHandoff = claimFollowup(params.requestedSessionKeyRaw);
+      }
     }
     if (execApprovalFollowupRuntimeHandoff) {
       claimedExecApprovalFollowupHandoffId = params.request.internalRuntimeHandoffId;
@@ -232,6 +242,7 @@ export async function prepareAgentRunUserTurn(params: {
         "Private completion requires an exact internal requester turn with delivery disabled",
       );
     }
+    const trackRequesterCompletion = params.privateCompletion || settleWakeReplay !== undefined;
     const suppressPromptPersistence =
       !params.privateCompletion &&
       (params.requestedPromptPersistenceSuppression ||
@@ -239,7 +250,6 @@ export async function prepareAgentRunUserTurn(params: {
           inputProvenance: params.inputProvenance,
           internalEvents: params.request.internalEvents,
         }));
-    let recorder: UserTurnTranscriptRecorder | undefined;
     if (
       params.resolvedSessionKey &&
       !params.suppressVisibleSessionEffects &&
@@ -252,12 +262,74 @@ export async function prepareAgentRunUserTurn(params: {
         logContext: "agent",
         assertCurrent: params.assertCurrent,
       });
-      durableMediaIds = persistedMedia.entries.map((entry) => entry.id);
+      // The parser still owns offloaded files until admission retains them.
+      // This scope only removes inline files it created, avoiding a second delete.
+      createdMediaIds = persistedMedia.entries
+        .filter((entry) => entry.imageKind === "inline")
+        .map((entry) => entry.id);
       params.assertCurrent();
       const media = persistedMedia.entries.map((entry) => entry.fact);
       const slots = persistedMedia.entries.flatMap((entry, factIndex) =>
         entry.imageKind ? [{ kind: entry.imageKind, factIndex }] : [],
       );
+      const resolveTarget = async () => {
+        params.assertCurrent();
+        const loaded = params.freshChildStorePath
+          ? {
+              entry: params.sessionEntry,
+              storePath: params.freshChildStorePath,
+              store: undefined,
+            }
+          : await loadGatewaySessionEntryReadOnlyInWorker({
+              cfg: params.cfgForAgent ?? params.cfg,
+              key: params.resolvedSessionKey!,
+              agentId: params.activeSessionAgentId,
+              assertActive: params.assertCurrent,
+              excludeInternalEffects: true,
+            });
+        params.assertCurrent();
+        const latestEntry = loaded.entry;
+        const loadedSessionId = latestEntry?.sessionId?.trim();
+        // Fresh children carry committed creation facts; their live lease still
+        // authorizes the write. Other callers must resolve their current target.
+        if (
+          !params.freshChildStorePath &&
+          (!latestEntry || loadedSessionId !== params.admittedSessionId)
+        ) {
+          return undefined;
+        }
+        return {
+          sessionId: params.admittedSessionId,
+          expectedSessionId: params.admittedSessionId,
+          sessionKey: params.resolvedSessionKey!,
+          sessionEntry: latestEntry,
+          sessionStore: loaded.store,
+          storePath: loaded.storePath,
+          agentId: params.activeSessionAgentId,
+          cwd: resolveSessionRuntimeCwd({ sessionEntry: latestEntry }),
+          ...(params.resolvedThreadId != null ? { threadId: params.resolvedThreadId } : {}),
+          config: params.cfgForAgent ?? params.cfg,
+        };
+      };
+      const privateTarget = params.privateCompletion ? await resolveTarget() : undefined;
+      const senderFields = gatewayClientSenderFields(params.client);
+      if (privateTarget) {
+        const submitted = await readSessionSubmittedInput(
+          privateTarget,
+          buildRunUserTurnIdempotencyKey(params.runId),
+        );
+        params.assertCurrent();
+        const sender = senderFields.sender;
+        const metadata = submitted?.["__openclaw"];
+        if (sender?.id && metadata?.senderId === sender.id) {
+          // Profile labels can change after acceptance; replay keeps the recorded
+          // presentation while the input owner still compares the complete request.
+          senderFields.sender = {
+            ...sender,
+            name: typeof metadata.senderName === "string" ? metadata.senderName : undefined,
+          };
+        }
+      }
       const input: UserTurnInput = {
         ...(params.privateCompletion ||
         isCompletionReportInputProvenance(params.inputProvenance) ||
@@ -272,42 +344,37 @@ export async function prepareAgentRunUserTurn(params: {
             : effectiveTranscriptInputText,
         timestamp: Date.now(),
         idempotencyKey: buildRunUserTurnIdempotencyKey(params.runId),
-        ...gatewayClientSenderFields(params.client),
+        ...senderFields,
         senderIsOwner,
         ...(params.inputProvenance ? { provenance: params.inputProvenance } : {}),
         ...(media.length > 0 ? { media } : {}),
         ...(slots.length > 0 ? { mediaImageLayout: { slots } } : {}),
       };
+      const peerDelivery = readSessionSendDeliveryAdmission({
+        runId: params.runId,
+        sessionKey: params.resolvedSessionKey,
+        sessionId: params.admittedSessionId,
+        agentId: params.activeSessionAgentId,
+      });
+      let peerMessage = peerDelivery?.acceptedMessage;
+      if (peerDelivery && !peerMessage) {
+        const original = buildPersistedUserTurnMessage(input);
+        peerMessage = {
+          ...original,
+          __openclaw: { ...original["__openclaw"], sessionSendDelivery: peerDelivery.delivery },
+        };
+      }
       recorder = createUserTurnTranscriptRecorder({
-        trackInputCompletion: params.privateCompletion,
+        trackInputCompletion: trackRequesterCompletion || peerDelivery !== undefined,
+        ...(peerMessage ? { message: peerMessage } : {}),
         pendingInputReplaySourceSessionKeys: settleWakeReplay?.sourceSessionKeys,
         input,
-        target: () => {
-          params.assertCurrent();
-          const loaded = loadSessionEntry(params.resolvedSessionKey!, {
-            agentId: params.activeSessionAgentId,
-            clone: false,
-          });
-          const latestEntry = loaded.entry;
-          const loadedSessionId = latestEntry?.sessionId?.trim();
-          // Session creation is persisted before this phase. No matching entry
-          // means the admitted lifecycle instance changed and must fail closed.
-          if (!latestEntry || loadedSessionId !== params.admittedSessionId) {
-            return undefined;
-          }
-          return {
-            sessionId: latestEntry.sessionId,
-            expectedSessionId: params.admittedSessionId,
-            sessionKey: params.resolvedSessionKey!,
-            sessionEntry: latestEntry,
-            sessionStore: loaded.store,
-            storePath: loaded.storePath,
-            agentId: params.activeSessionAgentId,
-            cwd: resolveSessionRuntimeCwd({ sessionEntry: latestEntry }),
-            ...(params.resolvedThreadId != null ? { threadId: params.resolvedThreadId } : {}),
-            config: params.cfgForAgent ?? params.cfg,
-          };
-        },
+        target: params.privateCompletion
+          ? () => {
+              params.assertCurrent();
+              return privateTarget;
+            }
+          : resolveTarget,
         errorContext: "gateway agent user turn transcript",
         beforeMessageWrite: (writeContext) => {
           const preparedMessage = runAgentHarnessBeforeMessageWriteHook(writeContext);
@@ -323,6 +390,14 @@ export async function prepareAgentRunUserTurn(params: {
       if (
         !(await recorder.stageApproved!({
           runId: params.runId,
+          storageTarget: params.freshChildStorePath
+            ? {
+                agentId: params.activeSessionAgentId,
+                sessionId: params.admittedSessionId,
+                sessionKey: params.resolvedSessionKey,
+                storePath: params.freshChildStorePath,
+              }
+            : undefined,
           assertCurrent: () => {
             params.assertCurrent();
             settleWakeReplay?.assertCurrent();
@@ -342,7 +417,7 @@ export async function prepareAgentRunUserTurn(params: {
     }
 
     let releaseProcessingAbortObserver: (() => void) | undefined;
-    if (params.privateCompletion && recorder && !recorder.getProcessingCompletion?.()) {
+    if (trackRequesterCompletion && recorder && !recorder.getProcessingCompletion?.()) {
       const recordAbort = () => {
         const stopReason = params.getAbortStopReason?.() ?? "rpc";
         const settle = () => {
@@ -354,7 +429,7 @@ export async function prepareAgentRunUserTurn(params: {
             }),
           ).catch((error: unknown) => {
             params.context.logGateway.warn(
-              `private input cancellation persistence failed: ${formatForLog(error)}`,
+              `requester input cancellation persistence failed: ${formatForLog(error)}`,
             );
           });
         };
@@ -376,6 +451,7 @@ export async function prepareAgentRunUserTurn(params: {
     }
     return {
       ...(params.privateCompletion ? { privateCompletion: true as const } : {}),
+      replyExpectation: params.replyExpectation,
       ...(releaseProcessingAbortObserver ? { releaseProcessingAbortObserver } : {}),
       ...(execApprovalFollowupRuntimeHandoff?.bashElevated
         ? { bashElevated: execApprovalFollowupRuntimeHandoff.bashElevated }
@@ -390,11 +466,19 @@ export async function prepareAgentRunUserTurn(params: {
       suppressPromptPersistence,
     };
   } catch (error) {
+    const mediaRetained = recorder !== undefined && retainsUserTurnTranscriptMedia(recorder);
+    if (mediaRetained) {
+      // This callback transfers parser cleanup ownership, not a public success fact.
+      // Retained input must keep its media even if later preparation or cleanup fails.
+      params.onUserTurnMediaPersisted();
+    }
     releaseExecApprovalFollowupRuntimeHandoff({
       handoffId: claimedExecApprovalFollowupHandoffId,
       claimId: execApprovalFollowupHandoffClaimId,
     });
-    await Promise.allSettled(durableMediaIds.map((id) => deleteMediaBuffer(id, "inbound")));
+    if (!mediaRetained) {
+      await Promise.allSettled(createdMediaIds.map((id) => deleteMediaBuffer(id, "inbound")));
+    }
     throw error;
   }
 }

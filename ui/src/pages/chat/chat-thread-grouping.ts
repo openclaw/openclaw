@@ -4,6 +4,7 @@ import { messageClientSourcesKey } from "../../../../src/chat/message-client-sou
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
+import { extractThinkingCached } from "../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import {
@@ -11,13 +12,15 @@ import {
   sessionParticipantIdentityKey,
   type SenderIdentity,
 } from "../../lib/chat/sender-label.ts";
+import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import {
   assistantMessageIsInterrupted,
+  isProviderVoiceTranscript,
   resolveAssistantReplyPhase,
 } from "./chat-assistant-reply.ts";
 import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
-import { userTurnRunId } from "./chat-thread-items.ts";
+import { readChatThreadMessageIdentity, userTurnRunId } from "./chat-thread-items.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   assistantGroupIsForwardedBoundary,
@@ -28,9 +31,22 @@ import {
   readAutomationRun,
 } from "./chat-turn-boundary.ts";
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
+import type { ChatReasoning } from "./tool-stream-contract.ts";
+
+const TERMINAL_WORK_STATUSES = new Set(["done", "failed", "timeout", "killed"]);
 
 function assistantMessageKind(message: unknown, visibleContent: MessageGroup["visibleContent"]) {
-  return resolveAssistantReplyPhase(message) ?? (visibleContent === "none" ? "activity" : "reply");
+  if (isProviderVoiceTranscript(message)) {
+    return "voice-transcript";
+  }
+  return (
+    resolveAssistantReplyPhase(message) ??
+    (asRecord(message)?.stopReason === "toolUse"
+      ? "commentary"
+      : visibleContent === "none"
+        ? "activity"
+        : "reply")
+  );
 }
 
 /**
@@ -139,34 +155,28 @@ function stampReplyAttribution(
   }
   for (const [index, item] of items.entries()) {
     const { sender, message, turnSource } = states[index]!;
-    if (item.kind === "stream") {
+    if (item.kind === "group") {
+      // Every strip follows the thread: an unattributed source is "You" only in 1:1.
       if (shared) {
-        item.replyToSender = sender;
-        item.replyToMessage = message;
+        item.replyShared = true;
       }
+      if (item.role !== "assistant" || hasForwardedSource(item)) {
+        continue;
+      }
+      const currentSource =
+        item.runId && item.messages.some((source) => source.replyTarget?.kind === "current")
+          ? runPrompts.get(item.runId)
+          : undefined;
+      if (turnSource) {
+        item.replyTurnSource = turnSource;
+      }
+      if (currentSource) {
+        item.replyCurrentSource = currentSource;
+      }
+    } else if (item.kind !== "stream") {
       continue;
     }
-    if (item.kind !== "group") {
-      continue;
-    }
-    // Every strip follows the thread: an unattributed source is "You" only in 1:1.
-    if (shared) {
-      item.replyShared = true;
-    }
-    if (item.role !== "assistant" || hasForwardedSource(item)) {
-      continue;
-    }
-    const currentSource =
-      item.runId && item.messages.some((source) => source.replyTarget?.kind === "current")
-        ? runPrompts.get(item.runId)
-        : undefined;
-    if (turnSource) {
-      item.replyTurnSource = turnSource;
-    }
-    if (currentSource) {
-      item.replyCurrentSource = currentSource;
-    }
-    if (shared && sender) {
+    if (shared && (item.kind === "stream" || sender)) {
       item.replyToSender = sender;
       item.replyToMessage = message;
     }
@@ -187,12 +197,23 @@ export type ReplyAttributionContext = {
 export function groupMessages(
   items: ChatItem[],
   replyContext: ReplyAttributionContext = {},
+  reasoning?: ChatReasoning | null,
+  showReasoning = false,
 ): Array<ChatItem | MessageGroup> {
+  const visibleReasoning = new Set(
+    reasoning?.items.flatMap(({ receipt }) =>
+      receipt?.persisted ? [JSON.stringify([receipt.runId, receipt.messageId])] : [],
+    ),
+  );
   const result = groupChatItems(
     items,
+    visibleReasoning,
     replyContext.items && rowsAfterHiddenTurns(items, replyContext.items),
+    showReasoning,
   );
-  const context = replyContext.items ? groupChatItems(replyContext.items) : result;
+  const context = replyContext.items
+    ? groupChatItems(replyContext.items, visibleReasoning, undefined, showReasoning)
+    : result;
   return stampReplyAttribution(result, context, replyContext);
 }
 
@@ -214,7 +235,9 @@ function rowsAfterHiddenTurns(items: ChatItem[], context: ChatItem[]): Set<strin
 
 function groupChatItems(
   items: ChatItem[],
+  visibleReasoning: ReadonlySet<string>,
   rowsAfterHiddenTurn?: ReadonlySet<string>,
+  showReasoning = false,
 ): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];
   let currentGroup: MessageGroup | null = null;
@@ -232,19 +255,53 @@ function groupChatItems(
     }
 
     const { item, normalized } = prepared;
-    const role = normalizeRoleForGrouping(normalized.role);
-    // Classify after content projection and keep the fact with its group; later
-    // presentation passes reuse it; replacing a message refreshes its facts.
+    const record = asRecord(item.message);
+    const identity = visibleReasoning.size ? readChatThreadMessageIdentity(item.message) : null;
+    const hasVisibleReasoning =
+      identity?.role === "assistant" &&
+      !identity.isImported &&
+      visibleReasoning.has(JSON.stringify([identity.runId, identity.id])) &&
+      Boolean(extractThinkingCached(item.message));
+    const hasAssistantText =
+      record?.role === "assistant" &&
+      record.stopReason === "toolUse" &&
+      Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim());
+    // Saved reasoning stays visible until its live owner retires the receipts.
+    // Legacy mixed rows retain their tool grouping and file-link attribution.
+    // Classify after content projection; prepared outcomes may outlive their blocks.
     const visibleContent = resolveMessageVisibleContent(item.message, normalized);
+    const normalizedRole = normalizeRoleForGrouping(normalized.role);
+    const hasPreparedActivity =
+      normalizedRole === "assistant" &&
+      visibleContent === "none" &&
+      hasVisiblePreparedActivity(item.message);
+    const role =
+      hasAssistantText || hasVisibleReasoning
+        ? "assistant"
+        : hasPreparedActivity
+          ? "tool"
+          : normalizedRole;
     const source = {
       message: item.message,
       key: item.key,
       duplicateCount: item.duplicateCount,
       ...(normalized.replyTarget ? { replyTarget: normalized.replyTarget } : {}),
       hasVisibleContent:
+        hasVisibleReasoning ||
+        (showReasoning && role === "assistant" && Boolean(extractThinkingCached(item.message))) ||
         visibleContent === "non-text" ||
         Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim()),
     };
+    // Projection can remove the last tool block, leaving only hidden thinking.
+    // Keep recorded interruptions/errors, which have their own visible outcome.
+    if (
+      role === "assistant" &&
+      !source.hasVisibleContent &&
+      !assistantMessageIsInterrupted(item.message) &&
+      record?.stopReason !== "error"
+    ) {
+      continue;
+    }
     const senderLabel =
       role === "user" || role === "assistant" ? (normalized.senderLabel ?? null) : null;
     const sender = role === "user" ? normalized.sender : undefined;
@@ -403,7 +460,12 @@ function isTurnOutputGroup(item: TurnRenderItem): item is MessageGroup {
 }
 
 function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
-  if (item.kind !== "group" || item.isStreaming || groupHasVisibleReplyContent(item, false)) {
+  if (
+    item.kind !== "group" ||
+    item.isStreaming ||
+    groupHasVisibleReplyContent(item, false) ||
+    item.messages.some(({ message }) => isProviderVoiceTranscript(message))
+  ) {
     return false;
   }
   const role = item.role.toLowerCase();
@@ -437,6 +499,7 @@ export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolea
   return (
     group.role.toLowerCase() === "assistant" &&
     !assistantGroupIsForwardedBoundary(group) &&
+    !group.messages.some(({ message }) => isProviderVoiceTranscript(message)) &&
     groupHasVisibleReplyContent(group)
   );
 }
@@ -475,6 +538,7 @@ export function collapseCompletedTurnWork(
   opts: {
     sessionKey: string;
     runWorking: boolean;
+    bubbleMode?: boolean;
     searchActive?: boolean;
     session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
   },
@@ -490,7 +554,9 @@ export function collapseCompletedTurnWork(
     extraParts.length === 0;
   // Channel sessions can also be opened in the Control UI, but their full
   // transcript remains the canonical presentation on message surfaces.
-  if (!isDashboardSession || opts.searchActive) {
+  // Bubble mode keeps commentary in place and lets contiguous tool activity
+  // use the existing activity disclosure instead of folding narration into work.
+  if (!isDashboardSession || opts.searchActive || opts.bubbleMode) {
     return items;
   }
   const turns: TurnRenderItem[][] = [];
@@ -559,20 +625,19 @@ export function collapseCompletedTurnWork(
       // the answer stays last. Nothing moves past a handoff, which keeps a
       // handoff's own sentence above its work, and nothing moves when any of
       // it failed or ended the run: that stays where it happened.
-      const answer = finalReplyIndex >= 0 ? terminalReply : undefined;
       const trailing = turn.slice(finalReplyIndex + 1);
       const answerLast =
-        answer?.runId !== undefined &&
+        terminalReply.runId !== undefined &&
         trailing.length > 0 &&
         trailing.every(
           (item) =>
             isCollapsibleWorkGroup(item) &&
-            item.runId === answer.runId &&
+            item.runId === terminalReply.runId &&
             !groupHasFailedResult(item) &&
             !groupEndsRunInFailure(item),
         );
       result.push(
-        ...(answerLast ? [...turn.slice(0, finalReplyIndex), ...trailing, answer] : turn),
+        ...(answerLast ? [...turn.slice(0, finalReplyIndex), ...trailing, terminalReply] : turn),
       );
       continue;
     }
@@ -621,10 +686,7 @@ export function collapseCompletedTurnWork(
       session?.key === opts.sessionKey &&
       terminalReply.runId !== undefined &&
       session.lastRunId === terminalReply.runId &&
-      (session.status === "done" ||
-        session.status === "failed" ||
-        session.status === "timeout" ||
-        session.status === "killed") &&
+      TERMINAL_WORK_STATUSES.has(session.status ?? "") &&
       typeof runtimeMs === "number" &&
       Number.isFinite(runtimeMs) &&
       runtimeMs >= 0

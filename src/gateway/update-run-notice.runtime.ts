@@ -10,9 +10,12 @@ import {
 } from "../infra/delivery-queue-state-context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { findDeliveryIntentOwner } from "../infra/outbound/delivery-queue-storage.js";
-import { recordUpdateRunStep, recordUpdateRunVerification } from "../infra/update-run-ledger.js";
 import { renderUpdateRunNotice, type UpdateRunNoticeKind } from "../infra/update-run-notice.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import {
+  recordUpdateRunStepAsync as recordUpdateRunStep,
+  recordUpdateRunVerificationAsync as recordUpdateRunVerification,
+} from "../infra/update-run-write.async.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sendGatewayLifecycleNotice } from "./server-restart-sentinel-notice.js";
 import {
@@ -63,7 +66,7 @@ export async function createUpdateRunNotifier(
       const cfg = getConfig();
       const currentTarget = authorizeUpdateRunNoticeTarget(cfg, noticeTarget);
       if (currentTarget.kind === "none") {
-        recordUpdateRunNoticeSkipped(run.runId, currentTarget.reason, env);
+        await recordUpdateRunNoticeSkipped(run.runId, currentTarget.reason, env);
         return { delivered: false, owned: false };
       }
       // Admission, the watcher, and successor startup share permanent delivery
@@ -99,7 +102,7 @@ export async function createUpdateRunNotifier(
         }
       }
       if (delivered && kind === "finished") {
-        recordUpdateRunVerification(run.runId, { noticeDelivered: true }, { env });
+        await recordUpdateRunVerification(run.runId, { noticeDelivered: true }, { env });
       }
       const custody =
         currentTarget.kind === "route"
@@ -107,7 +110,7 @@ export async function createUpdateRunNotifier(
           : null;
       const owned = delivered || custody?.status === "pending" || custody?.status === "completed";
       if (owned && kind !== "finished") {
-        recordUpdateRunStep(
+        await recordUpdateRunStep(
           run.runId,
           {
             step: `notice:${milestone}`,

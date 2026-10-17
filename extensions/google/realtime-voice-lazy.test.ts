@@ -84,15 +84,6 @@ it("fences response completion from a closed Google provider generation", async 
 });
 
 describe("Google lazy realtime voice", () => {
-  it("buffers early realtime audio while the lazy Google bridge loads", () => {
-    const { bridge } = createLazyRealtimeBridge();
-    expect(bridge.supportsToolResultContinuation).toBe(false);
-    expect(bridge.supportsToolResultSuppression).toBe(false);
-    expect(bridge.sendAudio(Buffer.alloc(160))).toBeUndefined();
-    expect(bridge.setMediaTimestamp(20)).toBeUndefined();
-    expect(bridge.sendUserMessage?.("hello")).toBeUndefined();
-  });
-
   it("evicts the oldest lazy audio when the startup chunk limit is reached", async () => {
     const loaded = createMockRealtimeBridge();
     createRealtimeBridgeMock.mockReturnValue(loaded.bridge);

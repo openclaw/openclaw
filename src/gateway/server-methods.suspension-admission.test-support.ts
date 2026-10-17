@@ -48,9 +48,10 @@ export function dispatchSuspensionRequest(params: {
     isWebchatConnect: () => false,
     context:
       params.context ??
-      ({ logGateway: { warn: vi.fn() } } as unknown as Parameters<
-        typeof handleGatewayRequest
-      >[0]["context"]),
+      ({
+        getRuntimeConfig: () => ({}),
+        logGateway: { warn: vi.fn(), info: vi.fn() },
+      } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"]),
     methodRegistry,
   });
   return { request, respond };

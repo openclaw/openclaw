@@ -1,6 +1,5 @@
 // Channel MCP server tests cover channel tool registration and requests.
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { OpenClawChannelBridge } from "./channel-bridge.js";
@@ -279,34 +278,6 @@ describe("openclaw channel mcp server", () => {
         expect(gatewayRequest).toHaveBeenCalledTimes(1);
       });
 
-      test("clamps direct bridge session limits to the public MCP windows", async () => {
-        const sessionKey = "agent:main:main";
-        const gatewayRequest = vi.fn(async (method: string) => {
-          if (method === "sessions.list") {
-            return { sessions: [] };
-          }
-          if (method === "sessions.get") {
-            return { messages: [] };
-          }
-          throw new Error(`unexpected gateway method ${method}`);
-        });
-        const bridge = createBridge();
-        attachReadyGateway(bridge, gatewayRequest);
-
-        await bridge.listConversations({ limit: 10_000 });
-        await bridge.readMessages(sessionKey, 10_000);
-
-        expect(gatewayRequest).toHaveBeenNthCalledWith(
-          1,
-          "sessions.list",
-          expect.objectContaining({ limit: 500 }),
-        );
-        expect(gatewayRequest).toHaveBeenNthCalledWith(2, "sessions.get", {
-          key: sessionKey,
-          limit: 200,
-        });
-      });
-
       test("emits Claude channel and permission notifications", async () => {
         const sessionKey = "agent:main:main";
         const channelNotifications: Array<{ content: string; meta: Record<string, string> }> = [];
@@ -318,12 +289,20 @@ describe("openclaw channel mcp server", () => {
         const mcp = await connectMcpWithoutGateway({
           claudeChannelMode: "on",
         });
-        mcp.client.setNotificationHandler(ClaudeChannelNotificationSchema, ({ params }) => {
-          channelNotifications.push(params);
-        });
-        mcp.client.setNotificationHandler(ClaudePermissionNotificationSchema, ({ params }) => {
-          permissionNotifications.push(params);
-        });
+        mcp.client.setNotificationHandler(
+          "notifications/claude/channel",
+          { params: ClaudeChannelNotificationSchema.shape.params },
+          (params) => {
+            channelNotifications.push(params);
+          },
+        );
+        mcp.client.setNotificationHandler(
+          "notifications/claude/channel/permission",
+          { params: ClaudePermissionNotificationSchema.shape.params },
+          (params) => {
+            permissionNotifications.push(params);
+          },
+        );
 
         await receiveMessage(mcp.bridge, {
           sessionKey,
@@ -461,6 +440,26 @@ describe("openclaw channel mcp server", () => {
       });
     });
 
+    test("rejects oversized limits and timeouts at the MCP input boundary", async () => {
+      const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
+      attachReadyGateway(
+        mcp.bridge,
+        vi.fn(async () => ({ sessions: [], messages: [] })),
+      );
+      for (const request of [
+        { name: "conversations_list", arguments: { limit: 501 } },
+        { name: "messages_read", arguments: { session_key: "agent:main:main", limit: 201 } },
+        { name: "events_poll", arguments: { limit: 201 } },
+        { name: "events_wait", arguments: { timeout_ms: 3_000_000_000 } },
+      ]) {
+        const result = await mcp.client.callTool(request);
+        expect(result).toMatchObject({
+          isError: true,
+          content: [{ type: "text", text: expect.stringContaining("Input validation error") }],
+        });
+      }
+    });
+
     test("waits for queued events through the MCP tool", async () => {
       const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
       await receiveMessage(mcp.bridge, {
@@ -565,7 +564,6 @@ describe("openclaw channel mcp server", () => {
           name: "events_wait",
           arguments: { after_cursor: 0, timeout_ms: 300_000 },
         },
-        undefined,
         { signal: controller.signal },
       );
       await vi.waitFor(() => expect(vi.getTimerCount()).toBeGreaterThan(timerBaseline));

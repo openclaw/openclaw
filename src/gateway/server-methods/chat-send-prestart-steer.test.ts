@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
@@ -17,6 +18,7 @@ import {
   loadSessionEntry,
   loadTranscriptEventsSync,
 } from "../../config/sessions/session-accessor.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { waitForChatAbortControllerRemoval } from "../chat-abort-lifecycle-internal.js";
@@ -30,6 +32,7 @@ import {
   directSessionReq,
   setupGatewaySessionsHandlerTestHarness,
 } from "../test/server-sessions.test-helpers.js";
+import { loadRealChatDispatch, successfulChatTurn } from "./chat-send-authority.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
@@ -43,12 +46,7 @@ vi.mock("../../auto-reply/reply/agent-runner-execution.js", async (importOrigina
 test.for(["accepted", "unavailable", "rejected"] as const)(
   "preserves a prestart steer through workspace preparation when late injection is %s",
   async (injection, { signal }) => {
-    const realDispatch = await vi.importActual<typeof import("../../auto-reply/dispatch.js")>(
-      "../../auto-reply/dispatch.js",
-    );
-    const realReply = await vi.importActual<typeof import("../../auto-reply/reply/get-reply.js")>(
-      "../../auto-reply/reply/get-reply.js",
-    );
+    const realDispatch = await loadRealChatDispatch();
     const workspace = await initializeRepository(tempDirs.make("openclaw-prestart-steer-"), "repo");
     testState.agentConfig = { workspace };
     const { storePath } = await createSessionStoreDir();
@@ -71,7 +69,11 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
     const terminalBeforeConsumption: boolean[] = [];
     let initialOperation: ReplyOperation | undefined;
     let sessionKey: string | undefined;
+    let clock = 0;
+    const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const logGateway = { ...createSubsystemLogger("test/gateway"), info: vi.fn() };
     const context = {
+      logGateway,
       chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
       chatQueuedTurns: new Map(),
       broadcast: vi.fn((event: string, payload: unknown) => {
@@ -107,6 +109,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         initialOperation.attachBackend({
           kind: "embedded",
           runId,
+          terminalReplyExpectation: followupRun.run.terminalReplyExpectation,
           toolAuthorityFingerprint: initialOperation.bindToolAuthorityRoute(followupRun.run),
           cancel: () => {},
           messageInjectionV2: {
@@ -143,21 +146,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         followupStarted.resolve();
         await releaseFollowup.promise;
       }
-      return {
-        runId,
-        outcome: {
-          kind: "settled",
-          status: "ok",
-          result: {
-            payloads: [{ text: "Included the regression proof." }],
-            meta: { durationMs: 0 },
-          },
-          resolved: { provider: "openai", model: "gpt-test" },
-          fallback: { exhausted: false, attempts: [] },
-          autoCompactionCount: 0,
-          didLogHeartbeatStrip: false,
-        },
-      };
+      return successfulChatTurn(runId, "Included the regression proof.");
     });
     // Observe custody without replacing dispatch, reply preparation, or queue policy.
     dispatchInboundMessageMock.mockImplementation(async (raw: unknown) => {
@@ -176,10 +165,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
           queuedSettled.resolve();
         };
       }
-      return realDispatch.dispatchInboundMessage({
-        ...params,
-        replyResolver: realReply.getReplyFromConfig,
-      });
+      return realDispatch(params);
     });
     try {
       const created = await directSessionReq<{ key: string; runId: string }>(
@@ -218,6 +204,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         "steer source registration",
       );
       expect(terminalBeforeConsumption).toEqual([]);
+      clock = 15_800;
       releaseWorkspace.resolve();
       await withinTest(inputQueued.promise, signal);
       // Steering can park before reply preparation reaches the runtime.
@@ -270,6 +257,18 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         );
       }
       expect(getFollowupQueueDepth(sessionKey)).toBe(0);
+      expect(
+        logGateway.info.mock.calls.filter(([message]) => message.startsWith("slow chat send")),
+      ).toEqual([
+        [
+          expect.stringContaining(
+            `slow chat send 15800ms stage=${injection === "accepted" ? "steer" : "queued"} ack=0ms`,
+          ),
+        ],
+        ...(injection === "accepted"
+          ? []
+          : [[expect.stringContaining("slow chat send 15800ms stage=startup ack=0ms")]]),
+      ]);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
       const entry = expectDefined(
         loadSessionEntry({ agentId: "main", sessionKey, storePath }),
@@ -319,6 +318,134 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         }
       }
       testState.agentConfig = undefined;
+      now.mockRestore();
     }
   },
 );
+
+test("queues a fresh follow-up while stopped preparation still owns the reply slot", async ({
+  signal,
+}) => {
+  const realDispatch = await loadRealChatDispatch();
+  testState.agentConfig = { workspace: tempDirs.make("openclaw-stopped-preparation-") };
+  const { storePath } = await createSessionStoreDir();
+  const preparationStarted = createDeferred();
+  const releasePreparation = createDeferred();
+  const followupDispatched = createDeferred();
+  const followupStarted = createDeferred();
+  const followupFinished = createDeferred();
+  const followupRunId = "after-stopped-preparation";
+  const followupText = "Continue with the new request.";
+  let initialOperation: ReplyOperation | undefined;
+  let sessionKey: string | undefined;
+  const consumed: string[] = [];
+  const context = {
+    chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
+    chatQueuedTurns: new Map(),
+    broadcast: vi.fn((event: string, payload: unknown) => {
+      if (
+        event === "chat" &&
+        isRecord(payload) &&
+        payload.runId === followupRunId &&
+        payload.state === "final"
+      ) {
+        followupFinished.resolve();
+      }
+    }),
+  };
+  const requestOptions = { ...controlUiClient, context };
+  runtime.execute.mockImplementation(async ({ followupRun, opts, replyOperation }) => {
+    const runId = expectDefined(opts?.runId, "runtime run ID");
+    if (!initialOperation) {
+      initialOperation = expectDefined(replyOperation, "initial reply owner");
+      preparationStarted.resolve();
+      // Model execution has not begun; asynchronous workspace setup still owns the attempt.
+      await releasePreparation.promise;
+      initialOperation.abortSignal.throwIfAborted();
+    } else {
+      opts?.onAgentRunStart?.(runId);
+      await expectDefined(
+        followupRun.userTurnTranscriptRecorder,
+        "follow-up input",
+      ).persistApproved();
+      consumed.push(followupRun.prompt);
+      followupStarted.resolve();
+    }
+    return successfulChatTurn(runId, "The new request completed.");
+  });
+  dispatchInboundMessageMock.mockImplementation(async (raw: unknown) => {
+    const params = raw as Parameters<typeof dispatchInboundMessage>[0];
+    try {
+      return await realDispatch(params);
+    } finally {
+      if (params.replyOptions?.runId === followupRunId) {
+        followupDispatched.resolve();
+      }
+    }
+  });
+  try {
+    const created = await directSessionReq<{ key: string; runId: string }>(
+      "sessions.create",
+      { agentId: "main", message: "Prepare the initial request." },
+      requestOptions,
+    );
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    const session = expectDefined(created.payload, "created session");
+    sessionKey = session.key;
+    await withinTest(preparationStarted.promise, signal);
+    const stopped = await directSessionReq(
+      "chat.abort",
+      { sessionKey, runId: session.runId },
+      requestOptions,
+    );
+    expect(stopped.ok, JSON.stringify(stopped.error)).toBe(true);
+    expect(initialOperation?.abortSignal.aborted).toBe(true);
+    expect(replyRunRegistry.get(sessionKey)).toBe(initialOperation);
+    const sent = await directSessionReq(
+      "chat.send",
+      { sessionKey, message: followupText, idempotencyKey: followupRunId },
+      requestOptions,
+    );
+    expect(sent).toMatchObject({ ok: true, payload: { runId: followupRunId, status: "started" } });
+    await withinTest(followupDispatched.promise, signal);
+    expect(consumed).toEqual([]);
+    expect(context.chatQueuedTurns.has(followupRunId)).toBe(true);
+    expect(runtime.execute).toHaveBeenCalledOnce();
+    expect(replyRunRegistry.get(sessionKey)).toBe(initialOperation);
+    releasePreparation.resolve();
+    await withinTest(followupStarted.promise, signal);
+    await withinTest(followupFinished.promise, signal);
+    expect(consumed).toEqual([expect.stringContaining(followupText)]);
+    expect(runtime.execute).toHaveBeenCalledTimes(2);
+    expect(initialOperation?.result).toMatchObject({ kind: "aborted", code: "aborted_by_user" });
+    const entry = expectDefined(
+      loadSessionEntry({ agentId: "main", sessionKey, storePath }),
+      "session",
+    );
+    const messages = loadTranscriptEventsSync({
+      agentId: "main",
+      sessionKey,
+      sessionId: entry.sessionId,
+      storePath,
+    });
+    expect(
+      messages.filter(
+        (event) =>
+          isRecord(event) &&
+          isRecord(event.message) &&
+          event.message.role === "user" &&
+          extractTextFromChatContent(event.message.content) === followupText,
+      ),
+    ).toHaveLength(1);
+  } finally {
+    const released = getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey] });
+    releasePreparation.resolve();
+    if (sessionKey) {
+      clearFollowupQueueForTest(sessionKey);
+    }
+    await released;
+    dispatchInboundMessageMock.mockReset();
+    runtime.execute.mockReset();
+    testState.agentConfig = undefined;
+  }
+});

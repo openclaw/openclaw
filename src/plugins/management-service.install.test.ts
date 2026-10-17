@@ -3,6 +3,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { pluginLifecycleError } from "../gateway/server-methods/plugins-lifecycle-error.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import * as bundledSources from "./bundled-sources.js";
 import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { PluginInstallConfigError } from "./install-config.js";
 import {
@@ -25,6 +27,13 @@ const mocks = vi.hoisted(() => ({
   replaceConfig: vi.fn(),
   selectWriteOptions: vi.fn((writeOptions: unknown) => writeOptions),
   slotSelection: vi.fn((config: unknown) => config),
+}));
+
+// A beta package version forces the beta update channel, so pin a stable host to keep
+// the default stable-channel expectations independent of the checkout's release train.
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
+  VERSION: "2026.9.7",
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -258,6 +267,82 @@ describe("managed plugin installation", () => {
       expect(mocks.npmInstall).not.toHaveBeenCalled();
       expect(mocks.clawhubInstall).not.toHaveBeenCalled();
       expect(mocks.persistInstall).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["npm", "clawhub"] as const)(
+    "retains canonical official recovery with a hosted %s primary and no bundled copy",
+    async (source) => {
+      vi.spyOn(bundledSources, "findBundledPluginSource").mockReturnValue(undefined);
+      const packageName = "@openclaw/brave-plugin";
+      const config = { tools: { web: { search: { provider: "brave" } } } };
+      const prepared = configSnapshot(config);
+      mocks.readConfig.mockResolvedValue({
+        ...prepared,
+        snapshot: {
+          ...prepared.snapshot,
+          valid: false,
+          exists: true,
+          parsed: config,
+          config,
+          issues: [
+            {
+              path: "tools.web.search.provider",
+              message:
+                'web_search provider is not available: brave (install or enable plugin "brave")',
+            },
+          ],
+          legacyIssues: [],
+        },
+      });
+      // The hosted feed supplies artifacts; Brave's local descriptor owns recovery permission.
+      mockHostedOfficialCatalog([
+        {
+          id: packageName,
+          state: "available",
+          publisher: { id: "openclaw", trust: "official" },
+          install: {
+            candidates: [{ sourceRef: `public-${source}`, package: packageName }],
+          },
+        },
+      ]);
+      if (source === "clawhub") {
+        mockClawHubInstall("brave", packageName);
+      } else {
+        mocks.npmInstall.mockResolvedValue({
+          ok: true,
+          pluginId: "brave",
+          targetDir: "/tmp/extensions/brave",
+          extensions: ["index.js"],
+          packageName,
+        });
+      }
+      mocks.persistInstall.mockResolvedValue(config);
+      mocks.metadata.mockReturnValue(
+        metadataSnapshot({ enabled: true, id: "brave", origin: "global" }),
+      );
+
+      const result = await installManagedPlugin({
+        request: {
+          source: "official",
+          pluginId: "brave",
+          acknowledgeCapabilities: emptyArtifactAcknowledgment,
+        },
+        env: {},
+      });
+
+      expect(source === "npm" ? mocks.npmInstall : mocks.clawhubInstall).toHaveBeenCalledWith(
+        expect.objectContaining({ expectedPluginId: "brave" }),
+      );
+      expect(source === "npm" ? mocks.clawhubInstall : mocks.npmInstall).not.toHaveBeenCalled();
+      expect(mocks.persistInstall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pluginId: "brave",
+          snapshot: expect.objectContaining({ config }),
+          install: expect.objectContaining({ source }),
+        }),
+      );
+      expect(result.plugin.id).toBe("brave");
     },
   );
 
@@ -545,12 +630,13 @@ describe("managed plugin installation", () => {
   });
 
   it("serializes install and enable mutations through one Gateway lock", async () => {
-    let releasePersist: ((config: Record<string, unknown>) => void) | undefined;
-    const heldPersist = new Promise<Record<string, unknown>>((resolve) => {
-      releasePersist = resolve;
-    });
+    const heldPersist = createDeferredCore<Record<string, unknown>>();
+    const persistEntered = createDeferredCore();
     mockClawHubInstall("demo", "community/demo");
-    mocks.persistInstall.mockReturnValueOnce(heldPersist);
+    mocks.persistInstall.mockImplementationOnce(() => {
+      persistEntered.resolve();
+      return heldPersist.promise;
+    });
     mocks.replaceConfig.mockResolvedValue({});
     mocks.refreshRegistry.mockResolvedValue(undefined);
     mocks.metadata
@@ -566,14 +652,21 @@ describe("managed plugin installation", () => {
       },
       env: {},
     });
-    await vi.waitFor(() => expect(mocks.persistInstall).toHaveBeenCalledTimes(1));
-    const enable = setManagedPluginEnabled({ pluginId: "workboard", enabled: true, env: {} });
-    await Promise.resolve();
+    let enable: ReturnType<typeof setManagedPluginEnabled> | undefined;
+    try {
+      await Promise.race([persistEntered.promise, install]);
+      expect(mocks.persistInstall).toHaveBeenCalledTimes(1);
+      enable = setManagedPluginEnabled({ pluginId: "workboard", enabled: true, env: {} });
+      await Promise.resolve();
 
-    expect(mocks.readConfig).toHaveBeenCalledTimes(1);
-    releasePersist?.({});
-    await install;
-    await enable;
-    expect(mocks.readConfig).toHaveBeenCalledTimes(2);
+      expect(mocks.readConfig).toHaveBeenCalledTimes(1);
+      heldPersist.resolve({});
+      await install;
+      await enable;
+      expect(mocks.readConfig).toHaveBeenCalledTimes(2);
+    } finally {
+      heldPersist.resolve({});
+      await Promise.allSettled(enable ? [install, enable] : [install]);
+    }
   });
 });

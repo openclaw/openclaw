@@ -67,8 +67,8 @@ describe("video-generation live-test helpers", () => {
       ["alibaba", "alibaba/wan2.6-r2v", false],
       ["qwen", "qwen/wan2.6-r2v-flash", false],
       ["vydra", "vydra/veo3", false],
-      ["together", "together/Wan-AI/Wan2.2-T2V-A14B", false],
-      ["together", "together/Wan-AI/Wan2.2-I2V-A14B", true],
+      ["together", "together/Wan-AI/wan2.7-t2v", false],
+      ["together", "together/Wan-AI/wan2.7-i2v", true],
     ] as const) {
       expect(canRunBufferBackedImageToVideoLiveLane({ providerId, modelRef }), modelRef).toBe(
         expected,

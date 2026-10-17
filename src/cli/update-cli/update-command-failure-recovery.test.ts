@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -175,12 +176,14 @@ describe("post-update failure recovery observation", () => {
   });
 
   it.each([
-    { activated: false, json: true },
-    { activated: true, json: false },
-    { activated: true, json: true },
+    { activated: false, json: true, deferred: false },
+    { activated: true, json: false, deferred: false },
+    { activated: true, json: true, deferred: false },
+    { activated: true, json: false, deferred: true },
+    { activated: true, json: true, deferred: true },
   ])(
-    "observes failed recovery once without waiting for startup (activated=$activated, json=$json)",
-    async ({ activated, json }) => {
+    "defers only recorded state contention (activated=$activated, json=$json, deferred=$deferred)",
+    async ({ activated, json, deferred }) => {
       const env = { ...process.env };
       const run = { runId: updateLedger.createUpdateRun({ trigger: "cli" }, { env }).runId, env };
       const readRuntime = vi.fn(async () => ({ status: "unknown" }));
@@ -229,6 +232,21 @@ describe("post-update failure recovery observation", () => {
               reason: "doctor-failed",
               recovery: { serviceRestartSafe: true, version: "2026.9.5" },
               steps: [
+                ...(deferred
+                  ? [
+                      {
+                        name: "post-install-verify",
+                        command: "verify installed package",
+                        cwd: root,
+                        durationMs: 0,
+                        exitCode: null,
+                        advisory: {
+                          kind: "recoverable-maintenance" as const,
+                          message: "State verification deferred to the operator restart.",
+                        },
+                      },
+                    ]
+                  : []),
                 {
                   name: "candidate-doctor-lint",
                   command: "doctor",
@@ -250,8 +268,8 @@ describe("post-update failure recovery observation", () => {
       if (!(failure instanceof ReportedUpdateCommandFailure)) {
         throw failure;
       }
-      expect(readRuntime).toHaveBeenCalledOnce();
-      expect(inspect).toHaveBeenCalledExactlyOnceWith(19431, expect.anything());
+      expect(readRuntime).toHaveBeenCalledTimes(deferred ? 0 : 1);
+      expect(inspect).toHaveBeenCalledTimes(deferred ? 0 : 1);
       expect(sleep).not.toHaveBeenCalled();
       expect(waitForStartup).not.toHaveBeenCalled();
       expect(elapsedMs).toBe(0);
@@ -271,19 +289,34 @@ describe("post-update failure recovery observation", () => {
         );
       }
       expect(recorded?.verification.serviceRunning).toBeUndefined();
-      expect(recorded?.verification.readyz).toBe(false);
+      expect(recorded?.verification.readyz).toBe(deferred ? undefined : false);
       expect(recorded?.steps).toContainEqual(
         expect.objectContaining({ step: "candidate-doctor-lint", exitCode: 2 }),
       );
       const recoveryStep = recorded?.steps.find(
         (step) => step.step === "gateway recovery verification",
       );
-      expect(recoveryStep).toMatchObject({ status: "failed", exitCode: 1 });
+      expect(recoveryStep).toMatchObject({
+        status: deferred ? "completed" : "failed",
+        exitCode: deferred ? null : 1,
+      });
+      if (deferred) {
+        expect(recoveryStep?.detail).toContain("deferred");
+        expect(recoveryStep?.detail).toContain("service owner");
+        expect(recoveryStep?.detail).toContain(
+          "Resolve the recorded update failure before restarting",
+        );
+        expect(recoveryStep?.failureFacts).toBeUndefined();
+        assert(recorded);
+        expect(renderUpdateRunReport(recorded).markdown).toContain("openclaw update status");
+      }
       expect(
         failure.result.steps.find((step) => step.name === "gateway recovery verification")
           ?.termination,
       ).toBeUndefined();
-      expect(recoveryStep?.failureFacts?.some((fact) => fact.code === "timeout")).toBe(false);
+      expect(recoveryStep?.failureFacts?.some((fact) => fact.code === "timeout") ?? false).toBe(
+        false,
+      );
       expect(mocks.converge).not.toHaveBeenCalled();
       expect(mocks.printResult).toHaveBeenCalledOnce();
     },

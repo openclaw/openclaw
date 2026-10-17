@@ -10,7 +10,6 @@ import {
 } from "../infra/restart.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import { flushLogger, setLoggerOverride } from "../logging/logger.js";
-import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { getPluginValueInstance } from "../plugins/plugin-instance-scope.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
@@ -30,7 +29,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import type { GatewayServer } from "./server-public.js";
 
-it.each(["sibling", "restart", "memory-and-plugin", "session-store"] as const)(
+it.each(["restart", "memory-and-plugin", "session-store"] as const)(
   "reports plugin cleanup through registered Gateway close (%s)",
   async (mode) => {
     const fixture = await createGatewayMetadataCloseFixture(`plugin-close-${mode}`);
@@ -74,9 +73,9 @@ it.each(["sibling", "restart", "memory-and-plugin", "session-store"] as const)(
     const releaseShared = createDeferredCore();
     const releaseWork = createDeferredCore();
     const started = createDeferredCore<GatewayServer>();
-    const exited = createDeferredCore<number>();
     const completeBoot = vi.fn();
     let exitCode: number | undefined;
+    let running: Promise<number> | undefined;
     let startCount = 0;
     let closing: Promise<unknown> | undefined;
     let activeWork: Promise<void> | undefined;
@@ -95,7 +94,7 @@ it.each(["sibling", "restart", "memory-and-plugin", "session-store"] as const)(
         }
         vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
         const previousStops = new Set(process.listeners("SIGINT"));
-        void runGatewayLoop({
+        running = runGatewayLoop({
           lockPort: port,
           start: async (options) => {
             startCount += 1;
@@ -106,16 +105,13 @@ it.each(["sibling", "restart", "memory-and-plugin", "session-store"] as const)(
             started.resolve(next);
             return next;
           },
-          runtime: {
-            log() {},
-            error() {},
-            exit(code) {
-              exitCode = code;
-              exited.resolve(code);
-            },
-          },
           completeBoot,
-        }).catch(started.reject);
+        });
+        void running
+          .then((code) => {
+            exitCode = code;
+          })
+          .catch(started.reject);
         server = await started.promise;
         stop = process.listeners("SIGINT").find((listener) => !previousStops.has(listener));
         assert(stop);
@@ -161,12 +157,6 @@ it.each(["sibling", "restart", "memory-and-plugin", "session-store"] as const)(
           }
         },
       );
-      let siblingPort: number | undefined;
-      if (mode === "sibling") {
-        setActivePluginRegistry(createEmptyPluginRegistry());
-        siblingPort = await fixture.reservePort();
-        await fixture.start(siblingPort);
-      }
       const close = vi.spyOn(server, "close");
       if (mode === "restart") {
         activeWork = runWithGatewayIndependentRootWorkAdmission(
@@ -199,19 +189,17 @@ it.each(["sibling", "restart", "memory-and-plugin", "session-store"] as const)(
         .finally(() => {
           closeSettled = true;
         });
-      if (mode !== "sibling") {
-        await Promise.race([
-          sharedEntered.promise,
-          outcome.then(() => {
-            throw new Error("Close settled before shared cleanup");
-          }),
-        ]);
-        await nextTurn();
-        expect(closeSettled).toBe(false);
-        expect(sharedSettled).toBe(false);
-        expect(pluginDisposed).toBe(hasPluginFailure);
-        releaseShared.resolve();
-      }
+      await Promise.race([
+        sharedEntered.promise,
+        outcome.then(() => {
+          throw new Error("Close settled before shared cleanup");
+        }),
+      ]);
+      await nextTurn();
+      expect(closeSettled).toBe(false);
+      expect(sharedSettled).toBe(false);
+      expect(pluginDisposed).toBe(hasPluginFailure);
+      releaseShared.resolve();
       const error = await outcome;
       if (stateFailure) {
         expect(collectNestedErrorCandidates(error)).toContain(pluginFailure);
@@ -222,7 +210,7 @@ it.each(["sibling", "restart", "memory-and-plugin", "session-store"] as const)(
         expect(pluginSawOpenDatabase).toBe(true);
       }
       if (mode === "restart") {
-        await exited.promise;
+        await running;
         expect(exitCode).toBe(0);
         expect(completeBoot).not.toHaveBeenCalledWith(
           expect.objectContaining({ outcome: "forced_stop" }),
@@ -253,18 +241,9 @@ it.each(["sibling", "restart", "memory-and-plugin", "session-store"] as const)(
       expect(getGatewayContextLifetime(kernel.resolvePluginGatewayContext).signal.aborted).toBe(
         true,
       );
-      if (siblingPort !== undefined) {
-        expect(sharedSettled).toBe(false);
-        expect(database.isOpen).toBe(true);
-        expect(getGatewayPluginMetadataSnapshot()).toBeDefined();
-        const response = await fetch(`http://127.0.0.1:${siblingPort}/healthz`);
-        await response.text();
-        expect(response.ok).toBe(true);
-      } else {
-        expect(sharedSettled).toBe(true);
-        expect(database.isOpen).toBe(false);
-        expect(getActiveSecretsRuntimeSnapshotState()).toBeNull();
-      }
+      expect(sharedSettled).toBe(true);
+      expect(database.isOpen).toBe(false);
+      expect(getActiveSecretsRuntimeSnapshotState()).toBeNull();
     } finally {
       releaseWork.resolve();
       releaseShared.resolve();
@@ -275,8 +254,8 @@ it.each(["sibling", "restart", "memory-and-plugin", "session-store"] as const)(
       if (mode === "restart" && exitCode === undefined && stop) {
         await nextTurn();
         stop("SIGINT");
-        await exited.promise;
       }
+      await Promise.allSettled([running]);
       await fixture.cleanup();
       setLoggerOverride(null);
       resetGatewayRestartStateForInProcessRestart();

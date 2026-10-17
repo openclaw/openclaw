@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
+import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
+import { selectSidebarView } from "../app-sidebar-setup.ts";
 import {
   createGatewayHarness,
   createSessionsHarness,
@@ -9,7 +11,7 @@ import {
 } from "../app-sidebar.ts";
 import { createTestGatewayClient } from "../gateway-client.ts";
 import { waitForFast } from "../wait-for.ts";
-import { mountRoster, roster, session, toggleRoster } from "./roster.test-support.ts";
+import { mountRoster, roster, session, settleRoster } from "./roster.test-support.ts";
 
 describe("AppSidebar session attention details", () => {
   it.each([
@@ -18,7 +20,7 @@ describe("AppSidebar session attention details", () => {
     ["main", undefined, true],
     ["research", undefined, false],
   ] as const)(
-    "keeps global Home attention scoped to %s for requester %s",
+    "keeps global main-header attention scoped to %s for requester %s",
     async (agentId, requesterAgentId, ownsRequest) => {
       const now = Date.now();
       const requestTarget = { sessionKey: "global", agentId: requesterAgentId };
@@ -54,13 +56,16 @@ describe("AppSidebar session attention details", () => {
         ],
       } satisfies SessionsListResult;
       sessionsHarness.publishList({ result });
-      const { sidebar } = await mountSidebar(
+      const { sidebar, context } = await mountSidebar(
         gatewayHarness.gateway,
         sessionsHarness.sessions,
         "panel",
         { ...TWO_AGENTS, scope: "global" },
         [approval],
       );
+      sidebar.connected = true;
+      sidebar.sidebarAgentsMode = "roster";
+      await settleRoster(sidebar);
       gatewayHarness.publishEvent("question.requested", {
         id: "global-question",
         ...requestTarget,
@@ -79,11 +84,15 @@ describe("AppSidebar session attention details", () => {
       await sidebar.updateComplete;
       expect(
         sidebar
-          .querySelector(".nav-item--home [data-session-attention]")
+          .querySelector(
+            `[data-agent-group="${agentId}"] .sidebar-agent-roster__header [data-session-attention]`,
+          )
           ?.getAttribute("aria-label"),
       ).toBe(ownsRequest ? "Waiting for your answer\nReview the changes?" : undefined);
       expect(sidebar.querySelector('[data-session-key="global"]')).toBeNull();
-      await toggleRoster(sidebar, agentId);
+      await selectSidebarView(sidebar, "pages");
+      await selectSidebarView(sidebar, "sessions");
+      await settleRoster(sidebar);
       const header = () =>
         sidebar.querySelector(`[data-agent-group="${agentId}"] .sidebar-agent-roster__header`);
       await waitForFast(() => expect(header()).not.toBeNull());
@@ -99,15 +108,27 @@ describe("AppSidebar session attention details", () => {
       expect(header()?.querySelector("[data-session-attention]")?.getAttribute("aria-label")).toBe(
         ownsRequest ? "Waiting for approval\ngit status --short" : undefined,
       );
-      await toggleRoster(sidebar, agentId);
-      await waitForFast(() => expect(sidebar.querySelector(".nav-item--home")).not.toBeNull());
+      await selectSidebarView(sidebar, "pages");
+      await selectSidebarView(sidebar, "sessions");
+      await settleRoster(sidebar);
+      await waitForFast(() => expect(header()).not.toBeNull());
       sessionsHarness.publishList({ result: { ...result, count: 0, sessions: [] } });
-      await sidebar.updateComplete;
+      await rosterActivityStore(context).refresh();
+      await settleRoster(sidebar);
       expect(
         sidebar
-          .querySelector(".nav-item--home [data-session-attention]")
+          .querySelector(
+            `[data-agent-group="${agentId}"] .sidebar-agent-roster__header [data-session-attention]`,
+          )
           ?.getAttribute("aria-label"),
       ).toBe(ownsRequest ? "Waiting for approval\ngit status --short" : undefined);
+      sidebar.setSessionOwnerFilter("synthetic-unmatched-owner");
+      await sidebar.updateComplete;
+      expect(header()?.querySelector("[data-session-attention]")).toBeNull();
+      sidebar.setSessionOwnerFilter(null);
+      vi.spyOn(context.sessions, "deletionState").mockReturnValue("confirmed");
+      await sidebar.updateComplete;
+      expect(header()?.querySelector("[data-session-attention]")).toBeNull();
     },
   );
 
@@ -122,12 +143,14 @@ describe("AppSidebar session attention details", () => {
       sidebar.sidebarAgentsMode = mode;
       if (mode === "roster") {
         await waitForFast(() =>
-          expect(sidebar.querySelector('[data-agent-collapse="main"]')).not.toBeNull(),
+          expect(sidebar.querySelector('[data-agent-group="main"]')).not.toBeNull(),
+        );
+        expect(sidebar.querySelector(`[data-session-key="${key}"]`)).toBeNull();
+      } else {
+        await waitForFast(() =>
+          expect(sidebar.querySelector(`[data-session-key="${key}"]`)).not.toBeNull(),
         );
       }
-      await waitForFast(() =>
-        expect(sidebar.querySelector(`[data-session-key="${key}"]`)).not.toBeNull(),
-      );
       const publish = (
         id: string,
         questions: string[],
@@ -153,7 +176,11 @@ describe("AppSidebar session attention details", () => {
       publish("oldest", ["Continue with deployment?", "Which environment?"], now);
       await sidebar.updateComplete;
       const indicator = () =>
-        sidebar.querySelector(`[data-session-key="${key}"] [data-session-attention="question"]`);
+        sidebar.querySelector(
+          mode === "roster"
+            ? '[data-agent-group="main"] .sidebar-agent-roster__header [data-session-attention="question"]'
+            : `[data-session-key="${key}"] [data-session-attention="question"]`,
+        );
       await waitForFast(() =>
         expect(indicator()?.getAttribute("aria-label")).toBe(
           "3 questions need your answer\nContinue with deployment?\n+2 more",
@@ -225,13 +252,9 @@ describe("AppSidebar session attention details", () => {
       );
       sidebar.sidebarAgentsMode = "roster";
       await waitForFast(() =>
-        expect(sidebar.querySelector('[data-agent-collapse="main"]')).not.toBeNull(),
+        expect(sidebar.querySelector('[data-agent-group="main"]')).not.toBeNull(),
       );
-      if (!isHome) {
-        await waitForFast(() =>
-          expect(sidebar.querySelector(`[data-session-key="${parentKey}"]`)).not.toBeNull(),
-        );
-      }
+      expect(sidebar.querySelector(`[data-session-key="${parentKey}"]`)).toBeNull();
       for (const [id, key, createdAtMs, question] of [
         ["parent-question", parentKey, now, "Which deployment region?"],
         ["child-question", childKey, now - 1, "Which environment?"],
@@ -247,10 +270,6 @@ describe("AppSidebar session attention details", () => {
         });
       }
       await sidebar.updateComplete;
-      sidebar.querySelector<HTMLButtonElement>('[data-agent-collapse="main"]')?.click();
-      await waitForFast(() =>
-        expect(sidebar.querySelector(`[data-session-key="${parentKey}"]`)).toBeNull(),
-      );
       const header = () =>
         sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__header');
       await waitForFast(() =>
@@ -283,36 +302,11 @@ describe("AppSidebar session attention details", () => {
           { questionId: "revision", header: "Release", question: "Which revision?", options: [] },
         ],
       });
-      sidebar.querySelector<HTMLButtonElement>('[data-agent-collapse="main"]')!.click();
-      if (!isHome) {
-        await waitForFast(() =>
-          expect(
-            sidebar.querySelector(`[data-child-session-toggle="${parentKey}"]`),
-          ).not.toBeNull(),
-        );
-        sidebar
-          .querySelector<HTMLButtonElement>(`[data-child-session-toggle="${parentKey}"]`)!
-          .click();
-      }
-      const attention = (key: string) =>
-        (isHome && key === parentKey
-          ? header()?.querySelector("[data-session-attention]")
-          : sidebar.querySelector(`[data-session-key="${key}"] [data-session-attention]`)
-        )?.getAttribute("aria-label");
-      await waitForFast(() =>
-        expect(attention(persistentKey)).toBe("Waiting for your answer\nWhich revision?"),
-      );
-      expect(attention(parentKey)).toBe(
-        "2 questions need your answer\nWhich environment?\n+1 more",
-      );
+      const attention = () =>
+        header()?.querySelector("[data-session-attention]")?.getAttribute("aria-label");
       expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
-      sidebar
-        .querySelector<HTMLButtonElement>(
-          isHome ? '[data-agent-collapse="main"]' : `[data-child-session-toggle="${parentKey}"]`,
-        )!
-        .click();
       await waitForFast(() =>
-        expect(attention(parentKey)).toBe("3 questions need your answer\nWhich revision?\n+2 more"),
+        expect(attention()).toBe("3 questions need your answer\nWhich revision?\n+2 more"),
       );
     },
   );

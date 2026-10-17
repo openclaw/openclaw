@@ -27,7 +27,29 @@ OpenClaw waits for any idle shutdown already in progress when it closes local se
 
 Shutdown completion requires the child and its output streams to close and pending tree-termination operations to finish. A missing PID alone does not release the service for replacement.
 
+Final exit observation starts after bounded tree-termination helpers finish. On Windows, this lets `taskkill` complete without reporting an already-closed service as a shutdown failure.
+
 If another OpenClaw process already has a healthy server at the same `healthUrl`, this process reuses it without adopting it (each process only manages the child it personally started). Startup and exit logs include bounded, redacted child-output tails plus timing and exit details; configured environment values are never emitted.
+
+For its pinned managed installation, llama.cpp checks for orphaned servers before
+the first local-service request in a new host process. On native Apple silicon
+macOS, it reclaims a launchd-adopted router only when the native executable
+is exactly this state directory's managed binary and its explicit host, port,
+and preset arguments match; relative presets also require the configured working
+directory. It captures matching descendants, sends SIGTERM, waits up to five
+seconds, then uses SIGKILL if needed. Process birth and executable identities are
+rechecked before each signal. Live parents, custom binaries, other state
+directories, configurations without unique explicit host/port/preset arguments,
+and different ports or presets are left alone. A new managed child
+then starts normally, including after a previous Gateway died from SIGHUP,
+SIGKILL, or a crash. This does not change inherited `nohup` signal handling.
+
+Update the host and plugin together to enable recovery; older compatible hosts
+without the recovery capability keep their existing reuse behavior.
+Hosts without native process identity support, Linux, and Windows retain
+the existing reuse behavior; Linux PID 1 may itself be a live Gateway, so parent
+PID alone cannot identify an orphan. On a supported host, if a matching orphan cannot be safely identified,
+startup reports its PID and asks you to stop it manually before retrying.
 
 ## Managed llama.cpp
 
@@ -96,7 +118,7 @@ During `memory_search`, managed embedding startup uses `readyTimeoutMs` instead 
 
 ## llmman example
 
-llmman is a custom OpenAI-compatible `/v1` backend, so the same `localService` API works with an `llmman` provider entry. It listens on `127.0.0.1:17434` by default; `LLMMAN_HOST` overrides the bind address, while `LLMMAN_LLM_LIBRARY` overrides GPU auto-detection. Its API has no authentication, so keep the default loopback bind unless a trusted network boundary restricts access. llmman has no `/health` route; use `/v1/models` or `/api/version` as `healthUrl`.
+llmman is a custom OpenAI-compatible `/v1` backend, so the same `localService` API works with an `llmman` provider entry. It listens on `127.0.0.1:17434` by default; `LLMMAN_HOST` overrides the bind address, while `LLMMAN_LLM_LIBRARY` overrides GPU auto-detection. Off loopback it refuses to start without `LLMMAN_API_KEYS`, so keep the default loopback bind unless you need remote access. llmman has no `/health` route; use `/v1/models` or `/api/version` as `healthUrl`.
 
 ```json5
 {

@@ -15,10 +15,8 @@ import {
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
-import {
-  runContextEngineMaintenance,
-  waitForDeferredTurnMaintenanceForSession,
-} from "./context-engine-maintenance.js";
+import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
+import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 
 const unchanged = { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
 
@@ -65,11 +63,11 @@ it("keeps SIGTERM cancellation attached through actual engine disposal", async (
       expect(lifecycleSignal?.aborted).toBe(true);
       expect(cancelled).toHaveBeenCalledExactlyOnceWith("disposer", lifecycleSignal?.reason);
       release.resolve();
-      await waitForDeferredTurnMaintenanceForSession("agent:main:maintenance-resources");
+      await waitForSessionMaintenance("agent:main:maintenance-resources");
       expect(disposed).toHaveBeenCalledExactlyOnceWith(42);
     } finally {
       release.resolve();
-      await waitForDeferredTurnMaintenanceForSession("agent:main:maintenance-resources");
+      await waitForSessionMaintenance("agent:main:maintenance-resources");
       process.off("SIGTERM", keepTestProcessAlive);
     }
   });
@@ -117,6 +115,66 @@ async function withResources(
     }
   });
 }
+
+it("refuses to reschedule during final disposal", async () => {
+  await withResources(async (_db, schedule) => {
+    const disposalStarted = createDeferredCore();
+    const releaseDisposal = createDeferredCore();
+    const maintenanceStarted = createDeferredCore();
+    const releaseMaintenance = createDeferredCore();
+    const maintain = vi
+      .fn(async () => unchanged)
+      .mockImplementationOnce(async () => {
+        maintenanceStarted.resolve();
+        await releaseMaintenance.promise;
+        return unchanged;
+      });
+    const contextEngine = engine(maintain);
+    contextEngine.dispose = async () => {
+      disposalStarted.resolve();
+      await releaseDisposal.promise;
+    };
+    const admitted = vi.fn();
+    const failed = vi.fn();
+    const resources = { closeFactoryWork: vi.fn(async () => {}), release: vi.fn(async () => {}) };
+    const keepProcessAlive = () => {};
+    process.on("SIGTERM", keepProcessAlive);
+    try {
+      await schedule(engine(maintain));
+      await maintenanceStarted.promise;
+      await schedule(contextEngine);
+      // The pending engine is disposed in final cleanup, not by the active-run loop.
+      process.emit("SIGTERM", "SIGTERM");
+      releaseMaintenance.resolve();
+      await disposalStarted.promise;
+      await runContextEngineMaintenance({
+        contextEngine,
+        sessionId: "resources",
+        sessionKey: "agent:main:maintenance-resources",
+        sessionFile: "agent:main:maintenance-resources",
+        reason: "turn",
+        onDeferredMaintenance: admitted,
+        onDeferredMaintenanceFailure: failed,
+        factoryResources: resources,
+      });
+      expect(admitted).not.toHaveBeenCalled();
+      expect(failed).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          message: expect.stringContaining("finishing cleanup"),
+        }),
+      );
+      expect(resources.closeFactoryWork).not.toHaveBeenCalled();
+      expect(resources.release).not.toHaveBeenCalled();
+      releaseDisposal.resolve();
+      await waitForSessionMaintenance("agent:main:maintenance-resources");
+      expect(maintain).toHaveBeenCalledOnce();
+    } finally {
+      releaseMaintenance.resolve();
+      releaseDisposal.resolve();
+      process.off("SIGTERM", keepProcessAlive);
+    }
+  });
+});
 
 it.each(["maintenance", "disposal"] as const)(
   "joins actual %s descendants before maintenance completion",
@@ -210,11 +268,9 @@ it("joins disposal of a superseded queued engine before reporting the active mai
       await context.run("superseded", () => schedule(superseded));
       await context.run("latest", () => schedule(latest));
       await disposalStarted.promise;
-      joined = waitForDeferredTurnMaintenanceForSession("agent:main:maintenance-resources").then(
-        () => {
-          allSettled = true;
-        },
-      );
+      joined = waitForSessionMaintenance("agent:main:maintenance-resources").then(() => {
+        allSettled = true;
+      });
       releaseActive.resolve();
       await finalRan.promise;
       await new Promise<void>((resolve) => {
@@ -260,7 +316,7 @@ it("keeps accepted maintenance independent of parent completion until gateway re
                 "abort",
                 () => {
                   cancelled(context.getStore(), signal.reason);
-                  cancellationCheckpoint = waitForDeferredTurnMaintenanceForSession(
+                  cancellationCheckpoint = waitForSessionMaintenance(
                     "agent:main:maintenance-resources",
                   ).then(() => {
                     checkpointPassed = true;

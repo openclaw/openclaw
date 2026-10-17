@@ -1,16 +1,21 @@
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { deserialize } from "node:v8";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
+import type { AuthProfileReadDatabaseOpener } from "../agents/auth-profiles/sqlite-read-pool.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { jsonFieldBatches } from "./json-field-transfer.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { isPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
+import { useConnectionScopedSqliteDatabaseAdmissionFacts } from "./sqlite-database-admission.js";
 import {
   formatSqliteErrorCodeSuffix,
   formatSqliteReadOnlyInspectionFailure,
   isSqliteLockError,
 } from "./sqlite-error-diagnostics.js";
+import { readSqliteAuthSchema } from "./sqlite-readonly-auth-schema.js";
 import { encodeSqliteAuthTransferFrame } from "./sqlite-readonly-auth-transfer.js";
 import {
   releaseSnapshotTempDirectory,
@@ -167,33 +172,80 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
 function runSession(): void {
   let busy = false;
   let closeRequested = false;
+  let stopping = false;
+  let finalExitCode = 0;
+  let retiring = false;
+  let activeWork = Promise.resolve();
   const transfers = createSqliteWorkerTransferOwner();
   let activeTransfer: { requestId: number; transferId: number; label: string } | undefined;
-  const send = (id: number, result: unknown, failed = false) => {
-    process.send?.({ id, result }, (error) => {
-      if (error || failed) {
-        transfers.close();
-        process.exit(1);
+  const stop = (failed = false) => {
+    if (failed) {
+      finalExitCode = 1;
+    }
+    if (stopping) {
+      return;
+    }
+    stopping = true;
+    // Pending imports and copies must settle before releasing their native tokens.
+    void activeWork.finally(() => {
+      const cleanup = [() => transfers.close(), ...stagingTokens.values()];
+      for (const close of cleanup) {
+        try {
+          close();
+        } catch (error) {
+          finalExitCode = 1;
+          process.stderr.write(
+            `SQLite read-only worker cleanup failed: ${formatSqliteReadOnlyInspectionFailure(error)}\n`,
+          );
+        }
       }
+      stagingTokens.clear();
+      activeTransfer = undefined;
+      process.stdin.destroy();
+      if (process.connected) {
+        process.disconnect?.();
+      }
+      process.exitCode = finalExitCode;
     });
   };
+  const send = (id: number, result: unknown, failed = false, onSent?: () => void) => {
+    if (stopping) {
+      return;
+    }
+    if (!process.connected || !process.send) {
+      stop(true);
+      return;
+    }
+    // A terminal reply closes admission now, but IPC stays owned until its write drains.
+    retiring ||= failed;
+    try {
+      process.send({ id, result }, (error) => {
+        if (error || failed) {
+          stop(true);
+          return;
+        }
+        onSent?.();
+        if (closeRequested && !busy) {
+          stop();
+        }
+      });
+    } catch {
+      stop(true);
+    }
+  };
   const fail = (id: number, error: unknown) => {
-    transfers.close();
     send(id, { ok: false, message: formatSqliteReadOnlyInspectionFailure(error) }, true);
   };
-  process.once("disconnect", () => {
-    if (busy) {
-      transfers.close();
-      process.exit(1);
-    }
-  });
+  process.once("disconnect", () => stop(busy));
   process.on("message", (message: unknown) => {
+    if (stopping || retiring) {
+      return;
+    }
     if (message === "close") {
       if (busy) {
         closeRequested = true;
       } else {
-        transfers.close();
-        process.disconnect?.();
+        stop();
       }
       return;
     }
@@ -264,11 +316,14 @@ function runSession(): void {
           }
           const request = { type: command.type, input: command.input };
           await sqliteReadOnlyOperations.prepare(request.type);
+          if (stopping) {
+            return;
+          }
           if (!sqliteReadOnlyOperations.has(request)) {
             throw new Error(`Unknown SQLite read-only operation: ${request.type}`);
           }
           assertExistingDatabaseIdentity(pathname, expectedIdentity);
-          const value = sqliteReadOnlyOperations.execute(request, {
+          const value = await sqliteReadOnlyOperations.execute(request, {
             path: pathname,
             env: process.env,
           });
@@ -284,8 +339,21 @@ function runSession(): void {
         // Domain code stays child-only; importing it from the host would reverse storage ownership.
         const { readAuthProfileRowsReadOnly } =
           await import("../agents/auth-profiles/sqlite-json.js");
-        assertExistingDatabaseIdentity(pathname, expectedIdentity);
-        const rows = readAuthProfileRowsReadOnly(pathname);
+        const openReadOnlyDatabase: AuthProfileReadDatabaseOpener =
+          read.artifactPreserving === true
+            ? (await import("./sqlite-snapshot-source.js")).openSqliteReadOnlyDatabase
+            : (databasePath, options) =>
+                openNodeSqliteDatabase(databasePath, { ...options, readOnly: true });
+        if (stopping) {
+          return;
+        }
+        const rows = readAuthProfileRowsReadOnly(
+          pathname,
+          openReadOnlyDatabase,
+          readSqliteAuthSchema(read.schema),
+          expectedIdentity,
+          read.retainReader === true,
+        );
         if (read.artifactPreserving === true) {
           rows.cacheable = false;
         }
@@ -299,11 +367,13 @@ function runSession(): void {
         activeTransfer = { requestId: id, transferId: handle.id, label: "Auth profile" };
         send(id, { type: "start", handle });
       };
-      void (
+      activeWork = (
         isRecord(read) && read.artifactPreserving === true
           ? withArtifactPreservingStateReads(execute, { agentDatabases: true })
           : execute()
-      ).catch((error: unknown) => fail(id, error));
+      )
+        .catch((error: unknown) => fail(id, error))
+        .finally(scheduleOpenClawCompileCacheFlush);
       return;
     }
     if (
@@ -315,36 +385,33 @@ function runSession(): void {
       typeof message.id !== "number" ||
       !Number.isSafeInteger(message.id) ||
       !("args" in message) ||
-      !Array.isArray(message.args) ||
-      (message.args[0] !== "sync" && !isSqliteSnapshotStagingMode(message.args[0])) ||
-      !message.args.every((arg): arg is string => typeof arg === "string")
+      !isStringArray(message.args) ||
+      (message.args[0] !== "sync" && !isSqliteSnapshotStagingMode(message.args[0]))
     ) {
-      process.exit(1);
+      stop(true);
+      return;
     }
     busy = true;
     const id = message.id;
     const staging = isSqliteSnapshotStagingMode(message.args[0]);
-    void inspect(message.args).then((inspected) => {
-      const result: SqliteReadOnlyWorkerResult =
-        Buffer.byteLength(JSON.stringify(inspected)) > SQLITE_READONLY_WORKER_MAX_BUFFER
-          ? { ok: false, message: "exceeded its output buffer" }
-          : inspected;
-      process.send?.({ id, result }, (error) => {
-        if (error || (!result.ok && !staging)) {
-          // Failed private recovery can retain a native handle until process exit.
-          process.exit(1);
-          return;
-        }
-        busy = false;
-        if (closeRequested) {
-          process.disconnect?.();
-        }
-      });
-    });
+    activeWork = inspect(message.args)
+      .then((inspected) => {
+        const result: SqliteReadOnlyWorkerResult =
+          Buffer.byteLength(JSON.stringify(inspected)) > SQLITE_READONLY_WORKER_MAX_BUFFER
+            ? { ok: false, message: "exceeded its output buffer" }
+            : inspected;
+        // Failed private recovery must retire this process, never admit another read.
+        send(id, result, !result.ok && !staging, () => {
+          busy = false;
+        });
+      })
+      .catch((error: unknown) => fail(id, error))
+      .finally(scheduleOpenClawCompileCacheFlush);
   });
 }
 
 if (process.argv[2] === SQLITE_READONLY_CHILD_ARG) {
+  useConnectionScopedSqliteDatabaseAdmissionFacts();
   if (process.argv[3] === "session" && process.send) {
     runSession();
   } else {

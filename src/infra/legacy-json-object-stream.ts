@@ -1,13 +1,14 @@
 // Streams one-property legacy JSON object stores without buffering the whole file.
 import { createHash } from "node:crypto";
+import type { BigIntStats } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import type { Root } from "@openclaw/fs-safe";
 
 const JSON_WHITESPACE = new Set([" ", "\t", "\r", "\n"]);
 
 type LegacyJsonStreamSnapshot = {
-  dev: number;
-  ino: number;
+  dev: bigint;
+  ino: bigint;
   mtimeMs: number;
   sha256: string;
   size: number;
@@ -177,18 +178,14 @@ async function parseSinglePropertyObject(params: {
   }
 }
 
-async function* decodeUtf8Chunks(params: {
-  handle: FileHandle;
-  hash: ReturnType<typeof createHash>;
-  onBytes: (length: number) => void;
-}): AsyncGenerator<string> {
+async function* decodeUtf8Chunks(
+  handle: FileHandle,
+  observeChunk: (chunk: Buffer | string) => Buffer,
+): AsyncGenerator<string> {
   const decoder = new TextDecoder("utf-8", { fatal: true });
-  const stream = params.handle.createReadStream({ autoClose: false, start: 0 });
+  const stream = handle.createReadStream({ autoClose: false, start: 0 });
   for await (const rawChunk of stream) {
-    const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
-    params.hash.update(chunk);
-    params.onBytes(chunk.byteLength);
-    const text = decoder.decode(chunk, { stream: true });
+    const text = decoder.decode(observeChunk(rawChunk), { stream: true });
     if (text) {
       yield text;
     }
@@ -199,17 +196,13 @@ async function* decodeUtf8Chunks(params: {
   }
 }
 
-function assertStableRead(
-  before: Awaited<ReturnType<FileHandle["stat"]>>,
-  after: Awaited<ReturnType<FileHandle["stat"]>>,
-  bytesRead: number,
-): void {
+function assertStableRead(before: BigIntStats, after: BigIntStats, bytesRead: number): void {
   if (
     before.dev !== after.dev ||
     before.ino !== after.ino ||
-    before.mtimeMs !== after.mtimeMs ||
+    before.mtimeNs !== after.mtimeNs ||
     before.size !== after.size ||
-    bytesRead !== after.size
+    BigInt(bytesRead) !== after.size
   ) {
     throw new Error("legacy JSON store changed while it was being read");
   }
@@ -229,15 +222,15 @@ export async function readLegacyJsonObjectStream(params: {
   const hash = createHash("sha256");
   let size = 0;
   try {
-    const before = opened.stat;
+    const before = await opened.handle.stat({ bigint: true });
+    const observeChunk = (rawChunk: Buffer | string) => {
+      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
+      hash.update(chunk);
+      size += chunk.byteLength;
+      return chunk;
+    };
     if (params.property && params.onEntry) {
-      const chunks = decodeUtf8Chunks({
-        handle: opened.handle,
-        hash,
-        onBytes: (length) => {
-          size += length;
-        },
-      });
+      const chunks = decodeUtf8Chunks(opened.handle, observeChunk);
       await parseSinglePropertyObject({
         chunks,
         property: params.property,
@@ -246,17 +239,15 @@ export async function readLegacyJsonObjectStream(params: {
     } else {
       const stream = opened.handle.createReadStream({ autoClose: false, start: 0 });
       for await (const rawChunk of stream) {
-        const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
-        hash.update(chunk);
-        size += chunk.byteLength;
+        observeChunk(rawChunk);
       }
     }
-    const after = await opened.handle.stat();
+    const after = await opened.handle.stat({ bigint: true });
     assertStableRead(before, after, size);
     return {
       dev: after.dev,
       ino: after.ino,
-      mtimeMs: after.mtimeMs,
+      mtimeMs: Number(after.mtimeNs / 1_000_000n) + Number(after.mtimeNs % 1_000_000n) / 1_000_000,
       sha256: hash.digest("hex"),
       size,
     };

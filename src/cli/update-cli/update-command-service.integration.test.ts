@@ -17,7 +17,7 @@ import { gatewayHealthResponse } from "../../gateway/health-response.test-suppor
 import { createSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
-import { captureEnv } from "../../test-utils/env.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as runtimeUtils from "../../utils.js";
@@ -29,6 +29,7 @@ import type { UpdateCommandOptions } from "./shared.js";
 import { registerGenerationRecoveryTests } from "./update-command-generation.test-support.js";
 import { registerRestartOutcomeTests } from "./update-command-restart-outcome.test-support.js";
 import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
+import type { UpdateServiceDefinitionRecovery } from "./update-command-service-context-types.js";
 import { assertGatewayServiceManagementAllowedForUpdate } from "./update-command-service-plan.js";
 import {
   createServiceActivationFixture,
@@ -102,7 +103,8 @@ vi.mock("../../daemon/launchd-current-service.js", () => ({
   isCurrentProcessLaunchdServiceLabel: () => mocks.inLaunchd,
   isCurrentProcessInsideLaunchdService: async () => mocks.inLaunchd,
 }));
-vi.mock("../../daemon/service-process-membership.js", () => ({
+vi.mock("../../daemon/service-process-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/service-process-membership.js")>()),
   // The simulated manager's Gateway PID has no native cgroup on the test host.
   inspectServiceProcessMembershipSync: (pid: number) => (pid === 4242 ? "outside" : "unknown"),
 }));
@@ -164,8 +166,9 @@ vi.mock("./update-command-service-drain.js", () => ({
   withGatewayMaintenanceDrain: async (_params: unknown, stop: () => Promise<unknown>) =>
     await stop(),
 }));
-vi.mock("../../daemon/systemd-maintenance.js", () => ({
-  prepareSystemdGatewayMaintenance: async () => false,
+vi.mock("../../daemon/systemd-maintenance.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/systemd-maintenance.js")>()),
+  prepareSystemdGatewayMaintenance: async () => ({ kind: "unchanged" }),
 }));
 vi.mock("../../daemon/systemd-definition-mutation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/systemd-definition-mutation.js")>()),
@@ -185,13 +188,6 @@ vi.mock("./update-command-service-command.js", async (importOriginal) => {
 });
 vi.mock("../../process/exec.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../process/exec.js")>();
-  const nativeSuccess = {
-    code: 0,
-    stderr: "",
-    signal: null,
-    killed: false,
-    termination: "exit" as const,
-  };
   const versionProbe = [
     "busctl",
     "--user",
@@ -208,16 +204,13 @@ vi.mock("../../process/exec.js", async (importOriginal) => {
       const [argv, options] = args;
       if (argv[0] === "systemctl") {
         expect(argv).toEqual(["systemctl", "--user", "daemon-reload"]);
-        if (typeof options !== "object") {
-          throw new Error("Native reload requires its captured manager environment.");
-        }
-        expect(options.baseEnv?.HOME).toBe(root);
+        expect(options).toMatchObject({ baseEnv: { HOME: root } });
         expect(mocks.running).toBe(false);
         mocks.events.push("native daemon-reload");
-        return Promise.resolve({ ...nativeSuccess, stdout: "" });
+        return Promise.resolve(commandResult());
       }
       if (argv.length === versionProbe.length && versionProbe.every((arg, i) => argv[i] === arg)) {
-        return Promise.resolve({ ...nativeSuccess, stdout: 's "252.39"' });
+        return Promise.resolve(commandResult({ stdout: 's "252.39"' }));
       }
       return mocks.child(...args);
     },
@@ -237,7 +230,8 @@ vi.mock("./update-command-config-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-config-snapshot.js")>()),
   createUpdateConfigSnapshot: mocks.configSnapshot,
 }));
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: {
     log: mocks.log,
     error: mocks.error,
@@ -267,6 +261,53 @@ let run: NonNullable<UpdateCommandOptions["run"]>;
 let envSnapshot: Awaited<ReturnType<typeof createServiceActivationFixture>>["envSnapshot"];
 let servingOwner: Awaited<ReturnType<typeof createServiceActivationFixture>>["servingOwner"];
 const writeConfig = (version: string) => writeRecoveryConfig(configPath, version);
+const gatewayArgs = (port = "19305") => [
+  process.execPath,
+  path.join(root, "dist", "index.js"),
+  "gateway",
+  "--port",
+  port,
+];
+const stopForUpdate = (updateInstallKind: "package" | "git" = "package") =>
+  maybeStopManagedServiceBeforeMutableUpdate({
+    updateInstallKind,
+    root,
+    shouldRestart: true,
+    jsonMode: true,
+  });
+const activate = (overrides: Partial<Parameters<typeof maybeRestartService>[0]>) =>
+  maybeRestartService({
+    shouldRestart: true,
+    result: serviceUpdateResult(root, { after: { version: VERSION } }),
+    opts: { json: true, run },
+    refreshServiceEnv: false,
+    gatewayPort: 19305,
+    requireRunningServiceAfterRestart: true,
+    timeoutMs: 1000,
+    ...overrides,
+  });
+const expectUncalled = (...functions: Array<{ mock: { calls: unknown[][] } }>) => {
+  for (const fn of functions) {
+    expect(fn).not.toHaveBeenCalled();
+  }
+};
+const expectStaleCleanup = () =>
+  expect(mocks.terminateStale).toHaveBeenCalledWith(
+    [4242],
+    expect.objectContaining({ env: expect.any(Object), assertCurrent: expect.any(Function) }),
+  );
+const recoveryHealth = (
+  port: number,
+  running = false,
+  staleGatewayPids: number[] = [],
+  busy = running,
+): Awaited<ReturnType<typeof mocks.health>> => ({
+  outcome: running ? "ready" : "failed",
+  healthy: running,
+  staleGatewayPids,
+  runtime: { status: running ? "running" : "stopped" },
+  portUsage: { port, status: busy ? "busy" : "free", listeners: [], hints: [] },
+});
 // Retain worker imports, not snapshots or authority, across service observations.
 const inspectionWorkers = createSqliteReadOnlyWorkerScope();
 aroundEach((runTest) => inspectionWorkers.run(runTest));
@@ -307,20 +348,12 @@ beforeEach(async () => {
   mocks.stopAllowances = [];
   mocks.capability.mockResolvedValue({ kind: "sealed", reason: "foreign-owner" });
   mocks.command.mockResolvedValue({
-    programArguments: [
-      process.execPath,
-      path.join(root, "dist", "index.js"),
-      "gateway",
-      "--port",
-      "19305",
-    ],
+    programArguments: gatewayArgs(),
     environment: { HOME: root },
     sourcePath: "/etc/systemd/system/openclaw-gateway.service",
   });
   mocks.child.mockReset().mockImplementation(async (args) => {
-    if (!args.includes("restart")) {
-      throw new Error("Unexpected subprocess in activation fixture");
-    }
+    expect(args).toContain("restart");
     mocks.events.push("fresh CLI restart");
     mocks.running = true;
     return commandResult({
@@ -347,33 +380,21 @@ describe("preserved update activation with real version guards", () => {
 
   it.each(preservedActivationCases)(
     "handles $phase $denial denial for $mode activation ($outcome; json=$json)",
-    async ({ mode, denial, outcome, json, phase }) => {
+    async ({ mode, denial, outcome, json }) => {
+      const definitionRecovery: UpdateServiceDefinitionRecovery = {};
       let nowMs = 0;
       vi.spyOn(performance, "now").mockImplementation(() => nowMs);
       vi.spyOn(runtimeUtils, "sleep").mockImplementation(async (ms) => {
         nowMs += ms;
       });
-      const late = phase === "late";
-      const serviceCommand = await mocks.command(process.env);
-      if (!serviceCommand) {
-        throw new Error("missing fixture command");
-      }
       mocks.command.mockResolvedValue({
-        ...serviceCommand,
+        ...(await mocks.command(process.env)),
+        programArguments: gatewayArgs(),
         environment: { HOME: root, MANAGED_VALUE: "revalidated" },
       });
-      mocks.capability.mockResolvedValue(
-        late
-          ? { kind: "writable" }
-          : { kind: denial, reason: denial === "sealed" ? "foreign-owner" : "inspection-failed" },
-      );
-      const before = await maybeStopManagedServiceBeforeMutableUpdate({
-        updateInstallKind: mode === "git" ? "git" : "package",
-        root,
-        shouldRestart: true,
-        jsonMode: true,
-      });
-      expect(before.serviceUpdateVerdict).toMatchObject({ kind: "owned", refreshDefinition: late });
+      mocks.capability.mockResolvedValue({ kind: "writable" });
+      const before = await stopForUpdate(mode === "git" ? "git" : "package");
+      expect(before.serviceUpdateVerdict).toMatchObject({ kind: "owned", refreshDefinition: true });
       const repair = vi.spyOn(startRepair, "repairLoadedGatewayServiceForStart");
       mocks.child.mockImplementation(async (args) => {
         if (args.includes("install")) {
@@ -393,15 +414,15 @@ describe("preserved update activation with real version guards", () => {
           return commandResult({
             code: 1,
             stdout:
-              outcome === "json denial"
+              outcome === "clean refusal"
                 ? JSON.stringify({
                     ok: false,
                     error: `SERVICE_DEFINITION_${denial.toUpperCase()}: late owner denial`,
                   })
                 : "",
             stderr:
-              outcome === "json denial"
-                ? "runtime warning"
+              outcome === "clean refusal"
+                ? ""
                 : `SERVICE_DEFINITION_${denial.toUpperCase()}: late owner denial`,
           });
         }
@@ -428,9 +449,7 @@ describe("preserved update activation with real version guards", () => {
             version: VERSION,
             connId: "fixture",
             bootId: "service-boot",
-            ...(outcome === "missing build"
-              ? {}
-              : { buildId: outcome === "stale build" ? "old-build" : "new-build" }),
+            ...(outcome === "missing build" ? {} : { buildId: "new-build" }),
           },
         }),
       );
@@ -452,25 +471,28 @@ describe("preserved update activation with real version guards", () => {
         }
         return await waitForGatewayHealthyRestart(params);
       });
-      const activated = await maybeRestartService({
-        shouldRestart: true,
+      const activated = await activate({
         result: serviceUpdateResult(root, {
           mode,
           before: { version: "2026.1.1" },
           after: { version: VERSION, buildId: "new-build" },
         }),
         opts: { json, run },
-        refreshServiceEnv: late,
+        refreshServiceEnv: true,
+        ...(outcome === "clean refusal" ? { definitionRecovery } : {}),
         serviceUpdateVerdict: before.serviceUpdateVerdict,
         serviceManagerUid: before.serviceManagerUid,
         serviceEnv: before.serviceEnv,
-        gatewayPort: late ? 19001 : 19305,
-        requireRunningServiceAfterRestart: true,
-        timeoutMs: 1000,
+        gatewayPort: 19001,
       });
       const allowed = !["uninspectable", "foreign"].includes(outcome);
-      const buildMismatch = ["stale build", "missing build"].includes(outcome);
+      const buildMismatch = outcome === "missing build";
       expect(activated).toBe(!allowed ? "failed" : buildMismatch ? "restart-health-failed" : "ok");
+      if (outcome === "clean refusal") {
+        expect(definitionRecovery).toEqual({ preserved: true, unverified: false });
+        expect(mocks.running).toBe(true);
+        expect(mocks.events).toContain("native restart");
+      }
       const restarts = mocks.child.mock.calls.filter(([args]) => args.includes("restart"));
       expect(restarts).toHaveLength(allowed ? (retried ? 2 : 1) : 0);
       for (const [args, options] of restarts) {
@@ -478,16 +500,10 @@ describe("preserved update activation with real version guards", () => {
         expect(typeof options === "object" && options.env?.MANAGED_VALUE).toBe("revalidated");
         expect(args).toContain("--json");
       }
-      expect(mocks.start).not.toHaveBeenCalled();
-      expect(mocks.child.mock.calls.filter(([args]) => args.includes("install"))).toHaveLength(
-        late ? 1 : 0,
-      );
+      expect(mocks.child.mock.calls.filter(([args]) => args.includes("install"))).toHaveLength(1);
       expect(mocks.health.mock.calls.every(([args]) => args.port === 19305)).toBe(true);
       if (retried) {
-        expect(mocks.terminateStale).toHaveBeenCalledWith(
-          [4242],
-          expect.objectContaining({ env: expect.any(Object), assertCurrent: expect.any(Function) }),
-        );
+        expectStaleCleanup();
       }
       if (allowed) {
         expect(await mocks.command(process.env)).toEqual(commandBefore);
@@ -508,22 +524,15 @@ describe("preserved update activation with real version guards", () => {
         expect(
           mocks.error.mock.calls.flat().concat(mocks.log.mock.calls.flat()).join("\n"),
         ).toContain(
-          `Gateway build mismatch: expected new-build, running gateway reported ${outcome === "missing build" ? "unavailable" : "old-build"}.`,
+          "Gateway build mismatch: expected new-build, running gateway reported unavailable.",
         );
       }
-      expect(repair).not.toHaveBeenCalled();
-      expect(mocks.install).not.toHaveBeenCalled();
-      expect(mocks.doctor).not.toHaveBeenCalled();
+      expectUncalled(mocks.start, repair, mocks.install, mocks.doctor);
     },
   );
 
   it("rejects a target without preservation support before automatic repair, with a JSON diagnostic", async () => {
-    const before = await maybeStopManagedServiceBeforeMutableUpdate({
-      updateInstallKind: "package",
-      root,
-      shouldRestart: true,
-      jsonMode: true,
-    });
+    const before = await stopForUpdate();
     expect(before.stopped).toBe(true);
     // Permissions can change after the original preservation verdict.
     mocks.capability.mockResolvedValue({ kind: "writable" });
@@ -531,72 +540,54 @@ describe("preserved update activation with real version guards", () => {
       .spyOn(startRepair, "repairLoadedGatewayServiceForStart")
       .mockRejectedValue(new Error("automatic repair reached"));
     mocks.child.mockImplementation(async (args, options) => {
-      const snapshot = captureEnv([
+      const inheritedKeys = [
         "OPENCLAW_UPDATE_IN_PROGRESS",
         "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR",
-      ]);
-      if (typeof options === "object") {
-        for (const key of [
-          "OPENCLAW_UPDATE_IN_PROGRESS",
-          "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR",
-        ]) {
-          const value = options.env?.[key];
-          if (value !== undefined) {
-            process.env[key] = value;
+      ];
+      const env = typeof options === "object" ? options.env : undefined;
+      const inherited = Object.fromEntries<string | undefined>(
+        inheritedKeys.map((key) => [key, env?.[key] ?? process.env[key]] as const),
+      );
+      return withEnvAsync(inherited, async () => {
+        let stderr = "";
+        const program = new Command().exitOverride().configureOutput({
+          writeErr: (text) => {
+            stderr += text;
+          },
+        });
+        // A target without this option must reject before its normal restart action.
+        program
+          .command("gateway")
+          .command("restart")
+          .option("--json")
+          .action(async (opts: { json?: boolean }) => {
+            await runDaemonRestart(opts);
+          });
+        try {
+          await program.parseAsync(args.slice(2), { from: "user" });
+          return commandResult({
+            stderr,
+          });
+        } catch (error) {
+          if (!(error instanceof Error) || !error.message.includes("unknown option")) {
+            throw error;
           }
+          return commandResult({
+            code: 1,
+            stderr,
+          });
         }
-      }
-      let stderr = "";
-      const program = new Command().exitOverride().configureOutput({
-        writeErr: (text) => {
-          stderr += text;
-        },
       });
-      // A target without this option must reject before its normal restart action.
-      program
-        .command("gateway")
-        .command("restart")
-        .option("--json")
-        .action(async (opts: { json?: boolean }) => {
-          await runDaemonRestart(opts);
-        });
-      try {
-        await program.parseAsync(args.slice(2), { from: "user" });
-        return commandResult({
-          stderr,
-        });
-      } catch (error) {
-        if (!(error instanceof Error) || !error.message.includes("unknown option")) {
-          throw error;
-        }
-        return commandResult({
-          code: 1,
-          stderr,
-        });
-      } finally {
-        snapshot.restore();
-      }
     });
-    const activated = await maybeRestartService({
-      shouldRestart: true,
-      result: serviceUpdateResult(root, {
-        after: { version: VERSION },
-      }),
-      opts: { json: true, run },
-      refreshServiceEnv: false,
+    const activated = await activate({
       serviceUpdateVerdict: before.serviceUpdateVerdict,
       serviceManagerUid: before.serviceManagerUid,
       serviceEnv: before.serviceEnv,
-      gatewayPort: 19305,
-      requireRunningServiceAfterRestart: true,
-      timeoutMs: 1000,
     });
-    expect(repair).not.toHaveBeenCalled();
     expect(activated).toBe("failed");
     expect(mocks.error.mock.calls.flat().join("\n")).toContain("unknown option");
     expect(mocks.error.mock.calls.flat().join("\n")).toContain("stopped");
-    expect(mocks.restart).not.toHaveBeenCalled();
-    expect(mocks.health).not.toHaveBeenCalled();
+    expectUncalled(repair, mocks.restart, mocks.health);
   });
 
   registerRecoveryTests({ root: () => root, configPath: () => configPath, run: () => run, mocks });
@@ -610,46 +601,28 @@ describe("preserved update activation with real version guards", () => {
     "pins writable service identity across %s changes",
     async (change) => {
       mocks.capability.mockResolvedValue({ kind: "writable" });
-      const before = await maybeStopManagedServiceBeforeMutableUpdate({
-        updateInstallKind: "package",
-        root,
-        shouldRestart: true,
-        jsonMode: true,
-      });
+      const before = await stopForUpdate();
       expect(before.stopped).toBe(true);
       expect(before.serviceEnv?.OPENCLAW_SYSTEMD_UNIT).toBeUndefined();
-      const command = await mocks.command(process.env);
-      if (!command) {
-        throw new Error("missing fixture command");
-      }
+      const profile = change === "profile" ? "second" : "default";
+      const stateDir = path.join(root, profile === "second" ? ".openclaw-second" : ".openclaw");
+      const unit =
+        change === "unit"
+          ? "openclaw-gateway-custom.service"
+          : profile === "second"
+            ? "openclaw-gateway-second.service"
+            : "openclaw-gateway.service";
       mocks.command.mockResolvedValue({
-        ...command,
-        programArguments: [
-          process.execPath,
-          path.join(root, "dist", "index.js"),
-          "gateway",
-          "--port",
-          "19002",
-        ],
+        ...(await mocks.command(process.env)),
+        programArguments: gatewayArgs("19002"),
         environment: {
           HOME: root,
           OPENCLAW_GATEWAY_PORT: "19002",
-          ...(change === "profile"
-            ? {
-                OPENCLAW_PROFILE: "second",
-                OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-second.service",
-                OPENCLAW_STATE_DIR: path.join(root, ".openclaw-second"),
-                OPENCLAW_CONFIG_PATH: path.join(root, ".openclaw-second", "openclaw.json"),
-              }
-            : {
-                OPENCLAW_PROFILE: "default",
-                OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
-                OPENCLAW_STATE_DIR: path.join(root, ".openclaw"),
-                OPENCLAW_CONFIG_PATH: configPath,
-              }),
-          ...(change === "unit"
-            ? { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-custom.service" }
-            : {}),
+          OPENCLAW_PROFILE: profile,
+          OPENCLAW_SYSTEMD_UNIT: unit,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_CONFIG_PATH:
+            profile === "second" ? path.join(stateDir, "openclaw.json") : configPath,
         },
       });
       const state = await readGatewayServiceState(resolveGatewayService(), {
@@ -663,11 +636,7 @@ describe("preserved update activation with real version guards", () => {
         preManagedServiceStop: before,
       });
       if (change !== "metadata") {
-        expect(state.env.OPENCLAW_SYSTEMD_UNIT).toBe(
-          change === "profile"
-            ? "openclaw-gateway-second.service"
-            : "openclaw-gateway-custom.service",
-        );
+        expect(state.env.OPENCLAW_SYSTEMD_UNIT).toBe(unit);
         await expect(revalidated).rejects.toThrow("manager identity changed");
       } else {
         await expect(revalidated).resolves.toMatchObject({
@@ -680,20 +649,6 @@ describe("preserved update activation with real version guards", () => {
   );
 
   registerPluginMaintenanceTests(() => ({ root, run, mocks, writeConfig }));
-
-  it.each(["sealed", "writable"] as const)(
-    "fresh restart keeps the preserved launcher even when authority is %s",
-    async (kind) => {
-      mocks.capability.mockResolvedValue(
-        kind === "sealed" ? { kind, reason: "foreign-owner" } : { kind },
-      );
-      await servingOwner.publish();
-      await expect(runDaemonRestart({ json: true, preserveDefinition: true })).resolves.toBe(true);
-      expect(mocks.restart).toHaveBeenCalledOnce();
-      expect(mocks.install).not.toHaveBeenCalled();
-      expect(mocks.health.mock.calls[0]?.[0].port).toBe(19305);
-    },
-  );
 
   it.each(["missing", "uninspectable", "disappeared after inspection"])(
     "does not fall through to an unmanaged listener when the selected service is %s",
@@ -716,11 +671,7 @@ describe("preserved update activation with real version guards", () => {
           false,
         );
       }
-      expect(mocks.restart).not.toHaveBeenCalled();
-      expect(mocks.install).not.toHaveBeenCalled();
-      expect(mocks.listenerPids).not.toHaveBeenCalled();
-      expect(mocks.signal).not.toHaveBeenCalled();
-      expect(mocks.health).not.toHaveBeenCalled();
+      expectUncalled(mocks.restart, mocks.install, mocks.listenerPids, mocks.signal, mocks.health);
     },
   );
 
@@ -733,22 +684,17 @@ describe("preserved update activation with real version guards", () => {
       await expect(
         runDaemonRestart({ preserveDefinition: true, safe: mode === "safe" }),
       ).rejects.toThrow();
-      expect(mocks.restart).not.toHaveBeenCalled();
-      expect(mocks.listenerPids).not.toHaveBeenCalled();
-      expect(mocks.signal).not.toHaveBeenCalled();
+      expectUncalled(mocks.restart, mocks.listenerPids, mocks.signal);
     },
   );
 
   it.each([
     "loaded",
-    "unloaded",
     "unloaded demand",
     "start demand",
     "handoff",
     "bootstrap denied",
-    "parent unhealthy",
     "parent recovery refusal",
-    "parent late sealed",
     "parent late unknown",
     "stale retry",
   ])("checks actual LaunchAgent artifacts during %s activation", async (scenario) => {
@@ -763,13 +709,7 @@ describe("preserved update activation with real version guards", () => {
     const demandOnly = scenario.endsWith("demand");
     let plist = buildLaunchAgentPlist({
       label,
-      programArguments: [
-        process.execPath,
-        path.join(root, "dist", "index.js"),
-        "gateway",
-        "--port",
-        "19305",
-      ],
+      programArguments: gatewayArgs(),
       stdoutPath: path.join(root, "gateway.log"),
       stderrPath: path.join(root, "gateway.err"),
       environment: {
@@ -809,10 +749,6 @@ describe("preserved update activation with real version guards", () => {
     if (loaded) {
       await servingOwner.publish("launchd");
     }
-    mocks.handoff.mockImplementation(() => ({
-      ok: true,
-      value: servingOwner.restart().then(() => true),
-    }));
     mocks.launchctl.mockImplementation(async (args) => {
       if (args[0] === "bootstrap") {
         if (scenario === "bootstrap denied" || scenario === "parent recovery refusal") {
@@ -837,22 +773,10 @@ describe("preserved update activation with real version guards", () => {
       };
     });
     if (demandOnly) {
-      mocks.health.mockImplementation(async ({ port }) => ({
-        outcome: nativeRunning ? "ready" : "failed",
-        healthy: nativeRunning,
-        staleGatewayPids: [],
-        runtime: { status: nativeRunning ? "running" : "stopped" },
-        portUsage: { port, status: nativeRunning ? "busy" : "free", listeners: [], hints: [] },
-      }));
+      mocks.health.mockImplementation(async ({ port }) => recoveryHealth(port, nativeRunning));
     }
     if (scenario === "stale retry") {
-      mocks.health.mockResolvedValueOnce({
-        outcome: "failed",
-        healthy: false,
-        staleGatewayPids: [4242],
-        runtime: { status: "stopped" },
-        portUsage: { port: 19305, status: "busy", listeners: [], hints: [] },
-      });
+      mocks.health.mockResolvedValueOnce(recoveryHealth(19305, false, [4242], true));
     }
     let result: boolean | Awaited<ReturnType<typeof maybeRestartService>>;
     if (scenario === "start demand") {
@@ -870,37 +794,22 @@ describe("preserved update activation with real version guards", () => {
             }),
             root,
           })
-        : scenario === "parent recovery refusal"
-          ? { kind: "owned" as const, root, fingerprint: "fixture", refreshDefinition: true }
-          : { kind: "unresolved" as const, root, fingerprint: "fixture" };
+        : { kind: "owned" as const, root, fingerprint: "fixture", refreshDefinition: true };
       if (lateDenial) {
         expect(verdict).toMatchObject({ kind: "owned", refreshDefinition: true });
         mocks.child.mockResolvedValueOnce(
           commandResult({
             code: 1,
-            stderr: `SERVICE_DEFINITION_${scenario.endsWith("sealed") ? "SEALED" : "UNKNOWN"}: late denial`,
+            stderr: "SERVICE_DEFINITION_UNKNOWN: late denial",
           }),
         );
       }
-      mocks.health.mockImplementation(async ({ port }) => ({
-        outcome: "failed",
-        healthy: false,
-        staleGatewayPids: [],
-        runtime: { status: "stopped" },
-        portUsage: { port, status: "free", listeners: [], hints: [] },
-      }));
-      result = await maybeRestartService({
-        shouldRestart: true,
-        result: serviceUpdateResult(root, {
-          after: { version: VERSION },
-        }),
-        opts: { json: true, run },
+      mocks.health.mockImplementation(async ({ port }) => recoveryHealth(port));
+      result = await activate({
         refreshServiceEnv: lateDenial,
         serviceUpdateVerdict: verdict,
         serviceEnv: process.env,
         gatewayPort: lateDenial ? 19001 : 19305,
-        requireRunningServiceAfterRestart: true,
-        timeoutMs: 1000,
       });
       expect(mocks.error.mock.calls.flat().join("\n")).toContain("did not become healthy");
       expect(mocks.health.mock.calls.every(([args]) => args.port === 19305)).toBe(true);
@@ -921,14 +830,12 @@ describe("preserved update activation with real version guards", () => {
       expect(writeFile).toHaveBeenCalled();
     } else {
       expect(await snapshot()).toEqual(before);
-      expect(writeFile).not.toHaveBeenCalled();
-      expect(chmod).not.toHaveBeenCalled();
-      expect(rename).not.toHaveBeenCalled();
+      expectUncalled(writeFile, chmod, rename);
     }
     expect(mocks.configSnapshot).toHaveBeenCalledTimes(
       scenario === "parent recovery refusal" ? 1 : 0,
     );
-    if (demandOnly || scenario === "unloaded") {
+    if (demandOnly) {
       const calls = mocks.launchctl.mock.calls.map(([args]) => args);
       const afterBootstrap = calls.slice(calls.findIndex((args) => args[0] === "bootstrap") + 1);
       const target = `gui/${process.getuid?.() ?? 501}/${label}`;
@@ -936,10 +843,7 @@ describe("preserved update activation with real version guards", () => {
       expect(afterBootstrap).not.toContainEqual(["kickstart", "-k", target]);
     }
     if (scenario === "stale retry") {
-      expect(mocks.terminateStale).toHaveBeenCalledWith(
-        [4242],
-        expect.objectContaining({ env: expect.any(Object), assertCurrent: expect.any(Function) }),
-      );
+      expectStaleCleanup();
       expect(mocks.launchctl.mock.calls.filter(([args]) => args[0] === "kickstart")).toHaveLength(
         2,
       );
@@ -952,6 +856,8 @@ describe("preserved update activation with real version guards", () => {
       expect(mocks.launchctl.mock.calls.every(([args]) => args[0] === "print")).toBe(true);
     } else if (scenario === "handoff") {
       expect(mocks.handoff).toHaveBeenCalledWith(expect.objectContaining({ mode: "kickstart" }));
+      // The detached restart follows command completion; join it before fixture cleanup.
+      await servingOwner.restart();
     } else {
       expect(mocks.launchctl.mock.calls.some(([args]) => args[0] === "kickstart")).toBe(true);
       expect(mocks.launchctl.mock.calls.some(([args]) => args[0] === "bootstrap")).toBe(
@@ -963,8 +869,6 @@ describe("preserved update activation with real version guards", () => {
   it("fresh restart still rejects config newer than its own binary", async () => {
     await writeConfig("9999.1.1");
     await expect(runDaemonRestart({ json: true, preserveDefinition: true })).resolves.toBe(false);
-    expect(mocks.restart).not.toHaveBeenCalled();
-    expect(mocks.install).not.toHaveBeenCalled();
-    expect(mocks.health).not.toHaveBeenCalled();
+    expectUncalled(mocks.restart, mocks.install, mocks.health);
   });
 });

@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { registerAcpSessionResetControls } from "../../acp/control-plane/manager.reset-controls.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
@@ -17,6 +18,7 @@ import {
   initializeSessionReadContext,
 } from "../server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
+import { loadGatewayTestConfig } from "../test-helpers.config-runtime.js";
 import { embeddedRunMock, testState } from "../test-helpers.runtime-state.js";
 import * as gatewayTestHelpers from "../test-helpers.server.js";
 import {
@@ -119,10 +121,6 @@ const sessionCleanupMocks = vi.hoisted(() => ({
   stopSessionResetSubagents: vi.fn(async () => {}),
 }));
 
-const bootstrapCacheMocks = vi.hoisted(() => ({
-  clearBootstrapSnapshot: vi.fn(),
-}));
-
 const sessionHookMocks = vi.hoisted(() => ({
   hasInternalHookListeners: vi.fn(() => true),
   triggerInternalHook: vi.fn(async (_eventValue: unknown) => {}),
@@ -199,16 +197,6 @@ vi.mock("../../auto-reply/reply/session-reset-cleanup.js", async () => {
   return {
     ...actual,
     stopSessionResetSubagents: sessionCleanupMocks.stopSessionResetSubagents,
-  };
-});
-
-vi.mock("../../agents/bootstrap-cache.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/bootstrap-cache.js")>(
-    "../../agents/bootstrap-cache.js",
-  );
-  return {
-    ...actual,
-    clearBootstrapSnapshot: bootstrapCacheMocks.clearBootstrapSnapshot,
   };
 });
 
@@ -318,7 +306,6 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     clearConfigCache();
     sessionCleanupMocks.clearSessionLifecycleQueues.mockClear();
     sessionCleanupMocks.stopSessionResetSubagents.mockClear();
-    bootstrapCacheMocks.clearBootstrapSnapshot.mockReset();
     sessionHookMocks.hasInternalHookListeners.mockReset();
     sessionHookMocks.hasInternalHookListeners.mockReturnValue(true);
     sessionHookMocks.triggerInternalHook.mockClear();
@@ -365,7 +352,7 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     const dir = path.join(requireSharedSessionStoreDir(), `case-${sessionStoreCaseSeq++}`);
     await fs.mkdir(dir, { recursive: true });
     testState.sessionStorePath = path.join(dir, "sessions.json");
-    (await getGatewayConfigModule()).clearRuntimeConfigSnapshot(); // A suite server may prewarm before case setup.
+    setRuntimeConfigSnapshot(loadGatewayTestConfig());
     return { dir, storePath: testState.sessionStorePath };
   }
 
@@ -380,6 +367,7 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
       systemAgent: { agentId: "main" },
       sessionStore: { agentId: "main" },
     };
+    setRuntimeConfigSnapshot(loadGatewayTestConfig());
     return {
       dir,
       storeTemplate,
@@ -578,6 +566,7 @@ export async function directSessionReq<TPayload = unknown>(
     client?: SessionsHandlerOptions["client"];
     isWebchatConnect?: SessionsHandlerOptions["isWebchatConnect"];
     sessionMutationAuthorization?: SessionsHandlerOptions["sessionMutationAuthorization"];
+    hasCurrentClientAuthority?: SessionsHandlerOptions["hasCurrentClientAuthority"];
     coercePayload?: (payload: unknown) => TPayload;
   },
 ): Promise<{
@@ -654,6 +643,7 @@ export async function directSessionReq<TPayload = unknown>(
     client: opts?.client ?? null,
     isWebchatConnect: opts?.isWebchatConnect ?? (() => false),
     sessionMutationAuthorization: opts?.sessionMutationAuthorization,
+    hasCurrentClientAuthority: opts?.hasCurrentClientAuthority,
   });
   await flushPendingSessionsChangedEvents(context);
   if (!result) {
@@ -682,7 +672,6 @@ export function setSessionLifecycleHookRunnerForTest(runner: HookRunner | undefi
 }
 
 export {
-  bootstrapCacheMocks,
   sessionHookMocks,
   beforeResetHookMocks,
   sessionLifecycleHookMocks,

@@ -9,6 +9,55 @@ import {
 } from "./ingress-drain.test-helpers.js";
 
 describe("channel ingress drain lanes", () => {
+  it("keeps a competing lane head ahead of its tail while dispatching other lanes", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir);
+      await queue.enqueue("head", { text: "same" }, { laneKey: "same", receivedAt: 1 });
+      await queue.enqueue("tail", { text: "same" }, { laneKey: "same", receivedAt: 2 });
+      await queue.enqueue("other", { text: "other" }, { laneKey: "old-lane", receivedAt: 3 });
+      const listUnsettled = queue.listUnsettled!.bind(queue);
+      const competing: { claim: Awaited<ReturnType<typeof queue.claim>> } = { claim: null };
+      const listing = vi.spyOn(queue, "listUnsettled").mockImplementationOnce(async () => {
+        const snapshot = await listUnsettled();
+        competing.claim = await queue.claim("head", { ownerId: "competing-owner" });
+        return snapshot;
+      });
+      const dispatches: string[] = [];
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        deriveLaneKey: (record) => record.payload.text,
+        reconcileStoredLaneKey: (_record, stored) => stored === "old-lane",
+        dispatchClaimedEvent: (event) => {
+          dispatches.push(event.id);
+          return { kind: "deferred" };
+        },
+      });
+      try {
+        expect(await drain.drainOnce()).toEqual({ started: 1 });
+        await drain.waitForIdle();
+        const competitor = competing.claim;
+        if (!competitor) {
+          throw new Error("Expected competing claim");
+        }
+        expect(dispatches).toEqual(["other"]);
+        expect(await queue.listClaims()).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ id: "head", claim: competitor.claim }),
+            expect.objectContaining({ id: "other", laneKey: "other" }),
+          ]),
+        );
+        expect((await queue.listPending()).map((row) => row.id)).toEqual(["tail"]);
+        await queue.complete(competitor);
+        expect(await drain.drainOnce()).toEqual({ started: 1 });
+        await drain.waitForIdle();
+        expect(dispatches).toEqual(["other", "tail"]);
+      } finally {
+        drain.dispose();
+        listing.mockRestore();
+      }
+    });
+  });
+
   it.each<{
     orderBy: "received" | "id";
     coherentSnapshot: boolean;

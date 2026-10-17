@@ -59,9 +59,7 @@ suite.define(() => {
         await expect.poll(() => secondShortcut.count()).toBe(1);
         // Finish the picker's opening scale before recording its baseline. The top
         // transform origin keeps the anchor gap stable while box geometry still grows.
-        await picker
-          .locator(':scope > wa-popup[data-anchored-overlay] > [part~="popup"]')
-          .evaluate(finishElementAnimations);
+        await picker.locator(":scope > [data-anchored-overlay]").evaluate(finishElementAnimations);
         const menuGeometry = () =>
           page.evaluate(() => {
             const anchor = document.querySelector('[data-chat-model-select="true"]');
@@ -181,9 +179,10 @@ suite.define(() => {
         });
         const root = page.locator("openclaw-new-session-page");
         await page.goto(`${suite.server.baseUrl}new?agent=main`);
-        await expect.poll(() => root.locator("[data-chat-model-option]").count()).toBe(2);
         const trigger = root.locator('.new-session-page__composer [data-chat-model-select="true"]');
         await expect.poll(() => trigger.textContent()).toContain("Retained one");
+        await trigger.click();
+        await expect.poll(() => root.locator("[data-chat-model-option]").count()).toBe(2);
         await navigateInApp(page, "agents-home");
         await expect.poll(() => root.count()).toBe(0);
         await page.evaluate(
@@ -209,7 +208,6 @@ suite.define(() => {
         await expect
           .poll(() => root.getByRole("button", { name: "sample-cloud", exact: true }).isVisible())
           .toBe(true);
-        expect(await root.locator("[data-chat-model-option]").count()).toBe(2);
         expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
         expect(await page.evaluate((key) => localStorage.getItem(key), storageKey)).toBe(
           JSON.stringify({ agents: { main: preference } }),
@@ -219,6 +217,7 @@ suite.define(() => {
         ).toBe("sample-cloud");
         await page.keyboard.press("Escape");
         await root.locator('.new-session-page__composer [data-chat-model-select="true"]').click();
+        await expect.poll(() => root.locator("[data-chat-model-option]").count()).toBe(2);
         await selectChatModelOption(root.locator('[data-chat-model-option="fixture/one"]'));
         expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
         await root.locator("#new-session-where-trigger").click();
@@ -234,7 +233,11 @@ suite.define(() => {
         expect(await gateway.getRequests("models.list")).toHaveLength(reads + 1);
         await root.locator("#new-session-where-trigger").click();
         await expect
-          .poll(() => root.getByRole("button", { name: "sample-cloud", exact: true }).isDisabled())
+          .poll(() =>
+            root
+              .getByRole("button", { name: "sample-cloud Unavailable", exact: true })
+              .isDisabled(),
+          )
           .toBe(true);
         const selectionWrites = (await gateway.getRequests("users.prefs.set")).length;
         await gateway.resolveDeferred("models.list", {
@@ -301,12 +304,16 @@ suite.define(() => {
           const rows = root.locator("[data-chat-model-option]");
           const preference = { model: "fixture/three" };
           await page.goto(`${suite.server.baseUrl}new?agent=main`);
+          await trigger.click();
           await expect.poll(() => rows.count()).toBe(2);
+          await trigger.click();
           const reads = (await gateway.getRequests("models.list")).length;
           await navigateInApp(page, "agents-home");
           await expect.poll(() => root.count()).toBe(0);
           await navigateInApp(page, "new-session", "?agent=main");
+          await trigger.click();
           await expect.poll(() => rows.count()).toBe(2);
+          await trigger.click();
           expect(await gateway.getRequests("models.list")).toHaveLength(reads);
           await navigateInApp(page, "agents-home");
           await expect.poll(() => root.count()).toBe(0);
@@ -577,6 +584,7 @@ suite.define(() => {
         });
       }
 
+      await gateway.waitForRequest("models.list");
       await gateway.resolveDeferred("models.list");
       await expect.poll(() => modelTrigger.textContent()).toContain("GPT-5.6 Luna");
       expect(await modelTrigger.getAttribute("aria-busy")).toBe("false");
@@ -700,18 +708,16 @@ suite.define(() => {
           await expect
             .poll(() => page.getByText("Models unavailable", { exact: true }).count())
             .toBeGreaterThan(0);
-          expect(await gateway.getRequests("models.list")).toHaveLength(2);
+          expect(await gateway.getRequests("models.list")).toHaveLength(1);
         }
         await gateway.setMethodResponse("models.list", { commands: [], models });
         if (startup) {
           await gateway.emitGatewayEvent("chat.metadata.changed", {});
-          await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(3);
+          await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
           await expect.poll(() => modelSelect.getAttribute("aria-disabled")).toBe("false");
         }
         await modelSelect.click();
-        await expect
-          .poll(async () => (await gateway.getRequests("models.list")).length)
-          .toBe(startup ? 3 : 2);
+        await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
         await expect
           .poll(() => page.locator("[data-chat-model-option]").count())
           .toBe(models.length);
@@ -722,7 +728,7 @@ suite.define(() => {
               page.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').textContent(),
             )
             .toContain(recoveredModel.name);
-          expect(await gateway.getRequests("models.list")).toHaveLength(3);
+          expect(await gateway.getRequests("models.list")).toHaveLength(2);
           for (const request of await gateway.getRequests("models.list")) {
             expect(request.params).toEqual({ view: "configured", agentId: "main" });
           }
@@ -825,7 +831,7 @@ suite.define(() => {
             path.join(suite.artifactDir, "new-session-catalog-retry", "01-cli-agents-retry.png"),
             await takeControlUiViewportScreenshot(
               page,
-              page.locator('.chat-controls__model-picker wa-popup [part="popup"]'),
+              page.locator(".chat-controls__model-picker > [data-anchored-overlay]"),
               [errorState],
             ),
           );
@@ -882,7 +888,7 @@ suite.define(() => {
             ),
             await takeControlUiViewportScreenshot(
               page,
-              page.locator('.chat-controls__model-picker wa-popup [part="popup"]'),
+              page.locator(".chat-controls__model-picker > [data-anchored-overlay]"),
               [page.locator('[data-chat-model-target="anthropic"]')],
             ),
           );

@@ -15,6 +15,7 @@ import { lt as semverLt, valid as validSemver } from "semver";
 import { z } from "zod";
 import { isRecord as isJsonRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.ts";
+import { retryClawHubRead } from "../../src/infra/clawhub-retry.ts";
 import { isRecoverableOpenClawNpmRegistryReadbackFailure } from "../openclaw-npm-resume-run.mts";
 import {
   compareCodeUnits,
@@ -804,95 +805,70 @@ async function cancelResponseBody(response: Response): Promise<void> {
   await response.body?.cancel().catch(() => undefined);
 }
 
+function retryReleaseClawHubRead<T extends { response: Response }>(
+  url: string,
+  request: () => Promise<T>,
+  delay?: (delayMs: number) => Promise<void>,
+): Promise<T> {
+  return retryClawHubRead(request, {
+    disposeRetry: ({ response }) => cancelResponseBody(response),
+    retryRateLimit: true,
+    sleep: delay,
+  }).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${url}: ${message}. Retry readback, not publication.`, { cause: error });
+  });
+}
+
 export async function fetchJsonWithRetry(
   url: string,
   options: {
-    attempts?: number;
     delay?: (delayMs: number) => Promise<void>;
     fetchImpl?: typeof fetch;
     timeoutMs?: number;
   } = {},
 ): Promise<unknown> {
-  const attempts = options.attempts ?? 5;
-  const delay = options.delay ?? sleep;
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const timeoutMs = options.timeoutMs ?? CLAWHUB_REQUEST_TIMEOUT_MS;
-  let lastError: unknown;
-
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    let response: Response | undefined;
-    let attemptError: unknown;
-    try {
-      const signal = AbortSignal.timeout(timeoutMs);
-      response = await fetchImpl(url, {
+  const { response: reply, body: text } = await retryReleaseClawHubRead(
+    url,
+    async () => {
+      const signal = AbortSignal.timeout(options.timeoutMs ?? CLAWHUB_REQUEST_TIMEOUT_MS);
+      const response = await (options.fetchImpl ?? fetch)(url, {
         headers: { accept: "application/json" },
         signal,
       });
-      if (response.status !== 429 && response.status < 500) {
-        if (!response.ok) {
-          await cancelResponseBody(response);
-          throw new Error(`${url} returned HTTP ${response.status}.`);
-        }
-        return await readBoundedJsonResponse(response, url, undefined, { signal });
-      }
-      attemptError = new Error(`HTTP ${response.status}`);
-      lastError = attemptError;
-    } catch (error) {
-      if (
-        response !== undefined &&
-        response.status !== 429 &&
-        response.status < 500 &&
-        !response.ok
-      ) {
+      try {
+        const body = response.ok
+          ? await readBoundedResponseText(response, url, CLAWHUB_RESPONSE_BODY_MAX_BYTES, {
+              signal,
+            })
+          : undefined;
+        return { response, body };
+      } catch (error) {
+        await cancelResponseBody(response);
         throw error;
       }
-      attemptError = error;
-      lastError = error;
-    } finally {
-      if (response !== undefined && attemptError !== undefined) {
-        await cancelResponseBody(response);
-      }
-    }
-    if (attempt < attempts) {
-      await delay(attempt * 1000);
-    }
+    },
+    options.delay,
+  );
+  if (!reply.ok) {
+    await cancelResponseBody(reply);
+    throw new Error(`${url} returned HTTP ${reply.status}. Retry readback, not publication.`);
   }
-  const message = lastError instanceof Error ? lastError.message : String(lastError);
-  throw new Error(`${url} did not return stable JSON: ${message}`);
-}
-
-export async function readBoundedJsonResponse(
-  response: Response,
-  label: string,
-  maxBytes = CLAWHUB_RESPONSE_BODY_MAX_BYTES,
-  options: { signal?: AbortSignal } = {},
-): Promise<unknown> {
-  return parseJson(await readBoundedResponseText(response, label, maxBytes, options), label);
+  // Parsing belongs after transport recovery: a complete invalid document is
+  // terminal, not a reason to repeat publication or hide unaccepted evidence.
+  return parseJson(text ?? "", url);
 }
 
 export async function fetchStatusWithRetry(url: string, method: "GET" | "HEAD"): Promise<number> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= 5; attempt += 1) {
-    try {
-      const response = await fetch(url, {
-        method,
-        redirect: "manual",
-        signal: AbortSignal.timeout(CLAWHUB_REQUEST_TIMEOUT_MS),
-      });
-      await cancelResponseBody(response);
-      if (response.status !== 429 && response.status < 500) {
-        return response.status;
-      }
-      lastError = new Error(`HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    if (attempt < 5) {
-      await sleep(attempt * 1000);
-    }
-  }
-  const message = lastError instanceof Error ? lastError.message : String(lastError);
-  throw new Error(`${url} did not return a stable response: ${message}`);
+  const { response } = await retryReleaseClawHubRead(url, async () => ({
+    response: await fetch(url, {
+      method,
+      redirect: "manual",
+      signal: AbortSignal.timeout(CLAWHUB_REQUEST_TIMEOUT_MS),
+    }),
+  }));
+  await cancelResponseBody(response);
+  return response.status;
 }
 
 async function readNpmBetaFloorError(

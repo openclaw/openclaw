@@ -2,6 +2,7 @@ import {
   WORKSPACE_SEED_RETENTION,
   WORKSPACE_SEED_RETENTION_JS,
 } from "../../worker/workspace-seed-retention.js";
+import { DEFAULT_NODE_TOOLCHAIN_SETUP_SH } from "./node-toolchain.js";
 import {
   PREPARE_PROJECT_WORKSPACE_JS,
   type PreparedProjectVerification,
@@ -30,7 +31,13 @@ type ProjectSeedScriptInput = {
 
 /** Only immutable Git content and non-secret preparation metadata enter the machine image. */
 export function createProjectSeedScript(input: ProjectSeedScriptInput): string {
+  // Bootstrap can install a toolchain before Node performs the full seed-path admission.
   return `set -eu
+if [ -n "\${HOME:-}" ] && { [ -L "$HOME/.openclaw-worker" ] || [ -L "$HOME/.openclaw-worker/git-seeds" ]; }; then
+  echo 'Project seed directory escaped its owner' >&2
+  exit 1
+fi
+${DEFAULT_NODE_TOOLCHAIN_SETUP_SH}
 node <<'PROJECT_SEED_SCRIPT'
 const fs = require("node:fs");
 const path = require("node:path");

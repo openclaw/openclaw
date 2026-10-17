@@ -116,12 +116,7 @@ export function resolveCommandTurnContext(input: CommandTurnContextInput): Comma
   if (explicit) {
     return explicit;
   }
-  const source =
-    input.CommandSource === "native"
-      ? "native"
-      : input.CommandSource === "text"
-        ? "text"
-        : "message";
+  const source = normalizeCommandTurnSource(input.CommandSource) ?? "message";
   const body = resolveCommandBody(input);
   return createCommandTurnContext(source, {
     authorized: input.CommandAuthorized === true,
@@ -165,12 +160,8 @@ export function resolveCommandTurnTargetSessionKey(
     isAuthorizedTextSlashCommandTurn(commandTurn) &&
     (commandTurn.commandName?.toLowerCase() === "steer" ||
       commandTurn.commandName?.toLowerCase() === "tell");
-  if (
-    (!isNativeCommandTurn(commandTurn) && !isExplicitTextSteer) ||
-    typeof input.CommandTargetSessionKey !== "string"
-  ) {
+  if (!isNativeCommandTurn(commandTurn) && !isExplicitTextSteer) {
     return undefined;
   }
-  const trimmed = input.CommandTargetSessionKey.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  return normalizeOptionalString(input.CommandTargetSessionKey);
 }

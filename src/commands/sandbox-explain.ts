@@ -19,13 +19,13 @@ import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js"
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import {
   resolveAgentMainSessionKey,
   resolveSessionStorePathCore,
   type SessionEntry,
 } from "../config/sessions.js";
-import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildAgentMainSessionKey,
@@ -112,7 +112,7 @@ export async function sandboxExplainCommand(
   opts: SandboxExplainOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
 
   const requestedSession = opts.session?.trim();
   const requestedAgent = opts.agent?.trim();
@@ -144,12 +144,23 @@ export async function sandboxExplainCommand(
     session: opts.session,
   });
 
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, {
+    agentId: resolvedAgentId,
+  });
+  // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
+  const sessionEntry = await readSessionEntryReadOnlyInWorker({
+    agentId: resolvedAgentId,
+    sessionKey,
+    storePath,
+  });
+
   const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, resolvedAgentId);
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg,
     sessionKey,
     agentId: resolvedAgentId,
     classificationAgentId: resolvedAgentId,
+    preparedSessionEntry: sessionEntry ?? null,
   });
   const configuredSandbox = resolveSandboxConfigForAgent(cfg, resolvedAgentId);
   const sandboxCfg = sandboxRuntime.sandboxRequired
@@ -161,15 +172,6 @@ export async function sandboxExplainCommand(
     : configuredSandbox;
   const mainSessionKey = sandboxRuntime.mainSessionKey;
   const sessionIsSandboxed = sandboxRuntime.sandboxed;
-  const storePath = resolveSessionStorePathCore(cfg.session?.store, {
-    agentId: resolvedAgentId,
-  });
-  // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
-  const sessionEntry = loadSessionEntryReadOnly({
-    agentId: resolvedAgentId,
-    sessionKey,
-    storePath,
-  });
 
   const agentConfig = resolveAgentConfig(cfg, resolvedAgentId);
   // Spawned sessions persist their inherited workspace and direct-mode cwd so

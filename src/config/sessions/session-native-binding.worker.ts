@@ -1,12 +1,21 @@
+import { serialize } from "node:v8";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
-import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import {
+  SQLITE_WORKER_MAX_MESSAGE_BYTES,
+  SqliteWorkerError,
+} from "../../infra/sqlite-worker-contract.js";
 import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
 import {
   preparePluginStateNativeBindingCodec,
   readPreparedPluginStateNativeBinding,
 } from "../../plugin-state/plugin-state-native-binding-codec.js";
+import {
+  capturePluginStateReceipt,
+  type PluginStateCommitReceipt,
+} from "../../plugin-state/plugin-state-publication.js";
 import { wrapPluginStateError } from "../../plugin-state/plugin-state-store.database.js";
 import {
   deletePluginStateNativeBinding,
@@ -17,7 +26,6 @@ import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-ope
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
 import { withSqliteSessionDeletionWorkerParticipant } from "./session-accessor.sqlite-deletion.js";
-import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
 import { collectLifecycleIdentityChanges } from "./session-accessor.sqlite-identity.js";
 import {
   collectReclamationChangedSessionKeys,
@@ -114,9 +122,6 @@ export function deleteSessionWithNativeBindings(
         current,
         (stage, facts) => {
           context.admit(stage, facts);
-          if (stage === "commit") {
-            assertSessionSubagentRunsCurrent(input.plan, input.plan.databaseOptions.env);
-          }
         },
         candidate,
         wrapReceipt,
@@ -143,11 +148,18 @@ export function runSessionNativeBindingTransaction(
   }
   const writeShared = <T>(
     operation: "delete" | "register",
-    write: (shared: OpenClawStateDatabase) => T,
+    write: (shared: OpenClawStateDatabase) => {
+      value: T;
+      bindings: SessionNativeBindingReceipt["bindings"];
+    },
     refusal?: Error,
   ): T => {
     try {
-      return writeSharedTransaction(input.sharedSource, write);
+      return writeSharedTransaction(input.sharedSource, (shared) => {
+        const captured = capturePluginStateReceipt(shared.db, () => write(shared));
+        recordSharedCommit(shared, captured.result.bindings, captured.receipt);
+        return captured.result.value;
+      });
     } catch (error) {
       if (error === refusal) {
         throw error;
@@ -167,27 +179,46 @@ export function runSessionNativeBindingTransaction(
   let agent: SessionNativeBindingReceipt["agent"] = "pending";
   let agentCommitted = false;
   let bindings: SessionNativeBindingReceipt["bindings"] = input.participants.map(() => "pending");
+  let pluginState: PluginStateCommitReceipt | undefined;
   let compensationFailure: SessionNativeBindingReceipt["compensationFailure"];
   const removed = new Map<number, Record<string, unknown>>();
-  const receipt = (nextAgent = agent, nextBindings = bindings): SessionNativeBindingReceipt => ({
-    kind: "session-native-binding",
-    operationId: input.operationId,
-    agent: nextAgent,
-    bindings: [...nextBindings],
-    ...(compensationFailure ? { compensationFailure } : {}),
-  });
+  const receipt = (
+    nextAgent = agent,
+    nextBindings = bindings,
+    nextPluginState = pluginState,
+  ): SessionNativeBindingReceipt => {
+    const value: SessionNativeBindingReceipt = {
+      kind: "session-native-binding",
+      operationId: input.operationId,
+      agent: nextAgent,
+      bindings: [...nextBindings],
+      ...(nextPluginState ? { pluginState: nextPluginState } : {}),
+      ...(compensationFailure ? { compensationFailure } : {}),
+    };
+    if (nextPluginState && serialize(value).byteLength > SQLITE_WORKER_MAX_MESSAGE_BYTES) {
+      value.pluginState = { kind: "unknown", identity: nextPluginState.source.identity };
+    }
+    return value;
+  };
   const recordSharedCommit = (
     shared: OpenClawStateDatabase,
     nextBindings: SessionNativeBindingReceipt["bindings"],
+    captured: PluginStateCommitReceipt,
   ) => {
-    stageSqliteTransactionState(shared.db, {
+    const nextPluginState: PluginStateCommitReceipt = {
+      ...captured,
+      facts: new Map([...(pluginState?.facts ?? []), ...captured.facts]),
+    };
+    const anchor = sqlPublicationAnchor(shared.db);
+    stageSqliteTransactionState(anchor, {
       stage() {},
       commit: () => {
         bindings = nextBindings;
+        pluginState = nextPluginState;
       },
       rollback() {},
     });
-    deferSqliteWorkerCommitReceipt(shared.db, receipt(agent, nextBindings));
+    deferSqliteWorkerCommitReceipt(anchor, receipt(agent, nextBindings, nextPluginState));
   };
   const admitShared = (
     index: number,
@@ -232,7 +263,6 @@ export function runSessionNativeBindingTransaction(
           }
           const next = [...bindings];
           next[index] = result.status === "conflict" ? "pending" : result.status;
-          recordSharedCommit(shared, next);
           admitShared(index, "delete", "commit");
           if (result.status === "deleted") {
             const lease = readPreparedPluginStateNativeBinding(plan, result.value)?.lease;
@@ -240,7 +270,7 @@ export function runSessionNativeBindingTransaction(
               throw expired;
             }
           }
-          return result.status;
+          return { value: result.status, bindings: next };
         },
         expired,
       );
@@ -252,7 +282,7 @@ export function runSessionNativeBindingTransaction(
   try {
     return withSqliteSessionDeletionWorkerParticipant(commitParticipant, () =>
       context.writeTransaction(operationLabel, owner, (current) => {
-        stageSqliteTransactionState(current.db, {
+        stageSqliteTransactionState(sqlPublicationAnchor(current.db), {
           stage() {},
           commit: () => {
             agent = "committed";
@@ -295,16 +325,15 @@ export function runSessionNativeBindingTransaction(
       }
       const plan = input.participants[index]!.binding!;
       try {
+        admitShared(index, "restore", "transaction");
         const restored = writeShared("register", (shared) => {
-          admitShared(index, "restore", "transaction");
           const applied = restorePluginStateNativeBinding(shared, plan, value);
           const next = [...bindings];
           if (applied) {
             next[index] = "restored";
           }
-          recordSharedCommit(shared, next);
           admitShared(index, "restore", "commit");
-          return applied;
+          return { value: applied, bindings: next };
         });
         if (!restored) {
           throw new Error(plan.rollbackChanged, { cause: error });
@@ -322,7 +351,8 @@ export function runSessionNativeBindingTransaction(
       );
     }
     try {
-      writeShared("register", (shared) => recordSharedCommit(shared, bindings));
+      context.admit("transaction");
+      writeShared("register", () => ({ value: undefined, bindings }));
     } catch (failure) {
       failures.push(failure);
     }

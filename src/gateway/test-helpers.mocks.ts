@@ -20,11 +20,10 @@ import {
 const gatewayTestHoisted = getGatewayTestHoistedState();
 
 function createEmbeddedRunMockExports() {
-  return {
+  const runtime = {
     compactEmbeddedAgentSession: (...args: unknown[]) =>
       embeddedRunMock.compactEmbeddedAgentSession(...args),
     isEmbeddedAgentRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
-    isEmbeddedAgentRunInProgress: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
     resolveEmbeddedAgentRunProgressState: (sessionId: string) =>
       embeddedRunMock.activeIds.has(sessionId) ? "running" : undefined,
     resolveEmbeddedAgentSessionProgressState: (sessionId: string) =>
@@ -50,6 +49,27 @@ function createEmbeddedRunMockExports() {
       }
       return ended;
     },
+  };
+  return {
+    ...runtime,
+    captureEmbeddedRunDrainTarget: (
+      sessionId: string,
+      owner: Parameters<
+        typeof import("../agents/embedded-agent-runner/runs.js").captureEmbeddedRunDrainTarget
+      >[1],
+    ) =>
+      embeddedRunMock.activeIds.has(sessionId)
+        ? {
+            sessionId,
+            agentId: owner.agentId,
+            sessionKey: undefined,
+            isActive: () => runtime.isEmbeddedAgentRunActive(sessionId),
+            abort: () => runtime.abortEmbeddedAgentRun(sessionId),
+            waitForEnd: (timeoutMs: number | null) =>
+              runtime.waitForEmbeddedAgentRunEnd(sessionId, timeoutMs),
+            release: () => {},
+          }
+        : undefined,
   };
 }
 
@@ -107,7 +127,7 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
     "../agents/sessions/index.js",
   );
 
-  const createActualRegistry = (...args: Parameters<typeof actual.discoverModels>) => {
+  const createActualRegistry = (...args: Parameters<typeof actual.discoverModelsAsync>) => {
     const modelsFile = path.join(args[1], "models.json");
     const Registry = modelSessions.ModelRegistry as unknown as {
       create?: (
@@ -169,8 +189,10 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
 
   return {
     ...actual,
-    discoverModels: (authStorage: Parameters<typeof actual.discoverModels>[0], agentDir: string) =>
-      new MockModelRegistry(authStorage, path.join(agentDir, "models.json")),
+    discoverModelsAsync: async (
+      authStorage: Parameters<typeof actual.discoverModelsAsync>[0],
+      agentDir: string,
+    ) => new MockModelRegistry(authStorage, path.join(agentDir, "models.json")),
     ModelRegistry: MockModelRegistry,
   };
 });
@@ -263,6 +285,7 @@ vi.mock("../agents/embedded-agent-runner/active-run-projections.js", async (impo
     typeof import("../agents/embedded-agent-runner/active-run-projections.js")
   >()),
   getActiveEmbeddedRunCount: () => embeddedRunMock.activeIds.size,
+  isEmbeddedAgentRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
 }));
 
 vi.mock("/src/agents/embedded-agent-runner/active-run-projections.js", async (importOriginal) => ({
@@ -270,10 +293,24 @@ vi.mock("/src/agents/embedded-agent-runner/active-run-projections.js", async (im
     typeof import("../agents/embedded-agent-runner/active-run-projections.js")
   >()),
   getActiveEmbeddedRunCount: () => embeddedRunMock.activeIds.size,
+  isEmbeddedAgentRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
 }));
 
+// mock-isolation: Gateway fixtures must not collect real channel or session state.
 vi.mock("./health/collector.js", () => ({
-  collectGatewayHealthSnapshot: vi.fn().mockResolvedValue({ ok: true, stub: true }),
+  collectGatewayHealthSnapshot: vi
+    .fn<typeof import("./health/collector.js").collectGatewayHealthSnapshot>()
+    .mockImplementation(async () => ({
+      ok: true,
+      ts: 0,
+      durationMs: 0,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      agents: [],
+      sessions: { path: "/test/gateway/sessions", count: 0, recent: [] },
+    })),
 }));
 vi.mock("../status/summary.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),

@@ -16,19 +16,19 @@ const transcript = vi.hoisted(() => ({
 
 // mock-isolation: Exercise catalog import ordering without opening the SQLite transcript owner.
 vi.mock("../plugin-sdk/session-transcript-runtime.js", () => ({
-  withSessionTranscriptWriteLock: async (
+  withSessionTranscriptWrite: async (
     _params: unknown,
     run: (context: {
       appendMessage: (params: {
         message: Record<string, unknown>;
         idempotencyLookup?: string;
-        beforeFreshMessageCommit?: () => void;
+        preparation?: { source?: () => void };
       }) => Promise<void>;
     }) => Promise<void>,
   ) => {
     transcript.lockCalls += 1;
     await run({
-      appendMessage: async ({ message, idempotencyLookup, beforeFreshMessageCommit }) => {
+      appendMessage: async ({ message, idempotencyLookup, preparation }) => {
         const key = message.idempotencyKey;
         if (
           idempotencyLookup === "scan" &&
@@ -37,7 +37,7 @@ vi.mock("../plugin-sdk/session-transcript-runtime.js", () => ({
         ) {
           return;
         }
-        beforeFreshMessageCommit?.();
+        preparation?.source?.();
         transcript.messages.push(message);
       },
     });
@@ -164,7 +164,13 @@ describe("importSessionCatalogHistory", () => {
             text: "careful",
             timestamp: "1969-12-31T23:59:59.000Z",
           },
-          { id: "a-1", type: "agentMessage", text: "answer", model: "anthropic/claude" },
+          {
+            id: "a-1",
+            type: "agentMessage",
+            text: "answer",
+            model: "anthropic/claude",
+            raw: "x".repeat(600 * 1024),
+          },
           { id: "t-1", type: "toolCall", text: "bash" },
           { id: "o-1", type: "other", text: "checkpoint" },
         ],
@@ -254,19 +260,6 @@ describe("importSessionCatalogHistory", () => {
     expect(text).toMatch(/^Tool result\n\n/u);
     expect(text).toMatch(/…$/u);
     expect(Buffer.byteLength(text ?? "", "utf8")).toBeLessThan(512 * 1024);
-  });
-
-  it("does not let an unused raw payload hide visible history", async () => {
-    await importHistory([
-      {
-        id: "raw-heavy",
-        type: "agentMessage",
-        text: "visible answer",
-        raw: "x".repeat(600 * 1024),
-      },
-    ]).result;
-
-    expect(transcript.messages.map(messageText)).toEqual(["visible answer"]);
   });
 
   it("does not open the transcript write lock when a paged read fails", async () => {

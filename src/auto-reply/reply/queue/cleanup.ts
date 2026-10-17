@@ -1,10 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveEmbeddedSessionLane } from "../../../agents/embedded-agent-runner/lanes.js";
-import {
-  clearCommandLane,
-  countQueuedCommandsInLane,
-  prepareCommandLaneClear,
-} from "../../../process/command-queue.js";
+import { clearCommandLane, countQueuedCommandsInLane } from "../../../process/command-queue.js";
 import {
   agentSessionKeysMatchByRequestKey,
   normalizeAgentId,
@@ -91,7 +87,7 @@ function resolveSessionLifecycleQueueKeys(params: SessionLifecycleQueueTarget) {
   };
 }
 
-/** Capture pending sources before Stop callbacks can replace their queue or session. */
+/** Stop selects current pending work, including input arriving during preparation. */
 export function prepareSessionFollowupCleanup(params: {
   keys: Array<string | undefined>;
   agentId: string;
@@ -99,73 +95,36 @@ export function prepareSessionFollowupCleanup(params: {
   sessionKeyAliases?: readonly string[];
   sessionId?: string;
   assertCurrent: () => void;
-}): () => number {
+}): (sessionId?: string) => number {
   const keys = new Set(
     params.keys.map((key) => normalizeOptionalString(key)).filter((key) => key !== undefined),
   );
-  const captures = [...keys].flatMap((key) => {
-    const queue = FOLLOWUP_QUEUES.get(key);
-    if (!queue) {
-      return [];
-    }
-    const isPending = (source: FollowupRun) =>
-      source.steerPending?.phase !== "injecting" &&
-      !queue.inFlight.has(source) &&
-      !queue.activeSummarySources.has(source);
-    // Admission can retarget the next claim before run.sessionId is refreshed.
-    // Exact Stop must not transfer to another incarnation; broad Stop includes both.
-    const sources = [...new Set(followupQueueSources(queue))]
-      .filter((source) => isPending(source) && matchesSessionFollowupRun(source, params))
-      .map((source) => ({
-        source,
-        run: source.run,
-        agentId: source.run.agentId,
-        sessionKey: source.run.sessionKey,
-        sessionId: source.run.sessionId,
-        admissionSessionId: source.admissionSessionId,
-        lifecycle: source.turnAdoptionLifecycle,
-      }));
-    return [{ key, queue, isPending, sources }];
-  });
   let consumed = false;
-  return () => {
+  return (sessionId = params.sessionId) => {
     if (consumed) {
       return 0;
     }
     consumed = true;
     let removed = 0;
-    for (const { key, queue, isPending, sources } of captures) {
+    for (const key of keys) {
       params.assertCurrent();
-      if (FOLLOWUP_QUEUES.get(key) !== queue) {
+      const queue = FOLLOWUP_QUEUES.get(key);
+      if (!queue) {
         continue;
       }
-      const matchesCapture = (source: FollowupRun, capture: (typeof sources)[number]) =>
-        isPending(source) &&
-        source.run === capture.run &&
-        source.run.agentId === capture.agentId &&
-        source.run.sessionKey === capture.sessionKey &&
-        (params.sessionId === undefined ||
-          (source.run.sessionId === capture.sessionId &&
-            source.admissionSessionId === capture.admissionSessionId)) &&
-        source.turnAdoptionLifecycle === capture.lifecycle;
-      const current = sources.filter((capture) => matchesCapture(capture.source, capture));
-      const pending = current.flatMap(({ source }) =>
-        queue.items.includes(source) ? [source] : [],
+      const current = [...new Set(followupQueueSources(queue))].filter(
+        (source) =>
+          source.steerPending?.phase !== "injecting" &&
+          !queue.inFlight.has(source) &&
+          !queue.activeSummarySources.has(source) &&
+          matchesSessionFollowupRun(source, { ...params, sessionId }),
       );
-      // Overflow records original -> compact-source custody. Follow only that owner mapping,
-      // retaining both original facts and the compact source's pending generation.
-      const summaries = current
-        .filter((capture) => {
-          const source = capture.source;
-          return (
-            queue.summarySources.includes(source) ||
-            queue.summaryElisions.some((entry) => {
-              const mapped = entry.sourceRefs.get(source) ?? source;
-              return entry.sources.includes(mapped) && matchesCapture(mapped, capture);
-            })
-          );
-        })
-        .map(({ source }) => source);
+      const pending = current.filter((source) => queue.items.includes(source));
+      const summaries = current.filter(
+        (source) =>
+          queue.summarySources.includes(source) ||
+          queue.summaryElisions.some((entry) => entry.sources.includes(source)),
+      );
       // Detach the whole accepted set before lifecycle callbacks can revoke or re-enter Stop.
       removeQueuedItemsByRef(queue.items, pending);
       consumeQueueSummaryDelivery(
@@ -175,15 +134,25 @@ export function prepareSessionFollowupCleanup(params: {
       );
       const detached = new Set([...pending, ...summaries]);
       removed += detached.size;
-      completeFollowupRuns(detached, (error) => {
+      const onSettlementError = (error: unknown) => {
         defaultRuntime.error?.(`followup queue cancellation settlement failed: ${String(error)}`);
-      });
-      // Settlement of accepted removals is unconditional; later effects need current authority.
-      params.assertCurrent();
+      };
+      for (const source of detached) {
+        for (const correlation of source.deliveryCorrelations ?? []) {
+          try {
+            const end = correlation.begin();
+            if (typeof end === "function") {
+              end({ visibleReplySent: false, failed: true });
+            }
+          } catch (error) {
+            onSettlementError(error);
+          }
+        }
+      }
+      completeFollowupRuns(detached, onSettlementError);
       if (
         FOLLOWUP_QUEUES.get(key) === queue &&
         !queue.draining &&
-        !queue.drainOwner &&
         queue.items.length === 0 &&
         queue.inFlight.size === 0 &&
         queue.droppedCount === 0
@@ -199,7 +168,6 @@ export function prepareSessionFollowupCleanup(params: {
 export function clearSessionLifecycleQueues(
   params: SessionLifecycleQueueTarget & { assertCurrent: () => void },
 ): ClearSessionQueueResult {
-  params.assertCurrent();
   const { keys, sessionKeyAliases } = resolveSessionLifecycleQueueKeys(params);
   const followupCleared = prepareSessionFollowupCleanup({
     ...params,
@@ -212,27 +180,8 @@ export function clearSessionLifecycleQueues(
 
 export function prepareSessionLifecycleQueueCleanup(
   params: SessionLifecycleQueueTarget & { assertCurrent: () => void },
-): () => ClearSessionQueueResult {
-  params.assertCurrent();
-  const { keys, sessionKeyAliases, matchesLaneEntry } = resolveSessionLifecycleQueueKeys(params);
-  const clearFollowups = prepareSessionFollowupCleanup({
-    ...params,
-    keys,
-    sessionKeyAliases,
-  });
-  const lanes = keys.map((key) =>
-    prepareCommandLaneClear(resolveEmbeddedSessionLane(key), matchesLaneEntry(key)),
-  );
-  return () => {
-    params.assertCurrent();
-    const followupCleared = clearFollowups();
-    let laneCleared = 0;
-    for (const clearLane of lanes) {
-      params.assertCurrent();
-      laneCleared += clearLane();
-    }
-    return { followupCleared, laneCleared, keys };
-  };
+): (sessionId?: string) => ClearSessionQueueResult {
+  return (sessionId = params.sessionId) => clearSessionLifecycleQueues({ ...params, sessionId });
 }
 
 export function clearSessionLifecycleLanes(

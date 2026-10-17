@@ -1,43 +1,71 @@
 import type { Writable } from "node:stream";
 import { formatErrorMessage } from "../infra/errors.js";
 
-export type MeetingOutputWriteWaiter<TProcess> = {
+type MeetingOutputWriteWaiter<TProcess> = {
   process: TProcess;
   release: () => void;
 };
 
-export function writeMeetingOutputChunk<TProcess>(
-  waiters: Set<MeetingOutputWriteWaiter<TProcess>>,
-  process: TProcess,
-  stdin: Writable,
-  audio: Buffer,
-): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    let settled = false;
-    const finish = (error?: Error) => {
-      if (settled) {
+export class MeetingOutputProcessOwner<TProcess extends MeetingBridgeProcess> {
+  readonly #waiters = new Set<MeetingOutputWriteWaiter<TProcess>>();
+  readonly #retiredStops = new Set<Promise<void>>();
+
+  constructor(private readonly graceMs: number) {}
+
+  write(process: TProcess, stdin: Writable, audio: Buffer): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = (error?: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        this.#waiters.delete(waiter);
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      };
+      const waiter = { process, release: () => finish() };
+      this.#waiters.add(waiter);
+      try {
+        stdin.write(audio, (error) => finish(error ?? undefined));
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(formatErrorMessage(error)));
         return;
       }
-      settled = true;
-      waiters.delete(waiter);
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
+      if (stdin.destroyed || stdin.writableEnded) {
+        finish(new Error("audio output stream is closed"));
       }
-    };
-    const waiter: MeetingOutputWriteWaiter<TProcess> = { process, release: () => finish() };
-    waiters.add(waiter);
-    try {
-      stdin.write(audio, (error) => finish(error ?? undefined));
-    } catch (error) {
-      finish(error instanceof Error ? error : new Error(formatErrorMessage(error)));
-      return;
+    });
+  }
+
+  release(process?: TProcess): void {
+    for (const waiter of this.#waiters) {
+      if (!process || waiter.process === process) {
+        waiter.release();
+      }
     }
-    if (stdin.destroyed || stdin.writableEnded) {
-      finish(new Error("audio output stream is closed"));
-    }
-  });
+  }
+
+  retire(process: TProcess | undefined, initialSignal?: NodeJS.Signals): void {
+    const stopped = terminateMeetingBridgeProcess(process, {
+      graceMs: this.graceMs,
+      initialSignal,
+    });
+    this.#retiredStops.add(stopped);
+    void stopped.finally(() => this.#retiredStops.delete(stopped));
+  }
+
+  async stop(...processes: Array<TProcess | undefined>): Promise<void> {
+    await Promise.all([
+      ...processes.map((process) =>
+        terminateMeetingBridgeProcess(process, { graceMs: this.graceMs }),
+      ),
+      ...this.#retiredStops,
+    ]);
+  }
 }
 
 export type MeetingBridgeProcess = {

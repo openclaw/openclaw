@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
@@ -42,10 +43,12 @@ import {
   projectQueuedCompactionSessionTarget,
   executeQueuedContextEngineCompaction,
   runPrimaryNativeCompactionInLanes,
-  type QueuedCompactionHostOptions,
   withQueuedCompactionCancellationResult,
 } from "./compact.queued-execution.js";
-import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
+import type {
+  CompactEmbeddedAgentSessionParams,
+  QueuedCompactionHostOptions,
+} from "./compact.types.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
   resolveCompactionContextTokenBudget,
@@ -125,11 +128,11 @@ export async function compactEmbeddedAgentSession(
     const assertHostActive = options.assertActive;
     const host = {
       ...options,
-      assertActive: () => {
-        assertHostActive?.();
-        sourceAuthority.assertActive();
-        sourceAuthority.operatorAuthority?.assertCurrent();
-      },
+      assertActive: composeSessionSourceAssertion([
+        assertHostActive,
+        sourceAuthority.assertActive,
+        sourceAuthority.operatorAuthority?.assertCurrent,
+      ]),
     };
     const signals = [input.abortSignal, sourceAuthority.operatorAuthority?.signal].filter(
       (signal): signal is AbortSignal => signal !== undefined,
@@ -148,20 +151,24 @@ export async function compactEmbeddedAgentSession(
     const contextEngineSessionKey =
       normalizeOptionalString(params.sessionKey) ??
       normalizeOptionalString(params.sessionTarget?.sessionKey);
-    const runtimeTarget = await resolveAgentRunSessionTarget({
-      ...params,
-      missingSessionKey: "resolve-existing",
-    });
+    const runtimeTarget =
+      host.preparedSession?.sessionTarget ??
+      (await resolveAgentRunSessionTarget({
+        ...params,
+        missingSessionKey: "resolve-existing",
+      }));
     const releaseForeground =
       params.trigger === "manual"
         ? await beginForegroundSessionMaintenance(runtimeTarget.sessionKey)
         : undefined;
     try {
       // Resolve the storage address first, then freeze its owner before runtime/plugin awaits.
-      const entry = await readSessionEntryReadOnlyInWorker(
-        { ...runtimeTarget, readConsistency: "latest" },
-        () => assertQueuedCompactionPreparationActive(params, host),
-      );
+      const entry =
+        host.preparedSession?.entry ??
+        (await readSessionEntryReadOnlyInWorker(
+          { ...runtimeTarget, readConsistency: "latest" },
+          () => assertQueuedCompactionPreparationActive(params, host),
+        ));
       assertQueuedCompactionPreparationActive(params, host);
       const expectedEntry = {
         sessionId: runtimeTarget.sessionId,
@@ -269,19 +276,22 @@ async function compactEmbeddedAgentSessionImpl(
             workspaceDir: resolvedWorkspaceDir,
           })
         : null;
-    const assertActive = () => {
-      sourceHost.assertActive?.();
-      placement?.assertCurrent();
-    };
+    const assertActive = composeSessionSourceAssertion(
+      [sourceHost.assertActive],
+      (assertSource) => {
+        assertSource();
+        placement?.assertCurrent();
+      },
+    );
     const host = {
       ...sourceHost,
       assertActive,
       sourceAuthority: {
         ...sourceHost.sourceAuthority,
-        assertActive: () => {
-          sourceHost.sourceAuthority.assertActive();
-          assertActive();
-        },
+        assertActive: composeSessionSourceAssertion([
+          sourceHost.sourceAuthority.assertActive,
+          assertActive,
+        ]),
       },
     };
     const placementSandbox = placement?.sandbox;

@@ -174,21 +174,20 @@ export async function retainUpdateDoctorProcesses(
         writeReceipt(file, receipt);
       } catch (error) {
         retained.settled();
+        receipt.slots.splice(receipt.slots.indexOf(slot), 1);
         throw error;
       }
       return {
         spawned(identity: CommandProcessIdentity) {
-          retained.spawned(identity);
+          // Publish the owned PID before binding so a failed bind cannot leave anonymous custody.
           slot.identity = identity;
           writeReceipt(file, receipt);
+          retained.spawned(identity);
         },
         settled() {
           retained.settled();
-          const index = receipt.slots.indexOf(slot);
-          if (index >= 0) {
-            receipt.slots.splice(index, 1);
-            writeReceipt(file, receipt);
-          }
+          receipt.slots.splice(receipt.slots.indexOf(slot), 1);
+          writeReceipt(file, receipt);
         },
       };
     },

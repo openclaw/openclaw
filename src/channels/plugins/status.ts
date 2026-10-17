@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { inspectChannelAccount } from "../account-inspection.js";
-import { resolveChannelAccount } from "../account-resolution.js";
+import { describeChannelAccount, resolveChannelAccount } from "../account-resolution.js";
 import {
   projectSafeChannelAccountSnapshotFields,
   redactChannelStatusSummaryBaseUrl,
@@ -48,7 +48,7 @@ export async function buildChannelAccountSnapshotFromAccount<ResolvedAccount>(pa
 
   params.assertActive?.();
 
-  const described = params.plugin.config.describeAccount?.(params.account, params.cfg);
+  const described = await describeChannelAccount(params);
   params.assertActive?.();
   const enabled = params.plugin.config.isEnabled
     ? params.plugin.config.isEnabled(params.account, params.cfg)

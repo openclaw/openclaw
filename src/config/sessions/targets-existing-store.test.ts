@@ -8,7 +8,7 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../config.js";
 import { replaceSessionEntry } from "./session-accessor.js";
 import * as sessionEntryStatus from "./session-accessor.sqlite-status.js";
-import { resolveExistingAgentSessionStoreTargetsSync } from "./targets.js";
+import { resolveExistingAgentSessionStoreTargetsSync } from "./targets-discovery.native.js";
 import { countMatching, createAgentSessionStores } from "./targets.test-support.js";
 
 describe("resolveExistingAgentSessionStoreTargetsSync", () => {

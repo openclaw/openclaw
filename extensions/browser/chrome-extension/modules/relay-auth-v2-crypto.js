@@ -1,3 +1,5 @@
+import { normalizeRelayQuery } from "./relay-url.js";
+
 // Browser-native proof primitives shared by the extension auth client and its vectors.
 
 export const RELAY_AUTH_LABEL = "openclaw.browser-relay.auth";
@@ -59,14 +61,9 @@ export function randomRelayBase64Url(cryptoApi, byteLength) {
 
 export function extensionRelayAuthResource(relayUrl) {
   const url = new URL(relayUrl);
-  const entries = [...url.searchParams];
-  if (
-    entries.some(([key, value]) => key !== "profile" || !/^[a-z0-9-]+$/.test(value)) ||
-    entries.filter(([key]) => key === "profile").length > 1
-  ) {
+  if (!normalizeRelayQuery(url)) {
     throw new Error("relay URL auth resource has unsupported query parameters");
   }
-  url.searchParams.sort();
   return `${url.pathname}${url.search}`;
 }
 

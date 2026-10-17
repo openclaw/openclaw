@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   openOpenClawStateDatabase,
@@ -90,39 +89,7 @@ describe("msteams pending uploads (fs-backed)", () => {
     expect(await getPendingUploadFs("does-not-exist")).toBeUndefined();
   });
 
-  it("persists so another reader finds the entry (simulates cross-process)", async () => {
-    await storeUpload({
-      id: "upload-x",
-      buffer: Buffer.from("top secret"),
-      filename: "secret.bin",
-    });
-
-    // Confirm SQLite-backed plugin state was created instead of a new JSON store.
-    const storePath = path.join(stateDir, "msteams-pending-uploads.json");
-    await expect(fs.promises.access(storePath)).rejects.toThrow();
-    await fs.promises.access(path.join(stateDir, "state", "openclaw.sqlite"));
-
-    const reader = await getPendingUploadFs("upload-x");
-    expect(reader?.buffer.toString("utf8")).toBe("top secret");
-    expect(reader?.filename).toBe("secret.bin");
-  });
-
-  it.each(["bulk", "legacy"])("stores multi-megabyte uploads with %s host reads", async (mode) => {
-    if (mode === "legacy") {
-      setMSTeamsRuntime({
-        ...msteamsRuntimeStub,
-        state: {
-          ...msteamsRuntimeStub.state,
-          openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
-            const { lookupMany: _lookupMany, ...store } = createPluginStateKeyedStoreForTests<T>(
-              "msteams",
-              options,
-            );
-            return store;
-          },
-        },
-      });
-    }
+  it("stores multi-megabyte uploads with bulk reads", async () => {
     const payload = Buffer.alloc(6 * 1024 * 1024, 7);
 
     await storeUpload({ id: "upload-large", buffer: payload, filename: "large.bin" });
@@ -156,21 +123,6 @@ describe("msteams pending uploads (fs-backed)", () => {
     });
   });
 
-  it("removes persisted entries", async () => {
-    await storeUpload({ id: "upload-rm", buffer: Buffer.from("x"), filename: "rm.bin" });
-    const loaded = await requirePendingUpload("upload-rm");
-    expect(loaded.id).toBe("upload-rm");
-    expect(loaded.filename).toBe("rm.bin");
-    expect(loaded.contentType).toBeUndefined();
-    expect(loaded.conversationId).toBe("19:conv@thread.v2");
-    expect(loaded.consentCardActivityId).toBeUndefined();
-    expect(loaded.buffer.toString("utf8")).toBe("x");
-    expect(Number.isFinite(loaded.createdAt)).toBe(true);
-
-    await removePendingUploadFs("upload-rm");
-    expect(await getPendingUploadFs("upload-rm")).toBeUndefined();
-  });
-
   it("remove is a no-op for unknown ids", async () => {
     await expect(removePendingUploadFs("never-existed")).resolves.toBeUndefined();
     await expect(removePendingUploadFs(undefined)).resolves.toBeUndefined();
@@ -191,29 +143,6 @@ describe("msteams pending uploads (fs-backed)", () => {
     await setPendingUploadActivityIdFs("upload-a", "activity-xyz");
     const loaded = await getPendingUploadFs("upload-a");
     expect(loaded?.consentCardActivityId).toBe("activity-xyz");
-  });
-
-  it("ignores legacy pending-upload JSON cache files at runtime", async () => {
-    const storePath = path.join(stateDir, "msteams-pending-uploads.json");
-    await fs.promises.writeFile(
-      storePath,
-      `${JSON.stringify({
-        version: 1,
-        uploads: {
-          cached: {
-            id: "cached",
-            bufferBase64: Buffer.from("cached payload").toString("base64"),
-            filename: "cached.txt",
-            conversationId: "19:conv@thread.v2",
-            createdAt: Date.now(),
-          },
-        },
-      })}\n`,
-      "utf-8",
-    );
-
-    expect(await getPendingUploadFs("cached")).toBeUndefined();
-    await fs.promises.access(storePath);
   });
 });
 

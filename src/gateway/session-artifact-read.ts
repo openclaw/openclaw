@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as asNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type {
@@ -16,7 +15,8 @@ import {
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { hasSqlitePostCommitScope } from "../infra/sqlite-post-commit.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { hasUncommittedSqliteWrites } from "../infra/sqlite-schema-facts.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import type { TranscriptReadWindow } from "../sessions/transcript-read-window.js";
 import {
@@ -31,7 +31,7 @@ import {
   prepareArtifactDownloadResponse,
 } from "./artifact-download-projection.js";
 import { parseManagedOutgoingArtifactId } from "./managed-outgoing-artifact-id.js";
-import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "./payload-limits.js";
 import {
   type ArtifactRecord,
   mediaUrlValue,
@@ -335,7 +335,7 @@ function createArtifactListCollector(query: Extract<SessionArtifactReadQuery, { 
 }
 
 const summaryLists = new WeakMap<
-  DatabaseSync,
+  EngineConnection,
   Map<string, { revision: string; artifacts: ArtifactRecord[] }>
 >();
 
@@ -345,7 +345,7 @@ export function readArtifactSummariesFromProjection(
   query: Extract<SessionArtifactReadQuery, { kind: "list" }>,
 ): ArtifactRecord[] {
   const cacheable =
-    !hasSqlitePostCommitScope(projection.database.db) &&
+    !hasUncommittedSqliteWrites(projection.database.db) &&
     !resolveSessionTranscriptReadFence(projection.resolved);
   let cache = summaryLists.get(projection.database.db);
   if (!cache && cacheable) {

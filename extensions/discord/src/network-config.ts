@@ -19,11 +19,7 @@ export function createDiscordDnsLookup(): LookupFunction {
     }
 
     const lookupOptions: dns.LookupOptions =
-      typeof options === "number"
-        ? { family: options }
-        : options === undefined
-          ? {}
-          : ({ ...options } as dns.LookupOptions);
+      typeof options === "number" ? { family: options } : { ...options };
 
     if (lookupOptions.family === 4 || lookupOptions.family === 6) {
       return dns.lookup(hostname, lookupOptions, callback as never);

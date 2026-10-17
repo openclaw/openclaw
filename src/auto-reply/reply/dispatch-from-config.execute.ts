@@ -1,13 +1,19 @@
+import { formatErrorMessage as formatErrorWithRedactor } from "@openclaw/normalization-core/error-coercion";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   hasOutboundReplyContent,
   isFastModeAutoProgressPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
+import { isRequiredReplyExpectation } from "../../agents/reply-completion.js";
 import { isAskUserPromptPending } from "../../agents/tools/ask-user-tool.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import { logVerbose } from "../../globals.js";
+import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isFileLogLevelEnabled } from "../../logging/logger.js";
+import { redactToolPayloadText } from "../../logging/redact.js";
 import { cleanDeferredFinalText } from "../../tts/captioned-final.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
@@ -29,6 +35,7 @@ import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.
 import { requireQueuedReplyDelivery } from "./dispatch-from-config.turn-ledger.js";
 import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
+import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
 
 export async function executeDispatch(state: PrepareDispatchExecutionReadyState) {
@@ -36,7 +43,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     cfg,
     commentaryPayloadsEnabled,
     ctx,
-    deliveryChannel,
     deferFinalTtsText,
     dispatcher,
     failDispatchReplyOperation,
@@ -49,18 +55,16 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     markProgress,
     maybeApplyTtsWithFinalizationLease,
     normalizeReplyMediaPayload,
+    noteCapturedFinalResponse,
     notifySessionMetadataChanges,
     onToolResultFromReplyOptions,
     onReasoningStream,
     params,
     reasoningPayloadsEnabled,
     replyConfig,
-    replyRoute,
     resolveToolDeliveryPayload,
     runWithDispatchLifecycleAdmission,
     sendPayloadAsync,
-    sessionAgentId,
-    sessionTtsAuto,
     shouldForwardProgressCallback,
     shouldRouteToOriginating,
     trackDispatchLifecycleWork,
@@ -75,12 +79,15 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
   );
   let pendingContinuation = false;
   let pendingContinuationSettlement: PendingContinuationSettlement | undefined;
+  let rawLlmResponse: string | undefined;
   const releasePendingContinuation = async () => {
     const settlement = pendingContinuationSettlement;
     pendingContinuationSettlement = undefined;
     await settlement?.settle(false);
   };
   let didDeliverVisiblePartialReply = false;
+  let replyResolverError: string | undefined;
+  const pendingToolProgress = new Set<Promise<void>>();
   const {
     onBlockReply,
     onPreparedBlockReply,
@@ -163,6 +170,14 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 pendingContinuation = true;
                 pendingContinuationSettlement ??= settlement;
               },
+              ...(resolveDiagnosticModelContentCapturePolicy(cfg).outputMessages
+                ? {
+                    onRawLlmResponse: (response: string) => {
+                      rawLlmResponse = response;
+                      noteCapturedFinalResponse(response);
+                    },
+                  }
+                : {}),
               onSessionMetadataChanges: notifySessionMetadataChanges,
               onSessionPrepared: state.notePreparedSession,
               onRunVerbosityResolved: (settings) => {
@@ -175,10 +190,19 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
               onPartialReply: deferFinalTtsText
                 ? undefined
                 : wrapProgressCallback(params.replyOptions?.onPartialReply, {
-                    onVisible: (payload) => {
-                      if (hasOutboundReplyContent(payload, { trimText: true })) {
-                        didDeliverVisiblePartialReply = true;
+                    onForward: async () => {
+                      if (!state.deliverStandaloneCommentaryProgress) {
+                        return;
                       }
+                      // Previews bypass the dispatcher queue; settle earlier progress first.
+                      await Promise.allSettled(pendingToolProgress);
+                      await flushPendingCommentaryProgress();
+                      await waitForReplyDispatcherIdle(dispatcher, getDispatchAbortSignal());
+                    },
+                    onVisible: (payload) => {
+                      didDeliverVisiblePartialReply ||= hasOutboundReplyContent(payload, {
+                        trimText: true,
+                      });
                     },
                   }),
               onReasoningStream,
@@ -343,15 +367,10 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   if (!visibleToolPayload) {
                     return;
                   }
-                  const ttsPayload = await maybeApplyTtsWithFinalizationLease({
-                    payload: visibleToolPayload,
-                    cfg,
-                    channel: deliveryChannel,
-                    kind: "tool",
-                    ttsAuto: sessionTtsAuto,
-                    agentId: sessionAgentId,
-                    accountId: replyRoute.accountId,
-                  });
+                  const ttsPayload = await maybeApplyTtsWithFinalizationLease(
+                    visibleToolPayload,
+                    "tool",
+                  );
                   const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
                   const deliveryPayload = bypassToolSummarySuppression
                     ? normalizedPayload
@@ -399,7 +418,13 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     }
                   }
                 };
-                return run();
+                const pending = run();
+                pendingToolProgress.add(pending);
+                void pending.then(
+                  () => pendingToolProgress.delete(pending),
+                  () => pendingToolProgress.delete(pending),
+                );
+                return pending;
               },
               onPlanUpdate: async (payload) => {
                 if (isDispatchOperationAborted()) {
@@ -472,13 +497,20 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     ) {
       throw error;
     }
+    // Gate collection, not just printing: diagnostic subscribers can export this cause.
+    if (isFileLogLevelEnabled("debug")) {
+      replyResolverError = truncateUtf16Safe(
+        formatErrorWithRedactor(error, { redact: redactToolPayloadText }),
+        2_048,
+      );
+    }
     failDispatchReplyOperation(error, "failed");
     if (!didDeliverVisiblePartialReply) {
       // Adoption retires ingress replay before the model starts. A progress ACK
       // cannot settle a later failure; use normal final delivery and its policy.
       return adopted &&
-        state.replyOperationRunState.replyCompletion?.expectation === "required" &&
-        state.replyOperationRunState.replyCompletion.outcome !== "blocked" &&
+        isRequiredReplyExpectation(state.replyOperationRunState.replyCompletion?.expectation) &&
+        state.replyOperationRunState.replyCompletion?.outcome !== "blocked" &&
         !state.suppressDelivery &&
         !state.getObservedReplyDelivery()
         ? { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true }
@@ -522,6 +554,8 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
       pendingContinuation,
       pendingContinuationSettlement,
       replyResult,
+      replyResolverError,
+      rawLlmResponse,
     });
     // Finalization now owns the exact settlement; earlier returns and throws release it here.
     pendingContinuationSettlement = undefined;

@@ -3,6 +3,7 @@ import {
   isBtwRequestText,
 } from "openclaw/plugin-sdk/command-primitives-runtime";
 import type { DmPolicy } from "openclaw/plugin-sdk/config-contracts";
+import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
 import { buildTelegramInboundDebounceKey } from "./bot-handlers.debounce-key.js";
 import {
   createTelegramInboundBuffers,
@@ -29,6 +30,8 @@ import type {
   TelegramMediaRef,
 } from "./bot-message-context.types.js";
 import {
+  createTelegramSpooledReplayDeferredParticipant,
+  getTelegramSpooledReplayLifecycle,
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
@@ -56,20 +59,19 @@ export function createTelegramInboundProcessing({
   message: TelegramMessagePipeline;
 }) {
   const { accountId, mediaMaxBytes, logger } = handlerParams;
-  const {
-    resolveMediaRuntime,
-    recordMessageResolvedMedia,
-    releaseDispatchDedupeClaims,
-    createSpooledReplayParticipantForBufferedWork,
-  } = message;
+  const { resolveMediaRuntime, recordMessageResolvedMedia, releaseDispatchDedupeClaims } = message;
   const { cancelPending, inboundDebouncer, resolveTelegramDebounceLane } =
     createTelegramInboundBuffers({ params: handlerParams, message });
 
-  const { handleMediaGroup, resolveUnaddressedGroupMediaDisposition, sendMediaWarning } =
-    createTelegramInboundMedia({
-      params: handlerParams,
-      message,
-    });
+  const {
+    handleMediaGroup,
+    pendingMediaGroups,
+    resolveUnaddressedGroupMediaDisposition,
+    sendMediaWarning,
+  } = createTelegramInboundMedia({
+    params: handlerParams,
+    message,
+  });
   const processInboundMessage = async (
     params: TelegramInboundMessage,
   ): Promise<TelegramInboundDisposition> => {
@@ -139,6 +141,24 @@ export function createTelegramInboundProcessing({
       return { kind: "buffered", buffer: "media-group" };
     }
 
+    // Wait in the ordinary conversation lane, never the independent control lane.
+    // The album queue releases at adoption (or claim release), not reply completion.
+    const pendingAlbums = !bypassTextBuffer && pendingMediaGroups(mediaInput);
+    if (pendingAlbums) {
+      const lifecycle = getTelegramSpooledReplayLifecycle();
+      const intervalMs = lifecycle?.deferredHeartbeatIntervalMs;
+      const heartbeat =
+        intervalMs === undefined
+          ? undefined
+          : setInterval(() => lifecycle?.onDeferredHeartbeat?.(), intervalMs);
+      heartbeat?.unref();
+      try {
+        await pendingAlbums;
+      } finally {
+        clearInterval(heartbeat);
+      }
+    }
+
     const mediaDisposition = await resolveUnaddressedGroupMediaDisposition(mediaInput);
     if (mediaDisposition === "skip") {
       releaseDispatchDedupeClaims(dispatchDedupeClaims);
@@ -178,13 +198,19 @@ export function createTelegramInboundProcessing({
           return { kind: "retry", error: mediaErr };
         }
         if (isMediaSizeLimitError(mediaErr)) {
-          const limitMb =
+          const limitBytes =
             mediaErr instanceof TelegramBotApiFileTooLargeError
-              ? Math.min(mediaErr.limitMb, Math.round(mediaMaxBytes / (1024 * 1024)))
-              : Math.round(mediaMaxBytes / (1024 * 1024));
-          unavailable = { reason: "oversize", limitMb };
+              ? Math.min(mediaErr.limitMb * 1024 * 1024, mediaMaxBytes)
+              : mediaMaxBytes;
+          const limit = formatByteSize(limitBytes, {
+            style: "legacy-binary",
+            maxUnit: "mega",
+            separator: "",
+            fractionDigits: (value) => (Number.isInteger(value) ? 0 : 2),
+          });
+          unavailable = { reason: "oversize", limit };
           if (sendOversizeWarning && mediaDisposition !== "silent-ingest") {
-            await sendMediaWarning(mediaInput, `⚠️ File too large. Maximum size is ${limitMb}MB.`);
+            await sendMediaWarning(mediaInput, `⚠️ File too large. Maximum size is ${limit}.`);
           }
           logger.warn({ chatId, error: String(mediaErr) }, oversizeLogMessage);
         } else {
@@ -253,9 +279,10 @@ export function createTelegramInboundProcessing({
     }
     const shouldBufferDebounce = inboundDebouncer.shouldBuffer(debounceEntry);
     if (shouldBufferDebounce) {
-      debounceEntry.spooledReplayParticipant = createSpooledReplayParticipantForBufferedWork(
-        `inbound-debounce:${debounceEntry.debounceKey}`,
-      );
+      debounceEntry.spooledReplayParticipant =
+        createTelegramSpooledReplayDeferredParticipant(
+          `inbound-debounce:${debounceEntry.debounceKey}`,
+        ) ?? undefined;
     }
     await inboundDebouncer.enqueue(debounceEntry);
     return shouldBufferDebounce ? { kind: "buffered", buffer: "debounce" } : { kind: "processed" };

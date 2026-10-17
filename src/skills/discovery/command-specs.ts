@@ -66,6 +66,7 @@ type WorkspaceSkillCommandOptions = {
   eligibility?: SkillEligibilityContext;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   reservedNames?: Set<string>;
+  gatewayOnly?: boolean;
 };
 
 function resolveCommandSkillLoadOptions(opts?: WorkspaceSkillCommandOptions) {
@@ -82,15 +83,16 @@ function resolveCommandSkillLoadOptions(opts?: WorkspaceSkillCommandOptions) {
       : (opts?.skillFilter ?? resolveEffectiveAgentSkillFilter(opts?.config, opts?.agentId)),
     eligibility: opts?.eligibility,
     pluginMetadataSnapshot: opts?.pluginMetadataSnapshot,
+    gatewayOnly: opts?.gatewayOnly,
   };
 }
 
 /** Builds user-invocable slash command specs for synchronous SDK consumers. */
 export function buildWorkspaceSkillCommandSpecs(
   workspaceDir: string,
-  opts?: WorkspaceSkillCommandOptions & { gatewayOnly?: boolean },
+  opts?: WorkspaceSkillCommandOptions,
 ): SkillCommandSpec[] {
-  const loadOptions = { ...resolveCommandSkillLoadOptions(opts), gatewayOnly: opts?.gatewayOnly };
+  const loadOptions = resolveCommandSkillLoadOptions(opts);
   const eligible = opts?.entries
     ? filterSkillEntries(opts.entries, loadOptions)
     : loadVisibleSkills(workspaceDir, loadOptions);
@@ -159,20 +161,14 @@ function assembleWorkspaceSkillCommandSpecs(
     const dispatch = entry.disableCommandDispatch
       ? undefined
       : (() => {
-          const kindRaw = normalizeLowercaseStringOrEmpty(
-            entry.frontmatter?.["command-dispatch"] ??
-              entry.frontmatter?.["command_dispatch"] ??
-              "",
-          );
+          const readCommandField = (key: string) =>
+            entry.frontmatter?.[key] ?? entry.frontmatter?.[key.replaceAll("-", "_")] ?? "";
+          const kindRaw = normalizeLowercaseStringOrEmpty(readCommandField("command-dispatch"));
           if (kindRaw !== "tool") {
             return undefined;
           }
 
-          const toolName = (
-            entry.frontmatter?.["command-tool"] ??
-            entry.frontmatter?.["command_tool"] ??
-            ""
-          ).trim();
+          const toolName = readCommandField("command-tool").trim();
           if (!toolName) {
             logSkillCommandOnce(
               `dispatch:missingTool:${rawName}`,
@@ -182,11 +178,7 @@ function assembleWorkspaceSkillCommandSpecs(
             return undefined;
           }
 
-          const argModeRaw = normalizeOptionalLowercaseString(
-            entry.frontmatter?.["command-arg-mode"] ??
-              entry.frontmatter?.["command_arg_mode"] ??
-              "",
-          );
+          const argModeRaw = normalizeOptionalLowercaseString(readCommandField("command-arg-mode"));
           if (argModeRaw && argModeRaw !== "raw") {
             logSkillCommandOnce(
               `dispatch:badArgMode:${rawName}:${argModeRaw}`,

@@ -13,9 +13,7 @@ import {
 } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
-import { getRuntimeConfig } from "../../config/io.js";
 import {
-  appendTranscriptMessageSync,
   readActiveTranscriptEntryAnchor,
   resolveSessionTranscriptDatabasePath,
   replaceSessionEntry,
@@ -23,19 +21,22 @@ import {
   SessionTranscriptProjectionUnavailableError,
 } from "../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { acquireSessionInputActor } from "../../config/sessions/session-input-actor.js";
 import * as historyReaders from "../../config/sessions/session-transcript-worker-readers.js";
-import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import {
+  runWithoutOwnedSessionTranscriptWrites,
+  withOwnedSessionTranscriptWrites,
+} from "../../config/sessions/transcript-write-context.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   attachSessionTranscriptRunId,
   emitSessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
-import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
-import * as sessionTranscriptReaders from "../session-transcript-readers.js";
 import {
   buildAssistantReplyContentFromInputs,
   extractAssistantDisplayText,
@@ -45,35 +46,10 @@ import {
   readChatSendReplyPayload,
   selectChatSendFinalReplyInputs,
 } from "./chat-send-command-replies.js";
-import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
-import { createReplyTranscriptFixture } from "./chat-send-reply-dispatch.test-support.js";
-
-function createReplyDispatchSession(clientRunId: string) {
-  return {
-    agentId: "main",
-    backingSessionId: undefined,
-    cfg: {},
-    clientRunId,
-    sessionKey: "agent:main:main",
-    sessionLoadOptions: { agentId: "main" },
-  };
-}
-
-function createReplyDispatch(
-  clientRunId: string,
-  overrides: Partial<Parameters<typeof createChatSendReplyDispatch>[0]> = {},
-) {
-  return createChatSendReplyDispatch({
-    getRuntimeConfig,
-    accountId: undefined,
-    isAgentRunStarted: () => true,
-    isRunCurrent: () => true,
-    logGateway: { ...createSubsystemLogger("test/chat-send-reply-dispatch"), warn: vi.fn() },
-    session: createReplyDispatchSession(clientRunId),
-    userTurnRecorder: { markBlocked: vi.fn(), getAdmissionReceipt: () => undefined },
-    ...overrides,
-  });
-}
+import {
+  createReplyDispatch,
+  createReplyTranscriptFixture,
+} from "./chat-send-reply-dispatch.test-support.js";
 
 function interceptDeliverySnapshot(afterRead: () => void) {
   const createReaders = historyReaders.createSessionHistoryWorkerReaders;
@@ -93,39 +69,86 @@ function interceptDeliverySnapshot(afterRead: () => void) {
 }
 
 describe("chat delivery watermark preparation", () => {
-  it("selects display payloads and delivery anchors in one transcript request", async () => {
-    await withOpenClawTestState({ label: "chat-delivery-one-snapshot" }, async () => {
-      const { dispatch, append } = await createReplyTranscriptFixture();
-      dispatch.captureAgentTranscriptStart();
-      await append("answer", { role: "assistant", content: "Committed answer." });
-      const requests: string[] = [];
-      const createReaders = historyReaders.createSessionHistoryWorkerReaders;
-      const readerSpy = vi
-        .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
-        .mockImplementation((runRequest) =>
-          createReaders((prepare, ...args) =>
-            runRequest(
-              () => {
-                const input = prepare();
-                requests.push(input.kind);
-                return input;
-              },
-              ...args,
-            ),
-          ),
+  it.each(["rewrite", "replacement"] as const)(
+    "reads released durable reply facts through history and rejects the old answer after %s",
+    async (change) => {
+      await withOpenClawTestState({ label: "chat-delivery-actor-receipt" }, async () => {
+        const { dispatch, rewriteSync, scope, runId } = await createReplyTranscriptFixture();
+        const acquired = await acquireSessionInputActor(
+          {
+            ...scope,
+            storePath: resolveSessionTranscriptDatabasePath(scope),
+            target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+          },
+          { assertCurrent() {}, assertReadable() {} },
         );
-      try {
-        expect(await dispatch.resolveReplyDelivery()).toBe("delivered");
-        expect(
-          requests.filter((kind) =>
-            ["transcript-anchors", "transcript-watermark", "history-page"].includes(kind),
-          ),
-        ).toEqual(["transcript-anchors"]);
-      } finally {
-        readerSpy.mockRestore();
-      }
-    });
-  });
+        if (!acquired) {
+          throw new Error("Expected a durable transcript actor");
+        }
+        const { actor } = acquired;
+        const authority = { assertCurrent() {}, authorize() {} };
+        try {
+          const before = await actor.read(authority);
+          expect(
+            dispatch.captureAgentTranscriptStart(runId, {
+              ...scope,
+              ...before.transcript.watermark,
+            }),
+          ).toBe(true);
+          const appended = await actor.appendToolResult(
+            {
+              commandId: "assistant-answer",
+              phaseId: "turn",
+              turn: {
+                agentId: scope.agentId,
+                sessionKey: scope.sessionKey,
+                options: {
+                  expectedSessionId: scope.sessionId,
+                  sessionFile: "synthetic.jsonl",
+                  messages: [
+                    {
+                      eventId: "answer",
+                      message: attachSessionTranscriptRunId(
+                        { role: "assistant", content: "Committed answer." },
+                        runId,
+                      ),
+                      now: 2,
+                    },
+                  ],
+                },
+              },
+            },
+            authority,
+          );
+          expect(appended.kind).toBe("committed");
+        } finally {
+          await actor.release();
+        }
+        const anchorReads = vi.fn();
+        const readerSpy = interceptDeliverySnapshot(anchorReads);
+        try {
+          await runWithoutOwnedSessionTranscriptWrites(async () => {
+            expect(await dispatch.resolveReplyDelivery()).toBe("delivered");
+            // Durable append receipts omit full indexes; the history owner supplies anchors.
+            expect(anchorReads).toHaveBeenCalledTimes(1);
+            if (change === "rewrite") {
+              rewriteSync("answer", "NO_REPLY");
+            } else {
+              await replaceSessionEntry(scope, {
+                sessionId: "replacement-session",
+                lifecycleRevision: "replacement",
+                updatedAt: 3,
+              });
+            }
+            expect(await dispatch.resolveReplyDelivery()).toBe("missing");
+            expect(anchorReads).toHaveBeenCalledTimes(change === "rewrite" ? 2 : 1);
+          });
+        } finally {
+          readerSpy.mockRestore();
+        }
+      });
+    },
+  );
 
   it("consumes the committed manager boundary without caller transcript SQL", async () => {
     await withOpenClawTestState({ label: "chat-prepared-start" }, async () => {
@@ -162,130 +185,69 @@ describe("chat delivery watermark preparation", () => {
     });
   });
 
-  it("refuses an anchor snapshot changed by an unpublished native append", async () => {
-    await withOpenClawTestState({ label: "chat-anchor-delay" }, async () => {
-      const { dispatch, append, scope } = await createReplyTranscriptFixture();
-      dispatch.captureAgentTranscriptStart();
-      await append("answer", { role: "assistant", content: "Committed answer." });
-      const createReaders = historyReaders.createSessionHistoryWorkerReaders;
-      let changed = false;
-      const readerSpy = vi
-        .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
-        .mockImplementation((runRequest) => {
-          const readers = createReaders(runRequest);
-          return {
-            ...readers,
-            readAnchors: async (input, signal) => {
-              const facts = await readers.readAnchors(input, signal);
-              if (!changed && input.selection.includeMessagesForRunId) {
-                changed = true;
-                expect(
-                  appendTranscriptMessageSync(scope, {
-                    eventId: "late-user",
-                    message: { role: "user", content: "A newly admitted question." },
-                  }).ok,
-                ).toBe(true);
-              }
-              return facts;
-            },
-          };
-        });
-      try {
-        expect(await dispatch.resolveReplyDelivery()).toBe("pending");
-        expect(changed).toBe(true);
-      } finally {
-        readerSpy.mockRestore();
-      }
-      expect(await dispatch.resolveReplyDelivery()).toBe("missing");
-    });
-  });
-
-  it("retires a shared-store watermark with its physical owner", async () => {
-    await withOpenClawTestState({ label: "chat-watermark-shared" }, async (state) => {
-      const storePath = state.statePath("shared.sqlite");
-      openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-      const scope = {
-        agentId: "ops",
-        sessionKey: "agent:ops:watermark",
-        sessionId: "shared-watermark",
-        storePath,
-      };
-      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const appended = appendTranscriptMessageSync(scope, {
-        eventId: "answer",
-        message: { role: "assistant", content: "Shared-store answer." },
-      });
-      expect(appended?.ok).toBe(true);
-      expect(
-        await sessionTranscriptReaders.readSessionTranscriptWatermarkAsync(scope),
-      ).toMatchObject({
-        maxSeq: 1,
-      });
-      await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
-      const createReaders = historyReaders.createSessionHistoryWorkerReaders;
-      const readerSpy = vi
-        .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
-        .mockImplementation((runRequest) => {
-          const readers = createReaders(runRequest);
-          return {
-            ...readers,
-            readWatermark: async (input) => {
-              const watermark = await readers.readWatermark(input);
-              await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
-              return watermark;
-            },
-          };
-        });
-      try {
-        await expect(
-          sessionTranscriptReaders.readSessionTranscriptWatermarkAsync(scope),
-        ).rejects.toThrow("revoked");
-      } finally {
-        readerSpy.mockRestore();
-      }
-    });
-  });
-
   it.each([false, true])(
-    "keeps watermark and current-session SQLite with their owner (incognito=%s)",
+    "keeps watermark and current-session reads off the Gateway thread (incognito=%s)",
     async (incognito) => {
       await withOpenClawTestState({ label: "chat-watermark-owner" }, async () => {
-        const { dispatch, append } = await createReplyTranscriptFixture(
-          incognito ? "agent:main:dashboard:incognito-watermark" : undefined,
-        );
-        await dispatch.runAgentMediaTranscript(
-          { run: async (operation) => operation() },
-          async () => {
-            const startingSql = observeHostDataSql();
-            try {
-              dispatch.captureAgentTranscriptStart();
-              expect(
-                startingSql.queries.filter((query) =>
+        const sessionKey = "agent:main:dashboard:incognito-watermark";
+        const run = async () => {
+          const { dispatch, append } = await createReplyTranscriptFixture(
+            incognito ? sessionKey : undefined,
+          );
+          await dispatch.runAgentMediaTranscript(
+            { run: async (operation) => operation() },
+            async () => {
+              const startingSql = observeHostDataSql();
+              try {
+                dispatch.captureAgentTranscriptStart();
+                expect(
+                  startingSql.queries.filter((query) =>
+                    /\bfrom\s+"?session_(?:nodes|participants)\b/i.test(query),
+                  ),
+                ).toEqual([]);
+              } finally {
+                startingSql.restore();
+              }
+              await append("answer", { role: "assistant", content: "Committed answer." });
+              const sql = observeHostDataSql();
+              try {
+                expect(await dispatch.resolveReplyDelivery()).toBe("delivered");
+                const transcriptReads = sql.queries.filter((query) =>
+                  /\bfrom\s+"?transcript_events\b/i.test(query),
+                );
+                expect(transcriptReads).toEqual([]);
+                const sessionReads = sql.queries.filter((query) =>
                   /\bfrom\s+"?session_(?:nodes|participants)\b/i.test(query),
-                ),
-              ).toEqual([]);
-            } finally {
-              startingSql.restore();
-            }
-            await append("answer", { role: "assistant", content: "Committed answer." });
-            const sql = observeHostDataSql();
-            try {
-              expect(await dispatch.resolveReplyDelivery()).toBe("delivered");
-              const watermarks = sql.queries.filter(
-                (query) =>
-                  query.includes('from "transcript_events"') &&
-                  query.includes('from "transcript_rewrite_watermarks"'),
-              );
-              expect(watermarks.length > 0).toBe(incognito);
-              const sessionReads = sql.queries.filter((query) =>
-                /\bfrom\s+"?session_(?:nodes|participants)\b/i.test(query),
-              );
-              expect(sessionReads.length > 0).toBe(incognito);
-            } finally {
-              sql.restore();
-            }
-          },
-        );
+                );
+                expect(sessionReads).toEqual([]);
+              } finally {
+                sql.restore();
+              }
+            },
+          );
+        };
+        if (incognito) {
+          await withSessionActorStorage(
+            { sessionKey, agentId: "main" },
+            {
+              create: true,
+              lifetime: { assertCurrent() {}, assertReadable() {} },
+              authority: { assertCurrent() {}, authorize() {} },
+            },
+            async (binding) => {
+              try {
+                await run();
+              } finally {
+                memorySessionActorOwners.closeSession(
+                  { agentId: binding.agentId, path: binding.path },
+                  sessionKey,
+                );
+              }
+            },
+          );
+        } else {
+          await run();
+        }
       });
     },
   );
@@ -374,10 +336,8 @@ describe("buildAssistantReplyContentFromInputs", () => {
   it.each([
     ...(
       [
-        { kind: "raw", withAnswer: false },
         { kind: "prepared", withAnswer: false },
         { kind: "raw", withAnswer: true },
-        { kind: "prepared", withAnswer: true },
       ] as const
     ).map(({ kind, withAnswer }) => ({
       name: `${kind} reasoning (answer: ${withAnswer})`,
@@ -562,7 +522,6 @@ describe("createChatSendReplyDispatch", () => {
   });
 
   it.each([
-    { operation: "raw", split: false },
     { operation: "raw", split: true },
     { operation: "prepared", split: false },
     { operation: "prepared", split: true },
@@ -612,17 +571,17 @@ describe("createChatSendReplyDispatch", () => {
       onCommandBlock,
     });
     const dispatcher = createReplyDispatcher(dispatch.dispatcherOptions);
-    dispatcher.sendBlockReply({ text: "[[reply_to_current]] First instruction" });
+    dispatcher.sendBlockReply({ text: "[[reply_to_current]] First" });
     await dispatcher.waitForIdle();
-    expect(onCommandBlock).toHaveBeenLastCalledWith("First instruction");
-    dispatcher.sendBlockReply({ text: "Second instruction" });
-    await dispatcher.waitForIdle();
-    expect(onCommandBlock).toHaveBeenLastCalledWith("First instruction\n\nSecond instruction");
+    for (const text of ["Second", "NO_REPLY", "NO_REPLY.", "ANNOUNCE_SKIP"]) {
+      dispatcher.sendBlockReply({ text });
+      await dispatcher.waitForIdle();
+    }
+    const expected = "First\n\nSecond\n\nNO_REPLY\n\nNO_REPLY.\n\nANNOUNCE_SKIP";
+    expect(onCommandBlock).toHaveBeenLastCalledWith(expected);
 
     onCommandBlock.mockClear();
     dispatcher.sendBlockReply({ text: "hidden reasoning", isReasoning: true });
-    dispatcher.sendBlockReply({ text: "NO_REPLY" });
-    dispatcher.sendBlockReply({ text: "ANNOUNCE_SKIP" });
     dispatcher.sendBlockReply({ text: "side answer", btw: { question: "side question" } });
     await dispatcher.waitForIdle();
     expect(onCommandBlock).not.toHaveBeenCalled();
@@ -721,7 +680,7 @@ describe("createChatSendReplyDispatch", () => {
     { phase: "final_answer", text: "Fixture inspected.", expected: "delivered" },
     { phase: "commentary", text: "Inspecting the fixture.", expected: "missing" },
     { phase: undefined, text: "Inspecting the fixture.", expected: "missing" },
-    { phase: "final_answer", text: "NO_REPLY", expected: "missing" },
+    { phase: "final_answer", text: "NO_REPLY", expected: "delivered" },
     { phase: "final_answer", text: "", expected: "missing" },
   ])(
     "uses committed display answers, not tool progress ($phase, $text)",

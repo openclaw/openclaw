@@ -139,7 +139,14 @@ export function parseStatusRouteArgs(argv: string[]) {
 export function parseGatewayStatusRouteArgs(argv: string[]) {
   const values = parseRoutedValueFlags(argv, {
     commandPath: ["gateway", "status"],
-    booleanFlags: ["--deep", "--json", "--require-rpc", "--no-probe", "--ssh-auto"],
+    booleanFlags: [
+      "--deep",
+      "--json",
+      "--require-rpc",
+      "--no-probe",
+      "--ssh-auto",
+      "--runtime-intent-only",
+    ],
     valueFlags: ["--url", "--token", "--password", "--timeout", "--ssh", "--ssh-identity"],
   });
   if (!values) {
@@ -164,6 +171,7 @@ export function parseGatewayStatusRouteArgs(argv: string[]) {
     json: hasFlag(argv, "--json"),
     requireRpc: hasFlag(argv, "--require-rpc"),
     probe: !hasFlag(argv, "--no-probe"),
+    ...(hasFlag(argv, "--runtime-intent-only") ? { runtimeIntentOnly: true } : {}),
   };
 }
 

@@ -15,8 +15,8 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import type { ApplicationRuntime } from "../app/bootstrap.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -216,7 +216,9 @@ async function send(
     throw new Error("Expected a send request");
   }
   expect(record(request.params)).toMatchObject({ sessionKey, message });
-  await expect.poll(() => observed.response(request.id)).toMatchObject({ ok: true });
+  await expect.poll(() => observed.response(request.id)).toBeDefined();
+  const response = observed.response(request.id);
+  expect(response, JSON.stringify(response)).toMatchObject({ ok: true });
   const runId = record(request.params)?.idempotencyKey;
   if (typeof runId !== "string") {
     throw new Error("Missing actual send run identity");
@@ -224,10 +226,8 @@ async function send(
   return { request, runId };
 }
 async function identity(page: Page) {
-  return page.evaluate(() => {
-    const snapshot = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
-      "openclaw-app",
-    )?.runtime?.context.gateway.snapshot;
+  return evaluateControlUiContext(page, (application) => {
+    const snapshot = application.gateway.snapshot;
     return {
       user: snapshot?.selfUser,
       connId: snapshot?.hello?.server?.connId,
@@ -356,20 +356,22 @@ suite.define(() => {
                 ).toBe(200);
                 await waitForControlUiGatewayReady(page);
                 if (index === 0) {
-                  proof.session = await page.evaluate(async (key) => {
-                    const client = document.querySelector<
-                      HTMLElement & { runtime?: ApplicationRuntime }
-                    >("openclaw-app")?.runtime?.context.gateway.snapshot.client;
-                    if (!client) {
-                      throw new Error("Authenticated reader client missing");
-                    }
-                    return await client.request("sessions.create", {
-                      key,
-                      agentId: "main",
-                      label: "Sender-local scroll proof",
-                      visibility: "shared",
-                    });
-                  }, sessionKey);
+                  proof.session = await evaluateControlUiContext(
+                    page,
+                    async (application, key) => {
+                      const client = application.gateway.snapshot.client;
+                      if (!client) {
+                        throw new Error("Authenticated reader client missing");
+                      }
+                      return await client.request("sessions.create", {
+                        key,
+                        agentId: "main",
+                        label: "Sender-local scroll proof",
+                        visibility: "shared",
+                      });
+                    },
+                    sessionKey,
+                  );
                 }
                 await page.goto(controlUiSessionUrl(urls[index]!, sessionKey));
                 await waitForControlUiGatewayReady(page);
@@ -536,10 +538,27 @@ suite.define(() => {
                         mode + ": " + stage + " anchor",
                       )
                       .toBeLessThanOrEqual(1);
+                    // Persistence can regroup rows above the reader. The visible
+                    // anchor and follow lock must survive that offset correction.
                     expect
-                      .soft(Math.abs(latest.top - before.top), mode + ": " + stage + " scrollTop")
-                      .toBeLessThanOrEqual(1);
+                      .soft(latest.policy?.locked, mode + ": " + stage + " follow lock")
+                      .toBe(true);
                   } else {
+                    if (latest.distance > 8) {
+                      const locked = samples.findIndex(
+                        (sample, index) =>
+                          sample.policy?.locked && samples[index - 1]?.policy?.locked === false,
+                      );
+                      console.info(
+                        "REAL_GATEWAY_FOLLOW_LOCK",
+                        JSON.stringify({
+                          mode,
+                          stage,
+                          transition:
+                            locked < 0 ? [] : samples.slice(Math.max(0, locked - 2), locked + 3),
+                        }),
+                      );
+                    }
                     expect
                       .soft(latest.distance, mode + ": " + stage + " follows")
                       .toBeLessThanOrEqual(8);
@@ -657,6 +676,29 @@ suite.define(() => {
                 expect(observed.sockets()).toBe(2);
               }
             } finally {
+              // Ordinary PR CI retains logs but does not upload the full protocol proof.
+              console.info(
+                "REAL_GATEWAY_TERMINALS",
+                JSON.stringify(
+                  observers.map((observed) => ({
+                    sends: observed
+                      .requests("chat.send")
+                      .map((frame) =>
+                        frame.type === "req" ? record(frame.params)?.idempotencyKey : null,
+                      ),
+                    terminals: observed.received.flatMap((frame) => {
+                      if (frame.type !== "event" || frame.event !== "chat") {
+                        return [];
+                      }
+                      const payload = record(frame.payload);
+                      return payload &&
+                        ["final", "aborted", "error"].includes(String(payload.state))
+                        ? [{ runId: payload.runId, state: payload.state, seq: payload.seq }]
+                        : [];
+                    }),
+                  })),
+                ),
+              );
               await finishPaints?.();
               for (const finish of finishVisuals) {
                 await finish();

@@ -5,6 +5,7 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
 import { contextWith, renderControl } from "./model-control.test-support.ts";
 import { NewSessionModelControl } from "./model-control.ts";
+import * as modelTarget from "./model-target.ts";
 import { loadNewSessionPreference, replaceBrowserPreference } from "./preferences.ts";
 
 const luna = { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" };
@@ -30,6 +31,45 @@ afterEach(() => {
 });
 
 describe("new-session model controls", () => {
+  it("reuses runtime resolution until model inputs change, including mutable defaults", async () => {
+    const local = { id: "local", source: "model" as const };
+    const hosted = { id: "hosted", source: "model" as const };
+    const { control, context, request } = setup([
+      { ...luna, agentRuntime: local },
+      { ...sol, agentRuntime: hosted },
+    ]);
+    const agent = { id: "main", model: { primary: "openai/gpt-5.6-luna" } };
+    control.load(context, "main", true, { agent });
+    await vi.waitFor(() => expect(control.resolveAgentRuntime()?.id).toBe("local"));
+    const resolve = vi.spyOn(modelTarget, "resolveDraftAgentRuntime");
+    for (let index = 0; index < 50; index += 1) {
+      expect(control.resolveAgentRuntime()?.id).toBe("local");
+    }
+    expect(resolve).not.toHaveBeenCalled();
+
+    agent.model.primary = "openai/gpt-5.6-sol";
+    expect(control.resolveAgentRuntime()?.id).toBe("hosted");
+    expect(resolve).toHaveBeenCalledTimes(1);
+    control.selectModel("openai/gpt-5.6-luna");
+    expect(control.resolveAgentRuntime()?.id).toBe("local");
+
+    control.selectModel("");
+    delete (agent as { model?: unknown }).model;
+    const defaults = context.sessions.state.result!.defaults!;
+    defaults.model = "gpt-5.6-sol";
+    defaults.modelProvider = "openai";
+    expect(control.resolveAgentRuntime()?.id).toBe("hosted");
+    defaults.model = "gpt-5.6-luna";
+    expect(control.resolveAgentRuntime()?.id).toBe("local");
+
+    request.mockResolvedValue({ models: [{ ...luna, agentRuntime: hosted }] });
+    control.invalidate();
+    control.load(context, "main", true, { agent });
+    await vi.waitFor(() => expect(control.resolveAgentRuntime()?.id).toBe("hosted"));
+    control.reset();
+    expect(control.resolveAgentRuntime()?.id).not.toBe("hosted");
+  });
+
   it("does not borrow a provider for an ambiguous draft target", async () => {
     const { control, context, draw, changed } = setup([
       {
@@ -348,7 +388,7 @@ describe("configured defaults", () => {
   function setupDefaults() {
     const state = contextWith(models);
     Object.assign(state.context, {
-      config: { current: { newSessionModelDefaults: "configured" } },
+      config: { ...state.context.config, current: { newSessionModelDefaults: "configured" } },
     });
     return state;
   }
@@ -383,28 +423,39 @@ describe("configured defaults", () => {
       control.reset();
     });
 
-    it("restores a deliberate same-route draft choice after agent/config hydration", async () => {
-      const { context } = setupDefaults();
-      const control = new NewSessionModelControl(() => undefined);
-      control.restoreDraftSelection({
-        agentId: "main",
-        model: "openai/other-model",
-        thinkingLevel: "low",
-      });
-      control.load(context, "main", true, {
-        agent,
-        preference,
-        initialModel: "openai/default-model",
-      });
-      await waitForFast(() => expect(control.isRestoringPreference()).toBe(false));
-      expect(control.selected).toBe("openai/other-model");
-      expect(control.thinkingLevel).toBe("low");
-      expect(control.draftSelection("main")).toMatchObject({
-        model: "openai/other-model",
-        thinkingLevel: "low",
-      });
-      control.reset();
-    });
+    it.each(["optional", "required", "required-after-hydration"])(
+      "restores a deliberate same-route draft choice after %s hydration",
+      async (placement) => {
+        const { context } = setupDefaults();
+        const control = new NewSessionModelControl(() => undefined);
+        control.restoreDraftSelection({
+          agentId: "main",
+          model: "openai/other-model",
+          thinkingLevel: "low",
+        });
+        control.load(context, "main", true, {
+          agent,
+          preference,
+          initialModel: "openai/default-model",
+          configuredDefaults: placement === "required",
+        });
+        await waitForFast(() => expect(control.isRestoringPreference()).toBe(false));
+        expect(control.selected).toBe("openai/other-model");
+        expect(control.thinkingLevel).toBe("low");
+        expect(control.draftSelection("main")).toMatchObject({
+          model: "openai/other-model",
+          thinkingLevel: "low",
+        });
+        control.load(context, "main", true, {
+          agent,
+          preference,
+          configuredDefaults: placement !== "optional",
+        });
+        expect(control.selected).toBe("openai/other-model");
+        expect(control.thinkingLevel).toBe("low");
+        control.reset();
+      },
+    );
 
     it("hydrates late Fast Mode preferences independently of a restored model", async () => {
       const { context, request } = setupDefaults();
@@ -553,11 +604,13 @@ it.each(["blue", "red"])(
     ]);
     const control = new NewSessionModelControl(() => undefined);
     control.load(context, "main", true);
-    await waitForFast(() =>
+    await waitForFast(() => {
+      const container = renderControl(control, context);
       expect(
-        renderControl(control, context).querySelector('[data-chat-speed-option="on"]'),
-      ).not.toBeNull(),
-    );
+        container.querySelector('[data-chat-model-option="openai/' + id + '"]'),
+      ).not.toBeNull();
+      expect(container.querySelector('[data-chat-speed-option="on"]')).not.toBeNull();
+    });
     renderControl(control, context)
       .querySelector<HTMLButtonElement>('[data-chat-speed-option="on"]')!
       .click();
@@ -712,7 +765,7 @@ describe("runtime choices", () => {
       }
     });
 
-    it("drops a saved runtime that is no longer offered instead of running it through the base harness", async () => {
+    it("blocks a saved runtime that is no longer offered instead of silently selecting the default", async () => {
       const { runtimeChoices: _choices, ...base } = models[0]!;
       const { context } = contextWith([base]);
       const changed = vi.fn();
@@ -723,10 +776,11 @@ describe("runtime choices", () => {
       });
       try {
         await vi.waitFor(() =>
-          expect(changed).toHaveBeenCalledWith({ model: "", agentRuntime: "", thinkingLevel: "" }),
+          expect(control.modelSelectionBlockedReason(agent)).toBe("Models unavailable"),
         );
-        expect(control.agentRuntime).toBeUndefined();
-        expect(control.modelForSubmission()).toBe("");
+        expect(control.agentRuntime).toBe("codex");
+        expect(control.modelForSubmission()).toBe("openai/gpt-5.6-sol");
+        expect(changed).not.toHaveBeenCalled();
       } finally {
         control.reset();
       }

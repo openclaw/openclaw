@@ -1,5 +1,5 @@
 import {
-  createChannelApprovalNativeRuntimeAdapter,
+  createChannelApprovalNativeRuntimeAdapterAsync,
   type ChannelApprovalCapabilityHandlerContext,
   type PendingApprovalView,
   type ResolvedApprovalView,
@@ -70,11 +70,7 @@ type PendingApprovalContent = {
     [MATRIX_APPROVAL_METADATA_KEY]: ReturnType<typeof buildMatrixApprovalMetadata>;
   };
 };
-type ReactionTargetRef = {
-  accountId: string;
-  roomId: string;
-  eventId: string;
-};
+type ReactionTargetRef = Parameters<typeof unregisterMatrixApprovalReactionTarget>[0];
 const MATRIX_APPROVAL_DELIVERY_ATTEMPTS = 3;
 const MATRIX_APPROVAL_DELIVERY_RETRY_DELAY_MS = 250;
 
@@ -308,7 +304,7 @@ function buildMarkdownCodeBlock(text: string): string {
   return [fence, text, fence].join("\n");
 }
 
-export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
+export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapterAsync<
   PendingApprovalContent,
   PreparedMatrixTarget,
   PendingMessage,
@@ -317,7 +313,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
 >({
   eventKinds: ["exec", "plugin", "system-agent"],
   availability: {
-    isConfigured: ({ cfg, accountId, context }) => {
+    isConfigured: async ({ cfg, accountId, context }) => {
       const resolved = resolveHandlerContext({ cfg, accountId, context });
       if (!resolved) {
         return false;
@@ -327,7 +323,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         accountId: resolved.accountId,
       });
     },
-    shouldHandle: ({ cfg, accountId, approvalKind, request, context }) => {
+    shouldHandle: async ({ cfg, accountId, approvalKind, request, context }) => {
       const resolved = resolveHandlerContext({ cfg, accountId, context });
       if (!resolved) {
         return false;

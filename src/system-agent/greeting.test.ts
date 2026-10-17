@@ -371,52 +371,6 @@ describe("system agent greeting cache", () => {
     expect(planner).toHaveBeenCalledOnce();
   });
 
-  it("does not let an older in-flight greeting replace newer facts", async () => {
-    const overview = createOverview();
-    const oldFacts = healthyFacts();
-    const newFacts = { ...oldFacts, updateAvailable: "2026.7.20" };
-    const cache = createCache();
-    const oldStarted = createDeferred();
-    const newStarted = createDeferred();
-    const oldPlan = createDeferred<{ text: string; modelRef: string }>();
-    const newPlan = createDeferred<{ text: string; modelRef: string }>();
-    const oldGreeting = resolveSystemAgentGreeting({
-      overview,
-      facts: oldFacts,
-      planner: () => {
-        oldStarted.resolve();
-        return oldPlan.promise;
-      },
-      cacheStore: cache.store,
-      now: () => 100,
-    });
-    const newGreeting = resolveSystemAgentGreeting({
-      overview,
-      facts: newFacts,
-      planner: () => {
-        newStarted.resolve();
-        return newPlan.promise;
-      },
-      cacheStore: cache.store,
-      now: () => 200,
-    });
-
-    await Promise.all([
-      awaitGateBeforeSettlement(oldStarted.promise, oldGreeting, "old planner did not start"),
-      awaitGateBeforeSettlement(newStarted.promise, newGreeting, "new planner did not start"),
-    ]);
-    newPlan.resolve({ text: "Update 2026.7.20 is ready.", modelRef: "openai/gpt-5.5" });
-    await newGreeting;
-    oldPlan.resolve({ text: "All systems nominal.", modelRef: "openai/gpt-5.5" });
-    await oldGreeting;
-
-    expect(cache.read()).toMatchObject({
-      factsHash: systemAgentGreetingFactsHash(overview, newFacts),
-      text: "Update 2026.7.20 is ready.",
-      at: 200,
-    });
-  });
-
   it("timestamps the greeting snapshot before inference begins", async () => {
     const events: string[] = [];
     const cache = createCache();

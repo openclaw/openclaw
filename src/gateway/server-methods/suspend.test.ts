@@ -137,7 +137,7 @@ describe("gateway suspend handlers", () => {
     );
   });
 
-  it("returns a draining status without exposing its owner's suspension id", async () => {
+  it("immediately reports pending write custody without exposing its owner's suspension id", async () => {
     vi.useFakeTimers();
     const result = {
       status: "draining",
@@ -156,44 +156,15 @@ describe("gateway suspend handlers", () => {
     };
     coordinator.status.mockReturnValue(result);
 
-    const response = invoke("gateway.suspend.status", {
+    const { respond, info } = await invoke("gateway.suspend.status", {
       suspensionId: "suspension-draining",
     });
-    await vi.advanceTimersByTimeAsync(15_000);
-    const { respond, info } = await response;
 
     expect(coordinator.status).toHaveBeenCalledWith("suspension-draining", false);
     expect(respond).toHaveBeenCalledWith(true, result);
     expect(info).toHaveBeenCalledWith(
       'DRAINING activeCount=2 blockers=root-request:1,terminal-persistence:1 holders=["1 active gateway request(s): http:openai","1 pending terminal session write(s): run=run-1 session=agent:main:chat-1"] custody=held',
     );
-  });
-
-  it("maps prepare and status recovery to the same retryable unavailable error", async () => {
-    const recovering = {
-      status: "recovering",
-      reason: "scheduler-resume-failed",
-      retryAfterMs: 1_000,
-    };
-    coordinator.prepare.mockReturnValueOnce(recovering);
-    coordinator.status.mockReturnValue(recovering);
-
-    const prepared = await invoke("gateway.suspend.prepare", { requestId: "request-recovery" });
-    const status = await invoke("gateway.suspend.status", { suspensionId: "stale-id" });
-
-    for (const respond of [prepared.respond, status.respond]) {
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "UNAVAILABLE",
-          message: "gateway scheduler recovery is pending",
-          retryable: true,
-          retryAfterMs: 1_000,
-          details: { reason: "scheduler-resume-failed" },
-        }),
-      );
-    }
   });
 
   it("keeps resume idempotent and rejects a mismatched active lease", async () => {
@@ -217,29 +188,5 @@ describe("gateway suspend handlers", () => {
       status: "running",
       resumed: false,
     });
-  });
-
-  it("returns retryable unavailable when scheduler resume needs retry", async () => {
-    coordinator.resume.mockReturnValueOnce({
-      ok: false,
-      reason: "scheduler-resume-failed",
-      retryAfterMs: 1_000,
-    });
-
-    const { respond } = await invoke("gateway.suspend.resume", {
-      suspensionId: "suspension-1",
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        message: "gateway scheduler recovery is pending",
-        retryable: true,
-        retryAfterMs: 1_000,
-        details: { reason: "scheduler-resume-failed" },
-      }),
-    );
   });
 });

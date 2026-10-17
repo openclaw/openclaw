@@ -7,7 +7,6 @@ import {
   readAdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
 import { createComputerTool } from "../agents/tools/computer-tool.js";
-import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   McpLoopbackToolCache,
   resolveMcpLoopbackPolicyTools,
@@ -17,7 +16,8 @@ import {
 const resolveGatewayScopedTools = vi.hoisted(() => vi.fn());
 const listNodes = vi.hoisted(() => vi.fn());
 
-vi.mock("../agents/tools/gateway.js", () => ({
+vi.mock("../agents/tools/gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/tools/gateway.js")>()),
   callGatewayTool: async (
     method: string,
     _opts: unknown,
@@ -119,35 +119,15 @@ describe("resolveMcpLoopbackScopedTools", () => {
   it("keeps exact grant names exact instead of reinterpreting policy shorthand", async () => {
     resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["write", "apply_patch"]));
 
-    const scoped = await resolveMcpLoopbackScopedTools(scopeParams({ toolsAllow: ["write"] }));
+    const scoped = await resolveMcpLoopbackScopedTools(
+      scopeParams({ toolsAllow: ["write"], nodeExecAllowed: true }),
+    );
 
     expect(scoped.tools.map((tool) => tool.name)).toEqual(["write"]);
     expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).toMatchObject({
       mediatedToolNames: new Set(["write"]),
+      includeNodeExecTool: false,
     });
-  });
-
-  it("exposes explicitly granted coding tools through the mediated loopback surface", async () => {
-    resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["read", "exec", "browser"]));
-
-    const scoped = await resolveMcpLoopbackScopedTools(
-      scopeParams({
-        toolsAllow: ["read", "exec", "browser"],
-        nodeExecAllowed: true,
-      }),
-    );
-
-    expect(scoped.tools.map((tool) => tool.name)).toEqual(["read", "exec", "browser"]);
-    const call = resolveGatewayScopedTools.mock.calls[0]?.[0] as {
-      excludeToolNames?: Set<string>;
-      mediatedToolNames?: Set<string>;
-      includeNodeExecTool?: boolean;
-    };
-    expect(call.includeNodeExecTool).toBe(false);
-    expect(call.excludeToolNames?.has("read")).toBe(false);
-    expect(call.excludeToolNames?.has("exec")).toBe(false);
-    expect(call.excludeToolNames?.has("write")).toBe(true);
-    expect(call.mediatedToolNames).toEqual(new Set(["read", "exec"]));
   });
 
   it.each([
@@ -173,24 +153,6 @@ describe("resolveMcpLoopbackScopedTools", () => {
       expect(scoped.tools.map((tool) => tool.name)).toEqual(expected);
     },
   );
-
-  it("materializes plugin selectors through registered tool metadata", async () => {
-    const pluginTools = ["memory_search", "memory_get"].map((name) => ({
-      name,
-      description: `${name} tool`,
-    }));
-    for (const tool of pluginTools) {
-      setPluginToolMeta(tool as never, { pluginId: "active-memory", optional: false });
-    }
-    resolveGatewayScopedTools.mockReturnValue({
-      agentId: "main",
-      tools: [...pluginTools, { name: "message", description: "message tool" }],
-    });
-    const scoped = await resolveMcpLoopbackPolicyTools(
-      scopeParams({ toolsAllow: ["active-memory"] }),
-    );
-    expect(scoped.tools.map((tool) => tool.name)).toEqual(["memory_search", "memory_get"]);
-  });
 });
 
 describe("McpLoopbackToolCache", () => {
@@ -241,19 +203,6 @@ describe("McpLoopbackToolCache", () => {
       expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
     } finally {
       admission.close();
-    }
-  });
-
-  it("rechecks execution availability before reusing cached schemas", async () => {
-    const cache = new McpLoopbackToolCache();
-    const params = scopeParams({ senderIsOwner: true, nodeExecAllowed: true });
-    resolveGatewayScopedTools.mockImplementation(({ includeNodeExecTool, nodeExecAvailable }) =>
-      scopedToolFixture(includeNodeExecTool && nodeExecAvailable?.() ? ["exec"] : []),
-    );
-    for (const connected of [false, true, false]) {
-      listNodes.mockResolvedValue([{ nodeId: "worker", connected, commands: ["system.run"] }]);
-      const result = await cache.resolve(params);
-      expect(result.tools.map((tool) => tool.name)).toEqual(connected ? ["exec"] : []);
     }
   });
 

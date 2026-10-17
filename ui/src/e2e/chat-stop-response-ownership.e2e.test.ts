@@ -39,15 +39,18 @@ suite.define(() => {
           message: { role: "assistant", content: [{ type: "text", text: progress }] },
         });
         await page.locator(".chat-bubble").getByText(progress, { exact: true }).waitFor();
-        await gateway.deferNext("chat.abort");
+        const abortMethod = scenario === "command" ? "sessions.abort" : "chat.abort";
+        await gateway.deferNext(abortMethod);
         if (scenario === "command") {
           await composer.fill("/stop");
           await composer.press("Enter");
         } else {
           await stop.click();
         }
-        const abort = await gateway.waitForRequest("chat.abort");
-        expect(abort.params).toEqual({ sessionKey, runId });
+        const abort = await gateway.waitForRequest(abortMethod);
+        expect(abort.params).toEqual(
+          scenario === "command" ? { key: sessionKey, clearQueued: true } : { sessionKey, runId },
+        );
 
         if (scenario !== "current") {
           await gateway.emitGatewayEvent("chat", {
@@ -81,9 +84,10 @@ suite.define(() => {
           ? "Stopped, but a reply could not be saved to history. Copy any visible text before leaving this chat."
           : "The original Stop acknowledgement failed.";
         if (saveWarning) {
-          await gateway.resolveDeferred("chat.abort", {
-            aborted: true,
-            runIds: [runId],
+          await gateway.resolveDeferred(abortMethod, {
+            ...(scenario === "command"
+              ? { status: "aborted", abortedRunId: runId }
+              : { aborted: true, runIds: [runId] }),
             ...(scenario === "deferred save" ? {} : { warning: notice }),
           });
           if (scenario === "deferred save") {
@@ -96,7 +100,7 @@ suite.define(() => {
             });
           }
         } else {
-          await gateway.rejectDeferred("chat.abort", { code: "UNAVAILABLE", message: notice });
+          await gateway.rejectDeferred(abortMethod, { code: "UNAVAILABLE", message: notice });
         }
         // A replacement must remain unchanged after the old response's promise handlers.
         await page.evaluate(
@@ -118,7 +122,7 @@ suite.define(() => {
         expect(await composer.inputValue()).toBe("Keep this next-message draft.");
         await composer.fill("");
         await stop.waitFor({ state: saveWarning ? "detached" : "visible" });
-        expect(await gateway.getRequests("chat.abort")).toEqual([abort]);
+        expect(await gateway.getRequests(abortMethod)).toEqual([abort]);
         expect(await gateway.getRequests("chat.send")).toHaveLength(
           scenario === "replacement" ? 2 : 1,
         );

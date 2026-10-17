@@ -11,16 +11,14 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
 import * as agentDeletionDiscovery from "../state/agent-deletion-discovery.js";
-import {
-  beginAgentDeletionJournal,
-  completeAgentDeletionJournalInDatabase,
-} from "../state/agent-deletion-journal.js";
+import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import * as agentWriteAdmission from "../state/openclaw-agent-write-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { runPluginHostCleanup } from "./host-hook-cleanup.js";
@@ -237,11 +235,19 @@ describe("plugin host cleanup session stores", () => {
       );
       await entered.promise;
       const queued = createDeferredCore();
+      let cleanupAdmitted = false;
       const admit = agentWriteAdmission.runOpenClawAgentWriteAdmission;
       const admission = vi
         .spyOn(agentWriteAdmission, "runOpenClawAgentWriteAdmission")
-        .mockImplementation((...args) => {
-          const result = admit(...args);
+        .mockImplementation((options, run, ...rest) => {
+          const result = admit(
+            options,
+            (...args) => {
+              cleanupAdmitted = true;
+              return run(...args);
+            },
+            ...rest,
+          );
           queued.resolve();
           return result;
         });
@@ -269,12 +275,7 @@ describe("plugin host cleanup session stores", () => {
             throw new Error("Cleanup completed before writer admission");
           }),
         ]);
-        expect(
-          [...agentWriteAdmission.SQLITE_SESSION_WRITER_QUEUES.values()].reduce(
-            (count, queue) => count + queue.pending.length,
-            0,
-          ),
-        ).toBe(1);
+        expect(cleanupAdmitted).toBe(false);
         current = mode !== "cancelled" && mode !== "revoked";
         release.resolve();
         const [blockedWrite, result] = await settled;

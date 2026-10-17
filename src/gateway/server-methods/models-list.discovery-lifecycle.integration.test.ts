@@ -12,6 +12,7 @@ it("models.list preserves provider starters and retires unavailable account rows
   const state = await createOpenClawTestState({
     label: "models-list-discovery-lifecycle",
     env: {
+      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
       OPENCLAW_SKIP_CHANNELS: "1",
       OPENCLAW_SKIP_GMAIL_WATCHER: "1",
       OPENCLAW_SKIP_CRON: "1",

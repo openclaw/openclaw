@@ -52,6 +52,7 @@ import { readSuspensionPhase } from "./gateway-readiness.ts";
 import { createAvailabilityIndicators } from "./gateway-store.availability.ts";
 import { createGatewayCredentials } from "./gateway-store.credentials.ts";
 import { createDeviceCredentialMethods } from "./gateway-store.device-credential.ts";
+import { createGatewayPresenceObserver } from "./gateway-store.presence.ts";
 import { createGatewaySelfProfile } from "./gateway-store.self-profile.ts";
 import { readHelloPluginCapabilities } from "./plugin-capabilities.ts";
 import {
@@ -114,7 +115,7 @@ export function createApplicationGateway(
     lastError: null,
     lastErrorCode: null,
     lastErrorAuthReason: null,
-    selfUser: null,
+    selfUser: undefined,
   };
   let client: GatewayBrowserClient | null = null;
   const selfProfile = createGatewaySelfProfile({
@@ -135,6 +136,11 @@ export function createApplicationGateway(
   // Snapshot observers can synchronously stop or replace their publishing client.
   const isCurrentClient = (expected: GatewayBrowserClient | null) =>
     !stopped && client === expected;
+  const isCurrentHello = (
+    expectedClient: GatewayBrowserClient | null,
+    hello: GatewayHelloOk | null,
+  ) =>
+    isCurrentClient(expectedClient) && snapshot.hello === hello && snapshot.phase === "connected";
   const availability = createAvailabilityIndicators({
     isStopped: () => stopped,
     getSnapshot: () => snapshot,
@@ -147,6 +153,17 @@ export function createApplicationGateway(
   const eventLogListeners = new Set<(events: readonly EventLogEntry[]) => void>();
   const eventLog = createGatewayEventLog();
   const metadataObserver = createGatewayMetadataObserver((current) => current === snapshot);
+  const presenceObserver = createGatewayPresenceObserver({
+    requestSnapshot: () => client!.request("system-presence", { snapshot: true }),
+    publish: (event) => {
+      const eventClient = client;
+      recordGatewayEvent(event);
+      notifyGatewayObservers(eventListeners, event, "event listener", () =>
+        isCurrentClient(eventClient),
+      );
+    },
+    onError: (error) => setSnapshot({ lastError: formatUiError(error) }),
+  });
   const publishEventLogRetirement = (events: readonly EventLogEntry[]) => {
     // Retirement remains valid after a reentrant stop or same-account client replacement.
     notifyGatewayObservers(
@@ -159,6 +176,7 @@ export function createApplicationGateway(
   const setSnapshot = (patch: Partial<ApplicationGatewaySnapshot>) => {
     const previous = snapshot;
     snapshot = { ...previous, ...patch };
+    presenceObserver.synchronize(snapshot.phase === "connected" ? snapshot.hello : null);
     if (snapshot.phase !== "connecting" && snapshot.phase !== "reconnecting") {
       snapshot.reconnectAt = undefined;
     }
@@ -177,7 +195,6 @@ export function createApplicationGateway(
       snapshot.suspensionPhase = availability.hasSuspensionDeadline()
         ? snapshot.suspensionPhase
         : undefined;
-      snapshot.pluginCapabilities = null;
       snapshot.usagePublications = undefined;
       scheduleOfflineIndicator();
     }
@@ -188,8 +205,9 @@ export function createApplicationGateway(
   const setConnectionSnapshot = (patch: Partial<ApplicationGatewaySnapshot>) =>
     setSnapshot({
       hello: null,
+      pluginCapabilities: null,
       canvasPluginSurfaceUrl: null,
-      selfUser: null,
+      selfUser: undefined,
       lastError: null,
       lastErrorCode: null,
       lastErrorAuthReason: null,
@@ -199,11 +217,7 @@ export function createApplicationGateway(
     const requestClient = client;
     const hello = snapshot.hello;
     void selfProfile.load().catch((error: unknown) => {
-      if (
-        isCurrentClient(requestClient) &&
-        snapshot.hello === hello &&
-        snapshot.phase === "connected"
-      ) {
+      if (isCurrentHello(requestClient, hello)) {
         setSnapshot({ lastError: formatUiError(error) });
       }
     });
@@ -224,12 +238,7 @@ export function createApplicationGateway(
     ) {
       // Capability updates keep hello identity; reconnects replace it.
       const eventHello = snapshot.hello;
-      const readCurrent = () =>
-        isCurrentClient(eventClient) &&
-        snapshot.hello === eventHello &&
-        snapshot.phase === "connected"
-          ? snapshot
-          : null;
+      const readCurrent = () => (isCurrentHello(eventClient, eventHello) ? snapshot : null);
       void import("./plugin-capabilities.runtime.ts")
         .then(({ refreshPluginCapabilities }) =>
           refreshPluginCapabilities(event, eventClient, readCurrent, setSnapshot, (url) =>
@@ -335,12 +344,9 @@ export function createApplicationGateway(
         ? { bootstrapProfile: undefined }
         : {}),
     };
-    const credentialsChanged =
-      nextConnection.gatewayUrl !== connection.gatewayUrl ||
-      nextConnection.token !== connection.token ||
-      nextConnection.password !== connection.password ||
-      nextConnection.bootstrapToken !== connection.bootstrapToken ||
-      nextConnection.bootstrapProfile !== connection.bootstrapProfile;
+    const credentialsChanged = (
+      ["gatewayUrl", "token", "password", "bootstrapToken", "bootstrapProfile"] as const
+    ).some((key) => nextConnection[key] !== connection[key]);
     const retiredEventLog = credentialsChanged ? eventLog.resetConnection() : null;
     if (credentialsChanged) {
       connectionRevision += 1;
@@ -501,10 +507,11 @@ export function createApplicationGateway(
           // Trim guards a whitespace-only defaultId from becoming a truthy selection.
           assistantAgentId: sessionDefaults?.defaultAgentId?.trim() || null,
           sessionKey,
-          selfUser: resolveSelfPresenceUser(
-            readPresenceEntries(hello.snapshot) ?? [],
-            nextClient.instanceId,
-          ),
+          selfUser:
+            resolveSelfPresenceUser(
+              readPresenceEntries(hello.snapshot) ?? [],
+              nextClient.instanceId,
+            ) ?? undefined,
         });
         if (isCurrentClient(nextClient) && !snapshot.selfUser) {
           refreshSelfProfile();
@@ -560,9 +567,20 @@ export function createApplicationGateway(
           : undefined;
         // Display-only evidence; admission is still re-derived from the next hello.
         setUnavailableDeadline("suspensionPhase", suspensionPhase ? 0 : undefined);
+        // Transport loss and announced unavailability keep this client's presentation;
+        // any connect rejection (auth, pairing, protocol, build) fails closed.
+        const transientClose =
+          !error ||
+          restartPending ||
+          Boolean(suspensionPhase) ||
+          isRetryableGatewayStartupUnavailableError(error);
+        const retainPresentation = transientClose && !nextClient.offlineRecoveryRetired;
         const closeReason = formatUiExternalText(reason);
         setConnectionSnapshot({
           client: nextClient,
+          // Retained capabilities describe this client, never its live dispatch authority.
+          hello: retainPresentation ? snapshot.hello : null,
+          pluginCapabilities: retainPresentation ? snapshot.pluginCapabilities : null,
           phase:
             mismatchedBuildId !== null
               ? "reload-required"
@@ -575,6 +593,10 @@ export function createApplicationGateway(
                   : willRetry
                     ? "connecting"
                     : "stopped",
+          // Retain only established profileless display identity through transport loss.
+          // Rejected admission and unresolved/replaced identities must stay fail-closed.
+          selfUser:
+            everConnected && retainPresentation && snapshot.selfUser === null ? null : undefined,
           restartPending: restartPending || snapshot.restartPending === true,
           suspensionPhase,
           lastError: startupPending
@@ -606,7 +628,10 @@ export function createApplicationGateway(
       onEvent: createGatewayEventObserver({
         isAttached: () => client === nextClient,
         isCurrent: () => isCurrentClient(nextClient),
-        project: (event) => metadataObserver.receive(event, snapshot),
+        project: (event) => {
+          const presenceEvent = presenceObserver.receive(event);
+          return presenceEvent && metadataObserver.receive(presenceEvent, snapshot);
+        },
         record: recordGatewayEvent,
         listeners: eventListeners,
       }),
@@ -618,6 +643,13 @@ export function createApplicationGateway(
       // recovery or a manual retry when a session already existed.
       phase: everConnected ? "reconnecting" : "connecting",
       reconnectAt: undefined,
+      selfUser:
+        !credentialsChanged &&
+        everConnected &&
+        !snapshot.client?.offlineRecoveryRetired &&
+        snapshot.selfUser === null
+          ? null
+          : undefined,
       assistantAgentId: null,
       sessionKey: nextSessionKey,
     });

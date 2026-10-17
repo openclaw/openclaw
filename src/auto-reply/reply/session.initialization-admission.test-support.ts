@@ -8,9 +8,9 @@ import {
 import * as lifecycleReads from "../../config/sessions/lifecycle-read.js";
 import {
   loadSessionEntry,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { replyRunRegistry, waitForReplyRunSuccessorAdmission } from "./reply-run-registry.js";
 import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
 import { admitReplyTurn, runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";

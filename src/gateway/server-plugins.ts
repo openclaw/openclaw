@@ -11,7 +11,7 @@ import type {
   PluginLoadOptions,
   PluginRuntimeRecovery,
 } from "../plugins/loader-types.js";
-import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { loadOpenClawPluginsAsync } from "../plugins/loader.js";
 import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
@@ -36,9 +36,10 @@ import type {
   PluginRuntime,
   RuntimeGatewayRequestOptions,
 } from "../plugins/runtime/types.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { bindInProcessSessionDeliveryGeneration } from "./in-process-session-delivery.js";
 import { authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
-import { normalizeOperatorScopeList } from "./operator-scopes.js";
+import { APPROVALS_SCOPE, normalizeOperatorScopeList } from "./operator-scopes.js";
 import type { GatewayNodeInvokeStream } from "./server-methods/shared-types.js";
 import type { GatewayContextResolver, GatewayRequestHandler } from "./server-methods/types.js";
 import { resolveTrustedPluginGitHubAccount } from "./server-plugin-github-account.js";
@@ -147,10 +148,22 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
   return await dispatchGatewayMethodInProcess<T>(method, requestParams, {
     forceSyntheticClient: true,
     pluginRuntimeOwnerId: pluginId,
+    ...(method === "plugin.approval.request" && syntheticScopes?.includes(APPROVALS_SCOPE)
+      ? { allowHostPluginApprovalRequest: true }
+      : {}),
     resolveGatewayContext,
     ...(!scope?.client ? { operatorRoleActor: { kind: "system" as const } } : {}),
     ...(syntheticScopes ? { syntheticScopes } : {}),
     ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+    ...(options?.signal
+      ? {
+          signal: AbortSignal.any(
+            [options.signal, scope?.signal, getAsyncWorkSignal()].filter(
+              (signal): signal is AbortSignal => signal !== undefined,
+            ),
+          ),
+        }
+      : {}),
   });
 }
 
@@ -353,7 +366,7 @@ function createGatewayPluginRuntimeBindings(
   };
 }
 
-export function loadGatewayPlugins(params: {
+export async function loadGatewayPlugins(params: {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   autoEnabledReasons: Readonly<Record<string, string[]>>;
@@ -435,10 +448,10 @@ export function loadGatewayPlugins(params: {
         resolvePluginSubagentOverridePolicies(resolvedConfig),
       )
     : undefined;
-  let pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
+  let pluginRegistry: Awaited<ReturnType<typeof loadOpenClawPluginsAsync>>;
   try {
     pluginRegistry = gatewayRuntimeBindings
-      ? loadOpenClawPlugins({
+      ? await loadOpenClawPluginsAsync({
           ...buildPluginRuntimeLoadOptions(loadContext),
           activate: false,
           runtimeSideEffects: true,

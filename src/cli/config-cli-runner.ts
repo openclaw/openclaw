@@ -11,7 +11,7 @@ import { prepareConfigWriteTopology } from "../config/io.write-topology.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { REDACTED_SENTINEL, restoreRedactedValues } from "../config/redact-snapshot.js";
-import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
+import type { ConfigSchemaResponse } from "../config/schema.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { visitConfigValueTree } from "../config/value-tree.js";
 import { diffConfigPaths } from "../gateway/config-diff.js";
@@ -29,6 +29,7 @@ import type { ConfigMutationOptions, ConfigSetOperation } from "./config-cli-inp
 import {
   normalizeConfigMutationExplicitSetPath,
   normalizeConfigMutationModelRefs,
+  shouldNormalizeConfigMutationProviderCatalogs,
 } from "./config-cli-model-normalization.js";
 import {
   assertNonDestructiveReplacement,
@@ -237,6 +238,7 @@ export async function runConfigOperations(params: {
   successMode: "set" | "patch";
   currentExpectation?: ConfigSetCurrentExpectation;
   beforePersistentApply?: () => void;
+  databaseOnly?: true;
 }) {
   const { runtime, operations, options } = params;
   if (
@@ -259,7 +261,10 @@ export async function runConfigOperations(params: {
   if (autoManagedTargets.length > 0) {
     throw new Error(formatAutoManagedMetaError(autoManagedTargets));
   }
-  const mutationStart = await loadValidConfigForWrite(runtime);
+  const mutationStart = await loadValidConfigForWrite(
+    runtime,
+    params.databaseOnly ? { databaseOnly: true } : undefined,
+  );
   const { snapshot } = mutationStart;
   const currentExpectation = params.currentExpectation;
   let assertCurrentExpectation: (() => void) | undefined;
@@ -284,8 +289,26 @@ export async function runConfigOperations(params: {
   }
   // Mutate resolved config so runtime defaults never leak into the authored file.
   const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
-  const currentConfig = normalizeConfigMutationModelRefs(snapshot.resolved);
-  const mutationSchema = await readBestEffortRuntimeConfigSchema().catch(() => undefined);
+  const modelNormalizationOptions = {
+    pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
+    env: mutationStart.writeOptions.envSnapshotForRestore,
+  };
+  let currentConfig = params.databaseOnly
+    ? snapshot.resolved
+    : await normalizeConfigMutationModelRefs(snapshot.resolved, {
+        ...modelNormalizationOptions,
+        normalizeProviderCatalogs: false,
+      });
+  let mutationSchema: Promise<ConfigSchemaResponse | undefined> | undefined;
+  const getMutationSchema = () =>
+    (mutationSchema ??= import("../config/runtime-schema.js")
+      .then(({ readBestEffortRuntimeConfigSchema }) =>
+        readBestEffortRuntimeConfigSchema({
+          snapshot,
+          pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
+        }),
+      )
+      .catch(() => undefined));
   const roster = new ConfigMutationAgentRoster(next, snapshot.sourceConfigBeforeMigrations);
   let unsetPaths: PathSegment[][] = [];
   let explicitSetPaths: PathSegment[][] = [];
@@ -354,6 +377,7 @@ export async function runConfigOperations(params: {
             currentConfig,
             mutationStart.writeOptions.basePluginMetadataSnapshot,
             getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig),
+            params.databaseOnly,
           );
         }
         throw new Error(message);
@@ -390,11 +414,23 @@ export async function runConfigOperations(params: {
       }
       continue;
     }
+    // Only ambiguous numeric segments need schema to distinguish missing maps from arrays.
+    const needsMutationSchema =
+      !params.databaseOnly &&
+      params.successMode !== "patch" &&
+      operation.setPath.some(
+        (segment, index) =>
+          index > 0 &&
+          parseConfigPathArrayIndex(segment) !== undefined &&
+          typeof operation.pathTokens?.[index] !== "number" &&
+          !operation.quotedNumericSegments?.has(index),
+      );
+    const schema = needsMutationSchema ? (await getMutationSchema())?.schema : undefined;
     const pathOptions = {
       numericObjectKeys: params.successMode === "patch",
       pathTokens: operation.pathTokens,
       quotedNumericSegments: operation.quotedNumericSegments,
-      schema: mutationSchema?.schema as JsonSchemaRecord | undefined,
+      schema: schema as JsonSchemaRecord | undefined,
       command: params.successMode,
     };
     let suppliedPaths: PathSegment[][];
@@ -426,13 +462,36 @@ export async function runConfigOperations(params: {
   });
   let nextConfig = coerceConfig(next);
   if (hasRedactedValues) {
-    const restored = restoreRedactedValues(next, snapshot.resolved, mutationSchema?.uiHints);
+    const restored = restoreRedactedValues(
+      next,
+      snapshot.resolved,
+      (await getMutationSchema())?.uiHints,
+    );
     if (!restored.ok) {
       throw new Error(restored.humanReadableMessage ?? "Cannot restore redacted config values.");
     }
     nextConfig = coerceConfig(restored.result);
   }
-  nextConfig = normalizeConfigMutationModelRefs(nextConfig);
+  const normalizeProviderCatalogs =
+    !params.databaseOnly &&
+    shouldNormalizeConfigMutationProviderCatalogs({
+      before: snapshot.resolved,
+      after: nextConfig,
+      touchedPaths: appliedOperations.map(({ setPath }) => setPath),
+      env: modelNormalizationOptions.env,
+    });
+  if (normalizeProviderCatalogs) {
+    currentConfig = await normalizeConfigMutationModelRefs(
+      snapshot.resolved,
+      modelNormalizationOptions,
+    );
+  }
+  if (!params.databaseOnly) {
+    nextConfig = await normalizeConfigMutationModelRefs(nextConfig, {
+      ...modelNormalizationOptions,
+      normalizeProviderCatalogs,
+    });
+  }
   const normalizedExplicitSetPaths = explicitSetPaths.map(normalizeConfigMutationExplicitSetPath);
   // Parent merge paths own policy, but inherited children are not caller-authored values.
   const resolutionEnv = mutationStart.writeOptions.envSnapshotForRestore ?? process.env;
@@ -456,7 +515,7 @@ export async function runConfigOperations(params: {
     previousEnv: preparedPreviousValues.resolutionEnv,
   };
   if (options.dryRun) {
-    const topology = prepareConfigWriteTopology({
+    const topology = await prepareConfigWriteTopology({
       snapshot,
       pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
       nextConfig: authoredNextConfig,
@@ -485,6 +544,7 @@ export async function runConfigOperations(params: {
       isDeepStrictEqual(authoredPreviousConfig, authoredNextConfig),
     pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
     deferredPluginMigrations: getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig),
+    databaseOnly: params.databaseOnly,
   });
   if (validation.kind === "dry-run") {
     printConfigDryRunResult(validation.result, runtime, options.json);

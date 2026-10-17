@@ -1,5 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { asPositiveFiniteNumber, resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { rethrowIncognitoSessionError } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptRawDelta } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   asFiniteNumber,
@@ -58,18 +59,17 @@ export async function streamActiveMemoryTranscriptRecords(params: {
       maxBytes: limits.maxBytes,
       maxEvents: limits.maxLines,
     });
-  } catch {
+  } catch (error) {
+    rethrowIncognitoSessionError(error);
     return;
   }
   if (page.kind !== "page") {
     return;
   }
   for (const { event } of page.events) {
-    try {
-      if (params.onRecord(event)) {
-        break;
-      }
-    } catch {}
+    if (params.onRecord(event)) {
+      break;
+    }
   }
 }
 

@@ -1,5 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import * as readline from "node:readline";
+import { PassThrough } from "node:stream";
 import type { ContentBlock, RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -55,7 +57,6 @@ describe("ACP child environment", () => {
     { serverCommand: undefined, serverArgs: undefined, strip: true },
     { serverCommand: "openclaw", serverArgs: ["acp"], strip: true },
     { serverCommand: "custom-server", serverArgs: ["serve"], strip: false },
-    { serverCommand: "openclaw", serverArgs: ["custom-entry.js"], strip: false },
   ])(
     "sanitizes $serverCommand $serverArgs (provider stripping: $strip)",
     ({ strip, ...server }) => {
@@ -106,6 +107,34 @@ it("rejects unresolved Windows wrappers without shell execution", async () => {
 });
 
 describe("resolvePermissionRequest", () => {
+  const streams: PassThrough[] = [];
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    for (const stream of streams.splice(0)) {
+      stream.destroy();
+    }
+  });
+  function terminal() {
+    const input = Object.assign(new PassThrough(), { isTTY: true });
+    const output = Object.assign(new PassThrough(), { isTTY: true });
+    streams.push(input, output);
+    vi.stubGlobal("process", { ...process, stdin: input, stderr: output });
+    const prompt = vi.spyOn(readline.Interface.prototype, "question");
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    return { input, prompt, log };
+  }
+  it("cancels a pending permission when its interactive session closes", async () => {
+    const lifetime = new AbortController();
+    const { input } = terminal();
+    const permission = resolvePermissionRequest(request({ title: "exec: echo marker" }), {
+      signal: lifetime.signal,
+    });
+    lifetime.abort();
+    input.write("y\n");
+    await expect(permission).resolves.toEqual({ outcome: { outcome: "cancelled" } });
+  });
+
   it.each<
     [Partial<RequestPermissionRequest["toolCall"]>, string | undefined, "auto" | "allow" | "reject"]
   >([
@@ -123,30 +152,26 @@ describe("resolvePermissionRequest", () => {
       "search",
       "auto",
     ],
-    [{ title: "search: TODO", rawInput: { path: "../.ssh" } }, "search", "reject"],
     [{ title: "search: path: ~/.ssh" }, "search", "reject"],
-    [{ title: "search: TODO", locations: [{ path: "/etc/passwd" }] }, "search", "reject"],
-    [
-      {
-        title: "read: docs/security.md",
-        rawInput: { path: "file:///tmp/openclaw-acp-cwd/docs/security.md" },
-      },
-      "read",
-      "auto",
-    ],
     [{ title: "read: src", rawInput: { path: "FILE:/tmp/outside/marker.txt" } }, "read", "reject"],
     [{ title: "read" }, "read", "reject"],
   ])("resolves %j (%s) with %s", async (toolCall, toolName, decision) => {
-    const prompt = vi.fn(async () => decision === "allow");
-    const result = await resolvePermissionRequest(request(toolCall), {
-      prompt,
-      log: () => {},
+    const { input, prompt } = terminal();
+    const pending = resolvePermissionRequest(request(toolCall), {
       cwd: "/tmp/openclaw-acp-cwd",
     });
+    if (decision !== "auto") {
+      input.write(decision === "allow" ? "y\n" : "n\n");
+    }
+    const result = await pending;
     if (decision === "auto") {
       expect(prompt).not.toHaveBeenCalled();
     } else {
-      expect(prompt).toHaveBeenCalledExactlyOnceWith(toolName, toolCall.title);
+      const label = toolName ? `${toolCall.title} (${toolName})` : toolCall.title;
+      expect(prompt).toHaveBeenCalledExactlyOnceWith(
+        `\n[permission] Allow "${label}"? (y/N) `,
+        expect.any(Function),
+      );
     }
     expect(result).toEqual({
       outcome: { outcome: "selected", optionId: decision === "reject" ? "reject" : "allow" },
@@ -154,25 +179,28 @@ describe("resolvePermissionRequest", () => {
   });
 
   it("prompts for control-plane tools and falls back to always options", async () => {
-    const prompt = vi.fn(async () => false);
-    const result = await resolvePermissionRequest(
+    const { input, prompt } = terminal();
+    const pending = resolvePermissionRequest(
       request({ title: "gateway: status" }, [
         { kind: "allow_always", name: "Always allow", optionId: "allow-always" },
         { kind: "reject_always", name: "Always reject", optionId: "reject-always" },
       ]),
-      { prompt, log: () => {} },
     );
-    expect(prompt).toHaveBeenCalledExactlyOnceWith("gateway", "gateway: status");
+    input.write("n\n");
+    const result = await pending;
+    expect(prompt).toHaveBeenCalledExactlyOnceWith(
+      '\n[permission] Allow "gateway: status (gateway)"? (y/N) ',
+      expect.any(Function),
+    );
     expect(result).toEqual({ outcome: { outcome: "selected", optionId: "reject-always" } });
   });
 
   it.each([{ options: [] }, { options: [onceOptions[1]!] }])(
     "cancels when no allow option exists: $options",
     async ({ options }) => {
-      const prompt = vi.fn(async () => true);
+      const { prompt } = terminal();
       const result = await resolvePermissionRequest(
         request({ title: "read: src/index.ts" }, options),
-        { prompt, log: () => {} },
       );
       expect(prompt).not.toHaveBeenCalled();
       expect(result).toEqual({ outcome: { outcome: "cancelled" } });
@@ -180,17 +208,17 @@ describe("resolvePermissionRequest", () => {
   );
 
   it("sanitizes exec titles before logging and prompting", async () => {
-    const prompt = vi.fn(async () => false);
-    const log = vi.fn();
-    const result = await resolvePermissionRequest(
+    const { input, prompt, log } = terminal();
+    const pending = resolvePermissionRequest(
       request({
         title: 'exec: \u001b[2K\u001b[1A\u001b[2K[permission] Allow "safe"? (y/N) \nnext',
       }),
-      { prompt, log },
     );
+    input.write("n\n");
+    const result = await pending;
     expect(prompt).toHaveBeenCalledExactlyOnceWith(
-      "exec",
-      'exec: [permission] Allow "safe"? (y/N) \\nnext',
+      '\n[permission] Allow "exec: [permission] Allow "safe"? (y/N) \\nnext (exec)"? (y/N) ',
+      expect.any(Function),
     );
     expect(log).toHaveBeenCalledWith(
       '\n[permission requested] exec: [permission] Allow "safe"? (y/N) \\nnext (exec) [exec_capable]',

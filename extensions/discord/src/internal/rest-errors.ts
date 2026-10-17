@@ -5,6 +5,7 @@ import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime"
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseDiscordRetryAfterBodySeconds } from "../retry-after.js";
 
+const DISCORD_UNKNOWN_MESSAGE = 10008;
 const DISCORD_UNKNOWN_VOICE_STATE = 10065;
 const DISCORD_ERROR_BODY_MAX_DEPTH = 64;
 const DISCORD_ERROR_BODY_MAX_NODES = 10_000;
@@ -17,11 +18,6 @@ type DiscordErrorRedactionState = {
   seen: WeakSet<object>;
   remainingNodes: number;
 };
-
-function isSensitiveDiscordErrorKey(key: string): boolean {
-  // An empty value isolates structured key handling from configured value patterns.
-  return redactSensitiveFieldValue(key, "") !== "";
-}
 
 function reserveRedactedKey(
   key: string,
@@ -95,9 +91,9 @@ function redactDiscordErrorBody(
       }
       const redactedKey = redactSensitiveFieldValue(sensitiveAncestorKey ?? "", nestedKey);
       const outputKey = reserveRedactedKey(redactedKey, usedKeys, collisionCounts);
-      const nestedSensitiveKey = isSensitiveDiscordErrorKey(nestedKey)
-        ? nestedKey
-        : sensitiveAncestorKey;
+      // An empty value isolates structured key handling from configured value patterns.
+      const nestedSensitiveKey =
+        redactSensitiveFieldValue(nestedKey, "") !== "" ? nestedKey : sensitiveAncestorKey;
       entries.push([
         outputKey,
         redactDiscordErrorBody(
@@ -153,10 +149,17 @@ export function readDiscordMessage(body: unknown, fallback: string): string {
   return typeof value === "string" && value.trim() ? value : fallback;
 }
 
+function readErrorDiscordCode(err: unknown): number | undefined {
+  return parseStrictNonNegativeInteger(asOptionalObjectRecord(err)?.discordCode);
+}
+
+export function isUnknownDiscordMessageError(err: unknown): boolean {
+  return readErrorDiscordCode(err) === DISCORD_UNKNOWN_MESSAGE;
+}
+
 export function isUnknownDiscordVoiceStateError(err: unknown): boolean {
-  const discordCode = parseStrictNonNegativeInteger(asOptionalObjectRecord(err)?.discordCode);
   return (
-    discordCode === DISCORD_UNKNOWN_VOICE_STATE ||
+    readErrorDiscordCode(err) === DISCORD_UNKNOWN_VOICE_STATE ||
     /unknown voice state/i.test(formatErrorMessage(err))
   );
 }

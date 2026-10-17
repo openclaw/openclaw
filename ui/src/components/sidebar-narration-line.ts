@@ -4,11 +4,6 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
   stripInternalRuntimeContext,
 } from "../../../src/agents/internal-runtime-context.js";
-import {
-  isSuppressedControlReplyLeadFragment,
-  isSuppressedControlReplyText,
-  stripSuppressedControlReplyToken,
-} from "../../../src/gateway/control-reply-text.js";
 import { stripInlineDirectiveTagsForDisplay } from "../../../src/utils/directive-tags.js";
 import { stripHeartbeatTokenForDisplay } from "../lib/chat/heartbeat-display.ts";
 import { clampText } from "../lib/format.ts";
@@ -20,17 +15,9 @@ export function deriveSidebarNarrationLine(text: string): string {
   // streamed drafts still carry them mid-run; persisted data is already clean.
   // Drop the stripInlineDirectiveTagsForDisplay call when the visibleReplies
   // default flips to "message_tool".
-  const displayText = stripSuppressedControlReplyToken(
-    stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(text).text),
-  );
+  const displayText = stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(text).text);
   const heartbeat = stripHeartbeatTokenForDisplay(displayText);
-  if (
-    !displayText ||
-    isSuppressedControlReplyText(displayText) ||
-    isSuppressedControlReplyLeadFragment(displayText) ||
-    heartbeat.shouldSkip ||
-    !heartbeat.text
-  ) {
+  if (!displayText || heartbeat.shouldSkip || !heartbeat.text) {
     return "";
   }
   // Fences are dropped before the paragraph split, not just by the shared
@@ -82,32 +69,26 @@ export function stripSidebarInternalRuntimeFragment(
   while (cursor < text.length) {
     const nextBegin = text.indexOf(INTERNAL_RUNTIME_CONTEXT_BEGIN, cursor);
     const nextEnd = text.indexOf(INTERNAL_RUNTIME_CONTEXT_END, cursor);
-    if (depth === 0) {
-      if (nextBegin === -1 && nextEnd === -1) {
-        visible += text.slice(cursor);
-        break;
-      }
-      if (nextEnd !== -1 && (nextBegin === -1 || nextEnd < nextBegin)) {
-        // A stray closing delimiter means this fragment may start inside an
-        // already-trimmed block. Fail closed until that boundary passes.
-        cursor = nextEnd + INTERNAL_RUNTIME_CONTEXT_END.length;
-        continue;
-      }
-      visible += text.slice(cursor, nextBegin);
-      depth = 1;
-      cursor = nextBegin + INTERNAL_RUNTIME_CONTEXT_BEGIN.length;
-      continue;
-    }
     if (nextBegin === -1 && nextEnd === -1) {
+      if (depth === 0) {
+        visible += text.slice(cursor);
+      }
       break;
     }
-    if (nextBegin !== -1 && (nextEnd === -1 || nextBegin < nextEnd)) {
+    const opening = nextBegin !== -1 && (nextEnd === -1 || nextBegin < nextEnd);
+    const next = opening ? nextBegin : nextEnd;
+    if (opening) {
+      if (depth === 0) {
+        visible += text.slice(cursor, next);
+      }
       depth += 1;
-      cursor = nextBegin + INTERNAL_RUNTIME_CONTEXT_BEGIN.length;
-      continue;
+    } else if (depth !== 0) {
+      depth -= 1;
     }
-    depth -= 1;
-    cursor = nextEnd + INTERNAL_RUNTIME_CONTEXT_END.length;
+    // A stray close at depth zero skips its prefix: the fragment may have
+    // begun inside an already-trimmed block, so stay closed until it passes.
+    cursor =
+      next + (opening ? INTERNAL_RUNTIME_CONTEXT_BEGIN : INTERNAL_RUNTIME_CONTEXT_END).length;
   }
 
   const delimiterPrefix = trailingInternalDelimiterPrefix(text);

@@ -16,8 +16,18 @@ import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
 } from "../test-helpers.js";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import { MemoryFileWatcher } from "./file-watcher.js";
 import { MemoryIndexManager } from "./manager.js";
+
+// Keep owner fault injection in this process; real worker transport has separate coverage.
+vi.mock("./local-file-watcher.js", async (original) => {
+  const watcher = await import("./file-watcher.js");
+  return {
+    ...(await original<typeof import("./local-file-watcher.js")>()),
+    LocalMemoryFileWatcher: watcher.MemoryFileWatcher,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/file-access-runtime", async (original) => ({
   ...(await original<typeof import("openclaw/plugin-sdk/file-access-runtime")>()),
@@ -92,7 +102,11 @@ it("indexes real edits, deletion and root replacement, then joins every subscrip
     const debounceMs = resolveMemorySearchConfig(cfg, "main")!.sync.watchDebounceMs;
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     manager = await turn.run("opening turn", () =>
-      MemoryIndexManager.get({ cfg, agentId: "main" }),
+      MemoryIndexManager.get({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg,
+        agentId: "main",
+      }),
     );
     if (!manager) {
       throw new Error("memory manager unavailable");
@@ -212,6 +226,7 @@ it("observes later edits beyond the default directory scan budget", async () => 
     await fs.writeFile(note, "Initial memory.");
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     watcher = new MemoryFileWatcher({
+      runInBackgroundContext: AsyncLocalStorage.snapshot(),
       workspaceDir: state.workspaceDir,
       agentId: "main",
       settings: {

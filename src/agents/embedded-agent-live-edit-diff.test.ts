@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { updateLiveEditDiffProgress } from "./embedded-agent-live-edit-diff.js";
+import {
+  updateLiveEditDiffProgress,
+  updateLiveEditDiffProgressFromInput,
+} from "./embedded-agent-live-edit-diff.js";
 
 function toolCallEvent(params: {
   type?: "toolcall_delta" | "toolcall_end";
@@ -23,6 +26,36 @@ function toolCallEvent(params: {
 }
 
 describe("updateLiveEditDiffProgress", () => {
+  it("bounds cumulative argument assembly before parsing across CLI and embedded callers", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const state = new Map();
+    const readPartialJson = vi.fn(() => '{"content":"one\\n');
+    const input = { toolCallId: "write-1", name: "Write", partialJsonLength: 20, readPartialJson };
+    updateLiveEditDiffProgressFromInput(state, input);
+    expect(readPartialJson).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(1_249);
+    updateLiveEditDiffProgressFromInput(state, input);
+    expect(readPartialJson).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(1_250);
+    updateLiveEditDiffProgressFromInput(state, input);
+    expect(readPartialJson).toHaveBeenCalledTimes(2);
+    updateLiveEditDiffProgressFromInput(state, { ...input, partialJsonLength: 1024 * 1024 + 1 });
+    expect(readPartialJson).toHaveBeenCalledTimes(2);
+    expect(state.size).toBe(0);
+    for (let index = 0; index < 64; index++) {
+      updateLiveEditDiffProgressFromInput(state, { ...input, toolCallId: `call-${index}` });
+    }
+    expect(state.size).toBe(64);
+    readPartialJson.mockClear();
+    updateLiveEditDiffProgressFromInput(state, { ...input, toolCallId: "overflow" });
+    expect(readPartialJson).not.toHaveBeenCalled();
+    // The embedded completion adapter releases the same counter owner's budget.
+    updateLiveEditDiffProgress(state, { type: "toolcall_end", toolCall: { id: "call-0" } });
+    updateLiveEditDiffProgressFromInput(state, { ...input, toolCallId: "overflow" });
+    expect(readPartialJson).toHaveBeenCalledTimes(1);
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });

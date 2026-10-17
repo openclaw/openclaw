@@ -5,6 +5,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { fireAndForgetBoundedHook } from "../../../hooks/fire-and-forget.js";
+import { emitAgentEvent } from "../../../infra/agent-events.js";
+import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import {
   diagnosticErrorCategory,
   diagnosticErrorFailureKind,
@@ -30,13 +32,18 @@ import {
 } from "../../../infra/diagnostic-trace-context.js";
 import { formatPropagatedDiagnosticTraceparent } from "../../../infra/diagnostic-trace-propagation.js";
 import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
+import { withModelTransportContext } from "../../../llm/model-transport-context.js";
+import { createModelCallStreamProgressReporter } from "../../../logging/diagnostic-model-stream-progress.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
   PluginHookModelCallEndedEvent,
   PluginHookModelCallStartedEvent,
 } from "../../../plugins/hook-types.js";
+import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
+import type { EmbeddedAgentEvent } from "../../embedded-agent-subscribe.shared-types.js";
 import type { StreamFn } from "../../runtime/index.js";
+import { log } from "../logger.js";
 import type {
   createModelObserver,
   ModelCallEventBase,
@@ -49,13 +56,17 @@ export type ModelCallDiagnosticContext = Omit<PluginHookModelCallStartedEvent, "
   contentCapture?: DiagnosticModelContentCapturePolicy;
   nextCallId: () => string;
   ownerGeneration?: CoreModelRequestOwnerGeneration;
-  onStarted?: () => void;
+  onStarted?: (callId: string) => void;
+  /** Request observation ended; cleanup settlement and replay admission remain separately owned. */
+  onFinished?: (callId: string) => void;
   /** Each streamed non-empty text, thinking or tool-call delta; keepalives never count. */
   onOutputDelta?: () => void;
   onTerminal?: () => void;
   onSucceeded?: (startedAt: number) => void;
+  onAgentEvent?: (event: EmbeddedAgentEvent) => void | Promise<void>;
   suppressPluginHooks?: boolean;
   requestTimeoutMs?: number;
+  priority?: "interactive" | "background";
 };
 
 type ModelCallErrorFields = Pick<
@@ -174,7 +185,8 @@ function withDiagnosticRequestContext(
   trace: DiagnosticTraceContext,
   observer: ModelCallObserver,
   callId: string,
-): ModelCallStreamOptions {
+  ctx: ModelCallDiagnosticContext,
+): NonNullable<ModelCallStreamOptions> {
   const traceparent = formatPropagatedDiagnosticTraceparent(trace);
   const originalOnPayload = options?.onPayload;
   const originalOnResponse = options?.onResponse;
@@ -222,6 +234,16 @@ function withDiagnosticRequestContext(
   };
   modelRequestBodyState(requestOptions).onBytes = (bytes) => {
     observer.state.requestPayloadBytes = bytes;
+    emitDiagnosticsTimelineEvent(
+      {
+        type: "mark",
+        name: "provider.request.serialized",
+        timestamp: new Date().toISOString(),
+        runId: ctx.runId,
+        spanId: callId,
+      },
+      { config: ctx.config },
+    );
   };
   return withProviderAcceptanceObserver(requestOptions, (acceptance) => {
     if (observer.state.terminalEventEmitted) {
@@ -242,6 +264,24 @@ export function createModelLifecycle(params: {
   createObserver: (capturePromptStats: boolean) => ModelCallObserver;
 }) {
   const callId = params.ctx.nextCallId();
+  const runContext = getAgentRunContext(params.ctx.runId);
+  const transportContext = {
+    sessionKey: params.ctx.sessionKey,
+    runId: params.ctx.runId,
+    requestId: callId,
+    priority: params.ctx.priority,
+    onRateLimitWait: (retryAt: number) => {
+      const delayMs = Math.max(0, retryAt - Date.now());
+      reportStatus({
+        phase: "retrying",
+        reason: "rate_limit",
+        message: `Waiting for rate limit. Retrying in ${Math.ceil(delayMs / 1000)}s.`,
+        delayMs,
+        retryAt,
+      });
+      return () => reportStatus({ phase: "starting_model" });
+    },
+  };
   const trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(params.ctx.trace));
   const observer = params.createObserver(areDiagnosticsEnabledForProcess());
   const eventBase: ModelCallEventBase = {
@@ -251,6 +291,10 @@ export function createModelLifecycle(params: {
     ...(observer.promptStats ? { promptStats: observer.promptStats } : {}),
     trace,
   };
+  const reportStreamProgress = createModelCallStreamProgressReporter({
+    config: params.ctx.config,
+    target: eventBase,
+  });
   emitCoreModelRequestStartedDiagnosticEvent(
     eventBase,
     params.ctx.ownerGeneration,
@@ -260,7 +304,6 @@ export function createModelLifecycle(params: {
   if (params.ctx.suppressPluginHooks !== true) {
     dispatchModelCallHook(eventBase);
   }
-  params.ctx.onStarted?.();
   const startedAt = Date.now();
   emitDiagnosticsTimelineEvent(
     {
@@ -272,15 +315,72 @@ export function createModelLifecycle(params: {
     },
     { config: params.ctx.config },
   );
-  const propagatedOptions = withDiagnosticRequestContext(params.options, trace, observer, callId);
+  const propagatedOptions = withDiagnosticRequestContext(
+    params.options,
+    trace,
+    observer,
+    callId,
+    params.ctx,
+  );
+  let waitReason: "response" | "slot" | null = null;
+  let firstEventObserved = false;
+  const trackStatusDelivery = captureAsyncWorkTracker();
+  const signal = params.options?.signal;
+  function reportStatus(data: Record<string, unknown>) {
+    const event = { stream: "run_status" as const, data };
+    emitAgentEvent({ runId: params.ctx.runId, sessionKey: params.ctx.sessionKey, ...event });
+    if (params.ctx.onAgentEvent) {
+      void trackStatusDelivery(async () => {
+        try {
+          await params.ctx.onAgentEvent?.(event);
+        } catch {
+          log.warn("Provider wait status delivery failed");
+        }
+      });
+    }
+  }
+  const reportWait: NonNullable<NonNullable<ModelCallStreamOptions>["onProviderWait"]> = (
+    reason,
+  ) => {
+    if (
+      reason === waitReason ||
+      (reason !== null &&
+        (firstEventObserved || signal?.aborted || observer.state.terminalEventEmitted))
+    ) {
+      return;
+    }
+    waitReason = reason;
+    if (runContext) {
+      if (reason) {
+        runContext.localModelWait = { requestId: callId };
+      } else if (runContext.localModelWait?.requestId === callId) {
+        delete runContext.localModelWait;
+      }
+    }
+    reportStatus(reason ? { phase: "waiting_for_model", reason } : { phase: "starting_model" });
+    params.options?.onProviderWait?.(reason);
+  };
+  const clearWait = () => reportWait(null);
+  propagatedOptions.onProviderWait = reportWait;
+  signal?.addEventListener("abort", clearWait, { once: true });
   function emitModelCallEnded(failure: { error: unknown } | undefined): void {
     const { ownerGeneration, config } = params.ctx;
     if (observer.state.terminalEventEmitted) {
       return;
     }
+    clearWait();
+    signal?.removeEventListener("abort", clearWait);
     observer.state.terminalEventEmitted = true;
     const terminalAtMs = Date.now();
     const durationMs = terminalAtMs - startedAt;
+    const providerTimingFields: Record<string, number> =
+      observer.state.providerProcessingMs === undefined
+        ? {}
+        : {
+            providerProcessingMs: observer.state.providerProcessingMs,
+            // Includes queueing, loading, transport, and terminal settlement overhead.
+            providerWaitEstimateMs: Math.max(0, durationMs - observer.state.providerProcessingMs),
+          };
     const sizeTimingFields = observer.sizeTimingFields();
     const fields = failure ? modelCallErrorFields(failure.error) : undefined;
     const terminal = fields
@@ -317,6 +417,7 @@ export function createModelLifecycle(params: {
           ...(api ? { api } : {}),
           ...(transport ? { transport } : {}),
           terminalAtMs,
+          ...providerTimingFields,
           ...(observer.state.lastProviderActivityAtMs !== undefined
             ? { lastProviderActivityAtMs: observer.state.lastProviderActivityAtMs }
             : {}),
@@ -332,6 +433,7 @@ export function createModelLifecycle(params: {
         ...terminal,
         ...eventBase,
         durationMs,
+        ...providerTimingFields,
         ...sizeTimingFields,
         ...observer.usageField(),
       },
@@ -348,33 +450,64 @@ export function createModelLifecycle(params: {
     }
   }
   let terminalNotified = false;
+  let finishedNotified = false;
+  const notifyFinished = () => {
+    if (!finishedNotified) {
+      finishedNotified = true;
+      clearWait();
+      signal?.removeEventListener("abort", clearWait);
+      params.ctx.onFinished?.(callId);
+    }
+  };
+  try {
+    params.ctx.onStarted?.(callId);
+  } catch (error) {
+    notifyFinished();
+    throw error;
+  }
   return {
     eventBase,
     observer,
     propagatedOptions,
+    runInTransportContext<T>(run: () => T): T {
+      return withModelTransportContext(transportContext, run);
+    },
     startedAt,
     observeChunk(chunk: unknown) {
+      firstEventObserved = true;
+      clearWait();
       observer.observeResponseChunk(startedAt, chunk);
-      observer.maybeEmitStreamProgress(eventBase);
+      reportStreamProgress(observer.state.terminalEventEmitted ? undefined : callId);
       if (params.ctx.onOutputDelta && isModelOutputDelta(chunk)) {
         params.ctx.onOutputDelta();
       }
     },
     emitCompleted() {
-      // Iterator exhaustion can emit diagnostics before result() supplies the terminal response.
-      if (!terminalNotified && (observer.state.terminalSucceeded || observer.state.terminalError)) {
-        terminalNotified = true;
-        params.ctx.onTerminal?.();
-        if (observer.state.terminalSucceeded && !observer.state.terminalError) {
-          params.ctx.onSucceeded?.(startedAt);
+      try {
+        // Iterator exhaustion can emit diagnostics before result() supplies the terminal response.
+        if (
+          !terminalNotified &&
+          (observer.state.terminalSucceeded || observer.state.terminalError)
+        ) {
+          terminalNotified = true;
+          params.ctx.onTerminal?.();
+          if (observer.state.terminalSucceeded && !observer.state.terminalError) {
+            params.ctx.onSucceeded?.(startedAt);
+          }
         }
+        emitModelCallEnded(
+          observer.state.terminalError ? { error: observer.state.terminalError } : undefined,
+        );
+      } finally {
+        notifyFinished();
       }
-      emitModelCallEnded(
-        observer.state.terminalError ? { error: observer.state.terminalError } : undefined,
-      );
     },
     emitError(err: unknown) {
-      emitModelCallEnded({ error: err });
+      try {
+        emitModelCallEnded({ error: err });
+      } finally {
+        notifyFinished();
+      }
     },
   };
 }

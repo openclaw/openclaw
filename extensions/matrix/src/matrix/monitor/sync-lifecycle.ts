@@ -69,9 +69,6 @@ export function createMatrixMonitorSyncLifecycle(params: {
       if (fatalError) {
         throw fatalError;
       }
-      if (resolveFatalWait || rejectFatalWait) {
-        throw new Error("Matrix fatal-stop wait already in progress");
-      }
       await new Promise<void>((resolve, reject) => {
         resolveFatalWait = resolve;
         rejectFatalWait = (error) => reject(error);

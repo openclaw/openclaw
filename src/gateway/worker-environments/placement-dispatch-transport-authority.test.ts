@@ -4,6 +4,10 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
@@ -13,7 +17,10 @@ import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(async () => await closeStateDatabaseForTest());
+afterEach(async () => {
+  await closeStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
+});
 
 it.each(
   (["device", "cloud-node", "ssh"] as const).flatMap((carrier) =>
@@ -28,8 +35,9 @@ it.each(
 )("forwards live $authority authority to $carrier $boundary effects", async (scenario) => {
   const root = tempDirs.make("placement-transport-authority-");
   const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+  setRuntimeConfigSnapshot({});
   const placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-  const harness = createHarness(database, placements);
+  const harness = await createHarness(database, placements);
   const nodeBacked = scenario.carrier !== "ssh";
   const providerId = scenario.carrier === "device" ? "device" : "generic-cloud-node";
   const profileId = scenario.carrier === "device" ? "device:device-1" : "cloud-node";

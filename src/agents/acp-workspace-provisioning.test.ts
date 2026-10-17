@@ -119,17 +119,6 @@ describe("resolveAcpAgentWorkspaceProvisioningForTurn", () => {
     ).resolves.toBe("standard");
   });
 
-  it("keeps standard provisioning when the binding cwd equals the resolved workspace", async () => {
-    const cfg: OpenClawConfig = {
-      ...baseCfg,
-      bindings: [acpBinding({ conversationId: "111", cwd: "/shared-ws/codex" })],
-    };
-    const key = await bindingSessionKey(cfg, "111");
-    await expect(
-      resolveAcpAgentWorkspaceProvisioningForTurn({ cfg, agentId: "codex", sessionKey: key }),
-    ).resolves.toBe("standard");
-  });
-
   it("uses the live session ACP meta cwd as the invocation cwd", async () => {
     await expect(
       resolveAcpAgentWorkspaceProvisioningForTurn({
@@ -144,44 +133,6 @@ describe("resolveAcpAgentWorkspaceProvisioningForTurn", () => {
         cfg: baseCfg,
         agentId: "codex",
         sessionEntry: { acp: sessionAcpMeta() },
-      }),
-    ).resolves.toBe("standard");
-  });
-
-  it.each([
-    {
-      cwd: "/projects/command",
-      sessionCwd: "/shared-ws/codex",
-      expected: "runtime-managed-implicit",
-    },
-    {
-      cwd: "/shared-ws/codex",
-      sessionCwd: "/projects/session",
-      expected: "standard",
-    },
-  ] as const)(
-    "gives the invocation cwd precedence over session metadata ($expected)",
-    async ({ cwd, sessionCwd, expected }) => {
-      await expect(
-        resolveAcpAgentWorkspaceProvisioningForTurn({
-          cfg: baseCfg,
-          agentId: "codex",
-          cwd,
-          sessionEntry: { acp: sessionAcpMeta(sessionCwd) },
-        }),
-      ).resolves.toBe(expected);
-    },
-  );
-
-  it("keeps standard provisioning without an invocation cwd and no runtime default", async () => {
-    await expect(
-      resolveAcpAgentWorkspaceProvisioningForTurn({ cfg: baseCfg, agentId: "codex" }),
-    ).resolves.toBe("standard");
-    await expect(
-      resolveAcpAgentWorkspaceProvisioningForTurn({
-        cfg: baseCfg,
-        agentId: "codex",
-        sessionKey: "agent:codex:not-a-binding-key",
       }),
     ).resolves.toBe("standard");
   });

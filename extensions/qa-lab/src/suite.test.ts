@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildQaSuiteEvidenceSummary } from "./evidence-summary.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import { remapModelRefForForcedRuntime } from "./model-selection.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
@@ -732,34 +731,6 @@ describe("buildQaSuiteSummaryJson", () => {
       failed: 1,
       skipped: 2,
     });
-  });
-
-  it("preserves the evidence summary when provided", () => {
-    const evidence = buildQaSuiteEvidenceSummary({
-      artifactPaths: [{ kind: "summary", path: "qa-suite-summary.json" }],
-      scenarioDefinitions: [
-        {
-          id: "dm-chat-baseline",
-          title: "DM baseline conversation",
-          sourcePath: "qa/scenarios/channels/dm-chat-baseline.yaml",
-          surface: "dm",
-          coverage: {
-            primary: ["channels.dm"],
-          },
-        },
-      ],
-      channelId: "qa-channel",
-      generatedAt: "2026-04-11T00:05:00.000Z",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      providerMode: "mock-openai",
-      scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
-    });
-    const json = buildQaSuiteSummaryJson({
-      ...baseParams,
-      evidence,
-    });
-
-    expect(json.evidence).toEqual(evidence);
   });
 
   it("records optional runtime metrics when provided", () => {

@@ -13,6 +13,7 @@ type GatewayStartupOutcome = Parameters<typeof formatGatewayStartupOutcomes>[0][
 const inactiveParams: GatewayStartupOutcomeRecorderParams = {
   cfg: {},
   gatewayStartHooks: false,
+  internalHooksConfigured: false,
   env: {},
 };
 
@@ -40,6 +41,7 @@ describe("gateway startup outcomes", () => {
   it("records awaited internal hook outcomes without logging raw error fields", () => {
     const recorder = createGatewayStartupOutcomeRecorder({
       ...inactiveParams,
+      internalHooksConfigured: true,
       cfg: {
         hooks: {
           enabled: true,

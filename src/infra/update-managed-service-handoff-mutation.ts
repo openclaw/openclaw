@@ -52,10 +52,7 @@ export function createManagedHandoffMutationReader(
         if (!orphanCommand) {
           return false;
         }
-        marker = key.indexOf("/.openclaw-update-child-", marker + 1);
-        continue;
-      }
-      if (!isRetiredManagedHandoffLeasePayload(ancestor.payload_json)) {
+      } else if (!isRetiredManagedHandoffLeasePayload(ancestor.payload_json)) {
         const lease = handle(ancestorKey, ancestor);
         if (lease.version === 4 || !originalAllowsMutation(lease, db)) {
           return false;
@@ -91,14 +88,9 @@ export function createManagedHandoffMutationReader(
     ) {
       return false;
     }
-    if (
-      childAliases(lease.key, db).some(
-        (key) => !ancestorsAllowMutation(key, db, Boolean(managedCommandCustody(lease))),
-      )
-    ) {
-      return false;
-    }
-    return true;
+    return !childAliases(lease.key, db).some(
+      (key) => !ancestorsAllowMutation(key, db, Boolean(managedCommandCustody(lease))),
+    );
   }
   function current(lease: ManagedHandoffParent) {
     try {

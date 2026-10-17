@@ -9,9 +9,19 @@ import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
 } from "../test-helpers.js";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import type { MemoryFileWatcher } from "./file-watcher.js";
 import type { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemoryIndexManager } from "./manager.js";
+
+// Keep owner fault injection in this process; real worker transport has separate coverage.
+vi.mock("./local-file-watcher.js", async (original) => {
+  const watcher = await import("./file-watcher.js");
+  return {
+    ...(await original<typeof import("./local-file-watcher.js")>()),
+    LocalMemoryFileWatcher: watcher.MemoryFileWatcher,
+  };
+});
 
 const observer = await vi.hoisted(async () => {
   const { createMemoryObservationHarness } = await import("./watcher-test-support.js");
@@ -88,7 +98,11 @@ describe("MemoryIndexManager observation close lifecycle", () => {
         },
       },
     };
-    const manager = await MemoryIndexManager.get({ cfg, agentId });
+    const manager = await MemoryIndexManager.get({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId,
+    });
     if (!manager) {
       throw new Error("Expected a persistent Memory manager");
     }
@@ -102,16 +116,14 @@ describe("MemoryIndexManager observation close lifecycle", () => {
   }
 
   it.each([false, true])(
-    "drains independent resources after observer close rejection (provider retry: %s)",
+    "drains independent resources after observer close rejection (provider failure: %s)",
     async (failProvider) => {
       const { manager, fields, entry } = await open("observation-close-" + failProvider);
       const physicalFailure = new Error("observer retirement failed");
       entry.close.mockRejectedValue(physicalFailure);
       const providerFailure = new Error("provider retirement failed");
       if (failProvider) {
-        embedding.close
-          .mockRejectedValueOnce(providerFailure)
-          .mockRejectedValueOnce(providerFailure);
+        embedding.close.mockRejectedValueOnce(providerFailure);
       }
       const unsubscribe = vi.fn(fields.sessionUnsubscribe!);
       fields.sessionUnsubscribe = unsubscribe;
@@ -137,7 +149,7 @@ describe("MemoryIndexManager observation close lifecycle", () => {
         await Promise.race([workerEntered.promise, outcomes]);
         expect(unsubscribe).toHaveBeenCalledOnce();
         expect(fields.sessionUnsubscribe).toBeNull();
-        expect(embedding.close).toHaveBeenCalledTimes(failProvider ? 2 : 1);
+        expect(embedding.close).toHaveBeenCalledOnce();
         expect(workerClose).toHaveBeenCalledOnce();
         expect(release).not.toHaveBeenCalled();
         expect(fields.publishedDatabase.db.isOpen).toBe(true);
@@ -158,7 +170,7 @@ describe("MemoryIndexManager observation close lifecycle", () => {
         // observation failure.
         await expect(manager.close()).rejects.toBe(watcherError);
         await expect(manager.close()).rejects.toBe(watcherError);
-        expect(embedding.close).toHaveBeenCalledTimes(failProvider ? 3 : 1);
+        expect(embedding.close).toHaveBeenCalledTimes(failProvider ? 2 : 1);
         expect(entry.close).toHaveBeenCalledOnce();
         expect(workerClose).toHaveBeenCalledOnce();
         expect(release).toHaveBeenCalledOnce();

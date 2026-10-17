@@ -18,10 +18,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
+import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-record-reader.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { createPluginCache, withPluginCache, type PluginCache } from "../plugins/plugin-cache.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
@@ -88,9 +90,7 @@ export async function runSetupInferenceTurn(params: {
   const timeoutMs = deps.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS;
   const started = Date.now();
   // A scratch workspace keeps the probe from reading the real workspace's bootstrap files.
-  const workspaceDir = await (
-    deps.createTempDir ?? (() => fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-inference-")))
-  )();
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-inference-"));
   const failed = (status: SetupInferenceFailureStatus, error: string): SetupTurnFailure => {
     setupInferenceLog.warn("Inference setup check failed.", {
       event: "setup_inference_probe_failed",
@@ -153,21 +153,20 @@ export async function runSetupInferenceTurn(params: {
     if (cliError) {
       return failed("unavailable", cliError);
     }
-    const profileError = resolveSetupInferenceProfileError(route, workspaceDir, deps);
+    const profileError = await resolveSetupInferenceProfileError(route, workspaceDir, deps);
     if (profileError) {
       return failed("auth", profileError);
     }
     let result: AgentRunResultView;
     if (route.runner === "cli") {
-      const runCli = deps.runCliAgent ?? (await import("../agents/cli-runner.js")).runCliAgent;
+      const { runCliAgent: runCli } = await import("../agents/cli-runner.js");
       result = await runCli({
         ...shared,
         executionMode: "side-question",
         cleanupCliLiveSessionOnRunEnd: true,
       });
     } else {
-      const runEmbedded =
-        deps.runEmbeddedAgent ?? (await import("../agents/embedded-agent.js")).runEmbeddedAgent;
+      const { runEmbeddedAgent: runEmbedded } = await import("../agents/embedded-agent.js");
       const harness = route.agentHarnessRuntimeOverride;
       result = await runSetupInferenceProbeWork(runEmbedded, {
         ...shared,
@@ -235,9 +234,7 @@ export async function runSetupInferenceTurn(params: {
     preparedRunAdmission.close();
     clearAgentRunContext(runId);
     try {
-      await (deps.removeTempDir ?? ((dir: string) => fs.rm(dir, { recursive: true, force: true })))(
-        workspaceDir,
-      );
+      await fs.rm(workspaceDir, { recursive: true, force: true });
     } catch (error) {
       params.runtime?.error?.(
         `Could not remove temporary AI setup files: ${await redactSetupInferenceError(error)}`,
@@ -247,20 +244,20 @@ export async function runSetupInferenceTurn(params: {
   }
 }
 
-type RevalidationDeps = SystemAgentVerifiedInferenceDeps & {
-  createSystemAgentVerifiedInferenceBinding?: typeof createSystemAgentVerifiedInferenceBinding;
-  resolvePluginMetadataSnapshot?: typeof resolvePluginMetadataSnapshot;
+export type SetupInferencePluginGeneration = {
+  config: OpenClawConfig;
+  metadataSnapshot: PluginMetadataSnapshot;
+  pluginRegistry: PluginRegistry;
 };
 
 /** Setup owns fresh package facts without replacing the Gateway's startup generation. */
-export function loadSetupInferencePluginGeneration(params: {
+export async function loadSetupInferencePluginGeneration(params: {
   cache: PluginCache;
   config: OpenClawConfig;
   workspaceDir: string;
   selection: AgentHarnessPluginSelection;
   pendingPluginInstalls?: Record<string, PluginInstallRecord>;
-  resolvePluginMetadataSnapshot?: typeof resolvePluginMetadataSnapshot;
-}) {
+}): Promise<SetupInferencePluginGeneration> {
   // Revalidation must select the probed artifacts: switching a built Gateway
   // owner to source files would report drift even when neither tree changed.
   const preferBuiltPluginArtifacts = getPluginRuntimeLoadContext(
@@ -268,21 +265,21 @@ export function loadSetupInferencePluginGeneration(params: {
   )?.preferBuiltPluginArtifacts;
   // The install lease may have cached absence before writing the package.
   // This post-mutation owner must capture new facts without retiring that lease's cache.
-  return withPluginCache(params.cache, () => {
+  return withPluginCache(params.cache, async () => {
     const index = params.pendingPluginInstalls
       ? loadInstalledPluginIndex({
           config: params.config,
           workspaceDir: params.workspaceDir,
           env: process.env,
           installRecords: {
-            ...loadInstalledPluginIndexInstallRecordsSync(),
+            ...(await loadInstalledPluginIndexInstallRecords()),
             ...params.pendingPluginInstalls,
           },
         })
       : undefined;
     const generation = {
       config: params.config,
-      metadataSnapshot: (params.resolvePluginMetadataSnapshot ?? resolvePluginMetadataSnapshot)({
+      metadataSnapshot: await resolvePluginMetadataSnapshotAsync({
         config: params.config,
         env: process.env,
         workspaceDir: params.workspaceDir,
@@ -310,7 +307,7 @@ async function revalidateSetupInferenceOwner(params: {
   route: SystemAgentConfiguredRoute;
   auth: AgentExecutionAuthBinding;
   ownerPluginIds?: readonly string[];
-  deps: RevalidationDeps;
+  deps: ActivateSetupInferenceDeps;
 }): Promise<SystemAgentVerifiedInferenceBinding> {
   const configuredHarnessId =
     params.route.runner === "embedded"
@@ -341,7 +338,7 @@ async function revalidateSetupInferenceOwner(params: {
       process.env,
     );
     await using cache = createPluginCache();
-    const generation = loadSetupInferencePluginGeneration({
+    const generation = await loadSetupInferencePluginGeneration({
       cache,
       config: params.route.runConfig,
       workspaceDir,
@@ -355,7 +352,6 @@ async function revalidateSetupInferenceOwner(params: {
             : {}),
         agentId: params.route.agentId,
       },
-      resolvePluginMetadataSnapshot: params.deps.resolvePluginMetadataSnapshot,
     });
     return await withPluginRuntimeGenerationScope(generation, createBinding);
   }
@@ -544,8 +540,7 @@ export async function resolvePersistentApplyInference(params: {
       executionRouteIdentity(params.binding.execution),
     ) ||
     !isDeepStrictEqual(live.binding.executionFingerprint, params.binding.executionFingerprint) ||
-    !isDeepStrictEqual(live.binding.ownerPluginIds, params.binding.ownerPluginIds) ||
-    !isDeepStrictEqual(live.binding.ownerPluginArtifacts, params.binding.ownerPluginArtifacts) ||
+    !hasSameOwnerPluginArtifacts(live.binding, params.binding) ||
     !isDeepStrictEqual(live.binding.auth, params.binding.auth)
   ) {
     return null;
@@ -580,7 +575,7 @@ export async function verifySetupInferenceConfig(
     params.config,
     params.agentId,
     {
-      loadAuthProfileStoreForRuntime: deps.loadAuthProfileStoreForRuntime,
+      loadAuthProfileStoreForRuntimeAsync: deps.loadAuthProfileStoreForRuntimeAsync,
       modelTarget: params.modelTarget,
     },
     params.configSnapshot,
@@ -638,7 +633,7 @@ export async function verifySetupInferenceConfig(
         currentConfig,
         route.agentId,
         {
-          loadAuthProfileStoreForRuntime: deps.loadAuthProfileStoreForRuntime,
+          loadAuthProfileStoreForRuntimeAsync: deps.loadAuthProfileStoreForRuntimeAsync,
           modelTarget: params.modelTarget,
         },
         currentSnapshot,
@@ -711,7 +706,7 @@ export async function completeSetupInferenceConfig(
   const route = await resolveSystemAgentConfiguredRouteFromConfig(
     params.config,
     params.agentId,
-    { loadAuthProfileStoreForRuntime: deps.loadAuthProfileStoreForRuntime },
+    { loadAuthProfileStoreForRuntimeAsync: deps.loadAuthProfileStoreForRuntimeAsync },
     params.configSnapshot,
   );
   if (!route) {

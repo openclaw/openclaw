@@ -1,4 +1,5 @@
 // Failed compaction must exit nonzero so automation cannot mistake a silent no-op for success.
+import { createCompactionNoticePayload } from "../auto-reply/reply/compaction-notice.js";
 import { rethrowExpectedCliError } from "../cli/failure-output.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -33,6 +34,7 @@ type SessionsCompactResult = {
       signal?: string;
       pending?: boolean;
       completed?: boolean;
+      qualityDegraded?: true;
     };
   };
 };
@@ -57,7 +59,11 @@ function describeCompaction(result: SessionsCompactResult, fallbackKey: string):
   } else if (typeof result.kept === "number") {
     detail = ` (kept ${result.kept} lines)`;
   }
-  return `Compacted session ${sessionKey}${detail}.`;
+  const notice =
+    result.result?.details?.qualityDegraded === true
+      ? `\n${createCompactionNoticePayload({ phase: "degraded" }).text}`
+      : "";
+  return `Compacted session ${sessionKey}${detail}.${notice}`;
 }
 
 export async function sessionsCompactCommand(

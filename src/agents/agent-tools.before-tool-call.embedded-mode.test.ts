@@ -88,17 +88,6 @@ function requireApprovalRequestCall(label: string): {
   };
 }
 
-function requireBeforeToolCall(
-  mock: ReturnType<typeof vi.fn<HookRunner["runBeforeToolCall"]>>,
-  label: string,
-): Parameters<HookRunner["runBeforeToolCall"]> {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label}`);
-  }
-  return call;
-}
-
 describe("runBeforeToolCallHook — embedded mode approvals", () => {
   let hookRunner: Pick<HookRunner, "hasHooks" | "runBeforeToolCall">;
   let runBeforeToolCallMock: ReturnType<typeof vi.fn<HookRunner["runBeforeToolCall"]>>;
@@ -269,33 +258,6 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("preserves hook params override after an approval allow decision", async () => {
-    setEmbeddedMode(true);
-
-    runBeforeToolCallMock.mockResolvedValue(
-      approvalResult({ severity: "info" }, { extraField: "injected" }),
-    );
-    mockCallGatewayTool.mockResolvedValueOnce({
-      id: "approval-3",
-      decision: PluginApprovalResolutions.ALLOW_ONCE,
-    });
-
-    const result = await runBeforeToolCallHook({
-      toolName: "write",
-      params: { path: "/tmp/test.txt", content: "hello" },
-      toolCallId: "call-3",
-    });
-
-    expect(result.blocked).toBe(false);
-    if (!result.blocked) {
-      expect(result.params).toEqual({
-        path: "/tmp/test.txt",
-        content: "hello",
-        extraField: "injected",
-      });
-    }
-  });
-
   it("routes trusted policy approval through the same approval gate as before_tool_call hooks", async () => {
     setEmbeddedMode(true);
     trustedPolicy(
@@ -337,26 +299,51 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(runBeforeToolCallMock).not.toHaveBeenCalled();
   });
 
-  it("preserves trusted policy params when before_tool_call hooks leave params unchanged", async () => {
-    trustedPolicy({ params: { command: "patched" } });
-    runBeforeToolCallMock.mockResolvedValue(undefined);
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: { command: "original", cwd: "/tmp" },
-      toolCallId: "call-policy-params",
-      ctx: { agentId: "main", sessionKey: "main" },
+  it("rejects an ordinary hook rewrite after trusted policy approval", async () => {
+    trustedPolicy(approvalResult({ pluginId: "trusted-policy" }));
+    runBeforeToolCallMock.mockResolvedValue({
+      params: { command: "unapproved" },
+    });
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "approval-policy",
+      decision: PluginApprovalResolutions.ALLOW_ONCE,
     });
 
-    expect(result).toEqual({ blocked: false, params: { command: "patched" } });
-    const [hookParams, hookContext] = requireBeforeToolCall(
-      runBeforeToolCallMock,
-      "before_tool_call invocation",
-    );
-    expect(hookParams.params).toEqual({ command: "patched" });
-    expect(hookParams.toolName).toBe("exec");
-    expect(hookParams.toolCallId).toBe("call-policy-params");
-    expect(typeof hookContext).toBe("object");
+    await expect(
+      runBeforeToolCallHook({
+        toolName: "bash",
+        params: { command: "approved" },
+      }),
+    ).resolves.toMatchObject({
+      blocked: true,
+      deniedReason: "plugin-approval",
+      reason: "Tool call parameters changed after trusted approval",
+      params: { command: "approved" },
+    });
+  });
+
+  it("rejects an in-place ordinary hook mutation after trusted policy approval", async () => {
+    trustedPolicy(approvalResult({ pluginId: "trusted-policy" }));
+    runBeforeToolCallMock.mockImplementation((event) => {
+      event.params.command = "unapproved";
+      return Promise.resolve(undefined);
+    });
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "approval-policy",
+      decision: PluginApprovalResolutions.ALLOW_ONCE,
+    });
+
+    await expect(
+      runBeforeToolCallHook({
+        toolName: "bash",
+        params: { command: "approved" },
+      }),
+    ).resolves.toMatchObject({
+      blocked: true,
+      deniedReason: "plugin-approval",
+      reason: "Tool call parameters changed after trusted approval",
+      params: { command: "approved" },
+    });
   });
 });
 

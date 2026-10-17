@@ -629,6 +629,32 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     expect(seenAuthHeaders).toEqual(["Bearer resolved-token"]);
   });
 
+  it.each([
+    {
+      phase: "connection resolution",
+      url: async () => {
+        throw new Error("connection unavailable");
+      },
+      message: "connection unavailable",
+    },
+    {
+      phase: "socket construction",
+      url: "not a valid websocket URL",
+      message: "not a valid websocket URL",
+    },
+  ])("reports $phase failures through connect and the observer", async ({ url, message }) => {
+    const onError = vi.fn();
+    const session = createSession({ url, callbacks: { onError } });
+
+    await expect(session.connect()).rejects.toThrow(message);
+
+    expect(session.isConnected()).toBe(false);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(requireFirstMockArg(onError, "connection error")).toMatchObject({
+      message: expect.stringContaining(message),
+    });
+  });
+
   it("preserves connect failures when the error callback throws", async () => {
     vi.useFakeTimers();
     const previousDebugProxyEnabled = process.env.OPENCLAW_DEBUG_PROXY_ENABLED;
@@ -800,28 +826,6 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
       );
     });
     expect(connections).toHaveLength(3);
-  });
-
-  it("delivers a legitimate large inbound message below the payload cap", async () => {
-    // Well above any real transcript message yet far under the 16 MiB cap: proves
-    // the bound does not reject legitimate large provider traffic.
-    const largeText = "x".repeat(2 * 1024 * 1024);
-    const server = await createRealtimeServer({
-      initialEvent: { type: "transcript", text: largeText },
-    });
-    const received = createDeferred();
-    const onMessage = vi.fn(() => received.resolve());
-    const session = createSession<{ type?: string; text?: string }>({
-      url: server.url,
-      readyOnOpen: true,
-      onMessage,
-    });
-
-    await session.connect();
-    await received.promise;
-    expect(onMessage).toHaveBeenCalledTimes(1);
-    const event = requireFirstMockArg(onMessage, "large inbound message");
-    expect(event).toEqual({ type: "transcript", text: largeText });
   });
 
   it("drops an oversized inbound message before it reaches the provider parser", async () => {

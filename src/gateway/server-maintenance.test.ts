@@ -29,10 +29,11 @@ const cleanupManagedOutgoingMediaRecordsMock = vi.fn(async () => ({
   deletedFileCount: 0,
   retainedCount: 0,
 }));
-const pruneExpiredDevicePairSetupCompletionsMock = vi.fn(async () => 0);
+const startDevicePairSetupMaintenanceMock = vi.fn(async () => 0);
 
+// mock-isolation: In-memory maintenance timers must not start the device expiry worker.
 vi.mock("../infra/device-bootstrap.js", () => ({
-  pruneExpiredDevicePairSetupCompletions: pruneExpiredDevicePairSetupCompletionsMock,
+  startDevicePairSetupMaintenance: startDevicePairSetupMaintenanceMock,
 }));
 
 vi.mock("../media/store.js", async () => {
@@ -105,7 +106,7 @@ describe("startGatewayMaintenanceTimers", () => {
     cleanOldMediaMock.mockReset().mockResolvedValue(undefined);
     pruneOutboundMediaMock.mockReset().mockResolvedValue(undefined);
     prunePlaybackTranscodeCacheMock.mockReset().mockResolvedValue(undefined);
-    pruneExpiredDevicePairSetupCompletionsMock.mockReset().mockResolvedValue(0);
+    startDevicePairSetupMaintenanceMock.mockReset().mockResolvedValue(0);
     cleanupManagedOutgoingMediaRecordsMock.mockReset().mockResolvedValue({
       deletedRecordCount: 0,
       deletedFileCount: 0,
@@ -237,8 +238,26 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
+  it("cancels media cleanup while the startup grace is pending", async () => {
+    vi.useFakeTimers();
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const timers = startGatewayMaintenanceTimers(deps);
+    timers.startMediaCleanup();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await expect(timers.stopMediaCleanup()).resolves.toBe("drained");
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(deps.runDeliveryQueueMediaGc).not.toHaveBeenCalled();
+    expect(prunePlaybackTranscodeCacheMock).not.toHaveBeenCalled();
+    expect(cleanupManagedOutgoingMediaRecordsMock).not.toHaveBeenCalled();
+    expect(pruneOutboundMediaMock).not.toHaveBeenCalled();
+    await stopMaintenanceTimers(timers);
+  });
+
   it("delays worktree cleanup until the first hourly tick and joins slow sweeps", async () => {
     vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
     const sweep = createDeferred();
@@ -298,34 +317,20 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("runs setup-outcome cleanup immediately without overlapping minute ticks", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
-    const prune = createDeferred<number>();
-    pruneExpiredDevicePairSetupCompletionsMock.mockReturnValueOnce(prune.promise);
+  it("delegates setup-outcome deadlines to the device owner", async () => {
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const timers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
-
-    await vi.advanceTimersByTimeAsync(0);
-    expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenCalledWith({
-      nowMs: Date.now(),
+    expect(startDevicePairSetupMaintenanceMock).toHaveBeenCalledOnce();
+    expect(startDevicePairSetupMaintenanceMock).toHaveBeenCalledWith({
+      scheduler: expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      onError: expect.any(Function),
     });
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenCalledTimes(1);
-
-    prune.resolve(0);
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenLastCalledWith({
-      nowMs: Date.now(),
-    });
-    expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenCalledTimes(2);
-
     await stopMaintenanceTimers(timers);
   });
 
   it("updates attachment cleanup policy between sweeps without restarting maintenance", async () => {
     vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:01.234Z"));
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     let config: OpenClawConfig = { attachments: { ttlHours: 24 } };
 
@@ -335,7 +340,11 @@ describe("startGatewayMaintenanceTimers", () => {
     });
     timers.startMediaCleanup();
 
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(prunePlaybackTranscodeCacheMock).not.toHaveBeenCalled();
+    expect(cleanupManagedOutgoingMediaRecordsMock).not.toHaveBeenCalled();
+    expect(cleanOldMediaMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(10_000);
     expect(prunePlaybackTranscodeCacheMock).toHaveBeenCalledTimes(1);
     expect(pruneOutboundMediaMock).not.toHaveBeenCalled();
     expect(cleanOldMediaMock).toHaveBeenCalledWith(MEDIA_CLEANUP_TTL_MS, {
@@ -377,6 +386,7 @@ describe("startGatewayMaintenanceTimers", () => {
     });
     timers.startMediaCleanup();
 
+    await vi.advanceTimersByTimeAsync(130_000);
     await vi.waitFor(() => {
       expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(1);
       expect(prunePlaybackTranscodeCacheMock).toHaveBeenCalledTimes(1);
@@ -395,7 +405,7 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("refreshes automatic health snapshots without live channel probes", async () => {
+  it("warms health once and refreshes passively only while clients are connected", async () => {
     const clock = createGatewaySchedulerClock();
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
@@ -408,8 +418,22 @@ describe("startGatewayMaintenanceTimers", () => {
       expect(deps.refreshGatewayHealthSnapshot).toHaveBeenCalledWith({ probe: false });
 
       await clock.advanceBy(60_000);
+      expect(deps.refreshGatewayHealthSnapshot).toHaveBeenCalledTimes(1);
+
+      deps.clients.add({
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: { id: "test", version: "test", platform: "test", mode: "test" },
+        },
+      });
+      await clock.advanceBy(60_000);
       expect(deps.refreshGatewayHealthSnapshot).toHaveBeenCalledTimes(2);
       expect(deps.refreshGatewayHealthSnapshot).toHaveBeenLastCalledWith({ probe: false });
+
+      deps.clients.clear();
+      await clock.advanceBy(60_000);
+      expect(deps.refreshGatewayHealthSnapshot).toHaveBeenCalledTimes(2);
     } finally {
       await stopMaintenanceTimers(timers);
     }
@@ -432,6 +456,7 @@ describe("startGatewayMaintenanceTimers", () => {
     });
     timers.startMediaCleanup();
 
+    await vi.advanceTimersByTimeAsync(130_000);
     await vi.waitFor(() => {
       expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(1);
     });
@@ -464,7 +489,7 @@ describe("startGatewayMaintenanceTimers", () => {
     const timers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
     timers.startMediaCleanup();
 
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(130_000);
     expect(pruneOutboundMediaMock).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(pruneOutboundMediaMock).toHaveBeenCalledTimes(1);
@@ -512,6 +537,7 @@ describe("startGatewayMaintenanceTimers", () => {
       getRuntimeConfig: () => ({ attachments: { ttlHours: 24 } }),
     });
     timers.startMediaCleanup();
+    await vi.advanceTimersByTimeAsync(130_000);
     await vi.waitFor(() => {
       expect(prunePlaybackTranscodeCacheMock).toHaveBeenCalledTimes(1);
       expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(1);
@@ -576,6 +602,7 @@ describe("startGatewayMaintenanceTimers", () => {
       const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
       const oldTimers = startGatewayMaintenanceTimers(createDeps());
       oldTimers.startMediaCleanup();
+      await vi.advanceTimersByTimeAsync(130_000);
       await vi.waitFor(() => {
         expect(cleanup).toHaveBeenCalledTimes(1);
       });
@@ -589,7 +616,7 @@ describe("startGatewayMaintenanceTimers", () => {
       expect(cleanup).toHaveBeenCalledTimes(1);
 
       resolveOldCleanup();
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(130_000);
       await vi.waitFor(() => {
         expect(cleanup).toHaveBeenCalledTimes(2);
       });
@@ -723,7 +750,7 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("converts expired stalled terminal persistence into a recovery candidate", async () => {
+  it("preserves captured recovery custody when stalled terminal persistence expires", async () => {
     const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
     const runId = "run-terminal-persistence";
     const terminalRun = createActiveRun("main");
@@ -733,6 +760,15 @@ describe("startGatewayMaintenanceTimers", () => {
     terminalRun.projectSessionTerminalObservedAt = Date.now() - 500;
     terminalRun.projectSessionTerminalPersistence = new Promise<void>(() => {});
     deps.chatAbortControllers.set(runId, terminalRun);
+    const recoveryCandidate = {
+      runId,
+      sourceRunId: "source-terminal-persistence",
+      lifecycleGeneration: "generation-1",
+      sessionKey: "main",
+      sessionId: "sess-1",
+      observedAt: terminalRun.projectSessionTerminalObservedAt,
+    };
+    deps.restartRecoveryCandidates.set(runId, recoveryCandidate);
 
     const timers = startGatewayMaintenanceTimers(deps);
     await vi.advanceTimersByTimeAsync(59_000);
@@ -745,13 +781,7 @@ describe("startGatewayMaintenanceTimers", () => {
 
     expect(terminalRun.controller.signal.aborted).toBe(false);
     expect([await drain, deps.chatAbortControllers.has(runId)]).toEqual([false, false]);
-    expect(deps.restartRecoveryCandidates.get(runId)).toEqual({
-      runId,
-      lifecycleGeneration: "generation-1",
-      sessionKey: "main",
-      sessionId: "sess-1",
-      observedAt: Date.now() - 60_500,
-    });
+    expect(deps.restartRecoveryCandidates.get(runId)).toBe(recoveryCandidate);
     await stopMaintenanceTimers(timers);
   });
 

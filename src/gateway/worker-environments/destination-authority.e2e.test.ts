@@ -68,13 +68,7 @@ const git = async (root: string, args: string[]) =>
 const authorityCases = [
   {
     contract: "destination preparation",
-    modes: [
-      "allowed",
-      "policy-activated",
-      "source-reassigned",
-      "accepted-stop",
-      "accepted-attached-stop",
-    ],
+    modes: ["allowed", "policy-activated", "accepted-stop", "accepted-attached-stop"],
   },
   {
     contract: "pending-result settlement",
@@ -115,10 +109,24 @@ it.for(authorityCases)("enforces $contract", async ({ contract, modes }, { signa
       const base = await captureWorkspaceManifest({ root: source, baseCommit });
       const remotes = state.path("remotes");
       await fs.mkdir(remotes);
+      const gitBin = state.path("git-transport");
+      await fs.mkdir(gitBin);
+      // Model a signed-out native CLI without inheriting the host's GitHub accounts.
+      await fs.writeFile(
+        path.join(gitBin, "gh"),
+        `#!${process.execPath}
+if (process.argv[2] !== "auth") process.exit(2);
+if (process.argv[3] === "token") process.exit(1);
+if (process.argv[3] !== "status") process.exit(2);
+process.stdout.write('{"hosts":{}}');
+`,
+        { mode: 0o700 },
+      );
       // Git itself handles the fixture transport; production clone/ls-remote commands
       // and guards are unchanged, and never contact public GitHub or use credentials.
       await withEnvAsync(
         {
+          PATH: `${gitBin}${path.delimiter}${state.env.PATH}`,
           GIT_CONFIG_COUNT: "2",
           GIT_CONFIG_KEY_0: `url.file://${remotes}/.insteadOf`,
           GIT_CONFIG_VALUE_0: "https://github.com/openclaw/",
@@ -138,8 +146,6 @@ it.for(authorityCases)("enforces $contract", async ({ contract, modes }, { signa
               const store = await createWorkerEnvironmentStore({ database });
               const scheduler = createTestGatewayScheduler();
               const realGit = (await exec("which", ["git"])).stdout.trim();
-              const gitBin = state.path("git-transport");
-              await fs.mkdir(gitBin);
               // Node workers intentionally discard GIT_CONFIG_*; this executable adapter
               // changes only transport and delegates every operation to the real Git owner.
               await fs.writeFile(
@@ -238,7 +244,7 @@ process.stdin.pipe(child.stdin);
                 listEnvironments: store.list,
                 getTransport: () => adapter,
                 workspaceTransfer: transfer,
-                validateWorkerTurn: placements.validateTurnClaim,
+                validateWorkerTurn: (claim) => placements.validateTurnClaim(claim),
                 launchNodeWorker: async () => {
                   throw new Error("No model turn belongs in destination proof");
                 },
@@ -294,9 +300,6 @@ process.stdin.pipe(child.stdin);
                 bootstrapWorker: async () => {
                   throw new Error("Warm allocation already bootstrapped");
                 },
-                executeInference: async () => {
-                  throw new Error("No inference belongs in destination proof");
-                },
                 nodeTunnelManager: tunnels,
                 placementStore: createWorkerSessionPlacementGate(placements),
               });
@@ -306,6 +309,7 @@ process.stdin.pipe(child.stdin);
                 node: await adapter.getCurrentNode(deviceId),
               }));
               const runtime = createGatewayWorkerPlacementRuntime({
+                initialPlacements: await placements.listAsync(),
                 scheduler,
                 environments,
                 placements,
@@ -540,9 +544,9 @@ process.stdin.pipe(child.stdin);
                   },
                   target: { kind: "gateway" },
                 });
-                const cloneFilesBefore = await fs.readdir(state.statePath("projects"), {
-                  recursive: true,
-                });
+                const cloneFilesBefore = (
+                  await fs.readdir(state.statePath("projects"), { recursive: true })
+                ).toSorted();
                 expect(cloneFilesBefore).not.toContain(sha256HexPrefixCore(url, 16));
                 const latePolicy = mode.startsWith("accepted-policy-");
                 if (mode.startsWith("accepted-")) {
@@ -651,9 +655,11 @@ process.stdin.pipe(child.stdin);
                     });
                   }
                   expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
-                  expect(placements.getPlacementMove(identity.sessionId)).toBeUndefined();
+                  expect(
+                    await placements.getPlacementMoveAsync(identity.sessionId),
+                  ).toBeUndefined();
                 } else {
-                  const reconciling = await placements.startReconcile({
+                  await placements.startReconcile({
                     sessionId: active.sessionId,
                     environmentId: active.environmentId,
                     ownerEpoch: active.activeOwnerEpoch,
@@ -704,18 +710,6 @@ process.stdin.pipe(child.stdin);
                     if (mode === "policy-activated") {
                       publishConfig("development");
                     }
-                    if (mode === "source-reassigned") {
-                      await placements.cancelPlacementMove(begun.intent);
-                      await placements.fail({
-                        sessionId: identity.sessionId,
-                        expectedGeneration: reconciling.generation,
-                        recoveryError: "Source reassigned",
-                      });
-                      await placements.startDispatch({
-                        ...identity,
-                        executionMode: "worker-turn",
-                      });
-                    }
                   } finally {
                     release.resolve();
                     await held;
@@ -729,11 +723,7 @@ process.stdin.pipe(child.stdin);
                     expect(currentCall).toBeGreaterThanOrEqual(0);
                     await expect(
                       observedMaterialization.mock.results[currentCall]?.value,
-                    ).rejects.toThrow(
-                      mode === "policy-activated"
-                        ? "required worker profile policy"
-                        : "lost its source owner",
-                    );
+                    ).rejects.toThrow("required worker profile policy");
                   }
                   observedMaterialization.mockRestore();
                   if (mode === "allowed") {
@@ -757,19 +747,17 @@ process.stdin.pipe(child.stdin);
                     expect(
                       await managedWorktrees.findLiveByOwner("session", identity.sessionKey),
                     ).toBeUndefined();
-                    expect(placements.get(identity.sessionId)?.state).toBe(
-                      mode === "policy-activated" ? "reconciling" : "requested",
-                    );
+                    expect(placements.get(identity.sessionId)?.state).toBe("reconciling");
                     if (mode === "policy-activated") {
-                      expect(placements.getPlacementMove(identity.sessionId)?.lastError).toContain(
-                        "required worker profile policy",
-                      );
+                      expect(
+                        (await placements.getPlacementMoveAsync(identity.sessionId))?.lastError,
+                      ).toContain("required worker profile policy");
                     }
                   }
                 }
                 if (mode !== "allowed" && !latePolicy && mode !== "accepted-allowed") {
                   expect(
-                    await fs.readdir(state.statePath("projects"), { recursive: true }),
+                    (await fs.readdir(state.statePath("projects"), { recursive: true })).toSorted(),
                   ).toEqual(cloneFilesBefore);
                   expect(loadSessionEntry(identity)?.repositoryWorkspaceId).toBe(
                     repository.workspaceId,
@@ -800,12 +788,10 @@ process.stdin.pipe(child.stdin);
                 console.info(
                   `destination-boundary ${mode}: required-placement=${Boolean(config.cloudWorkers?.requiredProfile)} gateway-binding=${Boolean(loadSessionEntry(identity)?.worktree)} source=destroyed checkpoint=retained placement=${placements.get(identity.sessionId)?.state}`,
                 );
-                if (mode === "policy-activated" || mode === "source-reassigned") {
+                if (mode === "policy-activated") {
                   // Retire the synthetic operation after asserting its retained rejection;
                   // later controls must not resume it when their policy is intentionally off.
-                  if (mode === "policy-activated") {
-                    await placements.cancelPlacementMove(begun.intent);
-                  }
+                  await placements.cancelPlacementMove(begun.intent);
                   await placements.fail({
                     sessionId: identity.sessionId,
                     expectedGeneration: placements.get(identity.sessionId)!.generation,

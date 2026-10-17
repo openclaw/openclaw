@@ -27,7 +27,7 @@ Long polling is the default. Webhook mode is the alternative when an HTTPS ingre
 
     Doctor saves the pin and its `meta.migrations.webhookListeners` completion record together. Keep that record when removing the pin so later Doctor runs and updates leave it removed. See [webhook migrations](/gateway/doctor/config-migrations#channel-webhook-listeners) for included and read-only config sources.
 
-    The legacy port preserves its unauthenticated `/healthz` response (`200`, plain `ok`) and account-local failed-secret rate limit. Health matching is exact: query strings, trailing slashes, case changes, and encoded variants are not health checks. HEAD returns the same status without a body. The canonical Gateway port keeps its own check and response-header behavior.
+    The legacy port preserves its unauthenticated `/healthz` response (`200`, plain `ok`) and account-local failed-secret rate limit. Health matching is exact: query strings, trailing slashes, case changes, and encoded variants are not health checks. HEAD returns the same status without a body. The main Gateway port keeps its own check and response-header behavior.
 
     After upgrading, run `openclaw doctor --fix`. Doctor backs up the config and migrates old `webhookPort` and `webhookHost` settings to `legacyWebhook: { port, host }`, preserving a host-only setting with port `8787`. An explicit endpoint object overrides the default; an omitted object host uses `127.0.0.1`. Existing `legacyWebhook: false` settings remain disabled during migration.
 
@@ -50,13 +50,16 @@ Telegram acknowledgment is gated by durable queue admission, not by plugin
 hooks or completion of an agent turn. Webhook mode uses the boundary described
 above; long polling uses this sequence:
 
-1. The polling worker receives one Telegram update and waits.
-2. OpenClaw transactionally enqueues the raw update in the account-scoped
+1. The polling worker receives a batch of Telegram updates and waits.
+2. OpenClaw transactionally enqueues that response's raw updates in the account-scoped
    `channel_ingress_events` queue in `state/openclaw.sqlite`.
-3. After enqueue succeeds, OpenClaw schedules persistence of the restart offset
+3. After the batch is durable, OpenClaw schedules persistence of its highest update ID
    and acknowledges the worker, allowing polling to continue.
-4. The shared drain processes the queued update separately. If admission fails,
+4. The shared drain processes the queued updates separately. If admission fails,
    OpenClaw rejects the worker acknowledgment instead of silently advancing.
+
+Duplicate update IDs are admitted once. Batching preserves queue ordering and
+does not change the quiet windows used to combine albums and forwarded messages.
 
 `offset queued` means the restart-offset write was scheduled, not committed. A
 crash before that write finishes can make Telegram redeliver an update that is
@@ -66,6 +69,13 @@ deduplication, not exactly-once processing. See
 [durable ingress and replay dedupe](/plugins/sdk-channel-plugins/durable-ingress#durable-ingress-and-replay-dedupe).
 
 ### Replay limits
+
+During upgrades, legacy spool updates older than 24 hours become
+`stale-legacy-import` failure tombstones, using their original receipt or message/edit
+date. Fresh updates still dispatch; original source bytes and import receipts stay
+preserved. One warning reports the count and oldest/newest dates. This intentionally
+forgoes genuinely unprocessed old updates to avoid executing stale instructions.
+Previously imported queue rows are unchanged.
 
 Both transports record the account's bot identity before accepting updates, even
 without a polling offset. Replacing a known bot clears its old ingress rows before

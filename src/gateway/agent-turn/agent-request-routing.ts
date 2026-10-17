@@ -2,7 +2,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import { isExecApprovalFollowupSessionRebound } from "../../agents/bash-tools.exec-approval-followup-state.js";
-import { resolveExistingSessionKeyForRequest } from "../../agents/command/session.js";
+import {
+  resolveExistingSessionKeyForRequest,
+  resolveSessionKeyForRequestCore,
+} from "../../agents/command/session.js";
 import { resolveExplicitAgentSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitDiagnosticEvent } from "../../infra/diagnostic-events.js";
@@ -20,10 +23,11 @@ import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "../server-methods/attachment-normalize.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { loadSessionEntry, resolveSessionStoreKey } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
+import { resolveSessionStoreKey } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
-import { respondUnavailableAgentSessionForKey } from "./agent-handler-helpers.js";
+import { respondUnavailableAgentSession } from "./agent-handler-helpers.js";
 import type { AgentTurnContext } from "./types.js";
 
 type ExplicitRecipientSession = Awaited<ReturnType<typeof resolveAgentExplicitRecipientSession>>;
@@ -72,10 +76,12 @@ export async function prepareAgentRequestRouting(params: {
       ? requestedToRaw
       : undefined;
   const requestedSessionKeyRaw = requestedSessionKeyParam ?? sessionKeyFromTo;
-  if (requestedSessionKeyRaw) {
+  const agentSelectionKey =
+    requestedSessionKeyRaw ?? (!requestedSessionId && !agentId ? "main" : undefined);
+  if (agentSelectionKey) {
     const requestedSessionAgent = resolveRequestedSessionAgentId(
       params.cfg,
-      requestedSessionKeyRaw,
+      agentSelectionKey,
       agentId,
     );
     if (!requestedSessionAgent.ok) {
@@ -84,26 +90,23 @@ export async function prepareAgentRequestRouting(params: {
     }
     agentId = requestedSessionAgent.agentId;
   }
-  let sessionIdTarget: ReturnType<typeof resolveExistingSessionKeyForRequest> | undefined;
+  let sessionIdTarget: Awaited<ReturnType<typeof resolveExistingSessionKeyForRequest>> | undefined;
   if (requestedSessionId && !requestedSessionKeyRaw) {
     try {
-      sessionIdTarget = resolveExistingSessionKeyForRequest({
+      params.reserveDedupe(undefined, agentId);
+      const resolveSessionId = params.request.createSessionIfMissing
+        ? resolveSessionKeyForRequestCore
+        : resolveExistingSessionKeyForRequest;
+      sessionIdTarget = await resolveSessionId({
         cfg: params.cfg,
         sessionId: requestedSessionId,
         agentId,
       });
       agentId = sessionIdTarget.agentId ?? agentId;
     } catch (error) {
+      params.clearDedupe();
       return rejectInvalidRequest(formatForLog(error));
     }
-  }
-  if (!requestedSessionKeyRaw && !requestedSessionId && !agentId) {
-    const implicitMainOwner = resolveRequestedSessionAgentId(params.cfg, "main");
-    if (!implicitMainOwner.ok) {
-      params.respond(false, undefined, implicitMainOwner.error);
-      return undefined;
-    }
-    agentId = implicitMainOwner.agentId;
   }
   const explicitRecipientChannel = normalizeMessageChannel(params.request.channel);
   const explicitRecipient =
@@ -152,23 +155,29 @@ export async function prepareAgentRequestRouting(params: {
     requestedSessionKey,
   });
   if (expectedSessionTargetError) {
+    params.clearDedupe();
     return rejectInvalidRequest(expectedSessionTargetError);
   }
+  let loaded: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>> | undefined;
   if (requestedSessionKey) {
-    const unavailable = respondUnavailableAgentSessionForKey({
-      sessionKey: requestedSessionKey,
-      requestedSessionId,
-      isRawModelRun: params.isRawModelRun,
-      agentId,
-      respond: params.respond,
-      assertCurrent: params.assertCurrent,
-    });
-    if (unavailable instanceof Promise) {
-      // Only the free ACP metadata read yields here. Reserve before that read
-      // settles so another invocation cannot claim this idempotency key.
-      params.reserveDedupe(requestedSessionKey, agentId);
-    }
+    // Reserve before the worker read yields, including ordinary session keys.
+    params.reserveDedupe(requestedSessionKey, agentId);
     try {
+      loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: params.cfg,
+        key: requestedSessionKey,
+        agentId,
+        projection: "list",
+        excludeInternalEffects: true,
+        assertActive: params.assertCurrent,
+      });
+      const unavailable = respondUnavailableAgentSession({
+        loaded,
+        requestedSessionId,
+        isRawModelRun: params.isRawModelRun,
+        respond: params.respond,
+        assertCurrent: params.assertCurrent,
+      });
       if (unavailable instanceof Promise ? await unavailable : unavailable) {
         params.clearDedupe();
         return undefined;
@@ -182,16 +191,7 @@ export async function prepareAgentRequestRouting(params: {
     const expectedSessionId = normalizeOptionalString(
       params.request.execApprovalFollowupExpectedSessionId,
     );
-    let currentSessionId: string | undefined;
-    try {
-      currentSessionId = normalizeOptionalString(
-        loadSessionEntry(requestedSessionKeyRaw, {
-          ...(agentId ? { agentId } : {}),
-          clone: false,
-          projection: "list",
-        }).entry?.sessionId,
-      );
-    } catch {}
+    const currentSessionId = normalizeOptionalString(loaded?.entry?.sessionId);
     if (
       isExecApprovalFollowupSessionRebound({
         expectedSessionId,
@@ -233,13 +233,6 @@ export async function prepareAgentRequestRouting(params: {
   // Keyless runs still need the run-id reservation before asynchronous preparation,
   // otherwise concurrent callers can dispatch the same id without a session owner.
   params.reserveDedupe(preAcceptedReservedSessionKey, agentId);
-  const loaded = requestedSessionKey
-    ? loadSessionEntry(requestedSessionKey, {
-        ...(agentId ? { agentId } : {}),
-        clone: false,
-        projection: "list",
-      })
-    : undefined;
   if (loaded) {
     params.bindDedupeSessionTarget({
       sessionKey: loaded.canonicalKey,

@@ -13,7 +13,7 @@ import type { MatrixVerificationSummary } from "../sdk/verification-manager.js";
 import type { createDirectRoomTracker } from "./direct.js";
 import type { createMatrixRoomInfoResolver } from "./room-info.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
-import { resolveMatrixInboundRoute } from "./route.js";
+import { resolveMatrixInboundRouteAsync } from "./route.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
 import { createMatrixVerificationEventRouter } from "./verification-events.js";
@@ -159,9 +159,6 @@ async function resolveMatrixSelfUserId(
   client: MatrixClient,
   logVerboseMessage: (message: string) => void,
 ): Promise<string | null> {
-  if (typeof client.getUserId !== "function") {
-    return null;
-  }
   try {
     return (await client.getUserId()) ?? null;
   } catch (err) {
@@ -191,7 +188,7 @@ export function registerMatrixMonitorEvents(params: {
   getHealthySyncSinceMs?: () => number | undefined;
   formatNativeDependencyHint: PluginRuntime["system"]["formatNativeDependencyHint"];
   onRoomMessage: (roomId: string, event: MatrixRawEvent) => void | Promise<void>;
-  runDetachedTask?: (label: string, task: () => Promise<void>) => Promise<void>;
+  runDetachedTask: (label: string, task: () => Promise<void>) => Promise<void>;
   sasNoticeRetryDelayMs?: number;
 }): () => void {
   const {
@@ -228,19 +225,8 @@ export function registerMatrixMonitorEvents(params: {
     sasNoticeRetryDelayMs,
   });
 
-  const runMonitorTask = (label: string, task: () => Promise<void>) => {
-    if (runDetachedTask) {
-      return runDetachedTask(label, task);
-    }
-    return Promise.resolve()
-      .then(task)
-      .catch((error: unknown) => {
-        logVerboseMessage(`matrix: ${label} failed (${String(error)})`);
-      });
-  };
-
   const dispatchRoomMessage = (label: string, roomId: string, event: MatrixRawEvent) => {
-    void runMonitorTask(`${label} room=${roomId} id=${event.event_id ?? "unknown"}`, async () => {
+    void runDetachedTask(`${label} room=${roomId} id=${event.event_id ?? "unknown"}`, async () => {
       await onRoomMessage(roomId, event);
     });
   };
@@ -272,7 +258,7 @@ export function registerMatrixMonitorEvents(params: {
   };
 
   const onFailedDecryption = (roomId: string, event: MatrixRawEvent, error: Error) => {
-    void runMonitorTask(
+    void runDetachedTask(
       `failed decryption handler room=${roomId} id=${event.event_id ?? "unknown"}`,
       async () => {
         const failureState = postHealthySyncDecryptFailureTracker.recordFailure(
@@ -330,7 +316,7 @@ export function registerMatrixMonitorEvents(params: {
   };
 
   const onVerificationSummary = (summary: MatrixVerificationSummary) => {
-    void runMonitorTask("verification summary handler", async () => {
+    void runDetachedTask("verification summary handler", async () => {
       await routeVerificationSummary(summary);
     });
   };
@@ -359,7 +345,7 @@ export function registerMatrixMonitorEvents(params: {
     if (event.membershipProvenance !== "transition" || event.state_key !== auth.userId) {
       return;
     }
-    void runMonitorTask(`join introduction room=${roomId}`, async () => {
+    void runDetachedTask(`join introduction room=${roomId}`, async () => {
       const members = await readJoinedMatrixMembers(client, roomId);
       // Classification needs a real remote member, not the self-join's sender.
       // Unknown membership cannot establish either room admission or DM exclusion.
@@ -395,14 +381,16 @@ export function registerMatrixMonitorEvents(params: {
         accountId: auth.accountId,
         conversationId: roomId,
         deliverTo: `room:${roomId}`,
-        route: resolveMatrixInboundRoute({
-          cfg,
-          accountId: auth.accountId,
-          roomId,
-          senderId: auth.userId,
-          isDirectMessage: false,
-          resolveAgentRoute,
-        }).route,
+        route: (
+          await resolveMatrixInboundRouteAsync({
+            cfg,
+            accountId: auth.accountId,
+            roomId,
+            senderId: auth.userId,
+            isDirectMessage: false,
+            resolveAgentRoute,
+          })
+        ).route,
         roomAllowed,
         resolveRoomContext: async ({ messageLimit }) => {
           const info = await getMatrixRoomInfo(roomId, options);

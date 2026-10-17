@@ -18,6 +18,7 @@ import {
   getDiagnosticSessionState,
   isDiagnosticSessionStateCurrent,
   peekDiagnosticSessionState,
+  touchDiagnosticSessionState,
 } from "./diagnostic-session-state.js";
 
 export type RecoverStuckSession = (
@@ -120,10 +121,7 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
   }
   const prevState = state.state;
   state.state = "idle";
-  state.lastActivity = Date.now();
-  state.generation = (state.generation ?? 0) + 1;
-  state.lastStuckWarnAgeMs = undefined;
-  state.lastLongRunningWarnAgeMs = undefined;
+  touchDiagnosticSessionState(state);
   const preserveQueuedIdleWork =
     params.request.expectedState === "idle" && (params.outcome.queuedCount ?? 0) > 0;
   state.queueDepth = recoveryOutcomeClearsQueuedSessionState(params.outcome)

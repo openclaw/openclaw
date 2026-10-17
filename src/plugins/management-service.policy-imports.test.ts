@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { readConfigFileSnapshotForWrite, writeConfigFile } from "../config/config.js";
+import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -11,7 +13,7 @@ import {
 import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { refreshInstalledPluginIndex } from "./installed-plugin-index.js";
 import type { PluginLifecycleRuntimeApply } from "./lifecycle.js";
@@ -184,7 +186,7 @@ describe("reload consent and current install preconditions", () => {
       },
       { env: state.env, config },
     );
-    const records = readPersistedInstalledPluginIndexInstallRecords({ env: state.env });
+    const records = await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env });
     const record = records?.["reload-proof"];
     if (!record) {
       throw new Error("Expected the actual persisted install record");
@@ -209,9 +211,9 @@ describe("reload consent and current install preconditions", () => {
         failure = error;
       },
     );
-    const current = readPersistedInstalledPluginIndexInstallRecords({ env: state.env })?.[
-      target.pluginId
-    ];
+    const current = (
+      await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env })
+    )?.[target.pluginId];
     expect(current?.acceptedSurfaceHash).toBe(reviewToken);
     expect(hashStableJson(current)).not.toBe(target.installHash);
     expect(request.plugins[0]?.installHash).toBe(hashStableJson(record));
@@ -229,6 +231,56 @@ describe("reload consent and current install preconditions", () => {
     ).resolves.toMatchObject({ pluginIds: [target.pluginId], application: { generation: 1 } });
     expect(applyRuntime).toHaveBeenCalledOnce();
   });
+
+  it.each(["transaction", "commit"] as const)(
+    "preserves durable consent when reload authority is revoked at worker %s admission",
+    async (stage) => {
+      const { state, record, reviewToken, applyRuntime } = await prepareReload();
+      const refused = new Error("plugin administrator authority revoked");
+      let current = true;
+      let reachedAdmission = false;
+      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
+      const admission = vi
+        .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
+        .mockImplementation((admit, attachment) =>
+          createAdmission((request, grant) => {
+            if (
+              request.stage === stage &&
+              isRecord(request.facts) &&
+              request.facts.kind === "state-lease"
+            ) {
+              reachedAdmission = true;
+              current = false;
+            }
+            admit(request, grant);
+          }, attachment),
+        );
+      try {
+        await expect(
+          reloadManagedPlugin({
+            plugins: [{ pluginId: "reload-proof" }],
+            acknowledgeCapabilities: { reviewToken },
+            env: state.env,
+            applyRuntime,
+            beforePersistentApply() {
+              if (!current) {
+                throw refused;
+              }
+            },
+          }),
+        ).rejects.toBe(refused);
+      } finally {
+        admission.mockRestore();
+      }
+      expect(reachedAdmission).toBe(true);
+      expect(
+        (await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }))?.[
+          "reload-proof"
+        ],
+      ).toEqual(record);
+      expect(applyRuntime).not.toHaveBeenCalled();
+    },
+  );
 
   it("stops a multi-target reload when another selected package needs a different review", async () => {
     const { state, record, reviewToken, applyRuntime, config } = await prepareReload();
@@ -263,7 +315,7 @@ describe("reload consent and current install preconditions", () => {
         applyRuntime,
       }),
     ).rejects.toMatchObject({ capabilityConsent: { pluginId: "second-proof" } });
-    const current = readPersistedInstalledPluginIndexInstallRecords({ env: state.env });
+    const current = await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env });
     expect(current?.["reload-proof"]?.acceptedSurfaceHash).toBe(reviewToken);
     expect(current?.["second-proof"]?.acceptedSurface).toBeUndefined();
     expect(applyRuntime).not.toHaveBeenCalled();

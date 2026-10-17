@@ -53,7 +53,10 @@ export function makeRespond() {
 }
 
 export function makeContext(sessions: Map<string, SystemAgentChatSession>): GatewayRequestContext {
-  return { systemAgentSessions: sessions } as unknown as GatewayRequestContext;
+  return {
+    systemAgentSessions: sessions,
+    getRuntimeConfig: () => verifiedConfig,
+  } as unknown as GatewayRequestContext;
 }
 
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;

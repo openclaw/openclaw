@@ -12,6 +12,12 @@ import { buildCaptureTimelineModel } from "./ui-render-capture-timeline-model.js
 import { esc, formatDuration, formatTime, parseJsonObject } from "./ui-render-utils.js";
 import type { CaptureEventView, UiState } from "./ui-types.js";
 
+function captureRange(start: number | null, end: number | null) {
+  return start != null && end != null
+    ? ([Math.min(start, end), Math.max(start, end)] as const)
+    : ([null, null] as const);
+}
+
 export function buildCaptureViewModel(state: UiState) {
   const sessionIds =
     state.selectedCaptureSessionIds.length > 0
@@ -120,22 +126,14 @@ export function buildCaptureViewModel(state: UiState) {
   const maxTs =
     baseFilteredEvents.length > 0 ? Math.max(...baseFilteredEvents.map((event) => event.ts)) : 0;
   const totalSpanMs = Math.max(1, maxTs - minTs);
-  const activeWindowStartPct =
-    state.captureTimelineWindowStartPct != null && state.captureTimelineWindowEndPct != null
-      ? Math.min(state.captureTimelineWindowStartPct, state.captureTimelineWindowEndPct)
-      : null;
-  const activeWindowEndPct =
-    state.captureTimelineWindowStartPct != null && state.captureTimelineWindowEndPct != null
-      ? Math.max(state.captureTimelineWindowStartPct, state.captureTimelineWindowEndPct)
-      : null;
-  const draftWindowStartPct =
-    state.captureTimelineBrushAnchorPct != null && state.captureTimelineBrushCurrentPct != null
-      ? Math.min(state.captureTimelineBrushAnchorPct, state.captureTimelineBrushCurrentPct)
-      : null;
-  const draftWindowEndPct =
-    state.captureTimelineBrushAnchorPct != null && state.captureTimelineBrushCurrentPct != null
-      ? Math.max(state.captureTimelineBrushAnchorPct, state.captureTimelineBrushCurrentPct)
-      : null;
+  const [activeWindowStartPct, activeWindowEndPct] = captureRange(
+    state.captureTimelineWindowStartPct,
+    state.captureTimelineWindowEndPct,
+  );
+  const [draftWindowStartPct, draftWindowEndPct] = captureRange(
+    state.captureTimelineBrushAnchorPct,
+    state.captureTimelineBrushCurrentPct,
+  );
   const activeWindowStartTs =
     activeWindowStartPct == null ? null : minTs + totalSpanMs * (activeWindowStartPct / 100);
   const activeWindowEndTs =

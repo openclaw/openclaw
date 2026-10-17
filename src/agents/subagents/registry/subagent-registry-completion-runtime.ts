@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import {
@@ -264,28 +265,47 @@ export function createSubagentRegistryCompletionRuntime(config: {
     }
     const generation = entry.generation;
     const stateContext = captureOpenClawStateWorkerContext();
+    let settledYielded: SubagentRunRecord | undefined;
     const isHostCurrent = () => {
       try {
         assertSubagentRegistryWriteSourceCurrent(stateContext);
       } catch {
         return false;
       }
+      const current = getCurrentSubagentRunOwner(runs, entry);
       return (
-        Boolean(getCurrentSubagentRunOwner(runs, entry)) &&
+        current !== undefined &&
         entry.generation === generation &&
-        params.recoveryCurrent?.isHostCurrent() !== false
+        params.recoveryCurrent?.isHostCurrent() !== false &&
+        // Once our settle commits, retries may drain effects only for that terminal.
+        (!settledYielded ||
+          (current.execution.status === "terminal" &&
+            current.pauseReason === undefined &&
+            !current.killIntent &&
+            !current.killReconciliation &&
+            current.endedReason === settledYielded.endedReason &&
+            current.execution.startedAt === settledYielded.execution.startedAt &&
+            current.execution.endedAt === settledYielded.execution.endedAt &&
+            isDeepStrictEqual(current.execution.outcome, settledYielded.execution.outcome)))
       );
     };
     const isCurrent = async () =>
       isHostCurrent() && (await params.recoveryCurrent?.prepare()) !== false && isHostCurrent();
-    const ownedParams = {
+    const ownedParams: SubagentCompletionRequest = {
       ...params,
       expectedEntry: entry,
       recoveryCurrent: {
         prepare: isCurrent,
         isHostCurrent,
-        onPublished: (published: SubagentRunRecord) =>
-          params.recoveryCurrent?.onPublished?.(published),
+        onPublished: (published: SubagentRunRecord) => {
+          if (ownedParams.settleYielded) {
+            settledYielded = published;
+            // The pause is gone after our commit. Retry normal idempotent effects,
+            // not the yield transition; isHostCurrent still rejects any replacement.
+            ownedParams.settleYielded = undefined;
+          }
+          params.recoveryCurrent?.onPublished?.(published);
+        },
       },
     };
     // Each controller attempt owns its terminal transition, while this outer
@@ -308,7 +328,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
         source,
         runId: params.runId,
       });
-      scheduleSubagentCompletionRetryAfterRestart(params, source, entry);
+      scheduleSubagentCompletionRetryAfterRestart(ownedParams, source, entry);
     }
   }
 
@@ -366,10 +386,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
       return 0;
     }
     pendingLifecycle.clear(runId);
-    if (
-      typeof entry.cleanupCompletedAt === "number" &&
-      entry.terminalOwner !== "interrupted-recovery"
-    ) {
+    if (typeof entry.cleanupCompletedAt === "number") {
       return hasCompleteSubagentTerminalState(entry) ? 1 : 0;
     }
     let publishedEntry = entry;
@@ -443,6 +460,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
 
 export function createSubagentResumeReader(params: {
   resumedRuns: Set<object>;
+  runBackgroundWork<T>(entry: SubagentRunRecord, run: () => Promise<T>): Promise<T>;
   getGatewayContextResolver: () => GatewayContextResolver | undefined;
   resume: (
     runId: string,
@@ -522,7 +540,7 @@ export function createSubagentResumeReader(params: {
           params.retryAfterDrain(runId, entry, stateContext);
         }
       };
-      void runWithGatewayDetachedWorkContinuation(async () => {
+      const readCurrent = async () => {
         try {
           let observed = entry;
           let check: ReturnType<typeof resolveSubagentRunOrphanReason> = orphanCheck;
@@ -531,12 +549,7 @@ export function createSubagentResumeReader(params: {
             if (check === null || typeof check === "string") {
               reason = check;
             } else {
-              try {
-                reason = (await check.read(assertCurrent)).orphanReason;
-              } catch {
-                // A failed read cannot establish orphanhood; authority is rechecked below.
-                reason = null;
-              }
+              reason = (await check.read(assertCurrent)).orphanReason;
             }
             if (!isReadCurrent()) {
               return;
@@ -566,7 +579,11 @@ export function createSubagentResumeReader(params: {
         } finally {
           release();
         }
-      }, "subagents:resume-session-read").catch((error: unknown) => {
+      };
+      void runWithGatewayDetachedWorkContinuation(
+        () => params.runBackgroundWork(entry, readCurrent),
+        "subagents:resume-session-read",
+      ).catch((error: unknown) => {
         try {
           failed(error);
         } finally {

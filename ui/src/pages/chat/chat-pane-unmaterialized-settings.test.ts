@@ -1,11 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
+import { renderPaneModelControl } from "./chat-pane-model-control.test-support.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import {
   readChatPaneMutationAccess,
@@ -13,7 +13,7 @@ import {
 } from "./chat-pane-session-controls.ts";
 import { refreshChatModelCatalogOnDemand } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import * as modelControls from "./components/chat-model-controls.ts";
+import * as modelControls from "./components/chat-model-controls.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -120,7 +120,7 @@ it.each(
       }),
       "sessions.patch": patch,
     });
-    const rendered = vi.spyOn(modelControls, "renderChatModelControls");
+    const rendered = vi.spyOn(modelControls, "ChatModelControls");
     let operation: Promise<unknown> | undefined;
     let latestOperation: Promise<unknown> | undefined;
     try {
@@ -154,7 +154,7 @@ it.each(
           canSelectFull: false,
           onModelSetup: vi.fn(),
         });
-        render(controls.composerControls, container);
+        renderPaneModelControl(controls.composerControls, container);
         const props = rendered.mock.calls.at(-1)?.[0];
         if (!props) {
           throw new Error("Expected mounted composer control props");

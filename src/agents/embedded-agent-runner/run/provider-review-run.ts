@@ -16,7 +16,7 @@ import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import { resolveProviderRefusal } from "./provider-refusal.js";
-import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import type { prepareEmbeddedRunRuntime } from "./runtime.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import { resolveEmbeddedRunAttemptTerminalOutcome } from "./terminal-outcome.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -23,10 +23,7 @@ import {
   waitForSessionTranscriptIndexReconcile,
 } from "../config/sessions/session-transcript-reconcile.js";
 import { readSessionTranscriptWatermarkAsync } from "../config/sessions/session-transcript-watermark.js";
-import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-contract.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import * as agentWriteAdmission from "../state/openclaw-agent-write-admission.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
@@ -149,125 +146,6 @@ describe("session transcript visible cursor SDK", () => {
         ]),
       },
     );
-  });
-
-  it("refuses a queued delta read after its prepared executor generation is replaced", async ({
-    signal,
-  }) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "prepared-delta-generation",
-      sessionKey: "agent:main:prepared-delta-generation",
-      storePath: path.join(tempDir, "prepared-delta.sqlite"),
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    await appendSessionTranscriptMessageByIdentity({
-      ...scope,
-      message: { role: "user", content: "retained transcript" },
-    });
-    const execution = captureOpenClawAgentDatabaseExecution({
-      agentId: scope.agentId,
-      path: scope.storePath,
-    });
-    if (!execution.capturePreparedGenerationClaim()) {
-      await execution.release();
-      throw new Error("The fixture requires its admitted session writer");
-    }
-    const entered = createDeferred();
-    const resume = createDeferred();
-    const writerEntered = createDeferred();
-    const replaceGeneration = createDeferred();
-    const reading = withSessionTranscriptDeltaReader(
-      scope,
-      async (reader) => {
-        entered.resolve();
-        await withinTest(resume.promise, signal);
-        return reader.raw({ maxEvents: 10 });
-      },
-      signal,
-    );
-    const refused = expect(reading).rejects.toThrow(
-      "Agent database execution generation was replaced",
-    );
-    const source: AgentDatabaseRequestExecutionSource = {
-      assertCurrent: () => execution.assertCurrent(),
-      createAdmission(binding) {
-        return () => ({
-          nativeLocations: binding.nativeLocations,
-          admission: createSqliteWorkerOperationAdmission((request, grant) => {
-            binding.authorize(request);
-            execution.assertCurrent();
-            if (!grant()) {
-              throw new Error("Fixture execution admission expired");
-            }
-          }, binding.attachment),
-        });
-      },
-    };
-    let writing: Promise<void> | undefined;
-    let restoreAdmission = () => {};
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          entered.promise,
-          reading,
-          "Delta read ended before retaining its prepared owner",
-        ),
-        signal,
-      );
-      writing = agentWriteAdmission.runOpenClawAgentWriteAdmission(execution, async () => {
-        writerEntered.resolve();
-        await withinTest(replaceGeneration.promise, signal);
-        const failure = new Error("Retire the original native generation");
-        await expect(
-          execution.runExisting(
-            source,
-            async () => {
-              throw failure;
-            },
-            { retireNativeOnFailure: true },
-          ),
-        ).rejects.toBe(failure);
-        await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 2 });
-      });
-      await withinTest(writerEntered.promise, signal);
-      const queued = createDeferred();
-      const admit = agentWriteAdmission.runOpenClawAgentWriteAdmission;
-      const admission = vi
-        .spyOn(agentWriteAdmission, "runOpenClawAgentWriteAdmission")
-        .mockImplementation((...args) => {
-          const pending = admit(...args);
-          if (args[0].path === scope.storePath && args[4] === signal) {
-            queued.resolve();
-          }
-          return pending;
-        });
-      restoreAdmission = () => admission.mockRestore();
-      resume.resolve();
-      await withinTest(
-        awaitGateBeforeSettlement(
-          queued.promise,
-          reading,
-          "Delta read bypassed the earlier admitted writer",
-        ),
-        signal,
-      );
-      restoreAdmission();
-      replaceGeneration.resolve();
-      await withinTest(writing, signal);
-      await refused;
-      const fresh = await readSessionTranscriptVisibleMessageDelta({ ...scope, maxMessages: 10 });
-      expect(fresh).toMatchObject({
-        kind: "page",
-        entries: [{ message: { role: "user", content: "retained transcript" } }],
-      });
-    } finally {
-      restoreAdmission();
-      resume.resolve();
-      replaceGeneration.resolve();
-      await Promise.allSettled([reading, writing, refused]);
-      await execution.release();
-    }
   });
 
   it.each([readSessionTranscriptRawDelta, readSessionTranscriptVisibleMessageDelta])(

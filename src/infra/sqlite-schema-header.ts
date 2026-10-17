@@ -64,23 +64,6 @@ export function readSqliteSchemaHeader(
   );
 }
 
-function readSqliteSchemaHeaderSnapshot(
-  location: string,
-  signal?: AbortSignal,
-  agentSchemaVersionForOwnership?: number,
-): SqliteSchemaHeader {
-  signal?.throwIfAborted();
-  const database = openNodeSqliteDatabase(location, { readOnly: true });
-  return runWithSqliteCleanup(
-    { release: () => database.close() },
-    "SQLite schema header read",
-    () => {
-      setSqliteBusyTimeout(database, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
-      return readSqliteSchemaHeader(database, agentSchemaVersionForOwnership);
-    },
-  );
-}
-
 /** Consume a private snapshot and retain both read and cleanup failures. */
 export function readSqliteSchemaHeaderFromSnapshot(
   prepared: PreparedSqliteReadOnlyLocation,
@@ -96,6 +79,18 @@ export function readSqliteSchemaHeaderFromSnapshot(
       },
     },
     "SQLite schema header snapshot",
-    () => readSqliteSchemaHeaderSnapshot(prepared.location, signal, agentSchemaVersionForOwnership),
+    () => {
+      const location = prepared.location;
+      signal?.throwIfAborted();
+      const database = openNodeSqliteDatabase(location, { readOnly: true });
+      return runWithSqliteCleanup(
+        { release: () => database.close() },
+        "SQLite schema header read",
+        () => {
+          setSqliteBusyTimeout(database, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
+          return readSqliteSchemaHeader(database, agentSchemaVersionForOwnership);
+        },
+      );
+    },
   );
 }

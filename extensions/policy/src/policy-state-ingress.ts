@@ -238,26 +238,22 @@ function channelWildcardRequireMention(
 ): { readonly source: string; readonly value: boolean } | undefined {
   for (const key of ["groups", "guilds", "channels", "rooms", "teams"] as const) {
     const effective = effectiveNestedIngressContainer(params, key);
-    const wildcard = isRecord(effective?.container["*"]) ? effective.container["*"] : undefined;
-    const requireMention = readBoolean(wildcard?.requireMention);
-    if (wildcard?.enabled !== false && requireMention !== undefined && effective !== undefined) {
-      return {
-        source: `${effective.sourceBase}/${key}/${ocPathSegment("*")}/requireMention`,
-        value: requireMention,
-      };
-    }
-    const fallbackContainer = isRecord(params.fallbackConfig?.[key])
-      ? params.fallbackConfig[key]
-      : undefined;
-    const fallbackWildcard = isRecord(fallbackContainer?.["*"])
-      ? fallbackContainer["*"]
-      : undefined;
-    const fallbackRequireMention = readBoolean(fallbackWildcard?.requireMention);
-    if (fallbackWildcard?.enabled !== false && fallbackRequireMention !== undefined) {
-      return {
-        source: `${params.fallbackSourceBase}/${key}/${ocPathSegment("*")}/requireMention`,
-        value: fallbackRequireMention,
-      };
+    const fallback = {
+      container: asNonArrayRecord(params.fallbackConfig?.[key]),
+      sourceBase: params.fallbackSourceBase,
+    };
+    for (const candidate of [effective, fallback]) {
+      const wildcard = candidate?.container["*"];
+      if (!isRecord(wildcard) || wildcard.enabled === false) {
+        continue;
+      }
+      const requireMention = readBoolean(wildcard.requireMention);
+      if (requireMention !== undefined && candidate !== undefined) {
+        return {
+          source: `${candidate.sourceBase}/${key}/${ocPathSegment("*")}/requireMention`,
+          value: requireMention,
+        };
+      }
     }
   }
   return undefined;

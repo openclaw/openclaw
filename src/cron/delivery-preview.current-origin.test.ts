@@ -9,7 +9,6 @@ import {
   resetSessionEntryLifecycle,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
@@ -20,6 +19,7 @@ import {
   createDirectOutboundTestAdapter,
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   normalizeSessionDeliveryState,
@@ -142,7 +142,7 @@ describe("current cron delivery origin", () => {
           expect(previews).toEqual({
             healthy: {
               label: "announce -> telegram:recipient",
-              detail: `resolved from last, session ${job.sessionKey}`,
+              detail: "commits to the destination conversation; sends one external notification",
             },
             "missing-current": {
               label: "announce -> current session",
@@ -151,12 +151,12 @@ describe("current cron delivery origin", () => {
             "missing-last": {
               label: "announce -> last",
               detail: expect.stringContaining(
-                "last -> no route, will fail-closed: Delivering to telegram requires target",
+                "last -> no route, will be blocked: Delivering to telegram requires target",
               ),
             },
             "missing-explicit": {
               label: "announce -> telegram:explicit-recipient",
-              detail: "explicit",
+              detail: "commits to the destination conversation; sends one external notification",
             },
           });
           expect(fs.existsSync(databasePath)).toBe(false);
@@ -182,45 +182,33 @@ describe("current cron delivery origin", () => {
           { sessionId: "interrupted-source", updatedAt: 1 },
         );
         const { db } = getOpenClawAgentDatabaseIfOpen({ agentId: "interrupted" })!;
-        clearNodeSqliteKyselyCacheForDatabase(db);
-        const prepare = db.prepare.bind(db);
-        const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql) => {
-          if (sql.includes('from "session_key_contract"')) {
-            prepareSpy.mockRestore();
-            db.exec("DROP TABLE session_key_contract");
-          }
-          return prepare(sql);
+        db.exec("DROP TABLE session_nodes");
+        const previews = await resolveCronDeliveryPreviews({
+          cfg,
+          jobs: [
+            { ...job, id: "healthy-current" },
+            interrupted,
+            {
+              ...job,
+              id: "healthy-explicit",
+              delivery: { mode: "announce", channel: "telegram", to: "other-recipient" },
+            },
+          ],
         });
-        try {
-          const previews = await resolveCronDeliveryPreviews({
-            cfg,
-            jobs: [
-              { ...job, id: "healthy-current" },
-              interrupted,
-              {
-                ...job,
-                id: "healthy-explicit",
-                delivery: { mode: "announce", channel: "telegram", to: "other-recipient" },
-              },
-            ],
-          });
-          expect(previews).toEqual({
-            "healthy-current": {
-              label: "announce -> telegram:recipient",
-              detail: `resolved from last, session ${job.sessionKey}`,
-            },
-            interrupted: {
-              label: "announce -> last",
-              detail: expect.stringMatching(/^delivery preview unavailable: .*table-missing/u),
-            },
-            "healthy-explicit": {
-              label: "announce -> telegram:other-recipient",
-              detail: "explicit",
-            },
-          });
-        } finally {
-          prepareSpy.mockRestore();
-        }
+        expect(previews).toEqual({
+          "healthy-current": {
+            label: "announce -> telegram:recipient",
+            detail: "commits to the destination conversation; sends one external notification",
+          },
+          interrupted: {
+            label: "announce -> last",
+            detail: expect.stringMatching(/^delivery preview unavailable: .*table-missing/u),
+          },
+          "healthy-explicit": {
+            label: "announce -> telegram:other-recipient",
+            detail: "commits to the destination conversation; sends one external notification",
+          },
+        });
       },
     );
   });
@@ -249,7 +237,7 @@ describe("current cron delivery origin", () => {
         });
         const expected = {
           label: "announce -> telegram:recipient",
-          detail: `resolved from last, session ${job.sessionKey}`,
+          detail: "commits to the destination conversation; sends one external notification",
         };
         expect(await resolveCronDeliveryPreview({ cfg, job })).toEqual(expected);
         expect(await resolveCronDeliveryPreviews({ cfg, jobs: [job] })).toEqual({
@@ -270,8 +258,10 @@ describe("current cron delivery origin", () => {
         );
       }
       const database = getOpenClawAgentDatabaseIfOpen({ agentId: "main" })!;
-      const reads = trackSqliteStatementExecutions(database.db, ["sessions"], (sql) =>
-        sql.includes('from "session_nodes"') ? "sessions" : null,
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["sessions"],
+        (sql) => (sql.includes('from "session_nodes"') ? "sessions" : null),
       );
       const jobs = Array.from({ length: 53 }, (_, index) => ({ ...job, id: `preview-${index}` }));
       const agentsRoot = path.dirname(path.dirname(path.dirname(storePath)));
@@ -326,7 +316,6 @@ describe("current cron delivery origin", () => {
     { surface: "webchat", channelCount: 1, sessionTarget: "current" as const },
     { surface: "dashboard", channelCount: 2, sessionTarget: "isolated" as const },
     { surface: "webchat", channelCount: 1, sessionTarget: "isolated" as const },
-    { surface: "webchat", channelCount: 0, sessionTarget: "isolated" as const },
   ])(
     "keeps a $sessionTarget $surface completion in its conversation with $channelCount unrelated channels",
     async (options) => {
@@ -363,7 +352,7 @@ describe("current cron delivery origin", () => {
             expect(preview.label).toBe(
               "to" in coordinates ? "announce -> last:recipient" : "announce -> last",
             );
-            expect(preview.detail).toContain("will fail-closed");
+            expect(preview.detail).toContain("will be blocked");
           }
         },
       );
@@ -409,7 +398,7 @@ describe("current cron delivery origin", () => {
           });
           expect(resolved).toMatchObject({ ok: false, channel: "unavailable-plugin" });
           expect((await resolveCronDeliveryPreview({ cfg, job })).detail).toContain(
-            "will fail-closed",
+            "will be blocked",
           );
         },
       );
@@ -420,11 +409,10 @@ describe("current cron delivery origin", () => {
     await withCurrentOrigin(
       { sessionTarget: "isolated", source: { channel: "telegram", to: "recipient" } },
       async ({ cfg, job }) => {
-        const sessionKey = job.sessionKey;
         job.sessionKey = undefined;
         expect(await resolveCronDeliveryPreview({ cfg, job })).toEqual({
           label: "announce -> telegram:recipient",
-          detail: `resolved from last, session ${sessionKey}`,
+          detail: "commits to the destination conversation; sends one external notification",
         });
       },
     );
@@ -448,10 +436,10 @@ describe("current cron delivery origin", () => {
         label: "announce -> creating conversation",
         detail: "commits to this conversation (no external channel route)",
       });
-      job.delivery = { mode: "announce", channel: "telegram" };
+      job.delivery = { mode: "announce", channel: "telegram", to: "other-recipient" };
       expect(await resolveCronDeliveryPreview({ cfg, job })).toEqual({
         label: "announce -> telegram:other-recipient",
-        detail: "explicit",
+        detail: "commits to the destination conversation; sends one external notification",
       });
     });
   });
@@ -519,7 +507,7 @@ describe("current cron delivery origin", () => {
         job.payload = { kind: "command", argv: ["echo", "report"] };
         const preview = await resolveCronDeliveryPreview({ cfg, job });
         expect(preview.label).toBe("announce -> last");
-        expect(preview.detail).toContain("will fail-closed");
+        expect(preview.detail).toContain("will be blocked");
       });
     },
   );

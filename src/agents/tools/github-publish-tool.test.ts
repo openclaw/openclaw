@@ -1,12 +1,65 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
+import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
+import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
+import { createCronToolSchema } from "./cron-tool-schema.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createGitHubPublishTool } from "./github-publish-tool.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 
 describe("github_publish tool", () => {
+  it("offers current-PR metadata editing to publication callers without privileged actions", () => {
+    const tool = createGitHubPublishTool();
+    expect(Value.Check(tool.parameters, { action: "edit" })).toBe(true);
+    expect(
+      Value.Check(tool.parameters, {
+        action: "edit",
+        title: "New title",
+        expectedTitle: "Old title",
+      }),
+    ).toBe(true);
+    for (const action of ["inspect", "ready", "merge", "close"]) {
+      expect(Value.Check(tool.parameters, { action })).toBe(false);
+    }
+    expect(Value.Check(tool.parameters, { action: "edit", publishingSessionKey: "another" })).toBe(
+      false,
+    );
+    expect(tool.description).toContain("used only when creating a PR");
+    expect(tool.description).toContain("Edit never synchronizes, stages, commits or pushes");
+    expect(
+      Value.Check(
+        createGitHubPublishTool({ publicationAvailable: false, actionsAvailable: true }).parameters,
+        { action: "edit" },
+      ),
+    ).toBe(false);
+  });
+
+  it.each(["available", "absent", "self-scoped", "denied"] as const)(
+    "offers a scheduled continuation only with %s automation creation",
+    (availability) => {
+      const publish = createGitHubPublishTool();
+      const automations = {
+        name: "automations",
+        description: "Schedule work",
+        parameters: createCronToolSchema({ selfRemoveOnly: availability === "self-scoped" }),
+      };
+      finalizeAgentToolAvailability(
+        [publish, ...(availability === "absent" ? [] : [automations])],
+        availability === "denied" ? { toolExecutionAllow: ["github_publish"] } : undefined,
+      );
+      if (availability === "available") {
+        expect(publish.description).toContain(
+          'automations: at + agentTurn + sessionTarget "session:<this session key from Runtime>"',
+        );
+      } else {
+        expect(publish.description).not.toContain("automations:");
+        expect(publish.description).toContain("a scheduled continuation is unavailable");
+      }
+    },
+  );
+
   it.each(["responseId", "turnId"] as const)(
     "scopes reused call IDs by %s and keeps replays stable across runs",
     async (identityField) => {

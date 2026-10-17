@@ -43,17 +43,14 @@ function readMemoryRecallMetadataMigrationState(database: DatabaseSync) {
     return null;
   }
   const columns = new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
+  const findSchemaObject = database.prepare(
+    "SELECT 1 FROM sqlite_schema WHERE type = ? AND name = ?",
+  );
   return {
     columns: LEGACY_MEMORY_RECALL_METADATA_COLUMNS.filter((column) => columns.has(column)),
-    hasMetadataTable: Boolean(
-      database
-        .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get(MEMORY_RECALL_METADATA_TABLE),
-    ),
+    hasMetadataTable: Boolean(findSchemaObject.get("table", MEMORY_RECALL_METADATA_TABLE)),
     hasProvenanceTrigger: Boolean(
-      database
-        .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND name = ?")
-        .get(LEGACY_MEMORY_PROVENANCE_TRIGGER),
+      findSchemaObject.get("trigger", LEGACY_MEMORY_PROVENANCE_TRIGGER),
     ),
   };
 }

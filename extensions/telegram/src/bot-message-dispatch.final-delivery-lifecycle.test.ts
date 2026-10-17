@@ -88,12 +88,17 @@ async function setupObservedProgressTransport() {
   };
 }
 
-function progressContext(
-  statusReactionController = createStatusReactionController(),
-  messageId = 456,
-) {
+let inboundSequence = 0;
+
+function progressContext(statusReactionController = createStatusReactionController()) {
+  const messageId = 456 + inboundSequence++;
   return createContext({
-    ctxPayload: { ...createDirectSessionPayload(), MessageSid: String(messageId) },
+    ctxPayload: {
+      ...createDirectSessionPayload(),
+      Provider: "telegram",
+      Surface: "telegram",
+      MessageSid: String(messageId),
+    },
     threadSpec: { id: undefined, scope: "none" },
     replyThreadId: undefined,
     msg: {
@@ -122,6 +127,8 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
     { failure: "retired instance", mode: "progress" },
     { failure: "definite no-send", mode: "progress" },
     { failure: "rejected tail", mode: "off" },
+    { failure: "network failure", mode: "off" },
+    { failure: "opaque fetch failure", mode: "off" },
   ] as const)(
     "preserves accepted content and reports $failure with streaming $mode",
     async ({ failure, mode }) => {
@@ -152,6 +159,12 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
         });
       } else if (failure === "retired instance") {
         deliverInboundReplyWithMessageSendContext.mockRejectedValueOnce(retiredPluginError());
+      } else if (failure === "network failure" || failure === "opaque fetch failure") {
+        const error = new Error("fetch failed");
+        if (failure === "network failure") {
+          error.cause = Object.assign(new Error("socket closed"), { code: "ECONNRESET" });
+        }
+        deliverInboundReplyWithMessageSendContext.mockRejectedValueOnce(error);
       } else {
         // A confirmed non-send may be retried without rerunning the model.
         deliverInboundReplyWithMessageSendContext.mockResolvedValue({ status: "handled_no_send" });
@@ -178,13 +191,18 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
         suppressFailureFallback: true,
       });
       await vi.advanceTimersByTimeAsync(5_000);
+      expect(replyResolver).toHaveBeenCalledOnce();
+      await expect(replyResolver.mock.results[0]?.value).resolves.toEqual({ text: finalText });
 
       expect([...messages.values()]).toEqual([
         ...(partial ? [prefix] : []),
-        expect.stringMatching(mode === "progress" ? /Exec|chat history/i : /chat history/i),
+        mode === "progress"
+          ? expect.stringMatching(/Exec|I couldn't deliver my reply/i)
+          : failure === "network failure"
+            ? "I couldn't deliver my reply because of a network problem. Please ask again."
+            : "I couldn't deliver my reply. Please ask again.",
       ]);
       expect(sendMessage.mock.calls.some(([, text]) => text === finalText)).toBe(false);
-      expect(replyResolver).toHaveBeenCalledOnce();
       expect(failedStatus.setError).toHaveBeenCalledOnce();
       expect(failedStatus.setDone).not.toHaveBeenCalled();
       if (failure !== "definite no-send") {
@@ -199,7 +217,7 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
         expect(sendMessage.mock.calls.map(([, text]) => text)).toEqual([
           prefix,
           tail,
-          expect.stringMatching(/chat history/i),
+          "I couldn't deliver my reply. Please ask again.",
         ]);
         return;
       }
@@ -222,7 +240,7 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
       );
       await dispatchWithContext({
         bot,
-        context: progressContext(nextStatus, 457),
+        context: progressContext(nextStatus),
         streamMode: mode,
         telegramCfg,
       });
@@ -262,7 +280,7 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
       context: progressContext(status),
       streamMode: "partial",
       telegramCfg: { streaming: { mode: "partial" } },
-      telegramDeps: {
+      moduleMocks: {
         ...telegramDepsForTest,
         recordOutboundMessageForPromptContext: recordContext,
       },
@@ -397,7 +415,9 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
     expect(visible[0]?.[1]).toBe(first);
     expect(sendMessage.mock.calls.filter(([, text]) => text === first)).toHaveLength(1);
     expect(visible.some(([, text]) => text === second)).toBe(false);
-    expect(visible.some(([, text]) => text.includes("OpenClaw chat history"))).toBe(true);
+    expect(
+      visible.some(([, text]) => text === "I couldn't deliver my reply. Please ask again."),
+    ).toBe(true);
     expect(sendMessage.mock.calls.filter(([, text]) => text === second)).toHaveLength(1);
     expect(status.setError).toHaveBeenCalledOnce();
     expect(status.setDone).not.toHaveBeenCalled();

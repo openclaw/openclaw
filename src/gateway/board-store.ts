@@ -2,8 +2,8 @@ import { BoardValidationError } from "../boards/board-layout.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { captureIncognitoSessionOperation } from "../config/sessions/session-incognito-binding.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
+import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 
 export function captureGatewaySessionStoreScope(sessionKey: string, explicitAgentId?: string) {
@@ -17,52 +17,31 @@ export function captureGatewaySessionStoreScope(sessionKey: string, explicitAgen
   return { agentId, storePath, sessionKey: canonicalKey };
 }
 
-function resolveGatewaySessionDatabase(
-  sessionKey: string,
-  explicitAgentId?: string,
-): {
-  agentId: string;
-  path?: string;
-  sessionKey: string;
-} {
-  const {
-    agentId,
-    storePath,
-    sessionKey: canonicalKey,
-  } = captureGatewaySessionStoreScope(sessionKey, explicitAgentId);
-  const databaseTarget = resolveSqliteTargetFromSessionStorePath(storePath, { agentId });
-  // Shared stores keep logical session keys under their persisted database owner.
-  return {
-    agentId: databaseTarget.agentId ?? agentId,
-    path: databaseTarget.path,
-    sessionKey: canonicalKey,
-  };
-}
-
 export const boardStore = new SqliteBoardStore({
-  resolveSession: ({ sessionKey, agentId }) => {
+  resolveSession: async ({ sessionKey, agentId }) => {
     const scope = captureGatewaySessionStoreScope(sessionKey, agentId);
-    const incognito = captureIncognitoSessionOperation(scope);
-    const database = incognito
-      ? {
-          agentId: incognito.actor.agentId,
-          path: incognito.actor.path,
-          sessionKey: scope.sessionKey,
-        }
-      : resolveGatewaySessionDatabase(sessionKey, agentId);
+    const assertCurrent = () => {
+      const current = captureGatewaySessionStoreScope(sessionKey, agentId);
+      if (
+        current.agentId !== scope.agentId ||
+        current.storePath !== scope.storePath ||
+        current.sessionKey !== scope.sessionKey
+      ) {
+        throw new BoardValidationError("invalid_operation", "board session changed; retry");
+      }
+    };
+    const memory = captureSessionActorStorageOwner(scope, {
+      assertCurrent,
+      authorize: assertCurrent,
+    });
+    const database =
+      memory ?? (await prepareSqliteTargetFromSessionStorePath(scope.storePath, scope));
     return {
-      ...database,
-      incognito,
-      assertCurrent() {
-        const current = captureGatewaySessionStoreScope(sessionKey, agentId);
-        if (
-          current.agentId !== scope.agentId ||
-          current.storePath !== scope.storePath ||
-          current.sessionKey !== scope.sessionKey
-        ) {
-          throw new BoardValidationError("invalid_operation", "board session changed; retry");
-        }
-      },
+      // Shared stores keep logical session keys under their persisted database owner.
+      agentId: database.agentId ?? scope.agentId,
+      path: database.path,
+      sessionKey: scope.sessionKey,
+      assertCurrent,
     };
   },
 });

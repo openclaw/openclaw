@@ -44,6 +44,7 @@ import {
   seedMainSessionStore,
   seedSessionStore,
   setHeartbeatAgentTurnStatus,
+  setHeartbeatSilentCompletion,
   type HeartbeatReplySpy,
   withTempHeartbeatSandbox,
   withTempTelegramHeartbeatSandbox,
@@ -151,11 +152,20 @@ describe("heartbeat acknowledgements", () => {
   }>([
     {
       name: "canonical NO_REPLY acknowledgement",
-      payload: { text: "NO_REPLY" },
+      payload: {},
       options: { showOk: true },
       sends: 1,
       sentText: "HEARTBEAT_OK",
     },
+    ...["NO_R", "NO_RE", "no_r"].flatMap((text) =>
+      [false, true].map((showOk) => ({
+        name: `truncated ${text} heartbeat (showOk=${showOk})`,
+        payload: { text },
+        options: { telegram: !showOk, showOk },
+        sends: showOk ? 1 : 0,
+        sentText: showOk ? "HEARTBEAT_OK" : undefined,
+      })),
+    ),
     {
       name: "exec summary with trailing acknowledgement",
       payload: { text: "Command completed: uploaded report.txt\nHEARTBEAT_OK" },
@@ -185,8 +195,17 @@ describe("heartbeat acknowledgements", () => {
       if (exec) {
         enqueueCompletion(sessionKey);
       }
-      replySpy.mockResolvedValue(payload);
-      expect((await run({}, exec ? "exec-event" : undefined)).status).toBe("ran");
+      replySpy.mockImplementation(async (_ctx, opts) => {
+        if (!Object.keys(payload).length) {
+          setHeartbeatSilentCompletion(opts);
+          return undefined;
+        }
+        return payload;
+      });
+      const outcome = await run({}, exec ? "exec-event" : undefined);
+      expect(outcome.status, JSON.stringify({ outcome, event: getLastHeartbeatEvent() })).toBe(
+        "ran",
+      );
       expect(send).toHaveBeenCalledTimes(sends);
       if (sentText) {
         expect(send.mock.calls[0]?.slice(0, 2)).toEqual([
@@ -233,7 +252,10 @@ describe("heartbeat acknowledgements", () => {
               failure === "readiness"
                 ? {
                     webAuthExists: async () => {
-                      throw new Error("readiness unavailable");
+                      if (replySpy.mock.calls.length > 0) {
+                        throw new Error("readiness unavailable");
+                      }
+                      return true;
                     },
                   }
                 : undefined;
@@ -284,13 +306,14 @@ describe("heartbeat acknowledgements", () => {
     });
   });
 
-  it("defers delivery when WhatsApp is not linked", async () => {
+  it("skips the model when WhatsApp is not linked", async () => {
     await withHeartbeat(async ({ send, replySpy, run }) => {
       replySpy.mockResolvedValue({ text: "Heartbeat alert" });
       expect(
         await run({ webAuthExists: async () => false, hasActiveWebListener: () => false }),
       ).toMatchObject({ status: "skipped", reason: "channel-not-ready" });
       expect(getLastHeartbeatEvent()).toMatchObject({ reason: "whatsapp-not-linked" });
+      expect(replySpy).not.toHaveBeenCalled();
       expect(send).not.toHaveBeenCalled();
     });
   });
@@ -336,7 +359,8 @@ async function runCommittedWork(params: {
         if (params.status) {
           setHeartbeatAgentTurnStatus(opts, params.status);
         }
-        return { text: "NO_REPLY" };
+        state.replyCompletion = { expectation: "optional", outcome: "silent" };
+        return undefined;
       });
       const result = await run();
       return { result, event: getLastHeartbeatEvent(), send };
@@ -742,7 +766,10 @@ describe("runHeartbeatOnce failure delivery", () => {
                   ...heartbeatRunnerTelegramPlugin,
                   heartbeat: {
                     checkReady: async () => {
-                      throw new Error("readiness probe failed");
+                      if (replySpy.mock.calls.length > 0) {
+                        throw new Error("readiness probe failed");
+                      }
+                      return { ok: true, reason: "ok" };
                     },
                   },
                 },

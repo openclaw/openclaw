@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
@@ -23,6 +24,7 @@ describe("host-owned update notices", () => {
   let state: OpenClawTestState;
   beforeEach(async () => {
     state = await createOpenClawTestState({ prefix: "openclaw-update-notice-" });
+    await captureRuntimeConfigAsyncReader()();
   });
   afterEach(async () => {
     await state.cleanup();

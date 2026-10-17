@@ -4,14 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { extractAgentRunTerminalError, extractAgentRunText } from "../agents/agent-run-result.js";
-import {
-  PreparedModelRuntimeOwnerNotPublishedError,
-  PreparedModelRuntimePublicationSupersededError,
-} from "../agents/prepared-model-runtime.errors.js";
-import {
-  AGENT_RUN_SUPERSEDED_STOP_REASON,
-  isAgentRunSupersededAbortReason,
-} from "../agents/run-termination.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { CommandLane } from "../process/lanes.js";
 import {
@@ -27,6 +19,10 @@ import { resolveSystemAgentAssistantTimeoutMs } from "./assistant-timeout.js";
 import type { SystemAgentGreetingFacts, SystemAgentGreetingPlan } from "./greeting.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { requireSystemAgentInferenceRoute } from "./inference-guard.js";
+import {
+  systemAgentRuntimeFailureGuidance,
+  systemAgentTerminalFailureGuidance,
+} from "./inference-run-errors.js";
 import type { SystemAgentOverview } from "./overview.js";
 import {
   resolveSystemAgentExpectedAgentHarnessRuntimeArtifact,
@@ -201,11 +197,7 @@ async function runConfiguredSystemAgentText(params: {
       throw new SystemAgentInferenceUnavailableError(
         "planner",
         [new Error(terminalError)],
-        result.meta?.stopReason === "timeout" || result.meta?.timeoutPhase
-          ? "timeout"
-          : result.meta?.stopReason === AGENT_RUN_SUPERSEDED_STOP_REASON
-            ? "superseded"
-            : "retry",
+        systemAgentTerminalFailureGuidance(result),
       );
     }
     text = extractAgentRunText(result);
@@ -213,14 +205,9 @@ async function runConfiguredSystemAgentText(params: {
     if (error instanceof SystemAgentInferenceUnavailableError) {
       throw error;
     }
-    if (
-      isAgentRunSupersededAbortReason(error) ||
-      error instanceof PreparedModelRuntimePublicationSupersededError
-    ) {
-      throw new SystemAgentInferenceUnavailableError("planner", [error], "superseded");
-    }
-    if (error instanceof PreparedModelRuntimeOwnerNotPublishedError) {
-      throw new SystemAgentInferenceUnavailableError("planner", [error], "runtime-unavailable");
+    const guidance = systemAgentRuntimeFailureGuidance(error);
+    if (guidance) {
+      throw new SystemAgentInferenceUnavailableError("planner", [error], guidance);
     }
     text = undefined;
   } finally {

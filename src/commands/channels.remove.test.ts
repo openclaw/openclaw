@@ -89,7 +89,7 @@ function firstWrittenChannelsConfig() {
 }
 
 function mockInstalledPlugin(plugin: ChannelPlugin) {
-  vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+  vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockResolvedValue(
     createTestRegistry([{ pluginId: "@vendor/external-chat-plugin", plugin, source: "test" }]),
   );
 }
@@ -132,7 +132,7 @@ describe("channelsRemoveCommand", () => {
       status: "installed",
     }));
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockClear();
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockResolvedValue(
       createTestRegistry(),
     );
     registryRefreshMocks.refreshPluginRegistryAfterConfigMutation.mockClear();
@@ -285,7 +285,7 @@ describe("channelsRemoveCommand", () => {
         ),
       },
     };
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockResolvedValue(
       createTestRegistry([
         {
           pluginId: "@vendor/external-chat-plugin",

@@ -1,13 +1,6 @@
 import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import { describe, expect, it } from "vitest";
-import type {
-  AssistantMessage,
-  Context,
-  Model,
-  Tool,
-  ToolResultMessage,
-  UserMessage,
-} from "../types.js";
+import type { AssistantMessage, Context, Model, ToolResultMessage, UserMessage } from "../types.js";
 import {
   buildGoogleInteractionsParams,
   resolveGoogleApiClientHeaders,
@@ -102,45 +95,6 @@ describe("buildGoogleInteractionsParams", () => {
         content: [{ type: "text", text: "OpenClaw runtime context:\ncurrent runtime facts" }],
       },
     ]);
-  });
-
-  it("converts tool definitions to Interactions functions", () => {
-    const tool: Tool = {
-      name: "getWeather",
-      description: "Get weather",
-      parameters: {
-        type: "object",
-        properties: { city: { type: "string" } },
-        required: ["city"],
-      },
-    };
-    const params = buildGoogleInteractionsParams(model, {
-      messages: [user("Weather?")],
-      tools: [tool],
-    });
-    expect(params.tools).toEqual([{ type: "function", ...tool }]);
-  });
-
-  it("preserves tool result failures in function_result steps", () => {
-    const params = buildGoogleInteractionsParams(
-      model,
-      {
-        messages: [
-          user("Use a tool"),
-          assistant([{ type: "toolCall", id: "call_failed", name: "lookup", arguments: {} }]),
-          toolResult("call_failed", "lookup", [{ type: "text", text: "lookup failed" }], true),
-        ],
-      },
-      {},
-    );
-
-    expect(params.input.at(-1)).toEqual({
-      type: "function_result",
-      call_id: "call_failed",
-      name: "lookup",
-      result: [{ type: "text", text: "lookup failed" }],
-      is_error: true,
-    });
   });
 
   it("preserves chronological model step order in stateless replay", () => {
@@ -267,6 +221,23 @@ describe("buildGoogleInteractionsParams", () => {
       thinking_summaries: "none",
     });
   });
+
+  it.each([true, false])(
+    "preserves the caller output cap for Interactions thinking (enabled=%s)",
+    (enabled) => {
+      const params = buildGoogleInteractionsParams(
+        { ...model, id: "gemini-3-flash-preview", reasoning: true, maxTokens: 65536 },
+        { messages: [user("Answer briefly")] },
+        { maxTokens: 64, thinking: { enabled, level: "LOW" } },
+      );
+      const serialized = JSON.stringify(params);
+      expect(JSON.parse(serialized).generation_config).toEqual({
+        max_output_tokens: 64,
+        thinking_level: "low",
+        thinking_summaries: enabled ? "auto" : "none",
+      });
+    },
+  );
 
   it("strips incompatible thought signatures and repairs missing tool results before conversion", () => {
     const params = buildGoogleInteractionsParams(

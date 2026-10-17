@@ -127,21 +127,16 @@ function parseOpenRouterPricing(value: unknown): OpenRouterModelPricing | null {
   const obj = value as Record<string, unknown>;
   const prompt = parseNumberString(obj.prompt);
   const completion = parseNumberString(obj.completion);
-  const request = parseNumberString(obj.request) ?? 0;
-  const image = parseNumberString(obj.image) ?? 0;
-  const webSearch = parseNumberString(obj.web_search) ?? 0;
-  const internalReasoning = parseNumberString(obj.internal_reasoning) ?? 0;
-
   if (prompt === null || completion === null) {
     return null;
   }
   return {
     prompt,
     completion,
-    request,
-    image,
-    webSearch,
-    internalReasoning,
+    request: parseNumberString(obj.request) ?? 0,
+    image: parseNumberString(obj.image) ?? 0,
+    webSearch: parseNumberString(obj.web_search) ?? 0,
+    internalReasoning: parseNumberString(obj.internal_reasoning) ?? 0,
   };
 }
 

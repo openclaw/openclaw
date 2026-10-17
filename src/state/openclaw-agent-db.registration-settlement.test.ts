@@ -7,7 +7,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { createSessionRowProjection } from "../gateway/session-row-projection.js";
-import { prepareSessionMutationFacts } from "../gateway/session-sharing-preparation.js";
+import {
+  prepareSessionMutationFacts,
+  SessionMutationFactsUnavailableError,
+} from "../gateway/session-sharing-preparation.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -21,7 +24,7 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
@@ -139,7 +142,7 @@ function observeStores(database: ReturnType<typeof openOpenClawStateDatabase>) {
 }
 
 describe("agent registration native settlement", () => {
-  it("refuses retained sharing facts when a worker loses its registration COMMIT receipt", async () => {
+  it("revokes captured absence when a worker loses its registration COMMIT receipt", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const agentId = lostReceipt.agentId;
       const sessionKey = `agent:${agentId}:existing`;
@@ -200,8 +203,8 @@ describe("agent registration native settlement", () => {
         expect(lostReceipt.events).toEqual(["native-exit", "read-rejected"]);
         expect(receipts).toEqual([]);
         expect(registrations()).toEqual([expect.objectContaining({ agentId, path: storePath })]);
-        // Neither fresh discovery nor global cleanup may rescue the retained reader.
-        expect(() => prepared.readCurrent(cfg)).toThrow("Session access facts are unavailable");
+        // Unknown registration settlement revokes this lease; a fresh read discovers the store.
+        expect(() => prepared.readCurrent(cfg)).toThrow(SessionMutationFactsUnavailableError);
         expect(observed.facts).toEqual([true]);
         const current = await prepareSessionMutationFacts({ cfg, agentId, sessionKey });
         try {
@@ -271,54 +274,51 @@ describe("agent registration native settlement", () => {
           });
         let execution: ReturnType<typeof captureOpenClawAgentDatabaseExecution> | undefined;
         let opening: Promise<unknown> | undefined;
+        // Intercept the physical owner's receipt, independently of a caller's admission.
+        // oxlint-disable-next-line typescript/unbound-method -- Forwarded below with the intercepted native MessagePort receiver.
+        const on = MessagePort.prototype.on;
+        const receive = vi.spyOn(MessagePort.prototype, "on").mockImplementation(function (
+          this: MessagePort,
+          event,
+          listener,
+        ) {
+          if (event !== "message") {
+            return on.call(this, event, listener);
+          }
+          return on.call(this, event, (message: unknown) => {
+            const facts = isRecord(message) ? message.facts : undefined;
+            if (
+              isRecord(message) &&
+              message.stage === "prepare" &&
+              isRecord(facts) &&
+              facts.kind === "agent-registration-committed" &&
+              isRecord(facts.registration) &&
+              facts.registration.agentId === fixture.target.agentId
+            ) {
+              // Pause before the normal receiver handles the real post-COMMIT receipt.
+              deliverCommitted = () => listener(message);
+              endScope.resolve();
+            } else {
+              listener(message);
+            }
+          });
+        });
         const scope = withExistingOpenClawStateSchema({ path: fixture.shared.path }, async () => {
           const retained = captureOpenClawAgentDatabaseExecution(fixture.target);
           execution = retained;
           const source: AgentDatabaseRequestExecutionSource = {
             assertCurrent: () => retained.assertCurrent(),
             createAdmission(binding) {
-              return () => {
-                // oxlint-disable-next-line typescript/unbound-method -- Forwarded below with the intercepted native MessagePort receiver.
-                const on = MessagePort.prototype.on;
-                const receive = vi.spyOn(MessagePort.prototype, "on").mockImplementation(function (
-                  this: MessagePort,
-                  event,
-                  listener,
-                ) {
-                  if (event !== "message") {
-                    return on.call(this, event, listener);
+              return () => ({
+                nativeLocations: binding.nativeLocations,
+                admission: createSqliteWorkerOperationAdmission((request, grant) => {
+                  binding.authorize(request);
+                  retained.assertCurrent();
+                  if (!grant()) {
+                    throw new Error("Registration fixture lost admission");
                   }
-                  return on.call(this, event, (message: unknown) => {
-                    const facts = isRecord(message) ? message.facts : undefined;
-                    if (
-                      isRecord(message) &&
-                      message.stage === "prepare" &&
-                      isRecord(facts) &&
-                      facts.kind === "agent-registration-committed"
-                    ) {
-                      // Pause before the normal receiver handles the real post-COMMIT receipt.
-                      deliverCommitted = () => listener(message);
-                      endScope.resolve();
-                    } else {
-                      listener(message);
-                    }
-                  });
-                });
-                try {
-                  return {
-                    nativeLocations: binding.nativeLocations,
-                    admission: createSqliteWorkerOperationAdmission((request, grant) => {
-                      binding.authorize(request);
-                      retained.assertCurrent();
-                      if (!grant()) {
-                        throw new Error("Registration fixture lost admission");
-                      }
-                    }, binding.attachment),
-                  };
-                } finally {
-                  receive.mockRestore();
-                }
-              };
+                }, binding.attachment),
+              });
             },
           };
           opening = retained.prepare(source).then(
@@ -357,11 +357,14 @@ describe("agent registration native settlement", () => {
           await projection.ensureMaterialized();
           expect(projection.capture(query)?.entry).toMatchObject(entry);
           expect(observed.trace).toEqual([{ kind: "stores", inTransaction: false }]);
-          expect(snapshot.assertCurrent).toThrow(registryListing.AgentDatabaseRegistryChangedError);
+          expect(snapshot.assertCurrent).toThrow(
+            expect.objectContaining({ name: "AgentDatabaseRegistryChangedError" }),
+          );
         } finally {
           endScope.resolve();
           deliverCommitted?.();
           await Promise.allSettled([scope, opening]);
+          receive.mockRestore();
           registration.mockRestore();
           await execution?.release();
         }

@@ -28,7 +28,7 @@ export async function writeTranscriptJsonlArtifact(params: {
             if (chunk.format !== "artifact") {
               throw new Error("Unexpected transcript artifact chunk.");
             }
-            await handle.writeFile(chunk.jsonl);
+            await handle.writeFile(chunk.jsonl, { signal });
             digest.update(chunk.jsonl);
           },
           params.signal,

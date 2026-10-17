@@ -2,10 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as targetPaths from "./session-sqlite-target-paths.js";
 import {
   assertSessionStoreReadCandidate,
   isSessionStoreReadCandidateCurrent,
 } from "./session-store-read-candidates.js";
+import { captureSessionStoreWriteCandidates } from "./session-store-target-inventory.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -150,3 +152,83 @@ test("rejects a candidate whose lexical target changed", () => {
     isSessionStoreReadCandidateCurrent({ path: replacement, physicalPath: capturedAlias }),
   ).toBe(false);
 });
+
+test.each([false, true])(
+  "qualifies an initially absent sibling only while it remains absent (appeared=%s)",
+  async (appeared) => {
+    const root = tempDirs.make("session-store-absent-family-");
+    const storePath = path.join(root, "custom.json");
+    const captured = captureSessionStoreWriteCandidates(storePath);
+    const selected = path.join(root, "custom.main.4.sqlite");
+    await Promise.resolve();
+    if (appeared) {
+      fs.writeFileSync(selected, "later database");
+      expect(() => captured.resolveIdentity(selected)).toThrow(
+        "appeared after its initial inventory",
+      );
+    } else {
+      expect(captured.resolveIdentity(selected)).toEqual({
+        key: `path:${path.join(fs.realpathSync(root), "custom.main.4.sqlite")}`,
+        canonicalPath: path.join(fs.realpathSync(root), "custom.main.4.sqlite"),
+      });
+    }
+  },
+);
+
+test("does not certify sibling absence when the initial directory listing failed", async () => {
+  const root = tempDirs.make("session-store-incomplete-family-");
+  const known = path.join(root, "custom.sqlite");
+  fs.writeFileSync(known, "existing database");
+  vi.spyOn(targetPaths, "listSqliteTargetCandidatePathsForSessionStorePath").mockImplementation(
+    () => {
+      throw Object.assign(new Error("directory listing denied"), { code: "EACCES" });
+    },
+  );
+  const captured = captureSessionStoreWriteCandidates(path.join(root, "custom.json"));
+  await Promise.resolve();
+  expect(captured.resolveIdentity(known).key).toMatch(/^file:/);
+  expect(() => captured.resolveIdentity(path.join(root, "custom.main.sqlite"))).toThrow(
+    "absence was not captured",
+  );
+});
+
+test.runIf(process.platform !== "win32")(
+  "rejects an absent sibling after its directory alias is retargeted",
+  async () => {
+    const root = tempDirs.make("session-store-absent-alias-");
+    const original = path.join(root, "original");
+    const replacement = path.join(root, "replacement");
+    const alias = path.join(root, "alias");
+    fs.mkdirSync(original);
+    fs.mkdirSync(replacement);
+    fs.symlinkSync(original, alias, "junction");
+    const captured = captureSessionStoreWriteCandidates(path.join(alias, "custom.json"));
+    await Promise.resolve();
+    fs.unlinkSync(alias);
+    fs.symlinkSync(replacement, alias, "junction");
+    expect(() => captured.resolveIdentity(path.join(alias, "custom.main.sqlite"))).toThrow(
+      "selector changed during discovery",
+    );
+    expect(fs.readdirSync(replacement)).toEqual([]);
+  },
+);
+
+test.each(process.platform === "win32" ? ["file"] : ["file", "symlink"])(
+  "never converts a removed positive %s into creation authority",
+  async (kind) => {
+    const root = tempDirs.make("session-store-positive-removal-");
+    const selected = path.join(root, "custom.main.sqlite");
+    if (kind === "symlink") {
+      const physical = path.join(root, "physical.db");
+      fs.writeFileSync(physical, "original database");
+      fs.symlinkSync(physical, selected);
+    } else {
+      fs.writeFileSync(selected, "original database");
+    }
+    const captured = captureSessionStoreWriteCandidates(path.join(root, "custom.json"));
+    await Promise.resolve();
+    fs.unlinkSync(selected);
+    expect(() => captured.resolveIdentity(selected)).toThrow();
+    expect(fs.existsSync(selected)).toBe(false);
+  },
+);

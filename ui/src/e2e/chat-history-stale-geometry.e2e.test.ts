@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { GatewaySessionRow } from "../api/types.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import {
   CHAT_SNAPSHOT_DB_NAME,
@@ -19,6 +20,11 @@ import {
 
 const suite = createChatFlowE2eSuite();
 const sessionId = "durable-geometry-session";
+const sessionInfo = {
+  key: "agent:main:main",
+  kind: "direct",
+  sessionId,
+} satisfies GatewaySessionRow;
 
 function historyMessage(seq: number, text: string) {
   return {
@@ -61,12 +67,13 @@ suite.define(() => {
         "chat.startup": {
           hasMore: false,
           messages: recentMessages,
+          sessionInfo,
           sessionId,
           totalMessages: recentMessages.length,
         },
       },
       sessionKey: "agent:main:main",
-      sessions: [{ key: "agent:main:main", sessionId }],
+      sessions: [sessionInfo],
     });
 
     try {
@@ -175,6 +182,7 @@ suite.define(() => {
         hasMore: true,
         messages: compactRecentMessages,
         nextOffset: compactRecentMessages.length,
+        sessionInfo,
         sessionId,
         totalMessages,
       });

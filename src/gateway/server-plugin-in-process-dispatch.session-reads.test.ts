@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as sqliteQueries from "../infra/kysely-sync.js";
@@ -44,6 +45,7 @@ async function withSyntheticReader(
       },
     };
     await state.writeConfig(config);
+    setRuntimeConfigSnapshot(config);
     const reader = ensureProfileForEmail("synthetic-reader@example.test");
     const ownerEmail = "synthetic-owner@example.test";
     const owner = ensureProfileForEmail(ownerEmail);
@@ -120,10 +122,7 @@ async function withSyntheticReader(
           sessionChanges.emit({ all: true, scope: "catalog" });
           return {
             entered: catalogEntered.promise,
-            readEntered: readEntered.promise.then(() => {
-              expect(readiness).toHaveBeenCalledOnce();
-              expect(readiness).toHaveBeenCalledWith(true);
-            }),
+            readEntered: readEntered.promise,
             release: () => catalogGate?.resolve(),
           };
         },

@@ -1,5 +1,7 @@
+import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -25,8 +27,11 @@ import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.
 import { isQueuedChatTurnForSession } from "../chat-queued-turns.js";
 import { resolveClaudeCliBindingSessionId } from "../cli-session-history.claude.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
+import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
 import { SerializedJsonArray } from "../serialized-json.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
+import { readPreparedGatewayModelMetadata } from "../server-model-catalog-view.js";
+import { registerDeflatedSegment } from "../server/ws-compression.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
 import { resolveSessionHistoryUnavailableMessage } from "../session-history-error.js";
@@ -70,6 +75,7 @@ export async function handleChatHistoryRequest({
   sessionMutationAuthorization,
   retainedTranscript,
   acceptsSerializedJson,
+  acceptsDeflatedSegments,
   req,
 }: GatewayRequestHandlerOptions & {
   method: ChatHistoryMethod;
@@ -87,14 +93,17 @@ export async function handleChatHistoryRequest({
     limit,
     offset,
     cursor,
+    knownState,
     messageId: wireMessageId,
     sessionId: wireSessionId,
     maxChars,
+    toolResultMaxChars,
     maxBytes,
     pendingBefore,
     inputRunIds,
   } = params;
   const pageCursor = decodeChatHistoryPageCursor(cursor);
+  const includePluginSteering = client?.connect.client?.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
   const messageId = pageCursor?.messageId ?? wireMessageId;
   const deltaCursor = pageCursor ? undefined : cursor;
   const retainedSessionId = retainedTranscript?.sessionId;
@@ -186,8 +195,9 @@ export async function handleChatHistoryRequest({
     });
     const max = limit ?? 200;
     const maxHistoryBytes = Math.min(maxBytes ?? Infinity, getMaxChatHistoryMessagesBytes());
-    // Recovery lookahead keeps its read budget; every response has the same byte target.
-    const maxResponseBytes = Math.min(maxBytes ?? Infinity, 512 * 1024, maxHistoryBytes);
+    // Keep the default response small while honoring explicit back-scroll budgets.
+    // Recovery lookahead retains its separate read budget.
+    const maxResponseBytes = Math.min(maxBytes ?? 512 * 1024, maxHistoryBytes);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(maxChars);
     const pendingInputs =
       sessionId && sessionId === entry?.sessionId
@@ -234,6 +244,13 @@ export async function handleChatHistoryRequest({
         : [],
     );
     let historyPage: Awaited<ReturnType<typeof readChatHistoryPage>>;
+    // Internal adapters may inspect message objects before responding.
+    const encodeResponse = acceptsSerializedJson && method === req.method;
+    // Model projection replaces serialized messages, so their compressed bytes go unused.
+    const deflateResponse =
+      encodeResponse &&
+      acceptsDeflatedSegments &&
+      !resolveOperatorRolePolicy(client, context.getCommittedRuntimeConfig?.() ?? cfg)?.modelPolicy;
     try {
       historyPage =
         deltaCursor !== undefined
@@ -243,8 +260,9 @@ export async function handleChatHistoryRequest({
               () =>
                 readChatHistoryPage(
                   {
-                    // Internal adapters may inspect message objects before responding.
-                    encodeResponse: acceptsSerializedJson && method === req.method,
+                    encodeResponse,
+                    deflateResponse,
+                    includePluginSteering,
                     entry: historyEntry,
                     provider: resolvedSessionModel.provider,
                     sessionId,
@@ -255,6 +273,7 @@ export async function handleChatHistoryRequest({
                     maxHistoryBytes,
                     responseHistoryBytes: maxResponseBytes,
                     effectiveMaxChars,
+                    toolResultMaxChars,
                     offset,
                     messageId,
                     ...(pageCursor ? { pageCursor } : {}),
@@ -274,6 +293,12 @@ export async function handleChatHistoryRequest({
     } catch (error) {
       respondReadError(error);
       return;
+    }
+    if (historyPage.encodedResponse && historyPage.encodedMessagesDeflate) {
+      registerDeflatedSegment(
+        historyPage.encodedResponse.messages,
+        historyPage.encodedMessagesDeflate,
+      );
     }
     const responsePage = historyPage.encodedResponse
       ? {
@@ -305,6 +330,33 @@ export async function handleChatHistoryRequest({
       agentId: sessionAgentId,
       catalog: defaultModelCatalog,
     };
+    const presentHistory = (
+      payload: Parameters<typeof projectOperatorModelRead>[1] & {
+        pendingInputs: typeof pendingInputs;
+      },
+    ) => {
+      const projected = projectOperatorModelRead(modelReadScope, payload);
+      if (knownState === undefined) {
+        return projected;
+      }
+      // Hash the authorized wire projection: receipts never skip current-state reads or policy.
+      const stateRevision = {
+        pendingInputs: sha256StableValue(projected.pendingInputs).digest,
+        sessionInfo: projected.sessionInfo
+          ? sha256StableValue({ ...projected.sessionInfo, snapshotAt: undefined }).digest
+          : undefined,
+      };
+      return {
+        ...projected,
+        stateRevision,
+        ...(deltaCursor !== undefined && knownState?.pendingInputs === stateRevision.pendingInputs
+          ? { pendingInputs: undefined }
+          : {}),
+        ...(deltaCursor !== undefined && knownState?.sessionInfo === stateRevision.sessionInfo
+          ? { sessionInfo: undefined, sessionInfoSnapshotAt: projected.sessionInfo?.snapshotAt }
+          : {}),
+      };
+    };
     const query = {
       key: canonicalKey,
       agentId: sessionAgentId,
@@ -331,6 +383,7 @@ export async function handleChatHistoryRequest({
                 ...selectedSession,
                 key: canonicalKey,
                 preparedAcpMeta: unsavedAcpMeta ?? null,
+                preparedRuntimeOwnership: null,
                 modelCatalog: sessionModelCatalog,
                 rowContext: rowProjection.state.rowContext,
               })),
@@ -383,6 +436,8 @@ export async function handleChatHistoryRequest({
         requestedSessionKey: sessionKey,
         canonicalSessionKey: canonicalKey,
         sessionId,
+        agentId: sessionAgentId,
+        defaultAgentId: compatibilityOwnerAgentId,
       });
       if (sessionInfo && Object.hasOwn(historyPage, "activeLeafEntryId")) {
         sessionInfo.activeLeafEntryId = historyPage.activeLeafEntryId ?? null;
@@ -394,6 +449,7 @@ export async function handleChatHistoryRequest({
               ...getSessionDefaults(cfg, defaultModelCatalog, {
                 agentId: sessionAgentId,
                 allowPluginNormalization: false,
+                metadataSnapshot: readPreparedGatewayModelMetadata(cfg),
                 providerPolicySource: "active",
               }),
               modelSelectionTarget: resolveGatewayModelSelectionPolicy({
@@ -487,6 +543,9 @@ export async function handleChatHistoryRequest({
             };
             delta = await readChatHistoryDelta(
               {
+                maxChars: effectiveMaxChars,
+                toolResultMaxChars,
+                includePluginSteering,
                 agentId: sessionAgentId,
                 cursor: deltaCursor,
                 maxBytes: maxResponseBytes,
@@ -540,7 +599,7 @@ export async function handleChatHistoryRequest({
               ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
               ...(startupMetadata ? { metadata: startupMetadata } : {}),
             };
-            respond(true, projectOperatorModelRead(modelReadScope, payload));
+            respond(true, presentHistory(payload));
             return undefined;
           });
         };
@@ -578,10 +637,10 @@ export async function handleChatHistoryRequest({
               ((await retainedTranscript.verifyRetainedState?.()) ?? true),
             requireCurrentSession: retainedTranscript.requireCurrentSession === true,
             sharing: currentSharing,
-            publish: () => respond(true, projectOperatorModelRead(modelReadScope, payload)),
+            publish: () => respond(true, presentHistory(payload)),
           });
       }
-      respond(true, projectOperatorModelRead(modelReadScope, payload));
+      respond(true, presentHistory(payload));
       return undefined;
     });
     await publishDelta?.();
@@ -614,7 +673,7 @@ export const chatHistoryHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const { shortId, slugHint, agentId, limit, maxBytes } = opts.params;
+    const { shortId, slugHint, agentId, limit, maxBytes, toolResultMaxChars } = opts.params;
     const projection = getSessionRowProjection(opts.context);
     if (!projection) {
       respondChatHistoryUnavailable(
@@ -654,7 +713,13 @@ export const chatHistoryHandlers: GatewayRequestHandlers = {
     }
     await handleChatHistoryRequest({
       ...opts,
-      params: { sessionKey: resolution.key, agentId: resolution.agentId, limit, maxBytes },
+      params: {
+        sessionKey: resolution.key,
+        agentId: resolution.agentId,
+        limit,
+        maxBytes,
+        toolResultMaxChars,
+      },
       method: "chat.startup",
       respond: (ok, payload, error, meta) =>
         opts.respond(ok, ok ? { ...asOptionalRecord(payload), resolution } : payload, error, meta),

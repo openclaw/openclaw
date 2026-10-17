@@ -17,7 +17,6 @@ import {
   collectServiceFiles,
   isLegacyLabel,
   isPotentialGatewayServiceName,
-  readServiceFile,
   scanSystemdDir,
   type ExtraGatewayService,
   type ServiceFileInspectionError,
@@ -44,7 +43,10 @@ import {
 } from "./schtasks-layout.js";
 import { listScheduledTasks } from "./schtasks-state-probe.js";
 import { resolveWindowsServiceCommandProfile } from "./service-env-merge.js";
-import { listLoadedSystemdUnits } from "./systemd-loaded-unit-inventory.js";
+import {
+  isLoadedSystemdMaintenanceCommand,
+  listLoadedSystemdUnits,
+} from "./systemd-loaded-unit-inventory.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 import {
   DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS,
@@ -442,7 +444,13 @@ async function scanGatewayServices(
           continue;
         }
         const backupPath = path.join(userDir, `${name}.service.bak`);
-        if ((await readServiceFile(backupPath)) !== null) {
+        const backup = await fs.readFile(backupPath).catch((error: unknown) => {
+          if (!hasErrnoCode(error, "ENOENT")) {
+            errors.push({ source: backupPath, message: "Service path could not be inspected." });
+          }
+          return null;
+        });
+        if (backup !== null) {
           push({
             platform: "linux",
             label,
@@ -490,6 +498,9 @@ async function scanGatewayServices(
                   source: unit.name,
                   message: "Loaded systemd Gateway definition could not be inspected.",
                 });
+                continue;
+              }
+              if (!selected && (await isLoadedSystemdMaintenanceCommand(unit, scope, env))) {
                 continue;
               }
               push({

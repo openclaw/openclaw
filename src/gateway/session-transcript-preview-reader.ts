@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
+import { resolveWorkerVisibleHistoryProjection } from "../config/sessions/session-accessor.sqlite-history-projection.worker.js";
 import { readRecentSessionTranscriptHistoryEventsFromProjection } from "../config/sessions/session-accessor.sqlite-history-query.js";
 import { readCurrentProjectionSnapshot } from "../config/sessions/session-accessor.sqlite-projection-read.js";
 import { readWithCanonicalSessionAdmission } from "../config/sessions/session-canonical-key.js";
@@ -27,22 +28,6 @@ function previewReadLimits(maxItems: number) {
   ];
 }
 
-/** Share the same bounded widening for display and canonical model-context previews. */
-export function readBoundedSessionPreviewItems(
-  maxItems: number,
-  readPage: (maxEvents: number, maxBytes: number) => PreviewPage,
-): SessionPreviewItem[] {
-  let items: SessionPreviewItem[] = [];
-  for (const { maxEvents, maxBytes } of previewReadLimits(maxItems)) {
-    const page = readPage(maxEvents, maxBytes);
-    items = page.items;
-    if (items.length >= maxItems || !page.hasOlderEvents) {
-      break;
-    }
-  }
-  return items;
-}
-
 export async function readBoundedSessionPreviewItemsAsync(
   maxItems: number,
   readPage: (maxEvents: number, maxBytes: number) => Promise<PreviewPage>,
@@ -52,6 +37,30 @@ export async function readBoundedSessionPreviewItemsAsync(
     const page = await readPage(maxEvents, maxBytes);
     items = page.items;
     if (items.length >= maxItems || !page.hasOlderEvents) {
+      break;
+    }
+  }
+  return items;
+}
+
+/** Native and worker display reads share widening, projection, and the older-page boundary. */
+function readSessionDisplayPreviewItems(
+  maxItems: number,
+  maxChars: number,
+  readPage: (
+    options: Parameters<typeof readRecentSessionTranscriptHistoryEventsFromProjection>[1],
+  ) => ReturnType<typeof readRecentSessionTranscriptHistoryEventsFromProjection>,
+): SessionPreviewItem[] {
+  let items: SessionPreviewItem[] = [];
+  for (const { maxEvents, maxBytes } of previewReadLimits(maxItems)) {
+    const page = readPage({ maxBytes, maxLines: maxEvents, maxMessages: maxEvents });
+    items = buildSessionPreviewItems(
+      page.events.map((entry) => asOptionalRecord(entry.event)?.message),
+      maxItems,
+      maxChars,
+    );
+    const hasOlderEvents = page.totalMessages > page.events.length;
+    if (items.length >= maxItems || !hasOlderEvents) {
       break;
     }
   }
@@ -68,7 +77,7 @@ export function readSessionPreviewItemsReadOnly(
       if (target.entryValidationKey !== undefined) {
         readSessionEntryRow(database, target.entryValidationKey);
       }
-      return readBoundedSessionPreviewItems(maxItems, (maxEvents, maxBytes) => {
+      return readSessionDisplayPreviewItems(maxItems, maxChars, (options) => {
         const snapshot = readCurrentProjectionSnapshot(
           database,
           {
@@ -78,25 +87,15 @@ export function readSessionPreviewItemsReadOnly(
             databaseAgentId: databaseTarget.agentId,
             path: databaseTarget.path,
           },
-          (projection) =>
-            readRecentSessionTranscriptHistoryEventsFromProjection(projection, {
-              maxBytes,
-              maxLines: maxEvents,
-              maxMessages: maxEvents,
-            }),
+          (projection) => {
+            projection.resolveVisibleHistory = resolveWorkerVisibleHistoryProjection;
+            return readRecentSessionTranscriptHistoryEventsFromProjection(projection, options);
+          },
         );
         if (snapshot.kind === "unavailable") {
           throw new SessionTranscriptProjectionUnavailableError(target.sessionId);
         }
-        const page = snapshot.value;
-        return {
-          items: buildSessionPreviewItems(
-            page.events.map((entry) => asOptionalRecord(entry.event)?.message),
-            maxItems,
-            maxChars,
-          ),
-          hasOlderEvents: page.totalMessages > page.events.length,
-        };
+        return snapshot.value;
       });
     });
   if (retainedDatabase) {

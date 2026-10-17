@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { LitElement } from "lit";
+import { flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { t } from "../../i18n/index.ts";
@@ -14,6 +14,9 @@ afterEach(() => {
 
 it("shows a failed recovery module only for the owner still awaiting it", async () => {
   vi.stubGlobal("sessionStorage", createStorageMock());
+  const { createPageState } = await import("./chat-state-page.ts");
+  // The plain state factory's composer store is separate from recovery's failed import.
+  await import("../../lib/chat/composer-draft-store.runtime.ts");
   const loading = createDeferred();
   const release = createDeferred();
   vi.doMock("../../lib/chat/composer-draft-store.runtime.ts", async () => {
@@ -21,14 +24,18 @@ it("shows a failed recovery module only for the owner still awaiting it", async 
     await release.promise;
     throw new Error("Synthetic recovery module unavailable");
   });
-  await import("./chat-outbox-recovery.ts");
-  const host = {
-    connected: true,
-    client: createTestGatewayClient(async () => ({})),
-    settings: { gatewayUrl: "ws://recovery.test" },
-  };
+  const { createInitializationContext } = await import("./chat-pane.test-support.ts");
+  await import("./chat-outbox-recovery.tsx");
+  const host = createPageState(
+    createInitializationContext(),
+    { invalidate: () => {}, afterCommit: () => () => {} },
+    { dispatchEvent: () => true, querySelector: () => null },
+  );
+  host.connected = true;
+  host.client = createTestGatewayClient(async () => ({}));
+  host.settings = { ...host.settings, gatewayUrl: "ws://recovery.test" };
   const createRecovery = () =>
-    Object.assign(document.createElement("openclaw-chat-outbox-recovery") as LitElement, {
+    Object.assign(document.createElement("openclaw-chat-outbox-recovery"), {
       host,
       identity: "connected-owner",
     });
@@ -37,12 +44,13 @@ it("shows a failed recovery module only for the owner still awaiting it", async 
   document.body.append(current, superseded);
   try {
     await Promise.all([current.updateComplete, superseded.updateComplete, loading.promise]);
+    const disconnectedClient = createTestGatewayClient(async () => ({}));
     superseded.host = {
       ...host,
       connected: false,
-      client: createTestGatewayClient(async () => ({})),
+      client: disconnectedClient,
     };
-    superseded.host.client.retireOfflineRecoveryScope();
+    disconnectedClient.retireOfflineRecoveryScope();
     superseded.identity = "disconnected-owner";
     await superseded.updateComplete;
     const failedImport = import("../../lib/chat/composer-draft-store.runtime.ts").catch(
@@ -51,6 +59,7 @@ it("shows a failed recovery module only for the owner still awaiting it", async 
     release.resolve();
     await failedImport;
     await Promise.all([current.updateComplete, superseded.updateComplete]);
+    flush();
     expect(current.querySelector('[role="alert"]')?.textContent).toBe(
       t("chat.outboxRecoveryStorageFailed"),
     );

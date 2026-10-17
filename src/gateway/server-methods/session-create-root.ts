@@ -1,9 +1,15 @@
 import fs from "node:fs";
-import { ok, type Result } from "@openclaw/normalization-core/result";
+import path from "node:path";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ErrorShape,
   SessionsCreateParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  missingScopeErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
@@ -11,13 +17,51 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { ADMIN_SCOPE } from "../method-scopes.js";
 import { invalidSessionRequest } from "../session-request-error.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
+import { requiredWorkerWorkspaceReuseError } from "./session-create-required-worker.js";
+import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
 type PreparedSessionCreateRoot = {
   sessionCwd?: string;
   sessionRoot?: string;
 };
+
+export async function prepareSessionCreateRequestedCwd(params: {
+  cfg: OpenClawConfig;
+  requestedCwd?: string;
+  requestedExecNode?: string;
+  permissionMode?: SessionsCreateParams["permissionMode"];
+  clientPresent: boolean;
+  clientScopes: readonly string[];
+}): Promise<Result<string | undefined, ErrorShape>> {
+  const { requestedCwd, requestedExecNode } = params;
+  const cwdIsAbsolute =
+    !requestedCwd ||
+    (requestedExecNode
+      ? path.isAbsolute(requestedCwd) || path.win32.isAbsolute(requestedCwd)
+      : path.isAbsolute(requestedCwd));
+  if (!cwdIsAbsolute) {
+    return err(errorShape(ErrorCodes.INVALID_REQUEST, "sessions.create cwd must be absolute"));
+  }
+  if (
+    params.permissionMode === "full" &&
+    params.clientPresent &&
+    !params.clientScopes.includes(ADMIN_SCOPE)
+  ) {
+    return err(
+      missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
+    );
+  }
+  if (requestedCwd && !requestedExecNode && !params.clientScopes.includes(ADMIN_SCOPE)) {
+    const containment = await resolveWorkspacePathContainment(requestedCwd, params.cfg);
+    return containment
+      ? ok(containment.path)
+      : err(missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }));
+  }
+  return ok(requestedCwd);
+}
 
 export function prepareSessionCreateFilesystemRoot(params: {
   cfg: OpenClawConfig;
@@ -48,6 +92,7 @@ export function prepareSessionCreateFilesystemRoot(params: {
         cfg: params.cfg,
         agentId: params.targetAgentId,
         sessionKey: params.sessionKey ?? `agent:${params.targetAgentId}:dashboard:pending`,
+        preparedSessionEntry: null,
       });
       // Canonical paths admit workspace aliases while rejecting links that
       // resolve outside the selected agent's workspace.
@@ -102,6 +147,7 @@ export function prepareSessionForkFilesystemRoot(params: {
 > {
   const parent = params.parent;
   if (
+    parent.deviceFolder ||
     parent.worktree ||
     parent.repositoryWorkspaceId ||
     parent.execHost === "node" ||
@@ -134,4 +180,33 @@ export function prepareSessionForkFilesystemRoot(params: {
     ...(parent.spawnedWorkspaceDir ? { spawnedWorkspaceDir: root.value.sessionRoot } : {}),
     sessionRoot: root.value.sessionRoot,
   });
+}
+
+/** Existing sessions keep their accepted workspace source across keyed create retries. */
+export function sessionWorkspaceReuseError(
+  params: Pick<SessionsCreateParams, "deviceFolder" | "repository">,
+  automaticEmptyWorkspace: boolean,
+  existingTargetEntry: InternalSessionEntry | undefined,
+): ErrorShape | undefined {
+  const { deviceFolder, repository } = params;
+  if (existingTargetEntry?.deviceFolder && !deviceFolder) {
+    return errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "Device folder sessions require their original deviceFolder; continue the existing session or create a new one.",
+    );
+  }
+  const requiredError = requiredWorkerWorkspaceReuseError(
+    automaticEmptyWorkspace,
+    existingTargetEntry,
+  );
+  if (requiredError) {
+    return requiredError;
+  }
+  if (existingTargetEntry?.repositoryWorkspaceId && !repository) {
+    return errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "Repository sessions require their original repository source; dispatch the existing session to continue.",
+    );
+  }
+  return undefined;
 }

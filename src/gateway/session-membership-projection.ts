@@ -210,7 +210,7 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
           (facts.kind === "entry" && previous[4] !== facts.previousSessionId) ||
           ((facts.kind === "member" || facts.kind === "category") &&
             previous[4] !== facts.sessionId) ||
-          (facts.kind === "participants" && !facts.projection)
+          (facts.kind === "participants" && !facts.projection && facts.projectionChanged !== false)
         ) {
           store.facts.delete(change.sessionKey);
           store.dirty.add(change.sessionKey);

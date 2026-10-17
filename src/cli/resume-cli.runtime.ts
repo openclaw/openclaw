@@ -39,7 +39,7 @@ async function formatResumeConnectionError(error: unknown): Promise<Error> {
     [
       state.connectionStatus,
       state.remediation ??
-        "Ensure the Gateway is running and your --url/--token/--password are correct.",
+        "Check that the Gateway is running and your --url/--token/--password are correct.",
     ].join("\n"),
     { cause: error },
   );
@@ -229,6 +229,5 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
       ...(connection.tlsFingerprint ? { tlsFingerprint: connection.tlsFingerprint } : {}),
     },
     session: sessionKey,
-    forceProcessExitOnReturn: true,
   });
 }

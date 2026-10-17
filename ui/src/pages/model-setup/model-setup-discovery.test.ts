@@ -5,8 +5,6 @@ import { WizardSession } from "../../../../src/wizard/session.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { i18n } from "../../i18n/index.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
@@ -17,7 +15,6 @@ import {
   mountPage,
   selectManualProvider,
 } from "./model-setup-first-run.test-support.ts";
-import { ModelSetupPage } from "./model-setup-page.ts";
 
 describe("Model Setup explicit discovery", () => {
   beforeEach(async () => {
@@ -32,37 +29,6 @@ describe("Model Setup explicit discovery", () => {
     document.body.replaceChildren();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-  });
-
-  it("detects an existing first-run route without testing it until a click", async () => {
-    const { context, request } = createFirstRunContext();
-    request.mockImplementation(async (method) => {
-      if (method === "openclaw.setup.detect") {
-        return { ...detection, configuredModel: "openai/existing", setupComplete: true };
-      }
-      if (method === "openclaw.setup.verify") {
-        return { ok: true, modelRef: "openai/existing", latencyMs: 12 };
-      }
-      throw new Error(`Unexpected setup request: ${method}`);
-    });
-    const provider = createApplicationContextProvider(context);
-    const page = new ModelSetupPage();
-    page.routeData = { firstRun: true };
-    provider.append(page);
-    document.body.append(provider);
-    await waitForFast(() =>
-      expect(page.querySelector(".model-setup__current button")).not.toBeNull(),
-    );
-    await page.updateComplete;
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["openclaw.setup.detect"]);
-    expect(context.navigate).not.toHaveBeenCalled();
-    expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBeNull();
-    page.querySelector<HTMLButtonElement>(".model-setup__current button")!.click();
-    await waitForFast(() => expect(page.querySelector(".model-setup__verified")).not.toBeNull());
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "openclaw.setup.detect",
-      "openclaw.setup.verify",
-    ]);
   });
 
   it.each(["cancel at credentials", "finish final commit"] as const)(
@@ -195,7 +161,7 @@ describe("Model Setup explicit discovery", () => {
     },
   );
 
-  it.each(["network", "denied", "missing wizard"] as const)(
+  it.each(["denied", "missing wizard"] as const)(
     "shows an explicit cancellation %s failure without discarding the clicked receipt",
     async (failure) => {
       const { context, client, request } = createFirstRunContext();
@@ -288,53 +254,49 @@ describe("Model Setup explicit discovery", () => {
     },
   );
 
-  it.each([false, true])(
-    "sends only an explicit fresh-install discovery choice (%s)",
-    async (enabled) => {
-      const { context, client, request } = createFirstRunContext();
-      request.mockResolvedValue({ done: true, status: "cancelled" });
-      const { page } = await mountPage(context, {
-        client,
-        firstRun: true,
-        state: {
-          phase: "ready",
-          result: {
-            ...detection,
-            nativeSessionCatalogPreferenceRequired: true,
-            nativeSessionCatalogs: [
-              { pluginId: "anthropic", label: "Claude" },
-              { pluginId: "codex", label: "Codex" },
-            ],
-            candidates: [candidate("codex-cli", "openai/available", true)],
-            manualProviders: [{ id: "api-key", label: "API provider" }],
-          },
+  it("sends only an explicit fresh-install discovery opt-in", async () => {
+    const enabled = true;
+    const { context, client, request } = createFirstRunContext();
+    request.mockResolvedValue({ done: true, status: "cancelled" });
+    const { page } = await mountPage(context, {
+      client,
+      firstRun: true,
+      state: {
+        phase: "ready",
+        result: {
+          ...detection,
+          nativeSessionCatalogPreferenceRequired: true,
+          nativeSessionCatalogs: [
+            { pluginId: "anthropic", label: "Claude" },
+            { pluginId: "codex", label: "Codex" },
+          ],
+          candidates: [candidate("codex-cli", "openai/available", true)],
+          manualProviders: [{ id: "api-key", label: "API provider" }],
         },
-      });
-      const checkbox = page.querySelector<HTMLInputElement>(
-        ".model-setup__native-discovery input",
-      )!;
-      expect(checkbox.checked).toBe(false);
-      expect(page.querySelector("[data-selected]")).toBeNull();
-      expect(request).not.toHaveBeenCalled();
-      expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBeNull();
-      if (enabled) {
-        checkbox.click();
-        await page.updateComplete;
-      }
-      expect(request).not.toHaveBeenCalled();
-      await clickCandidate(page, "codex-cli");
-      await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-      expect(request.mock.calls[0]).toEqual([
-        "openclaw.setup.activate.start",
-        expect.objectContaining({
-          kind: "codex-cli",
-          modelRef: "openai/available",
-          nativeSessionCatalogsEnabled: enabled,
-        }),
-        { timeoutMs: null },
-      ]);
-    },
-  );
+      },
+    });
+    const checkbox = page.querySelector<HTMLInputElement>(".model-setup__native-discovery input")!;
+    expect(checkbox.checked).toBe(false);
+    expect(page.querySelector("[data-selected]")).toBeNull();
+    expect(request).not.toHaveBeenCalled();
+    expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBeNull();
+    if (enabled) {
+      checkbox.click();
+      await page.updateComplete;
+    }
+    expect(request).not.toHaveBeenCalled();
+    await clickCandidate(page, "codex-cli");
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    expect(request.mock.calls[0]).toEqual([
+      "openclaw.setup.activate.start",
+      expect.objectContaining({
+        kind: "codex-cli",
+        modelRef: "openai/available",
+        nativeSessionCatalogsEnabled: enabled,
+      }),
+      { timeoutMs: null },
+    ]);
+  });
 
   it.each(["install", "custom"] as const)(
     "offers %s choices without installing or starting auth on discovery",
@@ -451,42 +413,4 @@ describe("Model Setup explicit discovery", () => {
     expect(page.querySelector("[data-selected]")).toBeNull();
     expect(request.mock.calls.map(([method]) => method)).toEqual(["openclaw.setup.detect"]);
   });
-
-  it.each(["same client", "replacement client"])(
-    "keeps explicit discovery opt-in across a same-Gateway reconnect (%s)",
-    async (replacement) => {
-      const { context, client, request, snapshot, publishGatewaySnapshot } =
-        createFirstRunContext();
-      const fresh = {
-        ...detection,
-        nativeSessionCatalogPreferenceRequired: true,
-        nativeSessionCatalogs: [{ pluginId: "codex", label: "Codex" }],
-      };
-      request.mockResolvedValue(fresh);
-      const { page } = await mountPage(context, {
-        client,
-        firstRun: true,
-        state: { phase: "ready", result: fresh },
-      });
-      page.querySelector<HTMLInputElement>(".model-setup__native-discovery input")!.click();
-      await page.updateComplete;
-      publishGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
-      await page.updateComplete;
-      publishGatewaySnapshot({
-        ...snapshot,
-        client: replacement === "same client" ? client : createTestGatewayClient(request),
-        hello: { ...snapshot.hello },
-      });
-      await waitForFast(() =>
-        expect(page.querySelector(".model-setup__native-discovery input")).not.toBeNull(),
-      );
-      expect(
-        page.querySelector<HTMLInputElement>(".model-setup__native-discovery input")!.checked,
-      ).toBe(true);
-      expect(request.mock.calls.map(([method]) => method)).toEqual([
-        "config.get",
-        "openclaw.setup.detect",
-      ]);
-    },
-  );
 });

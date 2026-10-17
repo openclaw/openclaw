@@ -12,7 +12,7 @@ import { pathForRoute, routePageSpec, type RouteId } from "../../app-route-paths
 import type { ApplicationContext } from "../../app/context.ts";
 import { pages } from "./route.ts";
 
-type RouteModule = { header: boolean; render: () => unknown };
+type RouteModule = Awaited<ReturnType<(typeof pages)[number]["component"]>>;
 
 const removedGeneralPage = pages.find((page) => page.id === "config") as PageDefinition<
   RouteId,
@@ -50,7 +50,7 @@ async function loadRemovedGeneral(url: string, basePath = "") {
 function targetPage(id: RouteId) {
   return definePage({
     ...routePageSpec(id),
-    component: async () => ({ header: true, render: () => null }),
+    component: async () => ({ header: true, renderSolid: () => null }),
   }) as PageDefinition<RouteId, ApplicationContext, RouteModule>;
 }
 
@@ -209,7 +209,7 @@ describe("moved Settings sections", () => {
               aliases: sourcePage.aliases,
               loader: sourcePage.loader,
               loaderDeps: sourcePage.loaderDeps,
-              component: async () => ({ header: true, render: () => null }),
+              component: async () => ({ header: true, renderSolid: () => null }),
             },
             targetPage("updates"),
             targetPage(targetId),

@@ -7,7 +7,6 @@ import type { WorktreeAllocationGuard } from "./allocation.js";
 import { withManagedWorktreeGit } from "./checkout-policy.js";
 import type { WorktreeCleanupMutation } from "./gc-removal.js";
 import { lockState } from "./git-lock.js";
-import { repairWorktreePackIndex } from "./git-maintenance.js";
 import { commandError, requireGit } from "./git.js";
 import {
   captureWorktreeRegistryReadGuard,
@@ -64,14 +63,13 @@ export async function removeSettledManagedWorktree(
   input: RemoveWorktreeParams & WorktreeAllocationGuard & { claimToken: string },
   context: {
     env: NodeJS.ProcessEnv;
-    now: () => number;
     getConfig: () => OpenClawConfig;
     snapshotRetentionMs: number;
   },
   timing: ReturnType<typeof startGitOperationTiming>,
   prepareArchive?: (snapshot: string) => Promise<void>,
 ): Promise<RemoveManagedWorktreeResult> {
-  const { env, now, getConfig, snapshotRetentionMs } = context;
+  const { env, getConfig, snapshotRetentionMs } = context;
   let params = input;
   timing?.markRemovalStage("preparation");
   params.signal?.throwIfAborted();
@@ -159,11 +157,6 @@ export async function removeSettledManagedWorktree(
         killProcessTree: true,
       });
     }
-    timing?.markRemovalStage("packRepair");
-    await repairWorktreePackIndex(record.repoRoot, {
-      signal: params.signal,
-      commitGuard: params.commitGuard,
-    });
     timing?.markRemovalStage("snapshot");
     const retirementName = params.exactState ? `.openclaw-retiring-${randomUUID()}` : undefined;
     let snapshotRef: string | undefined;
@@ -273,7 +266,7 @@ export async function removeSettledManagedWorktree(
           env,
           record.id,
           {
-            runEndCleanup: { outcome: "retained-dirty", at: now() },
+            runEndCleanup: { outcome: "retained-dirty", at: Date.now() },
           },
           {
             onlyIfLive: true,
@@ -300,7 +293,6 @@ export async function removeSettledManagedWorktree(
         record,
         env,
         claimToken,
-        now,
         snapshotRef,
         snapshotOid: snapshot ?? head,
         snapshotError,

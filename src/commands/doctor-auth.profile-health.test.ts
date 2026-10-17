@@ -21,7 +21,6 @@ const authProfileMocks = vi.hoisted(() => ({
   hasAnyAuthProfileStoreSource: vi.fn((_agentDir?: string) => false),
   hasLocalAuthProfileStoreSource: vi.fn((_agentDir?: string) => false),
   resolveApiKeyForProfile: vi.fn(),
-  resolveProfileUnusableUntilForDisplay: vi.fn(),
 }));
 
 vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
@@ -30,7 +29,6 @@ vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
   hasAnyAuthProfileStoreSource: authProfileMocks.hasAnyAuthProfileStoreSource,
   hasLocalAuthProfileStoreSource: authProfileMocks.hasLocalAuthProfileStoreSource,
   resolveApiKeyForProfile: authProfileMocks.resolveApiKeyForProfile,
-  resolveProfileUnusableUntilForDisplay: authProfileMocks.resolveProfileUnusableUntilForDisplay,
 }));
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
@@ -70,7 +68,6 @@ describe("noteAuthProfileHealth", () => {
     authProfileMocks.hasLocalAuthProfileStoreSource.mockReset();
     authProfileMocks.hasLocalAuthProfileStoreSource.mockReturnValue(false);
     authProfileMocks.resolveApiKeyForProfile.mockReset();
-    authProfileMocks.resolveProfileUnusableUntilForDisplay.mockReset();
     noteMock.mockReset();
   });
 
@@ -146,7 +143,6 @@ describe("noteAuthProfileHealth", () => {
     authProfileMocks.hasLocalAuthProfileStoreSource.mockImplementation(
       (agentDir) => agentDir !== undefined,
     );
-    authProfileMocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(now + 5 * 60_000);
     authProfileMocks.loadAuthProfileStoreForRuntime.mockReturnValue({
       version: 1,
       profiles: {},
@@ -177,7 +173,6 @@ describe("noteAuthProfileHealth", () => {
     authProfileMocks.hasLocalAuthProfileStoreSource.mockImplementation(
       (agentDir) => agentDir !== undefined,
     );
-    authProfileMocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(now + 5 * 60_000);
     authProfileMocks.loadAuthProfileStoreForRuntime.mockReturnValue({
       version: 1,
       profiles: {
@@ -262,7 +257,6 @@ describe("noteAuthProfileHealth", () => {
     authProfileMocks.hasLocalAuthProfileStoreSource.mockImplementation(
       (agentDir) => agentDir !== undefined,
     );
-    authProfileMocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(now + 5 * 60_000);
     authProfileMocks.loadAuthProfileStoreForRuntime.mockReturnValue({
       ...expiredStore("openai-codex:expired", now - 60_000),
       usageStats: { "openai-codex:expired": { cooldownUntil: now + 5 * 60_000 } },

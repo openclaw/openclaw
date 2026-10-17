@@ -355,9 +355,9 @@ async function settlePluginCacheRetirements(): Promise<void> {
 async function installDefaultPluginRegistry(): Promise<void> {
   // Worker module resets retire the lifecycle maps. Activate through the current
   // real module, never a cached closure or a suite's partial runtime mock.
-  const { resetPluginRuntimeStateForTest, setActivePluginRegistry } = await vi.importActual<
-    typeof import("../src/plugins/runtime.js")
-  >("../src/plugins/runtime.js");
+  const { clearActivePluginRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
+    await vi.importActual<typeof import("../src/plugins/runtime.js")>("../src/plugins/runtime.js");
+  await clearActivePluginRegistry();
   workerRuntimeState.materializedDefaultPluginRegistry = null;
   resetPluginRuntimeStateForTest();
   setActivePluginRegistry(resolveDefaultPluginRegistryProxy());
@@ -396,6 +396,10 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
+  const { clearActivePluginRegistry } = await vi.importActual<
+    typeof import("../src/plugins/runtime.js")
+  >("../src/plugins/runtime.js");
+  await clearActivePluginRegistry();
   const {
     clearSessionStoreCacheForTest,
     drainFileLockStateForTest,

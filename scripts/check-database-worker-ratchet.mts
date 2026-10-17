@@ -17,20 +17,25 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     if (!base) {
       throw new Error("SQLite worker ratchet requires a Git base commit.");
     }
-    const counts = (rows: ReturnType<typeof inventory>) =>
-      new Map(rows.filter((row) => row.tier === "T1").map((row) => [row.file, row.calls.length]));
+    const counts = (rows: ReturnType<typeof inventory>, tier = "T1") =>
+      new Map(rows.filter((row) => row.tier === tier).map((row) => [row.file, row.calls.length]));
     const head = inventory(root, "", args.staged);
-    const before = counts(inventory(root, base));
+    const baseline = inventory(root, base);
+    const before = counts(baseline);
     const after = counts(head);
     const total = (files: ReadonlyMap<string, number>) =>
       [...files.values()].reduce((sum, count) => sum + count, 0);
+    console.log(
+      `SQLite T1 live calls: ${total(before)} -> ${total(after)}; ` +
+        `T1-compat deprecated-only calls: ${total(counts(baseline, "T1-compat"))} -> ${total(counts(head, "T1-compat"))}.`,
+    );
     const { increased } = compareRatchetCounts(after, before);
     if (
       total(after) > total(before) &&
       reportRatchetFailures(
         [
           {
-            title: `Main-thread SQLite T1 total grew: ${total(before)} -> ${total(after)}`,
+            title: `Main-thread SQLite T1 comparison total grew: ${total(before)} -> ${total(after)}`,
             entries: increased.flatMap(({ entry, allowed, current }) =>
               [`${entry}: ${allowed} -> ${current}`].concat(
                 head

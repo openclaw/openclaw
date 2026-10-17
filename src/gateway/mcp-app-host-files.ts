@@ -7,6 +7,9 @@ import {
   type McpAppHostFile,
   type McpAppViewLease,
 } from "../agents/mcp-ui-resource.js";
+import { getRuntimeConfig } from "../config/io.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
+import { readRetainedSessionEntryFacts } from "../config/sessions/session-entry-read-facts.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logDebug } from "../logger.js";
@@ -20,39 +23,97 @@ import {
   readWorkspaceFile,
   resolveWorkspacePath,
 } from "./server-methods/workspace-fs.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "./workspace-file-limits.js";
 
 export { resolveMcpAppRequesterId } from "./mcp-app-operations.js";
 
+const fileSources = new WeakMap<
+  McpAppHostFile,
+  Awaited<ReturnType<typeof captureHostFileSession>>
+>();
+
 const writeAdmissions = new WeakSet<McpAppViewLease>();
 const subscriptions = new WeakMap<McpAppViewLease, Map<string, () => void>>();
 const etag = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+
+async function captureHostFileSession(
+  target: { sessionKey: string; agentId: string },
+  getConfig = getRuntimeConfig,
+) {
+  // File handles outlive their opening RPC; each file effect owns its request authority.
+  const authority = { assertCurrent() {}, authorize() {} };
+  const memory = captureSessionActorStorageOwner(target, authority);
+  const config = getConfig();
+  const assertRoutingCurrent = captureSessionMutationRouting(config, undefined, [target]);
+  const loaded = memory
+    ? undefined
+    : await loadGatewaySessionEntryReadOnlyAsync(
+        target.sessionKey,
+        {
+          agentId: target.agentId,
+          projection: "list",
+        },
+        config,
+      );
+  const readEntry = () =>
+    memory
+      ? memory.owner?.readSession(target.sessionKey, authority)?.entry
+      : loaded &&
+        readRetainedSessionEntryFacts(
+          {
+            agentId: loaded.readSource?.agentId ?? loaded.agentId,
+            path: loaded.readSource?.path ?? loaded.storePath,
+          },
+          { sessionKeys: [loaded.canonicalKey], projection: "exact", snapshotFields: [] },
+        )?.entries.find((row) => row.sessionKey === loaded.canonicalKey)?.entry;
+  const initial = readEntry();
+  return {
+    assertCurrent() {
+      assertRoutingCurrent(getConfig());
+      const current = readEntry();
+      if (
+        current?.sessionId !== initial?.sessionId ||
+        current?.lifecycleRevision !== initial?.lifecycleRevision
+      ) {
+        throw new Error("App file session generation changed");
+      }
+    },
+    readEntry,
+    readRoot: () =>
+      resolveLocalSessionWorkspaceRoot({
+        ...target,
+        source: { entry: readEntry(), cfg: getConfig() },
+      }),
+  };
+}
 
 /** Called only by the authenticated file entrypoint owner, never with an App-provided URI. */
 export async function prepareMcpAppHostFile(
   options: GatewayRequestHandlerOptions,
   target: { sessionKey: string; agentId: string; path: string },
 ): Promise<McpAppHostFile> {
-  const read = retainSessionScopedRead(options, target.sessionKey, target.agentId, {
+  const session = await captureHostFileSession(target, () => options.context.getRuntimeConfig());
+  const read = await retainSessionScopedRead(options, target.sessionKey, target.agentId, {
     requireMaterialized: true,
   });
   try {
-    const rootDir = resolveLocalSessionWorkspaceRoot(target);
-    const loaded = loadGatewaySessionEntryReadOnly(target.sessionKey, { agentId: target.agentId });
-    if (!rootDir || !loaded.entry?.sessionId) {
+    const rootDir = session.readRoot();
+    const entry = session.readEntry();
+    if (!rootDir || !entry?.sessionId) {
       throw new Error("Local workspace file access is unavailable");
     }
     const requesterId = resolveMcpAppRequesterId(options.client);
-    const sessionId = loaded.entry.sessionId;
+    const sessionId = entry.sessionId;
     const assertCurrent = () => {
+      session.assertCurrent();
       read?.assertCurrent();
       if (
         options.hasCurrentClientAuthority?.() === false ||
         resolveMcpAppRequesterId(options.client) !== requesterId ||
-        loadGatewaySessionEntryReadOnly(target.sessionKey, { agentId: target.agentId }).entry
-          ?.sessionId !== sessionId ||
-        resolveLocalSessionWorkspaceRoot(target) !== rootDir
+        session.readEntry()?.sessionId !== sessionId ||
+        session.readRoot() !== rootDir
       ) {
         throw new Error("App file workspace authority changed");
       }
@@ -69,7 +130,7 @@ export async function prepareMcpAppHostFile(
     if (!result || result === "too-large") {
       throw new Error("File is missing, unsafe, or too large");
     }
-    return {
+    const file = {
       resourceUri: "openclaw-file://" + randomUUID(),
       name: path.basename(result.canonicalPath),
       rootDir,
@@ -77,6 +138,8 @@ export async function prepareMcpAppHostFile(
       sessionId,
       requesterId,
     };
+    fileSources.set(file, session);
+    return file;
   } finally {
     read?.release();
   }
@@ -94,11 +157,17 @@ async function withHostFile<T>(
   if (!file || file.resourceUri !== uri || !sessionKey) {
     throw new Error("Resource is not the file opened by this App");
   }
-  const read = retainSessionScopedRead(options, sessionKey, view.agentId, {
+  const session =
+    fileSources.get(file) ??
+    (await captureHostFileSession({ sessionKey, agentId: view.agentId }, () =>
+      options.context.getRuntimeConfig(),
+    ));
+  const read = await retainSessionScopedRead(options, sessionKey, view.agentId, {
     requireMaterialized: true,
   });
   const assertCurrent = () => {
     view.runtime.assertOwnerCurrent?.();
+    session.assertCurrent();
     read?.assertCurrent();
     options.sessionMutationAuthorization?.assertCurrent();
     if (
@@ -109,9 +178,8 @@ async function withHostFile<T>(
       view.readOnly ||
       view.allowedAppToolNames === undefined ||
       resolveMcpAppRequesterId(options.client) !== file.requesterId ||
-      loadGatewaySessionEntryReadOnly(sessionKey, { agentId: view.agentId }).entry?.sessionId !==
-        file.sessionId ||
-      resolveLocalSessionWorkspaceRoot({ sessionKey, agentId: view.agentId }) !== file.rootDir
+      session.readEntry()?.sessionId !== file.sessionId ||
+      session.readRoot() !== file.rootDir
     ) {
       throw new Error("MCP App file authority expired");
     }
@@ -279,23 +347,28 @@ export async function subscribeMcpAppHostFile(
     if (!result || result === "too-large") {
       throw new Error("Resource cannot be subscribed");
     }
+    const session =
+      fileSources.get(file) ??
+      (await captureHostFileSession({ sessionKey, agentId: view.agentId }, () =>
+        options.context.getRuntimeConfig(),
+      ));
     let closed = false;
     let notifying = false;
-    const isCurrent = () =>
-      !closed &&
-      !client.connectionSignal?.aborted &&
-      options.hasCurrentClientAuthority?.() !== false &&
-      getMcpAppViewLease(view.viewId, view.runtime) === view &&
-      !view.readOnly &&
-      view.allowedAppToolNames !== undefined &&
-      resolveMcpAppRequesterId(client) === file.requesterId &&
-      options.context.getRuntimeConfig().mcp?.apps?.enabled === true &&
-      loadGatewaySessionEntryReadOnly(sessionKey, { agentId: view.agentId }).entry?.sessionId ===
-        file.sessionId &&
-      resolveLocalSessionWorkspaceRoot({
-        sessionKey,
-        agentId: view.agentId,
-      }) === file.rootDir;
+    const isCurrent = () => {
+      session.assertCurrent();
+      return (
+        !closed &&
+        !client.connectionSignal?.aborted &&
+        options.hasCurrentClientAuthority?.() !== false &&
+        getMcpAppViewLease(view.viewId, view.runtime) === view &&
+        !view.readOnly &&
+        view.allowedAppToolNames !== undefined &&
+        resolveMcpAppRequesterId(client) === file.requesterId &&
+        options.context.getRuntimeConfig().mcp?.apps?.enabled === true &&
+        session.readEntry()?.sessionId === file.sessionId &&
+        session.readRoot() === file.rootDir
+      );
+    };
     const notify = async () => {
       if (notifying) {
         return;
@@ -400,12 +473,13 @@ export async function subscribeMcpAppHostFile(
   });
 }
 
-export function canOpenMcpAppFiles(view: McpAppViewLease): boolean {
+export async function canOpenMcpAppFiles(view: McpAppViewLease): Promise<boolean> {
   const sessionKey = view.runtime.sessionKey;
   if (!sessionKey) {
     return false;
   }
-  return Boolean(resolveLocalSessionWorkspaceRoot({ sessionKey, agentId: view.agentId }));
+  const session = await captureHostFileSession({ sessionKey, agentId: view.agentId });
+  return Boolean(session.readRoot());
 }
 
 export async function openMcpAppFile(

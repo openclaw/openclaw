@@ -1,15 +1,15 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-import type { XApiClient, XAssertActive } from "./api.js";
+import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import type { XApiClient } from "./api.js";
+import type { XAssertActive } from "./fetch.js";
+import type { XMedia } from "./media.js";
 import { normalizeXReplyTarget } from "./target.js";
 import { findXUrls } from "./urls.js";
 
 const DEFAULT_X_REPLY_SIGNATURE = "🤖 automated reply";
-export type XVisibleWorkSession = {
-  sessionKey: string;
-  url: string;
-  label?: string;
-  publicRead?: boolean;
-};
+export type XVisibleWorkSession = Parameters<
+  NonNullable<GetReplyOptions["onVisibleWorkSessions"]>
+>[0][number];
 const graphemes = new Intl.Segmenter("en", { granularity: "grapheme" });
 const emojiSequence = new RegExp("^\\p{RGI_Emoji}$", "v");
 
@@ -63,14 +63,21 @@ function appendVisibleWorkSession(text: string, sessions: XVisibleWorkSession[] 
   return url && !text.includes(url) ? `${text.trimEnd()}\n${prefix}${url}` : text;
 }
 
-function chunkXReply(text: string, signature = DEFAULT_X_REPLY_SIGNATURE): string[] {
+function chunkXReply(
+  text: string,
+  signature = DEFAULT_X_REPLY_SIGNATURE,
+  hasMedia = false,
+): string[] {
   const normalized = text.normalize("NFC").trim();
   const suffix = signature.normalize("NFC").trim();
-  if (!normalized) {
-    throw new Error("X replies require nonempty text");
+  if (!normalized && !hasMedia) {
+    throw new Error("X replies require text or an attachment");
   }
   if (xWeightedLength(suffix) > 280) {
     throw new Error("X replySignature exceeds 280 weighted characters");
+  }
+  if (!normalized) {
+    return [suffix];
   }
   const tokens = weightedTokens(normalized);
   const chunks: string[] = [];
@@ -134,6 +141,7 @@ export class XPartialReplyError extends Error {
 export async function sendXReply(options: {
   api: XApiClient;
   text: string;
+  media?: readonly XMedia[];
   replyToId: string;
   signature?: string;
   visibleWorkSessions?: XVisibleWorkSession[];
@@ -152,6 +160,7 @@ export async function sendXReply(options: {
     chunks = chunkXReply(
       appendVisibleWorkSession(options.text, options.visibleWorkSessions),
       options.signature,
+      Boolean(options.media?.length),
     );
   } catch (cause) {
     throw new PlatformMessageNotDispatchedError(
@@ -160,6 +169,18 @@ export async function sendXReply(options: {
     );
   }
   const postIds: string[] = [];
+  const mediaIds: string[] = [];
+  // Failed uploads must never degrade to a caption-only post. Unattached uploads
+  // expire at X; retrying preparation cannot duplicate a visible reply.
+  for (const media of options.media ?? []) {
+    mediaIds.push(
+      await options.api.uploadMedia({
+        ...media,
+        signal: options.signal,
+        assertActive: options.assertActive,
+      }),
+    );
+  }
   try {
     for (const text of chunks) {
       if (options.signal?.aborted) {
@@ -170,6 +191,7 @@ export async function sendXReply(options: {
       }
       const id = await options.api.reply({
         text,
+        ...(postIds.length === 0 && mediaIds.length ? { mediaIds } : {}),
         inReplyToId: postIds.at(-1) ?? replyToId,
         signal: options.signal,
         assertActive: options.assertActive,

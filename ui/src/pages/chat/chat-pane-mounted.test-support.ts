@@ -10,7 +10,12 @@ import {
   type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
+import { ChatPaneRuntime } from "./chat-pane-render.ts";
+import {
+  createTestChatPane,
+  createPaneTestHost,
+  type TestChatPane,
+} from "./chat-pane.test-support.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 
 export function createMountedPanes(
@@ -21,6 +26,7 @@ export function createMountedPanes(
     Record<
       | "chat.history"
       | "chat.startup"
+      | "models.authStatus"
       | "models.list"
       | "sessions.describe"
       | "sessions.list"
@@ -33,6 +39,7 @@ export function createMountedPanes(
     if (
       method === "chat.history" ||
       method === "chat.startup" ||
+      method === "models.authStatus" ||
       method === "models.list" ||
       method === "sessions.describe" ||
       method === "sessions.list" ||
@@ -49,6 +56,9 @@ export function createMountedPanes(
         entry.key === (params?.sessionKey ?? params?.key) &&
         (!params?.agentId || entry.agentId === params.agentId),
     );
+    if (method === "users.list") {
+      return { profiles: [] };
+    }
     if (method === "models.list") {
       return { models: [] };
     }
@@ -64,6 +74,9 @@ export function createMountedPanes(
         rows.filter((entry) => entry.agentId === "main"),
         1,
       );
+    }
+    if (method === "sessions.subscribe") {
+      return { subscribed: true };
     }
     if (method === "sessions.describe") {
       await readBarrier;
@@ -89,12 +102,18 @@ export function createMountedPanes(
     const pane =
       panes.length === 0
         ? fixture.pane
-        : (document.createElement("openclaw-chat-pane") as unknown as TestChatPane);
+        : (createPaneTestHost(
+            "openclaw-chat-runtime-test",
+            ChatPaneRuntime,
+          ) as unknown as TestChatPane);
     Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
     pane.context = context;
     pane.sessionKey = sessionKey;
+    // Composer and transcript state belongs to each mounted presentation.
+    pane.presentationId = crypto.randomUUID();
     Object.assign(pane, { agentId: paneAgentId });
     panes.push(pane);
+    Reflect.set(pane, "state", undefined);
     pane.connectedCallback();
     return pane;
   };

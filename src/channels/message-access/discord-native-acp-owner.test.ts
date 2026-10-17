@@ -157,13 +157,32 @@ it.each([
           argument: commandName === "think" ? "high" : undefined,
         });
         if (commandName === "status") {
+          let lastUpdatedAt: number | undefined;
+          const expectUnchangedAcpOwner = () => {
+            const after = manager.resolveSession(target);
+            if (
+              before.kind !== "ready" ||
+              after.kind !== "ready" ||
+              !before.entry ||
+              !after.entry
+            ) {
+              expect(after).toEqual(before);
+              return;
+            }
+            // Delivered /status replies are transcript activity, not ACP ownership changes.
+            const { updatedAt: beforeUpdatedAt, ...beforeEntry } = before.entry;
+            const { updatedAt: afterUpdatedAt, ...afterEntry } = after.entry;
+            expect({ ...after, entry: afterEntry }).toEqual({ ...before, entry: beforeEntry });
+            expect(afterUpdatedAt).toBeGreaterThanOrEqual(lastUpdatedAt ?? beforeUpdatedAt);
+            lastUpdatedAt = afterUpdatedAt;
+          };
           expect(denied.followUp).toHaveBeenCalledWith(
             expect.objectContaining({
               content: expect.stringContaining("Session:"),
             }),
           );
           expect(await readFile(effectsPath, "utf8")).toBe("");
-          expect(manager.resolveSession(target)).toEqual(before);
+          expectUnchangedAcpOwner();
           const ownerStatus = await run({ commandName });
           expect(ownerStatus.followUp).toHaveBeenCalledWith(
             expect.objectContaining({
@@ -171,7 +190,7 @@ it.each([
             }),
           );
           expect(await readFile(effectsPath, "utf8")).toBe("");
-          expect(manager.resolveSession(target)).toEqual(before);
+          expectUnchangedAcpOwner();
           expect(dispatch).not.toHaveBeenCalled();
           return;
         }

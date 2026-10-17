@@ -26,6 +26,32 @@ type PrivateCompletionFixture = {
   agentCommandMock: typeof gatewayAgentCommandMock;
 };
 
+export function createPrivateCompletionRequest({
+  sessionKey,
+  sessionId,
+  runId,
+  message = "Synthetic private child marker",
+}: {
+  sessionKey: string;
+  sessionId: string;
+  runId: string;
+  message?: string;
+}) {
+  return {
+    sessionKey,
+    expectedExistingSessionId: sessionId,
+    idempotencyKey: runId,
+    message,
+    deliver: false,
+    sourceReplyDeliveryMode: "automatic",
+    inputProvenance: {
+      kind: "inter_session",
+      sourceTool: "subagent_announce",
+      sourceSessionKey: "agent:main:subagent:synthetic-child",
+    },
+  };
+}
+
 export function readPrivateCompletionRecorder(
   input: unknown,
   sessionId: string,
@@ -90,7 +116,11 @@ export function registerSessionsSendPrivateCompletionTests(
       const completion = SessionFollowupCompletion.bind(followup);
       const close = vi.spyOn(completion, "close");
       completion.markAccepted(childRunId);
-      await completion.settle(childRunId, { status: "ok", replyText: childReply });
+      await completion.settle(childRunId, {
+        status: "ok",
+        terminalReply: { disposition: "visible", text: childReply },
+        replyText: childReply,
+      });
       completion.finishExecution(childRunId);
       agentCommandMock.mockImplementation(async (input) => {
         const command = input as AgentCommandOpts;
@@ -103,7 +133,7 @@ export function registerSessionsSendPrivateCompletionTests(
           throw new Error("synthetic retained parent failure");
         }
         await inputRecorder.persistApproved();
-        return { payloads: [], meta: { durationMs: 1 } };
+        return { payloads: [], meta: { durationMs: 1, terminalReply: { disposition: "empty" } } };
       });
       await startSessionsSendReplyFlow({
         runId: childRunId,

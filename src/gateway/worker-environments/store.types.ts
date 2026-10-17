@@ -7,6 +7,7 @@ import type {
   WorkerEnvironmentRecord,
   WorkerEnvironmentTeardownTerminalState,
 } from "./environment-record.js";
+import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type {
   WorkerEnvironmentAttachmentRecord,
   WorkerEnvironmentSessionIdentity,
@@ -24,6 +25,7 @@ export type WorkerEnvironmentFacts = {
   environments: WorkerEnvironmentRecord[];
   credentials: WorkerCredentialRecord[];
   attachments: WorkerEnvironmentAttachmentRecord[];
+  placements?: WorkerSessionPlacementRecord[];
 };
 export type WorkerEnvironmentCommitAdmission = Array<{
   environmentId: string;

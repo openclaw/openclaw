@@ -6,9 +6,17 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { ensureAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import {
+  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
+} from "../agents/auth-profiles/store-runtime.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { startOAuthLoopbackCallbackServer } from "../infra/oauth-loopback-callback.js";
+import {
+  startOAuthLoopbackCallbackServer,
+  type OAuthLoopbackCallbackServer,
+} from "../infra/oauth-loopback-callback.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { renderOAuthPage } from "../shared/oauth-page.js";
 
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
@@ -38,42 +46,13 @@ export type OAuthCallbackResult = {
   state: string;
 };
 
-type ProviderOAuthLoopbackCallbackResult =
-  | { type: "authorization_code"; code: string; state: string; parameters: URLSearchParams }
-  | { type: "oauth_error"; error: string; errorDescription?: string };
-
-type ProviderOAuthLoopbackCallbackServer = {
-  waitForCallback: () => Promise<ProviderOAuthLoopbackCallbackResult>;
-  /** Flushes a deferred browser result, then closes; closed listeners ignore late completion. */
-  complete: (response: ProviderOAuthLoopbackRenderedResponse & { status: number }) => Promise<void>;
-  close: () => Promise<void>;
-};
-
-type ProviderOAuthLoopbackRenderedResponse = { body: string; contentType: string };
-type ProviderOAuthLoopbackCorsOriginResolver = (
-  originHeader: string | string[] | undefined,
-) => string | undefined;
-
 /**
  * Binds a hardened loopback listener before returning so provider plugins can open the browser
  * only after the callback route is ready. Invalid request candidates remain nonterminal.
  */
-export async function startProviderOAuthLoopbackCallbackServer(params: {
-  redirectUrl: string | URL;
-  expectedState: string;
-  /** Optional listener deadline; the caller signal continues to own provider work. */
-  timeoutMs?: number;
-  signal?: AbortSignal;
-  /** Additional loopback host; all addresses of the redirect hostname remain bound. */
-  bindHostname?: string;
-  /** Exact Node bind host for providers whose existing redirect uses one address family. */
-  bindOnlyHostname?: string;
-  /** Admit callback parameters now, then render the browser outcome through complete(). */
-  deferResponse?: boolean;
-  resolveCorsOrigin?: ProviderOAuthLoopbackCorsOriginResolver;
-  renderSuccess?: () => ProviderOAuthLoopbackRenderedResponse;
-  renderError?: (message: string) => ProviderOAuthLoopbackRenderedResponse;
-}): Promise<ProviderOAuthLoopbackCallbackServer> {
+export async function startProviderOAuthLoopbackCallbackServer(
+  params: Omit<Parameters<typeof startOAuthLoopbackCallbackServer>[0], "lookup" | "createServer">,
+): Promise<OAuthLoopbackCallbackServer> {
   return await startOAuthLoopbackCallbackServer(params);
 }
 
@@ -85,16 +64,39 @@ export type ProviderAuthProfileMetadata = {
   accountId?: string;
 };
 
+/** @deprecated Use resolveProviderAuthProfileMetadataAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveProviderAuthProfileMetadata(params: {
   provider: string;
   cfg?: OpenClawConfig;
   profileId?: string;
   agentDir?: string;
 }): ProviderAuthProfileMetadata {
+  warnPluginSdkDeprecation({
+    family: "auth-profiles",
+    method: "resolveProviderAuthProfileMetadata",
+    replacement: "resolveProviderAuthProfileMetadataAsync",
+  });
   const store = ensureAuthProfileStore(params.agentDir, {
     config: params.cfg,
     readOnly: true,
   });
+  return selectProviderAuthProfileMetadata(params, store);
+}
+
+export async function resolveProviderAuthProfileMetadataAsync(
+  params: Parameters<typeof resolveProviderAuthProfileMetadata>[0],
+): Promise<ProviderAuthProfileMetadata> {
+  const store = await ensureAuthProfileStoreAsync(params.agentDir, {
+    config: params.cfg,
+    readOnly: true,
+  });
+  return selectProviderAuthProfileMetadata(params, store);
+}
+
+function selectProviderAuthProfileMetadata(
+  params: Parameters<typeof resolveProviderAuthProfileMetadata>[0],
+  store: AuthProfileStore,
+): ProviderAuthProfileMetadata {
   const normalizedProvider = normalizeProviderId(params.provider);
   const entry = params.profileId
     ? ([params.profileId, store.profiles[params.profileId]] as const)
@@ -242,10 +244,10 @@ export async function waitForLocalOAuthCallback(params: {
       contentType: "text/html; charset=utf-8",
     }),
   });
-  params.onProgress?.(
-    params.progressMessage ?? `Waiting for OAuth callback on ${params.redirectUri}...`,
-  );
   try {
+    params.onProgress?.(
+      params.progressMessage ?? `Waiting for OAuth callback on ${params.redirectUri}...`,
+    );
     const result = await callback.waitForCallback();
     if (result.type === "oauth_error") {
       throw new Error(`OAuth error: ${result.error}`);

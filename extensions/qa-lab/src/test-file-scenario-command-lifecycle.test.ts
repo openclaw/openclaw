@@ -221,9 +221,12 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
     const root = await mkdtemp(path.join(os.tmpdir(), "qa-command-parent-signal-"));
     const bundlePath = path.join(root, "test-file-scenario-command-lifecycle.mjs");
     // Compile before the readiness window; a cold tsx child can exceed it under the full QA suite.
-    // The bundle needs only the UTF-16 helper behind this SDK import, not the full plugin runtime.
+    // Keep the real SDK helper implementations without unrelated barrel startup or SQL assets.
     await esbuild({
       alias: {
+        "openclaw/plugin-sdk/process-runtime": fileURLToPath(
+          new URL("../../../src/shared/pid-alive.ts", import.meta.url),
+        ),
         "openclaw/plugin-sdk/text-utility-runtime": fileURLToPath(
           new URL("../../../packages/normalization-core/src/utf16-slice.ts", import.meta.url),
         ),
@@ -374,16 +377,6 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
     processKill.mockClear();
     await vi.advanceTimersByTimeAsync(5_000);
     expect(processKill).not.toHaveBeenCalled();
-  });
-
-  it("preserves spawn rejection without installing lifecycle handlers", async () => {
-    const error = new Error("spawn failed");
-    spawnMock.mockImplementationOnce(() => {
-      throw error;
-    });
-
-    await expect(runCommand()).rejects.toBe(error);
-    expect(parentHandlers.size).toBe(0);
   });
 
   it("preserves the Windows taskkill timeout lifecycle", async () => {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
@@ -11,7 +12,6 @@ import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const TEST_TIMEOUT_MS = 120_000;
 const REQUEST_TIMEOUT_MS = 20_000;
-const STREAM_INTERVAL_MS = 20;
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
 const SESSION_KEY = "agent:qa:qa:session-streaming";
 const IDEMPOTENCY_KEY = "qa-session-streaming";
@@ -80,6 +80,7 @@ function writeEvent(response: ServerResponse, event: unknown): void {
 async function writeStreamingResponse(
   response: ServerResponse,
   deltasSent: ReturnType<typeof createDeferred>,
+  firstDeltaObserved: ReturnType<typeof createDeferred>,
   terminalRelease: ReturnType<typeof createDeferred>,
 ): Promise<void> {
   const message = {
@@ -108,7 +109,9 @@ async function writeStreamingResponse(
       content_index: 0,
       delta,
     });
-    await delay(STREAM_INTERVAL_MS);
+    if (delta === STREAM_DELTAS[0]) {
+      await firstDeltaObserved.promise;
+    }
   }
   deltasSent.resolve();
   await terminalRelease.promise;
@@ -136,6 +139,7 @@ async function startStreamingProvider() {
   const providerRequests: Array<Record<string, unknown>> = [];
   const transportRequests: string[] = [];
   const deltasSent = createDeferred();
+  const firstDeltaObserved = createDeferred();
   const terminalRelease = createDeferred();
   let terminalReleased = false;
   const releaseTerminal = () => {
@@ -161,7 +165,7 @@ async function startStreamingProvider() {
         providerRequests.push(
           JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>,
         );
-        await writeStreamingResponse(response, deltasSent, terminalRelease);
+        await writeStreamingResponse(response, deltasSent, firstDeltaObserved, terminalRelease);
         return;
       }
       transportRequests.push(`${request.method ?? "UNKNOWN"} ${request.url ?? ""}`);
@@ -182,11 +186,13 @@ async function startStreamingProvider() {
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     deltasSent: deltasSent.promise,
+    releaseRemainingDeltas: firstDeltaObserved.resolve,
     isTerminalReleased: () => terminalReleased,
     releaseTerminal,
     providerRequests,
     transportRequests,
     stop: async () => {
+      firstDeltaObserved.resolve();
       releaseTerminal();
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
@@ -320,6 +326,22 @@ describe("agent session streaming", () => {
         runId: IDEMPOTENCY_KEY,
       });
 
+      await vi.waitFor(
+        () => {
+          expect(
+            gatewayEvents
+              .map(asAgentEvent)
+              .some(
+                (event) =>
+                  event?.runId === IDEMPOTENCY_KEY &&
+                  event.stream === "assistant" &&
+                  event.data?.delta === STREAM_DELTAS[0],
+              ),
+          ).toBe(true);
+        },
+        { interval: 20, timeout: REQUEST_TIMEOUT_MS },
+      );
+      provider.releaseRemainingDeltas();
       await provider.deltasSent;
       await vi.waitFor(
         () => {
@@ -432,7 +454,30 @@ describe("agent session streaming", () => {
       );
       expect(assistantMessages).toHaveLength(1);
       expect(messageText(assistantMessages[0])).toBe(streamedText);
-      expect(provider.providerRequests).toHaveLength(1);
+      const requestCountDetails =
+        provider.providerRequests.length === 1
+          ? undefined
+          : JSON.stringify(
+              provider.providerRequests.slice(0, 8).map((request, index) => {
+                const input = JSON.stringify(request.input ?? null);
+                return {
+                  index,
+                  model: typeof request.model === "string" ? request.model.slice(0, 128) : null,
+                  keys: Object.keys(request).toSorted().slice(0, 64),
+                  inputShape: Array.isArray(request.input)
+                    ? request.input.slice(0, 64).map((item) => ({
+                        role: typeof item?.role === "string" ? item.role.slice(0, 64) : null,
+                        type: typeof item?.type === "string" ? item.type.slice(0, 64) : null,
+                      }))
+                    : typeof request.input,
+                  toolsCount: Array.isArray(request.tools) ? request.tools.length : null,
+                  containsFixtureRequest: input.includes(REQUEST_MESSAGE),
+                  inputSha256: createHash("sha256").update(input).digest("hex"),
+                  bodySha256: createHash("sha256").update(JSON.stringify(request)).digest("hex"),
+                };
+              }),
+            );
+      expect(provider.providerRequests.length, requestCountDetails).toBe(1);
       expect(provider.transportRequests).toEqual([]);
     },
   );

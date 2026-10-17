@@ -24,7 +24,7 @@ async function readBoundedRegularFile(params: {
   sourcePath: string;
   maxBytes: number;
 }): Promise<SourceSnapshot> {
-  const { buffer, stat } = await params.sourceRoot.read(params.relativePath, {
+  const { buffer, stat, exactIdentity } = await params.sourceRoot.read(params.relativePath, {
     hardlinks: "reject",
     symlinks: "reject",
     maxBytes: params.maxBytes,
@@ -37,8 +37,8 @@ async function readBoundedRegularFile(params: {
   }
   return {
     sourcePath: params.sourcePath,
-    dev: stat.dev,
-    ino: stat.ino,
+    dev: exactIdentity.dev,
+    ino: exactIdentity.ino,
     mtimeMs: stat.mtimeMs,
     sha256: createHash("sha256").update(buffer).digest("hex"),
     size: buffer.length,

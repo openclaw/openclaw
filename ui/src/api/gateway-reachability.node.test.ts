@@ -1,4 +1,5 @@
 /** @vitest-environment node */
+import { DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -93,4 +94,28 @@ it.each(["stop", "retry"])("discards a late liveness response after %s", async (
   pending.resolve(Response.json({ ok: true, status: "live" }));
   await vi.advanceTimersByTimeAsync(0);
   expect(onClose).not.toHaveBeenCalled();
+});
+
+it("reports an opening timeout before retrying even when the HTTP probe cannot finish", async () => {
+  const pending = createDeferred<Response>();
+  const fetchProbe = vi.fn(() => pending.promise);
+  vi.stubGlobal("fetch", fetchProbe);
+  const { socket, onClose } = connect();
+
+  await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
+  expect(socket.lastClose).not.toBeNull();
+  socket.emitClose(1006);
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(onClose).toHaveBeenCalledExactlyOnceWith({
+    code: 1006,
+    reason: "gateway websocket opening timed out after 30000ms",
+    error: undefined,
+    willRetry: true,
+  });
+  expect(fetchProbe).not.toHaveBeenCalled();
+
+  await vi.advanceTimersByTimeAsync(800);
+  expect(wsInstances).toHaveLength(2);
+  expect(onClose).toHaveBeenCalledOnce();
 });

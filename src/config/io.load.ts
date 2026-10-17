@@ -1,5 +1,6 @@
 import { isMainThread } from "node:worker_threads";
 import { loadDotEnvAsync } from "../infra/dotenv.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
@@ -20,6 +21,7 @@ import {
   coerceConfig,
   containsConfigIncludeDirective,
   hashConfigRaw,
+  readConfigFileIfPresent,
   resolveConfigForRead,
   resolveConfigIncludesForRead,
   restoreEnvChangesIfUnchanged,
@@ -73,15 +75,17 @@ function* loadConfigWithEffects(
       },
     });
     envBeforeRead = snapshotEnv(deps.env);
-    const exists = yield* resolveConfigIoEffect({
-      sync: () => deps.fs.existsSync(configPath),
+    const raw = yield* resolveConfigIoEffect({
+      sync: () => readConfigFileIfPresent(deps, configPath),
       async: () =>
-        deps.fs.promises.access(configPath).then(
-          () => true,
-          () => false,
-        ),
+        deps.fs.promises.readFile(configPath, "utf-8").catch((error: unknown) => {
+          if (hasErrnoCode(error, "ENOENT")) {
+            return undefined;
+          }
+          throw error;
+        }),
     });
-    if (!exists) {
+    if (raw === undefined) {
       loggedConfigWarningFingerprints.delete(configPath);
       // A missing config is the fresh-install default path: materialize the
       // same runtime defaults an empty {} config gets, or out-of-box behavior
@@ -107,10 +111,6 @@ function* loadConfigWithEffects(
           context.finalizeLoadedRuntimeConfigAsync(materialized, metadata, options.assertCurrent),
       });
     }
-    const raw = yield* resolveConfigIoEffect({
-      sync: () => deps.fs.readFileSync(configPath, "utf-8"),
-      async: () => deps.fs.promises.readFile(configPath, "utf-8"),
-    });
     const parsed = deps.json5.parse(raw);
     const readResolution = resolveConfigForRead(
       resolveConfigIncludesForRead(parsed, configPath, deps),
@@ -148,7 +148,7 @@ function* loadConfigWithEffects(
     const { deferredPluginMigrations, validated } = yield* resolveConfigIoEffect({
       sync: () =>
         withSynchronousArtifactPreservingStateSnapshot(() => {
-          const pending = context.resolveDeferredPluginMigrations();
+          const pending = context.options.deferredPluginMigrations;
           return {
             deferredPluginMigrations: pending,
             validated: validateConfigObjectWithPlugins(effectiveConfigRaw, {
@@ -160,7 +160,6 @@ function* loadConfigWithEffects(
         }),
       async: () =>
         prepareConfigSnapshotValidation({
-          kind: "validate",
           context,
           metadata: pluginMetadata,
           raw: effectiveConfigRaw,

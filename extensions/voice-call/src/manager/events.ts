@@ -4,23 +4,22 @@ import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
+import {
+  buildCallVoicemailSpeechInstructions,
+  resolveCallVoicemailMessage,
+} from "../call-brief.js";
 import { resolveVoiceCallEffectiveConfig, resolveVoiceCallSessionKey } from "../config.js";
 import { TerminalStates, type CallRecord, type NormalizedEvent } from "../types.js";
 import { buildCallbackMetadata, findRecentOutboundCallback } from "./callbacks.js";
 import type { CallManagerContext } from "./context.js";
 import { finalizeCall } from "./lifecycle.js";
 import { findCall } from "./lookup.js";
+import { updateCall } from "./mutations.js";
 import { endCall } from "./outbound.js";
-import {
-  appendCallReplayKey,
-  releaseRejectedProviderCall,
-  rememberManagerReplayKey,
-  reserveRejectedProviderCall,
-} from "./replay-keys.js";
+import { appendCallReplayKey, rememberManagerReplayKey } from "./replay-keys.js";
 import { addTranscriptEntry, copyCallRecord, transitionState } from "./state.js";
 import { findCallInStore, persistCallRecord } from "./store.js";
 import { resolveTranscriptWaiter, startMaxDurationTimer } from "./timers.js";
-import { playDetectedCallMessage } from "./voicemail.js";
 
 const log = createSubsystemLogger("voice-call/events");
 
@@ -64,6 +63,80 @@ function shouldAcceptInbound(
 
     default:
       return false;
+  }
+}
+
+/** Realtime speech owns voicemail when connected; carrier Say/Hangup is the fallback. */
+async function playDetectedCallMessage(
+  ctx: CallManagerContext,
+  call: CallRecord,
+  kind: "voicemail" | "notify",
+): Promise<void> {
+  const current = () =>
+    ctx.activeCalls.get(call.callId) === call &&
+    !TerminalStates.has(call.state) &&
+    !ctx.isStopping();
+  if (!current()) {
+    return;
+  }
+  const statusKey = kind === "voicemail" ? "voicemailStatus" : "notifyStatus";
+  const errorKey = kind === "voicemail" ? "voicemailError" : "notifyError";
+  const message =
+    kind === "voicemail" ? resolveCallVoicemailMessage(call) : call.metadata?.initialMessage;
+  try {
+    if (typeof message !== "string" || !message.trim()) {
+      throw new Error("Call message is unavailable");
+    }
+    if (
+      !(await updateCall(ctx, call, (next) => {
+        next.metadata = { ...next.metadata, [statusKey]: "playing" };
+        delete next.metadata.initialMessage;
+        addTranscriptEntry(next, "bot", message);
+      })) ||
+      !current()
+    ) {
+      return;
+    }
+    const realtimePlayback =
+      kind === "voicemail"
+        ? ctx.playRealtimeVoicemail?.(call.callId, buildCallVoicemailSpeechInstructions(call))
+        : undefined;
+    if (realtimePlayback) {
+      await realtimePlayback;
+      if (!current()) {
+        return;
+      }
+      const ended = await endCall(ctx, call.callId, { reason: "voicemail" });
+      if (!ended.success) {
+        throw new Error(ended.error ?? "Voicemail hangup failed");
+      }
+      return;
+    }
+    await ctx.beforeCarrierPlayback?.(call.callId);
+    if (!current()) {
+      return;
+    }
+    if (!ctx.provider?.playMessageAndHangup || !call.providerCallId) {
+      throw new Error("Carrier message playback is unavailable");
+    }
+    await ctx.provider.playMessageAndHangup({
+      callId: call.callId,
+      providerCallId: call.providerCallId,
+      text: message,
+    });
+  } catch (error) {
+    if (current()) {
+      await updateCall(ctx, call, (next) => {
+        next.metadata = {
+          ...next.metadata,
+          [statusKey]: "failed",
+          [errorKey]: formatErrorMessage(error),
+        };
+      });
+      if (current()) {
+        await endCall(ctx, call.callId, { reason: "error" });
+      }
+    }
   }
 }
 
@@ -190,10 +263,7 @@ async function processEventInQueue(
       if (ctx.isStopping()) {
         return { kind: "processed" };
       }
-      const rejectionReservation = reserveRejectedProviderCall(ctx.rejectedProviderCallIds, pid);
-      if (rejectionReservation === undefined) {
-        return { kind: "ignored" };
-      }
+      rememberManagerReplayKey(ctx.rejectedProviderCallIds, pid);
       rememberManagerReplayKey(ctx.processedEventIds, dedupeKey);
       log.info(`Rejecting inbound call by policy: ${pid}`);
       ctx.trackCallWork(
@@ -204,7 +274,7 @@ async function processEventInQueue(
             reason: "hangup-bot",
           })
           .catch((err: unknown) => {
-            releaseRejectedProviderCall(ctx.rejectedProviderCallIds, pid, rejectionReservation);
+            ctx.rejectedProviderCallIds.delete(pid);
             const message = formatErrorMessage(err);
             log.warn(`Failed to reject inbound call ${pid}: ${message}`);
           }),

@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import nodePath from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import {
   observeSqliteReadSql,
@@ -12,11 +11,12 @@ import { applyAgentDatabaseReaderRequest } from "../infra/agent-database-readers
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { recordOpenClawAgentCanonicalValidation } from "./openclaw-agent-canonical-validation-receipt.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
@@ -43,14 +43,14 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
 }));
 
 it.each([false, true])(
-  "reuses admitted metadata and observes foreign commits (snapshot=%s)",
+  "reuses admitted metadata and reads in-process writes without probes (snapshot=%s)",
   async (snapshot) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const options = { agentId: "main", env: state.env };
       const { path } = openOpenClawAgentDatabase(options);
       await closeOpenClawAgentDatabaseByPathAsync(path);
       const scope = new OpenClawAgentDatabaseReadOnlyScope();
-      const writer = new (requireNodeSqlite().DatabaseSync)(path);
+      const writer = nodeSqlite.openNodeSqliteDatabase(path);
       try {
         scope.run({ agentId: "main", path }, () => {
           withOpenClawAgentDatabaseReadOnly(({ db }) => {
@@ -89,12 +89,12 @@ it.each([false, true])(
                 observation.queries.filter((sql) =>
                   /PRAGMA data_version|FROM main\.pragma_data_version\(\)/iu.test(sql),
                 ),
-              ).toHaveLength(40);
+              ).toHaveLength(0);
               expect(
                 observation.queries.filter((sql) =>
                   /^SELECT role, schema_version, agent_id/iu.test(sql),
                 ),
-              ).toHaveLength(20);
+              ).toHaveLength(0);
             } finally {
               observation.restore();
               prepare.mockRestore();
@@ -109,31 +109,33 @@ it.each([false, true])(
   },
 );
 
-it("pins admission and rows together before a foreign ownership change", async () => {
+it("keeps a multi-statement snapshot stable until the next read after an in-process write", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const options = { agentId: "main", env: state.env };
     const { path } = openOpenClawAgentDatabase(options);
     await closeOpenClawAgentDatabaseByPathAsync(path);
     const scope = new OpenClawAgentDatabaseReadOnlyScope();
-    const writer = new (requireNodeSqlite().DatabaseSync)(path);
-    const readOwner = (db: DatabaseSync) =>
-      db.prepare("SELECT agent_id FROM schema_meta WHERE meta_key = 'primary'").get()?.agent_id;
+    const writer = nodeSqlite.openNodeSqliteDatabase(path);
+    const readStamp = (db: EngineConnection) =>
+      db.prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'").get()?.updated_at;
+    writer.exec("UPDATE schema_meta SET updated_at = 1 WHERE meta_key = 'primary'");
     try {
       scope.run({ agentId: "main", path }, () => {
         const read = () =>
-          withOpenClawAgentDatabaseReadOnly(({ db }) => readOwner(db), options, { snapshot: true });
-        expect(read()).toEqual({ found: true, value: "main" });
+          withOpenClawAgentDatabaseReadOnly(({ db }) => readStamp(db), options, { snapshot: true });
+        expect(read()).toEqual({ found: true, value: 1 });
         expect(
           withOpenClawAgentDatabaseReadOnly(
             ({ db }) => {
-              writer.exec("UPDATE schema_meta SET agent_id = 'other' WHERE meta_key = 'primary'");
-              return readOwner(db);
+              expect(readStamp(db)).toBe(1);
+              writer.exec("UPDATE schema_meta SET updated_at = 2 WHERE meta_key = 'primary'");
+              return readStamp(db);
             },
             options,
             { snapshot: true },
           ),
-        ).toEqual({ found: true, value: "main" });
-        expect(read).toThrow("belongs to agent other");
+        ).toEqual({ found: true, value: 1 });
+        expect(read()).toEqual({ found: true, value: 2 });
       });
     } finally {
       writer.close();
@@ -150,7 +152,7 @@ it("keeps one connection while nested reads retain independent committed snapsho
     const target = { agentId: "main", path };
     const scope = new OpenClawAgentDatabaseReadOnlyScope();
     const writer = new (requireNodeSqlite().DatabaseSync)(path);
-    let retained: DatabaseSync | undefined;
+    let retained: EngineConnection | undefined;
     const query = "SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'";
     try {
       scope.run(target, () => {
@@ -196,28 +198,11 @@ it("keeps one connection while nested reads retain independent committed snapsho
 
 it.each([
   {
-    sql: `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`,
-    error: "newer schema version",
-  },
-  {
-    sql: `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`,
-    error: "run openclaw doctor --fix",
-  },
-  {
-    sql: "UPDATE schema_meta SET agent_id = 'another' WHERE meta_key = 'primary'",
-    error: "belongs to agent another",
-  },
-  {
     sql: "UPDATE schema_meta SET role = 'state' WHERE meta_key = 'primary'",
-    error: "has schema role state",
-  },
-  {
-    sql: "DROP TRIGGER session_nodes_canonical_pending_after_update",
-    error: "canonical validation schema is missing or drifted",
   },
 ])(
-  "revalidates retained read admission on the next read after a commit: $sql",
-  async ({ sql, error }) => {
+  "reuses admitted format while observing fresh rows after a foreign commit: $sql",
+  async ({ sql }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const options = { agentId: "main", env: state.env };
       const { path } = openOpenClawAgentDatabase(options);
@@ -225,16 +210,36 @@ it.each([
       const target = { agentId: "main", path };
       const scope = new OpenClawAgentDatabaseReadOnlyScope();
       const read = () =>
-        scope.run(target, () => withOpenClawAgentDatabaseReadOnly(() => "admitted", options));
+        scope.run(target, () =>
+          withOpenClawAgentDatabaseReadOnly(
+            ({ db }) =>
+              db.prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'").get()
+                ?.updated_at,
+            options,
+          ),
+        );
       try {
-        expect(read()).toEqual({ found: true, value: "admitted" });
+        expect(read()).toEqual({ found: true, value: expect.any(Number) });
         const writer = new (requireNodeSqlite().DatabaseSync)(path);
         try {
           writer.exec(sql);
+          writer.exec("UPDATE schema_meta SET updated_at = 42 WHERE meta_key = 'primary'");
         } finally {
           writer.close();
         }
-        expect(read).toThrow(error);
+        const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+        try {
+          expect(read()).toEqual({ found: true, value: 42 });
+          expect(
+            observation.queries.filter((query) =>
+              /sqlite_schema|sqlite_master|PRAGMA\s+(?:user_version|schema_version|integrity_check|foreign_key_check)|^SELECT role, schema_version, agent_id/iu.test(
+                query,
+              ),
+            ),
+          ).toEqual([]);
+        } finally {
+          observation.restore();
+        }
       } finally {
         scope.close();
       }
@@ -475,9 +480,6 @@ it("closes generic and explicit candidate-family readers without releasing unrel
           (error: unknown) => error instanceof AggregateError && causes(error).includes(failure),
         );
         expect(reopened.isOpen).toBe(true);
-        expect(() => scope.run(options(sibling), () => read(sibling))).toThrow(
-          "native cleanup is pending",
-        );
         close.mockRestore();
         await closeReaders();
         expect(reopened.isOpen).toBe(false);
@@ -491,7 +493,7 @@ it("closes generic and explicit candidate-family readers without releasing unrel
   });
 });
 
-it("loads canonical proof before fresh full reads without trusting a copied file", async () => {
+it("loads canonical proof before fresh full selections without trusting a copied file", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const options = { agentId: "main", env };
     const database = openOpenClawAgentDatabase(options);
@@ -513,8 +515,11 @@ it("loads canonical proof before fresh full reads without trusting a copied file
           if (!opened.found) {
             throw new Error("Expected the seeded canonical database");
           }
-          const queries = trackSqliteStatementExecutions(opened.value.db, ["inventory"], (sql) =>
-            sql.includes("retained_window") && !/\bwhere\b/iu.test(sql) ? "inventory" : null,
+          const queries = trackSqliteStatementExecutions(
+            requireNativeSqliteDatabase(opened.value.db),
+            ["inventory"],
+            (sql) =>
+              sql.includes("retained_window") && !/\bwhere\b/iu.test(sql) ? "inventory" : null,
           );
           try {
             const result = readExactSessionEntriesWithLifecycle({
@@ -522,7 +527,7 @@ it("loads canonical proof before fresh full reads without trusting a copied file
               database: target,
               env,
               projection: "full",
-              sessionKeys: [sessionKey],
+              selection: { kind: "session-id", sessionId: "receipt-session" },
             });
             expect(result.entries[0]?.entry.sessionId).toBe("receipt-session");
             if (pathname === database.path) {

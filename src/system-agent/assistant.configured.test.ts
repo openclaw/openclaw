@@ -21,6 +21,11 @@ import {
   createSystemAgentVerifiedInferenceBinding,
   type SystemAgentVerifiedInferenceBinding,
 } from "./verified-inference.js";
+import {
+  profileAuth,
+  profileStore,
+  requireFingerprint,
+} from "./verified-inference.test-support.js";
 
 const inferenceMocks = vi.hoisted(() => ({
   fastBindings: new WeakSet<object>(),
@@ -99,6 +104,8 @@ function overview(defaultModel?: string): SystemAgentOverview {
   };
 }
 
+const defaultConfig = (): OpenClawConfig => ({ agents: { defaults: { model: "openai/gpt-5.5" } } });
+
 function snapshot(config: OpenClawConfig) {
   return {
     path: "/tmp/openclaw.json",
@@ -167,7 +174,7 @@ describe("OpenClaw configured-model planner", () => {
       guidance: "runtime became unavailable or was superseded",
     },
   ])("reports $guidance without onboarding", async ({ error, guidance }) => {
-    const config = { agents: { defaults: { model: "openai/gpt-5.5" } } } satisfies OpenClawConfig;
+    const config = defaultConfig();
     const { binding, deps } = await createSystemAgentVerifiedInferenceTestFixture(config);
     useFastVerifiedInference(binding);
     const runEmbeddedAgent = vi.fn(async () => {
@@ -224,29 +231,16 @@ describe("OpenClaw configured-model planner", () => {
     if (!configuredRoute) {
       throw new Error("missing test route");
     }
+    const resolvedAuth = profileAuth("openai:p2", "test-key");
     const authDeps = {
-      loadAuthProfileStoreForRuntime: vi.fn(() => ({
-        version: 1,
-        profiles: {
-          "openai:p2": { type: "api_key", provider: "openai", key: "test-key" },
-        },
-      })) as never,
-      resolveApiKeyForProvider: vi.fn(async () => ({
-        apiKey: "test-key",
-        profileId: "openai:p2",
-        source: "profile:openai:p2",
-        mode: "api-key" as const,
-      })),
+      loadAuthProfileStoreForRuntimeAsync: profileStore("openai:p2", {
+        type: "api_key",
+        provider: "openai",
+        key: "test-key",
+      }),
+      resolveApiKeyForProvider: vi.fn(async () => resolvedAuth),
     };
-    const authFingerprint = fingerprintResolvedProviderAuth({
-      apiKey: "test-key",
-      profileId: "openai:p2",
-      source: "profile:openai:p2",
-      mode: "api-key",
-    });
-    if (!authFingerprint) {
-      throw new Error("missing test auth fingerprint");
-    }
+    const authFingerprint = requireFingerprint(fingerprintResolvedProviderAuth(resolvedAuth));
     const binding = useFastVerifiedInference(
       await createSystemAgentVerifiedInferenceBinding({
         configuredRoute,
@@ -299,9 +293,7 @@ describe("OpenClaw configured-model planner", () => {
   });
 
   it("fails closed before planning when the verified route loses its config", async () => {
-    const config = {
-      agents: { defaults: { model: "openai/gpt-5.5" } },
-    } satisfies OpenClawConfig;
+    const config = defaultConfig();
     const { binding, deps } = await createSystemAgentVerifiedInferenceTestFixture(config);
     const runCliAgent = vi.fn();
     const runEmbeddedAgent = vi.fn();
@@ -332,9 +324,7 @@ describe("OpenClaw configured-model planner", () => {
   });
 
   it("rejects a model result when its owner changes during planner cleanup", async () => {
-    const config = {
-      agents: { defaults: { model: "openai/gpt-5.5" } },
-    } satisfies OpenClawConfig;
+    const config = defaultConfig();
     const changedConfig = {
       agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
     } satisfies OpenClawConfig;

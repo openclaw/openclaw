@@ -6,11 +6,13 @@ import { resolveCiTestRuntimeSelections } from "../../scripts/lib/ci-test-runtim
 import { createVitestRunSpecs } from "../../scripts/test-projects.test-support.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createAgentsSupportVitestConfig } from "../vitest/vitest.agents-support.config.js";
+import { createCommandsVitestConfig } from "../vitest/vitest.commands.config.js";
 import { createGatewayMethodsVitestConfig } from "../vitest/vitest.gateway-methods.config.js";
 import { matchesVitestGlob } from "../vitest/vitest.pattern-file.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const support = "test/vitest/vitest.agents-support.config.ts";
+const commands = "test/vitest/vitest.commands.config.ts";
 const gateway = "test/vitest/vitest.gateway-methods.config.ts";
 const nested = "src/agents/harness/gateway-question.authority-worker.test.ts";
 const fast = "src/agents/harness/execution-environment.test.ts";
@@ -19,7 +21,12 @@ const doctor = "src/commands/doctor-sqlite-nocow.test.ts";
 const snapshot = "src/gateway/server-methods/diagnostics.heap-snapshot.test.ts";
 const plugin = "test/plugins/team-reports-http.gateway.test.ts";
 const isolated = "src/gateway/server-methods/transcripts.test.ts";
-const witnesses = [nested, fast, foreign, doctor, snapshot, plugin, isolated];
+const sharedWitnesses = [nested, fast, foreign, doctor, snapshot, plugin, isolated];
+const preflight = "src/commands/doctor-config-preflight.process.test.ts";
+const lightCommand = "src/commands/doctor-browser.test.ts";
+const databaseCommand = "src/commands/doctor-security.test.ts";
+const fastCommand = "src/commands/doctor-format.test.ts";
+const commandWitnesses = [doctor, preflight, lightCommand, databaseCommand, fastCommand, foreign];
 
 const supportCases = [
   { name: "full owner", includes: undefined, runtime: "bun", files: [nested] },
@@ -93,12 +100,94 @@ const gatewayCases = [
   },
 ] as const;
 
-type OwnerScopeCase = (typeof supportCases)[number] | (typeof gatewayCases)[number];
+const commandsCases = [
+  { name: "full owner", includes: undefined, runtime: "bun", files: [doctor, preflight] },
+  { name: "empty override", includes: [], runtime: "bun", files: [doctor, preflight] },
+  {
+    name: "repository owner pattern",
+    includes: ["src/commands/**/*.test.ts"],
+    runtime: "bun",
+    files: [doctor, preflight],
+  },
+  {
+    name: "scoped owner pattern",
+    includes: ["**/*.test.ts"],
+    runtime: "bun",
+    files: [doctor, preflight],
+  },
+  { name: "repository file", includes: [doctor], runtime: "bun", files: [doctor] },
+  {
+    name: "scoped file",
+    includes: ["doctor-sqlite-nocow.test.ts"],
+    runtime: "bun",
+    files: [doctor],
+  },
+  {
+    name: "former partial admission with owner sibling",
+    includes: [preflight, doctor],
+    runtime: "bun",
+    files: [doctor, preflight],
+  },
+  { name: "commands-light file", includes: [lightCommand], runtime: "node", files: [] },
+  { name: "database-worker file", includes: [databaseCommand], runtime: "node", files: [] },
+  { name: "unit-fast file", includes: [fastCommand], runtime: "node", files: [] },
+  {
+    name: "mixed with excluded owners",
+    includes: [doctor, lightCommand, databaseCommand, fastCommand],
+    runtime: "node",
+    files: [doctor],
+  },
+  {
+    name: "uncertain glob",
+    includes: ["**/*.test.*"],
+    runtime: "node",
+    files: [doctor, preflight],
+  },
+  {
+    name: "mixed owner globs",
+    includes: ["**/*.test.ts", "../agents/*.test.ts"],
+    runtime: "node",
+    files: [doctor, preflight, foreign],
+  },
+  {
+    name: "foreign traversal",
+    includes: ["../agents/shell-snapshot.broker.test.ts"],
+    runtime: "node",
+    files: [foreign],
+  },
+  {
+    name: "absolute foreign file",
+    includes: [path.resolve(foreign)],
+    runtime: "node",
+    files: [foreign],
+  },
+] as const;
+
+type OwnerScopeCase =
+  | (typeof supportCases)[number]
+  | (typeof gatewayCases)[number]
+  | (typeof commandsCases)[number];
 
 describe.each([
-  { config: support, cases: supportCases },
-  { config: gateway, cases: gatewayCases },
-])("$config", ({ config, cases }) => {
+  {
+    config: support,
+    cases: supportCases,
+    createOwnerConfig: createAgentsSupportVitestConfig,
+    witnesses: sharedWitnesses,
+  },
+  {
+    config: gateway,
+    cases: gatewayCases,
+    createOwnerConfig: createGatewayMethodsVitestConfig,
+    witnesses: sharedWitnesses,
+  },
+  {
+    config: commands,
+    cases: commandsCases,
+    createOwnerConfig: createCommandsVitestConfig,
+    witnesses: commandWitnesses,
+  },
+])("$config", ({ config, cases, createOwnerConfig, witnesses }) => {
   it.each<OwnerScopeCase>(cases)("preserves selection through the child config: $name", (row) => {
     const scratch = tempDirs.make("openclaw-owner-scope-");
     const entry = {
@@ -135,9 +224,7 @@ describe.each([
           const previousArgv = process.argv;
           try {
             process.argv = [process.execPath, "vitest.mjs", "run", "--config", spec.config];
-            return config === support
-              ? createAgentsSupportVitestConfig(spec.env)
-              : createGatewayMethodsVitestConfig(spec.env);
+            return createOwnerConfig(spec.env);
           } finally {
             process.argv = previousArgv;
           }

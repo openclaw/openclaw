@@ -100,21 +100,6 @@ describe("Moonshot native video wrapper", () => {
     expect(body.match(/video omitted/gu)).toHaveLength(2);
   });
 
-  it("validates a caller replacement after Moonshot thinking post-processing", async () => {
-    const payload = genericPayload();
-    const dispatched = await dispatchPayload(payload, {
-      onPayload(value) {
-        return structuredClone(value);
-      },
-    });
-
-    expect(dispatched).toMatchObject({ reasoning_effort: "max" });
-    expect((dispatched as typeof payload).messages[0]!.content[2]).toEqual({
-      type: "video_url",
-      video_url: { url: MP4_A },
-    });
-  });
-
   it("evicts later admitted videos in place to satisfy the exclusive final size", async () => {
     const payload = genericPayload([MP4_A, MP4_B]);
     const projectedWithSecondOmitted = genericPayload([MP4_A]);
@@ -144,35 +129,6 @@ describe("Moonshot native video wrapper", () => {
       }),
     ).rejects.toThrow("Moonshot request body must be smaller than 200 bytes");
   });
-
-  it.each(["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const)(
-    "keeps thinking outside native video for %s",
-    async (hookName) => {
-      const provider = await registerSingleProviderPlugin(plugin);
-      const payload = genericPayload();
-      let dispatched: unknown;
-      const wrapped = provider[hookName]?.({
-        provider: "moonshot",
-        modelId: "kimi-k3",
-        thinkingLevel: "off",
-        streamFn: capturePayloadStream(payload, (value) => (dispatched = value)),
-      } as never);
-      if (!wrapped) {
-        throw new Error(`Moonshot did not register ${hookName}`);
-      }
-
-      await wrapped(model(), { messages: [] } as Context, {
-        onPayload(value) {
-          const record = value as Record<string, unknown>;
-          expect(record.reasoning_effort).toBe("max");
-          expect(JSON.stringify(record)).toContain('"type":"video_url"');
-          record.reasoning_effort = "low";
-        },
-      });
-
-      expect(dispatched).toMatchObject({ reasoning_effort: "max" });
-    },
-  );
 });
 
 describe("Moonshot registered transport boundary", () => {

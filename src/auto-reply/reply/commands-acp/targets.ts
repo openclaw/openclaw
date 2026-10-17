@@ -6,7 +6,7 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { SESSION_ID_RE } from "../../../sessions/session-id.js";
 import { resolveEffectiveResetTargetSessionKey } from "../acp-reset-target.js";
-import { resolveRequesterSessionKey } from "../commands-subagents/shared.js";
+import { resolveCommandSourceSessionKey } from "../command-source-session-key.js";
 import type { HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandBindingContext } from "./context.js";
 
@@ -91,7 +91,7 @@ export async function resolveAcpTargetSessionKey(params: {
   params.commandParams.opts?.abortSignal?.throwIfAborted();
   const sessionKey =
     threadBound ||
-    (!token && resolveRequesterSessionKey(params.commandParams, { preferCommandTarget: true }));
+    (!token && resolveCommandSourceSessionKey(params.commandParams, { preferCommandTarget: true }));
   if (!sessionKey) {
     return {
       ok: false,

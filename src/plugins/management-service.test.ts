@@ -15,7 +15,6 @@ import {
 
 const mocks = vi.hoisted(() => ({
   applyUninstall: vi.fn(),
-  clawReferenceWarnings: vi.fn(),
   commitRecords: vi.fn(),
   installRecords: vi.fn(),
   metadata: vi.fn(),
@@ -75,7 +74,7 @@ vi.mock("./installed-plugin-index-records.js", async (importOriginal) => ({
   // Keep the pure config/record helpers real; only record IO is stubbed.
   ...(await importOriginal<typeof import("./installed-plugin-index-records.js")>()),
   loadInstalledPluginIndexInstallRecords: (...args: unknown[]) => mocks.installRecords(...args),
-  readPersistedInstalledPluginIndexInstallRecords: (...args: unknown[]) =>
+  readPersistedInstalledPluginIndexInstallRecordsAsync: (...args: unknown[]) =>
     mocks.readPersistedRecords(...args),
 }));
 
@@ -87,10 +86,6 @@ vi.mock("./uninstall.js", async (importOriginal) => ({
 
 vi.mock("./install-record-commit.js", () => ({
   commitPluginInstallRecordsWithConfig: (...args: unknown[]) => mocks.commitRecords(...args),
-}));
-
-vi.mock("./uninstall-claw-references.js", () => ({
-  collectClawPluginUninstallWarnings: (...args: unknown[]) => mocks.clawReferenceWarnings(...args),
 }));
 
 vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
@@ -136,7 +131,6 @@ describe("plugin management service", () => {
     mocks.installRecords.mockResolvedValue({});
     mocks.applyUninstall.mockResolvedValue({ directoryRemoved: true, warnings: [] });
     mocks.pluginVersionCategories.mockResolvedValue([]);
-    mocks.clawReferenceWarnings.mockReturnValue([]);
     mockHostedOfficialCatalog([]);
   });
 

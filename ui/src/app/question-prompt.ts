@@ -3,12 +3,13 @@ import {
   asSafeIntegerInRange,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type {
   QuestionAnswers,
   QuestionResolvedEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { registerListener } from "../../../src/shared/listeners.js";
 import { GatewayRequestError, type GatewayEventFrame } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -58,11 +59,13 @@ export type QuestionPrompt = Pick<
 type QuestionPromptState = QuestionClientResolutionOwner & {
   ownerClient: QuestionClient | null;
   prompts: Map<string, QuestionPrompt>;
+  readonly snapshot: QuestionPrompt[];
   unmatchedResolutions: Map<string, QuestionResolvedEvent>;
   revision: number;
   expiryTimer: ReturnType<typeof globalThis.setTimeout> | null;
   refreshRetryTimer: ReturnType<typeof globalThis.setTimeout> | null;
   onChange: () => void;
+  subscribe: (listener: () => void) => () => void;
 };
 
 const REFRESH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
@@ -77,10 +80,7 @@ function parseQuestionAnswers(value: unknown): QuestionAnswers | null {
   }
   const answers: QuestionAnswers["answers"] = {};
   for (const [questionId, answerValue] of Object.entries(value.answers)) {
-    if (!/^[a-z][a-z0-9_]*$/.test(questionId) || !Array.isArray(answerValue)) {
-      return null;
-    }
-    if (!answerValue.every((answer) => typeof answer === "string")) {
+    if (!/^[a-z][a-z0-9_]*$/.test(questionId) || !isStringArray(answerValue)) {
       return null;
     }
     answers[questionId] = [...answerValue];
@@ -181,27 +181,49 @@ function parseQuestionResolvedEvent(payload: unknown): QuestionResolvedEvent | n
   return null;
 }
 
-export function createQuestionPromptState(onChange: () => void): QuestionPromptState {
+export function createQuestionPromptState(onChange: () => void = () => {}): QuestionPromptState {
+  const listeners = new Set<() => void>();
+  let snapshot: QuestionPrompt[] = [];
   const state: QuestionPromptState = {
     client: null,
     ownerClient: null,
     clientGeneration: 0,
     prompts: new Map(),
+    get snapshot() {
+      return snapshot;
+    },
     unmatchedResolutions: new Map(),
     revision: 0,
     expiryTimer: null,
     refreshRetryTimer: null,
-    onChange,
+    onChange: () => {
+      snapshot = [...state.prompts.values()].toSorted(
+        (left, right) => left.createdAtMs - right.createdAtMs || left.id.localeCompare(right.id),
+      );
+      onChange();
+      for (const listener of listeners) {
+        listener();
+      }
+    },
+    subscribe: (listener) => registerListener(listeners, listener),
     onQuestionResolution: (resolution) => recordQuestionResolution(state, resolution),
   };
   return state;
 }
 
-function scheduleExpiry(state: QuestionPromptState): void {
-  if (state.expiryTimer) {
-    globalThis.clearTimeout(state.expiryTimer);
-    state.expiryTimer = null;
+function clearQuestionPromptTimer(
+  state: QuestionPromptState,
+  field: "expiryTimer" | "refreshRetryTimer",
+): void {
+  const timer = state[field];
+  if (timer) {
+    globalThis.clearTimeout(timer);
+    state[field] = null;
   }
+}
+
+function scheduleExpiry(state: QuestionPromptState): void {
+  clearQuestionPromptTimer(state, "expiryTimer");
   let nextExpiry = Infinity;
   for (const prompt of state.prompts.values()) {
     if (prompt.status === "pending") {
@@ -359,7 +381,7 @@ function parseQuestionListResult(value: unknown): QuestionRecord[] | null {
   return questions.every((question) => question !== null) ? questions : null;
 }
 
-function isQuestionNotFoundError(error: unknown): boolean {
+export function isQuestionNotFoundError(error: unknown): boolean {
   return (
     error instanceof GatewayRequestError &&
     isRecord(error.details) &&
@@ -514,10 +536,7 @@ export function setQuestionPromptClient(
   state: QuestionPromptState,
   client: QuestionClient | null,
 ): void {
-  if (state.refreshRetryTimer) {
-    globalThis.clearTimeout(state.refreshRetryTimer);
-    state.refreshRetryTimer = null;
-  }
+  clearQuestionPromptTimer(state, "refreshRetryTimer");
   if (state.client === client) {
     return;
   }
@@ -536,10 +555,7 @@ export function setQuestionPromptClient(
 
   if (ownerChanged) {
     const changed = state.prompts.size > 0 || state.unmatchedResolutions.size > 0;
-    if (state.expiryTimer) {
-      globalThis.clearTimeout(state.expiryTimer);
-      state.expiryTimer = null;
-    }
+    clearQuestionPromptTimer(state, "expiryTimer");
     state.prompts.clear();
     state.unmatchedResolutions.clear();
     if (changed) {
@@ -574,14 +590,8 @@ export function disposeQuestionPromptState(state: QuestionPromptState): void {
   if (state.client) {
     unregisterQuestionClientOwner(state.client, state);
   }
-  if (state.expiryTimer) {
-    globalThis.clearTimeout(state.expiryTimer);
-    state.expiryTimer = null;
-  }
-  if (state.refreshRetryTimer) {
-    globalThis.clearTimeout(state.refreshRetryTimer);
-    state.refreshRetryTimer = null;
-  }
+  clearQuestionPromptTimer(state, "expiryTimer");
+  clearQuestionPromptTimer(state, "refreshRetryTimer");
   state.clientGeneration += 1;
   // Retained records belong to the previous client: remount on it may recover
   // them, while a different Gateway must still recognize and purge its state.
@@ -668,7 +678,5 @@ export async function cancelQuestionPrompt(state: QuestionPromptState, id: strin
 }
 
 export function listQuestionPrompts(state: QuestionPromptState): QuestionPrompt[] {
-  return [...state.prompts.values()].toSorted(
-    (left, right) => left.createdAtMs - right.createdAtMs || left.id.localeCompare(right.id),
-  );
+  return state.snapshot;
 }

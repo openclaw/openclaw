@@ -41,7 +41,8 @@ export const completeMcpOAuthAuthorization = mocks.completeMcpOAuthAuthorization
 export const readMcpOAuthCredentialsStatus = mocks.readMcpOAuthCredentialsStatus;
 export const countMcpOAuthPrincipals = mocks.countMcpOAuthPrincipals;
 
-vi.mock("../runtime.js", () => ({
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: mocks.runtime,
 }));
 
@@ -70,6 +71,7 @@ vi.mock("../agents/agent-bundle-mcp-runtime.js", async (importOriginal) => {
 
 const tempDirs: string[] = [];
 let sharedProgram: Command;
+let previousExitCode: typeof process.exitCode;
 
 export async function createWorkspace(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-mcp-"));
@@ -104,6 +106,8 @@ function lastRuntimeLine(mock: typeof mockLog): string {
 }
 
 export function resetMcpCliTestState(): void {
+  previousExitCode = process.exitCode;
+  process.exitCode = undefined;
   vi.clearAllMocks();
   mocks.createSessionMcpRuntimeOverride = undefined;
   readMcpOAuthCredentialsStatus.mockResolvedValue({
@@ -113,6 +117,12 @@ export function resetMcpCliTestState(): void {
 }
 
 export async function cleanupMcpCliTestState(): Promise<void> {
-  vi.restoreAllMocks();
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  try {
+    vi.restoreAllMocks();
+    await Promise.all(
+      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    );
+  } finally {
+    process.exitCode = previousExitCode;
+  }
 }

@@ -14,10 +14,11 @@ import "../test-helpers/app-sidebar-suite.ts";
 import {
   createContext,
   createGatewayHarness,
+  createSidebarElement,
   mountSidebar,
-  mountSidebarContext,
   TWO_AGENTS,
 } from "../test-helpers/app-sidebar.ts";
+import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import {
   createTestGatewayClient,
   type GatewayRequestHandler,
@@ -28,8 +29,11 @@ import {
 } from "../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import { storeSidebarSessionOwnerFilter } from "./app-sidebar-session-types.ts";
-import "./app-sidebar.ts";
+import {
+  storeSidebarSessionOwnerFilter,
+  storeSidebarSessionStatusFilter,
+} from "./app-sidebar-session-types.ts";
+import "./app-sidebar.tsx";
 
 async function mountSessionRoster(request: GatewayRequestHandler) {
   const gateway = createGatewayHarness(createTestGatewayClient(request));
@@ -42,6 +46,79 @@ async function mountSessionRoster(request: GatewayRequestHandler) {
 }
 
 describe("AppSidebar automatic list scope replacement", () => {
+  it("publishes a pending status-filter list before its data frame and restores identical rows", async () => {
+    vi.useFakeTimers();
+    storeSidebarSessionStatusFilter("all");
+    const row: GatewaySessionRow = {
+      key: "agent:main:archived",
+      kind: "direct",
+      displayName: "Archived conversation",
+      archived: true,
+    };
+    const response = sessionsResult([row], 1);
+    const pending = deferred<ReturnType<typeof sessionsResult>>();
+    const { sidebar, context, provider, sessions } = await mountSessionRoster(
+      async (method, raw) => {
+        const params = asOptionalRecord(raw);
+        if (method === "sessions.subscribe") {
+          return { subscribed: true };
+        }
+        if (method !== "sessions.list") {
+          return {};
+        }
+        return params?.archived === true
+          ? pending.promise
+          : params?.archived === "all"
+            ? response
+            : sessionsResult([], 0);
+      },
+    );
+    let unsubscribe: (() => void) | undefined;
+    try {
+      sidebar.connected = true;
+      await vi.advanceTimersByTimeAsync(50);
+      await settleLitElement(sidebar);
+      expect(sidebar.textContent).toContain(row.displayName);
+
+      const frames = new Map<number, FrameRequestCallback>();
+      let frameId = 0;
+      vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+        frames.set(++frameId, callback);
+        return frameId;
+      });
+      vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+      sidebar.sessionOrganizer.setSessionsStatusFilter("archived");
+      await settleLitElement(sidebar);
+      expect(sidebar.textContent).not.toContain(row.displayName);
+
+      const published = deferred();
+      unsubscribe = sessions.subscribeList(
+        sidebar.sessionData.sessionListQuery("main"),
+        (snapshot) => {
+          if (!snapshot.loading && snapshot.result) {
+            published.resolve();
+          }
+        },
+      );
+      pending.resolve(response);
+      await published.promise;
+      const pendingFrames = [...frames.values()];
+      frames.clear();
+      for (const callback of pendingFrames) {
+        callback(performance.now());
+      }
+      await settleLitElement(sidebar);
+      expect(sidebar.textContent).toContain(row.displayName);
+    } finally {
+      unsubscribe?.();
+      pending.resolve(response);
+      provider.remove();
+      context.connectionBootstrap.reset();
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("discovers current child parents after background work was queued", async () => {
     const previousParent: GatewaySessionRow = {
       key: "agent:main:previous-parent",
@@ -125,9 +202,8 @@ describe("AppSidebar automatic list scope replacement", () => {
       const expand = sidebar.querySelector<HTMLButtonElement>(
         `[data-child-session-toggle="${nextParent.key}"]`,
       );
-      expect(expand?.getAttribute("aria-expanded")).toBe("false");
-      expand!.click();
-      await settleLitElement(sidebar);
+      // The newly discovered child reveals its parent after the background queue drains.
+      expect(expand?.getAttribute("aria-expanded")).toBe("true");
       expect(sidebar.textContent).toContain(`${nextParent.key} child`);
       expect(parents).toHaveLength(2);
     } finally {
@@ -137,64 +213,79 @@ describe("AppSidebar automatic list scope replacement", () => {
     }
   });
 
-  it("loads the selected filtered roster after an earlier automatic scope read settles", async () => {
-    vi.useFakeTimers();
-    const previous = deferred<ReturnType<typeof sessionsResult>>();
-    const targets: unknown[] = [];
-    let mainReads = 0;
-    const archived = (agentId: string, label: string) =>
-      sessionsResult(
-        [{ key: `agent:${agentId}:archived`, kind: "direct", archived: true, label }],
-        1,
+  it.each([false, true])(
+    "loads selected filtered rosters before chat readiness (automatic first: %s)",
+    async (automaticFirst) => {
+      vi.useFakeTimers();
+      const previous = deferred<ReturnType<typeof sessionsResult>>();
+      const targets: unknown[] = [];
+      let mainReads = 0;
+      const archived = (agentId: string, label: string) =>
+        sessionsResult(
+          [{ key: `agent:${agentId}:archived`, kind: "direct", archived: true, label }],
+          1,
+        );
+      const { sidebar, context, provider, sessions } = await mountSessionRoster(
+        async (method, raw) => {
+          const params = asOptionalRecord(raw);
+          if (method === "sessions.subscribe") {
+            return { subscribed: true };
+          }
+          if (method !== "sessions.list") {
+            return {};
+          }
+          if (params?.archived !== true) {
+            return sessionsResult([], 0);
+          }
+          targets.push(params.agentId);
+          if (params.agentId === "research") {
+            return previous.promise;
+          }
+          return archived("main", `Main archived ${++mainReads}`);
+        },
       );
-    const { sidebar, context, provider, sessions } = await mountSessionRoster(
-      async (method, raw) => {
-        const params = asOptionalRecord(raw);
-        if (method === "sessions.subscribe") {
-          return { subscribed: true };
-        }
-        if (method !== "sessions.list") {
-          return {};
-        }
-        if (params?.archived !== true) {
-          return sessionsResult([], 0);
-        }
-        targets.push(params.agentId);
-        if (params.agentId === "research") {
-          return previous.promise;
-        }
-        return archived("main", `Main archived ${++mainReads}`);
-      },
-    );
-    try {
-      sidebar.connected = true;
-      await sidebar.updateComplete;
-      sidebar.sessionOrganizer.setSessionsStatusFilter("archived");
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
-      expect(sidebar.textContent).toContain("Main archived 1");
+      try {
+        sidebar.connected = true;
+        await settleLitElement(sidebar);
+        sidebar.sessionOrganizer.setSessionsStatusFilter("archived");
+        await vi.advanceTimersByTimeAsync(0);
+        await settleLitElement(sidebar);
+        expect(sidebar.textContent).toContain("Main archived 1");
 
-      context.agentSelection.set("research");
-      await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(50);
-      expect(targets).toEqual(["main", "research"]);
-      context.agentSelection.set("main");
-      await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(50);
-      previous.resolve(archived("research", "Stale Research archived"));
-      await vi.advanceTimersByTimeAsync(50);
-      await sidebar.updateComplete;
+        context.connectionBootstrap.setForegroundRoute("agent:research:pending");
+        if (automaticFirst) {
+          context.agentSelection.set("main");
+        }
+        context.agentSelection.set("research", { background: automaticFirst });
+        await settleLitElement(sidebar);
+        await vi.advanceTimersByTimeAsync(50);
+        if (automaticFirst) {
+          expect(targets).toEqual(["main"]);
+          expect(sidebar.textContent).not.toContain("Main archived 1");
+          context.connectionBootstrap.setForegroundRoute(null);
+          await vi.advanceTimersByTimeAsync(50);
+        }
+        expect(targets).toEqual(["main", "research"]);
+        context.connectionBootstrap.setForegroundRoute("agent:main:pending");
+        context.agentSelection.set("main");
+        await settleLitElement(sidebar);
+        await vi.advanceTimersByTimeAsync(50);
+        previous.resolve(archived("research", "Stale Research archived"));
+        await vi.advanceTimersByTimeAsync(50);
+        await settleLitElement(sidebar);
 
-      expect(sidebar.textContent).not.toContain("Stale Research archived");
-      expect(targets).toEqual(["main", "research", "main"]);
-      expect(sidebar.textContent).toContain("Main archived 2");
-    } finally {
-      previous.resolve(sessionsResult([], 0));
-      provider.remove();
-      sessions.dispose();
-      vi.useRealTimers();
-    }
-  });
+        expect(sidebar.textContent).not.toContain("Stale Research archived");
+        expect(targets).toEqual(["main", "research", "main"]);
+        expect(sidebar.textContent).toContain("Main archived 2");
+      } finally {
+        previous.resolve(sessionsResult([], 0));
+        provider.remove();
+        context.connectionBootstrap.reset();
+        sessions.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each(["research", "main"])(
     "loads the next active parent's children when its agent is %s",
@@ -254,7 +345,7 @@ describe("AppSidebar automatic list scope replacement", () => {
         sidebar.activeRouteId = "chat";
         sidebar.sessionKey = mainParent;
         sidebar.connected = true;
-        await sidebar.updateComplete;
+        await settleLitElement(sidebar);
         await vi.advanceTimersByTimeAsync(50);
         expect(parents).toEqual([mainParent]);
 
@@ -263,7 +354,7 @@ describe("AppSidebar automatic list scope replacement", () => {
         if (nextAgent !== "main") {
           await sessions.refresh({ agentId: nextAgent, force: true });
         }
-        await sidebar.updateComplete;
+        await settleLitElement(sidebar);
         await vi.advanceTimersByTimeAsync(50);
         expect(primaryReads).toBe(nextAgent === "main" ? 1 : 2);
         previous.resolve(
@@ -273,7 +364,7 @@ describe("AppSidebar automatic list scope replacement", () => {
           ),
         );
         await vi.advanceTimersByTimeAsync(50);
-        await sidebar.updateComplete;
+        await settleLitElement(sidebar);
 
         if (nextAgent !== "main") {
           expect(sidebar.textContent).not.toContain("Stale Main child");
@@ -283,9 +374,12 @@ describe("AppSidebar automatic list scope replacement", () => {
           `[data-child-session-toggle="${researchParent}"]`,
         );
         expect(expand).not.toBeNull();
-        expect(expand?.getAttribute("aria-expanded")).toBe("false");
-        expand!.click();
-        await sidebar.updateComplete;
+        // Only the cross-agent roster discovers a new child after the initial baseline.
+        expect(expand?.getAttribute("aria-expanded")).toBe(nextAgent === "main" ? "false" : "true");
+        if (nextAgent === "main") {
+          expand!.click();
+        }
+        await settleLitElement(sidebar);
         await vi.advanceTimersByTimeAsync(0);
         expect(sidebar.textContent).toContain("Next child");
         expect(parents).toEqual([mainParent, researchParent]);
@@ -301,10 +395,27 @@ describe("AppSidebar automatic list scope replacement", () => {
 
 describe("AppSidebar initial managed-list hydration", () => {
   it.each([
-    { name: "ordinary overlap", holdSecondSlot: false, invalidate: false },
-    { name: "queued initial fill", holdSecondSlot: true, invalidate: false },
-    { name: "queued initial fill with a later event", holdSecondSlot: true, invalidate: true },
-  ])("keeps only required filtered reads during $name", async ({ holdSecondSlot, invalidate }) => {
+    { name: "ordinary overlap", holdSecondSlot: false, invalidate: false, filter: "self" },
+    { name: "queued initial fill", holdSecondSlot: true, invalidate: false, filter: "self" },
+    {
+      name: "queued initial fill with a later event",
+      holdSecondSlot: true,
+      invalidate: true,
+      filter: "self",
+    },
+    { name: "saved owner", holdSecondSlot: true, invalidate: false, filter: "owner" },
+    {
+      name: "saved involving me",
+      holdSecondSlot: true,
+      invalidate: false,
+      filter: "involving-me",
+    },
+  ])("paints filtered sessions before group metadata during $name", async (scenario) => {
+    const { holdSecondSlot, invalidate, filter } = scenario;
+    const matchesFilter = (query: Record<string, unknown> | null | undefined) =>
+      filter === "involving-me"
+        ? query?.involvingMe === true
+        : query?.ownerId === "synthetic-operator";
     const primary = deferred<ReturnType<typeof sessionsResult>>();
     const filtered = deferred<ReturnType<typeof sessionsResult>>();
     const groups = deferred<{ names: string[]; groups: never[]; sectionOrder: string[] }>();
@@ -317,7 +428,14 @@ describe("AppSidebar initial managed-list hydration", () => {
       1,
     );
     const filteredResult = sessionsResult(
-      [{ key: "agent:main:mine", kind: "direct", label: "My session" }],
+      [
+        {
+          key: "agent:main:mine",
+          kind: "direct",
+          label: "My session",
+          owner: { actor: { type: "human", id: "synthetic-operator" } },
+        },
+      ],
       1,
     );
     const emptyGroups = { names: [], groups: [], sectionOrder: [] };
@@ -335,12 +453,22 @@ describe("AppSidebar initial managed-list hydration", () => {
         if (method !== "sessions.list") {
           return {};
         }
+        if (params?.includeOwnerSessionCounts) {
+          return { ...primaryResult, totalCount: 1, ownerSessionCounts: [] };
+        }
         listQueries.push({ ...params });
-        if (params?.involvingMe === true) {
+        if (matchesFilter(params)) {
           order.push("filtered:start");
-          if (invalidate && listQueries.filter((query) => query.involvingMe === true).length > 1) {
+          if (invalidate && listQueries.filter(matchesFilter).length > 1) {
             return sessionsResult(
-              [{ key: "agent:main:mine", kind: "direct", label: "Updated session" }],
+              [
+                {
+                  key: "agent:main:mine",
+                  kind: "direct",
+                  label: "Updated session",
+                  owner: { actor: { type: "human", id: "synthetic-operator" } },
+                },
+              ],
               2,
             );
           }
@@ -354,10 +482,6 @@ describe("AppSidebar initial managed-list hydration", () => {
       phase: "connecting",
       selfUser: { id: "synthetic-operator" },
       hello: gatewayHelloForMethods([...SESSION_MUTATION_TEST_METHODS, "sessions.groups.list"]),
-    });
-    storeSidebarSessionOwnerFilter(gateway.gateway.connection.gatewayUrl, "synthetic-operator", {
-      ownerId: null,
-      involvingMe: true,
     });
     const connectionBootstrap = createConnectionBootstrapCoordinator();
     const stopBootstrap = gateway.gateway.subscribe((snapshot) =>
@@ -382,7 +506,17 @@ describe("AppSidebar initial managed-list hydration", () => {
           await unrelatedBootstrap.promise;
         })
       : Promise.resolve();
-    const { sidebar, provider } = await mountSidebarContext(context);
+    const provider = createApplicationContextProvider(context);
+    const sidebar = await createSidebarElement();
+    if (filter !== "self") {
+      storeSidebarSessionOwnerFilter(gateway.gateway.connection.gatewayUrl, "synthetic-operator", {
+        ownerId: filter === "owner" ? "synthetic-operator" : null,
+        involvingMe: filter === "involving-me",
+      });
+    }
+    provider.append(sidebar.hostElement);
+    document.body.append(provider);
+    await settleLitElement(sidebar);
     const heldLater = invalidate
       ? connectionBootstrap.run("later-bootstrap", async () => {
           order.push("later:start");
@@ -391,29 +525,27 @@ describe("AppSidebar initial managed-list hydration", () => {
       : Promise.resolve();
     try {
       sidebar.connected = true;
-      await sidebar.updateComplete;
-      expect(listQueries).toHaveLength(1);
+      await settleLitElement(sidebar);
+      expect(listQueries).toHaveLength(holdSecondSlot ? 1 : 2);
       expect(listQueries[0]).toMatchObject({ ownerFirst: true, agentId: "main" });
-      expect(order.includes("groups:start")).toBe(!holdSecondSlot);
+      expect(order).not.toContain("groups:start");
 
       order.push("primary:resolve");
       primary.resolve(primaryResult);
-      await vi.waitFor(() => expect(order).toContain("groups:start"));
+      await vi.waitFor(() => expect(order).toContain("filtered:start"));
       await vi.waitFor(() =>
         expect(sessions.state.result?.sessions[0]?.label).toBe("Canonical session"),
       );
-      if (holdSecondSlot) {
-        expect(listQueries).toHaveLength(1);
-      }
-
-      order.push("groups:resolve");
-      groups.resolve(emptyGroups);
-      await vi.waitFor(() => expect(order).toContain("filtered:start"));
       expect(listQueries).toHaveLength(2);
-      expect(listQueries[1]).toMatchObject({ involvingMe: true, agentId: "main" });
+      expect(listQueries[1]?.agentId).toBe(filter === "involving-me" ? "main" : undefined);
+      expect(matchesFilter(listQueries[1])).toBe(true);
 
       order.push("filtered:resolve");
       filtered.resolve(filteredResult);
+      await vi.waitFor(() => expect(sidebar.textContent).toContain("My session"));
+      await vi.waitFor(() => expect(order).toContain("groups:start"));
+      order.push("groups:resolve");
+      groups.resolve(emptyGroups);
       if (invalidate) {
         await vi.waitFor(() => expect(order).toContain("later:start"));
         expect(sidebar.textContent).toContain("My session");
@@ -426,18 +558,16 @@ describe("AppSidebar initial managed-list hydration", () => {
           reason: "create",
         });
         await vi.advanceTimersByTimeAsync(5_000);
-        expect(listQueries.filter((query) => query.involvingMe === true)).toHaveLength(1);
+        expect(listQueries.filter(matchesFilter)).toHaveLength(1);
         laterBootstrap.resolve();
         await heldLater;
       }
       await connectionBootstrap.run("queue-drained", async () => {
         order.push("queue-drained");
       });
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
       console.info("bootstrap RPC order", JSON.stringify({ order, listQueries }));
-      expect(listQueries.filter((query) => query.involvingMe === true)).toHaveLength(
-        invalidate ? 2 : 1,
-      );
+      expect(listQueries.filter(matchesFilter)).toHaveLength(invalidate ? 2 : 1);
       expect(sidebar.textContent).toContain(invalidate ? "Updated session" : "My session");
       expect(sessions.state.result?.sessions[0]?.label).toBe("Canonical session");
     } finally {

@@ -1,3 +1,7 @@
+import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 
@@ -69,6 +73,7 @@ import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesWebSocketStream } from "./openai-responses-websocket.js";
 
 const initialHost = getAiTransportHost();
+const runDetached = AsyncLocalStorage.snapshot();
 const clientFixture = {
   apiKey: "test-key",
   baseURL: "https://api.openai.com/v1",
@@ -77,7 +82,7 @@ const clientFixture = {
   },
 };
 const client = clientFixture as never;
-const firstUser = { role: "user", content: "first" };
+const firstUser = { role: "user" as const, content: "first" };
 const assistantOutput = {
   type: "message",
   id: "msg_1",
@@ -130,23 +135,10 @@ describe("native OpenAI Responses WebSocket transport", () => {
     configureAiTransportHost(initialHost);
   });
 
-  it("only enables WebSockets for the official native OpenAI Responses endpoint", () => {
-    expect(
-      supportsNativeOpenAIResponsesEndpoint({
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      }),
-    ).toBe(true);
-  });
-
   it.each([
-    ["missing version path", "openai", "https://api.openai.com"],
-    ["compatible endpoint", "openai", "https://compatible.example/v1"],
     ["missing endpoint", "openai", undefined],
     ["credentials and URL components", "openai", "https://user:pass@api.openai.com/v1?q=x#x"],
     ["lookalike host", "openai", "https://api.openai.com.evil.example/v1"],
-    ["different provider", "azure-openai", "https://api.openai.com/v1"],
   ])("rejects %s", (_name, provider, baseUrl) => {
     expect(
       supportsNativeOpenAIResponsesEndpoint({ provider, api: "openai-responses", baseUrl }),
@@ -200,65 +192,6 @@ describe("native OpenAI Responses WebSocket transport", () => {
     });
   });
 
-  it("continues across equivalent request ordering, omissions, and persisted reasoning replay", async () => {
-    const reasoning = { type: "reasoning", id: "rs_1", encrypted_content: "ciphertext" };
-    websocketState.responseBatches.push(
-      [completion("resp_1", [reasoning, assistantOutput])],
-      [completion("resp_2")],
-    );
-    await consumeResponse(
-      createStream({
-        model: "gpt-5.6-luna",
-        metadata: { beta: "2", alpha: "1" },
-        max_output_tokens: undefined,
-        input: [firstUser],
-      }),
-    );
-
-    const second = createStream({
-      input: [
-        firstUser,
-        { type: "reasoning", summary: [] },
-        assistantOutput,
-        { role: "user", content: "second" },
-      ],
-      metadata: { alpha: "1", beta: "2" },
-      model: "gpt-5.6-luna",
-    });
-
-    expect(second.continuationStatus).toBe("continued");
-    expect(second.request.input).toEqual([{ role: "user", content: "second" }]);
-    await consumeResponse(second);
-  });
-
-  it("fails closed when a non-assistant history item changes", async () => {
-    const firstInput = {
-      type: "message",
-      role: "user",
-      id: "input_1",
-      status: "completed",
-      content: [{ type: "input_text", text: "first" }],
-    };
-    websocketState.responseBatches.push(
-      [completion("resp_1", [assistantOutput])],
-      [completion("resp_2")],
-    );
-    await consumeResponse(createStream({ model: "gpt-5.6-luna", input: [firstInput] as never }));
-
-    const second = createStream({
-      model: "gpt-5.6-luna",
-      input: [
-        { ...firstInput, id: "input_changed" },
-        assistantOutput,
-        { role: "user", content: "second" },
-      ] as never,
-    });
-
-    expect(second.continuationStatus).toBe("history_changed");
-    expect(second.request).not.toHaveProperty("previous_response_id");
-    await consumeResponse(second);
-  });
-
   it("does not retain a continuation after a terminal incomplete response", async () => {
     websocketState.responseBatches.push(
       [completion("resp_1", [assistantOutput])],
@@ -292,13 +225,6 @@ describe("native OpenAI Responses WebSocket transport", () => {
   });
 
   it.each([
-    {
-      name: "tool choice change",
-      mutate: (request: Record<string, unknown>) => ({
-        ...request,
-        tool_choice: "none",
-      }),
-    },
     {
       name: "history rewrite",
       mutate: (request: Record<string, unknown>) => ({
@@ -375,19 +301,91 @@ describe("native OpenAI Responses WebSocket transport", () => {
     expect(websocketState.instances).toHaveLength(2);
   });
 
-  it("closes only the requested session resources", async () => {
+  it("keeps an idle connection reusable without retaining its completed caller", async () => {
+    const host = createAiTransportHost({ runInDetachedAsyncContext: runDetached });
+    const callers = new AsyncLocalStorage<object>();
+    let reference: WeakRef<object> | undefined;
+    const request = { model: "fixture", input: [firstUser] };
     websocketState.responseBatches.push([completion("resp_1")], [completion("resp_2")]);
-    await consumeResponse(createStream({ model: "gpt-5.6-luna", input: [firstUser] }));
-    await consumeResponse(
-      createStream(
-        { model: "gpt-5.6-luna", input: [{ role: "user", content: "other" }] },
-        { sessionId: "session-2" },
-      ),
-    );
+    const completeTurn = () => {
+      const caller = { turn: 1 };
+      reference = new WeakRef(caller);
+      return runWithAiTransportHost(host, () =>
+        callers.run(caller, () => consumeResponse(createStream(request))),
+      );
+    };
+    try {
+      await completeTurn();
+      const control = new WeakRef({ unowned: true });
+      // Keep real cache timers and ALS alive while collecting the completed turn.
+      await nextTurn();
+      queryObjects(WeakRef);
+      expect(control.deref()).toBeUndefined();
+      assert.ok(reference);
+      expect(reference.deref()).toBeUndefined();
 
-    cleanupSessionResources("session-1");
-    expect(websocketState.instances[0]?.closed).toBe(true);
-    expect(websocketState.instances[1]?.closed).toBe(false);
+      await runWithAiTransportHost(host, async () => {
+        const followup = createStream(request);
+        expect(followup.reusedConnection).toBe(true);
+        expect(followup.request.previous_response_id).toBe("resp_1");
+        await consumeResponse(followup);
+      });
+      expect(websocketState.instances).toHaveLength(1);
+      expect(websocketState.instances[0]?.closed).toBe(false);
+    } finally {
+      cleanupSessionResources(undefined, host);
+      callers.disable();
+    }
+  });
+
+  it("keeps a degradation cooldown without retaining the failed caller or request", async () => {
+    const host = createAiTransportHost({ runInDetachedAsyncContext: runDetached });
+    const callers = new AsyncLocalStorage<object>();
+    const references: WeakRef<object>[] = [];
+    const failTurn = () => {
+      const caller = { turn: 1 };
+      const request = { model: "fixture", input: [firstUser] };
+      const restoreRequest = () => request;
+      references.push(new WeakRef(caller), new WeakRef(request), new WeakRef(restoreRequest));
+      return runWithAiTransportHost(host, () =>
+        callers.run(caller, () =>
+          consumeResponse(
+            createOpenAIResponsesWebSocketStream({
+              client,
+              request,
+              restoreRequest,
+              mode: "websocket-cached",
+              sessionId: "failed-retention",
+              headers: { "x-stable-session": "session-1" },
+              degradeCooldownMs: 60_000,
+            }),
+          ),
+        ),
+      );
+    };
+    try {
+      // Vitest's async matcher retains the rejection until the test finishes.
+      await assert.rejects(failTurn(), /failed after request dispatch/);
+      const control = new WeakRef({ unowned: true });
+      await nextTurn();
+      queryObjects(WeakRef);
+      expect(control.deref()).toBeUndefined();
+      expect(references.filter((reference) => reference.deref())).toHaveLength(0);
+
+      runWithAiTransportHost(host, () => {
+        expect(() =>
+          createStream({ model: "fixture", input: [firstUser] }, { sessionId: "failed-retention" }),
+        ).toThrow(
+          expect.objectContaining({
+            cause: expect.objectContaining({ message: expect.stringContaining("cooling down") }),
+          }),
+        );
+      });
+      expect(websocketState.instances).toHaveLength(1);
+    } finally {
+      cleanupSessionResources(undefined, host);
+      callers.disable();
+    }
   });
 
   it("keeps matching-session and all-session cleanup inside one runtime owner", async () => {

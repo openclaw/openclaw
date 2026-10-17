@@ -1,15 +1,10 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
-import {
-  isRecord,
-  normalizeLowercaseStringOrEmpty as normalizePolicyChannelId,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLowercaseStringOrEmpty as normalizePolicyChannelId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyEvidence, PolicyIngressEvidence } from "../policy-state.js";
-import { ingressPolicyShapeFinding } from "./access-shapes.js";
 import { CHECK_IDS } from "./check-ids.js";
 import { policyEvidenceRuleFindings, type PolicyEvidenceRule } from "./policy-evidence-finding.js";
-import { channelScopedPolicyTargets } from "./policy-scope.js";
-import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
-import { ocPathSegment, readPolicyBoolean, readPolicyPathString, readStringList } from "./utils.js";
+import { policySectionTargets } from "./policy-section-targets.js";
+import { readPolicyBoolean, readPolicyPathString, readStringList } from "./utils.js";
 
 export function ingressFindings(
   policy: unknown,
@@ -17,34 +12,18 @@ export function ingressFindings(
   policyDocName: string,
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
-  if (!isRecord(policy)) {
-    return [];
-  }
   const findings: HealthFinding[] = [];
-  const ingressPolicy = policy.ingress;
-  if (
-    ingressPolicyShapeFinding(ingressPolicy, { policyDocName, policyPath }) === undefined &&
-    isRecord(ingressPolicy)
-  ) {
+  for (const target of policySectionTargets(policy, policyPath, policyDocName, "ingress")) {
     findings.push(
-      ...ingressFindingsForRule(ingressPolicy, policyDocName, "ingress", evidence, () => true),
+      ...ingressFindingsForRule(
+        target.policy,
+        policyDocName,
+        target.requirementBase,
+        evidence,
+        (entry) =>
+          target.selectorId === undefined || scopedIngressChannelMatches(entry, target.selectorId),
+      ),
     );
-  }
-  if (hasValidScopedPolicy(policy, policyPath, policyDocName)) {
-    for (const target of channelScopedPolicyTargets(policy)) {
-      if (!isRecord(target.overlay.ingress)) {
-        continue;
-      }
-      findings.push(
-        ...ingressFindingsForRule(
-          target.overlay.ingress,
-          policyDocName,
-          `scopes/${ocPathSegment(target.scopeName)}/ingress`,
-          evidence,
-          (entry) => scopedIngressChannelMatches(entry, target.channelId),
-        ),
-      );
-    }
   }
   return findings;
 }

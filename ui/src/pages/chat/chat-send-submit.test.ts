@@ -271,7 +271,8 @@ describe("structured Goal admission", () => {
       sessionKey: host.sessionKey,
     };
     // The same browser persistence owner used on reconnect restores this immutable row.
-    const { admitQueuedMessageForSession } = await import("./chat-queue.ts");
+    const { admitQueuedMessageForSession } =
+      await import("./chat-outbox-admission.test-support.ts");
     expect(
       admitQueuedMessageForSession(host, captureChatOutboxAdmission(host, host.sessionKey), queued),
     ).toBe(true);
@@ -471,7 +472,7 @@ describe("handleSendChat immediate local commands", () => {
         chatMessage: draft,
         chatAttachments: [attachment],
         exportCurrentChat,
-        renderLifecycle: { invalidate: vi.fn(), afterCommit },
+        renderLifecycle: { afterCommit },
         requestHandlers: {},
       });
       await handleSendChat(host);

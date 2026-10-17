@@ -116,15 +116,9 @@ function getPersistentModalStore(): DiscordRegistryStore<DiscordModalEntry> | un
   ));
 }
 
-function isExpired(entry: { expiresAt?: number }, now: number) {
-  return entry.expiresAt !== undefined && !isFutureDateTimestampMs(entry.expiresAt, { nowMs: now });
-}
-
 function pruneUndefinedRegistryValues<T>(value: T): T {
   if (Array.isArray(value)) {
-    return value
-      .filter((entry) => entry !== undefined)
-      .map((entry) => pruneUndefinedRegistryValues(entry)) as T;
+    return value.filter((entry) => entry !== undefined).map(pruneUndefinedRegistryValues) as T;
   }
   if (!value || typeof value !== "object") {
     return value;
@@ -161,7 +155,7 @@ function resolveEntry<T extends { expiresAt?: number }>(
     return null;
   }
   const now = Date.now();
-  if (isExpired(entry, now)) {
+  if (entry.expiresAt !== undefined && !isFutureDateTimestampMs(entry.expiresAt, { nowMs: now })) {
     store.delete(params.id);
     return null;
   }
@@ -231,16 +225,6 @@ function resolveComponentConsumptionIds(entry: DiscordComponentEntry): string[] 
   return ids.length > 0 ? uniqueStrings(ids) : [entry.id];
 }
 
-async function deletePersistentComponentConsumptionGroup(
-  entry: DiscordComponentEntry,
-): Promise<void> {
-  await Promise.all(
-    resolveComponentConsumptionIds(entry).map((id) =>
-      deletePersistentEntry({ id, openStore: getPersistentComponentStore }),
-    ),
-  );
-}
-
 async function resolvePersistentRegistryEntry<T extends { id: string }>(params: {
   id: string;
   consume?: boolean;
@@ -278,6 +262,20 @@ export function registerDiscordComponentEntries(params: {
     for (const entry of normalizedModals) {
       discordComponentRegistryState.modalEntries.set(entry.id, entry);
     }
+    const pruneAt = Date.now();
+    for (const store of [
+      discordComponentRegistryState.componentEntries,
+      discordComponentRegistryState.modalEntries,
+    ]) {
+      for (const [id, entry] of store) {
+        if (
+          entry.expiresAt !== undefined &&
+          !isFutureDateTimestampMs(entry.expiresAt, { nowMs: pruneAt })
+        ) {
+          store.delete(id);
+        }
+      }
+    }
     await Promise.all([
       registerPersistentRegistryEntries({
         entries: normalizedEntries,
@@ -314,7 +312,11 @@ export async function resolveDiscordComponentEntryWithPersistence(params: {
           store.delete(id);
         }
       }
-      await deletePersistentComponentConsumptionGroup(entry);
+      await Promise.all(
+        resolveComponentConsumptionIds(entry).map((id) =>
+          deletePersistentEntry({ id, openStore: getPersistentComponentStore }),
+        ),
+      );
     }
     return entry;
   });

@@ -16,6 +16,7 @@ import { defaultRuntime } from "../../runtime.js";
 import {
   createGatewayRestartDeadline,
   GatewayRestartDeadlineError,
+  type GatewayRestartDeadline,
 } from "../daemon-cli/restart-health-deadline.js";
 import {
   GATEWAY_RESTART_PROBE_TIMEOUT_MS,
@@ -24,7 +25,6 @@ import {
 import { DEFAULT_RESTART_HEALTH_DELAY_MS } from "../daemon-cli/restart-health.constants.js";
 import {
   inspectGatewayRestart,
-  isSameGatewayRestartGeneration,
   waitForGatewayHealthyRestart,
   waitForGatewayHttpReadiness,
   type GatewayRestartSnapshot,
@@ -50,6 +50,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
   requirePluginHealth?: boolean;
   expectedVersion?: string;
   gatewayPort?: number;
+  waitForStartup?: boolean;
 }): Promise<boolean> {
   const { config, env } = params;
   const { assertCurrent, proofOptions } = captureUpdateGatewayReadinessOwner(params);
@@ -61,7 +62,9 @@ export async function verifyPreviousGatewayForUpdate(params: {
     previousGateway: true,
   });
   const startedAtMs = Date.now();
-  const deadline = createGatewayRestartDeadline({ timeoutMs, signal: params.signal });
+  const sharedDeadline = params.opts.run?.deadline;
+  const deadline =
+    sharedDeadline ?? createGatewayRestartDeadline({ timeoutMs, signal: params.signal });
   let lastProgress = { stage: "", at: -Infinity };
   let lastReason = "resolving the previous Gateway port and installed version";
   const progress = (stage: string, reason: string, warning = false) => {
@@ -112,27 +115,23 @@ export async function verifyPreviousGatewayForUpdate(params: {
         expectedBuildId: expectedBuildId ?? undefined,
         timeoutMs,
         probeTimeoutMs: 5_000,
-        deadlineMs: deadline.deadlineMs,
+        deadline,
         requireRunningService: true,
-        settle: { probes: 1 },
+        waitForStartup: params.waitForStartup,
         signal: deadline.signal,
         requirePluginHealth: params.requirePluginHealth,
         assertCurrent,
         onProgress: progress,
       });
-      if (health.waitOutcome === "timeout" || health.waitOutcome === "still-starting") {
-        progress(health.waitOutcome, lastReason, true);
+      if (!health.healthy || !readyz) {
+        progress(health.waitOutcome ?? "unverified", health.probeError ?? lastReason, true);
         return false;
       }
       progress("installation", "checking service command ownership of the previous installation");
       const servesPreviousPackage = await gatewayServiceCommandUsesRoot({ root: params.root, env });
       assertCurrent();
       return Boolean(
-        expectedVersion &&
-        servesPreviousPackage === true &&
-        health.healthy &&
-        health.runtime.status === "running" &&
-        readyz,
+        expectedVersion && servesPreviousPackage === true && health.runtime.status === "running",
       );
     });
   } catch (error) {
@@ -142,7 +141,9 @@ export async function verifyPreviousGatewayForUpdate(params: {
     progress("budget exhausted", lastReason, true);
     return false;
   } finally {
-    deadline.dispose();
+    if (!sharedDeadline) {
+      deadline.dispose();
+    }
   }
 }
 
@@ -161,6 +162,7 @@ export function captureUpdateGatewayReadinessOwner(params: {
   };
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
+    originalRun?.deadline?.signal.throwIfAborted();
     if (
       params.opts.run !== originalRun ||
       originalRun?.executorFence !== originalExecutor ||
@@ -187,6 +189,7 @@ export type UpdateGatewayReadinessParams = {
   timeoutMs?: number;
   probeTimeoutMs?: number;
   deadlineMs?: number;
+  deadline?: GatewayRestartDeadline;
   onProgress?: (stage: string, reason: string) => void;
   observedStartupMs?: number;
   expectedVersion?: string;
@@ -196,9 +199,8 @@ export type UpdateGatewayReadinessParams = {
   health?: GatewayRestartSnapshot;
   /** Installation observes native startup; final verification owns HTTP and identity proof. */
   healthOnly?: boolean;
-  /** A failure before activation observes existing health without waiting for startup. */
+  /** Observe an existing process without waiting for startup. */
   waitForStartup?: boolean;
-  settle?: { probes: number };
   signal?: AbortSignal;
   assertCurrent?: () => void;
   recoverHealth?: (
@@ -220,13 +222,10 @@ export function gatewayReadinessPending(health: GatewayRestartSnapshot): boolean
     health.runtime.status === "running" &&
     (typeof health.runtime.pid === "number" || Boolean(health.gatewayBootId)) &&
     // Only the restart owner can establish startup; an HTTP failure is not progress.
-    ["waiting for Gateway listener", "startup migration", "settling healthy Gateway"].includes(
-      health.startupPhase ?? "",
-    ) &&
+    ["waiting for Gateway listener", "startup migration"].includes(health.startupPhase ?? "") &&
     !health.versionMismatch &&
     !health.buildIdMismatch &&
     !health.activatedPluginErrors?.length &&
-    !health.channelProbeErrors?.length &&
     health.staleGatewayPids.length === 0
   );
 }
@@ -239,20 +238,14 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     observedStartupMs: params.observedStartupMs,
     migrationLeaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
   });
-  const settle = params.settle ?? { probes: 12 };
-  const settleDurationMs = waitForStartup
-    ? (Math.max(1, settle.probes) - 1) * DEFAULT_RESTART_HEALTH_DELAY_MS
-    : 0;
   const startedAtMs = performance.now();
-  const deadline = createGatewayRestartDeadline({
-    timeoutMs: Math.max(
-      0,
-      Math.min(timeoutMs + settleDurationMs, (params.deadlineMs ?? Infinity) - startedAtMs),
-    ),
-    signal: params.signal,
-  });
+  const deadline =
+    params.deadline ??
+    createGatewayRestartDeadline({
+      timeoutMs: Math.max(0, Math.min(timeoutMs, (params.deadlineMs ?? Infinity) - startedAtMs)),
+      signal: params.signal,
+    });
   const remainingMs = deadline.remainingMs;
-  const inspectionTimeoutMs = () => Math.min(remainingMs(), params.probeTimeoutMs ?? Infinity);
   const probeTimeoutMs = () =>
     waitForStartup && params.probeTimeoutMs === undefined
       ? remainingMs()
@@ -268,13 +261,12 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     expectedVersion: params.expectedVersion,
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
     requirePluginHealth: params.requirePluginHealth ?? false,
+    requireChannelHealth: false,
     env: params.serviceEnv,
     signal: deadline.signal,
     deadline,
-    // One-shot recovery caps network waits, not the preceding native inspection.
-    ...(!waitForStartup
-      ? { probeTimeoutMs: params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS }
-      : {}),
+    probeTimeoutMs:
+      params.probeTimeoutMs ?? (waitForStartup ? undefined : GATEWAY_RESTART_PROBE_TIMEOUT_MS),
   };
   let health: GatewayRestartSnapshot = params.health ?? {
     runtime: { status: "unknown" },
@@ -295,7 +287,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     if (!waitForStartup) {
       const inspectedHealth = await inspectGatewayRestart({
         ...probeParams,
-        timeoutMs: Math.max(1, inspectionTimeoutMs()),
+        timeoutMs: Math.max(1, remainingMs()),
       });
       assertCurrent();
       return inspectedHealth;
@@ -307,9 +299,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     const observed = await waitForGatewayHealthyRestart({
       ...probeParams,
       deadlineOutcome: "snapshot",
-      // The restart owner adds settling itself; reserve it once in the shared deadline.
-      timeoutMs: Math.max(1, remainingMs() - settleDurationMs),
-      probeTimeoutMs: params.probeTimeoutMs,
+      timeoutMs: Math.max(1, remainingMs()),
       onObservation: (snapshot) => {
         health = snapshot;
         retainChannelTimeouts(snapshot);
@@ -319,7 +309,6 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
         );
       },
       requireRunningService: params.requireRunningService,
-      settle,
       supervisorKeepsAlive,
     });
     health = observed;
@@ -349,7 +338,6 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
           health.versionMismatch ||
           health.buildIdMismatch ||
           health.activatedPluginErrors?.length ||
-          health.channelProbeErrors?.length ||
           health.staleGatewayPids.length > 0)
       ) {
         return { health, readyz: false, http: undefined, launchAgentRecovery };
@@ -381,35 +369,26 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
         health.healthy &&
         (!params.requireRunningService || health.runtime.status === "running")
       ) {
-        // HTTP readiness cannot transfer an earlier settle to a replacement boot.
-        const settled = health;
-        const inspect = () =>
+        const startupPhase = health.startupPhase;
+        health = await deadline.read("final Gateway identity", () =>
           inspectGatewayRestart({
             ...probeParams,
             probeContext: context,
-            timeoutMs: Math.max(1, inspectionTimeoutMs()),
-          });
-        const inspected = await deadline.read("final Gateway identity", inspect);
-        assertCurrent();
-        retainChannelTimeouts(inspected);
-        // Bracket the final native observation with health/hello probes so a same-PID
-        // or PID-less reboot during that observation cannot inherit the old boot.
-        health = inspected.healthy
-          ? await deadline.read("final Gateway health", inspect)
-          : inspected;
+            timeoutMs: Math.max(1, remainingMs()),
+          }),
+        );
         assertCurrent();
         retainChannelTimeouts(health);
-        health.startupPhase = settled.startupPhase;
-        const sameGeneration =
-          isSameGatewayRestartGeneration(settled, inspected) &&
-          isSameGatewayRestartGeneration(inspected, health);
-        if (!sameGeneration) {
+        health.startupPhase = startupPhase;
+        if (
+          params.requireRunningService &&
+          (health.runtime.status !== "running" ||
+            (process.platform !== "win32" && health.runtime.pid === undefined))
+        ) {
           health.healthy = false;
-          health.waitOutcome = "generation-changed";
-          health.probeError = "Gateway process changed during final readiness verification.";
         }
       }
-      if (health.waitOutcome !== "generation-changed" && (!readyz || remainingMs() === 0)) {
+      if (!readyz || remainingMs() === 0) {
         health = {
           ...health,
           healthy: false,
@@ -441,11 +420,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     }
     const interval = error.phase === "health-wait:interval";
     const waitOutcome: GatewayRestartSnapshot["waitOutcome"] =
-      health.waitOutcome === "generation-changed"
-        ? "generation-changed"
-        : interval && health.waitOutcome === "still-starting"
-          ? "still-starting"
-          : "timeout";
+      interval && health.waitOutcome === "still-starting" ? "still-starting" : "timeout";
     return {
       health: {
         ...health,
@@ -465,6 +440,8 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       launchAgentRecovery,
     };
   } finally {
-    deadline.dispose();
+    if (!params.deadline) {
+      deadline.dispose();
+    }
   }
 }

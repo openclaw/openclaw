@@ -3,18 +3,28 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
 import { ExpectedCliError } from "./cli/failure-output.js";
 import { runMainOrRootHelp } from "./entry.js";
+import type { PluginRuntime } from "./plugin-sdk/runtime-store.js";
+import { buildPluginApi } from "./plugins/api-builder.js";
+import { instrumentPluginInstanceApi } from "./plugins/api-facades.js";
+import { PluginInstance } from "./plugins/plugin-instance.js";
+import type { OpenClawPluginCliRegistrar } from "./plugins/plugin-registration.types.js";
 
 describe("entry run-main boundary", () => {
+  afterEach(() => {
+    vi.doUnmock("./cli/run-main.js");
+  });
+
   it("retains JSON console routing through process finalization", async () => {
     const runCli = vi.fn(async () => undefined);
 
-    await runMainOrRootHelp(["node", "openclaw", "status"], {
-      loadRunCli: async () => ({ runCli }),
-    });
+    // mock-isolation: Exercise the entry handoff without starting the real CLI runtime.
+    vi.doMock("./cli/run-main.js", async () => ({ runCli }));
+    await runMainOrRootHelp(["node", "openclaw", "status"]);
 
     expect(runCli).toHaveBeenCalledWith(["node", "openclaw", "status"], {
       additionalStartupTrace: expect.any(Object),
@@ -28,15 +38,15 @@ describe("entry run-main boundary", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     process.exitCode = undefined;
     try {
-      await runMainOrRootHelp(["node", "openclaw", "onboard", "recommendations"], {
-        loadRunCli: async () => ({
-          runCli: vi.fn(async () => {
-            throw new Error(
-              "Multiple agents are configured, but this operation has no explicit owner.",
-            );
-          }),
+      // mock-isolation: Exercise entry failure framing without starting the real CLI runtime.
+      vi.doMock("./cli/run-main.js", async () => ({
+        runCli: vi.fn(async () => {
+          throw new Error(
+            "Multiple agents are configured, but this operation has no explicit owner.",
+          );
         }),
-      });
+      }));
+      await runMainOrRootHelp(["node", "openclaw", "onboard", "recommendations"]);
       expect(process.exitCode).toBe(1);
       expect(errorSpy).toHaveBeenCalledWith("[openclaw] The CLI command failed.");
       expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("Could not start the CLI"));
@@ -46,16 +56,77 @@ describe("entry run-main boundary", () => {
     }
   });
 
+  it.each([false, true])(
+    "reports a plugin action failure message instead of crash framing (JSON: %s)",
+    async (json) => {
+      const message = "--limit must be a positive integer";
+      const instance = new PluginInstance("fixture");
+      let registrar: OpenClawPluginCliRegistrar | undefined;
+      const api = instrumentPluginInstanceApi(
+        buildPluginApi({
+          id: "fixture",
+          name: "fixture",
+          source: "test",
+          registrationMode: "discovery",
+          config: {},
+          runtime: {} as PluginRuntime,
+          resolvePath: (value) => value,
+          logger: { info() {}, warn() {}, error() {}, debug() {} },
+          handlers: { registerCli: (value) => (registrar = value) },
+        }),
+        instance,
+      );
+      api.registerCli(
+        ({ program }) => {
+          program
+            .command("fail")
+            .option("--json")
+            .action(() => {
+              throw new Error(message);
+            });
+        },
+        { commands: ["fail"] },
+      );
+      const host = new Command();
+      await registrar?.({ program: host, parentPath: [], config: {}, logger: api.logger });
+      const previousExitCode = process.exitCode;
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+      process.exitCode = undefined;
+      try {
+        // mock-isolation: This command runs on the fixture program, not the real CLI runtime.
+        vi.doMock("./cli/run-main.js", async () => ({
+          runCli: async (argv: string[]) => {
+            await host.parseAsync(argv);
+          },
+        }));
+        await runMainOrRootHelp(["node", "openclaw", "fail", ...(json ? ["--json"] : [])]);
+
+        expect(process.exitCode).toBe(1);
+        expect(errorSpy.mock.calls).toEqual([[message]]);
+        const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join("");
+        expect(json ? JSON.parse(output) : output).toEqual(
+          json ? { ok: false, error: { type: "cli_error", message } } : "",
+        );
+      } finally {
+        errorSpy.mockRestore();
+        stdout.mockRestore();
+        process.exitCode = previousExitCode;
+        await instance.dispose();
+      }
+    },
+  );
+
   it("frames a failure before the command runs as a startup failure", async () => {
     const previousExitCode = process.exitCode;
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     process.exitCode = undefined;
     try {
-      await runMainOrRootHelp(["node", "openclaw", "status"], {
-        loadRunCli: async () => {
-          throw new Error("cannot load run-main");
-        },
+      // mock-isolation: Model an import failure before the real CLI runtime initializes.
+      vi.doMock("./cli/run-main.js", async () => {
+        throw new Error("cannot load run-main");
       });
+      await runMainOrRootHelp(["node", "openclaw", "status"]);
       expect(process.exitCode).toBe(1);
       expect(errorSpy).toHaveBeenCalledWith("[openclaw] Could not start the CLI.");
       expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("The CLI command failed"));
@@ -78,13 +149,13 @@ describe("entry run-main boundary", () => {
     process.exitCode = undefined;
 
     try {
-      await runMainOrRootHelp(["node", "openclaw", "workboard", "list"], {
-        loadRunCli: async () => ({
-          runCli: vi.fn(async () => {
-            throw error;
-          }),
+      // mock-isolation: Exercise expected entry failures without starting the real CLI runtime.
+      vi.doMock("./cli/run-main.js", async () => ({
+        runCli: vi.fn(async () => {
+          throw error;
         }),
-      });
+      }));
+      await runMainOrRootHelp(["node", "openclaw", "workboard", "list"]);
 
       expect(process.exitCode).toBe(1);
       expect(errorSpy.mock.calls).toEqual([[message]]);
@@ -119,10 +190,15 @@ it.each([
       "src/logging/json-console-line.ts",
       "src/cli/startup-trace.ts",
     ];
+    const runMainPath = path.join(root, "run-main.mts");
     const relocated = new Map(
       sources.map((file, index) => [path.resolve(file), path.join(root, `owner-${index}.mts`)]),
     );
+    relocated.set(path.resolve("src/cli/run-main.ts"), runMainPath);
     for (const [source, destination] of relocated) {
+      if (destination === runMainPath) {
+        continue;
+      }
       const code = (await fs.readFile(source, "utf8")).replace(
         /(from\s+|import\(|import\s+)"([^"\n]+)"/g,
         (_match, prefix: string, specifier: string) => {
@@ -134,19 +210,24 @@ it.each([
       );
       await fs.writeFile(destination, code);
     }
+    await fs.writeFile(
+      runMainPath,
+      `
+import fs from 'node:fs/promises';
+export async function runCli() {
+  await Promise.all(${JSON.stringify([...relocated.values()])}.map(file => fs.rm(file)));
+  ${phase === "command" ? `throw new Error(${JSON.stringify(failureMessage)});` : ""}
+}
+`,
+    );
     const runner = path.join(root, "runner.mts");
     await fs.writeFile(
       runner,
       `
-import fs from 'node:fs/promises';
 ${trace ? "process.argv.push('gateway');" : ""}
 const { runMainOrRootHelp } = await import(${JSON.stringify(pathToFileURL(relocated.get(path.resolve("src/entry.ts"))!).href)});
 const fail = async () => { throw new Error(${JSON.stringify(failureMessage)}); };
 await runMainOrRootHelp(['node', 'openclaw', 'update', ${json ? "'--json'" : "'--yes'"}], {
-  loadRunCli: async () => ({ runCli: async () => {
-    await Promise.all(${JSON.stringify([...relocated.values()])}.map(file => fs.rm(file)));
-    ${phase === "command" ? "await fail();" : ""}
-  }}),
   ${phase === "finalize" ? "finalize: fail," : ""}
 });
 `,

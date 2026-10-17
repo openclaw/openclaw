@@ -11,12 +11,10 @@ import {
   normalizeProviderId,
 } from "../../agents/model-selection.js";
 import { RUNTIME_MODEL_VISIBILITY_NORMALIZATION } from "../../agents/model-visibility-policy.js";
-import {
-  needsThinkHydration,
-  resolveEffectiveAgentRuntime,
-} from "../../agents/thinking-runtime.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { workerInferenceMetadata } from "../../gateway/worker-environments/inference-placement.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
   isManifestPluginAvailableForControlPlane,
@@ -103,6 +101,9 @@ export async function prepareModelSelectionRuntime(params: {
   catalog: readonly ModelCatalogEntry[];
   rawRuntime?: string;
   hydrateThinkingCatalog?: boolean;
+  prepareNativeCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
+  /** Idle model-only host changes need no thinking policy refresh. */
+  thinkingPolicyRequired?: boolean;
   profileOverride?: string;
   sessionEntry?: Pick<
     SessionEntry,
@@ -168,6 +169,26 @@ export async function prepareModelSelectionRuntime(params: {
       (policy.forcedByEnvironment && policy.runtime !== "openclaw"),
     );
   }
+  if (
+    runtime.kind === "set" &&
+    runtime.runtime === "openclaw" &&
+    !sessionEntry?.authProfileOverride
+  ) {
+    const requiredProfile = params.cfg.cloudWorkers?.requiredProfile;
+    const workerProfile = requiredProfile
+      ? params.cfg.cloudWorkers?.profiles?.[requiredProfile]
+      : undefined;
+    // Mandatory worker-local turns validate provider access on the node.
+    if (
+      workerProfile &&
+      workerInferenceMetadata({
+        providerId: workerProfile.provider,
+        profileSnapshot: workerProfile,
+      }).inference
+    ) {
+      needsRuntimeChoice = false;
+    }
+  }
   if (needsRuntimeChoice) {
     const { preparePublishedModelRuntimeChoice } =
       await import("../../agents/model-runtime-choice.js");
@@ -198,9 +219,15 @@ export async function prepareModelSelectionRuntime(params: {
           sessionEntry: runtimeEntry,
         });
   let hydratedSelection: ModelCatalogEntry | undefined;
+  const needsThinkingObservation =
+    params.thinkingPolicyRequired !== false ||
+    agentRuntime !== "openclaw" ||
+    !selected ||
+    (selected.nativeRuntime !== undefined && selected.nativeRuntime !== "openclaw");
   if (
     params.hydrateThinkingCatalog !== false &&
-    needsThinkHydration(params.catalog, params.provider, params.model, agentRuntime)
+    params.cfg.plugins?.enabled !== false &&
+    needsThinkingObservation
   ) {
     // The selected route owns its capabilities. A prepared default-provider row cannot
     // supply thinking or context metadata for an explicit cross-provider selection.

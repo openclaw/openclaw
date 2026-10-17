@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as devicePairing from "../infra/device-pairing.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   createGatewaySchedulerClock,
@@ -59,6 +60,49 @@ describe("scope upgrade observations", () => {
       await coordinator.close();
       await Promise.all([first, second]);
       await observer.drain();
+    }
+    expect(vi.getTimerCount()).toBe(0);
+    expect(scheduler.nextWakeAtMs).toBeNull();
+  });
+
+  it("retires queued observations at the scheduler fence before received work closes", async () => {
+    vi.useFakeTimers();
+    pairing.pending = true;
+    const scheduler = createTestGatewayScheduler();
+    const coordinator = new ScopeUpgradeCoordinator(scheduler);
+    const observer = new AsyncWorkScope();
+    const owner = { deviceId: "device", publicKey: "public-key" };
+    const pendingRead = vi.spyOn(devicePairing, "getPendingDevicePairing");
+    coordinator.register({
+      requestId: "upgrade",
+      expiresAtMs: Date.now() + 60_000,
+      requestedScopes: ["operator.write"],
+      owner,
+    });
+    const observation = observer
+      .run(() => coordinator.wait("upgrade", owner))
+      .then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pendingRead).toHaveBeenCalledTimes(1);
+      coordinator.notify("upgrade", "rejected");
+      scheduler.beginClose();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(observer.signal.aborted).toBe(false);
+      expect(pendingRead).toHaveBeenCalledTimes(1);
+      await expect(observation).resolves.toEqual({
+        error: expect.objectContaining({ name: "AbortError" }),
+      });
+    } finally {
+      observer.beginClose();
+      await coordinator.close();
+      await observation;
+      await observer.drain();
+      await scheduler.stop();
+      pendingRead.mockRestore();
     }
     expect(vi.getTimerCount()).toBe(0);
     expect(scheduler.nextWakeAtMs).toBeNull();

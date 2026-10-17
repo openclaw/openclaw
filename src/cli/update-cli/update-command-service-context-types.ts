@@ -7,7 +7,6 @@ import type {
 } from "../../daemon/service-types.js";
 import type {
   PackageDirectoryIdentity,
-  PackageIntegrityFingerprint,
   PackageLauncherFingerprint,
 } from "../../infra/package-update-integrity.js";
 import type { UpdateFailureFact } from "../../infra/update-failure-facts.js";
@@ -67,6 +66,7 @@ export type PreManagedServiceStop = ManagedGatewayServiceObservation & {
 };
 
 export type UpdateRestartParams = {
+  originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   result: UpdateRunResult;
   root: string;
   preManagedServiceStop?: PreManagedServiceStop;
@@ -90,12 +90,10 @@ export type OriginalManagedServiceRuntime = {
     fingerprint: string;
     rebound?: string;
     reboundRuntimePin?: string;
-    runtimePin: DaemonRuntimePinSnapshot;
+    runtimePin: DaemonRuntimePinSnapshot | undefined;
   };
   service: ManagedGatewayServiceObservation;
   packageIdentity: PackageDirectoryIdentity;
-  packageFingerprint?: PackageIntegrityFingerprint;
-  packageFingerprintWarning?: string;
   launcher: {
     path: string;
     realPath: string;

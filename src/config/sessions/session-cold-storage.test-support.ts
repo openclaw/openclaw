@@ -5,9 +5,10 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import type { AgentsConfig } from "../types.agents.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { prepareTranscriptPayload, transcriptEventJsonSql } from "./transcript-payload.js";
@@ -96,9 +97,8 @@ export async function createSessionColdStorageFixture(
     );
   }, options);
 
-  const database = () => openOpenClawAgentDatabase(options).db;
-  const snapshot = () => {
-    const db = database();
+  const database = () => requireNativeSqliteDatabase(openOpenClawAgentDatabase(options).db);
+  const snapshot = (db = database()) => {
     return {
       events: executeSqliteQuerySync(
         db,

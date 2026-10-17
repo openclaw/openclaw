@@ -6,6 +6,8 @@ export type SessionLifecycleRevisionExpectation = string | null;
 
 /** Authoritative lifecycle snapshot required for an atomic transcript admission. */
 export type SessionTranscriptTurnExpectedState = {
+  /** When supplied, fences exact pending-final custody; null requires its absence. */
+  pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"] | null;
   /** Rejects a run-owned turn after another admitted run takes writer ownership. */
   expectedWriterRunId?: string;
   abortedLastRun: boolean | undefined;
@@ -35,6 +37,7 @@ export type SessionTranscriptTurnLifecyclePatch = {
   lifecycleRunId?: SessionEntry["lifecycleRunId"];
   lastRunId?: SessionEntry["lastRunId"];
   lastRunError?: SessionEntry["lastRunError"];
+  lastInteractionAt?: number;
   pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"];
   mainRestartRecovery?: SessionEntry["mainRestartRecovery"];
   restartRecoveryBeforeAgentReplyState?: SessionRestartRecoveryState["restartRecoveryBeforeAgentReplyState"];

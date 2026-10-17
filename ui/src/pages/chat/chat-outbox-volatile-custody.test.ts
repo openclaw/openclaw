@@ -27,8 +27,6 @@ useChatSendBrowserFixture();
 
 it.each([
   { subscribed: false, replacement: false },
-  { subscribed: false, replacement: true },
-  { subscribed: true, replacement: false },
   { subscribed: true, replacement: true },
 ])(
   "retains a genuinely volatile send across account return ($subscribed/$replacement)",

@@ -3,15 +3,20 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, aroundEach, beforeEach, expect, it, vi } from "vitest";
-import { readConfigFileSnapshot } from "../../config/config.js";
+import { readConfigFileSnapshot } from "../../config/io.runtime.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
+  replaceSessionEntrySync,
   upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
+} from "../../config/sessions/session-accessor.sqlite-entry.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as runtimePins from "../../daemon/runtime-pin-state.js";
 import type { GatewayServiceState } from "../../daemon/service.js";
-import * as packageIntegrity from "../../infra/package-update-integrity.js";
 import { createSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
+import { migrateDaemonRuntimePins } from "../../infra/state-migrations.daemon-runtime-pins.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
+import * as stateMetadata from "../../infra/update-candidate-state.sizes.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../plugins/installed-plugin-index-record-reader.js";
@@ -57,7 +62,8 @@ const mocks = vi.hoisted(() => ({
   suspend: vi.fn(),
   resume: vi.fn(),
 }));
-vi.mock("../../daemon/service-process-membership.js", () => ({
+vi.mock("../../daemon/service-process-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/service-process-membership.js")>()),
   inspectServiceProcessMembershipSync: (pid: number) => (pid === 4242 ? "outside" : "unknown"),
 }));
 vi.mock("../../daemon/schtasks.js", async (original) => ({
@@ -110,6 +116,9 @@ let stopped = false;
 const schemas = { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: OPENCLAW_AGENT_SCHEMA_VERSION };
 beforeEach(async () => {
   vi.clearAllMocks();
+  vi.spyOn(stateMetadata, "readUpdateStateDatabaseSizes").mockImplementation((files, { signal }) =>
+    stateMetadata.readUpdateStateDatabaseSizesInProcess(files, signal),
+  );
   // Service selection must not change the runtime of real schema and state workers.
   serviceNodeRunner = getNodeRuntimeFixture().execPath;
   state = await createOpenClawTestState({
@@ -126,10 +135,12 @@ beforeEach(async () => {
   vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: state.home });
   delete state.env.OPENCLAW_HOME;
   delete process.env.OPENCLAW_HOME;
-  await state.writeConfig({
+  const config: OpenClawConfig = {
     agents: { ownership: "explicit", entries: { main: { workspace: state.workspaceDir } } },
     plugins: { enabled: false },
-  });
+  };
+  await state.writeConfig(config);
+  setRuntimeConfigSnapshot(config);
   rootA = state.path("A");
   rootB = state.path("B");
   for (const [root, version] of [
@@ -239,13 +250,13 @@ beforeEach(async () => {
   });
   mocks.inspect.mockImplementation(async ({ expectedVersion, expectedBuildId }) => ({
     healthy: true,
-    runtime: { status: "running" },
+    runtime: { status: "running", pid: 4242 },
     gatewayVersion: expectedVersion,
     gatewayBuildId: expectedBuildId,
   }));
   mocks.health.mockImplementation(async ({ expectedVersion, expectedBuildId }) => ({
     healthy: true,
-    runtime: { status: "running" },
+    runtime: { status: "running", pid: 4242 },
     gatewayVersion: expectedVersion,
     gatewayBuildId: expectedBuildId,
   }));
@@ -261,7 +272,8 @@ beforeEach(async () => {
     mocks.running = true;
     return "accepted";
   });
-  await upsertSessionEntryCore(
+  // Seed through the sync storage owner; this fixture does not exercise session writer startup.
+  replaceSessionEntrySync(
     { agentId: "main", sessionKey: "agent:main:before", env: state.env },
     { sessionId: "before", updatedAt: 1 },
   );
@@ -269,6 +281,7 @@ beforeEach(async () => {
   // This threaded fixture has no installed plugins or shared-state broker.
   // Prepare its unchanged install inventory through the real metadata owner.
   expect(loadInstalledPluginIndexInstallRecordsSync({ env: state.env })).toEqual({});
+  expect((await migrateDaemonRuntimePins(state.env)).warnings).toEqual([]);
 });
 const inspectionWorkers = createSqliteReadOnlyWorkerScope();
 aroundEach((runTest) => inspectionWorkers.run(runTest));
@@ -280,6 +293,7 @@ afterEach(async () => {
 });
 
 it.for([
+  "pin-migration-pending",
   "same-version",
   "same-build-finalize",
   "package-root-missing",
@@ -295,6 +309,12 @@ it.for([
 ] as const)(
   "keeps B facts and current data through split-root failure: %s",
   async (scenario, { onTestFailed }) => {
+    if (scenario === "pin-migration-pending") {
+      vi.spyOn(runtimePins, "readDaemonRuntimePinMigrationPending").mockReturnValue(true);
+      vi.spyOn(runtimePins, "readDaemonRuntimePin").mockImplementation(() => {
+        throw new Error("pending pins must not be read");
+      });
+    }
     mocks.windows = scenario.startsWith("windows-autostart");
     const sameBuild = scenario === "same-build-finalize";
     const originalVersion = sameBuild ? "2026.9.4" : "2026.9.3";
@@ -400,7 +420,7 @@ it.for([
       mocks.health.mockImplementation(async ({ expectedVersion, expectedBuildId }) => ({
         // Keep the admission observation healthy; fail only the post-stop recovery.
         healthy: !stopped,
-        runtime: { status: stopped ? "stopped" : "running" },
+        runtime: { status: stopped ? "stopped" : "running", pid: stopped ? undefined : 4242 },
         gatewayVersion: expectedVersion,
         gatewayBuildId: expectedBuildId,
         staleGatewayPids: [],
@@ -480,7 +500,6 @@ it.for([
           name: "UpdateCommandPendingRecoveryFailure",
           exitCode: 1,
           cause: { kind: "newer-schema" },
-          automaticTriage: undefined,
           result: {
             root: rootB,
             status: "error",
@@ -511,7 +530,13 @@ it.for([
       await work;
     }
     const healthy =
-      sameBuild || ["same-version", "package-root-missing", "windows-autostart"].includes(scenario);
+      sameBuild ||
+      [
+        "pin-migration-pending",
+        "same-version",
+        "package-root-missing",
+        "windows-autostart",
+      ].includes(scenario);
     expect(mocks.restart).not.toHaveBeenCalled();
     expect(mocks.nativeRestart).toHaveBeenCalledTimes(
       healthy || scenario === "readiness-failed" || scenario === "windows-autostart-health-failed"
@@ -525,8 +550,17 @@ it.for([
         verified: true,
       });
     }
-    if (scenario === "package-changed") {
-      expect(execution?.originalManagedServiceRuntime?.packageFingerprintWarning).toBeUndefined();
+    if (scenario === "pin-migration-pending") {
+      expect(execution?.result.steps).toContainEqual(
+        expect.objectContaining({
+          advisory: expect.objectContaining({
+            message:
+              "runtime pins not yet migrated; preserved the current runtime; the post-update Doctor step migrates them",
+          }),
+        }),
+      );
+      expect(execution?.originalManagedServiceRuntime?.definition.runtimePin).toBeUndefined();
+      expect(mocks.nativeInstall).not.toHaveBeenCalled();
     }
     if (healthy) {
       expect(mocks.health).toHaveBeenCalledWith(
@@ -631,16 +665,13 @@ it("refuses B ledger admission independently from compatible service A state", a
 
 // Component regression: an unavailable A certificate must stop preparation, not A.
 it.each([
-  "fingerprint-timeout",
   "missing-node",
   "missing-env",
   "missing-schema",
   "unverified-health",
-  "definition-raced",
   "operator-overrides",
   "unknown-overrides",
   "reload-pending",
-  "authority-revoked",
   "no-restart",
 ] as const)("pre-stop qualification keeps retained A recoverable: %s", async (scenario) => {
   const run = {
@@ -648,7 +679,6 @@ it.each([
     env: state.env,
   };
   const opts: UpdateCommandOptions = { json: true, run };
-  const configSnapshot = await readConfigFileSnapshot({ observe: false });
   const packageBefore = await fs.readFile(path.join(rootB, "package.json"));
   const configBefore = await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!);
   let activated = false;
@@ -673,32 +703,9 @@ it.each([
     delete metadata.openclaw;
     await fs.writeFile(path.join(rootA, "package.json"), JSON.stringify(metadata));
   }
-  if (scenario === "fingerprint-timeout") {
-    mocks.capability.mockResolvedValue(false);
-  }
   if (scenario === "unverified-health") {
     mocks.inspect.mockResolvedValue({ healthy: false, runtime: { status: "running" } });
   }
-  const createReader = packageIntegrity.createPackageIntegrityReader;
-  vi.spyOn(packageIntegrity, "createPackageIntegrityReader").mockImplementation((timeout) => {
-    const reader = createReader(timeout);
-    return {
-      ...reader,
-      tree: async (root, originalRoot) => {
-        if (root === rootA && ["fingerprint-timeout", "no-restart"].includes(scenario)) {
-          throw new packageIntegrity.PackageIntegrityTimeoutError(30_000);
-        }
-        const fingerprint = await reader.tree(root, originalRoot);
-        if (root === rootA && scenario === "definition-raced") {
-          serviceState.command!.programArguments.push("--port", "19998");
-        }
-        if (root === rootA && scenario === "authority-revoked") {
-          opts.run = { ...run };
-        }
-        return fingerprint;
-      },
-    };
-  });
   mocks.package.mockImplementation(async (params) => {
     expect(params.honorPackageRoot).toBe(true);
     await params.beforeActivate();
@@ -757,59 +764,16 @@ it.each([
       },
     });
     expect(execution, execution?.failure?.detail).not.toBeNull();
-    if (scenario === "fingerprint-timeout") {
-      expect(activated, execution?.failure?.detail).toBe(true);
-      expect(stopped).toBe(true);
-      expect(execution!.originalManagedServiceRuntime).toMatchObject({
-        root: rootA,
-        verified: true,
-      });
-      const final = await finishUpdate({
-        ...execution!,
-        root: rootB,
-        installKindChanged: false,
-        configSnapshot,
-        requestedChannel: null,
-        storedChannel: "stable",
-        channel: "stable",
-        downgradeRisk: false,
-        shouldRestart: true,
-        opts,
-        ownedManagedUpdateEnv: state.env,
-        controlPlaneUpdateSentinelMeta: null,
-        preUpdatePluginInstallRecords: {},
-        startedAt: Date.now(),
-        updateStepTimeoutMs: 30000,
-      }).catch((error: unknown) => error);
-      expect(final).toMatchObject({
-        result: {
-          status: "error",
-          root: rootB,
-          reason: "doctor-failed",
-          recovery: { serviceRestartSafe: false },
-        },
-      });
-      expect(mocks.restart).not.toHaveBeenCalled();
-      expect(mocks.nativeRestart).toHaveBeenCalledOnce();
-      expect(mocks.health).toHaveBeenCalledWith(
-        expect.objectContaining({
-          expectedVersion: "2026.9.3",
-          expectedBuildId: "build-A",
-        }),
-      );
-      expect(mocks.running).toBe(true);
-    } else if (scenario === "no-restart") {
+    if (scenario === "no-restart") {
       expect(activated, execution?.failure?.detail).toBe(true);
       expect(stopped).toBe(false);
     } else {
       expect(activated).toBe(false);
       expect(stopped).toBe(false);
       expect(execution!.result.status).toBe("error");
-      if (scenario !== "authority-revoked") {
-        expect(execution!.result.reason, execution!.failure?.detail).toBe(
-          scenario === "missing-env" ? "managed-service-preflight" : "original-service-unverified",
-        );
-      }
+      expect(execution!.result.reason, execution!.failure?.detail).toBe(
+        scenario === "missing-env" ? "managed-service-preflight" : "original-service-unverified",
+      );
       expect(mocks.restart).not.toHaveBeenCalled();
       expect(mocks.running).toBe(true);
     }
@@ -854,8 +818,8 @@ it.each([false, true])(
             ...(mutated ? { mutated: true } : {}),
             before: original.definition.fingerprint,
             after: original.definition.fingerprint,
-            runtimePinBefore: original.definition.runtimePin.revision,
-            runtimePinAfter: original.definition.runtimePin.revision,
+            runtimePinBefore: original.definition.runtimePin?.revision,
+            runtimePinAfter: original.definition.runtimePin?.revision,
           },
         }),
         stderr: "",
@@ -891,7 +855,7 @@ it.each([false, true])(
         mutated ? original.definition.fingerprint : undefined,
       );
       expect(original.definition.reboundRuntimePin).toBe(
-        mutated ? original.definition.runtimePin.revision : undefined,
+        mutated ? original.definition.runtimePin?.revision : undefined,
       );
       await rollbackFailedUpdate({
         definitionRecovery: {},

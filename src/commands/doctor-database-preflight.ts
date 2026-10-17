@@ -3,8 +3,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../state/openclaw-database-preflight.js";
+import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
 
 export type DoctorDatabasePreflight = OpenClawDatabaseSchemaPreflight & {
+  /** The native updater already captured these files while holding stopped-state custody. */
+  verifiedSnapshots?: readonly BackupSqliteSnapshotFact[];
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
   agentDatabaseRecoveryConfigValid?: boolean;
   updateSchemaRehearsal?: { runId: string; updaterVersion: string };
@@ -12,9 +15,18 @@ export type DoctorDatabasePreflight = OpenClawDatabaseSchemaPreflight & {
 
 /** Prepare fleet facts through the artifact-preserving schema readers. */
 export async function prepareDoctorDatabasePreflight(
-  options: { scope?: "state"; cfg?: OpenClawConfig } = {},
+  options: {
+    scope?: "state";
+    cfg?: OpenClawConfig;
+    /**
+     * Update Doctor compares database generations recorded at snapshot capture. A native
+     * open of an idle WAL family rebuilds its WAL index and changes that generation, so
+     * those runs read every source through private snapshots instead.
+     */
+    preserveSourceArtifacts?: true;
+  } = {},
 ): Promise<DoctorDatabasePreflight> {
-  const { scope } = options;
+  const { scope, preserveSourceArtifacts } = options;
   const databasePreflight = await import("../state/openclaw-database-preflight.js");
   const [
     { createConfigIO },
@@ -42,6 +54,7 @@ export async function prepareDoctorDatabasePreflight(
     env: process.env,
     scope,
     openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
+    preserveSourceArtifacts,
     ...(cfg
       ? {
           // Custom stores go through the artifact-preserving header reader; discovery

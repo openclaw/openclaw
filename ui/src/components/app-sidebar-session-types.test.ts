@@ -73,12 +73,12 @@ describe("sidebar session owner preference", () => {
       involvingMe: true,
     });
     expect(loadStoredSidebarSessionOwnerFilter("wss://two.example/ws", "profile-ada")).toEqual({
-      ownerId: null,
+      ownerId: "profile-ada",
       involvingMe: false,
     });
   });
 
-  it("removes all-owner filters and rejects malformed stored values", () => {
+  it("stores an explicit all-owner choice and rejects malformed stored values", () => {
     storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada", {
       ownerId: "profile-bob",
       involvingMe: false,
@@ -99,7 +99,7 @@ describe("sidebar session owner preference", () => {
       ownerId: null,
       involvingMe: false,
     });
-    expect(localStorage.length).toBe(0);
+    expect(localStorage.getItem(key ?? "")).toBe("all");
   });
 
   it("keeps rendering when browser storage rejects access", () => {
@@ -111,7 +111,7 @@ describe("sidebar session owner preference", () => {
     };
 
     expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual({
-      ownerId: null,
+      ownerId: "profile-ada",
       involvingMe: false,
     });
     expect(() =>
@@ -124,12 +124,6 @@ describe("sidebar session owner preference", () => {
 });
 
 describe("sidebar session sort preference", () => {
-  it("defaults absent and unknown stored values to created", () => {
-    expect(loadStoredSidebarSessionSortMode()).toBe("created");
-    localStorage.setItem("openclaw:sidebar:sessions:sort-mode", "unexpected");
-    expect(loadStoredSidebarSessionSortMode()).toBe("created");
-  });
-
   it("round-trips updated and people modes", () => {
     expect(storeSidebarSessionSortMode("updated", undefined)).toBe("updated");
     expect(loadStoredSidebarSessionSortMode()).toBe("updated");

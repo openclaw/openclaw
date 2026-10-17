@@ -1,7 +1,8 @@
 // Check tests cover check script behavior.
 import { spawnSync } from "node:child_process";
-import { describe, expect, it } from "vitest";
-import { PREFLIGHT_CHECKS, runCommand } from "../../scripts/check.mts";
+import { describe, expect, it, vi } from "vitest";
+import { main, PREFLIGHT_CHECKS, runCommand } from "../../scripts/check.mts";
+import * as managed from "../../scripts/lib/managed-child-process.mts";
 
 describe("scripts/check", () => {
   function runCheck(...args: string[]) {
@@ -45,6 +46,23 @@ describe("scripts/check", () => {
     expect(calls).toEqual([{ args: ["lint"], bin: "pnpm" }]);
     expect(result).toMatchObject({ name: "lint", status: 0 });
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("passes the selected comparison base through full lint", async () => {
+    const run = vi.spyOn(managed, "runManagedCommand").mockResolvedValue(0);
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+    const exitCode = process.exitCode;
+    try {
+      await main(["--base", "fixture-base"]);
+      expect(run).toHaveBeenCalledWith({
+        args: ["lint", "--base", "fixture-base"],
+        bin: "pnpm",
+      });
+    } finally {
+      run.mockRestore();
+      stderr.mockRestore();
+      process.exitCode = exitCode;
+    }
   });
 
   it("keeps script policy guards in the aggregate preflight", () => {

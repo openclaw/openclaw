@@ -1,14 +1,27 @@
 import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
-import { nothing, render } from "lit";
 import { onTestFinished, vi } from "vitest";
-import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
+import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
 /* @vitest-environment jsdom */
-import { NewSessionComposerTextareaController } from "../new-session/composer-controller.ts";
-import { renderNewSessionComposer } from "../new-session/composer.ts";
-import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
+import {
+  createNewSessionComposerTextarea,
+  type NewSessionComposerTextarea,
+} from "../new-session/composer-textarea.ts";
+import { composerContext, mountNewSessionComposer } from "../new-session/composer.test-support.ts";
+import type { NewSessionComposerOptions } from "../new-session/composer.tsx";
+import { NewSessionModelControl } from "../new-session/model-control.ts";
+import {
+  createComposerContainer,
+  createComposerProps,
+  resetComposerFixture,
+  disposeComposer,
+  renderComposerInto,
+} from "./chat-composer.test-support.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
 export const people: UsersMentionableResult = {
@@ -18,10 +31,10 @@ export const people: UsersMentionableResult = {
   ],
   truncated: false,
 };
-const controllers: NewSessionComposerTextareaController[] = [];
+const composerTextareas: NewSessionComposerTextarea[] = [];
 
 export async function resetMentionComposerFixture() {
-  controllers.splice(0).forEach((controller) => controller.disconnect());
+  composerTextareas.splice(0).forEach((composerTextarea) => composerTextarea.disconnect());
   await resetComposerFixture();
 }
 
@@ -33,12 +46,37 @@ export function composerFixture(
 ) {
   vi.useFakeTimers();
   onTestFinished(installChatComposerPickerDismissal(document));
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   document.body.append(container);
-  const client = new GatewayBrowserClient({ url: "ws://gateway.test" });
-  const request = vi.spyOn(client, "request").mockResolvedValue(people);
-  const controller = new NewSessionComposerTextareaController();
-  controllers.push(controller);
+  let retired = false;
+  let native: ReturnType<typeof mountNewSessionComposer> | undefined;
+  let nativeOptions: NewSessionComposerOptions;
+  const request = createGatewayRequestMock().mockResolvedValue(people);
+  const client = createTestGatewayClient((method, params, options) =>
+    method === "commands.list" ? { commands: [] } : request(method, params, options),
+  );
+  const composerTextarea = createNewSessionComposerTextarea();
+  composerTextareas.push(composerTextarea);
+  const context = composerContext({
+    client,
+    phase: "connected",
+    selfUser: { id: "sender-one", identity: { type: "profile", id: "sender-one" } },
+  });
+  const attachmentDraft = new NewSessionAttachmentDraft(
+    () => renderCurrent(),
+    () => {},
+  );
+  const modelControl = new NewSessionModelControl(() => renderCurrent());
+  onTestFinished(() => {
+    retired = true;
+    attachmentDraft.reset();
+    if (native) {
+      native.unmount();
+    } else {
+      disposeComposer(container);
+    }
+    container.remove();
+  });
   let draft = initial;
   let mentions = initialMentions;
   let ownerKey = "sender-one";
@@ -52,54 +90,58 @@ export function composerFixture(
   };
   const props = createComposerProps();
   const renderCurrent = () => {
+    if (retired) {
+      return;
+    }
     const directory = {
       client,
       ownerKey,
       params: kind === "chat" ? { sessionKey: "agent:main:chat" } : { agentId: "main" },
     };
-    render(
-      kind === "chat"
-        ? renderChatComposer({
-            ...props,
-            submitDisabledReason,
-            draft,
-            mentions,
-            getDraft: () => draft,
-            getMentions: () => mentions,
-            mentionDirectory: unsupported ? undefined : directory,
-            mentionsUnsupported: unsupported,
-            onDraftChange: onInput,
-            onRequestUpdate: renderCurrent,
-            onSlashCommand: slashCommand,
-            canAbort: true,
-            onAbort: abort,
-            onSend: () => send({ draft, mentions }),
-          })
-        : renderNewSessionComposer({
-            renderCritters: () => nothing,
-            message: draft,
-            mentions,
-            getMentions: () => mentions,
-            mentionDirectory: directory,
-            attachments: [],
-            getAttachments: () => [],
-            canSubmit: true,
-            pendingAttachmentReads: 0,
-            readSignal: new AbortController().signal,
-            requiresModifier: false,
-            requestUpdate: renderCurrent,
-            submitting: false,
-            textareaController: controller,
-            onAttachmentsChange: () => undefined,
-            onPendingReadsChange: () => undefined,
-            onInput: (next, selected) => {
-              onInput(next, selected);
-              renderCurrent();
-            },
-            onSubmit: () => send({ draft, mentions }),
-          }),
-      container,
-    );
+    if (kind === "chat") {
+      renderComposerInto(container, {
+        ...props,
+        submitDisabledReason,
+        draft,
+        mentions,
+        getDraft: () => draft,
+        getMentions: () => mentions,
+        mentionDirectory: unsupported ? undefined : directory,
+        mentionsUnsupported: unsupported,
+        onDraftChange: onInput,
+        onSlashCommand: slashCommand,
+        canAbort: true,
+        onAbort: abort,
+        onSend: () => send({ draft, mentions }),
+      });
+    } else {
+      nativeOptions = {
+        agentId: "main",
+        context,
+        draftOwnerKey: ownerKey,
+        attachmentDraft,
+        modelControl,
+        isCatalogTarget: false,
+        message: draft,
+        mentions,
+        getMentions: () => mentions,
+        canSubmit: true,
+        requiresModifier: false,
+        onChange: renderCurrent,
+        submitting: false,
+        composerTextarea,
+        onInput: (next, selected) => {
+          onInput(next, selected);
+          renderCurrent();
+        },
+        onSubmit: () => send({ draft, mentions }),
+      };
+      if (native) {
+        native.rerender();
+      } else {
+        native = mountNewSessionComposer(() => nativeOptions, container);
+      }
+    }
   };
   renderCurrent();
   const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;

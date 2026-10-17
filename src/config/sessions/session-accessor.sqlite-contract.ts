@@ -57,6 +57,8 @@ export type SessionTranscriptBoundedActiveContext = {
   totalEvents: number;
   transcriptMutationAt: number | null;
   truncated: boolean;
+  /** Every indexed active entry is present, without a read fence or byte/event omission. */
+  completeActivePath?: true;
 };
 
 export type CanonicalSessionValidationResult = {
@@ -71,7 +73,6 @@ export type SqliteSessionReclamationDiagnostics = {
   kind?:
     | "archive-publish-prepare"
     | "archive-publish-record"
-    | "deletion-plan"
     | "entry"
     | "lifecycle-artifacts"
     | "lifecycle-projection-plan"
@@ -119,6 +120,7 @@ export type SqliteSessionArtifactPreparationDiagnostics =
 
 /** One pruning attempt retains only aggregate stage observations. */
 export type SqliteSessionArchivePruningDiagnostics = {
+  highWaterBytes?: number;
   trigger: "initial" | "after-eviction" | "final";
   checkpointCalls?: number;
   checkpointIncomplete?: number;

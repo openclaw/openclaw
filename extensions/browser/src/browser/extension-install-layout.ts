@@ -52,7 +52,7 @@ export function generateChromeExtensionIdForPath(
   const isAbsolute =
     platform === "win32" ? path.win32.isAbsolute(canonicalPath) : path.isAbsolute(canonicalPath);
   if (!isAbsolute) {
-    throw new Error("Chrome extension ID paths must be canonical absolute paths");
+    throw new Error("Chrome extension ID paths must be resolved absolute paths");
   }
   let nativePath = canonicalPath;
   if (platform === "win32" && /^[a-z]:/u.test(nativePath)) {
@@ -189,7 +189,7 @@ export async function assertOwnedPath(
       ? canonical.toLowerCase() !== expected.toLowerCase()
       : canonical !== expected
   ) {
-    throw new Error(`Refusing non-canonical path at ${target}`);
+    throw new Error(`Refusing unresolved path at ${target}`);
   }
 }
 

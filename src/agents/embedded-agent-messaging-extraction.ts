@@ -35,7 +35,7 @@ export function extractMessagingToolSourceReplyPayload(
   if (status && status !== "sent") {
     return undefined;
   }
-  return readSourceReplyPayload(details, readRecord(details.sourceReply) ?? details);
+  return readSourceReplyPayload(readRecord(details.sourceReply) ?? details, details);
 }
 
 /**
@@ -53,7 +53,7 @@ export function extractToolAuthoredSourceReplyPayload(
   if (!details || !sourceReply || sourceReply.final === false) {
     return undefined;
   }
-  const payload = readSourceReplyPayload(details, sourceReply);
+  const payload = readSourceReplyPayload(sourceReply);
   if (!payload) {
     return undefined;
   }
@@ -80,12 +80,13 @@ export function resolveSourceReplyMediaUrls(
 }
 
 function readSourceReplyPayload(
-  details: Record<string, unknown>,
   sourceReply: Record<string, unknown>,
+  // Only already-sent message mirrors support top-level legacy delivery fields.
+  legacyDetails?: Record<string, unknown>,
 ): MessagingToolSourceReplyPayload | undefined {
   const payload: MessagingToolSourceReplyPayload = {};
   const copyText = (key: "text" | "mediaUrl" | "idempotencyKey", fallback: string = key) => {
-    const value = readStringValue(sourceReply[key]) ?? readStringValue(details[fallback]);
+    const value = readStringValue(sourceReply[key]) ?? readStringValue(legacyDetails?.[fallback]);
     if (value) {
       payload[key] = value;
     }
@@ -94,8 +95,8 @@ function readSourceReplyPayload(
   copyText("mediaUrl");
   const rawMediaUrls = Array.isArray(sourceReply.mediaUrls)
     ? sourceReply.mediaUrls
-    : Array.isArray(details.mediaUrls)
-      ? details.mediaUrls
+    : Array.isArray(legacyDetails?.mediaUrls)
+      ? legacyDetails.mediaUrls
       : [];
   const mediaUrls = rawMediaUrls.filter((value): value is string => typeof value === "string");
   if (mediaUrls.length > 0) {
@@ -132,7 +133,7 @@ function readSourceReplyPayload(
   if (typeof sourceReply.trustedLocalMedia === "boolean") {
     payload.trustedLocalMedia = sourceReply.trustedLocalMedia;
   }
-  if (sourceReply.audioAsVoice === true || details.audioAsVoice === true) {
+  if (sourceReply.audioAsVoice === true || legacyDetails?.audioAsVoice === true) {
     payload.audioAsVoice = true;
   }
   const presentation = normalizeMessagePresentation(sourceReply.presentation);
@@ -148,7 +149,7 @@ function readSourceReplyPayload(
     payload.channelData = { ...channelData };
   }
   copyText("idempotencyKey");
-  if (details.sourceReplyTranscriptOwner === true) {
+  if (legacyDetails?.sourceReplyTranscriptOwner === true) {
     payload.transcriptOwner = true;
   }
   return Object.keys(payload).length > 0 ? payload : undefined;

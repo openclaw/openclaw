@@ -506,7 +506,7 @@ export async function applyPluginUninstallDirectoryRemoval(
     return { directoryRemoved: false, warnings };
   }
 
-  const ownershipWarning = `Refused to remove npm path without canonical package ownership: ${removal.target}`;
+  const ownershipWarning = `Refused to remove npm path without verified package ownership: ${removal.target}`;
   if (!isOwnedNpmRemoval(removal)) {
     return { directoryRemoved: false, warnings: [ownershipWarning] };
   }

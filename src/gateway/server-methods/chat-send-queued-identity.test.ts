@@ -5,16 +5,28 @@ import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
 import { completeFollowupRunLifecycle } from "../../auto-reply/reply/queue/lifecycle.js";
 import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import type { QueuedFollowupReplyBatch } from "../../auto-reply/reply/queue/types.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { prepareAgentWaitForTurn } from "../agent-turn/agent-wait.js";
 import { abortQueuedChatTurnById } from "../chat-queued-turns.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createChatSendTurnAdoptionLifecycle } from "./chat-send-turn-adoption.js";
 
 const sessionKey = "agent:main:queued-identity";
-afterEach(() => clearFollowupQueue(sessionKey));
+afterEach(() => {
+  clearFollowupQueue(sessionKey);
+  clearRuntimeConfigSnapshot();
+});
 
 function fixture(originatingChannel = "webchat") {
-  const context = createDirectChatContext({ chatQueuedTurns: new Map() });
+  const cfg = {};
+  setRuntimeConfigSnapshot(cfg);
+  const context = createDirectChatContext({
+    chatQueuedTurns: new Map(),
+    getRuntimeConfig: () => cfg,
+  });
   function source(runId: string) {
     const controller = new AbortController();
     const adoption = createChatSendTurnAdoptionLifecycle({
@@ -35,7 +47,7 @@ function fixture(originatingChannel = "webchat") {
       session: {
         agentId: "main",
         backingSessionId: "session",
-        cfg: {},
+        cfg,
         clientRunId: runId,
         sessionKey,
         sessionLoadOptions: { agentId: "main" },

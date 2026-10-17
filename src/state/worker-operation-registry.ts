@@ -41,6 +41,18 @@ export type WorkerOperations<Handlers extends WorkerOperationHandlers<never>> = 
   };
 };
 
+type IntersectUnion<T> = (T extends unknown ? (value: T) => void : never) extends (
+  value: infer Intersection,
+) => void
+  ? Intersection
+  : never;
+
+export type WorkerOperationsFromLoaders<
+  Loaders extends Record<string, () => Promise<WorkerOperationHandlers<never>>>,
+> = IntersectUnion<
+  { [Key in keyof Loaders]: WorkerOperations<Awaited<ReturnType<Loaders[Key]>>> }[keyof Loaders]
+>;
+
 type Namespace<Key> = Key extends `${infer Domain}.${string}` ? Domain : never;
 type DomainLoaders<Operations extends SqliteWorkerOperations, Context, Domains extends string> = {
   [Domain in Domains]: () => Promise<{
@@ -88,7 +100,7 @@ export function createWorkerOperationRegistry<
     },
     has(command: {
       type: PropertyKey;
-      input: unknown;
+      input?: unknown;
     }): command is SqliteWorkerCommand<Operations> {
       return handlerFor(command.type) !== undefined;
     },

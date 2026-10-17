@@ -33,16 +33,12 @@ type ChannelDocsEntry = { id: string; docsPath: string; source: ChannelDocsSourc
 type CompleteChannelDocsEntry = ChannelDocsEntry & { label: string; summary: string };
 
 /** Generated official channel catalog committed for source and packaged runtime consumers. */
-export const OFFICIAL_CHANNEL_CATALOG_SOURCE_RELATIVE_PATH =
+const OFFICIAL_CHANNEL_CATALOG_SOURCE_RELATIVE_PATH =
   "scripts/lib/official-external-channel-catalog.json";
-export const OFFICIAL_CHANNEL_DOCS_INDEX_RELATIVE_PATH = "docs/channels/index.md";
+const OFFICIAL_CHANNEL_DOCS_INDEX_RELATIVE_PATH = "docs/channels/index.md";
 const OFFICIAL_CHANNEL_DOCS_NAV_RELATIVE_PATH = "docs/docs.json";
 
-/**
- * Generated official channel catalog path in dist.
- * @internal Directly tested script implementation detail.
- */
-export const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = "dist/channel-catalog.json";
+const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = "dist/channel-catalog.json";
 
 const OFFICIAL_CHANNEL_DOCS_START_MARKER = "<!-- BEGIN GENERATED: official channel catalog -->";
 const OFFICIAL_CHANNEL_DOCS_END_MARKER = "<!-- END GENERATED: official channel catalog -->";
@@ -322,13 +318,13 @@ export function writeOfficialChannelCatalog(params: CatalogParams = {}) {
   return writeTextFileIfChanged(outputPath, renderOfficialChannelCatalog({ repoRoot }));
 }
 
-export function writeOfficialChannelCatalogSource(params: CatalogParams = {}) {
+function writeOfficialChannelCatalogSource(params: CatalogParams = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const outputPath = path.join(repoRoot, OFFICIAL_CHANNEL_CATALOG_SOURCE_RELATIVE_PATH);
   return writeTextFileIfChanged(outputPath, renderOfficialChannelCatalog({ repoRoot }));
 }
 
-export function checkOfficialChannelCatalogSource(params: CatalogParams = {}) {
+function checkOfficialChannelCatalogSource(params: CatalogParams = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const outputPath = path.join(repoRoot, OFFICIAL_CHANNEL_CATALOG_SOURCE_RELATIVE_PATH);
   const current = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, "utf8") : "";
@@ -509,20 +505,20 @@ function replaceOfficialChannelDocsBlock(current: string, block: string) {
   return `${current.slice(0, startIndex)}${block}${current.slice(afterEndIndex)}`;
 }
 
-export function renderOfficialChannelDocsIndex(params: CatalogParams = {}) {
+function renderOfficialChannelDocsIndex(params: CatalogParams = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const outputPath = path.join(repoRoot, OFFICIAL_CHANNEL_DOCS_INDEX_RELATIVE_PATH);
   const current = fs.readFileSync(outputPath, "utf8");
   return replaceOfficialChannelDocsBlock(current, renderOfficialChannelDocsBlock({ repoRoot }));
 }
 
-export function writeOfficialChannelDocsIndex(params: CatalogParams = {}) {
+function writeOfficialChannelDocsIndex(params: CatalogParams = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const outputPath = path.join(repoRoot, OFFICIAL_CHANNEL_DOCS_INDEX_RELATIVE_PATH);
   return writeTextFileIfChanged(outputPath, renderOfficialChannelDocsIndex({ repoRoot }));
 }
 
-export function checkOfficialChannelDocsIndex(params: CatalogParams = {}) {
+function checkOfficialChannelDocsIndex(params: CatalogParams = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const outputPath = path.join(repoRoot, OFFICIAL_CHANNEL_DOCS_INDEX_RELATIVE_PATH);
   if (!fs.existsSync(outputPath)) {
@@ -620,7 +616,7 @@ function buildHiddenChannelDocsRoutes(repoRoot: string) {
   return routes;
 }
 
-export function findMissingOfficialChannelDocsNavRoutes(params: CatalogParams = {}) {
+function findMissingOfficialChannelDocsNavRoutes(params: CatalogParams = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const navCounts = readDocsNavCounts(repoRoot);
   const missing = new Set<string>();
@@ -637,7 +633,7 @@ export function findMissingOfficialChannelDocsNavRoutes(params: CatalogParams = 
   return [...missing].toSorted((left, right) => left.localeCompare(right, "en"));
 }
 
-export function findUnexpectedOfficialChannelDocsNavRoutes(params: CatalogParams = {}) {
+function findUnexpectedOfficialChannelDocsNavRoutes(params: CatalogParams = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const navCounts = readDocsNavCounts(repoRoot).all;
   return [...buildHiddenChannelDocsRoutes(repoRoot)]
@@ -645,7 +641,7 @@ export function findUnexpectedOfficialChannelDocsNavRoutes(params: CatalogParams
     .toSorted((left, right) => left.localeCompare(right, "en"));
 }
 
-export function findDuplicateOfficialChannelDocsNavRoutes(params: CatalogParams = {}) {
+function findDuplicateOfficialChannelDocsNavRoutes(params: CatalogParams = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const navCounts = readDocsNavCounts(repoRoot).all;
   const duplicateRoutes = new Set<string>();

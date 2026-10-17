@@ -15,7 +15,6 @@ import {
   captureUpdateCommandExecutorAuthority,
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
-import * as nodeSqlite from "./node-sqlite.js";
 import {
   openPackageActivationJournal,
   resolvePackageActivationAnchor,
@@ -27,7 +26,6 @@ import { createPackageActivationLifetimeFixture } from "./package-update-activat
 import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
 import {
   readPackageActivationStatus,
-  readPackageActivationReceipt,
   runPackageActivationRecovery,
   assertNoPendingPackageActivation,
 } from "./package-update-activation.js";
@@ -225,47 +223,6 @@ describe.skipIf(process.platform === "win32")(
       },
     );
 
-    it("exposes the durable staged helper after replacement acknowledgement loss", async () => {
-      const first = await prepare();
-      await runPackageActivationRecovery(first.anchor, "repair", first.operationId);
-      await runPackageActivationRecovery(first.anchor, "retire", first.operationId);
-      const journalPath = resolvePackageActivationJournalPath(first.anchor);
-      const open = nodeSqlite.openNodeSqliteDatabase;
-      let lost = false;
-      vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((file, options) => {
-        const db = open(file, options);
-        if (db.location() === journalPath) {
-          const exec = db.exec.bind(db);
-          db.exec = (statement) => {
-            exec(statement);
-            if (!lost && statement === "COMMIT") {
-              lost = true;
-              throw new Error("replacement acknowledgement lost");
-            }
-          };
-        }
-        return db;
-      });
-      await expect(prepare()).rejects.toThrow("replacement acknowledgement lost");
-      vi.mocked(nodeSqlite.openNodeSqliteDatabase).mockRestore();
-      expect(lost).toBe(true);
-      const record = openPackageActivationJournal(first.anchor).read();
-      expect(record.descriptor.operationId).not.toBe(first.operationId);
-      expect(record.phase).toBe("preparing");
-      const helper = record.descriptor.preparation.find((entry) => entry.name === "helper")!.source;
-      expect(fs.existsSync(helper)).toBe(true);
-      expect(fs.existsSync(resolvePackageActivationHelper(first.anchor))).toBe(false);
-      const before = fs.readFileSync(journalPath);
-      const receipt = readPackageActivationReceipt(first.packageRoot);
-      expect(receipt?.recoveryCommand).toContain(helper);
-      expect(receipt?.recoveryCommand).toContain(record.descriptor.operationId);
-      expect(() => assertNoPendingPackageActivation(first.packageRoot)).toThrow(helper);
-      expect(fs.readFileSync(journalPath)).toEqual(before);
-      await runPackageActivationRecovery(first.anchor, "repair", record.descriptor.operationId);
-      await runPackageActivationRecovery(first.anchor, "retire", record.descriptor.operationId);
-      expect(readPackageActivationReceipt(first.packageRoot)?.recoveryCommand).toBeUndefined();
-    });
-
     it.for(["created", "schema", "inserted", "before-publication", "after-publication"])(
       "survives actual process death at first-use %s",
       { timeout: 120_000 },
@@ -378,24 +335,17 @@ describe.skipIf(process.platform === "win32")(
         }),
     );
     it.for(
-      ["transition", "replacement"].flatMap((operation) =>
-        ["after-update", "before-commit", "after-commit"].map((boundary) => ({
-          operation,
-          boundary,
-          cut: `${operation}-${boundary}`,
-        })),
-      ),
+      ["after-update", "before-commit", "after-commit"].map((boundary) => ({
+        boundary,
+        cut: `transition-${boundary}`,
+      })),
     )(
       "preserves the one-slot receipt after actual process death at $cut",
       { timeout: 120_000 },
-      async ({ operation, boundary, cut }, { signal }) =>
+      async ({ boundary, cut }, { signal }) =>
         lifetime.run(async () => {
           signal.throwIfAborted();
           const f = await prepare();
-          if (operation === "replacement") {
-            await runPackageActivationRecovery(f.anchor, "repair", f.operationId);
-            await runPackageActivationRecovery(f.anchor, "retire", f.operationId);
-          }
           const journal = openPackageActivationJournal(f.anchor);
           const before = journal.read();
           assertDatabasePath(before.descriptor.authority.databasePath);
@@ -447,40 +397,17 @@ describe.skipIf(process.platform === "win32")(
             } else {
               expect(after.revision).toBe(before.revision + 1);
               expect(() => journal.assertCurrent(before)).toThrow("no longer current");
-              if (operation === "transition") {
-                expect(after).toEqual({
-                  ...before,
-                  revision: before.revision + 1,
-                  phase: "publishing",
-                  intent: { kind: "displace" },
-                });
-              } else {
-                expect(after.descriptor.operationId).not.toBe(before.descriptor.operationId);
-                expect(after.descriptor.authority).toMatchObject({
-                  databasePath: before.descriptor.authority.databasePath,
-                  databaseIdentity: before.descriptor.authority.databaseIdentity,
-                  parentIdentity: before.descriptor.authority.parentIdentity,
-                  installKey: before.descriptor.authority.installKey,
-                });
-                expect(after.descriptor.authority.owner).not.toBe(
-                  before.descriptor.authority.owner,
-                );
-                expect(after).toMatchObject({
-                  phase: "preparing",
-                  intent: { kind: "prepare", completed: [], moving: null },
-                  publications: [],
-                });
-                await expect(
-                  readPackageActivationStatus(f.anchor, before.descriptor.operationId),
-                ).rejects.toThrow("different operation");
-              }
+              expect(after).toEqual({
+                ...before,
+                revision: before.revision + 1,
+                phase: "publishing",
+                intent: { kind: "displace" },
+              });
             }
-            const expectedPhase =
-              operation === "replacement" && boundary !== "after-commit" ? "complete" : after.phase;
             await expect(
               readPackageActivationStatus(f.anchor, after.descriptor.operationId),
             ).resolves.toMatchObject({
-              phase: expectedPhase,
+              phase: after.phase,
               operationId: after.descriptor.operationId,
             });
             await expect(
@@ -693,126 +620,6 @@ describe.skipIf(process.platform === "win32")(
       expect(fs.readFileSync(unknown, "utf8")).toBe("keep");
     });
 
-    it.each([
-      "staged-anchor",
-      "staged-helper",
-      "stable-anchor",
-      "stable-helper",
-      "before-commit",
-      "after-commit",
-    ])(
-      "keeps operation A complete or operation B recoverable after %s replacement cut",
-      async (cut) => {
-        const first = await prepare();
-        await runPackageActivationRecovery(first.anchor, "repair", first.operationId);
-        await runPackageActivationRecovery(first.anchor, "retire", first.operationId);
-        const before = openPackageActivationJournal(first.anchor).read();
-        const failure = new Error(cut);
-        const mkdir = fsp.mkdtemp.bind(fsp);
-        const openHelper = fs.openSync.bind(fs);
-        const sync = fs.fsyncSync.bind(fs);
-        const rename = fsp.rename.bind(fsp);
-        const open = nodeSqlite.openNodeSqliteDatabase;
-        let helperFd: number | undefined;
-        let fired = false;
-        vi.spyOn(fsp, "mkdtemp").mockImplementation(async (prefix, options) => {
-          const created = await mkdir(prefix, options);
-          if (!fired && cut === "staged-anchor" && prefix.includes(".activation-anchor-")) {
-            fired = true;
-            throw failure;
-          }
-          return created;
-        });
-        vi.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
-          const fd = openHelper(file, flags, mode);
-          if (
-            flags === "wx" &&
-            String(file).includes(".activation-anchor-") &&
-            String(file).endsWith(".recovery.mjs")
-          ) {
-            helperFd = fd;
-          }
-          return fd;
-        });
-        vi.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
-          sync(fd);
-          if (!fired && cut === "staged-helper" && fd === helperFd) {
-            fired = true;
-            throw failure;
-          }
-        });
-        vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
-          await rename(from, to);
-          if (
-            !fired &&
-            ((cut === "stable-anchor" && to === first.anchor) ||
-              (cut === "stable-helper" && to === resolvePackageActivationHelper(first.anchor)))
-          ) {
-            fired = true;
-            throw failure;
-          }
-        });
-        vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((file, options) => {
-          const db = open(file, options);
-          if (db.location() === resolvePackageActivationJournalPath(first.anchor)) {
-            const exec = db.exec.bind(db);
-            db.exec = (statement) => {
-              if (!fired && statement === "COMMIT" && cut === "before-commit") {
-                fired = true;
-                throw failure;
-              }
-              exec(statement);
-              if (!fired && statement === "COMMIT" && cut === "after-commit") {
-                fired = true;
-                throw failure;
-              }
-            };
-          }
-          return db;
-        });
-        await expect(prepare()).rejects.toBe(failure);
-        expect(fired).toBe(true);
-        if (cut === "staged-helper") {
-          expect(helperFd).toBeTypeOf("number");
-          expect(() => fs.fstatSync(helperFd!)).toThrow();
-        }
-        vi.mocked(fsp.mkdtemp).mockRestore();
-        vi.mocked(fs.openSync).mockRestore();
-        vi.mocked(fs.fsyncSync).mockRestore();
-        vi.mocked(fsp.rename).mockRestore();
-        vi.mocked(nodeSqlite.openNodeSqliteDatabase).mockRestore();
-        const after = openPackageActivationJournal(first.anchor).read();
-        if (["staged-anchor", "staged-helper", "before-commit"].includes(cut)) {
-          expect(after).toEqual(before);
-          await expect(
-            readPackageActivationStatus(first.anchor, first.operationId),
-          ).resolves.toMatchObject({
-            phase: "complete",
-          });
-          expect(() => assertNoPendingPackageActivation(first.packageRoot)).not.toThrow();
-          await expect(
-            runPackageActivationRecovery(first.anchor, "retire", first.operationId),
-          ).resolves.toMatchObject({
-            phase: "complete",
-          });
-        } else {
-          expect(after.descriptor.operationId).not.toBe(before.descriptor.operationId);
-          expect(after.phase).toBe("preparing");
-          expect(() => assertNoPendingPackageActivation(first.packageRoot)).toThrow("incomplete");
-          await expect(
-            runPackageActivationRecovery(first.anchor, "repair", after.descriptor.operationId),
-          ).resolves.toMatchObject({
-            phase: "aborted",
-          });
-          await expect(
-            runPackageActivationRecovery(first.anchor, "retire", after.descriptor.operationId),
-          ).resolves.toMatchObject({
-            phase: "complete",
-          });
-        }
-      },
-    );
-
     it("preserves version-1 launcher receipts and reads completion through status after helper removal", async () => {
       const f = await prepare();
       const record = openPackageActivationJournal(f.anchor).read();
@@ -871,7 +678,7 @@ describe.skipIf(process.platform === "win32")(
       expect(fs.existsSync(resolvePackageActivationHelper(f.anchor))).toBe(false);
     });
 
-    it.each(["after-custody", "before-replacement", "before-control", "after-control"])(
+    it.each(["after-custody", "before-control", "after-control"])(
       "preserves the actual stage-finally custody boundary on %s failure",
       async (cut) => {
         const f = await createPackageSwapFixture(root);
@@ -889,7 +696,6 @@ describe.skipIf(process.platform === "win32")(
         const failure = new Error(cut);
         const rename = fsp.rename.bind(fsp);
         const renameControl = fs.renameSync.bind(fs);
-        const open = nodeSqlite.openNodeSqliteDatabase;
         let fired = false;
         let stagePrefix = "";
         vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
@@ -910,20 +716,6 @@ describe.skipIf(process.platform === "win32")(
             fired = true;
             throw failure;
           }
-        });
-        vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((file, options) => {
-          const db = open(file, options);
-          if (db.location() === resolvePackageActivationJournalPath(anchor)) {
-            const exec = db.exec.bind(db);
-            db.exec = (statement) => {
-              if (!fired && cut === "before-replacement" && statement === "COMMIT") {
-                fired = true;
-                throw failure;
-              }
-              exec(statement);
-            };
-          }
-          return db;
         });
         const result = await withUpdateCommandExecutor(randomUUID(), async (executor) => {
           const fence = await executor.enter(f.packageRoot);
@@ -965,7 +757,6 @@ describe.skipIf(process.platform === "win32")(
         expect(result.failedStep?.stderrTail).toContain(cut);
         vi.mocked(fsp.rename).mockRestore();
         vi.mocked(fs.renameSync).mockRestore();
-        vi.mocked(nodeSqlite.openNodeSqliteDatabase).mockRestore();
         const retained = cut === "after-custody" || cut === "after-control";
         expect(fs.existsSync(stagePrefix)).toBe(retained);
         if (cut === "before-control") {
@@ -984,16 +775,19 @@ describe.skipIf(process.platform === "win32")(
       },
     );
 
-    it("replaces only the completed one-slot receipt under new original-store admission", async () => {
+    it("archives the completed receipt before preparing the next operation", async () => {
       const first = await prepare();
       await runPackageActivationRecovery(first.anchor, "repair", first.operationId);
       await runPackageActivationRecovery(first.anchor, "retire", first.operationId);
       const before = openPackageActivationJournal(first.anchor).read();
+      const bytes = fs.readFileSync(resolvePackageActivationJournalPath(first.anchor));
       const second = await prepare();
       const after = openPackageActivationJournal(second.anchor).read();
-      expect(after.descriptor.journalIdentity).toBe(before.descriptor.journalIdentity);
+      expect(after.descriptor.journalIdentity).not.toBe(before.descriptor.journalIdentity);
       expect(after.descriptor.operationId).not.toBe(before.descriptor.operationId);
-      expect(after.revision).toBeGreaterThan(before.revision);
+      expect(
+        fs.readFileSync(`${first.anchor}.superseded-${first.operationId}/control/operation.sqlite`),
+      ).toEqual(bytes);
       expect(after.phase).toBe("prepared");
     });
   },

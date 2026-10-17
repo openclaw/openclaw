@@ -18,6 +18,8 @@ import type { PreparedProviderStaticCatalog } from "../plugins/provider-discover
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { getOrLoadAgentDeletionJournalStatus } from "../state/agent-deletion-journal-status.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveAgentEntry, toAgentEntriesRecord } from "./agent-scope-config.js";
 import {
   listAgentIds,
@@ -167,6 +169,13 @@ export function prepareConfiguredRuntimeModels(params: {
   for (const { modelId, provider } of dedupeByKey(params.configuredModelRefs, (ref) =>
     buildModelCatalogMergeKey(ref.provider, ref.modelId),
   )) {
+    const matches = (candidate: Pick<InlineModelEntry, "id" | "provider">) =>
+      params.matchesStaticModelId({
+        candidateId: candidate.id,
+        rowProvider: candidate.provider,
+        provider,
+        modelId,
+      });
     // Match request-time fallback precedence exactly: manifest/runtime-discovery rows win,
     // and the provider-static catalog fills only models absent from that surface.
     let model =
@@ -178,23 +187,9 @@ export function prepareConfiguredRuntimeModels(params: {
         modelId,
         matchesStaticModelId: params.matchesStaticModelId,
       }) ??
-      params.providerStaticModels.find((candidate) =>
-        params.matchesStaticModelId({
-          candidateId: candidate.id,
-          rowProvider: candidate.provider,
-          provider,
-          modelId,
-        }),
-      );
+      params.providerStaticModels.find(matches);
     if (!model) {
-      const inlineModel = params.inlineProviderModels.find((candidate) =>
-        params.matchesStaticModelId({
-          candidateId: candidate.id,
-          rowProvider: candidate.provider,
-          provider,
-          modelId,
-        }),
-      );
+      const inlineModel = params.inlineProviderModels.find(matches);
       const providerConfig =
         inlineModel &&
         findNormalizedProviderValue(params.config.models?.providers, inlineModel.provider);
@@ -294,22 +289,38 @@ export function listConfiguredOwnerInputs(
   defaultWorkspaceDir?: string,
   allowGatewaySubagentBinding?: boolean,
   preservedWorkspaceByAgentDir?: ReadonlyMap<string, ReadonlyMap<string, string>>,
+  /** The published inventory; refreshes inside a lifecycle lease cannot read it from cache. */
+  pluginMetadataSnapshot?: PluginMetadataSnapshot,
 ): PreparedModelRuntimeInput[] {
   const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(config);
   const inheritedAuthDir = resolveLegacyInheritedAuthDir(config);
+  const statePath = resolveOpenClawStateSqlitePath();
   return listAgentIds(config)
-    .filter((agentId) => !readAgentDatabaseAdmissionRefusal(agentId))
+    .filter((agentId) => {
+      const deletion = getOrLoadAgentDeletionJournalStatus(statePath, agentId, () => undefined);
+      return (
+        deletion !== "pending" &&
+        deletion !== "complete" &&
+        !readAgentDatabaseAdmissionRefusal(agentId)
+      );
+    })
     .map((agentId) => {
       const agentDir = resolveAgentDir(config, agentId);
       const launchWorkspaceDir =
         preservedWorkspaceByAgentDir?.get(agentId)?.get(agentDir) ??
         (agentId === compatibilityAgentId ? defaultWorkspaceDir : undefined);
       const preserveWorkspaceDirOnRefresh =
-        launchWorkspaceDir && !resolveAgentEntry(config, agentId)?.workspace?.trim();
+        launchWorkspaceDir &&
+        !resolveAgentEntry(config, agentId)?.workspace?.trim() &&
+        !config.agents?.defaults?.workspace?.trim();
       const workspaceDir = preserveWorkspaceDirOnRefresh
         ? launchWorkspaceDir
         : resolveAgentWorkspaceDir(config, agentId);
-      const configured = resolveDefaultModelForAgent({ cfg: config, agentId });
+      const configured = resolveDefaultModelForAgent({
+        cfg: config,
+        agentId,
+        manifestPlugins: pluginMetadataSnapshot,
+      });
       const subagentModel = resolveSubagentConfiguredModelSelection({
         cfg: config,
         agentId,

@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
+import { TRIAGE_EXTERNAL_AGENTS } from "../../commands/triage-handoff.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { formatErrorMessage as formatError, runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions } from "../command-options.js";
@@ -23,6 +24,7 @@ const STATE_SQLITE_CONFLICTING_OPTION_NAMES = [
   "generateGatewayToken",
   "allowExec",
   "deep",
+  "fullIntegrityCheck",
   "lint",
   "postUpgrade",
   "sessionSqlite",
@@ -70,6 +72,7 @@ export function registerMaintenanceCommands(
       false,
     )
     .option("--deep", "Scan system services for extra gateway installs", false)
+    .option("--full-integrity-check", "Run full database integrity checks during migrations", false)
     .option("--lint", "Run read-only health checks and report findings", false)
     .option(
       "--post-upgrade",
@@ -223,6 +226,7 @@ export function registerMaintenanceCommands(
               generateGatewayToken: Boolean(opts.generateGatewayToken),
               allowExec: Boolean(opts.allowExec),
               deep: Boolean(opts.deep),
+              ...(opts.fullIntegrityCheck ? { fullIntegrityCheck: true } : {}),
               postUpgrade: Boolean(opts.postUpgrade),
               ...(stateSqlite ? { stateSqlite } : {}),
               ...(sessionSqlite ? { sessionSqlite } : {}),
@@ -263,7 +267,7 @@ export function registerMaintenanceCommands(
     .option("--no-export", "Skip the sanitized diagnostics archive")
     .option(
       "--agent <name>",
-      "Select a coding agent (claude|codex|cursor|grok|kimi|muse|opencode|pi|qwen)",
+      `Select a coding agent (${TRIAGE_EXTERNAL_AGENTS.toSorted().join("|")})`,
     )
     .option("--run", "Run one embedded agent turn after verifying model inference", false)
     .option(
@@ -279,24 +283,14 @@ export function registerMaintenanceCommands(
       if (opts.nonInteractive === true && opts.run === true) {
         return exitDoctorError("triage --non-interactive cannot be combined with --run.", false);
       }
-      const agent: unknown = opts.agent;
-      if (opts.run === true && agent !== undefined) {
+      const requestedAgent: unknown = opts.agent;
+      const agent = TRIAGE_EXTERNAL_AGENTS.find((name) => name === requestedAgent);
+      if (opts.run === true && requestedAgent !== undefined) {
         return exitDoctorError("triage --run cannot be combined with --agent.", opts.json === true);
       }
-      if (
-        agent !== undefined &&
-        agent !== "claude" &&
-        agent !== "codex" &&
-        agent !== "cursor" &&
-        agent !== "grok" &&
-        agent !== "kimi" &&
-        agent !== "muse" &&
-        agent !== "opencode" &&
-        agent !== "pi" &&
-        agent !== "qwen"
-      ) {
+      if (requestedAgent !== undefined && agent === undefined) {
         return exitDoctorError(
-          "Invalid --agent. Use claude, codex, cursor, grok, kimi, muse, opencode, pi, or qwen.",
+          `Invalid --agent. Use ${TRIAGE_EXTERNAL_AGENTS.toSorted().join(", ")}.`,
           opts.json === true,
         );
       }

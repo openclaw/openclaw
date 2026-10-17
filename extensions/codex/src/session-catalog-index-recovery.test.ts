@@ -1,10 +1,9 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { setImmediate as nextTurn } from "node:timers/promises";
 import { zstdCompressSync } from "node:zlib";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
 import type { CodexThread } from "./app-server/protocol.js";
@@ -14,9 +13,11 @@ import {
   observeCodexCatalogClient,
 } from "./session-catalog-events.js";
 import type { CodexCatalogIndexOptions } from "./session-catalog-index-contract.js";
-import type { CodexCatalogState } from "./session-catalog-index-state.js";
+import { CodexCatalogPersistence, type CodexCatalogState } from "./session-catalog-index-state.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
-import { projectCodexCatalogPage } from "./session-catalog-projection.js";
+import { completeCatalogState } from "./session-catalog-index.test-support.js";
+import { CodexCatalogProjections } from "./session-catalog-projection.js";
+import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 import { writeCatalogRollout } from "./session-catalog-resident.test-support.js";
 import { idleThread } from "./session-catalog.test-helpers.js";
 
@@ -30,8 +31,7 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-const project = (data: CodexThread[]) =>
-  projectCodexCatalogPage({ data }, { sanitize: sanitizeTerminalText });
+const project = (data: CodexThread[]) => projectCodexCatalogPage({ data });
 
 function catalog(
   root: string,
@@ -81,22 +81,7 @@ describe("resident Codex catalog recovery", () => {
     const original = idleThread({ id: "archived-while-offline", source: "cli" });
     const replacement = idleThread({ id: "created-while-offline", source: "cli" });
     const saved = await project([original]);
-    const state: CodexCatalogState = {
-      entries: vi.fn(async () => [
-        {
-          key: "complete",
-          createdAt: 0,
-          value: { version: 1 as const, kind: "complete" as const },
-        },
-        {
-          key: "original",
-          createdAt: 0,
-          value: { version: 1 as const, kind: "row" as const, row: saved.rows[0]! },
-        },
-      ]),
-      register: vi.fn(async () => {}),
-      delete: vi.fn(async () => false),
-    };
+    const state = completeCatalogState([saved.rows[0]!]);
     const native = createDeferred<void>();
     const readNative = vi.fn(async () => {
       await native.promise;
@@ -239,84 +224,6 @@ describe("resident Codex catalog recovery", () => {
     expect(readNative).toHaveBeenCalledOnce();
   });
 
-  it.each(["update", "remove"])(
-    "keeps a newer file %s when an older native metadata read finishes",
-    async (operation) => {
-      const { home, root, file, original } = await rollout("stale-native-thread", {
-        cwd: "/workspace/original",
-        originator: "codex_cli_rs",
-        recencyAt: 100,
-      });
-      const startOptions = clientOptions(home);
-      const readNative = vi.fn(async () => project([original]));
-      const index = catalog(root, readNative, {
-        homeId: await codexCatalogResidentHomeKey({ startOptions }),
-      });
-      const harness = createClientHarness();
-      const nativeReads = vi.spyOn(harness.client, "request");
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-      try {
-        await index.initialize();
-        // Drain startup currency before arranging the native-read/file-write race.
-        await vi.advanceTimersByTimeAsync(0);
-        await index.reconcile();
-        await observeCodexCatalogClient(harness.client, { startOptions });
-        harness.send({
-          method: "turn/completed",
-          params: { threadId: original.id, turn: {} },
-        });
-        const request = JSON.parse(await harness.waitForWrite(0));
-        expect(request).toMatchObject({
-          method: "thread/read",
-          params: { threadId: original.id, includeTurns: false },
-        });
-        const startedAt = Date.parse("2026-09-17T12:00:00.000Z") / 1_000;
-        if (operation === "update") {
-          await writeCatalogRollout(root, { ...original, cwd: "/workspace/changed" });
-          await fs.appendFile(
-            file,
-            `${JSON.stringify({
-              timestamp: "2026-09-17T12:00:00.000Z",
-              type: "event_msg",
-              payload: { type: "task_started", turn_id: "new-turn", started_at: startedAt },
-            })}\n`,
-          );
-        } else {
-          await fs.unlink(file);
-        }
-        await index.reconcile();
-        const current = await index.list({});
-        expect(current.sessions).toMatchObject(
-          operation === "update"
-            ? [
-                {
-                  threadId: original.id,
-                  cwd: "/workspace/original",
-                  recencyAt: startedAt,
-                },
-              ]
-            : [],
-        );
-        harness.send({ id: request.id, result: { thread: original } });
-        await nativeReads.mock.results[0]!.value;
-        // Explicit originator metadata lets publication finish without filesystem work.
-        await nextTurn();
-        const refreshedStatus = {
-          ...current,
-          sessions: current.sessions.map((session) =>
-            Object.assign({}, session, { status: "idle" }),
-          ),
-        };
-        expect(await index.list({})).toEqual(refreshedStatus);
-        await index.reconcile();
-        expect(await index.list({})).toEqual(refreshedStatus);
-        expect(readNative).toHaveBeenCalledOnce();
-      } finally {
-        await harness.client.closeAndWait();
-      }
-    },
-  );
-
   it.each(["covered", "flat", "outside"])(
     "verifies missing unfingerprinted native rollouts only in %s scan layout",
     async (layout) => {
@@ -420,5 +327,66 @@ describe("resident Codex catalog recovery", () => {
     expect(reads.reduce((sum, bytes) => sum + bytes, 0)).toBe(256 * 1024);
     expect(Math.max(...reads)).toBeLessThanOrEqual(128 * 1024);
     expect(readNative).toHaveBeenCalledOnce();
+  });
+});
+
+describe("resident catalog bounded bookkeeping", () => {
+  it("settles admitted projections and restores capacity after rejecting overflow", async () => {
+    const projections = new CodexCatalogProjections();
+    const gate = createDeferred<void>();
+    const admitted = Array.from({ length: 20_000 }, () => projections.run(() => gate.promise));
+    const overflow = vi.fn(async () => {});
+    await expect(projections.run(overflow)).rejects.toThrow("resident row limit");
+    expect(overflow).not.toHaveBeenCalled();
+    gate.resolve();
+    await Promise.all(admitted);
+    await expect(projections.run(overflow)).resolves.toBeUndefined();
+    expect(overflow).toHaveBeenCalledOnce();
+  });
+
+  it("rejects oversized notification rollout paths before retaining a catalog row", async () => {
+    const thread = idleThread({
+      id: "oversized-path",
+      path: "/" + "p".repeat(4096),
+      source: "cli",
+    });
+    const index = catalog("oversized-notification-path", async () => ({ rows: [] }), {
+      local: false,
+    });
+    await expect(index.upsertThread(thread)).rejects.toThrow("rollout path");
+  });
+
+  it("invalidates an overflowing persistence backlog without dropping admitted writes", async () => {
+    const gate = createDeferred<void>();
+    const started = createDeferred<void>();
+    const deleted: string[] = [];
+    const state: CodexCatalogState = {
+      entries: async () => [],
+      register: async () => {},
+      delete: async (key) => {
+        started.resolve();
+        await gate.promise;
+        deleted.push(key);
+        return true;
+      },
+    };
+    const report = vi.fn();
+    const persistence = new CodexCatalogPersistence(state, report);
+    persistence.remove("in-flight");
+    await started.promise;
+    for (let i = 0; i < 20_002; i++) {
+      persistence.remove(`pending-${i}`);
+    }
+    gate.resolve();
+    await persistence.retire();
+    expect(deleted).toHaveLength(20_002);
+    expect(deleted).toContain("complete");
+    const key = (id: string) => `thread:${createHash("sha256").update(id).digest("hex")}`;
+    expect(deleted).toContain(key("in-flight"));
+    expect(deleted).toContain(key("pending-0"));
+    expect(deleted).toContain(key("pending-19999"));
+    expect(deleted).not.toContain(key("pending-20000"));
+    expect(deleted).not.toContain(key("pending-20001"));
+    expect(report).toHaveBeenCalledOnce();
   });
 });

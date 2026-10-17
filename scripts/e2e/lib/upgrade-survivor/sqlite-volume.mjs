@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import {
   readSqliteTranscriptPayload,
@@ -38,29 +37,18 @@ const PREEXISTING_SESSION_FIXTURES = [
 export function measureVolumeDoctorBudget(stateDir) {
   const counts = { sessions: 0, events: 0, cronJobs: 0, pluginRoots: 0 };
   for (const agentId of VOLUME_AGENT_IDS) {
-    const db = new DatabaseSync(
-      path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite"),
-      { readOnly: true },
-    );
-    try {
+    readDatabase(path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite"), (db) => {
       counts.sessions += Number(
         db.prepare("SELECT count(*) AS count FROM session_nodes").get().count,
       );
       counts.events += Number(
         db.prepare("SELECT count(*) AS count FROM transcript_events").get().count,
       );
-    } finally {
-      db.close();
-    }
+    });
   }
-  const db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
-    readOnly: true,
-  });
-  try {
+  readDatabase(path.join(stateDir, "state", "openclaw.sqlite"), (db) => {
     counts.cronJobs = Number(db.prepare("SELECT count(*) AS count FROM cron_jobs").get().count);
-  } finally {
-    db.close();
-  }
+  });
   const index = readPluginInstallIndex({ stateDir, configPath: null });
   counts.pluginRoots = new Set(
     (index.plugins ?? []).filter((plugin) => plugin.enabled).map((plugin) => plugin.rootDir),

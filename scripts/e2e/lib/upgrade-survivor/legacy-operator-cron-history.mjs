@@ -6,7 +6,11 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { isMainThread } from "node:worker_threads";
-import { readDatabase } from "./observations.mjs";
+import {
+  findInstalledPackageRoot,
+  readDatabase,
+  recordProcessExitSnapshot,
+} from "./observations.mjs";
 
 const MIGRATION = "state:cron-run-logs-to-task-runs:v1";
 const FIXTURE_NAME = "legacy-operator-cron-history.json";
@@ -193,15 +197,9 @@ function observeUpdateProcess() {
       fixture.databasePath,
       path.join(process.env.OPENCLAW_STATE_DIR, "state/openclaw.sqlite"),
     );
-    let root = path.dirname(fs.realpathSync(process.argv[1]));
-    for (let depth = 0; depth < 3; depth++, root = path.dirname(root)) {
-      if (
-        fs.existsSync(path.join(root, "package.json")) &&
-        readJson(path.join(root, "package.json")).name === "openclaw"
-      ) {
-        receipt.identity = installedIdentity(root);
-        break;
-      }
+    const root = findInstalledPackageRoot(path.dirname(fs.realpathSync(process.argv[1])), 3);
+    if (root) {
+      receipt.identity = installedIdentity(root);
     }
     receipt.updateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1";
     receipt.before = snapshot(fixture);
@@ -209,15 +207,7 @@ function observeUpdateProcess() {
     receipt.observationError = String(error);
   }
   const file = path.join(observations, `cron-history-${command}-${process.pid}.json`);
-  writeJson(file, receipt);
-  process.once("exit", (exitCode) => {
-    try {
-      receipt.after = snapshot(fixture);
-    } catch (error) {
-      receipt.observationError = String(error);
-    }
-    writeJson(file, { ...receipt, exitCode });
-  });
+  recordProcessExitSnapshot(file, receipt, () => snapshot(fixture));
 }
 
 function assertProcessReceipt(observations, witness, role) {

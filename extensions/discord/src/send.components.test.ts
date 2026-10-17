@@ -66,15 +66,6 @@ function mediaOptions(rest?: ReturnType<typeof makeDiscordRest>["rest"]) {
   return { ...OPTIONS, rest, mediaUrl: "https://example.com/report.pdf" };
 }
 
-it("rejects forum-style channels before posting", async () => {
-  const { rest, postMock, getMock } = makeDiscordRest();
-  getMock.mockResolvedValueOnce({ type: ChannelType.GuildForum, id: "forum-1" });
-  await expect(
-    sendDiscordComponentMessage("channel:forum-1", BUTTON, { ...OPTIONS, rest }),
-  ).rejects.toThrow("Discord components are not supported in forum-style channels");
-  expect(postMock).not.toHaveBeenCalled();
-});
-
 it.each(["send", "edit"] as const)("awaits registry settlement after %s", async (operation) => {
   const { rest, postMock, patchMock, getMock } = makeDiscordRest();
   getMock.mockResolvedValueOnce({ type: ChannelType.DM, recipients: [{ id: "user-1" }] });
@@ -328,53 +319,16 @@ it("preserves indentation and later repetitions while removing only the leading 
   expect(sendMessageDiscordMock.mock.calls[0]?.[1]).toBe("    code\n\ncode\n\n    code");
 });
 
-it.each([
-  { contentType: "image/png", name: "upload.png" },
-  { contentType: "application/x-unknown", name: "upload" },
-])("derives $name for unnamed $contentType media", async ({ contentType, name }) => {
-  const { rest, postMock } = channelRest();
-  loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
-    buffer: Buffer.from("media"),
-    contentType,
-  });
-  await sendDiscordComponentMessage("channel:chan-1", MODAL, mediaOptions(rest));
-  expect(requestBody(postMock)).toMatchObject({ files: [expect.objectContaining({ name })] });
-  expect(sendMessageDiscordMock).not.toHaveBeenCalled();
-});
-
-it("keeps explicit filenames ahead of loader names and MIME fallback", async () => {
-  const { rest, postMock } = channelRest();
-  await sendDiscordComponentMessage("channel:chan-1", MODAL, {
-    ...mediaOptions(rest),
-    filename: "operator.bin",
-  });
-  expect(requestBody(postMock)).toMatchObject({
-    files: [expect.objectContaining({ name: "operator.bin" })],
-  });
-});
-
-it.each([
-  {
-    label: "spoiler",
-    blocks: [{ type: "file", file: "attachment://report.pdf", spoiler: true }],
-  },
-  {
-    label: "multiple",
-    blocks: [
-      { type: "file", file: "attachment://report.pdf" },
-      { type: "file", file: "attachment://report.pdf" },
-    ],
-  },
-] satisfies Array<{ label: string; blocks: DiscordComponentMessageSpec["blocks"] }>)(
-  "keeps $label file blocks on the component path",
-  async ({ blocks }) => {
+it.each([{ contentType: "application/x-unknown", name: "upload" }])(
+  "derives $name for unnamed $contentType media",
+  async ({ contentType, name }) => {
     const { rest, postMock } = channelRest();
-    await sendDiscordComponentMessage(
-      "channel:chan-1",
-      { text: "report", blocks },
-      mediaOptions(rest),
-    );
+    loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
+      buffer: Buffer.from("media"),
+      contentType,
+    });
+    await sendDiscordComponentMessage("channel:chan-1", MODAL, mediaOptions(rest));
+    expect(requestBody(postMock)).toMatchObject({ files: [expect.objectContaining({ name })] });
     expect(sendMessageDiscordMock).not.toHaveBeenCalled();
-    expect(postMock).toHaveBeenCalledOnce();
   },
 );

@@ -1,0 +1,8 @@
+{
+  "pluginId": "codex",
+  "plugin": "Codex",
+  "icon": "codex",
+  "key": "sessionCatalog",
+  "labelKey": "configView.sessionSources.codex",
+  "order": 20
+}

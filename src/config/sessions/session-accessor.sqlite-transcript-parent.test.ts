@@ -7,16 +7,21 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
-  replaceTranscriptEventsSync,
+  loadTranscriptEventsSync,
   resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
   validatePreparedAssistantAppendSync,
   type TranscriptEvent,
 } from "./session-accessor.js";
 import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
-import { appendTranscriptMessageSnapshotSync } from "./session-accessor.sqlite-transcript-write.js";
+import {
+  appendTranscriptEventSnapshotSync,
+  appendTranscriptMessageSnapshotSync,
+} from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-ancestry-");
 
@@ -45,6 +50,63 @@ function message(id: string, parentId: string | null): TranscriptEvent {
   return { type: "message", id, parentId, message: { role: "user", content: id } };
 }
 
+it.each(["event", "message"] as const)(
+  "keeps %s append rollback with its owning worker transaction without a savepoint",
+  async (kind) => {
+    const { database, scope } = await createTranscript([message("root", null)]);
+    const before = loadTranscriptEventsSync(scope);
+    expect(() =>
+      appendTranscriptMessageSnapshotSync(
+        scope,
+        { eventId: "outside-transaction", message: { role: "assistant", content: "refused" } },
+        undefined,
+        undefined,
+        undefined,
+        database,
+      ),
+    ).toThrow("Transcript write lost its owning transaction");
+    const transactionSql = vi.spyOn(database.db, "exec");
+    try {
+      expect(() =>
+        runOpenClawAgentWriteTransaction(
+          (current) => {
+            const snapshot =
+              kind === "event"
+                ? appendTranscriptEventSnapshotSync(
+                    scope,
+                    { type: "custom", id: "rolled-back", parentId: "root" },
+                    {},
+                    undefined,
+                    undefined,
+                    current,
+                  )
+                : appendTranscriptMessageSnapshotSync(
+                    scope,
+                    { eventId: "rolled-back", message: { role: "assistant", content: "refused" } },
+                    undefined,
+                    undefined,
+                    undefined,
+                    current,
+                  );
+            expect(snapshot.ok).toBe(true);
+            throw new Error("owning request refused commit");
+          },
+          { agentId: scope.agentId, path: database.path },
+        ),
+      ).toThrow("owning request refused commit");
+      expect(transactionSql.mock.calls.some(([sql]) => /SAVEPOINT/i.test(sql))).toBe(false);
+    } finally {
+      transactionSql.mockRestore();
+    }
+    expect(loadTranscriptEventsSync(scope)).toEqual(before);
+    const next = appendTranscriptMessageSnapshotSync(scope, {
+      eventId: "committed",
+      message: { role: "assistant", content: "accepted" },
+    });
+    expect(next).toMatchObject({ ok: true, value: { result: { messageId: "committed" } } });
+  },
+);
+
 it.each(["dirty", "unclassified"] as const)(
   "shares append metadata without retaining facts across rollback or foreign %s writes",
   async (change) => {
@@ -63,18 +125,22 @@ it.each(["dirty", "unclassified"] as const)(
       }
       return snapshot.value;
     };
-    const queries = trackSqliteStatementExecutions(database.db, ["projection", "tail"], (sql) => {
-      if (!/^select /i.test(sql)) {
-        return null;
-      }
-      if (sql.includes('"session_transcript_index_state"')) {
-        return "projection";
-      }
-      return /^select "seq" from "transcript_events"/i.test(sql) &&
-        sql.includes('order by "seq" desc')
-        ? "tail"
-        : null;
-    });
+    const queries = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["projection", "tail"],
+      (sql) => {
+        if (!/^select /i.test(sql)) {
+          return null;
+        }
+        if (sql.includes('"session_transcript_index_state"')) {
+          return "projection";
+        }
+        return /^select "seq" from "transcript_events"/i.test(sql) &&
+          sql.includes('order by "seq" desc')
+          ? "tail"
+          : null;
+      },
+    );
     let first: ReturnType<typeof append>;
     try {
       first = append("answer", "tail");

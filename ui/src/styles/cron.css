@@ -1,7 +1,7 @@
 /* ── Automations (cron) page ─────────────────────────────────────────────────
  * Structure comes from the settings design language (settings.css); this file
  * only keeps the cron-specific escape hatches: the jobs table grid, stat grid,
- * run-history entries, and the details-based popover menus.
+ * run-history entries, and the owned popover menus.
  */
 
 .cron-page {
@@ -155,24 +155,13 @@
 }
 
 .cron-refresh--loading svg {
-  animation: cron-refresh-spin 0.9s linear infinite;
-}
-
-@keyframes cron-refresh-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .cron-refresh--loading svg {
-    animation: none;
-  }
+  animation: btn-spinner-spin 0.9s linear infinite;
 }
 
 .cron-filter-popover {
-  position: relative;
-  flex: 0 0 auto;
+  --oc-popover-padding: 0;
+  --oc-overlay-max-width: min(280px, calc(100vw - 48px));
+  --oc-overlay-max-height: calc(100dvh - 16px);
 }
 
 .cron-filter-popover__trigger {
@@ -184,14 +173,7 @@
 }
 
 .cron-filter-popover__panel {
-  position: absolute;
-  z-index: 30;
-  top: calc(100% + 8px);
-  right: 0;
   width: min(280px, calc(100vw - 48px));
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
   padding: var(--space-3);
   display: grid;
   gap: var(--space-3);
@@ -303,7 +285,7 @@
 }
 
 .cron-table__state--running svg {
-  animation: cron-state-spin 1s linear infinite;
+  animation: btn-spinner-spin 1s linear infinite;
 }
 
 .cron-table__state--error {
@@ -314,13 +296,8 @@
   color: var(--muted);
 }
 
-@keyframes cron-state-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
+  .cron-refresh--loading svg,
   .cron-table__state--running svg {
     animation: none;
   }
@@ -774,7 +751,6 @@
   border-top: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
 }
 
 .cron-submit-reason {
@@ -792,15 +768,6 @@
   width: 30px;
   justify-content: center;
   padding: 0;
-}
-
-/* Invisible full-viewport hit area so clicking anywhere outside closes the menu. */
-.cron-job-menu[open] > .cron-job-menu__trigger::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: 20;
-  cursor: default;
 }
 
 .cron-job-menu__item {
@@ -925,6 +892,12 @@
   white-space: nowrap;
 }
 
+.cron-filter-dropdown__trigger > .oc-menu-item__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .cron-filter-dropdown__trigger svg {
   width: 12px;
   height: 12px;
@@ -938,6 +911,11 @@
   align-items: center;
   color: var(--text);
   font-size: 13px;
+}
+
+.cron-filter-dropdown__option > .oc-menu-item__check {
+  order: 0;
+  margin-inline-start: 0;
 }
 
 /* Run entries: flat list separated by hairlines inside the group. */
@@ -1010,7 +988,6 @@
 .cron-run-entry__body pre,
 .cron-run-entry__body table {
   overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
 }
 
 /* Cron markdown overrides out-specify the base .chat-text rules in chat/text.css. */
@@ -1046,7 +1023,6 @@
 }
 
 @media (max-width: 640px) {
-  .cron-toolbar__primary,
   .cron-detail-meta,
   .cron-detail-actions {
     flex-wrap: wrap;
@@ -1086,7 +1062,6 @@
   .cron-run-entry__body table {
     display: block;
     overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
   }
 }
 
@@ -1177,23 +1152,9 @@
   padding-bottom: var(--space-3);
 }
 
-/* Web Awesome popup surfaces own positioning, dismissal, and focus. */
-/* stylelint-disable-next-line no-duplicate-selectors -- popover sizing stays with its Web Awesome part overrides */
-.cron-filter-popover {
-  --max-width: min(280px, calc(100vw - 48px));
-}
-
-.cron-filter-popover::part(body) {
-  padding: 0;
-}
-
-.cron-filter-popover .cron-filter-popover__panel {
-  position: static;
-  width: min(280px, calc(100vw - 48px));
-}
-
-.cron-job-menu::part(menu),
-.cron-filter-dropdown__details::part(menu) {
+/* Owned surfaces keep positioning and dismissal with the overlay lifecycle. */
+.cron-job-menu > .oc-menu,
+.cron-filter-dropdown__details > .oc-menu {
   padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
@@ -1201,10 +1162,10 @@
   box-shadow: var(--overlay-shadow);
 }
 
-.cron-job-menu::part(menu) {
+.cron-job-menu > .oc-menu {
   min-width: 170px;
 }
 
-.cron-filter-dropdown__details::part(menu) {
+.cron-filter-dropdown__details > .oc-menu {
   width: min(300px, calc(100vw - 48px));
 }

@@ -3,6 +3,10 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as storage from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
@@ -13,17 +17,19 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import {
+  requireNativeSqliteDatabase,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  observeHostDataSql,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   listMemoryEntryOrigins,
-  listMemorySessionTombstones,
   pruneMemoryEntryOrigins,
   recordMemoryEntryOrigins,
 } from "./memory-entry-origins.js";
 import { observeMemoryForgetWorker } from "./memory-forget-fault.test-support.js";
+import { readMemoryForgetIndexInWorker } from "./memory-forget-index-read.js";
 import { planMemoryIndex } from "./memory-forget-index-sources.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import {
@@ -32,21 +38,23 @@ import {
 } from "./memory-forget.test-helpers.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import * as cpuRuntime from "./memory/manager-cpu-worker-runtime.js";
+import { readMemoryForgetTombstonesForTest } from "./test-helpers.js";
 
 describe("memory forget source removal", () => {
   let fixture: Awaited<ReturnType<typeof createMemoryForgetFixture>>;
 
   beforeEach(async () => {
     fixture = await createMemoryForgetFixture();
+    setRuntimeConfigSnapshot(fixture.cfg);
   });
 
   afterEach(async () => {
     await fixture.cleanup();
+    clearRuntimeConfigSnapshot();
   });
 
   function indexSelection() {
     return {
-      agentId: "main",
       changedPaths: new Set<string>(),
       removedPaths: new Set<string>(),
       sessionIds: new Set(["target"]),
@@ -55,6 +63,39 @@ describe("memory forget source removal", () => {
       corpusSnippets: new Set<string>(),
     };
   }
+
+  it("skips unselectable sources while preserving explicit file removals", async () => {
+    const { db, path: databasePath } = openOpenClawAgentDatabase({ agentId: "main" });
+    db.prepare(`INSERT INTO memory_index_sources (path, source, hash, mtime, size)
+      VALUES ('memory/retained.md', 'memory', 'retained', 1, 1)`).run();
+    const request = {
+      kind: "forget-index-plan" as const,
+      agentId: "main",
+      databasePath,
+      stateDir: fixture.stateDir,
+      changedPaths: ["MEMORY.md"],
+      removedPaths: [],
+      sessionIds: ["target"],
+      excludedSessionIds: [],
+      entryKeys: [],
+      corpusSnippets: [],
+    };
+    const observer = observeHostDataSql();
+    try {
+      expect(await readMemoryForgetIndexInWorker(request)).toMatchObject({
+        chunks: [],
+        sources: [],
+      });
+      expect(
+        observer.queries.filter((sql) => /\bfrom\s+"?memory_index_sources\b/iu.test(sql)),
+      ).toEqual([]);
+      expect(
+        await readMemoryForgetIndexInWorker({ ...request, removedPaths: ["memory/retained.md"] }),
+      ).toMatchObject({ sources: [{ path: "memory/retained.md", source: "memory" }] });
+    } finally {
+      observer.restore();
+    }
+  });
 
   it("retains planning input and placement across dispatch without creating missing stores", async () => {
     const options = { agentId: "main", env: { OPENCLAW_STATE_DIR: fixture.stateDir } };
@@ -111,7 +152,7 @@ describe("memory forget source removal", () => {
     ["newer schema", /uses newer schema version 999/],
     ["unreadable source", /file is not a database/],
   ] as const)(
-    "refuses %s during read planning without repairing its source",
+    "refuses %s during source validation without repairing its source",
     async (failure, message) => {
       openOpenClawAgentDatabase({ agentId: "main" });
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
@@ -143,7 +184,11 @@ describe("memory forget source removal", () => {
                 retainedEntryKeys: new Set(),
               })
             : listMemoryEntryOrigins({ agentId: "main" });
-        await expect(reading()).rejects.toThrow(message);
+        await expect(reading()).rejects.toThrow(
+          failure === "missing required table"
+            ? /missing table memory_index_chunks; run openclaw doctor --fix to repair it/
+            : message,
+        );
         await expect(
           planMemoryIndex(indexSelection(), {
             agentId: "main",
@@ -234,7 +279,7 @@ describe("memory forget source removal", () => {
           untargetableEntryKeys: report.untargetableEntryKeys,
           memory: await fs.readFile(memoryPath, "utf8"),
           origins: await listMemoryEntryOrigins({ agentId: "main" }),
-          tombstones: (await listMemorySessionTombstones({ agentId: "main" })).map(
+          tombstones: readMemoryForgetTombstonesForTest({ agentId: "main" }).map(
             ({ sessionId }) => sessionId,
           ),
         };
@@ -254,7 +299,7 @@ describe("memory forget source removal", () => {
     },
   );
 
-  it("refuses a retired borrowed handle without writing to its successor after vector preparation", async () => {
+  it("refuses a retired execution owner without writing to its successor after vector preparation", async () => {
     await seedMemoryForgetSession("target");
     const origin = {
       entryKey: "selected-entry",
@@ -269,7 +314,7 @@ describe("memory forget source removal", () => {
     const content =
       "<!-- openclaw-memory-promotion:selected-entry -->\n- Selected violet detail.\n";
     await fs.writeFile(memoryPath, content);
-    const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     const load = storage.loadSqliteVecExtension;
     const loaded = await load({ db });
     expect(loaded.ok).toBe(true);
@@ -289,12 +334,12 @@ describe("memory forget source removal", () => {
     const borrowCaptured = createDeferred<void>();
     const resume = createDeferred<void>();
     let intercepted = false;
-    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
+    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
     const openSpy = vi
-      .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore")
+      .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2")
       .mockImplementation(async (...args) => {
-        const [, source, worker] = args;
-        if (source === db && !intercepted) {
+        const [options, , worker] = args;
+        if (options.path === db.location() && !intercepted) {
           const input = worker.input;
           if (
             typeof input !== "object" ||
@@ -324,7 +369,7 @@ describe("memory forget source removal", () => {
     const readDurable = async (database: DatabaseSync) => ({
       memory: await fs.readFile(memoryPath, "utf8"),
       origins: await listMemoryEntryOrigins({ agentId: "main" }),
-      tombstones: await listMemorySessionTombstones({ agentId: "main" }),
+      tombstones: readMemoryForgetTombstonesForTest({ agentId: "main" }),
       chunks: database.prepare("SELECT id, text FROM memory_index_chunks ORDER BY id").all(),
       vectors: database.prepare("SELECT id FROM memory_index_chunks_vec ORDER BY id").all(),
       revision: database.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get(),
@@ -342,7 +387,9 @@ describe("memory forget source removal", () => {
       closeOpenClawAgentDatabasesForTest(fixture.stateDir);
       expect(db.isOpen).toBe(false);
       await closeOpenClawAgentDatabasesAsync(fixture.stateDir);
-      const successor = openOpenClawAgentDatabase({ agentId: "main" }).db;
+      const successor = requireNativeSqliteDatabase(
+        openOpenClawAgentDatabase({ agentId: "main" }).db,
+      );
       // Matcher deep-equality diagnostics cannot inspect a closed native handle.
       expect(successor === db).toBe(false);
       const successorLoaded = await load({ db: successor });
@@ -353,7 +400,7 @@ describe("memory forget source removal", () => {
       const after = await readDurable(successor);
       expect.soft(outcome).toMatchObject({
         ok: false,
-        error: { message: "Borrowed agent database closed or changed before Worker admission" },
+        error: { message: "Agent database execution admission is closed" },
       });
       expect(after).toEqual(before);
       expect(after.tombstones).toEqual([]);
@@ -370,7 +417,7 @@ describe("memory forget source removal", () => {
   it("forgets 32 sessions with bounded writes and preserves other sources", async () => {
     const sessionCount = 32;
     const { cfg } = fixture;
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     const insertSource = db.prepare(
       "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, 1, 1)",
     );
@@ -412,7 +459,7 @@ describe("memory forget source removal", () => {
       expect(result).toEqual({ ...preview, dryRun: false });
       expect(db.prepare("SELECT * FROM memory_index_sources ORDER BY id").all()).toEqual(survivors);
       expect(db.prepare("SELECT id FROM memory_index_chunks").all()).toEqual([]);
-      expect(await listMemorySessionTombstones({ agentId: "main" })).toMatchObject(
+      expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toMatchObject(
         sessionIds.toSorted().map((sessionId) => ({ sessionId, reason: "forgotten" })),
       );
       let sourceDeletes = 0;
@@ -443,7 +490,7 @@ describe("memory forget source removal", () => {
   });
   it("keeps the index intact when batched admission fails", async () => {
     const { cfg } = fixture;
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     const sessionIds = Array.from({ length: 130 }, (_, index) => `target-${index}`);
     db.prepare(`INSERT INTO memory_index_sources (path, source, hash, mtime, size)
       VALUES ('sessions/main/target-0.jsonl', 'sessions', 'keep-until-admitted', 1, 1)`).run();
@@ -467,7 +514,7 @@ describe("memory forget source removal", () => {
       await expect(forgetMemoryEntries({ cfg, agentId: "main", sessionIds })).rejects.toThrow(
         "synthetic admission failure",
       );
-      expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
+      expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toEqual([]);
       expect(db.prepare("SELECT * FROM memory_index_sources").all()).toEqual(sources);
       expect(db.prepare("SELECT * FROM memory_index_chunks").all()).toEqual(chunks);
       expect(db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get()).toEqual(
@@ -479,7 +526,7 @@ describe("memory forget source removal", () => {
     const result = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds });
     expect(result.artifacts.indexSources).toBe(1);
     expect(result.artifacts.indexChunks).toBe(1);
-    expect(await listMemorySessionTombstones({ agentId: "main" })).toHaveLength(130);
+    expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toHaveLength(130);
     expect(db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
     expect(db.prepare("SELECT * FROM memory_index_chunks").all()).toEqual([]);
   });
@@ -493,7 +540,7 @@ describe("memory forget source removal", () => {
     const content =
       "<!-- openclaw-memory-promotion:late-lineage -->\n- Selected violet detail.\n" + survivor;
     await fs.writeFile(memoryPath, content);
-    const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     db.prepare(`INSERT INTO memory_index_chunks
         (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
         VALUES ('selected-snapshot', 'MEMORY.md', 'memory', 1, 3, 'fixture', 'test', ?, x'', 1)`).run(
@@ -550,7 +597,7 @@ describe("memory forget source removal", () => {
         memory: await fs.readFile(memoryPath, "utf8"),
         index: db.prepare("SELECT id FROM memory_index_chunks").all(),
         origins: await listMemoryEntryOrigins({ agentId: "main" }),
-        targetTombstoned: (await listMemorySessionTombstones({ agentId: "main" })).some(
+        targetTombstoned: readMemoryForgetTombstonesForTest({ agentId: "main" }).some(
           ({ sessionId }) => sessionId === "target",
         ),
       };
@@ -570,7 +617,7 @@ describe("memory forget source removal", () => {
   it("does not infer hook or participant facts for an archived-only session", async () => {
     const { cfg } = fixture;
     await seedMemoryForgetSession("archived", "gmail");
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     db.prepare(
       `INSERT INTO session_participants
          (session_key, identity_namespace, actor_id, contribution_count, first_prompted_at, last_prompted_at)
@@ -604,11 +651,11 @@ describe("memory forget source removal", () => {
       expect(report.sessionIds).toEqual([]);
       expect(report.sessionResolutions).toEqual([]);
     }
-    expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
+    expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toEqual([]);
   });
   it("previews and forgets selected chunks before optional provenance exists", async () => {
     await seedMemoryForgetSession("target");
-    const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     const insert = db.prepare(`INSERT INTO memory_index_chunks
       (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
       VALUES (?, ?, 'sessions', 1, 1, 'fixture-hash', 'test', 'retained session body', x'', 1)`);

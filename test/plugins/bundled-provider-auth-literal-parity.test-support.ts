@@ -1,7 +1,8 @@
-// Keeps manifest providerAuthChoices literals aligned with registered provider.auth methods.
+// Keeps value-taking providerAuthChoices literals aligned with registered provider.auth methods.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { Option } from "commander";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPluginRuntimeMock } from "../../src/plugin-sdk/plugin-test-runtime.js";
 import { listBundledPluginMetadata } from "../../src/plugins/bundled-plugin-metadata.js";
@@ -79,6 +80,13 @@ function listParityCases(): ParityCase[] {
     (manifest.providerAuthChoices ?? []).flatMap((choice) => {
       if (!choice.optionKey?.trim() || !choice.cliFlag?.trim()) {
         return [];
+      }
+      if (choice.cliOption) {
+        const option = new Option(choice.cliOption);
+        // Boolean setup flags have no API-key literal to probe.
+        if (!option.required && !option.optional) {
+          return [];
+        }
       }
       return [
         {

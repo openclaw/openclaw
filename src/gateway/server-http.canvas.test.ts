@@ -5,6 +5,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveCanvasNodeCapability } from "../canvas/constants.js";
 import { createCanvasDocument } from "../canvas/documents.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -26,6 +30,7 @@ const tempDirs: string[] = [];
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })));
+  clearRuntimeConfigSnapshot();
 });
 
 async function requestHostedDocument(params: {
@@ -71,6 +76,7 @@ async function withHostedDocumentServer<T>(
       OPENCLAW_STATE_DIR: stateDir,
     },
     async () => {
+      setRuntimeConfigSnapshot(params.config);
       const server = createGatewayHttpServer({
         clients,
         controlUiEnabled: false,

@@ -14,21 +14,29 @@ const mocks = vi.hoisted(() => ({
   catalog: vi.fn(),
 }));
 vi.mock("../../agents/model-auth.js", () => ({}));
-vi.mock("../../agents/auth-profiles/external-cli-sync.js", () => ({}));
+// mock-isolation: Status health must not read machine CLI credential files.
+vi.mock("../../agents/auth-profiles/external-cli-sync.js", () => ({
+  readExternalCliBootstrapCredential: () => null,
+}));
 vi.mock("../../agents/auth-profiles/oauth-shared.js", () => ({}));
 vi.mock("../../web-search/runtime-execution.js", () => ({}));
 vi.mock("../../agents/auth-profiles/store.js", () => ({
   getPreparedRuntimeAuthProfileStoreSnapshot: mocks.snapshot,
 }));
+// mock-isolation: Any persisted read violates this prepared-auth status contract.
 vi.mock("../../agents/auth-profiles.js", () => ({
   hasAnyAuthProfileStoreSource: mocks.persistedAuth,
   ensureAuthProfileStore: mocks.persistedAuth,
+  ensureAuthProfileStoreAsync: mocks.persistedAuth,
   ensureAuthProfileStoreWithoutExternalProfiles: mocks.persistedAuth,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync: mocks.persistedAuth,
   listProfilesForProvider: (store: AuthProfileStore, provider: string) =>
     listProfilesForProvider(store, provider),
 }));
+// mock-isolation: Any persisted read violates this prepared-auth status contract.
 vi.mock("../../agents/auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStore: mocks.persistedAuth,
+  ensureAuthProfileStoreAsync: mocks.persistedAuth,
 }));
 vi.mock("./model-auth-agent-scope.js", () => ({
   resolveModelAuthAgentScope: () => ({ ok: true, agentId: "main", agentDir: "/synthetic/agent" }),
@@ -40,8 +48,14 @@ vi.mock("../../flows/search-setup.js", () => ({ listSearchProviderOptions: mocks
 vi.mock("../../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: mocks.providers,
 }));
-vi.mock("../../plugins/management-service.js", () => ({
-  resolveManagedPluginMetadata: () => ({ byPluginId: new Map() }),
+// mock-isolation: Prepared-auth status uses fixed metadata without loading the discovery registry.
+vi.mock("../../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginMetadataSnapshotAsync: async () => ({ byPluginId: new Map() }),
+}));
+// mock-isolation: Use fixed discovery policy without opening machine state for status projection.
+vi.mock("../../plugins/bundled-discovery-state.js", () => ({
+  prepareBundledDiscoveryMode: async () => () => {},
+  readBundledDiscoveryModeMemoized: () => undefined,
 }));
 vi.mock("../../agents/web-search-tool-policy.js", () => ({
   resolveWebSearchToolPolicy: () => ({ allowed: true }),
@@ -111,8 +125,47 @@ it.each([false, true])(
         credentialSource: published ? "auth-profile" : "missing",
       },
     ]);
-    expect(result.status?.route.kind).toBe(published ? "native" : "unavailable");
+    // Native search follows the selected transport; the model request admits credentials.
+    expect(result.status?.route.kind).toBe("native");
     expect(mocks.persistedAuth).not.toHaveBeenCalled();
     expect(JSON.stringify(result.status)).not.toContain("synthetic-fixture-token");
+  },
+);
+
+it.each([
+  { expires: Date.now() - 60_000, reported: true },
+  { expires: Date.now() + 24 * 60 * 60_000, reported: false },
+])(
+  "reports a search provider's expired sign-in from shared auth health (expired=$reported)",
+  async ({ expires, reported }) => {
+    mocks.snapshot.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai:fixture": {
+          type: "oauth",
+          provider: "openai",
+          access: "synthetic-access-token",
+          refresh: "synthetic-refresh-token",
+          expires,
+        },
+      },
+    });
+    mocks.catalog.mockResolvedValueOnce(undefined);
+    const config: OpenClawConfig = { tools: { web: { search: { provider: "example" } } } };
+    const result = await prepareWebSearchStatus(
+      { getRuntimeConfig: () => config } as GatewayRequestContext,
+      {},
+    );
+
+    expect(result.status?.providers).toMatchObject([
+      { id: "example", credentialSource: "auth-profile" },
+    ]);
+    expect(result.status?.testProvider).toMatchObject({ id: "example" });
+    const reason = result.status?.route.reason ?? "";
+    expect(reason.includes("The openai sign-in this provider uses is expired.")).toBe(reported);
+    expect(reason.includes("send `/login openai` from a private chat")).toBe(reported);
+    expect(reason.includes("openclaw models auth login --provider openai")).toBe(reported);
+    expect(JSON.stringify(result.status)).not.toContain("synthetic-");
+    expect(JSON.stringify(result.status)).not.toContain("openai:fixture");
   },
 );

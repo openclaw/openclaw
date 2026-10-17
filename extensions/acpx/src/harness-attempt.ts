@@ -14,7 +14,7 @@ import {
   type EmbeddedRunAttemptResult,
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { buildSessionContext, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS } from "openclaw/plugin-sdk/approval-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
@@ -367,10 +367,10 @@ export async function runAcpHarnessAttempt(params: {
       runId: input.runId,
       updateMode: "inline",
       message: { ...assistant, idempotencyKey: assistantItemId },
-      beforeFreshMessageCommit: createNativeSessionBindingAuthority(
-        [],
-        input.hostCapabilities.assertActive,
-      ).assertLegacyCurrent,
+      preparation: {
+        source: createNativeSessionBindingScope(input.hostCapabilities.assertActive)
+          .assertLegacyCurrent,
+      },
     });
     if (written.kind !== "result") {
       throw new Error("ACP assistant transcript was not committed");

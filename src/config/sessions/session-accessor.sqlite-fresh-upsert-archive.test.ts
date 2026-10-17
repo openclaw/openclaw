@@ -20,7 +20,7 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
 describe("fresh session creation with pending transcript archives", () => {

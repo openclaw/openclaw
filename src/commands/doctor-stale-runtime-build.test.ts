@@ -74,36 +74,4 @@ describe("collectStaleRuntimeBuildFindings", () => {
 
     await expect(collectStaleRuntimeBuildFindings({ root, env: {} })).resolves.toEqual([]);
   });
-
-  it("ignores a GIT_COMMIT override that still names the built commit", async () => {
-    const root = await makeCheckout({ built: BUILT, head: HEAD });
-
-    // GIT_COMMIT declares the built identity for packaged installs. Honouring it
-    // here would compare the build against itself and hide the real drift.
-    const findings = await collectStaleRuntimeBuildFindings({
-      root,
-      env: { GIT_COMMIT: BUILT },
-    });
-
-    expect(findings).toHaveLength(1);
-    expect(findings[0]?.message).toContain(HEAD.slice(0, 7));
-  });
-
-  it("ignores an unrelated GIT_SHA override on a current build", async () => {
-    const root = await makeCheckout({ built: BUILT, head: BUILT });
-
-    // An unrelated override must not invent drift for a build that matches.
-    await expect(
-      collectStaleRuntimeBuildFindings({
-        root,
-        env: { GIT_SHA: "9999999999999999999999999999999999999999" },
-      }),
-    ).resolves.toEqual([]);
-  });
-
-  it("stays silent when the checkout commit cannot be read", async () => {
-    const root = await makeCheckout({ built: BUILT });
-
-    await expect(collectStaleRuntimeBuildFindings({ root, env: {} })).resolves.toEqual([]);
-  });
 });

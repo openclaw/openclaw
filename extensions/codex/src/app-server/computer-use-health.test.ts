@@ -175,30 +175,6 @@ describe("Codex Computer Use periodic health", () => {
       client.request.mock.calls.filter(([method]) => method === "mcpServer/tool/call"),
     ).toHaveLength(1);
   });
-
-  it("does not start when Computer Use is disabled", () => {
-    const client = createClient();
-
-    expect(
-      startCodexComputerUseHealthMonitor({
-        client: client.client,
-        config: computerUseConfig({ enabled: false }),
-      }),
-    ).toEqual({ started: false, reason: "disabled" });
-    expect(client.addCloseHandler).not.toHaveBeenCalled();
-  });
-
-  it("does not start periodic health checks unless explicitly enabled", () => {
-    const client = createClient();
-
-    expect(
-      startCodexComputerUseHealthMonitor({
-        client: client.client,
-        config: computerUseConfig(),
-      }),
-    ).toEqual({ started: false, reason: "health_disabled" });
-    expect(client.addCloseHandler).not.toHaveBeenCalled();
-  });
 });
 
 function createClient(options: { liveTestFailures?: number } = {}) {

@@ -1,11 +1,19 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveExecutablePath } from "./executable-path.js";
+import type { ImmutableRecoveryRuntimeReference } from "./package-update-activation-immutable-recovery-schema.js";
 import type { PackageActivationRuntime } from "./package-update-activation-runtime.types.js";
 import type { PackageActivationRecord } from "./package-update-activation-schema.js";
+import { packageUpdateRefusal } from "./package-update-refusal.js";
+import type { ImmutableInstallDescriptor } from "./update-immutable-install-schema.js";
 
 const PACKAGE_ACTIVATION_PREFIX = ".openclaw.package-activation-";
+// Published openclaw@2026.9.8 recovery helper; newer writers keep full verification.
+export const LEGACY_PACKAGE_RECOVERY_HELPER =
+  "e08dfc1fb3ba7962f9e01d7a6770117c6cd77406b3fa4f7ba94788a670030ba0";
 
 export function packageActivationRuntimeIdentity(file: string): string {
   const stat = fs.lstatSync(file, { bigint: true });
@@ -31,15 +39,6 @@ export function capturePackageActivationRuntime(
 export function resolvePackageActivationAnchor(installKey: string): string {
   const key = createHash("sha256").update(installKey).digest("hex").slice(0, 24);
   return path.join(path.dirname(installKey), `${PACKAGE_ACTIVATION_PREFIX}${key}`);
-}
-
-export function isPackageActivationArtifactName(name: string): boolean {
-  return (
-    name.startsWith(PACKAGE_ACTIVATION_PREFIX) &&
-    /^[a-f0-9]{24}(?:\.control|\.superseded-[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})?$/u.test(
-      name.slice(PACKAGE_ACTIVATION_PREFIX.length),
-    )
-  );
 }
 
 export function resolvePackageActivationControl(anchor: string): string {
@@ -81,7 +80,7 @@ export function packageActivationIdentity(
           : null;
   if (reason) {
     throw new Error(
-      `Package publication object ${JSON.stringify(file)} has an unsafe identity (${reason}; owner UID ${stat.uid}, expected UID ${expectedUid ?? "unavailable"}). Verify this object's ownership and type before retrying openclaw update.`,
+      `Package publication object ${JSON.stringify(file)} has an unsafe identity (${reason}; mode=${(stat.mode & 0o7777n).toString(8).padStart(4, "0")} nlink=${stat.nlink}; owner UID ${stat.uid}, expected UID ${expectedUid ?? "unavailable"}). Verify this object's ownership and type before retrying openclaw update.`,
     );
   }
   return `${stat.dev}:${stat.ino}`;
@@ -93,18 +92,73 @@ export function privatePackageActivationIdentity(
 ): string {
   const directory = role === "anchor" || role === "control";
   const value = packageActivationIdentity(file, directory);
-  const stat = fs.lstatSync(file);
-  if ((stat.mode & 0o077) !== 0 || (!directory && stat.nlink !== 1)) {
-    const basename = path
-      .basename(file)
-      .replace(/[^A-Za-z0-9_.-]/gu, "_")
-      .slice(0, 64);
-    const mode = (stat.mode & 0o7777).toString(8).padStart(4, "0");
-    throw new Error(
-      `Package recovery ${role} ${JSON.stringify(basename)} unsafe: mode=${mode} nlink=${stat.nlink} uid=${stat.uid}; expected owner-only mode${directory ? "" : " nlink=1"}.`,
+  const stat = fs.lstatSync(file, { bigint: true });
+  const mode = (stat.mode & 0o7777n).toString(8).padStart(4, "0");
+  const refusal = (detail: string) =>
+    packageUpdateRefusal(
+      "package-recovery-permissions-unsafe",
+      `Package recovery ${role} ${JSON.stringify(file)} unsafe: mode=${mode} nlink=${stat.nlink} uid=${stat.uid}; ${detail}`,
+    );
+  if (!directory && stat.nlink !== 1n) {
+    throw refusal("expected nlink=1. Run openclaw doctor --fix.");
+  }
+  if ((stat.mode & 0o077n) !== 0n) {
+    // POSIX ACL masks occupy the group mode bits. chmod clears their effective
+    // grants too; getfacl is optional and only improves the repair diagnostic.
+    const acl =
+      process.platform === "linux"
+        ? spawnSync("/usr/bin/getfacl", ["-cp", "--", file], {
+            encoding: "utf8",
+            timeout: 1000,
+            maxBuffer: 64 * 1024,
+          })
+        : undefined;
+    const aclPresent = acl?.status === 0 && /^(?:user|group):[^:]+:|^mask::/mu.test(acl.stdout);
+    try {
+      repairPackagePermissions(file, stat, directory ? 0o700 : 0o600);
+    } catch (error) {
+      throw refusal(
+        `could not restore owner-only permissions${aclPresent ? " (POSIX ACL entries present)" : ""}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    process.emitWarning(
+      `Repaired package recovery ${role} ${JSON.stringify(file)}: mode=${mode} nlink=${stat.nlink} -> mode=${directory ? "0700" : "0600"}.${aclPresent ? " POSIX ACL entries were present; their access mask was neutralized." : " POSIX ACL access masks, if present, were neutralized."}`,
+      { code: "OPENCLAW_PACKAGE_PERMISSIONS_REPAIRED" },
     );
   }
   return value;
+}
+
+/** Tighten the observed owned inode without following a replaced path or symlink. */
+export function repairPackagePermissions(file: string, stat: fs.BigIntStats, mode: number): void {
+  const uid = process.getuid?.();
+  if ((uid !== undefined && stat.uid !== BigInt(uid)) || (!stat.isDirectory() && !stat.isFile())) {
+    throw new Error(`Cannot repair permissions of unowned or symbolic package object: ${file}`);
+  }
+  const fd = fs.openSync(
+    file,
+    fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+  );
+  try {
+    const opened = fs.fstatSync(fd, { bigint: true });
+    if (
+      (["dev", "ino", "mode", "uid", "gid", "nlink", "size", "mtimeNs", "ctimeNs"] as const).some(
+        (field) => opened[field] !== stat[field],
+      )
+    ) {
+      throw new Error("object changed before permission repair");
+    }
+    fs.fchmodSync(fd, mode);
+    const repaired = fs.fstatSync(fd, { bigint: true });
+    if (
+      (repaired.mode & 0o7777n) !== BigInt(mode) ||
+      packageActivationIdentity(file, stat.isDirectory()) !== `${stat.dev}:${stat.ino}`
+    ) {
+      throw new Error("owner-only permission repair could not be verified");
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 export function assertPackageActivationLayout(anchor: string): void {
@@ -125,12 +179,7 @@ export function isPackageActivationComplete(
   record: PackageActivationRecord,
 ): boolean {
   if (record.phase === "superseded") {
-    if (
-      record.intent?.kind !== "superseded-by-manual-install" &&
-      record.intent?.kind !== "recovery-lease-identity-changed" &&
-      record.intent?.kind !== "publication-settled-external-change" &&
-      record.intent?.kind !== "recovery-lease-missing"
-    ) {
+    if (!record.intent || !("settled" in record.intent)) {
       throw new Error("Package supersession fact is missing.");
     }
     // Settlement already relinquished rollback custody. Retained evidence may
@@ -148,4 +197,11 @@ export function isPackageActivationComplete(
   // A helper left by an interrupted unlink or a later replacement is cleanup,
   // not permission to restore an earlier generation or block a new update.
   return true;
+}
+
+export function resolveImmutableRecoveryCommand(
+  reference: ImmutableRecoveryRuntimeReference,
+  descriptor: ImmutableInstallDescriptor,
+): string {
+  return `${quoteCliArg(descriptor.runtime.path)} ${quoteCliArg(reference.helperPath)}`;
 }

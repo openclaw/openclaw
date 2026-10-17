@@ -19,14 +19,14 @@ export function registerRequiredRootThreadPolicyTests({
   ) => ReturnType<typeof startOrResumeThreadImpl>;
 }) {
   const PREFLIGHT_METHODS = ["config/read", "configRequirements/read"];
-  it("removes every native capability from a required-workspace thread", () => {
+  it("removes every native capability from a required-workspace thread", async () => {
     const params = createParams(
       path.join(tempDir, "conversation-policy-session.jsonl"),
       path.join(tempDir, "conversation-policy-workspace"),
     );
     params.conversationToolPolicy = { deny: ["exec"] };
     params.requireWorkspaceOnly = true;
-    const request = buildThreadResumeParams(params, {
+    const request = await buildThreadResumeParams(params, {
       threadId: "thread-policy-restricted",
       appServer: createThreadLifecycleAppServerOptions(),
       dynamicTools: [],

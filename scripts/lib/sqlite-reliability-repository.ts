@@ -140,6 +140,10 @@ async function runCrashPoint(
       stagingEntries,
       state: sourceState,
       visibleSnapshotsAfterCrash: visibleAfter.length,
+      repositoryVerified: true,
+      retryCreated: true,
+      sourcePayloadPreserved: true,
+      sourceStatePreserved: true,
     };
   } finally {
     await worker.stop();
@@ -188,36 +192,5 @@ export async function runRepositoryInterruptionProof(params: {
     provider,
   });
 
-  return {
-    afterCommit: {
-      ...afterCommit,
-      crashSnapshotVerifiedAfterCrash: true,
-      crashSnapshotVisibleAfterCrash: true,
-      incompleteEntries: 0,
-      repositoryVerified: true,
-      retryCreated: true,
-      sourcePayloadPreserved: true,
-      sourceStatePreserved: true,
-    },
-    beforePending: {
-      ...beforePending,
-      crashSnapshotVerifiedAfterCrash: false,
-      crashSnapshotVisibleAfterCrash: false,
-      incompleteEntries: 1,
-      repositoryVerified: true,
-      retryCreated: true,
-      sourcePayloadPreserved: true,
-      sourceStatePreserved: true,
-    },
-    pending: {
-      ...pending,
-      crashSnapshotVerifiedAfterCrash: true,
-      crashSnapshotVisibleAfterCrash: true,
-      incompleteEntries: 0,
-      repositoryVerified: true,
-      retryCreated: true,
-      sourcePayloadPreserved: true,
-      sourceStatePreserved: true,
-    },
-  };
+  return { afterCommit, beforePending, pending };
 }

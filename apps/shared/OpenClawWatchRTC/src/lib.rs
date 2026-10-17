@@ -143,7 +143,7 @@ pub extern "C" fn openclaw_rtc_create() -> *mut OpenClawRTC {
         let rtc = Rtc::builder()
             .set_local_ice_credentials(credentials)
             .clear_codecs()
-            .enable_opus(true)
+            .enable_opus(true, false)
             // Release each Opus frame despite loss; a nonzero window still drops
             // late frames instead of replaying them after newer speech.
             .set_reordering_size_audio(1)

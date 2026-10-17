@@ -134,7 +134,7 @@ node scripts/e2e/lib/plugins/assertions.mjs demo-plugin
 
 echo "Testing tgz install flow..."
 pack_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-pack.XXXXXX")"
-pack_fixture_plugin "$pack_dir" "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-tgz.tgz" demo-plugin-tgz 0.0.1 demo.tgz "Demo Plugin TGZ"
+pack_fixture_archive plugin "$pack_dir" "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-tgz.tgz" demo-plugin-tgz 0.0.1 demo.tgz "Demo Plugin TGZ"
 
 run_plugins_fixture_logged install-tgz plugins install "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-tgz.tgz" --force
 run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins2.json" plugins list --json
@@ -196,8 +196,8 @@ npm_pack_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-npm-pack.XX
 npm_dep_pack_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-npm-dep-pack.XXXXXX")"
 invalid_npm_pack_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-invalid-metadata-pack.XXXXXX")"
 npm_registry_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-npm-registry.XXXXXX")"
-pack_fixture_plugin_with_cli_registry_dependency "$npm_pack_dir" "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-npm.tgz" demo-plugin-npm 0.0.1 demo.npm "Demo Plugin NPM" demo-npm "demo-plugin-npm:pong"
-pack_fake_is_number_package "$npm_dep_pack_dir" "$OPENCLAW_PLUGINS_TMP_DIR/is-number-7.0.0.tgz"
+pack_fixture_archive plugin-cli-registry-dep "$npm_pack_dir" "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-npm.tgz" demo-plugin-npm 0.0.1 demo.npm "Demo Plugin NPM" demo-npm "demo-plugin-npm:pong"
+pack_fixture_archive fake-is-number-package "$npm_dep_pack_dir" "$OPENCLAW_PLUGINS_TMP_DIR/is-number-7.0.0.tgz"
 pack_fixture_plugin_with_invalid_extension_entry "$invalid_npm_pack_dir" "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-invalid-metadata.tgz" demo-plugin-invalid-metadata 0.0.1 demo.invalid.metadata "Demo Plugin Invalid Metadata"
 start_npm_fixture_registry "@openclaw/demo-plugin-npm" "0.0.1" "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-npm.tgz" "$npm_registry_dir" "is-number" "7.0.0" "$OPENCLAW_PLUGINS_TMP_DIR/is-number-7.0.0.tgz" "@openclaw/demo-plugin-invalid-metadata" "0.0.1" "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-invalid-metadata.tgz"
 

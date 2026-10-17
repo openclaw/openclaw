@@ -157,7 +157,6 @@ function isManagedProxyActive() {
 
 let cachedFeishuProxyAgent: Agent | undefined;
 let pendingFeishuProxyAgent: Promise<Agent | undefined> | undefined;
-let feishuProxyAgentGeneration = 0;
 
 // Ambient proxy configuration is process-stable. Share one dual-protocol agent
 // across REST, bootstrap, and WebSocket traffic so connections stay pooled.
@@ -169,17 +168,12 @@ async function getFeishuProxyAgent(): Promise<Agent | undefined> {
     return pendingFeishuProxyAgent;
   }
 
-  const generation = feishuProxyAgentGeneration;
   let resolutionError: unknown;
   const pending = resolveAmbientNodeProxyAgent<Agent>({
     onError: (error) => {
       resolutionError = error;
     },
   }).then((agent) => {
-    if (generation !== feishuProxyAgentGeneration) {
-      agent?.destroy();
-      return undefined;
-    }
     if (!agent && isManagedProxyActive()) {
       throw new Error("Feishu managed proxy is active but no proxy agent could be created", {
         cause: resolutionError,
@@ -192,15 +186,12 @@ async function getFeishuProxyAgent(): Promise<Agent | undefined> {
   try {
     return await pending;
   } finally {
-    if (pendingFeishuProxyAgent === pending) {
-      pendingFeishuProxyAgent = undefined;
-    }
+    pendingFeishuProxyAgent = undefined;
   }
 }
 
 /** @internal Resets process-scoped proxy state between tests. */
 export function resetFeishuProxyAgentForTest(): void {
-  feishuProxyAgentGeneration += 1;
   pendingFeishuProxyAgent = undefined;
   cachedFeishuProxyAgent?.destroy();
   cachedFeishuProxyAgent = undefined;
@@ -401,6 +392,21 @@ function createFeishuHttpInstance(
     });
   }
 
+  const createMethod =
+    (method: "get" | "delete" | "head" | "options"): Lark.HttpInstance["get"] =>
+    (url, opts) =>
+      runRequest((authority) =>
+        dispatch(authority, opts, (prepared) => base[method](resolveRequestUrl(url), prepared)),
+      );
+  const createDataMethod =
+    (method: "post" | "put" | "patch"): Lark.HttpInstance["post"] =>
+    (url, data, opts) =>
+      runRequest((authority) =>
+        dispatch(authority, opts, (prepared) =>
+          base[method](resolveRequestUrl(url), data, prepared),
+        ),
+      );
+
   return {
     request: (opts) =>
       // SDK message requests reach this seam after formatPayload/auth. Token
@@ -412,34 +418,13 @@ function createFeishuHttpInstance(
           ),
         "request",
       ),
-    get: (url, opts) =>
-      runRequest((assert) =>
-        dispatch(assert, opts, (prepared) => base.get(resolveRequestUrl(url), prepared)),
-      ),
-    post: (url, data, opts) =>
-      runRequest((assert) =>
-        dispatch(assert, opts, (prepared) => base.post(resolveRequestUrl(url), data, prepared)),
-      ),
-    put: (url, data, opts) =>
-      runRequest((assert) =>
-        dispatch(assert, opts, (prepared) => base.put(resolveRequestUrl(url), data, prepared)),
-      ),
-    patch: (url, data, opts) =>
-      runRequest((assert) =>
-        dispatch(assert, opts, (prepared) => base.patch(resolveRequestUrl(url), data, prepared)),
-      ),
-    delete: (url, opts) =>
-      runRequest((assert) =>
-        dispatch(assert, opts, (prepared) => base.delete(resolveRequestUrl(url), prepared)),
-      ),
-    head: (url, opts) =>
-      runRequest((assert) =>
-        dispatch(assert, opts, (prepared) => base.head(resolveRequestUrl(url), prepared)),
-      ),
-    options: (url, opts) =>
-      runRequest((assert) =>
-        dispatch(assert, opts, (prepared) => base.options(resolveRequestUrl(url), prepared)),
-      ),
+    get: createMethod("get"),
+    post: createDataMethod("post"),
+    put: createDataMethod("put"),
+    patch: createDataMethod("patch"),
+    delete: createMethod("delete"),
+    head: createMethod("head"),
+    options: createMethod("options"),
   };
 }
 

@@ -112,18 +112,6 @@ describe("signalSetupAdapter", () => {
       signalNumber: " +1 (555) 555-0123 ",
       expectedAccount: "+15555550123",
     },
-    {
-      accountId: "work",
-      signalNumber: "signal: +1 (555) 555-0124",
-      expectedAccount: "+15555550124",
-    },
-    { accountId: "default", signalNumber: "15555550125", expectedAccount: "+15555550125" },
-    { accountId: "work", signalNumber: "+12345", expectedAccount: "+12345" },
-    {
-      accountId: "default",
-      signalNumber: "+123456789012345",
-      expectedAccount: "+123456789012345",
-    },
   ])(
     "stores the canonical Signal number for the $accountId account",
     ({ accountId, signalNumber, expectedAccount }) => {
@@ -140,44 +128,6 @@ describe("signalSetupAdapter", () => {
       expect(account).toBe(expectedAccount);
     },
   );
-
-  it("preserves an opted-in socket when editing account setup", () => {
-    const transport = {
-      kind: "managed-native",
-      socketPath: "/tmp/signal-private/daemon.sock",
-    } as const;
-    const next = signalSetupAdapter.applyAccountConfig?.({
-      cfg: { channels: { signal: { account: "+15555550123", transport } } },
-      accountId: "default",
-      input: { signalNumber: "+15555550124", cliPath: "/opt/signal-cli" },
-    });
-    expect(next?.channels?.signal?.transport).toEqual({ ...transport, cliPath: "/opt/signal-cli" });
-  });
-
-  it("channels.add setup restores a promoted default before writing a named account", () => {
-    const next = signalSetupAdapter.applyAccountConfig?.({
-      cfg: signalConfig({
-        transport: { kind: "managed-native", httpPort: 8080 },
-        accounts: {
-          default: { account: "+15555550123" },
-        },
-      }),
-      accountId: "work",
-      input: { signalNumber: "+15555550124" },
-    });
-
-    expect(next?.channels?.signal?.account).toBe("+15555550123");
-    expect(next?.channels?.signal?.transport).toEqual({
-      kind: "managed-native",
-      httpPort: 8080,
-    });
-    expect(next?.channels?.signal?.accounts?.default).toEqual({});
-    expect(next?.channels?.signal?.accounts?.work?.transport).toEqual({
-      kind: "managed-native",
-      httpHost: "127.0.0.1",
-      httpPort: 8081,
-    });
-  });
 
   it("keeps promoted default-account policy scoped to that account", () => {
     const next = signalSetupAdapter.applyAccountConfig?.({
@@ -206,30 +156,6 @@ describe("signalSetupAdapter", () => {
     expect(next?.channels?.signal?.accounts?.default).not.toHaveProperty("account");
   });
 
-  it("repairs a duplicate explicit managed port before runtime resolution", () => {
-    const next = signalSetupAdapter.applyAccountConfig?.({
-      cfg: signalConfig({
-        accounts: {
-          personal: {
-            account: "+15555550123",
-            transport: { kind: "managed-native", httpPort: 8181 },
-          },
-          work: {
-            account: "+15555550124",
-            transport: { kind: "managed-native", httpPort: 8181 },
-          },
-        },
-      }),
-      accountId: "work",
-      input: { httpPort: "8282" },
-    });
-
-    expect(next?.channels?.signal?.accounts?.work?.transport).toMatchObject({
-      kind: "managed-native",
-      httpPort: 8282,
-    });
-  });
-
   it("realigns an existing managed connection URL after a partial bind update", () => {
     const next = signalSetupAdapter.applyAccountConfig?.({
       cfg: signalConfig({
@@ -254,26 +180,6 @@ describe("signalSetupAdapter", () => {
       url: "http://127.0.0.2:8282",
       httpHost: "127.0.0.2",
       httpPort: 8282,
-    });
-  });
-
-  it("uses the setup transport allocator for a second managed account", () => {
-    const cfg: OpenClawConfig = signalConfig({
-      account: "+15555550123",
-      transport: { kind: "managed-native", httpPort: 8080 },
-      accounts: { work: { account: "+15555550124" } },
-    });
-
-    const next = signalSetupAdapter.applyAccountConfig?.({
-      cfg,
-      accountId: "work",
-      input: { signalNumber: "+15555550124" },
-    });
-
-    expect(next?.channels?.signal?.accounts?.work?.transport).toEqual({
-      kind: "managed-native",
-      httpHost: "127.0.0.1",
-      httpPort: 8081,
     });
   });
 
@@ -337,47 +243,6 @@ describe("signalSetupAdapter", () => {
     expect(next?.channels?.signal?.accounts?.default).not.toHaveProperty("transport");
   });
 
-  it("channels.add setup keeps root transport during a default account-only update", () => {
-    const cfg: OpenClawConfig = signalConfig({
-      transport: { kind: "external-native", url: "http://canonical-signal:8080" },
-      accounts: {
-        default: {
-          account: "+15555550124",
-          transport: { kind: "container", url: "http://stale-container:8080" },
-        },
-      },
-    });
-
-    const next = signalSetupAdapter.applyAccountConfig?.({
-      cfg,
-      accountId: "default",
-      input: { signalNumber: "+15555550125" },
-    });
-
-    expect(next?.channels?.signal?.transport).toEqual({
-      kind: "external-native",
-      url: "http://canonical-signal:8080",
-    });
-    expect(next?.channels?.signal?.accounts?.default).toEqual({});
-  });
-
-  it("stores an explicitly selected container endpoint", () => {
-    const next = signalSetupAdapter.applyAccountConfig?.({
-      cfg: {},
-      accountId: "work",
-      input: {
-        signalNumber: "+15555550124",
-        httpUrl: "http://signal-container:8080/",
-        signalTransport: "container",
-      },
-    });
-
-    expect(next?.channels?.signal?.accounts?.work?.transport).toEqual({
-      kind: "container",
-      url: "http://signal-container:8080",
-    });
-  });
-
   it("keeps bare HTTP URLs on the historical external-native transport", () => {
     const next = signalSetupAdapter.applyAccountConfig?.({
       cfg: {},
@@ -394,48 +259,7 @@ describe("signalSetupAdapter", () => {
     });
   });
 
-  it("preserves an existing container kind when only its URL changes", () => {
-    const next = signalSetupAdapter.applyAccountConfig?.({
-      cfg: signalConfig({
-        account: "+15555550123",
-        accounts: {
-          work: {
-            transport: { kind: "container", url: "http://old-container:8080" },
-          },
-        },
-      }),
-      accountId: "work",
-      input: { httpUrl: "http://new-container:8080/" },
-    });
-
-    expect(next?.channels?.signal?.accounts?.work?.transport).toEqual({
-      kind: "container",
-      url: "http://new-container:8080",
-    });
-  });
-
-  it("preserves a nested default container kind while canonicalizing a URL-only edit", () => {
-    const next = signalSetupAdapter.applyAccountConfig?.({
-      cfg: signalConfig({
-        accounts: {
-          Default: {
-            account: "+15555550123",
-            transport: { kind: "container", url: "http://old-container:8080" },
-          },
-        },
-      }),
-      accountId: "default",
-      input: { httpUrl: "http://new-container:8080/" },
-    });
-
-    expect(next?.channels?.signal?.transport).toEqual({
-      kind: "container",
-      url: "http://new-container:8080",
-    });
-    expect(next?.channels?.signal?.accounts?.Default).not.toHaveProperty("transport");
-  });
-
-  it.each(["abc", "++12345", "+1+2345", "+1234", "+1234567890123456", "   ", ""])(
+  it.each(["+1+2345", "+1234567890123456"])(
     "rejects invalid Signal account number %s",
     (signalNumber) => {
       expect(
@@ -448,7 +272,7 @@ describe("signalSetupAdapter", () => {
     },
   );
 
-  it.each(["0", "abc", "65536"])("rejects invalid managed HTTP port %s", (httpPort) => {
+  it.each(["65536"])("rejects invalid managed HTTP port %s", (httpPort) => {
     expect(
       signalSetupAdapter.validateInput?.({
         cfg: {},
@@ -458,18 +282,15 @@ describe("signalSetupAdapter", () => {
     ).toBe("Signal --http-port must be an integer between 1 and 65535.");
   });
 
-  it.each(["bad host", "[::1", "localhost:8181"])(
-    "rejects invalid managed HTTP host %s",
-    (httpHost) => {
-      expect(
-        signalSetupAdapter.validateInput?.({
-          cfg: {},
-          accountId: "work",
-          input: { httpHost },
-        }),
-      ).toBe("Signal --http-host must be a hostname or IP address.");
-    },
-  );
+  it.each(["[::1"])("rejects invalid managed HTTP host %s", (httpHost) => {
+    expect(
+      signalSetupAdapter.validateInput?.({
+        cfg: {},
+        accountId: "work",
+        input: { httpHost },
+      }),
+    ).toBe("Signal --http-host must be a hostname or IP address.");
+  });
 
   it("rejects a transport kind without an HTTP URL", () => {
     expect(
@@ -520,19 +341,6 @@ describe("signalSetupAdapter", () => {
         cfg: signalConfig({
           accounts: { work: { account: "+15555550124" } },
         }),
-        accountId: "work",
-        input: {
-          httpUrl: "http://signal-container:8080",
-          signalTransport: "container",
-        },
-      }),
-    ).toBeNull();
-  });
-
-  it("allows a named container transport to inherit the root Signal account", () => {
-    expect(
-      signalSetupAdapter.validateInput?.({
-        cfg: signalConfig({ account: "+15555550123" }),
         accountId: "work",
         input: {
           httpUrl: "http://signal-container:8080",

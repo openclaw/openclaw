@@ -22,6 +22,8 @@ import type { DeliveryMirror } from "./mirror.js";
 import type { PreparedOutboundBatch } from "./prepared-batch.js";
 import type { OutboundSessionContext } from "./session-context.js";
 
+export const FINAL_TEXT_RECOVERY_MAX_ATTEMPTS = 2;
+
 /** Serializable owner callback for a durable queue entry. */
 export type DurableDeliveryCompletion =
   | {
@@ -74,6 +76,9 @@ export type QueuedDeliveryPayload = {
   accountId?: string;
   queuePolicy?: "required" | "best_effort";
   requireUnknownSendReconciliation?: boolean;
+  retryAmbiguousFinalText?: true;
+  /** Current failed attempt had a typed transport error and no accepted message. */
+  ambiguousTransportError?: true;
   requiresProducerClaim?: boolean;
   preparedBatch?: PreparedOutboundBatch;
   payloads?: ReplyPayload[];

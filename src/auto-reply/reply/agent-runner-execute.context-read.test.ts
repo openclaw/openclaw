@@ -1,7 +1,11 @@
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -13,6 +17,7 @@ import { executePreparedReplyAgentRun } from "./agent-runner-execute.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
+import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 import { createMockReplyOperation, createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
@@ -32,6 +37,8 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({ getGlobalHookRunner: () 
 
 it("keeps a cron context prefix readable when an inbound turn persists before queuing", async () => {
   await withOpenClawTestState({ label: "cron-inbound-context-read" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    onTestFinished(() => clearRuntimeConfigSnapshot());
     const target = {
       agentId: "main",
       sessionId: "cron-session",
@@ -46,8 +53,13 @@ it("keeps a cron context prefix readable when an inbound turn persists before qu
       input: { text: "incoming DM", idempotencyKey: "channel-user:v1:synthetic-dm" },
       target: { ...target, sessionEntry: entry },
     });
+    await using actor = createReplyRecoveryActorFixture({
+      ...target,
+      getSessionId: () => target.sessionId,
+    });
     const recovery = createReplyRestartRecoveryClaimController({
       ...target,
+      acquireSessionActor: () => actor.acquireSessionActor(),
       admissionRunId: "inbound-run",
       sourceTurnId: "channel-user:v1:synthetic-dm",
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
@@ -94,7 +106,6 @@ it("keeps a cron context prefix readable when an inbound turn persists before qu
               resolved: { provider: "test", model: "test" },
               fallback: { exhausted: false, attempts: [] },
               autoCompactionCount: 0,
-              didLogHeartbeatStrip: false,
             },
           };
         },

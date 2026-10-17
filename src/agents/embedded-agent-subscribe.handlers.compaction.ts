@@ -2,10 +2,7 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { recordSessionCompacted } from "../sessions/session-state-events.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "./compaction-usage.js";
-import {
-  classifyCompactionReason,
-  formatUnknownCompactionReasonDetail,
-} from "./embedded-agent-runner/compact-reasons.js";
+import { classifyCompactionReason } from "./embedded-agent-runner/compact-reasons.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
@@ -26,6 +23,7 @@ function emitCompactionAgentEvent(
         willRetry: boolean;
         outcome: SessionCompactionEndEvent["outcome"]["status"];
         reason?: string;
+        qualityDegraded?: true;
       },
 ): void {
   const event = { stream: "compaction" as const, data };
@@ -95,7 +93,9 @@ export function handleCompactionStart(
 
   // Hooks are fire-and-forget so compaction state updates and liveness pauses
   // cannot be delayed by plugin work.
-  runBestEffortCompactionHook(ctx, "before");
+  if (!evt.hooksHandled) {
+    runBestEffortCompactionHook(ctx, "before");
+  }
 }
 
 export function handleCompactionEnd(
@@ -153,7 +153,6 @@ export function handleCompactionEnd(
   if (willRetry) {
     ctx.noteCompactionRetry();
     ctx.resetForCompactionRetry();
-    ctx.log.debug(`embedded run compaction retry: runId=${ctx.params.runId}`);
   } else {
     if (outcome.status !== "aborted") {
       ctx.state.livenessState = "working";
@@ -164,7 +163,7 @@ export function handleCompactionEnd(
     // A failed/aborted/skipped end must keep live assistant usage intact —
     // zeroing it disables the persistent-error compaction trigger exactly in
     // the degraded sessions that need it.
-    if (completed && Array.isArray(messages)) {
+    if (completed) {
       // Marker-free final compaction has no fresh boundary, so stale totals
       // must be cleared before later context counters inspect assistant usage.
       stripStaleAssistantUsageBeforeLatestCompaction(messages, {
@@ -177,8 +176,6 @@ export function handleCompactionEnd(
     outcome.status === "skipped" || outcome.status === "failed" ? outcome.reason : undefined;
   if (!completed) {
     const reasonClass = outcomeReason ? classifyCompactionReason(outcomeReason) : "aborted";
-    const reasonDetail =
-      reasonClass === "unknown" ? formatUnknownCompactionReasonDetail(outcomeReason) : undefined;
     const metadata = {
       event: "embedded_run_compaction_end",
       runId: ctx.params.runId,
@@ -187,9 +184,7 @@ export function handleCompactionEnd(
       completed: false,
       willRetry: false,
       reasonClass,
-      ...(outcomeReason ? { outcomeReason } : {}),
-      ...(reasonDetail ? { reasonDetail } : {}),
-      consoleMessage: `embedded run ${kind} ${outcome.status}: runId=${ctx.params.runId} reason=${reasonClass}${reasonDetail ? ` detail=${reasonDetail}` : ""}`,
+      consoleMessage: `embedded run ${kind} ${outcome.status}: runId=${ctx.params.runId} reason=${reasonClass}`,
     };
     const benign =
       outcome.status === "aborted" ||
@@ -205,12 +200,13 @@ export function handleCompactionEnd(
     completed,
     willRetry,
     outcome: outcome.status,
+    ...(completed && outcome.qualityDegraded ? { qualityDegraded: true } : {}),
     ...(outcomeReason ? { reason: outcomeReason } : {}),
   });
 
   // after_compaction runs only once the run will not retry, matching the visible
   // post-compaction session state plugin authors observe.
-  if (completed && !willRetry) {
+  if (completed && !willRetry && !evt.hooksHandled) {
     runBestEffortCompactionHook(ctx, "after");
   }
   return recording;

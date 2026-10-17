@@ -1,6 +1,6 @@
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterAll, vi } from "vitest";
@@ -109,7 +109,6 @@ vi.mock("../src/config.js", async (importOriginal) => {
 });
 
 import { resolveFaceTimeConfig } from "../src/config.js";
-export { FaceTimeHelperActionError } from "../src/helper-results.js";
 import { createFaceTimeRuntime } from "../src/runtime.js";
 
 export function completeAction(owner: Record<string, unknown>) {
@@ -148,11 +147,11 @@ export function completeAbsence() {
 }
 
 export async function pendingDialState(overrides: Record<string, unknown> = {}) {
-  const store = createPluginStateKeyedStoreForTests<unknown>("facetime", {
-    namespace: "pending-dial",
-    maxEntries: 1,
-    overflowPolicy: "reject-new",
-  });
+  const store = createPluginStateKeyedStoreV2ForTests<unknown>(
+    "facetime",
+    { namespace: "pending-dial", maxEntries: 1, overflowPolicy: "reject-new" },
+    { assertCurrent() {} },
+  );
   await store.register("active", {
     dialID: "approved-dial",
     version: 1,
@@ -234,12 +233,15 @@ export function incomingCall(status = 4) {
 }
 
 export async function createRuntime(
-  state: PluginStateKeyedStore<unknown> = createPluginStateKeyedStoreForTests<unknown>("facetime", {
-    namespace: "pending-dial",
-    maxEntries: 1,
-    overflowPolicy: "reject-new",
-  }),
+  state: PluginStateKeyedStore<unknown, 2> = createPluginStateKeyedStoreV2ForTests<unknown>(
+    "facetime",
+    { namespace: "pending-dial", maxEntries: 1, overflowPolicy: "reject-new" },
+    { assertCurrent() {} },
+  ),
   ownerHandles = ["owner@example.com"],
+  storeOpeners?: {
+    openKeyedStoreV2: () => PluginStateKeyedStore<unknown, 2>;
+  },
 ) {
   return await createFaceTimeRuntime({
     config: resolveFaceTimeConfig({ ownerHandles }),
@@ -248,8 +250,8 @@ export async function createRuntime(
       system: {
         runCommandWithTimeout: mocks.systemRun,
       },
-      state: {
-        openKeyedStore: () => state,
+      state: storeOpeners ?? {
+        openKeyedStoreV2: () => state,
       },
     } as never,
     logger: {
@@ -293,11 +295,11 @@ afterAll(() => resetPluginStateStoreForTests());
 
 export async function resetRuntimeTestState() {
   resetPluginStateStoreForTests({ closeDatabase: false });
-  await createPluginStateKeyedStoreForTests<unknown>("facetime", {
-    namespace: "pending-dial",
-    maxEntries: 1,
-    overflowPolicy: "reject-new",
-  }).clear();
+  await createPluginStateKeyedStoreV2ForTests<unknown>(
+    "facetime",
+    { namespace: "pending-dial", maxEntries: 1, overflowPolicy: "reject-new" },
+    { assertCurrent() {} },
+  ).clear();
   vi.clearAllMocks();
   mocks.helperParams = undefined;
   mocks.helper.connectedSockets = 2;

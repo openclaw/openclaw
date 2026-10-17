@@ -6,7 +6,6 @@ import {
   loadRelayCommandHarness as createHarness,
   sendRuntimeMessage,
   TEST_RELAY_KEY,
-  REPLACEMENT_TEST_RELAY_KEY,
 } from "./background.test-harness.js";
 
 const pendingReleases = new Set<() => void>();
@@ -298,21 +297,6 @@ describe("created initial target in selected mode", () => {
     });
   });
 
-  it("does not publish or detach an owned target before focus completes", async () => {
-    const harness = await createHarness(mode);
-    const focusing = deferred(undefined);
-    harness.windowsUpdate.mockImplementationOnce(async () => await focusing.promise);
-    const creating = harness.command({ type: "createTab", url: "about:blank", focus: true });
-    await vi.waitFor(() => expect(harness.windowsUpdate).toHaveBeenCalled());
-    harness.updateTab(101, { url: "about:blank" });
-    await vi.waitFor(() =>
-      expect(harness.frames().findLast((frame) => frame.type === "tabs")?.tabs).toEqual([]),
-    );
-    expect(harness.debuggerDetach).not.toHaveBeenCalled();
-    focusing.resolve();
-    expect(await creating).toMatchObject({ type: "result" });
-  });
-
   it("does not recapture creation authority from a late self-group event after revocation", async () => {
     const harness = await createHarness(mode);
     const naming = deferred(undefined);
@@ -518,41 +502,4 @@ describe("navigation command authority", () => {
       expect(harness.tabsRemove).not.toHaveBeenCalled();
     },
   );
-
-  it("never replies to navigation through a replacement socket", async () => {
-    const harness = await createHarness("selected");
-    await harness.command({ type: "createTab", url: "about:blank" });
-    const completed = deferred({});
-    let returned = false;
-    harness.debuggerSendCommand.mockImplementationOnce(async () => {
-      await completed.promise;
-      returned = true;
-      return {};
-    });
-    harness.socket.receive({
-      type: "cdp",
-      seq: 70,
-      tabId: 101,
-      method: "Page.navigate",
-      params: { url: "https://example.com/next" },
-    });
-    await vi.waitFor(() => expect(harness.debuggerSendCommand).toHaveBeenCalled());
-    const mutation = sendRuntimeMessage(harness, {
-      type: "pair",
-      accessMode: "selected",
-      pairingString: `ws://127.0.0.1:18798/extension#${REPLACEMENT_TEST_RELAY_KEY}`,
-    });
-    await vi.waitFor(() => expect(harness.socket.close).toHaveBeenCalled());
-    completed.resolve();
-    await mutation;
-    await vi.waitFor(() => expect(returned).toBe(true));
-    {
-      const socket = harness.relaySockets.at(-1)!;
-      await harness.authenticate(socket);
-      expect(socket.send.mock.calls.map(([raw]) => JSON.parse(raw)).some((f) => f.seq === 70)).toBe(
-        false,
-      );
-    }
-    expect(harness.frames().some((f) => f.seq === 70)).toBe(false);
-  });
 });

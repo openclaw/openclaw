@@ -4,7 +4,7 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveIsNixMode } from "../config/paths.js";
+import { resolveIsNixMode, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import {
@@ -24,11 +24,7 @@ function collectMacLaunchAgentOverrideWarning(): string | null {
   if (process.platform !== "darwin") {
     return null;
   }
-  const markerPath = path.join(
-    process.env.HOME ?? os.homedir(),
-    ".openclaw",
-    "disable-launchagent",
-  );
+  const markerPath = path.join(resolveStateDir(), "disable-launchagent");
   if (!fs.existsSync(markerPath)) {
     return null;
   }
@@ -45,10 +41,6 @@ function noteMacGatewayWarning(warning: string | null) {
   if (warning) {
     note(warning, "Gateway (macOS)");
   }
-}
-
-export async function noteMacLaunchAgentOverrides() {
-  noteMacGatewayWarning(collectMacLaunchAgentOverrideWarning());
 }
 
 /** Diagnose persistent disablement without taking activation authority from update or Doctor. */
@@ -96,10 +88,6 @@ async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(): Promise<string
     "  launchctl remove <label>",
     `  ${formatCliCommand("openclaw gateway restart")}`,
   ].join("\n");
-}
-
-export async function noteMacStaleOpenClawUpdateLaunchdJobs() {
-  noteMacGatewayWarning(await collectMacStaleOpenClawUpdateLaunchdJobsWarning());
 }
 
 async function launchctlGetenv(name: string): Promise<string | undefined> {
@@ -156,7 +144,9 @@ async function collectMacLaunchctlGatewayEnvOverrideWarning(
     .join("\n");
 }
 
-export async function noteMacLaunchctlGatewayEnvOverrides(cfg: OpenClawConfig) {
+export async function noteMacGatewayPlatformWarnings(cfg: OpenClawConfig): Promise<void> {
+  noteMacGatewayWarning(collectMacLaunchAgentOverrideWarning());
+  noteMacGatewayWarning(await collectMacStaleOpenClawUpdateLaunchdJobsWarning());
   noteMacGatewayWarning(await collectMacLaunchctlGatewayEnvOverrideWarning(cfg));
 }
 

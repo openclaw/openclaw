@@ -34,12 +34,11 @@ type ProviderBlockStreamingConfig = {
   accounts?: Record<string, { streaming?: unknown }>;
 };
 
-function resolveProviderBlockStreamingCoalesce(params: {
-  cfg: OpenClawConfig | undefined;
-  providerKey?: TextChunkProvider;
-  accountId?: string | null;
-}): BlockStreamingCoalesceConfig | undefined {
-  const { cfg, providerKey, accountId } = params;
+function resolveProviderBlockStreamingCoalesce(
+  cfg: OpenClawConfig | undefined,
+  providerKey?: TextChunkProvider,
+  accountId?: string | null,
+): BlockStreamingCoalesceConfig | undefined {
   if (!cfg || !providerKey) {
     return undefined;
   }
@@ -172,11 +171,7 @@ function resolveBlockStreamingCoalescing(
   const providerDefaults = providerId
     ? getChannelPlugin(providerId)?.streaming?.blockStreamingCoalesceDefaults
     : undefined;
-  const providerCfg = resolveProviderBlockStreamingCoalesce({
-    cfg,
-    providerKey,
-    accountId,
-  });
+  const providerCfg = resolveProviderBlockStreamingCoalesce(cfg, providerKey, accountId);
   const coalesceCfg = providerCfg ?? cfg?.agents?.defaults?.blockStreamingCoalesce;
   const minRequested = Math.max(
     1,

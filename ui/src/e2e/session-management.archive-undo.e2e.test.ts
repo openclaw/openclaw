@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { pauseVirtualClock, reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -14,6 +14,7 @@ import {
   sessionsListResponse,
   waitForPatch,
 } from "./session-management.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -56,7 +57,8 @@ suite.define(() => {
         const undo = page.getByRole("button", { name: "Undo", exact: true });
         expect(await undo.count()).toBe(0);
         if (transition === "navigate") {
-          await page.getByRole("link", { name: "Agents", exact: true }).click();
+          const pages = await openSidebarPages(page);
+          await pages.getByRole("link", { name: "Agents", exact: true }).click();
           await page.waitForURL((url) => url.pathname.endsWith("/agents"));
           await page.locator("openclaw-sessions-page").waitFor({ state: "detached" });
         }
@@ -153,9 +155,16 @@ suite.define(() => {
           (params) => params.key === archived.key && params.archived === false,
         );
         expect(restored.params).toMatchObject({
+          key: archived.key,
           expectedSessionId: archived.sessionId,
-          pinned: true,
+          archived: false,
+          ...(surface === "header" ? { pinned: true } : {}),
         });
+        // Header Undo retains the legacy shared flag; the personal sidebar does not write it.
+        if (surface === "sidebar") {
+          expect(restored.params).not.toHaveProperty("pinned");
+        }
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);
         await rowFor(archived.key).waitFor({ state: "visible" });
         expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(target.key));
       } finally {
@@ -169,6 +178,7 @@ suite.define(() => {
     async (queued) => {
       const context = await suite.browser.newContext(createControlUiE2eContextOptions());
       const page = await context.newPage();
+      await page.clock.install();
       const archived = sessionRow("agent:main:undo-cross-agent", "Restored original", 3, {
         pinned: true,
       });
@@ -220,7 +230,7 @@ suite.define(() => {
         const switchAgent = async (name: string) => {
           await sidebar.getByRole("button", { name: /Switch agent/ }).click();
           await sidebar
-            .locator("wa-dropdown.sidebar-agent-menu")
+            .locator(".sidebar-agent-menu")
             .getByRole("menuitem", { name, exact: true })
             .click();
         };
@@ -240,7 +250,10 @@ suite.define(() => {
             await gateway.getRequests("sessions.list", { agentId: "main", includeGlobal: true })
           ).length;
           await gateway.deferNext("sessions.list", { agentId: "main", includeGlobal: true });
+          await pauseVirtualClock(page);
           await gateway.emitGatewayEvent("sessions.changed", { agentId: "main", reason: "update" });
+          await page.clock.fastForward(5_001);
+          await page.clock.resume();
           await gateway.waitForRequest("sessions.list", {
             after: listsBefore,
             match: { agentId: "main", includeGlobal: true },
@@ -269,9 +282,15 @@ suite.define(() => {
         await captureUiProof(suite, page, "cross-agent-after-pagination.png");
         await switchAgent("Main");
         await rowFor(archived.key).waitFor({ state: "visible" });
+        // Restoring legacy shared metadata does not author a personal navigation pin.
         await rowFor(archived.key)
-          .getByRole("button", { name: "Unpin session", exact: true })
+          .getByRole("button", { name: "Pin session", exact: true })
           .waitFor({ state: "attached" });
+        expect(
+          await page
+            .locator(`.sidebar-rail [data-sidebar-entry="session:${archived.key}"]`)
+            .count(),
+        ).toBe(0);
       } finally {
         await context.close();
       }

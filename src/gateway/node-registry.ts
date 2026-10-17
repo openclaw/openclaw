@@ -1000,8 +1000,6 @@ export class NodeRegistry {
         sessionCapsCeiling.has(capability),
       );
     }
-    this.refreshSessionPolicy(node);
-
     if ("permissions" in surface) {
       node.permissions =
         surface.permissions === undefined
@@ -1019,9 +1017,14 @@ export class NodeRegistry {
       }
     }
 
+    const previousPairingGeneration = node.pairingGeneration;
     if (generationTransition) {
-      const previousPairingGeneration = node.pairingGeneration;
+      // Policy refresh can synchronously notify readers of this committed surface.
       node.pairingGeneration = generationTransition.nextPairingGeneration;
+    }
+    this.refreshSessionPolicy(node);
+
+    if (generationTransition) {
       // Runner declarations are pairing-generation facts. Retire the old
       // declaration so the live process must publish for its promoted generation.
       settleNodeRegistryPairingGenerationChange({
@@ -1307,7 +1310,9 @@ export class NodeRegistry {
     if (eventTransport) {
       return eventTransport.send(event, payload);
     }
-    return sendNodeWebSocketEvent(node.client.socket, () => serializeNodeEvent(event, payload));
+    return sendNodeWebSocketEvent(node.client.socket, event, () =>
+      serializeNodeEvent(event, payload),
+    );
   }
 
   private sendEventRawInternal(
@@ -1332,7 +1337,7 @@ export class NodeRegistry {
     if (eventTransport) {
       return eventTransport.sendRaw(event, payloadJSON);
     }
-    return sendNodeWebSocketEvent(node.client.socket, () => {
+    return sendNodeWebSocketEvent(node.client.socket, event, () => {
       const payloadFragment = payloadJSON ? `,"payload":${payloadJSON.json}` : "";
       return `{"type":"event","event":${JSON.stringify(event)}${payloadFragment}}`;
     });

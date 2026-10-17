@@ -1,4 +1,5 @@
 // Discord provider module implements model/runtime integration.
+import { EventEmitter } from "node:events";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { Mock } from "vitest";
@@ -47,8 +48,8 @@ type ProviderMonitorTestMocks = {
       params?: { skillCommands?: unknown[]; provider?: string },
     ) => NativeCommandSpecMock[]
   >;
-  listSkillCommandsForAgentsMock: Mock<
-    (params?: { cfg?: unknown; agentIds?: string[] }) => unknown[]
+  prepareSkillCommandsForAgentsMock: Mock<
+    (params?: { cfg?: unknown; agentIds?: string[] }) => Promise<unknown[]>
   >;
   monitorLifecycleMock: Mock<(params: { threadBindings: { stop: () => void } }) => Promise<void>>;
   resolveDiscordAccountMock: Mock<
@@ -58,7 +59,6 @@ type ProviderMonitorTestMocks = {
   isNativeCommandsExplicitlyDisabledMock: Mock<(params?: unknown) => boolean>;
   resolveNativeCommandsEnabledMock: Mock<(params?: unknown) => boolean>;
   resolveNativeSkillsEnabledMock: Mock<(params?: unknown) => boolean>;
-  isVerboseMock: Mock<() => boolean>;
   shouldLogVerboseMock: Mock<() => boolean>;
   voiceRuntimeModuleLoadedMock: Mock<() => void>;
 };
@@ -74,7 +74,6 @@ function baseDiscordAccountConfig() {
 
 const providerMonitorTestMocks: ProviderMonitorTestMocks = vi.hoisted(() => {
   const createdBindingManagers: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
-  const isVerboseMock = vi.fn(() => false);
   const shouldLogVerboseMock = vi.fn(() => false);
 
   return {
@@ -131,9 +130,9 @@ const providerMonitorTestMocks: ProviderMonitorTestMocks = vi.hoisted(() => {
         params?: { skillCommands?: unknown[]; provider?: string },
       ) => NativeCommandSpecMock[]
     >(() => [{ name: "cmd", description: "built-in", acceptsArgs: false }]),
-    listSkillCommandsForAgentsMock: vi.fn<
-      (params?: { cfg?: unknown; agentIds?: string[] }) => unknown[]
-    >(() => []),
+    prepareSkillCommandsForAgentsMock: vi.fn<
+      (params?: { cfg?: unknown; agentIds?: string[] }) => Promise<unknown[]>
+    >(async () => []),
     monitorLifecycleMock: vi.fn(async (params: { threadBindings: { stop: () => void } }) => {
       params.threadBindings.stop();
     }),
@@ -149,7 +148,6 @@ const providerMonitorTestMocks: ProviderMonitorTestMocks = vi.hoisted(() => {
     isNativeCommandsExplicitlyDisabledMock: vi.fn((_params) => false),
     resolveNativeCommandsEnabledMock: vi.fn((_params) => true),
     resolveNativeSkillsEnabledMock: vi.fn((_params) => false),
-    isVerboseMock,
     shouldLogVerboseMock,
     voiceRuntimeModuleLoadedMock: vi.fn(),
   };
@@ -175,14 +173,13 @@ const {
   createdBindingManagers,
   getAcpSessionStatusMock,
   listNativeCommandSpecsForConfigMock,
-  listSkillCommandsForAgentsMock,
+  prepareSkillCommandsForAgentsMock,
   monitorLifecycleMock,
   resolveDiscordAccountMock,
   resolveDiscordAllowlistConfigMock,
   isNativeCommandsExplicitlyDisabledMock,
   resolveNativeCommandsEnabledMock,
   resolveNativeSkillsEnabledMock,
-  isVerboseMock,
   shouldLogVerboseMock,
   voiceRuntimeModuleLoadedMock,
 } = providerMonitorTestMocks;
@@ -191,9 +188,7 @@ export function getProviderMonitorTestMocks(): typeof providerMonitorTestMocks {
   return providerMonitorTestMocks;
 }
 
-export function resetDiscordProviderMonitorMocks(params?: {
-  nativeCommands?: NativeCommandSpecMock[];
-}) {
+export function resetDiscordProviderMonitorMocks() {
   clientDeployCommandsMock.mockClear().mockResolvedValue(undefined);
   clientFetchUserMock.mockClear().mockResolvedValue({ id: "bot-1" });
   clientGetPluginMock.mockClear().mockReturnValue(undefined);
@@ -231,10 +226,8 @@ export function resetDiscordProviderMonitorMocks(params?: {
   getAcpSessionStatusMock.mockClear().mockResolvedValue({ state: "idle" });
   listNativeCommandSpecsForConfigMock
     .mockClear()
-    .mockReturnValue(
-      params?.nativeCommands ?? [{ name: "cmd", description: "built-in", acceptsArgs: false }],
-    );
-  listSkillCommandsForAgentsMock.mockClear().mockReturnValue([]);
+    .mockReturnValue([{ name: "cmd", description: "built-in", acceptsArgs: false }]);
+  prepareSkillCommandsForAgentsMock.mockClear().mockResolvedValue([]);
   monitorLifecycleMock.mockClear().mockImplementation(async (monitorParams) => {
     monitorParams.threadBindings.stop();
   });
@@ -250,7 +243,6 @@ export function resetDiscordProviderMonitorMocks(params?: {
   isNativeCommandsExplicitlyDisabledMock.mockClear().mockReturnValue(false);
   resolveNativeCommandsEnabledMock.mockClear().mockReturnValue(true);
   resolveNativeSkillsEnabledMock.mockClear().mockReturnValue(false);
-  isVerboseMock.mockClear().mockReturnValue(false);
   shouldLogVerboseMock.mockClear().mockReturnValue(false);
   voiceRuntimeModuleLoadedMock.mockClear();
 }
@@ -291,7 +283,9 @@ vi.mock("../internal/discord.js", async () => {
   }
   class Client {
     listeners: unknown[];
+    plugins: NonNullable<ConstructorParameters<typeof actual.Client>[2]>;
     rest: {
+      options: { timeout: number };
       get: ReturnType<typeof vi.fn>;
       post: ReturnType<typeof vi.fn>;
       put: ReturnType<typeof vi.fn>;
@@ -299,10 +293,16 @@ vi.mock("../internal/discord.js", async () => {
       delete: ReturnType<typeof vi.fn>;
     };
     options: unknown;
-    constructor(options: unknown, handlers: { listeners?: unknown[] }) {
+    constructor(
+      options: unknown,
+      handlers: { listeners?: unknown[] },
+      plugins: ConstructorParameters<typeof actual.Client>[2] = [],
+    ) {
       this.options = options;
       this.listeners = handlers.listeners ?? [];
+      this.plugins = [...plugins];
       this.rest = {
+        options: { timeout: 15_000 },
         get: vi.fn(async () => undefined),
         post: vi.fn(async () => undefined),
         put: vi.fn(async () => undefined),
@@ -318,7 +318,7 @@ vi.mock("../internal/discord.js", async () => {
       return await clientFetchUserMock(target);
     }
     getPlugin(name: string) {
-      return clientGetPluginMock(name);
+      return clientGetPluginMock(name) ?? this.plugins.find((plugin) => plugin.id === name);
     }
   }
   return { ...actual, Client, RateLimitError };
@@ -328,8 +328,12 @@ vi.mock("../internal/gateway.js", () => ({
   GatewayCloseCodes: { DisallowedIntents: 4014 },
 }));
 
-vi.mock("../internal/voice.js", () => ({
-  VoicePlugin: function VoicePlugin() {},
+vi.mock("../internal/voice.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../internal/voice.js")>()),
+  VoicePlugin: class {
+    id = "voice";
+    registerClient() {}
+  },
 }));
 
 vi.mock("openclaw/plugin-sdk/acp-runtime", async () => {
@@ -353,7 +357,7 @@ vi.mock("openclaw/plugin-sdk/command-auth-native", async () => {
   return {
     ...actual,
     listNativeCommandSpecsForConfig: listNativeCommandSpecsForConfigMock,
-    listSkillCommandsForAgents: listSkillCommandsForAgentsMock,
+    prepareSkillCommandsForAgents: prepareSkillCommandsForAgentsMock,
   };
 });
 vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
@@ -384,7 +388,7 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   >("openclaw/plugin-sdk/runtime-config-snapshot");
   return {
     ...actual,
-    getRuntimeConfig: () => ({}),
+    captureRuntimeConfigAsyncReader: () => async () => ({}),
   };
 });
 
@@ -395,7 +399,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   return {
     ...actual,
     danger: (value: string) => value,
-    isVerbose: isVerboseMock,
+    isVerbose: () => false,
     logVerbose: vi.fn(),
     shouldLogVerbose: shouldLogVerboseMock,
     warn: (value: string) => value,
@@ -485,7 +489,13 @@ vi.mock(buildDiscordSourceModuleId("monitor/exec-approvals.js"), () => ({
 }));
 
 vi.mock(buildDiscordSourceModuleId("monitor/gateway-plugin.js"), () => ({
-  createDiscordGatewayPlugin: () => ({ id: "gateway-plugin" }),
+  createDiscordGatewayPlugin: () =>
+    clientGetPluginMock("gateway") ?? {
+      id: "gateway",
+      emitter: new EventEmitter(),
+      isConnected: false,
+      disconnect: vi.fn(),
+    },
   waitForDiscordGatewayPluginRegistration: () => undefined,
 }));
 
@@ -535,4 +545,8 @@ vi.mock(buildDiscordSourceModuleId("monitor/thread-bindings.js"), () => ({
   createThreadBindingManager: createThreadBindingManagerMock,
   reconcileAcpThreadBindingsOnStartup: reconcileAcpThreadBindingsOnStartupMock,
   resolveThreadBindingIdleTimeoutMs: vi.fn(() => 24 * 60 * 60 * 1000),
+}));
+
+vi.mock(buildDiscordSourceModuleId("monitor/thread-bindings.manager.js"), () => ({
+  createThreadBindingManager: createThreadBindingManagerMock,
 }));

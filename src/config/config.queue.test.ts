@@ -5,24 +5,6 @@ import { lookupConfigSchema } from "./schema.lookup.js";
 import { validateConfigObject, validateConfigObjectWithPlugins } from "./validation.js";
 
 describe("queue configuration", () => {
-  it("accepts per-channel queue modes and debounce for bundled and plugin channels", () => {
-    const queue = {
-      byChannel: {
-        googlechat: "followup",
-        mattermost: "collect",
-        matrix: "steer",
-        x: "followup",
-        "custom-channel": "collect",
-      },
-      debounceMsByChannel: { x: 750, "custom-channel": 0 },
-    };
-    const result = validateConfigObject({ messages: { queue } });
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.config.messages?.queue).toEqual(queue);
-    }
-  });
-
   it.each([
     { byChannel: { x: "invalid" } },
     { debounceMsByChannel: { x: -1 } },

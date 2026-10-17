@@ -12,7 +12,6 @@ import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
-import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { reconciliationDirectories } from "./workspace-reconcile-derived-paths.js";
 import { removeEmptyWorkspaceDirectory } from "./workspace-reconcile-fs.js";
 export { preflightWorkspaceApply } from "./workspace-manifest-worker.js";
@@ -62,6 +61,7 @@ export async function inspectAcceptedWorkerWorkspace(params: {
   allowAdvancedLocalState?: boolean;
   base: WorkerWorkspaceManifest;
   current: WorkerWorkspaceManifest;
+  additionalPaths?: ReadonlySet<string>;
 }): Promise<WorkerWorkspaceApplyResult | undefined> {
   const root = await fs.realpath(params.root);
   const preserveDirectories = new Set(
@@ -73,6 +73,7 @@ export async function inspectAcceptedWorkerWorkspace(params: {
   const includePaths = params.current.baseCommit
     ? new Set([...manifestNodes(params.base).keys(), ...manifestNodes(params.current).keys()])
     : undefined;
+  params.additionalPaths?.forEach((entryPath) => includePaths?.add(entryPath));
   const actual = await captureWorkspaceManifest({
     root,
     baseCommit: params.current.baseCommit,
@@ -169,20 +170,6 @@ export async function applyWorkspaceDirectoryChanges(params: {
     }
     await removeEmptyWorkspaceDirectory(workspaceRoot, entryPath);
   }
-}
-
-export function hasReplacedBaseEntryAncestor(
-  entryPath: string,
-  baseByPath: ReadonlyMap<string, WorkerWorkspaceManifestEntry>,
-  currentByPath: ReadonlyMap<string, WorkerWorkspaceManifestEntry>,
-): boolean {
-  for (const ancestor of workspacePathAncestors(entryPath)) {
-    const baseEntry = baseByPath.get(ancestor);
-    if (baseEntry && !sameEntry(baseEntry, currentByPath.get(ancestor))) {
-      return true;
-    }
-  }
-  return false;
 }
 
 export function retainedConflictPaths(

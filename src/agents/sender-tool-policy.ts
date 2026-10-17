@@ -43,16 +43,8 @@ export function resolveSenderToolPolicy(
     params.agentId && params.agentId.trim()
       ? resolveAgentConfig(cfg, params.agentId)?.tools
       : undefined;
-  const agentPolicy = resolveToolsBySender({
-    toolsBySender: agentTools?.toolsBySender,
-    ...sender,
-  });
-  if (agentPolicy) {
-    return pickSandboxToolPolicy(agentPolicy);
-  }
-  const globalPolicy = resolveToolsBySender({
-    toolsBySender: cfg.tools?.toolsBySender,
-    ...sender,
-  });
-  return pickSandboxToolPolicy(globalPolicy);
+  return pickSandboxToolPolicy(
+    resolveToolsBySender({ toolsBySender: agentTools?.toolsBySender, ...sender }) ||
+      resolveToolsBySender({ toolsBySender: cfg.tools?.toolsBySender, ...sender }),
+  );
 }

@@ -5,6 +5,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import {
   unregisterSessionBindingAdapter,
@@ -84,12 +88,14 @@ beforeEach(async () => {
     session: { scope: "global" },
   });
   await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
 });
 afterEach(async () => {
   for (const adapter of adapters.splice(0).toReversed()) {
     unregisterSessionBindingAdapter({ channel: "webchat", accountId: "default", adapter });
   }
   await state?.cleanup();
+  clearRuntimeConfigSnapshot();
   resetInboundDedupe();
   observed.events.length = 0;
   vi.clearAllMocks();

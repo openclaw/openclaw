@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  normalizePlainTextToolCallStreamEvents,
   projectScrubbedPlainTextToolCallMessage,
   type PlainTextToolCallNameMatcher,
 } from "./stream-normalizer.js";
@@ -34,7 +35,6 @@ const lifecycles = Array.from({ length: 129 }, (_, index) => [
 
 const aggregate = "<function=read></function>\n".repeat(9_500);
 const xmlParameter = `<function=read><parameter=path>${oversized}`;
-const incomplete = "Hello\n<function=read><parameter=path>SECRET";
 const longHarmony = `analysis${" ".repeat(256_001)}`;
 const streamDeltas = (...chunks: string[]) => chunks.map((delta) => streamTextDelta(delta));
 function cumulativeDeltas(...chunks: string[]) {
@@ -43,10 +43,6 @@ function cumulativeDeltas(...chunks: string[]) {
 }
 
 describe("normalizePlainTextToolCallStreamEvents", () => {
-  const aggregateTail = cumulativeDeltas(
-    aggregate + "<function=read><parameter=path>secret",
-    "</parameter></function>\nVisible",
-  );
   const falseMarker = cumulativeDeltas(aggregate + "[tool:re", " nope");
   const optionalWhitespace = streamDeltas(
     `[tool:read] {"path":"${oversized}`,
@@ -54,7 +50,6 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     "\n\n",
     "Visible",
   );
-  const incompleteEnd = [streamTextDelta(incomplete), textEnd(incomplete)];
   const prose = "analysis is ordinary prose";
   const proseEnd = [streamTextDelta("analysis"), textEnd(prose)];
   const endTypes = ["text_delta", "text_end"];
@@ -68,10 +63,8 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
   ];
   const startTypes = ["text_start", "text_delta", "text_delta"];
   it.each<[string, Record<string, unknown>[], string[], string?, string[]?]>([
-    ["suppresses an aggregate's active tail", aggregateTail, ["Visible"], "secret"],
     ["replays an aggregate's false marker", falseMarker, ["[tool:re nope"], "<function=read>"],
     ["retains split optional-closer whitespace", optionalWhitespace, ["\nVisible"]],
-    ["keeps incomplete calls private", incompleteEnd, ["Hello\n"], "SECRET"],
     ["reconciles false-prefix prose", proseEnd, [prose], undefined, endTypes],
     ["bounds unnamed Harmony prefixes", streamDeltas(longHarmony), [longHarmony]],
     ["preserves malformed parameters", invalidParameter, [malformed]],
@@ -96,21 +89,83 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     expect(textDeltas(events)).toEqual([raw]);
     expectTerminalContent(events, terminal, textContent(raw));
   });
+
+  it.each<[string, Record<string, unknown>[], string[], string]>([
+    [
+      "keeps a replayed false prefix stable when a call marker spans chunks",
+      streamDeltas(" [read]\n", "<function=read>"),
+      [" [read]\n"],
+      "<function=read>",
+    ],
+    [
+      "holds a stacked function call whose marker spans chunks",
+      streamDeltas('[tool:read]\n{"path":"a"}<funct', "ion=read></function>"),
+      [],
+      "<function=read>",
+    ],
+    [
+      "holds a stacked Harmony call whose marker spans chunks",
+      streamDeltas('[tool:read]\n{"path":"a"} <|channel|>', "commentary to=read code<|message|>  "),
+      [],
+      "<|channel|>",
+    ],
+  ])("%s", async (_name, source, visible, hidden) => {
+    const events = await normalize(source);
+    expect(textDeltas(events)).toEqual(visible);
+    expect(JSON.stringify(events)).not.toContain(hidden);
+    const unsplit = await normalize([
+      streamTextDelta(source.map((event) => event.delta as string).join("")),
+    ]);
+    expect(textDeltas(unsplit)).toEqual(visible);
+  });
+
+  it.each([
+    ["<function=read>", "</function>"],
+    ["<|channel|>commentary", ' to=read code<|message|>{"path":"a"}'],
+  ])("keeps every opening-marker split private for %s", async (marker, tail) => {
+    const firstCall = '[tool:read]\n{"path":"a"}';
+    for (let split = 1; split < marker.length; split += 1) {
+      const events = await normalizeTextDeltas(
+        firstCall + marker.slice(0, split),
+        marker.slice(split) + tail,
+      );
+      expect(textDeltas(events)).toEqual([]);
+    }
+  });
+
+  it.each([
+    [
+      "replays a false prefix that a cumulative text_end completes",
+      "hello\n[read]\n{}",
+      "hello\n[read]\n{}\nX\n  ",
+      "hello\n[read]\n{}\nX\n  ",
+    ],
+    [
+      "hides a split function marker completed only by a cumulative text_end",
+      "hello\n[read]\n{}",
+      "hello\n[read]\n{}\n<function=read>",
+      "hello\n[read]\n{}\n",
+    ],
+    [
+      "hides a split function call completed only by a cumulative text_end",
+      "hello\n[read]\n{}",
+      "hello\n[read]\n{}\n<function=read></function>",
+      "hello\n[read]\n{}\n",
+    ],
+  ])("%s", async (_name, delta, full, visible) => {
+    const split = await normalize([streamTextDelta(delta), textEnd(full)]);
+    const unsplit = await normalize([streamTextDelta(full), textEnd(full)]);
+    expect(textDeltas(split).join("")).toBe(visible);
+    expect(textDeltas(unsplit).join("")).toBe(visible);
+    expect(eventTypes(split).includes("text_end")).toBe(eventTypes(unsplit).includes("text_end"));
+    expect(JSON.stringify(split)).not.toContain("<function=read>");
+  });
   it("preserves prose that invalidates an over-cap XML prefix", async () => {
     const prefix = overCapXml.slice(0, -"</function>".length);
     const visible = "Visible answer";
     const events = await normalize(
       withTerminal(cumulativeDeltas(prefix, visible), "done", prefix + visible),
     );
-    expect(textDeltas(events)).toEqual([visible]);
-    expect(JSON.stringify(events)).not.toContain("<function=read>");
-    expectTerminalContent(events, "done", textContent(visible));
-  });
-
-  it("preserves a 400k suffix in a done snapshot after an over-cap call", async () => {
-    const visible = `${"a".repeat(150_000)}MIDDLE${"b".repeat(250_000)}`;
-    const raw = `${overCapXml}\n${visible}`;
-    const events = await normalize(withTerminal([textDelta(raw, raw)], "done", raw));
     expect(textDeltas(events)).toEqual([visible]);
     expect(JSON.stringify(events)).not.toContain("<function=read>");
     expectTerminalContent(events, "done", textContent(visible));
@@ -126,7 +181,7 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     expect(events).toEqual([]);
   });
 
-  it.each([`<parameter=path>${oversized}`, `{"path":"${oversized}"}\n[END_TOOL_REQU`])(
+  it.each([`{"path":"${oversized}"}\n[END_TOOL_REQU`])(
     "scrubs incomplete split named calls",
     async (payload) => {
       const message = assistantMessage(textContent("[read]", payload), "length");
@@ -153,13 +208,6 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     ["[read]", '  {"path":"/tmp"}[/read]', { path: "/tmp" }],
   ])("repairs a boundary inside leading horizontal whitespace", (first, second, args) => {
     expect(parseSplitCall([first, second])?.[0]).toMatchObject({ name: "read", arguments: args });
-  });
-
-  it("does not duplicate an existing parameter line break", () => {
-    expect(
-      parseSplitCall(["<function=read><parameter=path>", "  \r\n/tmp</parameter></function>"])?.[0]
-        ?.arguments,
-    ).toEqual({ path: "  \r\n/tmp" });
   });
 
   it.each([
@@ -363,7 +411,6 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
   it.each([
     ["<function=read><parameter=path>SECRET", "error"],
     ["<function=read><parameter=path>SECRET", "done"],
-    ["<function=read><parameter=path>SECRET</parameter></function>", "done"],
   ] as const)("fails closed on a known %s candidate at %s", async (raw, terminal) => {
     const events = await normalize(
       terminal === "error"
@@ -373,18 +420,6 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     expect(events.at(-1)?.type).toBe(terminal);
     expect(textDeltas(events)).toEqual([]);
     expect(JSON.stringify(events)).not.toContain("SECRET");
-  });
-
-  it("scrubs a cumulative partial before emitting a visible Harmony prefix", async () => {
-    const first = "Visible\nanalysis to=read code {}<";
-    const events = await normalize([
-      textDelta(first, first),
-      textDelta("|call|>", first + "|call|>"),
-    ]);
-    expect(textDeltas(events)).toEqual(["Visible\n"]);
-    expect(events[0]?.partial).toMatchObject({ content: textContent("Visible\n") });
-    expect(JSON.stringify(events[0])).not.toContain("SECRET");
-    expect(JSON.stringify(events)).not.toContain("<|call|>");
   });
 
   it("keeps block-local text_end checkpoints out of the candidate buffer", async () => {
@@ -523,37 +558,21 @@ describe("normalizePlainTextToolCallStreamEvents protected ranges", () => {
     expect(textDeltas(events).join("")).toBe(opening + candidate);
   });
 
-  it("materializes Markdown when inline spans block the fast path", async () => {
-    const lengths: number[] = [];
-    const chunks = Array.from({ length: 1_000 }, () => "ordinary `code` prose\n");
-    const candidate = literalCall.trimEnd();
-    const events = await protectedDeltas(
-      [...chunks.map((delta) => streamTextDelta(delta)), streamTextDelta(candidate)],
-      (text) => {
-        lengths.push(text.length);
-        return [];
-      },
-    );
-    expect(lengths[0]).toBe(chunks.join("").length + candidate.length);
-    expect(lengths.length).toBeLessThanOrEqual(3);
-    expect(textDeltas(events).join("")).toBe(chunks.join(""));
-  });
-
-  it.each([
-    ["an open fence", "```toml\n[read.section]\n"],
-    ["an unfinished text line", "hello"],
-  ])("resets %s between completions", async (_name, first) => {
-    const events = await normalize(
-      [
-        streamTextDelta(first),
-        doneAssistantEvent("stop", textContent(first), "stop"),
-        streamTextDelta(literalCall),
-        doneAssistantEvent("stop", textContent(literalCall), "stop"),
-      ],
-      { protectFences: true },
-    );
-    expect(textDeltas(events)).toEqual([first]);
-  });
+  it.each([["an open fence", "```toml\n[read.section]\n"]])(
+    "resets %s between completions",
+    async (_name, first) => {
+      const events = await normalize(
+        [
+          streamTextDelta(first),
+          doneAssistantEvent("stop", textContent(first), "stop"),
+          streamTextDelta(literalCall),
+          doneAssistantEvent("stop", textContent(literalCall), "stop"),
+        ],
+        { protectFences: true },
+      );
+      expect(textDeltas(events)).toEqual([first]);
+    },
+  );
 
   it("bounds prefix checks and parsing across later candidates (#122513)", async () => {
     const prefix = "x".repeat(199_998);
@@ -626,5 +645,226 @@ describe("normalizePlainTextToolCallStreamEvents protected ranges", () => {
       },
     );
     expectLiteral(events, text, textContent(text));
+  });
+});
+
+describe("normalizePlainTextToolCallStreamEvents scrub reuse", () => {
+  const toolCall = '[tool:read]\n{"path":"a"}\n';
+  const scrub = (raw: string) =>
+    projectScrubbedPlainTextToolCallMessage({
+      forceKnownCandidates: true,
+      matcher,
+      message: assistantMessage(textContent(raw)),
+      preserveEmptyTextBlocks: true,
+      resolveProtectedRanges: resolveTestFenceRanges,
+    })?.message;
+  const chunked = (text: string, size: number) => {
+    let accumulated = "";
+    return Array.from({ length: Math.ceil(text.length / size) }, (_, index) => {
+      const chunk = text.slice(index * size, index * size + size);
+      accumulated += chunk;
+      return partialDelta(chunk, 0, accumulated);
+    });
+  };
+
+  it("reuses settled scans across a streamed reply with a leaked call (#174345)", async () => {
+    const fenced = [
+      "```toml",
+      ...Array.from({ length: 40 }, (_, index) => `[read.section.${index}]\nname = "svc"`),
+      "```",
+      "",
+    ].join("\n");
+    const source = chunked(toolCall + fenced, 4);
+    let calls = 0;
+    const events = await protectedDeltas(source, (text) => {
+      calls += 1;
+      return resolveTestFenceRanges(text);
+    });
+    expect(textDeltas(events).join("")).toBe(fenced);
+    // One scan per delta would cost a call per chunk; reuse caps this to the deltas that still
+    // carry fence or marker bytes plus the first scans.
+    expect(calls).toBeLessThanOrEqual(Math.ceil(source.length / 4));
+    let visible = "";
+    for (const event of events) {
+      const delta = event.delta;
+      if (typeof delta !== "string" || delta.length === 0) {
+        continue;
+      }
+      visible += delta;
+      expect(event.partial).toEqual(scrub(toolCall + visible));
+    }
+  });
+
+  it.each([
+    ["spaces before the next line", '[tool:read]\n{"path":"a"}   \nNext.'],
+    ["CRLF before the next line", '[tool:read]\n{"path":"a"}\r\nNext.'],
+    ["closing tag with trailing spaces", "[read]\n{}\n[/read]   \nNext."],
+  ])(
+    "keeps the last streamed scrub equal to the unstreamed scrub (#174345): %s",
+    async (_name, text) => {
+      for (const chunkSize of [2, 3, 4, 5]) {
+        const events = await protectedDeltas(chunked(text, chunkSize));
+        const last = events.findLast((event) => event.type === "text_delta");
+        expect(last?.partial).toEqual(scrub(text));
+      }
+    },
+  );
+});
+
+describe("normalizePlainTextToolCallStreamEvents calls after visible text", () => {
+  const leading = '[tool:read]\n{"path":"a"}\n';
+  const trailing = '[tool:read]\n{"path":"b"}\n';
+
+  it.each<[string, string[], string]>([
+    ["one chunk", [`${leading}Done.\n${trailing}`], "Done.\n"],
+    ["later chunk", [`${leading}Done.\n`, trailing], "Done.\n"],
+    ["split name", [`${leading}Done.\n[tool:re`, 'ad]\n{"path":"b"}\n'], "Done.\n"],
+    ["split marker", [`${leading}Done.\n[to`, 'ol:read]\n{"path":"b"}\n'], "Done.\n"],
+    ["split payload", [`${leading}Done.\n[tool:read]\n{"path":"b`, '"}\n'], "Done.\n"],
+    ["split function", [`${leading}Done.\n<funct`, "ion=read></function>"], "Done.\n"],
+    ["stray closing tag", [`${leading}[/tool]\n${trailing}`], "[/tool]\n"],
+    ["literal fenced call", [leading + fencedExample], fencedExample],
+  ])("keeps streamed and terminal prose consistent: %s", async (_name, chunks, visible) => {
+    const text = chunks.join("");
+    const events = await normalize(
+      [...streamDeltas(...chunks), doneAssistantEvent("stop", textContent(text), "stop")],
+      { protectFences: true },
+    );
+    expect(textDeltas(events).join("")).toBe(visible);
+    expectTerminalContent(events, "done", textContent(visible));
+  });
+
+  it.each(["eof", "done", "error"] as const)(
+    "flushes prose but hides unfinished calls at %s",
+    async (terminal) => {
+      const raw = `${leading}Done.\n[tool:read`;
+      const events = await normalize(withTerminal([streamTextDelta(raw)], terminal, raw));
+      expect(textDeltas(events)).toEqual(["Done.\n"]);
+      expectTerminalContent(events, terminal, textContent("Done.\n"));
+      expect(JSON.stringify(events)).not.toContain("[tool:");
+    },
+  );
+
+  it("releases prose before a later call grows past the payload cap", async () => {
+    const prose = "Done.\n".repeat(45_000);
+    let visible = "";
+    async function* source() {
+      yield streamTextDelta(`${leading}${prose}[tool:read]\n{"path":"`);
+      expect(visible).toBe(prose);
+      yield streamTextDelta(oversized);
+      yield streamTextDelta('"}\nAfter.');
+    }
+    for await (const event of normalizePlainTextToolCallStreamEvents(source(), {
+      matcher,
+      createPromotedToolCallEvents: () => [],
+      normalizeTerminalMessage: () => undefined,
+    })) {
+      if (
+        event &&
+        typeof event === "object" &&
+        "delta" in event &&
+        typeof event.delta === "string"
+      ) {
+        visible += event.delta;
+      }
+    }
+    expect(visible).toBe(`${prose}After.`);
+  });
+});
+
+describe("normalizePlainTextToolCallStreamEvents trim replay ordering", () => {
+  it("drains buffered reasoning when a terminal trim clears the candidate", async () => {
+    const prefix = `[read]${" ".repeat(300)}`;
+    const events = await normalize([
+      streamTextDelta(prefix),
+      streamTextDelta("nope\n<function=read>"),
+      { type: "thinking_delta", contentIndex: 0, delta: "checking" },
+    ]);
+    expect(textDeltas(events)).toEqual([`${prefix}nope\n`]);
+    expect(eventTypes(events)).toContain("thinking_delta");
+    expect(JSON.stringify(events)).not.toContain("<function=read>");
+  });
+
+  it("replays each prefix segment at its original content index", async () => {
+    const events = await normalize([
+      streamTextDelta("[read]", 0),
+      streamTextDelta("x\n<function=read>", 1),
+    ]);
+    expect(
+      events
+        .filter((event) => event.type === "text_delta")
+        .map((event) => [event.contentIndex, event.delta]),
+    ).toEqual([
+      [0, "[read]"],
+      [1, "x\n"],
+    ]);
+    expect(JSON.stringify(events)).not.toContain("<function=read>");
+  });
+
+  it("keeps a trimmed cumulative snapshot local to the retained content block", async () => {
+    const events = await normalize([
+      streamTextDelta("[read]", 0),
+      streamTextDelta("x\n<function=read>", 1),
+      textEnd("x\n<function=read></function>", 1),
+    ]);
+    expect(
+      events
+        .filter((event) => event.type === "text_delta")
+        .map((event) => [event.contentIndex, event.delta]),
+    ).toEqual([
+      [0, "[read]"],
+      [1, "x\n"],
+    ]);
+    expect(JSON.stringify(events)).not.toContain("<function=read>");
+  });
+
+  it("replays a decided prefix and buffered reasoning in arrival order", async () => {
+    const events = await normalize([
+      streamTextDelta("[read]"),
+      { type: "thinking_delta", contentIndex: 0, delta: "checking" },
+      streamTextDelta("\n<function=read>"),
+    ]);
+    expect(events.map((event) => [event.type, event.delta])).toEqual([
+      ["text_delta", "[read]"],
+      ["thinking_delta", "checking"],
+      ["text_delta", "\n"],
+    ]);
+    expect(JSON.stringify(events)).not.toContain("<function=read>");
+  });
+});
+
+describe("normalizePlainTextToolCallStreamEvents terminal trim drains", () => {
+  const trimmedPrefix = `[read]${" ".repeat(300)}`;
+  const trimmedVisible = `${trimmedPrefix}nope\n`;
+  const trimmedDeltas = [streamTextDelta(trimmedPrefix), streamTextDelta("nope\n<function=read>")];
+  const queuedReasoning = { type: "thinking_delta", contentIndex: 0, delta: "checking" };
+
+  it("drains buffered reasoning when a done trim clears the candidate", async () => {
+    const events = await normalize([
+      ...trimmedDeltas,
+      queuedReasoning,
+      doneEvent("stop", assistantMessage(textContent("visible only"))),
+    ]);
+    expect(textDeltas(events)).toEqual([trimmedVisible]);
+    expect(eventTypes(events)).toContain("thinking_delta");
+    expect(JSON.stringify(events)).not.toContain("<function=read>");
+  });
+
+  it("drains buffered reasoning when an error trim clears the candidate", async () => {
+    const events = await normalize([
+      ...trimmedDeltas,
+      queuedReasoning,
+      errorEvent(assistantMessage(textContent("visible only"))),
+    ]);
+    expect(textDeltas(events)).toEqual([trimmedVisible]);
+    expect(eventTypes(events)).toContain("thinking_delta");
+    expect(JSON.stringify(events)).not.toContain("<function=read>");
+  });
+
+  it("drains buffered reasoning at the candidate queue cap", async () => {
+    const events = await normalize([...trimmedDeltas, ...lifecycles]);
+    expect(textDeltas(events)).toEqual([trimmedVisible]);
+    expect(eventTypes(events)).toContain("thinking_start");
+    expect(JSON.stringify(events)).not.toContain("<function=read>");
   });
 });

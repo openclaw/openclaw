@@ -4,7 +4,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { captureEnv } from "../test-utils/env.js";
-import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
+import {
+  acquireTestPortBlock,
+  reserveTestPortListener,
+  type TestPortClaim,
+} from "../test-utils/port-claims.js";
 import { startGatewayServerHarness } from "./server.e2e-ws-harness.js";
 import type { GatewayServer } from "./server.js";
 import { reserveGatewayTestListener, startClaimedGateway } from "./test-helpers.listener.js";
@@ -127,8 +131,6 @@ it("prevents an unclaimed listener from stealing the Gateway startup socket", as
         startupSettled: Promise.resolve(),
         close: async () => {
           await closeListener(observed.adopted.mock.lastCall?.[0]);
-          // Rebind before startClaimedGateway releases the cooperative port claim.
-          await listen(competitor, claim.port);
         },
       };
     }),
@@ -153,7 +155,6 @@ it("prevents an unclaimed listener from stealing the Gateway startup socket", as
 
       await harness.close();
       reclaimed = await acquireTestPortBlock({ port: claim.port, offsets: [0, 1, 2, 3, 4] });
-      expect(competitor.address()).toMatchObject({ address: "127.0.0.1", port: claim.port });
     },
     () => proceed.resolve(),
     async () => {
@@ -169,5 +170,47 @@ it("prevents an unclaimed listener from stealing the Gateway startup socket", as
     () => env.restore(),
     () => observed.server.mockReset(),
     () => observed.adopted.mockReset(),
+  );
+});
+
+it("releases a settled Gateway claim while its port still has a listener", async () => {
+  const competitor = createServer();
+  const { claim } = await reserveTestPortListener({
+    offsets: [0, 1, 2, 3, 4],
+    createListener: () => competitor,
+  });
+  const entered = createDeferred();
+  const proceed = createDeferred();
+  let reclaimed: TestPortClaim | undefined;
+  let closing: Promise<void> | undefined;
+  await runQaGatewayFixture(
+    async () => {
+      const server = await startClaimedGateway(claim, async () => ({
+        getTailscaleIngressEndpoint: () => undefined,
+        startupSettled: Promise.resolve(),
+        close: async () => {
+          entered.resolve();
+          await proceed.promise;
+        },
+      }));
+      closing = server.close();
+      await entered.promise;
+      await expect(
+        acquireTestPortBlock({ port: claim.port, offsets: [0, 1, 2, 3, 4] }).then(async (early) => {
+          await early.release();
+        }),
+      ).rejects.toMatchObject({ code: "EADDRINUSE" });
+      proceed.resolve();
+      await closing;
+      // Keep the unrelated listener bound throughout claim release; reopening a
+      // closed port would let another test or an outbound socket take it first.
+      reclaimed = await acquireTestPortBlock({ port: claim.port, offsets: [0, 1, 2, 3, 4] });
+      expect(competitor.address()).toMatchObject({ address: "127.0.0.1", port: claim.port });
+    },
+    () => proceed.resolve(),
+    () => closing,
+    () => closeListener(competitor),
+    () => claim.release(),
+    () => reclaimed?.release(),
   );
 });

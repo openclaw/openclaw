@@ -29,11 +29,6 @@ export type TuiOptions = {
   message?: string;
   /** Overrides timeoutMs only for the message sent automatically at startup. */
   initialMessageTimeoutMs?: number;
-  /**
-   * Internal CLI guard: after the standalone TUI returns, force the child
-   * process out if imported runtime handles keep the event loop alive.
-   */
-  forceProcessExitOnReturn?: boolean;
 };
 
 export type TuiGatewayConnectionOptions = Pick<
@@ -70,6 +65,7 @@ export type ChatEvent = {
   deltaText?: string;
   replace?: boolean;
   errorMessage?: string;
+  localModelMayStillBeFinishing?: boolean;
 };
 
 export type BtwEvent = {

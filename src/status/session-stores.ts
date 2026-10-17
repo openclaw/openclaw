@@ -85,7 +85,76 @@ export function createStatusSessionStoreReader(
   let sliceStartedAt = performance.now();
   return {
     stores,
-    read(storePath: string, agentId?: string) {
+    async read(storePath: string, agentId?: string) {
+      const projection = options.projection;
+      if (projection) {
+        if (agentId && readAgentDatabaseAdmissionRefusal(agentId, { env })) {
+          return { path: storePath, count: 0, recent: [] };
+        }
+        try {
+          do {
+            await projection.prepareSelection();
+          } while (projection.needsSelectionPreparation());
+          const state = projection.state;
+          const admitted = state.scope({ agentId }).paths;
+          const paths = state
+            .physicalStorePaths(storePath, agentId)
+            .filter((path) => admitted.has(path));
+          const selected = paths.map((path) => {
+            let store = stores.get(path);
+            if (!store) {
+              let snapshot: SessionStoreSummary;
+              try {
+                snapshot = summarizeProjectionRows(projection, path, agentIds, recentLimit);
+              } catch (error) {
+                if (!options.recoverReadError) {
+                  throw error;
+                }
+                snapshot = options.recoverReadError(error);
+              }
+              store = { ...snapshot, path };
+            }
+            return store;
+          });
+          const summaries = selected.map((store) => (agentId ? store.byAgent.get(agentId) : store));
+          let recent = summaries.flatMap((summary) => summary?.recent ?? []);
+          if (selected.length > 1) {
+            recent.sort(
+              (left, right) =>
+                (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0) ||
+                (left.sessionKey < right.sessionKey
+                  ? -1
+                  : left.sessionKey > right.sessionKey
+                    ? 1
+                    : 0),
+            );
+            recent = recent.slice(0, recentLimit);
+          }
+          const summary = {
+            path: paths.length === 1 ? paths[0]! : storePath,
+            count: summaries.reduce((count, store) => count + (store?.count ?? 0), 0),
+            recent,
+          };
+          if (performance.now() - sliceStartedAt >= SESSION_STORE_READ_SLICE_MS) {
+            await yieldToEventLoop();
+            sliceStartedAt = performance.now();
+          }
+          if (agentId && readAgentDatabaseAdmissionRefusal(agentId, { env })) {
+            return { path: summary.path, count: 0, recent: [] };
+          }
+          for (const store of selected) {
+            stores.set(store.path, store);
+          }
+          return summary;
+        } catch (error) {
+          if (!options.recoverReadError) {
+            throw error;
+          }
+          const recovered = options.recoverReadError(error);
+          const summary = agentId ? recovered.byAgent.get(agentId) : recovered;
+          return { path: storePath, count: summary?.count ?? 0, recent: summary?.recent ?? [] };
+        }
+      }
       return withSessionStoreReaderInWorker(
         { storePath, agentId, env },
         async ({ reader, database, selectedStore, continuation, assertCurrent }) => {
@@ -97,21 +166,12 @@ export function createStatusSessionStoreReader(
           if (!store) {
             let summary: SessionStoreSummary;
             try {
-              const projection = options.projection;
-              if (projection) {
-                do {
-                  await projection.ensureMaterialized();
-                  assertCurrent();
-                } while (projection.needsMaterialization);
-              }
-              summary = projection
-                ? summarizeProjectionRows(projection, database.path, agentIds, recentLimit)
-                : await reader.readStoreSummary({
-                    env: database.env,
-                    agentIds,
-                    recentLimit,
-                    continuation,
-                  });
+              summary = await reader.readStoreSummary({
+                env: database.env,
+                agentIds,
+                recentLimit,
+                continuation,
+              });
             } catch (error) {
               if (
                 error instanceof AgentDatabaseAdmissionError &&
@@ -126,14 +186,6 @@ export function createStatusSessionStoreReader(
               }
               summary = options.recoverReadError(error);
             }
-            // Worker reads already yield; resident selections share an event-loop slice.
-            if (
-              options.projection &&
-              performance.now() - sliceStartedAt >= SESSION_STORE_READ_SLICE_MS
-            ) {
-              await yieldToEventLoop();
-              sliceStartedAt = performance.now();
-            }
             assertCurrent();
             if (agentId && readAgentDatabaseAdmissionRefusal(agentId, { env })) {
               return { path, count: 0, recent: [] };
@@ -144,7 +196,7 @@ export function createStatusSessionStoreReader(
           const summary = agentId ? store.byAgent.get(agentId) : store;
           return { path, count: summary?.count ?? 0, recent: summary?.recent ?? [] };
         },
-        { backing: !options.projection, dataOnly: true, logical: {} },
+        { backing: true, dataOnly: true, logical: {} },
       );
     },
   };

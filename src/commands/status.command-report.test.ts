@@ -51,16 +51,7 @@ it("renders the full report in section order and trims table output", async () =
   );
 });
 
-it("prepares empty-state messages before rendering and omits absent sections", async () => {
-  const events: string[] = [];
-  vi.spyOn(theme, "muted").mockImplementation((text) => {
-    events.push(String(text));
-    return String(text);
-  });
-  vi.spyOn(terminalTable, "renderTable").mockImplementation((input) => {
-    events.push("table");
-    return renderTable(input);
-  });
+it("renders empty-state messages and omits absent sections", async () => {
   const lines = await buildStatusCommandReportLines({
     ...params,
     pluginCompatibilityLines: [],
@@ -73,7 +64,6 @@ it("prepares empty-state messages before rendering and omits absent sections", a
     healthRows: undefined,
     usageLines: undefined,
   });
-  expect(events).toEqual(["No channels configured", "No sessions", "table"]);
   expect(lines.join("\n")).toBe(
     [
       "# OpenClaw status",

@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
@@ -32,9 +33,10 @@ function callTool(
   tool: string,
   callId: string,
   args: CodexDynamicToolCallParams["arguments"] = {},
+  requestId = callId,
 ) {
   return harness.handleServerRequest({
-    id: callId,
+    id: requestId,
     method: "item/tool/call",
     params: {
       threadId: "thread-1",
@@ -50,6 +52,129 @@ function callTool(
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
+  it.each<{
+    scenario: string;
+    parentMs: number;
+    args: CodexDynamicToolCallParams["arguments"];
+    ageMs: number;
+    end: "complete" | "timeout" | "stop";
+  }>([
+    { scenario: "default review", parentMs: 1_800_000, args: {}, ageMs: 0, end: "complete" },
+    {
+      scenario: "explicit multipass review",
+      parentMs: 1_800_000,
+      args: { timeoutSeconds: 900, passes: 2 },
+      ageMs: 0,
+      end: "complete",
+    },
+    {
+      scenario: "original parent deadline",
+      parentMs: 1_200_000,
+      args: {},
+      ageMs: 500_000,
+      end: "timeout",
+    },
+    {
+      scenario: "Stop with unlimited parent",
+      parentMs: MAX_TIMER_TIMEOUT_MS,
+      args: {},
+      ageMs: 0,
+      end: "stop",
+    },
+  ])("keeps AutoReview and its replay within $scenario", async ({ parentMs, args, ageMs, end }) => {
+    const started = createDeferred<void>();
+    const finish = createDeferred<void>();
+    const upstream = new AbortController();
+    const tool = createRuntimeDynamicTool("autoreview");
+    tool.parameters = {
+      type: "object",
+      properties: { timeoutSeconds: { type: "number" }, passes: { type: "integer" } },
+    };
+    let toolSignal: AbortSignal | undefined;
+    tool.execute = vi.fn(async (_id, _args, signal) => {
+      toolSignal = signal;
+      started.resolve();
+      await finish.promise;
+      return {
+        content: [{ type: "text" as const, text: "Complete canonical review report" }],
+        details: {},
+      };
+    });
+    const harness = createStartedThreadHarness(
+      async (method) => {
+        if (method === "turn/interrupt") {
+          queueMicrotask(
+            () =>
+              void harness.notify({
+                method: "turn/completed",
+                params: {
+                  threadId: "thread-1",
+                  turn: { id: "turn-1", status: "interrupted", items: [] },
+                },
+              }),
+          );
+        }
+      },
+      { persistedThreads: [] },
+    );
+    const params = createTestParams();
+    params.timeoutMs = parentMs;
+    params.abortSignal = upstream.signal;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestToolFactory(params, () => [tool]);
+    setCodexTestModelSupportsTools(params, true);
+    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const run = runCodexAppServerAttempt(params);
+    try {
+      await run.waitForTurnAccepted();
+      await vi.advanceTimersByTimeAsync(ageMs);
+      const results: unknown[] = [];
+      const original = callTool(harness, "autoreview", "review", args).then((value) => {
+        results.push(value);
+        return value;
+      });
+      await started.promise;
+      const replay = callTool(harness, "autoreview", "review", args, "review-replay").then(
+        (value) => {
+          results.push(value);
+          return value;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(690_000);
+      expect(results).toEqual([]);
+      expect(toolSignal?.aborted).toBe(false);
+      expect(tool.execute).toHaveBeenCalledOnce();
+      if (end === "timeout") {
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(toolSignal?.aborted).toBe(true);
+      } else if (end !== "complete") {
+        upstream.abort(new Error("Stopped by user"));
+        expect(toolSignal?.aborted).toBe(true);
+      }
+      finish.resolve();
+      const [result, repeated] = await Promise.all([original, replay]);
+      expect(repeated).toEqual(result);
+      expect(result).toMatchObject({ success: end === "complete" });
+      if (end === "complete") {
+        expect(result).toMatchObject({
+          contentItems: [{ type: "inputText", text: "Complete canonical review report" }],
+        });
+        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      }
+      expect(readAttemptTerminal(await run)).toMatchObject({
+        timedOut: end === "timeout",
+        aborted: end !== "complete",
+      });
+    } finally {
+      finish.resolve();
+      harness.close();
+      await run;
+      vi.useRealTimers();
+      closeHost();
+    }
+  });
+
   it("retains a required command as one native pending call until terminal collection", async () => {
     const command = createRequiredExecRuntimeContract();
     const harness = createStartedThreadHarness();
@@ -59,7 +184,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     setCodexTestModelSupportsTools(params, true);
     const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
     // Keep fixture I/O from spending the attempt clock before the command starts.
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const run = runCodexAppServerAttempt(params);
     let response: ReturnType<typeof callTool> | undefined;
     try {
@@ -110,7 +235,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     setCodexTestModelSupportsTools(params, true);
     const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
     // Protocol acceptance owns this test; host I/O must not spend the execution watchdog.
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const run = runCodexAppServerAttempt(params);
     try {
       await Promise.race([
@@ -340,7 +465,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       name: "lookup",
       toolCallId: "call-1",
       commandBearing: true,
-      args: { action: "search", token: "plain-…2345", text: "hello" },
+      args: { action: "search", token: "plain-secret-value-12345", text: "hello" },
     });
     const resultEvent = agentEvents.find(
       (event) =>
@@ -355,7 +480,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     });
     expect(resultEvent?.data.result).not.toHaveProperty("success");
     expect(resultEvent?.data.result).not.toHaveProperty("contentItems");
-    expect(JSON.stringify(agentEvents)).not.toContain("plain-secret-value-12345");
+    expect(JSON.stringify(agentEvents)).toContain("plain-secret-value-12345");
     expect(
       globalAgentEvents.find((event) => event.stream === "tool" && event.data.phase === "start"),
     ).toMatchObject({

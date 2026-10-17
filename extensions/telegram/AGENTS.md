@@ -41,9 +41,9 @@ Proof: `src/channels/message/ingress-drain.test.ts`,
   `resolveTelegramAdoptionStallTimeoutMs`.
 - Non-retryable classifier: `telegram-ingress-non-retryable.ts`
   (missing harness, dispatch-dedupe rollback).
-- Supersede predicate: `telegram-ingress-supersede.ts` — only abort text /
-  authorized-looking explicit commands (and ambient room_event pending) may
-  supersede pre-adoption work. Normal messages never supersede.
+- Supersede predicate: `telegram-ingress-supersede.ts` — authorized abort text
+  and `/new` or `/reset` may supersede pre-adoption user work. Settings and
+  other commands queue behind pending input; command entities alone do not cancel it.
 - room_event ambient work shares the sequential lane so a later user turn can
   supersede it pre-adoption; adopted user turns are never touched (core drain
   supersede is pre-adoption only).

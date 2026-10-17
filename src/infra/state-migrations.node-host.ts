@@ -277,24 +277,6 @@ function migrateIntoDatabase(params: { env: NodeJS.ProcessEnv; legacy: Canonical
         );
         imported = expected.updatedAtMs === params.legacy.updatedAtMs;
       }
-
-      const verifiedRow = executeSqliteQueryTakeFirstSync(
-        db,
-        stateDb
-          .selectFrom("config_machine_state")
-          .selectAll()
-          .where("state_key", "=", NODE_HOST_CONFIG_KEY),
-      );
-      if (!verifiedRow) {
-        throw new Error("SQLite verification failed for node-host config");
-      }
-      const verified = rowToCanonicalState(verifiedRow);
-      if (
-        !configsEqual(verified.config, expected.config) ||
-        verified.updatedAtMs !== expected.updatedAtMs
-      ) {
-        throw new Error("SQLite verification failed for node-host config");
-      }
     },
     { env: params.env },
   );

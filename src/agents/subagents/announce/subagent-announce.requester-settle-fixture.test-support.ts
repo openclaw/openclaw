@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import * as deliveryRuntime from "./subagent-announce-delivery.runtime.js";
 import * as announceOutput from "./subagent-announce-output.js";
 import type { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
 import type { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.requester-settle-wake.js";
@@ -12,6 +17,7 @@ import {
   completeBatchSpy,
   deliverSpy,
 } from "./subagent-announce.requester-settle-wake.test-support.js";
+import { getRuntimeConfig } from "./subagent-announce.runtime.js";
 
 let sessionStore: Record<
   string,
@@ -59,7 +65,8 @@ vi.mock("../../../config/sessions/session-accessor.js", () => ({
   loadSessionEntryReadOnly: ({ sessionKey }: { sessionKey: string }) => sessionStore[sessionKey],
 }));
 
-vi.mock("./subagent-announce.runtime.js", () => ({
+vi.mock("./subagent-announce.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./subagent-announce.runtime.js")>()),
   callSubagentLifecycleGateway: vi.fn(async () => ({})),
   dispatchGatewayMethodInProcess: vi.fn(async () => ({})),
   isEmbeddedAgentRunActive: vi.fn(() => false),
@@ -69,7 +76,6 @@ vi.mock("./subagent-announce.runtime.js", () => ({
   readSubagentSessionEntry: vi.fn(
     (_storePath: string, sessionKey: string) => sessionStore[sessionKey],
   ),
-  resolveAgentIdFromSessionKey: vi.fn(() => "main"),
   resolveMainSessionKey: vi.fn(() => "agent:main:main"),
   resolveSessionStorePathCore: vi.fn(() => "/tmp/sessions.json"),
   waitForEmbeddedAgentRunEnd: vi.fn(async () => true),
@@ -88,8 +94,11 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     params.requesterOrigin,
 }));
 
+// mock-isolation: Settlement fixtures supply requester depth without opening a session database.
 vi.mock("../spawn/subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: (sessionKey: string) =>
+    sessionKey.split(":subagent:").length - 1,
+  getSubagentDepthFromSessionStoreInWorker: async (sessionKey: string) =>
     sessionKey.split(":subagent:").length - 1,
 }));
 
@@ -117,6 +126,16 @@ function wakeParams(
 }
 
 beforeEach(() => {
+  vi.spyOn(deliveryRuntime, "captureRequesterSessionEntryCurrent").mockImplementation(
+    async (sessionKey) => ({
+      readCurrent: () => {
+        const entry = sessionStore[sessionKey];
+        return entry?.sessionId ? { ...entry, sessionId: entry.sessionId } : undefined;
+      },
+      release() {},
+    }),
+  );
+  setRuntimeConfigSnapshot(getRuntimeConfig());
   vi.spyOn(announceOutput, "readChildCompletionFindings").mockImplementation((children) =>
     readChildCompletionFindings(children, (runId) =>
       listedRequesterRuns(children[0]?.requesterSessionKey).find((entry) => entry.runId === runId),
@@ -135,7 +154,11 @@ beforeEach(() => {
     .mockReturnValue(undefined);
 });
 
-afterEach(() => vi.mocked(announceOutput.readChildCompletionFindings).mockRestore());
+afterEach(() => {
+  vi.mocked(announceOutput.readChildCompletionFindings).mockRestore();
+  vi.mocked(deliveryRuntime.captureRequesterSessionEntryCurrent).mockRestore();
+  clearRuntimeConfigSnapshot();
+});
 
 function setSessionStore(store: typeof sessionStore): void {
   sessionStore = store;

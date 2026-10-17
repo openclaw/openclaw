@@ -16,8 +16,8 @@ import { AgentSessionPrompting } from "./agent-session-prompting.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ExtensionRunner } from "./extensions/runner.js";
 import type { ThinkingLevelSelectEvent } from "./extensions/types.js";
+import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
-import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
 
@@ -232,7 +232,7 @@ export abstract class AgentSessionModels extends AgentSessionPrompting {
         }
       },
       run: <T>(operation: () => Promise<T>): Promise<T> => {
-        const write = () => withSessionManagerWrite(manager, operation);
+        const write = () => withSessionManagerAppend(manager, operation);
         return target ? withSessionTranscriptWriteAssertion(target, assertCurrent, write) : write();
       },
     };

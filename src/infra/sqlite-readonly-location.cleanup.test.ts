@@ -10,7 +10,6 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   adoptPreparedLocation,
-  adoptRetainedPreparedLocation,
   registerRetainedSnapshotTempDirectory,
   retainSnapshotTempDirectory,
   cleanupSnapshotOperations,
@@ -51,7 +50,7 @@ it("retains bytes after a serviced cleanup failure and retries the same director
     retirements.push(retirement);
     return retirement.operation;
   });
-  const prepared = adoptRetainedPreparedLocation(location, directory);
+  const prepared = adoptPreparedLocation(location, directory);
   const first = prepared.startCleanup();
   expect(first.read()).toEqual({ status: "pending" });
   expect(fs.readFileSync(location, "utf8")).toBe("retained snapshot bytes");
@@ -135,6 +134,29 @@ describe("prepared SQLite snapshot cleanup", () => {
       expect(fs.readFileSync(sibling, "utf8")).toBe("not owned by snapshot");
     },
   );
+  it("keeps a best-effort lease read successful when shared removal stays busy", async () => {
+    const report = vi.fn();
+    const { ownedRoot, prepared } = fixture(false, report);
+    const snapshot = await prepareSingleFlightSqliteSnapshot(
+      path.join(ownedRoot, "source.sqlite"),
+      "best-effort-lease",
+      async () => prepared,
+    );
+    const busy = vi
+      .spyOn(fs.promises, "rm")
+      .mockRejectedValueOnce(Object.assign(new Error("snapshot busy"), { code: "EBUSY" }));
+    try {
+      expect(await snapshot.cleanupAsync()).toBe(false);
+      expect(snapshot.cleanup()).toBe(false);
+      expect(report).toHaveBeenCalledOnce();
+      expect(fs.existsSync(prepared.location)).toBe(true);
+    } finally {
+      busy.mockRestore();
+    }
+    await cleanupSnapshotOperations();
+    expect(fs.existsSync(ownedRoot)).toBe(false);
+  });
+
   it.each([false, true])(
     "retains all snapshot tokens when data removal fails (async: %s)",
     async (asynchronous) => {

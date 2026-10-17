@@ -5,11 +5,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveStateDir } from "../config/paths.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import {
-  loadExecApprovals,
+  loadExecApprovalsReadOnlyAsync,
   maxAsk,
   minSecurity,
   normalizeExecAsk,
-  requireValidExecTarget,
   resolveExecApprovalsFromFile,
   resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
@@ -49,7 +48,6 @@ import {
   type ExecProcessHandle,
   normalizePathPrepend,
   resolveApprovalRunningNoticeMs,
-  resolveExecTarget,
   runExecProcess,
 } from "./bash-tools.exec-runtime.js";
 import {
@@ -70,12 +68,13 @@ import type {
 } from "./bash-tools.exec-types.js";
 import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { createExecSchema, execSchema } from "./bash-tools.schemas.js";
-import { clampWithDefault, readEnvInt, truncateMiddle } from "./bash-tools.shared.js";
+import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 import {
   createExecToolExecutionTimeoutResolver,
   resolveExecDefaultTimeoutSec,
 } from "./exec-tool-timeout.js";
 import { resolveStoredSubagentCapabilities } from "./subagents/spawn/subagent-capabilities.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
 import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -96,10 +95,15 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       sessionId: defaults?.sessionId,
     });
   const preparedRunEnvironment = resolveExecPreparedRunEnvironment(defaults);
-  const subagentExecution =
-    resolveStoredSubagentCapabilities(defaults?.runSessionKey ?? defaults?.sessionKey, {
-      cfg: defaults?.config,
-    }).depth > 0;
+  let subagentExecutionPromise: Promise<boolean> | undefined;
+  const resolveSubagentExecution = () =>
+    defaults?.preparedSubagentExecution ??
+    (subagentExecutionPromise ??= withPreparedSessionCapabilityRead(
+      () =>
+        resolveStoredSubagentCapabilities(defaults?.runSessionKey ?? defaults?.sessionKey, {
+          cfg: defaults?.config,
+        }).depth > 0,
+    ));
   // Agent runs own one tool instance; unprepared store snapshots are read on first exec.
   // A new run constructs a new instance and observes later store mutations.
   let storeEnvPromise: Promise<Readonly<SecretStoreExecEnvironment>> | undefined =
@@ -161,12 +165,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
     notifyDeliveryContext,
     notifyFromConversationTurn,
   } = resolveExecNotificationDefaults(defaults);
-  const backgroundFollowUp =
-    notifyOnExit && notifyOnExitEmptySuccess
-      ? `Completion will wake this conversation automatically. If only waiting remains, report that the job is running and end this turn; do not keep polling. ${BACKGROUND_EXEC_FOLLOW_UP}`
-      : notifyOnExit
-        ? `${BACKGROUND_EXEC_FOLLOW_UP} Completion wakes this conversation on output or failure; empty successful jobs are silent (tools.exec.notifyOnExitEmptySuccess=false). Arrange continuation or collect the result before ending the turn if empty success matters.`
-        : `${BACKGROUND_EXEC_FOLLOW_UP} ${EXEC_MANUAL_COLLECTION_FOLLOW_UP}`;
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
@@ -250,10 +248,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       let execCommandOverride: string | undefined;
       let gatewayApproval: GatewayApprovalResult | undefined;
       let approvalReview: ExecToolApprovalReview | undefined;
-      const foregroundFallbackWarning =
-        !backgroundAvailable && (params.background === true || typeof params.yieldMs === "number")
-          ? "Warning: continuation options are unavailable; running synchronously."
-          : undefined;
       const yieldWindow = allowBackground
         ? params.background === true
           ? 0
@@ -269,7 +263,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       const elevatedRequested = elevatedMode !== "off";
       if (elevatedRequested && (!elevatedDefaults?.enabled || !elevatedDefaults.allowed)) {
         const runtime = defaults?.sandbox ? "sandboxed" : "direct";
-        const gates: string[] = [];
         const contextParts: string[] = [];
         const provider = normalizeOptionalString(defaults?.messageProvider);
         const sessionKey = normalizeOptionalString(defaults?.sessionKey);
@@ -279,17 +272,13 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         if (sessionKey) {
           contextParts.push(`session=${sessionKey}`);
         }
-        if (!elevatedDefaults?.enabled) {
-          gates.push("enabled (tools.elevated.enabled / agents.entries.*.tools.elevated.enabled)");
-        } else {
-          gates.push(
-            "allowFrom (tools.elevated.allowFrom.<provider> / agents.entries.*.tools.elevated.allowFrom.<provider>)",
-          );
-        }
+        const gate = !elevatedDefaults?.enabled
+          ? "enabled (tools.elevated.enabled / agents.entries.*.tools.elevated.enabled)"
+          : "allowFrom (tools.elevated.allowFrom.<provider> / agents.entries.*.tools.elevated.allowFrom.<provider>)";
         throw new Error(
           [
             `elevated is not available right now (runtime=${runtime}).`,
-            `Failing gates: ${gates.join(", ")}`,
+            `Failing gates: ${gate}`,
             contextParts.length > 0 ? `Context: ${contextParts.join(" ")}` : undefined,
             "Fix-it keys:",
             "- tools.elevated.enabled",
@@ -301,14 +290,14 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             .join("\n"),
         );
       }
-      const target = resolveExecTarget({
-        configuredTarget: defaults?.host,
-        requestedTarget: requireValidExecTarget(params.host),
-        elevatedRequested,
-        sandboxAvailable: Boolean(defaults?.sandbox),
-        sandboxRequired: defaults?.sandboxRequired,
-      });
-      const host = target.effectiveHost;
+      const host = resolveHostForParams(params);
+      const foregroundFallbackWarning =
+        (host === "node" || !backgroundAvailable) &&
+        (params.background === true || typeof params.yieldMs === "number")
+          ? host === "node"
+            ? "Warning: continuation options are unavailable for host=node; running synchronously via remote system.run without a process session."
+            : "Warning: continuation options are unavailable; running synchronously."
+          : undefined;
 
       const explicitSecurity = defaults?.security;
       const configuredSecurity = explicitSecurity ?? (host === "sandbox" ? "deny" : "full");
@@ -321,7 +310,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         host === "sandbox" || defaults?.bypassHostApprovalFloors === true
           ? undefined
           : resolveExecApprovalsFromFile({
-              file: loadExecApprovals(),
+              file: await loadExecApprovalsReadOnlyAsync(),
               agentId,
               overrides: {
                 security: "full",
@@ -358,7 +347,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       const autoReview = modePolicy.autoReview && ask === modePolicy.ask && !bypassApprovals;
 
       const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
-      if (target.selectedTarget === "sandbox" && !sandbox) {
+      if (host === "sandbox" && !sandbox) {
         throw new Error(
           [
             "exec host=sandbox requires a sandbox runtime for this session.",
@@ -418,7 +407,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       const effectiveTimeout = params.timeoutSeconds ?? defaultTimeoutSec;
       try {
         if (elevatedRequested) {
-          logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
+          logInfo("exec: elevated command");
         }
         if (!resolveExecEnvPrepared) {
           params = await requestPreparation.prepareParamsWithResolvedExecEnv(params, {
@@ -428,6 +417,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
 
         const resolvedExecEnvState = requestPreparation.getResolvedExecEnvPreparedState(params);
         const storeEnv = await resolveStoreEnv();
+        const subagentExecution = await resolveSubagentExecution();
         assertSourceActive();
         // The proxy is loopback-owned by the Gateway. Sandbox and node hosts
         // cannot use its sentinels, so both sides of the contract stay absent.
@@ -607,6 +597,12 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         return attachExecApprovalReview(ExecProcessPreflightError.unwrap(error), approvalReview);
       }
 
+      const backgroundFollowUp =
+        run.session.notifyOnExit && notifyOnExitEmptySuccess
+          ? `Completion will wake this conversation automatically. If only waiting remains, report that the job is running and end this turn; do not keep polling. ${BACKGROUND_EXEC_FOLLOW_UP}`
+          : run.session.notifyOnExit
+            ? `${BACKGROUND_EXEC_FOLLOW_UP} Completion wakes this conversation on output or failure; empty successful jobs are silent (tools.exec.notifyOnExitEmptySuccess=false). Arrange continuation or collect the result before ending the turn if empty success matters.`
+            : `${BACKGROUND_EXEC_FOLLOW_UP} ${EXEC_MANUAL_COLLECTION_FOLLOW_UP}`;
       let yielded = false;
       let yieldTimer: NodeJS.Timeout | null = null;
       let registeredAbortSignal: AbortSignal | null = null;
@@ -673,7 +669,16 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         yielded = true;
         run.disableUpdates();
         markBackgrounded(run.session);
-        backgrounded.resolve({ status: "backgrounded" });
+        void Promise.resolve(run.session.exitNotificationPersistence).then(
+          () => backgrounded.resolve({ status: "backgrounded" }),
+          (error: unknown) =>
+            backgrounded.reject(
+              new Error(
+                `Process ${run.session.id} started, but its restart notification could not be saved. Use process poll before retrying.`,
+                { cause: error },
+              ),
+            ),
+        );
       };
 
       try {

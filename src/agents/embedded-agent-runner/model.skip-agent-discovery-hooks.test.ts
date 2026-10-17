@@ -54,14 +54,18 @@ const mocks = vi.hoisted(() => ({
   shouldPreferProviderRuntimeResolvedModel: vi.fn(() => false),
 }));
 
+// mock-isolation: Discovery spies must observe the skip path without opening real auth or model stores.
 vi.mock("../agent-model-discovery.js", () => ({
   discoverAuthStorage: mocks.discoverAuthStorage,
-  discoverModels: mocks.discoverModels,
+  discoverModelsAsync: async (...args: Parameters<typeof mocks.discoverModels>) =>
+    mocks.discoverModels(...args),
 }));
 
+// mock-isolation: The skip-discovery fixture must exercise only selected dynamic hooks without discovering host auth providers.
 vi.mock("../../plugins/provider-external-auth-core.js", () => ({
   createProviderExternalAuthResolver: () => ({
     resolveExternalAuthProfilesWithPlugins: () => [],
+    withPreparedExternalAuthProfiles: async <T>(_params: unknown, run: () => Promise<T>) => run(),
   }),
 }));
 

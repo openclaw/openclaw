@@ -65,17 +65,6 @@ dump_debug_logs() {
 }
 openclaw_e2e_enable_failure_diagnostics
 
-start_gateway() {
-  local log_path="$1"
-  gateway_pid="$(openclaw_e2e_start_gateway "$entry" "$PORT" "$log_path")"
-  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$log_path" 300 "$PORT"
-}
-
-stop_gateway() {
-  openclaw_e2e_terminate_gateways "${gateway_pid:-}"
-  gateway_pid=""
-}
-
 write_journey_plugin() {
   node --input-type=module - "$@" <<'NODE'
 import { writeCliPlugin } from "./scripts/e2e/lib/fixtures/plugins.mjs";
@@ -92,33 +81,10 @@ openclaw_e2e_enable_openclaw_cli_timeout
 mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" "$OPENAI_LOG")"
 openclaw_e2e_wait_mock_openai "$MOCK_PORT"
 
-CLICKCLACK_FIXTURE_PORT="$CLICKCLACK_PORT" \
-CLICKCLACK_FIXTURE_TOKEN="$CLICKCLACK_BOT_TOKEN" \
-CLICKCLACK_FIXTURE_STATE="$CLICKCLACK_STATE" \
-  node scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs >"$CLICKCLACK_SERVER_LOG" 2>&1 &
-clickclack_pid="$!"
-for _ in $(seq 1 100); do
-  if openclaw_e2e_probe_http_status "http://127.0.0.1:$CLICKCLACK_PORT/health" 200 >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.1
-done
-openclaw_e2e_probe_http_status "http://127.0.0.1:$CLICKCLACK_PORT/health" 200
+start_clickclack_fixture "$CLICKCLACK_BOT_TOKEN"
 
 echo "Running non-interactive onboarding..."
-openclaw onboard \
-  --non-interactive \
-  --accept-risk \
-  --flow quickstart \
-  --mode local \
-  --auth-choice skip \
-  --gateway-port "$PORT" \
-  --gateway-bind loopback \
-  --skip-daemon \
-  --skip-ui \
-  --skip-channels \
-  --skip-skills \
-  --skip-health >"$ONBOARD_LOG" 2>&1
+openclaw_release_onboard "$PORT" openclaw >"$ONBOARD_LOG" 2>&1
 node scripts/e2e/lib/release-user-journey/assertions.mjs assert-onboard "$HOME"
 node scripts/e2e/lib/release-user-journey/assertions.mjs configure-mock-model "$MOCK_PORT"
 

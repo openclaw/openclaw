@@ -4,10 +4,6 @@ import { bindWorkerToolPreparation } from "../../agents/harness/host-private-cap
 import { bindPreparedToolAuthority } from "../../agents/harness/tool-authority-preparation.js";
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain.js";
 import { logVerbose } from "../../globals.js";
-import {
-  assertAgentRunLifecycleGenerationCurrent,
-  getAgentEventLifecycleGeneration,
-} from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
@@ -35,10 +31,6 @@ import {
 } from "./reply-run-registry.js";
 import { waitForReplyOperationBackend } from "./reply-run-registry.state.js";
 import { refreshReplyOperationTyping } from "./reply-run-typing.js";
-import {
-  resolveFollowupRunToolAuthorityFingerprint,
-  resolveFollowupRunToolAuthorityFingerprintAsync,
-} from "./reply-tool-authority.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import { prepareSteeringDelivery } from "./steering-delivery-preparation.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -112,13 +104,13 @@ export async function runActiveReplySteer(
   // would miss the live target run.
   const activeReplyOperation = params.providedReplyOperation;
   const activeReplyKey = activeReplyOperation?.key;
-  const readGeneration = getAgentEventLifecycleGeneration();
   const assertReadCurrent = () => {
-    assertAgentRunLifecycleGenerationCurrent(readGeneration);
     resolveFollowupAbortSignal(followupRun)?.throwIfAborted();
     params.opts?.abortSignal?.throwIfAborted();
     followupRun.operatorAuthority?.assertCurrent();
   };
+  let delivery: ReturnType<typeof prepareSteeringDelivery> | undefined;
+  let releaseToolAuthority: (() => void) | undefined;
   let steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
   const parked = parkSteerCandidate(queueKey, followupRun, resolvedQueue, runFollowup);
   if (!parked) {
@@ -177,13 +169,10 @@ export async function runActiveReplySteer(
       !activeReplyOperation ||
       activeReplyKey === undefined ||
       activeReplyOperation.key !== activeReplyKey ||
-      replyRunRegistry.get(activeReplyKey) !== activeReplyOperation ||
       !(await waitForReplyOperationBackend(
         activeReplyOperation,
         resolveFollowupAbortSignal(followupRun),
-      )) ||
-      activeReplyOperation.key !== activeReplyKey ||
-      replyRunRegistry.get(activeReplyKey) !== activeReplyOperation
+      ))
     ) {
       return await fallback("reply-owner-ended");
     }
@@ -193,7 +182,7 @@ export async function runActiveReplySteer(
     if (!injectionTarget) {
       return await fallback("injection_unavailable");
     }
-    const delivery = prepareSteeringDelivery({
+    delivery = prepareSteeringDelivery({
       agentId: followupRun.run.agentId,
       sessionKey,
       storePath: params.storePath,
@@ -202,26 +191,21 @@ export async function runActiveReplySteer(
       entry: params.sessionEntry,
       assertCurrent: assertReadCurrent,
     });
+    const steeringDelivery = delivery;
     const steeringAuthority = await resolveReplySteeringAuthority(
       followupRun,
       activeReplyOperation,
       assertReadCurrent,
     );
+    releaseToolAuthority = steeringAuthority.toolAuthority.release;
     assertReadCurrent();
-    if (
-      activeReplyOperation.key !== activeReplyKey ||
-      replyRunRegistry.get(activeReplyKey) !== activeReplyOperation
-    ) {
-      return await fallback("reply-owner-ended", injectionTarget.runId);
-    }
     if (steeringAuthority.shouldQueueAuthorityMismatch) {
       return await fallback("tool_authority_mismatch", injectionTarget.runId);
     }
     const automaticFallbackRoute = steeringAuthority.automaticFallbackRoute;
     const isCurrentFallback = () =>
       !automaticFallbackRoute ||
-      (activeReplyOperation?.automaticFallbackRoute === automaticFallbackRoute &&
-        activeReplyOperation.toolAuthorityRoute?.provider === automaticFallbackRoute.provider &&
+      (activeReplyOperation.toolAuthorityRoute?.provider === automaticFallbackRoute.provider &&
         activeReplyOperation.toolAuthorityRoute.model === automaticFallbackRoute.model);
     if (!isCurrentFallback()) {
       return await fallback("model-fallback-changed", injectionTarget.runId);
@@ -239,8 +223,7 @@ export async function runActiveReplySteer(
       }
     };
     const text = followupRun.prompt;
-    const assertLegacyPolicyCurrent = () =>
-      assertPolicy(resolveFollowupRunToolAuthorityFingerprint(followupRun, automaticFallbackRoute));
+    const assertLegacyPolicyCurrent = () => assertPolicy(steeringAuthority.toolAuthority.read());
     const sourceBound = Boolean(
       automaticFallbackRoute ||
       followupRun.operatorAuthority ||
@@ -257,14 +240,8 @@ export async function runActiveReplySteer(
           assertCurrent: assertSourceCurrent,
           compatAssertCurrent: assertLegacyPolicyCurrent,
           prepareCurrent: async () => {
-            assertPolicy(
-              await resolveFollowupRunToolAuthorityFingerprintAsync(
-                followupRun,
-                automaticFallbackRoute,
-                assertSourceCurrent,
-              ),
-            );
-            await delivery.prepareCurrent();
+            assertPolicy(steeringAuthority.toolAuthority.read());
+            await steeringDelivery.prepareCurrent();
             assertSourceCurrent();
           },
         }),
@@ -349,6 +326,8 @@ export async function runActiveReplySteer(
     await touchActiveSessionEntry();
     return "handled";
   } finally {
+    releaseToolAuthority?.();
+    delivery?.release();
     try {
       if (followupRun.steerPending) {
         if (isFollowupRunAborted(followupRun)) {

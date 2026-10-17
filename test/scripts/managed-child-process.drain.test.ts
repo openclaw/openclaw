@@ -30,6 +30,7 @@ function createChild(withOutput = false) {
     exitCode: { get: () => exitCode },
     stdout: { value: withOutput ? new PassThrough() : null, writable: true },
     stderr: { value: null, writable: true },
+    stdio: { get: () => [child.stdin, child.stdout, child.stderr, null] },
   });
   const kill = vi.spyOn(child, "kill").mockReturnValue(false);
   spawn.mockReturnValue(child);

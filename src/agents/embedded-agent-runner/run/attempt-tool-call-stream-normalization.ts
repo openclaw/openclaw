@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
+import { mapAssistantMessageStream } from "../../../llm/utils/stream-wrapper.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { normalizeToolPolicyName } from "../../tool-policy.js";
 import { isRunnerToolCallBlock } from "./attempt-tool-call-block-type.js";
 import { resolveToolCallName } from "./attempt-tool-call-name-resolution.js";
-import { mapAssistantMessageStream, wrapStreamObjectEvents } from "./stream-wrapper.js";
+import { wrapStreamObjectEvents } from "./stream-wrapper.js";
 
 const BLANK_TOOL_CALL_NAME_DESCRIPTION = "blank tool name";
 type UnknownToolLoopGuardState = {
@@ -41,7 +42,8 @@ function normalizeToolCallsInMessage(
   let sawAllowedToolCall = false;
   let sawIncompleteToolCall = false;
   let sawBlankStringToolCall = false;
-  const hasAllowedToolNames = Boolean(allowedToolNames && allowedToolNames.size > 0);
+  // An empty set declares no tools available; undefined leaves availability unknown.
+  const hasAllowedToolNames = allowedToolNames !== undefined;
   for (const block of content) {
     if (!isRunnerToolCallBlock(block)) {
       continue;

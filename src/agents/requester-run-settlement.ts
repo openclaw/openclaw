@@ -49,12 +49,6 @@ export async function settleFailedRequesterRun(
   } catch {
     return error;
   }
-  if (
-    params.abortSignal?.aborted ||
-    getActiveAgentRunDelegatedAuthority(instance)?.operationalRunInstance !== instance
-  ) {
-    return error;
-  }
   try {
     await settleRequesterRun(params, { meta: { durationMs: 0 } }, () => {
       assertCurrent?.();

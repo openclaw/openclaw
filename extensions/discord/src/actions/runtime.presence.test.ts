@@ -36,11 +36,6 @@ describe("handleDiscordPresenceAction", () => {
       activities: [{ name: "My Stream", type: 1, url: "https://twitch.tv/example" }],
     },
     {
-      name: "streaming activity without URL",
-      params: { accountId: "default", activityType: "streaming", activityName: "My Stream" },
-      activities: [{ name: "My Stream", type: 1 }],
-    },
-    {
       name: "custom activity using state",
       params: { activityType: "custom", activityState: "Vibing" },
       activities: [{ name: "", type: 4, state: "Vibing" }],

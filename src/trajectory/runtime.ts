@@ -1,12 +1,12 @@
 // Trajectory runtime records bounded session events into SQLite-backed storage.
 import { hash } from "node:crypto";
 import { isProxy } from "node:util/types";
+import { projectDiagnosticValue, type DiagnosticProjectionPolicy } from "@openclaw/ai/diagnostics";
 import { createDiagnosticRecord } from "@openclaw/ai/internal/shared";
-import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
+import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { redactSecrets } from "../logging/redact.js";
-import { getSecretRedactionRegistryRevision } from "../logging/secret-redaction-registry.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
@@ -41,7 +41,24 @@ const TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES = 4 * 1024;
 const TRAJECTORY_TOOL_CACHE_MAX_CHARS = 16_384;
 const TRAJECTORY_TOOL_CACHE_MAX_ENTRIES = 256;
 const toolParameterProjections = new Map<string, string>();
-let toolParameterSecretRevision = 0;
+const TRAJECTORY_PAYLOAD_PROJECTION = {
+  // Every JSON object needs at least two bytes. Avoid a second, smaller budget
+  // corrupting payloads that fit the event limit, including explicit bound markers.
+  maxNodes: TRAJECTORY_RUNTIME_EVENT_MAX_BYTES / 2,
+  maxKeys: TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS + 2,
+  redactCredentials: false,
+  omitField: (key) => key === "providerReplay",
+  propertyScope: "enumerable",
+  projectBinary: (binary) => ({
+    redacted: "<redacted>",
+    bytes: binary.byteLength,
+    sha256: sha256Hex(binary),
+  }),
+  projectMedia: (key, media) => ({
+    [key]: "<redacted>",
+    ...(media.source === undefined ? {} : { bytes: media.bytes, sha256: sha256Hex(media.source) }),
+  }),
+} satisfies DiagnosticProjectionPolicy;
 
 // Oversized events first shed repeated conversation state while keeping the
 // rest of their schema-v1 payload. The compact fallback then preserves keys
@@ -55,6 +72,12 @@ const TRAJECTORY_RUNTIME_OVERSIZE_DROP_FIRST_DATA_KEYS = [
 const OVERSIZE_PRESERVED_DATA_KEYS = [
   "threadId",
   "turnId",
+  "itemId",
+  "toolCallId",
+  "name",
+  "status",
+  "success",
+  "isError",
   "timedOut",
   "yieldDetected",
   "aborted",
@@ -213,21 +236,18 @@ function sanitizeTrajectoryPayload(data: Record<string, unknown>): Record<string
   const finalPromptText = data.finalPromptText;
   let boundedData = data;
   if (typeof finalPromptText === "string") {
-    const redactedFinalPromptText = redactSecrets(finalPromptText);
-    boundedData = { ...data, finalPromptText: redactedFinalPromptText };
-    if (
-      Buffer.byteLength(finalPromptText, "utf8") > TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES ||
-      Buffer.byteLength(redactedFinalPromptText, "utf8") > TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES
-    ) {
+    boundedData = { ...data };
+    if (Buffer.byteLength(finalPromptText, "utf8") > TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES) {
       boundedData.finalPromptText = truncateUtf8Prefix(
-        redactedFinalPromptText,
+        finalPromptText,
         TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES,
       );
       boundedData.finalPromptTextOriginalLength = finalPromptText.length;
     }
   }
-  return redactSecrets(
-    sanitizeDiagnosticPayload(limitTrajectoryPayloadValue(boundedData)),
+  return projectDiagnosticValue(
+    limitTrajectoryPayloadValue(boundedData),
+    TRAJECTORY_PAYLOAD_PROJECTION,
   ) as Record<string, unknown>;
 }
 
@@ -266,28 +286,28 @@ function isTrajectoryJsonData(value: unknown, depth = 0): boolean {
 }
 
 function projectTrajectoryToolParameters(parameters: unknown): unknown {
-  const bounded = limitTrajectoryPayloadValue(parameters);
-  // Custom array operations can return opaque objects; preserve their diagnostic projection.
-  if (!isTrajectoryJsonData(bounded)) {
-    return sanitizeDiagnosticPayload(bounded);
+  const published = getPublishedRuntimeToolInputSchema(parameters);
+  // Publication owns immutable JSON; mutable or opaque inputs still need current bounds.
+  const bounded = published ? undefined : limitTrajectoryPayloadValue(parameters);
+  if (!published && !isTrajectoryJsonData(bounded)) {
+    return projectDiagnosticValue(bounded, TRAJECTORY_PAYLOAD_PROJECTION);
   }
-  const revision = getSecretRedactionRegistryRevision();
-  if (revision !== toolParameterSecretRevision) {
-    toolParameterProjections.clear();
-    toolParameterSecretRevision = revision;
+  const content = published?.json ?? JSON.stringify(bounded);
+  const project = () =>
+    projectDiagnosticValue(
+      published ? limitTrajectoryPayloadValue(parameters) : bounded,
+      TRAJECTORY_PAYLOAD_PROJECTION,
+    );
+  if (!published && content.length > TRAJECTORY_TOOL_CACHE_MAX_CHARS) {
+    return project();
   }
-  const content = JSON.stringify(bounded);
-  if (content.length > TRAJECTORY_TOOL_CACHE_MAX_CHARS) {
-    return sanitizeDiagnosticPayload(bounded);
-  }
-  // Content owns invalidation: tools can be rebuilt or edited in place between requests.
-  const key = hash("sha256", content);
+  // Raw and already-bounded JSON can differ at truncation boundaries.
+  const key = published ? `published:${published.fingerprint}` : hash("sha256", content);
   const cached = toolParameterProjections.get(key);
   if (cached !== undefined) {
     return JSON.parse(cached);
   }
-  // This policy is fixed; the recorder still applies current configured/exact secret redaction.
-  const projected = sanitizeDiagnosticPayload(bounded);
+  const projected = project();
   const serialized = JSON.stringify(projected);
   if (serialized.length <= TRAJECTORY_TOOL_CACHE_MAX_CHARS) {
     if (toolParameterProjections.size >= TRAJECTORY_TOOL_CACHE_MAX_ENTRIES) {
@@ -380,9 +400,8 @@ export async function createTrajectoryRuntimeRecorder(input: TrajectoryRuntimeIn
       if (!boundedLine) {
         return;
       }
-      const boundedEvent = JSON.parse(boundedLine) as TrajectoryEvent;
       seq = nextSeq;
-      sink.write(boundedEvent, boundedLine);
+      sink.write(event, boundedLine);
     },
     flush: sink.flush,
     describeFlushState: sink.describeFlushState,

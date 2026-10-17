@@ -21,7 +21,7 @@ vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => ({
 
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
-  getRuntimeConfig: () => ({ browser: {} }),
+  readRuntimeConfig: () => ({ browser: {} }),
 }));
 
 vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({

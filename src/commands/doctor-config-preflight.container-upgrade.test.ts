@@ -115,15 +115,18 @@ describe("container image replacement Doctor repair and startup readiness", () =
     await withContainerState(async (stateDir) => {
       const databasePath = seedSchema19Agent(stateDir);
       const original = fs.readFileSync(databasePath);
-      await withAgentDatabaseStartupAdmission(async () => {
-        await expect(runStartupConfigPreflight({ gateway: true })).rejects.toMatchObject({
-          code: 78,
-        });
-        expect(fs.readFileSync(databasePath)).toEqual(original);
-        await repairContainerState();
-        await runStartupConfigPreflight({ gateway: true });
-        expect(listAgentDatabaseAdmissionRefusals()).toEqual([]);
-      });
+      await withAgentDatabaseStartupAdmission(
+        async () => {
+          await expect(runStartupConfigPreflight({ gateway: true })).rejects.toMatchObject({
+            code: 78,
+          });
+          expect(fs.readFileSync(databasePath)).toEqual(original);
+          await repairContainerState();
+          await runStartupConfigPreflight({ gateway: true });
+          expect(listAgentDatabaseAdmissionRefusals()).toEqual([]);
+        },
+        { deferInspections: false },
+      );
       const backups = fs
         .readdirSync(path.dirname(databasePath))
         .filter((name) => name.startsWith(`${path.basename(databasePath)}.pre-startup-migration-`));

@@ -10,6 +10,7 @@ const apiKeyInfo = {
 const runtimeAuthState = {
   generation: 1,
   sourceApiKey: "source-token",
+  apiKey: "runtime-token",
   authMode: "oauth",
   profileId: "test:profile",
 };
@@ -93,19 +94,6 @@ describe("createScopedAuthProfileStore", () => {
       profiles: { "openai:work": store.profiles["openai:work"] },
       runtimePersistedProfileIds: ["openai:work"],
       runtimeExternalProfileIds: [],
-      runtimeExternalProfileIdsAuthoritative: true,
-    });
-  });
-
-  it("preserves an authoritative external profile classification", () => {
-    expect(createScopedAuthProfileStore(store, ["openai:external", "anthropic:work"])).toEqual({
-      version: 1,
-      profiles: {
-        "openai:external": store.profiles["openai:external"],
-        "anthropic:work": store.profiles["anthropic:work"],
-      },
-      runtimePersistedProfileIds: ["anthropic:work"],
-      runtimeExternalProfileIds: ["openai:external"],
       runtimeExternalProfileIdsAuthoritative: true,
     });
   });

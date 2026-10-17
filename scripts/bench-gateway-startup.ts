@@ -5,9 +5,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { writeBenchmarkJson } from "./lib/benchmark-harness.mts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
-import { getFreePort, readProcessRssMb, readProcessTreeCpuMs } from "./lib/gateway-bench-probes.ts";
+import {
+  getFreePort,
+  readProcessTreeCpuMs,
+  startGatewayRssSampling,
+} from "./lib/gateway-bench-probes.ts";
 import {
   BASE_GATEWAY_BENCH_CONFIG,
   buildGatewayBenchChildArgs,
@@ -762,10 +767,9 @@ async function runGatewaySample(
     let gatewayReadyLogMs: number | null = null;
     let httpListenLogLine: string | null = null;
     let httpListenLogMs: number | null = null;
-    let maxRssMb: number | null = null;
     let childExited = false;
     let child: ChildProcessWithoutNullStreams | undefined;
-    let rssTimer: ReturnType<typeof setInterval> | undefined;
+    let rssSampler: ReturnType<typeof startGatewayRssSampling> | undefined;
 
     try {
       const nodeOptions = [
@@ -796,15 +800,7 @@ async function runGatewaySample(
       }
       const startedChild = child;
       const cpuStartMs = readProcessTreeCpuMs(startedChild.pid);
-      const sampleRss = () => {
-        const rssMb = readProcessRssMb(startedChild.pid);
-        if (rssMb != null) {
-          maxRssMb = maxRssMb == null ? rssMb : Math.max(maxRssMb, rssMb);
-        }
-      };
-      sampleRss();
-      rssTimer = setInterval(sampleRss, 100);
-      rssTimer.unref?.();
+      rssSampler = startGatewayRssSampling(startedChild);
       startedChild.once("exit", () => {
         childExited = true;
       });
@@ -863,11 +859,9 @@ async function runGatewaySample(
         cpuStartMs == null || cpuEndMs == null ? null : Math.max(0, cpuEndMs - cpuStartMs);
       const cpuCoreRatio = cpuMs == null ? null : cpuMs / Math.max(1, completedAt - startAt);
       const exit = await stopChild(startedChild);
-      sampleRss();
+      const maxRssMb = rssSampler.sample();
       child = undefined;
-      flushOutputLineBuffers(outputBuffers, onLine, performance.now() - startAt, {
-        flushPartial: true,
-      });
+      flushOutputLineBuffers(outputBuffers, onLine, performance.now() - startAt);
 
       return {
         completionMs,
@@ -888,9 +882,7 @@ async function runGatewaySample(
         startupTrace,
       };
     } finally {
-      if (rssTimer) {
-        clearInterval(rssTimer);
-      }
+      rssSampler?.stop();
       if (child) {
         await stopChild(child).catch(() => undefined);
       }
@@ -913,14 +905,8 @@ async function runCase(
   const total = options.runs + options.warmup;
   for (let index = 0; index < total; index += 1) {
     const sample = await runGatewaySample({
-      benchCase: options.benchCase,
-      cpuProfDir: options.cpuProfDir,
-      entry: options.entry,
-      gatewayRuntime: options.gatewayRuntime,
-      gatewayCpus: options.gatewayCpus,
-      heapProfDir: options.heapProfDir,
+      ...options,
       sampleIndex: index + 1,
-      timeoutMs: options.timeoutMs,
     });
     if (index >= options.warmup) {
       samples.push(sample);
@@ -1004,19 +990,7 @@ async function main() {
   }
   const results: CaseResult[] = [];
   for (const benchCase of options.cases) {
-    results.push(
-      await runCase({
-        benchCase,
-        cpuProfDir: options.cpuProfDir,
-        entry: options.entry,
-        gatewayRuntime: options.gatewayRuntime,
-        gatewayCpus: options.gatewayCpus,
-        heapProfDir: options.heapProfDir,
-        runs: options.runs,
-        timeoutMs: options.timeoutMs,
-        warmup: options.warmup,
-      }),
-    );
+    results.push(await runCase({ ...options, benchCase }));
   }
 
   const payload = {
@@ -1027,8 +1001,7 @@ async function main() {
     results,
   };
   if (options.output) {
-    mkdirSync(path.dirname(options.output), { recursive: true });
-    writeFileSync(options.output, `${JSON.stringify(payload, null, 2)}\n`);
+    writeBenchmarkJson(payload, options.output);
   }
   if (options.json) {
     console.log(JSON.stringify(payload, null, 2));

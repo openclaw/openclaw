@@ -5,7 +5,7 @@ sidebarTitle: "Tool Plugins"
 read_when:
   - You want to build a simple OpenClaw plugin that only adds agent tools
   - You want to use defineToolPlugin instead of hand-writing plugin manifest metadata
-  - You need to scaffold, generate, validate, test, or publish a tool-only plugin
+  - You need to create, generate, validate, test, or publish a tool-only plugin
   - You need the plugin tool context's memory audience and currency guards
 ---
 
@@ -40,7 +40,7 @@ npm run plugin:validate
 npm test
 ```
 
-`plugins init` scaffolds:
+`plugins init` creates these starter files:
 
 | File                   | Purpose                                                           |
 | ---------------------- | ----------------------------------------------------------------- |
@@ -66,7 +66,7 @@ Plugin stock-quotes is valid.
 | -------------------- | ------------------ | -------------------------------------- |
 | `--directory <path>` | `<id>`             | Output directory                       |
 | `--name <name>`      | Title-cased `<id>` | Display name                           |
-| `--type <type>`      | `tool`             | Scaffold type: `tool` or `provider`    |
+| `--type <type>`      | `tool`             | Plugin type: `tool` or `provider`      |
 | `--force`            | off                | Overwrite an existing output directory |
 
 ## Write a tool
@@ -75,9 +75,15 @@ Plugin stock-quotes is valid.
 static list of tools. Parameter and config types are inferred from the
 TypeBox schemas.
 
+Each tool can declare `workspaceAccess`: `false` for a workspace-independent tool,
+`"execute"` for a pure factory whose tool reads or writes working files, or `true`
+when its factory also reads the workspace. An omitted factory declaration waits
+for complete workspace preparation; an omitted static declaration waits only
+at execution. Explicit declarations preserve early first replies during checkout.
+
 ```typescript
-import { Type } from "typebox";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
+import { Type } from "typebox";
 
 export default defineToolPlugin({
   id: "stock-quotes",
@@ -118,6 +124,12 @@ export default defineToolPlugin({
 
 Tool names are the stable API. Pick names that are unique, lowercase, and
 specific enough to avoid collisions with core tools or other plugins.
+
+OpenClaw bounds tool input schemas to 128 nested schema levels, including
+expanded local references. Deeper subschemas become permissive `{}` schemas
+so the tool remains callable. A one-time warning names the affected tool;
+validation beyond the cutoff is unavailable. Keep schemas shallow enough to
+describe useful arguments to the model. This applies to MCP tools too.
 
 ## Optional and factory tools
 
@@ -184,6 +196,12 @@ in the captured lineage changes incarnation or lifecycle.
 `assertInvocationCurrent` separately checks the admitted tool invocation and
 plugin lifetime. Use a version 2 tool context when the tool depends on these live
 authority checks.
+
+`toolContext.approvalReviewerDeviceIds` contains the host-selected devices for
+an approval initiated by this tool. Pass it to `plugin.approval.request` when
+using the trusted in-process Gateway runtime. It only routes review to those
+devices; each reviewer still needs `operator.approvals`, and the tool must not
+take reviewer IDs from model-authored arguments.
 
 A factory may return a core `AgentTool`, an array of them, or `null` or
 `undefined` to opt out, as the example above does. When it returns a concrete
@@ -400,23 +418,37 @@ api.registerTool({
 });
 ```
 
-OpenClaw delivers the reply to the conversation the turn came from and ends the
-turn, so no further model turn restates the result. Other tool calls from the
-same model step still run to completion and are recorded. After a successful
-send, delivery records the reply as the assistant turn in the session
-transcript, with the same session checks as any other delivered reply. A reply
-needs `text`, `mediaUrl`, or `mediaUrls`; `attachments` ride along with them.
-Error results, results without a deliverable reply, and `sourceReply.final:
-false` are ignored, and the model continues as usual with `content`.
+OpenClaw waits for every tool call from the same model step to settle. The
+host skips the next model step only when the whole batch can finish without
+further model work, then delivers the admitted replies to the conversation.
+If a sibling fails, is rejected, or returns an ordinary or progress result,
+the model continues with the tool results instead; a partial success must not
+hide unfinished work or another call’s failure. Existing explicit terminal
+tools keep their own completion contract.
+
+After a successful send, delivery records the reply as the assistant turn in
+the session transcript, with the same session checks as any other delivered
+reply. A reply needs `text`, `mediaUrl`, or `mediaUrls` inside `sourceReply`;
+`attachments` ride along with them. Top-level result fields such as
+`details.message` and `details.mediaUrl` are not reply content. Removing
+`sourceReply`, leaving it empty, or returning `sourceReply.final: false` keeps
+the normal model path.
 
 OpenClaw reads the reply after tool hooks and result middleware run, so
 middleware can rewrite or withdraw it. Only the tool author can grant the
 capability: `canDeliverSourceReply` lives on the tool definition, never in a
 result. A call made from inside a Code Mode program returns to that program and
-is never delivered as a reply. On the Codex harness, only calls the model makes
-directly in the `direct-only` catalog can deliver, so declare
-`catalogMode: "direct-only"` as in the example; otherwise the model restates the
-result as usual.
+is never delivered as a reply. On the Codex harness, declare
+`catalogMode: "direct-only"` as in the example. Catalog selection alone does not
+grant delivery: the tool call must appear directly in the native model response,
+not only as execution nested inside a program. A nested call remains ordinary
+program data even if native execution reports the direct catalog namespace.
+
+Use this capability for complete reports, confirmations, receipts, or other
+user-ready results. Leave it off for search hits, raw database rows, or
+intermediate results the model still needs to combine. Existing tools do not
+opt in automatically, and the `message` tool keeps its existing delivery
+contract.
 
 ## Configuration
 
@@ -540,7 +572,7 @@ which editors surface as migration warnings. To enforce them in CI, enable a
 type-aware rule such as
 [`@typescript-eslint/no-deprecated`](https://typescript-eslint.io/rules/no-deprecated/).
 Oxlint is not type-aware, so it cannot enforce these annotations. The generated
-`plugins init` scaffold therefore does not add a deprecation lint config.
+`plugins init` starter files therefore do not add a deprecation lint config.
 
 `plugins validate` checks that:
 
@@ -583,14 +615,15 @@ clawhub package publish ./stock-quotes --dry-run
 clawhub package publish ./stock-quotes
 ```
 
-Install with an explicit ClawHub locator:
+Install from ClawHub:
 
 ```bash
-openclaw plugins install clawhub:your-org/stock-quotes
+openclaw plugins install your-org/stock-quotes
 ```
 
-Bare npm package specs install from npm, but ClawHub is the preferred
-discovery and distribution surface for OpenClaw plugins. See [ClawHub publishing](/clawhub/publishing) for owner scope and
+ClawHub is the default source for package specs and the preferred
+discovery and distribution surface for OpenClaw plugins. Use `npm:<package>`
+for an npm install. See [ClawHub publishing](/clawhub/publishing) for owner scope and
 release review.
 
 ## Troubleshooting

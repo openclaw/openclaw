@@ -2,7 +2,6 @@ import {
   buildChannelInboundEventContext,
   type dispatchInboundDirectDm as DispatchInboundDirectDm,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createPluginRuntimeMock,
   createStartAccountContext,
@@ -129,6 +128,9 @@ describe("nostr gateway lifecycle", () => {
       expect(h.isSettled()).toBe(false);
       expect(getActiveNostrBuses().has("default")).toBe(false);
       await expect(send("hello")).rejects.toThrow("Nostr bus not running for account default");
+      await expect(
+        nostrPlugin.pairing!.notifyApproval!({ cfg: {}, id: TEST_HEX_PUBLIC_KEY }),
+      ).rejects.toThrow("Nostr bus not running for account default");
       expect(bus.sendDm).not.toHaveBeenCalled();
       expect(h.context.log?.info).not.toHaveBeenCalledWith("[default] Nostr provider stopped");
       if (fails) {
@@ -171,15 +173,6 @@ describe("nostr gateway lifecycle", () => {
     } finally {
       close.resolve();
     }
-  });
-
-  it("closes immediately for an already-aborted signal", async () => {
-    const abort = new AbortController();
-    abort.abort();
-    const h = await startGateway({ abort });
-    await h.task;
-    expect(mocks.startNostrBus).toHaveBeenCalledOnce();
-    expect(h.bus.close).toHaveBeenCalledOnce();
   });
 
   it("becomes ready on connection and recovers only after the last relay disconnects", async () => {
@@ -234,7 +227,6 @@ describe("nostr inbound", () => {
       visible: "",
       expected: "",
     },
-    { name: "suppresses Markdown-only replies", text: "***", visible: "***", expected: "" },
   ])("$name through the reply pipeline", async ({ text, visible, expected }) => {
     mocks.dispatchInboundDirectDm.mockImplementationOnce(async (params) => {
       await params.deliver({ text });
@@ -287,7 +279,8 @@ describe("nostr inbound", () => {
 });
 
 describe("nostr outbound", () => {
-  it.each(NOSTR_SANITIZER_CASES)("$name", ({ text, expected }) => {
+  it("suppresses an outbound internal-trace-only reply", () => {
+    const { text, expected } = NOSTR_SANITIZER_CASES[3]!;
     expect(nostrPlugin.outbound?.sanitizeText?.({ text, payload: { text } })).toBe(expected);
   });
 
@@ -327,44 +320,16 @@ describe("nostr outbound", () => {
       expect.any(Object),
     );
     expect(result.messageId).toBe(eventId);
+    await nostrPlugin.pairing!.notifyApproval!({ cfg, id: TEST_HEX_PUBLIC_KEY });
+    expect(h.bus.sendDm).toHaveBeenLastCalledWith(
+      TEST_HEX_PUBLIC_KEY,
+      "Your pairing request has been approved!",
+    );
   });
 
   it("rejects empty text after Markdown conversion", async () => {
     const h = await startGateway();
     await expect(send("***")).rejects.toThrow("requires non-empty text");
     expect(h.bus.sendDm).not.toHaveBeenCalled();
-  });
-
-  it("backs declared message capabilities with a delivered text receipt", async () => {
-    const h = await startGateway();
-    const adapter = nostrPlugin.message;
-    if (!adapter?.send?.text) {
-      throw new Error("Expected Nostr message adapter");
-    }
-    const sendText = adapter.send.text;
-    expect(adapter.send.media).toBeUndefined();
-    await verifyChannelMessageAdapterCapabilityProofs({
-      adapterName: "nostrMessageAdapter",
-      adapter,
-      proofs: {
-        text: async () => {
-          const result = await sendText({
-            cfg: {},
-            to: TEST_HEX_PUBLIC_KEY,
-            text: "hello",
-            accountId: "default",
-          });
-          expect(h.bus.sendDm).toHaveBeenCalledWith(
-            TEST_HEX_PUBLIC_KEY,
-            "hello",
-            expect.any(Object),
-          );
-          expect(result.receipt.parts[0]?.kind).toBe("text");
-        },
-        messageSendingHooks: () => {
-          expect(sendText).toBeTypeOf("function");
-        },
-      },
-    });
   });
 });

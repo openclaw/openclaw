@@ -241,9 +241,7 @@ describeSpawnTransports(
     });
 
     it.each(
-      process.platform === "linux" && !process.versions.bun
-        ? ["process-group", "linux-subreaper"]
-        : ["process-group"],
+      process.platform === "linux" ? ["process-group", "linux-subreaper"] : ["process-group"],
     )(
       "uses %s custody after KILL when an escaped descendant retains lineage",
       async (ownership) => {
@@ -398,7 +396,7 @@ describeSpawnTransports(
         }
         const adapter = await startNode(
           `const fs = require("node:fs");
-         const secret = fs.readFileSync(${JSON.stringify(process.platform === "darwin" ? "/dev/fd/3" : "/proc/self/fd/3")}, "utf8").trimEnd();
+         const secret = fs.readFileSync(${JSON.stringify(process.platform === "linux" ? "/proc/self/fd/3" : "/dev/fd/3")}, "utf8").trimEnd();
          const input = fs.readFileSync(0, "utf8");
          process.stdout.write(secret.length + ":" + input);`,
           {

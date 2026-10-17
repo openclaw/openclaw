@@ -4,6 +4,7 @@ import http from "node:http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { createGatewayCronReconciliation } from "../gateway/server-cron-reconciled.js";
@@ -147,6 +148,7 @@ async function startAuthenticatedMcpProofServer() {
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
+  clearRuntimeConfigSnapshot();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -216,6 +218,7 @@ describe("mcp connection resolver helpers", () => {
   });
 
   it("revokes MCP credentials during a full gateway plugin-disable replacement", async () => {
+    setRuntimeConfigSnapshot({ plugins: { entries: { "startup-mail": { enabled: true } } } });
     const scheduler = createTestGatewayScheduler();
     onTestFinished(() => scheduler.stop());
     await setSessionMcpRuntimeScheduler(scheduler);

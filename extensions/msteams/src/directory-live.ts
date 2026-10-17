@@ -13,6 +13,7 @@ import {
 
 export async function listMSTeamsDirectoryPeersLive(params: {
   cfg: unknown;
+  accountId?: string | null;
   query?: string | null;
   limit?: number | null;
 }): Promise<ChannelDirectoryEntry[]> {
@@ -20,8 +21,10 @@ export async function listMSTeamsDirectoryPeersLive(params: {
   if (!query) {
     return [];
   }
-  const token = await resolveGraphToken(params.cfg);
-  const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : 20;
+  const token = await resolveGraphToken(params.cfg, {
+    accountId: params.accountId,
+  });
+  const limit = params.limit != null && params.limit > 0 ? params.limit : 20;
 
   const users = await searchGraphUsers({ token, query, top: limit });
 
@@ -46,6 +49,7 @@ export async function listMSTeamsDirectoryPeersLive(params: {
 
 export async function listMSTeamsDirectoryGroupsLive(params: {
   cfg: unknown;
+  accountId?: string | null;
   query?: string | null;
   limit?: number | null;
 }): Promise<ChannelDirectoryEntry[]> {
@@ -53,8 +57,10 @@ export async function listMSTeamsDirectoryGroupsLive(params: {
   if (!rawQuery) {
     return [];
   }
-  const token = await resolveGraphToken(params.cfg);
-  const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : 20;
+  const token = await resolveGraphToken(params.cfg, {
+    accountId: params.accountId,
+  });
+  const limit = params.limit != null && params.limit > 0 ? params.limit : 20;
   const [teamQuery, channelQuery] = rawQuery.includes("/")
     ? normalizeStringEntries(rawQuery.split("/", 2))
     : [rawQuery, null];

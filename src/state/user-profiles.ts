@@ -1,12 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sql } from "kysely";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import {
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
-} from "./openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import {
   ensureProfileForEmailInDatabase,
   normalizeProfileEmail as normalizeEmail,
@@ -25,7 +22,6 @@ import {
   insertUserProfile,
   requireResolvedUserProfileMetadataById,
   selectUserProfileEmailAlias,
-  selectResolvedUserProfileMetadataById,
   toUserProfile,
   userProfilesDb,
 } from "./user-profiles-internal.js";
@@ -33,11 +29,7 @@ import {
   ensureGatewayOwnerProfileRow,
   readGatewayOwnerProfileForEnsure,
 } from "./user-profiles-owner.js";
-import {
-  ensureUserProfileRoleSchema,
-  ensureUserProfilesSchema,
-  UserProfileNotFoundError,
-} from "./user-profiles-schema.js";
+import { ensureUserProfilesSchema, UserProfileNotFoundError } from "./user-profiles-schema.js";
 import {
   classifyTailscaleLogin,
   type TailscaleProfileIdentity,
@@ -45,11 +37,6 @@ import {
 import { MAX_USER_PROFILE_DISPLAY_NAME_LENGTH, type UserProfile } from "./user-profiles.types.js";
 
 export { formatUserProfileAvatarEtag } from "./user-profiles-internal.js";
-export {
-  getUserProfileDisplay,
-  readUserProfileAliases,
-  hasMultipleSessionSharingIdentities,
-} from "./user-profile-list.js";
 export { listProfiles } from "./user-profile-reads.js";
 
 export { adoptTailscaleProfileAvatar } from "./user-profiles-avatar.js";
@@ -61,26 +48,6 @@ export function normalizeInitialDisplayName(name: string | null | undefined): st
   return normalized ? truncateUtf16Safe(normalized, MAX_USER_PROFILE_DISPLAY_NAME_LENGTH) : null;
 }
 
-/** Resolves a durable profile reference to its current one-hop merge head. */
-export function resolveUserProfileId(
-  profileId: string,
-  options: OpenClawStateDatabaseOptions = {},
-): string | undefined {
-  ensureUserProfilesSchema(options);
-  const { db } = openOpenClawStateDatabase(options);
-  return selectResolvedUserProfileMetadataById(db, profileId)?.id;
-}
-
-/** Reads the role assigned to an existing profile's current merge head. */
-export function getUserProfileRole(
-  profileId: string,
-  options: OpenClawStateDatabaseOptions = {},
-): string | null {
-  ensureUserProfileRoleSchema(options);
-  const { db } = openOpenClawStateDatabase(options);
-  return requireResolvedUserProfileMetadataById(db, profileId).role ?? null;
-}
-
 function ensureProfileForEmailWithInitialName(
   email: string,
   initialDisplayName: string | null,
@@ -89,12 +56,12 @@ function ensureProfileForEmailWithInitialName(
   const normalizedEmail = normalizeEmail(email);
   ensureUserProfilesSchema(options);
   const { db: reader } = openOpenClawStateDatabase(options);
-  const assertBinding = (database: DatabaseSync) => {
+  const assertBinding = (database: EngineConnection) => {
     if (options.expectedGitHubAccountId !== undefined) {
       assertGitHubEmailIdentityBinding(database, normalizedEmail, options.expectedGitHubAccountId);
     }
   };
-  const selectExistingProfile = (database: DatabaseSync) => {
+  const selectExistingProfile = (database: EngineConnection) => {
     assertBinding(database);
     const alias = selectUserProfileEmailAlias(database, normalizedEmail);
     return alias
@@ -142,7 +109,7 @@ function ensureProfileForProviderIdentity(params: {
     params.provider === "github" ? githubAuthenticationSubject(params.subject) : params.subject;
   ensureUserProfilesSchema(params.options);
   const { db: reader } = openOpenClawStateDatabase(params.options);
-  const selectExistingIdentity = (database: DatabaseSync) => {
+  const selectExistingIdentity = (database: EngineConnection) => {
     let query = userProfilesDb(database)
       .selectFrom("user_profile_identities")
       .select(["profile_id", "subject"])

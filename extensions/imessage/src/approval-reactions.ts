@@ -101,7 +101,7 @@ const imessageApprovalReactionTargets =
     namespace: PERSISTENT_NAMESPACE,
     maxEntries: PERSISTENT_MAX_ENTRIES,
     defaultTtlMs: DEFAULT_REACTION_TARGET_TTL_MS,
-    openStore: (params) => getOptionalIMessageRuntime()?.state.openKeyedStore(params),
+    openStore: (params) => getOptionalIMessageRuntime()?.state.openKeyedStoreV2(params),
     logPersistentError: reportPersistentApprovalReactionError,
     readPersistedTarget: readApprovalReactionTargetRecord,
   });
@@ -356,20 +356,6 @@ export async function unregisterIMessageApprovalReactionTarget(params: {
   ]);
 }
 
-function resolveTarget(params: {
-  target: IMessageApprovalReactionTarget | null | undefined;
-  reactionKey: string;
-}): IMessageApprovalReactionResolution | null {
-  const target = resolveTypedApprovalReactionTarget(params);
-  return target
-    ? {
-        approvalId: target.approvalId,
-        approvalKind: target.approvalKind,
-        decision: target.decision,
-      }
-    : null;
-}
-
 function formatCanonicalApprovalTerminalState(approval: ApprovalResolveResult["approval"]): string {
   const decision =
     approval.status === "allowed" || approval.status === "denied"
@@ -390,12 +376,16 @@ export async function resolveIMessageApprovalReactionTargetWithPersistence(param
   // (chat_guid → chat_identifier → chat_id → handle) and accept the first hit.
   const keys = enumerateApprovalTargetKeys(params);
   for (const key of keys) {
-    const target = resolveTarget({
+    const target = resolveTypedApprovalReactionTarget({
       target: await imessageApprovalReactionTargets.lookup(key),
       reactionKey: params.reactionKey,
     });
     if (target) {
-      return target;
+      return {
+        approvalId: target.approvalId,
+        approvalKind: target.approvalKind,
+        decision: target.decision,
+      };
     }
   }
   return null;

@@ -1,5 +1,6 @@
 import { appendTextDeltaToAssistantMessage } from "@openclaw/llm-core";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -233,7 +234,7 @@ export function createNativeInferenceStreamGuard(native: NativeRuntimeResolved) 
         }
         // result() is authoritative, including end(result) without a terminal event.
         // Guard it before allowing the output stream to settle or release held events.
-        const final = structuredClone(await source.result());
+        const final = await source.result();
         publish(
           final.stopReason === "error" || final.stopReason === "aborted"
             ? { type: "error", reason: final.stopReason, error: final }
@@ -256,14 +257,7 @@ export function createNativeInferenceStreamGuard(native: NativeRuntimeResolved) 
             errorMessage: aborted
               ? "Runtime-local inference cancelled"
               : "Runtime-local inference failed its output boundary",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: makeZeroUsageSnapshot(),
           },
         });
       } finally {

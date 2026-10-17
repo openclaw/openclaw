@@ -7,12 +7,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { SpawnResult } from "../process/exec.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { npmCommandArgs } from "../test-utils/npm-command.js";
 import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { resolvePluginInstallOwnerMigrations } from "./install-transaction.js";
+import {
+  clearLoadInstalledPluginIndexInstallRecordsCache,
+  loadInstalledPluginIndexInstallRecords,
+} from "./installed-plugin-index-records.js";
 import { makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 
 const APP_ROOT = "/app";
 
@@ -45,7 +51,6 @@ const failedNpmVersionQueryResult: SpawnResult = {
   termination: "exit",
 };
 const validatePackageExtensionEntriesForInstallMock = vi.fn();
-const markClawPackageIndependentlyOwnedMock = vi.fn();
 const withClawPackageLifecycleLeaseMock = vi.fn(
   async (_artifact: unknown, operation: () => Promise<unknown>, _options?: unknown) =>
     await operation(),
@@ -130,11 +135,6 @@ vi.mock("../infra/clawhub-packages.js", async (importOriginal) => {
     fetchClawHubPackageDetail: (...args: unknown[]) => fetchClawHubPackageDetailMock(...args),
   };
 });
-
-vi.mock("../state/claw-package-adoption.js", () => ({
-  markClawPackageIndependentlyOwned: (...args: unknown[]) =>
-    markClawPackageIndependentlyOwnedMock(...args),
-}));
 
 vi.mock("../state/claw-package-lifecycle-lease.js", () => ({
   withClawPackageLifecycleLease: (
@@ -238,6 +238,19 @@ function pluginConfig(
   plugins: Omit<NonNullable<OpenClawConfig["plugins"]>, "installs"> = {},
 ): OpenClawConfig {
   return { plugins: { ...plugins, installs } };
+}
+
+async function reloadPersistedPluginConfig(config: OpenClawConfig): Promise<OpenClawConfig> {
+  const stateDir = makeTrackedTempDir("openclaw-plugin-update-records", tempDirs);
+  await seedInstalledPluginIndex(config.plugins?.installs ?? {}, {
+    stateDir,
+    config,
+    candidates: [],
+  });
+  await closeOpenClawStateDatabaseAsync();
+  clearLoadInstalledPluginIndexInstallRecordsCache();
+  const installs = await loadInstalledPluginIndexInstallRecords({ stateDir });
+  return pluginConfig(installs, config.plugins);
 }
 
 function createNpmInstallConfig(
@@ -2002,7 +2015,7 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
-  it("refreshes legacy records for disabled official npm installs during sync", async () => {
+  it("refreshes persisted legacy records for disabled official npm installs during sync", async () => {
     const installPath = createInstalledPackageDir("@openclaw/codex", "2026.5.3");
     mockNpmViewMetadata({
       name: "@openclaw/codex",
@@ -2018,17 +2031,18 @@ describe("updateNpmInstalledPlugins", () => {
     });
 
     const result = await updateNpmInstalledPlugins({
-      config: pluginConfig(
-        { codex: { source: "npm", spec: "@openclaw/codex@2026.5.3", installPath } },
-        {
-          entries: { codex: { enabled: false, config: { preserved: true } } },
-        },
+      config: await reloadPersistedPluginConfig(
+        pluginConfig(
+          { codex: { source: "npm", spec: "@openclaw/codex@2026.5.3", installPath } },
+          { entries: { codex: { enabled: false, config: { preserved: true } } } },
+        ),
       ),
       skipDisabledPlugins: true,
       syncOfficialPluginInstalls: true,
     });
 
     expect(npmInstallCall()?.spec).toBe("@openclaw/codex@2026.5.3");
+    expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
     expect(npmInstallCall()?.expectedPluginId).toBe("codex");
     expect(npmInstallCall()?.trustedSourceLinkedOfficialInstall).toBe(true);
     expect(result.changed).toBe(true);
@@ -2141,7 +2155,7 @@ describe("updateNpmInstalledPlugins", () => {
       dryRun: true,
     },
   ])(
-    "reports legacy spec-only ClawHub pin diagnostics for $name (dryRun=$dryRun)",
+    "reports persisted legacy spec-only ClawHub pin diagnostics for $name (dryRun=$dryRun)",
     async (scenario) => {
       const { dryRun } = scenario;
       const spec = `clawhub:@openclaw/diagnostics-otel@${scenario.selector}`;
@@ -2179,12 +2193,13 @@ describe("updateNpmInstalledPlugins", () => {
       delete record.clawhubChannel;
       delete record.clawhubPackage;
       const result = await updateNpmInstalledPlugins({
-        config,
+        config: await reloadPersistedPluginConfig(config),
         dryRun,
         syncOfficialPluginInstalls: true,
       });
 
       expect(clawHubInstallCall()?.spec).toBe(spec);
+      expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
       expect(fetchClawHubPackageDetailMock).toHaveBeenCalledWith({
         name: "@openclaw/diagnostics-otel",
         baseUrl: undefined,
@@ -2410,11 +2425,6 @@ describe("updateNpmInstalledPlugins", () => {
       expect.any(Function),
       undefined,
     );
-    expect(markClawPackageIndependentlyOwnedMock).toHaveBeenCalledWith({
-      kind: "plugin",
-      source: "clawhub",
-      ref: "demo",
-    });
     expectRecordFields(result.config.plugins?.installs?.demo, {
       ...updated.clawhub,
       spec: "clawhub:demo@1.2.3",
@@ -2755,7 +2765,7 @@ describe("updateNpmInstalledPlugins", () => {
             pluginId: "qqbot",
             status: "skipped",
             message:
-              'Removed duplicate "qqbot" install record; "openclaw-qqbot" is the canonical plugin id.',
+              'Removed duplicate "qqbot" install record; "openclaw-qqbot" is the current plugin ID.',
           }),
         ]),
       );
@@ -2776,7 +2786,7 @@ describe("updateNpmInstalledPlugins", () => {
             expect.objectContaining({
               pluginId: "qqbot",
               message:
-                'Kept duplicate "qqbot" install record because "openclaw-qqbot" did not complete a runnable canonical update.',
+                'Kept duplicate "qqbot" install record because "openclaw-qqbot" did not produce a runnable installation of the current plugin.',
             }),
           ]),
         );
@@ -2790,7 +2800,7 @@ describe("updateNpmInstalledPlugins", () => {
                 pluginId: "qqbot",
                 status: "skipped",
                 message:
-                  'Would remove duplicate "qqbot" install record; "openclaw-qqbot" is the canonical plugin id.',
+                  'Would remove duplicate "qqbot" install record; "openclaw-qqbot" is the current plugin ID.',
               }),
             ]),
           );

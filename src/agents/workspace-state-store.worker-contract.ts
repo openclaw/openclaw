@@ -1,4 +1,6 @@
 import type { AgentDeletionRecoveryHoldPredicate } from "../state/agent-deletion-journal-recovery.kernel.js";
+import type { AgentDeletionWorkerGuard } from "../state/agent-deletion-worker-contract.js";
+import type { WorkspaceStateIdentity } from "./workspace-state-identity.js";
 import type {
   WorkspaceSetupState,
   WorkspaceStateSnapshot,
@@ -17,6 +19,18 @@ type WorkspaceStateInput = {
   recoveryHoldPredicate?: AgentDeletionRecoveryHoldPredicate;
 };
 
+export type WorkspaceStateDeletionPlan = {
+  cacheRoot: string;
+  lexicalAlias: WorkspaceStateIdentity;
+  currentCanonicalIdentity: WorkspaceStateIdentity;
+  pathEntryExisted: boolean;
+};
+
+export type WorkspaceStateDeletionReceipt = {
+  kind: "workspace-deleted";
+  workspacePath: string;
+};
+
 export type WorkspaceStateWorkerOperations = {
   "workspace.snapshotAndRegister": {
     input: WorkspaceStateInput;
@@ -30,11 +44,8 @@ export type WorkspaceStateWorkerOperations = {
     output: WorkspaceSetupState;
   };
   "workspace.expire": { input: WorkspaceStateInput & { nowMs: number }; output: string | false };
-};
-
-export type WorkspaceStateWorkerCommand = {
-  [K in keyof WorkspaceStateWorkerOperations]: {
-    type: K;
-    input: WorkspaceStateWorkerOperations[K]["input"];
+  "workspace.delete": {
+    input: { plan: WorkspaceStateDeletionPlan; deletion?: AgentDeletionWorkerGuard };
+    output: WorkspaceStateDeletionReceipt;
   };
-}[keyof WorkspaceStateWorkerOperations];
+};

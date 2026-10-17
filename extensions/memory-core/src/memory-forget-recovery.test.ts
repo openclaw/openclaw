@@ -9,7 +9,10 @@ import {
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
-import { openOpenClawStateDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  requireNativeSqliteDatabase,
+  openOpenClawStateDatabase,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readSessionIngestionState,
@@ -21,11 +24,7 @@ import {
   readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
-import {
-  listMemoryEntryOrigins,
-  listMemorySessionTombstones,
-  recordMemoryEntryOrigins,
-} from "./memory-entry-origins.js";
+import { listMemoryEntryOrigins, recordMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { observeMemoryForgetWorker } from "./memory-forget-fault.test-support.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import {
@@ -34,6 +33,7 @@ import {
 } from "./memory-forget.test-helpers.js";
 import { observePublishedSql } from "./memory/manager-publication-observer.test-support.js";
 import { readPhaseSignalStore, writePhaseSignalStore } from "./short-term-promotion-store.js";
+import { readMemoryForgetTombstonesForTest } from "./test-helpers.js";
 
 describe("memory forget", () => {
   let fixture: Awaited<ReturnType<typeof createMemoryForgetFixture>>;
@@ -188,7 +188,7 @@ describe("memory forget", () => {
       });
 
       const agentDatabase = openOpenClawAgentDatabase({ agentId: "main" });
-      const db = agentDatabase.db;
+      const db = requireNativeSqliteDatabase(agentDatabase.db);
       const loaded = await loadSqliteVecExtension({ db });
       expect(loaded.ok).toBe(true);
       const schema = ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
@@ -381,7 +381,7 @@ describe("memory forget", () => {
             restore();
           }
         }
-        expect(await listMemorySessionTombstones({ agentId: "main" })).toMatchObject([
+        expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toMatchObject([
           { sessionId: "target", reason: "forgotten" },
         ]);
       }
@@ -512,7 +512,7 @@ describe("memory forget", () => {
       expect(
         (await listMemoryEntryOrigins({ agentId: "main" })).map((origin) => origin.entryKey),
       ).toEqual(["clean-entry"]);
-      const tombstones = await listMemorySessionTombstones({ agentId: "main" });
+      const tombstones = readMemoryForgetTombstonesForTest({ agentId: "main" });
       expect(tombstones).toEqual([
         {
           agentId: "main",
@@ -525,7 +525,7 @@ describe("memory forget", () => {
       const repeated = await forgetMemoryEntries({ cfg, agentId: "main", hookSources: ["gmail"] });
       expect(repeated.sessionIds).toEqual(["target"]);
       expect(Object.values(repeated.artifacts).every((count) => count === 0)).toBe(true);
-      expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
+      expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toEqual(tombstones);
       if (observed) {
         expect({
           lineage: suppliedCalls.filter(({ sql }) => isLineageRead(sql)),

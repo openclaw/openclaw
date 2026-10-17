@@ -21,7 +21,6 @@ import { acquireFileLock } from "../../infra/file-lock.js";
 import { removeTemporaryArtifacts } from "../../infra/temp-artifact-cleanup.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   copyExplicitSkillSelectionFileHost,
   resolveExplicitSkillSelectionFileHost,
@@ -36,7 +35,7 @@ import {
 } from "../library/bundle.js";
 import { readSkillLibrarySelectionManifests } from "../library/selection-read.js";
 import {
-  captureSkillLibrarySelection,
+  captureSkillLibraryPreparation,
   prepareSkillLibrarySelection,
 } from "../library/selection.js";
 import { loadSingleSkillDirectory } from "../loading/local-loader.js";
@@ -150,9 +149,13 @@ export async function prepareSkillResourceDelivery(
   ) {
     return undefined;
   }
+  const library = captureSkillLibraryPreparation(
+    inputSnapshot.librarySelections ?? [],
+    assertCurrent,
+  );
   const snapshot = {
     ...inputSnapshot,
-    librarySelections: captureSkillLibrarySelection(inputSnapshot.librarySelections ?? []),
+    librarySelections: library.librarySelections,
     skills: inputSnapshot.skills.map((skill) => ({ ...skill })),
     resolvedSkills: inputSnapshot.resolvedSkills?.map((skill) => ({ ...skill })),
     skillRoots: inputSnapshot.skillRoots && { ...inputSnapshot.skillRoots },
@@ -183,23 +186,15 @@ export async function prepareSkillResourceDelivery(
   };
   const skills: SkillResourceDelivery["skills"] = [];
   let total = 0;
-  const libraryContext = snapshot.librarySelections?.length
-    ? captureOpenClawStateWorkerContext()
-    : undefined;
-  const assertLibraryCurrent = () => {
-    assertCurrent();
-    libraryContext?.maintenanceScope?.assertAdmission();
-    libraryContext?.admission.assertCurrent();
-  };
-  const libraryOptions = { env: libraryContext?.environment };
-  const libraryEntries = libraryContext
+  const libraryOptions = { env: library.libraryContext?.environment };
+  const libraryEntries = library.libraryContext
     ? await prepareSkillLibrarySelection(
         snapshot.librarySelections ?? [],
         libraryOptions,
-        assertLibraryCurrent,
+        library.assertCurrent,
       )
     : [];
-  assertLibraryCurrent();
+  library.assertCurrent();
   const candidates = resolveSkillResourceCandidates(snapshot, libraryEntries)!;
   for (const selected of explicitSelections) {
     if (
@@ -232,7 +227,7 @@ export async function prepareSkillResourceDelivery(
     } catch (error) {
       throw contextualizeSkillResourceError({ name: selected.name, baseDir: skillDir }, error);
     }
-    assertLibraryCurrent();
+    library.assertCurrent();
     if (
       !loaded ||
       loaded.filePath !== selected.path ||
@@ -276,17 +271,17 @@ export async function prepareSkillResourceDelivery(
     let files: SkillLibraryFile[] | null;
     try {
       if (pin) {
-        assertLibraryCurrent();
+        library.assertCurrent();
         if (!manifests) {
           manifests = await readSkillLibrarySelectionManifests(pins, libraryOptions);
-          assertLibraryCurrent();
+          library.assertCurrent();
         }
         const manifest = manifests?.[pins.indexOf(pin)];
         if (!manifest) {
           throw new SkillLibraryError("NOT_FOUND", "Selected skill revision is unavailable.");
         }
         files = await readSkillLibraryManifestTree(
-          skillLibraryRevisionDir(pin.skillId, pin.revision, libraryContext?.environment),
+          skillLibraryRevisionDir(pin.skillId, pin.revision, library.libraryContext?.environment),
           manifest.files_json,
           pin.revision,
         );
@@ -298,7 +293,7 @@ export async function prepareSkillResourceDelivery(
     } catch (error) {
       throw contextualizeSkillResourceError(skill, error);
     }
-    assertLibraryCurrent();
+    library.assertCurrent();
     if (files === null) {
       if (explicitlySelected) {
         throw contextualizeSkillResourceError(

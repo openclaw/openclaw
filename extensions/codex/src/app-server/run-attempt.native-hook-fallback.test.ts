@@ -4,6 +4,7 @@ import * as agentHarnessRuntime from "openclaw/plugin-sdk/agent-harness-runtime"
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
@@ -44,7 +45,10 @@ import * as threadLifecyclePreflight from "./thread-lifecycle-preflight.js";
 import { startOrResumeThread } from "./thread-lifecycle-run.js";
 import { createLeasedCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
 
-function participantHostCapabilities(assertNativeSubagentSpawnAllowed: () => void) {
+function participantHostCapabilities(
+  assertNativeSubagentSpawnAllowed: () => void,
+  modelPolicyRequired = false,
+) {
   const bindModelExecution = () => ({
     signal: new AbortController().signal,
     assertCurrent: () => {},
@@ -54,11 +58,54 @@ function participantHostCapabilities(assertNativeSubagentSpawnAllowed: () => voi
     bindModelExecution,
     retainSourceAuthority: () => ({
       ...bindModelExecution(),
-      modelPolicyRequired: false,
+      modelPolicyRequired,
       bindModelExecution,
     }),
     assertNativeSubagentSpawnAllowed,
   });
+}
+
+function participantParams(name: string) {
+  return createParams(path.join(tempDir, `${name}.jsonl`), path.join(tempDir, `${name}-workspace`));
+}
+
+function useTokenSharing(params: ReturnType<typeof createParams>) {
+  const runtimePlan = createCodexRuntimePlanFixture();
+  params.runtimePlan = {
+    ...runtimePlan,
+    auth: {
+      ...runtimePlan.auth,
+      selectedAuthMode: "oauth",
+      selectedAuthFlow: "chatgpt-token-sharing",
+    },
+  };
+}
+
+const disabledDelegation = {
+  "agents.enabled": false,
+  "features.multi_agent": false,
+  "features.multi_agent_v2": false,
+};
+
+function nativeHarness(
+  managedOnly = false,
+  respond?: Parameters<typeof createStartedThreadHarness>[0],
+) {
+  const harness = createStartedThreadHarness(async (...args) => {
+    const result = await respond?.(...args);
+    if (result !== undefined) {
+      return result;
+    }
+    if (args[0] === "configRequirements/read") {
+      return { requirements: { allowManagedHooksOnly: managedOnly } };
+    }
+    if (args[0] === "account/read") {
+      return { account: { type: "apiKey" } };
+    }
+    return undefined;
+  });
+  ownCodexInferenceClient(harness.client);
+  return harness;
 }
 
 describe("Codex participant native admission", () => {
@@ -71,21 +118,10 @@ describe("Codex participant native admission", () => {
   ] as const)(
     "handles $participants participants with $hooks native admission on a $lifecycle $policy thread",
     async ({ hooks, lifecycle, participants, policy }) => {
-      const params = createParams(
-        path.join(tempDir, "participant-model-hooks.jsonl"),
-        path.join(tempDir, "participant-model-hooks-workspace"),
-      );
+      const params = participantParams("participant-model-hooks");
       params.sessionKey = undefined;
       if (policy === "token-sharing") {
-        const runtimePlan = createCodexRuntimePlanFixture();
-        params.runtimePlan = {
-          ...runtimePlan,
-          auth: {
-            ...runtimePlan.auth,
-            selectedAuthMode: "oauth",
-            selectedAuthFlow: "chatgpt-token-sharing",
-          },
-        };
+        useTokenSharing(params);
       }
       registerCodexTestSessionIdentity(params.sessionFile, params.sessionId, params.sessionKey);
       const dynamicTools: CodexDynamicToolSpec[] = [
@@ -148,6 +184,7 @@ describe("Codex participant native admission", () => {
           nativeHookRelay: hooks === "disabled" ? { enabled: false } : undefined,
         },
       });
+      using _ = { [Symbol.dispose]: connection.releaseBindingAuthority };
       try {
         const runtime = await prepareCodexAttemptRuntime(connection);
         const tools = await prepareCodexAttemptTools(runtime);
@@ -228,17 +265,11 @@ describe("Codex participant native admission", () => {
               false,
             );
             if (policy === "token-sharing") {
-              expect(request).toMatchObject({
-                config: {
-                  "agents.enabled": false,
-                  "features.multi_agent": false,
-                  "features.multi_agent_v2": false,
-                },
-              });
+              expect(request).toMatchObject({ config: disabledDelegation });
             } else {
-              expect(request).not.toHaveProperty(["config", "agents.enabled"], false);
-              expect(request).not.toHaveProperty(["config", "features.multi_agent"], false);
-              expect(request).not.toHaveProperty(["config", "features.multi_agent_v2"], false);
+              for (const key of Object.keys(disabledDelegation)) {
+                expect(request).not.toHaveProperty(["config", key], false);
+              }
             }
             if (hooks === "optional") {
               expect(admission?.nativeModelInputTools).toContain("spawn_agent");
@@ -300,6 +331,91 @@ describe("Codex participant native admission", () => {
 
 describe("Codex native hook Gateway fallback", () => {
   setupRunAttemptTestHooks();
+  it.each(["managed-only", "disabled"] as const)(
+    "waits for workspace preparation before starting a supported %s native turn",
+    async (hooks) => {
+      const params = participantParams(`workspace-${hooks}`);
+      const ready = createDeferred<void>();
+      const waiting = createDeferred<void>();
+      let prepared = false;
+      const waitUntilReady = vi.fn(async () => {
+        waiting.resolve();
+        await ready.promise;
+        prepared = true;
+      });
+      params.hostCapabilities = createCodexTestHostCapabilities({
+        ...participantHostCapabilities(() => {}),
+        workspaceReadiness: { toolNames: ["exec", "read"], waitUntilReady },
+      });
+      const harness = nativeHarness(hooks === "managed-only", async (method) => {
+        if (method === "thread/start" || method === "turn/start") {
+          expect(prepared, `${method} requires the complete workspace without native hooks`).toBe(
+            true,
+          );
+        }
+        return undefined;
+      });
+      const preflight = vi.spyOn(threadLifecyclePreflight, "prepareCodexThreadLifecyclePreflight");
+      const abort = new AbortController();
+      params.abortSignal = abort.signal;
+      const run = runCodexAppServerAttempt(params, {
+        bindingStore: createCodexTestBindingStore(),
+        nativeHookRelay: hooks === "disabled" ? { enabled: false } : undefined,
+      });
+      try {
+        await Promise.race([
+          waiting.promise,
+          run.waitForTurnAccepted().then(() => {
+            throw new Error("Native turn started before workspace preparation");
+          }),
+        ]);
+        expect(harness.requests.some(({ method }) => method === "thread/start")).toBe(false);
+        expect(preflight).toHaveBeenCalledWith(
+          expect.objectContaining({ nativeHookRelayRequired: false }),
+        );
+        ready.resolve();
+        await run.waitForTurnAccepted();
+        expect(waitUntilReady).toHaveBeenCalled();
+        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+        await run;
+      } finally {
+        ready.resolve();
+        abort.abort("test cleanup");
+        await run.catch(() => undefined);
+        harness.close();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "keeps required model admission fail closed under managed-only hooks (relay disabled: %s)",
+    async (disabled) => {
+      const params = participantParams(`workspace-required-${disabled}`);
+      const waitUntilReady = vi.fn(async () => {});
+      params.hostCapabilities = createCodexTestHostCapabilities({
+        ...participantHostCapabilities(() => {}, true),
+        workspaceReadiness: { toolNames: ["exec", "read"], waitUntilReady },
+      });
+      const harness = nativeHarness(true);
+      try {
+        await expect(
+          runCodexAppServerAttempt(params, {
+            bindingStore: createCodexTestBindingStore(),
+            nativeHookRelay: disabled ? { enabled: false } : undefined,
+          }),
+        ).rejects.toThrow(/managed-only hooks.*OpenClaw native hook relay/i);
+        expect(waitUntilReady).not.toHaveBeenCalled();
+        expect(
+          harness.requests.filter(({ method }) =>
+            ["thread/start", "thread/resume", "turn/start"].includes(method),
+          ),
+        ).toEqual([]);
+      } finally {
+        harness.close();
+      }
+    },
+  );
+
   it("publishes cross-profile steering from effective delegation policy and installed admission", async () => {
     const registered = vi.spyOn(agentHarnessRuntime, "setActiveEmbeddedRun");
     for (const { hooks, policy, supportsSteering } of [
@@ -310,36 +426,16 @@ describe("Codex native hook Gateway fallback", () => {
       { hooks: "disabled", policy: "tool-search-unsupported", supportsSteering: false },
     ] as const) {
       registered.mockClear();
-      const params = createParams(
-        path.join(tempDir, `participant-handle-${hooks}-${policy}.jsonl`),
-        path.join(tempDir, `participant-handle-${hooks}-${policy}-workspace`),
-      );
+      const params = participantParams(`participant-handle-${hooks}-${policy}`);
       params.hostCapabilities = participantHostCapabilities(() => {});
       if (policy === "token-sharing") {
-        const runtimePlan = createCodexRuntimePlanFixture();
-        params.runtimePlan = {
-          ...runtimePlan,
-          auth: {
-            ...runtimePlan.auth,
-            selectedAuthMode: "oauth",
-            selectedAuthFlow: "chatgpt-token-sharing",
-          },
-        };
+        useTokenSharing(params);
       } else if (policy === "report-only") {
         params.delegationCapability = "report_only";
       } else if (policy === "tool-search-unsupported") {
         params.modelId = "gpt-5.4-nano";
       }
-      const harness = createStartedThreadHarness(async (method) => {
-        if (method === "configRequirements/read") {
-          return { requirements: { allowManagedHooksOnly: false } };
-        }
-        if (method === "account/read") {
-          return { account: { type: "apiKey" } };
-        }
-        return undefined;
-      });
-      ownCodexInferenceClient(harness.client);
+      const harness = nativeHarness();
       const abort = new AbortController();
       params.abortSignal = abort.signal;
       const run = runCodexAppServerAttempt(params, {
@@ -355,13 +451,7 @@ describe("Codex native hook Gateway fallback", () => {
           .toBe(supportsSteering);
         const request = harness.requests.find(({ method }) => method === "thread/start")?.params;
         if (policy === "token-sharing" || policy === "report-only") {
-          expect(request).toMatchObject({
-            config: {
-              "agents.enabled": false,
-              "features.multi_agent": false,
-              "features.multi_agent_v2": false,
-            },
-          });
+          expect(request).toMatchObject({ config: disabledDelegation });
         } else if (policy === "tool-search-unsupported") {
           expect(request).toMatchObject({ config: { "features.multi_agent": false } });
           expect(request).not.toHaveProperty(["config", "features.multi_agent_v2"], false);
@@ -377,10 +467,7 @@ describe("Codex native hook Gateway fallback", () => {
     }
   });
   it("cancels an unqualified parent on new policy while preserving its permitted sibling", async () => {
-    const params = createParams(
-      path.join(tempDir, "retained-model-source.jsonl"),
-      path.join(tempDir, "retained-model-source-workspace"),
-    );
+    const params = participantParams("retained-model-source");
     const listeners = new Set<() => void>();
     let policy: NonNullable<
       Parameters<typeof bindProductionHarnessHostCapabilitiesForTest>[1]
@@ -476,6 +563,7 @@ describe("Codex native hook Gateway fallback", () => {
     );
     const params = createParams(sessionFile, workspaceDir);
     params.config = { tools: { loopDetection: { enabled: true } } };
+    setRuntimeConfigSnapshot(params.config);
     const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
     const abort = new AbortController();
     params.abortSignal = abort.signal;

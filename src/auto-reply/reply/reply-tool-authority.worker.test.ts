@@ -1,4 +1,5 @@
-import { DatabaseSync } from "node:sqlite";
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   createOperationalRunInstanceRef,
@@ -6,14 +7,26 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { acceptCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../agents/harness/tool-authority.runtime.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import * as capabilityReads from "../../agents/subagents/spawn/subagent-session-store.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  patchSessionEntryCore,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import {
   projectionLane,
   targetDiscoveryLane,
 } from "../../config/sessions/session-transcript-worker-resources.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
+import { bindSessionRowProjection } from "../../gateway/session-row-projection-access.js";
+import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
 import * as sessionReaders from "../../gateway/session-utils-store-worker.js";
+import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import { closeAgentWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -24,7 +37,10 @@ import {
   captureReplyOperationSessionReader,
   getReplyOperationSessionReader,
 } from "./reply-run-registry.state.js";
-import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
+import {
+  createTestReplyOperation,
+  queueCurrentReplyRunMessage,
+} from "./reply-run-registry.test-helpers.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
@@ -39,12 +55,14 @@ const policyKey = "agent:main:authority-policy";
 
 it("prepares embedded tool authority without caller-thread SQL and refuses a closing owner", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const config: OpenClawConfig = {};
+    setRuntimeConfigSnapshot(config);
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: policyKey },
       { sessionId: "policy", updatedAt: 1, sandboxMode: "off" },
     );
     const admission = prepareAgentRunAdmission({
-      cfg: {},
+      cfg: config,
       operationalRunInstance: createOperationalRunInstanceRef("worker-authority"),
       facts: {
         agentId: "main",
@@ -59,7 +77,7 @@ it("prepares embedded tool authority without caller-thread SQL and refuses a clo
         sessionKey: executionKey,
         runId: "worker-authority",
         agentId: "main",
-        config: {},
+        config,
         sessionFile: "/tmp/authority-worker.jsonl",
         workspaceDir: state.workspaceDir,
         provider: "openai",
@@ -95,9 +113,14 @@ it("prepares embedded tool authority without caller-thread SQL and refuses a clo
 });
 
 it.each(["main", "policy", "borrowed"] as const)(
-  "retains the %s-agent source while rereading foreign sandbox policy before steering",
+  "retains the %s-agent source while rereading changed sandbox policy before steering",
   async (policyAgent) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const config: OpenClawConfig = {
+        agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {}, policy: {} } },
+        tools: { sandbox: { tools: { deny: ["exec"] } } },
+      };
+      setRuntimeConfigSnapshot(config);
       const policyAgentId = policyAgent === "borrowed" ? "main" : policyAgent;
       const classificationKey =
         policyAgent === "borrowed" ? executionKey : `agent:${policyAgent}:authority-policy`;
@@ -105,17 +128,14 @@ it.each(["main", "policy", "borrowed"] as const)(
         { agentId: policyAgentId, sessionKey: classificationKey },
         { sessionId: "policy", updatedAt: 1, sandboxMode: "off" },
       );
-      // Settle setup maintenance before retaining the readers used across the foreign commit.
+      // Settle setup maintenance before retaining the readers used across the policy change.
       await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
       const run = createQueueTestRun({ prompt: "authority" });
       Object.assign(run.run, {
         sessionKey: executionKey,
         runtimePolicySessionKey: classificationKey,
         agentId: "main",
-        config: {
-          agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {}, policy: {} } },
-          tools: { sandbox: { tools: { deny: ["exec"] } } },
-        },
+        config,
       });
       const admission =
         policyAgent === "borrowed"
@@ -157,28 +177,24 @@ it.each(["main", "policy", "borrowed"] as const)(
         });
         try {
           await operation.bindToolAuthoritySnapshotAsync(snapshot);
-          expect(initialEntries).toBe(1);
+          // The borrowed admission read already warmed the entry facts.
+          expect(initialEntries).toBe(policyAgent === "borrowed" ? 0 : 1);
         } finally {
           for (const read of initialReads) {
             read.mockRestore();
           }
         }
         const admitted = await operation.bindToolAuthorityRouteAsync(run.run);
-        const foreign = new DatabaseSync(
-          resolveOpenClawAgentSqlitePath({ agentId: policyAgentId, env: state.env }),
+        await upsertSessionEntryCore(
+          { agentId: policyAgentId, sessionKey: classificationKey, env: state.env },
+          { sandboxMode: undefined },
         );
-        try {
-          foreign
-            .prepare(
-              "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.sandboxMode') WHERE session_key = ?",
-            )
-            .run(classificationKey);
-        } finally {
-          foreign.close();
-        }
         const calls = observeMainThreadSql();
         try {
           discovery.mockClear();
+          expect(() => snapshot.fingerprint(run.run)).toThrow(
+            "Tool authority classification session changed",
+          );
           expect(await snapshot.fingerprintAsync(run.run)).not.toBe(admitted);
           if (reader) {
             expect(discovery).not.toHaveBeenCalled();
@@ -203,6 +219,7 @@ it.each(["main", "policy", "borrowed"] as const)(
           calls.restore();
         }
       } finally {
+        snapshot.close();
         discovery.mockRestore();
         await admission?.databaseClaim.release();
       }
@@ -303,6 +320,7 @@ it.each(["execution", "separate"] as const)(
         await expect(snapshot.fingerprintAsync(run.run)).rejects.toThrow();
         expect(discovery).not.toHaveBeenCalled();
       } finally {
+        independent.close();
         discovery.mockRestore();
         admitted.operation.complete();
         await waitForReplyRunSuccessorAdmission(executionKey, null);
@@ -310,3 +328,184 @@ it.each(["execution", "separate"] as const)(
     });
   },
 );
+
+it.each([
+  "unrelated deletion",
+  "revoked policy",
+  "reassigned session",
+  "deleted requester",
+] as const)(
+  "rechecks reply capability authority after an await during %s before queueMessage",
+  async (change) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const config: OpenClawConfig = {};
+      setRuntimeConfigSnapshot(config);
+      const sessionKey = "agent:main:subagent:replay-requester";
+      const sessionId = "replay-requester";
+      const scope = { agentId: "main", sessionKey };
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: 1,
+        spawnDepth: 1,
+        spawnedBy: "agent:main:main",
+        inheritedToolPolicyVersion: 1,
+        inheritedToolAllow: ["read", "exec"],
+      });
+      const projection = await createSessionRowProjection({ cfg: config });
+      const run = createQueueTestRun({ prompt: "reply capability replay" });
+      Object.assign(run.run, {
+        sessionKey,
+        sessionId,
+        agentId: "main",
+        config,
+        workspaceDir: state.workspaceDir,
+      });
+      const snapshot = prepareReplyToolAuthority(run);
+      let releaseIngress: (() => void) | undefined;
+      try {
+        await projection.ensureMaterialized();
+        const context = bindSessionRowProjection(createDirectChatContext({}), () => projection);
+        await withPluginRuntimeGatewayContextResolver(
+          () => context,
+          async () => {
+            const operation = createTestReplyOperation({ sessionKey, sessionId });
+            await operation.bindToolAuthoritySnapshotAsync(snapshot);
+            await operation.bindToolAuthorityRouteAsync(run.run);
+            const queueMessage = vi.fn(async () => {});
+            operation.attachBackend({
+              kind: "embedded",
+              cancel: vi.fn(),
+              isStreaming: () => true,
+              queueMessage,
+            });
+            operation.setPhase("running");
+            const prepare = capabilityReads.prepareSessionCapabilityRead;
+            let interleaved = false;
+            vi.spyOn(capabilityReads, "prepareSessionCapabilityRead").mockImplementation(
+              async (read) => {
+                const prepared = await prepare(read);
+                if (!interleaved) {
+                  if (change === "unrelated deletion" || change === "deleted requester") {
+                    const deletedAgent = change === "unrelated deletion" ? "deleting" : "main";
+                    releaseIngress = closeAgentWorkAdmissions({
+                      agentId: deletedAgent,
+                      env: state.env,
+                      reason: new Error("Agent deletion is draining active work"),
+                    });
+                    beginAgentDeletionJournal(
+                      {
+                        agentId: deletedAgent,
+                        operationId: "capability-replay",
+                        agentDir: state.agentDir(deletedAgent),
+                        workspaceDir: state.workspaceDir,
+                        sessionsDir: state.sessionsDir(deletedAgent),
+                        databasePaths: [],
+                        deleteFiles: false,
+                      },
+                      { env: state.env },
+                    );
+                  } else {
+                    await patchSessionEntryCore(scope, () =>
+                      change === "revoked policy"
+                        ? { inheritedToolDeny: ["exec"] }
+                        : {
+                            sessionId: "replacement-requester",
+                            spawnedBy: "agent:main:other-parent",
+                          },
+                    );
+                  }
+                  interleaved = true;
+                }
+                return prepared;
+              },
+            );
+            const result = await queueCurrentReplyRunMessage(sessionId, "continue", {
+              isInboundUserMessage: true,
+              toolAuthorityOverlay: {
+                senderIsOwner: run.run.senderIsOwner === true,
+                disableTools: false,
+                traceAuthorized: false,
+              },
+            }).then(
+              (value) => ({ value }),
+              (error: unknown) => ({ error }),
+            );
+            expect(interleaved).toBe(true);
+            if (change === "unrelated deletion") {
+              expect(result).toEqual({ value: { status: "accepted" } });
+              expect(queueMessage).toHaveBeenCalledOnce();
+            } else {
+              expect(result).toEqual({
+                value: { status: "rejected", reason: "tool_authority_mismatch" },
+              });
+              expect(queueMessage).not.toHaveBeenCalled();
+            }
+          },
+        );
+      } finally {
+        releaseIngress?.();
+        snapshot.close();
+        projection.dispose();
+      }
+    });
+  },
+);
+
+it("propagates a lineage database failure before submitTurn", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const config: OpenClawConfig = {};
+    setRuntimeConfigSnapshot(config);
+    const sessionKey = "agent:main:subagent:unreadable-lineage";
+    const sessionId = "unreadable-lineage";
+    const runId = "worker-authority-database-failure";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      {
+        sessionId,
+        updatedAt: 1,
+        spawnedBy: "agent:broken:subagent:parent",
+        subagentRole: "orchestrator",
+        inheritedToolPolicyVersion: 1,
+      },
+    );
+    const admission = prepareAgentRunAdmission({
+      cfg: config,
+      operationalRunInstance: createOperationalRunInstanceRef(runId),
+      facts: {
+        agentId: "main",
+        runId,
+        ingress: { kind: "system", state: "present", boundary: "database-failure-test" },
+      },
+    });
+    try {
+      const admittedRunContext = await admission.admit("embedded", "database-failure-test");
+      const brokenPath = resolveOpenClawAgentSqlitePath({ agentId: "broken", env: state.env });
+      fs.mkdirSync(path.dirname(brokenPath), { recursive: true });
+      fs.writeFileSync(brokenPath, "not a SQLite database");
+      const submitTurn = vi.fn(async () => "submitted");
+      await expect(
+        withPreparedEmbeddedRunToolAuthority(
+          { admittedRunContext },
+          {
+            sessionId,
+            sessionKey,
+            runId,
+            agentId: "main",
+            config,
+            sessionFile: state.statePath("unreadable-lineage.jsonl"),
+            workspaceDir: state.workspaceDir,
+            provider: "openai",
+            modelId: "gpt-test",
+            senderIsOwner: true,
+            messageProvider: "webchat",
+          },
+          undefined,
+          submitTurn,
+        ),
+      ).rejects.toThrow(/not a database/i);
+      expect(submitTurn).not.toHaveBeenCalled();
+    } finally {
+      admission.close();
+    }
+  });
+});

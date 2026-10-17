@@ -1,26 +1,21 @@
 // Strict cron announcement transport tests cover scheduler-authorized alert delivery.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as deliveryQueue from "../infra/delivery-queue-sqlite.js";
 import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
 } from "../infra/outbound/deliver-types.js";
+import type { DeliverOutboundPayloadsParams } from "../infra/outbound/deliver.js";
+import { sendCronAnnouncePayloadStrict } from "./delivery.js";
 import { makeJob } from "./isolated-agent.test-harness.js";
 
 const mocks = vi.hoisted(() => ({
-  resolveDeliveryTarget: vi.fn(),
   deliverOutboundPayloads: vi.fn(),
   resolveAgentOutboundIdentity: vi.fn().mockReturnValue({ kind: "identity" }),
   buildOutboundSessionContext: vi.fn().mockReturnValue({ kind: "session" }),
   createOutboundSendDeps: vi.fn().mockReturnValue({ kind: "deps" }),
-  appendAssistantMessageToSessionTranscript: vi.fn().mockResolvedValue({ ok: true }),
-  resolveOutboundSessionRoute: vi.fn(),
-  ensureOutboundSessionEntry: vi.fn(),
-  loadCronSessionEntryLatest: vi.fn(),
 }));
 
-vi.mock("./isolated-agent/delivery-target.js", () => ({
-  resolveDeliveryTarget: mocks.resolveDeliveryTarget,
-}));
 vi.mock("../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
   deliverOutboundPayloadsInternal: mocks.deliverOutboundPayloads,
@@ -34,26 +29,14 @@ vi.mock("../infra/outbound/session-context.js", () => ({
 vi.mock("../cli/outbound-send-deps.js", () => ({
   createOutboundSendDeps: mocks.createOutboundSendDeps,
 }));
-vi.mock("../infra/outbound/outbound-session.js", () => ({
-  resolveOutboundSessionRoute: mocks.resolveOutboundSessionRoute,
-  ensureOutboundSessionEntry: mocks.ensureOutboundSessionEntry,
-}));
-vi.mock("../config/sessions/transcript.runtime.js", () => ({
-  appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
-}));
-vi.mock("./isolated-agent/session.js", () => ({
-  loadCronSessionEntryLatest: mocks.loadCronSessionEntryLatest,
-}));
-
-const { sendCronAnnouncePayloadStrict } = await import("./delivery.js");
 
 function send(overrides: Partial<Parameters<typeof sendCronAnnouncePayloadStrict>[0]> = {}) {
   return sendCronAnnouncePayloadStrict({
-    deps: {} as never,
+    deps: {},
     cfg: {},
     agentId: "main",
     jobId: "job-1",
-    target: { channel: "telegram", to: "123" },
+    target: { channel: "telegram", to: "123", accountId: "bot-a", threadId: 42 },
     payload: { text: "Automation failed" },
     abortSignal: new AbortController().signal,
     ...overrides,
@@ -61,109 +44,97 @@ function send(overrides: Partial<Parameters<typeof sendCronAnnouncePayloadStrict
 }
 
 describe("sendCronAnnouncePayloadStrict", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.loadCronSessionEntryLatest.mockReset().mockReturnValue({
-      sessionId: "destination-session",
-      updatedAt: 1,
-    });
-    mocks.resolveDeliveryTarget.mockResolvedValue({
-      ok: true,
-      channel: "telegram",
-      to: "123",
-      accountId: "bot-a",
-      threadId: 42,
-      mode: "explicit",
-    });
-    mocks.deliverOutboundPayloads.mockReset().mockResolvedValue([{ ok: true }]);
-    mocks.resolveOutboundSessionRoute.mockReset().mockResolvedValue({
-      sessionKey: "agent:main:telegram:group:123:topic:42",
-      baseSessionKey: "agent:main:telegram:group:123",
-    });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
-  it.each(["topic", "global"])(
-    "mirrors confirmed command output into its %s conversation",
-    async (scope) => {
-      const job = makeJob({ kind: "command", argv: ["/bin/echo", "Readiness 65 today"] });
-      if (scope === "global") {
-        mocks.resolveOutboundSessionRoute.mockResolvedValue({
-          sessionKey: "agent:main:main",
-          baseSessionKey: "agent:main:main",
-        });
-      }
-      mocks.deliverOutboundPayloads.mockImplementationOnce(async (params) => {
-        params.onPayload?.({ text: "Delivered readiness: 65", mediaUrls: [] });
-        expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
-        return [{ channel: "telegram", messageId: "confirmed-message" }];
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(deliveryQueue, "inspectDeliveryQueueReceipt").mockResolvedValue({
+      status: undefined,
+      pendingEntry: null,
+    });
+    mocks.deliverOutboundPayloads
+      .mockReset()
+      .mockImplementation(async (params: DeliverOutboundPayloadsParams) => {
+        for (const payload of params.payloads) {
+          params.onDeliveredPayload?.({
+            text: payload.text ?? "",
+            mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+          });
+        }
+        return [{ ok: true }];
       });
-      await send({
-        cfg: scope === "global" ? { session: { scope: "global" } } : {},
-        jobId: job.id,
-        target: { channel: "telegram", to: "123", threadId: 42 },
-        payload: { text: "Readiness 65 today" },
-        completion: { job, runStartedAt: 1000, deliveryAttemptFence: null },
-      });
-      expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          sessionKey: scope === "global" ? "global" : "agent:main:telegram:group:123:topic:42",
-          text: "Delivered readiness: 65",
-          deliveryMirror: { kind: "cron-direct-delivery-context" },
-          idempotencyKey: "cron-direct-delivery:v1:cron:job-1:1000:telegram:bot-a:123:42",
-        }),
-      );
-    },
-  );
+  });
 
-  it.each(["route", "transcript"] as const)(
-    "preserves confirmed delivery when the optional %s lookup rejects",
-    async (boundary) => {
-      const job = makeJob({ kind: "command", argv: ["/bin/echo", "report"] });
-      if (boundary === "route") {
-        mocks.resolveOutboundSessionRoute.mockRejectedValueOnce(new Error("route unavailable"));
-      } else {
-        mocks.loadCronSessionEntryLatest.mockImplementationOnce(() => {
-          throw new Error("session read unavailable");
-        });
-      }
-      mocks.deliverOutboundPayloads.mockImplementationOnce(async (params) => {
-        params.onPayload?.({ text: "report", mediaUrls: [] });
-        return [{ channel: "telegram", messageId: "confirmed-message" }];
-      });
-      const result = await send({
-        jobId: job.id,
-        payload: { text: "report" },
-        completion: { job, runStartedAt: 1000, deliveryAttemptFence: null },
-      });
-      expect(result.status).toBe("sent");
-      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
-      expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
-    },
-  );
-
-  it("does not begin delivery when target resolution settles after cancellation", async () => {
-    let resolvePendingTarget: (value: unknown) => void = () => {};
-    mocks.resolveDeliveryTarget.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolvePendingTarget = resolve;
-        }),
+  it("sends all prepared payloads under one destination-scoped intent", async () => {
+    const job = makeJob({ kind: "command", argv: ["/bin/echo", "Readiness 65 today"] });
+    const payloads = [
+      { text: "Readiness 65 today" },
+      { mediaUrl: "https://example.test/chart.png" },
+    ];
+    const result = await send({
+      jobId: job.id,
+      payload: payloads,
+      completion: { job, runStartedAt: 1000, deliveryAttemptFence: null },
+    });
+    expect(result).toEqual({
+      status: "sent",
+      payloads: [
+        { text: "Readiness 65 today", mediaUrls: [] },
+        { text: "", mediaUrls: ["https://example.test/chart.png"] },
+      ],
+    });
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "123",
+        accountId: "bot-a",
+        threadId: 42,
+        payloads,
+        bestEffort: false,
+        deliveryIntentId: "cron-direct-delivery:v1:cron:job-1:1000:telegram:bot-a:123:42",
+      }),
+      undefined,
     );
-    const abortController = new AbortController();
-    const delivery = send({
-      abortSignal: abortController.signal,
-    });
+  });
 
-    abortController.abort(new Error("delivery deadline exceeded"));
-    resolvePendingTarget({
-      ok: true,
-      channel: "telegram",
-      to: "123",
-      accountId: "bot-a",
-      mode: "explicit",
+  it("retries a proven not-dispatched failure through the notification sender", async () => {
+    vi.useFakeTimers();
+    const signal = new AbortController().signal;
+    const rejected = new PlatformMessageNotDispatchedError("connect ECONNREFUSED", {
+      cause: Object.assign(new Error("connect ECONNREFUSED"), {
+        code: "ECONNREFUSED",
+        syscall: "connect",
+      }),
     });
+    mocks.deliverOutboundPayloads.mockRejectedValueOnce(rejected);
+    const result = send({ abortSignal: signal });
+    await vi.runAllTimersAsync();
+    await expect(result).resolves.toEqual({
+      status: "sent",
+      payloads: [{ text: "Automation failed", mediaUrls: [] }],
+    });
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(2);
+    for (const [request] of mocks.deliverOutboundPayloads.mock.calls) {
+      expect(request.abortSignal).toBe(signal);
+    }
+  });
 
-    await expect(delivery).rejects.toThrow("delivery deadline exceeded");
+  it("does not retry an uncertain platform send", async () => {
+    const uncertain = Object.assign(new Error("read ECONNRESET after send"), {
+      code: "ECONNRESET",
+    });
+    mocks.deliverOutboundPayloads.mockRejectedValueOnce(uncertain);
+    await expect(send()).rejects.toThrow("read ECONNRESET after send");
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
+  });
+
+  it("does not begin delivery after cancellation", async () => {
+    await expect(
+      send({ abortSignal: AbortSignal.abort(new Error("delivery deadline exceeded")) }),
+    ).rejects.toThrow("delivery deadline exceeded");
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
@@ -187,41 +158,22 @@ describe("sendCronAnnouncePayloadStrict", () => {
     );
     const onDeliveryAttempt = vi.fn();
     const delivery = send({
-      target: { channel: "telegram", to: "123", accountId: "bot-a" },
       onDeliveryAttempt,
     });
 
     await firstResult;
     try {
-      expect(onDeliveryAttempt).toHaveBeenCalledExactlyOnceWith(true);
+      expect(onDeliveryAttempt).toHaveBeenLastCalledWith(true);
     } finally {
       releaseDelivery();
       await delivery;
     }
-    expect(onDeliveryAttempt).toHaveBeenCalledExactlyOnceWith(true);
-    expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
-      {},
-      "main",
-      { channel: "telegram", to: "123", accountId: "bot-a" },
-      undefined,
-    );
+    expect(onDeliveryAttempt).toHaveBeenLastCalledWith(true);
     expect(mocks.buildOutboundSessionContext).toHaveBeenCalledWith({
       cfg: {},
       agentId: "main",
       sessionKey: "cron:job-1:failure",
     });
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        to: "123",
-        accountId: "bot-a",
-        threadId: 42,
-        payloads: [{ text: "Automation failed" }],
-        bestEffort: false,
-      }),
-      undefined,
-    );
-    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -246,7 +198,7 @@ describe("sendCronAnnouncePayloadStrict", () => {
         onDeliveryAttempt,
       });
 
-      expect(result).toMatchObject({ status: "suppressed", reason, results: [] });
+      expect(result).toEqual({ status: "suppressed", reason });
       expect(onDeliveryAttempt).toHaveBeenCalledExactlyOnceWith(recipientReached);
       expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
     },
@@ -296,29 +248,8 @@ describe("sendCronAnnouncePayloadStrict", () => {
         }),
       ).rejects.toThrow(deliveryError.message);
 
-      expect(onDeliveryAttempt).toHaveBeenCalledExactlyOnceWith(true);
+      expect(onDeliveryAttempt).toHaveBeenLastCalledWith(true);
       expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
     },
   );
-
-  it.each([
-    {
-      name: "target resolution",
-      arrange: () =>
-        mocks.resolveDeliveryTarget.mockResolvedValueOnce({
-          ok: false,
-          error: new Error("target unavailable"),
-        }),
-      error: "target unavailable",
-    },
-    {
-      name: "channel delivery",
-      arrange: () => mocks.deliverOutboundPayloads.mockRejectedValueOnce(new Error("send failed")),
-      error: "send failed",
-    },
-  ])("rejects $name failures", async ({ arrange, error }) => {
-    arrange();
-
-    await expect(send({})).rejects.toThrow(error);
-  });
 });

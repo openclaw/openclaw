@@ -35,6 +35,18 @@ export type ExecApprovalChannelRuntimeAdapter<
   nowMs?: () => number;
 };
 
+export type ExecApprovalChannelRuntimeAdapterAsync<
+  TPending,
+  TRequest extends ApprovalRequestInput = ExecApprovalRequest,
+  TResolved extends ApprovalResolvedEvent = ExecApprovalResolved,
+> = Omit<
+  ExecApprovalChannelRuntimeAdapter<TPending, TRequest, TResolved>,
+  "isConfigured" | "shouldHandle"
+> & {
+  isConfigured: () => boolean | Promise<boolean>;
+  shouldHandle: (request: NormalizedApprovalRequest<TRequest>) => boolean | Promise<boolean>;
+};
+
 export type ExecApprovalChannelRuntime<
   TRequest extends ApprovalRequestInput = ExecApprovalRequest,
   TResolved extends ApprovalResolvedEvent = ExecApprovalResolved,

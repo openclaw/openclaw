@@ -139,7 +139,9 @@ function shouldSkipRuntimeFile(filePath: string): boolean {
     normalized.includes("/dist/") ||
     normalized.includes("/coverage/") ||
     normalized.includes("/assets/") ||
-    normalized.endsWith("/web/vite.config.ts")
+    // Bundler configs execute during asset preparation, not in the plugin runtime.
+    normalized.endsWith("/web/vite.config.ts") ||
+    normalized.endsWith("/rolldown.config.mjs")
   ) {
     return true;
   }

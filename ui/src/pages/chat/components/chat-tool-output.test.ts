@@ -1,20 +1,22 @@
 /* @vitest-environment jsdom */
 import { Blob as NodeBlob } from "node:buffer";
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createSidebarFullMessageLoader } from "../chat-pane-sidebar-layout.ts";
 import { createTestChatPane } from "../chat-pane.test-support.ts";
-import "./chat-detail-slot.ts";
 import type {
   SidebarContent,
   SidebarFullMessageLoader,
   ToolOutputSidebarContent,
 } from "./chat-sidebar-content-types.ts";
-import { renderToolCard } from "./chat-tool-cards.ts";
+import { mountCard } from "./chat-tool-cards.test-support.tsx";
+import { ChatToolOutput } from "./chat-tool-output-view.tsx";
 
 type Panel = HTMLElement & {
   content: ToolOutputSidebarContent;
@@ -107,11 +109,14 @@ describe("tool output inspection", () => {
     "keeps content-shaped data literal without native Code Mode input: %o",
     async ({ name, args }) => {
       const text = '[{"type":"input_text","text":"literal value"}]';
-      const panel = document.createElement("openclaw-chat-tool-output") as Panel;
-      panel.content = { kind: "tool-output", card: outputCard({ name, args, outputText: text }) };
-      document.body.append(panel);
-      await panel.updateComplete;
-      expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe(text);
+      const view = mountSolid(() =>
+        createComponent(ChatToolOutput, {
+          content: { kind: "tool-output", card: outputCard({ name, args, outputText: text }) },
+        }),
+      );
+      await waitForSolid(() =>
+        expect(view.container.querySelector(".chat-tool-output__text")?.textContent).toBe(text),
+      );
     },
   );
 
@@ -212,7 +217,7 @@ describe("tool output inspection", () => {
     const rawBody = panel.querySelector<HTMLElement>(".chat-tool-card__raw-body")!;
     expect(rawBody.hidden).toBe(true);
     button(panel, t("chat.toolCards.rawDetails")).click();
-    expect(rawBody.hidden).toBe(false);
+    await waitForSolid(() => expect(rawBody.hidden).toBe(false));
     expect(rawBody.querySelector("code")?.textContent).toBe(raw);
     const copy = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText: copy } });
@@ -220,21 +225,22 @@ describe("tool output inspection", () => {
     expect(copy).toHaveBeenCalledWith(raw);
   });
 
-  it.each(["plain", "native"])("opens long %s output as an inspectable result", (shape) => {
+  it.each(["plain", "native"])("opens long %s output as an inspectable result", async (shape) => {
     const text = "  " + "x".repeat(150_000) + "\r\nTAIL";
     const output = shape === "native" ? JSON.stringify([{ type: "input_text", text }]) : text;
     const card = outputCard({ outputText: output });
     const open = vi.fn<(content: SidebarContent) => void>();
     const root = document.createElement("div");
-    render(
-      renderToolCard(card, {
+    await mountCard(
+      card,
+      {
         messageKey: "calls",
         sessionKey: "global",
         agentId: "work",
         expanded: true,
         onToggleExpanded: vi.fn(),
         onOpenSidebar: open,
-      }),
+      },
       root,
     );
     expect(root.textContent).not.toContain("TAIL");

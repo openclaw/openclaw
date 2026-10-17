@@ -11,7 +11,12 @@ import {
 } from "openclaw/plugin-sdk/command-auth-native";
 import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
 import { decodeCustomIdComponent, encodeCustomIdComponent } from "../custom-id-codec.js";
-import { Button, Row, type ButtonInteraction, type ComponentData } from "../internal/discord.js";
+import {
+  Button,
+  Row,
+  type BaseComponentInteraction,
+  type ComponentData,
+} from "../internal/discord.js";
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import type { DispatchDiscordCommandInteraction } from "./native-command-dispatch.js";
 import type {
@@ -58,13 +63,12 @@ function parseDiscordCommandArgData(
   };
 }
 
-async function handleDiscordCommandArgInteraction(params: {
-  interaction: ButtonInteraction;
-  data: ComponentData;
-  ctx: DiscordCommandArgContext;
-  safeInteractionCall: SafeDiscordInteractionCall;
-  dispatchCommandInteraction: DispatchDiscordCommandInteraction;
-}) {
+async function handleDiscordCommandArgInteraction(
+  params: DiscordCommandArgButtonParams & {
+    interaction: BaseComponentInteraction;
+    data: ComponentData;
+  },
+) {
   const { interaction, data, ctx } = params;
   const clearWithMessage = async (content: string) =>
     await params.safeInteractionCall("command arg update", () =>
@@ -126,7 +130,7 @@ function createDiscordCommandArgButton(
     customId = params.customId;
     override style = params.style ?? ButtonStyle.Secondary;
 
-    override async run(interaction: ButtonInteraction, data: ComponentData) {
+    override async run(interaction: BaseComponentInteraction, data: ComponentData) {
       await handleDiscordCommandArgInteraction({ ...params, interaction, data });
     }
   })();

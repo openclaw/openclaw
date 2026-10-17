@@ -75,6 +75,24 @@ describe("session pull request snapshot store", () => {
     },
   );
 
+  it("waits for an active viewer before subscribing passive sidebar rows", async () => {
+    const { harness, store, owner } = createStoreHarness();
+    const passiveOwner = {};
+    const key = "agent:main:demo";
+    store.watch(passiveOwner, [key], { passive: true });
+    await flushSync();
+    expect(harness.request).not.toHaveBeenCalled();
+    store.watch(owner, [key], { foreground: true });
+    await flushSync();
+    expect(harness.request).toHaveBeenCalledTimes(1);
+    expectSubscription(harness, [key]);
+    store.unwatch(owner);
+    await flushSync();
+    expect(harness.request).toHaveBeenCalledTimes(2);
+    expectSubscription(harness, []);
+    store.unwatch(passiveOwner);
+  });
+
   it("coalesces refresh bursts while a subscription request is unsettled and keeps one trailing refresh", async () => {
     const { harness, store, owner } = createStoreHarness();
     const key = "agent:main:demo";
@@ -422,7 +440,9 @@ describe("session pull request snapshot store", () => {
     await flushSync();
     expect(harness.unsubscribeSnapshots).toHaveBeenCalledOnce();
     expect(harness.unsubscribeEvents).toHaveBeenCalledOnce();
-    expect(removeEventListener).toHaveBeenCalledWith("visibilitychange", visibilityListener);
+    expect(removeEventListener.mock.calls).toContainEqual(
+      expect.arrayContaining(["visibilitychange", visibilityListener]),
+    );
   });
 
   it("does not retry a failed subscribe after the store becomes idle", async () => {

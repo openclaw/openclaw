@@ -15,6 +15,7 @@ export type GatewayShutdownTrigger =
   | "SIGINT"
   | "SIGUSR2"
   | "hosted Gateway stop"
+  | "process exit"
   | "host lifeline closed";
 export type GatewayDrainReason =
   | "restart"
@@ -43,6 +44,7 @@ type GatewayWorkAdmissionState = {
   restartSignalGeneration: number;
   suspendPhase: GatewaySuspendAdmissionPhase;
   suspendGeneration: number;
+  suspendAttribution?: string;
   suspendInvalidated?: () => void;
   activeRootWork: Set<GatewayRootWorkAdmission>;
   currentRootWork: AsyncLocalStorage<GatewayRootWorkAdmission>;
@@ -51,6 +53,15 @@ type GatewayWorkAdmissionState = {
 };
 
 const admissionLog = createSubsystemLogger("gateway/admission");
+const reloadWaitingRoots = new AsyncLocalStorage<ReadonlySet<GatewayRootWorkAdmission>>();
+
+/** This root awaits the same reload transaction; retain admission while excluding its wait. */
+export function runWithGatewayReloadWaitingRoot<T>(run: () => T): T {
+  const current = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
+  return current
+    ? reloadWaitingRoots.run(new Set([...(reloadWaitingRoots.getStore() ?? []), current]), run)
+    : run();
+}
 
 function createShutdownCleanupController(): AbortController {
   const controller = new AbortController();
@@ -104,8 +115,8 @@ export type GatewayRootWorkAdmissionContinuationScope = {
 type GatewaySuspendAdmissionLease = {
   drain: () => boolean;
   commit: () => boolean;
-  rollback: () => boolean;
-  release: () => boolean;
+  rollback: (reason?: string) => boolean;
+  release: (reason?: string) => boolean;
 };
 
 export type GatewayRestartSignalAdmissionLease = {
@@ -225,8 +236,15 @@ function invalidateSuspendAdmission(): void {
   resolveSuspendOpenWaiters();
   // Restart drain supersedes suspension without reopening process admission.
   if (GATEWAY_WORK_ADMISSION_STATE.restartDrainReason === undefined) {
-    admissionLog.info("admission reopened: suspend phase");
+    admissionLog.info(
+      `admission reopened: suspend phase ${GATEWAY_WORK_ADMISSION_STATE.suspendAttribution} exit=invalidated`,
+    );
+  } else {
+    admissionLog.info(
+      `suspension superseded: ${GATEWAY_WORK_ADMISSION_STATE.suspendAttribution} exit=restart`,
+    );
   }
+  GATEWAY_WORK_ADMISSION_STATE.suspendAttribution = undefined;
   callback?.();
   notifyGatewaySuspendAdmission();
 }
@@ -332,7 +350,14 @@ export function beginGatewayShutdownCleanup(): void {
 }
 
 export function isGatewayRestartDrainError(error: unknown): error is GatewayDrainingError {
-  return error instanceof GatewayDrainingError && isGatewayRestartDraining();
+  if (!isGatewayRestartDraining()) {
+    return false;
+  }
+  try {
+    return error instanceof GatewayDrainingError;
+  } catch {
+    return false;
+  }
 }
 
 /** Restart drain is one-way until the in-process restart resets runtime state. */
@@ -432,11 +457,12 @@ export function tryBeginGatewayPreparedRestartRootWorkAdmission(): GatewayRootWo
 /** Independent roots count separately even when launched by an admitted parent. */
 export function tryBeginGatewayIndependentRootWorkAdmission(
   origin = "independent",
+  options: { detachedWork?: boolean } = {},
 ): GatewayRootWorkAdmissionLease | null {
   if (isGatewayWorkAdmissionClosed()) {
     return null;
   }
-  return createGatewayRootWorkAdmission(origin);
+  return createGatewayRootWorkAdmission(origin, options.detachedWork === true);
 }
 
 async function waitForGatewayWorkAdmissionChange(signal?: AbortSignal): Promise<void> {
@@ -634,22 +660,22 @@ export async function runWithRetainedGatewayRootWork<T>(run: () => T | Promise<T
 
 /** Starts process-lifetime work without inheriting the request root that created it. */
 export function runOutsideGatewayRootWorkAdmission<T>(run: () => T): T {
-  return GATEWAY_WORK_ADMISSION_STATE.currentRootWork.exit(run);
+  const { currentRootWork } = GATEWAY_WORK_ADMISSION_STATE;
+  return currentRootWork.getStore() === undefined ? run() : currentRootWork.exit(run);
 }
 
 /** Active root requests/ticks, optionally excluding the caller running prepare. */
 export function getActiveGatewayRootWorkCount(opts?: { excludeCurrent?: boolean }): number {
-  let count = GATEWAY_WORK_ADMISSION_STATE.activeRootWork.size;
-  const current = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
-  if (
-    opts?.excludeCurrent === true &&
-    current &&
-    !current.released &&
-    GATEWAY_WORK_ADMISSION_STATE.activeRootWork.has(current)
-  ) {
-    count -= 1;
+  const active = GATEWAY_WORK_ADMISSION_STATE.activeRootWork;
+  if (!opts?.excludeCurrent) {
+    return active.size;
   }
-  return Math.max(0, count);
+  const excluded = new Set(reloadWaitingRoots.getStore());
+  const current = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
+  if (current) {
+    excluded.add(current);
+  }
+  return active.size - [...excluded].filter((root) => active.has(root)).length;
 }
 
 /** Bounded, deterministic root-owner inventory for shutdown diagnostics. */
@@ -657,7 +683,10 @@ export function getActiveGatewayRootWorkHolders(opts?: { excludeCurrent?: boolea
   const current = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
   const counts = new Map<string, number>();
   for (const admission of GATEWAY_WORK_ADMISSION_STATE.activeRootWork) {
-    if (opts?.excludeCurrent === true && admission === current) {
+    if (
+      opts?.excludeCurrent === true &&
+      (admission === current || reloadWaitingRoots.getStore()?.has(admission))
+    ) {
       continue;
     }
     counts.set(admission.origin, (counts.get(admission.origin) ?? 0) + 1);
@@ -670,6 +699,7 @@ export function getActiveGatewayRootWorkHolders(opts?: { excludeCurrent?: boolea
 /** Atomically closes new suspension admission before synchronous inspection. */
 export function tryBeginGatewaySuspendAdmission(
   onInvalidated: () => void,
+  attribution?: { owner: string; leaseId: string; caller: string; reason: string },
 ): GatewaySuspendAdmissionLease | null {
   if (isGatewayWorkAdmissionClosed()) {
     return null;
@@ -677,12 +707,22 @@ export function tryBeginGatewaySuspendAdmission(
   GATEWAY_WORK_ADMISSION_STATE.suspendPhase = "preparing";
   const generation = ++GATEWAY_WORK_ADMISSION_STATE.suspendGeneration;
   GATEWAY_WORK_ADMISSION_STATE.suspendInvalidated = onInvalidated;
-  admissionLog.info("admission closed: suspend phase");
+  const description = JSON.stringify(
+    attribution ?? {
+      owner: "internal",
+      leaseId: String(generation),
+      caller: "in-process",
+      reason: "suspend",
+    },
+  );
+  GATEWAY_WORK_ADMISSION_STATE.suspendAttribution = description;
+  admissionLog.info(`admission closed: suspend phase ${description}`);
   notifyGatewaySuspendAdmission();
 
   const transition = (
     expected: GatewaySuspendAdmissionPhase,
     next: GatewaySuspendAdmissionPhase,
+    reason?: string,
   ): boolean => {
     if (
       GATEWAY_WORK_ADMISSION_STATE.suspendGeneration !== generation ||
@@ -694,7 +734,8 @@ export function tryBeginGatewaySuspendAdmission(
     if (next === "accepting") {
       GATEWAY_WORK_ADMISSION_STATE.suspendInvalidated = undefined;
       resolveSuspendOpenWaiters();
-      admissionLog.info("admission reopened: suspend phase");
+      GATEWAY_WORK_ADMISSION_STATE.suspendAttribution = undefined;
+      admissionLog.info(`admission reopened: suspend phase ${description} exit=${reason}`);
     }
     notifyGatewaySuspendAdmission();
     return true;
@@ -703,8 +744,9 @@ export function tryBeginGatewaySuspendAdmission(
   return {
     drain: () => transition("preparing", "draining"),
     commit: () => transition("preparing", "prepared") || transition("draining", "prepared"),
-    rollback: () => transition("preparing", "accepting"),
-    release: () => transition("draining", "accepting") || transition("prepared", "accepting"),
+    rollback: (reason = "rollback") => transition("preparing", "accepting", reason),
+    release: (reason = "released") =>
+      transition("draining", "accepting", reason) || transition("prepared", "accepting", reason),
   };
 }
 

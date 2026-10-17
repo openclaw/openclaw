@@ -15,6 +15,10 @@ Bare `openclaw doctor --json` is read-only and non-interactive: no prompts, repa
 
 Explicit `openclaw doctor --lint` is the deployment-preflight posture. Add `--json` for machine-readable output without changing lint's threshold-based exit code. Policy findings reported here are documented in [`openclaw policy`](/cli/policy).
 
+The setup assistant's `doctor` action uses this read-only lint posture in an isolated
+process. It reports findings without applying repairs or migrations. Run
+`openclaw doctor --fix` separately on the Gateway host when you intend to repair state.
+
 Full reports reuse a private shared-state snapshot for ordinary reads within the
 report, preserving the live database and its WAL files. Each new report reads a
 fresh snapshot. Checks that need writable inspection state or independent database
@@ -33,6 +37,7 @@ retirement fails, Doctor reports the error and leaves the private snapshot in pl
 Plugin source captures use the original profile's temporary storage, outside these
 database snapshots. Their plugin-cache owner retains them until plugin inspection
 finishes, so later channel setup checks can reuse admitted native files safely.
+Read-only database checks also keep plugin captures outside the profile's state directory.
 
 ```bash
 openclaw doctor --json
@@ -126,7 +131,7 @@ Bare `openclaw doctor --json` exits `0` once it emits a findings payload, includ
 
 `core/doctor/session-snapshots` reports stale paths in retained legacy session
 metadata as informational findings. It preserves the original files even under
-`--fix`; active sessions use canonical SQLite state and the current runtime skill
+`--fix`; active sessions use current SQLite state and the current runtime skill
 catalog. Historical snapshot paths do not require cleanup or a session reset.
 
 `core/doctor/local-audio-acceleration` reports the auto-selected local STT command, separate capable/requested/observed backend evidence, and fallback order without loading a speech model. It emits an informational finding, so include `--severity-min info` to display it.

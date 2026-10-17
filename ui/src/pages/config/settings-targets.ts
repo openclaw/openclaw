@@ -5,6 +5,7 @@ import {
   APPEARANCE_SETTINGS_TARGET_IDS,
   SETTINGS_ROUTE_TARGETS,
 } from "./route-data.ts";
+import { sessionSourcePresentations } from "./session-source-presentation.ts";
 
 export const SESSION_STORAGE_SETTINGS_TARGET_ID = "settings-session-storage";
 
@@ -55,6 +56,18 @@ export const SETTINGS_SEARCH_TARGETS = {
     ],
     aliases:
       "web internet native hosted automatic provider brave parallel google gemini searxng codex openai api key endpoint",
+  },
+  appearanceBackground: {
+    routeId: "appearance",
+    labelKey: "configView.appearance.background.title",
+    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.background}`,
+    searchKeys: [
+      "configView.appearance.background.custom",
+      "configView.appearance.background.newSession",
+      "configView.appearance.background.sessions",
+      "configView.appearance.background.visibility",
+    ],
+    aliases: "wallpaper photo picture image backdrop hide disable opt out",
   },
   sessionStorage: {
     routeId: "ai-agents",
@@ -315,6 +328,10 @@ export const SETTINGS_SEARCH_TARGETS = {
     searchKeys: [
       "configView.appearance.tabIcon.source",
       "configView.appearance.tabIcon.agent",
+      "configView.appearance.tabIcon.shape",
+      "configView.appearance.tabIcon.square",
+      "configView.appearance.tabIcon.rounded",
+      "configView.appearance.tabIcon.circle",
       "configView.appearance.tabIcon.lobsterdex",
     ],
     aliases: "favicon browser tab icon agent avatar image",
@@ -353,10 +370,7 @@ export const SETTINGS_SEARCH_TARGETS = {
     labelKey: "configView.sessionSources.title",
     searchKeys: [
       "configView.sessionSources.hint",
-      "configView.sessionSources.claude",
-      "configView.sessionSources.codex",
-      "configView.sessionSources.opencode",
-      "configView.sessionSources.pi",
+      ...sessionSourcePresentations.map((source) => source.labelKey),
     ],
     aliases:
       "automatic auto discover discovery native external conversations show hide sidebar claude sessions",

@@ -5,6 +5,9 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as backupConfigCapture from "../../infra/backup-config-capture.js";
+import { GatewayStateOwnerContentionError } from "../../infra/gateway-state-owner.js";
+import { runPackagePostInstallVerification } from "../../infra/package-update-verification-step.js";
+import { SqliteSchemaVersionError } from "../../infra/sqlite-user-version.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import {
   createDeferredConfiguredPluginRepairDoctorResult,
@@ -28,11 +31,14 @@ import {
 import * as processRunner from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import * as stateSnapshots from "../../state/openclaw-state-db-readonly.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import * as configCapture from "./update-command-config-snapshot.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { runPackageUpdateDoctor } from "./update-command-package.js";
-import { createUpdateRunProgress } from "./update-command-run.js";
+import { completeUpdateCommandRun, createUpdateRunProgress } from "./update-command-run.js";
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -55,6 +61,103 @@ async function createDoctorFixture() {
   return { root, env };
 }
 
+it.each([
+  { requested: false, supported: false },
+  { requested: false, supported: true },
+  { requested: true, supported: false },
+  { requested: true, supported: true },
+])(
+  "runs the candidate Doctor with full integrity requested=$requested supported=$supported",
+  async ({ requested, supported }) => {
+    const { root, env } = await createDoctorFixture();
+    const calls = path.join(root, "doctor-calls.jsonl");
+    await fs.writeFile(
+      path.join(root, "dist", "entry.js"),
+      `const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
+if (args.includes("--help")) {
+  console.log(${JSON.stringify(supported ? "  --full-integrity-check  Check all indexes" : "  --fix  Repair problems")});
+} else {
+  if (!${supported} && args.includes("--full-integrity-check")) process.exit(2);
+  fs.writeFileSync(process.env.${UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV}, JSON.stringify({ status: "ok" }));
+}
+`,
+    );
+    const result = await runPackageUpdateDoctor({
+      root,
+      nodeRunner: process.execPath,
+      fullIntegrityCheck: requested,
+      managedServiceEnv: env,
+      timeoutMs: 5_000,
+      progress: {},
+    });
+    expect(result?.exitCode).toBe(0);
+    const argv = (await fs.readFile(calls, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as string[]);
+    expect(argv.filter((args) => args.includes("--help"))).toHaveLength(requested ? 1 : 0);
+    expect(argv.at(-1)?.includes("--full-integrity-check")).toBe(requested && supported);
+  },
+);
+
+it.each([
+  { restart: false, contention: true },
+  { restart: false, contention: true, wrapped: true },
+  { restart: true, contention: true },
+  { restart: false, contention: false },
+  { restart: false, contention: false, wrapped: true },
+])(
+  "defers package replacement state handoff ($restart, contention=$contention, wrapped=$wrapped)",
+  async ({ restart, contention, wrapped }) => {
+    const { root, env } = await createDoctorFixture();
+    const cause = contention
+      ? new GatewayStateOwnerContentionError(resolveOpenClawStateSqlitePath(env))
+      : new SqliteSchemaVersionError("This OpenClaw build cannot open your existing data.");
+    const error = wrapped ? new Error("Cannot read shared state for discovery", { cause }) : cause;
+    vi.spyOn(configCapture, "captureUpdateConfigSnapshot").mockRejectedValue(error);
+    const spawn = vi.spyOn(processRunner, "runCommandWithTimeout");
+    const onStepComplete = vi.fn();
+    const results: UpdateStepResult[] = [];
+    const operation = runPackageUpdateDoctor({
+      root,
+      restart,
+      managedServiceEnv: env,
+      results,
+      progress: { onStepComplete },
+      onConfigSnapshot: vi.fn(),
+    });
+    if (restart) {
+      await expect(operation).rejects.toBe(error);
+    } else {
+      const step = await operation;
+      assert(step);
+      expect(step).toMatchObject({
+        name: "post-install-verify",
+        exitCode: null,
+        advisory: {
+          kind: "recoverable-maintenance",
+          message: expect.stringContaining("deferred"),
+        },
+      });
+      expect(step && isFailedUpdateStep(step)).toBe(false);
+      expect(step?.advisory?.message).toContain("openclaw update status");
+      expect(step?.advisory?.message).toContain("openclaw doctor");
+      expect(results).toEqual([step]);
+      expect(onStepComplete).toHaveBeenCalledWith(expect.objectContaining(step));
+      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      const result = completeUpdateCommandRun(
+        { status: "ok", mode: "npm", root, steps: results, durationMs: 0 },
+        run,
+      );
+      expect(result.status).toBe("ok");
+      expect(getUpdateRun(run.runId, { env })?.status).toBe("succeeded");
+    }
+    expect(spawn).not.toHaveBeenCalled();
+  },
+);
+
 it.each(["missing", "malformed", "newer-schema", "changed-during-capture"] as const)(
   "runs Doctor with %s include capture without broadening rollback ownership",
   async (includeState) => {
@@ -73,7 +176,8 @@ it.each(["missing", "malformed", "newer-schema", "changed-during-capture"] as co
       await fs.writeFile(includePath, originalInclude);
     }
     if (completeGraph) {
-      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      openOpenClawStateDatabase({ env });
+      await closeStateDatabaseForTest();
       const database = new DatabaseSync(databasePath);
       try {
         database.exec(`PRAGMA user_version = ${newerSchema}`);
@@ -104,10 +208,15 @@ it.each(["missing", "malformed", "newer-schema", "changed-during-capture"] as co
         assert(resultPath, "Missing Doctor result path");
         await writeUpdatePostInstallDoctorResult({
           resultPath,
-          result: { status: "ok", configHash: "unchanged" },
+          result: completeGraph
+            ? {
+                ...createDeferredConfiguredPluginRepairDoctorResult(["Optional repair deferred."]),
+                configHash: "unchanged",
+              }
+            : { status: "ok", configHash: "unchanged" },
         });
         return {
-          code: 0,
+          code: completeGraph ? UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE : 0,
           stdout: "",
           stderr: "",
           signal: null,
@@ -117,15 +226,21 @@ it.each(["missing", "malformed", "newer-schema", "changed-during-capture"] as co
       });
     const onConfigSnapshot = vi.fn();
     const onStepComplete = vi.fn();
+    const stateRead = vi.spyOn(stateSnapshots, "withOpenClawStateDatabaseReadSnapshot");
 
-    const step = await runPackageUpdateDoctor({
-      root,
-      timeoutMs: 1_000,
-      progress: { onStepComplete },
-      managedServiceEnv: env,
-      onConfigSnapshot,
-    });
+    const step = await runPackagePostInstallVerification(root, (candidateRoot, results) =>
+      runPackageUpdateDoctor({
+        root: candidateRoot,
+        timeoutMs: 1_000,
+        progress: { onStepComplete },
+        managedServiceEnv: env,
+        onConfigSnapshot,
+        results,
+      }),
+    );
 
+    expect(isFailedUpdateStep(step), JSON.stringify(step)).toBe(false);
+    expect(stateRead).not.toHaveBeenCalled();
     expect(invokeDoctor).toHaveBeenCalledOnce();
     expect(onConfigSnapshot).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
@@ -134,8 +249,15 @@ it.each(["missing", "malformed", "newer-schema", "changed-during-capture"] as co
         doctorOwned: completeGraph,
       }),
     );
-    expect(step).toMatchObject({ exitCode: 0 });
+    expect(step.failureFacts ?? []).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "runtime-verification-failed" })]),
+    );
     if (completeGraph) {
+      expect(step).toMatchObject({
+        exitCode: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+        advisory: { kind: "package-post-install-doctor" },
+        warnings: [expect.stringContaining("Optional repair deferred.")],
+      });
       expect(onConfigSnapshot.mock.calls[0]?.[0]).toMatchObject({
         includedFiles: [
           {
@@ -221,6 +343,9 @@ it.each([
             ...(cause === "reported-error" ? { failureFacts } : {}),
           };
     if (writerReceipt) {
+      if (cause === "success") {
+        receipt.deferredInspectionCheckIds = ["core/doctor/new-target-inspection"];
+      }
       receipt.configChanges = [
         { kind: "key", key: "agents" },
         { kind: "migration", message: "Moved model allowlist." },
@@ -278,6 +403,7 @@ it.each([
     });
 
     assert(step);
+    expect(step.deferredInspectionCheckIds).toEqual(receipt.deferredInspectionCheckIds ?? null);
     if (run) {
       expect(step).toMatchObject({ exitCode, outputLimitExceeded });
       if (cause === "reported-error") {
@@ -296,6 +422,7 @@ it.each([
     expect(isFailedUpdateStep(step)).toBe(Boolean(reason));
     const expected = {
       exitCode,
+      deferredInspectionCheckIds: receipt.deferredInspectionCheckIds ?? null,
       configChanges: receipt.configChanges,
       ...(reason
         ? { stderrTail: expect.stringContaining(`agents. ${reason}: Config writer refused.`) }
@@ -326,7 +453,8 @@ it.each([
 
 it("leaves the run ledger unchanged while the activation Doctor child is pending", async () => {
   const { root, env } = await createDoctorFixture();
-  vi.useFakeTimers();
+  // Ledger receipts still need real worker scheduling and monotonic clocks.
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   const { runId } = createUpdateRun({ trigger: "control-ui" }, { env });
   expect(adoptUpdateRun(runId, { env }).origin.driver?.pid).toBe(process.pid);
   const spawned = createDeferredCore();
@@ -387,6 +515,67 @@ it("leaves the run ledger unchanged while the activation Doctor child is pending
       expect.objectContaining({ step: "openclaw doctor", status: "completed" }),
     ]),
   });
+});
+
+it("records the activation Doctor's traced sections on its step and run record", async () => {
+  const { root, env } = await createDoctorFixture();
+  vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", undefined);
+  const { runId } = createUpdateRun({ trigger: "cli" }, { env });
+  adoptUpdateRun(runId, { env });
+  const run = { runId, env };
+  const guards = createUpdateCommandExecutionGuards({ run }, root);
+  const progress = createUpdateRunProgress(run, {}, guards.recordStep);
+  const trace = (name: string, ms: number) =>
+    `[gateway] startup trace: ${name} ${ms.toFixed(1)}ms total=${ms.toFixed(1)}ms start=0.0ms\n`;
+  const stderr = [
+    trace("cli.command.config-ready", 3),
+    trace("doctor.maintenance.begin", 120),
+    "real Doctor warning\n",
+    trace("doctor.database-preflight", 12_300),
+    trace("doctor.config-flow", 4_100),
+    ...[
+      ["doctor:gateway-services", 250_000],
+      ["doctor:plugins", 40_000],
+      ["doctor:sessions", 9_000],
+      ["doctor:skills", 1_000],
+      ["doctor:auth", 700],
+      ["doctor:fast", 5],
+    ].map(([id, ms]) => trace(`doctor.contribution.${id}`, Number(ms))),
+    trace("doctor.contributions", 300_200),
+    // JSON console style carries the same message inside one record.
+    `${JSON.stringify({ level: "info", message: trace("doctor.maintenance-ready", 900).trim() })}\n`,
+  ].join("");
+  let doctorEnv: NodeJS.ProcessEnv | undefined;
+  vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation(async (_argv, options) => {
+    assert(typeof options === "object");
+    doctorEnv = options.env;
+    // Lines arrive split across pipe chunks.
+    const bytes = Buffer.from(stderr);
+    for (let offset = 0; offset < bytes.length; offset += 7) {
+      options.onOutputChunk?.(bytes.subarray(offset, offset + 7), "stderr");
+    }
+    const resultPath = options.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
+    assert(resultPath, "Missing Doctor result path");
+    await writeUpdatePostInstallDoctorResult({ resultPath, result: { status: "ok" } });
+    return { code: 0, stdout: "", stderr, signal: null, killed: false, termination: "exit" };
+  });
+
+  const step = await runPackageUpdateDoctor({
+    root,
+    timeoutMs: 60_000,
+    managedServiceEnv: env,
+    progress,
+  });
+
+  const sections =
+    "Doctor sections: maintenance.begin 0.1 s, database-preflight 12.3 s, config-flow 4.1 s, contributions 300.2 s, maintenance-ready 0.9 s; slowest contributions: gateway-services 250.0 s, plugins 40.0 s, sessions 9.0 s, skills 1.0 s, auth 0.7 s";
+  expect(doctorEnv?.OPENCLAW_GATEWAY_STARTUP_TRACE).toBe("1");
+  expect(step).toMatchObject({ name: "openclaw doctor", exitCode: 0 });
+  expect(step?.diagnostics?.[0]).toBe(sections);
+  expect(step?.stderrTail).toBe("real Doctor warning");
+  expect(getUpdateRun(runId, { env })?.steps).toContainEqual(
+    expect.objectContaining({ step: "diagnostic:openclaw doctor", detail: sections }),
+  );
 });
 
 it.each([

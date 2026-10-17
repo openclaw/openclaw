@@ -33,8 +33,9 @@ vi.mock("../../logging/subsystem.js", () => ({
 }));
 vi.mock("../../logging/logger.js", () => ({ flushLogger: async () => {} }));
 
-// Acquire the runner's compiled subprocess generation before case deadlines.
+// Prepare transforms and compiled subprocesses before case deadlines; cases reset evaluation.
 await import("../../infra/runtime-process-entrypoints.js");
+await import("./run-loop.js");
 
 let activeCase: Promise<void> | undefined;
 afterEach(async () => {
@@ -100,6 +101,7 @@ describe("gateway lifecycle hub import boundaries", () => {
               name: "test",
             }),
             resolveGatewayRestartDecision: () => ({ mode: "supervised", supervisor: "systemd" }),
+            registerGatewayRuntimeRecovery: () => () => {},
             requestGatewayRestartWithSignalAdmission:
               vi.fn<LifecycleRuntime["requestGatewayRestartWithSignalAdmission"]>(),
             captureForegroundUpdateHandoffStop: () => undefined,
@@ -127,7 +129,7 @@ describe("gateway lifecycle hub import boundaries", () => {
             primed = true;
             return hub;
           });
-          const { runGatewayLoop } = await import("./run-loop.js");
+          const { runGatewayLoop } = await import("./run-loop.test-support.js");
           abortSignal.throwIfAborted();
           await withIsolatedSignals(async ({ captureSignal }) => {
             const originalOn = process.on.bind(process);

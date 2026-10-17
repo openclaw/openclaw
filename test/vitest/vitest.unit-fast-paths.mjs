@@ -1,5 +1,4 @@
 // Unit-fast test discovery and classification helpers for fast local routing.
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { isAgentsCoreIsolatedTestFile } from "./vitest.agents-paths.mjs";
@@ -12,6 +11,7 @@ import {
 } from "./vitest.gateway-server-paths.mjs";
 import { pluginSdkLightTestFiles } from "./vitest.plugin-sdk-paths.mjs";
 import { isToolingIsolatedTestFile } from "./vitest.tooling-isolated-paths.mjs";
+import { getRepositoryFileInventory } from "./vitest.ui-paths.mjs";
 import { boundaryTestFiles, bundledPluginDependentUnitTestFiles } from "./vitest.unit-paths.mjs";
 
 const normalizeRepoPath = (value) => value.replaceAll("\\", "/");
@@ -81,11 +81,8 @@ export const forcedUnitFastTestFiles = [
   "src/acp/control-plane/manager.turn-results.test.ts",
   "src/acp/persistent-bindings.lifecycle.test.ts",
   "src/acp/translator.prompt-prefix.test.ts",
-  "src/acp/translator.stop-reason.test.ts",
   "src/acp/persistent-bindings.test.ts",
   "src/acp/server.startup.test.ts",
-  "src/acp/translator.final-snapshots.test.ts",
-  "src/acp/translator.session-setup.test.ts",
   "src/browser-lifecycle-cleanup.test.ts",
   "src/system-agent/assistant.configured.test.ts",
   "src/system-agent/system-agent.test.ts",
@@ -109,7 +106,6 @@ export const forcedUnitFastTestFiles = [
   "src/plugin-activation-boundary.test.ts",
   "src/proxy-capture/runtime.test.ts",
   "src/proxy-capture/store.sqlite.test.ts",
-  "src/talk/agent-consult-runtime.test.ts",
   "src/security/audit-config-basics.test.ts",
   "src/security/audit-exec-surface.test.ts",
   "src/security/audit-extra.sync.test.ts",
@@ -134,7 +130,6 @@ export const forcedUnitFastTestFiles = [
   "packages/terminal-core/src/restore.test.ts",
   "packages/terminal-core/src/table.test.ts",
   "src/test-helpers/state-dir-env.test.ts",
-  "src/test-utils/openclaw-test-state.test.ts",
   "src/test-utils/temp-home.test.ts",
   "src/utils.test.ts",
   "src/version.test.ts",
@@ -148,6 +143,10 @@ const broadUnitFastCandidatePatterns = prepareGlobPatterns(
   directoryPrefixForGlob,
 );
 const ownerRoutedUnitTestPatterns = [
+  // Real heartbeat admission needs the infra runner's agent-database host owner.
+  "src/infra/heartbeat-runner.exact-session-busy.test.ts",
+  // This family proof belongs to the PostgreSQL conformance owner.
+  "src/infra/database-engine/port-provider.postgres.test.ts",
   ...gatewayPluginTestFiles,
   ...cliProcessTestFiles,
   // Planner inventory proofs retain their tooling timing and worker policy
@@ -284,7 +283,7 @@ const disqualifyingPatterns = [
 ];
 
 const statefulTestHelperImportPattern =
-  /\bfrom\s+["']([^"']*(?:test-support|\.harness|\.test-mocks|prepared-model-runtime\.test-harness|message-action-runner\.test-helpers|computer-tool\.test-helpers)(?:\.js|\.ts)?)["']/gu;
+  /\bfrom\s+["']([^"']*(?:test-support|\.harness|\.test-mocks|\.test-harness|message-action-runner\.test-helpers|computer-tool\.test-helpers)(?:\.js|\.ts)?)["']/gu;
 const statefulTestHelperByKey = new Map();
 
 function importsStatefulTestHelper(cwd, file, source) {
@@ -366,59 +365,38 @@ function walkFiles(directory, files = []) {
 
 const walkedTestFilesByCwd = new Map();
 
-function collectRepoTestFilesFromGit(cwd) {
-  // Planning, fast-lane includes, and scoped exclusions share this inventory.
-  // New working-tree tests must be present so explicit targets cannot become empty lanes.
-  const result = spawnSync(
-    "git",
-    [
-      "ls-files",
-      "--cached",
-      "--others",
-      "--exclude-standard",
-      "-z",
-      "--",
-      "src",
-      "packages",
-      "test",
-    ],
-    { cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] },
-  );
-  if (result.error || result.status !== 0) {
-    return null;
-  }
-  return result.stdout
-    .split("\0")
-    .map(normalizeRepoPath)
-    .filter((file) => file.endsWith(".test.ts"));
-}
-
-function collectRepoTestFiles(cwd) {
-  const normalizedCwd = normalizeRepoPath(cwd);
-  const cached = walkedTestFilesByCwd.get(normalizedCwd);
+function collectRepoTestFiles(cwd, selected) {
+  const key = JSON.stringify([normalizeRepoPath(cwd), selected]);
+  const cached = walkedTestFilesByCwd.get(key);
   if (cached) {
     return cached;
   }
-  const files =
-    collectRepoTestFilesFromGit(cwd) ??
-    ["src", "packages", "test"]
-      .flatMap((directory) => walkFiles(path.join(cwd, directory)))
-      .map((file) => normalizeRepoPath(path.relative(cwd, file)));
-  walkedTestFilesByCwd.set(normalizedCwd, files);
+  const inventory = getRepositoryFileInventory(cwd, selected);
+  const files = inventory
+    ? [...inventory]
+        .map(normalizeRepoPath)
+        .filter((file) => /^(?:src|packages|test)\//u.test(file) && file.endsWith(".test.ts"))
+    : (selected ??
+      ["src", "packages", "test"]
+        .flatMap((directory) => walkFiles(path.join(cwd, directory)))
+        .map((file) => normalizeRepoPath(path.relative(cwd, file))));
+  walkedTestFilesByCwd.set(key, files);
   return files;
 }
 
 const unitFastCandidateInventoryByCwd = new Map();
 
-function collectUnitFastCandidateInventory(cwd) {
-  const cacheKey = normalizeRepoPath(cwd);
-  const cached = unitFastCandidateInventoryByCwd.get(cacheKey);
+function collectUnitFastCandidateInventory(cwd, selected) {
+  const cacheKey = JSON.stringify([normalizeRepoPath(cwd), selected]);
+  const cached =
+    unitFastCandidateInventoryByCwd.get(JSON.stringify([normalizeRepoPath(cwd), undefined])) ??
+    unitFastCandidateInventoryByCwd.get(cacheKey);
   if (cached) {
     return cached;
   }
   const inventory = [
     ...new Set([
-      ...collectRepoTestFiles(cwd),
+      ...collectRepoTestFiles(cwd, selected),
       ...unitFastCandidateExactFiles,
       ...forcedUnitFastTestFiles,
     ]),
@@ -470,7 +448,7 @@ function matchesCompiledInclude(file, compiledPatterns) {
   );
 }
 
-export function classifyUnitFastTestFileContent(source) {
+function classifyUnitFastTestFileContent(source) {
   const reasons = [];
   for (const { code, pattern } of disqualifyingPatterns) {
     if (pattern.test(source)) {
@@ -610,8 +588,13 @@ export function getUnitFastTestFilesForIncludePatterns(includePatterns, options 
     return [];
   }
   const compiledPatterns = prepareGlobPatterns(patterns);
+  const candidates = patterns.every(
+    (pattern) => pattern.endsWith(".test.ts") && literalGlobPrefix(pattern) === pattern,
+  )
+    ? collectUnitFastCandidateInventory(cwd, patterns)
+    : collectUnitFastCandidateInventory(cwd);
 
-  const files = collectUnitFastCandidateInventory(cwd)
+  const files = candidates
     .filter((file) => {
       return (
         isFileWithinScope(file, dir) &&
@@ -687,7 +670,7 @@ function getUnitFastTestFileAnalysis(file) {
   // Exact routing must not analyze every source before admitting one test.
   // Retain inventory membership, including ignored-file and forced-owner rules.
   return isUnitFastCandidateFile(normalized) &&
-    collectUnitFastCandidateInventory(cwd).includes(normalized)
+    collectUnitFastCandidateInventory(cwd, [normalized]).includes(normalized)
     ? analyzeUnitFastTestFile(cwd, normalized)
     : undefined;
 }

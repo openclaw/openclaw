@@ -3,7 +3,6 @@ import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
@@ -47,9 +46,12 @@ export async function withSqliteTranscriptArchiveSession<T>(
   }
   const session = new ArchiveSession(options);
   try {
-    return await sessions.context.run(session, run);
-  } finally {
+    const result = await sessions.context.run(session, run);
+    await session.release();
+    return result;
+  } catch (error) {
     await session.close();
+    throw error;
   }
 }
 
@@ -71,7 +73,7 @@ class ArchiveSession {
   private connection?: ArchiveConnection;
   private dispatched?: Promise<SqliteArchiveSessionResponse>;
   private revoked = false;
-  private operationId = 0;
+  private released = false;
 
   constructor(options: OpenClawAgentDatabaseOptions) {
     const env = { ...(options.env ?? process.env) };
@@ -109,6 +111,7 @@ class ArchiveSession {
   matches(options: OpenClawAgentDatabaseOptions): boolean {
     return (
       !this.revoked &&
+      !this.released &&
       this.options.agentId === normalizeAgentId(options.agentId) &&
       this.options.path === resolveOpenClawAgentSqlitePath(options) &&
       this.state.databasePath ===
@@ -117,7 +120,7 @@ class ArchiveSession {
   }
 
   assertCurrent(): void {
-    if (this.revoked) {
+    if (this.revoked || this.released) {
       throw new Error("SQLite archive session was revoked");
     }
     this.state.assertCurrent();
@@ -137,46 +140,41 @@ class ArchiveSession {
     ) {
       throw new Error("SQLite archive request changed its captured database owner");
     }
-    // The global FIFO ensures the previous scope is idle; never multiply warm heaps.
-    if (sessions.warm && sessions.warm !== this) {
-      await sessions.warm.retire();
+    // The FIFO leaves no native handles in the idle worker; transfer execution, not authority.
+    const previous = sessions.warm;
+    if (previous && previous !== this) {
+      if (
+        !previous.revoked &&
+        previous.options.env.OPENCLAW_STATE_DIR === this.options.env.OPENCLAW_STATE_DIR &&
+        !previous.connection?.retiring &&
+        !previous.connection?.failure &&
+        !previous.connection?.didExit
+      ) {
+        this.connection = previous.connection;
+        previous.connection = undefined;
+        sessions.warm = this;
+      } else {
+        await previous.retire();
+      }
+      if (previous.released) {
+        await previous.close();
+      }
     }
     this.assertCurrent();
     await this.connection?.retiring;
     this.assertCurrent();
     const connection = (this.connection ??= this.start(createWorker));
     sessions.warm = this;
-    const operationId = ++this.operationId;
+    connection.worker.ref();
     const dispatched = new Promise<SqliteArchiveSessionResponse>((resolve, reject) => {
       const cleanup = () => {
         connection.worker.off("message", receive);
         connection.worker.off("exit", exit);
       };
-      const receive = (response: unknown) => {
-        const expectedType =
-          request.operation === "materialize"
-            ? "done"
-            : request.operation === "publish"
-              ? "published"
-              : request.operation === "read-page"
-                ? "page-read"
-                : "final-read";
-        if (
-          !isRecord(response) ||
-          response.type !== expectedType ||
-          response.operationId !== operationId ||
-          response.settled !== true ||
-          !Array.isArray(response.results)
-        ) {
-          connection.failure = new Error(
-            "SQLite archive Worker returned an invalid operation result",
-          );
-          void connection.worker.terminate();
-          return;
-        }
+      // The FIFO has one request in flight on this private, paired worker port.
+      const receive = (response: SqliteArchiveSessionResponse) => {
         cleanup();
-        // SAFETY: the paired Worker owns result values; the operation identity and envelope match.
-        resolve(response as SqliteArchiveSessionResponse);
+        resolve(response);
       };
       const exit = () => {
         cleanup();
@@ -196,7 +194,6 @@ class ArchiveSession {
           {
             ...request,
             type: "archive-operation",
-            operationId,
           } satisfies SqliteArchiveSessionRequest,
           [],
         );
@@ -226,7 +223,6 @@ class ArchiveSession {
   }
 
   private start(createWorker: (data: object) => Worker): ArchiveConnection {
-    this.operationId = 0;
     const worker = createWorker({
       type: "sqlite-transcript-archive-v2",
       operation: "archive-session",
@@ -260,6 +256,7 @@ class ArchiveSession {
     return (connection.retiring ??= (async () => {
       // Queued requests own no native work and will refuse at FIFO admission.
       await this.dispatched?.catch(() => {});
+      connection.worker.ref();
       if (!connection.didExit) {
         try {
           connection.worker.postMessage({ type: "close" }, []);
@@ -276,6 +273,23 @@ class ArchiveSession {
         sessions.warm = undefined;
       }
     })());
+  }
+
+  async release(): Promise<void> {
+    this.released = true;
+    // Successful replies have closed every native handle. Keep only the FIFO's idle carrier.
+    const connection = this.connection;
+    if (
+      connection &&
+      !this.revoked &&
+      !connection.retiring &&
+      !connection.didExit &&
+      !connection.failure
+    ) {
+      connection.worker.unref();
+      return;
+    }
+    await this.close();
   }
 
   async close(): Promise<void> {

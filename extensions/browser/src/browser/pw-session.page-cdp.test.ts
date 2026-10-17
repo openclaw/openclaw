@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BROWSER_REF_MARKER_ATTRIBUTE,
   markBackendDomRefsOnPage,
-  readMainFrameDocumentIdentityForPage,
+  readDocumentIdentitiesForPage,
   withPageScopedCdpClient,
   withCdpSnapshotRoot,
 } from "./pw-session.page-cdp.js";
@@ -107,9 +107,9 @@ describe("pw-session page-scoped CDP client", () => {
     const sessionDetach = vi.fn(async () => {});
     const page = cdpPage(sessionSend, sessionDetach);
 
-    await expect(readMainFrameDocumentIdentityForPage(page as never)).resolves.toBe(
-      "cdp:LOADER_SAME_URL",
-    );
+    await expect(readDocumentIdentitiesForPage(page as never)).resolves.toEqual({
+      mainFrame: "cdp:LOADER_SAME_URL",
+    });
     expect(sessionDetach).toHaveBeenCalledTimes(1);
   });
 
@@ -184,7 +184,7 @@ describe("pw-session page-scoped CDP client", () => {
         }),
       }),
     };
-    const identity = readMainFrameDocumentIdentityForPage(page as never);
+    const identity = readDocumentIdentitiesForPage(page as never);
     const rejected = expect(identity).rejects.toThrow("timed out after 5000ms");
     try {
       await vi.advanceTimersByTimeAsync(5_000);

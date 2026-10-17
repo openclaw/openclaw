@@ -40,7 +40,7 @@ export function validateSessionPatchAdmission(params: {
   if (harnessSessionError) {
     return invalid(harnessSessionError);
   }
-  if (typeof patch.archived === "boolean" || "snoozedUntil" in patch) {
+  if (typeof patch.archived === "boolean" || "snoozedUntil" in patch || "sidebarRoot" in patch) {
     if (!params.existingEntry?.sessionId) {
       return invalid(`session not found: ${storeKey}`);
     }
@@ -55,7 +55,7 @@ export function validateSessionPatchAdmission(params: {
     return invalid(MODEL_SELECTION_LOCKED_MESSAGE);
   }
   if (typeof patch.agentRuntime === "string" && typeof patch.model !== "string") {
-    return invalid("agentRuntime requires an explicit canonical provider/model selection");
+    return invalid("agentRuntime requires an explicit provider/model selection using full IDs");
   }
   return undefined;
 }

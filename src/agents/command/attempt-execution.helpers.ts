@@ -4,76 +4,41 @@ import readline from "node:readline";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { stripMixedSilentReplyTokens } from "../../auto-reply/reply/mixed-silent-reply-tokens.js";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
-import {
-  isSilentReplyPrefixText,
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-  startsWithSilentToken,
-  stripLeadingSilentToken,
-} from "../../auto-reply/tokens.js";
-import { normalizeChatType } from "../../channels/chat-type.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import {
   isToolCallBlock,
   resolveToolUseId,
   type ToolContentBlock,
 } from "../../chat/tool-content.js";
 import {
-  readSessionTranscriptBoundedMessageTailPage,
   type SessionTranscriptRuntimeTarget,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
+import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { resolveSilentReplySettings } from "../../config/silent-reply.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   type ClaudeCliFallbackSeed,
   readClaudeCliFallbackSeed,
 } from "../../gateway/cli-session-history.claude.js";
-import { isSubagentSessionKey } from "../../routing/session-key.js";
-import type { InputProvenance } from "../../sessions/input-provenance.js";
-import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import { sleep } from "../../utils/sleep.js";
-import { buildAgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
+import {
+  prepareAgentRunTerminalReply,
+  type PreparedAgentRunTerminalReply,
+} from "../agent-run-terminal-reply.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
 import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-approval-output.js";
-import { isClaudeToolResultBlockType, isClaudeToolUseBlockType } from "../cli-output-records.js";
+import {
+  isClaudeCliProvider,
+  isClaudeToolResultBlockType,
+  isClaudeToolUseBlockType,
+} from "../cli-output-records.js";
 import { cliBackendLog } from "../cli-runner/log.js";
-import { AGENT_LANE_SUBAGENT } from "../lanes.js";
-import type { ReplyExpectation } from "../reply-completion.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 import type { AgentCommandOpts } from "./types.js";
 
 const CLAUDE_CLI_TRANSCRIPT_MAX_RECORDS = 500;
-
-export function resolveCommandReplyExpectation(params: {
-  cfg: OpenClawConfig;
-  sessionKey?: string;
-  sessionEntry?: Pick<SessionEntry, "chatType">;
-  messageChannel?: string;
-  opts: { lane?: string; privateCompletion?: true; inputProvenance?: InputProvenance };
-}): ReplyExpectation | undefined {
-  if (
-    params.opts.privateCompletion ||
-    params.opts.lane === AGENT_LANE_SUBAGENT ||
-    isSubagentSessionKey(params.sessionKey) ||
-    !isDeliverableMessageChannel(params.messageChannel ?? "")
-  ) {
-    return "required";
-  }
-  if (params.opts.inputProvenance?.kind !== "inter_session") {
-    return undefined;
-  }
-  const chatType = normalizeChatType(params.sessionEntry?.chatType);
-  return resolveSilentReplySettings({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    surface: params.messageChannel,
-    conversationType: chatType === "channel" ? "group" : chatType,
-  }).policy === "allow"
-    ? "optional"
-    : "required";
-}
 
 function normalizeClaudeCliSessionId(sessionId: string | undefined): string | undefined {
   const trimmed = sessionId?.trim();
@@ -139,12 +104,22 @@ export async function sessionTranscriptHasContent(
   if (!target) {
     return false;
   }
-  await waitForSessionTranscriptProjection(target, abortSignal);
-  const { events } = readSessionTranscriptBoundedMessageTailPage(target, {
-    maxBytes: 5 * 1024 * 1024,
-    maxMessages: 500,
-    offset: 0,
+  abortSignal?.throwIfAborted();
+  const source = captureSessionActorStorageOwner(target, {
+    assertCurrent() {
+      abortSignal?.throwIfAborted();
+    },
+    authorize() {},
   });
+  const capturedTarget = { ...target, ...(source ? { storePath: source.path } : {}) };
+  await waitForSessionTranscriptProjection(capturedTarget, abortSignal);
+  const { readSessionTranscriptBoundedMessageTailPageAsync } =
+    await import("../../gateway/session-transcript-readers.js");
+  const { events } = await readSessionTranscriptBoundedMessageTailPageAsync(
+    capturedTarget,
+    { maxBytes: 5 * 1024 * 1024, maxMessages: 500, offset: 0 },
+    abortSignal,
+  );
   return events.some(
     ({ event }) =>
       isRecord(event) &&
@@ -366,16 +341,19 @@ function formatFallbackTurns(
 }
 
 /** Prefer the harvested summary, then retain recent turns within the fallback prompt budget. */
-export function buildClaudeCliFallbackContextPrelude(params: {
+export async function buildClaudeCliFallbackContextPrelude(params: {
   cliSessionId: string | undefined;
   homeDir?: string;
   charBudget?: number;
-}): string {
+}): Promise<string> {
   const sessionId = params.cliSessionId?.trim();
   if (!sessionId) {
     return "";
   }
-  const seed = readClaudeCliFallbackSeed({ cliSessionId: sessionId, homeDir: params.homeDir });
+  const seed = await readClaudeCliFallbackSeed({
+    cliSessionId: sessionId,
+    homeDir: params.homeDir,
+  });
   if (!seed) {
     return "";
   }
@@ -416,72 +394,49 @@ export function buildClaudeCliFallbackContextPrelude(params: {
   return sections.join("\n");
 }
 
-/** Creates an accumulator that strips ACP silent-reply prefixes while streaming. */
+/** Withholds only a possible exact leading control line while ACP is producing output. */
 export function createAcpVisibleTextAccumulator() {
   let visibleText = "";
   let rawText = "";
-  const resolveNextCandidate = (base: string, chunk: string): string => {
-    if (!base) {
-      return chunk;
-    }
-    if (
-      isSilentReplyText(base, SILENT_REPLY_TOKEN) &&
-      !chunk.startsWith(base) &&
-      /^[\p{L}\p{N}]/u.test(chunk)
-    ) {
-      return chunk;
-    }
-    if (chunk.startsWith(base) && chunk.length > base.length) {
-      return chunk;
-    }
-    return `${base}${chunk}`;
-  };
+  let released = false;
+  let prepared: PreparedAgentRunTerminalReply | undefined;
+  const finalize = () => (prepared ??= prepareAgentRunTerminalReply({ rawText }));
 
   return {
     consume(chunk: string): { text: string; delta: string } | null {
       if (!chunk) {
         return null;
       }
-
-      if (!visibleText) {
-        const leadCandidate = resolveNextCandidate(rawText, chunk);
-        rawText = leadCandidate;
-        const trimmedLeadCandidate = leadCandidate.trim();
-        if (
-          isSilentReplyText(trimmedLeadCandidate, SILENT_REPLY_TOKEN) ||
-          isSilentReplyPrefixText(trimmedLeadCandidate, SILENT_REPLY_TOKEN)
-        ) {
-          return null;
-        }
-        const text = startsWithSilentToken(trimmedLeadCandidate, SILENT_REPLY_TOKEN)
-          ? stripLeadingSilentToken(leadCandidate, SILENT_REPLY_TOKEN)
-          : leadCandidate;
-        if (!text) {
-          return null;
-        }
-        visibleText = text;
-        return { text, delta: text };
-      }
-
       const delta =
-        chunk.startsWith(rawText) && chunk.length > rawText.length
+        rawText && chunk.startsWith(rawText) && chunk.length > rawText.length
           ? chunk.slice(rawText.length)
           : chunk;
       rawText += delta;
+      if (!released) {
+        const candidate = rawText.trimStart().toUpperCase();
+        const stripped = stripMixedSilentReplyTokens(rawText);
+        if (SILENT_REPLY_TOKEN.startsWith(candidate) || isSilentReplyText(candidate)) {
+          // A literal newline ends the one permitted control line. Its suffix
+          // is ordinary text, even if it spells another control token.
+          if (stripped === null) {
+            return null;
+          }
+        }
+        released = true;
+        visibleText = stripped ?? rawText;
+        return visibleText ? { text: visibleText, delta: visibleText } : null;
+      }
       visibleText += delta;
       return { text: visibleText, delta };
     },
     finalize(): string {
-      return visibleText.trim();
+      return finalize().text;
     },
     finalizeRaw(): string {
-      return visibleText;
+      return rawText;
     },
     finalizeReplySnapshot(): AgentRunTerminalReplySnapshot {
-      return buildAgentRunTerminalReplySnapshot({
-        visibleText,
-        rawText: visibleText ? "" : rawText,
-      });
+      return finalize().terminalReply;
     },
   };
 }
@@ -502,10 +457,6 @@ export function rebaseExecApprovalContinuationPromptRange(params: {
     start: offset + params.range.start,
     end: offset + params.range.end,
   };
-}
-
-export function isClaudeCliProvider(provider: string): boolean {
-  return provider.trim().toLowerCase() === "claude-cli";
 }
 
 /** Restores completion tools only on runtimes that enforce the captured requester cap. */

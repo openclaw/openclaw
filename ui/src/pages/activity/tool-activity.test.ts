@@ -24,46 +24,29 @@ function buildResultPreview(result: unknown): string {
   return entry.outputPreview;
 }
 
-describe("activity model output preview redaction", () => {
+describe("activity model output preview fidelity", () => {
   it.each([
-    ["short UTF-16 text", "\ud800 visible 🦞 text", "\ud800 visible 🦞 text"],
     ["a surrogate pair at the cap", "a".repeat(1_999) + "🦞tail", "a".repeat(1_999)],
     ["a lone surrogate inside the cap", "\ud800" + "a".repeat(2_100), "\ud800" + "a".repeat(1_999)],
   ])("preserves %s", (_label, source, expected) => {
     expect(buildResultPreview({ text: source })).toBe(expected);
   });
 
-  it("redacts dotted API key assignments emitted by tool output", () => {
-    const preview = buildResultPreview({
-      text: [
-        "app.api.key=visible-leaked-value-1234567890",
-        "spring.datasource.password=visible-db-password-1234567890",
-        "server.port=8080",
-      ].join("\n"),
-    });
-
-    expect(preview).toContain("app.api.key=[redacted]");
-    expect(preview).toContain("spring.datasource.password=[redacted]");
-    expect(preview).toContain("server.port=8080");
-    expect(preview).not.toContain("visible-leaked-value-1234567890");
-    expect(preview).not.toContain("visible-db-password-1234567890");
-  });
-
-  it("redacts dotted API keys in object-shaped tool results", () => {
+  it("preserves dotted API keys in object-shaped tool results", () => {
     const preview = buildResultPreview({
       "app.api.key": 'visible secret with spaces, apostrophe: don\'t, quote: "keep hidden"',
       "server.port": 8080,
     });
 
-    expect(preview).toContain('"app.api.key": "[redacted]"');
+    expect(JSON.parse(preview)["app.api.key"]).toBe(
+      'visible secret with spaces, apostrophe: don\'t, quote: "keep hidden"',
+    );
     expect(preview).toContain('"server.port": 8080');
-    expect(preview).not.toContain("visible secret");
-    expect(preview).not.toContain("keep hidden");
   });
 });
 
 describe("activity preview retention", () => {
-  it.each(["tool", "answer_candidate"])(
+  it.each(["tool"])(
     "releases large %s payloads while retaining their previews",
     (kind) => {
       const result = spawnSync(
@@ -86,7 +69,6 @@ describe("activity preview retention", () => {
               return process.memoryUsage().heapUsed;
             }
             function append(index, size) {
-              // Keep all discarded bytes without benchmarking long-token redaction.
               const payload = "x".repeat(2_000) + "!".repeat(size - 2_000);
               const text = JSON.parse(JSON.stringify("Synthetic " + index + ": " + payload));
               entries = updateToolActivity(entries, {
@@ -128,7 +110,7 @@ describe("activity preview retention", () => {
 });
 
 describe("activity feed bounds", () => {
-  it.each(["tool", "answer_candidate"] as const)(
+  it.each(["tool"] as const)(
     "retains the latest 100 %s entries without mutating earlier snapshots",
     (kind) => {
       const event = (index: number, done = false): Parameters<typeof updateToolActivity>[1] => ({

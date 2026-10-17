@@ -2,9 +2,11 @@
 import type {
   ChannelApprovalCapability,
   ChannelApprovalNativeAdapter,
+  ChannelApprovalNativeAdapterAsync,
 } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { canChannelEnforcePluginReviewerPolicy } from "./approval-channel-policy-support.js";
 import {
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
@@ -16,13 +18,15 @@ import type {
   ChannelApprovalCapabilityHandlerContext,
   ChannelApprovalKind,
   ChannelApprovalNativeRuntimeAdapter,
+  ChannelApprovalNativeRuntimeAdapterAsync,
   ChannelApprovalNativeRuntimeSpec,
+  ChannelApprovalNativeRuntimeSpecAsync,
 } from "./approval-handler-runtime-types.js";
 import type {
   ChannelNativeApprovalDeliveryCallbacks,
   ChannelNativeApprovalTransportSpec,
 } from "./approval-native-runtime-types.js";
-import { createChannelNativeApprovalRuntime } from "./approval-native-runtime.js";
+import { createChannelNativeApprovalRuntimeAsync } from "./approval-native-runtime.js";
 import { normalizeApprovalRequest } from "./approval-types.js";
 import {
   buildExpiredApprovalView,
@@ -62,7 +66,9 @@ export type {
   ChannelApprovalNativeObserveAdapter,
   ChannelApprovalNativePresentationAdapter,
   ChannelApprovalNativeRuntimeAdapter,
+  ChannelApprovalNativeRuntimeAdapterAsync,
   ChannelApprovalNativeRuntimeSpec,
+  ChannelApprovalNativeRuntimeSpecAsync,
   ChannelApprovalNativeTransportAdapter,
 } from "./approval-handler-runtime-types.js";
 
@@ -87,7 +93,7 @@ type WrappedPendingContent = {
   payload: unknown;
 };
 
-/** Adapts a strongly typed channel native approval spec into the erased runtime contract. */
+/** @deprecated Use createChannelApprovalNativeRuntimeAdapterAsync with awaited availability callbacks. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function createChannelApprovalNativeRuntimeAdapter<
   TPendingPayload,
   TPreparedTarget,
@@ -115,7 +121,46 @@ export function createChannelApprovalNativeRuntimeAdapter<
   TBinding,
   TFinalPayload
 > {
-  const adapter: ChannelApprovalNativeRuntimeAdapter<
+  warnPluginSdkDeprecation({
+    family: "approval-session-routing",
+    method: "createChannelApprovalNativeRuntimeAdapter",
+    replacement: "createChannelApprovalNativeRuntimeAdapterAsync",
+  });
+  return {
+    ...createChannelApprovalNativeRuntimeAdapterAsync(spec),
+    availability: spec.availability,
+  };
+}
+
+/** Adapts a strongly typed channel native approval spec into the erased runtime contract. */
+export function createChannelApprovalNativeRuntimeAdapterAsync<
+  TPendingPayload,
+  TPreparedTarget,
+  TPendingEntry,
+  TBinding = unknown,
+  TFinalPayload = unknown,
+  TPendingView extends PendingApprovalView = PendingApprovalView,
+  TResolvedView extends ResolvedApprovalView = ResolvedApprovalView,
+  TExpiredView extends ExpiredApprovalView = ExpiredApprovalView,
+>(
+  spec: ChannelApprovalNativeRuntimeSpecAsync<
+    TPendingPayload,
+    TPreparedTarget,
+    TPendingEntry,
+    TBinding,
+    TFinalPayload,
+    TPendingView,
+    TResolvedView,
+    TExpiredView
+  >,
+): ChannelApprovalNativeRuntimeAdapterAsync<
+  TPendingPayload,
+  TPreparedTarget,
+  TPendingEntry,
+  TBinding,
+  TFinalPayload
+> {
+  const adapter: ChannelApprovalNativeRuntimeAdapterAsync<
     TPendingPayload,
     TPreparedTarget,
     TPendingEntry,
@@ -235,7 +280,9 @@ type ChannelApprovalHandlerLifecycleSpec<
   onStopped?: () => Promise<void> | void;
 };
 
-/** Adapter contract used by core to run a channel's native approval delivery lifecycle. */
+/**
+ * Adapter contract used by core to run a channel's native approval delivery lifecycle.
+ */
 export type ChannelApprovalHandlerAdapter<
   TPendingEntry,
   TPreparedTarget,
@@ -260,7 +307,33 @@ export type ChannelApprovalHandlerAdapter<
   >;
 };
 
-/** Creates the shared approval handler runtime from channel-specific content and transport hooks. */
+type ChannelApprovalHandlerAdapterAsync<
+  TPendingEntry,
+  TPreparedTarget,
+  TPendingContent,
+  TRequest extends ApprovalRequest = ApprovalRequest,
+  TResolved extends ApprovalResolved = ApprovalResolved,
+> = Omit<
+  ChannelApprovalHandlerAdapter<
+    TPendingEntry,
+    TPreparedTarget,
+    TPendingContent,
+    TRequest,
+    TResolved
+  >,
+  "runtime"
+> & {
+  runtime: Omit<
+    ChannelApprovalHandlerRuntimeSpec<TRequest>,
+    "isConfigured" | "shouldHandle" | "nativeAdapter"
+  > & {
+    nativeAdapter?: ChannelApprovalNativeAdapter | ChannelApprovalNativeAdapterAsync | null;
+    isConfigured: () => boolean | Promise<boolean>;
+    shouldHandle: (request: TRequest) => boolean | Promise<boolean>;
+  };
+};
+
+/** Creates a channel approval handler with synchronous availability callbacks. */
 export function createChannelApprovalHandler<
   TPendingEntry,
   TPreparedTarget,
@@ -276,7 +349,26 @@ export function createChannelApprovalHandler<
     TResolved
   >,
 ): ChannelApprovalHandler<TRequest, TResolved> {
-  return createChannelNativeApprovalRuntime<
+  return createChannelApprovalHandlerAsync(adapter);
+}
+
+/** Creates the shared approval handler runtime from channel-specific content and transport hooks. */
+function createChannelApprovalHandlerAsync<
+  TPendingEntry,
+  TPreparedTarget,
+  TPendingContent,
+  TRequest extends ApprovalRequest = ApprovalRequest,
+  TResolved extends ApprovalResolved = ApprovalResolved,
+>(
+  adapter: ChannelApprovalHandlerAdapterAsync<
+    TPendingEntry,
+    TPreparedTarget,
+    TPendingContent,
+    TRequest,
+    TResolved
+  >,
+): ChannelApprovalHandler<TRequest, TResolved> {
+  return createChannelNativeApprovalRuntimeAsync<
     TPendingEntry,
     TPreparedTarget,
     TPendingContent,
@@ -314,7 +406,11 @@ export function createChannelApprovalHandler<
 export async function createChannelApprovalHandlerFromCapability(params: {
   capability?: Pick<
     ChannelApprovalCapability,
-    "native" | "nativeRuntime" | "supportsScopedPluginApprovalApprovers"
+    | "native"
+    | "nativeAsync"
+    | "nativeRuntime"
+    | "nativeRuntimeAsync"
+    | "supportsScopedPluginApprovalApprovers"
   > | null;
   label: string;
   clientDisplayName: string;
@@ -326,7 +422,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
   context?: unknown;
   nowMs?: () => number;
 }): Promise<ChannelApprovalHandler | null> {
-  const nativeRuntime = params.capability?.nativeRuntime;
+  const nativeRuntime = params.capability?.nativeRuntimeAsync ?? params.capability?.nativeRuntime;
   if (!nativeRuntime) {
     return null;
   }
@@ -428,7 +524,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
       phase: outcome.phase,
     });
   };
-  return createChannelApprovalHandler<WrappedPendingEntry, unknown, WrappedPendingContent>({
+  return createChannelApprovalHandlerAsync<WrappedPendingEntry, unknown, WrappedPendingContent>({
     runtime: {
       label: params.label,
       clientDisplayName: params.clientDisplayName,
@@ -438,7 +534,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
       accountId: params.accountId,
       gatewayUrl: params.gatewayUrl,
       eventKinds: nativeRuntime.eventKinds,
-      nativeAdapter: params.capability?.native as ChannelApprovalNativeAdapter | null,
+      nativeAdapter: params.capability?.nativeAsync ?? params.capability?.native,
       ...(nativeRuntime.resolveApprovalKind
         ? { resolveApprovalKind: nativeRuntime.resolveApprovalKind }
         : {}),

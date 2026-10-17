@@ -151,6 +151,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   printInfo("Host desktop:", formatHostDesktopStatus(status.hostDesktop));
   spacer();
 
+  if (service.configAudit?.definitionDriftError) {
+    printWarning(
+      `Service definition inspection incomplete: ${sanitizeTerminalText(service.configAudit.definitionDriftError)}`,
+    );
+  }
   if (service.configAudit?.issues.length) {
     printWarning("Service config looks out of date or non-standard.");
     for (const issue of service.configAudit.issues) {
@@ -291,7 +296,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       );
     } else {
       defaultRuntime.log(
-        warnText("Warm-up: launch agents can take a few seconds. Try again shortly."),
+        warnText(
+          "Readiness is not confirmed. A running service process does not prove the Gateway is available; inspect the service logs and openclaw gateway status --deep.",
+        ),
       );
     }
   }
@@ -321,7 +328,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
         defaultRuntime.error(`  ${errorText(line)}`);
       }
       if (status.port?.status === "busy" && status.lastError) {
-        defaultRuntime.error(`${errorText("Last gateway error:")} ${status.lastError}`);
+        defaultRuntime.error(
+          `${errorText("Recent Gateway log error (may be from an earlier run):")} ${status.lastError}`,
+        );
       }
     }
     if (rpc.authWarning) {
@@ -535,7 +544,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     printError(`Gateway port ${status.port.port} is not listening (service appears running).`);
     const serviceEnv = { ...process.env, ...service.command?.environment };
     if (status.lastError) {
-      defaultRuntime.error(`${errorText("Last gateway error:")} ${status.lastError}`);
+      defaultRuntime.error(
+        `${errorText("Recent Gateway log error (may be from an earlier run):")} ${status.lastError}`,
+      );
     }
     if (process.platform === "linux") {
       const unit =

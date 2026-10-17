@@ -1,10 +1,11 @@
 import { getAgentToolAssistantTurnId } from "../../../../packages/agent-core/src/tool-execution-context.js";
+import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
   getPluginToolMeta,
   getPluginToolSideEffectOwnerKey,
 } from "../../../plugins/tool-metadata.js";
 import {
-  createClientToolNameConflictError,
+  CLIENT_TOOL_NAME_CONFLICT_PREFIX,
   findClientToolNameConflicts,
   toClientToolDefinitions,
   toToolDefinitions,
@@ -26,7 +27,6 @@ import {
 } from "../../tool-replay-safety.js";
 import { addClientToolsToToolCatalog } from "../../tool-search-catalog.js";
 import { resolveToolSearchConfig, type ToolSearchCatalogRef } from "../../tool-search.js";
-import { log } from "../logger.js";
 import {
   AGENT_RESERVED_TOOL_NAMES,
   collectRegisteredToolNames,
@@ -150,7 +150,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
       existingToolNames: [...clientConflictToolNames, ...AGENT_RESERVED_TOOL_NAMES],
     });
     if (clientToolNameConflicts.length > 0) {
-      throw createClientToolNameConflictError(clientToolNameConflicts);
+      throw new Error(`${CLIENT_TOOL_NAME_CONFLICT_PREFIX} ${clientToolNameConflicts.join(", ")}`);
     }
 
     let clientToolDefs = sourceClientToolDefs.map((definition) =>
@@ -178,11 +178,12 @@ export function prepareEmbeddedAttemptClientTools(params: {
     });
     clientToolDefs = clientToolSearch.tools;
     if (clientToolSearch.compacted) {
-      log.info(
-        params.codeModeControlsEnabledForRun
-          ? `code-mode: cataloged ${clientToolSearch.catalogToolCount} client tools behind exec/wait`
-          : `tool-search: cataloged ${clientToolSearch.catalogToolCount} client tools behind compact prompt surface`,
-      );
+      emitTrustedDiagnosticEvent({
+        type: "tool.catalog",
+        source: "client",
+        mode: params.codeModeControlsEnabledForRun ? "code-mode" : "tool-search",
+        toolCount: clientToolSearch.catalogToolCount,
+      });
     }
 
     const customTools = toToolDefinitions(

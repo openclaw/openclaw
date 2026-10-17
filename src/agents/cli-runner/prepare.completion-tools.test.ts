@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { mintMcpLoopbackClientGrant as MintMcpLoopbackClientGrant } from "../../gateway/mcp-grant-store.js";
@@ -17,6 +22,11 @@ import {
   createTestMcpLoopbackServerConfig,
 } from "../cli-runner.test-helpers.js";
 import * as subagentSpawn from "../subagents/spawn/subagent-spawn.js";
+import {
+  expectReadWriteEditTools,
+  getTextContent,
+} from "../test-helpers/agent-tools-fs-helpers.js";
+import { requestNativeTool, runPlugin, SUCCESS_RESULT } from "./execute-plugin.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -100,16 +110,195 @@ describe("restricted CLI tool preparation", () => {
       getCliLiveSessionGeneration: () => undefined,
       loadManifestModelCatalog: () => [],
     });
-    fixture = createCliRunnerPrepareFixture((params) =>
-      prepareCliRunContext({ skillsSnapshot: { prompt: "", skills: [] }, ...params }),
-    );
+    fixture = createCliRunnerPrepareFixture((params) => {
+      setRuntimeConfigSnapshot(params.config ?? {});
+      return prepareCliRunContext({ skillsSnapshot: { prompt: "", skills: [] }, ...params });
+    });
   });
 
   afterEach(async () => {
     await fixture.settle();
+    clearRuntimeConfigSnapshot();
     resetCliRunnerPrepareTestDeps();
     cliBackendsTesting.resetDepsForTest();
   });
+
+  it.each(["global", "agent", "child"])(
+    "confines %s workspace-only CLI file tools to the workspace",
+    async (scope) => {
+      const stateDir = fixture.session.dir;
+      const workspaceDir = path.join(stateDir, "workspaces", "main");
+      const siblingDir = path.join(stateDir, "workspaces", "other");
+      fs.mkdirSync(workspaceDir, { recursive: true });
+      fs.mkdirSync(siblingDir);
+      const stateFile = path.join(stateDir, "openclaw.json");
+      const siblingFile = path.join(siblingDir, "note.txt");
+      fs.writeFileSync(stateFile, "state fixture");
+      fs.writeFileSync(siblingFile, "sibling fixture");
+      fs.symlinkSync(siblingDir, path.join(workspaceDir, "outside"), "junction");
+      const sessionKey = scope === "child" ? "agent:main:subagent:child" : "agent:main:main";
+      const config: OpenClawConfig = {
+        session: { store: fixture.session.sessionTarget.storePath },
+        tools: {
+          profile: "coding",
+          exec: { security: "full", ask: "off" },
+          fs: { workspaceOnly: scope === "global" },
+        },
+        agents: {
+          entries: {
+            main: {
+              workspace: workspaceDir,
+              ...(scope === "global" ? {} : { tools: { fs: { workspaceOnly: true } } }),
+            },
+          },
+        },
+      };
+      const context = await fixture.prepare({
+        provider: "claude-cli",
+        modelHasVision: false,
+        workspaceDir,
+        sessionKey,
+        sessionTarget: { ...fixture.session.sessionTarget, sessionKey },
+        config,
+      });
+      try {
+        await runPlugin(context, async function* (execution) {
+          await expect(
+            requestNativeTool(execution, "Read", { file_path: stateFile }),
+          ).resolves.toMatchObject({ behavior: "deny" });
+          yield SUCCESS_RESULT;
+        });
+        const grant = mintGrant.mock.calls[0]?.[0]?.context;
+        if (!grant) {
+          throw new Error("expected workspace-only MCP tools");
+        }
+        const scoped = await resolveMcpLoopbackScopedTools({
+          cfg: config,
+          context: grant,
+          admittedRunContext: context.params.admittedRunContext,
+        });
+        const { readTool, writeTool, editTool } = expectReadWriteEditTools(scoped.tools);
+        await writeTool.execute("workspace-write", {
+          path: "note.txt",
+          content: "workspace fixture",
+        });
+        expect(getTextContent(await readTool.execute("workspace-read", { path: "note.txt" }))).toBe(
+          "workspace fixture",
+        );
+        await editTool.execute("workspace-edit", {
+          path: "note.txt",
+          edits: [{ oldText: "workspace fixture", newText: "edited fixture" }],
+        });
+        expect(fs.readFileSync(path.join(workspaceDir, "note.txt"), "utf8")).toBe("edited fixture");
+        for (const filePath of [
+          stateFile,
+          siblingFile,
+          "../../openclaw.json",
+          "../other/note.txt",
+          "outside/note.txt",
+        ]) {
+          await expect(readTool.execute("outside-read", { path: filePath })).rejects.toThrow();
+          await expect(
+            writeTool.execute("outside-write", { path: filePath, content: "changed" }),
+          ).rejects.toThrow();
+          await expect(
+            editTool.execute("outside-edit", {
+              path: filePath,
+              edits: [{ oldText: "fixture", newText: "changed" }],
+            }),
+          ).rejects.toThrow();
+        }
+        expect(fs.readFileSync(stateFile, "utf8")).toBe("state fixture");
+        expect(fs.readFileSync(siblingFile, "utf8")).toBe("sibling fixture");
+        await expect(
+          writeTool.execute("outside-create", { path: "../../new.txt", content: "changed" }),
+        ).rejects.toThrow();
+        expect(fs.existsSync(path.join(stateDir, "new.txt"))).toBe(false);
+      } finally {
+        await context.preparedBackend.cleanup?.();
+      }
+    },
+  );
+
+  it("retains native file tools when the agent disables global workspace-only policy", async () => {
+    const context = await fixture.prepare({
+      provider: "claude-cli",
+      sessionKey: "agent:main:main",
+      config: {
+        session: { store: fixture.session.sessionTarget.storePath },
+        tools: { fs: { workspaceOnly: true }, exec: { security: "full", ask: "off" } },
+        agents: { entries: { main: { tools: { fs: { workspaceOnly: false } } } } },
+      },
+    });
+    try {
+      await runPlugin(context, async function* (execution) {
+        await expect(
+          requestNativeTool(execution, "Read", {
+            file_path: path.join(fixture.session.dir, "openclaw.json"),
+          }),
+        ).resolves.toMatchObject({ behavior: "allow" });
+        yield SUCCESS_RESULT;
+      });
+    } finally {
+      await context.preparedBackend.cleanup?.();
+    }
+  });
+
+  it("retains an exact file-tool selection when applying workspace-only policy", async () => {
+    const config: OpenClawConfig = {
+      session: { store: fixture.session.sessionTarget.storePath },
+      tools: { profile: "coding", fs: { workspaceOnly: true } },
+    };
+    const context = await fixture.prepare({
+      provider: "claude-cli",
+      sessionKey: "agent:main:main",
+      modelHasVision: false,
+      cliToolAvailability: { native: [], openClaw: ["write"] },
+      config,
+    });
+    try {
+      const grant = mintGrant.mock.calls[0]?.[0]?.context;
+      if (!grant) {
+        throw new Error("expected workspace-only MCP tools");
+      }
+      const scoped = await resolveMcpLoopbackScopedTools({
+        cfg: config,
+        context: grant,
+        admittedRunContext: context.params.admittedRunContext,
+      });
+      expect(scoped.tools.map((tool) => tool.name)).toEqual(["write"]);
+    } finally {
+      await context.preparedBackend.cleanup?.();
+    }
+  });
+
+  it.each(["agent", "side-question", "preparation-error"] as const)(
+    "releases direct CLI tool authority after %s",
+    async (outcome) => {
+      if (outcome === "preparation-error") {
+        setCliRunnerPrepareTestDeps({
+          resolveBootstrapContextForRun: async () => {
+            throw new Error("bootstrap preparation failed");
+          },
+        });
+      }
+      const pending = fixture.prepare({
+        provider: "claude-cli",
+        model: "opus",
+        modelHasVision: false,
+        sessionKey: fixture.session.sessionTarget.sessionKey,
+        config: { session: { store: fixture.session.sessionTarget.storePath } },
+        ...(outcome === "side-question" ? { executionMode: "side-question" } : {}),
+      });
+      if (outcome === "preparation-error") {
+        await expect(pending).rejects.toThrow("bootstrap preparation failed");
+      } else {
+        const context = await pending;
+        await context.preparedBackend.cleanup?.();
+      }
+      assertNoRetainedSessionSharingReads();
+    },
+  );
 
   it.each([
     "conversation",
@@ -433,13 +622,15 @@ describe("restricted CLI tool preparation", () => {
     expect(mintGrant).not.toHaveBeenCalled();
   });
 
-  it("keeps a completion tool-free when the caller disabled tools", async () => {
+  it("lets disableTools override a completion's runtime tool cap", async () => {
     const context = await fixture.prepare({
       ...completionRun(fixture.session.sessionTarget),
       disableTools: true,
+      toolsAllow: ["write"],
     });
     try {
       expect(context.params.cliToolAvailability).toEqual({ native: [], openClaw: [] });
+      expect(context.params.toolsAllow).toBeUndefined();
     } finally {
       await context.preparedBackend.cleanup?.();
     }

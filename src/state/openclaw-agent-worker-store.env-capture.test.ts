@@ -3,13 +3,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { normalizeDatabasePath } from "../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { StoreWriterQueue } from "../shared/store-writer-queue.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
-import type {
-  AgentDatabaseExecutionScope,
-  AgentDatabaseRequestExecutionSource,
-} from "./openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
+import type { AgentDatabaseExecutionScope } from "./openclaw-agent-execution-contract.js";
 import { openOpenClawAgentSqliteWorkerStore } from "./openclaw-agent-worker-store.js";
 
 const boundary = vi.hoisted(() => ({
@@ -70,8 +67,8 @@ vi.mock("./openclaw-agent-db-lifecycle.js", () => ({
   retainAgentDatabase: () => () => {},
 }));
 vi.mock("./openclaw-agent-db.js", () => ({ getOpenClawAgentDatabaseIfOpen: boundary.current }));
+// mock-isolation: Capture worker admission timing without entering real writer queues.
 vi.mock("./openclaw-agent-write-admission.js", () => ({
-  SQLITE_SESSION_WRITER_QUEUES: new Map<string, StoreWriterQueue>(),
   runOpenClawAgentWorkerWrite: async (
     _options: OpenClawAgentDatabaseOptions,
     run: () => Promise<unknown>,

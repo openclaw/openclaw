@@ -230,19 +230,10 @@ function coerceWithUnionSchema(
   root: JsonSchemaObject | undefined,
   refs: ReadonlySet<JsonSchemaObject> | undefined,
 ): unknown {
-  // When value is null, check if any union member accepts null directly
-  // (type: "null") before falling through to coercion.  Without this check,
-  // anyOf [{type: "string"}, {type: "null"}] coerces null → "" via the
-  // string branch and never reaches the null branch.
-  if (value === null) {
-    for (const schema of schemas) {
-      const types = getSchemaTypes(schema, root);
-      if (types.includes("null")) {
-        const validator = getSubSchemaValidator(schema, root);
-        if (!validator || validator.Check(value)) {
-          return value;
-        }
-      }
+  // Preserve accepted values before trying a conversion to another union branch.
+  for (const schema of schemas) {
+    if (getSubSchemaValidator(schema, root)?.Check(value)) {
+      return value;
     }
   }
   for (const schema of schemas) {
@@ -291,12 +282,10 @@ function coerceWithJsonSchema(
     }
   }
 
-  if (Array.isArray(schema.anyOf)) {
-    nextValue = coerceWithUnionSchema(nextValue, schema.anyOf, root, refs);
-  }
-
-  if (Array.isArray(schema.oneOf)) {
-    nextValue = coerceWithUnionSchema(nextValue, schema.oneOf, root, refs);
+  for (const keyword of ["anyOf", "oneOf"] as const) {
+    if (Array.isArray(schema[keyword])) {
+      nextValue = coerceWithUnionSchema(nextValue, schema[keyword], root, refs);
+    }
   }
 
   const schemaTypes = getSchemaTypes(schema, root);

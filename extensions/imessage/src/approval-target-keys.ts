@@ -26,9 +26,7 @@ function chatIdToKeyValue(chatId: number | string | undefined): string | null {
   return value || null;
 }
 
-export function enumerateConversationKeyForms(
-  conversation: IMessageApprovalConversationKey,
-): string[] {
+function enumerateConversationKeyForms(conversation: IMessageApprovalConversationKey): string[] {
   const forms: string[] = [];
   const chatGuid = conversation.chatGuid?.trim();
   if (chatGuid) {

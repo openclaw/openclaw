@@ -628,12 +628,7 @@ describe("plugin-sdk subpath exports", () => {
       mentions: ["buildApprovalResolutionRef"],
       omits: ["resolveApprovalOverGateway", "withOperatorApprovalsGatewayClient"],
     });
-    expectSourceMentions("reply-chunking", [
-      "chunkText",
-      "chunkTextWithMode",
-      "isSilentReplyPayloadText",
-      "isSilentReplyText",
-    ]);
+    expectSourceMentions("reply-chunking", ["chunkText", "chunkTextWithMode"]);
     expectSourceMentions("reply-history", [
       "buildInboundHistoryFromEntries",
       "buildInboundHistoryFromMap",
@@ -1417,19 +1412,6 @@ describe("plugin-sdk subpath exports", () => {
       const mod = await importResolvedPluginSdkSubpath(`openclaw/plugin-sdk/${subpath}`);
       expect(typeof mod, `deprecated subpath ${subpath} should resolve`).toBe("object");
     }
-  });
-
-  it("keeps repeated silent-token semantics visible through the reply-chunking subpath", async () => {
-    const replyChunkingSdk = await importResolvedPluginSdkSubpath(
-      "openclaw/plugin-sdk/reply-chunking",
-    );
-
-    expect(replyChunkingSdk.isSilentReplyText("NO_REPLY\n\nNO_REPLY")).toBe(true);
-    expect(replyChunkingSdk.isSilentReplyPayloadText("NO_REPLY\n\nNO_REPLY")).toBe(true);
-    expect(replyChunkingSdk.isSilentReplyText("HEARTBEAT_OK\nHEARTBEAT_OK", "HEARTBEAT_OK")).toBe(
-      true,
-    );
-    expect(replyChunkingSdk.isSilentReplyText("Visible update\n\nNO_REPLY")).toBe(false);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

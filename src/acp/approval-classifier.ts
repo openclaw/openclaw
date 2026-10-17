@@ -96,13 +96,7 @@ function resolveToolNameForPermission(
   if ((fromMeta && !metaName) || (fromRawInput && !rawInputName)) {
     return undefined;
   }
-  if (metaName && titleName && metaName !== titleName) {
-    return undefined;
-  }
-  if (rawInputName && metaName && rawInputName !== metaName) {
-    return undefined;
-  }
-  if (rawInputName && titleName && rawInputName !== titleName) {
+  if (new Set([metaName, titleName, rawInputName].filter(Boolean)).size > 1) {
     return undefined;
   }
   return metaName ?? titleName ?? rawInputName;

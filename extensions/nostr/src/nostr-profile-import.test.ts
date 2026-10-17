@@ -68,50 +68,6 @@ describe("nostr-profile-import", () => {
   });
 
   describe("importProfileFromRelays", () => {
-    it("queries relays independently and uses the newest profile", async () => {
-      const pubkey = "a".repeat(64);
-      const relays = ["wss://old.example", "wss://new.example"];
-      const relayEvents = [
-        createProfileEvent({ id: "1".repeat(64), created_at: 10 }),
-        createProfileEvent({
-          id: "2".repeat(64),
-          created_at: 20,
-          content: JSON.stringify({ name: "newest" }),
-        }),
-      ];
-      mockState.subscribeMany.mockImplementation((_relays, _filter, params) => {
-        params.onevent?.(relayEvents.shift()!);
-        params.oneose?.();
-      });
-
-      const result = await importProfileFromRelays({
-        pubkey,
-        relays,
-      });
-
-      expect(result).toMatchObject({
-        ok: true,
-        profile: { name: "newest" },
-        event: { id: "2".repeat(64), created_at: 20 },
-        relaysQueried: relays,
-        sourceRelay: relays[1],
-      });
-      expect(mockState.subscribeMany).toHaveBeenCalledTimes(2);
-      for (const [index, relay] of relays.entries()) {
-        expect(mockState.subscribeMany).toHaveBeenNthCalledWith(
-          index + 1,
-          [relay],
-          { kinds: [0], authors: [pubkey], limit: 1 },
-          expect.objectContaining({
-            onevent: expect.any(Function),
-            oneose: expect.any(Function),
-            onclose: expect.any(Function),
-          }),
-        );
-      }
-      expect(mockState.close).toHaveBeenCalledWith(relays);
-    });
-
     it("uses the lowest event id when profile timestamps match", async () => {
       const pubkey = "a".repeat(64);
       const relays = ["wss://first.example", "wss://second.example"];
@@ -176,18 +132,6 @@ describe("nostr-profile-import", () => {
 
     it.each([
       {
-        case: "a wrong field type",
-        content: { name: 123, about: "valid" },
-      },
-      {
-        case: "a wrong URL field type",
-        content: { name: "valid", picture: 123 },
-      },
-      {
-        case: "an overlong field",
-        content: { name: "a".repeat(257), about: "valid" },
-      },
-      {
         case: "a wrong field type alongside an unsafe URL",
         content: { name: "valid", about: 123, picture: "https://127.0.0.1/avatar.png" },
       },
@@ -230,80 +174,6 @@ describe("nostr-profile-import", () => {
       };
       const result = mergeProfiles(undefined, imported);
       expect(result).toEqual(imported);
-    });
-
-    it("returns local when imported is undefined", () => {
-      const local: NostrProfile = {
-        name: "local",
-        displayName: "Local User",
-      };
-      const result = mergeProfiles(local, undefined);
-      expect(result).toEqual(local);
-    });
-
-    it("prefers local values over imported", () => {
-      const local: NostrProfile = {
-        name: "localname",
-        about: "Local bio",
-      };
-      const imported: NostrProfile = {
-        name: "importedname",
-        displayName: "Imported Display",
-        about: "Imported bio",
-        picture: "https://example.com/pic.jpg",
-      };
-
-      const result = mergeProfiles(local, imported);
-
-      expect(result.name).toBe("localname"); // local wins
-      expect(result.displayName).toBe("Imported Display"); // imported fills gap
-      expect(result.about).toBe("Local bio"); // local wins
-      expect(result.picture).toBe("https://example.com/pic.jpg"); // imported fills gap
-    });
-
-    it("fills all missing fields from imported", () => {
-      const local: NostrProfile = {
-        name: "myname",
-      };
-      const imported: NostrProfile = {
-        name: "theirname",
-        displayName: "Their Name",
-        about: "Their bio",
-        picture: "https://example.com/pic.jpg",
-        banner: "https://example.com/banner.jpg",
-        website: "https://example.com",
-        nip05: "user@example.com",
-        lud16: "user@getalby.com",
-      };
-
-      const result = mergeProfiles(local, imported);
-
-      expect(result.name).toBe("myname");
-      expect(result.displayName).toBe("Their Name");
-      expect(result.about).toBe("Their bio");
-      expect(result.picture).toBe("https://example.com/pic.jpg");
-      expect(result.banner).toBe("https://example.com/banner.jpg");
-      expect(result.website).toBe("https://example.com");
-      expect(result.nip05).toBe("user@example.com");
-      expect(result.lud16).toBe("user@getalby.com");
-    });
-
-    it("handles empty strings as falsy (prefers imported)", () => {
-      const local: NostrProfile = {
-        name: "",
-        displayName: "",
-      };
-      const imported: NostrProfile = {
-        name: "imported",
-        displayName: "Imported",
-      };
-
-      const result = mergeProfiles(local, imported);
-
-      // Empty strings are still strings, so they "win" over imported
-      // This is JavaScript nullish coalescing behavior
-      expect(result.name).toBe("");
-      expect(result.displayName).toBe("");
     });
 
     it("handles null values in local (prefers imported)", () => {

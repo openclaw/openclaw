@@ -22,7 +22,7 @@ function renderHealthcheck(port: number, retries: number, startPeriod: number) {
         - CMD
         - node
         - -e
-        - fetch("http://127.0.0.1:${port}/healthz").then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
+        - fetch("http://127.0.0.1:${port}/healthz").then(async(r)=>{await r.body?.cancel();process.exitCode=r.ok?0:1}).catch(()=>{process.exitCode=1})
       interval: 10s
       timeout: 5s
       retries: ${retries}
@@ -247,26 +247,10 @@ kill the container by detaching a replacement child.
   };
 }
 
-export async function buildQaDockerHarnessImage(
-  params: {
-    repoRoot: string;
-    imageName?: string;
-  },
-  deps?: {
-    runCommand?: (
-      command: string,
-      args: string[],
-      cwd: string,
-    ) => Promise<{ stdout: string; stderr: string }>;
-  },
-) {
+export async function buildQaDockerHarnessImage(params: { repoRoot: string; imageName?: string }) {
   const imageName = params.imageName ?? "openclaw:qa-local-prebaked";
-  const runCommand =
-    deps?.runCommand ??
-    ((command: string, args: string[], cwd: string) =>
-      runExec(command, args, { cwd, logOutput: false }));
 
-  await runCommand(
+  await runExec(
     "docker",
     [
       "build",
@@ -278,7 +262,7 @@ export async function buildQaDockerHarnessImage(
       "Dockerfile",
       ".",
     ],
-    params.repoRoot,
+    { cwd: params.repoRoot, logOutput: false },
   );
 
   return { imageName };

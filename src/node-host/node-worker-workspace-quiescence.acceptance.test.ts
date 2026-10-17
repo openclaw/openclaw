@@ -505,11 +505,12 @@ process.on("message", (message) => {
   );
 });
 
-it.runIf(process.platform === "linux")(
+// Detached leases intentionally refuse root-owned worker sessions.
+it.runIf(process.platform === "linux" && process.getuid?.() !== 0)(
   "preserves an older Gateway's detached lease on the new node-host command route",
   async () => {
     const f = fixture();
-    const retainedProcess = vi.spyOn(f.runtime.processes, "execute");
+    const managedSpawn = vi.spyOn(getProcessSupervisor(), "spawn");
     const quiesce = createWorkerWorkspaceQuiescence({
       ownerSignal: new AbortController().signal,
       sharedHost: true,
@@ -525,12 +526,14 @@ it.runIf(process.platform === "linux")(
     });
     const lease = await quiesce(f.workspaceDir);
     try {
-      await f.runtime.exec({
-        ...identity,
-        argv: [path.basename(process.execPath), "-e", "process.stdout.write('legacy-command')"],
-      });
+      await expect(
+        f.runtime.exec({
+          ...identity,
+          argv: [path.basename(process.execPath), "-e", "process.stdout.write('legacy-command')"],
+        }),
+      ).resolves.toMatchObject({ code: 0, stdout: "legacy-command" });
       await lease.assertActive();
-      expect(retainedProcess).not.toHaveBeenCalled();
+      expect(managedSpawn).not.toHaveBeenCalled();
       expect(f.runtime.quiescence.hasActiveWork()).toBe(false);
     } finally {
       await lease.resume();

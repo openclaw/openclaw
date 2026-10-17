@@ -1,5 +1,4 @@
 import {
-  ComponentType,
   InteractionResponseType,
   InteractionType,
   Routes,
@@ -64,7 +63,7 @@ function readInteractionUser(rawData: RawInteraction, client: InteractionClient)
   }
   const memberUser = rawData.member?.user;
   if (memberUser && typeof memberUser === "object" && typeof memberUser.id === "string") {
-    const user = { ...memberUser } as APIUser;
+    const user = { ...memberUser };
     if (typeof user.username !== "string") {
       user.username = "";
     }
@@ -273,13 +272,6 @@ export class BaseComponentInteraction extends BaseInteraction {
   }
 }
 
-export class ButtonInteraction extends BaseComponentInteraction {}
-export class StringSelectMenuInteraction extends BaseComponentInteraction {}
-class UserSelectMenuInteraction extends BaseComponentInteraction {}
-class RoleSelectMenuInteraction extends BaseComponentInteraction {}
-class MentionableSelectMenuInteraction extends BaseComponentInteraction {}
-class ChannelSelectMenuInteraction extends BaseComponentInteraction {}
-
 export class ModalInteraction extends BaseInteraction {
   readonly fields: ModalFields;
   constructor(client: InteractionClient, rawData: APIModalSubmitInteraction & RawInteraction) {
@@ -295,15 +287,6 @@ export class ModalInteraction extends BaseInteraction {
   }
 }
 
-const componentInteractions = new Map<number, typeof BaseComponentInteraction>([
-  [ComponentType.Button, ButtonInteraction],
-  [ComponentType.StringSelect, StringSelectMenuInteraction],
-  [ComponentType.UserSelect, UserSelectMenuInteraction],
-  [ComponentType.RoleSelect, RoleSelectMenuInteraction],
-  [ComponentType.MentionableSelect, MentionableSelectMenuInteraction],
-  [ComponentType.ChannelSelect, ChannelSelectMenuInteraction],
-]);
-
 export function createInteraction(client: InteractionClient, rawData: RawInteraction) {
   assertDiscordInteractionPayload(rawData);
   if (rawData.type === InteractionType.ApplicationCommandAutocomplete) {
@@ -316,9 +299,7 @@ export function createInteraction(client: InteractionClient, rawData: RawInterac
     return new ModalInteraction(client, rawData);
   }
   if (rawData.type === InteractionType.MessageComponent) {
-    const Component =
-      componentInteractions.get(rawData.data?.component_type) ?? BaseComponentInteraction;
-    return new Component(client, rawData);
+    return new BaseComponentInteraction(client, rawData);
   }
   return new BaseInteraction(client, rawData);
 }

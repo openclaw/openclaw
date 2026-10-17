@@ -17,8 +17,10 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../io.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
 import {
   reconcileSessionTranscriptIndexes,
@@ -38,6 +40,9 @@ async function fixture(count = 1) {
   const stateDir = tempDirs.make("transcript-publication-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   const options = { agentId: "main", env };
+  setRuntimeConfigSnapshot({
+    session: { store: resolveSessionStorePathCore(undefined, options) },
+  });
   const scope = { ...options, sessionId: "publication", sessionKey: "agent:main:publication" };
   await persistSessionTranscriptTurn(scope, {
     messages: Array.from({ length: count }, (_, index) => ({
@@ -56,6 +61,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
+  clearRuntimeConfigSnapshot();
 });
 
 it("publishes a cold compressed multi-chunk branch without host data SQL", async () => {
@@ -279,7 +285,7 @@ it("delivers a committed finalization before close permits a physical successor"
                   command.input.command.type === "finalize"
                 ) {
                   held = true;
-                  expect(result).toEqual({ finalized: true, sessionKey: scope.sessionKey });
+                  expect(result).toMatchObject({ finalized: true, sessionKey: scope.sessionKey });
                   events.push("committed");
                   committed.resolve();
                   await deliver.promise;

@@ -1,8 +1,5 @@
-// Chat engine tests: proposals, approvals, and the chat-hosted channel wizard.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeAll, expect, vi } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   fingerprintAuthProfileCredential,
   fingerprintOpaqueRuntimeOwner,
@@ -11,38 +8,31 @@ import {
 import { committedConfigFiles as hostedConfigFiles } from "../commands/committed-config.test-support.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { runSetupMemoryImportStep } from "../wizard/setup.memory-import.js";
-import { runSystemAgentTurnWithDeps as runSystemAgentTurnWithDepsImpl } from "./agent-turn.test-support.js";
+import { runSystemAgentTurnWithDeps as runTurn } from "./agent-turn.test-support.js";
 import {
   SystemAgentChatEngine as RuntimeSystemAgentChatEngine,
   type SystemAgentChatEngineOptions,
 } from "./chat-engine.js";
 import type { ChatWizardHostDependencies } from "./chat-wizard-host.js";
 import {
-  resolveSystemAgentConfiguredRouteFromConfig as resolveSystemAgentConfiguredRouteFromConfigImpl,
+  resolveSystemAgentConfiguredRouteFromConfig as resolveRouteImpl,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
 import type { SystemAgentOverview } from "./overview.js";
 import {
-  createSystemAgentVerifiedInferenceTestFixture as createSystemAgentVerifiedInferenceTestFixtureImpl,
-  createSystemAgentPluginMetadataTestSnapshot,
+  createSystemAgentVerifiedInferenceTestFixture as makeFixtureImpl,
+  createSystemAgentPluginMetadataTestSnapshot as prepareMetadata,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
 import {
-  createSystemAgentVerifiedInferenceBinding as createSystemAgentVerifiedInferenceBindingImpl,
+  createSystemAgentVerifiedInferenceBinding as bindInference,
   type SystemAgentVerifiedInferenceBinding,
   type SystemAgentVerifiedInferenceDeps,
 } from "./verified-inference.js";
+import { profileStore, requireFingerprint } from "./verified-inference.test-support.js";
 
 const mocks = vi.hoisted(() => ({
-  readConfigFileSnapshot: vi.fn(async () => ({
-    exists: true,
-    valid: true,
-    path: "/tmp/openclaw.json",
-    hash: "h",
-    config: {},
-    sourceConfig: {},
-    issues: [],
-  })),
+  readConfigFileSnapshot: vi.fn(async () => configSnapshot({})),
   readSetupConfigFileSnapshot: vi.fn(),
   setupChannels: vi.fn(),
   setupSkills: vi.fn(),
@@ -101,7 +91,7 @@ vi.mock("./verified-inference.js", async (importOriginal) => {
   };
 });
 
-const tempDirs: string[] = [];
+const tempDirs = createTempDirTracker();
 
 export const sharedVerifiedInferenceConfig = {
   agents: {
@@ -125,35 +115,25 @@ export const sharedVerifiedInferenceConfig = {
 } satisfies OpenClawConfig;
 
 export let sharedVerifiedInference: SystemAgentVerifiedInferenceBinding | undefined;
-let sharedVerifiedInferenceDeps: SystemAgentVerifiedInferenceDeps | undefined;
+let sharedFixture: Awaited<ReturnType<typeof makeFixtureImpl>>;
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
-const resolveSystemAgentConfiguredRouteFromConfig: typeof resolveSystemAgentConfiguredRouteFromConfigImpl =
-  (...args) =>
-    pluginMetadataSnapshot!.run(
-      () => resolveSystemAgentConfiguredRouteFromConfigImpl(...args),
-      args[0],
-    );
+function scoped<Args extends unknown[], Result>(
+  run: (...args: Args) => Result,
+  config?: (args: Args) => OpenClawConfig,
+) {
+  return (...args: Args) => pluginMetadataSnapshot!.run(() => run(...args), config?.(args));
+}
 
-const createSystemAgentVerifiedInferenceTestFixture: typeof createSystemAgentVerifiedInferenceTestFixtureImpl =
-  (...args) =>
-    pluginMetadataSnapshot!.run(
-      () => createSystemAgentVerifiedInferenceTestFixtureImpl(...args),
-      args[0],
-    );
+const resolveRoute = scoped(resolveRouteImpl, ([config]) => config);
+const makeFixture = scoped(makeFixtureImpl, ([config]) => config);
+const makeBinding = scoped(bindInference);
+export const runSystemAgentTurnWithDeps = scoped(runTurn);
 
-const createSystemAgentVerifiedInferenceBinding: typeof createSystemAgentVerifiedInferenceBindingImpl =
-  (...args) =>
-    pluginMetadataSnapshot!.run(() => createSystemAgentVerifiedInferenceBindingImpl(...args));
-
-export const runSystemAgentTurnWithDeps: typeof runSystemAgentTurnWithDepsImpl = (...args) =>
-  pluginMetadataSnapshot!.run(() => runSystemAgentTurnWithDepsImpl(...args));
-
-export { createSystemAgentVerifiedInferenceTestFixture };
+export { makeFixture as createSystemAgentVerifiedInferenceTestFixture };
 
 export function useTempStateDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-engine-"));
-  tempDirs.push(dir);
+  const dir = tempDirs.make("openclaw-engine-");
   vi.stubEnv("OPENCLAW_STATE_DIR", dir);
   return dir;
 }
@@ -164,11 +144,11 @@ export function configSnapshot(config: OpenClawConfig): ConfigFileSnapshot {
     valid: true,
     path: "/tmp/openclaw.json",
     hash: "h",
-    raw: null,
-    parsed: config,
     config,
     runtimeConfig: config,
     sourceConfig: config,
+    raw: null,
+    parsed: config,
     resolved: config,
     issues: [],
     warnings: [],
@@ -176,24 +156,26 @@ export function configSnapshot(config: OpenClawConfig): ConfigFileSnapshot {
   };
 }
 
+const sharedSnapshot = () => configSnapshot(structuredClone(sharedVerifiedInferenceConfig));
+
 function testHarnessBinding(route: SystemAgentConfiguredRoute) {
   if (route.runner !== "embedded") {
     return { auth: {}, deps: {} };
   }
-  const agentHarnessId =
+  const id =
     route.agentHarnessRuntimeOverride === "auto"
       ? "openclaw"
       : (route.agentHarnessRuntimeOverride ?? "codex");
-  if (agentHarnessId === "openclaw") {
-    return { auth: { agentHarnessId }, deps: {} };
+  if (id === "openclaw") {
+    return { auth: { agentHarnessId: id }, deps: {} };
   }
   return {
     auth: {
-      agentHarnessId,
+      agentHarnessId: id,
       runtimeOwnerKind: "plugin-harness" as const,
-      runtimeOwnerId: agentHarnessId,
-      runtimeArtifactId: `${agentHarnessId}-test-artifact`,
-      runtimeArtifactFingerprint: `${agentHarnessId}-test-fingerprint`,
+      runtimeOwnerId: id,
+      runtimeArtifactId: `${id}-test-artifact`,
+      runtimeArtifactFingerprint: `${id}-test-fingerprint`,
     },
     deps: {
       validateAgentHarnessRuntimeArtifact: vi.fn(async () => true),
@@ -201,83 +183,63 @@ function testHarnessBinding(route: SystemAgentConfiguredRoute) {
   };
 }
 
-export async function createAmbientVerifiedBinding(config: OpenClawConfig) {
-  const route = await resolveSystemAgentConfiguredRouteFromConfig(config);
+type ProfileCredential = Parameters<typeof fingerprintAuthProfileCredential>[0]["credential"];
+
+async function createVerifiedBinding(config: OpenClawConfig, credential?: ProfileCredential) {
+  const route = await resolveRoute(config);
   if (!route) {
     throw new Error("missing test route");
   }
-  const authFingerprint = fingerprintResolvedProviderAuth({
-    apiKey: "test-key",
-    source: "models.json",
-    mode: "api-key",
-  });
-  if (!authFingerprint) {
-    throw new Error("missing test ambient auth fingerprint");
+  const profileId = "anthropic:oauth";
+  const authFingerprint = requireFingerprint(
+    credential
+      ? fingerprintAuthProfileCredential({ profileId, credential })
+      : fingerprintResolvedProviderAuth({
+          apiKey: "test-key",
+          source: "models.json",
+          mode: "api-key",
+        }),
+  );
+  const harness = testHarnessBinding(route);
+  const auth: Parameters<typeof makeBinding>[0]["auth"] = { authFingerprint, ...harness.auth };
+  const deps: SystemAgentVerifiedInferenceDeps = { ...harness.deps };
+  if (credential) {
+    auth.authProfileId = profileId;
+    deps.loadAuthProfileStoreForRuntimeAsync = profileStore(profileId, credential);
+  } else {
+    auth.modelId = route.model;
+    auth.modelApi = route.provider === "anthropic" ? "anthropic-messages" : "openai-responses";
   }
-  const harnessBinding = testHarnessBinding(route);
-  return await createSystemAgentVerifiedInferenceBinding({
-    configuredRoute: route,
-    executionRoute: route,
-    auth: {
-      authFingerprint,
-      modelId: route.model,
-      modelApi: route.provider === "anthropic" ? "anthropic-messages" : "openai-responses",
-      ...harnessBinding.auth,
-    },
-    deps: harnessBinding.deps,
-  });
+  return makeBinding({ configuredRoute: route, executionRoute: route, auth, deps });
 }
 
-export async function createOAuthVerifiedBinding(
-  config: OpenClawConfig,
-  credential: Parameters<typeof fingerprintAuthProfileCredential>[0]["credential"],
-) {
-  const route = await resolveSystemAgentConfiguredRouteFromConfig(config);
-  if (!route) {
-    throw new Error("missing test OAuth route");
-  }
-  const profileId = "anthropic:oauth";
-  const authFingerprint = fingerprintAuthProfileCredential({ profileId, credential });
-  if (!authFingerprint) {
-    throw new Error("missing test OAuth fingerprint");
-  }
-  const harnessBinding = testHarnessBinding(route);
-  return await createSystemAgentVerifiedInferenceBinding({
-    configuredRoute: route,
-    executionRoute: route,
-    auth: { authProfileId: profileId, authFingerprint, ...harnessBinding.auth },
-    deps: {
-      ...harnessBinding.deps,
-      loadAuthProfileStoreForRuntime: vi.fn(() => ({
-        version: 1,
-        profiles: { [profileId]: credential },
-      })) as never,
-    },
-  });
-}
+export const createAmbientVerifiedBinding = (config: OpenClawConfig) =>
+  createVerifiedBinding(config);
+
+export const createOAuthVerifiedBinding = (config: OpenClawConfig, credential: ProfileCredential) =>
+  createVerifiedBinding(config, credential);
 
 export async function createCliVerifiedBinding(config: OpenClawConfig) {
-  const route = await resolveSystemAgentConfiguredRouteFromConfig(config);
+  const route = await resolveRoute(config);
   if (!route || route.runner !== "cli") {
     throw new Error("missing test CLI route");
   }
   const runtimeArtifactId = route.provider;
   const runtimeArtifactFingerprint = `${runtimeArtifactId}-test-artifact`;
-  const runtimeOwnerFingerprint = fingerprintOpaqueRuntimeOwner({
-    kind: "cli-runtime",
-    runner: "cli",
-    provider: route.provider,
-    backendId: runtimeArtifactId,
-    runtimeArtifactFingerprint,
-  });
-  if (!runtimeOwnerFingerprint) {
-    throw new Error("missing test CLI runtime-owner fingerprint");
-  }
+  const runtimeOwnerFingerprint = requireFingerprint(
+    fingerprintOpaqueRuntimeOwner({
+      kind: "cli-runtime",
+      runner: "cli",
+      provider: route.provider,
+      backendId: runtimeArtifactId,
+      runtimeArtifactFingerprint,
+    }),
+  );
   const deps: SystemAgentVerifiedInferenceDeps = {
     resolveCliRuntimeArtifactFingerprint: vi.fn(async () => runtimeArtifactFingerprint),
     resolveCliRuntimeOwnerFingerprint: vi.fn(async () => runtimeOwnerFingerprint),
   };
-  const binding = await createSystemAgentVerifiedInferenceBinding({
+  const binding = await makeBinding({
     configuredRoute: route,
     executionRoute: route,
     auth: {
@@ -298,83 +260,33 @@ type TestSystemAgentChatEngineOptions = Omit<SystemAgentChatEngineOptions, "veri
     verifiedInference?: SystemAgentVerifiedInferenceBinding;
   };
 
-/** Every ordinary engine test starts from a real, live-gate-shaped authority grant. */
 export class SystemAgentChatEngine extends RuntimeSystemAgentChatEngine {
-  override answerWizard(...args: Parameters<RuntimeSystemAgentChatEngine["answerWizard"]>) {
-    return pluginMetadataSnapshot!.run(() => super.answerWizard(...args));
-  }
-
-  override cancelWizard(...args: Parameters<RuntimeSystemAgentChatEngine["cancelWizard"]>) {
-    return pluginMetadataSnapshot!.run(() => super.cancelWizard(...args));
-  }
-
-  override resolveOperatorApproval(
-    ...args: Parameters<RuntimeSystemAgentChatEngine["resolveOperatorApproval"]>
-  ) {
-    return pluginMetadataSnapshot!.run(() => super.resolveOperatorApproval(...args));
-  }
-
-  override loadOverview(...args: Parameters<RuntimeSystemAgentChatEngine["loadOverview"]>) {
-    return pluginMetadataSnapshot!.run(() => super.loadOverview(...args));
-  }
-
-  override planGreeting(...args: Parameters<RuntimeSystemAgentChatEngine["planGreeting"]>) {
-    return pluginMetadataSnapshot!.run(() => super.planGreeting(...args));
-  }
-
-  override seedHistory(...args: Parameters<RuntimeSystemAgentChatEngine["seedHistory"]>) {
-    return pluginMetadataSnapshot!.run(() => super.seedHistory(...args));
-  }
-
-  override propose(...args: Parameters<RuntimeSystemAgentChatEngine["propose"]>) {
-    return pluginMetadataSnapshot!.run(() => super.propose(...args));
-  }
-
-  override handle(...args: Parameters<RuntimeSystemAgentChatEngine["handle"]>) {
-    return pluginMetadataSnapshot!.run(() => super.handle(...args));
-  }
+  override answerWizard = scoped(super.answerWizard.bind(this));
+  override cancelWizard = scoped(super.cancelWizard.bind(this));
+  override resolveOperatorApproval = scoped(super.resolveOperatorApproval.bind(this));
+  override loadOverview = scoped(super.loadOverview.bind(this));
+  override planGreeting = scoped(super.planGreeting.bind(this));
+  override seedHistory = scoped(super.seedHistory.bind(this));
+  override propose = scoped(super.propose.bind(this));
+  override handle = scoped(super.handle.bind(this));
 
   constructor(opts: TestSystemAgentChatEngineOptions = {}) {
-    const {
-      runChannelSetupWizard,
-      runSkillsSetupWizard,
-      runSearchSetupWizard,
-      runGatewaySetupWizard,
-      runMemoryImportWizard,
-      appendAuditEntry,
-      executeOperation,
-      ...engineOptions
-    } = opts;
+    const { executeOperation, ...engineOptions } = opts;
     const explicitBinding = engineOptions.verifiedInference;
-    const verifiedInference = explicitBinding ?? sharedVerifiedInference;
-    if (!verifiedInference) {
-      throw new Error("shared verified inference fixture was not initialized");
-    }
-    if (!sharedVerifiedInferenceDeps) {
-      throw new Error("shared verified inference dependencies were not initialized");
-    }
     super(
       {
         ...engineOptions,
-        verifiedInference,
+        verifiedInference: explicitBinding ?? sharedFixture.binding,
         deps: {
           ...(explicitBinding
             ? { validateAgentHarnessRuntimeArtifact: async () => true }
-            : sharedVerifiedInferenceDeps),
-          readConfigFileSnapshot: async () =>
-            configSnapshot(structuredClone(sharedVerifiedInferenceConfig)),
+            : sharedFixture.deps),
+          readConfigFileSnapshot: async () => sharedSnapshot(),
           ...engineOptions.deps,
         },
       },
       {
-        wizardDependencies: {
-          ...(runChannelSetupWizard ? { runChannelSetupWizard } : {}),
-          ...(runSkillsSetupWizard ? { runSkillsSetupWizard } : {}),
-          ...(runSearchSetupWizard ? { runSearchSetupWizard } : {}),
-          ...(runGatewaySetupWizard ? { runGatewaySetupWizard } : {}),
-          ...(runMemoryImportWizard ? { runMemoryImportWizard } : {}),
-          ...(appendAuditEntry ? { appendAuditEntry } : {}),
-        },
+        wizardDependencies: opts,
         ...(executeOperation ? { executeOperation } : {}),
       },
     );
@@ -384,8 +296,6 @@ export class SystemAgentChatEngine extends RuntimeSystemAgentChatEngine {
 export async function advanceGatewayWizardToSecretStorage(engine: SystemAgentChatEngine) {
   const portStep = await engine.handle("configure gateway");
   expect((await engine.handle("19001")).text).toContain("Gateway bind address");
-  // The wizard no longer asks token vs password; bind goes straight to Tailscale exposure,
-  // then to how the generated secret is stored.
   expect((await engine.handle("2")).text).toContain("Tailscale exposure");
   const storageStep = await engine.handle("1");
   expect(storageStep.text).toContain("store the Gateway");
@@ -393,50 +303,39 @@ export async function advanceGatewayWizardToSecretStorage(engine: SystemAgentCha
 }
 
 beforeAll(async () => {
-  pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot(
-    sharedVerifiedInferenceConfig,
-  );
-  const fixture = await createSystemAgentVerifiedInferenceTestFixture(
-    sharedVerifiedInferenceConfig,
-  );
-  sharedVerifiedInference = fixture.binding;
-  mocks.sharedVerifiedInference = fixture.binding;
-  sharedVerifiedInferenceDeps = fixture.deps;
-  mocks.readConfigFileSnapshot.mockResolvedValue(
-    configSnapshot(structuredClone(sharedVerifiedInferenceConfig)) as never,
-  );
+  pluginMetadataSnapshot = prepareMetadata(sharedVerifiedInferenceConfig);
+  sharedFixture = await makeFixture(sharedVerifiedInferenceConfig);
+  sharedVerifiedInference = mocks.sharedVerifiedInference = sharedFixture.binding;
+  mocks.readConfigFileSnapshot.mockResolvedValue(sharedSnapshot());
 });
 
 afterEach(() => {
   hostedConfigFiles.clear();
   vi.unstubAllEnvs();
   vi.clearAllMocks();
-  mocks.readConfigFileSnapshot.mockResolvedValue(
-    configSnapshot(structuredClone(sharedVerifiedInferenceConfig)) as never,
-  );
+  mocks.readConfigFileSnapshot.mockResolvedValue(sharedSnapshot());
   mocks.readSetupConfigFileSnapshot.mockReset();
   mocks.setupChannels.mockReset();
   mocks.setupSkills.mockReset();
   mocks.runSearchSetupFlow.mockReset();
   mocks.runSetupMemoryImportStep.mockReset();
   mocks.writeWizardConfigFile.mockReset();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  tempDirs.cleanup();
 });
 
 export const CANCEL_HINT = "Say `cancel` to stop this setup.";
 export const countCancelHints = (text: string) => text.split(CANCEL_HINT).length - 1;
 
-export function fakeOverviewLoader(
-  overrides: {
-    defaultModel?: string;
-    setupModel?: string;
-    claudeFound?: boolean;
-    codexFound?: boolean;
-  } = {},
-) {
-  return async (): Promise<SystemAgentOverview> => ({
+export const fakeOverviewLoader =
+  (
+    overrides: {
+      defaultModel?: string;
+      setupModel?: string;
+      claudeFound?: boolean;
+      codexFound?: boolean;
+    } = {},
+  ) =>
+  async (): Promise<SystemAgentOverview> => ({
     config: { path: "/tmp/openclaw.json", exists: false, valid: true, issues: [], hash: null },
     agents: [],
     defaultAgentId: "main",
@@ -454,17 +353,15 @@ export function fakeOverviewLoader(
       sourceUrl: "https://github.com/openclaw/openclaw",
     },
   });
-}
 
 export { expectDefined } from "@openclaw/normalization-core";
 export { hashSystemAgentOperation } from "./operator-approval.js";
-export type { OpenClawConfig } from "../config/types.openclaw.js";
+export type { OpenClawConfig, SystemAgentVerifiedInferenceBinding };
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { classifySystemAgentApprovalText } from "./operator-approval.js";
 export { SystemAgentWizardAnswerError } from "./chat-engine.js";
 export type { SystemAgentChatEngineOptions } from "./chat-engine.js";
 export { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 export { verifyConfigAfterSystemAgentWrite } from "./post-write-verification.js";
-export type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
-export { RuntimeSystemAgentChatEngine };
-export { mocks };
+export { RuntimeSystemAgentChatEngine, mocks };
+export { operationMocks } from "./chat-engine.mocks.test-support.js";

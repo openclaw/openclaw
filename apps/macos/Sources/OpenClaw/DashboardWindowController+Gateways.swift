@@ -62,6 +62,13 @@ extension DashboardWindowController {
         else {
             return
         }
+        if let payload = message.body as? [String: Any], payload["type"] as? String == "reload" {
+            guard self.isShowingFailurePage, self.signedOut == nil,
+                  message.frameInfo.request.url?.absoluteString == "about:blank",
+                  self.webView.url?.absoluteString == "about:blank" else { return }
+            self.reloadDashboard()
+            return
+        }
         if let payload = message.body as? [String: Any],
            payload["type"] as? String == "connection-state-changed"
         {

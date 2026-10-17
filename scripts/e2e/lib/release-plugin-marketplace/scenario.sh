@@ -30,17 +30,7 @@ openclaw_e2e_install_package /tmp/openclaw-release-plugin-marketplace-install.lo
 command -v openclaw >/dev/null
 openclaw_e2e_enable_openclaw_cli_timeout
 
-openclaw onboard \
-  --non-interactive \
-  --accept-risk \
-  --flow quickstart \
-  --mode local \
-  --auth-choice skip \
-  --skip-daemon \
-  --skip-ui \
-  --skip-channels \
-  --skip-skills \
-  --skip-health >/tmp/openclaw-release-plugin-marketplace-onboard.log 2>&1
+openclaw_release_onboard "" openclaw >/tmp/openclaw-release-plugin-marketplace-onboard.log 2>&1
 
 marketplace_root="$HOME/.claude/plugins/marketplaces/release-fixture-marketplace"
 marketplace_assertions="scripts/e2e/lib/release-plugin-marketplace/lifecycle-assertions.mjs"

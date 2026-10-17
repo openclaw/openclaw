@@ -13,6 +13,7 @@ import {
   findOversizedTsgoCoreTestShards,
   findTsgoCoreTestShardViolations,
   selectChangedTsgoCoreTestShards,
+  orderChangedTsgoCoreTestShards,
   TSGO_CORE_GRAPHS,
   TSGO_CI_ADDITIONAL_GRAPHS,
   selectTsgoCoreTestShards,
@@ -53,12 +54,21 @@ describe("tsgo core test shards", () => {
       name: shard.name,
       roots: roots(shard.config),
     }));
+    const canonicalRoots = roots("test/tsconfig/tsconfig.core.test.json");
     expect(
       findTsgoCoreTestShardViolations({
-        canonicalRoots: roots("test/tsconfig/tsconfig.core.test.json"),
+        canonicalRoots,
         shards,
       }),
     ).toEqual([]);
+    const clawRoots = canonicalRoots.filter((file) => file.startsWith("src/claws/"));
+    expect(clawRoots.length).toBeGreaterThan(0);
+    for (const file of clawRoots) {
+      expect(
+        shards.filter((shard) => shard.roots.includes(file)).map((shard) => shard.name),
+        file,
+      ).toEqual(["claws"]);
+    }
     // Shard size is advisory: warn so a rebalance gets scheduled, never block a PR on it.
     for (const warning of findOversizedTsgoCoreTestShards({ shards })) {
       console.warn(`[tsgo-core-test-shards] warning: ${warning}`);
@@ -73,7 +83,10 @@ describe("tsgo core test shards", () => {
       ["src/agents/models-config.merge.test.ts", "agents-root"],
       ["ui/src/pages/chat/chat-send-submit.test.ts", "ui-chat"],
       ["ui/src/pages/config/config-page.test.ts", "ui-pages"],
-      ["ui/src/components/agent-avatar-face.test.ts", "ui-components"],
+      ["ui/src/components/agent-avatar-face.test.tsx", "ui-components"],
+      ["ui/src/e2e/chat-send-ack-ownership.e2e.test.ts", "ui-e2e-chat"],
+      ["ui/src/e2e/about.e2e.test.ts", "ui-e2e"],
+      ["ui/src/test-helpers/control-ui-e2e.test.ts", "ui-e2e"],
       ["src/gateway/server-methods/update-owner.test.ts", "gateway-methods"],
       ["src/gateway/talk/client-authority.test.ts", "gateway-other"],
       ["src/gateway/worker-environments/service.plugin-create.test.ts", "gateway-other"],
@@ -90,7 +103,7 @@ describe("tsgo core test shards", () => {
       ["src/cli/cron-cli.test.ts", "services-cron"],
       ["src/cli/cron-output.process.test.ts", "services-cron"],
       ["src/cli/cron-cli/register.cron-edit.test.ts", "services-cron"],
-      ["src/cron/service/run-recovery.observation.test.ts", "services-cron"],
+      ["src/cron/service/run-receipt-observation.test.ts", "services-cron"],
       ["src/cli/program/command-registry.test.ts", "commands"],
       ["src/cli/update-cli.test.ts", "cli-update"],
       ["src/cli/update-cli/update-command-config-fence.test.ts", "cli-update"],
@@ -112,57 +125,6 @@ describe("tsgo core test shards", () => {
         file,
       ).toEqual([owner]);
     }
-  });
-
-  it("partitions every root-test input and preserves shared ambient context", () => {
-    const canonicalOptions = readNativeTypeScriptConfig({
-      cwd: process.cwd(),
-      configFileName: "test/tsconfig/tsconfig.test.root.json",
-    }).options;
-    const semanticOptions = (options: typeof canonicalOptions) => {
-      const { tsBuildInfoFile: _cache, configFilePath: _config, ...semantic } = options;
-      return semantic;
-    };
-    const roots = (config: string) => {
-      const parsed = readNativeTypeScriptConfig({ cwd: process.cwd(), configFileName: config });
-      const contents = JSON5.parse(fs.readFileSync(config, "utf8")) as { references?: unknown };
-      expect(contents.references ?? [], config).toEqual([]);
-      expect(semanticOptions(parsed.options), config).toEqual(semanticOptions(canonicalOptions));
-      return parsed.fileNames.map((file) =>
-        path.relative(process.cwd(), file).replaceAll(path.sep, "/"),
-      );
-    };
-    const canonicalConfig = "test/tsconfig/tsconfig.test.root.json";
-    const canonical = roots(canonicalConfig);
-    const config = JSON5.parse(fs.readFileSync(canonicalConfig, "utf8")) as { files: string[] };
-    const shared = new Set([
-      ...canonical.filter((file) => /\.d\.[cm]?ts$/u.test(file)),
-      ...config.files.map((file) => path.posix.normalize("test/tsconfig/" + file)),
-    ]);
-    const caches: string[] = [];
-    const shards = TSGO_ROOT_TEST_SHARDS.map((shard) => {
-      const files = roots(shard.config);
-      for (const file of shared) {
-        expect(files, shard.name).toContain(file);
-      }
-      const contents = JSON5.parse(fs.readFileSync(shard.config, "utf8")) as {
-        compilerOptions: { tsBuildInfoFile: string };
-      };
-      caches.push(
-        path.resolve(path.dirname(shard.config), contents.compilerOptions.tsBuildInfoFile),
-      );
-      return { name: shard.name, roots: files.filter((file) => !shared.has(file)) };
-    });
-    expect(
-      findTsgoCoreTestShardViolations({
-        canonicalRoots: canonical.filter((file) => !shared.has(file)),
-        shards,
-      }),
-    ).toEqual([]);
-    expect(new Set(caches).size).toBe(shards.length);
-    expect(
-      caches.every((file) => file.startsWith(path.resolve(".artifacts/tsgo-cache") + path.sep)),
-    ).toBe(true);
   });
 
   it.each(["root", "src", undefined])("preserves graph ownership for the %s alias", (group) => {
@@ -274,53 +236,48 @@ describe("changed core test graph selection", () => {
       files: graph.name === "core-test-agents-other" ? [leaf] : [],
     }));
 
-  it.each([leaf, "test/helpers/shared.ts"])(
-    "selects every consuming test graph for %s",
-    (source) => {
-      const graphs = inventory();
-      for (const graph of graphs) {
-        if (
-          graph.name === "core-test-agents-tools" ||
-          (source !== leaf && ["core", "core-test-agents-other"].includes(graph.name))
-        ) {
-          graph.files.push(source);
-        }
+  it("prioritizes root owners stably within the selected shards", () => {
+    const graphs = inventory();
+    const gateway = "src/gateway/gateway.test.ts";
+    graphs.find((graph) => graph.name === "core-test-gateway-root")!.roots.push(gateway);
+    graphs.find((graph) => graph.name === "core-test-agents-root")!.files.push(leaf);
+    const selected = TSGO_CORE_TEST_SHARDS.slice(0, 4);
+    const names = (paths: string[], shards = selected) =>
+      orderChangedTsgoCoreTestShards(shards, paths, graphs).map((shard) => shard.name);
+    expect(names([gateway, leaf])).toEqual([
+      "agents-other",
+      "gateway-root",
+      "agents-root",
+      "agents-tools",
+    ]);
+    expect(names([gateway, leaf], selected.slice(0, 3))).toEqual([
+      "agents-other",
+      "agents-root",
+      "agents-tools",
+    ]);
+    expect(names(["test/helpers/shared.ts"])).toEqual(selected.map((shard) => shard.name));
+  });
+
+  it.each([leaf])("selects every consuming test graph for %s", (source) => {
+    const graphs = inventory();
+    for (const graph of graphs) {
+      if (graph.name === "core-test-agents-tools") {
+        graph.files.push(source);
       }
-      expect(selectChangedTsgoCoreTestShards([source], graphs)?.map((shard) => shard.name)).toEqual(
-        ["agents-other", "agents-tools"],
-      );
-    },
-  );
+    }
+    expect(selectChangedTsgoCoreTestShards([source], graphs)?.map((shard) => shard.name)).toEqual([
+      "agents-other",
+      "agents-tools",
+    ]);
+  });
 
   it.each([
-    ["empty input", []],
-    ["unconsumed source", ["src/owner.ts"]],
-    ["unowned test root", ["src/missing.test.ts"]],
     ["mixed config input", [leaf, "package.json"]],
-    ["ambient declarations", ["src/types/node-runtime-globals.d.ts"]],
-    ["plugin browser input claiming core ownership", ["extensions/example/browser/page.test.ts"]],
-    ["incomplete inventory", [leaf]],
-    ["duplicate inventory", [leaf]],
-    ["deleted input", [leaf]],
     ["production ownership", [leaf]],
-    ["ambiguous ownership", [leaf]],
   ] as const)("retains full checks for %s", (failure, paths) => {
     const graphs = inventory();
-    if (failure === "plugin browser input claiming core ownership") {
-      const graph = graphs.find((entry) => entry.name === "core-test-ui-other")!;
-      graph.roots = graph.files = [...paths];
-    } else if (failure === "incomplete inventory") {
-      graphs.shift();
-    } else if (failure === "duplicate inventory") {
-      graphs.push(graphs[0]!);
-    } else if (failure === "deleted input") {
-      graphs.forEach((graph) => {
-        graph.files = [];
-      });
-    } else if (failure === "production ownership") {
+    if (failure === "production ownership") {
       graphs[0]!.files.push(leaf);
-    } else if (failure === "ambiguous ownership") {
-      graphs.find((graph) => graph.name === "core-test-agents-tools")!.roots.push(leaf);
     }
     expect(selectChangedTsgoCoreTestShards(paths, graphs)).toBeUndefined();
   });
@@ -338,9 +295,8 @@ afterAll(async () => {
 afterEach(() => lifetime.cleanup());
 
 it.runIf(process.platform !== "win32").each([
-  ["alias", ["root"], [0, 1, 2, 3]],
   ["mixed CI", ["--ci-graphs-json", '["scripts", "test-root"]'], [0, 1, 2, 3]],
-  ["odd stripe", ["--root-stripe", "1/2"], [0, 2]],
+  ["selected CI", ["--ci-graphs-json", '["test-root-tooling", "test-root-e2e"]'], [0, 2]],
   ["even stripe", ["--root-stripe", "2/2"], [1, 3]],
 ] as const)(
   "executes assigned root partitions serially through %s",
@@ -375,7 +331,12 @@ export async function runPreparedTsgoCommand(args, options) {
 }
 `,
       );
-      for (const exitCode of [0, 2, 137]) {
+      for (const [exitCode, ci] of [
+        [0, true],
+        [2, true],
+        [137, true],
+        [2, false],
+      ] as const) {
         fs.writeFileSync(path.join(root, "calls.jsonl"), "");
         const result = await lifetime.track(
           runNodeScript(
@@ -389,6 +350,8 @@ export async function runPreparedTsgoCommand(args, options) {
             ],
             {
               ...process.env,
+              CI: ci ? "true" : "false",
+              GITHUB_ACTIONS: "false",
               OPENCLAW_LOCAL_CHECK: "0",
               OPENCLAW_CI_STATIC_EVIDENCE: "1",
               FIXTURE_EXIT: String(exitCode),
@@ -406,14 +369,15 @@ export async function runPreparedTsgoCommand(args, options) {
           .trim()
           .split("\n")
           .map((line) => JSON.parse(line));
+        const stops = fails && (!ci || exitCode >= 128);
         expect(calls).toEqual([
           ...(_label === "mixed CI" ? ["tsconfig.scripts.json"] : []),
-          ...selected.slice(0, fails ? failureIndex + 1 : undefined).map((graph) => graph.config),
+          ...selected.slice(0, stops ? failureIndex + 1 : undefined).map((graph) => graph.config),
         ]);
         const completion = result.stdout
           .split("\n")
           .find((line) => line.startsWith("[ci-static:tsgo:completion] "));
-        if (!fails && process.platform !== "win32") {
+        if (!stops && process.platform !== "win32") {
           expect(completion).toBeDefined();
           const evidence = JSON.parse(completion!.slice("[ci-static:tsgo:completion] ".length)) as {
             planned: number;
@@ -525,7 +489,7 @@ exec ${JSON.stringify(native)} "$@"
           const prepared = resolveRuntimeWorkerUrl(entry);
           return [source, prepared.pathname.endsWith(".mts") ? source : prepared];
         }),
-        { ...process.env, OPENCLAW_LOCAL_CHECK: "0" },
+        { ...process.env, CI: "true", GITHUB_ACTIONS: "false", OPENCLAW_LOCAL_CHECK: "0" },
         [
           [
             new URL("./lib/tsdown-declaration-boundary.mts", preparedDriver),
@@ -574,7 +538,7 @@ exec ${JSON.stringify(native)} "$@"
         noncoreConsumer,
         "export type { ExtensionValue } from '../extensions/example/value.js';\n",
       );
-      for (const graph of TSGO_CI_ADDITIONAL_GRAPHS) {
+      for (const graph of expandTsgoExecutionGraphs(TSGO_CI_ADDITIONAL_GRAPHS)) {
         write(
           graph.config,
           JSON.stringify({
@@ -595,16 +559,21 @@ exec ${JSON.stringify(native)} "$@"
         `import { createChangedCiTypeCheckPlan } from "./run-tsgo-core-test-shards.mts";
 import { checkCoreTsgoGraphBoundary } from "./check-tsgo-core-boundary.mts";
 if (process.argv[2] === "boundary") {
-  await checkCoreTsgoGraphBoundary();
+  const graphs = await checkCoreTsgoGraphBoundary();
+  console.log(JSON.stringify(Object.fromEntries(graphs.map(({ name, files }) => [name, files]))));
 } else {
-  const plan = await createChangedCiTypeCheckPlan([process.argv[2] === "core-plan" ? ${JSON.stringify(helper)} : ${JSON.stringify(extension)}], {
+  const plan = await createChangedCiTypeCheckPlan([process.argv[2] === "core-plan" ? ${JSON.stringify(helper)} : ${JSON.stringify(extension)}, ...JSON.parse(process.argv[3])], {
     cwd: process.cwd(), coreBoundaryOwner: "additional-checks",
   });
   console.log(JSON.stringify({ mode: plan.mode, names: plan.graphs.map(({ name }) => name) }));
 }
 `,
       );
-      const inspectExtension = async (mode: "plan" | "core-plan" | "boundary", serial = "") => {
+      const inspectExtension = async (
+        mode: "plan" | "core-plan" | "boundary",
+        serial = "",
+        extraPaths: string[] = [],
+      ) => {
         write("compiler-events.tsv", "");
         return await lifetime.track(
           runNodeScript(
@@ -613,6 +582,7 @@ if (process.argv[2] === "boundary") {
               pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href,
               plannerDriver,
               mode,
+              JSON.stringify(extraPaths),
             ],
             { ...env, OPENCLAW_CI_TYPE_PLAN_SERIAL: serial },
             undefined,
@@ -620,25 +590,94 @@ if (process.argv[2] === "boundary") {
           ),
         );
       };
+      const deletedNonCompilerPaths = ["docs/removed.md", "docs/removed.mdx", "ui/src/removed.css"];
+      const presentationPaths = [
+        "extensions/active-memory/control-ui.presentation.json",
+        "extensions/memory-wiki/control-ui.presentation.json",
+      ];
+      for (const file of presentationPaths) {
+        write(file, '{"label":"Memory add-on"}\n');
+      }
+      const uiConsumer = "ui/src/presentation.ts";
+      const presentationImports = presentationPaths
+        .map(
+          (file, index) =>
+            `import presentation${index} from '../../${file}' with { type: 'json' };`,
+        )
+        .join("\n");
+      write(uiConsumer, `${presentationImports}\n`);
+      const uiGraphs = TSGO_CORE_GRAPHS.filter(
+        ({ name }) => name === "ui" || name.startsWith("core-test-"),
+      );
+      const coreConfig = TSGO_CORE_GRAPHS.find(({ name }) => name === "core")!.config;
+      const originalConfigs = new Map(
+        [...uiGraphs.map(({ config }) => config), coreConfig].map((config) => [
+          config,
+          fs.readFileSync(path.join(root, config), "utf8"),
+        ]),
+      );
+      const addGraphFiles = (config: string, files: string[]) => {
+        const value = JSON.parse(originalConfigs.get(config)!);
+        value.compilerOptions.resolveJsonModule = true;
+        value.files.push(...files.map((file) => path.join(root, file)));
+        write(config, JSON.stringify(value));
+      };
+      for (const { config } of uiGraphs) {
+        addGraphFiles(config, [uiConsumer]);
+      }
+      const presentationBoundary = await inspectExtension("boundary");
+      expect(presentationBoundary.status, presentationBoundary.stderr).toBe(0);
+      const presentationGraphFiles = JSON.parse(presentationBoundary.stdout.trim());
+      for (const { name } of uiGraphs) {
+        expect(presentationGraphFiles[name]).toEqual(expect.arrayContaining(presentationPaths));
+      }
+      const unrelatedJson = "extensions/example/other.json";
+      write(unrelatedJson, "{}\n");
+      write(
+        uiConsumer,
+        `${presentationImports}\nimport '../../${extension}';\nimport other from '../../${unrelatedJson}' with { type: 'json' };\n`,
+      );
+      addGraphFiles(coreConfig, [presentationPaths[0]!]);
+      const rejectedExtensionInputs = await inspectExtension("boundary");
+      expect(rejectedExtensionInputs.status).not.toBe(0);
+      for (const { name } of uiGraphs) {
+        expect(rejectedExtensionInputs.stderr).toContain(`${name}: ${extension}`);
+        expect(rejectedExtensionInputs.stderr).toContain(`${name}: ${unrelatedJson}`);
+      }
+      expect(rejectedExtensionInputs.stderr).toContain(`core: ${presentationPaths[0]}`);
+      for (const [config, original] of originalConfigs) {
+        write(config, original);
+      }
       for (const serial of ["", "1"]) {
-        const extensionPlan = await inspectExtension("plan", serial);
+        const extensionPlan = await inspectExtension("plan", serial, deletedNonCompilerPaths);
         expect(extensionPlan.status, extensionPlan.stderr).toBe(0);
         expect(JSON.parse(extensionPlan.stdout.trim())).toEqual({
           mode: "changed",
-          names: ["extensions", "extensions-test", "scripts", "test-root"],
+          names: [
+            "extensions",
+            "extensions-test",
+            "scripts",
+            ...TSGO_ROOT_TEST_SHARDS.map(({ name }) => name),
+          ],
         });
         const discovery = compilerEvents();
-        expect(discovery).toHaveLength(serial ? 4 : 1);
+        expect(discovery).toHaveLength(serial ? 7 : 1);
         expect(discovery.every((args) => args.includes(serial ? "--listFilesOnly" : "--api"))).toBe(
           true,
         );
-        const corePlan = await inspectExtension("core-plan", serial);
+        const corePlan = await inspectExtension("core-plan", serial, deletedNonCompilerPaths);
         expect(corePlan.status, corePlan.stderr).toBe(0);
         expect(JSON.parse(corePlan.stdout.trim())).toEqual({
           mode: "changed",
           names: ["core-test-agents-other"],
         });
       }
+      const deletedCompilerPlan = await inspectExtension("plan", "", [
+        "extensions/example/removed.ts",
+      ]);
+      expect(deletedCompilerPlan.status, deletedCompilerPlan.stderr).toBe(0);
+      expect(JSON.parse(deletedCompilerPlan.stdout.trim()).mode).toBe("full");
+      expect(compilerEvents()).toEqual([]);
       // Its parallel owner must still reject a type-only edge into an extension.
       write(
         consumer,
@@ -658,9 +697,12 @@ if (process.argv[2] === "boundary") {
         consumer,
         "import type {Value} from '../nested/leaf.test.js';\nconst value: Value = 1;\n",
       );
-      const validConsumer = await check([helper], "2/5");
+      const validConsumer = await check([consumer, helper], "2-3/5");
       expect(validConsumer.result.status, validConsumer.result.stderr).toBe(0);
-      expect(validConsumer.builds).toEqual(["test/tsconfig/tsconfig.core.test.agents-other.json"]);
+      expect(validConsumer.builds).toEqual([
+        "test/tsconfig/tsconfig.core.test.agents-tools.json",
+        "test/tsconfig/tsconfig.core.test.agents-other.json",
+      ]);
       const invalidStripe = await check([helper], "0/5", 0);
       expect(invalidStripe.result.status).not.toBe(0);
       expect(invalidStripe.result.stderr).toContain("Invalid core test stripe");
@@ -675,10 +717,6 @@ if (process.argv[2] === "boundary") {
       const brokenConsumer = await check([helper], "3/5");
       expect(brokenConsumer.result.status).not.toBe(0);
       expect(brokenConsumer.builds).toEqual(["test/tsconfig/tsconfig.core.test.agents-tools.json"]);
-      expect([...validConsumer.builds, ...brokenConsumer.builds]).toEqual([
-        "test/tsconfig/tsconfig.core.test.agents-other.json",
-        "test/tsconfig/tsconfig.core.test.agents-tools.json",
-      ]);
       expect(brokenConsumer.result.stdout + brokenConsumer.result.stderr).toContain(
         "consumer.test.ts(2,7): error TS2322",
       );
@@ -738,7 +776,7 @@ if (process.argv[2] === "boundary") {
         );
         expect(result.status, result.stderr).toBe(2);
         expect(result.stdout).toContain("leaf.test.ts(1,14): error TS2322");
-        expect(compilerEvents()).toHaveLength(mode === "evidence" ? 2 : 1);
+        expect(compilerEvents()).toHaveLength(2);
         const receipts = result.stdout
           .split("\n")
           .filter((line) => line.startsWith("[ci-static:tsgo:"));

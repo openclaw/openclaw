@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/io.js";
 import { updateSessionEntry } from "../config/sessions/session-accessor.entry-mutation.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { recordSessionParticipant as recordNativeParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
@@ -129,6 +130,7 @@ it("reuses placement after runtime events and entry writes and refreshes actual 
         defaults: { model: "unit-test/model", utilityModel: "" },
       },
     };
+    setRuntimeConfigSnapshot(cfg);
     const target = {
       agentId: "main",
       sessionKey: "agent:main:entry-placement",
@@ -186,9 +188,31 @@ it("reuses placement after runtime events and entry writes and refreshes actual 
       });
       expect(reads).not.toHaveBeenCalled();
 
+      const rowFactReads: string[][] = [];
+      const readDatabases = history.withSessionHistoryWorkerDatabases;
+      vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
+        (databases, consume, lane) =>
+          readDatabases(
+            databases,
+            (owners) =>
+              consume(
+                owners.map((owner) => ({
+                  ...owner,
+                  readRowFacts(input) {
+                    rowFactReads.push([...input.sessionKeys]);
+                    return owner.readRowFacts(input);
+                  },
+                })),
+              ),
+            lane,
+          ),
+      );
+      const sharedReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
       for (const [index, record] of [recordNativeParticipant, recordSessionParticipant].entries()) {
         const identity = { type: "agent" as const, id: `peer-${index}` };
         for (const promptedAt of [10, 20]) {
+          rowFactReads.length = 0;
+          sharedReads.mockClear();
           expect(await record(target, { identity, promptedAt })).toBe(
             promptedAt === 10 ? "inserted" : "updated",
           );
@@ -196,10 +220,22 @@ it("reuses placement after runtime events and entry writes and refreshes actual 
           expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
             session: expect.objectContaining({
               participantCount: index + 1,
-              participants: expect.arrayContaining([expect.objectContaining({ identity })]),
+              participants: expect.arrayContaining(
+                Array.from({ length: index + 1 }, (_, peer) =>
+                  expect.objectContaining({ identity: { type: "agent", id: `peer-${peer}` } }),
+                ),
+              ),
               placement: expect.objectContaining({ state: "requested" }),
             }),
           });
+          if (record === recordSessionParticipant) {
+            expect(rowFactReads).toEqual([]);
+            expect(
+              sharedReads.mock.calls.filter(
+                ([, command]) => command.type === "sessionRows.sharedFacts",
+              ),
+            ).toEqual([]);
+          }
         }
       }
       expect(reads).not.toHaveBeenCalled();

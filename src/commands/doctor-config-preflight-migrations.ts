@@ -18,10 +18,7 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
 import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
-import {
-  assertPreflightConfigUnchanged,
-  type ConfigPreflightSnapshotRead,
-} from "./config-preflight-snapshot.js";
+import type { ConfigPreflightSnapshotRead } from "./config-preflight-snapshot.js";
 import { runDoctorPluginConvergence } from "./doctor-config-preflight-plugin-verification.js";
 import type { PluginMigrationInspection } from "./doctor/shared/plugin-migration-availability.js";
 
@@ -37,16 +34,17 @@ export async function prepareDoctorMigrationPlugins(params: {
     pending: readonly DeferredPluginMigration[],
     inspection?: PluginMigrationInspection,
   ) => Promise<void>;
-}): Promise<ConfigPreflightSnapshotRead> {
+}): Promise<{ snapshotRead: ConfigPreflightSnapshotRead; warnings: string[] }> {
   const convergence = await runDoctorPluginConvergence(params);
   setActiveDegradedPlugins(convergence.quarantinedPlugins);
   await params.onDeferredPlugins(
     convergence.deferredPlugins ?? [],
     convergence.migrationInspection,
   );
-  const refreshed = await params.readRefreshedSnapshot();
-  assertPreflightConfigUnchanged(params.snapshotRead.snapshot, refreshed.snapshot);
-  return refreshed;
+  return {
+    snapshotRead: await params.readRefreshedSnapshot(),
+    warnings: convergence.warnings ?? [],
+  };
 }
 
 export async function assertDoctorPreflightMigrationsComplete(params: {

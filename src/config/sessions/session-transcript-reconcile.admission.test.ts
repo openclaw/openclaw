@@ -4,7 +4,9 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as sqlite from "../../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -12,8 +14,8 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import {
   reconcileSessionTranscriptIndexes,
@@ -41,16 +43,19 @@ afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
   for (const root of roots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }
+  clearRuntimeConfigSnapshot();
 });
 
 async function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "reconcile-admission-"));
   roots.push(root);
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  setRuntimeConfigSnapshot({});
   const options = { agentId: "main", env: { ...process.env, OPENCLAW_STATE_DIR: root } };
   const scope = { ...options, sessionId: "cold", sessionKey: "agent:main:cold" };
   await persistSessionTranscriptTurn(scope, {
@@ -71,7 +76,7 @@ async function fixture() {
 it("waits for a cold projection without superseding its native integrity admission", async () => {
   const { root, options, scope } = await fixture();
   closeOpenClawAgentDatabasesForTest(root);
-  clearOpenClawAgentIntegrityVerification(options.path, options.env);
+  revokeSqliteDatabaseAdmissionsForPath(options.path);
   let parentChecks = 0;
   vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, openOptions) => {
     const database = realOpen(pathname, openOptions);
@@ -95,16 +100,12 @@ it("waits for a cold projection without superseding its native integrity admissi
     return database;
   });
   const entered = createDeferred();
-  const createAdmission = admission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-    (admit, attachment) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "open") {
-          entered.resolve();
-        }
-        admit(request, grant);
-      }, attachment),
-  );
+  probe.admission(admission, (request, grant, admit) => {
+    if (request.stage === "open") {
+      entered.resolve();
+    }
+    admit(request, grant);
+  });
   startSessionTranscriptIndexReconcile(options);
   await entered.promise;
   await waitForSessionTranscriptProjection(scope);

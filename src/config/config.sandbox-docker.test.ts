@@ -112,16 +112,12 @@ describe("sandbox docker config", () => {
       { browser: { binds: ["/agent:/agent:rw"] } },
     ).browser;
     expect(resolved.binds).toEqual(["/global:/global:ro"]);
+    expect(resolved.network).toBe("openclaw-sandbox-browser");
 
     const resolvedNoGlobal = resolveSandbox(
       { scope: "shared", browser: {} },
       { browser: { binds: ["/agent:/agent:rw"] } },
     ).browser;
     expect(resolvedNoGlobal.binds).toBeUndefined();
-  });
-
-  it("defaults browser network to dedicated sandbox network", () => {
-    const resolved = resolveSandbox({ scope: "agent", browser: {} }).browser;
-    expect(resolved.network).toBe("openclaw-sandbox-browser");
   });
 });

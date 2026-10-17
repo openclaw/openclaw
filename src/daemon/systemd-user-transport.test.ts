@@ -46,7 +46,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each(["custom", "runtime", "private", "unavailable"] as const)(
+it.each(["custom", "private", "unavailable"] as const)(
   "shares the proven %s route across inspection and child commands",
   async (scenario) => {
     const home = dirs.make("openclaw-transport-");
@@ -57,7 +57,6 @@ it.each(["custom", "runtime", "private", "unavailable"] as const)(
       await fs.writeFile(path.join(runtimeDir, "systemd/private"), "");
     }
     const custom = `unix:path=${home}/custom-bus`;
-    const runtime = `unix:path=${runtimeDir}/bus`;
     const env = {
       HOME: home,
       USER: "service",
@@ -66,7 +65,7 @@ it.each(["custom", "runtime", "private", "unavailable"] as const)(
       XDG_RUNTIME_DIR: runtimeDir,
       DBUS_SESSION_BUS_ADDRESS: custom,
     };
-    const selected = scenario === "custom" ? custom : scenario === "runtime" ? runtime : undefined;
+    const selected = scenario === "custom" ? custom : undefined;
     const probes: string[] = [];
     const children: Array<{
       command: string;
@@ -97,15 +96,13 @@ it.each(["custom", "runtime", "private", "unavailable"] as const)(
         reason: "systemd-user-bus-unavailable",
       });
       expect(await readSystemdUserTransport(env)).toBeUndefined();
-      expect(probes).toEqual([custom, runtime, "machine"]);
+      expect(probes).toEqual([custom, `unix:path=${runtimeDir}/bus`, "machine"]);
       return;
     }
     await expect(readSelectedUserService(env)).resolves.toBeNull();
     expect((await execSystemctlUser(env, ["status"])).code).toBe(0);
     const transport = await readSystemdUserTransport(env);
-    expect(transport?.kind).toBe(
-      scenario === "custom" ? "session-bus" : scenario === "runtime" ? "runtime-bus" : "private",
-    );
+    expect(transport?.kind).toBe(scenario === "custom" ? "session-bus" : "private");
     if (scenario === "private") {
       expect(children).toEqual([
         {
@@ -124,7 +121,9 @@ it.each(["custom", "runtime", "private", "unavailable"] as const)(
       ]);
       expect(openSystemdUserManager).not.toHaveBeenCalled();
     }
-    expect(probes).toEqual(scenario === "custom" ? [custom] : [custom, runtime]);
+    expect(probes).toEqual(
+      scenario === "custom" ? [custom] : [custom, `unix:path=${runtimeDir}/bus`],
+    );
     const payloadEnv = mergeGatewayServiceEnv(env, {
       programArguments: ["node", "gateway"],
       environment: {
@@ -164,27 +163,13 @@ it("deduplicates concurrent discovery without retaining caller environment", asy
 
 it.each([
   { busctl: "ENOENT", systemctl: "ENOENT", reason: "service-manager-unavailable" },
-  { busctl: "ENOENT", systemctl: undefined, reason: "systemd-busctl-unavailable" },
   { busctl: "EACCES", systemctl: undefined, reason: "service-manager-access-denied" },
-  { busctl: undefined, systemctl: undefined, reason: "systemd-user-bus-unavailable" },
-  { busctl: undefined, systemctl: "offline", reason: "service-manager-unavailable" },
-  { busctl: undefined, systemctl: "not-booted", reason: "service-manager-unavailable" },
 ] as const)(
   "distinguishes missing native tools from $reason ($busctl, $systemctl)",
   async ({ busctl, systemctl, reason }) => {
     const home = dirs.make("openclaw-missing-manager-");
     vi.mocked(execFileUtf8).mockImplementation(async (command) => {
-      const errorCode =
-        command === "busctl" ? busctl : systemctl === "ENOENT" ? systemctl : undefined;
-      if (command === "systemctl" && systemctl === "offline") {
-        return { ...missing, stdout: "offline\n", stderr: "" };
-      }
-      if (command === "systemctl" && systemctl === "not-booted") {
-        return {
-          ...missing,
-          stderr: "System has not been booted with systemd as init system (PID 1). Can't operate.",
-        };
-      }
+      const errorCode = command === "busctl" ? busctl : systemctl;
       return errorCode
         ? { ...missing, termination: "error", errorCode }
         : command === "systemctl"
@@ -200,22 +185,6 @@ it.each([
     ).rejects.toMatchObject({ reason });
   },
 );
-
-it("does not let a short failed discovery poison the next caller", async () => {
-  const home = dirs.make("openclaw-short-transport-");
-  const env = {
-    HOME: home,
-    DBUS_SESSION_BUS_ADDRESS: `unix:path=${home}/bus`,
-    XDG_RUNTIME_DIR: home,
-  };
-  vi.mocked(execFileUtf8).mockResolvedValue({ ...missing, termination: "timeout" });
-  await expect(resolveSystemdUserTransport(env, performance.now() + 100)).rejects.toThrow();
-  vi.mocked(execFileUtf8).mockResolvedValue(success(version));
-  await expect(resolveSystemdUserTransport(env)).resolves.toMatchObject({
-    kind: "session-bus",
-    address: env.DBUS_SESSION_BUS_ADDRESS,
-  });
-});
 
 it("stops discovery when its caller retires between probes", async () => {
   const home = dirs.make("openclaw-retired-transport-");

@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -6,6 +5,7 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type {
   DB as StateDatabase,
   WorkerSessionPlacements,
@@ -40,7 +40,50 @@ type PlacementDatabase = Pick<
   | "worker_turn_tool_authorities"
 >;
 
-export const query = (db: DatabaseSync) => getNodeSqliteKysely<PlacementDatabase>(db);
+export const query = (db: EngineConnection) => getNodeSqliteKysely<PlacementDatabase>(db);
+
+export function selectWorkerPlacementRows(db: EngineConnection, sessionIds: readonly string[]) {
+  return query(db)
+    .selectFrom("worker_session_placements")
+    .select([
+      "session_id",
+      "agent_id",
+      "session_key",
+      "execution_mode",
+      "state",
+      "environment_id",
+      "transition_generation",
+      "active_owner_epoch",
+      "workspace_base_manifest_ref",
+      "remote_workspace_dir",
+      "worker_bundle_hash",
+      "last_transcript_ack_cursor",
+      "last_live_event_ack_cursor",
+      "recovery_error",
+      "terminal_reason",
+      "terminal_at_ms",
+      "turn_claim_owner",
+      "turn_claim_id",
+      "turn_claim_run_id",
+      "turn_claim_generation",
+      "turn_claim_owner_epoch",
+      "created_at_ms",
+      "updated_at_ms",
+      "state_changed_at_ms",
+    ])
+    .where("session_id", "in", sqliteStringSet(sessionIds))
+    .$assertType<PlacementRow>();
+}
+
+export function revivePlacementProjectionInteger(column: string, value: unknown): unknown {
+  // These STRICT tables project INTEGER numbers; preserve native reads' refusal to round them.
+  if (typeof value === "number" && !Number.isSafeInteger(value)) {
+    throw new RangeError(
+      `Worker placement projection column ${column} is outside JavaScript's safe integer range`,
+    );
+  }
+  return value;
+}
 
 export function turnClaimValues(claim: PersistedTurnClaim | null) {
   return {
@@ -81,6 +124,10 @@ function parseTurnClaim(row: PlacementRow): PersistedTurnClaim | null {
 }
 
 export function fromRow(row: PlacementRow): WorkerSessionPlacementRecord {
+  normalizeNonNegativeInteger(row.transition_generation, "generation");
+  normalizeNonNegativeInteger(row.created_at_ms, "creation timestamp");
+  normalizeNonNegativeInteger(row.updated_at_ms, "update timestamp");
+  normalizeNonNegativeInteger(row.state_changed_at_ms, "state change timestamp");
   const state = parseWorkerSessionPlacementState(row.state);
   const executionMode = normalizeWorkerPlacementExecutionMode(row.execution_mode);
   const parsed = {
@@ -127,7 +174,7 @@ export function fromRow(row: PlacementRow): WorkerSessionPlacementRecord {
 }
 
 export function find(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId: string,
 ): WorkerSessionPlacementRecord | undefined {
   const row = executeSqliteQueryTakeFirstSync(
@@ -141,7 +188,7 @@ export function find(
 }
 
 export function readWorkerPlacementsForReconcileInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionKey?: string,
 ): WorkerSessionPlacementRecord[] {
   let select = query(db)
@@ -157,7 +204,7 @@ export function readWorkerPlacementsForReconcileInDatabase(
 }
 
 export function readWorkerPlacementsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionIds?: readonly string[],
 ): WorkerSessionPlacementRecord[] {
   let select = query(db).selectFrom("worker_session_placements").selectAll();
@@ -168,7 +215,7 @@ export function readWorkerPlacementsInDatabase(
 }
 
 export function readWorkerPlacementChangeSnapshotInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   profileIds?: readonly string[],
 ): WorkerSessionPlacementChangeSnapshot[] {
   if (profileIds?.length === 0) {
@@ -217,7 +264,7 @@ export function readWorkerPlacementChangeSnapshotInDatabase(
   });
 }
 
-export function getRequired(db: DatabaseSync, sessionId: string): WorkerSessionPlacementRecord {
+export function getRequired(db: EngineConnection, sessionId: string): WorkerSessionPlacementRecord {
   const record = find(db, sessionId);
   if (!record) {
     throw new Error(`Unknown worker session placement: ${sessionId}`);
@@ -226,7 +273,7 @@ export function getRequired(db: DatabaseSync, sessionId: string): WorkerSessionP
 }
 
 export function ensureLocal(
-  db: DatabaseSync,
+  db: EngineConnection,
   identity: WorkerSessionPlacementIdentity,
   nowMs: number,
 ): WorkerSessionPlacementRecord {
@@ -237,7 +284,7 @@ export function ensureLocal(
     }
     return current;
   }
-  executeSqliteQuerySync(
+  const result = executeSqliteQuerySync(
     db,
     query(db)
       .insertInto("worker_session_placements")
@@ -262,9 +309,10 @@ export function ensureLocal(
         created_at_ms: nowMs,
         updated_at_ms: nowMs,
         state_changed_at_ms: nowMs,
-      }),
+      })
+      .returningAll(),
   );
-  const record = getRequired(db, identity.sessionId);
+  const record = fromRow(result.rows[0]!);
   publishPlacementTurnClaimState(db, record, null);
   return record;
 }
@@ -360,7 +408,7 @@ export function transitionValues(
 }
 
 export function updateTransition(
-  db: DatabaseSync,
+  db: EngineConnection,
   current: WorkerSessionPlacementRecord,
   to: WorkerSessionPlacementState,
   patch: WorkerSessionPlacementTransitionPatch,

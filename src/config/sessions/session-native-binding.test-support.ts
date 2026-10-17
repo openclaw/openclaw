@@ -1,9 +1,10 @@
 import type { MockInstance } from "vitest";
 import type { AgentHarnessV2 } from "../../agents/harness/types.js";
-import type { SubagentRunsDurableBasis } from "../../agents/subagents/registry/subagent-registry-read.types.js";
+import { withEngineStoreAdmission } from "../../infra/database-engine/admission-scope.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import {
   createPluginStateKeyedStore,
+  createPluginStateKeyedStoreV2,
   createPluginStateSyncKeyedStore,
 } from "../../plugin-state/plugin-state-store.js";
 import type { PluginStateSyncKeyedStore } from "../../plugin-state/plugin-state-store.types.js";
@@ -29,9 +30,9 @@ import {
   rewindSessionToMessage,
   switchSessionBranch,
 } from "./session-accessor.sqlite-message-cut.js";
-import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
-type NativeBindingTestApi = {
+export type NativeBindingTestApi = {
   createNativeBindingDeletionFixture(
     this: void,
     runtime: PluginRuntime,
@@ -57,13 +58,13 @@ export type NativeBindingClientTestApi = {
 
 export async function withNativeBindingFixture<T>(
   kind: "codex" | "agentsapi",
-  run: (fixture: Awaited<ReturnType<typeof createFixture>>) => Promise<T>,
-  mode: "worker" | "native" = "worker",
+  run: (fixture: Awaited<ReturnType<typeof createNativeBindingFixture>>) => Promise<T>,
+  mode: "worker" | "legacy" = "worker",
 ): Promise<T> {
   return withOpenClawTestState(
     { scenario: "minimal", label: "native-binding-settlement" },
     async (state) => {
-      const fixture = await createFixture(kind, mode, state.env);
+      const fixture = await createNativeBindingFixture(kind, mode, state.env);
       try {
         return await run(fixture);
       } finally {
@@ -74,26 +75,34 @@ export async function withNativeBindingFixture<T>(
   );
 }
 
-async function createFixture(
+export async function createNativeBindingFixture(
   kind: "codex" | "agentsapi",
-  mode: "worker" | "native",
+  mode: "worker" | "legacy",
   env: NodeJS.ProcessEnv,
+  sessionId = "native-binding-session",
 ) {
-  const database = openOpenClawAgentDatabase({ agentId: "main", env });
-  const shared = openOpenClawStateDatabase({ env });
+  const database = withEngineStoreAdmission(() =>
+    openOpenClawAgentDatabase({ agentId: "main", env }),
+  );
+  const shared = withEngineStoreAdmission(() => openOpenClawStateDatabase({ env }));
   const scope = {
     agentId: "main",
-    sessionId: "native-binding-session",
-    sessionKey: "agent:main:native-binding",
+    sessionId,
+    sessionKey:
+      sessionId === "native-binding-session"
+        ? "agent:main:native-binding"
+        : `agent:main:${sessionId}`,
     storePath: database.path,
     env,
   };
-  replaceSessionEntrySync(scope, {
-    sessionId: scope.sessionId,
-    lifecycleRevision: "native-binding-generation",
-    updatedAt: 1,
-    agentHarnessId: kind,
-  });
+  withEngineStoreAdmission(() =>
+    replaceSessionEntrySync(scope, {
+      sessionId: scope.sessionId,
+      lifecycleRevision: "native-binding-generation",
+      updatedAt: 1,
+      agentHarnessId: kind,
+    }),
+  );
   const events = [
     {
       type: "session",
@@ -107,23 +116,18 @@ async function createFixture(
       message: { role: "user", content: "Retain this transcript", timestamp: 1 },
     },
   ];
-  replaceTranscriptEventsSync(scope, events);
+  withEngineStoreAdmission(() => replaceTranscriptEventsSync(scope, events));
   const runtime = createPluginRuntimeMock({
     state: {
       openSyncKeyedStore: <Value>(options: Parameters<typeof createPluginStateSyncKeyedStore>[1]) =>
         createPluginStateSyncKeyedStore<Value>(kind, { ...options, env }),
       openKeyedStore: <Value>(options: Parameters<typeof createPluginStateKeyedStore>[1]) => {
-        const store = createPluginStateKeyedStore<Value>(kind, { ...options, env });
-        // A released SDK adapter forwards the public contract without the host's private branding.
-        return mode === "worker"
-          ? store
-          : {
-              ...store,
-              withCurrent: (authority: Parameters<NonNullable<typeof store.withCurrent>>[0]) => ({
-                ...store.withCurrent(authority),
-              }),
-            };
+        return createPluginStateKeyedStore<Value>(kind, { ...options, env });
       },
+      openKeyedStoreV2: <Value>(
+        options: Parameters<typeof createPluginStateKeyedStoreV2>[1],
+        authority: Parameters<typeof createPluginStateKeyedStoreV2>[2] = { assertCurrent() {} },
+      ) => createPluginStateKeyedStoreV2<Value>(kind, { ...options, env }, authority),
     },
   });
   const { createNativeBindingDeletionFixture } =
@@ -131,10 +135,24 @@ async function createFixture(
       pluginId: kind,
       artifactBasename: "native-session-binding.test-api.js",
     });
-  const native = createNativeBindingDeletionFixture(runtime, scope);
+  const native = withEngineStoreAdmission(() => createNativeBindingDeletionFixture(runtime, scope));
   const registry = createEmptyPluginRegistry();
   registry.plugins.push(createPluginRecord({ id: kind }));
   registry.agentHarnesses.push({ pluginId: kind, source: "runtime", harness: native.harness });
+  if (mode === "legacy") {
+    // Exercise a released opaque sibling's post-commit cleanup alongside the
+    // official harness's V2 store and typed worker participant.
+    registry.agentHarnesses.push({
+      pluginId: "core",
+      source: "runtime",
+      harness: {
+        ...native.harness,
+        async withSessionDeletion(_params, run) {
+          return run({ commit() {}, rollback() {} });
+        },
+      },
+    });
+  }
   markPluginRegistryActive(registry);
   const target = { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] };
   return {
@@ -147,8 +165,9 @@ async function createFixture(
     harness: native.harness,
     bindingKey: native.key,
     bindingStore: native.store,
-    readEntry: () => readExactSessionEntryRow(database, scope.sessionKey)?.entry,
-    readBinding: () => native.store.lookup(native.key),
+    readEntry: () =>
+      withEngineStoreAdmission(() => readExactSessionEntryRow(database, scope.sessionKey)?.entry),
+    readBinding: () => withEngineStoreAdmission(() => native.store.lookup(native.key)),
     cleanup: () =>
       withPluginRuntimeRegistryScope(registry, () =>
         cleanupSessionLifecycleArtifactsCore({
@@ -179,16 +198,13 @@ async function createFixture(
           ? rewindSessionToMessage({ ...scope, entryId })
           : switchSessionBranch({ ...scope, leafEntryId: entryId }),
       ),
-    remove: (
-      options: { archiveTranscript?: boolean; descendantRunBasis?: SubagentRunsDurableBasis } = {},
-    ) =>
+    remove: (options: { archiveTranscript?: boolean } = {}) =>
       withPluginRuntimeRegistryScope(registry, () =>
         deleteSessionEntryLifecycle({
           ...scope,
           target,
           archiveTranscript: options.archiveTranscript ?? false,
           deleteTranscriptWithoutArchive: true,
-          descendantRunBasis: options.descendantRunBasis,
         }),
       ),
   };

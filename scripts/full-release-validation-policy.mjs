@@ -15,6 +15,7 @@ import { compareAscii, sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { hasRequiredCrossOsSuites } from "./lib/cross-os-release-checks/suite-filter.mjs";
 import { candidateArtifactJsonFromBinding } from "./lib/full-release-candidate-reuse.mjs";
 import {
+  FULL_RELEASE_CHILD_EVIDENCE_JOB,
   MAX_RELEASE_ARTIFACT_BYTES,
   serializeReleaseArtifact,
 } from "./lib/full-release-evidence.mjs";
@@ -25,6 +26,7 @@ import {
 import { changelogEntryPath, isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 import { validateQualificationBaselines } from "./lib/release-upgrade-baseline.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
+import { parseGithubResponse } from "./pr-lib/gh-api-preflight.mjs";
 import { validateQualificationCoverage } from "./release-qualification-coverage.mjs";
 
 export { MAX_RELEASE_ARTIFACT_BYTES, serializeReleaseArtifact, buildReleaseValidationManifest };
@@ -382,15 +384,65 @@ function releaseGhTransportErrorText(error) {
   return parts.join("\n");
 }
 
+export function releaseGhRateLimitRetryAt(error, now = Date.now(), failures = 0) {
+  // gh retains successful pages before the failed response. Its final frame owns
+  // the throttle deadline; earlier quota headers must not override that failure.
+  const output = String(error?.stdout ?? "");
+  const response = parseGithubResponse(
+    output.split(/(?=^HTTP\/\d+(?:\.\d+)? [1-5]\d{2}\b)/mu).at(-1),
+  );
+  const text = releaseGhTransportErrorText(error);
+  const limited =
+    response.status === "429" ||
+    (response.status === "403" &&
+      (response.remaining === 0 || response.retryAfter !== undefined)) ||
+    RATE_LIMITED_403_PATTERN.test(text) ||
+    /HTTP 429\b|secondary rate limit|API rate limit|abuse detection/iu.test(text);
+  if (!limited || (response.status && !["403", "429"].includes(response.status))) {
+    return undefined;
+  }
+  const reset = response.remaining === 0 ? Date.parse(response.resetUtc) : Number.NaN;
+  const delay =
+    response.retryAfter === undefined
+      ? Math.min(60_000 * 2 ** failures, 15 * 60_000)
+      : response.retryAfter * 1000;
+  return Math.max(now + delay, Number.isFinite(reset) ? reset : 0);
+}
+
 export function classifyReleaseGhTransportError(error) {
   const text = releaseGhTransportErrorText(error);
-  if (RATE_LIMITED_403_PATTERN.test(text)) {
+  if (releaseGhRateLimitRetryAt(error) !== undefined) {
     return "transient";
   }
   if (HARD_GH_TRANSPORT_PATTERN.test(text)) {
     return "hard";
   }
   return TRANSIENT_GH_TRANSPORT_PATTERN.test(text) ? "transient" : "ambiguous";
+}
+
+// GitHub can persistently 5xx one page size of an attempt-jobs listing (for example a
+// rerun attempt carrying forward hundreds of jobs) while smaller pages of the same
+// listing succeed. Each size reads the complete paginated listing, so results never
+// mix page sizes; only the final size spends its caller's full transient-retry budget.
+const RELEASE_JOB_LISTING_PAGE_SIZES = [100, 50, 30];
+const GH_SERVER_ERROR_PATTERN = /\(HTTP 5[0-9][0-9]\)|^HTTP\/\d+(?:\.\d+)? 5[0-9][0-9]\b/mu;
+
+export function isReleaseGhServerError(error) {
+  return GH_SERVER_ERROR_PATTERN.test(releaseGhTransportErrorText(error));
+}
+
+export async function readReleaseJobListing(readListing) {
+  for (const [index, perPage] of RELEASE_JOB_LISTING_PAGE_SIZES.entries()) {
+    const smallerPageFallback = index < RELEASE_JOB_LISTING_PAGE_SIZES.length - 1;
+    try {
+      return await readListing(perPage, { smallerPageFallback });
+    } catch (error) {
+      if (!smallerPageFallback || !isReleaseGhServerError(error)) {
+        throw error;
+      }
+    }
+  }
+  throw new Error("release job listing page sizes exhausted");
 }
 
 export function isReleaseGhArtifactMissingError(error) {
@@ -679,15 +731,25 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
     const completedNames = new Set(
       attempt.jobs.filter((job) => job?.status === "completed").map((job) => job.name),
     );
+    const runningNames = new Set(
+      ["queued", "in_progress"].includes(expected.effectiveRunStatus) &&
+        expectedAttempt === effectiveRunAttempt &&
+        effectiveRunAttempt > plannedRunAttempt
+        ? attempt.jobs
+            .filter((job) => job?.status === "in_progress" && (job.runner_id || job.runner_name))
+            .map((job) => job.name)
+        : [],
+    );
     for (const rawJob of attempt.jobs) {
       const job = normalizedAttemptJob(rawJob, expectedAttempt);
-      // Skipped jobs and GitHub's runnerless queued rerun copies (beside a completed
-      // sibling in the same attempt) carry no independent evidence. GitHub may
-      // mirror the completed sibling's steps onto these copies, so runner identity is
-      // the stable discriminator. Drop them before identity checks because they collide.
+      // GitHub's runnerless queued copies can outlive the real rerun job. While
+      // the latest rerun is active, retain its running job so collection stays
+      // pending even when the aggregate run status still says queued. Terminal
+      // evidence still requires the completed sibling. Mirrored steps do not
+      // identify a real runner.
       const ghost = job.status === "queued" && !rawJob.runner_id && !rawJob.runner_name;
       const skipped = job.status === "completed" && job.conclusion === "skipped";
-      if (skipped || (ghost && completedNames.has(job.name))) {
+      if (skipped || (ghost && (completedNames.has(job.name) || runningNames.has(job.name)))) {
         continue;
       }
       if (names.has(job.name)) {
@@ -715,6 +777,7 @@ export function composeReleaseChildAttemptEvidence({ attempts, expected, run }) 
   const provenance = validateReleaseChildRunProvenance(run, expected);
   const composite = composeReleaseAttemptJobs(attempts, {
     effectiveRunAttempt: provenance.effectiveRunAttempt,
+    effectiveRunStatus: run.status,
     plannedRunAttempt: expected.plannedRunAttempt,
   });
   return {
@@ -1484,6 +1547,11 @@ export function planReleaseChildRerun({ childKey, jobs }) {
   if (failed.length === 0) {
     throw new Error(`${childKey} has no blocking failed job to rerun`);
   }
+  // Receipt publication is best-effort at the workflow boundary. A green child
+  // can therefore need only this failed metadata job, never its passing workloads.
+  if (failed.length === 1 && failed[0] === FULL_RELEASE_CHILD_EVIDENCE_JOB) {
+    return { failed, mode: "receipt", producer: FULL_RELEASE_CHILD_EVIDENCE_JOB };
+  }
   // These consumers bind their producer's artifact to the current run attempt, so a
   // failed-jobs rerun that leaves the green producer behind stays red (#161317).
   const producer = "install_smoke_release_checks / installer_smoke_candidate_payload";
@@ -1539,20 +1607,7 @@ function releaseState(cancelled, activeRunIds, blockers, errors) {
   );
 }
 
-export function classifyReleaseSnapshot({
-  cancelled = false,
-  children,
-  extraBlockers = [],
-  extraErrors = [],
-  localFailures = [],
-}) {
-  const selected = children.filter((child) => child.selected);
-  const active = selected.filter(
-    (child) => child.runId && child.runAttempt && child.status !== "completed",
-  );
-  const childErrors = selected.flatMap((child) =>
-    (child.errors ?? []).filter((error) => error.kind !== "dispatch_missing"),
-  );
+function releaseChildBlockers(selected) {
   const childJobBlockers = selected.flatMap((child) =>
     child.jobs.filter(isFailedJob).map((job) => ({
       child: child.key,
@@ -1589,18 +1644,35 @@ export function classifyReleaseSnapshot({
       runId: child.runId,
       url: child.url,
     }));
+  return [...childJobBlockers, ...terminalBlockers];
+}
+
+export function classifyReleaseSnapshot({
+  cancelled = false,
+  children,
+  extraBlockers = [],
+  extraErrors = [],
+  localFailures = [],
+}) {
+  const selected = children.filter((child) => child.selected);
+  const active = selected.filter(
+    (child) => child.runId && child.runAttempt && child.status !== "completed",
+  );
+  const childErrors = selected.flatMap((child) =>
+    (child.errors ?? []).filter((error) => error.kind !== "dispatch_missing"),
+  );
+  const childBlockers = releaseChildBlockers(selected);
   const rawBlockers = [
     ...localFailures,
     ...extraBlockers,
     ...dispatchBlockers(selected),
-    ...childJobBlockers,
-    ...terminalBlockers,
+    ...childBlockers,
   ];
   const blockers = normalizeIssues(rawBlockers, "release_blocker");
   const errors = normalizeIssues([...extraErrors, ...childErrors], "orchestration_error");
 
   const activeRunIds = active.map((child) => String(child.runId)).toSorted();
-  const primary = [...childJobBlockers, ...terminalBlockers]
+  const primary = childBlockers
     .filter((issue) => issue.primaryAt)
     .toSorted((left, right) => String(left.primaryAt).localeCompare(String(right.primaryAt), "en"));
   return {
@@ -2376,26 +2448,53 @@ function verifyStateTransition(decision, drain, executionPlan) {
         "compatible collector evidence for the same execution plan is required",
     );
   }
-  if (
-    decision.state.startsWith("blocked_") &&
-    drain.state === "blocked_complete" &&
-    !decision.blockers.every((blocker) =>
-      drain.blockers.some(
-        (candidate) =>
-          JSON.stringify(candidate) === JSON.stringify(blocker) ||
-          // A verified newer attempt can replace a job URL while retaining the
-          // same blocker. Both URLs must belong to their accepted job evidence.
-          (executionPlan.attemptEvidenceVersion !== undefined &&
-            JSON.stringify({ ...candidate, url: blocker.url }) === JSON.stringify(blocker) &&
-            acceptedJobBlockerAttempt(drain, candidate) >
-              acceptedJobBlockerAttempt(decision, blocker)) ||
-          (blocker.kind === "workflow_failure" &&
-            candidate.kind === "job_failure" &&
-            ["child", "runId"].every((key) => candidate[key] === blocker[key])),
-      ),
-    )
-  ) {
-    throw new Error("diagnostic drain changed or removed a release decision blocker");
+  if (decision.state.startsWith("blocked_") && drain.state === "blocked_complete") {
+    // Display rows are capped and can shift as earlier-sorted jobs finish. The
+    // complete index owns retention; child evidence owns permitted replacements.
+    const transitionBlockers = (state) => [
+      ...state.blockers,
+      ...releaseChildBlockers(
+        Object.entries(state.children).map(([key, child]) =>
+          Object.assign({}, child, { key, jobs: child.timing.jobs }),
+        ),
+      ).map((issue) => normalizeIssue(issue, "release_blocker")),
+    ];
+    const previous = new Map(
+      transitionBlockers(decision).map((blocker) => [blockerIndex([blocker])[0], blocker]),
+    );
+    const current = transitionBlockers(drain);
+    const currentIndex = new Set(drain.blockerIndex);
+    const inconsistentDisplay = [decision, drain].some(
+      (state) =>
+        state.blockerCount !== null &&
+        blockerIndex(state.blockers).some((hash) => !state.blockerIndex.includes(hash)),
+    );
+    if (
+      inconsistentDisplay ||
+      !decision.blockerIndex.every((hash) => {
+        if (currentIndex.has(hash)) {
+          return true;
+        }
+        const blocker = previous.get(hash);
+        return (
+          blocker &&
+          current.some(
+            (candidate) =>
+              // A verified newer attempt can replace a job URL while retaining
+              // the same blocker. Both URLs belong to accepted job evidence.
+              (executionPlan.attemptEvidenceVersion !== undefined &&
+                JSON.stringify({ ...candidate, url: blocker.url }) === JSON.stringify(blocker) &&
+                acceptedJobBlockerAttempt(drain, candidate) >
+                  acceptedJobBlockerAttempt(decision, blocker)) ||
+              (blocker.kind === "workflow_failure" &&
+                candidate.kind === "job_failure" &&
+                ["child", "runId"].every((key) => candidate[key] === blocker[key])),
+          )
+        );
+      })
+    ) {
+      throw new Error("diagnostic drain changed or removed a release decision blocker");
+    }
   }
 }
 

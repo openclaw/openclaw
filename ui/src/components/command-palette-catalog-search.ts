@@ -20,7 +20,8 @@ import { loadCronCatalog } from "../lib/cron/catalog.ts";
 import type { PluginListResult } from "../lib/plugins/index.ts";
 import { settingsNavigationLabelForRoute } from "../lib/settings-navigation.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
-import type { IconName } from "./icons.ts";
+import type { IconName } from "./icon-data.ts";
+import { askBrandLabel } from "./theme-brand-label.ts";
 
 registerCommandPaletteEnglish();
 
@@ -127,7 +128,7 @@ function getCommandPaletteBaseItems(
         ? [
             {
               id: `panel-${panel}`,
-              label: t(labelKey),
+              label: panel === "custodian" ? askBrandLabel() : t(labelKey),
               icon,
               category: "navigation" as const,
               action: `panel:${panel}`,

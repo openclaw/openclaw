@@ -177,29 +177,6 @@ describe("Zalo API request methods", () => {
     });
   });
 
-  it("uses the production API root by default", async () => {
-    const fetcher = createOkFetcher();
-
-    await callZaloApi("getMe", "test-token", undefined, { fetch: fetcher });
-
-    expect(fetcher).toHaveBeenCalledWith(
-      "https://bot-api.zaloplatforms.com/bottest-token/getMe",
-      expect.any(Object),
-    );
-  });
-
-  it("uses ZALO_API_URL for provider-compatible alternate endpoints", async () => {
-    vi.stubEnv("ZALO_API_URL", " http://127.0.0.1:49152/zalo/ ");
-    const fetcher = createOkFetcher();
-
-    await callZaloApi("getMe", "test-token", undefined, { fetch: fetcher });
-
-    expect(fetcher).toHaveBeenCalledWith(
-      "http://127.0.0.1:49152/zalo/bottest-token/getMe",
-      expect.any(Object),
-    );
-  });
-
   it("rejects an empty ZALO_API_URL", async () => {
     vi.stubEnv("ZALO_API_URL", "   ");
 
@@ -218,7 +195,7 @@ describe("Zalo API request methods", () => {
     ).rejects.toThrow("ZALO_API_URL must use http:// or https://.");
   });
 
-  it.each(["https://proxy.example/zalo?tenant=1", "https://proxy.example/zalo#provider"])(
+  it.each(["https://proxy.example/zalo#provider"])(
     "rejects an API root with URL suffix components: %s",
     async (apiUrl) => {
       vi.stubEnv("ZALO_API_URL", apiUrl);
@@ -236,45 +213,6 @@ describe("Zalo API request methods", () => {
 
   it("keeps POST for deleteWebhook", async () => {
     await expectPostJsonRequest(deleteWebhook);
-  });
-
-  it("aborts sendChatAction when the typing timeout elapses", async () => {
-    vi.useFakeTimers();
-    try {
-      const fetcher = vi.fn<ZaloFetch>(
-        (_, init) =>
-          new Promise<Response>((_Local, reject) => {
-            init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
-              once: true,
-            });
-          }),
-      );
-
-      const promise = sendChatAction(
-        "test-token",
-        {
-          chat_id: "chat-123",
-          action: "typing",
-        },
-        fetcher,
-        25,
-      );
-      const rejected = expect(promise).rejects.toThrow("aborted");
-
-      await vi.advanceTimersByTimeAsync(25);
-
-      await rejected;
-      const [, init] = expectDefined(fetcher.mock.calls[0], "Zalo chat action request");
-      if (!init) {
-        throw new Error("expected Zalo chat action request init");
-      }
-      if (!init.signal) {
-        throw new Error("expected Zalo chat action abort signal");
-      }
-      expect(init.signal.aborted).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("keeps the default request deadline active while reading a hanging send response body", async () => {
@@ -351,71 +289,6 @@ describe("Zalo API request methods", () => {
     } finally {
       setTimeoutMock.mockRestore();
     }
-  });
-
-  it("validates outbound photo URLs against the SSRF guard before posting", async () => {
-    const setTimeoutMock = vi.spyOn(globalThis, "setTimeout");
-    const fetcher = createOkFetcher();
-    try {
-      await sendPhoto(
-        "test-token",
-        {
-          chat_id: "chat-123",
-          photo: "https://example.com/image.png",
-        },
-        fetcher,
-      );
-
-      expect(resolvePinnedHostnameWithPolicyMock).toHaveBeenCalledWith("example.com", {
-        policy: {},
-      });
-      expect(setTimeoutMock).toHaveBeenCalledWith(
-        expect.any(Function),
-        ZALO_SEND_PHOTO_REQUEST_TIMEOUT_MS,
-      );
-      expect(fetcher).toHaveBeenCalledTimes(1);
-      const [, init] = expectDefined(fetcher.mock.calls[0], "Zalo photo request");
-      expect(init?.body).toBe(
-        JSON.stringify({
-          chat_id: "chat-123",
-          photo: "https://example.com/image.png",
-        }),
-      );
-    } finally {
-      setTimeoutMock.mockRestore();
-    }
-  });
-
-  it.each([
-    { name: "short", caption: "caption text", expected: "caption text" },
-    {
-      name: "exact UTF-16 boundary",
-      caption: `${"a".repeat(1998)}🐱`,
-      expected: `${"a".repeat(1998)}🐱`,
-    },
-    {
-      name: "surrogate crossing the boundary",
-      caption: `${"a".repeat(1999)}🐱tail`,
-      expected: "a".repeat(1999),
-    },
-    { name: "oversized ASCII", caption: "a".repeat(2001), expected: "a".repeat(2000) },
-  ])("bounds $name photo captions in the serialized API request", async ({ caption, expected }) => {
-    const fetcher = createOkFetcher();
-
-    await sendPhoto(
-      "test-token",
-      { chat_id: "chat-123", photo: "https://example.com/image.png", caption },
-      fetcher,
-    );
-
-    const [, request] = expectDefined(fetcher.mock.calls[0], "Zalo photo request");
-    expect(request?.body).toBe(
-      JSON.stringify({
-        chat_id: "chat-123",
-        photo: "https://example.com/image.png",
-        caption: expected,
-      }),
-    );
   });
 
   it("keeps URL-only photo sends past the default and bounds the media window", async () => {

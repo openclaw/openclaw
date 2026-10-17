@@ -3,12 +3,12 @@ import type {
   SessionEntryPlaceholder,
   SessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.types.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type PreparedSessionEntryPredicate = {
   entry: SessionEntry | undefined;
   matches: (entry: SessionEntry | undefined) => boolean;
-  state: "current" | "unknown" | "changed";
+  state: "acquiring" | "current" | "unknown" | "changed";
   revision: number;
   pending: Set<object>;
 };
@@ -57,12 +57,23 @@ export function publishRetainedSessionEntryPredicate(
   read: PreparedSessionSharingRead,
   entry: SessionEntry | undefined,
   known: boolean,
+  options?: { preserveMatchingEntry?: boolean },
 ): void {
   const predicate = read.predicate;
   if (!predicate) {
     return;
   }
   if (predicate.state === "changed") {
+    return;
+  }
+  // Seed acquisition with the first committed fact. Later facts must agree before
+  // the selecting read can acknowledge them, including superseded receipts.
+  if (predicate.state === "acquiring" && predicate.revision === 0) {
+    predicate.entry = entry;
+    predicate.revision += 1;
+    if (!known) {
+      predicate.state = "unknown";
+    }
     return;
   }
   let matches: boolean | undefined;
@@ -77,7 +88,7 @@ export function publishRetainedSessionEntryPredicate(
   } else if (!matches) {
     predicate.revision += 1;
     predicate.state = "changed";
-  } else {
+  } else if (!options?.preserveMatchingEntry) {
     predicate.entry = entry;
   }
 }
@@ -91,7 +102,7 @@ export function revokePreparedSessionEntryPredicate(read: PreparedSessionSharing
 
 /** Partial publications change only their named fields, independently of row-cache warmth. */
 export function projectSessionEntryPredicateChange(
-  predicate: PreparedSessionEntryPredicate,
+  predicate: Pick<PreparedSessionEntryPredicate, "entry">,
   change: SessionRowFacts,
 ): SessionEntry | undefined {
   const entry = predicate.entry;
@@ -105,9 +116,11 @@ export function projectSessionEntryPredicateChange(
         ? { ...entry, owner: change.owner }
         : undefined;
     case "participants":
-      return change.projection
-        ? { ...entry, participants: undefined, participantCount: undefined, ...change.projection }
-        : undefined;
+      return change.projectionChanged === false
+        ? entry
+        : change.projection
+          ? { ...entry, participants: undefined, participantCount: undefined, ...change.projection }
+          : undefined;
     case "category":
       return entry.sessionId === change.sessionId
         ? { ...entry, category: change.category ?? undefined }
@@ -212,7 +225,7 @@ export function recordAcquiringSessionMember(
 /** Apply a committed field postimage only to its original session generation. */
 export function updateSessionSharingField(
   facts: CommittedSessionSharingFacts,
-  change: Extract<SessionRowFacts, { kind: "member" | "owner" }>,
+  change: Extract<SessionRowFacts, { kind: "member" | "owner" | "category" }>,
 ): CommittedSessionSharingFacts {
   if (facts.entry?.sessionId !== change.sessionId) {
     return facts;
@@ -221,6 +234,9 @@ export function updateSessionSharingField(
     return (facts.entry.lifecycleRevision ?? null) === change.lifecycleRevision
       ? { ...facts, entry: { ...facts.entry, owner: change.owner } }
       : facts;
+  }
+  if (change.kind === "category") {
+    return { ...facts, entry: { ...facts.entry, category: change.category ?? undefined } };
   }
   const membership = new Set(facts.membership);
   if (change.present) {

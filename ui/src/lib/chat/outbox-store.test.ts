@@ -728,7 +728,10 @@ describe("stored outbox summaries", () => {
     const unsubscribeFirst = subscribeStoredChatOutboxChanges(firstListener);
     const unsubscribeSecond = subscribeStoredChatOutboxChanges(secondListener);
 
-    expect(addEventListener).toHaveBeenCalledWith("storage", expect.any(Function));
+    const storageListeners = addEventListener.mock.calls
+      .filter(([type]) => type === "storage")
+      .map(([, listener]) => listener);
+    expect(storageListeners).toEqual([expect.any(Function)]);
 
     window.dispatchEvent(
       new StorageEvent("storage", { key: "openclaw.control.chatComposer.v4:gateway" }),
@@ -747,10 +750,14 @@ describe("stored outbox summaries", () => {
     expect(secondListener).toHaveBeenCalledTimes(2);
 
     unsubscribeFirst();
-    expect(removeEventListener).not.toHaveBeenCalledWith("storage", expect.any(Function));
+    expect(removeEventListener.mock.calls.filter(([type]) => type === "storage")).toEqual([]);
 
     unsubscribeSecond();
-    expect(removeEventListener).toHaveBeenCalledWith("storage", expect.any(Function));
+    expect(
+      removeEventListener.mock.calls
+        .filter(([type]) => type === "storage")
+        .map(([, listener]) => listener),
+    ).toEqual(storageListeners);
   });
 
   it("rejects a store owned by another gateway", () => {

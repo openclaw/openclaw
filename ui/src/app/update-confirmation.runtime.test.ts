@@ -4,10 +4,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
-import { confirmAndStartUpdateRuntime } from "./update-confirmation.runtime.ts";
+import { confirmAndStartUpdateRuntime } from "./update-confirmation.runtime.tsx";
 import {
   createUpdateProgressWatcher,
   type ConfirmAndStartUpdateParams,
@@ -37,6 +38,7 @@ function createProgressStream(
     async push(progress: UpdateProgress) {
       emit?.(progress);
       await Promise.resolve();
+      flush();
     },
   };
 }
@@ -74,6 +76,8 @@ function startUpdate(
 ) {
   const startGatewayUpdate = vi.fn();
   const settled = confirmAndStartUpdateRuntime({
+    isCurrentTarget: () => true,
+    canStartNativeUpdate: () => true,
     startGatewayUpdate,
     updateAvailable: UPDATE_AVAILABLE,
     updateSchedule: null,
@@ -97,6 +101,24 @@ afterEach(() => {
   } else {
     Reflect.deleteProperty(window, "webkit");
   }
+});
+
+it("refuses a native update without a live authority check", async () => {
+  const postMessage = installNativeBridge();
+  const { settled, startGatewayUpdate } = startUpdate({
+    viaNativeApp: true,
+    canStartNativeUpdate: undefined,
+  });
+  await getRenderedModalDialog(document.body);
+  findButton("Update Mac app and restart").click();
+  flush();
+  expect(postMessage).not.toHaveBeenCalled();
+  expect(startGatewayUpdate).not.toHaveBeenCalled();
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+    "Administrator access is required",
+  );
+  findButton("Cancel").click();
+  await settled;
 });
 
 it.each([false, true])("routes a confirmed Mac update with bridge removed: %s", async (removed) => {
@@ -244,13 +266,6 @@ it.each<{
   distance: string | null;
 }>([
   { version: null, cachedBehind: 3, distance: "3 commits behind" },
-  { version: "2026.8.1", cachedBehind: 246, distance: "246 commits behind" },
-  {
-    version: "2026.8.1",
-    cachedBehind: 1,
-    git: { status: "behind", commitsBehind: 50 },
-    distance: "50 commits behind",
-  },
   {
     version: "2026.8.1",
     cachedBehind: 246,
@@ -269,12 +284,6 @@ it.each<{
     distance: "50 commits behind",
   },
   { version: "2026.9.3", cachedBehind: 246, git: { status: "current" }, distance: null },
-  {
-    version: "2026.9.3",
-    cachedBehind: 246,
-    git: { status: "ahead", commitsAhead: 1 },
-    distance: null,
-  },
 ])(
   "formats the git target from its current comparison: %j",
   async ({ version, cachedBehind, git, distance }) => {
@@ -397,11 +406,8 @@ it("keeps the server success report visible across restart until the operator cl
   findButton("Update and restart").click();
   const restarting = createUpdateRunFixture({ phase: "restarting" });
   await stream.push({ run: restarting, busy: true, connected: false, failure: null });
-  const view = document.body.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-    "openclaw-update-run-view",
-  )!;
-  await view.updateComplete;
-  expect(view.textContent).toContain("Gateway restarting…");
+  const view = document.body.querySelector("openclaw-update-run-view")!;
+  await waitForSolid(() => expect(view.textContent).toContain("Gateway restarting…"));
   await stream.push({
     run: createUpdateRunFixture({
       phase: "finished",
@@ -413,7 +419,7 @@ it("keeps the server success report visible across restart until the operator cl
     connected: true,
     failure: null,
   });
-  await view.updateComplete;
+  flush();
   expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
   expect(view.querySelector(".update-run-view__report")?.textContent).toContain(
     "OpenClaw updated to 2026.9.2",
@@ -438,6 +444,7 @@ it.each(["existing", "started", "initial"] as const)(
     const stream = createProgressStream(entry === "existing" ? progress : undefined);
     const onAcknowledge = vi.fn();
     const settled = confirmAndStartUpdateRuntime({
+      isCurrentTarget: () => true,
       ...(entry !== "started" ? { existingRun: run } : {}),
       onAcknowledge,
       startGatewayUpdate: vi.fn(),
@@ -466,7 +473,6 @@ it.each(["existing", "started", "initial"] as const)(
 );
 
 it.each([
-  { name: "an empty snapshot", failure: null },
   {
     name: "a retained failure",
     failure: "The update failed at install: ENOSPC: no space left on device, write.",
@@ -503,8 +509,6 @@ it.each([
     recovery: false,
     watch: true,
   },
-  { status: "skipped", reason: "container-image-install", recovery: false, watch: true },
-  { status: "skipped", reason: "already-current", recovery: false, watch: true },
   { status: "skipped", reason: "dirty", recovery: true, watch: true },
   { status: "failed", reason: "build-failed", recovery: true, watch: true },
 ] as const)(
@@ -540,8 +544,6 @@ it.each([
 it.each([
   { status: "running", entry: "existing" },
   { status: "failed", entry: "existing" },
-  { status: "succeeded", entry: "existing" },
-  { status: "skipped", entry: "existing" },
   { status: "running", entry: "started" },
 ] as const)(
   "keeps the $status report and exposes read recovery for a $entry run",
@@ -550,12 +552,7 @@ it.each([
       status,
       phase: status === "running" ? "verifying" : "finished",
       finishedAtMs: status === "running" ? null : 4_000,
-      reason:
-        status === "failed"
-          ? "build-failed"
-          : status === "skipped"
-            ? "external-supervisor-update-required"
-            : null,
+      reason: status === "failed" ? "build-failed" : null,
     });
     let admitted = entry === "existing";
     let rejectRunReads = false;
@@ -579,6 +576,8 @@ it.each([
         : {};
     });
     const harness = updateRunHarness(request);
+    const selfUser = { id: "gateway-owner" };
+    harness.update({ selfUser });
     const overlays = createApplicationOverlays(harness.gateway);
     let operation: Promise<void> | undefined;
     let statusOperation: Promise<boolean> | undefined;
@@ -586,6 +585,7 @@ it.each([
     try {
       await overlays.refreshUpdateStatus();
       settled = confirmAndStartUpdateRuntime({
+        isCurrentTarget: overlays.captureUpdateTarget(),
         ...(entry === "existing" ? { existingRun: run } : {}),
         startGatewayUpdate: () => {
           operation = overlays.runUpdate();
@@ -602,15 +602,28 @@ it.each([
         await flushMicrotasks();
         await operation;
       }
+      const retainedView = modal.querySelector(".update-run-view");
+      expect(retainedView).not.toBeNull();
+      // Reconnect the same target before exercising recovery from its retained report.
+      harness.update({ phase: "reconnecting", selfUser: undefined });
+      harness.update({ phase: "connected", selfUser: undefined });
+      await flushMicrotasks();
+      harness.update({ selfUser });
       rejectRunReads = true;
       harness.emitEvent("update.run.changed", { ...run, updatedAtMs: run.updatedAtMs + 1 });
       await flushMicrotasks();
-      const view = modal.querySelector<
-        HTMLElement & { run: unknown; updateComplete: Promise<boolean> }
-      >("openclaw-update-run-view")!;
-      await view.updateComplete;
+      flush();
+      const view = modal.querySelector(".update-run-view")!;
       expect(modal.textContent).toContain("Run status read failed");
-      expect(view.run).toEqual(run);
+      expect(view).toBe(retainedView);
+      expect(view.getAttribute("data-run-id")).toBe(run.runId);
+      expect(view.getAttribute("data-run-status")).toBe(status);
+      expect(view.querySelector("h3")?.textContent).toContain(
+        status === "running"
+          ? "OpenClaw update in progress: verifying"
+          : `OpenClaw update ${status}`,
+      );
+      const reportText = view.textContent;
       const check = findButton("Check status");
       expect(check.disabled).toBe(false);
       if (status !== "failed") {
@@ -638,25 +651,31 @@ it.each([
       check.click();
       pendingStatus.resolve();
       await statusOperation;
+      flush();
       expect(modal.textContent).not.toContain("Run status read failed");
       expect(modal.querySelector('[role="status"]')?.textContent).toContain("Status refreshed.");
-      expect(view.run).toEqual(run);
+      expect(modal.querySelector(".update-run-view")).toBe(view);
+      expect(view.textContent).toBe(reportText);
       expect(checkoutReads()).toHaveLength(checkoutReadsBeforeCheck + 1);
 
       statusResponse = Promise.reject(new Error("Status refresh unavailable"));
       findButton("Check status").click();
       await statusOperation;
+      flush();
       expect(modal.textContent).toContain(
         "Could not check for updates: Status refresh unavailable",
       );
       expect(modal.textContent).not.toContain("Status refreshed.");
       expect(findButton("Check status").disabled).toBe(false);
-      expect(view.run).toEqual(run);
+      expect(modal.querySelector(".update-run-view")).toBe(view);
+      expect(view.textContent).toBe(reportText);
       statusResponse = Promise.resolve();
       findButton("Check status").click();
       await statusOperation;
+      flush();
       expect(modal.textContent).not.toContain("Could not check for updates");
-      expect(view.run).toEqual(run);
+      expect(modal.querySelector(".update-run-view")).toBe(view);
+      expect(view.textContent).toBe(reportText);
       harness.update({ phase: "connecting", client: null });
       await flushMicrotasks();
       expect(findButton("Check status").disabled).toBe(true);

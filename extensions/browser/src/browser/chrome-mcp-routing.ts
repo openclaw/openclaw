@@ -1,6 +1,6 @@
 // Serializes Chrome MCP operations and maps opaque targets/snapshot refs.
 import { randomUUID } from "node:crypto";
-import { McpError } from "@modelcontextprotocol/sdk/types.js";
+import { SdkError } from "@modelcontextprotocol/client";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -123,7 +123,10 @@ async function withChromeMcpOperationLock<T>(
 
 /** UID-only MCP actions cannot distinguish collisions between renderer documents. */
 function validateChromeMcpSnapshotRefs(root: ChromeMcpSnapshotNode) {
-  const documents = new Map<string, { document: ChromeMcpSnapshotNode; documentUid?: string }>();
+  const documents = new Map<
+    string,
+    { document: ChromeMcpSnapshotNode; documentUid?: string; nodes: ChromeMcpSnapshotNode[] }
+  >();
   const pending = [{ node: root, document: root, documentUid: normalizeOptionalString(root.id) }];
   for (let current = pending.pop(); current; current = pending.pop()) {
     const role = current.node.role?.trim().toLowerCase();
@@ -140,9 +143,13 @@ function validateChromeMcpSnapshotRefs(root: ChromeMcpSnapshotNode) {
             "Use a managed browser profile for this page; ref-free screenshots remain available.",
         );
       }
-      documents.set(uid, { document, documentUid });
+      if (previous) {
+        previous.nodes.push(current.node);
+      } else {
+        documents.set(uid, { document, documentUid, nodes: [current.node] });
+      }
     }
-    for (const child of current.node.children ?? []) {
+    for (const child of current.node.children?.toReversed() ?? []) {
       pending.push({
         node: child,
         document: role === "iframe" ? current.node : document,
@@ -165,31 +172,16 @@ export function registerChromeMcpSnapshot(
   }
   const documents = validateChromeMcpSnapshotRefs(root);
   const routing = getChromeMcpRoutingState(session);
-  const wrappedByUid = new Map<string, string>();
   const refs = new Map<string, { uid: string; documentUid?: string }>();
 
-  // Normalization creates this operation-owned tree. Rewrite after document
-  // validation; the renderer owns depth truncation.
-  const stack = [root];
-  for (let node = stack.pop(); node; node = stack.pop()) {
-    const rawUid = normalizeOptionalString(node.id);
-    if (rawUid) {
-      let id = wrappedByUid.get(rawUid);
-      if (!id) {
-        id = `${CHROME_MCP_SNAPSHOT_REF_PREFIX}${routing.sessionNonce}:${routing.nextSnapshotRefId}`;
-        routing.nextSnapshotRefId += 1;
-        wrappedByUid.set(rawUid, id);
-        refs.set(id, {
-          uid: rawUid,
-          documentUid: documents.get(rawUid)?.documentUid,
-        });
-      }
+  // Validation collects aliases in snapshot order before claiming ref IDs.
+  // Normalization created this operation-owned tree; rewrite all aliases together.
+  for (const [uid, binding] of documents) {
+    const id = `${CHROME_MCP_SNAPSHOT_REF_PREFIX}${routing.sessionNonce}:${routing.nextSnapshotRefId}`;
+    routing.nextSnapshotRefId += 1;
+    refs.set(id, { uid, documentUid: binding.documentUid });
+    for (const node of binding.nodes) {
       node.id = id;
-    }
-    for (const child of node.children?.toReversed() ?? []) {
-      if (child) {
-        stack.push(child);
-      }
     }
   }
   routing.snapshotsByTarget.set(targetId, { documentUid, refs });
@@ -226,14 +218,12 @@ async function callTool(
   // SDK-owned cancellation removes its request correlation entry. An outer race would return
   // early while leaving the underlying MCP request pending after a target-browser crash.
   const request = { name, arguments: args };
-  const rawCall = (
-    (timeoutMs !== undefined && timeoutMs > 0) || signal
-      ? lease.session.client.callTool(request, undefined, {
-          ...(timeoutMs !== undefined && timeoutMs > 0 ? { timeout: timeoutMs } : {}),
-          ...(signal ? { signal } : {}),
-        })
-      : lease.session.client.callTool(request)
-  ) as Promise<ChromeMcpToolResult>;
+  const toolDefinition = lease.session.tools?.find((tool) => tool.name === name);
+  const rawCall = lease.session.client.callTool(request, {
+    ...(timeoutMs !== undefined && timeoutMs > 0 ? { timeout: timeoutMs } : {}),
+    ...(signal ? { signal } : {}),
+    ...(toolDefinition ? { toolDefinition } : {}),
+  });
 
   let result: ChromeMcpToolResult;
   try {
@@ -246,7 +236,7 @@ async function callTool(
     if (signal?.aborted) {
       throw toErrorObject(signal.reason ?? err, "Non-Error abort reason");
     }
-    if (timeoutMs && err instanceof McpError && err.code === MCP_REQUEST_TIMEOUT_CODE) {
+    if (timeoutMs && err instanceof SdkError && err.code === MCP_REQUEST_TIMEOUT_CODE) {
       throw new Error(
         `Chrome MCP "${name}" timed out after ${timeoutMs}ms. Session reset for reconnect.`,
         { cause: err },

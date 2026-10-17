@@ -12,6 +12,7 @@ export type SessionManagerMocks = {
   getHeader: UnknownMock;
   getLeafId: Mock<() => string | null>;
   getLeafEntry: UnknownMock;
+  hasLoadedTranscriptTail: () => boolean;
   getEntry: UnknownMock;
   getEntries: UnknownMock;
   getBranch: UnknownMock;
@@ -30,7 +31,7 @@ export type SessionManagerMocks = {
   flushPendingToolResultsAsync: UnknownMock;
   clearPendingToolResults: UnknownMock;
   reloadPersistedTranscriptAsync: UnknownMock;
-  clearNextUserMessagePersistenceSuppression: UnknownMock;
+  setNextUserMessagePersistence: UnknownMock;
   removeTrailingEntriesAsync: UnknownMock;
 };
 
@@ -83,7 +84,7 @@ export function resetSessionManagerMocks(
   sessionManager.getBoundaryCount.mockReset().mockReturnValue(0);
   sessionManager.branchAsync.mockReset();
   sessionManager.resetLeafAsync.mockReset();
-  sessionManager.clearNextUserMessagePersistenceSuppression.mockReset();
+  sessionManager.setNextUserMessagePersistence.mockReset();
   sessionManager.buildSessionContext.mockReset().mockReturnValue({ messages });
   sessionManager.appendThinkingLevelChange.mockReset();
   sessionManager.appendModelChange.mockReset();

@@ -8,18 +8,18 @@ import {
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
-  retryMainSessionRecoveryMutation,
-  scheduleMainSessionRecoveryMutation,
-} from "./main-session-recovery-lifecycle.js";
-import {
   isMainSessionRecoveryPending,
+  isMainSessionRecoveryReconciliationCandidate,
   transitionMainSessionRecovery,
   type MainSessionRecoveryCommand,
   type MainSessionRecoveryOwnerClaim,
   type MainSessionRecoveryReservation,
   type MainSessionRecoveryTransitionResult,
 } from "./main-session-recovery-state.js";
-import { captureYieldedMainSessionContinuation } from "./main-session-restart-recovery-target.js";
+import {
+  captureYieldedMainSessionContinuation,
+  resolveRestartRecoveryDispatchIdentity,
+} from "./main-session-restart-recovery-target.js";
 
 export type MainSessionRecoveryStoreTarget = {
   agentId?: string;
@@ -64,7 +64,6 @@ export async function commitMainSessionRecovery(params: {
   command: MainSessionRecoveryCommand;
   expectedSessionId?: string;
   requireWriteSuccess?: boolean;
-  scanAliases?: boolean;
   shouldContinue?: () => boolean;
   target: MainSessionRecoveryStoreTarget;
 }): Promise<MainSessionRecoveryStoreResult> {
@@ -82,10 +81,17 @@ export async function commitMainSessionRecovery(params: {
       ? params.command.claim
       : undefined;
   let yieldedContinuation: (() => boolean) | undefined;
-  const result = await applySessionEntryReplacements<MainSessionRecoveryStoreResult | undefined>({
+  return await applySessionEntryReplacements<MainSessionRecoveryStoreResult>({
     agentId: params.target.agentId,
     requireWriteSuccess: params.requireWriteSuccess,
-    ...(params.scanAliases ? {} : { sessionKeys: [params.target.sessionKey] }),
+    sessionKeys: [params.target.sessionKey],
+    // Retained windows follow key moves and session rotation; the claim still authorizes cleanup.
+    includeSessionWindowOwner:
+      reservationCleanup?.sessionId ??
+      recoveryAdmission?.sessionId ??
+      exactOwnerClaim?.sessionId ??
+      ownerClaim?.sessionId ??
+      params.expectedSessionId,
     storePath: params.target.storePath,
     assertCommitAllowed: () => {
       if (
@@ -98,8 +104,7 @@ export async function commitMainSessionRecovery(params: {
       }
     },
     update: (entries) => {
-      // Recheck after entering write admission: shutdown can begin while this
-      // recovery owner is waiting, including between exact and moved-key lookups.
+      // Shutdown can begin while recovery waits for writer admission.
       const expectedGeneration = currentGenerationRequiredBy(params.command);
       if (
         params.shouldContinue?.() === false ||
@@ -141,20 +146,8 @@ export async function commitMainSessionRecovery(params: {
         });
       } else if (ownerClaim && (!selected || selected.entry.sessionId !== ownerClaim.sessionId)) {
         candidate = entries.find(({ entry }) => entry.sessionId === ownerClaim.sessionId);
-      } else if (params.scanAliases && params.expectedSessionId) {
+      } else if (params.expectedSessionId) {
         candidate = entries.find(({ entry }) => entry.sessionId === params.expectedSessionId);
-      }
-      if (
-        !candidate &&
-        !params.scanAliases &&
-        (reservationCleanup ||
-          recoveryAdmission ||
-          exactOwnerClaim ||
-          ownerClaim ||
-          params.command.kind === "inspect")
-      ) {
-        // Discover moved identities only after the exact key misses.
-        return { result: undefined };
       }
       if (reservationCleanup || recoveryAdmission || exactOwnerClaim) {
         candidate ??= selected;
@@ -194,10 +187,12 @@ export async function commitMainSessionRecovery(params: {
         )
       ) {
         yieldedContinuation = captureYieldedMainSessionContinuation({
-          storeAgentId: params.target.agentId,
           entry,
-          sessionKey: candidate.sessionKey,
-          storePath: params.target.storePath,
+          requester: resolveRestartRecoveryDispatchIdentity({
+            storeAgentId: params.target.agentId,
+            sessionKey: candidate.sessionKey,
+            storePath: params.target.storePath,
+          }),
         });
         if (yieldedContinuation?.()) {
           // The durable child batch takes custody before the successor gets its own fence.
@@ -219,7 +214,6 @@ export async function commitMainSessionRecovery(params: {
       };
     },
   });
-  return result ?? commitMainSessionRecovery({ ...params, scanAliases: true });
 }
 
 export async function refreshMainSessionRecoveryOwner(
@@ -304,6 +298,18 @@ export async function claimMainSessionRecoveryOwner(params: {
   ) {
     return { kind: "not_required", entry: claim.entry, sessionKey: claim.sessionKey } as const;
   }
+  if (
+    claim.entry?.sessionId === params.sessionId &&
+    claim.sessionKey &&
+    isMainSessionRecoveryReconciliationCandidate(claim.entry)
+  ) {
+    return {
+      kind: "invalidated",
+      reason: "recovery_pending",
+      entry: claim.entry,
+      sessionKey: claim.sessionKey,
+    } as const;
+  }
   const reason = claim.transition.kind === "rejected" ? claim.transition.reason : "state_changed";
   return { kind: "invalidated", reason } as const;
 }
@@ -340,18 +346,17 @@ export async function inspectMainSessionRecoveryRequired(params: {
   };
 }
 
-async function releaseMainSessionRecoveryOwnerWithRetries(
-  lease: MainSessionRecoveryOwnerLease,
+export async function releaseMainSessionRecoveryOwner(
+  lease: MainSessionRecoveryOwnerLease | undefined,
 ): Promise<MainSessionRecoveryPendingTarget | undefined> {
-  // A leaked current-generation token blocks automatic recovery until restart.
-  // Token-scoped release is idempotent, so transient writer failures are safe to retry.
-  const released = await retryMainSessionRecoveryMutation(async () =>
-    commitMainSessionRecovery({
-      command: { kind: "release_foreground", claim: lease },
-      requireWriteSuccess: true,
-      target: lease,
-    }),
-  );
+  if (!lease) {
+    return undefined;
+  }
+  const released = await commitMainSessionRecovery({
+    command: { kind: "release_foreground", claim: lease },
+    requireWriteSuccess: true,
+    target: lease,
+  });
   const { entry, sessionKey } = released;
   if (
     (released.transition.kind !== "applied" && released.transition.kind !== "no_change") ||
@@ -368,28 +373,4 @@ async function releaseMainSessionRecoveryOwnerWithRetries(
     sessionKey,
     storePath: lease.storePath,
   };
-}
-
-export async function releaseMainSessionRecoveryOwner(
-  lease: MainSessionRecoveryOwnerLease | undefined,
-): Promise<MainSessionRecoveryPendingTarget | undefined> {
-  if (!lease) {
-    return undefined;
-  }
-  try {
-    return await releaseMainSessionRecoveryOwnerWithRetries(lease);
-  } catch (error) {
-    // Exact-token cleanup survives transient writer outages without blocking its caller.
-    scheduleMainSessionRecoveryMutation({
-      mutation: () => releaseMainSessionRecoveryOwnerWithRetries(lease),
-      onSuccess: async (pending) => {
-        if (pending) {
-          const { scheduleMainSessionRecoveryPendingTarget } =
-            await import("./main-session-recovery-owner-release.js");
-          scheduleMainSessionRecoveryPendingTarget(pending);
-        }
-      },
-    });
-    throw error;
-  }
 }

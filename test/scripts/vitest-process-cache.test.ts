@@ -12,9 +12,16 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 const tsxPreload = pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm")).href;
 
-it.each(["hermetic", "live-aware", "tooling"] as const)(
-  "keeps source compiler caching inside the owned namespace (%s)",
-  async (homeMode) => {
+it.each([
+  ["hermetic", undefined],
+  ["live-aware", undefined],
+  ["tooling", undefined],
+  ["hermetic", "caller-cache"],
+  ["hermetic", ""],
+  ["hermetic", "0"],
+] as const)(
+  "keeps source compiler cache ownership (%s, Bun cache %s)",
+  async (homeMode, bunCache) => {
     const root = fs.realpathSync(tempDirs.make("oc-vt-source-cache-"));
     const sourcePath = path.join(root, "source.mts");
     fs.writeFileSync(sourcePath, "enum Value { Answer = 42 }\nconsole.log(Value.Answer);\n");
@@ -28,7 +35,7 @@ if (result.error) throw result.error;
 if (result.status !== 0) throw new Error(result.stderr);
 const namespace = os.tmpdir();
 const cache = path.join(namespace, "tsx-" + (process.geteuid?.() ?? os.userInfo().username));
-console.log(JSON.stringify({ namespace, output: result.stdout, disabled: process.env.TSX_DISABLE_CACHE, cached: fs.existsSync(cache) && fs.readdirSync(cache).length > 0 }));
+console.log(JSON.stringify({ namespace, output: result.stdout, disabled: process.env.TSX_DISABLE_CACHE, cached: fs.existsSync(cache) && fs.readdirSync(cache).length > 0, bunCache: process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH }));
 `;
     const env = {
       PATH: process.env.PATH,
@@ -39,6 +46,7 @@ console.log(JSON.stringify({ namespace, output: result.stdout, disabled: process
       TEMP: root,
       TSX_DISABLE_CACHE: "1",
       NODE_DISABLE_COMPILE_CACHE: "1",
+      BUN_RUNTIME_TRANSPILER_CACHE_PATH: bunCache,
       ESBUILD_WORKER_THREADS: "0",
     };
     const { child, completion } = spawnOwnedVitestProcess({
@@ -62,6 +70,13 @@ console.log(JSON.stringify({ namespace, output: result.stdout, disabled: process
     const observed = JSON.parse(output);
     expect(observed.output).toBe("42\n");
     expect(observed.cached, JSON.stringify(observed)).toBe(homeMode !== "tooling");
+    expect(observed.bunCache).toBe(
+      bunCache ??
+        (homeMode === "tooling"
+          ? undefined
+          : path.resolve(import.meta.dirname, "../../.cache/bun-transpiler")),
+    );
+    expect(env.BUN_RUNTIME_TRANSPILER_CACHE_PATH).toBe(bunCache);
     expect(path.dirname(observed.namespace)).toBe(root);
     expect(env.TSX_DISABLE_CACHE).toBe("1");
     expect(fs.existsSync(observed.namespace)).toBe(process.platform === "win32");

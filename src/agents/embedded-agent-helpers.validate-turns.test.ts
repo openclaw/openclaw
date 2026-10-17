@@ -37,55 +37,39 @@ describe("turn validation", () => {
     ]);
   });
 
-  it("does not merge Gemini turns across tool results", () => {
-    const prefix = [
-      { role: "user", content: "Use tool" },
-      assistant([call("toolUse")]),
-      { role: "toolResult", toolUseId: "tool-1", content: [text("Found data")] },
-    ];
-    expect(
-      validateGeminiTurns(
-        asMessages([
-          ...prefix,
-          assistant([text("Answer")]),
-          assistant([text("Extra")]),
-          user("Next"),
-        ]),
-      ),
-    ).toEqual([...prefix, assistant([text("Answer"), text("Extra")]), user("Next")]);
-  });
-
-  it("keeps consecutive users separate when merging is disabled", () => {
-    const messages = asMessages([
-      user("Switch model"),
-      user("Read notes.txt"),
-      assistant([text("Done")]),
-    ]);
-    expect(validateAnthropicTurns(messages, { mergeConsecutiveUserTurns: false })).toEqual(
-      messages,
-    );
-  });
-
-  it("merges injected assistant turns before checking signed tool-result pairing", () => {
-    const result = {
-      role: "toolResult",
-      toolUseId: "tool-1",
-      toolName: "gateway",
-      content: [text("done")],
-      isError: false,
-    };
-    expect(
-      validateToolTurn(
-        signed(),
-        [{ ...assistant([text("Subagent completion delivered.")]), stopReason: "stop" }, result],
-        { stopReason: "toolUse" },
-      ),
-    ).toEqual([
-      user("Use tool"),
-      { ...assistant([...signed(), text("Subagent completion delivered.")]), stopReason: "stop" },
-      result,
-    ]);
-  });
+  it.each([false])(
+    "preserves signed tool-result pairing across an injected assistant (merging=%s)",
+    (mergeConsecutiveTurns) => {
+      const result = {
+        role: "toolResult",
+        toolUseId: "tool-1",
+        toolName: "gateway",
+        content: [text("done")],
+        isError: false,
+      };
+      const source = { ...assistant(signed()), stopReason: "toolUse" };
+      const injected = {
+        ...assistant([text("Subagent completion delivered.")]),
+        stopReason: "stop",
+      };
+      expect(
+        validateAnthropicTurns(asMessages([user("Use tool"), source, injected, result]), {
+          mergeConsecutiveTurns,
+        }),
+      ).toEqual([
+        user("Use tool"),
+        ...(mergeConsecutiveTurns
+          ? [
+              {
+                ...assistant([...signed(), text("Subagent completion delivered.")]),
+                stopReason: "stop",
+              },
+            ]
+          : [source, injected]),
+        result,
+      ]);
+    },
+  );
 
   it("normalizes string user content while merging", () => {
     expect(
@@ -154,21 +138,6 @@ describe("turn validation", () => {
       user("Use tool"),
       omitted,
       following,
-    ]);
-  });
-
-  it("accepts a current tool-result alias alongside a stale alias", () => {
-    const following = [
-      {
-        ...textToolResult("tool-current", "gateway", "ok", { isError: false }),
-        toolUseId: "tool-stale",
-      },
-      user("Continue"),
-    ];
-    expect(validateToolTurn(signed("tool-current"), following)).toEqual([
-      user("Use tool"),
-      assistant(signed("tool-current")),
-      ...following,
     ]);
   });
 

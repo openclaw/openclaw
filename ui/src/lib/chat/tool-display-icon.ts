@@ -1,5 +1,5 @@
 import SHARED_TOOL_DISPLAY_JSON from "../../../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json" with { type: "json" };
-import { icons, type IconName } from "../../components/icons.ts";
+import { iconData, type IconName } from "../../components/icon-data.ts";
 
 const tools = new Map<string, { icon: string }>(Object.entries(SHARED_TOOL_DISPLAY_JSON.tools));
 
@@ -13,7 +13,7 @@ const TOOL_NAME_ALIASES = new Map([
 ]);
 
 function isIconName(name: string): name is IconName {
-  return Object.hasOwn(icons, name);
+  return Object.hasOwn(iconData, name);
 }
 
 export function resolveToolDisplayIcon(name: string): IconName {

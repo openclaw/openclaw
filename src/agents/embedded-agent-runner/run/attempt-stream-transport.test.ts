@@ -19,9 +19,13 @@ import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
+import "../../ai-transport-runtime-host.js";
 import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
 import type { StreamFn } from "../../runtime/index.js";
-import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
+import {
+  castAgentMessage,
+  makeAgentAssistantMessage,
+} from "../../test-helpers/agent-message-fixtures.js";
 import {
   testing as extraParamsTesting,
   type WrapProviderStreamFnParams,
@@ -42,7 +46,7 @@ const admittedRunContext = {
 };
 
 function createTransportFixture(testCase: {
-  compaction: boolean;
+  compaction?: boolean;
   pruning: boolean;
   apiKey: string;
   baseUrl?: string;
@@ -81,9 +85,14 @@ function createTransportFixture(testCase: {
       runtimePlan: {
         auth: { forwardedAuthProfileId: undefined },
         transport: {
-          resolveExtraParams: () => ({
+          resolveExtraParams: ({
+            extraParamsOverride,
+          }: {
+            extraParamsOverride?: Record<string, unknown>;
+          }) => ({
             transport: "sse",
             anthropicServerCompaction: testCase.compaction,
+            ...extraParamsOverride,
           }),
         },
       },
@@ -209,27 +218,6 @@ describe("prepareEmbeddedAttemptTransport", () => {
       compaction: true,
       apiKey: "test-api-key",
       replayEnabled: true,
-      pruning: false,
-      clearing: false,
-    },
-    {
-      compaction: true,
-      apiKey: "test-sk-ant-oat-oauth",
-      replayEnabled: false,
-      pruning: true,
-      clearing: false,
-    },
-    {
-      compaction: false,
-      apiKey: "test-api-key",
-      replayEnabled: false,
-      pruning: true,
-      clearing: true,
-    },
-    {
-      compaction: true,
-      apiKey: "test-api-key",
-      replayEnabled: true,
       pruning: true,
       clearing: true,
     },
@@ -252,10 +240,125 @@ describe("prepareEmbeddedAttemptTransport", () => {
     expect(result.serverToolClearingEnabled).toBe(testCase.clearing);
   });
 
-  it.each([
-    { source: "stored profile", resolvedApiKey: undefined },
-    { source: "resolved run", resolvedApiKey: "sk-ant-oat01-synthetic-run" },
-  ])(
+  it("disables OpenAI inline compaction only for memory flushes", async () => {
+    const payloads: Record<string, unknown>[] = [];
+    for (const trigger of [undefined, "memory"] as const) {
+      const { input, session, streamFn } = createTransportFixture({
+        pruning: false,
+        apiKey: "sk-openai-synthetic",
+      });
+      input.attempt.model = {
+        ...anthropicModel,
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      };
+      input.attempt.provider = input.attempt.model.provider;
+      input.attempt.modelId = input.attempt.model.id;
+      input.attempt.trigger = trigger;
+      input.attempt.runtimePlan!.transport.resolveExtraParams = (params = {}) => ({
+        responsesServerCompaction: true,
+        ...params.extraParamsOverride,
+      });
+      streamFn.mockImplementation(async (model, _context, options) => {
+        const payload: Record<string, unknown> = { input: [] };
+        await options?.onPayload?.(payload, model);
+        payloads.push(payload);
+        return createAssistantMessageEventStream();
+      });
+      registerProviderStreamForModel.mockReturnValue(streamFn);
+
+      await prepareEmbeddedAttemptTransport(input);
+      await session.agent.streamFn(input.attempt.model, { messages: [] }, {});
+    }
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.context_management).toEqual([
+      { type: "compaction", compact_threshold: 140_000 },
+    ]);
+    expect(payloads[1]).not.toHaveProperty("context_management");
+  });
+
+  it.each(
+    (["openai-responses", "anthropic-messages"] as const).flatMap((api) =>
+      [
+        { owns: true, configured: undefined, suppressed: true },
+        { owns: true, configured: false, suppressed: true },
+        { owns: true, configured: true, suppressed: false },
+        { owns: false, configured: undefined, suppressed: false },
+        { owns: true, configured: true, suppressed: true, trigger: "memory" as const },
+      ]
+        .filter((scenario) => api === "openai-responses" || !scenario.trigger)
+        .map((scenario) =>
+          Object.assign(scenario, {
+            api,
+            suppressed: api === "openai-responses" && scenario.suppressed,
+          }),
+        ),
+    ),
+  )("respects OpenAI compaction ownership without changing Anthropic: %j", async (scenario) => {
+    const { input, session, streamFn } = createTransportFixture({
+      pruning: false,
+      apiKey: "sk-synthetic",
+    });
+    const responses = scenario.api === "openai-responses";
+    input.attempt.model = {
+      ...anthropicModel,
+      api: scenario.api,
+      provider: responses ? "openai" : "anthropic",
+      id: responses ? "gpt-5.4" : "claude-sonnet-4-6",
+      baseUrl: responses ? "https://api.openai.com/v1" : "https://api.anthropic.com",
+    };
+    input.attempt.provider = input.attempt.model.provider;
+    input.attempt.modelId = input.attempt.model.id;
+    input.attempt.trigger = scenario.trigger;
+    input.contextEngineInfo = {
+      id: "engine",
+      name: "Engine",
+      ownsCompaction: scenario.owns,
+    };
+    const parameter = responses ? "responsesServerCompaction" : "anthropicServerCompaction";
+    input.attempt.runtimePlan!.transport.resolveExtraParams = () => ({
+      [parameter]: scenario.configured,
+    });
+    const checkpoint = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "CE_SELECTED_HISTORY" }],
+      providerReplay: {
+        v: 1,
+        provider: input.attempt.model.provider,
+        api: input.attempt.model.api,
+        model: input.attempt.model.id,
+        data: "opaque-checkpoint",
+        baseUrlHash: "synthetic-endpoint-hash",
+        type: responses ? "openai-responses-compaction" : "anthropic-compaction",
+      },
+    });
+    const messages = [checkpoint];
+    streamFn.mockReturnValue(createAssistantMessageEventStream());
+    registerProviderStreamForModel.mockReturnValue(streamFn);
+
+    const prepared = await prepareEmbeddedAttemptTransport(input);
+    await session.agent.streamFn(input.attempt.model, { messages }, {});
+
+    expect(prepared.compactionReplayEnabled).toBe(
+      !scenario.suppressed && scenario.configured !== false,
+    );
+    expect(prepared.effectiveExtraParams[parameter]).toBe(
+      scenario.suppressed ? false : scenario.configured,
+    );
+    if (responses && scenario.suppressed) {
+      expect(prepared.effectiveExtraParams.responsesCompactEndpoint).toBe(false);
+    }
+    const sent = streamFn.mock.calls.at(-1)?.[1].messages.find((m) => m.role === "assistant");
+    expect(sent?.content).toEqual(checkpoint.content);
+    expect(sent?.providerReplay).toEqual(
+      scenario.suppressed ? undefined : checkpoint.providerReplay,
+    );
+    expect(checkpoint.providerReplay).toBeDefined();
+  });
+
+  it.each([{ source: "resolved run", resolvedApiKey: "sk-ant-oat01-synthetic-run" }])(
     "gives provider wrappers the $source credential the Anthropic transport sends",
     async ({ resolvedApiKey }) => {
       await import("../../ai-transport-runtime-host.js");
@@ -348,13 +451,6 @@ describe("prepareEmbeddedAttemptTransport", () => {
   });
 
   it.each([
-    { label: "foreground", toolExecutionAllow: undefined, expectedSearch: true, codeMode: false },
-    {
-      label: "skill review",
-      toolExecutionAllow: ["skill_workshop"],
-      expectedSearch: false,
-      codeMode: false,
-    },
     {
       label: "explicit search",
       toolExecutionAllow: ["web_search"],

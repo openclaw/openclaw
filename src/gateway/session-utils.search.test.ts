@@ -1,5 +1,9 @@
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import { filterAndSortSessionEntries, prepareSessionRowSelection } from "./session-utils-list.js";
@@ -37,6 +41,14 @@ function selectSessionKeys(params: {
 }
 
 describe("filterAndSortSessionEntries search", () => {
+  beforeEach(() => {
+    setRuntimeConfigSnapshot(baseCfg);
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+  });
+
   test("matches title punctuation and spacing before selecting the result window", () => {
     const key = "agent:main:communication";
     const store: Record<string, SessionEntry> = {

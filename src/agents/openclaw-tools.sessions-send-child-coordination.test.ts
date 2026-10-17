@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/io.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   listSessionParticipantsReadOnly,
   loadSessionEntryReadOnly,
+  persistSessionTranscriptTurn,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -14,7 +16,7 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "../gateway/session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreTargetWithStoreAsync } from "../gateway/session-utils-store-lookup.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -43,7 +45,7 @@ vi.mock("../acp/runtime/session-meta.js", () => ({
   }) => {
     params.assertCurrent?.();
     const cfg = params.cfg ?? config;
-    const target = resolveGatewaySessionStoreTargetWithStore({
+    const target = await resolveGatewaySessionStoreTargetWithStoreAsync({
       cfg,
       key: params.sessionKey,
       agentId: params.agentId,
@@ -70,13 +72,15 @@ vi.mock("../acp/runtime/session-meta.js", () => ({
     };
   },
 }));
+// mock-isolation: Keep ACP database reads controlled by each coordination scenario.
 vi.mock("../acp/runtime/session-meta-readonly.js", async () => {
   const { rowToAcpSessionMeta } = await vi.importActual<
     typeof import("../acp/runtime/session-meta-readonly.js")
   >("../acp/runtime/session-meta-readonly.js");
   return {
     rowToAcpSessionMeta,
-    readAcpSessionMetaForEntry: (params: unknown) => readAcpSessionMetaForEntryMock(params),
+    readAcpSessionMetaForEntryAsync: async (params: unknown) =>
+      readAcpSessionMetaForEntryMock(params),
   };
 });
 vi.mock("../gateway/call.js", () => ({ callGateway: (opts: unknown) => callGatewayMock(opts) }));
@@ -141,12 +145,20 @@ function mockGatewayReply(
     terminalReply: { disposition: "visible", text: "Requested result" },
   },
 ) {
+  let targetSessionKey: string | undefined;
   callGatewayMock.mockImplementation(async (request: GatewayCall) => {
     calls.push(request);
     if (request.method === "agent") {
+      targetSessionKey = String(request.params?.sessionKey);
       return { runId: "coordination-run", status: "accepted" };
     }
-    return request.method === "agent.wait" ? waitResult : {};
+    if (request.method === "agent.wait") {
+      if (waitResult.status === "ok" && targetSessionKey) {
+        await writeFinal(targetSessionKey, "coordination-run", "Requested result");
+      }
+      return waitResult;
+    }
+    return {};
   });
 }
 function agentParams(call: GatewayCall): AgentCallParams {
@@ -204,6 +216,44 @@ async function writeEntry(sessionKey: string, entry: SessionEntry, storePath?: s
   );
 }
 
+async function writeFinal(sessionKey: string, runId: string, text: string) {
+  const target = await resolveGatewaySessionStoreTargetWithStoreAsync({
+    cfg: config,
+    key: sessionKey,
+    readOnly: true,
+    exactRead: true,
+  });
+  const sessionId = target.store[target.canonicalKey]?.sessionId;
+  if (!sessionId) {
+    throw new Error(`Expected a fixture session for ${sessionKey}`);
+  }
+  await persistSessionTranscriptTurn(
+    {
+      agentId: target.agentId,
+      storePath: target.storePath,
+      sessionKey: target.canonicalKey,
+      sessionId,
+    },
+    {
+      config,
+      runId,
+      expectedSessionId: sessionId,
+      touchSessionEntry: false,
+      updateMode: "none",
+      messages: [
+        {
+          message: {
+            role: "assistant",
+            phase: "final_answer",
+            stopReason: "stop",
+            content: [{ type: "text", text }],
+          },
+        },
+      ],
+    },
+  );
+}
+
 describe("sessions_send child coordination", () => {
   let state: OpenClawTestState;
   beforeEach(async () => {
@@ -215,6 +265,7 @@ describe("sessions_send child coordination", () => {
       dmScope: "main",
       store: state.path("configured", "agents", "{agentId}", "sessions", "sessions.json"),
     };
+    setRuntimeConfigSnapshot(config);
     resetGatewayWorkAdmission();
     callGatewayMock.mockReset();
     calls.length = 0;
@@ -264,6 +315,15 @@ describe("sessions_send child coordination", () => {
       const previous = () => getSubagentRunByRunId("steer-A")!;
       const queueB = vi.fn(async () => {});
       const handleB = createEmbeddedRunHandle({ runId: "steer-B", queueMessage: queueB });
+      handleB.messageInjectionV2 = {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage: async (_text, options, assertCurrent) => {
+          assertCurrent();
+          await queueB();
+          options?.onQueueAccepted?.(true);
+        },
+      };
       const completePrevious = async (delivered = false) => {
         await mutateSubagentRuns(["steer-A"], (rows) => {
           const current = rows.get("steer-A");
@@ -307,6 +367,15 @@ describe("sessions_send child coordination", () => {
         }
       });
       const handleA = createEmbeddedRunHandle({ runId: "steer-A", queueMessage: queueA });
+      handleA.messageInjectionV2 = {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage: async (_text, options, assertCurrent) => {
+          assertCurrent();
+          await queueA();
+          options?.onQueueAccepted?.(true);
+        },
+      };
       setActiveEmbeddedRun(sessionId, handleA, childSessionKey);
       const deliver = sendDelivery.trySessionsSendActiveRunDelivery;
       const admission = vi
@@ -398,7 +467,11 @@ describe("sessions_send child coordination", () => {
         expectsCompletionMessage: true,
         createdAt: 1,
         execution: { status: "terminal", startedAt: 1, endedAt: 2, outcome: { status: "ok" } },
-        completion: { required: true, resultText: "Original result" },
+        completion: {
+          required: true,
+          resultText: "Original result",
+          terminalReply: { disposition: "visible", text: "Original result" },
+        },
         delivery: { status: "delivered" },
         cleanupCompletedAt: 3,
         requesterTurnRunId: undefined,
@@ -420,6 +493,7 @@ describe("sessions_send child coordination", () => {
         }
         if (request.method === "agent.wait" && request.params?.runId === runId) {
           await childPending;
+          await writeFinal(childSessionKey, runId, "Follow-up result");
           return {
             runId,
             status: "ok",
@@ -559,6 +633,7 @@ describe("sessions_send child coordination", () => {
         const index = runIds.indexOf(String(request.params?.runId));
         if (index >= 0) {
           await replies[index]!.promise;
+          await writeFinal(childSessionKey, runIds[index]!, "FOLLOWUP-" + (index + 1));
           return {
             status: "ok",
             startedAt: 10,
@@ -692,6 +767,7 @@ describe("sessions_send child coordination", () => {
     callGatewayMock,
     calls,
     writeEntry,
+    writeFinal,
     settleSessionWork,
     drainRootWork: () => settleRootWork(true),
   });
@@ -812,17 +888,18 @@ describe("sessions_send child coordination", () => {
       // The separate lookup can observe another entry snapshot; classification must
       // join its metadata against the entry already selected by sessions_send.
       readAcpSessionMetaMock.mockImplementation(
-        (params: Parameters<typeof metadata.readAcpSessionEntry>[0]) =>
-          metadataRead.readAcpSessionMetaForEntry({
+        (params: Parameters<typeof metadata.readAcpSessionEntryAsync>[0]) =>
+          metadataRead.readAcpSessionMetaForEntryAsync({
             ...params,
             databasePath,
             entry: { sessionId, lifecycleRevision, sessionStartedAt: 50 },
           }),
       );
       readAcpSessionMetaForEntryMock.mockImplementation(
-        (params: Parameters<typeof metadataRead.readAcpSessionMetaForEntry>[0]) =>
-          metadataRead.readAcpSessionMetaForEntry({ ...params, databasePath }),
+        (params: Parameters<typeof metadataRead.readAcpSessionMetaForEntryAsync>[0]) =>
+          metadataRead.readAcpSessionMetaForEntryAsync({ ...params, databasePath }),
       );
+      await writeEntry(peerKey, { sessionId: "peer-session", updatedAt: 1 });
       await writeEntry(reusedKey, currentEntry);
       const result = await send(requesterKey, targetKey, direction === "target" ? 0 : 1);
       await settleSessionWork();
@@ -863,8 +940,18 @@ describe("sessions_send child coordination", () => {
     "sessions_send does not start reply turns for $name after timeoutSeconds=$timeoutSeconds",
     async ({ requesterKey, entry, timeoutSeconds, targetKey = "agent:main:main" }) => {
       await writeEntry(requesterKey, { sessionId: "child", updatedAt: 1, ...entry });
+      await writeEntry(targetKey, { sessionId: "target", updatedAt: 1 });
       mockGatewayReply({ status: "timeout" });
       const result = await send(requesterKey, targetKey, timeoutSeconds);
+      if (entry.spawnedBy) {
+        expect(result.details).toMatchObject({
+          status: "forbidden",
+          error: "Session communication ancestry is invalid.",
+        });
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        expect(calls.map((call) => call.method)).toEqual(["sessions.resolve"]);
+        return;
+      }
       expect(result.details).toMatchObject({
         status: "accepted",
         delivery: { status: "skipped" },

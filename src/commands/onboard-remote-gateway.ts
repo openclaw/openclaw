@@ -7,7 +7,6 @@ import type {
   SystemAgentSetupVerifyResult,
   WizardNextResult,
   WizardStartResult,
-  WizardStep,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDeviceIdentityForGatewayCall } from "../gateway/call-device-auth.js";
@@ -24,6 +23,7 @@ import type {
 } from "../system-agent/setup-inference.js";
 import { t } from "../wizard/i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
+import { answerGatewayWizardStep } from "./gateway-wizard-step.js";
 
 const GATEWAY_SETUP_DETECT_TIMEOUT_MS = 40_000;
 const GATEWAY_SETUP_ACTIVATE_TIMEOUT_MS = 150_000;
@@ -45,100 +45,23 @@ type RemoteGatewayInferenceTarget = {
 
 function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupInferenceDetection {
   return {
+    ...result,
     candidates: result.candidates.map((candidate) => ({
       ...candidate,
       // Gateway ordering is authoritative; the guided candidate shape no
       // longer permits a second client-side recommendation signal.
       recommended: false,
     })),
-    manualProviders: result.manualProviders.map(
-      ({ groupLabel: _groupLabel, ...provider }) => provider,
-    ),
     authOptions: result.authOptions ?? [],
-    ...(result.prepareOptions !== undefined
-      ? {
-          prepareOptions: result.prepareOptions.map(
-            ({ actionLabel: _actionLabel, ...option }) => option,
-          ),
-        }
-      : {}),
     recommendedInstalls: result.recommendedInstalls ?? [],
-    unavailableCandidates: (result.unavailableCandidates ?? []).map((candidate) => ({
-      id: candidate.id,
-      label: candidate.label,
-      detail: candidate.detail,
-      reason: candidate.reason,
-    })),
-    workspace: result.workspace,
-    ...(result.configuredModel !== undefined ? { configuredModel: result.configuredModel } : {}),
-    ...(result.setupModel !== undefined ? { setupModel: result.setupModel } : {}),
-    ...(result.utilityModel !== undefined ? { utilityModel: result.utilityModel } : {}),
-    setupComplete: result.setupComplete,
+    unavailableCandidates: result.unavailableCandidates ?? [],
   };
-}
-
-async function answerSetupStep(step: WizardStep, prompter: WizardPrompter): Promise<unknown> {
-  const message = step.message ?? step.title ?? "Continue";
-  if (step.externalUrl) {
-    await prompter.note(step.externalUrl, "Open this URL to continue");
-  }
-  switch (step.type) {
-    case "note":
-      await prompter.note(message, step.title);
-      return undefined;
-    case "text":
-      return await prompter.text({
-        message,
-        sensitive: step.sensitive,
-        placeholder: step.placeholder,
-        initialValue: typeof step.initialValue === "string" ? step.initialValue : undefined,
-      });
-    case "select":
-      return await prompter.select({
-        message,
-        options: step.options ?? [],
-        initialValue: step.initialValue,
-      });
-    case "multiselect":
-      return await prompter.multiselect({
-        message,
-        options: step.options ?? [],
-        initialValues: Array.isArray(step.initialValue) ? step.initialValue : undefined,
-      });
-    case "confirm":
-    case "action":
-      if (step.executor === "gateway") {
-        return undefined;
-      }
-      return await prompter.confirm({
-        message,
-        initialValue: typeof step.initialValue === "boolean" ? step.initialValue : undefined,
-      });
-    case "progress":
-      break;
-  }
-  return undefined;
 }
 
 function activationTimeoutMs(kind: ActivateSetupInferenceParams["kind"]): number {
   return kind === "codex-cli"
     ? GATEWAY_CODEX_SETUP_ACTIVATE_TIMEOUT_MS
     : GATEWAY_SETUP_ACTIVATE_TIMEOUT_MS;
-}
-
-function bindGatewayConfig(target: RemoteGatewayInferenceTarget): OpenClawConfig {
-  return {
-    ...target.config,
-    gateway: {
-      ...target.config.gateway,
-      mode: "remote",
-      remote: {
-        ...target.config.gateway?.remote,
-        url: target.gatewayUrl,
-        ...(target.configuredRemote ? {} : { transport: "direct" as const }),
-      },
-    },
-  };
 }
 
 function toVerifiedActivationResult(params: {
@@ -186,7 +109,18 @@ export async function runRemoteGatewayInferenceOnboarding(
 ): Promise<void> {
   const { callGatewayCli } = await import("../gateway/call.js");
   const { runGuidedOnboarding } = await import("./onboard-guided.js");
-  const boundConfig = bindGatewayConfig(target);
+  const boundConfig: OpenClawConfig = {
+    ...target.config,
+    gateway: {
+      ...target.config.gateway,
+      mode: "remote",
+      remote: {
+        ...target.config.gateway?.remote,
+        url: target.gatewayUrl,
+        ...(target.configuredRemote ? {} : { transport: "direct" as const }),
+      },
+    },
+  };
   const explicitAuth = Boolean(target.token || target.password);
   let gatewayWorkspace: string | undefined;
 
@@ -224,11 +158,9 @@ export async function runRemoteGatewayInferenceOnboarding(
   ): Promise<ActivateSetupInferenceResult> => {
     let activationBootId: string | undefined;
     const sessionId = randomUUID();
-    let started = false;
-    let terminal = false;
     const prompter: WizardPrompter =
       params.prompter ?? (await import("../wizard/clack-prompter.js")).createClackPrompter();
-    let result: WizardNextResult;
+    let result: WizardNextResult | undefined;
     try {
       result = await request<WizardStartResult>({
         method: "openclaw.setup.activate.start",
@@ -247,17 +179,21 @@ export async function runRemoteGatewayInferenceOnboarding(
           activationBootId = hello.server.bootId?.trim();
         },
       });
-      started = true;
-      terminal = result.done;
       while (!result.done) {
         params.signal?.throwIfAborted();
-        const step = result.step;
+        const step: WizardNextResult["step"] = result.step;
         let answer: { stepId: string; value: unknown } | undefined;
         if (step) {
           if (result.error) {
             await prompter.note(result.error);
           }
-          const value = await answerSetupStep(step, prompter);
+          if (step.externalUrl) {
+            await prompter.note(step.externalUrl, "Open this URL to continue");
+          }
+          const value: unknown =
+            (step.type === "confirm" || step.type === "action") && step.executor === "gateway"
+              ? undefined
+              : await answerGatewayWizardStep(step, prompter);
           if (step.type !== "progress" && step.executor !== "gateway") {
             answer = { stepId: step.id, value };
           }
@@ -268,10 +204,9 @@ export async function runRemoteGatewayInferenceOnboarding(
           signal: params.signal,
           timeoutMs: activationTimeoutMs(params.kind),
         });
-        terminal = result.done;
       }
     } catch (error) {
-      if (!terminal && (started || !isGatewayClientRequestError(error))) {
+      if (!result?.done && (result !== undefined || !isGatewayClientRequestError(error))) {
         try {
           await request({
             method: "wizard.cancel",
@@ -302,10 +237,10 @@ export async function runRemoteGatewayInferenceOnboarding(
     if (activation.gatewayRestartRequired && !restartBootId) {
       throw new Error(GATEWAY_RESTART_IDENTITY_ERROR);
     }
-    const restartDeadline = Date.now() + GATEWAY_RESTART_WAIT_TIMEOUT_MS;
+    const restartDeadline = performance.now() + GATEWAY_RESTART_WAIT_TIMEOUT_MS;
     let retryDelayMs = 250;
     for (;;) {
-      const remainingBeforeAttemptMs = restartDeadline - Date.now();
+      const remainingBeforeAttemptMs = restartDeadline - performance.now();
       if (restartBootId && remainingBeforeAttemptMs <= 0) {
         throw new Error(
           "Inference settings were saved, but the Gateway did not finish restarting and verifying inference. Check the remote Gateway, then run onboarding again.",
@@ -360,7 +295,7 @@ export async function runRemoteGatewayInferenceOnboarding(
           requestedDelay = error.retryAfterMs ?? retryDelayMs;
         }
       }
-      await delay(Math.min(requestedDelay, Math.max(0, restartDeadline - Date.now())));
+      await delay(Math.min(requestedDelay, Math.max(0, restartDeadline - performance.now())));
       retryDelayMs = Math.min(retryDelayMs * 2, 2_000);
     }
   };

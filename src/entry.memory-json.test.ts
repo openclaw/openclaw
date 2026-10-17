@@ -89,32 +89,30 @@ async function withMemoryRoot(run: (fixture: MemoryRootFixture) => Promise<void>
       process.exitCode = 0;
       // Retain JSON routing around the root catch as normal runCli does; the outer
       // scope restores it when this in-process test invocation finishes.
-      await withConsoleLogsRoutedToStderrForJson(argv, () =>
-        runMainOrRootHelp(argv, {
-          loadRunCli: async () => ({
-            runCli: async (commandArgv) => {
-              const program = new Command().name("openclaw").exitOverride();
-              const resources = new CliPluginInvocationResources();
-              const session = createPluginCliLoadSession(cache, { resources });
-              try {
-                await session.withCache(async () => {
-                  await registerPluginCliCommandsFromValidatedConfig(
-                    program,
-                    fixtureEnv,
-                    { pluginSdkResolution: "src" },
-                    { primary: "memory", session },
-                  );
-                  session.close();
-                  await resources.run(() => program.parseAsync(commandArgv));
-                });
-              } finally {
-                session.close();
-                await resources.release();
-              }
-            },
-          }),
-        }),
-      );
+      // mock-isolation: Run the real memory command on the fixture program, not the CLI bootstrap.
+      vi.doMock("./cli/run-main.js", async () => ({
+        runCli: async (commandArgv: string[]) => {
+          const program = new Command().name("openclaw").exitOverride();
+          const resources = new CliPluginInvocationResources();
+          const session = createPluginCliLoadSession(cache, { resources });
+          try {
+            await session.withCache(async () => {
+              await registerPluginCliCommandsFromValidatedConfig(
+                program,
+                fixtureEnv,
+                { pluginSdkResolution: "src" },
+                { primary: "memory", session },
+              );
+              session.close();
+              await resources.run(() => program.parseAsync(commandArgv));
+            });
+          } finally {
+            session.close();
+            await resources.release();
+          }
+        },
+      }));
+      await withConsoleLogsRoutedToStderrForJson(argv, () => runMainOrRootHelp(argv));
     };
     await run({
       workspaceDir,
@@ -137,6 +135,7 @@ async function withMemoryRoot(run: (fixture: MemoryRootFixture) => Promise<void>
     } finally {
       clearRuntimeConfigSnapshot();
       resetLogger();
+      vi.doUnmock("./cli/run-main.js");
       vi.restoreAllMocks();
       vi.unstubAllEnvs();
       process.exitCode = previousExitCode;
@@ -179,7 +178,9 @@ describe("memory command failures at the root JSON boundary", () => {
           message: "Missing search query. Provide a positional query or use --query <text>.",
         },
       });
-      expect(stderr()).toContain("The CLI command failed.");
+      expect(stderr().trim()).toBe(
+        "Missing search query. Provide a positional query or use --query <text>.",
+      );
       // Vitest suppresses the native one-shot exit; this checks the logical code only.
       expect(process.exitCode).toBe(1);
     });
@@ -244,8 +245,7 @@ describe("memory command failures at the root JSON boundary", () => {
           });
           expect(beforeRemovalSettled).toBe("");
           expect(cleanupAttempts).toBe(1);
-          expect(stderr()).toContain("[openclaw] The CLI command failed.");
-          expect(stderr()).not.toContain(cleanupError.message);
+          expect(stderr().trim()).toBe(cleanupError.message);
           expect(process.exitCode).toBe(1);
           expect(await fs.readFile(historyPath, "utf8")).toBe(history);
         } finally {
@@ -448,7 +448,7 @@ describe("registered memory_search through Gateway /tools/invoke (infra)", () =>
             ok: true,
             result: {
               details: {
-                results: ["snapshot", "traffic", "verify", "repair", "rollback"].map((name) => ({
+                results: ["snapshot", "verify", "traffic", "repair", "rollback"].map((name) => ({
                   path: `memory/${name}.md`,
                   source: "memory",
                   vectorScore: expect.any(Number),

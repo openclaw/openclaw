@@ -7,12 +7,15 @@ import { log } from "../logger.js";
 
 const TRANSCRIPT_TEARDOWN_BUDGET_MS = 30_000;
 
-/** Per-attempt transcript write state carried by the owned AsyncLocalStorage. */
-export type LifecycleOwner = {
+type LifecycleOwner = {
+  readonly attempt: symbol;
+  readonly parent: LifecycleOwner | undefined;
   active: boolean;
   nestedTail: Promise<void>;
   pendingOperations: Set<Promise<void>>;
 };
+
+const lifecycleOwners = new AsyncLocalStorage<LifecycleOwner>();
 
 export type EmbeddedAttemptTranscriptLifecycle = {
   withTranscriptWrite<T>(run: () => Promise<T> | T): Promise<T>;
@@ -20,24 +23,31 @@ export type EmbeddedAttemptTranscriptLifecycle = {
   dispose(): Promise<void>;
 };
 
-export function createEmbeddedAttemptTranscriptLifecycle(
-  params: {
-    runId?: string;
-    sessionId?: string;
-  },
-  deps: {
-    /** Override how the lifecycle owner store is constructed, so tests can hold a reference to the per-attempt AsyncLocalStorage. Defaults to an owned instance. */
-    createLifecycleStore?: () => AsyncLocalStorage<LifecycleOwner>;
-  } = {},
-): EmbeddedAttemptTranscriptLifecycle {
+export function createEmbeddedAttemptTranscriptLifecycle(params: {
+  runId?: string;
+  sessionId?: string;
+  /** Release retained owners after accepted descendants settle, even after a teardown timeout. */
+  onDrained?: () => void | Promise<void>;
+}): EmbeddedAttemptTranscriptLifecycle {
   let disposed = false;
   let lifecycle = Promise.resolve();
   let cleanupDrain: Promise<void> | undefined;
   let disposePromise: Promise<void> | undefined;
   let pendingWrites = 0;
-  const lifecycleOwner = deps.createLifecycleStore?.() ?? new AsyncLocalStorage<LifecycleOwner>();
+  const attempt = Symbol("transcript-attempt");
+  // Writes may enter another attempt's lifecycle before re-entering this one.
+  const currentOwner = (): LifecycleOwner | undefined => {
+    for (let owner = lifecycleOwners.getStore(); owner; owner = owner.parent) {
+      if (owner.attempt === attempt) {
+        return owner;
+      }
+    }
+    return undefined;
+  };
 
   const createLifecycleOwner = (): LifecycleOwner => ({
+    attempt,
+    parent: lifecycleOwners.getStore(),
     active: true,
     nestedTail: Promise.resolve(),
     pendingOperations: new Set(),
@@ -64,7 +74,7 @@ export function createEmbeddedAttemptTranscriptLifecycle(
     let value: T | undefined;
     let primaryError: Error | undefined;
     try {
-      value = await lifecycleOwner.run(owner, async () => await run());
+      value = await lifecycleOwners.run(owner, async () => await run());
     } catch (error) {
       primaryError = toErrorObject(error, "transcript write failed");
     }
@@ -95,7 +105,7 @@ export function createEmbeddedAttemptTranscriptLifecycle(
     return value as T;
   };
   const serializeLifecycle = async <T>(run: () => Promise<T> | T): Promise<T> => {
-    const inheritedOwner = lifecycleOwner.getStore();
+    const inheritedOwner = currentOwner();
     if (inheritedOwner?.active) {
       const operation = inheritedOwner.nestedTail.then(
         async () => await runLifecycleOwner(createLifecycleOwner(), run),
@@ -131,20 +141,15 @@ export function createEmbeddedAttemptTranscriptLifecycle(
     }
   };
   const beginCleanup = async (): Promise<void> => {
-    const currentOwner = lifecycleOwner.getStore();
-    if (currentOwner?.active) {
+    if (currentOwner()?.active) {
       throw new Error("cannot start attempt cleanup inside a transcript write callback");
     }
-    // Release the owned AsyncLocalStorage only after the serialized drain actually
-    // settles, never when the bounded teardown budget merely expires. Disabling it
-    // early would make a still-running transcript callback lose its store (its
-    // nested writes would be rejected as disposed) and, once that callback finishes,
-    // the queued drain would re-run() the instance with no later disable to release
-    // it. Attaching the release to the drain itself keeps bounded teardown and only
-    // frees context that no admitted callback can still observe. See #141122.
+    // Accepted descendants retain their owner until the drain settles, even when
+    // the bounded teardown budget expires. Cleanup never disables the shared carrier.
     cleanupDrain ??= settleWithinTeardownBudget(
       serializeLifecycle(() => {
-        lifecycleOwner.disable();
+        currentOwner()!.active = false;
+        return params.onDrained?.();
       }),
     );
     await cleanupDrain;
@@ -152,7 +157,7 @@ export function createEmbeddedAttemptTranscriptLifecycle(
 
   return {
     withTranscriptWrite: (run) => {
-      const activeDescendant = lifecycleOwner.getStore()?.active === true;
+      const activeDescendant = currentOwner()?.active === true;
       if ((cleanupDrain || disposed) && !activeDescendant) {
         const rejected = Promise.reject(
           new Error(
@@ -175,8 +180,7 @@ export function createEmbeddedAttemptTranscriptLifecycle(
     },
     beginCleanup,
     dispose: async () => {
-      const currentOwner = lifecycleOwner.getStore();
-      if (currentOwner?.active) {
+      if (currentOwner()?.active) {
         throw new Error("cannot dispose an attempt from inside a transcript write callback");
       }
       disposePromise ??= (async () => {

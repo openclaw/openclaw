@@ -110,12 +110,10 @@ export async function resolveGatewayInstallToken(
 ): Promise<GatewayInstallTokenResolution> {
   const cfg = options.config;
   const warnings: string[] = [];
+  const resolution = (unavailableReason?: string) => ({ unavailableReason, warnings });
 
   if (hasAmbiguousGatewayAuthModeConfig(cfg)) {
-    return {
-      unavailableReason: formatAmbiguousGatewayAuthModeReason(),
-      warnings,
-    };
+    return resolution(formatAmbiguousGatewayAuthModeReason());
   }
 
   const resolvedAuth = resolveGatewayAuth({
@@ -125,18 +123,12 @@ export async function resolveGatewayInstallToken(
   });
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   if (isUnsafeGatewayTailscaleNoAuth({ authMode: resolvedAuth.mode, tailscaleMode })) {
-    return {
-      unavailableReason: formatUnsafeGatewayTailscaleNoAuthMessage(tailscaleMode),
-      warnings,
-    };
+    return resolution(formatUnsafeGatewayTailscaleNoAuthMessage(tailscaleMode));
   }
   const needsToken =
     shouldRequireGatewayTokenForInstall(cfg, options.env) && !resolvedAuth.allowTailscale;
   if (!needsToken) {
-    return {
-      unavailableReason: undefined,
-      warnings,
-    };
+    return resolution();
   }
 
   const resolvedToken = await resolveGatewayAuthToken({
@@ -152,7 +144,7 @@ export async function resolveGatewayInstallToken(
 
   if (tokenRefConfigured && resolvedToken.source === "secretRef") {
     warnings.push(
-      "gateway.auth.token is SecretRef-managed; install will not persist a resolved token in service environment. Ensure the SecretRef is resolvable in the daemon runtime context.",
+      "gateway.auth.token is SecretRef-managed; install will not persist a resolved token in service environment. Check that the SecretRef is resolvable in the daemon runtime context.",
     );
   } else if (tokenRefConfigured && !token) {
     unavailableReason = `gateway.auth.token SecretRef is configured but unresolved (${resolvedToken.unresolvedRefReason ?? "unknown reason"}).`;
@@ -170,8 +162,5 @@ export async function resolveGatewayInstallToken(
     });
   }
 
-  return {
-    unavailableReason,
-    warnings,
-  };
+  return resolution(unavailableReason);
 }

@@ -351,7 +351,7 @@ describe("provider auth protected persistence", () => {
       if (credential?.type !== "token" || !credential.tokenRef) {
         throw new Error("Expected staged protected tokenRef");
       }
-      updateSecretStoreAllowedHosts({
+      await updateSecretStoreAllowedHosts({
         scope: { kind: "team" },
         name: credential.tokenRef.id,
         allowedHosts: ["api.example.test"],
@@ -367,9 +367,7 @@ describe("provider auth protected persistence", () => {
       }
       expect(rollbackError).toBeInstanceOf(AggregateError);
       await expect(staged.rollback()).rejects.toBe(rollbackError);
-      await expect(staged.commit()).rejects.toThrow(
-        "Cannot commit provider auth persistence after rollback failed",
-      );
+      await expect(staged.commit()).rejects.toBe(rollbackError);
       expect(
         await readSecretStoreValue({
           scope: { kind: "team" },
@@ -414,7 +412,7 @@ describe("provider auth protected persistence", () => {
       if (credential?.type !== "token" || !credential.tokenRef) {
         throw new Error("Expected staged protected tokenRef");
       }
-      updateSecretStoreAllowedHosts({
+      await updateSecretStoreAllowedHosts({
         scope: { kind: "team" },
         name: credential.tokenRef.id,
         allowedHosts: ["api.example.test"],

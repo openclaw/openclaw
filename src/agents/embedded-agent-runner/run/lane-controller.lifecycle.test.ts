@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import {
   emitAgentEvent,
   getAgentEventLifecycleGeneration,
@@ -73,6 +77,7 @@ function createController(options: {
     abortSignal: options.abortSignal,
     ...options.params,
   };
+  setRuntimeConfigSnapshot(params.config ?? {});
   const controller = createEmbeddedRunLaneController({
     getLifecycleGeneration: () => lifecycleGeneration,
     getParams: () => params,
@@ -97,6 +102,9 @@ function createController(options: {
 describe("createEmbeddedRunLaneController lifecycle admission", () => {
   beforeEach(() => {
     resetAgentEventsForTest();
+  });
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
   });
 
   it("marks user session work as foreground", async () => {

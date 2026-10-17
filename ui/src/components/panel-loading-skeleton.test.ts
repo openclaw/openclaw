@@ -1,104 +1,191 @@
-import { html, render, type CSSResult } from "lit";
-import { afterEach, describe, expect, it } from "vitest";
-import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
-import {
-  renderPanelLoadingSkeleton,
-  type PanelLoadingSkeletonVariant,
-} from "./panel-loading-skeleton.ts";
+import { cleanup, getByRole, render as renderSolid } from "@solidjs/testing-library";
+import { createComponent, createSignal, flush } from "solid-js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mountSolid } from "../test-helpers/solid-render.tsx";
+import { PanelEmptyState } from "./solid/panel-empty-state.tsx";
+import type {
+  PanelLoadingSkeletonProps,
+  PanelLoadingSkeletonVariant,
+} from "./solid/panel-loading-skeleton.tsx";
+import { PanelLoadingSkeleton } from "./solid/panel-loading-skeleton.tsx";
 
-const variants = [
-  "board",
-  "browser",
-  "chat",
-  "discussion",
-  "document",
-  "file-list",
-  "files",
-  "review",
-  "terminal",
-] satisfies PanelLoadingSkeletonVariant[];
+const owners: HTMLElement[] = [];
 
-afterEach(() => {
-  document.body.replaceChildren();
+afterEach(async () => {
+  cleanup();
+  for (const owner of owners.splice(0)) {
+    owner.remove();
+  }
+  await Promise.resolve();
 });
 
-describe("panel loading skeleton", () => {
-  it("keeps the shadow shimmer primitive declaration-identical to base.css", () => {
-    const component = customElements.get(
-      "openclaw-panel-loading-skeleton",
-    ) as CustomElementConstructor & {
-      styles: CSSResult | CSSResult[];
+describe("panel presentations", () => {
+  it.each([
+    "board",
+    "browser",
+    "chat",
+    "discussion",
+    "document",
+    "file-list",
+    "files",
+    "review",
+    "terminal",
+  ] satisfies PanelLoadingSkeletonVariant[])(
+    "renders an accessible light-DOM %s placeholder",
+    async (variant) => {
+      const { container: owner } = mountSolid(PanelLoadingSkeleton, {
+        variant,
+        label: `Loading ${variant}`,
+      });
+      const skeleton = owner.querySelector("openclaw-panel-loading-skeleton")!;
+      await skeleton.updateComplete;
+      expect(skeleton.shadowRoot).toBeNull();
+      expect(owner.querySelectorAll("openclaw-panel-loading-skeleton")).toHaveLength(1);
+      expect(skeleton.dataset.panelSkeleton).toBe(variant);
+      expect(skeleton.getAttribute("aria-label")).toBe(`Loading ${variant}`);
+      expect(skeleton.getAttribute("aria-busy")).toBe("true");
+      expect(skeleton.querySelectorAll(".skeleton").length).toBeGreaterThan(3);
+    },
+  );
+
+  it("updates compact/overlay attributes without replacing unchanged contents", async () => {
+    const view = mountSolid<PanelLoadingSkeletonProps>(PanelLoadingSkeleton, {
+      variant: "browser",
+      label: "Loading browser",
+      compact: false,
+      overlay: false,
+    });
+    const owner = view.container;
+    const skeleton = owner.querySelector("openclaw-panel-loading-skeleton")!;
+    await skeleton.updateComplete;
+    const viewport = skeleton.querySelector(".viewport");
+    view.update({ variant: "browser", label: "Reconnecting", compact: true, overlay: true });
+    flush();
+    await skeleton.updateComplete;
+    expect(skeleton.querySelector(".viewport")).toBe(viewport);
+    expect(skeleton.compact).toBe(true);
+    expect(skeleton.overlay).toBe(true);
+    expect(skeleton.hasAttribute("compact")).toBe(true);
+    expect(skeleton.hasAttribute("overlay")).toBe(true);
+    expect(skeleton.getAttribute("aria-label")).toBe("Reconnecting");
+    view.update({ variant: "desktop", label: "Connecting", compact: false, overlay: false });
+    flush();
+    await skeleton.updateComplete;
+    expect(skeleton.compact).toBe(false);
+    expect(skeleton.overlay).toBe(false);
+    expect(skeleton.querySelector(".skeleton")).toBeNull();
+    expect(skeleton.querySelector(".desktop-loading")?.textContent).toContain("Connecting");
+  });
+
+  it("mounts one direct Solid skeleton and synchronizes reactive properties", () => {
+    const [label, setLabel] = createSignal("Connecting");
+    const [compact, setCompact] = createSignal(false);
+    const view = renderSolid(() =>
+      createComponent(PanelLoadingSkeleton, {
+        variant: "desktop",
+        get label() {
+          return label();
+        },
+        get compact() {
+          return compact();
+        },
+      }),
+    );
+    flush();
+    const skeleton = view.container.querySelector("openclaw-panel-loading-skeleton")!;
+    const spinner = skeleton.querySelector(".desktop-spinner");
+    setLabel("Authenticating");
+    setCompact(true);
+    flush();
+    expect(view.container.querySelectorAll("openclaw-panel-loading-skeleton")).toHaveLength(1);
+    expect(skeleton.querySelector(".desktop-spinner")).toBe(spinner);
+    expect(skeleton.getAttribute("aria-label")).toBe("Authenticating");
+    expect(skeleton.compact).toBe(true);
+    expect(skeleton.hasAttribute("compact")).toBe(true);
+    expect(skeleton.querySelector(".desktop-loading")?.textContent).toContain("Authenticating");
+  });
+
+  it("retains custom-element default/named content through updates and reconnect without hiding actions", async () => {
+    const action = vi.fn();
+    const owner = document.body.appendChild(document.createElement("div"));
+    owners.push(owner);
+    const host = new PanelEmptyState.Element();
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    icon.append(path);
+    const slot = document.createElement("span");
+    slot.slot = "action";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.addEventListener("click", action);
+    slot.append(button);
+    host.append(icon, slot);
+    const update = (label: string, data: string) => {
+      host.heading = label;
+      host.description = "Choose a file to continue.";
+      button.textContent = label;
+      path.setAttribute("d", data);
     };
-    const styles = Array.isArray(component.styles) ? component.styles : [component.styles];
-    const shadowCss = styles.map((style) => style.cssText).join("\n");
-    const baseCss = readStyleSheet("ui/src/styles/base.css");
-
-    function extractBlock(cssText: string, selector: string): string {
-      const source = cssText.replace(/\/\*[\s\S]*?\*\//g, "");
-      let depth = 0;
-      let start = 0;
-      let header = "";
-      for (const match of source.matchAll(/[{}]/g)) {
-        if (match[0] === "{") {
-          if (depth === 0) {
-            header = source.slice(start, match.index).trim();
-          }
-          depth += 1;
-        } else {
-          depth -= 1;
-          if (depth === 0) {
-            if (header === selector) {
-              return source
-                .slice(start, match.index + 1)
-                .replace(/\s+/g, " ")
-                .replace(/\s*([{};:,])\s*/g, "$1")
-                .trim();
-            }
-            start = match.index + 1;
-          }
-        }
-      }
-      throw new Error(`Missing top-level ${selector} block`);
-    }
-
-    for (const selector of ["@keyframes shimmer", ".skeleton", ".skeleton::after"]) {
-      expect(extractBlock(shadowCss, selector), `${selector} must match base.css`).toBe(
-        extractBlock(baseCss, selector),
-      );
-    }
+    update("Add file", "M1 1h10");
+    owner.append(host);
+    await host.updateComplete;
+    const content = host.querySelector(".empty-state");
+    expect(icon.getAttribute("aria-hidden")).toBe("true");
+    expect(host.shadowRoot).toBeNull();
+    expect(getByRole(host, "button", { name: "Add file" })).toBe(button);
+    expect(button.closest('[aria-hidden="true"]')).toBeNull();
+    button.click();
+    update("Add another file", "M2 2v10");
+    await host.updateComplete;
+    expect(host.querySelector(".empty-state")).toBe(content);
+    expect(host.querySelector("svg")).toBe(icon);
+    expect(path.getAttribute("d")).toBe("M2 2v10");
+    expect(host.querySelector(".empty-state__title")?.textContent).toBe("Add another file");
+    expect(getByRole(host, "button", { name: "Add another file" })).toBe(button);
+    host.remove();
+    await Promise.resolve();
+    owner.append(host);
+    await host.updateComplete;
+    expect(owner.querySelectorAll("openclaw-panel-empty-state")).toHaveLength(1);
+    expect(host.querySelectorAll(".empty-state")).toHaveLength(1);
+    expect(host.querySelector("svg")).toBe(icon);
+    expect(icon.getAttribute("aria-hidden")).toBe("true");
+    getByRole(host, "button", { name: "Add another file" }).click();
+    update("Choose again", "M3 3h9");
+    await host.updateComplete;
+    expect(path.getAttribute("d")).toBe("M3 3h9");
+    getByRole(host, "button", { name: "Choose again" }).click();
+    expect(action).toHaveBeenCalledTimes(3);
   });
 
-  it.each(variants)("renders an accessible structural %s placeholder", async (variant) => {
-    const mount = document.body.appendChild(document.createElement("div"));
-    render(html`${renderPanelLoadingSkeleton(variant, `Loading ${variant}`)}`, mount);
-
-    const skeleton = mount.querySelector<HTMLElement>("openclaw-panel-loading-skeleton");
-    expect(skeleton).toBeInstanceOf(HTMLElement);
-    await (skeleton as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
-    expect(skeleton?.dataset.panelSkeleton).toBe(variant);
-    expect(skeleton?.getAttribute("aria-label")).toBe(`Loading ${variant}`);
-    expect(skeleton?.getAttribute("aria-busy")).toBe("true");
-    expect(skeleton?.shadowRoot?.querySelectorAll(".skeleton").length).toBeGreaterThan(3);
-  });
-
-  it("supports a compact structural placeholder for nested loading surfaces", async () => {
-    const mount = document.body.appendChild(document.createElement("div"));
-    render(html`${renderPanelLoadingSkeleton("terminal", "Loading sessions", true)}`, mount);
-
-    const skeleton = mount.querySelector<HTMLElement>("openclaw-panel-loading-skeleton");
-    await (skeleton as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
-    expect(skeleton?.hasAttribute("compact")).toBe(true);
-  });
-
-  it("supports an overlay placeholder for retained viewport chrome", async () => {
-    const mount = document.body.appendChild(document.createElement("div"));
-    render(html`${renderPanelLoadingSkeleton("desktop", "Connecting", false, true)}`, mount);
-
-    const skeleton = mount.querySelector<HTMLElement>("openclaw-panel-loading-skeleton");
-    await (skeleton as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
-    expect(skeleton?.hasAttribute("overlay")).toBe(true);
-    expect(skeleton?.getAttribute("aria-label")).toBe("Connecting");
-    expect(skeleton?.shadowRoot?.textContent).toContain("Connecting");
-    expect(skeleton?.shadowRoot?.querySelector(".skeleton")).toBeNull();
+  it("mounts the same empty-state implementation from Solid without a nested host", () => {
+    const [heading, setHeading] = createSignal("No files");
+    const view = renderSolid(() =>
+      createComponent(PanelEmptyState, {
+        get heading() {
+          return heading();
+        },
+        description: "Choose a workspace.",
+        get icon() {
+          return document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        },
+        get action() {
+          const button = document.createElement("button");
+          button.textContent = "Choose workspace";
+          return button;
+        },
+      }),
+    );
+    flush();
+    const host = view.container.querySelector("openclaw-panel-empty-state")!;
+    const body = host.querySelector(".empty-state");
+    setHeading("No matching files");
+    flush();
+    expect(view.container.querySelectorAll("openclaw-panel-empty-state")).toHaveLength(1);
+    expect(host.querySelectorAll(".empty-state")).toHaveLength(1);
+    expect(host.querySelector(".empty-state")).toBe(body);
+    expect(host.querySelector(".empty-state__title")?.textContent).toBe("No matching files");
+    expect(getByRole(host, "button", { name: "Choose workspace" })).toBeTruthy();
   });
 });

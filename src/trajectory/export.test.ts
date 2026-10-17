@@ -4,17 +4,22 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { Message } from "openclaw/plugin-sdk/llm";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import type { SessionHeader } from "../agents/sessions/session-manager.js";
 import { createReadTool } from "../agents/sessions/tools/read.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
-  replaceSessionEntry,
-  replaceTranscriptEvents,
-} from "../config/sessions/session-accessor.js";
+  resolveSqliteReadScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
@@ -28,7 +33,7 @@ import {
   writeToolCallSessionFile,
 } from "./export.test-helpers.js";
 import { TRAJECTORY_RUNTIME_FILE_MAX_BYTES } from "./paths.js";
-import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
+import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.test-support.js";
 import type { TrajectoryEvent } from "./types.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trajectory-"));
@@ -634,29 +639,6 @@ describe("exportTrajectoryBundle", () => {
     },
   );
 
-  it("preserves numeric transcript timestamps", async () => {
-    const { tmpDir, sessionFile, outputDir } = exportPaths();
-    writeSimpleSessionFile(sessionFile, {
-      userEntryTimestamp: Date.parse("2026-04-01T05:46:40.000Z"),
-    });
-
-    await exportTrajectoryBundle({
-      outputDir,
-      sessionFile,
-      sessionId: "session-1",
-      workspaceDir: tmpDir,
-    });
-
-    const exportedEvents = fs
-      .readFileSync(path.join(outputDir, "events.jsonl"), "utf8")
-      .trim()
-      .split(/\r?\n/u)
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
-    expect(exportedEvents.find((event) => event.type === "user.message")?.ts).toBe(
-      "2026-04-01T05:46:40.000Z",
-    );
-  });
-
   it("rejects retired media fields in versionless transcript inputs", async () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");
@@ -697,7 +679,6 @@ describe("exportTrajectoryBundle", () => {
       }),
     ).rejects.toThrow("retired top-level media fields");
   });
-
   it("rejects retired media carriers in versionless runtime trajectories", async () => {
     const { tmpDir, sessionTarget } = exportPaths();
     await replaceTranscriptEvents(sessionTarget, simpleSessionEntries(tmpDir));
@@ -971,7 +952,7 @@ describe("exportTrajectoryBundle", () => {
       type: "message",
       id: "entry-user",
       parentId: null,
-      timestamp: "2026-04-01T05:46:40.000Z",
+      timestamp: Date.parse("2026-04-01T05:46:40.000Z"),
       message: userMessage("hello"),
     };
     const assistantEntry = {
@@ -1008,6 +989,9 @@ describe("exportTrajectoryBundle", () => {
 
     expect(bundle.manifest.transcriptEventCount).toBe(2);
     expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
+    expect(bundle.events.find((event) => event.type === "user.message")?.ts).toBe(
+      "2026-04-01T05:46:40.000Z",
+    );
     expect(bundle.manifest.warnings).toEqual([
       {
         source: "session",
@@ -1456,7 +1440,7 @@ describe("exportTrajectoryBundle", () => {
     expect(events).not.toContain(homeDir);
   });
 
-  it("exports merged runtime and transcript events plus convenience files", async () => {
+  it("exports identical complete bundles from compressed, legacy, and mixed runtime rows", async () => {
     const { tmpDir, sessionTarget, outputDir } = exportPaths();
     await replaceTranscriptEvents(sessionTarget, toolCallSessionEntries(tmpDir));
 
@@ -1474,7 +1458,7 @@ describe("exportTrajectoryBundle", () => {
         seq: 2,
         sourceSeq: 2,
         data: {
-          systemPrompt: `system prompt for ${path.join(tmpDir, "instructions.md")}`,
+          systemPrompt: `system prompt for ${path.join(tmpDir, "instructions.md")}\n${"Follow the conversation faithfully. 🦞\n".repeat(80)}`,
           tools: [
             {
               name: "read",
@@ -1524,7 +1508,7 @@ describe("exportTrajectoryBundle", () => {
           terminalError: "non_deliverable_terminal_turn",
           assistantTexts: ["done"],
           stopReason: "stop_sequence",
-          finalPromptText: `final prompt from ${path.join(tmpDir, "prompt.txt")}`,
+          finalPromptText: `final prompt from ${path.join(tmpDir, "prompt.txt")}\n${"A retained observation from the conversation.\n".repeat(80)}`,
           finalPromptTextOriginalLength: 12_345,
           itemLifecycle: {
             startedCount: 1,
@@ -1536,15 +1520,24 @@ describe("exportTrajectoryBundle", () => {
     ];
     appendSqliteTrajectoryRuntimeEvents(sessionTarget, runtimeEvents);
 
-    const bundle = await exportTrajectoryBundle({
-      outputDir,
-      sessionTarget,
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      workspaceDir: tmpDir,
-      systemPrompt: "fallback prompt",
-      tools: [{ name: "fallback" }],
-    });
+    const exportAtFixedTime = async (directory: string) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-04-22T09:00:00.000Z"));
+      try {
+        return await exportTrajectoryBundle({
+          outputDir: directory,
+          sessionTarget,
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          workspaceDir: tmpDir,
+          systemPrompt: "fallback prompt",
+          tools: [{ name: "fallback" }],
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    };
+    const bundle = await exportAtFixedTime(outputDir);
 
     expect(bundle.manifest.eventCount).toBeGreaterThanOrEqual(5);
     expect(bundle.manifest.runtimeEventCount).toBe(runtimeEvents.length);
@@ -1608,6 +1601,57 @@ describe("exportTrajectoryBundle", () => {
     expect(systemPrompt).toContain("$WORKSPACE_DIR/instructions.md");
     expect(tools).toContain("$WORKSPACE_DIR/docs");
     expect(`${prompts}\n${artifacts}\n${systemPrompt}\n${tools}`).not.toContain(tmpDir);
+
+    const options = toDatabaseOptions(resolveSqliteReadScope(sessionTarget));
+    runOpenClawAgentWriteTransaction((database) => {
+      const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
+      const stored = executeSqliteQuerySync(
+        database.db,
+        db.selectFrom("trajectory_runtime_events").select("event_codec"),
+      ).rows;
+      expect(stored.filter((row) => row.event_codec === "br")).toHaveLength(2);
+      for (const [seq, event] of runtimeEvents.entries()) {
+        executeSqliteQuerySync(
+          database.db,
+          db
+            .updateTable("trajectory_runtime_events")
+            .set({
+              event_json: JSON.stringify(event),
+              event_payload: null,
+              event_codec: null,
+              event_utf8_bytes: null,
+            })
+            .where("session_id", "=", sessionTarget.sessionId)
+            .where("seq", "=", seq),
+        );
+      }
+    }, options);
+    const legacyDir = path.join(tmpDir, "legacy-bundle");
+    await exportAtFixedTime(legacyDir);
+
+    runOpenClawAgentWriteTransaction((database) => {
+      const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .deleteFrom("trajectory_runtime_events")
+          .where("session_id", "=", sessionTarget.sessionId)
+          .where("seq", ">=", 2),
+      );
+    }, options);
+    appendSqliteTrajectoryRuntimeEvents(sessionTarget, runtimeEvents.slice(2));
+    const mixedDir = path.join(tmpDir, "mixed-bundle");
+    await exportAtFixedTime(mixedDir);
+
+    const artifactNames = fs.readdirSync(outputDir).toSorted();
+    for (const directory of [legacyDir, mixedDir]) {
+      expect(fs.readdirSync(directory).toSorted()).toEqual(artifactNames);
+      for (const name of artifactNames) {
+        expect(fs.readFileSync(path.join(directory, name))).toEqual(
+          fs.readFileSync(path.join(outputDir, name)),
+        );
+      }
+    }
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

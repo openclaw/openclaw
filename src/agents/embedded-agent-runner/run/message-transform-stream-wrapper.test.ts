@@ -17,6 +17,10 @@ import type { SandboxFsBridge } from "../../sandbox/fs-bridge.js";
 import { hydratePromptMediaMessages, materializeProviderContext } from "./images.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
 
+type ProviderContextMaterializer = NonNullable<
+  Parameters<typeof wrapStreamFnWithMessageTransform>[2]
+>;
+
 const PNG = {
   type: "image" as const,
   data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==",
@@ -140,20 +144,13 @@ describe("direct provider context handoff", () => {
         tools: [],
       } as Parameters<StreamFn>[1];
       const originalJson = JSON.stringify(context);
+      expect(originalJson).toContain("provider does not support native video");
       const model = {
         id: "canonical",
         provider: "direct",
         api: "test",
         input: ["text", "image"],
       } as Parameters<StreamFn>[0];
-
-      const firstCandidate = vi.fn<StreamFn>((_model, firstContext, options) => {
-        expect((options as ProviderStreamOptions)[PROVIDER_CONTEXT_HANDOFF]).toBeUndefined();
-        expect(JSON.stringify(firstContext)).toContain("provider does not support native video");
-        expect(JSON.stringify(firstContext)).not.toContain("native historical replay");
-        return createAssistantMessageEventStream();
-      });
-      void firstCandidate(model, context, {});
 
       let providerContext: Promise<ProviderContext> | undefined;
       let providerOptions: ProviderStreamOptions | undefined;
@@ -162,11 +159,10 @@ describe("direct provider context handoff", () => {
         providerContext = resolveProviderContext(canonical, options);
         return createAssistantMessageEventStream();
       });
-      const wrapped = wrapStreamFnWithMessageTransform(
-        direct,
-        (messages) => messages,
-        (input) => materializeProviderContext({ ...input, workspaceDir: stateDir }),
+      const materialize = vi.fn<ProviderContextMaterializer>((input) =>
+        materializeProviderContext({ ...input, workspaceDir: stateDir }),
       );
+      const wrapped = wrapStreamFnWithMessageTransform(direct, (messages) => messages, materialize);
       void wrapped(model, context, {});
       const resolved = await providerContext;
 
@@ -197,9 +193,8 @@ describe("direct provider context handoff", () => {
       }
       expect(JSON.stringify(resolved)).not.toContain(stateDir);
       expect(JSON.stringify(context)).toBe(originalJson);
-      await expect(providerOptions?.[PROVIDER_CONTEXT_HANDOFF]?.()).rejects.toThrow(
-        "already consumed",
-      );
+      await expect(providerOptions?.[PROVIDER_CONTEXT_HANDOFF]?.()).resolves.toBe(resolved);
+      expect(materialize).toHaveBeenCalledTimes(1);
     } finally {
       env.restore();
     }
@@ -311,30 +306,28 @@ describe("direct provider context handoff", () => {
     };
     const context = { systemPrompt: "system", messages: [historical], tools: [] };
     const model = { id: "test", provider: "test", api: "test", input: ["text", "image"] };
+    const materialize: ProviderContextMaterializer = (input) =>
+      materializeProviderContext({
+        ...input,
+        workspaceDir: "/workspace",
+        sandbox: { root: "/workspace", bridge },
+      });
     const nonconsumer = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
-    void wrapStreamFnWithMessageTransform(nonconsumer, (messages) => messages)(
+    void wrapStreamFnWithMessageTransform(nonconsumer, (messages) => messages, materialize)(
       model as Parameters<StreamFn>[0],
       context,
       {},
     );
     expect(readFile).not.toHaveBeenCalled();
 
+    let resolved: Promise<ProviderContext> | undefined;
+    const consumer = vi.fn<StreamFn>((_model, canonical, options) => {
+      resolved = resolveProviderContext(canonical, options);
+      return createAssistantMessageEventStream();
+    });
+    const wrapped = wrapStreamFnWithMessageTransform(consumer, (messages) => messages, materialize);
     const consume = async () => {
-      let resolved: Promise<ProviderContext> | undefined;
-      const consumer = vi.fn<StreamFn>((_model, canonical, options) => {
-        resolved = resolveProviderContext(canonical, options);
-        return createAssistantMessageEventStream();
-      });
-      void wrapStreamFnWithMessageTransform(
-        consumer,
-        (messages) => messages,
-        (input) =>
-          materializeProviderContext({
-            ...input,
-            workspaceDir: "/workspace",
-            sandbox: { root: "/workspace", bridge },
-          }),
-      )(model as Parameters<StreamFn>[0], context, {});
+      void wrapped(model as Parameters<StreamFn>[0], context, {});
       await resolved;
     };
     await consume();

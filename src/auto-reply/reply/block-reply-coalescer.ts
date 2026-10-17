@@ -70,17 +70,17 @@ export function createBlockReplyCoalescer(params: {
     await onFlush(payload);
   };
 
-  const canMergeBufferedTextWithMedia = (payload: ReplyPayload) =>
+  const canMergeBufferedTextWithMedia = (payload: ReplyPayload, text: string) =>
     Boolean(bufferText) &&
+    (!text || bufferText.length + joiner.length + text.length <= maxChars) &&
     bufferedPayload !== undefined &&
-    !bufferedPayload.audioAsVoice &&
-    !payload.audioAsVoice &&
-    !payload.isReasoning &&
-    !payload.isCommentary &&
-    !isReplyPayloadStatusNotice(payload) &&
-    !bufferedPayload.isReasoning &&
-    !bufferedPayload.isCommentary &&
-    !isReplyPayloadStatusNotice(bufferedPayload) &&
+    [bufferedPayload, payload].every(
+      (part) =>
+        !part.audioAsVoice &&
+        !part.isReasoning &&
+        !part.isCommentary &&
+        !isReplyPayloadStatusNotice(part),
+    ) &&
     (!payload.replyToId || bufferedPayload.replyToId === payload.replyToId);
 
   const mergeSource = (text: string, source: typeof bufferSource): typeof bufferSource => ({
@@ -128,7 +128,7 @@ export function createBlockReplyCoalescer(params: {
       blockSourceRange: getReplyPayloadMetadata(payload)?.blockSourceRange,
     };
     if (reply.hasMedia) {
-      if (canMergeBufferedTextWithMedia(payload)) {
+      if (canMergeBufferedTextWithMedia(payload, text)) {
         void onFlush(mergeBufferedTextWithMedia(payload, text));
         return;
       }

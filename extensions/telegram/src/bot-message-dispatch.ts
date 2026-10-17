@@ -254,16 +254,13 @@ export const dispatchTelegramMessage = async (
     runtime,
     replyToMode,
     telegramCfg,
-    telegramDeps: injectedTelegramDeps,
     retryDispatchErrors = false,
     suppressFailureFallback = false,
     turnAdoptionLifecycle,
   } = dispatchParams;
   const dispatchStartedAt = Date.now();
   const dispatchContext = await resolveDispatchTelegramContext({ context });
-  const telegramDeps =
-    injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
-  const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg, telegramDeps });
+  const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg });
   const isRoomEvent = dispatchContext.ctxPayload.InboundEventKind === "room_event";
   const status = createTelegramDispatchStatus({ context: dispatchContext });
   const richMessagesParams = {
@@ -273,7 +270,7 @@ export const dispatchTelegramMessage = async (
   };
   const richMessages = resolveTelegramRichMessages(richMessagesParams);
   const tableMode = resolveTelegramTableMode(richMessagesParams);
-  const resolvedReasoningLevel = resolveTelegramReasoningLevel({
+  const resolvedReasoningLevel = await resolveTelegramReasoningLevel({
     cfg,
     sessionKey: dispatchContext.ctxPayload.SessionKey,
     agentId: dispatchContext.route.agentId,
@@ -304,7 +301,6 @@ export const dispatchTelegramMessage = async (
     richMessages,
     statusReactionController: status.controller,
     tableMode,
-    telegramDeps,
   };
   const draftState = createDraftState(turnConfig);
   const progressState = createProgressState(turnConfig, draftState, () => turn);
@@ -332,8 +328,9 @@ export const dispatchTelegramMessage = async (
     try {
       const sessionKey = dispatchContext.ctxPayload.SessionKey;
       if (sessionKey) {
-        isFirstTurnInSession = !loadFreshSessionEntry(dispatchContext.route.agentId, sessionKey)
-          .entry?.systemSent;
+        isFirstTurnInSession = !(
+          await loadFreshSessionEntry(dispatchContext.route.agentId, sessionKey)
+        ).entry?.systemSent;
       } else {
         logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");
       }
@@ -346,7 +343,7 @@ export const dispatchTelegramMessage = async (
   // ingress watchdog. Never enter the reply pipeline after that owner has
   // already fenced this attempt; the canonical spool row will retry it.
   if (isDispatchSuperseded()) {
-    status.finalizeInBackground({ outcome: "cancelled" }, "cancelled finalize");
+    status.finalizeInBackground("cancelled", "cancelled finalize");
     return { kind: "completed" };
   }
   if (status.controller && !isRoomEvent) {
@@ -381,7 +378,7 @@ export const dispatchTelegramMessage = async (
   }
   if (dispatchWasSuperseded) {
     if (status.controller) {
-      status.finalizeInBackground({ outcome: "done" }, "finalize");
+      status.finalizeInBackground("done", "finalize");
     }
     return { kind: "completed" };
   }
@@ -463,7 +460,7 @@ export const dispatchTelegramMessage = async (
       : null);
 
   if (status.controller && !hasVisibleResponse && !intentionalNoResponse) {
-    status.finalizeInBackground({ outcome: "error" }, "error finalize");
+    status.finalizeInBackground("error", "error finalize");
   }
   const shouldReturnRetryableDispatchFailure =
     retryDispatchErrors &&
@@ -486,16 +483,13 @@ export const dispatchTelegramMessage = async (
   });
   if (status.controller) {
     status.finalizeInBackground(
-      {
-        outcome:
-          turn.agentRunFailed ||
-          turn.dispatchError != null ||
-          turn.previewLifecycle.finalFailed ||
-          (turn.previewLifecycle.finalDelivered && !turn.previewLifecycle.finalSucceeded) ||
-          sentFallback
-            ? "error"
-            : "done",
-      },
+      turn.agentRunFailed ||
+        turn.dispatchError != null ||
+        turn.previewLifecycle.finalFailed ||
+        (turn.previewLifecycle.finalDelivered && !turn.previewLifecycle.finalSucceeded) ||
+        sentFallback
+        ? "error"
+        : "done",
       "finalize",
     );
   }

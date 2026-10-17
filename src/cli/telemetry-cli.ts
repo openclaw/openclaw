@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { getRuntimeConfig, transformConfigFileWithRetry } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, transformConfigFileWithRetry } from "../config/config.js";
 import {
   buildTelemetryPayload,
   buildTelemetryUserAgent,
@@ -19,7 +19,7 @@ const TELEMETRY_REASON_LABELS = {
 } satisfies Record<Awaited<ReturnType<typeof resolveTelemetryStatus>>["reason"], string>;
 
 async function showTelemetry(options: { json?: boolean }): Promise<void> {
-  const config = getRuntimeConfig({ skipPluginValidation: true });
+  const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
   const telemetry = await resolveTelemetryStatus(config);
   const request =
     telemetry.reason === "update-disabled" || telemetry.reason === "automated-environment"

@@ -22,7 +22,6 @@ import {
   shouldSkipSnapshotRestore,
   shellQuote,
   validateSnapshotRestoreMode,
-  warn,
   withProgressOnStderr,
   writeJson,
   writeSummaryMarkdown,
@@ -45,10 +44,12 @@ import {
   printSmokeTargetSummary,
   posixAgentTurnScript,
   posixStopGatewayScript,
+  posixRefOnboardArgs,
   parseSmokeCliArgs,
   SmokeRunController,
   smokeDefaultOptions,
   smokeDefaultStatus,
+  verifyPosixGateway,
   type SmokeCliOptions,
 } from "./smoke-common.ts";
 
@@ -391,28 +392,7 @@ fi`);
   }
 
   private runRefOnboard(): void {
-    this.guest.exec([
-      "/usr/bin/env",
-      `${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`,
-      "openclaw",
-      "onboard",
-      "--non-interactive",
-      "--mode",
-      "local",
-      "--auth-choice",
-      this.auth.authChoice,
-      ...(this.auth.tokenProvider ? ["--token-provider", this.auth.tokenProvider] : []),
-      "--secret-input-mode",
-      "ref",
-      "--gateway-port",
-      "18789",
-      "--gateway-bind",
-      "loopback",
-      "--skip-skills",
-      "--skip-health",
-      "--accept-risk",
-      "--json",
-    ]);
+    this.guest.exec(posixRefOnboardArgs(this.auth));
   }
 
   private injectBadPluginFixture(): void {
@@ -490,20 +470,7 @@ setsid sh -lc ` +
   }
 
   private verifyGatewayStatus(): void {
-    for (let attempt = 1; attempt <= 8; attempt++) {
-      const result = this.guest.run(
-        ["openclaw", "gateway", "status", "--deep", "--require-rpc", "--timeout", "15000"],
-        { check: false },
-      );
-      if (result.status === 0) {
-        return;
-      }
-      if (attempt < 8) {
-        warn(`gateway-status retry ${attempt}`);
-        run("sleep", ["5"]);
-      }
-    }
-    throw new Error("gateway status did not become RPC-ready");
+    verifyPosixGateway(this.guest);
   }
 
   private async verifyBadPluginDiagnostic(lane: "fresh" | "upgrade"): Promise<void> {

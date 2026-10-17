@@ -1,13 +1,16 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { describe, expect, it } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assert, describe, expect, it } from "vitest";
 import type { Tool } from "../types.js";
-import {
-  normalizeToolParameterSchema,
-  type ToolSchemaModelCompat,
-} from "./agent-tools-parameter-schema.js";
+import type { ToolSchemaModelCompat } from "./agent-tools-parameter-schema.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
-import { prepareOpenAITools, projectOpenAITools } from "./openai-tool-projection.js";
+import { prepareOpenAITools } from "./openai-tool-projection.js";
 import { normalizeOpenAIStrictToolParameters } from "./openai-tool-schema.js";
+import {
+  getPublishedRuntimeToolInputSchema,
+  projectRuntimeToolInputSchema,
+  publishRuntimeToolInputSchema,
+} from "./tool-schema-json-projection.js";
 import { withPreparedToolSchemaNormalization } from "./tool-schema-normalization-cache.js";
 
 function actionSchema() {
@@ -41,24 +44,73 @@ function normalizePreparedSchema(tools: Tool[], modelCompat: ToolSchemaModelComp
 }
 
 describe("OpenAI tool schema reuse", () => {
-  it.each([false, true])(
-    "keeps payloads independent and sees in-place source edits with strict=%s",
-    (strict) => {
-      const parameters = actionSchema();
-      const tools = [{ name: "choose", description: "Choose an action", parameters }];
-      const first = payloadSchema(tools, strict);
-      actions(first).push("output-only");
+  it("publishes detached immutable schemas while source edits require a new publication", () => {
+    const source = actionSchema();
+    const projection = publishRuntimeToolInputSchema(source);
+    assert(isRecord(projection.schema));
+    const published = getPublishedRuntimeToolInputSchema(projection.schema);
+    assert(published);
+    expect(getPublishedRuntimeToolInputSchema(source)).toBeUndefined();
+    expect(published.json).toBe(
+      '{"type":"object","properties":{"action":{"type":"string","enum":["read"]}},"required":["action"],"additionalProperties":false}',
+    );
+    source.properties.action.enum.push("write");
+    const tool = { name: "choose", description: "Choose", parameters: projection.schema };
+    const parameters = payloadSchema([tool]);
+    expect(actions(parameters)).toEqual(["read"]);
+    expect(() => actions(parameters).push("delete")).toThrow(TypeError);
+    expect(() => Object.assign(published, { json: "{}" })).toThrow(TypeError);
+    expect(projectRuntimeToolInputSchema(projection.schema)).toBe(projection);
+    expect(payloadSchema([tool])).toBe(parameters);
+    const refreshed = publishRuntimeToolInputSchema(source);
+    assert(isRecord(refreshed.schema));
+    expect(getPublishedRuntimeToolInputSchema(refreshed.schema)?.fingerprint).not.toBe(
+      published.fingerprint,
+    );
+    expect(payloadSchema([{ ...tool, parameters: refreshed.schema }])).toHaveProperty(
+      "properties.action.enum",
+      ["read", "write"],
+    );
+  });
 
-      const second = payloadSchema(tools, strict);
-      expect(actions(second)).toEqual(["read"]);
-      expect(second).not.toBe(first);
-      parameters.properties.action.enum.push("write");
-      expect(actions(payloadSchema(tools, strict))).toEqual(["read", "write"]);
-      Object.assign(parameters, actionSchema());
-      expect(actions(payloadSchema(tools, strict))).toEqual(["read"]);
-      expect(actions(second)).toEqual(["read"]);
-    },
-  );
+  it("reuses published provider variants without changing current strict or compatibility options", () => {
+    const source = actionSchema();
+    Reflect.deleteProperty(source, "additionalProperties");
+    const projection = publishRuntimeToolInputSchema(source);
+    assert(isRecord(projection.schema));
+    const tools = [{ name: "choose", description: "Choose", parameters: projection.schema }];
+    const loose = payloadSchema(tools);
+    const strict = payloadSchema(tools, true);
+    expect(loose).not.toHaveProperty("additionalProperties");
+    expect(strict).toHaveProperty("additionalProperties", false);
+    expect(strict).not.toBe(loose);
+    expect(payloadSchema(tools)).toBe(loose);
+    expect(payloadSchema(tools, true)).toBe(strict);
+    const wire = expectDefined(
+      convertResponsesToolPayload(tools, { strict: true })[0],
+      "wire tool",
+    );
+    expect(convertResponsesToolPayload(tools, { strict: true })[0]).toBe(wire);
+    expect(() => Object.assign(wire, { name: "other" })).toThrow(TypeError);
+    const renamed = convertResponsesToolPayload(
+      [
+        {
+          ...expectDefined(tools[0], "source tool"),
+          name: "renamed",
+          description: "New description",
+        },
+      ],
+      { strict: true },
+    )[0];
+    expect(renamed).toMatchObject({ name: "renamed", description: "New description" });
+    expect(renamed).not.toBe(wire);
+    const stripped = normalizePreparedSchema(tools, { unsupportedToolSchemaKeywords: ["enum"] });
+    expect(stripped).not.toHaveProperty("properties.action.enum");
+    expect(normalizePreparedSchema(tools, { unsupportedToolSchemaKeywords: ["enum"] })).toBe(
+      stripped,
+    );
+    expect(payloadSchema(tools, true)).toHaveProperty("properties.action.enum", ["read"]);
+  });
 
   it("keeps current provider options isolated", () => {
     const tools = [{ name: "choose", description: "Choose", parameters: actionSchema() }];
@@ -119,44 +171,5 @@ describe("OpenAI tool schema reuse", () => {
     expect(normalizeOpenAIStrictToolParameters(parameters, true)).toBe(direct);
     expect(direct).toHaveProperty("properties.direct");
     expect(direct).not.toHaveProperty("properties.action");
-  });
-
-  it("keeps hostile public projections outside source-cache provenance", () => {
-    const parameters = actionSchema();
-    const tools = [{ name: "choose", description: "Choose", parameters }];
-    expect(actions(payloadSchema(tools))).toEqual(["read"]);
-    const projection = projectOpenAITools(tools);
-    const projected = expectDefined(projection.tools[0], "projected tool").parameters;
-    actions(projected).push("public-edit");
-    Object.defineProperty(projected, "toJSON", {
-      value: () => parameters,
-      enumerable: false,
-    });
-    expect(normalizeToolParameterSchema(projected)).toHaveProperty("properties.action.enum", [
-      "read",
-      "public-edit",
-    ]);
-    expect(actions(payloadSchema(tools))).toEqual(["read"]);
-  });
-
-  it("restores outer facts after an inner throw and retires them on return", () => {
-    const outer = prepareOpenAITools([{ name: "outer", parameters: actionSchema() }]);
-    const schema = expectDefined(outer.projection.tools[0], "outer tool").parameters;
-    withPreparedToolSchemaNormalization(outer.schemas, () => {
-      const first = normalizeToolParameterSchema(schema);
-      expect(() =>
-        withPreparedToolSchemaNormalization(new Map(), () => {
-          throw new Error("inner");
-        }),
-      ).toThrow("inner");
-      const second = normalizeToolParameterSchema(schema);
-      const third = normalizeToolParameterSchema(schema);
-      expect(second).toEqual(first);
-      expect(second).not.toBe(first);
-      expect(third).toEqual(second);
-      expect(third).not.toBe(second);
-    });
-    const direct = normalizeToolParameterSchema(schema);
-    expect(normalizeToolParameterSchema(schema)).toBe(direct);
   });
 });

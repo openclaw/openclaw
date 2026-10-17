@@ -12,7 +12,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { buildCommandContext } from "./commands-context.js";
+import { buildCommandContextForTest as buildCommandContext } from "./commands-context.test-support.js";
 import { handleCommands } from "./commands-core.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 import { resolveAuthorizedSessionResetCommand } from "./session-reset-command.js";
@@ -105,7 +105,7 @@ async function dispatch(params: {
           resolvedReasoningLevel: "off",
         }),
       });
-      const reset = resolveAuthorizedSessionResetCommand({
+      const reset = await resolveAuthorizedSessionResetCommand({
         cfg,
         ctx: { ...commandParams.ctx, commandText: "/reset", rawText: "/reset" },
         agentId: "main",

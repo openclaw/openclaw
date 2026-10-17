@@ -587,7 +587,7 @@ function assertNpmPluginUpdateUnchanged() {
   assertNpmPlugin();
 }
 
-function assertNpmPluginRemoved() {
+function assertNpmPluginUninstalled(keepFiles) {
   const installPath = fs.readFileSync(scratchFile("plugins-npm-install-path.txt"), "utf8").trim();
   const packageParent = path.dirname(installPath);
   const nodeModulesPath = path.basename(packageParent).startsWith("@")
@@ -599,39 +599,22 @@ function assertNpmPluginRemoved() {
     .trim();
   assertPluginRemoved({
     pluginId: "demo-plugin-npm",
-    listFile: scratchFile("plugins-npm-uninstalled.json"),
+    listFile: scratchFile(`plugins-npm-${keepFiles ? "retained" : "uninstalled"}.json`),
+    // Historical --keep-files retains a discoverable directory; current releases
+    // instead persist an exact disabled marker.
+    allowLegacyRetainedListing: keepFiles && pluginUninstallMode === "legacy",
   });
-  if (fs.existsSync(installPath)) {
-    throw new Error(`npm managed package still exists after uninstall: ${installPath}`);
+  for (const [label, file] of [
+    ["package", installPath],
+    ["dependency", dependencyPackagePath],
+  ]) {
+    if (fs.existsSync(file) !== keepFiles) {
+      const outcome = keepFiles ? "was deleted by --keep-files" : "still exists after uninstall";
+      throw new Error(`npm managed ${label} ${outcome}: ${file}`);
+    }
   }
-  if (fs.existsSync(dependencyPackagePath)) {
-    throw new Error(
-      `npm managed dependency still exists after uninstall: ${dependencyPackagePath}`,
-    );
-  }
-  if (pluginUninstallMode !== "legacy" && fs.existsSync(projectRoot)) {
+  if (!keepFiles && pluginUninstallMode !== "legacy" && fs.existsSync(projectRoot)) {
     throw new Error(`npm managed project still exists after uninstall: ${projectRoot}`);
-  }
-}
-
-function assertNpmPluginRetained() {
-  const installPath = fs.readFileSync(scratchFile("plugins-npm-install-path.txt"), "utf8").trim();
-  const dependencyPackagePath = fs
-    .readFileSync(scratchFile("plugins-npm-dependency-path.txt"), "utf8")
-    .trim();
-  assertPluginRemoved({
-    pluginId: "demo-plugin-npm",
-    listFile: scratchFile("plugins-npm-retained.json"),
-    // Historical --keep-files removed config ownership but retained a
-    // discoverable plugin directory. Its list entry is expected until the
-    // subsequent reinstall; current releases persist an exact disabled marker.
-    allowLegacyRetainedListing: pluginUninstallMode === "legacy",
-  });
-  if (!fs.existsSync(installPath)) {
-    throw new Error(`npm managed package was deleted by --keep-files: ${installPath}`);
-  }
-  if (!fs.existsSync(dependencyPackagePath)) {
-    throw new Error(`npm managed dependency was deleted by --keep-files: ${dependencyPackagePath}`);
   }
 }
 
@@ -878,9 +861,9 @@ const commands = {
   "plugin-file-removed": () => assertLocalPluginRemoved(localPluginScenarios.file),
   "plugin-npm": assertNpmPlugin,
   "plugin-npm-update": assertNpmPluginUpdateUnchanged,
-  "plugin-npm-retained": assertNpmPluginRetained,
+  "plugin-npm-retained": () => assertNpmPluginUninstalled(true),
   "plugin-npm-reinstalled": assertNpmPluginReinstalled,
-  "plugin-npm-removed": assertNpmPluginRemoved,
+  "plugin-npm-removed": () => assertNpmPluginUninstalled(false),
   "invalid-openclaw-extensions": assertInvalidOpenClawExtensionsRejected,
   "bundle-disabled": assertClaudeBundleDisabled,
   "bundle-inspect": assertClaudeBundleInspect,

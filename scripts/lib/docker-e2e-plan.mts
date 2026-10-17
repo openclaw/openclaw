@@ -680,26 +680,18 @@ function laneCredentialRequirements(poolLane: DockerE2eLane): string[] {
   if (poolLane.name === "install-e2e-anthropic") {
     credentials.push("anthropic");
   }
-  if (resources.includes("live:openai")) {
-    credentials.push("openai");
-  }
-  if (resources.includes("live:codex")) {
-    credentials.push("codex");
-  }
-  if (resources.includes("live:claude")) {
-    credentials.push(poolLane.name === "live-anthropic-cache" ? "anthropic-api-key" : "anthropic");
-  }
-  if (resources.includes("live:droid")) {
-    credentials.push("factory");
-  }
-  if (resources.includes("live:gemini")) {
-    credentials.push("gemini");
-  }
-  if (resources.includes("live:opencode")) {
-    credentials.push("opencode");
-  }
-  if (resources.includes("live:telegram")) {
-    credentials.push("telegram");
+  for (const [resource, credential] of [
+    ["live:openai", "openai"],
+    ["live:codex", "codex"],
+    ["live:claude", poolLane.name === "live-anthropic-cache" ? "anthropic-api-key" : "anthropic"],
+    ["live:droid", "factory"],
+    ["live:gemini", "gemini"],
+    ["live:opencode", "opencode"],
+    ["live:telegram", "telegram"],
+  ] as const) {
+    if (resources.includes(resource)) {
+      credentials.push(credential);
+    }
   }
   return credentials;
 }

@@ -46,7 +46,7 @@ absolute POSIX workspace path:
 
 Placement does not grant access. Authorize the required node commands and file
 paths separately; the example grants only `AGENTS.md`. Gateway callers retain
-their own document allowlists. Use the canonical workspace root. Document reads
+their own document allowlists. Use the resolved workspace root. Document reads
 and writes reject symlinks. Bootstrap reads can follow directory aliases inside
 that root when the node policy permits it; final-file symlinks remain rejected.
 There is no local-file fallback while the
@@ -54,17 +54,17 @@ configured node is unavailable or its workspace service is stopped.
 Agents sharing a Gateway workspace must use the same node and remote root;
 identical mappings share one binding, while conflicting mappings fail startup.
 
-| Workspace operation                        | Node command |
-| ------------------------------------------ | ------------ |
-| Read bytes and their canonical source path | `file.fetch` |
-| Write bytes                                | `file.write` |
-| List directory entries                     | `dir.list`   |
-| Read type, size, and modification time     | `file.stat`  |
+| Workspace operation                       | Node command |
+| ----------------------------------------- | ------------ |
+| Read bytes and their resolved source path | `file.fetch` |
+| Write bytes                               | `file.write` |
+| List directory entries                    | `dir.list`   |
+| Read type, size, and modification time    | `file.stat`  |
 
 `file.stat` adds no model tool. It accepts regular files and directories without
 fetching contents or listing the parent, under the existing read-path policy.
 For bootstrap reads, `file.fetch.rootPath` confines parent-alias resolution to
-the canonical workspace root; it does not grant access beyond the node policy.
+the resolved workspace root; it does not grant access beyond the node policy.
 Unary reads and writes retain the 16 MiB transfer limit; directory reads consume
 the existing `dir.list` pages. `file.write.expectedSha256` verifies the submitted bytes, not
 the previous file version. Owner-document conflict checks remain in the Gateway.
@@ -137,6 +137,9 @@ rewritten by security sanitization, the text reports the omission rather than
 showing a partial or altered path. A listing that cannot display its first entry
 explicitly reports that pagination cannot advance.
 
+If a saved file's metadata cannot be read, `dir_fetch` fails instead of reporting
+a successful transfer with an incomplete manifest.
+
 Directory fetch policy checks the source-tree descendants and then the archive
 member identities admitted by the same bounded parser and policy planner used
 for extraction. It does not use human-readable `tar` listings: admitted Unicode
@@ -144,7 +147,7 @@ and newline names retain their exact spelling, and producer-added AppleDouble
 files are checked rather than hidden. Parent paths are checked even when the
 archive omits directory headers. The 5000-descendant cap includes those implicit
 directories, counting shared parents only once. A denied path rejects the whole transfer.
-Canonical source path/device/inode binding, byte-count and SHA-256 verification,
+Resolved source path/device/inode binding, byte-count and SHA-256 verification,
 link/traversal/collision checks, and extraction limits still apply. Malformed
 archive headers and destination-platform filename restrictions still reject;
 filenames are not truncated or repaired to make an archive pass.

@@ -3,6 +3,7 @@ import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js"
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { toErrorObject } from "../../infra/errors.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { recordSubagentTerminalState } from "../../sessions/subagent-terminal-state.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
@@ -17,8 +18,7 @@ import { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import { ensureManagerRuntimeHandle } from "./manager.runtime-handle-ensure.js";
 import {
   runResetManagerSessionRuntimeOptions,
-  runSetManagerSessionConfigOption,
-  runSetManagerSessionRuntimeMode,
+  runSetManagerSessionRuntimeOption,
   runUpdateManagerSessionRuntimeOptions,
   type RuntimeOptionCommandServices,
 } from "./manager.runtime-options-commands.js";
@@ -113,12 +113,17 @@ export class AcpSessionManager {
     });
   }
 
-  /** @deprecated Use resolveSessionAsync; retained for the v2026.9.4 Plugin SDK contract. */
+  /** @deprecated Use resolveSessionAsync; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
   resolveSession(params: {
     cfg: OpenClawConfig;
     sessionKey: string;
     agentId?: string;
   }): AcpSessionResolution {
+    warnPluginSdkDeprecation({
+      family: "acp-session",
+      method: "AcpSessionManager.resolveSession",
+      replacement: "AcpSessionManager.resolveSessionAsync",
+    });
     if (!params.sessionKey.trim()) {
       return { kind: "none", sessionKey: "" };
     }
@@ -253,11 +258,11 @@ export class AcpSessionManager {
     const runtimeMode = validateRuntimeModeInput(params.runtimeMode);
 
     return await this.withSessionActor(target, async (isCurrentActor) => {
-      return await runSetManagerSessionRuntimeMode({
+      return await runSetManagerSessionRuntimeOption({
         assertActive: params.assertActive,
         cfg: params.cfg,
         ...target,
-        runtimeMode,
+        update: { runtimeMode },
         ...this.runtimeOptionCommandServices(isCurrentActor),
       });
     });
@@ -275,12 +280,11 @@ export class AcpSessionManager {
     const { key, value } = validateRuntimeConfigOptionInput(params.key, params.value);
 
     return await this.withSessionActor(target, async (isCurrentActor) => {
-      return await runSetManagerSessionConfigOption({
+      return await runSetManagerSessionRuntimeOption({
         assertActive: params.assertActive,
         cfg: params.cfg,
         ...target,
-        key,
-        value,
+        update: { key, value },
         ...this.runtimeOptionCommandServices(isCurrentActor),
       });
     });
@@ -358,6 +362,7 @@ export class AcpSessionManager {
             await recordSubagentTerminalState(
               {
                 childSessionKey: target.sessionKey,
+                agentId: target.agentId,
                 runId: input.requestId,
                 requesterSessionKey,
                 outcomeStatus: "cancelled",

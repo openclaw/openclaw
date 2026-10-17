@@ -1,6 +1,6 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, expect, it, vi, type MockInstance } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
@@ -16,6 +16,7 @@ import {
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   emitAgentEvent,
@@ -59,11 +60,12 @@ import { createSessionRowProjection } from "./session-row-projection.js";
 
 const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-restart-terminal-");
 
+beforeEach(() => {
+  const cfg = {};
+  setRuntimeConfigSnapshot(cfg, cfg);
+});
+
 const routing = vi.hoisted(() => ({ loadSessionEntry: vi.fn() }));
-vi.mock("./session-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-utils.js")>()),
-  loadSessionEntry: routing.loadSessionEntry,
-}));
 vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
   loadGatewaySessionEntryReadOnlyInWorker: async (
@@ -71,7 +73,11 @@ vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
       typeof import("./session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
     >[0],
   ) => {
-    const loaded = routing.loadSessionEntry(params.key, { agentId: params.agentId }, params.cfg);
+    const loaded = await routing.loadSessionEntry(
+      params.key,
+      { agentId: params.agentId },
+      params.cfg,
+    );
     return { ...loaded, storeKeys: loaded.storeKeys ?? [loaded.canonicalKey] };
   },
 }));
@@ -302,11 +308,11 @@ it.each(["success", "failed-write"])(
     const admissionParams = {
       cfg,
       runId,
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
       agentDedupeKeys: [`agent:${runId}`],
       context,
       io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
     };
+    let admissionEntry: SessionEntry | undefined = { sessionId, updatedAt: 1_000 };
     const admission = createAgentAdmissionController({
       ...admissionParams,
       dedupeLifecycle: createAgentDedupeLifecycle({
@@ -317,6 +323,10 @@ it.each(["success", "failed-write"])(
       getRequestedSessionKey: () => target.sessionKey,
       getResolvedSessionKey: () => target.sessionKey,
       getResolvedSessionId: () => sessionId,
+      getSessionEntry: () => admissionEntry,
+      setSessionEntry: (entry) => {
+        admissionEntry = entry;
+      },
       getResolvedSessionAgentId: () => "main",
       getAgentId: () => "main",
       getSessionPersisted: () => true,
@@ -340,8 +350,18 @@ it.each(["success", "failed-write"])(
     let heldWriter: Promise<unknown> | undefined;
     let subscriptions: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
     let interruption: ReturnType<typeof startSessionWorkAdmissionInterruption> | undefined;
-    const actual = await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
-    routing.loadSessionEntry.mockImplementation(actual.loadSessionEntry);
+    const actual = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
+      "./session-utils-store-worker.js",
+    );
+    routing.loadSessionEntry.mockImplementation((key, options, sourceCfg) =>
+      actual.loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: sourceCfg,
+        key,
+        ...options,
+        excludeInternalEffects: true,
+        readOnly: false,
+      }),
+    );
     const readHistory = async () => {
       const respond = vi.fn();
       await chatHistoryHandlers["chat.history"]!({
@@ -356,11 +376,12 @@ it.each(["success", "failed-write"])(
       return respond.mock.calls[0]?.[1];
     };
     try {
-      await replaceSessionEntry(target, {
-        sessionId,
-        spawnedBy: "agent:main:main",
-        updatedAt: 1_000,
-      });
+      admissionEntry =
+        (await replaceSessionEntry(target, {
+          sessionId,
+          spawnedBy: "agent:main:main",
+          updatedAt: 1_000,
+        })) ?? undefined;
       await admission.acquire(target.storePath);
       const rowProjection = await createSessionRowProjection({ cfg, context });
       bindSessionRowProjection(context, () => rowProjection);
@@ -499,7 +520,11 @@ it.each(["success", "failed-write"])(
         "sessions.changed",
         expect.objectContaining({ runId, status: "killed", hasActiveRun: false, runtimeMs: 1_000 }),
         new Set(["session-observer"]),
-        { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
+        {
+          dropIfSlow: true,
+          sessionEventSubscriptionKeys: [target.sessionKey],
+          prepareSessionProjection: expect.any(Function),
+        },
       );
       await closeOpenClawAgentDatabasesAsync(state.root);
       closeOpenClawAgentDatabasesForTest(state.root);

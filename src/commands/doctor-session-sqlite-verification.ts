@@ -3,10 +3,8 @@ import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveLegacyTranscriptPaths } from "../config/sessions/legacy-store-inspection.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
-import {
-  attachSessionEntrySnapshots,
-  sessionEntrySnapshotColumns,
-} from "../config/sessions/session-entry-snapshots.js";
+import { attachSessionEntrySnapshots } from "../config/sessions/session-entry-snapshot-values.js";
+import { sessionEntrySnapshotColumns } from "../config/sessions/session-entry-snapshots.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";

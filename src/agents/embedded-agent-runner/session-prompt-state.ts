@@ -1,8 +1,5 @@
 /** Transcript-backed prompt projection state cached by an embedded session lifecycle. */
-import {
-  splitSystemPromptCacheBoundary,
-  SYSTEM_PROMPT_CACHE_BOUNDARY,
-} from "@openclaw/ai/internal/shared";
+import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -11,6 +8,7 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { getOpenClawSystemUpdateKind } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
+import { shareSystemPromptPrefix } from "../sessions/system-prompt-pool.js";
 import {
   prepareCacheTtlCheckpoint,
   serializeCacheTtlToolResultProjections,
@@ -25,8 +23,6 @@ type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
 export type ToolResultPromptProjectionState = CacheTtlProjectionInput & {
   /** Null means an uncertain append requires a checkpoint, including for empty state. */
   cacheTtlCheckpoint?: CacheTtlCheckpoint | null;
-  /** Every baseline publication, including an empty-branch restore, invalidates pending writes. */
-  cacheTtlRevision?: number;
 };
 
 type EmbeddedSessionPromptState = {
@@ -35,8 +31,6 @@ type EmbeddedSessionPromptState = {
   systemPrompt?: SystemPromptSeries;
   pendingSystemPrompt?: SystemPromptSeries;
   systemPromptRouteKey?: string;
-  persistedSystemPrompt?: string;
-  prunedImageMessages?: Set<string>;
   removedRuntimeContextKeys?: Set<string>;
   runtimeContextCarrierPositions?: number[];
 };
@@ -88,29 +82,28 @@ function promptSections(text: string): Map<string, string> {
 
 function promptDelta(previous: string, current: string): string[] {
   const before = promptSections(previous);
-  const after = promptSections(current);
-  return [
-    ...[...after].flatMap(([heading, section]) =>
-      before.get(heading) === section ? [] : [section],
-    ),
-    ...[...before.keys()].flatMap((heading) =>
-      after.has(heading) ? [] : [`${heading}\n(removed)`],
-    ),
-  ];
+  const sections: string[] = [];
+  for (const [heading, section] of promptSections(current)) {
+    if (before.get(heading) !== section) {
+      sections.push(section);
+    }
+    before.delete(heading);
+  }
+  for (const heading of before.keys()) {
+    sections.push(`${heading}\n(removed)`);
+  }
+  return sections;
 }
 
-/** Restore only a matching effective prompt; a changed restart input begins a fresh series. */
+/** Restore the admitted series; refreshed instructions append after its conversation prefix. */
 export function prepareSessionSystemPrompt(params: {
   state: EmbeddedSessionPromptState;
   routeKey: string;
   systemPrompt: string;
   entries: SessionEntry[];
 }) {
-  const { permissionNotice, systemPrompt: prompt } = extractAttemptPermissionNotice(
-    params.systemPrompt,
-  );
-  const split = splitSystemPromptCacheBoundary(prompt);
-  const renderedPrefix = split?.stablePrefix ?? prompt;
+  const { permissionNotice, systemPrompt } = extractAttemptPermissionNotice(params.systemPrompt);
+  const renderedPrefix = shareSystemPromptPrefix(systemPrompt);
   const historyId =
     params.entries.findLast((entry) => entry.type === "compaction" || entry.type === "reset")?.id ??
     null;
@@ -124,7 +117,6 @@ export function prepareSessionSystemPrompt(params: {
   if (orphanedUpdate) {
     // A canceled append may precede its checkpoint; retire that override before any new request.
     params.state.systemPrompt = undefined;
-    params.state.persistedSystemPrompt = undefined;
   }
   let series = params.state.pendingSystemPrompt ?? params.state.systemPrompt;
   if (
@@ -138,26 +130,32 @@ export function prepareSessionSystemPrompt(params: {
       isRecord(data) &&
       typeof data.prefix === "string" &&
       data.hash === sha256Hex(data.prefix) &&
-      data.renderedPrefix === renderedPrefix &&
+      typeof data.renderedPrefix === "string" &&
       data.routeKey === params.routeKey &&
       data.historyId === historyId &&
       !afterCheckpoint.some((later) => later.type === "model_change")
     ) {
       series = {
-        prefix: data.prefix,
+        prefix: shareSystemPromptPrefix(data.prefix),
         hash: data.hash,
-        renderedPrefix,
+        renderedPrefix: shareSystemPromptPrefix(data.renderedPrefix),
         routeKey: params.routeKey,
         historyId,
         permissionNotice:
           typeof data.permissionNotice === "string" ? data.permissionNotice : undefined,
         restart: false,
       };
-      params.state.persistedSystemPrompt = JSON.stringify(series);
+      params.state.systemPrompt = series;
     }
   }
   const restart = !series || series.routeKey !== params.routeKey || series.historyId !== historyId;
-  const sections = !restart && series ? promptDelta(series.renderedPrefix, renderedPrefix) : [];
+  const sections =
+    !restart && series && series.renderedPrefix !== renderedPrefix
+      ? promptDelta(
+          stripSystemPromptCacheBoundary(series.renderedPrefix),
+          stripSystemPromptCacheBoundary(renderedPrefix),
+        )
+      : [];
   if (permissionNotice && (restart || permissionNotice !== series?.permissionNotice)) {
     sections.push(permissionNotice);
   }
@@ -172,11 +170,11 @@ export function prepareSessionSystemPrompt(params: {
         restart: true,
       }
     : { ...series!, renderedPrefix, permissionNotice, restart: false };
+  // Admission callbacks need the series, not the transcript used to restore it.
+  const { state, routeKey } = params;
   let committed = false;
   return {
-    systemPrompt: split
-      ? `${next.prefix}${SYSTEM_PROMPT_CACHE_BOUNDARY}${split.dynamicSuffix}`
-      : next.prefix,
+    systemPrompt: next.prefix,
     update: sections.length
       ? buildSystemUpdateMessage(
           restart
@@ -193,8 +191,8 @@ export function prepareSessionSystemPrompt(params: {
       }
       committed = true;
       // An early restart marker already retired old overrides; keep this turn's new operators.
-      params.state.pendingSystemPrompt = restartRecorded ? { ...next, restart: false } : next;
-      params.state.systemPromptRouteKey = params.routeKey;
+      state.pendingSystemPrompt = restartRecorded ? { ...next, restart: false } : next;
+      state.systemPromptRouteKey = routeKey;
     },
   };
 }
@@ -207,7 +205,6 @@ export async function retireSessionSystemPrompt(
 ): Promise<void> {
   state.systemPrompt = undefined;
   state.pendingSystemPrompt = undefined;
-  state.persistedSystemPrompt = undefined;
   state.systemPromptRouteKey = routeKey;
   await appendEntry("openclaw.system-prompt", { restart: true, routeKey });
 }
@@ -220,18 +217,24 @@ export async function persistSessionSystemPrompt(
   if (!snapshot) {
     return;
   }
-  const fingerprint = JSON.stringify({ ...snapshot, restart: false });
-  if (snapshot.restart || state.persistedSystemPrompt !== fingerprint) {
+  const previous = state.systemPrompt;
+  if (
+    snapshot.restart ||
+    !previous ||
+    snapshot.prefix !== previous.prefix ||
+    snapshot.renderedPrefix !== previous.renderedPrefix ||
+    snapshot.routeKey !== previous.routeKey ||
+    snapshot.historyId !== previous.historyId ||
+    snapshot.permissionNotice !== previous.permissionNotice
+  ) {
     try {
       await appendEntry("openclaw.system-prompt", snapshot);
     } catch (error) {
       // Rejection can follow a durable commit; keep pending work, but distrust the cached checkpoint.
       state.systemPrompt = undefined;
-      state.persistedSystemPrompt = undefined;
       throw error;
     }
   }
-  state.persistedSystemPrompt = fingerprint;
   state.systemPrompt = { ...snapshot, restart: false };
   state.pendingSystemPrompt = undefined;
 }
@@ -257,9 +260,7 @@ export function createToolResultPromptProjectionState(
     ambiguousBaseKeys: new Set(source?.ambiguousBaseKeys),
     sourceHashByKey: new Map(source?.sourceHashByKey),
     restoredCacheTtl: new Map(source?.restoredCacheTtl),
-    ...(source
-      ? { cacheTtlCheckpoint: source.cacheTtlCheckpoint, cacheTtlRevision: source.cacheTtlRevision }
-      : {}),
+    ...(source ? { cacheTtlCheckpoint: source.cacheTtlCheckpoint } : {}),
   };
 }
 
@@ -283,7 +284,7 @@ export function recordToolResultPromptProjection(
   });
 }
 
-export function getEmbeddedSessionPromptState(sessionId: string): EmbeddedSessionPromptState {
+function getEmbeddedSessionPromptState(sessionId: string): EmbeddedSessionPromptState {
   const existing = sessionPromptStates.get(sessionId);
   const current: EmbeddedSessionPromptState = existing ?? {
     activeAttempts: 0,
@@ -351,7 +352,6 @@ export async function persistToolResultProjections(
 ): Promise<void> {
   const snapshot = serializeCacheTtlToolResultProjections(state);
   const previous = state.cacheTtlCheckpoint;
-  const revision = state.cacheTtlRevision ?? 0;
   if (
     previous === undefined &&
     !cacheTouch &&
@@ -371,11 +371,7 @@ export async function persistToolResultProjections(
     committedCheckpoint = checkpoint;
   } finally {
     // Rejection can follow a durable commit; the next write must re-establish the full base.
-    // A branch restore during the write owns its new baseline.
-    if ((state.cacheTtlRevision ?? 0) === revision) {
-      state.cacheTtlCheckpoint = committedCheckpoint;
-      state.cacheTtlRevision = revision + 1;
-    }
+    state.cacheTtlCheckpoint = committedCheckpoint;
   }
 }
 

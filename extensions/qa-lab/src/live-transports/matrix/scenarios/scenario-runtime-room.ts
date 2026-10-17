@@ -171,6 +171,14 @@ export async function runMembershipLossScenario(context: MatrixQaScenarioContext
     accessToken: context.sutAccessToken,
     baseUrl: context.baseUrl,
   });
+  const waitForMembership = (membership: "invite" | "join" | "leave") =>
+    waitForMembershipEvent({
+      ...resolveMatrixQaActorSyncParams(context, "driver"),
+      membership,
+      roomId,
+      stateKey: context.sutUserId,
+      timeoutMs: context.timeoutMs,
+    });
   let membershipRestored = false;
 
   try {
@@ -179,13 +187,7 @@ export async function runMembershipLossScenario(context: MatrixQaScenarioContext
       roomId,
       userId: context.sutUserId,
     });
-    const leaveEvent = await waitForMembershipEvent({
-      ...resolveMatrixQaActorSyncParams(context, "driver"),
-      membership: "leave",
-      roomId,
-      stateKey: context.sutUserId,
-      timeoutMs: context.timeoutMs,
-    });
+    const leaveEvent = await waitForMembership("leave");
 
     const noReplyToken = buildMatrixQaToken("MATRIX_QA_MEMBERSHIP_LOSS");
     await runNoReplyExpectedScenario({
@@ -203,26 +205,12 @@ export async function runMembershipLossScenario(context: MatrixQaScenarioContext
       roomId,
       userId: context.sutUserId,
     });
-    await waitForMembershipEvent({
-      ...resolveMatrixQaActorSyncParams(context, "driver"),
-      membership: "invite",
-      roomId,
-      stateKey: context.sutUserId,
-      timeoutMs: context.timeoutMs,
-    });
+    await waitForMembership("invite");
     await sutClient.joinRoom(roomId);
-    const joinEvent = await waitForMembershipEvent({
-      ...resolveMatrixQaActorSyncParams(context, "driver"),
-      membership: "join",
-      roomId,
-      stateKey: context.sutUserId,
-      timeoutMs: context.timeoutMs,
-    });
+    const joinEvent = await waitForMembership("join");
     membershipRestored = true;
     const recovered = await runTopologyScopedTopLevelScenario({
-      accessToken: context.driverAccessToken,
       actorId: "driver",
-      actorUserId: context.driverUserId,
       context,
       roomKey: MATRIX_QA_MEMBERSHIP_ROOM_KEY,
       tokenPrefix: "MATRIX_QA_MEMBERSHIP_RETURN",

@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
@@ -27,7 +28,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function seedRun(db: DatabaseSync, version = "2026.9.2", id = runId) {
+function seedRun(db: EngineConnection, version = "2026.9.2", id = runId) {
   db.prepare(`
     INSERT INTO update_runs (
       run_id, created_at_ms, updated_at_ms, trigger, phase, status,
@@ -56,14 +57,14 @@ function createV15Database(version: string | null = "2026.9.2") {
   return { options, databasePath };
 }
 
-function expectVersion(db: DatabaseSync, version: number) {
+function expectVersion(db: EngineConnection, version: number) {
   expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: version });
   expect(
     db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
   ).toEqual({ schema_version: version });
 }
 
-function finishRun(db: DatabaseSync, finishedAtMs: number, id = runId) {
+function finishRun(db: EngineConnection, finishedAtMs: number, id = runId) {
   db.prepare(`
     UPDATE update_runs SET status = 'succeeded', phase = 'finished',
       finished_at_ms = ?, updated_at_ms = ? WHERE run_id = ?

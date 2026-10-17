@@ -21,8 +21,9 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cach
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { createResidentSessionRowReader } from "./session-row-projection.test-support.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
 const rowReader = createResidentSessionRowReader();
 
@@ -109,7 +110,7 @@ describe("session list subagent payload reads", () => {
           const validateJson = nativeJson.prepare("SELECT json_valid(?) AS value");
           let unrelatedInspections = 0;
           let retainedValidationBytes = 0;
-          openOpenClawStateDatabase().db.function(
+          requireNativeSqliteDatabase(openOpenClawStateDatabase().db).function(
             "json_valid",
             { deterministic: true },
             (value) => {
@@ -124,7 +125,9 @@ describe("session list subagent payload reads", () => {
           );
 
           await subagentRegistryState.prepareSubagentSessionListReadCache();
-          const { store } = loadGatewaySessionEntryReadOnly("main", {
+          const { store } = await loadGatewaySessionEntryReadOnlyInWorker({
+            cfg,
+            key: "main",
             includeStoreChildEntries: true,
           });
           expect(Object.keys(store)).toEqual([

@@ -8,7 +8,6 @@ import { loadWorkspaceHookEntries } from "./workspace.js";
 
 const { warnMock } = vi.hoisted(() => ({ warnMock: vi.fn() }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const discoveryModes = ["collection", "extra root"] as const;
 
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: warnMock }),
@@ -58,16 +57,14 @@ function hookNames(entries: ReturnType<typeof loadWorkspaceHookEntries>): string
   return entries.map((entry) => entry.hook.name);
 }
 
-function loadWorkspaceEntriesFromHooksRoot(hooksRoot: string, extraRoot?: string) {
-  const workspaceDir = extraRoot
-    ? path.join(path.dirname(hooksRoot), "empty-workspace")
-    : path.dirname(hooksRoot);
+function loadWorkspaceEntriesFromHooksRoot(hooksRoot: string) {
+  const workspaceDir = path.dirname(hooksRoot);
   return loadWorkspaceHookEntries(workspaceDir, {
     managedHooksDir: path.join(workspaceDir, "managed-none"),
     bundledHooksDir: path.join(workspaceDir, "bundled-none"),
     config: {
       plugins: { enabled: false },
-      hooks: { internal: { load: { extraDirs: extraRoot ? [extraRoot] : [] } } },
+      hooks: { internal: { load: { extraDirs: [] } } },
     },
   });
 }
@@ -104,41 +101,18 @@ describe("hooks workspace", () => {
     warnMock.mockClear();
   });
 
-  it.each(discoveryModes)(
-    "rejects package traversal without scanning unlisted children (%s)",
-    (mode) => {
-      const { root, hooksRoot } = makeHooksWorkspace();
+  it("rejects package traversal without scanning unlisted children", () => {
+    const { root, hooksRoot } = makeHooksWorkspace();
 
-      const pkgDir = path.join(hooksRoot, "pkg");
-      fs.mkdirSync(pkgDir, { recursive: true });
-
-      writePlainHook(root, "outside");
-      writePlainHook(pkgDir, "unlisted");
-
-      writeHookPackageManifest(pkgDir, ["../../outside"]);
-
-      const entries = loadWorkspaceEntriesFromHooksRoot(
-        hooksRoot,
-        mode === "extra root" ? pkgDir : undefined,
-      );
-      expect(hookNames(entries)).toEqual([]);
-    },
-  );
-
-  it.each(discoveryModes)("does not recurse into declared packs or collections (%s)", (mode) => {
-    const { hooksRoot } = makeHooksWorkspace();
     const pkgDir = path.join(hooksRoot, "pkg");
-    const nestedPack = path.join(pkgDir, "nested-pack");
-    writePlainHook(nestedPack, "nested-hook");
-    writeHookPackageManifest(nestedPack, ["./nested-hook"]);
-    writePlainHook(path.join(pkgDir, "nested-collection"), "collection-hook");
-    writePlainHook(pkgDir, "unlisted");
-    writeHookPackageManifest(pkgDir, ["./nested-pack", "./nested-collection"]);
+    fs.mkdirSync(pkgDir, { recursive: true });
 
-    const entries = loadWorkspaceEntriesFromHooksRoot(
-      hooksRoot,
-      mode === "extra root" ? pkgDir : undefined,
-    );
+    writePlainHook(root, "outside");
+    writePlainHook(pkgDir, "unlisted");
+
+    writeHookPackageManifest(pkgDir, ["../../outside"]);
+
+    const entries = loadWorkspaceEntriesFromHooksRoot(hooksRoot);
     expect(hookNames(entries)).toEqual([]);
   });
 
@@ -179,47 +153,47 @@ describe("hooks workspace", () => {
     expect(warnMock).not.toHaveBeenCalled();
   });
 
-  it.each(discoveryModes)(
-    "still loads a plain hook when its package.json is oversized (%s)",
-    (mode) => {
-      const { hooksRoot } = makeHooksWorkspace();
-
-      const hookDir = writePlainHook(hooksRoot, "compat-hook");
-      const manifestPath = path.join(hookDir, "package.json");
-      fs.writeFileSync(manifestPath, "x".repeat(METADATA_MAX_BYTES + 1), "utf8");
-
-      const entries = loadWorkspaceEntriesFromHooksRoot(
-        hooksRoot,
-        mode === "extra root" ? hookDir : undefined,
+  it.each(["EIO", "EACCES"])("warns when hook metadata cannot be read (%s)", (code) => {
+    const { hooksRoot } = makeHooksWorkspace();
+    const hookDir = writePlainHook(hooksRoot, "unreadable-hook");
+    const hookMdPath = path.join(hookDir, "HOOK.md");
+    const metadataIdentity = fs.statSync(hookMdPath);
+    const readSync = fs.readSync;
+    const read = vi.spyOn(fs, "readSync").mockImplementation((...args) => {
+      const identity = fs.fstatSync(args[0]);
+      if (identity.dev === metadataIdentity.dev && identity.ino === metadataIdentity.ino) {
+        throw Object.assign(new Error("private metadata contents"), { code });
+      }
+      return readSync(...args);
+    });
+    try {
+      expect(loadWorkspaceEntriesFromHooksRoot(hooksRoot)).toEqual([]);
+      expect(warnMock).toHaveBeenCalledExactlyOnceWith(
+        `Failed to read hook metadata ${hookMdPath}; check file permissions and disk health.`,
       );
-      expect(hookNames(entries)).toContain("compat-hook");
-      expect(oversizedMetadataWarnings(manifestPath)).toHaveLength(1);
-    },
-  );
+    } finally {
+      read.mockRestore();
+    }
+    expect(hookNames(loadWorkspaceEntriesFromHooksRoot(hooksRoot))).toEqual(["unreadable-hook"]);
+  });
 
-  it.each(discoveryModes)(
-    "rejects package symlink escapes without scanning unlisted children (%s)",
-    (mode) => {
-      const { root, hooksRoot } = makeHooksWorkspace();
+  it("rejects package symlink escapes without scanning unlisted children", () => {
+    const { root, hooksRoot } = makeHooksWorkspace();
 
-      const pkgDir = path.join(hooksRoot, "pkg");
-      const outsideDir = writePlainHook(root, "outside");
-      const linkedDir = path.join(pkgDir, "linked");
-      fs.mkdirSync(pkgDir, { recursive: true });
-      fs.symlinkSync(outsideDir, linkedDir, process.platform === "win32" ? "junction" : "dir");
+    const pkgDir = path.join(hooksRoot, "pkg");
+    const outsideDir = writePlainHook(root, "outside");
+    const linkedDir = path.join(pkgDir, "linked");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.symlinkSync(outsideDir, linkedDir, process.platform === "win32" ? "junction" : "dir");
 
-      writePlainHook(pkgDir, "unlisted");
-      writeHookPackageManifest(pkgDir, ["./linked"]);
+    writePlainHook(pkgDir, "unlisted");
+    writeHookPackageManifest(pkgDir, ["./linked"]);
 
-      const entries = loadWorkspaceEntriesFromHooksRoot(
-        hooksRoot,
-        mode === "extra root" ? pkgDir : undefined,
-      );
-      expect(hookNames(entries)).toEqual([]);
-    },
-  );
+    const entries = loadWorkspaceEntriesFromHooksRoot(hooksRoot);
+    expect(hookNames(entries)).toEqual([]);
+  });
 
-  it.each(discoveryModes)("ignores hooks with hardlinked HOOK.md aliases (%s)", (mode) => {
+  it("ignores hooks with hardlinked HOOK.md aliases", () => {
     if (process.platform === "win32") {
       return;
     }
@@ -234,14 +208,11 @@ describe("hooks workspace", () => {
     }
 
     writePlainHook(hookDir, "unlisted");
-    const entries = loadWorkspaceEntriesFromHooksRoot(
-      hooksRoot,
-      mode === "extra root" ? hookDir : undefined,
-    );
+    const entries = loadWorkspaceEntriesFromHooksRoot(hooksRoot);
     expect(hookNames(entries)).toEqual([]);
   });
 
-  it.each(discoveryModes)("ignores hooks with hardlinked handler aliases (%s)", (mode) => {
+  it("ignores hooks with hardlinked handler aliases", () => {
     if (process.platform === "win32") {
       return;
     }
@@ -256,34 +227,7 @@ describe("hooks workspace", () => {
     }
 
     writePlainHook(hookDir, "unlisted");
-    const entries = loadWorkspaceEntriesFromHooksRoot(
-      hooksRoot,
-      mode === "extra root" ? hookDir : undefined,
-    );
+    const entries = loadWorkspaceEntriesFromHooksRoot(hooksRoot);
     expect(hookNames(entries)).toEqual([]);
-  });
-
-  it("treats configured extraDirs as managed hook sources", () => {
-    const root = tempDirs.make("openclaw-hooks-extra-");
-    const workspaceDir = path.join(root, "workspace");
-    writePlainHook(path.join(root, "shared-hooks"), "shared-hook");
-
-    const entries = loadWorkspaceHookEntries(workspaceDir, {
-      bundledHooksDir: path.join(root, "bundled-none"),
-      config: {
-        hooks: {
-          internal: {
-            enabled: true,
-            load: {
-              extraDirs: [path.join(root, "shared-hooks")],
-            },
-          },
-        },
-      },
-    });
-
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.hook.name).toBe("shared-hook");
-    expect(entries[0]?.hook.source).toBe("openclaw-managed");
   });
 });

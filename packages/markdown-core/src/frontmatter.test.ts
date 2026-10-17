@@ -25,14 +25,24 @@ metadata:
     expect(result.metadata).toBe('{"openclaw":{"emoji":"disk","events":["command:new"]}}');
   });
 
-  it("preserves inline JSON values", () => {
-    const content = `---
+  it.each(["", " # display metadata", " #"])(
+    "preserves inline JSON values before %j",
+    (comment) => {
+      const content = `---
 name: inline-json
-metadata: {"openclaw": {"events": ["test"]}}
+metadata: {"openclaw": {"events": ["test#tag"]}}${comment}
 ---
 `;
-    const result = parseFrontmatterBlock(content);
-    expect(result.metadata).toBe('{"openclaw": {"events": ["test"]}}');
+      const result = parseFrontmatterBlock(content);
+      expect(result.metadata).toBe('{"openclaw": {"events": ["test#tag"]}}');
+    },
+  );
+
+  it("normalizes an indented YAML flow mapping without a line-parser fallback", () => {
+    const result = parseFrontmatterBlock(`---
+  metadata: {openclaw: {emoji: lobster}} # display metadata
+---`);
+    expect(JSON.parse(result.metadata ?? "")).toEqual({ openclaw: { emoji: "lobster" } });
   });
 
   it("keeps a flow value that continues on the next line", () => {
@@ -184,6 +194,19 @@ description: | # note
   line two
 ---`).description,
     ).toBe("line one\nline two");
+  });
+
+  it("drops comment-only values but keeps unquoted hash-led text", () => {
+    const parsed = parseFrontmatterBlock(`---
+name: hashes
+description: # Add a description here
+summary: #1 pick for audits
+color: #ff8800
+---`);
+
+    expect(parsed.description).toBeUndefined();
+    expect(parsed.summary).toBe("#1 pick for audits");
+    expect(parsed.color).toBe("#ff8800");
   });
 
   it("retains structured-value parser errors for owning loaders", () => {

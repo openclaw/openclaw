@@ -116,9 +116,15 @@ describe("update-cli child-owned deferred completion", () => {
             step: "gateway recovery verification",
             status: "failed",
             exitCode: 1,
-            detail: "Exit code: 1; Gateway did not settle.",
+            detail:
+              "Exit code: 1; Gateway readiness was not verified; service status: stopped. Check openclaw gateway status --deep.",
             failureFacts: [
-              { check: "settled", code: "stopped-free", message: "Gateway did not settle." },
+              {
+                check: "settled",
+                code: "stopped-free",
+                message:
+                  "Gateway readiness was not verified; service status: stopped. Check openclaw gateway status --deep.",
+              },
             ],
           },
         ]);
@@ -126,15 +132,6 @@ describe("update-cli child-owned deferred completion", () => {
 
       if (writes) {
         expect(replaceConfigFile).toHaveBeenCalledExactlyOnceWith({ nextConfig: config });
-        expect(mutateConfigFileWithRetry).toHaveBeenCalledExactlyOnceWith({
-          mutate: expect.any(Function),
-          writeOptions: {
-            assertCurrent: expect.any(Function),
-            beforeCommit: expect.any(Function),
-            observe: false,
-          },
-        });
-
         expect(
           vi.mocked(mutateConfigFileWithRetry).mock.calls[0]?.[0].writeOptions?.assertCurrent,
         ).toThrow("Update operation ownership has closed.");

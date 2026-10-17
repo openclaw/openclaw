@@ -165,7 +165,6 @@ export function classifyProviderRuntimeFailureKind(
   // Schema copy requires message evidence, not a generic HTTP 400 classification.
   if (
     message &&
-    !isReplayInvalidErrorMessage(message) &&
     !isContextOverflowErrorFromTables(message) &&
     (classifyFailoverReason(message, schemaOptions) === "format" ||
       matchesFormatErrorPattern(message))

@@ -9,10 +9,10 @@ import {
   type TelegramThreadBindingRecord,
 } from "./thread-bindings-store.js";
 
-type TelegramThreadBindingStore = PluginStateKeyedStore<TelegramThreadBindingRecord>;
+type TelegramThreadBindingStore = PluginStateKeyedStore<TelegramThreadBindingRecord, 2>;
 
 function openThreadBindingStore(): TelegramThreadBindingStore {
-  return getTelegramRuntime().state.openKeyedStore<TelegramThreadBindingRecord>({
+  return getTelegramRuntime().state.openKeyedStoreV2<TelegramThreadBindingRecord>({
     namespace: TELEGRAM_THREAD_BINDINGS_NAMESPACE,
     maxEntries: TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
   });
@@ -89,7 +89,7 @@ export async function persistBindingMutation(params: {
   return false;
 }
 
-/** Native compatibility for the published synchronous SDK, retained until its next major. */
+/** Native compatibility for the published synchronous SDK, retained during stable deprecation. */
 export function updateStoredBindingSync(params: {
   binding: TelegramThreadBindingRecord;
   persist: boolean;

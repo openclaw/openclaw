@@ -20,7 +20,6 @@ import {
   setDateOnlyFakeClockActive,
   waitForAssertion,
   expectRecordFields,
-  expectStringFieldContains,
   expectSqliteSessionFileMarkerForEntry,
   mockCallArg,
   expectRespondError,
@@ -36,10 +35,12 @@ import {
   cronMediaCompletionEvent,
   setupCronContinuationReleaseFixture,
   operatorWriteGatewayClient,
+  REAL_PNG,
   waitForAgentCommandCall,
   invokeAgent,
   describe0AfterEach0,
 } from "./agent.test-harness.js";
+import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 
 const mocks = getAgentTestMocks();
 
@@ -126,7 +127,6 @@ describe("gateway agent handler", () => {
         sessionId: scenario.sessionId,
         sessionKey: scenario.sessionKey,
         storePath,
-        sessionEntry: failedEntryWithStaleActivity,
       });
     } else {
       expect(mocks.hasSessionTranscriptEventsSync).not.toHaveBeenCalled();
@@ -150,21 +150,20 @@ describe("gateway agent handler", () => {
     const sessionsDir = `${root}/sessions`;
     await fs.mkdir(sessionsDir, { recursive: true });
     mocks.hasSessionTranscriptEventsSync.mockReturnValue(true);
-    const failedEntryWithResolvedTranscript = {
-      sessionId: "failed-present-session-id",
-      status: "failed",
-      startedAt: now - 1_000,
-      endedAt: now,
-      runtimeMs: 1_000,
-      abortedLastRun: true,
-      updatedAt: now,
-      sessionStartedAt: now,
-      lastInteractionAt: now,
-    };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
       storePath: `${sessionsDir}/sessions.json`,
-      entry: failedEntryWithResolvedTranscript,
+      entry: {
+        sessionId: "failed-present-session-id",
+        status: "failed",
+        startedAt: now - 1_000,
+        endedAt: now,
+        runtimeMs: 1_000,
+        abortedLastRun: true,
+        updatedAt: now,
+        sessionStartedAt: now,
+        lastInteractionAt: now,
+      },
       canonicalKey: "agent:main:main",
     });
 
@@ -191,7 +190,7 @@ describe("gateway agent handler", () => {
     });
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: existingEntry,
       canonicalKey: sessionKey,
     });
@@ -242,15 +241,15 @@ describe("gateway agent handler", () => {
     let capturedEntry: Record<string, unknown> | undefined;
     mocks.loadSessionEntry.mockImplementation(() => ({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: capturedEntry,
       canonicalKey: sessionKey,
     }));
 
+    const store: Record<string, unknown> = {};
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      const store: Record<string, unknown> = {};
       const result = await updater(store);
-      capturedEntry = result as Record<string, unknown>;
+      capturedEntry = store[sessionKey] as Record<string, unknown>;
       return result;
     });
 
@@ -290,7 +289,7 @@ describe("gateway agent handler", () => {
     let capturedEntry: Record<string, unknown> | undefined;
     mocks.loadSessionEntry.mockImplementation(() => ({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: capturedEntry,
       canonicalKey: sessionKey,
     }));
@@ -457,7 +456,7 @@ describe("gateway agent handler", () => {
     };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: existingEntry,
       canonicalKey: sessionKey,
     });
@@ -531,67 +530,54 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("does not bypass image support check for non-ACP sessions with acpTurnSource", async () => {
-    primeMainAgentRun();
-    mocks.agentCommand.mockClear();
+  it.each([
+    { name: "non-ACP session", sessionKey: "agent:main:main" },
+    { name: "ACP-shaped session without metadata", sessionKey: "agent:main:acp:missing-meta" },
+  ])("requires image understanding for a $name with acpTurnSource", async ({ sessionKey }) => {
+    mocks.loadConfigReturn = {
+      agents: { defaults: { model: { primary: "test/text-only" } } },
+    };
+    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
+    mocks.readAcpSessionMetaAsync.mockResolvedValue(undefined);
     const respond = vi.fn();
+    const context = makeContext();
+    context.loadGatewayModelCatalog = vi.fn<typeof context.loadGatewayModelCatalog>(async () => [
+      { id: "text-only", name: "Synthetic text model", provider: "test", input: ["text"] },
+    ]);
+    const runId = `image-offload-${sessionKey}`;
 
     await invokeAgent(
       {
         message: "describe this image",
         agentId: "main",
-        sessionKey: "agent:main:main",
+        sessionKey,
         acpTurnSource: "manual_spawn",
-        idempotencyKey: "test-acp-image-bypass-guard",
+        idempotencyKey: runId,
         attachments: [
           {
             type: "file",
             mimeType: "image/png",
             fileName: "test.png",
-            content: Buffer.from("fake-png-data").toString("base64"),
+            content: REAL_PNG.toString("base64"),
           },
         ],
       },
-      { respond, reqId: "test-acp-image-bypass-guard" },
+      { context, respond, reqId: runId },
     );
 
-    // Non-ACP session (agent:main:main) with acpTurnSource="manual_spawn" must
-    // NOT bypass resolveGatewayModelSupportsImages. The image should be rejected
-    // by the normal image-support check since this is not an ACP session.
+    // A claimed ACP source cannot hand raw images to a text-only model.
     expect(mocks.agentCommand).not.toHaveBeenCalled();
-    const error = expectRespondError(respond, {});
-    expectStringFieldContains(error, "message", "does not accept image inputs");
-  });
-
-  it("does not bypass image support check for ACP-shaped sessions without ACP metadata", async () => {
-    mockMainSessionEntry({ sessionId: "existing-acp-shaped-session" });
-    mocks.updateSessionStore.mockResolvedValue(undefined);
-    mockSuccessfulAgentCommand();
-    mocks.agentCommand.mockClear();
-    const respond = vi.fn();
-
-    await invokeAgent(
-      {
-        message: "describe this image",
-        agentId: "main",
-        sessionKey: "agent:main:acp:missing-meta",
-        acpTurnSource: "manual_spawn",
-        idempotencyKey: "test-acp-image-metadata-bypass-guard",
-        attachments: [
-          {
-            type: "file",
-            mimeType: "image/png",
-            fileName: "test.png",
-            content: Buffer.from("fake-png-data").toString("base64"),
-          },
-        ],
-      },
-      { respond, reqId: "test-acp-image-metadata-bypass-guard" },
+    expect(respond).toHaveBeenLastCalledWith(
+      false,
+      expect.objectContaining({ status: "error" }),
+      expect.objectContaining({
+        code: ErrorCodes.UNAVAILABLE,
+        message: expect.stringContaining(
+          "Configure agents.defaults.imageModel or tools.media.models",
+        ),
+      }),
+      expect.objectContaining({ runId }),
     );
-
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
-    const error = expectRespondError(respond, {});
-    expectStringFieldContains(error, "message", "does not accept image inputs");
   });
 
   it("rejects provider and model overrides for write-scoped callers", async () => {
@@ -673,7 +659,7 @@ describe("gateway agent handler", () => {
   it("preserves fresh modelOverride when cached entry is stale (#5369)", async () => {
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "subagent-session-id",
         updatedAt: Date.now() - 1000,
@@ -717,7 +703,7 @@ describe("gateway agent handler", () => {
   it("preserves all fresh session fields when cached entry is stale (#5369 broader)", async () => {
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "subagent-session-id",
         updatedAt: Date.now() - 1000,
@@ -784,7 +770,7 @@ describe("gateway agent handler", () => {
   it("checks delivery sendPolicy against the fresh store entry (#5369)", async () => {
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "subagent-session-id",
         updatedAt: Date.now() - 1000,
@@ -885,7 +871,7 @@ describe("gateway agent handler", () => {
     );
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "old-session-id",
         updatedAt: Date.now() - 1000,
@@ -939,7 +925,7 @@ describe("gateway agent handler", () => {
     const recoveredStartedAt = Date.now() - 5_000;
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "legacy-session-id",
         updatedAt: Date.now() - 1000,
@@ -985,7 +971,7 @@ describe("gateway agent handler", () => {
     const freshStartedAt = Date.now() - 2_500;
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "legacy-session-id",
         updatedAt: Date.now() - 1000,
@@ -1174,7 +1160,7 @@ describe("gateway agent handler", () => {
     };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       canonicalKey: sessionKey,
       entry,
     });
@@ -1330,7 +1316,7 @@ describe("gateway agent handler", () => {
     };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       canonicalKey: sessionKey,
       entry,
     });
@@ -1382,7 +1368,7 @@ describe("gateway agent handler", () => {
     };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       canonicalKey: sessionKey,
       entry,
     });
@@ -1417,7 +1403,7 @@ describe("gateway agent handler", () => {
     let admissionActiveAtFinalResponse: boolean | undefined;
     first.mockImplementation((ok, payload) => {
       if (ok && payload && typeof payload === "object" && "status" in payload) {
-        admissionActiveAtFinalResponse = isSessionWorkAdmissionActive("/tmp/sessions.json", [
+        admissionActiveAtFinalResponse = isSessionWorkAdmissionActive(getAgentTestStorePath(), [
           sessionKey,
           "run-1",
         ]);
@@ -1543,7 +1529,7 @@ describe("gateway agent handler", () => {
     const store: Record<string, SessionEntry> = { [sessionKey]: structuredClone(entry) };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       canonicalKey: sessionKey,
       entry,
     });
@@ -1589,7 +1575,7 @@ describe("gateway agent handler", () => {
     };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       canonicalKey: sessionKey,
       entry,
     });
@@ -1661,7 +1647,7 @@ describe("gateway agent handler", () => {
     };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       canonicalKey: sessionKey,
       entry,
     });

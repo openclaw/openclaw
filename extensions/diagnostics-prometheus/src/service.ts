@@ -15,14 +15,9 @@ import type {
   OpenClawPluginServiceContext,
 } from "../api.js";
 import { isInternalDiagnosticEventMetadata, redactSensitiveText } from "../api.js";
+import { seconds, type LabelSet } from "./prometheus-format.js";
 import {
-  escapeHelp,
-  formatLabels,
-  formatPrometheusNumber,
-  seconds,
-  type LabelSet,
-} from "./prometheus-format.js";
-import {
+  AGENT_DURATION_BUCKETS_SECONDS,
   createPrometheusMetricStore,
   type PrometheusMetricStore,
 } from "./prometheus-metric-store.js";
@@ -30,6 +25,7 @@ import { recordChildProcessSpawn } from "./service-child-process.js";
 import { recordMemorySample } from "./service-memory.js";
 import { recordModelUsage } from "./service-model-usage.js";
 import { recordOperationTimingEvent } from "./service-operation-timing.js";
+import { recordSessionRetention } from "./service-retention.js";
 import {
   createGatewayWorkMetricsRecorder,
   recordSessionDiagnosticEvent,
@@ -50,52 +46,6 @@ function safeErrorMessage(err: unknown): string {
       .replace(/[\r\n\t\u2028\u2029]/gu, " "),
     500,
   );
-}
-
-function renderPrometheusMetrics(store: PrometheusMetricStore): string {
-  const snapshot = store.snapshot();
-  const lines: string[] = [];
-  const emitted = new Set<string>();
-
-  const emitHeader = (name: string, type: "counter" | "gauge" | "histogram", help: string) => {
-    if (emitted.has(name)) {
-      return;
-    }
-    emitted.add(name);
-    lines.push(`# HELP ${name} ${escapeHelp(help)}`);
-    lines.push(`# TYPE ${name} ${type}`);
-  };
-
-  for (const [type, entries] of [
-    ["counter", snapshot.counters],
-    ["gauge", snapshot.gauges],
-  ] as const) {
-    entries.sort(([left], [right]) => left.localeCompare(right));
-    for (const [key, sample] of entries) {
-      const name = key.split("|", 1)[0] ?? "";
-      emitHeader(name, type, sample.help);
-      lines.push(`${name}${formatLabels(sample.labels)} ${formatPrometheusNumber(sample.value)}`);
-    }
-  }
-
-  snapshot.histograms.sort(([left], [right]) => left.localeCompare(right));
-  for (const [key, sample] of snapshot.histograms) {
-    const name = key.split("|", 1)[0] ?? "";
-    emitHeader(name, "histogram", sample.help);
-    for (let index = 0; index < sample.buckets.length; index += 1) {
-      lines.push(
-        `${sample.bucketPrefixes[index]}${formatPrometheusNumber(sample.counts[index] ?? 0)}`,
-      );
-    }
-    lines.push(
-      `${sample.bucketPrefixes[sample.buckets.length]}${formatPrometheusNumber(sample.count)}`,
-    );
-    lines.push(`${name}_sum${sample.labels} ${formatPrometheusNumber(sample.sum)}`);
-    lines.push(`${name}_count${sample.labels} ${formatPrometheusNumber(sample.count)}`);
-  }
-
-  lines.push("");
-  return lines.join("\n");
 }
 
 function webhookLabels(
@@ -120,36 +70,71 @@ function recordDiagnosticEvent(
   }
 
   switch (evt.type) {
+    case "gateway.ws.event": {
+      if (!metadata.trusted) {
+        return;
+      }
+      const labels = { event: evt.event };
+      store.counter(
+        "openclaw_gateway_ws_events_total",
+        "Outbound Gateway WebSocket event frames accepted by the sender per socket.",
+        labels,
+        evt.count,
+      );
+      store.counter(
+        "openclaw_gateway_ws_event_bytes_total",
+        "Encoded outbound Gateway WebSocket event bytes before framing or compression per socket.",
+        labels,
+        evt.bytes,
+      );
+      if (evt.sessionEvent) {
+        const sessionLabels = { event: evt.event, ...evt.sessionEvent };
+        store.counter(
+          "openclaw_gateway_ws_session_event_frames_total",
+          "Outbound session event frames by reason and exact message subscription per socket.",
+          sessionLabels,
+          evt.count,
+        );
+        store.counter(
+          "openclaw_gateway_ws_session_event_bytes_total",
+          "Encoded outbound session event bytes by reason and exact message subscription per socket.",
+          sessionLabels,
+          evt.bytes,
+        );
+      }
+      return;
+    }
+    case "gateway.ws.connections":
+      if (metadata.trusted) {
+        store.gauge(
+          "openclaw_gateway_ws_operator_connections",
+          "Connected authenticated Gateway operator WebSockets.",
+          {},
+          evt.operators,
+        );
+      }
+      return;
+    case "sessions.list.retention":
+    case "sessions.event.retention":
+      if (metadata.trusted) {
+        recordSessionRetention(store, evt);
+      }
+      return;
     case "worker.request":
       if (metadata.trusted) {
         recordWorkerRequest(store, evt);
       }
       return;
     case "diagnostic.phase.completed":
+    case "secret.egress":
+    case "tool.catalog":
     case "gateway.rpc":
-      recordOperationTimingEvent(store, evt, metadata);
-      return;
+    case "sessions.list.baseline.retired":
+    case "gateway.http.cancelled":
     case "diagnostic.gc":
-      store.histogram(
-        "openclaw_gc_duration_seconds",
-        "Elapsed garbage collection duration in seconds for the hosting JavaScript isolate.",
-        {},
-        seconds(evt.durationMs),
-      );
-      return;
     case "gateway.event_loop.sample":
-      store.histogram(
-        "openclaw_gateway_event_loop_delay_max_seconds",
-        "Maximum event-loop delay per completed Gateway observation window in seconds.",
-        {},
-        seconds(evt.delayMaxMs),
-      );
-      store.counter(
-        "openclaw_gateway_event_loop_observed_seconds_total",
-        "Elapsed seconds covered by completed Gateway event-loop observation windows.",
-        {},
-        evt.intervalMs / 1000,
-      );
+    case "gateway.main_thread.stall":
+      recordOperationTimingEvent(store, evt, metadata);
       return;
     case "model.usage":
       recordModelUsage(store, evt);
@@ -168,6 +153,7 @@ function recordDiagnosticEvent(
         "Agent run duration in seconds.",
         labels,
         seconds(evt.durationMs),
+        AGENT_DURATION_BUCKETS_SECONDS,
       );
       store.counter("openclaw_run_completed_total", "Agent runs completed by outcome.", labels);
       return;
@@ -191,6 +177,7 @@ function recordDiagnosticEvent(
         "Model request or synthetic agent-turn duration in seconds.",
         labels,
         seconds(evt.durationMs),
+        AGENT_DURATION_BUCKETS_SECONDS,
       );
       store.counter(
         "openclaw_model_call_total",
@@ -287,6 +274,7 @@ function recordDiagnosticEvent(
         "Agent harness run duration in seconds.",
         labels,
         seconds(evt.durationMs),
+        AGENT_DURATION_BUCKETS_SECONDS,
       );
       store.counter(
         "openclaw_harness_run_total",
@@ -379,6 +367,7 @@ function recordDiagnosticEvent(
         "Inbound message dispatch duration in seconds.",
         labels,
         seconds(evt.durationMs),
+        AGENT_DURATION_BUCKETS_SECONDS,
       );
       return;
     }
@@ -613,7 +602,7 @@ function createMetricsHandler(store: PrometheusMetricStore): OpenClawPluginHttpR
       return true;
     }
 
-    const body = renderPrometheusMetrics(store);
+    const body = store.render();
     res.statusCode = 200;
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
@@ -723,9 +712,7 @@ export function createDiagnosticsPrometheusExporter() {
 
   return {
     handler: createMetricsHandler(store),
-    render: () => renderPrometheusMetrics(store),
+    render: store.render,
     service,
   };
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2,18 +2,20 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { decodeMemoryEmbedding, encodeMemoryEmbedding } from "./embedding-vector.js";
 import {
   buildMemoryEmbeddingCacheSchema,
+  buildMemoryStorageSchema,
+  memoryStorageIndexes,
+  MEMORY_INLINE_RECALL_COLUMNS,
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_CHUNKS_SCHEMA_SQL,
 } from "./memory-schema-base.js";
+import { memorySchemaSource } from "./memory-schema-catalog.js";
+import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
 import {
   dropMemoryChunkFtsTriggers,
   ensureMemoryChunkFtsTriggers,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS,
   rebuildMemoryChunkFts,
-} from "./memory-schema-fts.js";
-import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
-import {
   assertSqliteSchemaContains,
   canReuseSqliteSchemaInTransaction,
   createSqliteTableContractReader,
@@ -21,51 +23,13 @@ import {
   type SqliteTableContractReader,
 } from "./openclaw-runtime-sqlite.js";
 
-// Frozen pre-binary contract, including the older non-STRICT spelling below.
-const LEGACY_CHUNK_SCHEMA = `
-  CREATE TABLE IF NOT EXISTS memory_index_chunks (
-    id TEXT PRIMARY KEY,
-    path TEXT NOT NULL,
-    source TEXT NOT NULL DEFAULT 'memory',
-    start_line INTEGER NOT NULL,
-    end_line INTEGER NOT NULL,
-    hash TEXT NOT NULL,
-    model TEXT NOT NULL,
-    text TEXT NOT NULL,
-    embedding TEXT NOT NULL,
-    updated_at INTEGER NOT NULL
-  ) STRICT;
-`;
-
-function legacyCacheSchema(table: string): string {
-  return `CREATE TABLE IF NOT EXISTS ${table} (
-    provider TEXT NOT NULL,
-    model TEXT NOT NULL,
-    provider_key TEXT NOT NULL,
-    hash TEXT NOT NULL,
-    embedding TEXT NOT NULL,
-    dims INTEGER,
-    updated_at INTEGER NOT NULL,
-    PRIMARY KEY (provider, model, provider_key, hash)
-  ) STRICT;`;
-}
-
-const CHUNK_INDEXES = [
-  { name: "idx_memory_index_chunks_path_source", columns: "path, source" },
-  { name: "idx_memory_index_chunks_path", columns: "path" },
-  { name: "idx_memory_index_chunks_source", columns: "source" },
-];
-const CHUNK_REVISION_TRIGGERS = ["insert", "update", "delete"].map((event) => ({
+// Pre-v23 rebuild admission still recognizes the triggers installed by shipped schemas.
+const LEGACY_CHUNK_REVISION_TRIGGERS = ["insert", "update", "delete"].map((event) => ({
   name: `memory_index_chunks_revision_after_${event}`,
   sql: `CREATE TRIGGER IF NOT EXISTS memory_index_chunks_revision_after_${event}
     AFTER ${event.toUpperCase()} ON memory_index_chunks
     BEGIN UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1; END;`,
 }));
-const INLINE_RECALL_COLUMNS = [
-  ["importance", "importance INTEGER CHECK (importance IS NULL OR importance BETWEEN 1 AND 10)"],
-  ["triggers", "triggers TEXT"],
-  ["project_key", "project_key TEXT"],
-] as const;
 
 type StorageShape = "absent" | "legacy" | "binary";
 
@@ -88,47 +52,24 @@ function storageShape(
   if (!shape || (chunks && tableColumns.has("chunk_rowid") !== (shape === "binary"))) {
     throw new Error(`Unsupported partial memory storage schema: ${table}`);
   }
-  let schema = chunks
-    ? shape === "legacy"
-      ? LEGACY_CHUNK_SCHEMA
-      : MEMORY_INDEX_CHUNKS_SCHEMA_SQL
-    : shape === "legacy"
-      ? legacyCacheSchema(table)
-      : buildMemoryEmbeddingCacheSchema(table);
-  if (chunks) {
-    const inline = INLINE_RECALL_COLUMNS.filter(([name]) => tableColumns.has(name));
-    if (inline.length > 0) {
-      schema = schema.replace(
-        "updated_at INTEGER NOT NULL",
-        `updated_at INTEGER NOT NULL,\n${inline.map(([, declaration]) => declaration).join(",\n")}`,
-      );
-    }
-  }
-  if (
-    shape === "legacy" &&
+  const strict =
+    shape !== "legacy" ||
     db.prepare("SELECT strict FROM pragma_table_list WHERE schema = 'main' AND name = ?").get(table)
-      ?.strict === 0
-  ) {
-    schema = schema.replace(") STRICT;", ");");
-  }
-  const indexes = chunks
-    ? CHUNK_INDEXES
-    : [
-        {
-          name:
-            table === MEMORY_EMBEDDING_CACHE_TABLE
-              ? "idx_memory_embedding_cache_updated_at"
-              : "idx_embedding_cache_updated_at",
-          columns: "updated_at",
-        },
-      ];
-  schema += indexes
-    .map((index) => `CREATE INDEX ${index.name} ON ${table}(${index.columns});`)
-    .join("\n");
+      ?.strict !== 0;
+  const indexes = memoryStorageIndexes(table, chunks);
+  const schema = buildMemoryStorageSchema({
+    table: chunks ? table : MEMORY_EMBEDDING_CACHE_TABLE,
+    chunks,
+    legacy: shape === "legacy",
+    strict,
+    inlineRecallColumns: MEMORY_INLINE_RECALL_COLUMNS.filter(([name]) =>
+      tableColumns.has(name),
+    ).map(([name]) => name),
+  });
   assertSqliteSchemaContains(
     db,
     `memory storage ${table}`,
-    schema,
+    memorySchemaSource(schema, chunks ? MEMORY_EMBEDDING_CACHE_TABLE : table),
     {
       // Current tables are not rebuilt; preserve the agent owner's compatible
       // nullable additions while refusing every extra column on conversion input.
@@ -136,7 +77,7 @@ function storageShape(
       allowedMissingIndexes: indexes.map((index) => index.name),
       optionalCanonicalTriggerGroups: chunks
         ? [
-            { tableName: table, triggers: CHUNK_REVISION_TRIGGERS },
+            { tableName: table, triggers: LEGACY_CHUNK_REVISION_TRIGGERS },
             ...(shape === "binary"
               ? [{ tableName: table, triggers: MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS }]
               : []),
@@ -150,7 +91,7 @@ function storageShape(
       db,
       table,
       indexes.map((index) => index.name),
-      chunks ? CHUNK_REVISION_TRIGGERS.map((trigger) => trigger.name) : [],
+      chunks ? LEGACY_CHUNK_REVISION_TRIGGERS.map((trigger) => trigger.name) : [],
     );
   }
   return shape;
@@ -383,6 +324,16 @@ function existingStorageObjects(db: DatabaseSync, table: string): string[] {
     .map((row) => String(row.sql));
 }
 
+function replaceStorageTable(db: DatabaseSync, table: string, objects: string[]): void {
+  db.exec(`
+    DROP TABLE ${table};
+    ALTER TABLE ${table}_storage_migration RENAME TO ${table};
+  `);
+  for (const sql of objects) {
+    db.exec(sql);
+  }
+}
+
 /** Record regeneration debt after a legacy import has verified its canonical copy. */
 export function markInvalidImportedMemoryEmbeddings(db: DatabaseSync, schema: string): void {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(schema)) {
@@ -442,17 +393,13 @@ export function migrateMemoryIndexStorage(
   let cacheWarning: string | undefined;
   try {
     runSqliteImmediateTransactionSync(db, () => {
-      const current = storageShapes(db, cacheTable);
-      if (current.chunks !== shapes.chunks || current.cache !== shapes.cache) {
-        throw new Error("Memory storage schema changed before migration admission");
-      }
       const renewAuthority = registerMemoryEmbeddingMigrationFunctions(db, options.renewAuthority);
       const chunkObjects = migrateChunks ? existingStorageObjects(db, "memory_index_chunks") : [];
       const cacheObjects = migrateCache ? existingStorageObjects(db, cacheTable) : [];
-      if (current.chunks === "binary") {
+      if (shapes.chunks === "binary") {
         assertBinaryEmbeddings(db, "memory_index_chunks");
       }
-      if (current.cache === "binary") {
+      if (shapes.cache === "binary") {
         assertBinaryEmbeddings(db, cacheTable);
       }
       if (migrateChunks) {
@@ -486,13 +433,7 @@ export function migrateMemoryIndexStorage(
           FROM memory_index_chunks WHERE rowid = ?
         `,
         );
-        db.exec(`
-          DROP TABLE memory_index_chunks;
-          ALTER TABLE memory_index_chunks_storage_migration RENAME TO memory_index_chunks;
-        `);
-        for (const sql of chunkObjects) {
-          db.exec(sql);
-        }
+        replaceStorageTable(db, "memory_index_chunks", chunkObjects);
         if (
           db
             .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
@@ -511,13 +452,7 @@ export function migrateMemoryIndexStorage(
           ),
         );
         cacheWarning = copyLegacyMemoryEmbeddingCache(db, cacheTable, replacement, renewAuthority);
-        db.exec(`
-          DROP TABLE ${cacheTable};
-          ALTER TABLE ${replacement} RENAME TO ${cacheTable};
-        `);
-        for (const sql of cacheObjects) {
-          db.exec(sql);
-        }
+        replaceStorageTable(db, cacheTable, cacheObjects);
       }
       if (migrateChunks) {
         for (const table of [

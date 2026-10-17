@@ -7,12 +7,14 @@ import {
 import { createEmbeddedRunHandle } from "../agents/embedded-agent-runner/runs.test-support.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { persistAgentSessionMessage } from "../agents/sessions/agent-session-transcript.js";
+import type { AgentSessionEvent } from "../agents/sessions/agent-session-types.js";
 import { registerQueuedUserMessageRetirement } from "../agents/sessions/queued-user-message-retirement.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { setSteeringMessageIdentity } from "../agents/sessions/steering-message-identity.js";
 import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { withPersonalToolTurn } from "../auto-reply/reply/personal-tool-turn.test-support.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
@@ -80,6 +82,7 @@ export function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<vo
       tools: { sessions: { visibility: "all" } },
     };
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     for (const [agentId, sessionKey, sessionId] of [
       ["main", REQUESTER, "session-tools-requester-id"],
       ["main", TARGET, TARGET_ID],
@@ -201,9 +204,9 @@ export async function withDelayedSessionToolsSteering(
     message: PersistedUserTurnMessage;
     recorder: UserTurnTranscriptRecorder;
   }> = [];
-  const listeners = new Set<(event: unknown) => void>();
+  const listeners = new Set<(event: AgentSessionEvent) => unknown>();
   const settled = createDeferredCore();
-  const emit = (event: unknown) => {
+  const emit = (event: AgentSessionEvent) => {
     for (const listener of listeners) {
       listener(event);
     }

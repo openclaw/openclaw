@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.test-support.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import { AGENT_SCHEMA_COMPATIBILITY } from "./openclaw-agent-db-schema-compatibility.js";
 import {
@@ -37,13 +39,6 @@ const cases = [
     compatibility: OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
     indexes: [
       {
-        name: "idx_task_runs_requester_session_key",
-        table: "task_runs",
-        primaryKey: "task_id",
-        query:
-          "SELECT task_id AS id FROM task_runs WHERE requester_session_key = 'requester' ORDER BY task_id",
-      },
-      {
         name: "idx_worker_session_placements_environment",
         table: "worker_session_placements",
         primaryKey: "session_id",
@@ -51,18 +46,8 @@ const cases = [
           "SELECT session_id AS id FROM worker_session_placements WHERE environment_id = 'environment' ORDER BY session_id",
       },
     ],
-    seed(db: DatabaseSync) {
+    seed(db: EngineConnection) {
       db.exec(`
-        INSERT INTO task_runs
-          (task_id, runtime, owner_key, scope_kind, task, status, delivery_status, notify_policy,
-           created_at, run_id, child_session_key, requester_session_key)
-        VALUES
-          ('a', 'subagent', 'owner', 'session', 'task a', 'running', 'pending', 'always', 1,
-           ' run ', ' child ', 'requester'),
-          ('b', 'subagent', 'owner', 'session', 'task b', 'running', 'pending', 'always', 2,
-           'run', 'child', 'requester'),
-          ('c', 'subagent', 'owner', 'session', 'task c', 'running', 'pending', 'always', 3,
-           NULL, NULL, NULL);
         INSERT INTO worker_session_placements
           (session_id, agent_id, session_key, state, environment_id,
            created_at_ms, updated_at_ms, state_changed_at_ms)
@@ -105,7 +90,7 @@ const cases = [
           AND updated_at <= 2`,
       },
     ],
-    seed(db: DatabaseSync) {
+    seed(db: EngineConnection) {
       const insert = db.prepare(`
         INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
         VALUES (?, ?, ?, 1)
@@ -156,13 +141,13 @@ function createFixture(testCase: IndexCase) {
   return { options, open, database };
 }
 
-function readRows(db: DatabaseSync, testCase: IndexCase) {
+function readRows(db: EngineConnection, testCase: IndexCase) {
   return [...new Set(testCase.indexes.map((index) => index.table))].map((table) =>
     db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all(),
   );
 }
 
-function readSchema(db: DatabaseSync) {
+function readSchema(db: EngineConnection) {
   return {
     cookie: db.prepare("PRAGMA schema_version").get(),
     version: db.prepare("PRAGMA user_version").get(),
@@ -243,7 +228,7 @@ it.each(cases)(
       );
     expect(() =>
       assertSqliteSchemaContains(
-        database.db,
+        requireNativeSqliteDatabase(database.db),
         database.path,
         previousSchema,
         testCase.compatibility,

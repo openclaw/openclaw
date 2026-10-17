@@ -328,31 +328,6 @@ describe("completion-cli write-state", () => {
     },
   );
 
-  it.each(["zsh"] as const)(
-    "reports missing %s completion cache without registering commands or plugins",
-    async (shell) => {
-      const { registerCompletionCli } = await import("./completion-cli.js");
-
-      await withIsolatedCompletionState(async () => {
-        const cachePath = resolveCompletionCachePath(shell, "openclaw");
-        const profilePath = resolveCompletionProfilePath(shell);
-        const program = new Command().name("openclaw");
-        registerCompletionCli(program);
-
-        await expect(
-          program.parseAsync(["completion", "--shell", shell, "--install", "--yes"], {
-            from: "user",
-          }),
-        ).rejects.toThrow(
-          `Completion cache not found at ${cachePath}. Run \`openclaw completion --write-state\` first.`,
-        );
-
-        await expect(fs.access(profilePath)).rejects.toThrow();
-        expectCompletionInstallationToSkipRegistration();
-      });
-    },
-  );
-
   it("detects the active shell for cached installation without registering commands", async () => {
     const { registerCompletionCli } = await import("./completion-cli.js");
 

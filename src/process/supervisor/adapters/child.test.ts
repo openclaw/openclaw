@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import { writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -13,7 +12,7 @@ import {
   createChildAdapterHarness,
   createStubChild,
   createWindowsNpmShim,
-  firstSpawnWithFallbackParams,
+  firstSpawnAndWaitParams,
   readyChildAdapter,
   setPlatform,
 } from "./child.test-support.js";
@@ -22,25 +21,23 @@ import {
   mockLinuxOomWrapperShell,
 } from "./test-support.js";
 
-const { spawnMock, signalMock, killTreeMock, decoderMock, relayMock } = vi.hoisted(() => ({
+const { spawnMock, signalMock, decoderMock, relayMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
   signalMock: vi.fn<typeof import("../../kill-tree.js").signalProcessTree>(),
-  killTreeMock: vi.fn<typeof import("../../kill-tree.js").killProcessTree>(),
   decoderMock:
     vi.fn<typeof import("../../../infra/windows-encoding.js").createWindowsOutputDecoder>(),
   relayMock: vi.fn(),
 }));
-vi.mock("../../spawn-utils.js", () => ({ spawnWithFallback: spawnMock }));
-vi.mock("../../kill-tree.js", () => ({
+vi.mock("../../spawn-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../spawn-utils.js")>()),
+  spawnAndWait: spawnMock,
+}));
+vi.mock("../../kill-tree.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../kill-tree.js")>()),
   signalProcessTree: signalMock,
-  killProcessTree: killTreeMock,
 }));
 vi.mock("../../../infra/windows-encoding.js", () => ({ createWindowsOutputDecoder: decoderMock }));
 vi.mock("../service-child-relay-host.js", () => ({ createServiceChildRelayAdapter: relayMock }));
-
-if (process.platform !== "win32") {
-  createRequire(import.meta.url)("koffi");
-}
 
 let start: ReturnType<typeof readyChildAdapter>;
 let roots: typeof import("../../../infra/windows-install-roots.js").getWindowsInstallRoots;
@@ -57,25 +54,17 @@ function createSecretChild(secret: Writable) {
     value: [child.child.stdin, child.child.stdout, child.child.stderr, secret],
     configurable: true,
   });
-  spawnMock.mockResolvedValue({ child: child.child, usedFallback: false });
+  spawnMock.mockResolvedValue(child.child);
   return child;
 }
-function setup(input: Input = {}, usedFallback = false) {
+function setup(input: Input = {}) {
   const { argv = ["node", "worker"], ...options } = input;
-  return createChildAdapterHarness(
-    (params) => start({ ...params, ...options }),
-    {
-      mockResolvedValue(
-        spawned: Awaited<ReturnType<typeof import("../../spawn-utils.js").spawnWithFallback>>,
-      ) {
-        return spawnMock.mockResolvedValue({ ...spawned, usedFallback });
-      },
-    },
-    { argv },
-  );
+  return createChildAdapterHarness((params) => start({ ...params, ...options }), spawnMock, {
+    argv,
+  });
 }
 
-const spawnArgs = () => firstSpawnWithFallbackParams(spawnMock);
+const spawnArgs = () => firstSpawnAndWaitParams(spawnMock);
 
 beforeEach(async () => {
   vi.resetModules();
@@ -90,7 +79,6 @@ beforeEach(async () => {
   start = readyChildAdapter((await import("./child.js")).createChildAdapter);
   spawnMock.mockReset();
   signalMock.mockReset().mockImplementation((_pid, _signal, options) => options?.onComplete?.());
-  killTreeMock.mockReset();
   decoderMock.mockReset().mockImplementation(() => ({ decode, flush: () => "" }));
   relayMock.mockReset().mockResolvedValue({ ready: Promise.resolve(), adapter: {} });
   vi.stubEnv("OPENCLAW_SERVICE_MARKER", "");
@@ -102,11 +90,10 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("creates owned worker groups without fallback and gates startup through IPC", async () => {
+it("creates owned worker groups and gates startup through IPC", async () => {
   vi.stubEnv("OPENCLAW_SERVICE_MARKER", "service-managed");
   const { adapter, sendMock, disconnectMock } = await setup({ ownedWorker: true, input: "{}" });
   expect(spawnArgs().options?.detached).toBe(process.platform !== "win32");
-  expect(spawnArgs().fallbacks).toEqual([]);
   expect(spawnArgs().options?.stdio).toEqual(["pipe", "pipe", "pipe", "ipc"]);
   await adapter.openStartGate?.();
   expect(sendMock).toHaveBeenCalledWith({ type: "openclaw-worker-start-v1" }, expect.any(Function));
@@ -203,58 +190,6 @@ it("captures close while secret delivery is still pending", async () => {
   await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
   expect(delivered).toBe("selected-secret");
   expect(transient.equals(Buffer.alloc(transient.length))).toBe(true);
-});
-
-it("keeps macOS no-detach TERM on the direct signal path", async () => {
-  setPlatform("darwin");
-  const { adapter, killMock, child } = await setup({}, true);
-  adapter.kill("SIGTERM");
-  expect(signalMock).toHaveBeenCalledWith(child.pid, "SIGTERM", { detached: false });
-  expect(killMock).not.toHaveBeenCalled();
-});
-
-it("retains one Linux fallback snapshot through root close and disposal", async () => {
-  setPlatform("linux");
-  const force = vi.fn();
-  killTreeMock.mockReturnValue({ force });
-  const { adapter, child, emitExit, emitClose } = await setup({}, true);
-  adapter.kill("SIGTERM");
-  adapter.kill("SIGTERM");
-  expect(killTreeMock).toHaveBeenCalledExactlyOnceWith(child.pid, {
-    detached: false,
-    graceMs: 5_000,
-    force: false,
-  });
-  emitExit(0);
-  emitClose(0);
-  await adapter.wait();
-  adapter.dispose();
-  adapter.kill("SIGKILL");
-  expect(force).toHaveBeenCalledOnce();
-  expect(killTreeMock).toHaveBeenCalledOnce();
-  expect(signalMock).not.toHaveBeenCalled();
-});
-
-it("never rediscovers a Linux fallback tree without its initial identity", async () => {
-  setPlatform("linux");
-  const { adapter, killMock } = await setup({}, true);
-  adapter.kill("SIGTERM");
-  adapter.kill("SIGKILL");
-  await Promise.resolve();
-  expect(killTreeMock).toHaveBeenCalledOnce();
-  expect(signalMock).not.toHaveBeenCalled();
-  expect(killMock).toHaveBeenCalledWith("SIGKILL");
-});
-
-it("does not discover a Linux fallback tree after root exit", async () => {
-  setPlatform("linux");
-  const { adapter, emitExit } = await setup({}, true);
-  emitExit(0);
-  adapter.kill("SIGTERM");
-  adapter.kill("SIGKILL");
-  await Promise.resolve();
-  expect(killTreeMock).not.toHaveBeenCalled();
-  expect(signalMock).not.toHaveBeenCalled();
 });
 
 it("rejects writes after stdin ends and tracks destruction", async () => {
@@ -406,7 +341,6 @@ it("wraps Windows command shims through trusted cmd.exe", async () => {
     windowsHide: true,
     windowsVerbatimArguments: true,
   });
-  expect(spawnArgs().fallbacks).toEqual([]);
 });
 
 it("unwraps an npm script shim without reparsing prompt argv", async () => {
@@ -563,7 +497,7 @@ it("withholds input and secret bytes when request authority retires during spawn
   const secretBytes = vi.fn();
   secretStream.on("data", secretBytes);
   const { child, killMock, emitClose } = createSecretChild(secretStream);
-  const startup = createDeferred<{ child: typeof child; usedFallback: boolean }>();
+  const startup = createDeferred<typeof child>();
   const input = vi.spyOn(child.stdin!, "write");
   const createData = vi.fn(() => Buffer.from("synthetic-selected-secret"));
   spawnMock.mockReturnValueOnce(startup.promise);
@@ -582,7 +516,7 @@ it("withholds input and secret bytes when request authority retires during spawn
   const outcome = Promise.allSettled([run]);
   expect(spawnMock).toHaveBeenCalledOnce();
   current = false;
-  startup.resolve({ child, usedFallback: false });
+  startup.resolve(child);
   try {
     await nextTurn();
     expect(killMock).toHaveBeenCalledWith("SIGKILL");

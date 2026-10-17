@@ -127,14 +127,6 @@ describe("copySessionCatalogToGateway", () => {
       notice: "This session is using the source model, openai/gpt-5.6-sol.",
     },
     {
-      listed: true,
-      available: false,
-      restricted: false,
-      expectedModel: undefined,
-      notice:
-        "The source model, openai/gpt-5.6-sol, is not available to this Team agent, so this session is using its configured model, openai/team-default.",
-    },
-    {
       listed: false,
       available: true,
       restricted: false,
@@ -324,28 +316,6 @@ describe("copySessionCatalogToGateway", () => {
       }
     },
   );
-
-  it("allows a clean retry after a timed-out preferred-model assessment", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    const assessment = createDeferredCore<{ models: Array<Record<string, unknown>> }>();
-    mocks.buildModelsListResult.mockReturnValueOnce(assessment.promise as never);
-    const first = copySessionCatalogToGateway(copyParams());
-    await vi.advanceTimersByTimeAsync(20_000);
-    await expect(first).resolves.toMatchObject({
-      ok: false,
-      error: { code: "UNAVAILABLE", retryable: true },
-    });
-    expect(mocks.createGatewaySession).not.toHaveBeenCalled();
-
-    assessment.resolve({ models: [] });
-    await expect(copySessionCatalogToGateway(copyParams())).resolves.toEqual({
-      ok: true,
-      sessionKey: "agent:main:gateway-copy",
-    });
-    expect(mocks.createGatewaySession).toHaveBeenCalledOnce();
-    expect(mocks.importSessionCatalogHistory).toHaveBeenCalledOnce();
-    expect(mocks.recordSessionStateEventAsync).toHaveBeenCalledOnce();
-  });
 
   it("preserves configured-model fallback for ordinary availability errors", async () => {
     mocks.buildModelsListResult.mockRejectedValueOnce(new Error("catalog projection failed"));

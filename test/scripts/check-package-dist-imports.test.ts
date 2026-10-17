@@ -24,6 +24,23 @@ function checkPackage(
 }
 
 describe("collectPackageDistImportErrors", () => {
+  it("requires executable helpers resolved beside bundled JavaScript", () => {
+    const sources: Record<string, string> = {
+      "dist/worker/worker.mjs":
+        'export const helper = new URL("./windows-security-helper.exe", import.meta.url);',
+    };
+    const check = () =>
+      collectPackageDistImportErrors({
+        files: Object.keys(sources),
+        readText: (file) => sources[file]!,
+      });
+    expect(check()).toEqual([
+      "dist/worker/worker.mjs imports missing dist/worker/windows-security-helper.exe",
+    ]);
+    sources["dist/worker/windows-security-helper.exe"] = "MZ";
+    expect(check()).toEqual([]);
+  });
+
   it.each([undefined, "commonjs"])(
     "resolves CommonJS files and directory entries with package type %s",
     (type) => {
@@ -197,14 +214,14 @@ describe("collectPackageDistImports", () => {
   });
 
   it("excludes only the handoff runtime's staged native URL", () => {
-    const stagedPath = "./node_modules/koffi/indirect.cjs";
+    const stagedPath = "./node_modules/@openclaw/proc-safe/dist/identity.js";
     const source = [
       `new URL("${stagedPath}", import.meta.url);`,
       `import "${stagedPath}";`,
       `export * from "${stagedPath}";`,
       `import("${stagedPath}");`,
       `require("${stagedPath}");`,
-      'new URL("./node_modules/koffi/other.cjs", import.meta.url);',
+      'new URL("./node_modules/@openclaw/proc-safe/dist/other.js", import.meta.url);',
     ].join("\n");
     for (const importerPath of ["dist/managed-handoff-runtime.mjs", "dist/other.mjs"]) {
       const imports = collectPackageDistImports({
@@ -215,10 +232,10 @@ describe("collectPackageDistImports", () => {
       expect(imports).toEqual([
         ...Array.from({ length: expectedNativeEdges }, (_, index) => ({
           importerPath,
-          importedPath: "dist/node_modules/koffi/indirect.cjs",
+          importedPath: "dist/node_modules/@openclaw/proc-safe/dist/identity.js",
           kind: index === expectedNativeEdges - 1 ? "require" : undefined,
         })),
-        { importerPath, importedPath: "dist/node_modules/koffi/other.cjs" },
+        { importerPath, importedPath: "dist/node_modules/@openclaw/proc-safe/dist/other.js" },
       ]);
     }
   });

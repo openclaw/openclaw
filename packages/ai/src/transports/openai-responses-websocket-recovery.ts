@@ -1,5 +1,4 @@
 import type { AssistantMessage, StreamFn } from "@openclaw/llm-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   OpenAIResponsesWebSocketSafeRetryError,
   OpenAIResponsesWebSocketPreDispatchError,
@@ -10,6 +9,7 @@ import { safeDebugValue } from "./openai-responses-debug.js";
 import {
   createResponsesStreamWithRecovery,
   isInvalidEncryptedContentError,
+  readResponsesRecoveryEvent,
   resolveNextResponsesEncryptedContentAttempt,
 } from "./openai-responses-replay-internal.js";
 import {
@@ -62,20 +62,8 @@ export function createRecoverableResponsesWebSocketStream<
       let outputObserved = false;
       try {
         for await (const event of trackedWebSocketStream) {
-          const failure =
-            isRecord(event) && event.type === "response.failed" && isRecord(event.response)
-              ? event.response.error
-              : isRecord(event) && event.type === "error"
-                ? (event.error ?? event)
-                : undefined;
-          if (
-            isRecord(event) &&
-            isRecord(event.response) &&
-            Array.isArray(event.response.output) &&
-            event.response.output.length
-          ) {
-            outputObserved = true;
-          }
+          const { failure, hasResponseOutput, isPrelude } = readResponsesRecoveryEvent(event);
+          outputObserved ||= hasResponseOutput;
           if (isResponsesServiceTierRejection(failure) && !websocket.hasActiveResponse) {
             throw new OpenAIResponsesWebSocketSafeRetryError(
               "invalid_request_error",
@@ -85,14 +73,7 @@ export function createRecoverableResponsesWebSocketStream<
               failure,
             );
           }
-          if (
-            !isRecord(event) ||
-            !["response.created", "response.in_progress", "response.queued"].includes(
-              String(event.type),
-            )
-          ) {
-            outputObserved = true;
-          }
+          outputObserved ||= !isPrelude;
           if (acceptance === "pending") {
             acceptance = "observing";
             await notifyProviderStreamOpened({

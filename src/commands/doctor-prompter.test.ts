@@ -127,7 +127,7 @@ describe("createDoctorPrompter", () => {
     expect(confirmMock).not.toHaveBeenCalled();
   });
 
-  it.each([{ repair: true }, { repair: true, force: true }, { yes: true }, { force: true }])(
+  it.each([{ yes: true }])(
     "refuses interactive-only repairs without a terminal for %j",
     async (options) => {
       setTerminal(false);

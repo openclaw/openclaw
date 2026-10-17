@@ -4,7 +4,10 @@ import { createAssistantMessageEventStream, EventStream } from "@openclaw/llm-co
 import type { AssistantMessageEvent } from "@openclaw/llm-core/types";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { processCompletionsStream } from "../../../../packages/ai/src/transports/openai-completions-stream.js";
+import {
+  observeOpenAICompletionsProgress,
+  processCompletionsStream,
+} from "../../../../packages/ai/src/transports/openai-completions-stream.js";
 import {
   createAssistantOutput,
   makeCompletionsChunk,
@@ -19,7 +22,10 @@ import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeo
 const model = makeCompletionsModel({ reasoning: false });
 const idleMs = 100;
 
-async function openStream(scope: "creation-and-gaps" | "creation-only" = "creation-and-gaps") {
+async function openStream(
+  scope: "creation-and-gaps" | "creation-only" = "creation-and-gaps",
+  timeoutMs = idleMs,
+) {
   const chunks = new EventStream<ChatCompletionChunk, boolean>(
     () => false,
     () => true,
@@ -38,10 +44,13 @@ async function openStream(scope: "creation-and-gaps" | "creation-only" = "creati
     const stopChunks = () => chunks.end(true);
     requestSignal.addEventListener("abort", stopChunks, { once: true });
     const stream = createAssistantMessageEventStream();
-    void processCompletionsStream(chunks, output, model, stream, {
-      signal: requestSignal,
-      emitReasoning: false,
-    })
+    void processCompletionsStream(
+      observeOpenAICompletionsProgress(chunks, requestSignal),
+      output,
+      model,
+      stream,
+      { signal: requestSignal, emitReasoning: false },
+    )
       .then(
         () => stream.end(output),
         (error: unknown) => {
@@ -66,7 +75,7 @@ async function openStream(scope: "creation-and-gaps" | "creation-only" = "creati
     model,
     signal: runAbort.signal,
   });
-  const stream = await streamWithIdleTimeout(streamFn, idleMs, onTimeout, { scope })(model, {
+  const stream = await streamWithIdleTimeout(streamFn, timeoutMs, onTimeout, { scope })(model, {
     messages: [],
   });
   const events: AssistantMessageEvent[] = [];
@@ -133,17 +142,17 @@ describe("completions model-progress deadline", () => {
     }
   });
 
-  it("keeps hidden reasoning progress alive beyond both windows", async () => {
+  it("allows 1095 seconds of hidden reasoning while the 120-second idle watchdog sees progress", async () => {
     vi.useFakeTimers();
-    const stream = await openStream();
+    const stream = await openStream("creation-and-gaps", 120_000);
     try {
-      for (let index = 0; index < 8; index += 1) {
-        await vi.advanceTimersByTimeAsync(40);
+      for (let index = 0; index < 15; index += 1) {
+        await vi.advanceTimersByTimeAsync(73_000);
         await stream.send(makeCompletionsChunk({ reasoning_content: "x" }));
       }
       expect(stream.onTimeout).not.toHaveBeenCalled();
       expect(stream.requestSignal?.aborted).toBe(false);
-      expect(stream.activity).toHaveLength(8);
+      expect(stream.activity).toHaveLength(15);
       expect(stream.events.filter((event) => event.type === "thinking_delta")).toEqual([]);
       await stream.send(makeCompletionsChunk({ content: "OK" }, "stop"));
     } finally {

@@ -20,7 +20,7 @@ Signal is a downloadable channel plugin (`@openclaw/signal`). The gateway talks 
 openclaw plugins install @openclaw/signal
 ```
 
-`@openclaw/signal` installs from npm first, then falls back to its declared ClawHub package only when the npm target is unavailable. Use `npm:` or `clawhub:` to force a source. `plugins install` registers and enables the plugin; no separate `enable` step is needed. See [Plugins](/tools/plugin) for general install rules.
+`@openclaw/signal` installs from ClawHub by default. Use `npm:@openclaw/signal` to install directly from npm. `plugins install` registers and enables the plugin; no separate `enable` step is needed. See [Plugins](/tools/plugin) for general install rules.
 
 ## Quick setup
 
@@ -89,7 +89,7 @@ Omitted account `dmPolicy` and `groupPolicy` inherit the channel root; explicit 
 
 ## What it is
 
-- Deterministic routing: replies always go back to Signal.
+- Replies always go back to Signal.
 - DMs share the agent's main session; with default `session.groupScope: "per-group"`, groups are isolated (`agent:<agentId>:signal:group:<groupId>`).
 - By default, Signal may write config updates triggered by `/config set|unset` (requires `commands.config: true`). Disable with `channels.signal.configWrites: false`.
 
@@ -244,6 +244,7 @@ Operational notes:
 - Use `MODE=json-rpc` for receiving. `MODE=normal` can make `/v1/about` look healthy, but `/v1/receive/{account}` will not WebSocket-upgrade, so container receive streaming will fail its check.
 - Set `kind: "container"` for the bbernhard REST API and `kind: "external-native"` for native `signal-cli` JSON-RPC/SSE.
 - Container attachment downloads honor the same media byte limits as native mode. Oversized responses are rejected before being fully buffered when the server sends `Content-Length`, and while streaming otherwise.
+- Health and missing-attachment results do not wait for an unused response body's cancellation to finish.
 
 ## Opt-in private UNIX socket
 
@@ -403,9 +404,14 @@ Signal exec and plugin approval prompts use the top-level `approvals.exec` and `
 
 Approval reaction resolution requires explicit Signal approvers from `channels.signal.allowFrom`, `channels.signal.defaultTo`, or the matching account-level fields. Direct same-chat exec approval prompts can still suppress the duplicate local `/approve` fallback without explicit approvers; no-approver group approvals keep the local fallback visible.
 
-## Question reactions
+<a id="question-reactions" />
 
-For an `ask_user` prompt with one non-secret, single-select question and one to four options, Signal shows `1️⃣` through `4️⃣` beside the option labels. React to the delivered prompt with the matching number to answer it. OpenClaw verifies the reaction targets the bot-authored message, then maps the number to the canonical option through the Gateway. Stale or duplicate taps are ignored. Multi-question, multi-select, and free-text prompts remain text-reply-only; normal Signal DM/group admission rules authorize the sender.
+## Agent questions
+
+Signal does not expose the [`ask_user`](/tools/ask-user) tool. When the agent
+needs your input, it asks in an ordinary message and you reply in plain text.
+Numbered reactions do not answer questions. Approval reactions described above
+are unchanged.
 
 ## Delivery targets (CLI/cron)
 

@@ -3,6 +3,10 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import { isReplyRunEvidenceStale } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
+import {
   getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
   rotateAgentEventLifecycleGeneration,
@@ -58,6 +62,7 @@ function createRunController(overrides: Partial<RunEmbeddedAgentParams> = {}) {
     workspaceDir: "/tmp",
     ...overrides,
   };
+  setRuntimeConfigSnapshot(params.config ?? {});
   const controller = createEmbeddedRunLaneController({
     getLifecycleGeneration: () => lifecycleGeneration,
     getParams: () => params,
@@ -82,6 +87,7 @@ async function waitForQueuedLane(lane: string): Promise<void> {
 }
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   resetAgentEventsForTest();
   resetCommandQueueStateForTest();
 });
@@ -90,6 +96,7 @@ afterEach(() => {
   resetAgentEventsForTest();
   resetCommandQueueStateForTest();
   vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("queued embedded run context liveness", () => {
@@ -335,7 +342,11 @@ describe("queued embedded run context liveness", () => {
         lastActiveAt: admissionAt,
         sessionId: params.sessionId,
       });
-      expect(changed).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "agent-runs" });
+      expect(changed).toHaveBeenCalledExactlyOnceWith({
+        all: true,
+        scope: "agent-runs",
+        runtimeSession: { sessionId: params.sessionId, agentId: undefined },
+      });
       expect(localTurn).toHaveBeenCalledOnce();
 
       clock.mockReturnValue(admissionAt + CONTEXT_TTL_MS);

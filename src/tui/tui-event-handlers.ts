@@ -85,11 +85,14 @@ export function createEventHandlers(context: EventHandlerContext) {
     finalizeHistoryOwnedRun: ({ runId, result, previouslyDisplayed }) => {
       // Persisted history owns the final row; retain the previous display fact
       // after a failed rebuild so delayed finals never duplicate or disappear.
+      clearPendingSubmit(state, runId);
       finalizeRun({
         runId,
-        wasActiveRun: state.activeChatRunId === runId,
+        wasActiveRun:
+          state.activeChatRunId === runId || (!state.activeChatRunId && !hasPendingSubmit(state)),
         status: "idle",
         displayedFinal: result.loaded || previouslyDisplayed,
+        reconcileIdle: false,
       });
     },
     replayHistoryRunEvent: (event) => handleChatEvent(event),
@@ -328,7 +331,12 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       const diagnostic = formatTuiAbortDiagnostic(evt.errorMessage);
       chatLog.addSystem(diagnostic ? `run aborted: ${diagnostic}` : "run aborted");
-      terminateRun({ runId: evt.runId, wasActiveRun, status: "aborted" });
+      terminateRun({
+        runId: evt.runId,
+        wasActiveRun,
+        status: "aborted",
+        localModelMayStillBeFinishing: evt.localModelMayStillBeFinishing,
+      });
       maybeRefreshHistoryForRun(evt.runId, {
         hasDisplayableFinal: hasDisplayableAbortedText,
       });
@@ -365,11 +373,17 @@ export function createEventHandlers(context: EventHandlerContext) {
     const persistedRunId = evt.clientRunId || evt.runId;
     if (persistedRunId && (evt.phase === "end" || evt.phase === "error")) {
       runCoordinator.notePersistedRun(persistedRunId);
-      if (pendingNewSessionRunIds.delete(persistedRunId)) {
+      if (
+        pendingNewSessionRunIds.delete(persistedRunId) ||
+        sessionRuns.has(persistedRunId) ||
+        state.activeChatRunId === persistedRunId ||
+        getPendingSubmitAcceptedRunId(state) === persistedRunId
+      ) {
         if (evt.phase === "end") {
           const displayedRunIds = finalizedRunsWithDisplay.has(persistedRunId)
             ? [persistedRunId]
             : [];
+          runCoordinator.pendingHistoryRefresh = false;
           void runCoordinator.queueHistoryReload(
             [persistedRunId],
             [persistedRunId],
@@ -546,6 +560,23 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     const isKnownRun = isActiveRun || isPendingRun || isSessionRun || finalizedRuns.has(evt.runId);
     if (!isKnownRun) {
+      return;
+    }
+    if (evt.stream === "run_status" && isActiveRun) {
+      if (evt.data?.phase === "waiting_for_model") {
+        pauseStreamingWatchdog();
+        setActivityStatus(
+          evt.data.reason === "slot"
+            ? "Waiting for a free model slot"
+            : "Waiting for the local model to respond",
+        );
+      } else if (evt.data?.phase === "starting_model") {
+        armStreamingWatchdog(evt.runId);
+        setActivityStatus("running");
+      } else {
+        return;
+      }
+      tui.requestRender();
       return;
     }
     if (evt.stream === "item") {

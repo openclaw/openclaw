@@ -4,7 +4,6 @@ import type { RuntimeEnv } from "../../runtime.js";
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
-  canonicalizeAllowlistWithResolvedIds,
   patchAllowlistUsersInConfigEntries,
   summarizeMapping,
 } from "./resolve-utils.js";
@@ -62,29 +61,6 @@ describe("addAllowlistUserEntriesFromConfigEntry", () => {
     const target = new Set<string>(["a"]);
     addAllowlistUserEntriesFromConfigEntry(target, null);
     expect(Array.from(target)).toEqual(["a"]);
-  });
-});
-
-describe("canonicalizeAllowlistWithResolvedIds", () => {
-  it("replaces resolved names with ids and keeps unresolved entries", () => {
-    const resolvedMap = new Map([
-      ["Alice#1234", { input: "Alice#1234", resolved: true, id: "111" }],
-      ["bob", { input: "bob", resolved: false }],
-    ]);
-    const result = canonicalizeAllowlistWithResolvedIds({
-      existing: ["Alice#1234", "bob", "222", "*"],
-      resolvedMap,
-    });
-    expect(result).toEqual(["111", "bob", "222", "*"]);
-  });
-
-  it("deduplicates ids after canonicalization", () => {
-    const resolvedMap = new Map([["alice", { input: "alice", resolved: true, id: "111" }]]);
-    const result = canonicalizeAllowlistWithResolvedIds({
-      existing: ["alice", "111", "alice"],
-      resolvedMap,
-    });
-    expect(result).toEqual(["111"]);
   });
 });
 

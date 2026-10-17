@@ -117,7 +117,7 @@ describe("worker Gateway tool runtime", () => {
       expect(projection.tools.map(({ name }) => name)).toEqual([
         "tool_search",
         "tool_describe",
-        "tool_call",
+        "dispatch_action",
       ]);
       expect(projection.toolSchemaDirectoryPrompt).toContain(
         "Deferred names are not directly callable.",
@@ -148,7 +148,11 @@ describe("worker Gateway tool runtime", () => {
     });
     const placement = tool("read", execute);
     bindAgentToolExecutionLocation(placement, { kind: "placement" });
-    const { runtime, prepareTools } = fixture([remote, placement]);
+    const { runtime, prepareTools } = fixture([
+      remote,
+      placement,
+      createSessionsYieldTool({ sessionId: "session" }),
+    ]);
     const surface = await runtime.getSurface(identity);
     expect(Value.Check(WorkerToolSurfaceSchema, surface)).toBe(true);
     expect(await runtime.getSurface(identity)).toEqual(surface);
@@ -162,6 +166,7 @@ describe("worker Gateway tool runtime", () => {
       plugin: { pluginId: "fixture", optional: true, replaySafe: true },
       definition: { outputSchema: remote.outputSchema, catalogMode: "direct-only" },
     });
+    expect(surface.tools[2]?.definition).toMatchObject({ name: "sessions_yield", async: false });
     const invocation = request(surface);
     for (const invalid of [
       { ...invocation, generation: "stale" },
@@ -180,14 +185,6 @@ describe("worker Gateway tool runtime", () => {
     expect(execute).not.toHaveBeenCalled();
     await expect(runtime.invoke(identity, invocation, sink)).resolves.toEqual(success);
     expect(execute).toHaveBeenCalledTimes(1);
-    await runtime.close();
-  });
-
-  it("issues sessions_yield with its synchronous flag so worker turns can start", async () => {
-    const { runtime } = fixture([createSessionsYieldTool({ sessionId: "session" })]);
-    const surface = await runtime.getSurface(identity);
-    expect(Value.Check(WorkerToolSurfaceSchema, surface)).toBe(true);
-    expect(surface.tools[0]?.definition).toMatchObject({ name: "sessions_yield", async: false });
     await runtime.close();
   });
 
@@ -444,6 +441,27 @@ describe("worker Gateway tool runtime", () => {
       await runtime.close();
     },
   );
+
+  it("preserves error text through worker tool execution", async () => {
+    const message = "API_TOKEN = computeToken(); Authorization: Bearer sk-fixture1234567890";
+    const execute = vi.fn(async () => {
+      throw new Error(message);
+    });
+    const { runtime } = fixture([tool("remote", execute)]);
+    try {
+      const surface = await runtime.getSurface(identity);
+      const result = await runtime.invoke(identity, request(surface), sink);
+      expect(result).toEqual({
+        content: [
+          { type: "text", text: JSON.stringify({ status: "error", error: message }, null, 2) },
+        ],
+        details: { status: "error", error: message },
+      });
+      expect(execute).toHaveBeenCalledOnce();
+    } finally {
+      await runtime.close();
+    }
+  });
 
   it.each([false, true])("bounds result and update control bytes with images=%s", async (image) => {
     const oversized = {

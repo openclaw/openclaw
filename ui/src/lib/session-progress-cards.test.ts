@@ -33,6 +33,43 @@ function watchCards(gateway: ApplicationGateway, targets: ProgressCardGetParams[
 }
 
 describe("session progress card lifetimes", () => {
+  it.each(["updated", "absent"] as const)(
+    "shows cached progress before hello and accepts live %s state",
+    async (outcome) => {
+      const { gateway, request, snapshotChanged } = createGateway();
+      gateway.snapshot.phase = "connecting";
+      const { store } = watchCards(gateway);
+      const cached = createProgressCard(10);
+      store.hydrate(target, cached);
+      expect(store.get(target)).toEqual(cached);
+      expect(request).not.toHaveBeenCalled();
+      const lifetime = store.getLifetime(target);
+      const live = outcome === "updated" ? { ...cached, revision: 2, markdown: "Finished" } : null;
+      const response = createDeferred<{ card: typeof live }>();
+      request.mockReturnValue(response.promise);
+      gateway.snapshot.phase = "connected";
+      snapshotChanged();
+      expect(store.get(target)).toEqual(cached);
+      response.resolve({ card: live });
+      await store.load(target);
+      expect(store.get(target)).toEqual(live);
+      expect(store.getLifetime(target)).toBe(live ? lifetime : undefined);
+      store.hydrate(target, cached);
+      expect(store.get(target)).toEqual(live);
+    },
+  );
+
+  it("retires cached progress when the authenticated presentation scope changes", () => {
+    const { gateway, snapshotChanged } = createGateway();
+    gateway.snapshot.phase = "connecting";
+    const { store } = watchCards(gateway);
+    store.hydrate(target, createProgressCard(10));
+    expect(store.get(target)).not.toBeNull();
+    Object.defineProperty(gateway, "connectionRevision", { value: 1 });
+    snapshotChanged();
+    expect(store.get(target)).toBeUndefined();
+    expect(store.getLifetime(target)).toBeUndefined();
+  });
   it("ends a lifetime only after an accepted clear, not revisions, errors, or idle detach", async () => {
     const { gateway, request, emitChange, emit } = createGateway();
     const owner = {};
@@ -272,7 +309,7 @@ describe("session progress card refresh", () => {
     },
   );
 
-  it.each(["reconnect", "replace", "reset", "detach"])(
+  it.each(["replace", "reset", "detach"])(
     "retires stale retry reads and acceptance after %s",
     async (transition) => {
       vi.useFakeTimers();
@@ -299,13 +336,7 @@ describe("session progress card refresh", () => {
         store.unwatch(owner);
         store.watch(owner, [target]);
       } else {
-        if (transition === "replace") {
-          gateway.snapshot.client = createTestGatewayClient(request);
-        } else {
-          gateway.snapshot.phase = "reconnecting";
-          snapshotChanged();
-          gateway.snapshot.phase = "connected";
-        }
+        gateway.snapshot.client = createTestGatewayClient(request);
         snapshotChanged();
       }
       await store.load(target);
@@ -683,9 +714,6 @@ describe("session progress card Gateway response boundary", () => {
     expect(replacementLifetime).toBeDefined();
     expect(replacement.request).toHaveBeenCalledTimes(1);
 
-    const staleDismiss = createDeferred<{ card: null }>();
-    replacement.request.mockReturnValueOnce(staleDismiss.promise);
-    const dismissal = store.dismiss(reconnectTarget, store.get(reconnectTarget)!);
     const interruptedRead = createDeferred<{ card: typeof nextCard }>();
     replacement.request.mockReturnValueOnce(interruptedRead.promise);
     replacement.opts.onEvent?.(
@@ -705,11 +733,9 @@ describe("session progress card Gateway response boundary", () => {
     await vi.waitFor(() => expect(store.get(reconnectTarget)).toEqual(refreshedCard));
     interruptedRead.resolve({ card: nextCard });
     await expect(reconnectRead).resolves.toBeNull();
-    staleDismiss.resolve({ card: null });
-    await expect(dismissal).resolves.toBe(false);
     expect(store.get(reconnectTarget)).toEqual(refreshedCard);
     expect(store.getLifetime(reconnectTarget)).toBe(replacementLifetime);
-    expect(replacement.request).toHaveBeenCalledTimes(4);
+    expect(replacement.request).toHaveBeenCalledTimes(3);
   });
 
   it.each([

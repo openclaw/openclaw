@@ -19,9 +19,10 @@ vi.mock("../infra/sqlite-worker-identity.js", async () => ({
   readDatabasePathIdentitySync: (canonicalPath: string) => ({ key: "file:12:34", canonicalPath }),
 }));
 
-vi.mock("node:worker_threads", async () => {
+vi.mock("node:worker_threads", async (importOriginal) => {
   const { EventEmitter } = await import("node:events");
   return {
+    ...(await importOriginal<typeof import("node:worker_threads")>()),
     isMainThread: true,
     Worker: class extends EventEmitter {
       shared: BigInt64Array;

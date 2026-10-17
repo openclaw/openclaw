@@ -28,7 +28,6 @@ import {
   createTsdownOutputScanner,
   describeInsufficientTsdownHeap,
   listTsdownOutputRoots,
-  parseTsdownBuildArgs,
   prepareTsdownBuildExecution,
   pruneStaleRootChunkFiles,
   pruneStaleRuntimeSymlinks,
@@ -205,14 +204,6 @@ function expectPathMissing(targetPath: string) {
 }
 
 describe("resolveTsdownBuildInvocation", () => {
-  it("parses wrapper help before any tsdown work", () => {
-    expect(parseTsdownBuildArgs(["--help"])).toEqual({ forwardedArgs: [], help: true });
-    expect(parseTsdownBuildArgs(["--format", "esm"])).toEqual({
-      forwardedArgs: ["--format", "esm"],
-      help: false,
-    });
-  });
-
   it("prints wrapper help without invoking pnpm or tsdown", () => {
     const result = spawnSync(
       process.execPath,
@@ -1174,7 +1165,6 @@ describe("resolveTsdownBuildInvocation", () => {
         const declarationFiles = [
           "dist/plugin-sdk/core.d.ts",
           "dist/plugin-sdk/nested/types.d.cts",
-          "dist-runtime/extensions/demo/index.d.ts",
           "packages/media-understanding-common/dist/index.d.mts",
           "packages/media-understanding-common/dist/nested/types.d.ts",
         ];
@@ -1191,6 +1181,7 @@ describe("resolveTsdownBuildInvocation", () => {
           "dist-runtime/stale.js",
           "dist-runtime/control-ui/index.html",
           "dist-runtime/extensions/demo/index.js",
+          "dist-runtime/extensions/demo/index.d.ts",
           "dist-runtime/extensions/demo/node_modules/staged/index.js",
           "packages/agent-core/dist/stale.js",
           "packages/net-policy/dist/stale.js",

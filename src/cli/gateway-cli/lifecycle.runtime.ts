@@ -7,6 +7,7 @@ export { listActiveEmbeddedRunSessionIds } from "../../agents/embedded-agent-run
 export { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 export {
   resolveGatewayRestartDecision,
+  registerGatewayRuntimeRecovery,
   respawnGatewayProcessForUpdate,
   restartGatewayProcessWithFreshPid,
 } from "../../infra/process-respawn.js";
@@ -23,10 +24,7 @@ export {
   scheduleGatewayRestart,
 } from "../../infra/restart.js";
 export { prepareGatewayRestartIntentConsumption } from "../../infra/restart-intent.js";
-export {
-  prepareGatewayRestartHandoffRuntime,
-  writeGatewayRestartHandoff,
-} from "../../infra/restart-handoff.js";
+export { writeGatewayRestartHandoff } from "../../infra/restart-handoff.js";
 export {
   cancelManagedServiceUpdateHandoff,
   claimManagedServiceUpdateHandoff,

@@ -4,13 +4,17 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveBuildInfo } from "../write-build-info.ts";
+import { createFsSafeWindowsHelperAssetPlugin } from "./fs-safe-windows-helper-asset.mts";
 import { createManagedHandoffBuildConfigs } from "./managed-handoff-build-config.mts";
+import { createPublicSessionCardAssetsPlugin } from "./public-session-card-assets.mts";
 import { collectRuntimeImportClosure } from "./runtime-import-closure.mts";
 import {
+  getStandaloneRuntimeProcessOutputOptions,
   sharedRuntimeProcessBuildEntries,
   shouldBundleRuntimeSqliteDependency,
   standaloneRuntimeProcessBuildEntries,
 } from "./runtime-process-core-build-entries.mts";
+import { createSqliteSchemaAssetsPlugin } from "./sqlite-schema-assets.mts";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
 import {
   hashVitestWorkerArtifact,
@@ -109,10 +113,14 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
   const shouldBundleWorkspaceDependency = (id: string) =>
     (id.startsWith("@openclaw/") || id.startsWith("openclaw/")) &&
     id !== "@openclaw/fs-safe" &&
-    !id.startsWith("@openclaw/fs-safe/");
+    !id.startsWith("@openclaw/fs-safe/") &&
+    id !== "@openclaw/proc-safe" &&
+    !id.startsWith("@openclaw/proc-safe/");
   const createInputPlugins = (outputPrefix: string) => {
     const schemaPlugin = createStateSchemaInlinePlugin(root);
     return [
+      createPublicSessionCardAssetsPlugin(root, recordInput),
+      createSqliteSchemaAssetsPlugin(root, recordInput),
       {
         ...schemaPlugin,
         name: "openclaw:worker-build-inputs",
@@ -306,7 +314,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
       await build({
         ...config,
         entry: { [name]: source },
-        outputOptions: { codeSplitting: false },
+        outputOptions: getStandaloneRuntimeProcessOutputOptions(name),
       });
     }
     reportPhase("standalone workers compiled");
@@ -318,7 +326,12 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
         outDir,
         clean: false,
         logLevel: config.logLevel,
-        plugins: config.plugins,
+        // Keep the invocation's loader boundaries while recording the binary
+        // input and output alongside its sealed JavaScript consumers.
+        plugins: [
+          createFsSafeWindowsHelperAssetPlugin(root, undefined, recordInput),
+          config.plugins,
+        ],
       });
     }
     reportPhase("managed handoff compiled");
@@ -404,9 +417,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     // Output paths stay relative to dist, including package-root runtime assets.
     outputs[path.relative(outDir, destination).replaceAll("\\", "/")] = hash;
   }
-  const manifest = await writeVitestWorkerManifest(directory, inputs, outputs, started, {
-    inputsChangedAfter: cache?.startedAt,
-  });
+  const manifest = await writeVitestWorkerManifest(directory, inputs, outputs, started);
   reportPhase("compiler outputs verified");
   if (cache) {
     manifest.cacheSignature = await cache.seal(manifest);
@@ -421,11 +432,7 @@ async function writeVitestWorkerManifest(
   inputs: Record<string, string>,
   outputs: Record<string, string>,
   started: number,
-  {
-    restored = false,
-    inputsChangedAfter,
-    cacheSignature,
-  }: { restored?: boolean; inputsChangedAfter?: number; cacheSignature?: string } = {},
+  { restored = false, cacheSignature }: { restored?: boolean; cacheSignature?: string } = {},
 ): Promise<VitestWorkerManifest> {
   const outDir = path.join(directory, "dist");
   // Version consumers need the built source identity without making this
@@ -449,7 +456,7 @@ async function writeVitestWorkerManifest(
   // Restoration verified these bytes before transferring exclusive ownership.
   // The borrower boundary still verifies the refreshed manifest before lending.
   if (!restored) {
-    await verifyVitestWorkerArtifacts(directory, manifest, { inputsChangedAfter });
+    await verifyVitestWorkerArtifacts(directory, manifest);
   }
   manifest.durationMs = performance.now() - started;
   fs.writeFileSync(

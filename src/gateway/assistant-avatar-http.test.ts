@@ -5,12 +5,19 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as imageOps from "../media/image-ops.js";
 import { readImageMetadataFromHeader } from "../media/image-ops.js";
 import { encodePngRgba } from "../media/png-encode.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-limits.js";
-import { readGatewayAvatarThumbnail } from "./assistant-avatar-thumbnail.runtime.js";
+import {
+  readGatewayAvatarNotificationIcon,
+  readGatewayAvatarThumbnail,
+} from "./assistant-avatar-thumbnail.runtime.js";
 import { resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import { handleControlUiAvatarRequest } from "./control-ui.js";
@@ -18,7 +25,10 @@ import { APNG_BYTES } from "./http-image.test-support.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
+});
 
 it.each(["https://example.test/avatar.png", "data:text/html,<html>avatar</html>"])(
   "rejects %s before invoking the native data decoder",
@@ -72,6 +82,32 @@ it("retries failed thumbnail preparation without retaining the rejected result",
   expect(fetch).toHaveBeenCalledTimes(2);
 });
 
+it("retries a failed notification image on the next delivery", async () => {
+  const source = {
+    dataUrl: `data:image/png;base64,${encodePngRgba(Buffer.from([255, 150, 0, 255]), 1, 1).toString("base64")}`,
+    revision: "retry-notification-icon",
+  };
+  const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("decode failed"));
+  expect(await readGatewayAvatarNotificationIcon(source)).toBeUndefined();
+  const icon = await readGatewayAvatarNotificationIcon(source);
+  expect(icon).toMatch(/^data:image\/png;base64,/);
+  expect(await readGatewayAvatarNotificationIcon(source)).toBe(icon);
+  expect(fetch).toHaveBeenCalledTimes(2);
+});
+
+it("keeps a detailed saved picker avatar within the notification image budget", async () => {
+  const bytes = fs.readFileSync(new URL("./fixtures/notification-avatar.webp", import.meta.url));
+  const icon = await readGatewayAvatarNotificationIcon({
+    dataUrl: `data:image/webp;base64,${bytes.toString("base64")}`,
+    revision: "detailed-picker-avatar",
+  });
+  expect(icon).toMatch(/^data:image\/png;base64,/);
+  expect(icon!.length).toBeLessThanOrEqual(2_400);
+  const size = readImageMetadataFromHeader(Buffer.from(icon!.split(",")[1]!, "base64"));
+  expect(size?.width).toBeLessThanOrEqual(32);
+  expect(size?.height).toBeLessThanOrEqual(32);
+});
+
 // Two 2×2 red/blue frames encoded with img2webp; VP8X animation flag and timing are retained.
 const ANIMATED_WEBP = Buffer.from(
   "UklGRoQAAABXRUJQVlA4WAoAAAACAAAAAQAAAQAAQU5JTQYAAAD/////AABBTk1GKAAAAAAAAAAAAAEAAAEAAGQAAAJWUDhMDwAAAC8BQAAABxD9j/4HIqL/AQBBTk1GKAAAAAAAAAAAAAEAAAEAAGQAAABWUDhMDwAAAC8BQAAABxDR//4HIqL/AQA=",
@@ -114,6 +150,7 @@ it.each([
   const config: OpenClawConfig = {
     agents: { entries: { main: { workspace, identity: { avatar } } } },
   };
+  setRuntimeConfigSnapshot(config);
   const { avatar: url } = await resolveGatewayAssistantAvatar({
     cfg: config,
     identity: await resolveAssistantIdentity({ cfg: config, agentId: "main" }),
@@ -159,6 +196,7 @@ it.each(["local", "data"])(
         },
       },
     };
+    setRuntimeConfigSnapshot(config);
     const project = async (agentId = "main") =>
       (
         await resolveGatewayAssistantAvatar({
@@ -219,6 +257,7 @@ it.each(["local", "data"])(
             sourceKind === "local" ? filename : `data:image/png;base64,${bytes.toString("base64")}`,
         },
       };
+      setRuntimeConfigSnapshot(config);
       urls.push(await project(agentId));
       expect((await request({ url: urls[index] })).res.statusCode).toBe(200);
     }
@@ -255,6 +294,7 @@ it.each(["local", "data"])(
       fs.renameSync(path.join(workspace, "replacement.png"), avatarPath);
     } else {
       config.agents!.entries!.main!.identity!.avatar = `data:image/png;base64,${replacement.toString("base64")}`;
+      setRuntimeConfigSnapshot(config);
     }
     const replacedUrl = await project();
     expect(replacedUrl).not.toBe(url);

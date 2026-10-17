@@ -39,15 +39,11 @@ export function resolveMatrixSqliteStateEnv(
 }
 
 export async function updateMatrixKeyedState<T>(
-  store: PluginStateKeyedStore<T>,
+  store: PluginStateKeyedStore<T, 2>,
   key: string,
   update: (current: T | undefined) => T | undefined,
-  legacyUpdate: () => boolean | Promise<boolean>,
   onUndefined: "keep" | "skip" = "keep",
 ): Promise<boolean> {
-  if (!store.observe || !store.compareAndApply) {
-    return await legacyUpdate();
-  }
   let observation = await store.observe(key);
   for (;;) {
     const value = update(observation.value);

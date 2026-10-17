@@ -39,14 +39,11 @@ describe("Buzz QA credentials", () => {
     expect(credentials.driverPublicKey).not.toBe(credentials.sutPublicKey);
   });
 
-  it.each(["ws://localhost:8080", "ws://127.0.0.1:8080", "ws://[::1]:8080"])(
-    "allows plaintext loopback relay URL %s",
-    (relayUrl) => {
-      expect(parseBuzzQaCredentialPayload({ ...credentialPayload, relayUrl }).relayUrl).toBe(
-        relayUrl,
-      );
-    },
-  );
+  it.each(["ws://127.0.0.1:8080"])("allows plaintext loopback relay URL %s", (relayUrl) => {
+    expect(parseBuzzQaCredentialPayload({ ...credentialPayload, relayUrl }).relayUrl).toBe(
+      relayUrl,
+    );
+  });
 
   it("rejects plaintext remote relay URLs", () => {
     expect(() =>

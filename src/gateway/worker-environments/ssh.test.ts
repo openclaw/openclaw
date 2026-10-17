@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import {
   prepareWorkerSsh,
@@ -18,275 +18,207 @@ const SSH: WorkerSshEndpoint = {
   hostKey: HOST_KEY,
   keyRef: { source: "file", provider: "workers", id: "/identity" },
 };
+const IDENTITY = { kind: "path", path: "/keys/worker" } as const;
 
-function prepareTestWorkerSsh() {
-  return prepareWorkerSsh({
+const KNOWN_HOSTS = [
+  `[worker.example.test]:2202 ${HOST_KEY}`,
+  `worker.example.test ${HOST_KEY}`,
+  `[worker.example.test]:2200 ${HOST_KEY}`,
+  "",
+].join("\n");
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
+
+async function prepareTestWorkerSsh(params: Partial<Parameters<typeof prepareWorkerSsh>[0]> = {}) {
+  const prepared = await prepareWorkerSsh({
     ssh: SSH,
     pinnedHostKey: SSH.hostKey,
-    resolveIdentity: async () => ({ kind: "path" as const, path: "/keys/worker" }),
+    resolveIdentity: async () => IDENTITY,
+    ...params,
   });
+  onTestFinished(() => prepared.dispose());
+  return prepared;
 }
 
-describe("worker SSH preparation", () => {
-  it("discards a late identity before writing it and closes the retained preparation guard", async () => {
+it.each([false, true])(
+  "closes preparation authority after success or revocation (%s)",
+  async (revoked) => {
     const controller = new AbortController();
     const closed = new Error("SSH preparation stopped");
     let retained: (() => void) | undefined;
     const writeFile = vi.spyOn(fs, "writeFile");
-    let prepared: Awaited<ReturnType<typeof prepareWorkerSsh>> | undefined;
-    const request = {
-      ssh: SSH,
-      pinnedHostKey: SSH.hostKey,
+    const preparing = prepareTestWorkerSsh({
       assertCurrent: () => controller.signal.throwIfAborted(),
-      resolveIdentity: async (
-        _keyRef: WorkerSshEndpoint["keyRef"],
-        context?: { assertCurrent: () => void },
-      ) => {
-        retained = context?.assertCurrent;
-        context?.assertCurrent();
-        controller.abort(closed);
-        return { kind: "material" as const, contents: "synthetic-worker-key" };
+      resolveIdentity: async (_keyRef, context) => {
+        retained = context.assertCurrent;
+        context.assertCurrent();
+        if (revoked) {
+          controller.abort(closed);
+        }
+        return revoked ? { kind: "material", contents: "synthetic-worker-key" } : IDENTITY;
       },
-    };
-    try {
-      await expect(
-        prepareWorkerSsh(request).then((value) => {
-          prepared = value;
-          return value;
-        }),
-      ).rejects.toBe(closed);
+    });
+    if (revoked) {
+      await expect(preparing).rejects.toBe(closed);
       expect(writeFile).not.toHaveBeenCalled();
-      expect(retained).toBeTypeOf("function");
-      expect(() => retained?.()).toThrow("preparation invocation is closed");
-    } finally {
-      await prepared?.dispose();
-      writeFile.mockRestore();
+    } else {
+      await fs.access((await preparing).knownHostsPath);
     }
-  });
+    expect(retained).toBeTypeOf("function");
+    expect(() => retained?.()).toThrow("preparation invocation is closed");
+  },
+);
 
-  it("closes the preparation guard after success without disposing the prepared identity", async () => {
-    let retained: (() => void) | undefined;
-    const prepared = await prepareWorkerSsh({
+it("retries disposal after a filesystem cleanup failure", async () => {
+  const prepared = await prepareTestWorkerSsh();
+  const directory = path.dirname(prepared.knownHostsPath);
+  const failure = new Error("synthetic cleanup failure");
+  vi.spyOn(fs, "rm").mockRejectedValueOnce(failure);
+  await expect(prepared.dispose()).rejects.toBe(failure);
+  await fs.access(directory);
+  await prepared.dispose();
+  await expect(fs.access(directory)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("adapts pinned endpoint identity and every advertised port for sandbox SSH", () => {
+  expect(
+    resolveWorkerSshSandboxSettings({
       ssh: SSH,
-      pinnedHostKey: SSH.hostKey,
-      resolveIdentity: async (
-        _keyRef: WorkerSshEndpoint["keyRef"],
-        context?: { assertCurrent: () => void },
-      ) => {
-        retained = context?.assertCurrent;
-        context?.assertCurrent();
-        return { kind: "path", path: "/keys/worker" };
-      },
-    });
-    try {
-      expect(retained).toBeTypeOf("function");
-      expect(() => retained?.()).toThrow("preparation invocation is closed");
-      await fs.access(prepared.knownHostsPath);
-    } finally {
-      await prepared.dispose();
-    }
-  });
-
-  it("retries disposal after a filesystem cleanup failure", async () => {
-    const prepared = await prepareTestWorkerSsh();
-    const directory = path.dirname(prepared.knownHostsPath);
-    const failure = new Error("synthetic cleanup failure");
-    const remove = vi.spyOn(fs, "rm").mockRejectedValueOnce(failure);
-    try {
-      await expect(prepared.dispose()).rejects.toBe(failure);
-      await fs.access(directory);
-      await prepared.dispose();
-      await expect(fs.access(directory)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      remove.mockRestore();
-      await fs.rm(directory, { recursive: true, force: true });
-    }
-  });
-
-  it("adapts pinned endpoint identity and every advertised port for sandbox SSH", () => {
-    expect(
-      resolveWorkerSshSandboxSettings({
-        ssh: SSH,
-        identity: { kind: "path", path: "/keys/worker" },
-      }),
-    ).toEqual({
-      target: "worker@worker.example.test:2202",
-      command: "ssh",
-      strictHostKeyChecking: true,
-      updateHostKeys: false,
-      identityFile: "/keys/worker",
-      knownHostsData: [
-        `[worker.example.test]:2202 ${HOST_KEY}`,
-        `worker.example.test ${HOST_KEY}`,
-        `[worker.example.test]:2200 ${HOST_KEY}`,
-        "",
-      ].join("\n"),
-    });
-  });
-
-  it("shares the pinned trust context while disabling only unrequested forwardings", async () => {
-    let identityResolutions = 0;
-    const prepared = await prepareWorkerSsh({
-      ssh: SSH,
-      pinnedHostKey: SSH.hostKey,
-      resolveIdentity: async () => {
-        identityResolutions += 1;
-        return { kind: "path", path: "/keys/worker" };
-      },
-    });
-    try {
-      expect(await fs.readFile(prepared.knownHostsPath, "utf8")).toBe(
-        [
-          `[worker.example.test]:2202 ${HOST_KEY}`,
-          `worker.example.test ${HOST_KEY}`,
-          `[worker.example.test]:2200 ${HOST_KEY}`,
-          "",
-        ].join("\n"),
-      );
-      expect(identityResolutions).toBe(1);
-      expect(workerSshOptions(prepared, { forwarding: "disabled" })).toContain(
-        "ClearAllForwardings=yes",
-      );
-      expect(workerSshOptions(prepared, { forwarding: "explicit" })).toContain(
-        "ClearAllForwardings=no",
-      );
-      for (const options of [
-        workerSshOptions(prepared, { forwarding: "disabled" }),
-        workerSshOptions(prepared, { forwarding: "explicit" }),
-      ]) {
-        expect(options).toContain("StrictHostKeyChecking=yes");
-        expect(options).toContain("UpdateHostKeys=no");
-        expect(options).toContain("ControlMaster=no");
-        expect(options).toContain("ControlPath=none");
-      }
-    } finally {
-      await prepared.dispose();
-    }
-  });
-
-  it("rotates stable advertised order from the selected authenticated port", async () => {
-    const prepared = await prepareTestWorkerSsh();
-    try {
-      const attempted: number[] = [];
-      await runWorkerSshCandidates(prepared, 10_000, async (port) => {
-        attempted.push(port);
-        return {
-          stdout: "",
-          stderr: "",
-          code: port === 2202 ? 255 : 7,
-          signal: null,
-          killed: false,
-          termination: "exit" as const,
-        };
-      });
-
-      expect(attempted).toEqual([2202, 22]);
-      expect(prepared.port).toBe(22);
-
-      const retryOrder: number[] = [];
-      await runWorkerSshCandidates(prepared, 10_000, async (port) => {
-        retryOrder.push(port);
-        return {
-          stdout: "",
-          stderr: "",
-          code: 255,
-          signal: null,
-          killed: false,
-          termination: "exit" as const,
-        };
-      });
-      expect(retryOrder).toEqual([22, 2200, 2202]);
-    } finally {
-      await prepared.dispose();
-    }
-  });
-
-  it("shares a decreasing deadline while preserving fast fallback budget", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const prepared = await prepareTestWorkerSsh();
-    try {
-      const remainingTimeouts: number[] = [];
-      const result = await runWorkerSshCandidates(
-        prepared,
-        1_000,
-        async (port, remainingTimeoutMs) => {
-          remainingTimeouts.push(remainingTimeoutMs);
-          if (port === 2202) {
-            vi.advanceTimersByTime(1);
-            return { code: 255, termination: "exit" };
-          }
-          return { code: 0, termination: "exit" };
-        },
-      );
-
-      expect(remainingTimeouts).toEqual([1_000, 999]);
-      expect(result).toEqual({ code: 0, termination: "exit" });
-      expect(prepared.port).toBe(22);
-    } finally {
-      await prepared.dispose();
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not start a later candidate after the operation deadline", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const prepared = await prepareTestWorkerSsh();
-    try {
-      const attempted: number[] = [];
-      const firstResult = { code: 255, termination: "exit" as const };
-      const result = await runWorkerSshCandidates(prepared, 100, async (port) => {
-        attempted.push(port);
-        vi.advanceTimersByTime(100);
-        return firstResult;
-      });
-
-      expect(attempted).toEqual([2202]);
-      expect(result).toBe(firstResult);
-      expect(prepared.port).toBe(2202);
-    } finally {
-      await prepared.dispose();
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not select a candidate after non-exit termination", async () => {
-    const prepared = await prepareTestWorkerSsh();
-    prepared.selectPort(22);
-    try {
-      const attempted: number[] = [];
-      const result = await runWorkerSshCandidates(prepared, 1_000, async (port) => {
-        attempted.push(port);
-        return port === 22
-          ? { code: 255, termination: "exit" as const }
-          : { code: null, termination: "timeout" };
-      });
-
-      expect(attempted).toEqual([22, 2200]);
-      expect(result).toEqual({ code: null, termination: "timeout" });
-      expect(prepared.port).toBe(22);
-    } finally {
-      await prepared.dispose();
-    }
-  });
-
-  it("materializes identity contents once and removes them with the shared context", async () => {
-    const prepared = await prepareWorkerSsh({
-      ssh: SSH,
-      pinnedHostKey: SSH.hostKey,
-      resolveIdentity: async () => ({
-        kind: "material",
-        contents: ["part", "value"].join("\\n"),
-      }),
-    });
-    const identityPath = prepared.identityPath;
-
-    expect(await fs.readFile(identityPath, "utf8")).toBe("part\nvalue\n");
-    if (process.platform !== "win32") {
-      expect((await fs.stat(identityPath)).mode & 0o777).toBe(0o600);
-    }
-    await prepared.dispose();
-    await expect(fs.stat(identityPath)).rejects.toMatchObject({ code: "ENOENT" });
+      identity: IDENTITY,
+    }),
+  ).toEqual({
+    target: "worker@worker.example.test:2202",
+    command: "ssh",
+    strictHostKeyChecking: true,
+    updateHostKeys: false,
+    identityFile: "/keys/worker",
+    knownHostsData: KNOWN_HOSTS,
   });
 });
+
+it("shares the pinned trust context while disabling only unrequested forwardings", async () => {
+  let identityResolutions = 0;
+  const prepared = await prepareTestWorkerSsh({
+    resolveIdentity: async () => {
+      identityResolutions += 1;
+      return IDENTITY;
+    },
+  });
+  expect(await fs.readFile(prepared.knownHostsPath, "utf8")).toBe(KNOWN_HOSTS);
+  expect(identityResolutions).toBe(1);
+  for (const forwarding of ["disabled", "explicit"] as const) {
+    expect(workerSshOptions(prepared, { forwarding })).toEqual(
+      expect.arrayContaining([
+        `ClearAllForwardings=${forwarding === "disabled" ? "yes" : "no"}`,
+        "StrictHostKeyChecking=yes",
+        "UpdateHostKeys=no",
+        "ControlMaster=no",
+        "ControlPath=none",
+      ]),
+    );
+  }
+});
+
+it("rotates stable advertised order from the selected authenticated port", async () => {
+  const prepared = await prepareTestWorkerSsh();
+  const attempted: number[] = [];
+  await runWorkerSshCandidates(prepared, 10_000, async (port) => {
+    attempted.push(port);
+    return { code: port === 2202 ? 255 : 7, termination: "exit" };
+  });
+
+  expect(attempted).toEqual([2202, 22]);
+  expect(prepared.port).toBe(22);
+
+  const retryOrder: number[] = [];
+  await runWorkerSshCandidates(prepared, 10_000, async (port) => {
+    retryOrder.push(port);
+    return { code: 255, termination: "exit" };
+  });
+  expect(retryOrder).toEqual([22, 2200, 2202]);
+});
+
+it("does not start a later candidate after the operation deadline", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_000);
+  const prepared = await prepareTestWorkerSsh();
+  const attempted: number[] = [];
+  const firstResult = { code: 255, termination: "exit" as const };
+  const result = await runWorkerSshCandidates(prepared, 100, async (port) => {
+    attempted.push(port);
+    vi.advanceTimersByTime(100);
+    return firstResult;
+  });
+
+  expect(attempted).toEqual([2202]);
+  expect(result).toBe(firstResult);
+  expect(prepared.port).toBe(2202);
+});
+
+it("does not select a candidate after non-exit termination", async () => {
+  const prepared = await prepareTestWorkerSsh();
+  prepared.selectPort(22);
+  const attempted: number[] = [];
+  const result = await runWorkerSshCandidates(prepared, 1_000, async (port) => {
+    attempted.push(port);
+    return port === 22
+      ? { code: 255, termination: "exit" as const }
+      : { code: null, termination: "timeout" };
+  });
+
+  expect(attempted).toEqual([22, 2200]);
+  expect(result).toEqual({ code: null, termination: "timeout" });
+  expect(prepared.port).toBe(22);
+});
+
+it("materializes identity contents once and removes them with the shared context", async () => {
+  const prepared = await prepareTestWorkerSsh({
+    resolveIdentity: async () => ({
+      kind: "material",
+      contents: ["part", "value"].join("\\n"),
+    }),
+  });
+  const identityPath = prepared.identityPath;
+
+  expect(await fs.readFile(identityPath, "utf8")).toBe("part\nvalue\n");
+  if (process.platform !== "win32") {
+    expect((await fs.stat(identityPath)).mode & 0o777).toBe(0o600);
+  }
+  await prepared.dispose();
+  await expect(fs.stat(identityPath)).rejects.toMatchObject({ code: "ENOENT" });
+});
+it.each([300_000, -300_000])(
+  "keeps the retry budget on the monotonic clock across a %i ms wall-clock jump",
+  async (wallClockStepMs) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let monotonicMs = 0;
+    let wallMs = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => monotonicMs);
+    vi.spyOn(Date, "now").mockImplementation(() => wallMs);
+    const prepared = await prepareTestWorkerSsh();
+    const attempted: number[] = [];
+    let retriedTimeoutMs: number | undefined;
+    const result = await runWorkerSshCandidates(
+      prepared,
+      10_000,
+      async (port, remainingTimeoutMs) => {
+        attempted.push(port);
+        if (attempted.length === 1) {
+          wallMs += wallClockStepMs;
+          monotonicMs += 200;
+          return { code: 255, termination: "exit" as const };
+        }
+        retriedTimeoutMs = remainingTimeoutMs;
+        return { code: 0, termination: "exit" as const };
+      },
+    );
+    expect(result.code).toBe(0);
+    expect(attempted.length).toBeGreaterThan(1);
+    expect(retriedTimeoutMs).toBeDefined();
+    expect(retriedTimeoutMs!).toBeGreaterThan(9_000);
+    expect(retriedTimeoutMs!).toBeLessThanOrEqual(10_000);
+  },
+);

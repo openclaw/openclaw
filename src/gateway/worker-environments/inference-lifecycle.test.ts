@@ -4,6 +4,7 @@ import type {
   WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
@@ -16,8 +17,8 @@ import {
   createChatAbortContext,
   invokeChatAbortHandler,
 } from "../server-methods/chat.abort.test-helpers.js";
+import type { WorkerInferenceExecutor } from "./connection-identity.js";
 import { registerWorkerInferenceSessionControl } from "./inference-control-internal.js";
-import type { WorkerInferenceExecutor } from "./inference.js";
 import {
   accept,
   CANCEL,
@@ -34,6 +35,35 @@ import {
   terminalFrames,
   waitForFast,
 } from "./inference.test-support.js";
+
+function pendingInference(store = createMemoryStore()) {
+  const provider = createDeferred<WorkerInferenceTerminalOutcome>();
+  const entered = createDeferred<Parameters<WorkerInferenceExecutor>[0]>();
+  const instance = makeManager(async (params) => {
+    entered.resolve(params);
+    return await provider.promise;
+  }, store);
+  return { provider, entered, instance, sink: createSink() };
+}
+
+function startInference(
+  instance: Manager,
+  overrides: Partial<Parameters<Manager["start"]>[0]> = {},
+) {
+  return instance.start({
+    identity: IDENTITY,
+    request: REQUEST,
+    sessionTarget: SESSION_TARGET,
+    sink: overrides.sink ?? createSink().sink,
+    ...overrides,
+  });
+}
+
+function expectCancelled(sink: ReturnType<typeof createSink>) {
+  const frames = terminalFrames(sink.frames);
+  expect(frames).toHaveLength(1);
+  expect(frames[0]?.payload.outcome).toMatchObject({ reason: "cancelled" });
+}
 
 describe("worker inference manager", () => {
   it.each(["authority-refused", "outcome-unknown"] as const)(
@@ -86,10 +116,7 @@ describe("worker inference manager", () => {
         expect(terminalFrames(sink.frames)).toEqual([]);
         await expect(instance.stop()).rejects.toBe(failure);
       } else {
-        expect(terminalFrames(sink.frames)).toHaveLength(1);
-        expect(terminalFrames(sink.frames)[0]?.payload.outcome).toMatchObject({
-          reason: "cancelled",
-        });
+        expectCancelled(sink);
         await instance.stop();
       }
     },
@@ -164,6 +191,7 @@ describe("worker inference manager", () => {
     "Gateway Stop retains original worker registration and authority (explicit=%s)",
     async (explicit) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         for (const change of ["none", "replacement", "revocation"] as const) {
           const key = "agent:main:main";
           await upsertSessionEntryCore(
@@ -300,13 +328,7 @@ describe("worker inference manager", () => {
           : new Error("write failed");
       const store = createMemoryStore();
       const complete = vi.spyOn(store, "complete").mockRejectedValue(failure);
-      const pending = createDeferred<WorkerInferenceTerminalOutcome>();
-      const entered = createDeferred();
-      const instance = makeManager(async () => {
-        entered.resolve();
-        return await pending.promise;
-      }, store);
-      const sink = createSink();
+      const { provider, entered, instance, sink } = pendingInference(store);
       await accept(instance, { sink: sink.sink });
       await entered.promise;
 
@@ -314,7 +336,7 @@ describe("worker inference manager", () => {
       const rejected = expect(drain.drained).rejects.toBe(failure);
       drain.start();
       const cancelled = instance.cancel({ identity: IDENTITY, request: CANCEL });
-      pending.resolve(ERROR);
+      provider.resolve(ERROR);
       expect(await cancelled).toEqual({ ok: false, reason: "provider-error" });
       await rejected;
       expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(failureKind === "outcome-unknown");
@@ -329,12 +351,7 @@ describe("worker inference manager", () => {
     const failure = new Error("provider native work failed", {
       cause: new SqliteWorkerError("native result lost", "outcome-unknown"),
     });
-    const provider = createDeferred<WorkerInferenceTerminalOutcome>();
-    const entered = createDeferred();
-    const instance = makeManager(async () => {
-      entered.resolve();
-      return await provider.promise;
-    });
+    const { provider, entered, instance } = pendingInference();
     await accept(instance);
     await entered.promise;
     const drain = instance.reserveSessionDrain(REQUEST.sessionId).accept();
@@ -391,18 +408,12 @@ describe("worker inference manager", () => {
   });
 
   it("defers protocol cancellation to the accepted drain and joins its provider work", async () => {
-    const pending = createDeferred<WorkerInferenceTerminalOutcome>();
-    const entered = createDeferred<AbortSignal>();
     const store = createMemoryStore();
     const complete = vi.spyOn(store, "complete");
     const cancelPending = vi.spyOn(store, "cancelPending");
-    const instance = makeManager(async ({ signal }) => {
-      entered.resolve(signal);
-      return await pending.promise;
-    }, store);
-    const sink = createSink();
+    const { provider, entered, instance, sink } = pendingInference(store);
     await accept(instance, { sink: sink.sink });
-    const signal = await entered.promise;
+    const { signal } = await entered.promise;
     const reservation = instance.reserveSessionDrain(REQUEST.sessionId);
     reservation.assertReserved();
     const drain = reservation.accept();
@@ -430,7 +441,7 @@ describe("worker inference manager", () => {
     await Promise.resolve();
     expect(settled).toBe(false);
     expect(cancellationSettled).toBe(false);
-    pending.resolve(DONE);
+    provider.resolve(DONE);
     await joined;
     expect(await cancelled).toEqual({ ok: true, result: { status: "cancelled" } });
     expect(await instance.cancel({ identity: IDENTITY, request: CANCEL })).toEqual({
@@ -439,22 +450,47 @@ describe("worker inference manager", () => {
     });
     expect(cancelPending).not.toHaveBeenCalled();
     expect(complete).toHaveBeenCalledOnce();
-    expect(terminalFrames(sink.frames)).toHaveLength(1);
-    expect(terminalFrames(sink.frames)[0]?.payload.outcome).toMatchObject({ reason: "cancelled" });
+    expectCancelled(sink);
     expect(drain.hasWork()).toBe(false);
     drain.release();
     await instance.stop();
   });
 
+  it("leaves accepted inference running when drain authority is revoked before start", async () => {
+    const { provider, entered, instance, sink } = pendingInference();
+    await accept(instance, { sink: sink.sink });
+    const { signal } = await entered.promise;
+    let current = true;
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error("deletion superseded");
+      }
+    };
+    assertCurrent();
+    const drain = instance.reserveSessionDrain(REQUEST.sessionId).accept();
+    const drained = Promise.allSettled([drain.drained]);
+    try {
+      current = false;
+      drain.start(assertCurrent);
+      expect(signal.aborted).toBe(false);
+      expect(sink.frames).toEqual([]);
+      provider.resolve(DONE);
+      expect(await sink.terminal).toMatchObject({ payload: { outcome: DONE } });
+      expect(await drained).toEqual([
+        { status: "rejected", reason: new Error("deletion superseded") },
+      ]);
+    } finally {
+      provider.resolve(DONE);
+      await drained;
+      drain.release();
+      await instance.stop();
+    }
+  });
+
   it("does not let a stale drain release unlock a newer accepted drain", async () => {
     const store = createMemoryStore();
     const begin = vi.spyOn(store, "begin");
-    const provider = createDeferred<WorkerInferenceTerminalOutcome>();
-    const entered = createDeferred();
-    const instance = makeManager(async () => {
-      entered.resolve();
-      return await provider.promise;
-    }, store);
+    const { provider, entered, instance } = pendingInference(store);
     const previous = instance.reserveSessionDrain(REQUEST.sessionId).accept();
     previous.start();
     await previous.drained;
@@ -464,11 +500,9 @@ describe("worker inference manager", () => {
     const current = instance.reserveSessionDrain(REQUEST.sessionId).accept();
     const replacementRequest = { ...REQUEST, runId: "replacement", turnId: "replacement" };
     const start = () =>
-      instance.start({
+      startInference(instance, {
         identity: identityFor(replacementRequest),
         request: replacementRequest,
-        sessionTarget: SESSION_TARGET,
-        sink: createSink().sink,
       });
     try {
       previous.release();
@@ -525,7 +559,7 @@ describe("worker inference manager", () => {
     const reservedSink = createSink("reserved");
     await accept(instance, { sink: reservedSink.sink }, false);
     const otherSink = createSink("unrelated");
-    const other = await instance.start({
+    const other = await startInference(instance, {
       identity: identityFor(otherRequest),
       request: otherRequest,
       sessionTarget: { ...SESSION_TARGET, sessionId: otherRequest.sessionId },
@@ -662,12 +696,7 @@ describe("worker inference manager", () => {
       const execute = vi.fn<WorkerInferenceExecutor>(async () => DONE);
       const instance = makeManager(execute, store);
       const sink = createSink();
-      const started = instance.start({
-        sessionTarget: SESSION_TARGET,
-        identity: IDENTITY,
-        request: REQUEST,
-        sink: sink.sink,
-      });
+      const started = startInference(instance, { sink: sink.sink });
       await entered.promise;
       const drain = instance.reserveSessionDrain(REQUEST.sessionId).accept();
       const stopping = stopBeforeStart ? instance.stop() : undefined;
@@ -692,10 +721,7 @@ describe("worker inference manager", () => {
         expect(begin).toHaveBeenCalledOnce();
         expect(complete).toHaveBeenCalledOnce();
         expect(execute).not.toHaveBeenCalled();
-        expect(terminalFrames(sink.frames)).toHaveLength(1);
-        expect(terminalFrames(sink.frames)[0]?.payload.outcome).toMatchObject({
-          reason: "cancelled",
-        });
+        expectCancelled(sink);
         expect(drain.hasWork()).toBe(false);
       } finally {
         release.resolve();
@@ -719,12 +745,7 @@ describe("worker inference manager", () => {
     const execute = vi.fn<WorkerInferenceExecutor>(async () => DONE);
     const instance = makeManager(execute, store);
     const sink = createSink();
-    const started = instance.start({
-      sessionTarget: SESSION_TARGET,
-      identity: IDENTITY,
-      request: REQUEST,
-      sink: sink.sink,
-    });
+    const started = startInference(instance, { sink: sink.sink });
     await entered.promise;
     const captured = instance.captureSessionCancellation(REQUEST.sessionId);
     expect(captured.runIds).toEqual([REQUEST.runId]);
@@ -741,7 +762,6 @@ describe("worker inference manager", () => {
     await instance.stop();
     expect(execute).not.toHaveBeenCalled();
     expect(complete).toHaveBeenCalledOnce();
-    expect(terminalFrames(sink.frames)).toHaveLength(1);
-    expect(terminalFrames(sink.frames)[0]?.payload.outcome).toMatchObject({ reason: "cancelled" });
+    expectCancelled(sink);
   });
 });

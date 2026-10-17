@@ -93,10 +93,7 @@ export class DiscordCommandDeployer {
     }
     this.hashLoaded = true;
     try {
-      const hash = await this.params.hashStore?.lookup(this.cacheKey);
-      if (typeof hash === "string" && hash.trim()) {
-        this.hash = hash;
-      }
+      this.hash = await this.params.hashStore?.lookup(this.cacheKey);
     } catch {
       // Cache lookup failure is a miss. Reconcile repairs the canonical row after success.
     }
@@ -107,7 +104,7 @@ export class DiscordCommandDeployer {
   }
 }
 
-function stableCommandKey(command: Pick<SerializedCommand, "name" | "type">) {
+function stableCommandKey(command: { name: string; type?: ApplicationCommandType }) {
   return `${command.type ?? ApplicationCommandType.ChatInput}:${command.name}`;
 }
 

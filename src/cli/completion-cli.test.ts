@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { Command, Option } from "commander";
 import { afterAll, describe, expect, it } from "vitest";
-import { getCompletionScript } from "./completion-cli.js";
+import { registerAcpCli } from "./acp-cli.js";
+import { getCompletionScript, registerCompletionCli } from "./completion-cli.js";
 import {
   createAliasedCompletionProgram,
   createCompletionProgram,
@@ -32,6 +33,46 @@ function createOptionalChoiceCompletionProgram(): Command {
 }
 
 describe("completion-cli", () => {
+  for (const [shell, nativeTest] of [
+    ["bash", it.skipIf(process.platform === "win32")],
+    ["fish", itWithFish],
+    ["powershell", itWithPowerShell],
+  ] as const) {
+    nativeTest(`offers root global flags after subcommands in ${shell}`, async () => {
+      const program = new Command()
+        .name("openclaw")
+        .enablePositionalOptions()
+        .option("--profile <name>", "Profile")
+        .option("--log-level <level>", "Log level")
+        .option("--container <name>", "Container")
+        .option("--no-color", "Disable colors")
+        .option("--root-only", "Positional root option")
+        .addOption(new Option("--dev", "Hidden global").hideHelp());
+      const group = program.command("group").alias("g").option("--parent-only");
+      group.command("status").option("--json");
+      program.command("local").addOption(new Option("--profile <name>").choices(["local"]));
+
+      for (const [line, expected] of [
+        ["openclaw g status --pr", ["--profile"]],
+        ["openclaw group status --no-c", ["--no-color"]],
+        ["openclaw group status --log", ["--log-level"]],
+        ["openclaw group status --cont", ["--container"]],
+        ["openclaw group status --root", []],
+        ["openclaw group status --parent", []],
+        ["openclaw group status --dev", []],
+        ["openclaw local --profile lo", ["local"]],
+      ] as const) {
+        const actual =
+          shell === "bash"
+            ? runGeneratedBashCompletion(program, line.split(" "))
+            : shell === "fish"
+              ? runGeneratedFishCompletion(program, line)
+              : await powerShellCompletion.complete(program, line);
+        expect(actual, line).toEqual(expected);
+      }
+    });
+  }
+
   it("escapes zsh option descriptions for double-quoted arguments specs", () => {
     const program = new Command()
       .name("openclaw")
@@ -148,6 +189,84 @@ _openclaw_root_completion
       expect(result.stdout).toContain("two\\ words");
       expect(result.stdout).toContain('say\\ \\"hello\\"');
       expect(result.stdout).toContain("OPENCLAW_COMPLETION_VALUE_EXECUTED");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "completes grouped short options in zsh command groups and leaves",
+    async (ctx) => {
+      const probe = spawnSync("zsh", ["-fc", "zmodload zsh/zpty"], { encoding: "utf8" });
+      if (probe.error && "code" in probe.error && probe.error.code === "ENOENT") {
+        ctx.skip();
+      }
+      expect(probe.error).toBeUndefined();
+      expect(probe.status).toBe(0);
+
+      const program = new Command().name("openclaw");
+      registerCompletionCli(program);
+      registerAcpCli(program);
+      const cases = [
+        ["openclaw completion -ys f", "openclaw completion -ys fish"],
+        ["openclaw completion -s f", "openclaw completion -s fish"],
+        ["openclaw completion -yi --shell f", "openclaw completion -yi --shell fish"],
+        ["openclaw acp -vv cl", "openclaw acp -vv client"],
+      ];
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-zsh-completion-"));
+      try {
+        await fs.writeFile(
+          path.join(tempDir, ".zshrc"),
+          `autoload -Uz compinit
+compinit -u -D
+${getCompletionScript("zsh", program)}
+PROMPT='OPENCLAW_READY> '
+openclaw_capture_completion() {
+  print -r -- "OPENCLAW_RESULT:$BUFFER"
+  print -r -- OPENCLAW_RESULT_END
+  zle reset-prompt
+}
+zle -N openclaw_capture_completion
+bindkey -e
+bindkey '^X' openclaw_capture_completion
+`,
+          "utf8",
+        );
+        const result = spawnSync(
+          "zsh",
+          [
+            "-fc",
+            `zmodload zsh/zpty
+zpty completion zsh -di
+{
+  zpty -r completion output '*OPENCLAW_READY>*'
+${cases
+  .map(
+    ([line]) => `  zpty -w -n completion '${line}'$'\t\x18'
+  zpty -r completion output '*OPENCLAW_RESULT_END*'
+  print -r -- "$output"
+  zpty -w -n completion $'\x15'`,
+  )
+  .join("\n")}
+} always {
+  zpty -d completion
+}
+`,
+          ],
+          {
+            encoding: "utf8",
+            timeout: 15_000,
+            env: { ...process.env, HOME: tempDir, ZDOTDIR: tempDir, TERM: "xterm" },
+          },
+        );
+        expect(result.error).toBeUndefined();
+        expect(result.stderr).toBe("");
+        expect(result.status).toBe(0);
+        const completed = [...result.stdout.matchAll(/OPENCLAW_RESULT:([^\r\n]*)/g)].map((match) =>
+          match[1]?.trimEnd(),
+        );
+        expect(completed).toEqual(cases.map(([, expected]) => expected));
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
     },
   );
 
@@ -429,6 +548,10 @@ _openclaw_root_completion
   itWithPowerShell.each([
     ["a short-option cluster value", "openclaw completion -ysf", "-ysfish"],
     ["a separated short-option cluster value", "openclaw completion -ys f", "fish"],
+    ["an unfinished single-quoted value", "openclaw completion --shell 'f", "fish"],
+    ["an unfinished double-quoted value", 'openclaw completion --shell "f', "fish"],
+    ["a closed quoted value", "openclaw completion --shell 'f'", "fish"],
+    ["a quoted equals value", "openclaw completion --shell='f", "--shell=fish"],
   ])("completes PowerShell Commander choices after %s", async (_name, commandLine, expected) => {
     expect(
       await powerShellCompletion.complete(createDocumentedCompletionProgram(), commandLine),

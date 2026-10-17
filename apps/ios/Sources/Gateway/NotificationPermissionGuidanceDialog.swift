@@ -64,7 +64,7 @@ private struct NotificationPermissionGuidanceCard: View {
 
             VStack(spacing: 10) {
                 approvalDialogButton(Text("Open Notifications Settings"), action: self.onOpenNotifications)
-                    .buttonStyle(.borderedProminent)
+                    .openClawProminentButton()
 
                 approvalDialogButton(Text("Not Now"), role: .cancel, action: self.onDismiss)
                     .buttonStyle(.bordered)

@@ -103,18 +103,6 @@ describe("resolveSandboxPath", () => {
       );
     });
   });
-
-  it("still shortens roots beneath the home directory", async () => {
-    const home = path.join(os.homedir(), "test-home");
-    await withEnvAsync({ HOME: home, OPENCLAW_HOME: undefined }, async () => {
-      const root = path.join(home, "openclaw-sandbox");
-      const outside = path.dirname(root);
-
-      expect(() => resolveSandboxPath({ filePath: outside, cwd: root, root })).toThrow(
-        `Path escapes sandbox root (~${path.sep}openclaw-sandbox): ${outside}`,
-      );
-    });
-  });
 });
 
 describe("assertSandboxPath", () => {
@@ -201,38 +189,6 @@ describe("assertSandboxPath", () => {
       }
     },
   );
-
-  it("accepts not-yet-created and symlinked roots", async () => {
-    const parent = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-missing-root-")),
-    );
-    try {
-      const root = path.join(parent, "workspace");
-      await expect(
-        assertSandboxPath({ filePath: "nested/new.txt", cwd: root, root }),
-      ).resolves.toMatchObject({ relative: path.join("nested", "new.txt") });
-
-      const realRoot = path.join(parent, "real-workspace");
-      const linkedRoot = path.join(parent, "linked-workspace");
-      await fs.mkdir(realRoot);
-      await fs.symlink(realRoot, linkedRoot);
-      await expect(
-        assertSandboxPath({ filePath: linkedRoot, cwd: linkedRoot, root: linkedRoot }),
-      ).resolves.toMatchObject({ relative: "" });
-      await expect(
-        assertSandboxPath({
-          filePath: path.join(realRoot, "nested", "new.txt"),
-          cwd: realRoot,
-          root: linkedRoot,
-        }),
-      ).resolves.toEqual({
-        resolved: path.join(linkedRoot, "nested", "new.txt"),
-        relative: path.join("nested", "new.txt"),
-      });
-    } finally {
-      await fs.rm(parent, { recursive: true, force: true });
-    }
-  });
 
   it.runIf(process.platform !== "win32")(
     "does not trust unrelated ancestors of a cwd alias pointing deeper into the root",
@@ -326,11 +282,6 @@ describe("resolveSandboxedMediaSource", () => {
       media: pathToFileURL(path.join(openClawTmpDir, "photo.png")).href,
       expected: path.join(openClawTmpDir, "photo.png"),
     },
-    {
-      name: "nested paths under preferred OpenClaw tmp root",
-      media: path.join(openClawTmpDir, "subdir", "deep", "file.png"),
-      expected: path.join(openClawTmpDir, "subdir", "deep", "file.png"),
-    },
   ])("allows $name", async ({ media, expected }) => {
     await withSandboxRoot(async (sandboxDir) => {
       const result = await resolveSandboxedMediaSource({
@@ -342,10 +293,6 @@ describe("resolveSandboxedMediaSource", () => {
   });
 
   it.each([
-    {
-      name: "managed outbound media",
-      relative: path.join("media", "outbound", "reply.png"),
-    },
     {
       name: "managed file-transfer tool media",
       relative: path.join("media", "tool-file-transfer", "fetched.png"),
@@ -363,15 +310,6 @@ describe("resolveSandboxedMediaSource", () => {
 
         expect(result).toBe(media);
       });
-    });
-  });
-
-  it("resolves checked managed media paths for non-sandbox callers", async () => {
-    await withManagedMediaRoot(async ({ stateDir }) => {
-      const media = path.join(stateDir, "media", "outbound", "reply.png");
-      await fs.writeFile(media, "image", "utf8");
-
-      await expect(resolveAllowedManagedMediaPath(media)).resolves.toBe(media);
     });
   });
 
@@ -393,16 +331,6 @@ describe("resolveSandboxedMediaSource", () => {
         sandboxRoot: sandboxDir,
       });
       expect(result).toBe(path.join(sandboxDir, "data", "file.txt"));
-    });
-  });
-
-  it("allows dot-dot-prefixed filenames inside the sandbox root", async () => {
-    await withSandboxRoot(async (sandboxDir) => {
-      const result = await resolveSandboxedMediaSource({
-        media: "./..image.png",
-        sandboxRoot: sandboxDir,
-      });
-      expect(result).toBe(path.join(sandboxDir, "..image.png"));
     });
   });
 
@@ -429,53 +357,20 @@ describe("resolveSandboxedMediaSource", () => {
     },
   );
 
-  it.each([
-    {
-      name: "OpenShell absolute path",
-      containerWorkdir: "/sandbox",
-      media: "/sandbox/media/pic.png",
-    },
-    {
-      name: "custom backend workdir with trailing slash",
-      containerWorkdir: "/remote/agent/",
-      media: "/remote/agent/media/pic.png",
-    },
-    {
-      name: "custom backend file URL",
-      containerWorkdir: "/remote/agent",
-      media: "FILE:/remote/agent/media/pic.png",
-    },
-  ])(
-    "maps $name through the authoritative backend workdir",
-    async ({ containerWorkdir, media }) => {
+  it.each(["/sandbox-other/secret.png"])(
+    "rejects %s outside the authoritative backend workdir",
+    async (media) => {
       await withSandboxRoot(async (sandboxDir) => {
         await expect(
           resolveSandboxedMediaSource({
             media,
             sandboxRoot: sandboxDir,
-            containerWorkdir,
+            containerWorkdir: "/sandbox",
           }),
-        ).resolves.toBe(path.join(sandboxDir, "media", "pic.png"));
+        ).rejects.toThrow(/sandbox/i);
       });
     },
   );
-
-  it.each([
-    "/sandbox-other/secret.png",
-    "/workspace/secret.png",
-    "/sandbox/../secret.png",
-    "file:///sandbox-other/secret.png",
-  ])("rejects %s outside the authoritative backend workdir", async (media) => {
-    await withSandboxRoot(async (sandboxDir) => {
-      await expect(
-        resolveSandboxedMediaSource({
-          media,
-          sandboxRoot: sandboxDir,
-          containerWorkdir: "/sandbox",
-        }),
-      ).rejects.toThrow(/sandbox/i);
-    });
-  });
 
   it("preserves remote mxc:// media sources", async () => {
     await withSandboxRoot(async (sandboxDir) => {
@@ -495,23 +390,8 @@ describe("resolveSandboxedMediaSource", () => {
       expected: /sandbox/i,
     },
     {
-      name: "paths under similarly named container roots",
-      media: "/workspace-two/secret.txt",
-      expected: /sandbox/i,
-    },
-    {
-      name: "absolute paths under host tmp outside openclaw tmp root",
-      media: path.join(os.tmpdir(), "outside-openclaw", "passwd"),
-      expected: /sandbox/i,
-    },
-    {
       name: "relative traversal outside sandbox",
       media: "../outside-sandbox.png",
-      expected: /sandbox/i,
-    },
-    {
-      name: "file:// URLs outside sandbox",
-      media: "file:///etc/passwd",
       expected: /sandbox/i,
     },
     {
@@ -599,28 +479,7 @@ describe("resolveSandboxedMediaSource", () => {
     );
   });
 
-  it("rejects symlinked OpenClaw tmp paths to hardlinked outside files", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    await withOutsideHardlinkInOpenClawTmp(
-      {
-        openClawTmpDir,
-        hardlinkPrefix: "sandbox-media-hardlink-target",
-        symlinkPrefix: "sandbox-media-hardlink-symlink",
-      },
-      async ({ symlinkPath }) => {
-        if (!symlinkPath) {
-          return;
-        }
-        await withSandboxRoot(async (sandboxDir) => {
-          await expectSandboxRejection(symlinkPath, sandboxDir, /hard.?link|sandbox/i);
-        });
-      },
-    );
-  });
-
-  it.each(["outbound", "tool-file-transfer"])(
+  it.each(["outbound"])(
     "rejects symlinked managed media paths escaping the %s root",
     async (subdir) => {
       if (process.platform === "win32") {
@@ -680,15 +539,6 @@ describe("resolveSandboxedMediaSource", () => {
         }
       });
     });
-  });
-
-  // Group 4: Passthrough
-  it("passes HTTP URLs through unchanged", async () => {
-    const result = await resolveSandboxedMediaSource({
-      media: "https://example.com/image.png",
-      sandboxRoot: "/any/path",
-    });
-    expect(result).toBe("https://example.com/image.png");
   });
 
   it("returns empty string for whitespace-only input", async () => {

@@ -2,12 +2,14 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
-import { applyProviderAuthConfigPatch } from "./provider-auth-choice-helpers.js";
+import { applyProviderAuthConfigPatch as applySdkAuthPatch } from "../plugin-sdk/provider-auth.js";
+import { applyProviderAuthConfigPatchWithNormalization } from "./provider-auth-choice-helpers.js";
+import type { ProviderAuthResult } from "./provider-authentication.types.js";
 
 const providerConfigNormalizer = ({ providerConfig }: { providerConfig: ModelProviderConfig }) =>
   providerConfig;
 
-describe("applyProviderAuthConfigPatch", () => {
+describe("applyProviderAuthConfigPatchWithNormalization", () => {
   const base = {
     agents: {
       defaults: {
@@ -23,7 +25,7 @@ describe("applyProviderAuthConfigPatch", () => {
 
   it("merges default model maps by default so other providers survive login", () => {
     const patch = { agents: { defaults: { models: { "openai/gpt-5.5": {} } } } };
-    const next = applyProviderAuthConfigPatch(base, patch);
+    const next = applyProviderAuthConfigPatchWithNormalization(base, patch);
     expect(next.agents?.defaults?.models).toEqual({
       ...base.agents.defaults.models,
       "openai/gpt-5.5": {},
@@ -31,77 +33,33 @@ describe("applyProviderAuthConfigPatch", () => {
     expect(next.agents?.defaults?.model).toEqual(base.agents.defaults.model);
   });
 
-  it("does not turn primary and fallback refs into per-model config entries", () => {
-    const next = applyProviderAuthConfigPatch(
-      {
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-5.5",
-              fallbacks: ["anthropic/claude-opus-4-6"],
-            },
-          },
-        },
-      },
-      { agents: { defaults: { models: { "openai/gpt-5.6-sol": {} } } } },
-    );
-
-    expect(next.agents?.defaults?.models).toEqual({
-      "openai/gpt-5.6-sol": {},
-    });
-  });
-
-  it("replaces the per-model config only when replaceDefaultModels is set", () => {
+  it("ignores undefined deletions under blocked __proto__ keys without mutating input", () => {
+    const blockedKey = "__proto__";
+    const config = { [blockedKey]: { retained: "before" } };
+    const baseLocal = {
+      plugins: { entries: { example: { config } } },
+    } satisfies OpenClawConfig;
     const patch = {
-      agents: {
-        defaults: {
-          models: {
-            "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
-            "openai/gpt-5.2": {},
-          },
+      plugins: {
+        entries: {
+          example: { config: { [blockedKey]: { retained: undefined } } },
         },
       },
     };
-    const next = applyProviderAuthConfigPatch(base, patch, { replaceDefaultModels: true });
-    expect(next.agents?.defaults?.models).toEqual(patch.agents.defaults.models);
-    expect(next.agents?.defaults?.model).toEqual(base.agents.defaults.model);
+
+    const next = applyProviderAuthConfigPatchWithNormalization(baseLocal, patch);
+
+    expect(config[blockedKey]).toEqual({ retained: "before" });
+    expect(next.plugins?.entries?.example?.config?.[blockedKey]).toEqual({ retained: "before" });
   });
-
-  it("drops prototype-pollution keys from the merge", () => {
-    const patch = JSON.parse('{"__proto__":{"polluted":true},"agents":{"defaults":{}}}');
-    const next = applyProviderAuthConfigPatch(base, patch);
-    expect(next.agents?.defaults?.models).toEqual(base.agents.defaults.models);
-    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
-    expect(Object.getPrototypeOf(next).polluted).toBeUndefined();
-  });
-
-  it.each(["__proto__", "constructor", "prototype"])(
-    "ignores undefined deletions under blocked %s keys without mutating input",
-    (blockedKey) => {
-      const config = { [blockedKey]: { retained: "before" } };
-      const baseLocal = {
-        plugins: { entries: { example: { config } } },
-      } satisfies OpenClawConfig;
-      const patch = {
-        plugins: {
-          entries: {
-            example: { config: { [blockedKey]: { retained: undefined } } },
-          },
-        },
-      };
-
-      const next = applyProviderAuthConfigPatch(baseLocal, patch);
-
-      expect(config[blockedKey]).toEqual({ retained: "before" });
-      expect(next.plugins?.entries?.example?.config?.[blockedKey]).toEqual({ retained: "before" });
-    },
-  );
 
   it("drops prototype-pollution keys from opt-in model replacement", () => {
     const patch = JSON.parse(
       '{"agents":{"defaults":{"models":{"__proto__":{"polluted":true},"claude-cli/claude-sonnet-4-6":{"alias":"Sonnet","params":{"constructor":{"polluted":true},"maxTokens":12000}}}}}}',
     );
-    const next = applyProviderAuthConfigPatch(base, patch, { replaceDefaultModels: true });
+    const next = applyProviderAuthConfigPatchWithNormalization(base, patch, {
+      replaceDefaultModels: true,
+    });
     const models = next.agents?.defaults?.models;
     expect(models).toEqual({
       "claude-cli/claude-sonnet-4-6": {
@@ -112,89 +70,6 @@ describe("applyProviderAuthConfigPatch", () => {
     expect(Object.hasOwn(models ?? {}, "__proto__")).toBe(false);
     expect(Object.getPrototypeOf(Object.assign({}, models)).polluted).toBeUndefined();
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
-  });
-
-  it("preserves nested merge and replacement contracts without mutating inputs", () => {
-    const config = {
-      merged: { keep: "base", replace: "before" },
-      scalar: "before",
-      array: ["before"],
-      nullified: { keep: "before" },
-      replaced: { keep: "before" },
-      removed: "before",
-    };
-    const baseLocal = {
-      plugins: { entries: { example: { config } } },
-    } satisfies OpenClawConfig;
-    const before = structuredClone(baseLocal);
-    const replacement = JSON.parse(
-      '[{"safe":"after","__proto__":{"polluted":true},"constructor":{"polluted":true},"nested":{"prototype":{"polluted":true},"keep":true}}]',
-    );
-    replacement[0].optional = undefined;
-    const patch = {
-      plugins: {
-        entries: {
-          example: {
-            config: {
-              merged: { replace: "after" },
-              scalar: { added: true, removed: undefined },
-              array: { added: true },
-              nullified: null,
-              replaced: replacement,
-              removed: undefined,
-            },
-          },
-        },
-      },
-    };
-
-    const next = applyProviderAuthConfigPatch(baseLocal, patch);
-
-    expect(next.plugins?.entries?.example?.config).toStrictEqual({
-      merged: { keep: "base", replace: "after" },
-      scalar: { added: true },
-      array: { added: true },
-      nullified: null,
-      replaced: [{ safe: "after", nested: { keep: true }, optional: undefined }],
-    });
-    expect(baseLocal).toEqual(before);
-    expect(Object.hasOwn(replacement[0], "__proto__")).toBe(true);
-    expect(Object.hasOwn(Object.prototype, "polluted")).toBe(false);
-  });
-
-  it("keeps normal recursive merges for unrelated provider auth patch fields", () => {
-    const baseLocal = {
-      agents: {
-        defaults: {
-          contextPruning: {
-            mode: "cache-ttl",
-            ttl: "30m",
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-    const patch = {
-      agents: {
-        defaults: {
-          contextPruning: {
-            ttl: "1h",
-          },
-        },
-      },
-    };
-
-    const next = applyProviderAuthConfigPatch(baseLocal, patch);
-
-    expect(next).toEqual({
-      agents: {
-        defaults: {
-          contextPruning: {
-            mode: "cache-ttl",
-            ttl: "1h",
-          },
-        },
-      },
-    });
   });
 
   it("deletes provider auth fields marked undefined by auth patches", () => {
@@ -224,7 +99,9 @@ describe("applyProviderAuthConfigPatch", () => {
       },
     };
 
-    const next = applyProviderAuthConfigPatch(baseLocal, patch, { providerConfigNormalizer });
+    const next = applyProviderAuthConfigPatchWithNormalization(baseLocal, patch, {
+      providerConfigNormalizer,
+    });
     const provider = next.models?.providers?.["microsoft-foundry"] as
       | Record<string, unknown>
       | undefined;
@@ -234,40 +111,118 @@ describe("applyProviderAuthConfigPatch", () => {
     expect(provider).not.toHaveProperty("headers");
   });
 
-  it("normalizes retired Google Gemini model refs from provider config patches", () => {
-    const patch = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "google/gemini-3-pro-preview",
-            fallbacks: ["google/gemini-3-pro-preview", "openai/gpt-5.5"],
-          },
-          models: {
-            "google/gemini-3-pro-preview": {
-              alias: "gemini",
-              params: { thinking: "high" },
-            },
-            "google/gemini-3.1-pro-preview": {
-              params: { maxTokens: 12_000 },
-            },
+  it("deletes individual auth headers while retaining other provider headers", () => {
+    const provider = {
+      baseUrl: "https://provider.example/v1",
+      headers: { Authorization: "Bearer old-key", "X-Deployment": "keep" },
+      request: { headers: { "X-Custom-Auth": "old-key", "X-Route": "keep" } },
+      models: [],
+    };
+    const patch: ProviderAuthResult["configPatch"] = {
+      models: {
+        providers: {
+          fixture: {
+            ...provider,
+            headers: { Authorization: undefined },
+            request: { headers: { "X-Custom-Auth": undefined } },
           },
         },
       },
     };
-
-    const next = applyProviderAuthConfigPatch({}, patch);
-
-    expect(next.agents?.defaults?.model).toEqual({
-      primary: "google/gemini-3.1-pro-preview",
-      fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
+    const next = applySdkAuthPatch({ models: { providers: { fixture: provider } } }, patch);
+    expect(next.models?.providers?.fixture).toMatchObject({
+      headers: { "X-Deployment": "keep" },
+      request: { headers: { "X-Route": "keep" } },
     });
-    expect(next.agents?.defaults?.models).toEqual({
-      "google/gemini-3.1-pro-preview": {
-        alias: "gemini",
-        params: { thinking: "high", maxTokens: 12_000 },
-      },
-    });
+    expect(next.models?.providers?.fixture?.headers).not.toHaveProperty("Authorization");
+    expect(next.models?.providers?.fixture?.request?.headers).not.toHaveProperty("X-Custom-Auth");
   });
+
+  it.each(["litellm", "LiteLLM"] as const)(
+    "preserves fresh %s fields and canonical unchanged fields from a whole-config auth result",
+    (updatedKey) => {
+      const model: ModelProviderConfig["models"][number] = {
+        id: "local-model",
+        name: "Local model",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 2048,
+      };
+      const canonical: ModelProviderConfig = {
+        baseUrl: "https://canonical.example/v1",
+        apiKey: "canonical-key",
+        headers: { "x-old": "remove" },
+        params: { canonicalKeep: true, shared: "canonical" },
+        models: [{ ...model, params: { canonicalValue: null, shared: "canonical" } }],
+      };
+      const alias: ModelProviderConfig = {
+        baseUrl: "https://alias.example/v1",
+        apiKey: "alias-key",
+        params: { aliasKeep: true, shared: "alias" },
+        request: { headers: { "x-route": "keep" } },
+        models: [
+          {
+            ...model,
+            params: { aliasValue: null, shared: "alias", rows: [{ id: "same", stale: true }] },
+          },
+        ],
+      };
+      const baseLocal = { models: { providers: { litellm: canonical, LiteLLM: alias } } };
+      const sourceRow = baseLocal.models.providers[updatedKey];
+      // Auth plugins may return the whole config, including unchanged duplicate rows.
+      const patch = {
+        models: {
+          providers: {
+            ...baseLocal.models.providers,
+            [updatedKey]: {
+              ...sourceRow,
+              baseUrl: "https://selected.example/v1",
+              apiKey: "selected-key",
+              headers: undefined,
+              params: { ...sourceRow.params, selected: true },
+              models: [
+                {
+                  ...model,
+                  params: {
+                    ...sourceRow.models[0]?.params,
+                    selectedValue: null,
+                    rows: [{ id: "same", selected: true }],
+                  },
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      const next = applyProviderAuthConfigPatchWithNormalization(baseLocal, patch, {
+        providerConfigNormalizer,
+      });
+
+      expect(next.models?.providers).toEqual({
+        litellm: {
+          baseUrl: "https://selected.example/v1",
+          apiKey: "selected-key",
+          params: { canonicalKeep: true, aliasKeep: true, shared: "canonical", selected: true },
+          request: alias.request,
+          models: [
+            {
+              ...model,
+              params: {
+                canonicalValue: null,
+                aliasValue: null,
+                shared: "canonical",
+                selectedValue: null,
+                rows: [{ id: "same", selected: true }],
+              },
+            },
+          ],
+        },
+      });
+    },
+  );
 
   it("normalizes retired Google Gemini per-agent refs from provider config patches", () => {
     const patch = {
@@ -288,7 +243,7 @@ describe("applyProviderAuthConfigPatch", () => {
       },
     };
 
-    const next = applyProviderAuthConfigPatch({}, patch);
+    const next = applyProviderAuthConfigPatchWithNormalization({}, patch);
 
     expect(next.agents?.entries?.ops?.model).toEqual({
       primary: "google/gemini-3.1-pro-preview",
@@ -298,24 +253,6 @@ describe("applyProviderAuthConfigPatch", () => {
       "google/gemini-3.1-pro-preview": {
         alias: "ops-gemini",
       },
-    });
-  });
-
-  it("normalizes retired Google Gemini keys when replacing provider model maps", () => {
-    const patch = {
-      agents: {
-        defaults: {
-          models: {
-            "google/gemini-3-pro-preview": {},
-          },
-        },
-      },
-    };
-
-    const next = applyProviderAuthConfigPatch(base, patch, { replaceDefaultModels: true });
-
-    expect(next.agents?.defaults?.models).toEqual({
-      "google/gemini-3.1-pro-preview": {},
     });
   });
 
@@ -343,7 +280,9 @@ describe("applyProviderAuthConfigPatch", () => {
       },
     } satisfies OpenClawConfig;
 
-    const next = applyProviderAuthConfigPatch({}, patch, { providerConfigNormalizer });
+    const next = applyProviderAuthConfigPatchWithNormalization({}, patch, {
+      providerConfigNormalizer,
+    });
 
     expect(next.models?.providers?.google?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
     expect(next.models?.providers?.google?.api).toBe("openai-completions");
@@ -373,7 +312,9 @@ describe("applyProviderAuthConfigPatch", () => {
       },
     } satisfies OpenClawConfig;
 
-    const next = applyProviderAuthConfigPatch({}, patch, { providerConfigNormalizer });
+    const next = applyProviderAuthConfigPatchWithNormalization({}, patch, {
+      providerConfigNormalizer,
+    });
 
     expect(next.models?.providers?.kilocode?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
   });

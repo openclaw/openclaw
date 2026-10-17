@@ -1,8 +1,13 @@
 /**
  * Session lifecycle state derivation tests.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
+import { projectSessionEntryPatch } from "../config/sessions/session-entry-patch-operation.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 
 const persistenceMocks = vi.hoisted(() => ({
@@ -23,8 +28,12 @@ vi.mock("../plugins/loader-runtime-load.js", () => {
 
 // mock-isolation: Exercise lifecycle reducers without native persistence or transcript writes.
 vi.mock("../config/sessions/session-accessor.js", () => ({
-  patchSessionEntryTarget: persistenceMocks.updateSessionEntry,
   appendSessionTranscriptReport: vi.fn(async () => ({ ok: true, value: undefined })),
+}));
+
+// mock-isolation: Exercise the lifecycle reducer without opening the session database.
+vi.mock("../config/sessions/session-accessor.sqlite-entry.js", () => ({
+  applySessionEntryTargetOperation: persistenceMocks.updateSessionEntry,
 }));
 
 // mock-isolation: Controlled entries isolate lifecycle projection from database admission.
@@ -78,6 +87,9 @@ function persistLifecycle(
 }
 
 describe("session lifecycle state", () => {
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+  afterEach(clearRuntimeConfigSnapshot);
+
   const goalEntry: SessionEntry = {
     sessionId: "goal-session",
     updatedAt: 1_000,
@@ -550,10 +562,12 @@ describe("session lifecycle state", () => {
     const resumed = await persistLifecycle(yielded, {
       ts: 2_100,
       sessionId: "session-id",
+      runId: "yielded-recovery-run",
       data: { phase: "start", startedAt: 2_100 },
     });
     expect(resumed.status).toBeUndefined();
     expect(resumed.endedAt).toBeUndefined();
+    expect(resumed.startedAt).toBe(2_100);
   });
 
   it("does not infer pending continuation from end_turn without explicit yield metadata", async () => {
@@ -652,9 +666,12 @@ describe("session lifecycle state", () => {
     });
     persistenceMocks.updateSessionEntry.mockImplementation(
       async (...args: Parameters<UpdateSessionEntry>) => {
-        const [, update, options] = args;
-        const patch = await update(structuredClone(storedEntry), {
-          existingEntry: structuredClone(storedEntry),
+        const [scope, operation, options] = args;
+        const patch = projectSessionEntryPatch({
+          existing: storedEntry,
+          writeBase: storedEntry,
+          sessionKey: scope.target.canonicalKey,
+          operation,
         });
         options?.workerGuard?.source?.();
         if (patch) {

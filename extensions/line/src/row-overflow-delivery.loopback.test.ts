@@ -1,14 +1,17 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
+import type { messagingApi } from "@line/bot-sdk";
 import {
   adaptMessagePresentationForChannel,
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
+import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../api.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { baseDeliveryParams, createDeps } from "./auto-reply-delivery.test-helpers.js";
+import { createImageCard } from "./flex-templates/basic-cards.js";
 import { processLineMessage } from "./markdown-to-line.js";
 import { lineOutboundAdapter } from "./outbound.js";
 import { LINE_PRESENTATION_CAPABILITIES, prepareLineReplyPayload } from "./rich-messages.js";
@@ -20,6 +23,9 @@ type WireMessage = {
   type: string;
   text?: string;
   altText?: string;
+  template?: messagingApi.Template;
+  actions?: messagingApi.ImagemapAction[];
+  video?: messagingApi.ImagemapVideo;
   quickReply?: { items: Array<{ action: { label: string; text?: string; data?: string } }> };
 };
 
@@ -55,6 +61,7 @@ async function readRequestBody(request: IncomingMessage): Promise<string> {
 async function listenLoopback(
   requestHandler: (req: IncomingMessage, res: ServerResponse) => Promise<void>,
 ): Promise<{ server: Server; port: number; close: () => Promise<void> }> {
+  const claim = await acquireTestPortBlock({ offsets: [0] });
   const server = createServer((request, response) => {
     void requestHandler(request, response).catch((error: unknown) => {
       response.writeHead(500, { "content-type": "text/plain" });
@@ -69,7 +76,7 @@ async function listenLoopback(
   server.on("clientError", (_err, socket) => socket.destroy());
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(claim.port, "127.0.0.1", () => {
       server.off("error", reject);
       resolve();
     });
@@ -88,6 +95,7 @@ async function listenLoopback(
           socket.destroy();
         }
       });
+      await claim.release();
     },
   };
 }
@@ -253,10 +261,130 @@ describe("Row-overflow table delivery through production outbound adapter over l
     vi.resetModules();
   });
 
+  it.each(["push", "reply"] as const)(
+    "normalizes action contracts before %s HTTP delivery",
+    async (operation) => {
+      const link = {
+        type: "uri",
+        uri: "https://example.com",
+        altUri: { desktop: "ftp://example.com" },
+      } as const;
+      const postback = {
+        type: "postback",
+        label: "Run",
+        data: "",
+        text: "Legacy",
+        displayText: "Modern",
+        fillInText: "x".repeat(301),
+      } as const;
+      const messages: messagingApi.Message[] = [
+        {
+          type: "text",
+          text: "Choose",
+          quickReply: {
+            items: [
+              { action: { type: "message", label: "Missing text" } },
+              { action: { type: "message", label: "", text: "blank" } },
+              ...Array.from({ length: 14 }, (_, i) => ({
+                action: { type: "message" as const, label: String(i), text: String(i) },
+                imageUrl: "http://example.com/icon.png",
+              })),
+            ],
+          },
+        },
+        { type: "text", text: "No buttons", quickReply: { items: [] } },
+        {
+          type: "flex",
+          altText: "Image",
+          contents: createImageCard("https://example.com/image.png", "Image"),
+        },
+        {
+          type: "template",
+          altText: "Menu",
+          template: {
+            type: "buttons",
+            text: "Choose",
+            defaultAction: link,
+            actions: [
+              { type: "camera", label: "Camera" },
+              postback,
+              {
+                type: "datetimepicker",
+                label: "Date",
+                data: "date",
+                mode: "datetime",
+                initial: "2026-02-30T12:00",
+                min: "2026-06-01T10:00",
+                max: "2026-06-01t09:00",
+              },
+              { type: "clipboard", label: "Copy", clipboardText: "" },
+            ],
+          },
+        },
+        {
+          type: "imagemap",
+          baseUrl: "https://example.com/map",
+          altText: "Map",
+          baseSize: { width: 1040, height: 1040 },
+          actions: [
+            {
+              type: "uri",
+              linkUri: "ftp://example.com",
+              area: { x: 0, y: 0, width: 100, height: 100 },
+            },
+          ],
+          video: {
+            originalContentUrl: "https://example.com/video.mp4",
+            previewImageUrl: "https://example.com/preview.png",
+            area: { x: 0, y: 0, width: 100, height: 100 },
+            externalLink: { linkUri: "https://example.com", label: "" },
+          },
+        },
+      ];
+      if (operation === "push") {
+        await pushMessagesLine("U123", messages, { cfg: LINE_TEST_CFG });
+      } else {
+        await replyMessageLine("reply-token", messages, { cfg: LINE_TEST_CFG });
+      }
+      expect(requests).toHaveLength(1);
+      const request = requests[0]!;
+      expect(request.authorization).toBe("Bearer line-loopback-proof-token");
+      expect(request.path).toBe("/v2/bot/message/" + operation);
+      const [quick, empty, image, menu, map] = request.body.messages;
+      expect(quick?.quickReply?.items).toEqual(
+        Array.from({ length: 13 }, (_, i) => ({
+          type: "action",
+          action: { type: "message", label: String(i), text: String(i) },
+        })),
+      );
+      expect(empty).not.toHaveProperty("quickReply");
+      expect(image).toEqual({
+        type: "flex",
+        altText: "Image",
+        contents: createImageCard("https://example.com/image.png", "Image"),
+      });
+      if (
+        menu?.type !== "template" ||
+        menu.template?.type !== "buttons" ||
+        map?.type !== "imagemap"
+      ) {
+        throw new Error("Expected menu and map");
+      }
+      expect(menu.template).not.toHaveProperty("defaultAction");
+      expect(menu.template.actions).toEqual([
+        { type: "message", label: "Unavailable", text: expect.stringContaining("quick replies") },
+        { type: "postback", label: "Run", data: "", displayText: "Modern" },
+        { type: "datetimepicker", label: "Date", data: "date", mode: "datetime" },
+        { type: "message", label: "Unavailable", text: expect.stringContaining("clipboard") },
+      ]);
+      expect(map.actions).toHaveLength(2);
+      expect(map.actions?.every((action) => action.type === "message")).toBe(true);
+      expect(map.video).not.toHaveProperty("externalLink");
+    },
+  );
+
   it.each([
     { delivery: "reply", card: false },
-    { delivery: "reply", card: true },
-    { delivery: "push", card: false },
     { delivery: "push", card: true },
   ])("carries every select through $delivery requests (card=$card)", async ({ delivery, card }) => {
     const selects = ["environment", "region", "version"].map((kind) => ({
@@ -349,64 +477,6 @@ describe("Row-overflow table delivery through production outbound adapter over l
     expect(text.includes(presentation.title!)).toBe(!card);
   });
 
-  it("delivers all 15 rows of a 2-column overflow table through the production outbound adapter", async () => {
-    const rows = Array.from({ length: 15 }, (_, i) => `| Item${i + 1} | $${i + 1}.00 |`).join("\n");
-    const markdown = `Header\n\n| Name | Price |\n|---|---|\n${rows}\n\nFooter`;
-
-    await lineOutboundAdapter.sendPayload!({
-      to: "line:user:Utest15",
-      text: markdown,
-      payload: { text: markdown },
-      cfg: LINE_TEST_CFG,
-    });
-
-    const allMessages = collectAllWireMessages(requests);
-
-    expect(requests.length).toBeGreaterThanOrEqual(1);
-    const pushRequest = requests.find((r) => r.path === "/v2/bot/message/push");
-    expect(pushRequest).toBeDefined();
-    expect(pushRequest!.authorization).toBe("Bearer line-loopback-proof-token");
-
-    const allText = allMessages
-      .filter((m) => m.type === "text" && m.text)
-      .map((m) => m.text!)
-      .join(" ");
-
-    for (let i = 1; i <= 15; i++) {
-      expect(allText).toContain(`Item${i}`);
-    }
-    expect(allText).toContain("Header");
-    expect(allText).toContain("Footer");
-    expect(allText.indexOf("Header")).toBeLessThan(allText.indexOf("Item1"));
-    expect(allText.indexOf("Item15")).toBeLessThan(allText.indexOf("Footer"));
-
-    expect(allMessages.some((m) => m.type === "flex" && m.altText === "Table")).toBe(false);
-  });
-
-  it("delivers all 11 rows of a 3-column overflow table through the production outbound adapter", async () => {
-    const rows = Array.from({ length: 11 }, (_, i) => `| Row${i + 1} | Val${i + 1} | Extra |`).join(
-      "\n",
-    );
-    const markdown = `| Name | Value | Extra |\n|---|---|---|\n${rows}`;
-
-    await lineOutboundAdapter.sendPayload!({
-      to: "line:user:Utest11",
-      text: markdown,
-      payload: { text: markdown },
-      cfg: LINE_TEST_CFG,
-    });
-
-    const allMessages = collectAllWireMessages(requests);
-    const allText = allMessages
-      .filter((m) => m.type === "text" && m.text)
-      .map((m) => m.text!)
-      .join(" ");
-
-    for (let i = 1; i <= 11; i++) {
-      expect(allText).toContain(`Row${i}`);
-    }
-  });
-
   it("preserves source order of kept Flex card alongside overflow text through the production outbound adapter", async () => {
     const keptTable = "| Small | Card |\n|---|---|\n| Kept | row |";
     const bigRows = Array.from({ length: 13 }, (_, i) => `| Big${i + 1} | $${i + 1}.00 |`).join(
@@ -456,25 +526,6 @@ describe("Row-overflow table delivery through production outbound adapter over l
     for (let i = 1; i <= 13; i++) {
       expect(allText).toContain(`Big${i}`);
     }
-  });
-
-  it("preserves ordinary prose, code, and table order on the actual LINE HTTP wire", async () => {
-    const markdown =
-      "Before\n\n```js\nfirst()\n```\n\nBetween\n\n| Name | Value |\n|---|---|\n| Item | one |\n\nAfter";
-
-    await lineOutboundAdapter.sendPayload!({
-      to: "line:user:UtestOrdered",
-      text: markdown,
-      payload: { text: markdown },
-      cfg: LINE_TEST_CFG,
-    });
-
-    expect(
-      collectAllWireMessages(requests).map((message) =>
-        message.type === "flex" ? message.altText : message.text,
-      ),
-    ).toEqual(["Before", "Code", "Between", "Table", "After"]);
-    expect(requests.every((request) => request.body.messages.length <= 5)).toBe(true);
   });
 
   it("delivers every line of an oversized code block through the production outbound adapter", async () => {

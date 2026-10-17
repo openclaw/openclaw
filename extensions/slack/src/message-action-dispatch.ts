@@ -49,26 +49,16 @@ function readSlackForceDocument(params: Record<string, unknown>): boolean {
   );
 }
 
-function resolveSlackPresentationText(
-  content: string | undefined,
-  presentation: ReturnType<typeof normalizeMessagePresentation>,
-): string {
-  const hasStructuredData = presentation?.blocks.some(
-    (block) => block.type === "chart" || block.type === "table",
-  );
-  return hasStructuredData
-    ? renderSlackMessagePresentationFallbackText({ text: content, presentation })
-    : (content ?? "");
-}
-
 function renderSlackActionPresentation(
+  content: string | undefined,
   presentation: ReturnType<typeof normalizeMessagePresentation>,
 ): {
   blocks?: SlackBlock[];
+  text: string;
   usesPresentationTextFallback: boolean;
 } {
   if (!presentation) {
-    return { usesPresentationTextFallback: false };
+    return { text: content ?? "", usesPresentationTextFallback: false };
   }
   const needsCompleteTextFallback = presentation.blocks.some(
     (block) =>
@@ -82,6 +72,11 @@ function renderSlackActionPresentation(
   const blocks = usesPresentationTextFallback ? undefined : renderedBlocks;
   return {
     ...(blocks?.length ? { blocks } : {}),
+    text:
+      usesPresentationTextFallback ||
+      presentation.blocks.some((block) => block.type === "chart" || block.type === "table")
+        ? renderSlackMessagePresentationFallbackText({ text: content, presentation })
+        : (content ?? ""),
     usesPresentationTextFallback,
   };
 }
@@ -162,7 +157,7 @@ export async function handleSlackMessageAction(params: {
         action: "sendMessage",
         to,
         content: content ?? "",
-        mediaUrl: mediaUrl ?? undefined,
+        mediaUrl,
         ...(readSlackForceDocument(actionParams) ? { forceDocument: true } : {}),
         threadTs: resolveSlackThreadTsValue({ replyToId: replyTo, threadId }),
         ...(topLevel ? { topLevel: true } : {}),
@@ -226,13 +221,13 @@ export async function handleSlackMessageAction(params: {
     });
     const content = readStringParam(actionParams, "message", { allowEmpty: true });
     const presentation = normalizeMessagePresentation(actionParams.presentation);
-    const renderedPresentation = renderSlackActionPresentation(presentation);
     // Slack hides top-level text when blocks are present on updates. Keep an
     // unrenderable presentation text-only so its complete fallback stays visible.
-    const blocks = renderedPresentation.blocks;
-    const accessibleContent = renderedPresentation.usesPresentationTextFallback
-      ? renderSlackMessagePresentationFallbackText({ text: content, presentation })
-      : resolveSlackPresentationText(content, presentation);
+    const {
+      blocks,
+      text: accessibleContent,
+      usesPresentationTextFallback,
+    } = renderSlackActionPresentation(content, presentation);
     const tableMode = resolveMarkdownTableMode({
       cfg,
       channel: "slack",
@@ -243,7 +238,7 @@ export async function handleSlackMessageAction(params: {
       countSlackTextUtf8Bytes(normalizeSlackOutboundText(accessibleContent, { tableMode })) >
         SLACK_EDIT_TEXT_MAX_BYTES
     ) {
-      const editSubject = renderedPresentation.usesPresentationTextFallback
+      const editSubject = usesPresentationTextFallback
         ? "Slack presentation fallback"
         : "Slack edit";
       throw new Error(
@@ -304,8 +299,8 @@ export async function handleSlackMessageAction(params: {
     return await invokeSlackAction({
       action: "downloadFile",
       fileId,
-      channelId: channelId ?? undefined,
-      threadId: threadId ?? undefined,
+      channelId,
+      threadId,
     });
   }
 
@@ -340,7 +335,7 @@ export async function handleSlackMessageAction(params: {
         "",
       filename: readStringParam(actionParams, "filename"),
       title: readStringParam(actionParams, "title"),
-      threadTs: threadId ?? undefined,
+      threadTs: threadId,
       ...(readSlackForceDocument(actionParams) ? { forceDocument: true } : {}),
       ...(topLevel ? { topLevel: true } : {}),
     });

@@ -4,6 +4,7 @@ import { NON_ENV_SECRETREF_MARKER } from "./provider-auth-runtime.js";
 import {
   buildLiveModelProviderConfig,
   buildOpenAICompatibleLiveModelProviderConfig,
+  buildOpenAICompatibleLiveProviderCatalog,
   buildOpenAICompatibleProviderFamilyCatalog,
   clearLiveCatalogCacheForTests,
   fetchLiveProviderModelIds,
@@ -42,6 +43,45 @@ function buildFetchGuard(body: unknown): {
 }
 
 describe("provider-catalog-live-runtime", () => {
+  it.each(["id"])(
+    "retains raw %s identities for read-time diagnostics before chat filtering",
+    async (idField) => {
+      const { fetchGuard, fetchGuardMock } = buildFetchGuard({
+        data: [
+          { [idField]: "chat-local", object: "model" },
+          { id: "local/chat-local", object: "model" },
+          { id: "embed-local", object: "embedding" },
+        ],
+      });
+      const result = await buildOpenAICompatibleLiveProviderCatalog({
+        providerId: "local",
+        discoveryMode: "strict",
+        fetchGuard,
+        providerConfig: {
+          api: "openai-completions",
+          baseUrl: "http://127.0.0.1:1234/v1",
+          models: [],
+        },
+      });
+      expect(result?.outcomes).toEqual([
+        {
+          provider: "local",
+          status: "ready",
+          modelIdCatalog: {
+            baseUrl: "http://127.0.0.1:1234/v1",
+            modelIds: ["chat-local", "local/chat-local", "embed-local"],
+          },
+        },
+      ]);
+      expect(result).toMatchObject({
+        provider: {
+          models: expect.arrayContaining([expect.objectContaining({ id: "chat-local" })]),
+        },
+      });
+      expect(fetchGuardMock).toHaveBeenCalledOnce();
+    },
+  );
+
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
   });
@@ -596,25 +636,6 @@ describe("provider-catalog-live-runtime", () => {
     const headers = fetchGuardMock.mock.calls[0]?.[0].init?.headers;
     expect(headers).toBeInstanceOf(Headers);
     expect((headers as Headers).get("authorization")).toBe("Bearer provider-key");
-  });
-
-  it("keeps authored static metadata for live ids already in the provider seed", async () => {
-    const { fetchGuard } = buildFetchGuard({
-      data: [{ id: "chat-v1", object: "model", context_window: 1 }],
-    });
-    const seed = buildModel("chat-v1");
-
-    const provider = await buildOpenAICompatibleLiveModelProviderConfig({
-      providerId: "provider",
-      providerConfig: {
-        api: "openai-completions",
-        baseUrl: "https://provider.example.test/v1",
-        models: [seed],
-      },
-      fetchGuard,
-    });
-
-    expect(provider.models).toEqual([seed]);
   });
 
   it("supports provider-specific model-list paths and headers", async () => {

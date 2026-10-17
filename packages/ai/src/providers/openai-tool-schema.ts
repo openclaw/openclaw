@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeToolParameterSchema,
   shouldOmitEmptyArrayItems,
@@ -6,7 +5,9 @@ import {
 } from "./agent-tools-parameter-schema.js";
 import type { OpenAIToolProjection } from "./openai-tool-projection.js";
 import { findOpenAIStrictSchemaViolations } from "./openai-tool-schema-compat.js";
+import { getPublishedRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
 import { createToolSchemaNormalizationCache } from "./tool-schema-normalization-cache.js";
+import { normalizeToolSchema } from "./tool-schema-normalization.js";
 
 export { findOpenAIStrictSchemaViolations } from "./openai-tool-schema-compat.js";
 
@@ -19,6 +20,7 @@ const MAX_STRICT_SCHEMA_CACHE_ENTRIES_PER_SCHEMA = 8;
 const strictOpenAISchemaCache = createToolSchemaNormalizationCache<unknown>(
   MAX_STRICT_SCHEMA_CACHE_ENTRIES_PER_SCHEMA,
 );
+const publishedStrictCompatibility = new WeakMap<object, boolean>();
 
 function resolveToolSchemaModelCompat(
   compat: ToolSchemaCompatInput | null | undefined,
@@ -64,58 +66,16 @@ export function normalizeStrictOpenAIJsonSchema(
       return cached;
     }
   }
-  const normalized = normalizeStrictOpenAIJsonSchemaRecursive(
+  const normalized = normalizeToolSchema(
     normalizeToolParameterSchema(schemaInput, {
       modelCompat: resolveToolSchemaModelCompat(modelCompat),
     }),
-    0,
+    "strict",
   );
   // Preserve object identity per input and compatibility key.
   return cacheable
     ? strictOpenAISchemaCache.remember(schemaInput, cacheKey, normalized)
     : normalized;
-}
-
-function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number): unknown {
-  if (Array.isArray(schema)) {
-    let changed = false;
-    const normalized = schema.map((entry) => {
-      const next = normalizeStrictOpenAIJsonSchemaRecursive(entry, depth);
-      changed ||= next !== entry;
-      return next;
-    });
-    return changed ? normalized : schema;
-  }
-  if (!schema || typeof schema !== "object") {
-    return schema;
-  }
-
-  const record = schema as Record<string, unknown>;
-  let changed = false;
-  const normalized = Object.fromEntries<unknown>(
-    Object.entries(record).map(([key, value]) => {
-      const next = normalizeStrictOpenAIJsonSchemaRecursive(
-        value,
-        key === "properties" ? depth : depth + 1,
-      );
-      changed ||= next !== value;
-      return [key, next];
-    }),
-  );
-
-  if (normalized.type === "object") {
-    const properties = isRecord(normalized.properties) ? normalized.properties : undefined;
-    if (properties && Object.keys(properties).length === 0 && !Array.isArray(normalized.required)) {
-      normalized.required = [];
-      changed = true;
-    }
-    if (depth === 0 && !("additionalProperties" in normalized)) {
-      normalized.additionalProperties = false;
-      changed = true;
-    }
-  }
-
-  return changed ? normalized : schema;
 }
 
 /** Normalizes tool parameters using strict OpenAI rules only when strict mode is active. */
@@ -133,10 +93,21 @@ export function normalizeOpenAIStrictToolParameters<T>(
 
 /** Returns whether a schema already satisfies OpenAI strict tool-schema constraints. */
 export function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
-  return (
+  const published = getPublishedRuntimeToolInputSchema(schema);
+  const publishedSchema = published?.projection.schema;
+  const source =
+    publishedSchema && typeof publishedSchema === "object" ? publishedSchema : undefined;
+  const cached = source ? publishedStrictCompatibility.get(source) : undefined;
+  if (cached !== undefined) {
+    return cached;
+  }
+  const compatible =
     findOpenAIStrictSchemaViolations(normalizeStrictOpenAIJsonSchema(schema), "parameters")
-      .length === 0
-  );
+      .length === 0;
+  if (source) {
+    publishedStrictCompatibility.set(source, compatible);
+  }
+  return compatible;
 }
 
 type OpenAIStrictToolSchemaDiagnostic = {

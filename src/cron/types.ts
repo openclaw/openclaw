@@ -5,6 +5,7 @@ import type {
   CronRunLogEntry as CronRunLogWireEntry,
   CronUpdateParams as CronUpdateParamsWire,
 } from "../../packages/gateway-protocol/src/schema/cron.types.js";
+import type { AgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 /** Cron scheduling, delivery, diagnostics, and store data contracts. */
 import type { FailoverReason } from "../agents/failover/signal.js";
@@ -150,8 +151,9 @@ export type CronRunDiagnostics = NonNullable<CronRunLogWireEntry["diagnostics"]>
 /** Explicit execution-error disposition used consistently by retry, history, and alerts. */
 export type CronRunErrorClassification =
   | { kind: "reason"; reason: FailoverReason }
-  /** `reportedByAgent`: the run's final answer reported AUTOMATION_FAILED; no runtime fault. */
-  | { kind: "permanent"; reportedByAgent?: true };
+  | { kind: "permanent" }
+  /** Operator cancellation or lifecycle retirement, never an execution timeout. */
+  | { kind: "aborted" };
 
 /** Closed producer-authored facts allowed in operator-facing failure notifications. */
 export type CronFailureNotificationDetail =
@@ -175,10 +177,39 @@ export type CronRunOutcome = {
   /** Transient internal detail; never project into persisted or public cron events. */
   failureNotificationDetail?: CronFailureNotificationDetail;
   summary?: string;
+  /** Producer-authored terminal reply fact without exposing reply text. */
+  replyDisposition?: AgentRunTerminalReplySnapshot["disposition"];
   sessionId?: string;
   sessionKey?: string;
   diagnostics?: CronRunDiagnostics;
 };
+
+export type CronRunDeliveryResult = {
+  /** True after verified delivery, including a matching messaging-tool send. */
+  delivered?: boolean;
+  /** Delivery may have been attempted without a confirmed transport acknowledgment. */
+  deliveryAttempted?: boolean;
+  deliveryError?: string;
+  deliverySuppressionReason?: NormalizeReplySkipReason;
+  deliveryState?: CronResolvedDeliveryState;
+  delivery?: CronDeliveryTrace;
+};
+
+export type CronTriggerEvalOutcome = {
+  fired: boolean;
+  stateChanged: boolean;
+  state?: unknown;
+  busy?: true;
+};
+
+export type CronJobExecutionResult = CronRunOutcome &
+  CronRunTelemetry &
+  CronRunDeliveryResult & {
+    nextCheck?: CronNextCheckProposal;
+    scriptStateChanged?: boolean;
+    scriptState?: unknown;
+    triggerEval?: CronTriggerEvalOutcome;
+  };
 
 /** One run's requested delay before the same paced job runs again. */
 export type CronNextCheckProposal = {
@@ -290,7 +321,7 @@ export type CronJobState = Omit<
   failureAlertIncident?: {
     signature?: string;
     scope: "run" | "trigger";
-    repair?: { atMs: number; alerted?: true };
+    repair?: { atMs: number; deadlineAtMs?: number; settledAtMs?: number; alerted?: true };
   };
   /** Fences notification settlement when multiple cycles share a timestamp. */
   lastFailureNotificationId?: string;
@@ -376,6 +407,8 @@ export type CronToolsAllowProvenance =
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
 export type CronStoredJob = CronJob & {
+  /** Captured inference owner; private and independent of scheduled tool authority. */
+  inferenceBinding?: import("./inference-binding.js").CronInferenceBinding;
   /** Creation-bound destination for isolated results when no external route exists. */
   sourceConversation?: {
     sessionKey: string;
@@ -408,6 +441,7 @@ type CronJobStateInput = Partial<
     | "autoDisabled"
     | "scheduleActivatedAtMs"
     | "streamSourceIdentity"
+    | "sourceIdentity"
     | "runningReceiptId"
     | "runningScheduleChangeId"
   >

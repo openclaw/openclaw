@@ -119,12 +119,12 @@ describe("SqliteBackedMatrixSyncStore", () => {
 
   it("keeps a cache generation intact while another store instance publishes", async () => {
     const runtime = getMatrixRuntime();
-    const openStore = runtime.state.openKeyedStore.bind(runtime.state);
+    const openStore = runtime.state.openKeyedStoreV2.bind(runtime.state);
     const metadataRead = createDeferred<void>();
     const releaseRead = createDeferred<void>();
     const writeStarted = vi.fn();
     let pauseReads = false;
-    vi.spyOn(runtime.state, "openKeyedStore").mockImplementation((options) => {
+    vi.spyOn(runtime.state, "openKeyedStoreV2").mockImplementation((options) => {
       const store = openStore(options);
       if (options.namespace !== "sync-cache") {
         return store;
@@ -179,10 +179,10 @@ describe("SqliteBackedMatrixSyncStore", () => {
 
   it("joins deletion before freezing or persisting newer sync data", async () => {
     const runtime = getMatrixRuntime();
-    const openStore = runtime.state.openKeyedStore.bind(runtime.state);
+    const openStore = runtime.state.openKeyedStoreV2.bind(runtime.state);
     const deleting = createDeferred<void>();
     const release = createDeferred<void>();
-    vi.spyOn(runtime.state, "openKeyedStore").mockImplementation((options) => {
+    vi.spyOn(runtime.state, "openKeyedStoreV2").mockImplementation((options) => {
       const store = openStore(options);
       return {
         ...store,
@@ -214,7 +214,7 @@ describe("SqliteBackedMatrixSyncStore", () => {
     expect(restored.getSyncToken()).toBe("new");
   });
 
-  it.each(["bulk", "legacy"])(
+  it.each(["legacy"])(
     "restores multi-chunk sync data and rejects a bad digest with %s stores",
     async (mode) => {
       const response = createSyncResponse("large-cursor");
@@ -266,22 +266,41 @@ describe("SqliteBackedMatrixSyncStore", () => {
         cleanShutdown: false,
       });
       await expect(hasMatrixSyncCacheStateInStore(readParams)).resolves.toBe(false);
-      const laterChunk = sync
-        .entries()
-        .find((row) => row.value.kind === "sync-chunk" && row.value.index === 11);
-      if (!laterChunk) {
-        throw new Error("expected sync chunk 11");
-      }
+    },
+  );
+
+  it.each(["bulk"])(
+    "validates selected chunk JSON after earlier gaps with %s stores",
+    async (mode) => {
+      const options = openMatrixSyncCacheStoreOptions(storageRoot);
       const { db } = openOpenClawStateDatabase({ env: options.env });
-      db.prepare("UPDATE plugin_state_entries SET value_json = ? WHERE entry_key = ?").run(
-        "invalid JSON",
-        laterChunk.key,
+      // Seed corrupt bytes before the runtime publishes any cached chunk facts.
+      const insert = db.prepare(
+        "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES ('matrix', 'sync-cache', ?, ?, 1, NULL)",
       );
+      insert.run(
+        "current:meta",
+        JSON.stringify({ kind: "meta", version: 1, generation: "corrupt", chunkCount: 2 }),
+      );
+      insert.run("current:sync:corrupt:1", "invalid JSON");
+      const sync = createPluginStateSyncKeyedStoreForTests<MatrixSyncCacheRecord>(
+        "matrix",
+        options,
+      );
+      const asyncStore = createPluginStateKeyedStoreForTests<MatrixSyncCacheRecord>(
+        "matrix",
+        options,
+      );
+      const readParams = {
+        storageRootDir: storageRoot,
+        store: mode === "bulk" ? asyncStore : { lookup: (key: string) => asyncStore.lookup(key) },
+      };
+      const firstKey = "current:sync:corrupt:0";
       for (const early of ["invalid", "missing"]) {
         if (early === "invalid") {
-          sync.register(chunk.key, { ...chunk.value, index: -1 });
+          sync.register(firstKey, { kind: "sync-chunk", index: -1, data: "" });
         } else {
-          sync.delete(chunk.key);
+          sync.delete(firstKey);
         }
         expect(await readPersistedStoreFromStore(readParams)).toMatchObject({
           savedSync: null,
@@ -289,7 +308,7 @@ describe("SqliteBackedMatrixSyncStore", () => {
         });
         await expect(hasMatrixSyncCacheStateInStore(readParams)).resolves.toBe(false);
       }
-      sync.register(chunk.key, chunk.value);
+      sync.register(firstKey, { kind: "sync-chunk", index: 0, data: "" });
       await expect(readPersistedStoreFromStore(readParams)).rejects.toMatchObject({
         code: "PLUGIN_STATE_CORRUPT",
       });
@@ -319,7 +338,7 @@ describe("SqliteBackedMatrixSyncStore", () => {
 
   it("fails persistence instead of silently dropping sync data when sqlite is unavailable", async () => {
     const runtime = getMatrixRuntime();
-    vi.spyOn(runtime.state, "openKeyedStore").mockImplementation(() => {
+    vi.spyOn(runtime.state, "openKeyedStoreV2").mockImplementation(() => {
       throw new Error("sqlite unavailable");
     });
 

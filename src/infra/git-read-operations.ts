@@ -43,7 +43,12 @@ export type GitReadOperations = {
     >;
   };
   "checkout.revision": {
-    input: { root: string; includeIndex: boolean; branch?: string; defaultBranch?: string };
+    input: {
+      root: string;
+      scope: "context" | "refs" | "worktree";
+      branch?: string;
+      defaultBranch?: string;
+    };
     output: string | null;
   };
   "checkout.context": {
@@ -75,4 +80,3 @@ export type GitReadOperations = {
 export type GitReadOperation = {
   [K in keyof GitReadOperations]: { type: K; input: GitReadOperations[K]["input"] };
 }[keyof GitReadOperations];
-export type GitReadOperationResult = GitReadOperations[keyof GitReadOperations]["output"];

@@ -16,7 +16,7 @@ type TelegramAutoSelectFamilyDecision = {
 let wsl2SyncCache: boolean | undefined;
 
 type TelegramDnsResultOrderDecision = {
-  value: "ipv4first" | "verbatim";
+  value: "ipv4first" | "ipv6first" | "verbatim";
   source: string;
 };
 
@@ -39,27 +39,30 @@ export function resolveTelegramAutoSelectFamilyDecision(params?: {
   if ((wsl2SyncCache ??= isWSL2Sync())) {
     return { value: false, source: "default-wsl2" };
   }
-  return { value: true, source: "default-node22" };
+  // DNS ordering alone does not stop Node from racing the other address family.
+  return {
+    value: resolveTelegramDnsResultOrderDecision(params).value !== "ipv4first",
+    source: "default-dns-order",
+  };
 }
 
 // Default to IPv4 first to work around networks with broken IPv6 connectivity.
 export function resolveTelegramDnsResultOrderDecision(params?: {
   network?: TelegramNetworkConfig;
 }): TelegramDnsResultOrderDecision {
-  const envValue = normalizeOptionalLowercaseString(process.env[TELEGRAM_DNS_RESULT_ORDER_ENV]);
-  if (envValue === "ipv4first" || envValue === "verbatim") {
-    return { value: envValue, source: `env:${TELEGRAM_DNS_RESULT_ORDER_ENV}` };
+  for (const [source, read] of [
+    [`env:${TELEGRAM_DNS_RESULT_ORDER_ENV}`, () => process.env[TELEGRAM_DNS_RESULT_ORDER_ENV]],
+    ["config", () => params?.network?.dnsResultOrder],
+    ["process-default", () => dns.getDefaultResultOrder()],
+  ] as const) {
+    const value = normalizeOptionalLowercaseString(read());
+    if (
+      value === "ipv4first" ||
+      value === "verbatim" ||
+      (source === "process-default" && value === "ipv6first")
+    ) {
+      return { value, source };
+    }
   }
-
-  const configValue = normalizeOptionalLowercaseString(params?.network?.dnsResultOrder);
-  if (configValue === "ipv4first" || configValue === "verbatim") {
-    return { value: configValue, source: "config" };
-  }
-
-  const processDefaultValue = normalizeOptionalLowercaseString(dns.getDefaultResultOrder());
-  if (processDefaultValue === "ipv4first" || processDefaultValue === "verbatim") {
-    return { value: processDefaultValue, source: "process-default" };
-  }
-
   return { value: "ipv4first", source: "default-node22" };
 }

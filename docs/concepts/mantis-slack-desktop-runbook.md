@@ -125,7 +125,7 @@ pnpm openclaw qa mantis slack-desktop-smoke \
 ```
 
 Use `--hydrate-mode prehydrated` only when the reused remote workspace already
-has `node_modules` and a built `dist/`. Mantis fails closed otherwise.
+has `node_modules` and a built `dist/`. Mantis refuses to run otherwise.
 
 Prove native Slack approval UI:
 

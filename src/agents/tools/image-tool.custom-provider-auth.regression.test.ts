@@ -6,6 +6,7 @@ import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { buildMediaUnderstandingRegistry } from "../../media-understanding/provider-registry.js";
 import type { MediaUnderstandingProvider } from "../../media-understanding/types.js";
 import type { ImageDescriptionRequest } from "../../plugin-sdk/media-understanding.js";
+import { createAuthProfileStoreFixture } from "../auth-profiles/credential-fixtures.test-support.js";
 import { getApiKeyForModelCore, hasUsableCustomProviderApiKey } from "../model-auth.js";
 import { resolveImageToolFactoryAvailable } from "../openclaw-tools.media-factory-plan.js";
 import { createImageTool } from "./image-tool.js";
@@ -174,6 +175,7 @@ describe("image custom provider auth regression", () => {
       },
       cfg,
       agentDir,
+      store: createAuthProfileStoreFixture({}),
     });
     expect(auth.apiKey).toBe(CONFIG_API_KEY);
     expect(auth.source).toContain("models.json");
@@ -183,6 +185,7 @@ describe("image custom provider auth regression", () => {
       agentDir,
       deferAutoModelResolution: true,
       modelHasVision: false,
+      authProfileStore: createAuthProfileStoreFixture({}),
     });
     expect(typeof tool?.execute).toBe("function");
     expect(tool?.name).toBe("view_image");
@@ -210,6 +213,7 @@ describe("image custom provider auth regression", () => {
       agentDir,
       deferAutoModelResolution: true,
       modelHasVision: false,
+      authProfileStore: createAuthProfileStoreFixture({}),
     });
     await expect(
       tool!.execute("regression-2", {

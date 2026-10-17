@@ -59,6 +59,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   // Hash-only change notice after a persisted config write; content stays
   // behind the operator-scoped config.get.
   "config.changed": [READ_SCOPE],
+  "agent.identity.changed": [READ_SCOPE],
   "users.prefs.changed": [SESSION_READ_SCOPE],
   "mentions.changed": [READ_SCOPE],
   "skills.changed": [READ_SCOPE],
@@ -93,6 +94,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "session.reaction": [SESSION_READ_SCOPE],
   "session.typing": [SESSION_READ_SCOPE],
   "session.tool": [SESSION_READ_SCOPE],
+  "socket.drain": [SESSION_READ_SCOPE],
   // Operator terminal byte/exit streams. Admin-gated to match the terminal.*
   // methods; also targeted to the owning connection at broadcast time.
   "terminal.data": [ADMIN_SCOPE],

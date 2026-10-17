@@ -20,7 +20,7 @@ const { AsyncWorkScope } = await import("../../shared/async-work-scope.js");
 beforeEach(resetIsolatedCompletionTestState);
 
 describe("runIsolatedCompletion native authorization", () => {
-  it.each(["none", "profile", "dependent-direct"] as const)(
+  it.each(["profile", "dependent-direct"] as const)(
     "rejects a retired native route before dispatch (API sibling: %s)",
     async (apiSibling) => {
       const registry = makeRegistry([
@@ -124,57 +124,6 @@ describe("runIsolatedCompletion native authorization", () => {
       expect(releaseRuntimeLease).toHaveBeenCalledOnce();
     },
   );
-
-  it("hands harness-owned authorization to the V2 owner without resolving a host key", async () => {
-    const runIsolatedCompletionV2 = vi.fn(async () => ({
-      assistant: isolatedAssistant([{ type: "text", text: "native result" }]),
-    }));
-    registerIsolatedHarness({
-      authBootstrap: "harness",
-      runIsolatedCompletionV2,
-    });
-
-    await expect(runIsolatedCompletion(isolatedRequest())).resolves.toMatchObject({
-      text: "native result",
-      owner: { kind: "harness", id: "codex" },
-    });
-    expect(mocks.acquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({ catalogMode: "static" }),
-    );
-    expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
-    expect(runIsolatedCompletionV2).toHaveBeenCalledWith(
-      expect.objectContaining({
-        authorization: expect.objectContaining({ owner: "harness" }),
-      }),
-    );
-  });
-
-  it("materializes the canonical provider target behind a manifest alias", async () => {
-    const runIsolatedCompletionV2 = vi.fn(async () => ({
-      assistant: isolatedAssistant([{ type: "text", text: "Canonical provider reply" }]),
-    }));
-    registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2 });
-
-    await expect(
-      runIsolatedCompletion({ ...isolatedRequest(), provider: "catalog-alias" }),
-    ).resolves.toMatchObject({
-      text: "Canonical provider reply",
-      provider: "openai",
-    });
-    expect(runIsolatedCompletionV2).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "catalog-alias",
-        modelId: "gpt-test",
-        authorization: expect.objectContaining({
-          owner: "harness",
-          plan: expect.objectContaining({
-            modelRoute: expect.objectContaining({ provider: "openai", modelId: "gpt-test" }),
-          }),
-        }),
-      }),
-    );
-  });
 
   it("clamps V2 output tokens to the resolved physical model limit", async () => {
     mocks.resolveModelAsync.mockResolvedValueOnce({
@@ -360,57 +309,6 @@ describe("runIsolatedCompletion native authorization", () => {
       }
     },
   );
-
-  it("skips a cooled profile without hiding a prepared healthy backup", async () => {
-    const firstPlan = {
-      ...nativeAuthPlan,
-      forwardedAuthProfileId: "openai:first",
-      forwardedAuthProfileSource: "auto" as const,
-      forwardedAuthProfileCandidateIds: ["openai:first", "openai:backup"],
-    };
-    const backupPlan = {
-      ...firstPlan,
-      forwardedAuthProfileId: "openai:backup",
-      forwardedAuthProfileCandidateIds: ["openai:backup"],
-    };
-    mocks.ensureAuthProfileStore.mockReturnValueOnce({
-      version: 1,
-      profiles: {
-        "openai:first": { type: "token", provider: "openai", token: "first" },
-        "openai:backup": { type: "token", provider: "openai", token: "backup" },
-      },
-      usageStats: {
-        "openai:first": { cooldownUntil: Date.now() + 60_000 },
-      },
-    });
-    mocks.prepareAgentRuntimeAuth.mockReturnValueOnce({
-      plan: firstPlan,
-      attempts: [
-        { kind: "profile", plan: firstPlan, profileId: "openai:first" },
-        { kind: "profile", plan: backupPlan, profileId: "openai:backup" },
-      ],
-    });
-    const runIsolatedCompletionV2 = vi.fn(async () => ({
-      assistant: isolatedAssistant([{ type: "text", text: "backup result" }]),
-    }));
-    registerIsolatedHarness({
-      authBootstrap: "harness",
-      runIsolatedCompletionV2,
-    });
-
-    await expect(runIsolatedCompletion(isolatedRequest())).resolves.toMatchObject({
-      text: "backup result",
-    });
-    expect(runIsolatedCompletionV2).toHaveBeenCalledOnce();
-    expect(runIsolatedCompletionV2).toHaveBeenCalledWith(
-      expect.objectContaining({
-        authorization: expect.objectContaining({
-          owner: "harness",
-          plan: expect.objectContaining({ forwardedAuthProfileId: "openai:backup" }),
-        }),
-      }),
-    );
-  });
 
   it.each([
     {

@@ -35,6 +35,10 @@ const { PreparedModelRuntimeOwnerNotPublishedError } = await vi.importActual<
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
+function runTurn(overrides?: Record<string, unknown>) {
+  return runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture(overrides));
+}
+
 async function setupPublishedGeneration(withAuth = false) {
   const config = {
     ...(withAuth
@@ -98,10 +102,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       verboseDefault: "on" as const,
     };
     const config = {
-      agents: {
-        defaults: { model: "anthropic/claude-opus-4-6" },
-        entries: { main: agent },
-      },
+      agents: { defaults: { model: "anthropic/claude-opus-4-6" }, entries: { main: agent } },
     };
     const admittedConfig = structuredClone(config);
     const selected = { provider: "google", model: "gemini-2.0-flash" };
@@ -123,9 +124,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       return { payloads: [{ text: "summary done" }], meta: { agentMeta: {} } };
     });
 
-    const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentParamsFixture({ cfg: config, agentId: "main" }),
-    );
+    const result = await runTurn({ cfg: config, agentId: "main" });
 
     expect(result.status).toBe("ok");
     expect(acquirePreparedModelRuntimeMock.mock.calls[0]?.[0].config).toBe(config);
@@ -153,10 +152,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       onRuntimeLease?.(dispatchLease);
       return { ...dispatchRuntime, readFullModelCatalog };
     });
-    const selectedGeneration = {
-      ...pluginGeneration,
-      pluginRegistry: createEmptyPluginRegistry(),
-    };
+    const selectedGeneration = { ...pluginGeneration, pluginRegistry: createEmptyPluginRegistry() };
     const afterPreparation = createDeferred();
     let borrowedAfterPreparation: Promise<unknown> | undefined;
     acquirePreparedModelRuntimeMock.mockImplementation(async () => {
@@ -188,9 +184,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       return { payloads: [{ text: "test output" }], meta: { agentMeta: {} } };
     });
 
-    const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentParamsFixture({ cfg: config, agentId: "default" }),
-    );
+    const result = await runTurn({ cfg: config, agentId: "default" });
     expect(result.error).toBeUndefined();
     expect(result.status).toBe("ok");
     const dispatchAdmission = loadPublishedReplyDispatchRuntimeMock.mock.calls[0]?.[0] as {
@@ -239,9 +233,9 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       };
     });
 
-    await expect(
-      runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture({ cfg: config, agentId: "default" })),
-    ).resolves.toMatchObject({ status: "ok" });
+    await expect(runTurn({ cfg: config, agentId: "default" })).resolves.toMatchObject({
+      status: "ok",
+    });
     expect(resolveSessionAuthSelectionMock).toHaveBeenCalledOnce();
     expect(loadPublishedReplyDispatchRuntimeMock).toHaveBeenCalledOnce();
     expect(acquirePreparedModelRuntimeMock.mock.calls[0]?.[1]).toMatchObject({
@@ -315,7 +309,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       },
     });
     const result = await withPluginRuntimeGenerationScope({ metadataSnapshot: ambient }, () =>
-      runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture({ cfg: config })),
+      runTurn({ cfg: config }),
     );
     expect(result.status).toBe("ok");
     expect(cronSession.sessionEntry.estimatedCostUsd).toBe(3);
@@ -341,7 +335,6 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
         throw new Error("continuation fixture failed");
       },
       sync: async () => {},
-      setCliExecutionProvider: async () => {},
       seal: async () => {},
     });
     const release = vi.fn(async () => {});
@@ -350,9 +343,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       [Symbol.asyncDispose]: release,
     });
     try {
-      await expect(runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture())).rejects.toThrow(
-        "continuation fixture failed",
-      );
+      await expect(runTurn()).rejects.toThrow("continuation fixture failed");
       expect(release).toHaveBeenCalledOnce();
       expect(releaseDispatch).toHaveBeenCalledOnce();
     } finally {

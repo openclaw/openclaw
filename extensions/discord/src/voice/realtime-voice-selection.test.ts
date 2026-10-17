@@ -299,9 +299,14 @@ defineDiscordVoiceTests(
 
     it("does not hand cancelled native consult speech to the replacement", async () => {
       useNativeVoices();
-      const [{ DiscordRealtimeSpeakerSession }, { DiscordRealtimePlayer }] = await Promise.all([
+      const [
+        { DiscordRealtimeSpeakerSession },
+        { DiscordRealtimePlayer },
+        { prepareDiscordRealtimeProvider },
+      ] = await Promise.all([
         import("./realtime-speaker-session.js"),
         import("./realtime-player.js"),
+        import("./realtime-speaker-config.js"),
       ]);
       const { entry, manager } = await createJoinedAgentProxyFixture();
       const player = new DiscordRealtimePlayer(entry.audio);
@@ -309,7 +314,7 @@ defineDiscordVoiceTests(
       const cancellation = new AbortController();
       const context = { senderIsOwner: true, speakerLabel: "Owner" };
       const runAgentTurn = vi.fn(() => answer.promise);
-      const createSpeaker = (sessionId: string, voiceOverride: string) =>
+      const createSpeaker = async (sessionId: string, voiceOverride: string) =>
         new DiscordRealtimeSpeakerSession({
           accountId: "default",
           cfg: {},
@@ -318,13 +323,20 @@ defineDiscordVoiceTests(
           mode: "agent-proxy",
           player,
           sessionId,
-          voiceOverride,
+          preparedProvider: await prepareDiscordRealtimeProvider({
+            accountId: "default",
+            agentId: entry.route.agentId,
+            cfg: {},
+            realtimeConfig: { provider: "openai" },
+            isAgentProxy: true,
+            voiceOverride,
+          }),
           runAgentTurn,
           resolveSpeakerContext: async () => context,
           onTerminalError: vi.fn(),
         });
-      const original = createSpeaker("cancelled-consult-source", "marin");
-      const replacement = createSpeaker("cancelled-consult-replacement", "cedar");
+      const original = await createSpeaker("cancelled-consult-source", "marin");
+      const replacement = await createSpeaker("cancelled-consult-replacement", "cedar");
       try {
         await original.connect();
         const sourceBridge = lastRealtimeBridge();
@@ -762,7 +774,7 @@ defineDiscordVoiceTests(
       }
     });
 
-    it("closes candidates on cancellation and aborts retained delegation when the room leaves", async () => {
+    it("closes candidates on cancellation and aborts retained delegation when the manager stops", async () => {
       useNativeVoices();
       const { entry, manager } = await createJoinedAgentProxyFixture();
       const connection = createDeferred<void>();
@@ -796,7 +808,7 @@ defineDiscordVoiceTests(
         const consultation = original.bridgeParams.runAgentConsult!({
           prompt: "Switch voice and check the agenda.",
         });
-        const abandoned = expect(consultation).rejects.toThrow("Discord voice call closed");
+        const abandoned = expect(consultation).rejects.toThrow("Discord voice manager stopped");
         await vi.waitFor(() => expect(selectionOwner().read()).toMatchObject({ voice: "cedar" }));
         await manager.destroy();
         expect(sourceSignal?.aborted).toBe(true);

@@ -221,41 +221,42 @@ export function prepareLegacyWorkspaceStateReset(
   options?: { env?: NodeJS.ProcessEnv; homedir?: () => string },
 ): LegacyWorkspaceResetPlan {
   const sources = resolveLegacyWorkspaceSourcePaths(workspaceDir, options);
-  const candidates = [
-    ...sources.setupStatePaths.map((sourcePath) => ({
-      rootDir: path.dirname(sourcePath),
-      sourcePath,
-      requireAttestationHeader: false,
-    })),
-    ...sources.stateDirAttestationPaths.map((sourcePath) => ({
-      rootDir: path.dirname(path.dirname(sourcePath)),
-      sourcePath,
-      // Hashed paths inside OpenClaw-owned attestation directories are
-      // reserved state. Explicit reset must remove malformed blockers too.
-      requireAttestationHeader: false,
-    })),
-    ...sources.siblingAttestationPaths.map((sourcePath) => ({
-      rootDir: path.dirname(sourcePath),
-      sourcePath,
-      requireAttestationHeader: true,
-    })),
-  ].flatMap((candidate) => [
-    candidate,
-    {
-      ...candidate,
-      sourcePath: `${candidate.sourcePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`,
-      // Sibling claims remain outside OpenClaw-owned roots. Renaming a claimed
-      // marker preserves its header, so require that ownership proof there too.
-      requireAttestationHeader: candidate.requireAttestationHeader,
-    },
-  ]);
+  // Hashed paths are reserved state; sibling markers outside owned roots need a header.
+  const groups = [
+    [sources.setupStatePaths, "workspace"],
+    [sources.stateDirAttestationPaths, "state-dir"],
+    [sources.siblingAttestationPaths, "sibling"],
+  ] as const;
+  const candidates = groups
+    .flatMap(([paths, kind]) =>
+      paths.map((sourcePath) => ({
+        rootDir:
+          kind === "state-dir" ? path.dirname(path.dirname(sourcePath)) : path.dirname(sourcePath),
+        sourcePath,
+        requireAttestationHeader: kind === "sibling",
+      })),
+    )
+    .flatMap((candidate) => [
+      candidate,
+      {
+        ...candidate,
+        sourcePath: `${candidate.sourcePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`,
+        // Sibling claims remain outside OpenClaw-owned roots. Renaming a claimed
+        // marker preserves its header, so require that ownership proof there too.
+        requireAttestationHeader: candidate.requireAttestationHeader,
+      },
+    ]);
   return { candidates };
 }
 
 /** Discard retired workspace files from a pre-removal reset plan. */
 export async function removeLegacyWorkspaceStateForReset(
   plan: LegacyWorkspaceResetPlan,
-  options?: { dryRun?: boolean; assertCurrent?: () => void },
+  options?: {
+    dryRun?: boolean;
+    assertCurrent?: () => void;
+    assertCurrentAsync?: () => Promise<void>;
+  },
 ): Promise<LegacyWorkspaceResetCleanup> {
   const removedPaths: string[] = [];
   const warnings: string[] = [];
@@ -288,8 +289,10 @@ export async function removeLegacyWorkspaceStateForReset(
         }
       }
       if (!options?.dryRun) {
-        options?.assertCurrent?.();
-        await sourceRoot.remove(relativePath);
+        if (options?.assertCurrentAsync) {
+          await options.assertCurrentAsync();
+        }
+        await sourceRoot.remove(relativePath, { assertBeforeMutation: options?.assertCurrent });
       }
       removedPaths.push(sourcePath);
     } catch (error) {

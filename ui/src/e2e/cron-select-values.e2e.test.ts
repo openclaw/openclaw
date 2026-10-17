@@ -7,6 +7,7 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { pickerValue as readPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron select values mocked Gateway E2E",
@@ -180,7 +181,8 @@ suite.define(() => {
           if (narrow) {
             await page.setViewportSize({ width: 1416, height: 707 });
           }
-          await page.getByRole("link", { name: "Agents", exact: true }).click();
+          const pages = await openSidebarPages(page);
+          await pages.getByRole("link", { name: "Agents", exact: true }).click();
           await expect
             .poll(() =>
               scroller.evaluate((element) => getComputedStyle(element).scrollPaddingBlockEnd),
@@ -308,19 +310,21 @@ suite.define(() => {
         const response = await page.goto(`${suite.server.baseUrl}cron`);
         expect(response?.status()).toBe(200);
         await page.locator('[data-test-id="cron-list-tab-activity"]').click();
-        const sortMenu = page.locator("wa-dropdown", { has: page.locator(".cron-run-sort") });
+        const sortMenu = page.locator(".cron-filter-dropdown__details", {
+          has: page.locator(".cron-run-sort"),
+        });
         const sort = page.getByRole("button", { name: "Sort Newest first", exact: true });
         await sort.waitFor({ state: "visible" });
         await sort.click();
-        await sortMenu.locator('wa-dropdown-item[value="asc"]').click();
+        await sortMenu.locator('[data-value="asc"]').click();
         await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
         // Switching tabs recreates the dropdown with the persisted non-first value.
         await page.locator('[data-test-id="cron-tab-all"]').click();
         await page.locator('[data-test-id="cron-list-tab-activity"]').click();
         await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
-        expect(
-          await sortMenu.locator('wa-dropdown-item[value="asc"]').getAttribute("aria-current"),
-        ).toBe("true");
+        expect(await sortMenu.locator('[data-value="asc"]').getAttribute("aria-current")).toBe(
+          "true",
+        );
         await page.locator('[data-test-id="cron-new-task"]').click();
 
         const pickerValue = (selector: string) =>

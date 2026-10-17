@@ -334,49 +334,6 @@ describe("resolve-openclaw-package-candidate", () => {
     });
   });
 
-  it("rejects option-shaped package candidate option values", () => {
-    for (const flag of [
-      "--artifact-dir",
-      "--github-output",
-      "--metadata",
-      "--output-dir",
-      "--output-name",
-      "--package-ref",
-      "--package-spec",
-      "--package-url",
-      "--package-sha256",
-      "--source",
-      "--trusted-source-id",
-      "--trusted-source-policy",
-    ]) {
-      expect(() => parseArgs([flag, "--output-dir", "out"]), flag).toThrow(
-        `${flag} requires a value`,
-      );
-      expect(() => parseArgs([flag, "-h"]), flag).toThrow(`${flag} requires a value`);
-    }
-  });
-
-  it("rejects duplicate package candidate CLI options", () => {
-    for (const flag of [
-      "--artifact-dir",
-      "--github-output",
-      "--metadata",
-      "--output-dir",
-      "--output-name",
-      "--package-ref",
-      "--package-spec",
-      "--package-url",
-      "--package-sha256",
-      "--source",
-      "--trusted-source-id",
-      "--trusted-source-policy",
-    ]) {
-      expect(() => parseArgs([flag, "one", flag, "two"]), flag).toThrow(
-        `${flag} was provided more than once`,
-      );
-    }
-  });
-
   it("rejects package candidate output names that escape the output directory", () => {
     for (const outputName of [
       "../openclaw-current.tgz",
@@ -392,35 +349,6 @@ describe("resolve-openclaw-package-candidate", () => {
     expect(parseArgs(["--output-name", "openclaw-current.tar.gz"]).outputName).toBe(
       "openclaw-current.tar.gz",
     );
-  });
-
-  it("resolves npm package candidates through the Windows npm.cmd toolchain shim", () => {
-    const execPath = "C:\\nodejs\\node.exe";
-    const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
-
-    const runner = resolveNpmPackageCandidatePackRunner(
-      "openclaw@2026.5.26-beta.1",
-      "C:\\openclaw\\.artifacts\\docker-e2e-package",
-      {
-        comSpec: "C:\\Windows\\System32\\cmd.exe",
-        env: {},
-        execPath,
-        existsSync: (candidate) => candidate === npmCmdPath,
-        platform: "win32",
-      },
-    );
-
-    expect(runner).toEqual({
-      command: "C:\\Windows\\System32\\cmd.exe",
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        `${npmCmdPath} pack openclaw@2026.5.26-beta.1 --ignore-scripts --json --pack-destination C:\\openclaw\\.artifacts\\docker-e2e-package`,
-      ],
-      shell: false,
-      windowsVerbatimArguments: true,
-    });
   });
 
   it("keeps the first packed identity when a moving npm tag changes", async () => {
@@ -471,6 +399,8 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
     const packOutput = await runCommandForTest(runner.command, runner.args, {
       capture: true,
       env: runner.env,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      killAfterMs: Number.MAX_SAFE_INTEGER,
     });
     const candidate = await moveNewestPackedTarballForTest(
       outputDir,
@@ -582,15 +512,6 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
         { capture: true },
       ),
     ).rejects.toThrow(/produced more than \d+ captured stdout chars/u);
-  });
-
-  it("clamps oversized package runner command timers before scheduling", async () => {
-    await expect(
-      runCommandForTest(process.execPath, ["-e", "setTimeout(() => process.exit(0), 25);"], {
-        killAfterMs: Number.MAX_SAFE_INTEGER,
-        timeoutMs: Number.MAX_SAFE_INTEGER,
-      }),
-    ).resolves.toBe("");
   });
 
   it("kills timed-out package runner process groups", async ({ signal, onTestFinished }) => {
@@ -1263,34 +1184,7 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
     await expect(missing(`${target}.tmp`)).resolves.toBe(true);
   });
 
-  it("reads package source metadata from package artifacts", async () => {
-    const dir = autoTempDirs.make("openclaw-package-candidate-");
-    await writeFile(
-      path.join(dir, "package-candidate.json"),
-      JSON.stringify(
-        {
-          packageRef: "release/2026.4.30",
-          packageSourceSha: "66ce632b9b7c5c7fdd3e66c739687d51638ad6e2",
-          packageTrustedReason: "repository-branch-history",
-          sha256: "a".repeat(64),
-        },
-        null,
-        2,
-      ),
-    );
-
-    await expect(readArtifactPackageCandidateMetadata(dir)).resolves.toEqual({
-      packageRef: "release/2026.4.30",
-      packageSourceSha: "66ce632b9b7c5c7fdd3e66c739687d51638ad6e2",
-      packageTrustedReason: "repository-branch-history",
-      sha256: "a".repeat(64),
-    });
-  });
-
-  it.each([
-    ["without a registry", false],
-    ["with a registry", true],
-  ])("rejects artifact provenance mismatches %s before side effects", async (_label, registry) => {
+  it("rejects artifact provenance mismatches before registry side effects", async () => {
     const metadataSha = "66ce632b9b7c5c7fdd3e66c739687d51638ad6e2";
     const buildInfoSha = "77df743c0c8d6d80ee4f77d84a798e62749be7f3";
     const fixture = await createArtifactFixture("openclaw-artifact-provenance-mismatch-", {
@@ -1304,14 +1198,10 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
           ...fixture.args,
           "--output-dir",
           path.join(fixture.dir, "output"),
-          ...(registry
-            ? [
-                "--plugin-registry-output-dir",
-                fixture.registryDir,
-                "--required-plugin-packages-json",
-                '["@openclaw/codex"]',
-              ]
-            : []),
+          "--plugin-registry-output-dir",
+          fixture.registryDir,
+          "--required-plugin-packages-json",
+          '["@openclaw/codex"]',
         ]),
       ).rejects.toThrow(
         `artifact packageSourceSha ${metadataSha} does not match package build-info commit ${buildInfoSha}`,

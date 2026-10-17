@@ -2,11 +2,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureRuntimeConfigAsyncReader } from "../src/config/io.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { redactSensitiveText } from "../src/logging/redact.js";
 import { upsertSessionEntry } from "../src/plugin-sdk/session-store-runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../src/plugin-sdk/sqlite-runtime-testing.js";
 import { seedInstalledPluginIndex } from "../src/plugins/test-helpers/installed-plugin-index.js";
+import { VERSION } from "../src/version.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -69,7 +72,7 @@ async function installCodexHarnessFixture(stateDir: string, config: OpenClawConf
     path.join(pluginDir, "package.json"),
     JSON.stringify({
       name: "@openclaw/codex",
-      version: "2026.8.1",
+      version: VERSION,
       type: "module",
       openclaw: { extensions: ["./index.js"] },
     }),
@@ -205,6 +208,7 @@ describe("Gateway copied Codex session resume", () => {
       await installCodexHarnessFixture(instance.stateDir, config);
 
       instance.state.applyEnv();
+      await captureRuntimeConfigAsyncReader()();
       await upsertSessionEntry({
         agentId: "main",
         sessionKey: SESSION_KEY,
@@ -248,7 +252,16 @@ describe("Gateway copied Codex session resume", () => {
                 const history = await client.request<{
                   entries: Array<{ status: string; summary?: string; error?: string }>;
                 }>("cron.runs", { id: job.id, limit: 1 });
-                expect(history.entries).toMatchObject([{ status: "ok", summary: VISIBLE_REPLY }]);
+                const failureDiagnostic =
+                  history.entries[0]?.status === "error"
+                    ? redactSensitiveText(JSON.stringify(history.entries), { mode: "tools" }).slice(
+                        0,
+                        4_000,
+                      )
+                    : undefined;
+                expect(history.entries, failureDiagnostic).toMatchObject([
+                  { status: "ok", summary: VISIBLE_REPLY },
+                ]);
               },
               { timeout: 30_000, interval: 100 },
             );

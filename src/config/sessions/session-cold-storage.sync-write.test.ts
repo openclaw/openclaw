@@ -10,19 +10,21 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import {
-  appendTranscriptEventSync,
   appendTranscriptMessageSync,
   persistCompactionBoundaryWithSessionEntrySync,
   loadTranscriptEventsSync,
   replaceTranscriptSuffixEventsSync,
   replaceSessionEntrySync,
-  replaceTranscriptEvents,
-  replaceTranscriptEventsSync,
 } from "./session-accessor.js";
 import {
   appendTranscriptEventSnapshotSync,
   appendTranscriptMessageSnapshotSync,
 } from "./session-accessor.sqlite-transcript-write.js";
+import {
+  appendTranscriptEventSync,
+  replaceTranscriptEvents,
+  replaceTranscriptEventsSync,
+} from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";

@@ -25,6 +25,20 @@ import {
 
 const NOTIFY_POLL_INTERVAL_MS = 10_000;
 
+// Gateway services and workspace command registries have distinct APIs but share these stores.
+const notifyStateListeners = new Set<() => void>();
+
+async function writeNotifyState<T>(write: () => Promise<T>): Promise<T> {
+  try {
+    return await write();
+  } finally {
+    // Failed replies can follow durable writes; wake the owner to reconcile either outcome.
+    for (const listener of notifyStateListeners) {
+      listener();
+    }
+  }
+}
+
 type PendingPairingRequest = Pick<
   Awaited<ReturnType<typeof listDevicePairing>>["pending"][number],
   "requestId" | "deviceId" | "displayName" | "platform" | "role" | "roles" | "scopes" | "remoteIp"
@@ -60,22 +74,11 @@ export function formatPendingRequests(pending: PendingPairingRequest[]): string 
   return lines.join("\n");
 }
 
-type NotifySubscriberStore = PluginStateKeyedStore<NotifySubscription> & {
-  observe: NonNullable<PluginStateKeyedStore<NotifySubscription>["observe"]>;
-  compareAndApply: NonNullable<PluginStateKeyedStore<NotifySubscription>["compareAndApply"]>;
-};
-
-function openNotifySubscriberStore(api: OpenClawPluginApi): NotifySubscriberStore {
-  const store = api.runtime.state.openKeyedStore<NotifySubscription>({
+function openNotifySubscriberStore(api: OpenClawPluginApi) {
+  return api.runtime.state.openKeyedStoreV2<NotifySubscription>({
     namespace: DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
     maxEntries: DEVICE_PAIR_NOTIFY_SUBSCRIBER_MAX_ENTRIES,
   });
-  if (!store.observe || !store.compareAndApply) {
-    throw new Error(
-      "device-pair notify requires a runtime with atomic plugin state compare-and-apply support",
-    );
-  }
-  return store as NotifySubscriberStore;
 }
 
 function openNotifySeenRequestStore(
@@ -132,7 +135,9 @@ async function registerNotifySubscriber(params: {
   if (!params.refresh && current?.mode === params.mode) {
     return false;
   }
-  await store.register(key, nextNotifySubscription(params.target, params.mode), { assertCurrent });
+  await writeNotifyState(() =>
+    store.register(key, nextNotifySubscription(params.target, params.mode), { assertCurrent }),
+  );
   return true;
 }
 
@@ -180,7 +185,7 @@ function shouldNotifySubscriberForRequest(
   return ts >= subscriber.addedAtMs;
 }
 
-async function notifyPendingPairingRequests(params: { api: OpenClawPluginApi }): Promise<void> {
+async function notifyPendingPairingRequests(params: { api: OpenClawPluginApi }): Promise<boolean> {
   const subscriberStore = openNotifySubscriberStore(params.api);
   const seenRequestStore = openNotifySeenRequestStore(params.api);
   const [subscriberEntries, seenRequestEntries] = await Promise.all([
@@ -188,7 +193,7 @@ async function notifyPendingPairingRequests(params: { api: OpenClawPluginApi }):
     seenRequestStore.entries(),
   ]);
   if (subscriberEntries.length === 0 && seenRequestEntries.length === 0) {
-    return;
+    return false;
   }
   const pairing = await listDevicePairing();
   const subscribers = subscriberEntries.toSorted((a, b) => a.value.addedAtMs - b.value.addedAtMs);
@@ -207,7 +212,7 @@ async function notifyPendingPairingRequests(params: { api: OpenClawPluginApi }):
       !pendingIds.has(requestId) ||
       now - notifiedAtMs > DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS
     ) {
-      await seenRequestStore.delete(entry.key);
+      await writeNotifyState(() => seenRequestStore.delete(entry.key));
       continue;
     }
     notifiedRequestIds.add(requestId);
@@ -257,23 +262,28 @@ async function notifyPendingPairingRequests(params: { api: OpenClawPluginApi }):
         if (subscriber.mode === "once") {
           deliveredOneShots.add(entry.key);
           // A changed row belongs to its writer; never recapture it after delivery.
-          await subscriberStore.compareAndApply(entry.key, observation.comparison, {
-            operation: "delete",
-            action: "delete",
-          });
+          await writeNotifyState(() =>
+            subscriberStore.compareAndApply(entry.key, observation.comparison, {
+              operation: "delete",
+              action: "delete",
+            }),
+          );
         }
       }
 
       if (delivered) {
-        await seenRequestStore.register(
-          notifyRequestStoreKey(request.requestId),
-          { requestId: request.requestId, notifiedAtMs: now },
-          { ttlMs: DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS },
+        await writeNotifyState(() =>
+          seenRequestStore.register(
+            notifyRequestStoreKey(request.requestId),
+            { requestId: request.requestId, notifiedAtMs: now },
+            { ttlMs: DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS },
+          ),
         );
         notifiedRequestIds.add(request.requestId);
       }
     }
   }
+  return true;
 }
 
 type NotifyCommandContext = Pick<
@@ -337,7 +347,9 @@ export async function handleNotifyCommand(params: {
   }
 
   if (params.action === "off" || params.action === "disable") {
-    await subscriberStore.delete(targetStoreKey, { assertCurrent: assertOwnerCurrent });
+    await writeNotifyState(() =>
+      subscriberStore.delete(targetStoreKey, { assertCurrent: assertOwnerCurrent }),
+    );
     return { text: "✅ Pair request notifications disabled for this Telegram chat." };
   }
 
@@ -356,9 +368,7 @@ export async function handleNotifyCommand(params: {
   if (params.action === "status" || params.action === "") {
     const [current, subscriberCount, pending] = await Promise.all([
       subscriberStore.lookup(targetStoreKey),
-      subscriberStore.count
-        ? subscriberStore.count()
-        : subscriberStore.entries().then((entries) => entries.length),
+      subscriberStore.count(),
       listDevicePairing(),
     ]);
     const enabled = Boolean(current);
@@ -383,14 +393,51 @@ export function startPairingNotifier(
   api: OpenClawPluginApi,
   scheduler: PluginServiceSchedulerV1,
 ): void {
-  // Keep the first scan off Gateway readiness; retirement joins delivery and its receipt.
-  scheduler.schedule({
-    id: "notifications",
-    delayMs: NOTIFY_POLL_INTERVAL_MS,
-    everyMs: NOTIFY_POLL_INTERVAL_MS,
-    run: () =>
-      notifyPendingPairingRequests({ api }).catch((err: unknown) => {
-        api.logger.warn(`device-pair: notify poll failed: ${formatErrorMessage(err)}`);
-      }),
+  if (scheduler.signal.aborted) {
+    return;
+  }
+  let scheduled = false;
+  let running = false;
+  let wakeRequested = false;
+
+  function scheduleNext(): void {
+    if (scheduler.signal.aborted || scheduled || running) {
+      return;
+    }
+    scheduled = true;
+    scheduler.schedule({
+      id: "notifications",
+      delayMs: NOTIFY_POLL_INTERVAL_MS,
+      run: async () => {
+        scheduled = false;
+        running = true;
+        wakeRequested = false;
+        let active = true;
+        try {
+          active = await notifyPendingPairingRequests({ api });
+        } catch (err) {
+          api.logger.warn(`device-pair: notify poll failed: ${formatErrorMessage(err)}`);
+        } finally {
+          running = false;
+          if (active || wakeRequested) {
+            scheduleNext();
+          }
+        }
+      },
+    });
+  }
+
+  const wake = () => {
+    if (running) {
+      wakeRequested = true;
+    } else {
+      scheduleNext();
+    }
+  };
+  notifyStateListeners.add(wake);
+  scheduler.signal.addEventListener("abort", () => notifyStateListeners.delete(wake), {
+    once: true,
   });
+  // Keep the first scan off Gateway readiness; retirement joins delivery and its receipt.
+  scheduleNext();
 }

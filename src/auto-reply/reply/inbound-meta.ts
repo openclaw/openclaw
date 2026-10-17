@@ -22,6 +22,8 @@ import {
   neutralizeMarkdownFences,
   selectInboundHistoryContext,
 } from "./channel-prompt-context.js";
+import { CURRENT_MESSAGE_MARKER } from "./history.js";
+import type { HistoryEntry } from "./history.types.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
 
 const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
@@ -71,15 +73,21 @@ function refreshActiveGoalContextText(
   if (!activeGoalContext) {
     return retained.join("\n\n");
   }
-  if (insertionIndex === undefined) {
-    const anchorIndex = retained.findLastIndex((block) => block.startsWith("Current message:"));
-    insertionIndex = anchorIndex >= 0 ? anchorIndex : retained.length;
-  }
-  retained.splice(Math.min(insertionIndex, retained.length), 0, activeGoalContext);
+  const markerIndex = retained.lastIndexOf(CURRENT_MESSAGE_MARKER);
+  // A thread marker can precede a separate inline current-message header.
+  const anchorIndex =
+    markerIndex >= 0
+      ? markerIndex
+      : retained.findLastIndex((block) => block.startsWith("Current message:"));
+  insertionIndex = Math.min(
+    insertionIndex ?? retained.length,
+    anchorIndex >= 0 ? anchorIndex : retained.length,
+  );
+  retained.splice(insertionIndex, 0, activeGoalContext);
   return retained.join("\n\n");
 }
 
-/** Refreshes only a previously injected goal line when a queued turn is admitted. */
+/** Refreshes the captured goal when a queued turn is admitted. */
 export function refreshActiveGoalContext(
   context: CurrentInboundPromptContext | undefined,
   sessionEntry: SessionEntry | undefined,
@@ -154,14 +162,11 @@ function normalizePromptMediaPath(value: unknown): string | undefined {
   return toInboundMediaPath(path.posix.basename(normalized));
 }
 
-function normalizePromptMetadataStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
+function normalizePromptMetadataStringArray(value: string[] | undefined): string[] | undefined {
   const normalized = value
-    .map(normalizePromptMetadataString)
+    ?.map(normalizePromptMetadataString)
     .filter((entry): entry is string => Boolean(entry));
-  return normalized.length > 0 ? normalized : undefined;
+  return normalized?.length ? normalized : undefined;
 }
 
 function sanitizePromptBody(value: unknown): string | undefined {
@@ -201,19 +206,6 @@ function sanitizeTranscriptText(
         });
   const sanitized = neutralizeMarkdownFences(truncated).replace(/\s+/g, " ").trim();
   return kind === "body" ? sanitized || undefined : sanitized;
-}
-
-function formatChannelStructuredContextLabel(label: unknown): string {
-  const normalized = normalizePromptMetadataString(label)?.replace(/\s+/g, " ").trim();
-  return normalized ? `${normalized}:` : "Structured object:";
-}
-
-function formatStructuredContextRelation(value: unknown): string | undefined {
-  const relation = sanitizeTranscriptText(value);
-  if (relation === "around_reply_target") {
-    return "around replied-to message";
-  }
-  return relation?.replaceAll("_", " ");
 }
 
 function formatChatWindowTimestamp(
@@ -268,7 +260,11 @@ function formatChatWindowStructuredContext(
     return undefined;
   }
   const label = sanitizeTranscriptText(entry.label) ?? "Chat window";
-  const relation = formatStructuredContextRelation(entry.payload["relation"]);
+  const rawRelation = sanitizeTranscriptText(entry.payload["relation"]);
+  const relation =
+    rawRelation === "around_reply_target"
+      ? "around replied-to message"
+      : rawRelation?.replaceAll("_", " ");
   const order = sanitizeTranscriptText(entry.payload["order"]);
   const qualifiers = [order, relation].filter(Boolean).join(", ");
   const header = qualifiers ? `${label} (${qualifiers}):` : `${label}:`;
@@ -315,41 +311,20 @@ function isChatWindowHistoryContext(
   return relation === "before_current_message" || relation === "selected_for_current_message";
 }
 
-function buildLocationContextPayload(ctx: TemplateContext): Record<string, unknown> | undefined {
-  const payload = {
-    latitude: typeof ctx.LocationLat === "number" ? ctx.LocationLat : undefined,
-    longitude: typeof ctx.LocationLon === "number" ? ctx.LocationLon : undefined,
-    accuracy_m:
-      typeof ctx.LocationAccuracy === "number" && Number.isFinite(ctx.LocationAccuracy)
-        ? ctx.LocationAccuracy
-        : undefined,
-    source: normalizePromptMetadataString(ctx.LocationSource),
-    is_live: ctx.LocationIsLive === true ? true : undefined,
-    name: sanitizePromptBody(ctx.LocationName),
-    address: sanitizePromptBody(ctx.LocationAddress),
-    caption: sanitizePromptBody(ctx.LocationCaption),
-  };
-  return Object.values(payload).some((value) => value !== undefined) ? payload : undefined;
-}
-
-function readInboundHistoryMediaTypes(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((entry) => {
-    if (!isRecord(entry)) {
-      return [];
-    }
-    const contentType = normalizePromptMetadataString(entry["contentType"]);
-    return contentType ? [contentType] : [];
-  });
+function readInboundHistoryMediaTypes(value: HistoryEntry["media"]): string[] {
+  return (
+    value?.flatMap((entry) => {
+      const contentType = normalizePromptMetadataString(entry.contentType);
+      return contentType ? [contentType] : [];
+    }) ?? []
+  );
 }
 
 function buildReplyChainPayload(
   ctx: TemplateContext,
   envelope?: EnvelopeFormatOptions,
 ): Array<Record<string, unknown>> {
-  if (!Array.isArray(ctx.ReplyChain)) {
+  if (!ctx.ReplyChain) {
     return [];
   }
   return ctx.ReplyChain.flatMap((entry) => {
@@ -518,9 +493,7 @@ export function buildInboundUserContextPrefix(
   const timestampStr = formatConversationTimestamp(ctx.Timestamp, envelope);
   const { boundedHistory, historyLabel, truncated } = selectInboundHistoryContext(ctx);
   const replyChainPayload = buildReplyChainPayload(ctx, envelope);
-  const structuredContext = Array.isArray(ctx.ChannelStructuredContext)
-    ? ctx.ChannelStructuredContext
-    : [];
+  const structuredContext = ctx.ChannelStructuredContext ?? [];
   const chatWindowMessageIds = collectChatWindowMessageIds(structuredContext);
   const replyToId = normalizePromptMetadataString(ctx.ReplyToId);
   const chatWindowCoversReplyContext =
@@ -542,7 +515,7 @@ export function buildInboundUserContextPrefix(
     name: normalizePromptMetadataString(ctx.SenderName),
     username: normalizePromptMetadataString(ctx.SenderUsername),
     e164: senderE164Digits && senderE164Digits === senderIdDigits ? undefined : senderE164,
-    is_bot: typeof ctx.SenderIsBot === "boolean" ? ctx.SenderIsBot : undefined,
+    is_bot: ctx.SenderIsBot,
   };
 
   // Keep volatile conversation/message identifiers in the user-role block so the system
@@ -580,8 +553,7 @@ export function buildInboundUserContextPrefix(
     is_forum: ctx.IsForum === true ? true : undefined,
     is_group_chat: !isDirect ? true : undefined,
     was_mentioned: ctx.WasMentioned === true ? true : undefined,
-    explicitly_mentioned_bot:
-      typeof ctx.ExplicitlyMentionedBot === "boolean" ? ctx.ExplicitlyMentionedBot : undefined,
+    explicitly_mentioned_bot: ctx.ExplicitlyMentionedBot,
     mentioned_user_ids: normalizePromptMetadataStringArray(ctx.MentionedUserIds),
     mentioned_subteam_ids: normalizePromptMetadataStringArray(ctx.MentionedSubteamIds),
     implicit_mention_kinds: normalizePromptMetadataStringArray(ctx.ImplicitMentionKinds),
@@ -621,27 +593,37 @@ export function buildInboundUserContextPrefix(
     title: normalizePromptMetadataString(ctx.ForwardedFromTitle),
     signature: normalizePromptMetadataString(ctx.ForwardedFromSignature),
     chat_type: normalizePromptMetadataString(ctx.ForwardedFromChatType),
-    date_ms: typeof ctx.ForwardedDate === "number" ? ctx.ForwardedDate : undefined,
+    date_ms: ctx.ForwardedDate,
   };
   if (forwardedFrom) {
     appendJsonContext("Forwarded message context:", forwardedContext);
   }
 
-  const locationContext = buildLocationContextPayload(ctx);
-  if (locationContext) {
+  const locationContext = {
+    latitude: ctx.LocationLat,
+    longitude: ctx.LocationLon,
+    accuracy_m:
+      ctx.LocationAccuracy !== undefined && Number.isFinite(ctx.LocationAccuracy)
+        ? ctx.LocationAccuracy
+        : undefined,
+    source: normalizePromptMetadataString(ctx.LocationSource),
+    is_live: ctx.LocationIsLive === true ? true : undefined,
+    name: sanitizePromptBody(ctx.LocationName),
+    address: sanitizePromptBody(ctx.LocationAddress),
+    caption: sanitizePromptBody(ctx.LocationCaption),
+  };
+  if (Object.values(locationContext).some((value) => value !== undefined)) {
     appendJsonContext("Location:", locationContext);
   }
 
   for (const entry of structuredContext) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
     const chatWindow = formatChatWindowStructuredContext(entry, envelope);
     if (chatWindow) {
       blocks.push(chatWindow);
       continue;
     }
-    appendJsonContext(formatChannelStructuredContextLabel(entry.label), {
+    const label = normalizePromptMetadataString(entry.label)?.replace(/\s+/g, " ").trim();
+    appendJsonContext(label ? `${label}:` : "Structured object:", {
       source: normalizePromptMetadataString(entry.source),
       type: normalizePromptMetadataString(entry.type),
       payload: entry.payload,

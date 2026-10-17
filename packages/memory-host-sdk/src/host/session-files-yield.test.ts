@@ -2,10 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import {
-  replaceSessionEntry,
-  replaceTranscriptEventsSync,
-} from "../../../../src/config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../../../../src/config/sessions/session-accessor.js";
+import { replaceTranscriptEventsSync } from "../../../../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { useSessionStoreTempDirs } from "../../../../src/test-utils/session-state-cleanup.js";
 import { buildSessionEntry } from "./session-files.js";
 

@@ -17,7 +17,7 @@ function* legacyOffsets(context: PluginDoctorStateMigrationContext) {
   let after: string | undefined;
   while (true) {
     const rows = read(offsetNamespace, { prefix: "", after, limit: 512 });
-    yield rows.flatMap((entry) => {
+    const legacy = rows.flatMap((entry) => {
       const value = asObjectRecord(entry.value);
       if (!value || (value.version !== 1 && value.version !== 2)) {
         return [];
@@ -44,6 +44,9 @@ function* legacyOffsets(context: PluginDoctorStateMigrationContext) {
         },
       ];
     });
+    if (legacy.length) {
+      yield legacy;
+    }
     const last = rows.at(-1);
     if (rows.length < 512 || !last) {
       return;
@@ -63,20 +66,14 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     phase: "after-session-repair",
     collectBackupResources: () => [],
     detectLegacyState({ context }) {
-      for (const rows of legacyOffsets(context)) {
-        if (rows.length) {
-          return { preview: ["Normalize Telegram SQLite update offsets before account startup."] };
-        }
-      }
-      return null;
+      return legacyOffsets(context).next().done
+        ? null
+        : { preview: ["Normalize Telegram SQLite update offsets before account startup."] };
     },
     async migrateLegacyState({ context }) {
       const result: { changes: string[]; warnings: string[] } = { changes: [], warnings: [] };
       const batches = [...legacyOffsets(context)];
       for (const rows of batches) {
-        if (!rows.length) {
-          continue;
-        }
         if (!context.repairPluginStateEntries) {
           throw new Error("Update OpenClaw to repair Telegram SQLite offsets.");
         }

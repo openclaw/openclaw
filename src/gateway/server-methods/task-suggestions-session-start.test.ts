@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
@@ -43,6 +44,7 @@ describe("session-first task suggestion acceptance", () => {
       const repository = await initializeRepository(root, "project");
       const prompt = "Investigate the service shutdown using retained evidence.";
       const config = { agents: { defaults: { workspace: cwd } } };
+      setRuntimeConfigSnapshot(config);
       const options = {
         config,
         client: operatorClient(),
@@ -125,6 +127,7 @@ describe("session-first task suggestion acceptance", () => {
         }
         const prompt = "Investigate the restarting local service without changing storage.";
         const config = { agents: { defaults: { workspace: cwd } } };
+        setRuntimeConfigSnapshot(config);
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
           { sessionId: "follow-up-source", updatedAt: 1 },

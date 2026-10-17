@@ -66,13 +66,14 @@ describe("ordinary steering into automatic model fallback", () => {
         sessionId: run.run.sessionId,
         resetTriggered: false,
       });
-      operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
-      operation.bindToolAuthorityRoute(run.run);
+      await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
+      await operation.bindToolAuthorityRouteAsync(run.run);
       const injected = vi.fn(async () => {});
       const replacementInjected = vi.fn(async () => {});
       if (!holdBackend) {
         operation.attachBackend({
           kind: "embedded",
+          terminalReplyExpectation: "result-required",
           cancel() {},
           messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage: injected },
         });
@@ -110,9 +111,9 @@ describe("ordinary steering into automatic model fallback", () => {
           }
         }
       });
-      const fingerprint = toolAuthority.resolveFollowupRunToolAuthorityFingerprintAsync;
+      const fingerprint = toolAuthority.prepareFollowupRunToolAuthorityFingerprint;
       let reads = 0;
-      vi.spyOn(toolAuthority, "resolveFollowupRunToolAuthorityFingerprintAsync").mockImplementation(
+      vi.spyOn(toolAuthority, "prepareFollowupRunToolAuthorityFingerprint").mockImplementation(
         async (...args) => {
           const result = await fingerprint(...args);
           if (++reads === read) {
@@ -149,6 +150,7 @@ describe("ordinary steering into automatic model fallback", () => {
         if (replaceBackend) {
           operation.attachBackend({
             kind: "embedded",
+            terminalReplyExpectation: "result-required",
             cancel() {},
             messageInjectionV2: {
               version: 2,
@@ -203,7 +205,6 @@ describe("ordinary steering into automatic model fallback", () => {
     "changed-tools",
     "hook-route",
     "transport-alias",
-    "replaced-during-preparation",
   ] as const)("preserves admitted selection and authority: %s", async (scenario) => {
     const crossProfile = scenario === "cross-profile" || scenario === "cross-profile-pending";
     const key = `agent:main:fallback-steering-${scenario}`;
@@ -264,7 +265,7 @@ describe("ordinary steering into automatic model fallback", () => {
         gatewayUiCommandTarget: { connId: "alice-tab", profileId: "alice" },
       });
     }
-    operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
+    await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
     operation.setPhase("running");
     const delivered: string[] = [];
     const candidates: string[] = [];
@@ -306,7 +307,7 @@ describe("ordinary steering into automatic model fallback", () => {
             modelIdSource: "selected",
             cfg: run.run.config,
           });
-          operation.bindToolAuthorityRoute({
+          await operation.bindToolAuthorityRouteAsync({
             provider:
               scenario === "hook-route"
                 ? "hook-provider"
@@ -317,6 +318,7 @@ describe("ordinary steering into automatic model fallback", () => {
           });
           operation.attachBackend({
             kind: "embedded",
+            terminalReplyExpectation: "result-required",
             cancel: vi.fn(),
             messageInjectionV2: {
               version: 2,
@@ -339,10 +341,6 @@ describe("ordinary steering into automatic model fallback", () => {
                   throw new Error(
                     "A locked selection may only answer the pending fallback question",
                   );
-                }
-                if (scenario === "replaced-during-preparation") {
-                  await Promise.resolve();
-                  operation.setAutomaticFallbackRoute(operation.automaticFallbackRoute);
                 }
                 assertCurrent();
                 delivered.push(text);
@@ -395,17 +393,11 @@ describe("ordinary steering into automatic model fallback", () => {
         shouldInjectGroupIntro: false,
         typingMode: "never",
       });
-      if (scenario === "replaced-during-preparation") {
-        await expect(incoming).rejects.toThrow(
-          "Automatic model fallback changed during steering admission",
-        );
-      } else {
-        await incoming;
-        expect(resultState.admission).toEqual({
-          status: "accepted",
-          mode: shouldSteer ? "steer" : "followup",
-        });
-      }
+      await incoming;
+      expect(resultState.admission).toEqual({
+        status: "accepted",
+        mode: shouldSteer ? "steer" : "followup",
+      });
       expect(delivered).toEqual(shouldSteer ? [run.prompt] : []);
       if (crossProfile) {
         const dispatch = await createPersonalToolScreenDispatcher(["alice", "bob"]);

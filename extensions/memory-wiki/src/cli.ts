@@ -154,7 +154,7 @@ function isBoundedGatewayString(
   return typeof value === "string" && value.length <= maxChars;
 }
 
-function isStringArray(
+function isBoundedGatewayStringArray(
   value: unknown,
   maxChars = GATEWAY_RESPONSE_MAX_STRING_CHARS,
 ): value is string[] {
@@ -240,9 +240,9 @@ function isMemoryWikiImportResult(value: unknown): value is MemoryWikiImportedSo
       "artifactCount",
       "workspaces",
     ]) &&
-    isStringArray(value.pagePaths) &&
+    isBoundedGatewayStringArray(value.pagePaths) &&
     typeof value.indexesRefreshed === "boolean" &&
-    isStringArray(value.indexUpdatedFiles) &&
+    isBoundedGatewayStringArray(value.indexUpdatedFiles) &&
     isBoundedGatewayString(value.indexRefreshReason, GATEWAY_RESPONSE_MAX_CODE_CHARS)
   );
 }
@@ -306,7 +306,7 @@ function parseWikiSearchEnumOption<T extends string>(
   if ((allowed as readonly string[]).includes(value)) {
     return value as T;
   }
-  throw new Error(`Invalid ${label}: ${value}. Expected one of: ${allowed.join(", ")}`);
+  throw invalidCliArgument(`Invalid ${label}: ${value}. Expected one of: ${allowed.join(", ")}`);
 }
 
 async function resolveWikiApplyBody(params: { body?: string; bodyFile?: string }): Promise<string> {
@@ -552,7 +552,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .option("--json", "Print JSON")
     .action(async (opts: WikiJsonOptions) => {
       const { appConfig, config } = requireCommandContext();
-      await syncMemoryWikiImportedSources({ config, appConfig });
+      await syncMemoryWikiImportedSources({ config, appConfig, deferIndexRefresh: true });
       printWikiResult(
         await compileMemoryWikiVault(config),
         opts.json,
@@ -565,7 +565,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .option("--json", "Print JSON")
     .action(async (opts: WikiJsonOptions) => {
       const { appConfig, config } = requireCommandContext();
-      await syncMemoryWikiImportedSources({ config, appConfig });
+      await syncMemoryWikiImportedSources({ config, appConfig, deferIndexRefresh: true });
       printWikiResult(
         await lintMemoryWikiVault(config),
         opts.json,

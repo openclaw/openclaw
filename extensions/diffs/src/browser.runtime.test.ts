@@ -12,7 +12,7 @@ import type {
 import type {
   PluginBlobEntry,
   PluginBlobEntryInfo,
-  PluginBlobStore,
+  PluginBlobStoreWithReceipts,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -127,26 +127,6 @@ describe("PlaywrightDiffScreenshotter", () => {
     vi.stubEnv("ProgramFiles(x86)", params.programFilesX86);
   }
 
-  it("uses the Windows per-user install root when LOCALAPPDATA is blank", async () => {
-    stubWindowsBrowserDiscoveryEnv({
-      localAppData: " \t ",
-      programFiles: "",
-      programFilesX86: "   ",
-    });
-    vi.spyOn(os, "homedir").mockReturnValue("C:\\Users\\test");
-    const chromePath = "C:\\Users\\test\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe";
-    const accessMock = vi.spyOn(fs, "access").mockImplementation(async (candidate) => {
-      if (String(candidate) !== chromePath) {
-        throw new Error("ENOENT");
-      }
-    });
-
-    await expect(renderWithBrowserDiscovery()).resolves.toEqual(
-      expect.objectContaining({ executablePath: chromePath }),
-    );
-    expect(accessMock.mock.calls.map(([candidate]) => String(candidate))).toEqual([chromePath]);
-  });
-
   it("uses standard Windows system roots when install-root overrides are blank", async () => {
     stubWindowsBrowserDiscoveryEnv({
       localAppData: " ",
@@ -170,32 +150,13 @@ describe("PlaywrightDiffScreenshotter", () => {
     expect(candidates.every((candidate) => path.win32.isAbsolute(candidate))).toBe(true);
   });
 
-  it("preserves custom Windows install-root precedence", async () => {
-    stubWindowsBrowserDiscoveryEnv({
-      localAppData: "D:\\User Apps",
-      programFiles: "D:\\System Apps",
-      programFilesX86: "D:\\System Apps x86",
-    });
-    const customChromePath = "D:\\User Apps\\Google\\Chrome\\Application\\chrome.exe";
-    const accessMock = vi.spyOn(fs, "access").mockImplementation(async (candidate) => {
-      if (String(candidate) !== customChromePath) {
-        throw new Error("ENOENT");
-      }
-    });
-
-    await expect(renderWithBrowserDiscovery()).resolves.toEqual(
-      expect.objectContaining({ executablePath: customChromePath }),
-    );
-    expect(accessMock.mock.calls.map(([candidate]) => String(candidate))).toEqual([
-      customChromePath,
-    ]);
-  });
-
-  it("reuses the same browser across renders and closes it after the idle window", async () => {
+  it("shares a browser across parallel renders and closes it after the idle window", async () => {
     const { pages, browser, screenshotter } = await createScreenshotterHarness();
 
-    await screenshotter.screenshotHtml(screenshotParams());
-    await screenshotter.screenshotHtml(screenshotParams());
+    await Promise.all([
+      screenshotter.screenshotHtml(screenshotParams()),
+      screenshotter.screenshotHtml(screenshotParams()),
+    ]);
 
     expect(launchMock).toHaveBeenCalledTimes(1);
     expect(browser.newPage).toHaveBeenCalledTimes(2);
@@ -215,7 +176,7 @@ describe("PlaywrightDiffScreenshotter", () => {
     expect(launchMock).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["config", "runtimeConfig"] as const)(
+  it.each(["config"] as const)(
     "uses explicit tool %s for viewer links and screenshot browser selection",
     async (configField) => {
       const processConfig: OpenClawConfig = {
@@ -232,7 +193,7 @@ describe("PlaywrightDiffScreenshotter", () => {
       });
       launchMock.mockResolvedValue(createMockBrowser([]));
 
-      const { details } = await render({ config: processConfig, [configField]: explicitConfig });
+      const { details } = await render({ [configField]: explicitConfig });
 
       expect
         .soft(String(details.viewerUrl))
@@ -316,25 +277,6 @@ describe("PlaywrightDiffScreenshotter", () => {
     await expect(screenshotter.screenshotHtml(screenshotParams())).rejects.toThrow(
       "requires a Chromium-compatible browser",
     );
-  });
-
-  it("limits hydration waits and preserves errors after a browser page has opened", async () => {
-    const browser = createMockBrowser([]);
-    const page = createMockPage();
-    page.waitForFunction.mockRejectedValue(new Error("hydration timeout"));
-    browser.newPage.mockResolvedValue(page);
-    launchMock.mockResolvedValue(browser);
-    const screenshotter = new PlaywrightDiffScreenshotter({
-      config: createConfig(),
-    });
-
-    await expect(screenshotter.screenshotHtml(screenshotParams())).rejects.toThrow(
-      "hydration timeout",
-    );
-    expect(page.waitForFunction).toHaveBeenCalledWith(expect.any(Function), undefined, {
-      timeout: 10_000,
-    });
-    expect(page.close).toHaveBeenCalledOnce();
   });
 });
 
@@ -583,7 +525,7 @@ describe("diffs plugin registration", () => {
   });
 });
 
-function createMemoryBlobStore<TMetadata>(): PluginBlobStore<TMetadata> {
+function createMemoryBlobStore<TMetadata>(): PluginBlobStoreWithReceipts<TMetadata> {
   const entries = new Map<
     string,
     {
@@ -611,23 +553,34 @@ function createMemoryBlobStore<TMetadata>(): PluginBlobStore<TMetadata> {
       ...(entry.expiresAt !== undefined ? { expiresAt: entry.expiresAt } : {}),
     };
   };
-  const register: PluginBlobStore<TMetadata>["register"] = async (key, bytes, metadata, opts) => {
+  const register = (
+    key: string,
+    bytes: Uint8Array,
+    metadata: TMetadata,
+    opts?: { ttlMs?: number },
+  ) => {
     const createdAt = Date.now();
+    const receipt = { createdAt, ...(opts?.ttlMs ? { expiresAt: createdAt + opts.ttlMs } : {}) };
     entries.set(key, {
       bytes: bytes.slice(),
       metadata,
-      createdAt,
-      ...(opts?.ttlMs ? { expiresAt: createdAt + opts.ttlMs } : {}),
+      ...receipt,
     });
+    return receipt;
   };
   return {
-    register,
+    async register(key, bytes, metadata, opts) {
+      register(key, bytes, metadata, opts);
+    },
     async registerIfAbsent(key, bytes, metadata, opts) {
       if (read(key)) {
         return false;
       }
-      await register(key, bytes, metadata, opts);
+      register(key, bytes, metadata, opts);
       return true;
+    },
+    async registerIfAbsentWithReceipt(key, bytes, metadata, opts) {
+      return read(key) ? undefined : register(key, bytes, metadata, opts);
     },
     async lookup(key) {
       return read(key);

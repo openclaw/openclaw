@@ -4,7 +4,10 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import type { NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 import { createNodeWorkerSupervisor, mocks } from "./node-worker-supervisor.mock.test-support.js";
-import { fixture, recoveryFixture } from "./node-worker-supervisor.settlement.test-support.js";
+import {
+  fixture as settlementFixture,
+  recoveryFixture,
+} from "./node-worker-supervisor.settlement.test-support.js";
 import {
   TEST_WORKER_ENDPOINT,
   testNodeWorkerLaunchIdentity,
@@ -12,6 +15,33 @@ import {
 } from "./node-worker-supervisor.test-support.js";
 
 afterEach(() => vi.resetAllMocks());
+
+function barrier() {
+  const deferred = createDeferred();
+  return { ...deferred, [Symbol.dispose]: () => deferred.resolve() };
+}
+
+async function fixture(...args: Parameters<typeof settlementFixture>) {
+  const value = await settlementFixture(...args);
+  return {
+    ...value,
+    [Symbol.asyncDispose]: () => value.dispose(),
+    async beginSettlement() {
+      value.emitResult.resolve();
+      await value.entered.promise;
+    },
+    snapshot() {
+      return {
+        state: value.readTurn()?.state,
+        done: value.turnSettled(),
+        free: value.snapshots.at(-1),
+        send: mocks.send.mock.calls.length,
+        finish: mocks.launchFinish.mock.calls.length,
+        remove: mocks.remove.mock.calls.length,
+      };
+    },
+  };
+}
 
 it("joins accepted workspace retention before sealing journals on close", async () => {
   const entered = createDeferred();
@@ -119,41 +149,30 @@ it.each(["cancelled", "cleanup-failure"] as const)(
     const launching = supervisor.launch(input, TEST_WORKER_ENDPOINT, controller.signal);
     const launchResult = launching.catch((error: unknown) => error);
     let cancelling: Promise<unknown> | undefined;
-    let cancellationSettled = false;
+    const cancellationSettled = vi.fn();
     try {
       await entered.promise;
-      cancelling = supervisor.cancel(identity).then(
-        (value) => {
-          cancellationSettled = true;
-          return value;
-        },
-        (error: unknown) => {
-          cancellationSettled = true;
-          throw error;
-        },
-      );
+      cancelling = supervisor.cancel(identity).finally(cancellationSettled);
       const cancelResult = cancelling.catch((error: unknown) => error);
       await nextTurn();
-      expect(cancellationSettled).toBe(false);
+      expect(cancellationSettled).not.toHaveBeenCalled();
       releaseClaim.resolve();
       await finishing.promise;
       await nextTurn();
-      expect(cancellationSettled).toBe(false);
+      expect(cancellationSettled).not.toHaveBeenCalled();
       expect(snapshots.at(-1)).toBe(0);
       expect(mocks.prepare).not.toHaveBeenCalled();
       releaseFinish.resolve();
       if (outcome === "cleanup-failure") {
         expect(await cancelResult).toBe(cleanupFailure);
         expect(await launchResult).toBe(cleanupFailure);
-        expect(snapshots.at(-1)).toBe(0);
-        expect(await supervisor.hasActiveWork()).toBe(true);
       } else {
         expect(await cancelResult).toBeUndefined();
         expect(await launchResult).toBeInstanceOf(Error);
         expect(receipt?.state).toBe("cancelled");
-        expect(snapshots.at(-1)).toBe(1);
-        expect(await supervisor.hasActiveWork()).toBe(false);
       }
+      expect(snapshots.at(-1)).toBe(outcome === "cleanup-failure" ? 0 : 1);
+      expect(await supervisor.hasActiveWork()).toBe(outcome === "cleanup-failure");
     } finally {
       releaseClaim.resolve();
       releaseFinish.resolve();
@@ -167,8 +186,7 @@ it("settles retained startup cancellation without joining its own admission", as
   const f = await fixture();
   const controller = new AbortController();
   try {
-    f.emitResult.resolve();
-    await f.entered.promise;
+    await f.beginSettlement();
     f.persistence.resolve();
     await nextTurn();
     expect(await f.supervisor.status(f.identity.launchId)).toMatchObject({ state: "completed" });
@@ -217,8 +235,7 @@ describe("node worker persistence settlement lifetime", () => {
       expect(observed).toEqual([]);
       release.resolve();
       await f.launching;
-      f.emitResult.resolve();
-      await f.entered.promise;
+      await f.beginSettlement();
       await vi.advanceTimersByTimeAsync(0);
       expect(observed).toEqual([]);
       f.persistence.resolve();
@@ -266,8 +283,7 @@ describe("node worker persistence settlement lifetime", () => {
         }
         expect(vi.getTimerCount()).toBe(0);
         expect(mocks.turnFinish).not.toHaveBeenCalled();
-        expect(mocks.send).not.toHaveBeenCalled();
-        expect(f.snapshots.at(-1)).toBe(0);
+        expect(f.snapshot()).toMatchObject({ send: 0, free: 0 });
       } finally {
         await f.dispose();
         vi.useRealTimers();
@@ -275,45 +291,32 @@ describe("node worker persistence settlement lifetime", () => {
     },
   );
 
-  it.each(["ownership read", "terminal admission"] as const)(
-    "retains the stale launch when recovery closes during %s",
-    async (boundary) => {
-      const f = recoveryFixture(true);
-      const entered = createDeferred();
-      const release = createDeferred();
-      if (boundary === "ownership read") {
-        mocks.launchMatching.mockResolvedValueOnce(f.original).mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-          return f.original;
-        });
-      } else {
-        mocks.launchFinish.mockImplementationOnce(async (...args) => {
-          entered.resolve();
-          await release.promise;
-          return f.finish(...args);
-        });
-      }
-      const recovering = f.recover(f.original, true, undefined, true);
-      try {
-        await entered.promise;
-        f.close();
-        release.resolve();
-        expect(await recovering).toEqual(f.original);
-        expect(await f.store.nonterminalCount()).toBe(1);
-        if (boundary === "ownership read") {
-          expect(mocks.remove).not.toHaveBeenCalled();
-          expect(mocks.launchFinish).not.toHaveBeenCalled();
-        }
-      } finally {
-        f.close();
-        release.resolve();
-        await recovering;
-      }
-    },
-  );
+  it("retains the stale launch when recovery closes during ownership read", async () => {
+    const f = recoveryFixture(true);
+    const entered = createDeferred();
+    const release = createDeferred();
+    mocks.launchMatching.mockResolvedValueOnce(f.original).mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return f.original;
+    });
+    const recovering = f.recover(f.original, true, undefined, true);
+    try {
+      await entered.promise;
+      f.close();
+      release.resolve();
+      expect(await recovering).toEqual(f.original);
+      expect(await f.store.nonterminalCount()).toBe(1);
+      expect(mocks.remove).not.toHaveBeenCalled();
+      expect(mocks.launchFinish).not.toHaveBeenCalled();
+    } finally {
+      f.close();
+      release.resolve();
+      await recovering;
+    }
+  });
 
-  it.each(["before admission", "after admission", "unknown settlement"] as const)(
+  it.each(["after admission", "unknown settlement"] as const)(
     "preserves recovery cancellation and terminal authority %s",
     async (boundary) => {
       const f = recoveryFixture();
@@ -339,22 +342,13 @@ describe("node worker persistence settlement lifetime", () => {
         cancellation = f.recover(f.original, true, "cancelled", true);
         const settled = Promise.allSettled([recovering, cancellation]);
         release.resolve();
-        if (boundary === "unknown settlement") {
-          expect(await settled).toEqual([
-            { status: "rejected", reason: unknown },
-            { status: "rejected", reason: unknown },
-          ]);
-          expect(mocks.launchFinish).toHaveBeenCalledOnce();
-          expect(await f.store.nonterminalCount()).toBe(1);
-        } else {
-          const state = boundary === "before admission" ? "cancelled" : "interrupted";
-          expect(await settled).toEqual([
-            { status: "fulfilled", value: expect.objectContaining({ state }) },
-            { status: "fulfilled", value: expect.objectContaining({ state }) },
-          ]);
-          expect(mocks.launchFinish).toHaveBeenCalledTimes(boundary === "before admission" ? 2 : 1);
-          expect(await f.store.nonterminalCount()).toBe(0);
-        }
+        const refused = boundary === "unknown settlement";
+        const expected = refused
+          ? { status: "rejected", reason: unknown }
+          : { status: "fulfilled", value: expect.objectContaining({ state: "interrupted" }) };
+        expect(await settled).toEqual([expected, expected]);
+        expect(mocks.launchFinish).toHaveBeenCalledOnce();
+        expect(await f.store.nonterminalCount()).toBe(refused ? 1 : 0);
       } finally {
         release.resolve();
         await Promise.allSettled([recovering, cancellation]);
@@ -363,34 +357,136 @@ describe("node worker persistence settlement lifetime", () => {
   );
 
   it("retries failed close cleanup before completing shutdown", async () => {
-    const f = await fixture();
+    await using f = await fixture();
     const failure = new Error("Synthetic close cleanup failed");
-    try {
-      f.emitResult.resolve();
-      await f.entered.promise;
-      f.persistence.resolve();
-      await nextTurn();
-      const closing = f.supervisor.close();
-      const rejected = expect(closing).rejects.toBe(failure);
-      await f.removalEntered.promise;
-      f.firstRemoval.reject(failure);
-      await rejected;
-      expect(f.snapshots.at(-1)).toBe(0);
-      f.retryRemoval.resolve();
-      await f.supervisor.close();
-      expect(f.snapshots.at(-1)).toBe(1);
-      expect(await f.supervisor.cancel(f.identity)).toMatchObject({ state: "completed" });
-    } finally {
-      await f.dispose();
-    }
+    await f.beginSettlement();
+    f.persistence.resolve();
+    await nextTurn();
+    const closing = f.supervisor.close();
+    const rejected = expect(closing).rejects.toBe(failure);
+    await f.removalEntered.promise;
+    f.firstRemoval.reject(failure);
+    await rejected;
+    expect(f.snapshots.at(-1)).toBe(0);
+    f.retryRemoval.resolve();
+    await f.supervisor.close();
+    expect(f.snapshots.at(-1)).toBe(1);
+    expect(await f.supervisor.cancel(f.identity)).toMatchObject({ state: "completed" });
   });
 
   it("reconciles an observed replacement after a delayed running receipt", async () => {
-    const f = await fixture();
+    await using f = await fixture();
     const readEntered = createDeferred();
-    const releaseRead = createDeferred();
-    try {
-      mocks.launchFinish.mockRejectedValueOnce(new Error("Synthetic terminal journal failure"));
+    using releaseRead = barrier();
+    mocks.launchFinish.mockRejectedValueOnce(new Error("Synthetic terminal journal failure"));
+    mocks.turnMatching.mockImplementationOnce(async () => {
+      const receipt = f.readReceipt();
+      readEntered.resolve();
+      await releaseRead.promise;
+      return receipt;
+    });
+    const cancellation = f.supervisor.cancel(f.identity);
+    await readEntered.promise;
+    await f.beginSettlement();
+    f.persistence.reject(new Error("Synthetic result journal failure"));
+    f.firstRemoval.resolve();
+    f.retryRemoval.resolve();
+    await nextTurn();
+    expect(f.turnSettled()).toBe(false);
+    releaseRead.resolve();
+    expect(await cancellation).toMatchObject({ state: "cancelled" });
+    expect(f.snapshot()).toMatchObject({ done: true, free: 1 });
+  });
+
+  it("retains turn completion after physical cleanup until terminal persistence succeeds", async () => {
+    await using f = await fixture();
+    const failure = new Error("Synthetic terminal journal failure");
+    mocks.launchFinish.mockRejectedValueOnce(failure);
+    await f.beginSettlement();
+    f.persistence.reject(new Error("Synthetic result journal failure"));
+    f.firstRemoval.resolve();
+    f.retryRemoval.resolve();
+    await nextTurn();
+    expect(f.snapshot()).toMatchObject({ finish: 1, done: false, free: 0 });
+    mocks.launchFinish.mockRejectedValueOnce(failure);
+    await expect(f.supervisor.cancel(f.identity)).rejects.toBe(failure);
+    expect(f.turnSettled()).toBe(false);
+    expect(await f.supervisor.status(f.identity.launchId)).toMatchObject({ state: "failed" });
+    expect(f.snapshot()).toMatchObject({ done: true, free: 1 });
+  });
+
+  it("retries owned container cleanup when cancellation starts during persistence", async () => {
+    await using f = await fixture();
+    const cleanupFailure = new Error("Synthetic container cleanup failed");
+    await f.beginSettlement();
+    const cancellation = f.supervisor.cancel(f.identity);
+    void cancellation.catch(() => undefined);
+    await nextTurn();
+    f.persistence.reject(new Error("Synthetic known write failure"));
+    await f.removalEntered.promise;
+    await nextTurn();
+    expect(mocks.send).toHaveBeenCalledOnce();
+    f.firstRemoval.reject(cleanupFailure);
+    await nextTurn();
+    await expect(cancellation).rejects.toBe(cleanupFailure);
+    expect(f.snapshot()).toMatchObject({ state: "running", done: false, finish: 0, free: 0 });
+    const retry = f.supervisor.cancel(f.identity);
+    await nextTurn();
+    expect(f.snapshot()).toMatchObject({ remove: 2, finish: 0 });
+    f.retryRemoval.resolve();
+    expect(await retry).toMatchObject({ state: "cancelled" });
+    expect(mocks.launchFinish.mock.lastCall?.[0].state).toBe("cancelled");
+    expect(f.snapshot()).toMatchObject({ done: true, free: 1 });
+  });
+
+  it("lets successful persistence win over a reentrant cancellation", async () => {
+    await using f = await fixture();
+    let cancellation: Promise<NodeWorkerLaunchReceipt | undefined> | undefined;
+    f.onPersist.call = () => {
+      cancellation = f.supervisor.cancel(f.identity);
+    };
+    await f.beginSettlement();
+    await nextTurn();
+    expect(cancellation).toBeDefined();
+    expect(f.snapshot()).toMatchObject({ send: 0, remove: 0 });
+    f.persistence.resolve();
+    expect(await cancellation).toMatchObject({ state: "completed" });
+    expect(f.snapshot()).toMatchObject({ done: true, send: 0, remove: 0, free: 0 });
+  });
+
+  it("retains unknown-outcome refusal after rejected persistence", async () => {
+    await using f = await fixture(true);
+    const failure = new SqliteWorkerError(
+      "Synthetic transaction outcome is unknown",
+      "outcome-unknown",
+    );
+    await f.beginSettlement();
+    const cancellation = f.supervisor.cancel(f.identity);
+    const cancelled = vi.fn();
+    void cancellation.then(cancelled, cancelled);
+    await nextTurn();
+    f.persistence.reject(failure);
+    await f.removalEntered.promise;
+    f.firstRemoval.reject(new Error("Synthetic container cleanup failed"));
+    await nextTurn();
+    expect(cancelled).toHaveBeenCalledOnce();
+    await expect(cancellation).rejects.toBe(failure);
+    expect(f.readTurn()?.state).toBe("running");
+    expect(f.snapshot()).toMatchObject({ done: false, send: 0, finish: 0, free: 0 });
+    f.retryRemoval.resolve();
+    await expect(f.supervisor.close()).rejects.toThrow();
+    await expect(f.supervisor.status(f.identity.launchId)).rejects.toBe(failure);
+  });
+
+  it.each(["before settlement", "during settlement"] as const)(
+    "retains completion ownership across a delayed receipt read starting %s",
+    async (timing) => {
+      await using f = await fixture();
+      const readEntered = createDeferred();
+      using releaseRead = barrier();
+      if (timing === "during settlement") {
+        await f.beginSettlement();
+      }
       mocks.turnMatching.mockImplementationOnce(async () => {
         const receipt = f.readReceipt();
         readEntered.resolve();
@@ -398,193 +494,20 @@ describe("node worker persistence settlement lifetime", () => {
         return receipt;
       });
       const cancellation = f.supervisor.cancel(f.identity);
-      await readEntered.promise;
-      f.emitResult.resolve();
-      await f.entered.promise;
-      f.persistence.reject(new Error("Synthetic result journal failure"));
-      f.firstRemoval.resolve();
-      f.retryRemoval.resolve();
-      await nextTurn();
-      expect(f.turnSettled()).toBe(false);
-      releaseRead.resolve();
-      expect(await cancellation).toMatchObject({ state: "cancelled" });
-      expect(f.turnSettled()).toBe(true);
-      expect(f.snapshots.at(-1)).toBe(1);
-    } finally {
-      releaseRead.resolve();
-      await f.dispose();
-    }
-  });
-
-  it("retains turn completion after physical cleanup until terminal persistence succeeds", async () => {
-    const f = await fixture();
-    const failure = new Error("Synthetic terminal journal failure");
-    try {
-      mocks.launchFinish.mockRejectedValueOnce(failure);
-      f.emitResult.resolve();
-      await f.entered.promise;
-      f.persistence.reject(new Error("Synthetic result journal failure"));
-      f.firstRemoval.resolve();
-      f.retryRemoval.resolve();
-      await nextTurn();
-      expect(mocks.launchFinish).toHaveBeenCalledOnce();
-      expect(f.turnSettled()).toBe(false);
-      expect(f.snapshots.at(-1)).toBe(0);
-      mocks.launchFinish.mockRejectedValueOnce(failure);
-      await expect(f.supervisor.cancel(f.identity)).rejects.toBe(failure);
-      expect(f.turnSettled()).toBe(false);
-      expect(await f.supervisor.status(f.identity.launchId)).toMatchObject({ state: "failed" });
-      expect(f.turnSettled()).toBe(true);
-      expect(f.snapshots.at(-1)).toBe(1);
-    } finally {
-      await f.dispose();
-    }
-  });
-
-  it.each([{ timing: "during persistence", expectedState: "cancelled" }] as const)(
-    "retries owned container cleanup when cancellation starts $timing",
-    async ({ timing, expectedState }) => {
-      const f = await fixture();
-      const cleanupFailure = new Error("Synthetic container cleanup failed");
-      let cancellation: Promise<NodeWorkerLaunchReceipt | undefined> | undefined;
-      try {
-        f.emitResult.resolve();
-        await f.entered.promise;
-        if (timing === "during persistence") {
-          cancellation = f.supervisor.cancel(f.identity);
-          void cancellation.catch(() => undefined);
-          await nextTurn();
-        }
-        f.persistence.reject(new Error("Synthetic known write failure"));
-        await f.removalEntered.promise;
-        await nextTurn();
-        if (timing === "during persistence") {
-          expect(mocks.send).toHaveBeenCalledOnce();
-        }
-        f.firstRemoval.reject(cleanupFailure);
-        await nextTurn();
-        if (cancellation) {
-          await expect(cancellation).rejects.toBe(cleanupFailure);
-        }
-        expect(f.readTurn()?.state).toBe("running");
-        expect(f.turnSettled()).toBe(false);
-        expect(mocks.launchFinish).not.toHaveBeenCalled();
-        expect(f.snapshots.at(-1)).toBe(0);
-        const retry = f.supervisor.cancel(f.identity);
-        await nextTurn();
-        expect(mocks.remove).toHaveBeenCalledTimes(2);
-        expect(mocks.launchFinish).not.toHaveBeenCalled();
-        f.retryRemoval.resolve();
-        expect(await retry).toMatchObject({ state: expectedState });
-        expect(mocks.launchFinish.mock.lastCall?.[0].state).toBe(expectedState);
-        expect(f.turnSettled()).toBe(true);
-        expect(f.snapshots.at(-1)).toBe(1);
-      } finally {
-        await f.dispose();
-      }
-    },
-  );
-
-  it("lets successful persistence win over a reentrant cancellation", async () => {
-    const f = await fixture();
-    let cancellation: Promise<NodeWorkerLaunchReceipt | undefined> | undefined;
-    try {
-      f.onPersist.call = () => {
-        cancellation = f.supervisor.cancel(f.identity);
-      };
-      f.emitResult.resolve();
-      await f.entered.promise;
-      await nextTurn();
-      expect(cancellation).toBeDefined();
-      expect(mocks.send).not.toHaveBeenCalled();
-      expect(mocks.remove).not.toHaveBeenCalled();
-      f.persistence.resolve();
-      expect(await cancellation).toMatchObject({ state: "completed" });
-      expect(f.turnSettled()).toBe(true);
-      expect(mocks.send).not.toHaveBeenCalled();
-      expect(mocks.remove).not.toHaveBeenCalled();
-      expect(f.snapshots.at(-1)).toBe(0);
-    } finally {
-      await f.dispose();
-    }
-  });
-
-  it("retains unknown-outcome refusal after rejected persistence", async () => {
-    const f = await fixture(true);
-    const failure = new SqliteWorkerError(
-      "Synthetic transaction outcome is unknown",
-      "outcome-unknown",
-    );
-    try {
-      f.emitResult.resolve();
-      await f.entered.promise;
-      const cancellation = f.supervisor.cancel(f.identity);
-      let cancelled = false;
-      void cancellation.then(
-        () => {
-          cancelled = true;
-        },
-        () => {
-          cancelled = true;
-        },
-      );
-      await nextTurn();
-      f.persistence.reject(failure);
-      await f.removalEntered.promise;
-      f.firstRemoval.reject(new Error("Synthetic container cleanup failed"));
-      await nextTurn();
-      expect(cancelled).toBe(true);
-      await expect(cancellation).rejects.toBe(failure);
-      expect(f.readTurn()?.state).toBe("running");
-      expect(f.turnSettled()).toBe(false);
-      expect(mocks.send).not.toHaveBeenCalled();
-      expect(mocks.launchFinish).not.toHaveBeenCalled();
-      expect(f.snapshots.at(-1)).toBe(0);
-      f.retryRemoval.resolve();
-      await expect(f.supervisor.close()).rejects.toThrow();
-      await expect(f.supervisor.status(f.identity.launchId)).rejects.toBe(failure);
-    } finally {
-      await f.dispose();
-    }
-  });
-
-  it.each(["before settlement", "during settlement"] as const)(
-    "retains completion ownership across a delayed receipt read starting %s",
-    async (timing) => {
-      const f = await fixture();
-      const readEntered = createDeferred();
-      const releaseRead = createDeferred();
-      try {
-        if (timing === "during settlement") {
-          f.emitResult.resolve();
-          await f.entered.promise;
-        }
-        mocks.turnMatching.mockImplementationOnce(async () => {
-          const receipt = f.readReceipt();
-          readEntered.resolve();
-          await releaseRead.promise;
-          return receipt;
-        });
-        const cancellation = f.supervisor.cancel(f.identity);
-        if (timing === "before settlement") {
-          await readEntered.promise;
-          f.emitResult.resolve();
-          await f.entered.promise;
-        }
-        f.persistence.resolve();
+      if (timing === "before settlement") {
         await readEntered.promise;
-        await nextTurn();
-        releaseRead.resolve();
-        await nextTurn();
-        expect(mocks.remove).not.toHaveBeenCalled();
-        expect(await cancellation).toMatchObject({
-          state: timing === "before settlement" ? "cancelled" : "completed",
-        });
-        expect(mocks.send).not.toHaveBeenCalled();
-      } finally {
-        releaseRead.resolve();
-        await f.dispose();
+        await f.beginSettlement();
       }
+      f.persistence.resolve();
+      await readEntered.promise;
+      await nextTurn();
+      releaseRead.resolve();
+      await nextTurn();
+      expect(mocks.remove).not.toHaveBeenCalled();
+      expect(await cancellation).toMatchObject({
+        state: timing === "before settlement" ? "cancelled" : "completed",
+      });
+      expect(mocks.send).not.toHaveBeenCalled();
     },
   );
 });

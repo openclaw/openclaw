@@ -14,10 +14,7 @@ const OTHER_GATEWAY = "wss://other-remote.example.test";
 const IDENTITY_KEY = "openclaw-device-identity-v1";
 
 beforeEach(stubGatewayStoreTestGlobals);
-afterEach(async () => {
-  // Settle lazy cache retirement before releasing browser storage.
-  const { clearCachedBootState } = await import("../lib/sessions/session-roster-cache.runtime.ts");
-  await clearCachedBootState();
+afterEach(() => {
   setAvatarGatewayOrigin(null);
   vi.unstubAllGlobals();
   vi.restoreAllMocks();

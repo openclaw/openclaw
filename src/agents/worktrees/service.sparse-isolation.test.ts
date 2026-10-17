@@ -59,13 +59,14 @@ describe("ManagedWorktreeService sparse isolation", () => {
     const root = tempDirs.make("openclaw-worktree-sparse-isolation-");
     repo = await initializeRepository(root);
     env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
-    const now = Date.now();
     backend = createCopyWorktreeBackend();
     vi.mocked(detectWorktreeFilesystemBackend).mockReset().mockResolvedValue(backend);
-    service = new ManagedWorktreeService({ env, now: () => now, getConfig: () => ({}) });
+    service = new ManagedWorktreeService({ env, getConfig: () => ({}) });
   });
 
   it("preserves isolated source and guarded fallback across sparse checkout changes", async () => {
+    // Sparse isolation must not depend on Btrfs checkout timing selection.
+    vi.spyOn(performance, "now").mockReturnValue(0);
     await fs.mkdir(path.join(repo, ".openclaw/worktree-profiles"), { recursive: true });
     await fs.mkdir(path.join(repo, "selected"), { recursive: true });
     await fs.mkdir(path.join(repo, "excluded"), { recursive: true });
@@ -104,9 +105,9 @@ describe("ManagedWorktreeService sparse isolation", () => {
       );
       const calls = vi.mocked(backend.cloneTemplate).mock.calls.length;
       const created = await service.create({ repoRoot: repo, name, baseRef: commit, profiles });
-      // Sparse setup enables shared worktreeConfig, keeping later full creates on Git.
+      // Only explicitly profiled creates need native sparse materialization.
       expect(vi.mocked(backend.cloneTemplate).mock.calls.length > calls, name).toBe(
-        name === "full-cold" || name === "full-warm",
+        !profiles?.length,
       );
       for (const sibling of siblings) {
         expect(await fs.readFile(sibling.index), sibling.label).toEqual(sibling.indexBytes);

@@ -1,8 +1,11 @@
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
@@ -32,6 +35,7 @@ import {
   createPluginLifecycleLeaseTestClock,
   createReloadWarningObserver,
 } from "./config-reload.test-support.js";
+import { installWatcherMock } from "./config-reload.watcher.test-support.js";
 import {
   createAdmittedWizardSession,
   whenAdmittedWizardSessionSettled,
@@ -80,6 +84,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 let pluginRegistrySnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
 
 beforeEach(() => {
+  const watcher = installWatcherMock();
+  onTestFinished(() => watcher.restore());
   vi.useFakeTimers();
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-wizard-lease-"));
   vi.stubEnv("OPENCLAW_SKIP_CHANNELS", undefined);
@@ -104,6 +110,7 @@ async function createReloadFixture(
     gateway: { reload: {} },
     channels: { whatsapp: { enabled: true, selfChatMode: false } },
   } satisfies OpenClawConfig;
+  setRuntimeConfigSnapshot(initialConfig);
   setActivePluginRegistry(
     createTestRegistry([
       {

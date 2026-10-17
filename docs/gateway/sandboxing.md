@@ -6,7 +6,7 @@ read_when: "You want a dedicated explanation of sandboxing or need to tune agent
 status: active
 ---
 
-OpenClaw can run tool execution inside a sandbox backend to reduce blast radius. Sandboxing is off by default and controlled by `agents.defaults.sandbox` (global), `agents.entries.*.sandbox` (per-agent), or a required creator-role sandbox policy. The Gateway process always stays on the host; only tool execution moves into the sandbox when enabled.
+OpenClaw can run tool execution inside a sandbox backend to limit the damage tools can cause. Sandboxing is off by default and controlled by `agents.defaults.sandbox` (global), `agents.entries.*.sandbox` (per-agent), or a required creator-role sandbox policy. The Gateway process always stays on the host; only tool execution moves into the sandbox when enabled.
 
 <Note>
 This is not a perfect security boundary, but it materially limits filesystem and process access when the model does something dumb.
@@ -77,6 +77,8 @@ Debugging:
 Each agent can override sandbox + tools: `agents.entries.*.sandbox` and `agents.entries.*.tools` (plus `agents.entries.*.tools.sandbox.tools` for sandbox tool policy). See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for precedence.
 
 ### Managed GitHub identity
+
+Publication-eligible managed sessions can use `github_publish` under the default sandbox tool policy to publish their own session branch through the Gateway. Publication credentials stay on the Gateway; the credential opt-in below is unnecessary for this route. Explicit tool denies and restrictive custom allowlists still apply. See [GitHub publication](/gateway/config-tools/github-identity).
 
 Sandboxed execution excludes the agent's managed GitHub identity by default.
 Set `agents.entries.<id>.tools.github.allowInSandbox: true` on that agent's

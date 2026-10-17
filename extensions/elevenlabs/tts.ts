@@ -169,7 +169,6 @@ export async function elevenLabsTTSStream(params: ElevenLabsTtsRequestParams): P
     await import("openclaw/plugin-sdk/provider-binary-stream");
   const { assertProviderBinaryResponseContent } = await import("openclaw/plugin-sdk/provider-http");
   const { response, release } = await requestElevenLabsTts(params, true);
-  let handedOff = false;
   try {
     assertProviderBinaryResponseContent(response, "ElevenLabs API error", "audio");
     if (!response.body) {
@@ -182,14 +181,12 @@ export async function elevenLabsTTSStream(params: ElevenLabsTtsRequestParams): P
       createReleaseError: () => new Error("ElevenLabs TTS stream released"),
       cleanup: release,
     });
-    handedOff = true;
     return {
       audioStream: boundedStream.stream,
       release: boundedStream.release,
     };
-  } finally {
-    if (!handedOff) {
-      await release();
-    }
+  } catch (error) {
+    await release();
+    throw error;
   }
 }

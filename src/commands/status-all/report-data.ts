@@ -14,6 +14,7 @@ import {
 } from "../../plugins/status.js";
 import { buildWorkspaceSkillReadiness } from "../../skills/discovery/status.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
+import { resolveStatusDatabaseEngines } from "../status-database-engines.js";
 import { buildStatusAllOverviewRows } from "../status-overview-rows.ts";
 import {
   resolveStatusGatewayDiagnosticsSafe,
@@ -59,12 +60,9 @@ async function resolveStatusAllLocalDiagnosis(params: {
       ? [undefined, null, null]
       : await Promise.all([
           resolveStatusGatewayHealthSafe({
-            config: overview.cfg,
-            gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
+            ...diagnosticsParams,
             timeoutMs: Math.min(8000, params.timeoutMs ?? 10_000),
-            gatewayReachable,
             gatewayProbeError: gatewayProbe?.error ?? null,
-            ...(gatewayCallOverrides ? { callOverrides: gatewayCallOverrides } : {}),
           }),
           resolveStatusGatewayDiagnosticsSafe(diagnosticsParams),
           resolveStatusGatewayDiagnosticsSafe({
@@ -173,6 +171,10 @@ export async function buildStatusAllReportData(params: {
     gatewayService: params.daemon,
     nodeService: params.nodeService,
     nodeOnlyGateway: params.nodeOnlyGateway,
+    databaseEngines: await resolveStatusDatabaseEngines(
+      params.overview.cfg,
+      summary.databaseStores,
+    ),
   };
   const overviewRows = buildStatusAllOverviewRows({
     surface: overviewSurface,

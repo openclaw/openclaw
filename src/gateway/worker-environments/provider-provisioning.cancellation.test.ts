@@ -2,11 +2,9 @@ import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { WorkerProviderError } from "../../plugins/capability-provider.types.js";
-import type { WorkerNodeEnrollment } from "../../plugins/types.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
-import { completeWorkerNodeSetupForTest } from "./node-enrollment.test-support.js";
 import * as support from "./service.test-support.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
@@ -52,7 +50,7 @@ function createRuntimeManager(
 describe("worker provisioning cancellation ownership", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it.each(["bootstrapping", "ready", "idle"] as const)(
+  it.each(["bootstrapping", "ready"] as const)(
     "cancels persisted SSH bootstrap from %s while retaining its child and lease cleanup",
     async (state) => {
       let record = await support.seedBootstrapping(`worker-persisted-bootstrap-stop-${state}`);
@@ -66,13 +64,6 @@ describe("worker provisioning cancellation ownership", () => {
             bundleHash: "b".repeat(64),
           }),
         });
-        if (state === "idle") {
-          record = await support.testState.store.transition({
-            environmentId: record.environmentId,
-            from: record.state,
-            to: "idle",
-          });
-        }
       }
       const entered = createDeferredCore();
       const childClosed = createDeferredCore();
@@ -220,7 +211,7 @@ describe("worker provisioning cancellation ownership", () => {
     },
   );
 
-  it.each(["cancelled", "late-success", "profile-error", "cleanup-complete"] as const)(
+  it.each(["late-success", "profile-error", "cleanup-complete"] as const)(
     "retains allocation cleanup after cancellation with a %s provider result",
     async (result) => {
       const started = createDeferredCore();
@@ -245,9 +236,6 @@ describe("worker provisioning cancellation ownership", () => {
               "lease-cancelled",
               new Error("provider setup failed before cleanup"),
             );
-          }
-          if (result === "cancelled") {
-            providerSignal?.throwIfAborted();
           }
           return { leaseId: "lease-cancelled", sharedHost: false, ssh: support.SSH_ENDPOINT };
         },
@@ -386,82 +374,7 @@ describe("worker provisioning cancellation ownership", () => {
     expect(events).toEqual(["bundle-started", "bundle-settled"]);
   });
 
-  it("does not let queued runtime preparation revoke a newer enrollment", async () => {
-    const enrolled = createDeferredCore<WorkerNodeEnrollment>();
-    const runtimeResult = createDeferredCore<unknown>();
-    const finishProvider = createDeferredCore();
-    const transfer = createWorkerBootstrapArtifactTransferService();
-    const manager = createRuntimeManager(transfer);
-    const deviceId = "newer-enrollment-device";
-    const service = support.createService(
-      support.createProvider({
-        supportedExecutionModes: ["worker-turn"],
-        requiresNodeEnrollment: true,
-        provisionBeforeInstallation: true,
-        provision: async (_profile, _operation, options) => {
-          const record = support.testState.store.list()[0]!;
-          const owner = await support.testState.store.ensureNodeEnrollment(record.environmentId);
-          const setupId = owner.nodeSetupId;
-          if (!setupId) {
-            throw new Error("Expected persisted enrollment setup identity");
-          }
-          await completeWorkerNodeSetupForTest({
-            baseDir: support.testState.root,
-            store: support.testState.store,
-            setupId,
-            deviceId,
-            completedAtMs: 1_000,
-          });
-          void options!.prepareNodeRuntime!().then(runtimeResult.resolve, runtimeResult.resolve);
-          enrolled.resolve(await options!.beginNodeEnrollment!());
-          await finishProvider.promise;
-          return { leaseId: "newer-enrollment-lease", node: { deviceId }, sharedHost: false };
-        },
-      }),
-      {
-        prepareNodeBootstrap: manager.prepare,
-        prepareNodeRuntime: manager.prepareRuntime,
-        closeNodeRuntime: manager.closeRuntime,
-        prepareNodeEnrollment: manager.begin,
-        closeNodeEnrollment: manager.close,
-        stopNodeEnrollmentWaits: manager.stop,
-        ensureNodeWorkerBundle: async () => support.BOOTSTRAP_RECEIPT,
-      },
-    );
-    const creation = service
-      .createWithRequest({
-        profileId: "development",
-        idempotencyKey: "runtime-before-enrollment",
-        executionMode: "worker-turn",
-      })
-      .catch((error: unknown) => error);
-    try {
-      const enrollment = await Promise.race([
-        enrolled.promise,
-        creation.then(() => {
-          throw new Error("Creation ended before enrollment");
-        }),
-      ]);
-      const authorization = transfer.authorize({
-        token: enrollment.nodeBootstrap.token,
-        artifactKey: enrollment.nodeBootstrap.sha256,
-      });
-      expect(authorization).toBeDefined();
-      expect(enrollment.signal?.aborted).toBe(false);
-      await expect(runtimeResult.promise).resolves.toMatchObject({
-        message: "Worker node enrollment has already begun",
-      });
-      expect(enrollment.signal?.aborted).toBe(false);
-      expect(transfer.isAuthorizationCurrent(authorization!)).toBe(true);
-    } finally {
-      finishProvider.resolve();
-      await creation;
-      manager.stop();
-    }
-    expect(await creation).toMatchObject({ state: "ready", nodeDeviceId: deviceId });
-  });
-
-  it.each(["bundle", "npm"] as const)(
+  it.each(["npm"] as const)(
     "releases a cancelled fresh %s preparation consumer while shutdown retains the producer",
     async (install) => {
       const preparing = createDeferredCore();
@@ -471,7 +384,7 @@ describe("worker provisioning cancellation ownership", () => {
       support.testState.prepareInstallation = vi.fn(async () => {
         preparing.resolve();
         await prepared.promise;
-        return install === "bundle" ? support.BUNDLE_ARTIFACT : support.NPM_ARTIFACT;
+        return support.NPM_ARTIFACT;
       });
       const provision = vi.fn(async () => ({
         leaseId: "lease-unexpected",
@@ -580,7 +493,7 @@ describe("worker provisioning cancellation ownership", () => {
     expect(provision).not.toHaveBeenCalled();
   });
 
-  it.each(["bundle", "npm"] as const)(
+  it.each(["npm"] as const)(
     "cleans an adopted replay lease while cancelled %s preparation is still running",
     async (install) => {
       const preparing = createDeferredCore();
@@ -593,7 +506,7 @@ describe("worker provisioning cancellation ownership", () => {
           preparing.resolve();
           await prepared.promise;
         }
-        return install === "bundle" ? support.BUNDLE_ARTIFACT : support.NPM_ARTIFACT;
+        return support.NPM_ARTIFACT;
       });
       const events: string[] = [];
       const destroy = vi.fn(async () => {

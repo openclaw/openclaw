@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 
+import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionsCatalogImportResult } from "../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import "../lib/toast-host.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import {
   catalogPage,
@@ -12,7 +14,7 @@ import {
 } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 const result: SessionsCatalogImportResult = {
   sessionKey: "agent:main:imported-transcript",
@@ -48,12 +50,13 @@ async function fixture(scopes = ["operator.read", "operator.write"]) {
     .querySelector('[data-catalog-session-key*="thread-1"]')!
     .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
   await vi.advanceTimersByTimeAsync(0);
-  const selectImport = () => {
-    const item = sidebar.querySelector('wa-dropdown-item[value="import"]');
-    expect(item).not.toBeNull();
-    item!.dispatchEvent(
-      new CustomEvent("wa-select", { bubbles: true, detail: { item: { value: "import" } } }),
+  const selectImport = async () => {
+    const item = sidebar.querySelector<HTMLButtonElement>(
+      'openclaw-catalog-session-menu [data-value="import"]',
     );
+    expect(item).not.toBeNull();
+    item!.click();
+    await vi.advanceTimersByTimeAsync(0);
   };
   return { sidebar, toast, gateway, request, imported, selectImport };
 }
@@ -66,7 +69,7 @@ describe("AppSidebar catalog import", () => {
     { outcome: "failure", stale: true },
   ])("publishes only a current import $outcome (stale=$stale)", async ({ outcome, stale }) => {
     const { sidebar, toast, gateway, request, imported, selectImport } = await fixture();
-    selectImport();
+    await selectImport();
     expect(request).toHaveBeenCalledWith("sessions.catalog.import", {
       catalogId: "codex",
       hostId: "gateway:local",
@@ -86,6 +89,8 @@ describe("AppSidebar catalog import", () => {
     }
     await vi.advanceTimersByTimeAsync(0);
     await toast.updateComplete;
+    await vi.dynamicImportSettled();
+    flush();
     expect(sidebar.onNavigate).not.toHaveBeenCalled();
     if (stale) {
       expect(toast.textContent?.trim()).toBe("");
@@ -109,12 +114,16 @@ describe("AppSidebar catalog import", () => {
       authority === "read-only" ? ["operator.read"] : ["operator.read", "operator.write"],
     );
     if (authority === "read-only") {
-      expect(sidebar.querySelector('wa-dropdown-item[value="import"]')).toBeNull();
+      expect(
+        sidebar.querySelector<HTMLButtonElement>(
+          'openclaw-catalog-session-menu [data-value="import"]',
+        ),
+      ).toBeNull();
     } else {
       gateway.publish({
         hello: gatewayHelloForMethods(["sessions.catalog.list"], ["operator.read"]),
       });
-      selectImport();
+      await selectImport();
     }
     expect(request).not.toHaveBeenCalledWith("sessions.catalog.import", expect.anything());
   });
@@ -133,7 +142,6 @@ describe("AppSidebar catalog authority", () => {
         );
       const gateway = createGatewayHarness(createTestGatewayClient(request));
       const hello = gatewayHelloForMethods(["sessions.catalog.list"]);
-      hello.features!.events = ["sessions.catalog.changed"];
       gateway.publish({ hello });
       const { sidebar, provider } = await mountSidebar(
         gateway.gateway,
@@ -165,7 +173,7 @@ describe("AppSidebar catalog authority", () => {
           agentId: "main",
           catalog: catalogPage([{ threadId: "stale", name: "Late catalog session" }]).catalogs[0],
         });
-        gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+        document.dispatchEvent(new Event("visibilitychange"));
         if (pendingKind === "error") {
           pending.reject(new Error("Stale catalog failure"));
         } else {
@@ -180,7 +188,6 @@ describe("AppSidebar catalog authority", () => {
         expect(sidebar.querySelector(".sidebar-session-catalog-error")).toBeNull();
         expect(sidebar.sessionData.sessionCatalogs).toEqual([]);
         expect(sidebar.sessionData.sessionCatalogPageDepths.size).toBe(0);
-        expect(sidebar.sessionData.sessionCatalogRevisions.size).toBe(0);
         expect(sidebar.sessionData.loadingMoreSessionCatalogIds.size).toBe(0);
         expect(sidebar.sessionData.sessionCatalogLive.timer).toBeNull();
         expect(request).toHaveBeenCalledTimes(2);

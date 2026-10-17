@@ -1,14 +1,23 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
+import type { runSqliteTranscriptArchiveWorkerOperation as ArchiveWorker } from "./session-accessor.sqlite-archive.js";
+import type { withSqliteReclamationAuthorization as ReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
+import type { runExclusiveSqliteSessionWrite as ExclusiveWrite } from "./session-accessor.sqlite-scope.js";
+import type { withSqliteMutationWorkerLifetime as WorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
 import type { SessionColdReadPreparation } from "./session-cold-storage-read.js";
 import { restoreSessionColdTranscript } from "./session-cold-storage.js";
 import type { SessionColdMutationResult } from "./session-cold-storage.types.js";
 
 type Receipt = { result: SessionColdMutationResult; cleanupIncomplete?: boolean };
 const observed = vi.hoisted(() => ({
-  worker: vi.fn<() => Promise<Receipt[]>>(),
+  worker: vi.fn<(params: Parameters<typeof ArchiveWorker>[0]) => Promise<Receipt[]>>(),
+  admit: vi.fn<(signal?: AbortSignal) => void | Promise<void>>(),
   native: vi.fn(),
   caller: vi.fn(),
   request: vi.fn(),
@@ -32,36 +41,36 @@ vi.mock("../../state/openclaw-agent-db-readonly.js", () => ({
     },
   }),
 }));
+// mock-isolation: exercise restoration admission and publication without native SQLite.
 vi.mock("./session-accessor.sqlite-scope.js", async () => ({
   toDatabaseOptions: (await import("./session-accessor.sqlite-scope-helpers.js")).toDatabaseOptions,
   prepareSqliteTranscriptReadScope: vi.fn(),
   resolveSqliteTranscriptReadScope: vi.fn(),
-  runExclusiveSqliteSessionWrite: async <T>(_options: unknown, run: () => Promise<T>) =>
-    await run(),
+  runExclusiveSqliteSessionWrite: (async (
+    _options,
+    run,
+    _operation,
+    _diagnostics,
+    _writer,
+    signal,
+  ) => {
+    await observed.admit(signal);
+    return await run();
+  }) satisfies typeof ExclusiveWrite,
 }));
+// mock-isolation: exercise receipt handling without native lifecycle resources.
 vi.mock("./session-accessor.sqlite-worker-request.js", () => ({
-  withSqliteMutationWorkerLifetime: async <T>(
-    _options: unknown,
-    run: (owner: {
-      assertCurrent: () => void;
-      commitGate: SharedArrayBuffer;
-      signal: AbortSignal;
-    }) => Promise<T>,
-  ) =>
+  withSqliteMutationWorkerLifetime: (async (_options, run, callerSignal) =>
     await run({
       assertCurrent: observed.request,
       commitGate: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
-      signal: new AbortController().signal,
-    }),
+      signal: callerSignal ?? new AbortController().signal,
+    })) satisfies typeof WorkerLifetime,
 }));
 vi.mock("./session-accessor.sqlite-reclamation-commit.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-accessor.sqlite-reclamation-commit.js")>()),
-  withSqliteReclamationAuthorization: async <T>(
-    _gate: SharedArrayBuffer,
-    _database: unknown,
-    assertCurrent: () => void,
-    run: (authorize: () => void) => Promise<T>,
-  ) => await run(assertCurrent),
+  withSqliteReclamationAuthorization: (async (_gate, _database, assertCurrent, run) =>
+    await run(assertCurrent)) satisfies typeof ReclamationAuthorization,
 }));
 vi.mock("./session-accessor.sqlite-archive.js", () => ({
   runSqliteTranscriptArchiveWorkerOperation: observed.worker,
@@ -115,7 +124,7 @@ const result: SessionColdMutationResult = {
 };
 const changes = vi.fn();
 const factChanges = vi.fn();
-let unsubscribe: () => void;
+let subscriptions: (() => void)[];
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -123,46 +132,112 @@ beforeEach(() => {
   observed.native.mockImplementation(() => {
     throw new Error("Restore publication executed SQLite on the calling thread");
   });
-  const unsubscribeChanges = sessionChanges.subscribe(changes);
-  const unsubscribeFacts = sessionChanges.subscribeFacts(factChanges);
-  unsubscribe = () => {
-    unsubscribeChanges();
-    unsubscribeFacts();
-  };
+  subscriptions = [sessionChanges.subscribe(changes), sessionChanges.subscribeFacts(factChanges)];
 });
 afterEach(() => {
-  unsubscribe();
+  subscriptions.forEach((unsubscribe) => unsubscribe());
   expect(observed.native).not.toHaveBeenCalled();
   expect(observed.release).toHaveBeenCalledOnce();
 });
 
-function restore() {
-  return restoreSessionColdTranscript(preparation.target, observed.caller, preparation);
+function restore(signal?: AbortSignal) {
+  return restoreSessionColdTranscript(
+    preparation.target,
+    observed.caller,
+    preparation,
+    undefined,
+    signal,
+  );
 }
 
-it("publishes the committed key exactly once after the worker settles, without host SQLite", async () => {
+function holdWorker() {
   const entered = createDeferred();
-  const settled = createDeferred<Receipt[]>();
+  const finished = createDeferred<Receipt[]>();
   observed.worker.mockImplementation(() => {
     entered.resolve();
-    return settled.promise;
+    return finished.promise;
   });
+  return { entered, finished };
+}
+
+it("cancels restoration queued at writer admission when its host callback expires", async () => {
+  const controller = new AbortController();
+  const queued = createDeferred();
+  const entered = createDeferred<AbortSignal | undefined>();
+  observed.admit
+    .mockImplementationOnce(() => {})
+    .mockImplementationOnce((signal) => {
+      entered.resolve(signal);
+      signal?.addEventListener("abort", () => queued.reject(signal.reason), { once: true });
+      return queued.promise;
+    });
+  observed.worker.mockImplementation(async (params) => {
+    if (params.expectedMessageType !== "reclaimed") {
+      throw new Error("Expected cold restoration worker");
+    }
+    await params.withWriteAdmission(async () => undefined, { admissionId: 1 });
+    return [{ result }];
+  });
+  const pending = restore(controller.signal);
+  const outcome = Promise.allSettled([pending]);
+  try {
+    const signal = await awaitGateBeforeSettlement(
+      entered.promise,
+      pending,
+      "Restore did not reach writer admission",
+    );
+    expect(signal).toBeDefined();
+    const expired = new Error("usage restore callback deadline expired");
+    controller.abort(expired);
+    expect(signal?.aborted).toBe(true);
+    expect(await outcome).toEqual([{ status: "rejected", reason: expired }]);
+  } finally {
+    queued.resolve();
+    await outcome;
+  }
+});
+
+it("cancels a queued restoration without releasing its admitted predecessor", async ({
+  signal,
+}) => {
+  const { entered, finished } = holdWorker();
+  const first = restore();
+  await awaitGateBeforeSettlement(entered.promise, first, "First restore was not admitted");
+  const controller = new AbortController();
+  const second = restore(controller.signal);
+  const outcome = Promise.allSettled([second]);
+  try {
+    const expired = new Error("queued restore host deadline expired");
+    controller.abort(expired);
+    expect(await withinTest(outcome, signal)).toEqual([{ status: "rejected", reason: expired }]);
+    expect(observed.worker).toHaveBeenCalledOnce();
+    expect(observed.release).not.toHaveBeenCalled();
+  } finally {
+    finished.resolve([{ result }]);
+    await Promise.allSettled([first, second]);
+  }
+  expect(observed.worker).toHaveBeenCalledOnce();
+});
+
+it("publishes the committed key exactly once after the worker settles, without host SQLite", async () => {
+  const { entered, finished } = holdWorker();
   const pending = restore();
   try {
     await awaitGateBeforeSettlement(entered.promise, pending, "Restore worker was not dispatched");
     expect(changes).not.toHaveBeenCalled();
     expect(observed.release).not.toHaveBeenCalled();
   } finally {
-    settled.resolve([{ result }]);
+    finished.resolve([{ result }]);
     await pending;
   }
-  expect(changes).toHaveBeenCalledExactlyOnceWith({
+  const change = {
     storePath: preparation.target.path,
     sessionKey: "agent:main:committed-window",
-  });
+    scope: "transcript",
+  };
+  expect(changes).toHaveBeenCalledExactlyOnceWith(change);
   expect(factChanges).toHaveBeenCalledExactlyOnceWith({
-    storePath: preparation.target.path,
-    sessionKey: "agent:main:committed-window",
+    ...change,
     facts: { kind: "unchanged" },
   });
 });

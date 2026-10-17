@@ -1,5 +1,5 @@
 import path from "node:path";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { SessionPhysicalDiskUsage } from "./disk-budget-files.js";
@@ -12,11 +12,7 @@ const measurements = resolveGlobalSingleton<{
   Symbol.for("openclaw.sessionDiskBudgetWorkers"),
   () => ({
     pool: new WorkerTaskPool<string, SessionPhysicalDiskUsage>({
-      workerUrl: resolveRuntimeWorkerUrl({
-        currentModuleUrl: import.meta.url,
-        sourceWorkerName: "disk-budget.worker",
-        distWorkerPath: "config/sessions/disk-budget.worker.js",
-      }),
+      workerUrl: resolveRuntimeProcessEntrypointUrl("sessionDiskBudget"),
       workerClass: "reader",
     }),
     pending: new Set<Promise<SessionPhysicalDiskUsage>>(),

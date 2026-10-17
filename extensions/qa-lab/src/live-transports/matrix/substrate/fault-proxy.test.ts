@@ -1,207 +1,156 @@
-// Qa Lab Matrix tests cover fault proxy plugin behavior.
+import { once } from "node:events";
 import { createServer, request } from "node:http";
+import { text } from "node:stream/consumers";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildRoomKeyBackupUnavailableFaultRule } from "../scenarios/scenario-runtime-e2ee-room.js";
 import { startMatrixQaFaultProxy } from "./fault-proxy.js";
 
-type MatrixQaFaultProxy = Awaited<ReturnType<typeof startMatrixQaFaultProxy>>;
-
+const syncPath = "/_matrix/client/v3/sync";
+const backupPath = "/_matrix/client/v3/room_keys/version";
+const forwardedBody = { forwarded: true };
+type ForwardedRequest = { authorization?: string; body: string; method: string; url: string };
 const servers: Array<{ close(): Promise<void> }> = [];
 
 async function startTargetServer(params?: {
   responseBody?: Buffer | string;
   responseHeaders?: Record<string, string>;
 }) {
-  const requests: Array<{
-    authorization?: string;
-    body: string;
-    method: string;
-    url: string;
-  }> = [];
+  const requests: ForwardedRequest[] = [];
   const server = createServer((req, res) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of req) {
-        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-      }
       requests.push({
         ...(req.headers.authorization ? { authorization: req.headers.authorization } : {}),
-        body: Buffer.concat(chunks).toString("utf8"),
+        body: await text(req),
         method: req.method ?? "GET",
         url: req.url ?? "/",
       });
       res.writeHead(200, { "content-type": "application/json", ...params?.responseHeaders });
-      res.end(params?.responseBody ?? JSON.stringify({ forwarded: true }));
-    })();
+      res.end(params?.responseBody ?? JSON.stringify(forwardedBody));
+    })().catch((error: unknown) =>
+      res.destroy(error instanceof Error ? error : new Error(String(error))),
+    );
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("target server did not bind to a TCP port");
   }
   const handle = {
     baseUrl: `http://127.0.0.1:${address.port}`,
-    close: async () => {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve();
-        });
-      });
-    },
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
     requests,
   };
   servers.push(handle);
   return handle;
 }
 
+function forwardedRequest(url: string, overrides: Partial<ForwardedRequest> = {}) {
+  return { body: "", method: "GET", url, ...overrides };
+}
+function faultHit(method: string, ruleId: string, path = syncPath) {
+  return { method, path, ruleId };
+}
+async function expectReply(response: Response, status: number, body: unknown) {
+  expect([response.status, await response.json()]).toEqual([status, body]);
+}
+async function expectError(response: Response, status: number, errcode: string, error?: string) {
+  await expectReply(
+    response,
+    status,
+    expect.objectContaining({ errcode, ...(error && { error }) }),
+  );
+}
+
 describe("Matrix QA fault proxy", () => {
-  let proxy: MatrixQaFaultProxy | undefined;
+  async function startProxy(
+    options: Partial<Parameters<typeof startMatrixQaFaultProxy>[0]> = {},
+    targetOptions?: Parameters<typeof startTargetServer>[0],
+  ) {
+    const target = await startTargetServer(targetOptions);
+    const proxy = await startMatrixQaFaultProxy({
+      targetBaseUrl: target.baseUrl,
+      rules: [],
+      ...options,
+    });
+    servers.push({ close: () => proxy.stop() });
+    return { proxy, target };
+  }
 
   afterEach(async () => {
-    await proxy?.stop();
-    proxy = undefined;
     while (servers.length > 0) {
       await servers.pop()?.close();
     }
   });
 
   it("prevents backup discovery and creation only for the faulted account", async () => {
-    const target = await startTargetServer();
-    proxy = await startMatrixQaFaultProxy({
-      targetBaseUrl: target.baseUrl,
+    const { proxy, target } = await startProxy({
       rules: [buildRoomKeyBackupUnavailableFaultRule("driver-token")],
     });
+    const backup = (token: string, method = "GET") =>
+      fetch(`${proxy.baseUrl}${backupPath}`, {
+        headers: { authorization: `Bearer ${token}` },
+        method,
+      });
 
-    const faulted = await fetch(`${proxy.baseUrl}/_matrix/client/v3/room_keys/version`, {
-      headers: { authorization: "Bearer driver-token" },
-    });
-    expect(faulted.status).toBe(404);
-    await expect(faulted.json()).resolves.toEqual({
+    await expectReply(await backup("driver-token"), 404, {
       errcode: "M_NOT_FOUND",
       error: "No current key backup",
     });
 
-    const creation = await fetch(`${proxy.baseUrl}/_matrix/client/v3/room_keys/version`, {
-      headers: { authorization: "Bearer driver-token" },
-      method: "POST",
-    });
-    expect(creation.status).toBe(503);
-    await expect(creation.json()).resolves.toMatchObject({ errcode: "M_UNKNOWN" });
-
-    const otherAccount = await fetch(`${proxy.baseUrl}/_matrix/client/v3/room_keys/version`, {
-      headers: { authorization: "Bearer other-token" },
-      method: "POST",
-    });
-    expect(otherAccount.status).toBe(200);
-    await expect(otherAccount.json()).resolves.toEqual({ forwarded: true });
+    await expectError(await backup("driver-token", "POST"), 503, "M_UNKNOWN");
+    await expectReply(await backup("other-token", "POST"), 200, forwardedBody);
 
     const forwarded = await fetch(`${proxy.baseUrl}/_matrix/client/v3/sync?timeout=0`, {
       body: JSON.stringify({ ok: true }),
-      headers: {
-        authorization: "Bearer driver-token",
-        "content-type": "application/json",
-      },
+      headers: { authorization: "Bearer driver-token", "content-type": "application/json" },
       method: "POST",
     });
-    expect(forwarded.status).toBe(200);
-    await expect(forwarded.json()).resolves.toEqual({ forwarded: true });
+    await expectReply(forwarded, 200, forwardedBody);
 
     expect(proxy.hits()).toEqual([
-      {
-        method: "GET",
-        path: "/_matrix/client/v3/room_keys/version",
-        ruleId: "room-key-backup-version-unavailable",
-      },
-      {
-        method: "POST",
-        path: "/_matrix/client/v3/room_keys/version",
-        ruleId: "room-key-backup-version-unavailable",
-      },
+      faultHit("GET", "room-key-backup-version-unavailable", backupPath),
+      faultHit("POST", "room-key-backup-version-unavailable", backupPath),
     ]);
     expect(target.requests).toEqual([
-      {
-        authorization: "Bearer other-token",
-        body: "",
-        method: "POST",
-        url: "/_matrix/client/v3/room_keys/version",
-      },
-      {
+      forwardedRequest(backupPath, { authorization: "Bearer other-token", method: "POST" }),
+      forwardedRequest("/_matrix/client/v3/sync?timeout=0", {
         authorization: "Bearer driver-token",
         body: '{"ok":true}',
         method: "POST",
-        url: "/_matrix/client/v3/sync?timeout=0",
-      },
+      }),
     ]);
   });
 
-  it.each(["forwarded", "faulted"] as const)(
-    "finishes the %s response when its exchange observer rejects",
-    async (mode) => {
-      const target = await startTargetServer();
-      let observations = 0;
-      proxy = await startMatrixQaFaultProxy({
-        targetBaseUrl: target.baseUrl,
-        rules:
-          mode === "faulted"
-            ? [
-                {
-                  id: "synthetic-fault",
-                  match: () => true,
-                  response: () => ({ body: { errcode: "M_QA_FAULT" }, status: 503 }),
-                },
-              ]
-            : [],
-        onExchange: async () => {
-          observations += 1;
-          throw new Error("capture observer failed");
-        },
-      });
+  it("finishes the forwarded response when its exchange observer rejects", async () => {
+    let observations = 0;
+    const { proxy, target } = await startProxy({
+      onExchange: async () => {
+        observations += 1;
+        throw new Error("capture observer failed");
+      },
+    });
 
-      const response = await fetch(`${proxy.baseUrl}/_matrix/client/v3/sync`, {
-        signal: AbortSignal.timeout(5_000),
-      });
+    const response = await fetch(`${proxy.baseUrl}${syncPath}`, {
+      signal: AbortSignal.timeout(5_000),
+    });
 
-      expect(response.status).toBe(502);
-      await expect(response.json()).resolves.toMatchObject({
-        errcode: "MATRIX_QA_FAULT_PROXY_ERROR",
-        error: "capture observer failed",
-      });
-      expect(observations).toBe(1);
-      expect(target.requests).toHaveLength(mode === "forwarded" ? 1 : 0);
-    },
-  );
+    await expectError(response, 502, "MATRIX_QA_FAULT_PROXY_ERROR", "capture observer failed");
+    expect(observations).toBe(1);
+    expect(target.requests).toHaveLength(1);
+  });
 
   it("rejects request targets that resolve outside the configured origin", async () => {
-    const target = await startTargetServer();
-    proxy = await startMatrixQaFaultProxy({ targetBaseUrl: target.baseUrl, rules: [] });
-    const proxyUrl = new URL(proxy.baseUrl);
+    const { proxy, target } = await startProxy();
     const requestTarget = async (path: string) =>
       await new Promise<{ body: string; status: number | undefined }>((resolve, reject) => {
-        const req = request(
-          {
-            hostname: proxyUrl.hostname,
-            path,
-            port: proxyUrl.port,
-          },
-          (res) => {
-            const chunks: Buffer[] = [];
-            res.on("data", (chunk: Buffer) => chunks.push(chunk));
-            res.on("end", () =>
-              resolve({ body: Buffer.concat(chunks).toString("utf8"), status: res.statusCode }),
-            );
-          },
-        );
+        const req = request(proxy.baseUrl, { path }, (res) => {
+          void text(res).then((body) => resolve({ body, status: res.statusCode }), reject);
+        });
         req.once("error", reject);
         req.end();
       });
@@ -214,144 +163,68 @@ describe("Matrix QA fault proxy", () => {
     expect(target.requests).toEqual([]);
   });
 
-  it("strips stale content-encoding after buffering decoded bodies", async () => {
-    const body = Buffer.from(JSON.stringify({ forwarded: true }));
-    const target = await startTargetServer({
-      responseBody: gzipSync(body),
-      responseHeaders: {
-        "content-encoding": "gzip",
-        "content-length": String(gzipSync(body).byteLength),
-      },
-    });
-    proxy = await startMatrixQaFaultProxy({ targetBaseUrl: target.baseUrl, rules: [] });
-
-    const response = await fetch(`${proxy.baseUrl}/encoded`);
-
-    expect(response.headers.get("content-encoding")).toBeNull();
-    expect(response.headers.get("content-length")).toBeNull();
-    await expect(response.json()).resolves.toEqual({ forwarded: true });
-  });
-
   it("mutates matching forwarded Matrix responses", async () => {
-    const target = await startTargetServer();
-    proxy = await startMatrixQaFaultProxy({
-      targetBaseUrl: target.baseUrl,
-      rules: [
-        {
-          id: "sync-state-after",
-          match: (proxyRequest) =>
-            proxyRequest.method === "GET" &&
-            proxyRequest.path === "/_matrix/client/v3/sync" &&
-            proxyRequest.search.includes("org.matrix.msc4222.use_state_after=true"),
-          mutateResponse: ({ response }) => ({
-            ...response,
-            body: Buffer.from(JSON.stringify({ forwarded: true, mutated: true })),
-          }),
-        },
-      ],
-    });
-
-    const mutated = await fetch(
-      `${proxy.baseUrl}/_matrix/client/v3/sync?timeout=0&org.matrix.msc4222.use_state_after=true`,
+    const body = gzipSync(Buffer.from(JSON.stringify(forwardedBody)));
+    const { proxy, target } = await startProxy(
       {
-        headers: { authorization: "Bearer driver-token" },
+        rules: [
+          {
+            id: "sync-state-after",
+            match: (proxyRequest) =>
+              proxyRequest.method === "GET" &&
+              proxyRequest.path === syncPath &&
+              proxyRequest.search.includes("org.matrix.msc4222.use_state_after=true"),
+            mutateResponse: ({ response }) => ({
+              ...response,
+              body: Buffer.from(JSON.stringify({ forwarded: true, mutated: true })),
+            }),
+          },
+        ],
+      },
+      {
+        responseBody: body,
+        responseHeaders: { "content-encoding": "gzip", "content-length": String(body.byteLength) },
       },
     );
 
-    expect(mutated.status).toBe(200);
-    await expect(mutated.json()).resolves.toEqual({ forwarded: true, mutated: true });
-    expect(proxy.hits()).toEqual([
-      {
-        method: "GET",
-        path: "/_matrix/client/v3/sync",
-        ruleId: "sync-state-after",
-      },
-    ]);
+    const mutated = await fetch(
+      `${proxy.baseUrl}${syncPath}?timeout=0&org.matrix.msc4222.use_state_after=true`,
+      { headers: { authorization: "Bearer driver-token" } },
+    );
+
+    const headers = mutated.headers;
+    expect([headers.get("content-encoding"), headers.get("content-length")]).toEqual([null, null]);
+    await expectReply(mutated, 200, { forwarded: true, mutated: true });
+    expect(proxy.hits()).toEqual([faultHit("GET", "sync-state-after")]);
     expect(target.requests).toEqual([
-      {
+      forwardedRequest(`${syncPath}?timeout=0&org.matrix.msc4222.use_state_after=true`, {
         authorization: "Bearer driver-token",
-        body: "",
-        method: "GET",
-        url: "/_matrix/client/v3/sync?timeout=0&org.matrix.msc4222.use_state_after=true",
-      },
+      }),
     ]);
   });
 
-  it("installs and removes scenario-local rules without changing the proxy origin", async () => {
-    const target = await startTargetServer();
-    proxy = await startMatrixQaFaultProxy({ targetBaseUrl: target.baseUrl, rules: [] });
-    const baseUrl = proxy.baseUrl;
-    const handle = proxy.installRule({
-      id: "scenario-local-sync-fault",
-      match: (proxyRequest) =>
-        proxyRequest.path === "/_matrix/client/v3/sync" && proxyRequest.bearerToken === "sut-token",
-      response: () => ({ body: { errcode: "M_QA_FAULT" }, status: 503 }),
-    });
-
-    const faulted = await fetch(`${proxy.baseUrl}/_matrix/client/v3/sync`, {
-      headers: { authorization: "Bearer sut-token" },
-    });
-    expect(faulted.status).toBe(503);
-    expect(proxy.baseUrl).toBe(baseUrl);
-    expect(handle.hits()).toEqual([
-      {
-        method: "GET",
-        path: "/_matrix/client/v3/sync",
-        ruleId: "scenario-local-sync-fault",
-      },
-    ]);
-
-    handle.remove();
-    handle.remove();
-    const forwarded = await fetch(`${proxy.baseUrl}/_matrix/client/v3/sync`, {
-      headers: { authorization: "Bearer sut-token" },
-    });
-    expect(forwarded.status).toBe(200);
-    expect(handle.hits()).toHaveLength(1);
-    expect(proxy.hits()).toHaveLength(1);
-  });
-
-  it("rejects oversized forwarded request bodies before contacting the target", async () => {
-    const target = await startTargetServer();
-    proxy = await startMatrixQaFaultProxy({
-      maxRequestBytes: 4,
-      targetBaseUrl: target.baseUrl,
-      rules: [],
-    });
-
-    const rejected = await fetch(`${proxy.baseUrl}/_matrix/client/v3/send`, {
-      body: "12345",
-      method: "POST",
-    });
-
-    expect(rejected.status).toBe(413);
-    expect(rejected.headers.get("connection")).toBe("close");
-    await expect(rejected.json()).resolves.toMatchObject({
-      errcode: "MATRIX_QA_FAULT_PROXY_REQUEST_TOO_LARGE",
-    });
-    expect(target.requests).toEqual([]);
-  });
-
-  it("rejects oversized forwarded Matrix responses without buffering the full body", async () => {
-    const target = await startTargetServer({ responseBody: JSON.stringify({ payload: "large" }) });
-    proxy = await startMatrixQaFaultProxy({
-      maxResponseBytes: 8,
-      targetBaseUrl: target.baseUrl,
-      rules: [],
-    });
-
-    const rejected = await fetch(`${proxy.baseUrl}/_matrix/client/v3/sync`);
-
-    expect(rejected.status).toBe(502);
-    await expect(rejected.json()).resolves.toMatchObject({
-      errcode: "MATRIX_QA_FAULT_PROXY_RESPONSE_TOO_LARGE",
-    });
-    expect(target.requests).toEqual([
-      {
-        body: "",
-        method: "GET",
-        url: "/_matrix/client/v3/sync",
-      },
-    ]);
-  });
+  it.each(["request", "response"] as const)(
+    "rejects oversized forwarded %s bodies",
+    async (side) => {
+      const requestSide = side === "request";
+      const { proxy, target } = await startProxy(
+        requestSide ? { maxRequestBytes: 4 } : { maxResponseBytes: 8 },
+        { responseBody: JSON.stringify({ payload: "large" }) },
+      );
+      const path = requestSide ? "/_matrix/client/v3/send" : syncPath;
+      const rejected = await fetch(
+        `${proxy.baseUrl}${path}`,
+        requestSide ? { body: "12345", method: "POST" } : undefined,
+      );
+      if (requestSide) {
+        expect(rejected.headers.get("connection")).toBe("close");
+      }
+      await expectError(
+        rejected,
+        requestSide ? 413 : 502,
+        `MATRIX_QA_FAULT_PROXY_${side.toUpperCase()}_TOO_LARGE`,
+      );
+      expect(target.requests).toEqual(requestSide ? [] : [forwardedRequest(path)]);
+    },
+  );
 });

@@ -5,8 +5,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as kyselySync from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import * as stateDb from "../../state/openclaw-state-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -17,12 +19,13 @@ import {
   captureSecretStoreExpiryCutoffs,
   purgeExpiredSecretStoreEntriesInDatabase,
 } from "./secret-store-expiry.kernel.js";
+import { listHiddenGitHubSecretRecords } from "./secret-store-hidden-github.js";
 import {
   consumeGitHubSetupHandoff,
   deleteHiddenGitHubSecretRecord,
   deleteSecretStoreEntry,
-  listHiddenGitHubSecretRecordNames,
   listSecretStoreEntries,
+  purgeExpiredSecretStoreEntries as purgeStoredSecrets,
   readHiddenGitHubSecretRecord,
   readSecretStoreExecEnvironment,
   readSecretStoreValue,
@@ -38,7 +41,7 @@ function purgeExpiredSecretStoreEntries(params: {
   return purgeExpiredSecretStoreEntriesInDatabase(
     captureSecretStoreExpiryCutoffs(),
     params.database,
-  );
+  ).removed;
 }
 
 const roots: string[] = [];
@@ -87,6 +90,50 @@ afterEach(async () => {
 });
 
 describe("secret store", () => {
+  it("discovers newly deleted entries after idle and purges overdue entries after restart", async () => {
+    vi.useFakeTimers();
+    const deletedAtMs = Date.UTC(2026, 0, 1);
+    vi.setSystemTime(deletedAtMs);
+    await expect(purgeStoredSecrets({ database })).resolves.toBe(0);
+
+    await write("EXPIRED_AFTER_IDLE", "retired");
+    await deleteSecretStoreEntry({ scope: team, name: "EXPIRED_AFTER_IDLE", database });
+    await expect(purgeStoredSecrets({ database })).resolves.toBe(0);
+
+    vi.setSystemTime(deletedAtMs + 30 * 24 * 60 * 60_000);
+    await expect(purgeStoredSecrets({ database })).resolves.toBe(0);
+    expect(countStoredRows(database, "EXPIRED_AFTER_IDLE")).toBe(1);
+
+    vi.setSystemTime(deletedAtMs + 30 * 24 * 60 * 60_000 + 1);
+    await closeOpenClawStateDatabaseAsync();
+    await expect(purgeStoredSecrets({ database })).resolves.toBe(1);
+    expect(countStoredRows(database, "EXPIRED_AFTER_IDLE")).toBe(0);
+  });
+
+  it("retains a transient handoff refreshed before the purge acquires its writer", async () => {
+    vi.useFakeTimers();
+    const createdAtMs = Date.UTC(2026, 0, 1);
+    vi.setSystemTime(createdAtMs);
+    const name = "github-setup-55555555555555555555555555555555";
+    await write(name, "handoff");
+    vi.setSystemTime(createdAtMs + 10 * 60_000 + 1);
+    const runTransaction = stateDb.runOpenClawStateWriteTransaction;
+    const acquire = vi
+      .spyOn(stateDb, "runOpenClawStateWriteTransaction")
+      .mockImplementationOnce((operation, options, transactionOptions) => {
+        openOpenClawStateDatabase(database)
+          .db.prepare("UPDATE secret_store_entries SET created_at_ms = ? WHERE name = ?")
+          .run(Date.now(), name);
+        return runTransaction(operation, options, transactionOptions);
+      });
+    try {
+      expect(purgeExpiredSecretStoreEntries({ database })).toBe(0);
+      expect(countStoredRows(database, name)).toBe(1);
+    } finally {
+      acquire.mockRestore();
+    }
+  });
+
   it.each([
     { kind: "secret", allowedHosts: [], ageMs: 0, accepted: true },
     { kind: "env", allowedHosts: undefined, ageMs: 0, accepted: false },
@@ -100,14 +147,16 @@ describe("secret store", () => {
       vi.useFakeTimers();
       vi.setSystemTime(now - ageMs);
       await write(name, "temporary-value", { kind, allowedHosts });
-      expect(consumeGitHubSetupHandoff({ name, nowMs: now, database })).toBe(
-        accepted ? "temporary-value" : undefined,
-      );
+      const consumption = consumeGitHubSetupHandoff({ name, nowMs: now, database });
+      const duplicate = accepted
+        ? consumeGitHubSetupHandoff({ name, nowMs: now, database })
+        : undefined;
+      expect(await consumption).toBe(accepted ? "temporary-value" : undefined);
       if (accepted) {
+        expect(await duplicate).toBeUndefined();
         expect(countStoredRows(database, name)).toBe(0);
-        expect(consumeGitHubSetupHandoff({ name, database })).toBeUndefined();
         await write("DEPLOY_TOKEN", "unrelated-value");
-        expect(consumeGitHubSetupHandoff({ name: "DEPLOY_TOKEN", database })).toBeUndefined();
+        expect(await consumeGitHubSetupHandoff({ name: "DEPLOY_TOKEN", database })).toBeUndefined();
         expect(await readSecretStoreValue({ scope: team, name: "DEPLOY_TOKEN", database })).toEqual(
           { ok: true, value: "unrelated-value" },
         );
@@ -253,13 +302,13 @@ describe("secret store", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
     await write(setupName, "abandoned-value", { allowedHosts: [] });
-    writeHiddenGitHubSecretRecord({
+    await writeHiddenGitHubSecretRecord({
       name: deviceName,
       value: "device-value",
       updatedBy: "test",
       database,
     });
-    writeHiddenGitHubSecretRecord({
+    await writeHiddenGitHubSecretRecord({
       name: oauthName,
       value: "oauth-value",
       updatedBy: "test",
@@ -267,14 +316,14 @@ describe("secret store", () => {
     });
     await write("UNRELATED_SECRET", "keep-value");
 
-    expect(listHiddenGitHubSecretRecordNames({ prefix: "github-device", database })).toEqual([
-      deviceName,
+    expect(await listHiddenGitHubSecretRecords({ prefix: "github-device", database })).toEqual([
+      { name: deviceName, value: "device-value" },
     ]);
-    expect(listHiddenGitHubSecretRecordNames({ prefix: "github-oauth", database })).toEqual([
-      oauthName,
+    expect(await listHiddenGitHubSecretRecords({ prefix: "github-oauth", database })).toEqual([
+      { name: oauthName, value: "oauth-value" },
     ]);
-    expect(readHiddenGitHubSecretRecord({ name: deviceName, database })).toBe("device-value");
-    expect(readHiddenGitHubSecretRecord({ name: oauthName, database })).toBe("oauth-value");
+    expect(await readHiddenGitHubSecretRecord({ name: deviceName, database })).toBe("device-value");
+    expect(await readHiddenGitHubSecretRecord({ name: oauthName, database })).toBe("oauth-value");
     expect(isSecretValueRegisteredForRedaction("device-value")).toBe(true);
     expect(isSecretValueRegisteredForRedaction("oauth-value")).toBe(true);
     expect(
@@ -301,7 +350,7 @@ describe("secret store", () => {
 
   it.each(["github-device", "github-oauth"] as const)(
     "lists exact live %s records without materializing unrelated credentials",
-    (prefix) => {
+    async (prefix) => {
       const { db } = openOpenClawStateDatabase(database);
       const now = Date.parse("2026-01-01T00:00:00.000Z");
       vi.useFakeTimers();
@@ -378,33 +427,19 @@ describe("secret store", () => {
           null,
         );
       }
-      const execute = vi.spyOn(kyselySync, "executeSqliteQuerySync");
-      try {
-        expect(listHiddenGitHubSecretRecordNames({ prefix, database })).toEqual(
-          fixtures
-            .filter((entry) => entry.accept)
-            .map((entry) => entry.name)
-            .toSorted(),
-        );
-        const materialized = execute.mock.results.flatMap((result) =>
-          result.type === "return" ? result.value.rows : [],
-        );
-        expect(materialized).not.toContainEqual(
-          expect.objectContaining({
-            value: expect.stringMatching(/^synthetic-(sibling|unrelated):/),
-          }),
-        );
-        for (const entry of fixtures) {
-          expect(isSecretValueRegisteredForRedaction(entry.value)).toBe(entry.accept);
-          if (entry.accept) {
-            expect(materialized).toContainEqual(expect.objectContaining({ value: entry.value }));
-          }
-        }
-        expect(isSecretValueRegisteredForRedaction(`synthetic-sibling:${prefix}`)).toBe(false);
-        expect(isSecretValueRegisteredForRedaction(`synthetic-unrelated:${prefix}:0`)).toBe(false);
-      } finally {
-        execute.mockRestore();
+      expect(
+        (await listHiddenGitHubSecretRecords({ prefix, database })).map(({ name }) => name),
+      ).toEqual(
+        fixtures
+          .filter((entry) => entry.accept)
+          .map((entry) => entry.name)
+          .toSorted(),
+      );
+      for (const entry of fixtures) {
+        expect(isSecretValueRegisteredForRedaction(entry.value)).toBe(entry.accept);
       }
+      expect(isSecretValueRegisteredForRedaction(`synthetic-sibling:${prefix}`)).toBe(false);
+      expect(isSecretValueRegisteredForRedaction(`synthetic-unrelated:${prefix}:0`)).toBe(false);
     },
   );
 
@@ -415,13 +450,13 @@ describe("secret store", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
     await write(setupName, "setup-value", { allowedHosts: [] });
-    writeHiddenGitHubSecretRecord({
+    await writeHiddenGitHubSecretRecord({
       name: deviceName,
       value: "device-value",
       updatedBy: "test",
       database,
     });
-    writeHiddenGitHubSecretRecord({
+    await writeHiddenGitHubSecretRecord({
       name: oauthName,
       value: "oauth-value",
       updatedBy: "test",
@@ -431,13 +466,13 @@ describe("secret store", () => {
     vi.setSystemTime(new Date("2026-01-01T00:10:00.001Z"));
     expect(purgeExpiredSecretStoreEntries({ database })).toBe(1);
     expect(countStoredRows(database, setupName)).toBe(0);
-    expect(readHiddenGitHubSecretRecord({ name: deviceName, database })).toBe("device-value");
+    expect(await readHiddenGitHubSecretRecord({ name: deviceName, database })).toBe("device-value");
 
     vi.setSystemTime(new Date("2026-01-01T00:15:00.000Z"));
-    expect(readHiddenGitHubSecretRecord({ name: deviceName, database })).toBe(undefined);
+    expect(await readHiddenGitHubSecretRecord({ name: deviceName, database })).toBe(undefined);
     expect(purgeExpiredSecretStoreEntries({ database })).toBe(1);
     expect(countStoredRows(database, deviceName)).toBe(0);
-    expect(readHiddenGitHubSecretRecord({ name: oauthName, database })).toBe("oauth-value");
+    expect(await readHiddenGitHubSecretRecord({ name: oauthName, database })).toBe("oauth-value");
 
     vi.setSystemTime(new Date("2027-01-01T00:00:00.000Z"));
     expect(purgeExpiredSecretStoreEntries({ database })).toBe(0);
@@ -567,13 +602,13 @@ describe("secret store", () => {
   it("validates and hard-deletes exact hidden GitHub device and OAuth records", async () => {
     const deviceName = "github-device-66666666666666666666666666666666";
     const oauthName = "github-oauth-66666666666666666666666666666666";
-    writeHiddenGitHubSecretRecord({
+    await writeHiddenGitHubSecretRecord({
       name: deviceName,
       value: "device-value",
       updatedBy: null,
       database,
     });
-    writeHiddenGitHubSecretRecord({ name: oauthName, value: "oauth-value", database });
+    await writeHiddenGitHubSecretRecord({ name: oauthName, value: "oauth-value", database });
 
     await expect(
       write("github-oauth-66666666666666666666666666666666", "oauth-value", { updatedBy: null }),
@@ -585,29 +620,29 @@ describe("secret store", () => {
         database,
       }),
     ).rejects.toThrow(expect.objectContaining({ code: "SECRET_STORE_INVALID_NAME" }));
-    expect(() =>
+    await expect(
       writeHiddenGitHubSecretRecord({
         name: "github-device-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         value: "wrong-case",
         updatedBy: null,
         database,
       }),
-    ).toThrow(expect.objectContaining({ code: "SECRET_STORE_INVALID_NAME" }));
-    expect(() =>
+    ).rejects.toThrow(expect.objectContaining({ code: "SECRET_STORE_INVALID_NAME" }));
+    await expect(
       writeHiddenGitHubSecretRecord({
         name: "github-setup-66666666666666666666666666666666",
         value: "wrong-owner",
         updatedBy: null,
         database,
       }),
-    ).toThrow(expect.objectContaining({ code: "SECRET_STORE_INVALID_NAME" }));
+    ).rejects.toThrow(expect.objectContaining({ code: "SECRET_STORE_INVALID_NAME" }));
 
-    deleteHiddenGitHubSecretRecord({ name: deviceName, database });
-    deleteHiddenGitHubSecretRecord({ name: deviceName, database });
-    deleteHiddenGitHubSecretRecord({ name: oauthName, database });
+    await deleteHiddenGitHubSecretRecord({ name: deviceName, database });
+    await deleteHiddenGitHubSecretRecord({ name: deviceName, database });
+    await deleteHiddenGitHubSecretRecord({ name: oauthName, database });
     expect(countStoredRows(database, deviceName)).toBe(0);
     expect(countStoredRows(database, oauthName)).toBe(0);
-    expect(readHiddenGitHubSecretRecord({ name: deviceName, database })).toBe(undefined);
+    expect(await readHiddenGitHubSecretRecord({ name: deviceName, database })).toBe(undefined);
   });
 
   it.each([
@@ -658,6 +693,7 @@ describe("secret store", () => {
     });
     before.exec("DROP TABLE secret_store_entries;");
     before.close();
+    revokeSqliteDatabaseAdmissionsForPath(database.path);
 
     expect(await listSecretStoreEntries({ scope: team, database })).toEqual([]);
     expect(

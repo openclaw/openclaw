@@ -46,11 +46,11 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
   private persistPromise: Promise<void> | null = null;
 
   static async create(storageRootDir: string): Promise<SqliteBackedMatrixSyncStore> {
-    let store: PluginStateKeyedStore<MatrixSyncCacheRecord> | undefined;
+    let store: PluginStateKeyedStore<MatrixSyncCacheRecord, 2> | undefined;
     let persisted: PersistedMatrixSyncStore | null = null;
     let unavailableError: unknown;
     try {
-      store = getMatrixRuntime().state.openKeyedStore<MatrixSyncCacheRecord>(
+      store = getMatrixRuntime().state.openKeyedStoreV2<MatrixSyncCacheRecord>(
         openMatrixSyncCacheStoreOptions(storageRootDir),
       );
       persisted = await readPersistedStoreFromStore({ storageRootDir, store });
@@ -63,7 +63,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
 
   private constructor(
     private readonly storageRootDir: string,
-    private readonly store: PluginStateKeyedStore<MatrixSyncCacheRecord> | undefined,
+    private readonly store: PluginStateKeyedStore<MatrixSyncCacheRecord, 2> | undefined,
     persisted: PersistedMatrixSyncStore | null,
     private readonly storeUnavailableError: unknown,
   ) {
@@ -213,11 +213,9 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     this.dirty = false;
     const payload: PersistedMatrixSyncStore = {
       version: MATRIX_SYNC_CACHE_VERSION,
-      savedSync: this.savedSync ? structuredClone(this.savedSync) : null,
+      savedSync: this.savedSync,
       cleanShutdown: this.cleanShutdown,
-      ...(this.savedClientOptions
-        ? { clientOptions: structuredClone(this.savedClientOptions) }
-        : {}),
+      ...(this.savedClientOptions ? { clientOptions: this.savedClientOptions } : {}),
     };
     try {
       await writeMatrixSyncCacheStateToStore({
@@ -242,7 +240,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     return pending;
   }
 
-  private requireStore(): PluginStateKeyedStore<MatrixSyncCacheRecord> {
+  private requireStore(): PluginStateKeyedStore<MatrixSyncCacheRecord, 2> {
     if (this.store && this.storeUnavailableError == null) {
       return this.store;
     }

@@ -6,6 +6,7 @@ import {
   type AgentMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type {
   TranscriptEntryAnchor,
   SessionTranscriptWriteLockParams,
@@ -243,7 +244,7 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
   try {
     const mirrorPromise = (async () => {
       const userPromptMessage = projectAgentHarnessTranscriptMessageForDisplay({
-        hidden: params.params.trigger === "memory",
+        hidden: params.params.privateCompletion === true || params.params.trigger === "memory",
         inputProvenance: params.params.inputProvenance,
         message: attachUpstreamUserText(
           attachCodexMirrorIdentity(
@@ -275,7 +276,8 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
         return;
       }
       const mirrorResult = await mirror({
-        assertCurrent: params.params.hostCapabilities.assertActive,
+        assertCurrent: createNativeSessionBindingScope(params.params.hostCapabilities.assertActive)
+          .assertLegacyCurrent,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         sessionId: params.params.sessionId,

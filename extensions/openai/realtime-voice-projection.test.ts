@@ -18,6 +18,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
   isProviderAuthProfileConfigured: mocks.isProviderAuthProfileConfiguredMock,
+  isProviderAuthProfileConfiguredAsync: mocks.isProviderAuthProfileConfiguredMock,
   resolveProviderAuthProfileApiKey: mocks.resolveProviderAuthProfileApiKeyMock,
 }));
 const { isProviderAuthProfileConfiguredMock } = mocks;
@@ -29,9 +30,23 @@ const {
 } = createOpenAIRealtimeTestSupport({ ...mocks, buildOpenAIRealtimeVoiceProvider });
 const OPAQUE_REALTIME_MODEL = "gpt-live-test-canary";
 
+function projectionFixture(withBroker = false) {
+  const broker = withBroker ? createQuicksilverBrowserBrokerFixture().broker : undefined;
+  const provider = buildOpenAIRealtimeVoiceProvider({ quicksilverBrowserSessionBroker: broker });
+  const api = readInternalRealtimeVoiceProviderApi(provider);
+  return {
+    provider,
+    api,
+    project: (providerConfig: Record<string, unknown>, config = providerConfig) =>
+      api.projectPublicProjection({ providerConfig, config }),
+    relayConfigured: (providerConfig: Record<string, unknown>) =>
+      api.isGatewayRelayConfiguredAsync({ providerConfig, agentId: "main" }),
+  };
+}
+
 describe("OpenAI realtime public projection", () => {
-  beforeEach(() => resetTestState());
-  afterEach(() => restoreTestEnvironment());
+  beforeEach(resetTestState);
+  afterEach(restoreTestEnvironment);
 
   it("preserves native Talk for forced agent consult", () => {
     const config = { model: "gpt-live-1-codex", consultRouting: "force-agent-consult" };
@@ -43,23 +58,19 @@ describe("OpenAI realtime public projection", () => {
 
   it.each([false, true])(
     "advertises the subscription relay capability independently of OAuth readiness=%s",
-    (hasOAuth) => {
+    async (hasOAuth) => {
       isProviderAuthProfileConfiguredMock.mockImplementation(
         ({ profileTypes }: { profileTypes?: readonly string[] }) =>
           hasOAuth && profileTypes?.includes("oauth") === true,
       );
-      const internalApi = readInternalRealtimeVoiceProviderApi(buildOpenAIRealtimeVoiceProvider());
+      const { project, relayConfigured } = projectionFixture();
       const providerConfig = { model: "gpt-live-1-codex" };
 
-      expect(
-        internalApi.projectPublicProjection({ providerConfig, config: providerConfig }),
-      ).toEqual({
+      expect(project(providerConfig)).toEqual({
         config: providerConfig,
         clientHints: { gatewayRelaySupported: true },
       });
-      expect(internalApi.isGatewayRelayConfigured({ providerConfig, agentId: "main" })).toBe(
-        hasOAuth,
-      );
+      expect(await relayConfigured(providerConfig)).toBe(hasOAuth);
       for (const [azureConfig, supportsRelay] of [
         [{ azureEndpoint: " https://example.openai.azure.com " }, false],
         [{ azureDeployment: " live-deployment " }, false],
@@ -69,68 +80,35 @@ describe("OpenAI realtime public projection", () => {
         [{ azureEndpoint: " \t ", azureDeployment: "" }, true],
       ] as const) {
         const azureProviderConfig = { ...providerConfig, ...azureConfig };
-        expect(
-          internalApi.projectPublicProjection({
-            providerConfig: azureProviderConfig,
-            config: providerConfig,
-          }),
-        ).toEqual({
+        expect(project(azureProviderConfig, providerConfig)).toEqual({
           config: providerConfig,
           clientHints: { gatewayRelaySupported: supportsRelay },
         });
-        expect(
-          internalApi.isGatewayRelayConfigured({
-            providerConfig: azureProviderConfig,
-            agentId: "main",
-          }),
-        ).toBe(hasOAuth && supportsRelay);
+        expect(await relayConfigured(azureProviderConfig)).toBe(hasOAuth && supportsRelay);
       }
     },
   );
 
-  it("admits opaque realtime models without publishing them", () => {
-    const { broker } = createQuicksilverBrowserBrokerFixture();
-    const provider = buildOpenAIRealtimeVoiceProvider({
-      quicksilverBrowserSessionBroker: broker,
-    });
-    const internalApi = readInternalRealtimeVoiceProviderApi(provider);
-    const providerConfig = {
-      apiKey: "test-api-key-platform",
-      model: OPAQUE_REALTIME_MODEL,
-    };
+  it("admits opaque realtime models without publishing them", async () => {
+    const { provider, api, project, relayConfigured } = projectionFixture(true);
+    const providerConfig = { apiKey: "test-api-key-platform", model: OPAQUE_REALTIME_MODEL };
 
     expect(provider.models).not.toContain(OPAQUE_REALTIME_MODEL);
+    expect(await relayConfigured(providerConfig)).toBe(true);
     expect(
-      internalApi.isGatewayRelayConfigured({
-        providerConfig,
-        agentId: "main",
-      }),
-    ).toBe(true);
-    expect(
-      internalApi.resolveGatewayRelayCapabilities({
-        providerConfig,
-        model: OPAQUE_REALTIME_MODEL,
-      }),
+      api.resolveGatewayRelayCapabilities({ providerConfig, model: OPAQUE_REALTIME_MODEL }),
     ).toMatchObject({
       handlesAgentConsult: true,
       supportsToolCalls: false,
       voices: ["marin", "cedar"],
       voiceSelectionPolicy: "allowlist-default",
     });
-    expect(
-      internalApi.projectPublicProjection({
-        providerConfig,
-        config: { model: OPAQUE_REALTIME_MODEL, voice: "marin" },
-      }),
-    ).toEqual({
+    expect(project(providerConfig, { model: OPAQUE_REALTIME_MODEL, voice: "marin" })).toEqual({
       config: { voice: "marin" },
       clientHints: { modelSource: "gateway", gatewayRelaySupported: false },
     });
     expect(
-      internalApi.projectPublicProjection({
-        providerConfig: { model: "gpt-realtime-2.1" },
-        config: { model: "gpt-realtime-2.1", voice: "marin" },
-      }),
+      project({ model: "gpt-realtime-2.1" }, { model: "gpt-realtime-2.1", voice: "marin" }),
     ).toEqual({ config: { model: "gpt-realtime-2.1", voice: "marin" } });
   });
 
@@ -138,30 +116,10 @@ describe("OpenAI realtime public projection", () => {
     {
       model: "gpt-live-1",
       selectedVoice: "quartz",
-      voices: [
-        "alloy",
-        "ash",
-        "ballad",
-        "beacon",
-        "bossa",
-        "cedar",
-        "cinder",
-        "coral",
-        "delta",
-        "echo",
-        "gleam",
-        "marin",
-        "meridian",
-        "quartz",
-        "ripple",
-        "sage",
-        "shimmer",
-        "stone",
-        "tempo",
-        "verse",
-        "vesper",
-        "willow",
-      ],
+      voices:
+        "alloy ash ballad beacon bossa cedar cinder coral delta echo gleam marin meridian quartz ripple sage shimmer stone tempo verse vesper willow".split(
+          " ",
+        ),
     },
     {
       model: "gpt-live-1-codex",
@@ -169,19 +127,11 @@ describe("OpenAI realtime public projection", () => {
       voices: ["arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"],
     },
   ])("publishes $model with its own catalog voice profile", ({ model, selectedVoice, voices }) => {
-    const { broker } = createQuicksilverBrowserBrokerFixture();
-    const provider = buildOpenAIRealtimeVoiceProvider({
-      quicksilverBrowserSessionBroker: broker,
-    });
-    const internalApi = readInternalRealtimeVoiceProviderApi(provider);
+    const { provider, api, project } = projectionFixture(true);
 
     expect(provider.models).toContain(model);
     expect(provider.capabilities).toMatchObject({ voicesByModel: { [model]: voices } });
-    expect(
-      internalApi.resolveGatewayRelayCapabilities({
-        providerConfig: { model },
-      }),
-    ).toMatchObject({
+    expect(api.resolveGatewayRelayCapabilities({ providerConfig: { model } })).toMatchObject({
       handlesAgentConsult: true,
       supportsToolCalls: false,
       supportsBargeIn: false,
@@ -190,12 +140,7 @@ describe("OpenAI realtime public projection", () => {
       voices,
       voiceSelectionPolicy: "allowlist-default",
     });
-    expect(
-      internalApi.projectPublicProjection({
-        providerConfig: { model },
-        config: { model, voice: selectedVoice },
-      }),
-    ).toEqual({
+    expect(project({ model }, { model, voice: selectedVoice })).toEqual({
       config: { model, voice: selectedVoice },
       clientHints: { gatewayRelaySupported: true },
     });

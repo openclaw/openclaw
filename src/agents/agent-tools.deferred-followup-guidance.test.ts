@@ -14,6 +14,7 @@ import {
 } from "./tool-description-presets.js";
 import { createAgentsWaitTool } from "./tools/agents-wait-tool.js";
 import { createConversationsSendTool } from "./tools/conversation-tools.js";
+import { createNodesTool } from "./tools/nodes-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
@@ -37,6 +38,21 @@ function findToolDescription(
 }
 
 describe("createOpenClawCodingTools availability guidance", () => {
+  it.each([false, true])(
+    "directs inter-session messages only to an available sessions_send (available=%s)",
+    (hasSessionsSend) => {
+      const [tool] = applyToolAvailabilityDescriptions([
+        createSessionsYieldTool(),
+        ...(hasSessionsSend
+          ? [{ name: "sessions_send", description: "send" } as AnyAgentTool]
+          : []),
+      ]);
+
+      expect(tool?.description).toContain("Does not message other sessions");
+      expect(tool?.description.includes("use sessions_send")).toBe(hasSessionsSend);
+    },
+  );
+
   it.each([
     { available: [], mode: "suggest", deferred: false },
     { available: ["sessions_yield", "agents_wait"], mode: "prefer", deferred: true },
@@ -98,18 +114,10 @@ describe("createOpenClawCodingTools availability guidance", () => {
 
     expect(exec.toolNames).toEqual(["exec", "process", schedulerToolName]);
     expect(exec.description).toBe(
-      "Run shell now; background continuation supported. Completed calls return command output directly. Use process only when exec reports running with a sessionId; output text alone is not a process handle. Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion. Omit host to use the session's configured host. No sleep loops for reminders/follow-ups; use automations. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
+      "Run shell now; background continuation supported. Completed calls return command output directly. Use process only when exec reports running with a sessionId; output text alone is not a process handle. Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion. Omit host/node to use the session's configured host. No sleep loops for reminders/follow-ups; use automations. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
     );
     expect(process.description).toBe(
       "Control existing exec: list, poll, log, write, send-keys, submit, paste, kill. poll/log: status, output, quiet success, completion without auto-wake, input hints. Others: input/intervention. No polling as timer/reminder; scheduled follow-up uses automations.",
-    );
-  });
-
-  it("keeps shell-quoting guidance without background continuation", () => {
-    const exec = findToolDescription("exec", undefined, false);
-
-    expect(exec.description).toBe(
-      "Run shell and wait for completion. Omit host to use the session's configured host. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
     );
   });
 
@@ -151,19 +159,22 @@ describe("createOpenClawCodingTools availability guidance", () => {
     }
   });
 
-  it("describes only executable conversation routes", () => {
-    const [tool] = applyToolAvailabilityDescriptions([
-      { name: "sessions_send", description: describeSessionsSendTool() },
-      ...["conversations_list", "conversations_send"].map((name) => ({
-        name,
-        description: "available",
-      })),
-    ] as AnyAgentTool[]);
+  it.each([false, true])(
+    "describes only executable conversation routes (allowThreadTargets=%s)",
+    (allowThreadTargets) => {
+      const [tool] = applyToolAvailabilityDescriptions([
+        { name: "sessions_send", description: describeSessionsSendTool({ allowThreadTargets }) },
+        ...["conversations_list", "conversations_send"].map((name) => ({
+          name,
+          description: "available",
+        })),
+      ] as AnyAgentTool[]);
 
-    expect(tool?.description).toContain("conversations_list");
-    expect(tool?.description).toContain("conversations_send");
-    expect(tool?.description).not.toContain("conversations_turn");
-  });
+      expect(tool?.description).toContain("conversations_list");
+      expect(tool?.description).toContain("conversations_send");
+      expect(tool?.description).not.toContain("conversations_turn");
+    },
+  );
 
   it("keeps authorized history guidance and the prepared session URL", () => {
     const sessionLinkBase = "https://gateway.example/control";
@@ -231,7 +242,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
     ] as AnyAgentTool[]);
 
     expect(tool?.description).toContain(
-      "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner. Once delegation is appropriate, use a hidden subagent unless the user needs a separate, independently steerable session. This includes substantial, bounded API/service investigations that can be handed off with the needed context and capabilities. For hidden subagents, omit `visible` or set it false, and report results through the parent.",
+      "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner. Once delegation is appropriate, use a hidden subagent unless the user needs to revisit or steer deliberately supervised child work. This includes substantial, bounded API/service investigations that can be handed off with the needed context and capabilities. For hidden subagents, omit `visible` or set it false, and report results through the parent.",
     );
     expect(tool?.description).not.toContain("trial-and-error");
     expect(tool?.description).toContain("configured agent (see agents_list);");
@@ -243,5 +254,27 @@ describe("createOpenClawCodingTools availability guidance", () => {
     expect(tool?.description).toContain(
       "When diagnosing a missing result from an announcing child, use `subagents` to inspect execution and delivery status. Recover existing results or follow up within the still-authorized task; respect intentional cancellation and never loop-poll.",
     );
+  });
+
+  it("names exec for file listing only when exec survives tool filtering", () => {
+    const nodes = createNodesTool();
+    const [withoutExec] = applyToolAvailabilityDescriptions([nodes]);
+    const [withExec] = applyToolAvailabilityDescriptions([
+      nodes,
+      { name: "exec", description: "exec base" } as AnyAgentTool,
+    ]);
+
+    expect(withoutExec?.description).toContain("fs.listDir returns sub-directories only");
+    expect(withoutExec?.description).not.toContain("use the exec tool with host=node");
+    expect(withExec?.description).toContain(
+      "fs.listDir returns sub-directories only; use the exec tool with host=node to list files",
+    );
+    const invokeCommand = (
+      expectDefined(withoutExec, "nodes tool").parameters as {
+        properties?: Record<string, { description?: string }>;
+      }
+    ).properties?.invokeCommand;
+    expect(invokeCommand?.description).toContain("fs.listDir returns sub-directories only");
+    expect(invokeCommand?.description).not.toContain("use the exec tool");
   });
 });

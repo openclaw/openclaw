@@ -1,18 +1,20 @@
 import type { HeapProfiler, Runtime } from "node:inspector";
 import type { HeapSpaceInfo } from "node:v8";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { DiagnosticsHeapProfileParams } from "../../packages/gateway-protocol/src/schema/diagnostics.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
-  assertProfile,
   captureDiagnosticProfile,
+  createInspectorProfileCapture,
   DIAGNOSTIC_PROFILE_MAX_BYTES,
   sanitizeDiagnosticProfileFrame,
 } from "./diagnostic-profile.js";
 
 // Node's inspector declarations omit these fields from the current V8 protocol.
-type SamplingNode = HeapProfiler.SamplingHeapProfileNode & { id: number; children: SamplingNode[] };
-type SamplingProfile = {
+type SamplingNode = Omit<HeapProfiler.SamplingHeapProfileNode, "children"> & {
+  id: number;
+  children: SamplingNode[];
+};
+export type SamplingProfile = {
   head: SamplingNode;
   samples: Array<{ size: number; nodeId: number; ordinal: number }>;
 };
@@ -41,30 +43,17 @@ type HeapProfileResult = Metadata & {
   truncated: boolean;
 } & ({ profile: SamplingProfile } | { summary: AllocationSummary[] });
 
-function boundProfile(
-  profile: HeapProfiler.SamplingHeapProfile,
+export function sanitizeDiagnosticHeapProfile(
+  profile: SamplingProfile,
   packageRoot: string | null,
   metadata: Metadata,
 ): HeapProfileResult {
-  assertProfile(Boolean(profile?.head) && isRecord(profile) && Array.isArray(profile.samples));
   const samples = profile.samples;
   type Row = AllocationSummary & { node: SamplingNode; parent?: Row };
   const rows = new Map<number, Row>();
-  const pending: Array<{ source: HeapProfiler.SamplingHeapProfileNode; parent?: Row }> = [
-    { source: profile.head },
-  ];
+  const pending: Array<{ source: SamplingNode; parent?: Row }> = [{ source: profile.head }];
   let redactedNodeCount = 0;
   for (const { source, parent } of pending) {
-    assertProfile(
-      isRecord(source) &&
-        typeof source.id === "number" &&
-        Number.isSafeInteger(source.id) &&
-        source.id > 0 &&
-        !rows.has(source.id) &&
-        Number.isSafeInteger(source.selfSize) &&
-        source.selfSize >= 0 &&
-        Array.isArray(source.children),
-    );
     const { callFrame, redacted } = sanitizeDiagnosticProfileFrame(source.callFrame, packageRoot);
     redactedNodeCount += Number(redacted);
     const node: SamplingNode = {
@@ -91,25 +80,12 @@ function boundProfile(
   let unattributedSampleCount = 0;
   let unattributedSampleBytes = 0;
   for (const sample of samples) {
-    assertProfile(
-      isRecord(sample) &&
-        typeof sample.nodeId === "number" &&
-        Number.isSafeInteger(sample.nodeId) &&
-        sample.nodeId > 0 &&
-        typeof sample.size === "number" &&
-        Number.isSafeInteger(sample.size) &&
-        sample.size >= 0 &&
-        typeof sample.ordinal === "number" &&
-        Number.isSafeInteger(sample.ordinal) &&
-        sample.ordinal >= 0,
-    );
     const row = rows.get(sample.nodeId);
     if (!row) {
       // V8 can sample profile construction after a call site was translated.
       // Preserve native tree sizes and report the missing attribution separately.
       unattributedSampleCount++;
       unattributedSampleBytes += sample.size;
-      assertProfile(Number.isSafeInteger(unattributedSampleBytes));
       continue;
     }
     row.count++;
@@ -119,11 +95,8 @@ function boundProfile(
   for (const row of ordered.toReversed()) {
     if (row.parent) {
       row.parent.totalBytes += row.totalBytes;
-      assertProfile(Number.isSafeInteger(row.parent.totalBytes));
     }
   }
-  const head = ordered[0]?.node;
-  assertProfile(head !== undefined);
   const common = {
     ...metadata,
     redactedNodeCount,
@@ -133,7 +106,7 @@ function boundProfile(
   const raw: HeapProfileResult = {
     ...common,
     truncated: unattributedSampleCount > 0,
-    profile: { head, samples: safeSamples },
+    profile: { head: ordered[0]!.node, samples: safeSamples },
   };
   if (boundedJsonUtf8Bytes(raw, DIAGNOSTIC_PROFILE_MAX_BYTES).complete) {
     return raw;
@@ -179,8 +152,10 @@ export function captureDiagnosticHeapProfile(
 ) {
   const samplingIntervalBytes = Math.max(4_096, options.samplingIntervalBytes ?? 32_768);
   const collectionOptions = {
-    includeObjectsCollectedByMajorGC: options.includeObjectsCollectedByMajorGC ?? false,
-    includeObjectsCollectedByMinorGC: options.includeObjectsCollectedByMinorGC ?? false,
+    includeObjectsCollectedByMajorGC:
+      options.includeObjectsCollectedByMajorGC ?? options.includeCollected ?? false,
+    includeObjectsCollectedByMinorGC:
+      options.includeObjectsCollectedByMinorGC ?? options.includeCollected ?? false,
   };
   const maxDurationMs =
     collectionOptions.includeObjectsCollectedByMajorGC ||
@@ -192,16 +167,20 @@ export function captureDiagnosticHeapProfile(
     signal: options.signal,
     hasAuthority: options.hasAuthority,
     durationMs,
-    setup: (session) => session.post("HeapProfiler.enable"),
-    start: (session) =>
-      session.post("HeapProfiler.startSampling", {
-        samplingInterval: samplingIntervalBytes,
-        ...collectionOptions,
+    create: (inspector) =>
+      createInspectorProfileCapture(inspector, {
+        setup: (session) => session.post("HeapProfiler.enable"),
+        start: (session) =>
+          session.post("HeapProfiler.startSampling", {
+            samplingInterval: samplingIntervalBytes,
+            ...collectionOptions,
+          }),
+        stop: (session) => session.post("HeapProfiler.stopSampling"),
+        disable: (session) => session.post("HeapProfiler.disable"),
       }),
-    stop: (session) => session.post("HeapProfiler.stopSampling"),
-    disable: (session) => session.post("HeapProfiler.disable"),
     sanitize: (profile, packageRoot, measurement) =>
-      boundProfile(profile, packageRoot, {
+      // SAFETY: The native protocol includes IDs and samples omitted by Node's declarations.
+      sanitizeDiagnosticHeapProfile(profile as SamplingProfile, packageRoot, {
         durationMs: measurement.durationMs,
         samplingIntervalBytes,
         ...collectionOptions,

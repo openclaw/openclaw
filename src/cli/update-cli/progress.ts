@@ -3,6 +3,7 @@ import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
+import { isStateDatabaseMaintenanceContention } from "../../infra/gateway-state-owner-record.js";
 import { formatUpdateDoctorLintFinding } from "../../infra/update-doctor-lint.js";
 import { formatUpdateFailureFact } from "../../infra/update-failure-facts-format.js";
 import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
@@ -151,7 +152,8 @@ export function createUpdateProgress(
         polling = record?.status === "running";
       }
     } catch (error) {
-      if (!controller.signal.aborted) {
+      // Doctor children hold their own custody; observation waits without borrowing it.
+      if (!controller.signal.aborted && !isStateDatabaseMaintenanceContention(error)) {
         polling = false;
         defaultRuntime.error(`Update progress history unavailable: ${formatErrorMessage(error)}`);
       }

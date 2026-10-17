@@ -84,6 +84,23 @@ function createAssetFixture(
 }
 
 describe("selected plugin runtime assets", () => {
+  it("builds package assets against the packed tree's tsconfig, not release tooling's", async () => {
+    const fixture = createAssetFixture({ generated: true });
+    fs.writeFileSync(path.join(fixture.packageDir, fixture.source), "selected asset");
+    vi.stubEnv("TSX_TSCONFIG_PATH", "/release-tooling/tsconfig.json");
+    const runner = vi.spyOn(managedCommands, "runManagedCommand").mockResolvedValueOnce(0);
+    try {
+      await buildPluginNpmRuntime({ ...fixture, logLevel: "silent" });
+      const env = runner.mock.calls[0]?.[0].env;
+      expect(env).toBeDefined();
+      expect(env).not.toHaveProperty("TSX_TSCONFIG_PATH");
+      expect(env?.PATH).toBe(process.env.PATH);
+    } finally {
+      runner.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("awaits bounded asset execution before publishing package assets", async () => {
     const fixture = createAssetFixture({ generated: true });
     fs.writeFileSync(path.join(fixture.packageDir, fixture.source), "previous source asset");
@@ -153,7 +170,30 @@ describe("selected plugin runtime assets", () => {
       execFileSync("git", ["add", "extensions/other/package.json"], { cwd: fixture.repoRoot });
     }
 
+    fs.writeFileSync(
+      path.join(fixture.packageDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "demo",
+        themes: [
+          {
+            id: "mission",
+            name: "Mission",
+            description: "Mission theme",
+            source: "theme.json",
+            icons: { rocket: "assets/rocket.svg" },
+          },
+        ],
+      }),
+    );
+    fs.writeFileSync(path.join(fixture.packageDir, "theme.json"), "{}");
+    fs.writeFileSync(
+      path.join(fixture.packageDir, "assets/rocket.svg"),
+      '<svg xmlns="http://www.w3.org/2000/svg"/>',
+    );
     const result = await buildPluginNpmRuntime({ ...fixture, logLevel: "silent" });
+    expect(result?.packageFiles).toEqual(
+      expect.arrayContaining(["theme.json", "assets/rocket.svg"]),
+    );
     expect(result?.copiedStaticAssets).toEqual(["dist/assets/message.txt"]);
     const entry = pathToFileURL(path.join(fixture.packageDir, "dist", "index.js")).href;
     expect(

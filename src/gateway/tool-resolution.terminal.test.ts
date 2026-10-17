@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -30,12 +34,14 @@ describe("resolveGatewayScopedTools terminal ownership", () => {
     currentPty.emitData("current session output\n");
     const context = { terminalSessions: manager } as unknown as GatewayRequestContext;
 
+    const cfg: OpenClawConfig = { tools: { allow: ["terminal"], exec: { mode: "deny" } } };
+    setRuntimeConfigSnapshot(cfg);
     try {
       const result = await withPluginRuntimeGatewayRequestScope(
         { context, isWebchatConnect: () => false },
         async () =>
           await resolveGatewayScopedTools({
-            cfg: { tools: { allow: ["terminal"], exec: { mode: "deny" } } } as OpenClawConfig,
+            cfg,
             sessionKey: childSessionKey,
             sessionId: "loopback-session-id",
             execSession: { permissionMode: "read-only" },
@@ -90,6 +96,7 @@ describe("resolveGatewayScopedTools terminal ownership", () => {
       expect(otherPty.killed).toBe(false);
     } finally {
       manager.disposeAll();
+      clearRuntimeConfigSnapshot();
     }
   });
 });

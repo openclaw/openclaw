@@ -1,3 +1,4 @@
+import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -21,6 +22,7 @@ export function readSessionRowModelFacts(params: {
   agentId: string;
   entry?: SessionEntry;
   preparedAcpMeta?: SessionEntry["acp"] | null;
+  preparedRuntimeOwnership?: AgentHarnessSessionRuntimeOwnership | null;
   /** Null records an admitted absence; only standalone readers may discover metadata. */
   preparedModelMetadata?: PluginMetadataSnapshot | null;
   source: GatewaySessionModelSource;
@@ -41,6 +43,7 @@ export function readSessionRowModelFacts(params: {
     source,
     agentId,
     rowContext,
+    preparedRuntimeOwnership: params.preparedRuntimeOwnership,
     allowPluginNormalization: !lightweight,
     manifestPlugins: metadataSnapshot === null ? [] : metadataSnapshot,
   });
@@ -78,6 +81,6 @@ export function readSessionRowModelFacts(params: {
     rowModelIdentity,
     thinkingProjection,
     catalogEntry:
-      rowModelCatalog && provider && model ? thinkingProjection.catalogEntry : undefined,
+      rowModelCatalog && provider && model ? thinkingProjection.capacityCatalogEntry : undefined,
   };
 }

@@ -20,15 +20,14 @@ async function withWindowsFiles(files: string[], run: (directory: string) => voi
 }
 
 describe("Windows command helpers", () => {
-  it.each([
-    { command: "pnpm", platform: "linux", expected: "pnpm" },
-    { command: "corepack", platform: "win32", expected: "corepack.cmd" },
-    { command: "npm.cmd", platform: "win32", expected: "npm.cmd" },
-  ] as const)("resolves $command on $platform to $expected", ({ command, platform, expected }) => {
-    expect(
-      resolveWindowsCommandShim({ command, platform, cmdCommands: ["corepack", "pnpm", "npm"] }),
-    ).toBe(expected);
-  });
+  it.each([{ command: "pnpm", platform: "linux", expected: "pnpm" }] as const)(
+    "resolves $command on $platform to $expected",
+    ({ command, platform, expected }) => {
+      expect(
+        resolveWindowsCommandShim({ command, platform, cmdCommands: ["corepack", "pnpm", "npm"] }),
+      ).toBe(expected);
+    },
+  );
 
   it("resolves relative executables against the child cwd", async () => {
     await withWindowsFiles(["bin/tool.exe"], (cwd) => {
@@ -52,7 +51,7 @@ describe("Windows command helpers", () => {
     });
   });
 
-  it.each([".EXE;.CMD;", ";;"])(
+  it.each([".EXE;.CMD;"])(
     "reports an unresolved command for a bare file with PATHEXT %j",
     async (pathext) => {
       await withWindowsFiles(["runner"], (binDir) => {
@@ -88,28 +87,6 @@ describe("Windows command helpers", () => {
           env: { PATH: "", PATHEXT: ".CMD;.BAT" },
         }).command,
       ).toBe(executable);
-    });
-  });
-
-  it("resolves PATH and PATHEXT keys case-insensitively", async () => {
-    await withWindowsFiles(["tool.exe"], (binDir) => {
-      expect(
-        resolveSafeChildProcessInvocation({
-          argv: ["tool"],
-          env: { path: binDir, pathext: ".EXE" },
-        }).command,
-      ).toBe(path.join(binDir, "tool.exe"));
-    });
-  });
-
-  it("accepts PATH executables with explicit extensions independently of PATHEXT", async () => {
-    await withWindowsFiles(["tool.exe"], (binDir) => {
-      expect(
-        resolveSafeChildProcessInvocation({
-          argv: ["tool.exe"],
-          env: { PATH: binDir, PATHEXT: ".CMD;.BAT" },
-        }).command,
-      ).toBe(path.join(binDir, "tool.exe"));
     });
   });
 

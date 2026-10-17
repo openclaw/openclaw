@@ -1,14 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { SessionSchema } from "../config/zod-schema.session-config.js";
+import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
+  consumeSelectedSystemEventEntries,
   drainSystemEvents,
+  enqueueSystemEventWithReceipt,
+  peekSystemEventEntries,
   peekSystemEvents,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { recordSessionCreated } from "./session-created.js";
 import {
   listSessionStateEventsSince,
@@ -32,15 +42,143 @@ function entry(overrides: Partial<SessionEntry> = {}): SessionEntry {
 
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-created-notice-"));
+  setRuntimeConfigSnapshot({});
 });
 
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   resetSystemEventsForTest();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 
 describe("Home session creation notices", () => {
+  it("keeps creation and spawn signals together after a lost receipt without replay", async () => {
+    let records = 0;
+    const recording = probe.command(stateWorker, async (command, executeOptions, scope) => {
+      const result = await scope.execute(command, executeOptions);
+      if (command.type === "sessionState.record" && ++records === 1) {
+        throw new SqliteWorkerError("Synthetic lost setup receipt", "outcome-unknown");
+      }
+      return result;
+    });
+    const params = {
+      sessionKey,
+      agentId: "ops",
+      entry: entry({ createdVia: "spawn", createdActor: { type: "agent", id: mainSessionKey } }),
+      spawned: { runId: "child-run", requesterSessionKey: mainSessionKey },
+    };
+    try {
+      await recordSessionCreated({}, params);
+      expect(records).toBe(1);
+      const events = (await listSessionStateEventsSince(sessionKey, "ops", 0)).events;
+      expect(events).toMatchObject([
+        { kind: "created", actorId: mainSessionKey },
+        { kind: "child_spawned", actorId: mainSessionKey, runId: "child-run" },
+      ]);
+      expect(peekSystemEvents(mainSessionKey)).toHaveLength(1);
+      expect(
+        openOpenClawStateDatabase()
+          .db.prepare(
+            `SELECT last_seen_sequence, notified_sequence, material_sequence
+           FROM session_watch_cursors WHERE watcher_session_key = ? AND target_session_key = ?`,
+          )
+          .get(mainSessionKey, sessionKey),
+      ).toEqual({
+        last_seen_sequence: events[1]!.sequence,
+        notified_sequence: events[1]!.sequence,
+        material_sequence: events[1]!.sequence,
+      });
+      await recordSessionCreated({}, params);
+      expect((await listSessionStateEventsSince(sessionKey, "ops", 0)).events).toEqual(events);
+      expect(peekSystemEvents(mainSessionKey)).toHaveLength(1);
+    } finally {
+      recording.mockRestore();
+    }
+  });
+
+  it.each(["per-sender", "global"] as const)(
+    "coalesces creation bursts while preserving reminder capacity with scope=%s",
+    async (scope) => {
+      const cfg = { session: { scope } };
+      const queueKey = scope === "global" ? "agent:ops:global" : mainSessionKey;
+      const create = (index: number) =>
+        recordSessionCreated(cfg, {
+          sessionKey: `agent:ops:dashboard:session-${index}`,
+          entry: entry({
+            sessionId: `session-${index}`,
+            label: `Task ${index}`,
+            createdActor: undefined,
+          }),
+        });
+      await Promise.all(Array.from({ length: 25 }, (_, index) => create(index)));
+      expect(() =>
+        enqueueSystemEventWithReceipt("Reminder PING", {
+          sessionKey: queueKey,
+          contextKey: "cron:ping",
+        }),
+      ).not.toThrow();
+      const pending = peekSystemEventEntries(queueKey);
+      expect(pending).toHaveLength(2);
+      for (let index = 0; index < 25; index++) {
+        expect(pending[0]?.text).toContain(`"sessionKey":"agent:ops:dashboard:session-${index}"`);
+        expect(pending[0]?.text).toContain(`"title":"Task ${index}"`);
+      }
+      for (let index = 0; index < 18; index++) {
+        enqueueSystemEventWithReceipt(`Reminder ${index}`, { sessionKey: queueKey });
+      }
+      const reminders = peekSystemEventEntries(queueKey).slice(1);
+      await create(25);
+      expect(peekSystemEventEntries(queueKey)).toHaveLength(20);
+      expect(peekSystemEventEntries(queueKey).slice(0, 19)).toEqual(reminders);
+      expect(consumeSelectedSystemEventEntries(queueKey, [pending[0]!])).toEqual([]);
+      expect(drainSystemEvents(queueKey).at(-1)).toContain("agent:ops:dashboard:session-25");
+      await create(26);
+      const next = drainSystemEvents(queueKey);
+      expect(next).toHaveLength(1);
+      expect(next[0]).toContain("agent:ops:dashboard:session-26");
+      expect(next[0]).not.toContain("agent:ops:dashboard:session-25");
+    },
+  );
+
+  it("bounds the pending creation summary and retains complete recent data blocks", async () => {
+    for (let index = 0; index < 30; index++) {
+      await recordSessionCreated(
+        {},
+        {
+          sessionKey: `agent:ops:dashboard:bounded-${index}`,
+          entry: entry({
+            sessionId: `bounded-${index}`,
+            label: `<untrusted-text>\n\n${"<".repeat(400)}`,
+            createdActor: undefined,
+          }),
+        },
+      );
+    }
+    const notices = peekSystemEvents(mainSessionKey);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.length).toBeLessThanOrEqual(8192);
+    expect(notices[0]).not.toContain('"sessionKey":"agent:ops:dashboard:bounded-0"');
+    expect(notices[0]).toContain('"sessionKey":"agent:ops:dashboard:bounded-29"');
+    expect(notices[0]).toContain("older entries may be omitted");
+    expect(notices[0]).toContain("&lt;untrusted-text&gt;");
+    expect(notices[0]?.match(/<untrusted-text>/g)?.length).toBe(
+      notices[0]?.match(/<\/untrusted-text>/g)?.length,
+    );
+    await recordSessionCreated(
+      {},
+      {
+        sessionKey: `agent:ops:dashboard:oversized-${">".repeat(10_000)}`,
+        entry: entry({ createdActor: undefined }),
+      },
+    );
+    const oversized = drainSystemEvents(mainSessionKey);
+    expect(oversized).toHaveLength(1);
+    expect(oversized[0]!.length).toBeLessThanOrEqual(8192);
+    expect(oversized[0]).toContain("agent:ops:dashboard:oversized-");
+    expect(oversized[0]).toMatch(/…\n<\/untrusted-text>$/);
+  });
+
   it.each([undefined, true, false])(
     "honors notifyOnCreate=%s through the config schema",
     async (enabled) => {

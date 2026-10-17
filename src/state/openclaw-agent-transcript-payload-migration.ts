@@ -3,6 +3,7 @@ import {
   MAX_COMPRESSED_EVENT_BYTES,
   prepareTranscriptPayload,
 } from "../config/sessions/transcript-payload.js";
+import { readSqliteTextEncoding } from "../infra/sqlite-schema-admission.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { extractSqliteTableSchema, quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import { resolveZstdCodec } from "../infra/zstd-codec.js";
@@ -72,7 +73,7 @@ export function migrateTranscriptPayloadStorageInTransaction(database: DatabaseS
     );
   }
   assertTranscriptRebuildInputs(database);
-  const utf8 = database.prepare("PRAGMA encoding").get()?.encoding === "UTF-8";
+  const utf8 = readSqliteTextEncoding(database) === "UTF-8";
   const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
   const codec = resolveZstdCodec();
   database.exec(
@@ -124,7 +125,7 @@ export function migrateTranscriptPayloadStorageInTransaction(database: DatabaseS
         // Invalid historical UTF-8 remains native TEXT, preserving its exact stored bytes.
       }
       if (text !== undefined) {
-        const payload = prepareTranscriptPayload(database, text);
+        const payload = prepareTranscriptPayload(database, text, undefined, "UTF-8");
         navigation = payload.navigation_json;
         if (payload.event_zstd !== null) {
           if (

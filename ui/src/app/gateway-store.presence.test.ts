@@ -1,0 +1,137 @@
+// @vitest-environment node
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  createGatewayEvent,
+  createGatewayStoreTestStore,
+  GATEWAY_STORE_TEST_HELLO,
+  stubGatewayStoreTestGlobals,
+} from "./gateway-store.test-support.ts";
+
+const first = { ts: 1, instanceId: "first", host: "First" };
+const second = { ts: 2, instanceId: "second", host: "Second" };
+const hello = () => ({ ...GATEWAY_STORE_TEST_HELLO, snapshot: { presence: [first] } });
+const reset = (version: number, presence = [first], keys = ["first-key"]) => ({
+  reset: true,
+  version,
+  presence,
+  keys,
+});
+
+let store: ReturnType<typeof createGatewayStoreTestStore>;
+beforeEach(() => {
+  stubGatewayStoreTestGlobals();
+  store = createGatewayStoreTestStore();
+  store.gateway.start();
+  store.current().opts.onHello?.(hello());
+});
+afterEach(() => {
+  store.gateway.stop();
+  vi.unstubAllGlobals();
+});
+
+describe("Gateway presence delivery", () => {
+  it("publishes reconstructed snapshots to every consumer in server order", () => {
+    const events = vi.fn();
+    store.gateway.subscribeEvents(events);
+    store.gateway.subscribeEventLog(() => {});
+    const send = (payload: unknown) =>
+      store.current().opts.onEvent?.(createGatewayEvent("presence", payload));
+    send(reset(2));
+    const changed = { ...first, host: "Changed" };
+    send({
+      base: 2,
+      version: 3,
+      upsert: [
+        { key: "first-key", presence: changed },
+        { key: "second-key", presence: second },
+      ],
+      remove: [],
+      order: ["second-key", "first-key"],
+    });
+    expect(events.mock.lastCall?.[0].payload).toEqual({ presence: [second, changed] });
+    expect(store.gateway.eventLog[0]?.payload).toEqual({ presence: [second, changed] });
+    send({ base: 3, version: 4, upsert: [], remove: ["first-key"], order: ["second-key"] });
+    expect(events.mock.lastCall?.[0].payload).toEqual({ presence: [second] });
+    send(reset(5));
+    expect(events.mock.lastCall?.[0].payload).toEqual({ presence: [first] });
+    expect(store.current().request).not.toHaveBeenCalled();
+  });
+
+  it("deduplicates mismatched deltas and publishes the recovered full snapshot", async () => {
+    const recovery = createDeferred<ReturnType<typeof reset>>();
+    store.current().request.mockReturnValue(recovery.promise);
+    const events = vi.fn();
+    store.gateway.subscribeEvents(events);
+    const event = createGatewayEvent("presence", {
+      base: 1,
+      version: 2,
+      upsert: [],
+      remove: [],
+      order: [],
+    });
+    store.current().opts.onEvent?.(event);
+    store.current().opts.onEvent?.(event);
+    expect(store.current().request).toHaveBeenCalledTimes(1);
+    expect(store.current().request).toHaveBeenCalledWith("system-presence", { snapshot: true });
+    expect(events).not.toHaveBeenCalled();
+    recovery.resolve(reset(4, [second], ["second-key"]));
+    await recovery.promise;
+    expect(events.mock.lastCall?.[0].payload).toEqual({ presence: [second] });
+    store.current().opts.onEvent?.(
+      createGatewayEvent("presence", {
+        base: 4,
+        version: 5,
+        upsert: [],
+        remove: ["second-key"],
+        order: [],
+      }),
+    );
+    expect(events.mock.lastCall?.[0].payload).toEqual({ presence: [] });
+  });
+
+  it("never replaces a newer full event with a pending recovery, even at equal version", async () => {
+    const recovery = createDeferred<ReturnType<typeof reset>>();
+    store.current().request.mockReturnValue(recovery.promise);
+    const events = vi.fn();
+    store.gateway.subscribeEvents(events);
+    store
+      .current()
+      .opts.onEvent?.(
+        createGatewayEvent("presence", { base: 9, version: 10, upsert: [], remove: [], order: [] }),
+      );
+    store.current().opts.onEvent?.(createGatewayEvent("presence", reset(10)));
+    recovery.resolve(reset(10, [second], ["second-key"]));
+    await recovery.promise;
+    expect(events).toHaveBeenCalledTimes(1);
+    expect(events.mock.lastCall?.[0].payload).toEqual({ presence: [first] });
+  });
+
+  it("retires keyed state and pending recovery on a new hello from the same client", async () => {
+    const recovery = createDeferred<ReturnType<typeof reset>>();
+    const current = store.current();
+    current.request.mockReturnValue(recovery.promise);
+    const events = vi.fn();
+    store.gateway.subscribeEvents(events);
+    current.opts.onEvent?.(createGatewayEvent("presence", reset(2)));
+    current.opts.onEvent?.(
+      createGatewayEvent("presence", { base: 9, version: 10, upsert: [], remove: [], order: [] }),
+    );
+    current.opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
+    current.opts.onHello?.(hello());
+    recovery.resolve(reset(10, [second], ["second-key"]));
+    await recovery.promise;
+    expect(events).toHaveBeenCalledTimes(1);
+    current.opts.onEvent?.(createGatewayEvent("presence", reset(1)));
+    current.opts.onEvent?.(
+      createGatewayEvent("presence", {
+        base: 1,
+        version: 2,
+        upsert: [{ key: "second-key", presence: second }],
+        remove: ["first-key"],
+        order: ["second-key"],
+      }),
+    );
+    expect(events.mock.lastCall?.[0].payload).toEqual({ presence: [second] });
+  });
+});

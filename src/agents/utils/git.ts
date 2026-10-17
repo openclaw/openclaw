@@ -70,16 +70,12 @@ function parseGenericGitUrl(url: string): GitSource | null {
     }
   }
 
-  const normalizedPath = normalizeGitPath(path);
-  if (!isSafeGitHost(host) || !normalizedPath) {
-    return null;
-  }
+  return normalizeGitSource(host, path);
+}
 
-  return {
-    type: "git",
-    host,
-    path: normalizedPath,
-  };
+function normalizeGitSource(host: string, path: string): GitSource | null {
+  const normalizedPath = normalizeGitPath(path);
+  return isSafeGitHost(host) && normalizedPath ? { type: "git", host, path: normalizedPath } : null;
 }
 
 function isSafeGitHost(host: string): boolean {
@@ -115,10 +111,9 @@ function parseHostedGitUrl(url: string): GitSource | null {
     if (!info) {
       continue;
     }
-    const host = info.domain || "";
-    const path = normalizeGitPath(`${info.user}/${info.project}`);
-    if (isSafeGitHost(host) && path) {
-      return { type: "git", host, path };
+    const source = normalizeGitSource(info.domain || "", `${info.user}/${info.project}`);
+    if (source) {
+      return source;
     }
   }
   return null;

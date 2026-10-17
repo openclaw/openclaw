@@ -23,7 +23,6 @@ import {
   testing as registryTesting,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
-import * as admissionController from "../agent-turn/agent-admission-controller.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import {
   seedReleasedYieldedSubagentRun,
@@ -85,8 +84,6 @@ describe("gateway agent follow-up activity", () => {
       priorSessionId: "retired-session",
     },
     { label: "reset child uses the agent default", budget: 90, priorRevision: "retired-revision" },
-    { label: "session id rotated during admission wait", budget: 0, rotation: "sessionId" },
-    { label: "lifecycle revision rotated during admission wait", budget: 90, rotation: "revision" },
     { label: "unbound unlimited registration", budget: 0, missingIdentity: true },
     {
       label: "v2026.9.6 persisted unlimited nested settle wake",
@@ -128,7 +125,6 @@ describe("gateway agent follow-up activity", () => {
       retired,
       priorSessionId,
       priorRevision,
-      rotation,
       missingIdentity,
       persisted,
       register,
@@ -229,6 +225,7 @@ describe("gateway agent follow-up activity", () => {
           await registerSubagentRun({
             runId: previousRunId,
             childSessionKey,
+            childAgentId: "main",
             requesterSessionKey,
             requesterDisplayKey: requesterSessionKey,
             task: "Review the candidate",
@@ -258,26 +255,6 @@ describe("gateway agent follow-up activity", () => {
           }
         }
         const previousRun = structuredClone(await getSubagentRunByChildSessionKey(childSessionKey));
-        const admissionStarted = createDeferred();
-        const releaseAdmission = createDeferred();
-        const createController = admissionController.createAgentAdmissionController;
-        const admissionSpy = rotation
-          ? vi
-              .spyOn(admissionController, "createAgentAdmissionController")
-              .mockImplementation((params) => {
-                const controller = createController(params);
-                return {
-                  ...controller,
-                  acquire: async (scope) => {
-                    if (controller.getAdmission()) {
-                      admissionStarted.resolve();
-                      await releaseAdmission.promise;
-                    }
-                    await controller.acquire(scope);
-                  },
-                };
-              })
-          : undefined;
         const run = createDeferred<{ payloads: []; meta: { durationMs: number } }>();
         mocks.agentCommand.mockReturnValueOnce(run.promise);
         const context = makeContext();
@@ -308,15 +285,6 @@ describe("gateway agent follow-up activity", () => {
             reqId: runId,
             client: backendGatewayClient(),
           });
-          if (rotation) {
-            await admissionStarted.promise;
-            currentEntry = {
-              ...currentEntry,
-              sessionId: rotation === "sessionId" ? "replacement-session" : currentEntry.sessionId,
-              lifecycleRevision: "replacement-revision",
-            };
-            releaseAdmission.resolve();
-          }
           await pending;
           const expectedSeconds =
             timeout ??
@@ -324,7 +292,6 @@ describe("gateway agent follow-up activity", () => {
             retired ||
             priorSessionId ||
             priorRevision ||
-            rotation ||
             missingIdentity ||
             persisted ||
             recreate ||
@@ -349,8 +316,6 @@ describe("gateway agent follow-up activity", () => {
           await invokeAgent(request, { context, reqId: "replay", client: backendGatewayClient() });
           expect(mocks.agentCommand).toHaveBeenCalledTimes(callCount);
         } finally {
-          releaseAdmission.resolve();
-          admissionSpy?.mockRestore();
           run.resolve({ payloads: [], meta: { durationMs: 1 } });
           await terminal.promise;
           expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, { status: "ok" });

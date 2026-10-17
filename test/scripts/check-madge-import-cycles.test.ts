@@ -14,12 +14,15 @@ function createCheckerFixture(files: Record<string, string>, config: object = {}
   }
   for (const file of [
     "scripts/check-madge-import-cycles.ts",
+    "scripts/check-import-cycles.ts",
     "scripts/tsx.mjs",
     "scripts/lib/tsx-cli-shim.mjs",
+    "scripts/lib/managed-cleanup-handoff.mts",
     "scripts/lib/local-check-runtime.mts",
     "scripts/lib/import-cycle-graph.ts",
     "scripts/lib/native-typescript.mts",
     "scripts/lib/native-typescript-diagnostics.mts",
+    "scripts/lib/ts-guard-utils.mts",
   ]) {
     fs.copyFileSync(path.resolve(file), path.join(root, file));
   }
@@ -66,6 +69,7 @@ describe("Madge import-cycle CLI", () => {
     status: number;
     stdout?: string;
     stderr?: string;
+    runtimeCycles?: number;
   }>([
     {
       name: "clean graph with dynamic imports",
@@ -73,9 +77,23 @@ describe("Madge import-cycle CLI", () => {
         "src/a.ts": 'export const value = 1; void import("./b.js");',
         "src/b.ts": 'import { value } from "./a.js"; export const copy = value;',
         "src/dist/ignored.ts": 'import "./ignored.js";',
+        "ui/view.tsx": 'import "../src/a.js"; export const view = <div />;',
       },
+      config: { jsx: "preserve" },
       status: 0,
       stdout: "Madge import cycle check: 0 cycle(s).\n",
+    },
+    {
+      name: "TSX component cycle",
+      files: {
+        "src/a.tsx": 'import "./b.js"; export const view = <div />;',
+        "src/b.tsx": 'import "./a.js"; export const view = <span />;',
+      },
+      config: { jsx: "preserve" },
+      status: 1,
+      stdout: "Madge import cycle check: 1 cycle(s).\n",
+      stderr: "# cycle 1\n  src/a.tsx\n  -> src/b.tsx\n",
+      runtimeCycles: 1,
     },
     {
       name: "alias, re-export and type-only cycle",
@@ -136,16 +154,30 @@ describe("Madge import-cycle CLI", () => {
       status: 1,
       stderr: "error TS5023",
     },
-  ])("$name", ({ files, config, status, stdout, stderr }) => {
+  ])("$name", ({ files, config, status, stdout, stderr, runtimeCycles }) => {
     it("joins its compiler and preserves diagnostics", async ({ signal }) => {
       await fixtures.run(async () => {
-        const result = await runChecker(createCheckerFixture(files, config), signal);
+        const root = createCheckerFixture(files, config);
+        const result = await runChecker(root, signal);
         expect(result.status, result.stderr).toBe(status);
         if (stdout !== undefined) {
           expect(result.stdout).toBe(stdout);
         }
         if (stderr !== undefined) {
           expect(result.stderr).toContain(stderr);
+        }
+        if (runtimeCycles !== undefined) {
+          const runtime = await runNodeScript(
+            ["--import", "./scripts/tsx.mjs", "scripts/check-import-cycles.ts"],
+            process.env,
+            undefined,
+            { cwd: root, signal, requireProcessTreeExit: process.platform !== "win32" },
+          );
+          expect(runtime.error).toBeUndefined();
+          expect(runtime.status, runtime.stderr).toBe(runtimeCycles > 0 ? 1 : 0);
+          expect(runtime.stdout).toBe(
+            `Import cycle check: ${runtimeCycles} runtime value cycle(s).\n`,
+          );
         }
       });
     });

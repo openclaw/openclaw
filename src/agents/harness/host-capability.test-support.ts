@@ -26,6 +26,7 @@ export async function createAdmittedHostCapabilityTestFixture(
   attempt: Omit<HostAttempt, "admittedRunContext">,
   options: {
     nativeModelPolicySupport?: "exact";
+    toolCalls?: "deny";
     gatewayContext?: true;
     operatorAuthority?: AdmittedRunOperatorAuthority;
   } = {},
@@ -74,6 +75,7 @@ export async function createAdmittedHostCapabilityTestFixture(
       attempt: { ...attempt, admittedRunContext },
       pluginId: "codex",
       nativeModelPolicySupport: options.nativeModelPolicySupport,
+      toolCalls: options.toolCalls,
     }),
   );
   return {

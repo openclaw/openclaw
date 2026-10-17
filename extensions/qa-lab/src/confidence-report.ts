@@ -103,11 +103,10 @@ function collectGatewayLogSentinels(value: unknown): GatewayLogSentinelFinding[]
     if (!isRecord(candidate)) {
       return;
     }
-    if (Array.isArray(candidate.gatewayLogSentinels)) {
-      findings.push(...candidate.gatewayLogSentinels.filter(isGatewayLogSentinelFinding));
-    }
-    if (Array.isArray(candidate.sentinelFindings)) {
-      findings.push(...candidate.sentinelFindings.filter(isGatewayLogSentinelFinding));
+    for (const sentinels of [candidate.gatewayLogSentinels, candidate.sentinelFindings]) {
+      if (Array.isArray(sentinels)) {
+        findings.push(...sentinels.filter(isGatewayLogSentinelFinding));
+      }
     }
     for (const [key, nested] of Object.entries(candidate)) {
       if (key === "gatewayLogSentinels" || key === "sentinelFindings") {
@@ -280,28 +279,20 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
   const failedCount = readCount(counts?.failed);
   const explicitSkippedCount = readCount(counts?.skipped);
   const scenarios = Array.isArray(payload.scenarios) ? payload.scenarios : undefined;
-  const failedScenarioCount =
-    scenarios?.filter((scenario) => isRecord(scenario) && scenario.status === "fail").length ?? 0;
+  const scenarioStatuses = scenarios?.map((scenario) =>
+    isRecord(scenario) ? scenario.status : undefined,
+  );
+  const failedScenarioCount = scenarioStatuses?.filter((status) => status === "fail").length ?? 0;
   const skippedScenarioCount =
-    scenarios?.filter(
-      (scenario) =>
-        isRecord(scenario) && (scenario.status === "skip" || scenario.status === "skipped"),
-    ).length ?? 0;
+    scenarioStatuses?.filter((status) => status === "skip" || status === "skipped").length ?? 0;
   const unknownBlockingScenarioCount =
-    scenarios?.filter(
-      (scenario) =>
-        !isRecord(scenario) ||
-        (scenario.status !== "pass" &&
-          scenario.status !== "fail" &&
-          scenario.status !== "skip" &&
-          scenario.status !== "skipped"),
+    scenarioStatuses?.filter(
+      (status) =>
+        status !== "pass" && status !== "fail" && status !== "skip" && status !== "skipped",
     ).length ?? 0;
   const hasExecutedScenarios =
     (failedCount ?? 0) > 0 ||
-    scenarios?.some(
-      (scenario) =>
-        isRecord(scenario) && (scenario.status === "pass" || scenario.status === "fail"),
-    ) === true ||
+    scenarioStatuses?.some((status) => status === "pass" || status === "fail") === true ||
     (scenarios === undefined && (passedCount ?? 0) > 0);
   const gatewayLogSentinels = collectGatewayLogSentinels(payload);
   if (gatewayLogSentinels.length > 0) {
@@ -386,15 +377,10 @@ function evaluatePassSummary(payload: unknown): QaConfidenceLaneEvaluation {
   }
   const status = readString(payload.status);
   if (status) {
-    if (
-      status === "pass" ||
-      status === "passed" ||
-      status === "success" ||
-      status === "succeeded"
-    ) {
+    if (["pass", "passed", "success", "succeeded"].includes(status)) {
       return { passed: true, details: `summary status=${status}` };
     }
-    if (status === "fail" || status === "failed" || status === "error") {
+    if (["fail", "failed", "error"].includes(status)) {
       return { passed: false, details: `summary status=${status}` };
     }
     return unknownLaneEvaluation(`summary status=${status}`);

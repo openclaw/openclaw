@@ -1,11 +1,15 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { addAbortListener } from "node:events";
 import {
   asPositiveSafeInteger,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
-import { runWithGatewayDetachedWorkAdmission } from "../process/gateway-work-admission.js";
+import {
+  getGatewayRestartDrainSignal,
+  runWithGatewayDetachedWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -19,12 +23,10 @@ import {
   recordSystemEventStoreReplaced,
 } from "./system-event-ownership.js";
 
-type SessionEventWakeResult = HeartbeatRunResult;
-type SessionEventWakeRequest = HeartbeatWakeRequest;
 type WakeHandler = (
-  request: SessionEventWakeRequest,
+  request: HeartbeatWakeRequest,
   signal: AbortSignal,
-) => Promise<SessionEventWakeResult>;
+) => Promise<HeartbeatRunResult>;
 export type SessionEventWakeWaitOptions = {
   abortSignal?: AbortSignal;
   /** Called when the queue starts an attempt for this waiter. */
@@ -33,23 +35,24 @@ export type SessionEventWakeWaitOptions = {
   onQueued?: () => void;
   /** Detach this waiter while the queue retains the wake at its retry deadline. */
   stopWaitingOnRetry?: (
-    result: Extract<SessionEventWakeResult, { status: "skipped" }>,
+    result: Extract<HeartbeatRunResult, { status: "skipped" }>,
     retryAtMs: number,
   ) => boolean;
 };
 type Settlement = {
   active: boolean;
-  settle: (result: SessionEventWakeResult) => void;
+  settle: (result: HeartbeatRunResult) => void;
   onAttemptStarted?: SessionEventWakeWaitOptions["onAttemptStarted"];
   onQueued?: SessionEventWakeWaitOptions["onQueued"];
   stopWaitingOnRetry?: SessionEventWakeWaitOptions["stopWaitingOnRetry"];
 };
-type PendingWake = SessionEventWakeRequest & {
+type PendingWake = HeartbeatWakeRequest & {
   sequence: number;
   barrierSequence?: number;
   requestedAt: number;
   readyAt: number;
   notBefore: number;
+  channelRetryDelayMs?: number;
   settlements: Settlement[];
   retired?: true;
   /** Admission/preparation may have effects even before model dispatch. Never reset on retry. */
@@ -63,13 +66,14 @@ type WakeGroup = {
   event?: PendingWake;
   blockedUntil: number;
 };
-type ActiveWake = { generation: number; controller: AbortController; wakes: PendingWake[] };
+type ActiveWake = { controller: AbortController; wakes: PendingWake[] };
 type WakeAttempt = {
   signal: AbortSignal;
   wake: PendingWake;
   terminalPollDisposition: boolean;
+  retryIntervalMs?: number | null;
 };
-type RequestOptions = Omit<SessionEventWakeRequest, "retainedWork"> & { coalesceMs?: number };
+type RequestOptions = Omit<HeartbeatWakeRequest, "retainedWork"> & { coalesceMs?: number };
 
 const SLOTS = ["task", "scheduled", "event"] as const;
 const COALESCE_MS = 250;
@@ -90,7 +94,7 @@ export function isRetryableSessionEventWakeReason(reason: string): boolean {
   return RETRY_REASONS.has(reason);
 }
 
-function priority(wake: SessionEventWakeRequest): number {
+function priority(wake: HeartbeatWakeRequest): number {
   return wake.intent === "manual" || wake.intent === "immediate"
     ? 3
     : wake.source === "retry" || wake.reason === "retry"
@@ -131,6 +135,7 @@ function merge(previous: PendingWake, next: PendingWake): PendingWake {
         : preferred.requestedAt,
     readyAt: Math.min(previous.readyAt, next.readyAt),
     notBefore: bypass ? 0 : Math.max(previous.notBefore, next.notBefore),
+    channelRetryDelayMs: previous.channelRetryDelayMs ?? next.channelRetryDelayMs,
     heartbeat: preferred.heartbeat ?? other.heartbeat,
     scheduledEveryMs: preferred.scheduledEveryMs ?? other.scheduledEveryMs,
     tasks: tasks.size
@@ -143,7 +148,7 @@ function merge(previous: PendingWake, next: PendingWake): PendingWake {
   };
 }
 
-function targetKey(request: SessionEventWakeRequest): string {
+function targetKey(request: HeartbeatWakeRequest): string {
   if (!request.sessionKey || (request.sessionKey === "global" && !request.agentId)) {
     return `${request.agentId ?? ""}::`;
   }
@@ -155,7 +160,7 @@ function targetKey(request: SessionEventWakeRequest): string {
 
 function shouldRetain(
   wake: PendingWake,
-  result: Extract<SessionEventWakeResult, { status: "skipped" }>,
+  result: Extract<HeartbeatRunResult, { status: "skipped" }>,
 ): boolean {
   return (
     RETRY_REASONS.has(result.reason) ||
@@ -175,12 +180,12 @@ function createSessionEventWakeRuntime() {
   const waiters = new Set<Settlement>();
   const attempts = new AsyncLocalStorage<WakeAttempt>();
   let handler: WakeHandler | null = null;
-  let generation = 0;
   let sequence = 0;
   let timer: NodeJS.Timeout | undefined;
   let timerDueAt = 0;
   let timerDefersReadyWork = false;
   let enabled = true;
+  let drainListener: ReturnType<typeof addAbortListener> | undefined;
 
   const isCurrent = (wake: PendingWake) =>
     !wake.retired &&
@@ -218,6 +223,9 @@ function createSessionEventWakeRuntime() {
 
   function enqueue(wake: PendingWake, blockedUntil = 0): string {
     const key = targetKey(wake);
+    if (getGatewayRestartDrainSignal().aborted) {
+      settle(wake, { status: "skipped", reason: "gateway-draining" });
+    }
     if (!isCurrent(wake)) {
       retire(wake);
       return key;
@@ -319,7 +327,7 @@ function createSessionEventWakeRuntime() {
     return ready;
   }
 
-  function settle(wake: PendingWake, result: SessionEventWakeResult): void {
+  function settle(wake: PendingWake, result: HeartbeatRunResult): void {
     if (result.status === "failed") {
       heartbeatLog.error("session event wake failed; no wake retry scheduled", {
         source: wake.source,
@@ -337,21 +345,36 @@ function createSessionEventWakeRuntime() {
 
   function retry(
     wake: PendingWake,
-    result?: Extract<SessionEventWakeResult, { status: "skipped" }>,
+    result?: Extract<HeartbeatRunResult, { status: "skipped" }>,
+    retryIntervalMs?: number | null,
   ): void {
+    const channelNotReady = result?.reason === "channel-not-ready";
+    const channelRetryDelayMs =
+      channelNotReady && retryIntervalMs != null
+        ? Math.min(
+            retryIntervalMs,
+            (wake.channelRetryDelayMs ?? SESSION_EVENT_IDLE_RETRY_MS / 2) * 2,
+          )
+        : undefined;
+    if (channelRetryDelayMs !== undefined && wake.channelRetryDelayMs === undefined) {
+      heartbeatLog.info("heartbeat: channel not ready; backing off before the next turn", {
+        agentId: wake.agentId,
+        sessionKey: wake.sessionKey,
+      });
+    }
     const idleGrace =
-      result &&
-      (result.reason === "preempted" ||
-        result.reason === "channel-not-ready" ||
-        ((result.reason === "requests-in-flight" || result.reason === "active-run") &&
-          (wake.intent === "scheduled" || wake.intent === "task")));
+      channelNotReady ||
+      result?.reason === "preempted" ||
+      ((result?.reason === "requests-in-flight" || result?.reason === "active-run") &&
+        (wake.intent === "scheduled" || wake.intent === "task"));
     const guard = idleGrace || (result && GUARD_REASONS.has(result.reason));
     const delay =
-      result?.retryAtMs !== undefined
+      channelRetryDelayMs ??
+      (result?.retryAtMs !== undefined
         ? Math.max(0, result.retryAtMs - Date.now())
         : idleGrace
           ? SESSION_EVENT_IDLE_RETRY_MS
-          : RETRY_MS;
+          : RETRY_MS);
     const deadline = performance.now() + delay;
     if (result) {
       const retryAtMs = Date.now() + delay;
@@ -364,18 +387,13 @@ function createSessionEventWakeRuntime() {
     enqueue(
       {
         ...wake,
+        channelRetryDelayMs: channelNotReady ? channelRetryDelayMs : wake.channelRetryDelayMs,
         readyAt: performance.now(),
         notBefore: guard ? deadline : 0,
         retainedWork: guard ? true : wake.retainedWork,
       },
       guard ? 0 : deadline,
     );
-  }
-
-  function handOff(wakes: PendingWake[], start: number): void {
-    for (const wake of wakes.slice(start)) {
-      enqueue(wake);
-    }
   }
 
   async function dispatch(
@@ -392,13 +410,14 @@ function createSessionEventWakeRuntime() {
         }
         // Busy backoff also owns wakes selected before the current attempt began.
         const blockedUntil = pending.get(key)?.blockedUntil ?? 0;
-        if (owner.generation !== generation || blockedUntil > performance.now()) {
-          handOff(wakes, index);
+        if (run !== handler || blockedUntil > performance.now()) {
+          for (const pendingWake of wakes.slice(index)) {
+            enqueue(pendingWake);
+          }
           return;
         }
         const attempt: WakeAttempt = { signal, wake, terminalPollDisposition: false };
-        let result: SessionEventWakeResult;
-        let onAbort: (() => void) | undefined;
+        let result: HeartbeatRunResult;
         try {
           result = await runWithGatewayDetachedWorkAdmission(() => {
             signal.throwIfAborted();
@@ -407,17 +426,7 @@ function createSessionEventWakeRuntime() {
                 entry.onAttemptStarted?.();
               }
             }
-            // Subscribe before calling the handler: it can synchronously replace its owner.
-            const aborted = new Promise<never>((_resolve, reject) => {
-              onAbort = () =>
-                reject(
-                  signal.reason instanceof Error
-                    ? signal.reason
-                    : new Error("Heartbeat handler was replaced"),
-                );
-              signal.addEventListener("abort", onAbort, { once: true });
-            });
-            const request: SessionEventWakeRequest = {
+            const request: HeartbeatWakeRequest = {
               source: wake.source,
               intent: wake.intent,
               reason: wake.reason,
@@ -433,24 +442,19 @@ function createSessionEventWakeRuntime() {
               ...(wake.tasks ? { tasks: wake.tasks } : {}),
               ...(wake.retainedWork ? { retainedWork: true } : {}),
             };
-            // A synchronous handler throw must not leave the abort promise unobserved.
-            const running = attempts.run(attempt, async () => run(request, signal));
-            return Promise.race([running, aborted]);
+            // Handler replacement affects queued work; admitted work owns its actual settlement.
+            const currentHandler = handler;
+            if (!currentHandler) {
+              throw new Error("Heartbeat handler is unavailable");
+            }
+            return attempts.run(attempt, () => currentHandler(request, signal));
           }, "heartbeat:wake");
         } catch {
           if (wake.retired) {
             continue;
           }
-          if (owner.generation === generation) {
-            retry(wake);
-          } else {
-            enqueue(wake);
-          }
+          retry(wake);
           continue;
-        } finally {
-          if (onAbort) {
-            signal.removeEventListener("abort", onAbort);
-          }
         }
         if (wake.retired) {
           continue;
@@ -460,12 +464,16 @@ function createSessionEventWakeRuntime() {
           !isTerminalPollAttempt(attempt) &&
           shouldRetain(wake, result)
         ) {
-          if (owner.generation === generation) {
-            retry(wake, result);
-          } else {
-            enqueue(wake);
-          }
+          retry(wake, result, attempt.retryIntervalMs);
         } else {
+          if (wake.channelRetryDelayMs !== undefined) {
+            heartbeatLog.info("heartbeat: channel readiness retry settled", {
+              agentId: wake.agentId,
+              sessionKey: wake.sessionKey,
+              status: result.status,
+              ...(result.status === "ran" ? {} : { reason: result.reason }),
+            });
+          }
           settle(wake, result);
         }
       }
@@ -478,7 +486,7 @@ function createSessionEventWakeRuntime() {
   }
 
   function scheduleAt(dueAt: number, defersReadyWork = false): void {
-    if (!handler || (timer && timerDueAt <= dueAt)) {
+    if (!handler || getGatewayRestartDrainSignal().aborted || (timer && timerDueAt <= dueAt)) {
       return;
     }
     clearTimeout(timer);
@@ -495,7 +503,7 @@ function createSessionEventWakeRuntime() {
           }
           // Register the whole batch first so replacement retires unstarted work too.
           const ready = takeReady().map(({ key, wakes }) => {
-            const owner = { generation, controller: new AbortController(), wakes };
+            const owner = { controller: new AbortController(), wakes };
             active.set(key, owner);
             return { key, wakes, owner };
           });
@@ -545,16 +553,24 @@ function createSessionEventWakeRuntime() {
   }
 
   function setSessionEventWakeHandler(next: WakeHandler | null): () => void {
-    const previousGeneration = generation;
-    generation += 1;
-    const ownedGeneration = generation;
+    drainListener?.[Symbol.dispose]();
+    drainListener = next
+      ? addAbortListener(getGatewayRestartDrainSignal(), () => {
+          clearTimeout(timer);
+          timer = undefined;
+          // Release callers before shutdown joins cron. Keep notifications for an
+          // in-process restart; admitted handlers still own their final writes.
+          for (const group of pending.values()) {
+            for (const slot of SLOTS) {
+              const wake = group[slot];
+              if (wake) {
+                settle(wake, { status: "skipped", reason: "gateway-draining" });
+              }
+            }
+          }
+        })
+      : undefined;
     handler = next;
-    if (!next) {
-      // Waiters cannot depend on a future runner; shared notifications retain their queue ownership.
-      for (const waiter of waiters) {
-        waiter.settle({ status: "skipped", reason: "handler-unavailable" });
-      }
-    }
     clearTimeout(timer);
     timer = undefined;
     timerDefersReadyWork = false;
@@ -569,16 +585,18 @@ function createSessionEventWakeRuntime() {
           }
         }
       }
-    }
-    // Abort listeners can register another handler; retire only the replaced generation.
-    for (const owner of active.values()) {
-      if (owner.generation === previousGeneration) {
+    } else {
+      // Waiters cannot depend on a future runner; shared notifications retain their queue ownership.
+      for (const waiter of waiters) {
+        waiter.settle({ status: "skipped", reason: "handler-unavailable" });
+      }
+      for (const owner of active.values()) {
         owner.controller.abort();
       }
     }
     schedulePending(COALESCE_MS);
     return () => {
-      if (generation === ownedGeneration) {
+      if (handler === next) {
         setSessionEventWakeHandler(null);
       }
     };
@@ -620,8 +638,7 @@ function createSessionEventWakeRuntime() {
           asPositiveSafeInteger(wake.scheduledEveryMs) !== undefined &&
           !wake.tasks?.length,
       };
-      const key = enqueue(pendingWake);
-      schedulePending(0, key);
+      schedulePending(0, enqueue(pendingWake));
     });
   }
 
@@ -631,7 +648,7 @@ function createSessionEventWakeRuntime() {
   function requestSessionEventWakeAndWait(
     options: RequestOptions,
     lifecycle?: SessionEventWakeWaitOptions,
-  ): Promise<SessionEventWakeResult> {
+  ): Promise<HeartbeatRunResult> {
     return new Promise((resolve) => {
       const signal = lifecycle?.abortSignal;
       const settlement: Settlement = {
@@ -673,11 +690,16 @@ function createSessionEventWakeRuntime() {
   }
 
   // These operations stay internal to the owner/runner, outside the SDK adapter.
-  function markSessionEventWakeWorkStarted(): void {
+  function markSessionEventWakeWorkStarted(ambientRetryIntervalMs?: number): void {
     const attempt = attempts.getStore();
     if (attempt) {
       attempt.signal.throwIfAborted();
       attempt.wake.workStarted = true;
+      // A broadcast carrying any required work must keep its ordinary delivery retry.
+      attempt.retryIntervalMs =
+        ambientRetryIntervalMs === undefined || attempt.retryIntervalMs === null
+          ? null
+          : Math.min(attempt.retryIntervalMs ?? Infinity, ambientRetryIntervalMs);
       attempt.terminalPollDisposition = false;
     }
   }

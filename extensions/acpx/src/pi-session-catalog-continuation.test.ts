@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type ResolveAcpSessionAvailability =
   (typeof import("openclaw/plugin-sdk/acp-runtime"))["resolveAcpSessionAvailability"];
@@ -23,7 +23,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
     await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-runtime")>();
   return {
     ...actual,
-    withSessionTranscriptWriteLock: async (
+    withSessionTranscriptWrite: async (
       _params: unknown,
       run: (context: {
         appendMessage: (params: {
@@ -60,59 +60,52 @@ import {
   capturePiContinuationCatalog,
   createPiStoreFixture,
   installFakePiFixture,
+  restorePiEnvironment,
 } from "./pi-session-catalog.test-support.js";
 
 const temporaryDirectories: string[] = [];
-const originalSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
-const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-const originalPath = process.env.PATH;
+const originalEnvironment = {
+  PI_CODING_AGENT_SESSION_DIR: process.env.PI_CODING_AGENT_SESSION_DIR,
+  PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
+  PATH: process.env.PATH,
+};
+let sessionDirectory: string;
+let catalog: ReturnType<typeof capturePiContinuationCatalog>;
+const continueRequest = { hostId: "gateway", threadId: "pi-session" };
 
-afterEach(async () => {
-  acpRuntimeMocks.resolveAcpSessionAvailability.mockReset().mockReturnValue({ available: true });
-  process.env.PATH = originalPath;
-  transcriptMocks.messages.length = 0;
-  transcriptMocks.failAfter = undefined;
-  if (originalSessionDir === undefined) {
-    delete process.env.PI_CODING_AGENT_SESSION_DIR;
-  } else {
-    process.env.PI_CODING_AGENT_SESSION_DIR = originalSessionDir;
-  }
-  if (originalAgentDir === undefined) {
-    delete process.env.PI_CODING_AGENT_DIR;
-  } else {
-    process.env.PI_CODING_AGENT_DIR = originalAgentDir;
-  }
-  await Promise.all(
-    temporaryDirectories.splice(0).map(async (directory) => {
-      await fs.rm(directory, { recursive: true, force: true });
-    }),
-  );
-});
-
-function createResumableStore() {
-  return createPiStoreFixture(
+beforeEach(async () => {
+  sessionDirectory = await createPiStoreFixture(
     temporaryDirectories,
     "hi",
     "Pi catalog session",
     { command: "pwd" },
     true,
   );
-}
+  await installFakePiFixture(temporaryDirectories, originalEnvironment.PATH);
+  catalog = capturePiContinuationCatalog();
+});
+
+afterEach(async () => {
+  acpRuntimeMocks.resolveAcpSessionAvailability.mockReset().mockReturnValue({ available: true });
+  restorePiEnvironment(originalEnvironment);
+  transcriptMocks.messages.length = 0;
+  transcriptMocks.failAfter = undefined;
+  await Promise.all(
+    temporaryDirectories
+      .splice(0)
+      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
+  );
+});
 
 describe("Pi session catalog continuation", () => {
   it("projects only adopted Pi rows with their OpenClaw session key", async () => {
-    await createResumableStore();
-    await installFakePiFixture(temporaryDirectories, originalPath);
-    const { entries, provider } = capturePiContinuationCatalog();
+    const { entries, provider } = catalog;
     const sessionEntries = { entriesForAgent: () => entries } as never;
 
     const before = await provider.list({ hostIds: ["gateway"], sessionEntries });
     expect(before[0]?.sessions[0]).not.toHaveProperty("sessionKey");
 
-    const adopted = await provider.continueSession!({
-      hostId: "gateway",
-      threadId: "pi-session",
-    });
+    const adopted = await provider.continueSession!(continueRequest);
     const after = await provider.list({ hostIds: ["gateway"], sessionEntries });
 
     expect(after[0]?.sessions[0]).toMatchObject({
@@ -122,15 +115,13 @@ describe("Pi session catalog continuation", () => {
   });
 
   it("adopts once with the native ACP binding and an exact file baseline", async () => {
-    const sessionDirectory = await createResumableStore();
-    await installFakePiFixture(temporaryDirectories, originalPath);
-    const { createSessionEntry, provider } = capturePiContinuationCatalog();
+    const { createSessionEntry, provider } = catalog;
 
     const [first, concurrent] = await Promise.all([
-      provider.continueSession!({ hostId: "gateway", threadId: "pi-session" }),
-      provider.continueSession!({ hostId: "gateway", threadId: "pi-session" }),
+      provider.continueSession!(continueRequest),
+      provider.continueSession!(continueRequest),
     ]);
-    const second = await provider.continueSession!({ hostId: "gateway", threadId: "pi-session" });
+    const second = await provider.continueSession!(continueRequest);
     const sessionFile = await fs.realpath(path.join(sessionDirectory, "session.jsonl"));
     const sessionStats = await fs.stat(sessionFile);
 
@@ -142,8 +133,9 @@ describe("Pi session catalog continuation", () => {
       marker: expect.objectContaining({ offset: sessionStats.size }),
     });
     expect(createSessionEntry).toHaveBeenCalledTimes(1);
-    expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
-    expect(createSessionEntry).toHaveBeenCalledWith(
+    const createParams = createSessionEntry.mock.calls[0]?.[0];
+    expect(createParams).not.toHaveProperty("label");
+    expect(createParams).toEqual(
       expect.objectContaining({
         displayName: "Pi catalog session",
         spawnedCwd: "/workspace",
@@ -171,29 +163,23 @@ describe("Pi session catalog continuation", () => {
       mirrorOrigin: "pi-catalog-import",
     });
 
-    const createParams = createSessionEntry.mock.calls[0]?.[0];
-    const adopted = createSessionEntry.mock.results[0]?.value;
-    await createParams?.afterCreate?.(await adopted);
+    await createParams?.afterCreate?.(await createSessionEntry.mock.results[0]?.value);
     expect(transcriptMocks.messages).toHaveLength(5);
   });
 
   it("rolls adoption back when transcript import fails", async () => {
-    await createResumableStore();
-    await installFakePiFixture(temporaryDirectories, originalPath);
     transcriptMocks.failAfter = 2;
-    const { entries, provider } = capturePiContinuationCatalog();
+    const { entries, provider } = catalog;
 
-    await expect(
-      provider.continueSession!({ hostId: "gateway", threadId: "pi-session" }),
-    ).rejects.toThrow("transcript append failed");
+    await expect(provider.continueSession!(continueRequest)).rejects.toThrow(
+      "transcript append failed",
+    );
     expect(entries).toEqual([]);
     expect(transcriptMocks.messages).toEqual([]);
   });
 
   it("rejects paired-node and unknown session continuation", async () => {
-    await createResumableStore();
-    await installFakePiFixture(temporaryDirectories, originalPath);
-    const { createSessionEntry, provider } = capturePiContinuationCatalog();
+    const { createSessionEntry, provider } = catalog;
 
     await expect(
       provider.continueSession!({ hostId: "node:remote", threadId: "pi-session" }),
@@ -205,16 +191,14 @@ describe("Pi session catalog continuation", () => {
   });
 
   it("keeps legacy-session adoption successful when a safe baseline is unavailable", async () => {
-    const sessionDirectory = await createResumableStore();
     const sessionFile = path.join(sessionDirectory, "session.jsonl");
     const content = await fs.readFile(sessionFile, "utf8");
     await fs.writeFile(sessionFile, content.replace('"version":3', '"version":2'));
-    await installFakePiFixture(temporaryDirectories, originalPath);
-    const { createSessionEntry, provider } = capturePiContinuationCatalog();
+    const { createSessionEntry, provider } = catalog;
 
-    await expect(
-      provider.continueSession!({ hostId: "gateway", threadId: "pi-session" }),
-    ).resolves.toEqual({ sessionKey: expect.any(String) });
+    await expect(provider.continueSession!(continueRequest)).resolves.toEqual({
+      sessionKey: expect.any(String),
+    });
     expect(createSessionEntry).toHaveBeenCalledTimes(1);
   });
 });

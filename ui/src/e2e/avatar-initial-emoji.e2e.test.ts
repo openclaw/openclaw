@@ -58,7 +58,7 @@ async function screenshot(page: Page, name: string) {
 }
 
 suite.define(() => {
-  it("renders the identity emoji in the sidebar chip and agent menu row", async () => {
+  it("renders the identity emoji in the rail and agent menu row", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -95,7 +95,7 @@ suite.define(() => {
 
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
         const emojiRow = sidebar
-          .locator("wa-dropdown.sidebar-agent-menu")
+          .locator(".sidebar-agent-menu")
           .getByRole("menuitem", { name: "🚀Rocket", exact: true });
         const menuAvatar = emojiRow.locator(".identity-avatar__text");
         await expect.poll(() => menuAvatar.getAttribute("data-avatar")).toBe(emojiGrapheme);
@@ -241,26 +241,18 @@ suite.define(() => {
         await picker.getByRole("button", { name: "dolphin", exact: true }).click();
         await expect.poll(() => emojiInput.inputValue()).toBe("🐬");
         await screenshot(page, "04-agents-emoji-selected.png");
+        const beforeBoundedSave = (await gateway.getRequests("agents.update")).length;
         await emojiInput.fill("🪿".repeat(20));
         await expect.poll(() => emojiInput.inputValue()).toBe("🪿".repeat(4));
-        const beforeBoundedSave = (await gateway.getRequests("agents.update")).length;
-        await page
-          .locator(".agent-identity-editor__actions")
-          .getByRole("button", { name: "Save" })
-          .click();
         const boundedUpdate = await gateway.waitForRequest("agents.update", {
           after: beforeBoundedSave,
         });
         expect(boundedUpdate.params).toMatchObject({ agentId: "emoji", emoji: "🪿".repeat(4) });
+        const beforeTypedSave = (await gateway.getRequests("agents.update")).length;
         await emojiInput.fill("👨‍👩‍👧‍👦".repeat(3));
         await expect.poll(() => emojiInput.inputValue()).toBe("👨‍👩‍👧‍👦");
         await emojiInput.fill("🪿");
         await expect.poll(() => emojiInput.inputValue()).toBe("🪿");
-        const beforeTypedSave = (await gateway.getRequests("agents.update")).length;
-        await page
-          .locator(".agent-identity-editor__actions")
-          .getByRole("button", { name: "Save" })
-          .click();
         const update = await gateway.waitForRequest("agents.update", { after: beforeTypedSave });
         expect(update.params).toMatchObject({ agentId: "emoji", emoji: "🪿" });
         await expect

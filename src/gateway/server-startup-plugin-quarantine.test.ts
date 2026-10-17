@@ -18,7 +18,7 @@ import {
 } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { installPluginFromPath } from "../plugins/install.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../plugins/installed-plugin-index-records.js";
 import { runPluginPayloadSmokeCheck } from "../plugins/payload-verification.js";
 import {
   createPluginCache,
@@ -540,6 +540,8 @@ describe("updater plugin degradation with a running source Gateway", () => {
     expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(200);
     expect(await fsPromises.readFile(snapshot.path, "utf8")).toBe(configBytes);
     expect(await fsPromises.readFile(dataPath, "utf8")).toBe("newer state must survive\n");
-    expect(readPersistedInstalledPluginIndexInstallRecords({ env: process.env })).toEqual(records);
+    expect(
+      await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: process.env }),
+    ).toEqual(records);
   });
 });

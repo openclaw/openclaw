@@ -1,4 +1,5 @@
 // Public user-profile and self-service account contracts.
+export * from "./schema/users-background.js";
 export {
   GATEWAY_OWNER_PROFILE_ID,
   GIT_COAUTHOR_PREFERENCE_KEY,

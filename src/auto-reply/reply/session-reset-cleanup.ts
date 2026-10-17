@@ -1,7 +1,11 @@
+import { clearPreparedEmbeddedAgentSettings } from "../../agents/agent-project-settings.js";
+import { clearEmbeddedSessionForkSnapshot } from "../../agents/embedded-agent-runner/session-fork.js";
 import { clearEmbeddedSessionPromptStates } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { killSessionSubagentRuns } from "../../agents/subagents/registry/subagent-control-kill.js";
-import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { captureIncognitoSessionOperation } from "../../config/sessions/session-incognito-binding.js";
+import { retainPreparedSessionGenerationFacts } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { projectSessionSharingEntry } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import { withSessionEntriesFromStoreInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import {
@@ -22,31 +26,67 @@ import {
 
 export class SessionResetCleanupError extends Error {}
 
-/** Bind runtime cleanup to the parent incarnation accepted before asynchronous work. */
-export function createSessionResetCleanupGuard(params: {
+/** Prepare parent facts once; cleanup observes the entry writer's in-process receipts. */
+export async function prepareSessionResetCleanupGuard(params: {
+  agentId: string;
   storePath: string;
   sessionKey: string;
   expectedSession: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined;
   assertCurrent?: () => void;
-}): () => void {
-  const binding = captureIncognitoSessionOperation(params);
-  const sessionId = params.expectedSession?.sessionId;
-  const lifecycleRevision = params.expectedSession?.lifecycleRevision;
-  return () => {
+}): Promise<{ assertCurrent: () => void; release: () => void }> {
+  const memory = captureSessionEntryMetadataRead(params, () => {});
+  const assertEntry = (
+    current: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | null | undefined,
+  ) => {
     params.assertCurrent?.();
-    const current = binding
-      ? binding.actor.sessions.readSharing(params.sessionKey)?.entry
-      : loadExactSessionEntryReadOnly({
-          storePath: params.storePath,
-          sessionKey: params.sessionKey,
-          clone: false,
-        })?.entry;
-    if (current?.sessionId !== sessionId || current?.lifecycleRevision !== lifecycleRevision) {
+    if (
+      current?.sessionId !== params.expectedSession?.sessionId ||
+      current?.lifecycleRevision !== params.expectedSession?.lifecycleRevision
+    ) {
       throw new SessionResetCleanupError(
         "Reset did not complete because the session changed before cleanup. Retry /reset.",
       );
     }
   };
+  if (memory) {
+    return {
+      assertCurrent: () => assertEntry(memory.readCurrent()),
+      release() {},
+    };
+  }
+  return withSessionEntriesFromStoreInWorker(
+    {
+      agentId: params.agentId,
+      storePath: params.storePath,
+      sessionKeys: [params.sessionKey],
+      snapshotFields: [],
+    },
+    async ({ result }) => {
+      const entry = result.entries.find((row) => row.sessionKey === params.sessionKey)?.entry;
+      assertEntry(entry);
+      const identity = result.databaseIdentity?.identity;
+      if (!identity) {
+        return { assertCurrent: () => params.assertCurrent?.(), release() {} };
+      }
+      const retained = retainPreparedSessionGenerationFacts({
+        databaseIdentity: `file:${identity}`,
+        sessionKey: params.sessionKey,
+        entry: entry ? projectSessionSharingEntry(entry) : undefined,
+      });
+      return {
+        assertCurrent: () => {
+          const current = retained.readCurrent();
+          if (current === undefined) {
+            throw new SessionResetCleanupError(
+              "Reset did not complete because the session changed before cleanup. Retry /reset.",
+            );
+          }
+          assertEntry(current);
+        },
+        release: retained.release,
+      };
+    },
+  );
 }
 
 /** Reset must report unfinished child cleanup before committing a fresh conversation. */
@@ -107,6 +147,10 @@ export function clearSessionResetRuntimeState(
 ): void {
   opts.assertCurrent();
   clearEmbeddedSessionPromptStates([opts.activeReplySessionId]);
+  clearPreparedEmbeddedAgentSettings([opts.activeReplySessionId]);
+  if (opts.activeReplySessionId) {
+    clearEmbeddedSessionForkSnapshot(opts.activeReplySessionId);
+  }
   const cleared = clearSessionLifecycleQueues({
     keys,
     agentId: opts.agentId,

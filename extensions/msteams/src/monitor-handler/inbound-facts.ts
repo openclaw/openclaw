@@ -41,6 +41,7 @@ export type MSTeamsDebounceEntry = Awaited<ReturnType<typeof prepareMSTeamsDebou
 
 export async function prepareMSTeamsDebounceEntry(params: {
   context: MSTeamsTurnContext;
+  accountId: string;
   turnAdoptionLifecycle?: MSTeamsIngressLifecycle;
 }) {
   const activity = params.context.activity;
@@ -54,11 +55,15 @@ export async function prepareMSTeamsDebounceEntry(params: {
     : extractTextFromHtmlAttachments(attachments) ||
       stripMSTeamsMentionTags(serializeMSTeamsAdaptiveCardActionValue(activity.value) || "");
   const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
-  const replyToId = activity.replyToId ?? undefined;
+  const replyToId = activity.replyToId;
   const implicitMentionKinds: Array<"reply_to_bot"> =
     conversationId &&
     replyToId &&
-    (await wasMSTeamsMessageSentWithPersistence({ conversationId, messageId: replyToId }))
+    (await wasMSTeamsMessageSentWithPersistence({
+      conversationId,
+      messageId: replyToId,
+      accountId: params.accountId,
+    }))
       ? ["reply_to_bot"]
       : [];
 
@@ -120,9 +125,7 @@ export function assembleMSTeamsInboundFacts(entry: MSTeamsDebounceEntry) {
   const conversationType = conversation?.conversationType ?? "personal";
   const isChannel = conversationType === "channel";
   const teamId = activity.channelData?.team?.id;
-  const threadId = isChannel
-    ? (conversationMessageId ?? activity.replyToId ?? undefined)
-    : undefined;
+  const threadId = isChannel ? (conversationMessageId ?? activity.replyToId) : undefined;
   const advertisedMedia = resolveMSTeamsAdvertisedMedia(entry.attachments);
 
   return {
@@ -133,12 +136,6 @@ export function assembleMSTeamsInboundFacts(entry: MSTeamsDebounceEntry) {
     rawBody: entry.text,
     advertisedMedia,
     quoteInfo: extractMSTeamsQuoteInfo(entry.attachments),
-    attachmentTypes: entry.attachments
-      .map((attachment) =>
-        typeof attachment.contentType === "string" ? attachment.contentType : undefined,
-      )
-      .filter(Boolean)
-      .slice(0, 3),
     htmlSummary: summarizeMSTeamsHtmlAttachments(entry.attachments),
     rawConversationId,
     conversationId,

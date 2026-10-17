@@ -3,8 +3,8 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openMockAbortableRun } from "./chat-run-lifecycle.test-support.ts";
@@ -170,17 +170,15 @@ suite.define(() => {
       .getByText(reply.content, { exact: true });
     await replyBody.waitFor();
     const operationLabel = currentPage.locator(".chat-work-group .chat-activity-group__label");
-    const refreshedSession = await currentPage.evaluate(async (key) => {
-      const app = document.querySelector<
-        HTMLElement & { runtime?: { context?: ApplicationContext } }
-      >("openclaw-app");
-      const sessions = app?.runtime?.context?.sessions;
-      if (!sessions) {
-        throw new Error("Session capability is missing");
-      }
-      await sessions.refresh({ agentId: "main", force: true });
-      return sessions.state.result?.sessions.find((row) => row.key === key);
-    }, sessionKey);
+    const refreshedSession = await evaluateControlUiContext(
+      currentPage,
+      async (application, key) => {
+        const sessions = application.sessions;
+        await sessions.refresh({ agentId: "main", force: true });
+        return sessions.state.result?.sessions.find((row) => row.key === key);
+      },
+      sessionKey,
+    );
     expect(refreshedSession).toMatchObject({ lastRunId: runId, runtimeMs: 13_000 });
     await operationLabel.waitFor();
     await expect.poll(() => operationLabel.textContent()).toBe("Worked for 13 seconds");
@@ -228,7 +226,9 @@ suite.define(() => {
 
     expect(await assistantGroup.count()).toBe(1);
     expect(await currentPage.locator(".chat-reading-indicator").count()).toBe(0);
-    expect(await assistantGroup.getByText("Working…", { exact: true }).count()).toBe(1);
+    expect(
+      await assistantGroup.getByText("Waiting for turn to start…", { exact: true }).count(),
+    ).toBe(1);
 
     const artifactDir = path.join(suite.artifactDir, "chat-single-turn-status");
     await currentPage.screenshot({
@@ -338,14 +338,7 @@ suite.define(() => {
 
     await gateway.setOnline(false);
     await expect
-      .poll(() =>
-        currentPage.evaluate(() => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-          };
-          return app.runtime?.context.gateway.snapshot.phase;
-        }),
-      )
+      .poll(() => currentPage.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase))
       .toBe("reconnecting");
     await stop.waitFor({ state: "visible" });
     expect(await stop.isEnabled()).toBe(true);
@@ -510,6 +503,8 @@ suite.define(() => {
     await composer.fill("keep this draft");
     // Deferred responses do not synthesize chat.abort lifecycle events.
     await gateway.resolveDeferred("chat.abort", { ok: true, aborted: true, runIds: [runId] });
+    await currentPage.locator(".chat-working-indicator").waitFor({ state: "visible" });
+    // An answer retires visual activity, not the accepted abort's run ownership.
     await gateway.emitGatewayEvent("chat", {
       sessionKey,
       runId,
@@ -527,9 +522,13 @@ suite.define(() => {
       hasText: "Interrupted",
     });
     expect(await interrupted.count()).toBe(0);
-    await currentPage.locator(".chat-working-indicator").waitFor({ state: "visible" });
+    await currentPage.locator(".chat-working-indicator").waitFor({ state: "detached" });
     expect(await composer.inputValue()).toBe("keep this draft");
     expect(await gateway.getRequests("chat.history")).toHaveLength(historyCount);
+    await composer.fill("");
+    await stop.waitFor({ state: "visible" });
+    await composer.fill("keep this draft");
+    expect(await interrupted.count()).toBe(0);
     await captureMockStopProof(currentPage, "mock-accepted-abort-before-terminal");
     await gateway.emitGatewayEvent("chat", { sessionKey, runId, state: "aborted" });
     await currentPage.locator(".chat-working-indicator").waitFor({ state: "detached" });
@@ -676,14 +675,8 @@ suite.define(() => {
       });
       await gateway.waitForRequest("chat.history", { after: historyCount });
       // A newer sidebar read may publish while Stop's history is still pending.
-      await currentPage.evaluate(async () => {
-        const app = document.querySelector<
-          HTMLElement & { runtime?: { context: ApplicationContext } }
-        >("openclaw-app");
-        if (!app?.runtime?.context) {
-          throw new Error("Control UI context is unavailable");
-        }
-        await app.runtime.context.sessions.refreshList({ force: true });
+      await evaluateControlUiContext(currentPage, async (application) => {
+        await application.sessions.refreshList({ force: true });
       });
       await gateway.resolveDeferred("chat.history");
       await currentPage
@@ -734,11 +727,13 @@ suite.define(() => {
     await expect
       .poll(() => currentPage.locator(".chat-working-indicator__elapsed").textContent())
       .toBe("2m 57s");
-    const workingLabel = currentPage.locator(".chat-working-indicator__status > .sr-only");
-    expect(await workingLabel.textContent()).toBe("Working…");
+    const workingLabel = currentPage.locator(".chat-working-indicator__status > span:first-child");
+    expect(await workingLabel.textContent()).toBe("Waiting for turn to start…");
     expect(
-      await currentPage.locator(".chat-working-indicator__status > span:not(.sr-only)").count(),
-    ).toBe(0);
+      await currentPage
+        .locator(".chat-working-indicator__status > span:not(.sr-only)")
+        .allTextContents(),
+    ).toEqual(["Waiting for turn to start…", "·"]);
   });
 
   it.each(["final", "error"] as const)(
@@ -771,7 +766,7 @@ suite.define(() => {
       const runId = params.idempotencyKey as string;
 
       await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
-      const mainSession = currentPage.locator(".nav-item--home");
+      const mainSession = currentPage.locator(".sidebar-footer-bar__home");
       // Home mirrors session rows: active-run state rings the leading glyph.
       const mainSessionRunIndicator = mainSession
         .locator(".session-glyph")
@@ -818,7 +813,9 @@ suite.define(() => {
           });
           await currentPage.getByRole("alert").filter({ hasText: diagnostic }).waitFor();
           await mainSession.locator('[data-session-attention="error"]').waitFor();
-          expect(await mainSession.getAttribute("aria-label")).toContain(diagnostic);
+          expect(
+            await mainSession.locator("[data-session-attention=error]").getAttribute("aria-label"),
+          ).toContain(diagnostic);
           expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(
             0,
           );
@@ -971,7 +968,7 @@ suite.define(() => {
     const runId = params.idempotencyKey as string;
 
     await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
-    const mainSession = currentPage.locator(".nav-item--home");
+    const mainSession = currentPage.locator(".sidebar-footer-bar__home");
     // Home mirrors session rows: active-run state rings the leading glyph.
     const mainSessionRunIndicator = mainSession
       .locator(".session-glyph")

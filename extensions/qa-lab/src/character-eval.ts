@@ -27,10 +27,7 @@ const DEFAULT_CHARACTER_EVAL_CONCURRENCY = 16;
 const DEFAULT_JUDGE_THINKING: QaThinkingLevel = "xhigh";
 const DEFAULT_JUDGE_TIMEOUT_MS = 300_000;
 
-export type QaCharacterModelOptions = {
-  thinkingDefault?: QaThinkingLevel;
-  fastMode?: boolean;
-};
+export type QaCharacterModelOptions = (typeof DEFAULT_JUDGE_MODEL_OPTIONS)[string];
 
 type QaCharacterEvalRun = {
   model: string;
@@ -449,6 +446,13 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
       const { thinkingDefault, fastMode } = resolveCandidateOptions(params, model);
       const modelOutputDir = path.join(runsDir, `${index + 1}-${sanitizePathPart(model)}`);
       const runStartedAt = Date.now();
+      const complete = <T extends QaCharacterEvalRun>(run: T) => {
+        logCharacterEvalProgress(
+          params.progress,
+          `candidate done ${formatEvalIndex(index, models.length)} model=${model} ${summarizeRunStats(run)}`,
+        );
+        return run;
+      };
       logCharacterEvalProgress(
         params.progress,
         `candidate start ${formatEvalIndex(index, models.length)} model=${model} thinking=${thinkingDefault} fast=${fastMode ? "on" : "off"}`,
@@ -477,7 +481,7 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
           result.summaryPath,
         );
         const status = failedScenarioCount > 0 || transcriptFailure ? "fail" : "pass";
-        const run = {
+        return complete({
           model,
           status,
           durationMs: Date.now() - runStartedAt,
@@ -489,15 +493,10 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
           transcript,
           stats,
           ...(transcriptFailure ? { error: transcriptFailure } : {}),
-        } satisfies QaCharacterEvalRun;
-        logCharacterEvalProgress(
-          params.progress,
-          `candidate done ${formatEvalIndex(index, models.length)} model=${model} ${summarizeRunStats(run)}`,
-        );
-        return run;
+        });
       } catch (error) {
         const transcript = "";
-        const run = {
+        return complete({
           model,
           status: "fail",
           durationMs: Date.now() - runStartedAt,
@@ -507,12 +506,7 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
           transcript,
           stats: collectTranscriptStats(transcript),
           error: formatErrorMessage(error),
-        } satisfies QaCharacterEvalRun;
-        logCharacterEvalProgress(
-          params.progress,
-          `candidate done ${formatEvalIndex(index, models.length)} model=${model} ${summarizeRunStats(run)}`,
-        );
-        return run;
+        });
       }
     }),
     limit: candidateConcurrency,

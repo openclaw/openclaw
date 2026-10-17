@@ -1,7 +1,8 @@
 import { Type } from "typebox";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { jsonResult } from "../../agents/tools/common.js";
+import { resolveMessageToolDiscoveryAsync } from "../../agents/tools/message-tool-discovery.js";
 import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -11,14 +12,12 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import * as bundled from "./bundled.js";
 import {
-  channelSupportsMessageCapability,
-  channelSupportsMessageCapabilityForChannel,
-  listCrossChannelSchemaSupportedMessageActions,
-  resolveChannelMessageToolMediaSourceParamKeys,
-  resolveChannelMessageToolSchemaProperties,
+  listCrossChannelSchemaSupportedMessageActionsSteps,
+  resolveChannelMessageToolMediaSourceParamKeysAsync,
+  resolveChannelMessageToolSchemaPropertiesSteps,
+  runMessageActionDiscoveryAsync,
 } from "./message-action-discovery.js";
 import { dispatchChannelMessageAction } from "./message-action-dispatch.js";
-import type { ChannelMessageCapability } from "./message-capabilities.js";
 import type {
   ChannelMessageActionContext,
   ChannelMessageToolSchemaContribution,
@@ -27,10 +26,50 @@ import type {
 
 type DispatchContext = Parameters<typeof dispatchChannelMessageAction>[0];
 type Actions = NonNullable<ChannelPlugin["actions"]>;
+type Alias = NonNullable<NonNullable<Actions["messageActionTargetAliases"]>["react"]>;
+type TargetCase = [Record<string, unknown>, DispatchContext["toolContext"]];
+type AccessCase = [string, Partial<DispatchContext>, boolean];
+const nc = "nextcloud-talk";
+const ncCurrent = `${nc}:current`;
 const emptyRegistry = createTestRegistry([]);
 const handleAction = vi.fn(async (_ctx: ChannelMessageActionContext) => jsonResult({ ok: true }));
 const supportsAction = vi.fn(() => true);
 const requiresTrustedRequesterSender = vi.fn(() => false);
+
+function currentContext(
+  currentChannelProvider: string,
+  currentChannelId: string,
+  extra: DispatchContext["toolContext"] = {},
+) {
+  return { currentChannelProvider, currentChannelId, ...extra };
+}
+
+async function expectAccess(context: Partial<DispatchContext>, allowed: boolean) {
+  if (!allowed) {
+    return expectDenied(context);
+  }
+  await dispatch(context);
+  expect(handleAction).toHaveBeenCalledOnce();
+}
+
+const nextcloudContext = (
+  id = ncCurrent,
+  currentChatType: NonNullable<DispatchContext["toolContext"]>["currentChatType"] = "group",
+) => currentContext(nc, id, { currentChatType });
+
+async function discover(
+  options: Omit<Parameters<typeof resolveMessageToolDiscoveryAsync>[0], "cfg"> = {},
+) {
+  return (await resolveMessageToolDiscoveryAsync({ cfg: {}, ...options })).schema.properties;
+}
+
+function schemaProperties(
+  options: Omit<Parameters<typeof resolveChannelMessageToolSchemaPropertiesSteps>[0], "cfg">,
+) {
+  return runMessageActionDiscoveryAsync(
+    resolveChannelMessageToolSchemaPropertiesSteps({ cfg: {}, ...options }),
+  );
+}
 
 function activate(...plugins: ChannelPlugin[]) {
   setActivePluginRegistry(
@@ -38,17 +77,15 @@ function activate(...plugins: ChannelPlugin[]) {
   );
 }
 
-function register({
-  channel = "discord",
-  origin,
-  messaging,
-  actions,
-}: {
-  channel?: ChannelPlugin["id"];
-  origin?: "bundled" | "workspace";
-  messaging?: ChannelPlugin["messaging"];
-  actions?: Partial<Actions>;
-} = {}) {
+function register(
+  options: {
+    channel?: ChannelPlugin["id"];
+    origin?: "bundled" | "workspace";
+    messaging?: ChannelPlugin["messaging"];
+    actions?: Partial<Actions>;
+  } = {},
+) {
+  const { channel = "discord", origin, messaging, actions } = options;
   const plugin: ChannelPlugin = {
     ...createChannelTestPluginBase({
       id: channel,
@@ -91,498 +128,316 @@ async function expectDenied(overrides: Partial<DispatchContext>) {
   expect(requiresTrustedRequesterSender).not.toHaveBeenCalled();
 }
 
-beforeEach(() => {
-  vi.clearAllMocks();
-});
+beforeEach(() => vi.clearAllMocks());
 afterEach(() => {
   setActivePluginRegistry(emptyRegistry);
   vi.restoreAllMocks();
 });
 
-describe("message action authorization", () => {
-  it.each([undefined, "trusted-user"])(
-    "requires a trusted sender for moderation (sender=%s)",
-    async (requesterSenderId) => {
-      register({
-        actions: {
-          describeMessageTool: () => ({ actions: ["kick"] }),
-          supportsAction: ({ action }) => action === "kick",
-          requiresTrustedRequesterSender: ({ action, toolContext }) =>
-            Boolean(action === "kick" && toolContext),
-        },
-      });
-      const pending = dispatch({
-        action: "kick",
-        params: { guildId: "g1", userId: "u1" },
-        requesterSenderId,
-      });
-      if (requesterSenderId) {
-        await pending;
-        expect(handleAction).toHaveBeenCalledOnce();
-      } else {
-        await expect(pending).rejects.toThrow(
-          "Trusted sender identity is required for discord:kick",
-        );
-        expect(handleAction).not.toHaveBeenCalled();
-      }
+it.each([undefined, "trusted-user"])("gates moderation sender: %s", async (sender) => {
+  register({
+    actions: {
+      describeMessageTool: () => ({ actions: ["kick"] }),
+      supportsAction: ({ action }) => action === "kick",
+      requiresTrustedRequesterSender: ({ action, toolContext }) =>
+        Boolean(action === "kick" && toolContext),
     },
-  );
-
-  it.each([
-    { name: "normalized current conversation", context: {}, allowed: true },
-    { name: "missing requester", context: { requesterAccountId: undefined }, allowed: false },
-    { name: "invalid account", context: { accountId: "!!!" }, allowed: false },
-    {
-      name: "forged provenance",
-      context: {
-        conversationReadOrigin: undefined,
-        params: {
-          channelId: "other",
-          conversationReadOrigin: "direct-operator",
-          pluginOrigin: "bundled",
-          channelData: { conversationReadOrigin: "direct-operator", pluginOrigin: "bundled" },
-        },
-      },
-      allowed: false,
-    },
-  ] satisfies { name: string; context: Partial<DispatchContext>; allowed: boolean }[])(
-    "checks host context for $name",
-    async ({ context, allowed }) => {
-      register();
-      if (allowed) {
-        await dispatch(context);
-        expect(handleAction).toHaveBeenCalledOnce();
-      } else {
-        await expectDenied(context);
-      }
-    },
-  );
-
-  it("rejects unknown runtime actions before plugin callbacks", async () => {
-    register();
-    expect(
-      await dispatch({ action: "forged-read", conversationReadOrigin: "direct-operator" }),
-    ).toBeNull();
+  });
+  const pending = dispatch({
+    action: "kick",
+    params: { guildId: "g1", userId: "u1" },
+    requesterSenderId: sender,
+  });
+  if (sender) {
+    await pending;
+    expect(handleAction).toHaveBeenCalledOnce();
+  } else {
+    await expect(pending).rejects.toThrow("Trusted sender identity is required for discord:kick");
     expect(handleAction).not.toHaveBeenCalled();
-    expect(supportsAction).not.toHaveBeenCalled();
-    expect(requiresTrustedRequesterSender).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      name: "conflicting trusted kinds",
-      params: { target: "current" },
-      toolContext: {
-        currentChannelProvider: "discord",
-        currentChannelId: "channel:current",
-        currentMessagingTarget: "user:current",
-      },
-    },
-    {
-      name: "bare trusted sibling hiding a kind mismatch",
-      params: { target: "channel:current", channelId: "current" },
-      toolContext: {
-        currentChannelProvider: "discord",
-        currentChannelId: "current",
-        currentMessagingTarget: "user:current",
-      },
-    },
-    {
-      name: "provider prefix hiding a user kind",
-      params: { target: "user:current", to: "nextcloud-talk:current" },
-      toolContext: {
-        currentChannelProvider: "nextcloud-talk",
-        currentChannelId: "nextcloud-talk:current",
-        currentChatType: "group",
-      },
-    },
-    {
-      name: "typed room without a canonical sibling",
-      params: { target: "room:current" },
-      toolContext: {
-        currentChannelProvider: "nextcloud-talk",
-        currentChannelId: "nextcloud-talk:current",
-        currentChatType: "group",
-      },
-    },
-    {
-      name: "group target in a channel context",
-      params: { target: "group:current", to: "nextcloud-talk:current" },
-      toolContext: {
-        currentChannelProvider: "nextcloud-talk",
-        currentChannelId: "nextcloud-talk:current",
-        currentChatType: "channel",
-      },
-    },
-  ] satisfies {
-    name: string;
-    params: Record<string, unknown>;
-    toolContext: DispatchContext["toolContext"];
-  }[])("rejects $name", async ({ name: _name, params, toolContext }) => {
-    const channel = toolContext?.currentChannelProvider ?? "discord";
-    register({
-      channel,
-      origin: "workspace",
-      messaging: { targetPrefixes: ["nextcloud-talk", "nc", "user"] },
-    });
-    await expectDenied({ channel, params, toolContext });
-  });
-
-  it.each([
-    {
-      name: "case-sensitive mismatch",
-      target: "room:CURRENT",
-      current: "nextcloud-talk:current",
-      normalized: "nextcloud-talk:current",
-      expected: undefined,
-      origin: "delegated",
-    },
-    {
-      name: "direct operator",
-      target: "room:other",
-      current: "nextcloud-talk:current",
-      normalized: undefined,
-      expected: "room:other",
-      origin: "direct-operator",
-    },
-    {
-      name: "normalization mirror",
-      target: "room:current",
-      current: "nc:current",
-      normalized: "nextcloud-talk:other",
-      expected: "nc:current",
-      origin: "delegated",
-    },
-  ] as const)(
-    "uses host target authority for $name",
-    async ({ target, current, normalized, expected, origin }) => {
-      const normalizeTarget = vi.fn(() => normalized);
-      register({
-        channel: "nextcloud-talk",
-        origin: "workspace",
-        messaging: {
-          targetPrefixes: ["nc"],
-          ...(normalized ? { normalizeTarget } : {}),
-        },
-      });
-      const context: Partial<DispatchContext> = {
-        channel: "nextcloud-talk",
-        conversationReadOrigin: origin,
-        params: { target, to: target },
-        toolContext: {
-          currentChannelProvider: "nextcloud-talk",
-          currentChannelId: current,
-          currentChatType: "group",
-        },
-      };
-      if (expected === undefined) {
-        await expectDenied(context);
-      } else {
-        await dispatch(context);
-        expect(handleAction).toHaveBeenCalledOnce();
-        expect(handleAction.mock.calls[0]?.[0].params).toEqual({ target: expected, to: expected });
-      }
-      expect(normalizeTarget).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    { origin: "bundled", providerOwnedReadGates: true, allowed: true },
-    { origin: "bundled", providerOwnedReadGates: ["read"], allowed: true },
-    { origin: "workspace", providerOwnedReadGates: true, allowed: false },
-  ] satisfies {
-    origin: "bundled" | "workspace";
-    providerOwnedReadGates: Actions["providerOwnedReadGates"];
-    allowed: boolean;
-  }[])(
-    "delegates declared read gates only to bundled plugins (%j)",
-    async ({ origin, providerOwnedReadGates, allowed }) => {
-      register({ origin, actions: { providerOwnedReadGates } });
-      const context = { params: { channelId: "configured" }, toolContext: undefined };
-      if (allowed) {
-        await dispatch(context);
-        expect(handleAction).toHaveBeenCalledOnce();
-      } else {
-        await expectDenied(context);
-      }
-    },
-  );
+  }
 });
 
+it.each<AccessCase>([
+  ["normalized current conversation", {}, true],
+  ["missing requester", { requesterAccountId: undefined }, false],
+  ["invalid account", { accountId: "!!!" }, false],
+  [
+    "forged provenance",
+    {
+      conversationReadOrigin: undefined,
+      params: {
+        channelId: "other",
+        conversationReadOrigin: "direct-operator",
+        pluginOrigin: "bundled",
+        channelData: { conversationReadOrigin: "direct-operator", pluginOrigin: "bundled" },
+      },
+    },
+    false,
+  ],
+])("checks host context: %s", async (_name, context, allowed) => {
+  register();
+  await expectAccess(context, allowed);
+});
+
+it("rejects unknown actions before callbacks", async () => {
+  register();
+  expect(
+    await dispatch({ action: "forged-read", conversationReadOrigin: "direct-operator" }),
+  ).toBeNull();
+  expect(handleAction).not.toHaveBeenCalled();
+  expect(supportsAction).not.toHaveBeenCalled();
+  expect(requiresTrustedRequesterSender).not.toHaveBeenCalled();
+});
+
+it.each<TargetCase>([
+  [
+    { target: "current" },
+    currentContext("discord", "channel:current", {
+      currentMessagingTarget: "user:current",
+    }),
+  ],
+  [
+    { target: "channel:current", channelId: "current" },
+    currentContext("discord", "current", { currentMessagingTarget: "user:current" }),
+  ],
+  [{ target: "user:current", to: ncCurrent }, nextcloudContext()],
+  [{ target: "room:current" }, nextcloudContext()],
+  [{ target: "group:current", to: ncCurrent }, nextcloudContext(undefined, "channel")],
+])("rejects conflicting target kinds: %j", async (params, toolContext) => {
+  const channel = toolContext?.currentChannelProvider ?? "discord";
+  register({
+    channel,
+    origin: "workspace",
+    messaging: { targetPrefixes: [nc, "nc", "user"] },
+  });
+  await expectDenied({ channel, params, toolContext });
+});
+
+it.each([
+  ["room:CURRENT", ncCurrent, ncCurrent, undefined, "delegated"],
+  ["room:other", ncCurrent, undefined, "room:other", "direct-operator"],
+  ["room:current", "nc:current", `${nc}:other`, "nc:current", "delegated"],
+] as const)("authorizes host target: %s", async (target, current, normalized, expected, origin) => {
+  const normalizeTarget = vi.fn(() => normalized);
+  register({
+    channel: nc,
+    origin: "workspace",
+    messaging: {
+      targetPrefixes: ["nc"],
+      ...(normalized ? { normalizeTarget } : {}),
+    },
+  });
+  const context: Partial<DispatchContext> = {
+    channel: nc,
+    conversationReadOrigin: origin,
+    params: { target, to: target },
+    toolContext: nextcloudContext(current),
+  };
+  if (expected === undefined) {
+    await expectDenied(context);
+  } else {
+    await expectAccess(context, true);
+    expect(handleAction.mock.calls[0]?.[0].params).toEqual({ target: expected, to: expected });
+  }
+  expect(normalizeTarget).not.toHaveBeenCalled();
+});
+
+it.each<["bundled" | "workspace", Actions["providerOwnedReadGates"], boolean]>([
+  ["bundled", true, true],
+  ["bundled", ["read"], true],
+  ["workspace", true, false],
+])("trusts bundled read gates: %j", async (origin, providerOwnedReadGates, allowed) => {
+  register({ origin, actions: { providerOwnedReadGates } });
+  await expectAccess({ params: { channelId: "configured" }, toolContext: undefined }, allowed);
+});
 const aliasContext: Partial<DispatchContext> = {
   channel: "imessage",
   action: "react",
   params: { chatId: 42, messageId: "current-message" },
-  toolContext: {
-    currentChannelProvider: "imessage",
-    currentChannelId: "current-handle",
+  toolContext: currentContext("imessage", "current-handle", {
     currentMessageId: "current-message",
-  },
+  }),
 };
 
-function registerAlias({
-  origin = "bundled",
-  ...matchers
-}: {
-  origin?: "bundled" | "workspace";
-  matchesCurrentConversation?: () => boolean;
-  matchesCurrentConversationAsync?: () => Promise<boolean>;
-} = {}) {
+function registerAlias(
+  alias: Partial<Alias> = {},
+  origin: "bundled" | "workspace" = "bundled",
+  messaging?: ChannelPlugin["messaging"],
+) {
   const resolveDeliveryTarget = vi.fn(
     ({ args }: { args: Record<string, unknown> }) => `chat_id:${String(args.chatId)}`,
   );
+  const react: Alias = {
+    aliases: ["chatId", "messageId"],
+    deliveryTargetAliases: ["chatId"],
+    resolveDeliveryTarget,
+    ...alias,
+  };
   register({
     channel: "imessage",
     origin,
-    actions: {
-      messageActionTargetAliases: {
-        react: {
-          aliases: ["chatId", "messageId"],
-          deliveryTargetAliases: ["chatId"],
-          resolveDeliveryTarget,
-          ...matchers,
-        },
-      },
-    },
+    messaging,
+    actions: { messageActionTargetAliases: { react } },
   });
   return resolveDeliveryTarget;
 }
 
 function prepareAsyncAlias(origin: "bundled" | "workspace" = "bundled") {
   const proof = createDeferred<boolean>();
-  const matchesCurrentConversation = vi.fn(() => true);
-  const matchesCurrentConversationAsync = vi.fn(() => proof.promise);
-  const resolveDeliveryTarget = registerAlias({
-    origin,
-    matchesCurrentConversation,
-    matchesCurrentConversationAsync,
-  });
-  return {
-    proof,
-    resolveDeliveryTarget,
-    matchesCurrentConversation,
-    matchesCurrentConversationAsync,
+  const matchers = {
+    matchesCurrentConversation: vi.fn(() => true),
+    matchesCurrentConversationAsync: vi.fn(() => proof.promise),
   };
+  return { proof, resolveDeliveryTarget: registerAlias(matchers, origin), ...matchers };
 }
 
-describe("message action delivery alias authority", () => {
-  it("matches numeric delivery aliases through the bundled provider normalizer", async () => {
-    const resolveDeliveryTarget = vi.fn(({ args }: { args: Record<string, unknown> }) =>
-      typeof args.chatId === "number" && Number.isInteger(args.chatId) && args.chatId > 0
-        ? `chat_id:${args.chatId}`
-        : undefined,
-    );
-    register({
-      channel: "imessage",
-      origin: "bundled",
-      messaging: { normalizeTarget: (raw) => raw.trim().toLowerCase() || undefined },
-      actions: {
-        messageActionTargetAliases: {
-          react: {
-            aliases: ["chatId", "messageId"],
-            deliveryTargetAliases: ["chatId"],
-            resolveDeliveryTarget,
-          },
-        },
-      },
-    });
-    await dispatch({
-      ...aliasContext,
-      toolContext: { currentChannelProvider: "imessage", currentChannelId: "CHAT_ID:42" },
-    });
-    expect(resolveDeliveryTarget).toHaveBeenCalledOnce();
-    expect(handleAction).toHaveBeenCalledOnce();
+it("normalizes bundled numeric delivery aliases", async () => {
+  const resolveDeliveryTarget = vi.fn(({ args }: { args: Record<string, unknown> }) =>
+    typeof args.chatId === "number" && Number.isInteger(args.chatId) && args.chatId > 0
+      ? `chat_id:${args.chatId}`
+      : undefined,
+  );
+  registerAlias({ resolveDeliveryTarget }, "bundled", {
+    normalizeTarget: (raw) => raw.trim().toLowerCase() || undefined,
   });
-
-  it.each([true, false])(
-    "honors synchronous alias proof with normalized mirrors (proof=%s)",
-    async (matches) => {
-      const matchesCurrentConversation = vi.fn(() => matches);
-      registerAlias({ matchesCurrentConversation });
-      const context = {
-        ...aliasContext,
-        params: { ...aliasContext.params, target: "chat_id:42", to: "chat_id:42" },
-      };
-      if (matches) {
-        await dispatch(context);
-        expect(handleAction).toHaveBeenCalledOnce();
-      } else {
-        await expectDenied(context);
-      }
-      expect(matchesCurrentConversation).toHaveBeenCalledWith({
-        args: context.params,
-        accountId: "work",
-        toolContext: aliasContext.toolContext,
-      });
-    },
-  );
-
-  it.each([true, false, "error"] as const)(
-    "awaits async alias proof without legacy fallback (result=%s)",
-    async (outcome) => {
-      const fixture = prepareAsyncAlias();
-      const pending = dispatch(aliasContext);
-      expect(fixture.matchesCurrentConversationAsync).toHaveBeenCalledOnce();
-      expect(handleAction).not.toHaveBeenCalled();
-      const expected =
-        outcome === true
-          ? expect(pending).resolves.toMatchObject({ details: { ok: true } })
-          : expect(pending).rejects.toThrow(
-              outcome === "error" ? "proof unavailable" : "exact current conversation",
-            );
-      if (outcome === "error") {
-        fixture.proof.reject(new Error("proof unavailable"));
-      } else {
-        fixture.proof.resolve(outcome);
-      }
-      await expected;
-      expect(fixture.matchesCurrentConversation).not.toHaveBeenCalled();
-      expect(handleAction).toHaveBeenCalledTimes(outcome === true ? 1 : 0);
-    },
-  );
-
-  it.each(["external", "account", "provider", "sibling"] as const)(
-    "rejects %s mismatch before alias callbacks",
-    async (mismatch) => {
-      const fixture = prepareAsyncAlias(mismatch === "external" ? "workspace" : "bundled");
-      await expectDenied({
-        ...aliasContext,
-        ...(mismatch === "external" ? { params: { messageId: "current-message" } } : {}),
-        ...(mismatch === "account" ? { accountId: undefined } : {}),
-        ...(mismatch === "provider"
-          ? { toolContext: { ...aliasContext.toolContext, currentChannelProvider: "discord" } }
-          : {}),
-        ...(mismatch === "sibling"
-          ? { params: { ...aliasContext.params, target: "other-handle" } }
-          : {}),
-      });
-      expect(fixture.matchesCurrentConversationAsync).not.toHaveBeenCalled();
-      expect(fixture.matchesCurrentConversation).not.toHaveBeenCalled();
-      if (mismatch !== "sibling") {
-        expect(fixture.resolveDeliveryTarget).not.toHaveBeenCalled();
-      }
-    },
-  );
-
-  it.each(["caller", "registration"] as const)(
-    "rechecks %s authority after awaited alias proof",
-    async (revoked) => {
-      const fixture = prepareAsyncAlias();
-      const bundledFallback = vi
-        .spyOn(bundled, "getBundledChannelPlugin")
-        .mockReturnValue(undefined);
-      let callerCurrent = true;
-      const pending = dispatch({
-        ...aliasContext,
-        assertDirectAdapterHandoff: () => {
-          if (!callerCurrent) {
-            throw new Error("caller is no longer active");
-          }
-        },
-      });
-      const expected = expect(pending).rejects.toThrow("no longer active");
-      if (revoked === "caller") {
-        callerCurrent = false;
-      } else {
-        setActivePluginRegistry(emptyRegistry);
-      }
-      fixture.proof.resolve(true);
-      await expected;
-      expect(handleAction).not.toHaveBeenCalled();
-      expect(bundledFallback).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    {
-      name: "delivery alias",
-      aliases: {
-        read: {
-          aliases: ["chatGuid"],
-          deliveryTargetAliases: ["chatGuid"],
-          resolveDeliveryTarget: ({ args }) =>
-            typeof args.chatGuid === "string" ? `chat_guid:${args.chatGuid}` : undefined,
-        },
-      },
-      params: { to: "chat_guid:iMessage;+;current", chatGuid: "iMessage;+;other" },
-    },
-    {
-      name: "canonical target",
-      aliases: { read: { aliases: ["messageId"] } },
-      params: {
-        target: "malformed-target",
-        to: "chat_guid:iMessage;+;current",
-        messageId: "current-message",
-      },
-    },
-  ] satisfies {
-    name: string;
-    aliases: Actions["messageActionTargetAliases"];
-    params: Record<string, unknown>;
-  }[])("rejects an unnormalizable $name even with a valid sibling", async ({ aliases, params }) => {
-    register({
-      channel: "imessage",
-      origin: "bundled",
-      messaging: { normalizeTarget: (raw) => (raw.includes("current") ? raw : undefined) },
-      actions: { messageActionTargetAliases: aliases },
-    });
-    await expectDenied({
-      channel: "imessage",
-      params,
-      toolContext: {
-        currentChannelProvider: "imessage",
-        currentChannelId: "chat_guid:iMessage;+;current",
-      },
-    });
+  await dispatch({
+    ...aliasContext,
+    toolContext: { currentChannelProvider: "imessage", currentChannelId: "CHAT_ID:42" },
   });
+  expect(resolveDeliveryTarget).toHaveBeenCalledOnce();
+  expect(handleAction).toHaveBeenCalledOnce();
+});
 
-  it("does not grant resource-only mutations authority from a read-only provider gate", async () => {
-    register({
-      channel: "imessage",
-      origin: "bundled",
-      actions: {
-        providerOwnedReadGates: ["read"],
-        messageActionTargetAliases: { react: { aliases: ["messageId"] } },
-      },
-    });
-    await expectDenied({ ...aliasContext, params: { messageId: "current-message" } });
+it.each([true, false])("checks synchronous alias proof: %s", async (matches) => {
+  const matchesCurrentConversation = vi.fn(() => matches);
+  registerAlias({ matchesCurrentConversation });
+  const context = {
+    ...aliasContext,
+    params: { ...aliasContext.params, target: "chat_id:42", to: "chat_id:42" },
+  };
+  await expectAccess(context, matches);
+  expect(matchesCurrentConversation).toHaveBeenCalledWith({
+    args: context.params,
+    accountId: "work",
+    toolContext: aliasContext.toolContext,
   });
 });
 
-describe("bundled targetless cache reads", () => {
-  const context: Partial<DispatchContext> = {
-    channel: "telegram",
-    action: "sticker-search",
-    params: { query: "party", limit: 5 },
-    toolContext: { currentChannelProvider: "telegram", currentChannelId: "123" },
-  };
-  beforeEach(() => {
-    register({ channel: "telegram", origin: "bundled" });
-  });
+it.each([true, false, "error"] as const)("awaits alias, never sync: %s", async (outcome) => {
+  const fixture = prepareAsyncAlias();
+  const pending = dispatch(aliasContext);
+  expect(fixture.matchesCurrentConversationAsync).toHaveBeenCalledOnce();
+  expect(handleAction).not.toHaveBeenCalled();
+  const expected =
+    outcome === true
+      ? expect(pending).resolves.toMatchObject({ details: { ok: true } })
+      : expect(pending).rejects.toThrow(
+          outcome === "error" ? "proof unavailable" : "exact current conversation",
+        );
+  if (outcome === "error") {
+    fixture.proof.reject(new Error("proof unavailable"));
+  } else {
+    fixture.proof.resolve(outcome);
+  }
+  await expected;
+  expect(fixture.matchesCurrentConversation).not.toHaveBeenCalled();
+  expect(handleAction).toHaveBeenCalledTimes(outcome === true ? 1 : 0);
+});
 
-  it.each([
-    { name: "matching context", override: {}, allowed: true },
-    {
-      name: "missing provider",
-      override: { toolContext: { currentChannelId: "123" } },
-      allowed: false,
-    },
-    { name: "wrong account", override: { accountId: "other" }, allowed: false },
-    {
-      name: "missing current target",
-      override: { toolContext: { currentChannelProvider: "telegram" } },
-      allowed: false,
-    },
-  ] satisfies { name: string; override: Partial<DispatchContext>; allowed: boolean }[])(
-    "checks cache-read authority with $name",
-    async ({ override, allowed }) => {
-      if (allowed) {
-        await dispatch({ ...context, ...override });
-        expect(handleAction).toHaveBeenCalledOnce();
-      } else {
-        await expectDenied({ ...context, ...override });
+it.each<[string, Partial<DispatchContext>]>([
+  ["external", { params: { messageId: "current-message" } }],
+  ["account", { accountId: undefined }],
+  ["provider", { toolContext: { ...aliasContext.toolContext, currentChannelProvider: "discord" } }],
+  ["sibling", { params: { ...aliasContext.params, target: "other-handle" } }],
+])("rejects %s before alias callbacks", async (mismatch, context) => {
+  const fixture = prepareAsyncAlias(mismatch === "external" ? "workspace" : "bundled");
+  await expectDenied({ ...aliasContext, ...context });
+  expect(fixture.matchesCurrentConversationAsync).not.toHaveBeenCalled();
+  expect(fixture.matchesCurrentConversation).not.toHaveBeenCalled();
+  if (mismatch !== "sibling") {
+    expect(fixture.resolveDeliveryTarget).not.toHaveBeenCalled();
+  }
+});
+
+it.each(["caller", "registration"] as const)("rechecks %s after alias proof", async (revoked) => {
+  const fixture = prepareAsyncAlias();
+  const bundledFallback = vi.spyOn(bundled, "getBundledChannelPlugin").mockReturnValue(undefined);
+  let callerCurrent = true;
+  const pending = dispatch({
+    ...aliasContext,
+    assertDirectAdapterHandoff: () => {
+      if (!callerCurrent) {
+        throw new Error("caller is no longer active");
       }
     },
+  });
+  const expected = expect(pending).rejects.toThrow("no longer active");
+  if (revoked === "caller") {
+    callerCurrent = false;
+  } else {
+    setActivePluginRegistry(emptyRegistry);
+  }
+  fixture.proof.resolve(true);
+  await expected;
+  expect(handleAction).not.toHaveBeenCalled();
+  expect(bundledFallback).not.toHaveBeenCalled();
+});
+
+it.each([true, false])("rejects malformed target beside valid sibling: %s", async (delivery) => {
+  const current = "chat_guid:iMessage;+;current";
+  const alias: Alias = delivery
+    ? {
+        aliases: ["chatGuid"],
+        deliveryTargetAliases: ["chatGuid"],
+        resolveDeliveryTarget: ({ args }) =>
+          typeof args.chatGuid === "string" ? `chat_guid:${args.chatGuid}` : undefined,
+      }
+    : { aliases: ["messageId"] };
+  register({
+    channel: "imessage",
+    origin: "bundled",
+    messaging: { normalizeTarget: (raw) => (raw.includes("current") ? raw : undefined) },
+    actions: { messageActionTargetAliases: { read: alias } },
+  });
+  await expectDenied({
+    channel: "imessage",
+    params: {
+      to: current,
+      ...(delivery
+        ? { chatGuid: "iMessage;+;other" }
+        : { target: "malformed-target", messageId: "current-message" }),
+    },
+    toolContext: currentContext("imessage", current),
+  });
+});
+
+it("denies resource-only mutations through a read-only gate", async () => {
+  register({
+    channel: "imessage",
+    origin: "bundled",
+    actions: {
+      providerOwnedReadGates: ["read"],
+      messageActionTargetAliases: { react: { aliases: ["messageId"] } },
+    },
+  });
+  await expectDenied({ ...aliasContext, params: { messageId: "current-message" } });
+});
+it.each<AccessCase>([
+  ["matching context", {}, true],
+  ["missing provider", { toolContext: { currentChannelId: "123" } }, false],
+  ["wrong account", { accountId: "other" }, false],
+  ["missing current target", { toolContext: { currentChannelProvider: "telegram" } }, false],
+])("checks bundled cache-read authority: %s", async (_name, override, allowed) => {
+  register({ channel: "telegram", origin: "bundled" });
+  await expectAccess(
+    {
+      channel: "telegram",
+      action: "sticker-search",
+      params: { query: "party", limit: 5 },
+      toolContext: currentContext("telegram", "123"),
+      ...override,
+    },
+    allowed,
   );
 });
 
@@ -594,6 +449,10 @@ function discoveryPlugin(
     ...createChannelTestPluginBase({ id, capabilities: { chatTypes: ["direct", "group"] } }),
     actions: { describeMessageTool },
   };
+}
+
+function activateDiscovery(description: ReturnType<Actions["describeMessageTool"]>, id = "demo") {
+  activate(discoveryPlugin(id, () => description));
 }
 
 function activateCapabilities() {
@@ -608,171 +467,128 @@ function activateCapabilities() {
   );
 }
 
-describe("message action discovery", () => {
-  it.each([
-    { name: "all plugins", all: true, channel: undefined, presentation: true, pin: true },
-    {
-      name: "channel alias",
-      all: false,
-      channel: "demo-cards-alias",
-      presentation: false,
-      pin: true,
-    },
-    { name: "missing channel", all: false, channel: undefined, presentation: false, pin: false },
-  ])("scopes capabilities to $name", ({ all, channel, presentation, pin }) => {
-    activateCapabilities();
-    const supports = (capability: ChannelMessageCapability) =>
-      all
-        ? channelSupportsMessageCapability({}, capability)
-        : channelSupportsMessageCapabilityForChannel({ cfg: {}, channel }, capability);
-    expect(supports("presentation")).toBe(presentation);
-    expect(supports("delivery-pin")).toBe(pin);
-  });
+it.each<[string | undefined, boolean, boolean]>([
+  [undefined, true, true],
+  ["demo-cards-alias", false, true],
+  ["demo-missing", false, false],
+])("scopes capabilities: %s", async (channel, presentation, pin) => {
+  activateCapabilities();
+  const properties = await discover({ currentChannelProvider: channel });
+  expect([
+    Object.hasOwn(properties, "presentation"),
+    Object.hasOwn(properties, "delivery"),
+  ]).toEqual([presentation, pin]);
+});
 
-  it("does not replace an explicitly empty prepared catalog", () => {
-    activateCapabilities();
-    const preparedMessageToolCatalog = { version: 0, channels: [], getChannel: () => undefined };
-    expect(channelSupportsMessageCapability({}, "presentation", preparedMessageToolCatalog)).toBe(
-      false,
-    );
-    expect(
-      resolveChannelMessageToolSchemaProperties({
-        cfg: {},
-        channel: "demo-buttons",
-        preparedMessageToolCatalog,
-      }),
-    ).toEqual({});
-  });
-
-  it("evaluates prepared discovery against each account context", () => {
-    const plugin = discoveryPlugin("demo-account-scoped", ({ accountId }) => ({
-      actions: ["send"],
-      capabilities: accountId === "first" ? ["presentation"] : ["delivery-pin"],
-    }));
-    activate(plugin);
-    const preparedMessageToolCatalog = getPreparedMessageToolCatalog();
-    const supports = (accountId: string, capability: ChannelMessageCapability) =>
-      channelSupportsMessageCapabilityForChannel(
-        { cfg: {}, channel: plugin.id, accountId, preparedMessageToolCatalog },
-        capability,
-      );
-    expect(supports("first", "presentation")).toBe(true);
-    expect(supports("second", "presentation")).toBe(false);
-    expect(supports("second", "delivery-pin")).toBe(true);
-  });
-
-  it("keeps all-configured schema account-neutral from another current channel", () => {
-    const schema: ChannelMessageToolSchemaContribution[] = [
-      { actions: ["react"], properties: { emoji: Type.Optional(Type.String()) } },
-      {
-        actions: ["send"],
-        properties: { components: Type.Optional(Type.Object({})) },
-        visibility: "all-configured",
-      },
-    ];
-    activate(
-      discoveryPlugin("discord", ({ accountId }) =>
-        accountId
-          ? { actions: [], schema: null }
-          : {
-              actions: ["react", "send"],
-              schema,
-            },
-      ),
-      discoveryPlugin("slack", () => ({ actions: [] })),
-    );
-    const properties = resolveChannelMessageToolSchemaProperties({
-      cfg: {},
-      channel: "slack",
-      accountId: "slack-workspace",
-    });
-    expect(properties).toHaveProperty("components");
-    expect(properties).not.toHaveProperty("emoji");
-  });
-
-  it("keeps required and serialized contributed properties optional", () => {
-    activate(
-      discoveryPlugin("demo-contrib", () => ({
-        actions: ["send"],
-        schema: {
-          properties: {
-            components: Type.Array(Type.String()),
-            // Serialization loses TypeBox's non-enumerable optional marker.
-            chatRef: structuredClone(Type.Optional(Type.String())),
-            media: Type.Optional(Type.String()),
-          },
-        },
-      })),
-    );
-    const properties = resolveChannelMessageToolSchemaProperties({
-      cfg: {},
-      channel: "demo-contrib",
-    });
-    expect(Type.Object({ action: Type.String(), ...properties }).required).toEqual(["action"]);
-  });
-
-  it.each([
-    {
-      name: "action-scoped",
-      actions: ["read", "list-pins", "unpin"],
-      scope: { actions: ["unpin"] },
-      expected: ["read", "list-pins"],
-    },
-    { name: "unscoped", actions: ["read", "unpin"], scope: {}, expected: [] },
-  ] satisfies {
-    name: string;
-    actions: NonNullable<ReturnType<Actions["describeMessageTool"]>>["actions"];
-    scope: Pick<ChannelMessageToolSchemaContribution, "actions">;
-    expected: string[];
-  }[])(
-    "filters cross-channel actions for $name current-channel schema",
-    ({ actions, scope, expected }) => {
-      activate(
-        discoveryPlugin("demo-scoped-schema", () => ({
-          actions,
-          schema: { ...scope, properties: { pinnedMessageId: Type.Optional(Type.String()) } },
-        })),
-      );
-      expect(
-        listCrossChannelSchemaSupportedMessageActions({ cfg: {}, channel: "demo-scoped-schema" }),
-      ).toStrictEqual(expected);
-    },
+it("preserves an explicitly empty prepared catalog", async () => {
+  activateCapabilities();
+  const preparedMessageToolCatalog = { version: 0, channels: [], getChannel: () => undefined };
+  const properties = await discover({ preparedMessageToolCatalog });
+  expect(properties).not.toHaveProperty("presentation");
+  expect(properties).not.toHaveProperty("delivery");
+  expect(await schemaProperties({ channel: "demo-buttons", preparedMessageToolCatalog })).toEqual(
+    {},
   );
+});
 
-  it.each([
+it("discovers per account from a prepared catalog", async () => {
+  const plugin = discoveryPlugin("demo-account-scoped", ({ accountId }) => ({
+    actions: ["send"],
+    capabilities: accountId === "first" ? ["presentation"] : ["delivery-pin"],
+  }));
+  activate(plugin);
+  const preparedMessageToolCatalog = getPreparedMessageToolCatalog();
+  const forAccount = (currentAccountId: string) =>
+    discover({
+      currentChannelProvider: plugin.id,
+      currentAccountId,
+      preparedMessageToolCatalog,
+    });
+  expect(await forAccount("first")).toHaveProperty("presentation");
+  const second = await forAccount("second");
+  expect(second).not.toHaveProperty("presentation");
+  expect(second).toHaveProperty("delivery");
+});
+
+it("keeps cross-channel schema account-neutral", async () => {
+  const schema: ChannelMessageToolSchemaContribution[] = [
+    { actions: ["react"], properties: { emoji: Type.Optional(Type.String()) } },
     {
-      name: "action-scoped",
-      mediaSourceParams: { "set-profile": ["avatarUrl", "avatarPath"] },
-      sendParams: [],
+      actions: ["send"],
+      properties: { components: Type.Optional(Type.Object({})) },
+      visibility: "all-configured",
     },
-    {
-      name: "flat",
-      mediaSourceParams: ["avatarUrl", "avatarPath"],
-      sendParams: ["avatarUrl", "avatarPath"],
+  ];
+  activate(
+    discoveryPlugin("discord", ({ accountId }) =>
+      accountId ? { actions: [], schema: null } : { actions: ["react", "send"], schema },
+    ),
+    discoveryPlugin("slack", () => ({ actions: [] })),
+  );
+  const properties = await schemaProperties({ channel: "slack", accountId: "slack-workspace" });
+  expect(properties).toHaveProperty("components");
+  expect(properties).not.toHaveProperty("emoji");
+});
+
+it("makes required and serialized properties optional", async () => {
+  activateDiscovery({
+    actions: ["send"],
+    schema: {
+      properties: {
+        components: Type.Array(Type.String()),
+        // Serialization loses TypeBox's non-enumerable optional marker.
+        chatRef: structuredClone(Type.Optional(Type.String())),
+        media: Type.Optional(Type.String()),
+      },
     },
-  ])("discovers $name media-source parameters", ({ mediaSourceParams, sendParams }) => {
-    activate(
-      discoveryPlugin("demo-media", () => ({
-        actions: ["send", "set-profile"],
-        mediaSourceParams,
-      })),
-    );
-    const paramsFor = (action: "send" | "set-profile") =>
-      resolveChannelMessageToolMediaSourceParamKeys({ cfg: {}, action, channel: "demo-media" });
-    expect(paramsFor("set-profile")).toEqual(["avatarUrl", "avatarPath"]);
-    expect(paramsFor("send")).toStrictEqual(sendParams);
   });
+  const properties = await schemaProperties({ channel: "demo" });
+  expect(Type.Object({ action: Type.String(), ...properties }).required).toEqual(["action"]);
+});
 
-  it("skips crashing discovery and logs once", () => {
-    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
-    activate(
-      discoveryPlugin("demo-crashing", () => {
-        throw new Error("boom");
+it.each([true, false])("filters cross-channel schema actions: %s", async (scoped) => {
+  activateDiscovery({
+    actions: scoped ? ["read", "list-pins", "unpin"] : ["read", "unpin"],
+    schema: {
+      ...(scoped ? { actions: ["unpin"] } : {}),
+      properties: { pinnedMessageId: Type.Optional(Type.String()) },
+    },
+  });
+  expect(
+    await runMessageActionDiscoveryAsync(
+      listCrossChannelSchemaSupportedMessageActionsSteps({
+        cfg: {},
+        channel: "demo",
       }),
-    );
-    expect(channelSupportsMessageCapability({}, "presentation")).toBe(false);
-    expect(errorSpy).toHaveBeenCalledTimes(1);
-    expect(channelSupportsMessageCapability({}, "presentation")).toBe(false);
-    expect(errorSpy).toHaveBeenCalledTimes(1);
+    ),
+  ).toStrictEqual(scoped ? ["read", "list-pins"] : []);
+});
+
+it.each([true, false])("discovers media-source parameters: %s", async (scoped) => {
+  const keys = ["avatarUrl", "avatarPath"];
+  activateDiscovery({
+    actions: ["send", "set-profile"],
+    mediaSourceParams: scoped ? { "set-profile": keys } : keys,
   });
+  const paramsFor = (action: "send" | "set-profile") =>
+    resolveChannelMessageToolMediaSourceParamKeysAsync({
+      cfg: {},
+      action,
+      channel: "demo",
+    });
+  expect(await paramsFor("set-profile")).toEqual(["avatarUrl", "avatarPath"]);
+  expect(await paramsFor("send")).toStrictEqual(scoped ? [] : keys);
+});
+
+it("skips crashing discovery and logs once", async () => {
+  const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+  activate(
+    discoveryPlugin("demo-crashing", () => {
+      throw new Error("boom");
+    }),
+  );
+  expect(await discover()).not.toHaveProperty("presentation");
+  expect(errorSpy).toHaveBeenCalledTimes(1);
+  expect(await discover()).not.toHaveProperty("presentation");
+  expect(errorSpy).toHaveBeenCalledTimes(1);
 });

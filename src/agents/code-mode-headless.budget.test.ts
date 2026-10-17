@@ -176,7 +176,7 @@ it.each([0, 1])(
     expect(result, JSON.stringify(result)).toMatchObject(
       excess === 0
         ? { status: "completed", value: { json: "1" } }
-        : { status: "failed", code: "timeout" },
+        : { status: "failed", code: "internal_error", failurePhase: "host" },
     );
     expect(released).toHaveBeenCalledOnce();
   },

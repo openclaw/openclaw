@@ -1,7 +1,7 @@
 /**
  * System prompt runtime parameter resolver.
  *
- * Collects repository, time, timezone, channel, and shell facts for prompt rendering.
+ * Collects repository, channel, and shell facts for prompt rendering.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -17,7 +17,6 @@ import {
 } from "../infra/active-node-context.js";
 import { findGitRoot } from "../infra/git-root.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
-import { formatDateStamp, resolveUserTimezone } from "./date-time.js";
 import { resolveAgentIdentity } from "./identity.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 import type { SystemPromptRuntimeInfo } from "./system-prompt.types.js";
@@ -32,8 +31,6 @@ type RuntimeInfoInput = Omit<SystemPromptRuntimeInfo, "chatType"> &
 
 type SystemPromptRuntimeParams = {
   runtimeInfo: RuntimeInfoInput;
-  userTimezone: string;
-  userDate: string;
 };
 
 export function buildSystemPromptParams(params: {
@@ -49,8 +46,6 @@ export function buildSystemPromptParams(params: {
   const repoRoot = Object.hasOwn(params, "preparedRepoRoot")
     ? (params.preparedRepoRoot ?? undefined)
     : resolveSystemPromptRepoRoot(params);
-  const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-  const userDate = formatDateStamp(Date.now(), userTimezone);
   const { runId } = parseCronRunScopeSuffix(params.runtime.sessionKey);
   // Exact isolated-cron URLs expose a volatile run id before prompt rendering can normalize it,
   // defeating byte-identical prompt-prefix reuse across runs of the same job.
@@ -82,8 +77,6 @@ export function buildSystemPromptParams(params: {
       activeNodeIdentity: getActiveNodeIdentityScope(params.requesterProfileId),
       repoRoot,
     },
-    userTimezone,
-    userDate,
   };
 }
 

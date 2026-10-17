@@ -1,4 +1,5 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawPluginDefinition } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
@@ -12,10 +13,7 @@ import { createEmbeddedRunHandle } from "../../../agents/embedded-agent-runner/r
 import { withPreparedEmbeddedRunToolAuthority } from "../../../agents/harness/tool-authority.runtime.js";
 import type { AgentSession } from "../../../agents/sessions/agent-session.js";
 import { AuthStorage } from "../../../agents/sessions/auth-storage.js";
-import {
-  createAdmittedGatewayToolCallerIdentity,
-  withGatewayToolCallerIdentity,
-} from "../../../agents/tools/gateway-caller-context.js";
+import { setRuntimeConfigSnapshot } from "../../../config/io.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { TalkRealtimeConfig } from "../../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -43,6 +41,7 @@ import type {
 import { sharingPolicyClient } from "../../session-sharing.test-utils.js";
 import { closeTalkClientGatewayControlSession } from "../client-gateway-control.js";
 import { cleanupTalkConnection } from "../session-registry.js";
+import { withRegisteredNativeEmbeddedRun } from "./client-native-run.test-support.js";
 import { talkClientHandlers } from "./client.js";
 
 const nativeUpstream = await vi.hoisted(async () => {
@@ -105,8 +104,6 @@ const nativeUpstream = await vi.hoisted(async () => {
   };
 });
 
-const NATIVE_REALTIME_MODEL = "gpt-live-test-canary";
-
 vi.mock("../../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: nativeUpstream.runEmbeddedAgent,
 }));
@@ -134,8 +131,29 @@ export const AGENT_ID = "voice";
 export const SESSION_KEY = "agent:voice:main";
 export const SESSION_ID = "native-control-transcript";
 export const CONNECTION_ID = "native-control-client";
+export const nativeSessionScope = { agentId: AGENT_ID, sessionKey: SESSION_KEY };
 const AUDIO_SDP = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
 const DATA_CHANNEL_SDP = `${AUDIO_SDP}m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n`;
+
+export function nativeResult(text: string, meta: { aborted?: boolean } = {}) {
+  return { payloads: [{ text }], meta: { durationMs: 0, ...meta } };
+}
+
+export function nativeConsult(text: string) {
+  return (params: RunEmbeddedAgentParams) =>
+    withRegisteredNativeEmbeddedRun(params, () => nativeResult(text));
+}
+
+export async function settleNativeBackend(release: () => void) {
+  release();
+  await Promise.allSettled(
+    upstream.runEmbeddedAgent.mock.results
+      .filter((result) => result.type === "return")
+      .map((result) => result.value),
+  );
+  // Join the consult owner's continuations before another delegation can supersede its signal.
+  await nextEventLoopTurn();
+}
 
 export function requireString(record: Record<string, unknown>, key: string): string {
   const value = record[key];
@@ -145,42 +163,11 @@ export function requireString(record: Record<string, unknown>, key: string): str
   return value;
 }
 
-export async function withRegisteredNativeEmbeddedRun<T>(
-  params: Pick<
-    RunEmbeddedAgentParams,
-    "agentId" | "preparedRunAdmission" | "runId" | "sessionId" | "sessionKey"
-  >,
-  run: () => Promise<T> | T,
-): Promise<T> {
-  const { agentId, preparedRunAdmission, sessionKey } = params;
-  if (!agentId || !preparedRunAdmission || !sessionKey) {
-    throw new Error("Expected real Talk admission");
-  }
-  const admittedRunContext = await preparedRunAdmission.admit("embedded", "native-test-backend");
-  return await withGatewayToolCallerIdentity(
-    createAdmittedGatewayToolCallerIdentity({
-      admittedRunContext,
-      agentId,
-      sessionKey,
-    }),
-    async () => {
-      const handle = createEmbeddedRunHandle({ runId: params.runId });
-      embeddedRuns.setActiveEmbeddedRun(params.sessionId, handle, sessionKey);
-      try {
-        return await run();
-      } finally {
-        embeddedRuns.clearActiveEmbeddedRun(params.sessionId, handle, sessionKey);
-      }
-    },
-  );
-}
-
 function requireSuccessfulReply(respond: ReturnType<typeof vi.fn<RespondFn>>) {
-  const reply = respond.mock.calls.at(-1);
-  if (!reply) {
-    throw new Error("Talk handler did not respond");
-  }
-  const [ok, payload, error] = reply;
+  const [ok, payload, error] = expectDefined(
+    respond.mock.calls.at(-1),
+    "Talk handler did not respond",
+  );
   // Report the public rejection, never the credential-bearing session payload.
   expect({ ok, error }).toEqual({ ok: true, error: undefined });
   if (!isRecord(payload)) {
@@ -208,6 +195,7 @@ type NativePluginFixture = {
 
 export async function withNativePlugin(
   run: (fixture: NativePluginFixture) => Promise<void>,
+  options: { model?: string; nativeEffects?: boolean; onConsult?: () => void } = {},
 ): Promise<void> {
   await withOpenClawTestState(
     { layout: "state-only", prefix: "talk-native-control-", env: { OPENAI_API_KEY: undefined } },
@@ -225,9 +213,11 @@ export async function withNativePlugin(
             other: {},
           },
         },
+        ...(options.nativeEffects ? { tools: { exec: { host: "gateway", mode: "full" } } } : {}),
         talk: { agentId: AGENT_ID, realtime: realtimeConfig },
         plugins: { allow: ["openai"], entries: { openai: { enabled: true } } },
       };
+      setRuntimeConfigSnapshot(config);
       const registry = createEmptyPluginRegistry();
       // Native factory binding must retain the fixture's synthetic auth, not resolve operator credentials.
       const capabilityCatalogContext = {
@@ -243,7 +233,11 @@ export async function withNativePlugin(
       const client = {
         ...sharingPolicyClient({
           user: profile.id,
-          scopes: ["operator.read", "operator.talk"],
+          scopes: [
+            "operator.read",
+            "operator.talk",
+            ...(options.nativeEffects ? ["operator.write"] : []),
+          ],
         }),
         connId: CONNECTION_ID,
       };
@@ -271,6 +265,22 @@ export async function withNativePlugin(
                 entry,
                 () => capabilityCatalogContext,
               );
+              const createBrowserSession = provider.createBrowserSession;
+              if (createBrowserSession && options.onConsult) {
+                provider.createBrowserSession = (request) => {
+                  const original = request.runAgentConsult;
+                  if (original) {
+                    request.runAgentConsult = Object.assign(
+                      (...args: Parameters<typeof original>) => {
+                        options.onConsult?.();
+                        return original(...args);
+                      },
+                      original,
+                    );
+                  }
+                  return createBrowserSession(request);
+                };
+              }
               registry.realtimeVoiceProviders.push({
                 pluginId: "openai",
                 source: "test",
@@ -281,23 +291,18 @@ export async function withNativePlugin(
             registerRuntimeLifecycle: (lifecycle) => lifecycles.push(lifecycle),
           }),
         );
-        if (!registry.realtimeVoiceProviders.some((entry) => entry.provider.id === "openai")) {
-          throw new Error("OpenAI did not register its realtime voice provider");
-        }
-        realtimeConfig.model = NATIVE_REALTIME_MODEL;
+        realtimeConfig.model = options.model ?? "gpt-live-test-canary";
         setActivePluginRegistry(registry);
         const offerRoute = routes.find((route) => route.path === "/plugins/openai/realtime/calls");
         if (!offerRoute) {
           throw new Error("OpenAI did not register its realtime offer route");
         }
-        await replaceSessionEntry(
-          { agentId: AGENT_ID, sessionKey: SESSION_KEY },
-          {
-            sessionId: SESSION_ID,
-            updatedAt: Date.now(),
-            createdActor: { type: "human", source: "profile", id: profile.id },
-          },
-        );
+        await replaceSessionEntry(nativeSessionScope, {
+          sessionId: SESSION_ID,
+          ...(options.nativeEffects ? { permissionMode: "full", execHost: "gateway" } : {}),
+          updatedAt: Date.now(),
+          createdActor: { type: "human", source: "profile", id: profile.id },
+        });
         const call = async (
           method: keyof typeof talkClientHandlers,
           params: Record<string, unknown>,
@@ -327,13 +332,12 @@ export async function withNativePlugin(
             voiceSessionIds.push(requireString(result, "voiceSessionId"));
             return result;
           },
-          invoke: async (method, params) => {
-            return await call(method, {
+          invoke: (method, params) =>
+            call(method, {
               sessionKey: SESSION_KEY,
               ...(method === "talk.client.steer" ? {} : { voiceSessionId: voiceSessionIds.at(-1) }),
               ...params,
-            });
-          },
+            }),
           offer: (token, sdp) => {
             const request = Object.assign(createMockIncomingRequest([sdp]), {
               method: "POST",
@@ -391,10 +395,7 @@ export async function connectNativeSession(
     expect(upstream.fetch).toHaveBeenCalledTimes(fetchCount + 1);
     expect(upstream.sockets).toHaveLength(socketIndex + 1);
     expect(response.end).not.toHaveBeenCalled();
-    const socket = upstream.sockets[socketIndex];
-    if (!socket) {
-      throw new Error("Missing native sideband");
-    }
+    const socket = expectDefined(upstream.sockets[socketIndex], "Missing native sideband");
     socket.open();
     await handling;
     expect(response.res.statusCode).toBe(200);
@@ -420,22 +421,26 @@ export function talkEventTypes(broadcast: ReturnType<typeof vi.fn>): string[] {
   });
 }
 
-type ParkedNativeTask = NativePluginFixture &
-  Awaited<ReturnType<typeof connectNativeSession>> & {
-    activeRun: RunEmbeddedAgentParams & { abortSignal: AbortSignal };
-    abortOwned: ReturnType<typeof vi.fn<() => void>>;
-    queueMessage: ReturnType<
-      typeof vi.fn<ReturnType<typeof createEmbeddedRunHandle>["queueMessage"]>
-    >;
-    settleBackend: () => Promise<void>;
-  };
+type ConnectedNativePluginFixture = NativePluginFixture &
+  Awaited<ReturnType<typeof connectNativeSession>>;
+
+type ParkedNativeTask = ConnectedNativePluginFixture & {
+  activeRun: RunEmbeddedAgentParams & { abortSignal: AbortSignal };
+  abortOwned: ReturnType<typeof vi.fn<() => void>>;
+  queueMessage: ReturnType<
+    typeof vi.fn<ReturnType<typeof createEmbeddedRunHandle>["queueMessage"]>
+  >;
+  settleBackend: () => Promise<void>;
+};
 
 export async function withParkedNativeTask(
   run: (task: ParkedNativeTask) => Promise<void>,
   prompt = "Keep working until I cancel.",
-  ...embedded: [] | [session: AgentSession, finish: () => void]
+  ...embedded:
+    | []
+    | [session: AgentSession, finish: () => void, prepared?: ConnectedNativePluginFixture]
 ): Promise<void> {
-  const [embeddedSession, finishEmbeddedSession] = embedded;
+  const [embeddedSession, finishEmbeddedSession, preparedFixture] = embedded;
   const releaseBackend = createDeferredCore();
   const registered =
     createDeferredCore<
@@ -486,10 +491,7 @@ export async function withParkedNativeTask(
               phase = "loading embedded stream";
               const { prepareEmbeddedAttemptStream } =
                 await import("../../../agents/embedded-agent-runner/run/attempt-stream-prepare.js");
-              const model = embeddedSession.model;
-              if (!model) {
-                throw new Error("Expected an embedded test model");
-              }
+              const model = expectDefined(embeddedSession.model, "Expected an embedded test model");
               phase = "publishing embedded registration";
               stream = prepareEmbeddedAttemptStream({
                 attempt: {
@@ -570,13 +572,9 @@ export async function withParkedNativeTask(
               await embeddedSession?.prompt(params.prompt);
               phase = "waiting for backend release";
               await releaseBackend.promise;
-              return {
-                payloads: [{ text: "Original task completed normally." }],
-                meta: {
-                  durationMs: 0,
-                  aborted: backendAborted || params.abortSignal?.aborted === true,
-                },
-              };
+              return nativeResult("Original task completed normally.", {
+                aborted: backendAborted || params.abortSignal?.aborted === true,
+              });
             } finally {
               params.abortSignal?.removeEventListener("abort", releaseOnAbort);
               stream?.subscription.unsubscribe();
@@ -589,24 +587,9 @@ export async function withParkedNativeTask(
         throw error;
       }
     })
-    .mockImplementation(
-      async (params) =>
-        await withRegisteredNativeEmbeddedRun(params, () => ({
-          payloads: [{ text: "Subsequent task completed." }],
-          meta: { durationMs: 0 },
-        })),
-    );
-  const settleBackend = async () => {
-    releaseBackend.resolve();
-    await Promise.allSettled(
-      upstream.runEmbeddedAgent.mock.results
-        .filter((result) => result.type === "return")
-        .map((result) => result.value),
-    );
-    // Let the real consult owner release registration and finish its provider result.
-    await nextEventLoopTurn();
-  };
-  await withNativePlugin(async (fixture) => {
+    .mockImplementation(nativeConsult("Subsequent task completed."));
+  const settleBackend = () => settleNativeBackend(releaseBackend.resolve);
+  const runInFixture = async (fixture: NativePluginFixture) => {
     let deadline: ReturnType<typeof setTimeout> | undefined;
     let stopObservingCompletion: (() => void) | undefined;
     const timeoutMs = 1000;
@@ -630,7 +613,7 @@ export async function withParkedNativeTask(
         return claim;
       });
     try {
-      const session = await connectNativeSession(fixture);
+      const session = preparedFixture ?? (await connectNativeSession(fixture));
       const readiness = Promise.race([registered.promise, failed.promise]);
       const send = session.socket.send.bind(session.socket);
       const observeCompletion = vi.spyOn(session.socket, "send").mockImplementation((payload) => {
@@ -683,19 +666,25 @@ export async function withParkedNativeTask(
         }
       }
     }
-  });
+  };
+  if (preparedFixture) {
+    await runInFixture(preparedFixture);
+  } else {
+    await withNativePlugin(runInFixture);
+  }
 }
 
 export function installNativePluginTestHooks() {
   beforeEach(() => {
     upstream.sockets.length = 0;
     upstream.fetch.mockReset();
-    upstream.fetch.mockImplementation(async () => {
-      return new Response("v=native-answer\r\n", {
-        status: 201,
-        headers: { Location: `/v1/live/rtc_native_test_${upstream.fetch.mock.calls.length}` },
-      });
-    });
+    upstream.fetch.mockImplementation(
+      async () =>
+        new Response("v=native-answer\r\n", {
+          status: 201,
+          headers: { Location: `/v1/live/rtc_native_test_${upstream.fetch.mock.calls.length}` },
+        }),
+    );
     vi.stubGlobal("fetch", upstream.fetch);
     upstream.authConfigured.mockClear();
     upstream.resolveAuth.mockClear();

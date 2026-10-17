@@ -103,6 +103,12 @@ export function formatGatewayRestartFailure(params: {
     const message = formatGatewayStillStarting(params.health);
     return { statusLine: message, failMessage: message };
   }
+  if (params.health.waitOutcome === "port-held") {
+    const message =
+      params.health.probeError ??
+      `Gateway port ${params.port} is held by another process. Inspect it with openclaw gateway status --deep.`;
+    return { statusLine: message, failMessage: message };
+  }
   if (params.health.waitOutcome === "stopped-free") {
     const elapsedSeconds = Math.max(1, Math.round((params.health.elapsedMs ?? 0) / 1000));
     return {

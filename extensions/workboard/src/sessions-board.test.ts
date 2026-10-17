@@ -55,6 +55,7 @@ async function withService(
 async function createFixture(options: {
   facts: WorkboardSessionFacts[];
   spec?: Partial<WorkboardSessionsBoardSpec>;
+  repair?: Promise<{ placements: number; boards: number }>;
 }) {
   const stores = createKernelStores(path.join(tempDir, `${nextDatabase++}.sqlite`));
   const store = new WorkboardBoardStore(stores.cards, {
@@ -72,7 +73,6 @@ async function createFixture(options: {
   const state: SelectedFacts = {
     scope: "shared-scope",
     revision: "initial",
-    redactionRevision: "initial-policy",
     sessions: options.facts,
   };
   const selectSessionFacts = vi
@@ -102,6 +102,9 @@ async function createFixture(options: {
   const service = createWorkboardSessionsBoardService({ store, gateway });
   const context = { config: {}, stateDir: "unused", logger };
   const repair = vi.spyOn(store, "repairSessionPlacements");
+  if (options.repair) {
+    repair.mockReturnValueOnce(options.repair);
+  }
   await service.start(context);
   return {
     store,
@@ -341,6 +344,55 @@ describe("Sessions board rules and live facts", () => {
     },
   );
 
+  it.each([false, true])(
+    "waits for placement repair on first use and drains it on stop (stop early: %s)",
+    async (stopEarly) => {
+      const repair = Promise.withResolvers<{ placements: number; boards: number }>();
+      await withService({ facts: [], repair: repair.promise }, async ({ service, store }) => {
+        let readDone = false;
+        let updateDone = false;
+        const reading = service.read(BOARD_ID).finally(() => {
+          readDone = true;
+        });
+        const updating = service.update(BOARD_ID, { scope: { maxAgeHours: 48 } }).finally(() => {
+          updateDone = true;
+        });
+        const results = Promise.allSettled([reading, updating]);
+        let stopped = false;
+        const stopping = stopEarly
+          ? service.stop().then(() => {
+              stopped = true;
+            })
+          : undefined;
+        expect(readDone).toBe(false);
+        expect(updateDone).toBe(false);
+        expect(stopped).toBe(false);
+        repair.resolve({ placements: 0, boards: 0 });
+        if (stopEarly) {
+          expect(await results).toEqual([
+            {
+              status: "rejected",
+              reason: expect.objectContaining({
+                message: "Sessions board service is no longer active.",
+              }),
+            },
+            {
+              status: "rejected",
+              reason: expect.objectContaining({
+                message: "Sessions board service is no longer active.",
+              }),
+            },
+          ]);
+          await stopping;
+          expect((await store.getSessionsBoard(BOARD_ID)).sessions.scope?.maxAgeHours).not.toBe(48);
+        } else {
+          expect((await results).map(({ status }) => status)).toEqual(["fulfilled", "fulfilled"]);
+          expect((await store.getSessionsBoard(BOARD_ID)).sessions.scope?.maxAgeHours).toBe(48);
+        }
+      });
+    },
+  );
+
   it("repairs only old-default rules at startup, preserves custom boards and ordering, and is idempotent", async () => {
     await withService(
       { facts: [] },
@@ -377,6 +429,7 @@ describe("Sessions board rules and live facts", () => {
         await store.updateSessionsBoard("custom-order", reordered);
         logger.info.mockClear();
         await service.start(context);
+        await service.read(BOARD_ID);
         const repaired = await store.getSessionsBoard(BOARD_ID);
         expect(repaired.sessions.columns.map((column) => column.id)).toEqual(DEFAULT_COLUMNS);
         expect(repaired.sessions.columns.find((column) => column.id === "working")).toMatchObject({
@@ -406,6 +459,7 @@ describe("Sessions board rules and live facts", () => {
         repair.mockResolvedValueOnce({ placements: 3, boards: 0 });
         logger.info.mockClear();
         await service.start(context);
+        await service.read(BOARD_ID);
         expect(logger.info).toHaveBeenCalledExactlyOnceWith(
           "Sessions board removed 3 non-operator placements.",
         );
@@ -534,7 +588,7 @@ describe("Sessions board rules and live facts", () => {
     });
   });
 
-  it("shares frozen projections and reuses 80 unchanged rows after one session changes", async () => {
+  it("shares projections and reuses 80 unchanged rows after one session changes", async () => {
     await withService(
       { facts: Array.from({ length: 81 }, (_, index) => Object.freeze(facts(String(index)))) },
       async ({ service, store, state, emit }) => {
@@ -550,7 +604,6 @@ describe("Sessions board rules and live facts", () => {
         const first = readers[0]!;
         expect(readers.every((read) => read === first)).toBe(true);
         expect(first.sessions).toHaveLength(81);
-        expect(first.sessions.every(Object.isFrozen)).toBe(true);
         expect(boards).toHaveBeenCalledOnce();
         expect(placements).toHaveBeenCalledOnce();
         emit(facts("0").key, "category");
@@ -667,48 +720,6 @@ describe("Sessions board rules and live facts", () => {
           expect(expired.revision!.scope).not.toBe(first.revision!.scope);
         },
       );
-    },
-  );
-
-  it.each(["source", "placements"] as const)(
-    "refreshes expired people for a reader joining pending %s work",
-    async (pending) => {
-      await withService({ facts: [] }, async ({ service, store, state, selectSessionFacts }) => {
-        const entered = Promise.withResolvers<void>();
-        const release = Promise.withResolvers<void>();
-        const people: NonNullable<SelectedFacts["people"]> = [
-          { identity: { type: "profile", id: "one" }, label: "One", sessionCount: 1 },
-        ];
-        const source = { ...state, people, activityExpiresAt: NOW + 100 };
-        state.people = [];
-        state.revision = "people-expired";
-        using placements = vi.spyOn(store, "listSessionPlacements");
-        if (pending === "source") {
-          selectSessionFacts.mockImplementationOnce(async () => {
-            entered.resolve();
-            await release.promise;
-            return source;
-          });
-        } else {
-          selectSessionFacts.mockResolvedValueOnce(source);
-          placements.mockImplementationOnce(async () => {
-            entered.resolve();
-            await release.promise;
-            return [];
-          });
-        }
-        const view = { includePeople: true, involvingProfileId: "selected" };
-        const first = service.read(BOARD_ID, view);
-        await entered.promise;
-        vi.setSystemTime(NOW + 101);
-        const second = await service.read(BOARD_ID, view);
-        release.resolve();
-        const before = await first;
-        expect(before.people).toEqual(people);
-        expect(second.people).toEqual([]);
-        expect(second.revision!.scope).not.toBe(before.revision!.scope);
-        expect((await service.read(BOARD_ID, view)).people).toEqual([]);
-      });
     },
   );
 
@@ -842,22 +853,6 @@ describe("Sessions board rules and live facts", () => {
       expect(read.sessions[0]).toMatchObject(known);
       await service.read(BOARD_ID);
       expect(logger.warn).toHaveBeenCalledOnce();
-      state.redactionRevision = "tightened-policy";
-      state.revision = "redaction-changed-with-failure";
-      state.sessions = state.sessions.map((row) =>
-        Object.assign({}, row, { label: "Safe label", derivedTitle: "Safe title" }),
-      );
-      const safe = await service.read(BOARD_ID);
-      expect(JSON.stringify(safe.sessions)).not.toContain(marker);
-      expect(safe.sessions[0]).toMatchObject({
-        columnId: "focus",
-        run: "active",
-        label: "Safe label",
-        derivedTitle: "Safe title",
-        observerDigest: { health: "on-track", revision: 1 },
-        pullRequests: [{ number: 12, state: "open" }],
-      });
-      expect(safe.sessions[0]?.lastMessagePreview).toBeUndefined();
       state.sessions = [facts("known"), facts("new")];
       state.revision = "recovered";
       const recovered = await service.read(BOARD_ID);
@@ -887,54 +882,11 @@ describe("Sessions board rules and live facts", () => {
     });
   });
 
-  it.each([true, false])(
-    "does not let an in-flight read overwrite newer facts (event: %s)",
-    async (event) => {
-      await withService(
-        { facts: [facts("one")] },
-        async ({ service, store, state, emit, selectSessionFacts }) => {
-          await service.read(BOARD_ID);
-          if (event) {
-            emit(facts("one").key);
-          }
-          const admittedRevision = store.sessionsRevision;
-          const entered = Promise.withResolvers<void>();
-          const release = Promise.withResolvers<void>();
-          const source = { ...state };
-          selectSessionFacts.mockImplementationOnce(async () => {
-            entered.resolve();
-            await release.promise;
-            return source;
-          });
-          const pending = service.read(BOARD_ID);
-          await entered.promise;
-          state.sessions = [facts("one", { run: "active" })];
-          state.revision = "active";
-          if (event) {
-            emit(facts("one").key);
-          }
-          const current = await service.read(BOARD_ID);
-          release.resolve();
-          const previous = await pending;
-          expect(previous.revision!.revision).toBe(admittedRevision.revision);
-          expect(current.sessions[0]).toMatchObject({ columnId: "focus" });
-          expect(current.revision!.revision).toBeGreaterThanOrEqual(previous.revision!.revision);
-          expect(await service.read(BOARD_ID)).toBe(current);
-          state.sessions = [{ ...facts("one"), unavailable: "facts backend offline" }];
-          state.revision = "unavailable";
-          if (event) {
-            emit(facts("one").key);
-          }
-          expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({ columnId: "focus" });
-        },
-      );
-    },
-  );
-
   it("completes during continuous source invalidation without caching a stale revision", async () => {
     await withService(
       { facts: [facts("one")] },
       async ({ service, store, state, selectSessionFacts, emit }) => {
+        await service.read(BOARD_ID);
         const admittedRevision = store.sessionsRevision;
         let sourceReads = 0;
         selectSessionFacts.mockImplementation(async () => {

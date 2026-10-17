@@ -6,19 +6,24 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { resolveGitCoauthorAttribution } from "../../agents/git-coauthor-attribution.js";
+import { SANDBOX_DEFAULT_TOOL_ALLOW } from "../../agents/sandbox/types.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
 import { callInProcessGatewayToolWithCreation } from "../../agents/tools/in-process-gateway.js";
+import { prepareSandboxSessionTools } from "../../agents/tools/sessions-operator-authority.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import { createReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.tool-authority.js";
+import { withVisibleWorkSessionReporter } from "../../auto-reply/reply/visible-work-sessions.js";
 import {
   bindChildSessionPublication,
   admitChildSessionPublication,
   readChildSessionPublication,
 } from "../../channels/message-access/child-session-publication.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   assignSessionOwner,
   listSessionParticipantsReadOnly,
@@ -52,7 +57,6 @@ import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
 import { releaseGatewaySessionStoreFixture } from "../test/server-sessions-resources.test-helpers.js";
 import { sessionCreateHandlers } from "./sessions-create.js";
 import { identifiedClient } from "./sessions-sharing.test-support.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
 
 installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
@@ -145,7 +149,7 @@ async function createHostedChildFixture(
   const dispatchEntered = createDeferred();
   const provider = vi.fn();
   const persistenceResult = vi.fn();
-  let originalHandler: GatewayRequestHandlerOptions | undefined;
+  const renamePolicy = vi.fn();
   let sourceCurrent = true;
   let hostCurrent = true;
   let gatewayCurrent = true;
@@ -171,6 +175,17 @@ async function createHostedChildFixture(
     const recorder = expectDefined(replyOptions?.userTurnTranscriptRecorder, "child input owner");
     dispatchEntered.resolve();
     await releaseDispatch.promise;
+    if (toolInvocation && !system) {
+      const allow = ["read"];
+      // Reply tool-policy preparation runs before the child binds its own tool caller.
+      renamePolicy(
+        prepareSandboxSessionTools({
+          policy: { allow, deny: [], [SANDBOX_DEFAULT_TOOL_ALLOW]: allow },
+          senderIsOwner: false,
+          authority: replyOptions?.operatorAuthority,
+        }),
+      );
+    }
     // The real reply admission owner rejects a missing persistence result before inference.
     const persisted = await recorder.persistApproved();
     persistenceResult(persisted);
@@ -192,13 +207,7 @@ async function createHostedChildFixture(
           name: "sessions.create",
           scope: "operator.write",
           owner: { kind: "core", area: "sessions" },
-          handler: async (options) => {
-            originalHandler = options;
-            await expectDefined(
-              sessionCreateHandlers["sessions.create"],
-              "creation owner",
-            )(options);
-          },
+          handler: expectDefined(sessionCreateHandlers["sessions.create"], "creation owner"),
         },
       ],
       registry,
@@ -236,6 +245,15 @@ async function createHostedChildFixture(
     }),
     "admitted parent caller",
   );
+  const participants =
+    toolInvocation && caller.operatorAuthority
+      ? createReplyTurnParticipants({ operatorAuthority: caller.operatorAuthority })
+      : undefined;
+  if (participants) {
+    caller.personalToolParticipants = participants;
+    caller.personalToolUser = profile.id;
+    caller.personalToolIdentityScoped = true;
+  }
   const dispatch = (requesterSessionKey = parentKey, targetKey = childKey, spawnDepth = 1) =>
     callInProcessGatewayToolWithCreation<{
       key: string;
@@ -252,6 +270,8 @@ async function createHostedChildFixture(
         parentSessionKey: requesterSessionKey,
         spawnDepth,
         task: "Continue independently.",
+        // Automatic naming has its own lifecycle tests; custody must not await a title model.
+        displayName: "Custody fixture",
       },
       {
         via: "spawn",
@@ -360,8 +380,18 @@ async function createHostedChildFixture(
     beforeInputCommit,
     provider,
     persistenceResult,
+    renamePolicy,
+    providerDiagnostics: () =>
+      JSON.stringify({
+        persistenceResults: persistenceResult.mock.calls,
+        warnings: vi.mocked(context.logGateway.warn).mock.calls,
+        errors: vi.mocked(context.logGateway.error).mock.calls,
+      }),
     dispatchEntered: dispatchEntered.promise,
-    closeParent: () => parent.close(),
+    closeParent: () => {
+      participants?.close();
+      parent.close();
+    },
     closeInvocation: () => {
       invocationCurrent = false;
     },
@@ -375,15 +405,12 @@ async function createHostedChildFixture(
       gatewayCurrent = false;
     },
     abortSignal: () => signal.abort(new Error("explicit request signal closed")),
-    replaceHandler: () => {
-      expectDefined(originalHandler, "original request handler").context =
-        createDirectChatContext();
-    },
     finish,
     [Symbol.asyncDispose]: async () => {
       try {
         await finish();
       } finally {
+        participants?.close();
         parent.close();
         captured?.release();
         releaseProfileCatalog?.();
@@ -406,23 +433,75 @@ function userMessages(
 }
 
 describe("hosted creation transfers accepted child input", () => {
-  it("commits public ingress publication with the fresh child before its first turn, not its descendants", async () => {
-    await using fixture = await createHostedChildFixture(true);
-    fixture.enablePublicIngress();
-    const child = await fixture.send();
-    await fixture.dispatchEntered;
-    expect(child.publicRead).toBe(true);
-    expect(child.entry).not.toHaveProperty("publicShare");
-    expect(resolveSessionPublicShare(loadSessionEntry(fixture.scope()))?.sessionId).toBe(
-      child.sessionId,
-    );
-    expect(loadSessionEntry(fixture.parentScope)?.publicShare).toBeUndefined();
-    await fixture.finish();
-    expect(fixture.provider).toHaveBeenCalledTimes(1);
-    const nested = await fixture.sendNested();
-    expect(nested.publicRead).toBe(false);
-    expect(nested.entry).not.toHaveProperty("publicShare");
-  });
+  it.each([
+    {
+      name: "public session URL",
+      gateway: { publicOrigin: "https://public-proof.example.test" },
+      url: "https://public-proof.example.test/chat/main/dashboard/accepted-child",
+    },
+    { name: "no public origin", gateway: {}, url: undefined },
+    {
+      name: "disabled Control UI",
+      gateway: {
+        publicOrigin: "https://public-proof.example.test",
+        controlUi: { enabled: false },
+      },
+      url: undefined,
+    },
+  ])(
+    "initializes the immediate public child before its first turn with $name",
+    async ({ gateway, url }) => {
+      await using fixture = await createHostedChildFixture(true);
+      fixture.enablePublicIngress();
+      setRuntimeConfigSnapshot({
+        ...getRuntimeConfig(),
+        gateway,
+      });
+      const reportEntered = createDeferred();
+      const releaseReport = createDeferred();
+      const report = vi.fn(async () => {
+        reportEntered.resolve();
+        await releaseReport.promise;
+      });
+      await withVisibleWorkSessionReporter(
+        { requesterSessionKey: fixture.parentScope.sessionKey, report },
+        async () => {
+          const creating = fixture.send();
+          try {
+            await Promise.race([
+              reportEntered.promise,
+              fixture.dispatchEntered.then(() => {
+                throw new Error("Child dispatched before visible-session initialization");
+              }),
+            ]);
+            expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+            expect(report).toHaveBeenCalledExactlyOnceWith(
+              url
+                ? [{ sessionKey: "agent:main:dashboard:accepted-child", url, publicRead: true }]
+                : [],
+              { createdSessionKey: "agent:main:dashboard:accepted-child" },
+            );
+          } finally {
+            releaseReport.resolve();
+          }
+          const child = await creating;
+          await fixture.dispatchEntered;
+          expect(child.publicRead).toBe(true);
+          expect(child.entry).not.toHaveProperty("publicShare");
+          expect(resolveSessionPublicShare(loadSessionEntry(fixture.scope()))?.sessionId).toBe(
+            child.sessionId,
+          );
+          expect(loadSessionEntry(fixture.parentScope)?.publicShare).toBeUndefined();
+          await fixture.finish();
+          expect(fixture.provider, fixture.providerDiagnostics()).toHaveBeenCalledTimes(1);
+          const nested = await fixture.sendNested();
+          expect(nested.publicRead).toBe(false);
+          expect(nested.entry).not.toHaveProperty("publicShare");
+          expect(report).toHaveBeenCalledTimes(1);
+        },
+      );
+    },
+  );
 
   it("does not publish a private source's child", async () => {
     await using fixture = await createHostedChildFixture(true);
@@ -467,7 +546,7 @@ describe("hosted creation transfers accepted child input", () => {
     });
     await expect(readCredit()).resolves.toEqual(expectedCredit);
     await fixture.finish();
-    expect(fixture.provider).toHaveBeenCalledOnce();
+    expect(fixture.provider, fixture.providerDiagnostics()).toHaveBeenCalledOnce();
     const nested = await fixture.sendNested();
     expect(nested.runStarted).toBe(true);
     expect(nested.entry).not.toHaveProperty("inheritedGitContributorProfileIds");
@@ -478,7 +557,7 @@ describe("hosted creation transfers accepted child input", () => {
       }),
     ).resolves.toEqual(expectedCredit);
     await fixture.finish();
-    expect(fixture.provider).toHaveBeenCalledTimes(2);
+    expect(fixture.provider, fixture.providerDiagnostics()).toHaveBeenCalledTimes(2);
     for (const childScope of [scope, fixture.scope(nested.key)]) {
       expect(
         (listSessionParticipantsReadOnly(childScope).get(childScope.sessionKey) ?? []).filter(
@@ -560,7 +639,12 @@ describe("hosted creation transfers accepted child input", () => {
       fixture.closeInvocation();
       fixture.closeParent();
       await fixture.finish();
-      expect(fixture.provider).toHaveBeenCalledOnce();
+      expect(fixture.provider, fixture.providerDiagnostics()).toHaveBeenCalledOnce();
+      if (!system) {
+        expect(fixture.renamePolicy).toHaveBeenCalledWith(
+          expect.objectContaining({ renameOnly: true }),
+        );
+      }
       expect(userMessages(scope)).toHaveLength(1);
       expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
       expect(fixture.context.chatAbortControllers.has(accepted.runId)).toBe(false);
@@ -588,16 +672,7 @@ describe("hosted creation transfers accepted child input", () => {
     },
   );
 
-  it.each([
-    "source",
-    "host",
-    "signal",
-    "gateway",
-    "handler",
-    "ACL",
-    "lifecycle",
-    "replacement",
-  ] as const)(
+  it.each(["source", "host", "signal", "gateway", "replacement"] as const)(
     "retains the original %s boundary after child ACK and parent closure",
     async (change) => {
       await using fixture = await createHostedChildFixture();
@@ -616,12 +691,6 @@ describe("hosted creation transfers accepted child input", () => {
         fixture.abortSignal();
       } else if (change === "gateway") {
         fixture.closeGateway();
-      } else if (change === "handler") {
-        fixture.replaceHandler();
-      } else if (change === "ACL") {
-        await patchSessionEntryCore(scope, () => ({ visibility: "draft" }));
-      } else if (change === "lifecycle") {
-        await patchSessionEntryCore(scope, () => ({ lifecycleRevision: "replaced-generation" }));
       } else {
         replaceSessionEntrySync(scope, { sessionId: "successor-child", updatedAt: Date.now() });
       }

@@ -20,6 +20,8 @@ import {
   getAgentRunRegistryState,
   bumpAgentRunIndexVersion,
   getAgentRunContextOwnerStatus,
+  getAgentRunLifecycleGeneration,
+  readAgentRunIndexVersion,
 } from "./agent-run-registry-state.js";
 import type {
   AgentRunContext,
@@ -34,6 +36,7 @@ import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage
 export type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
 export { getAgentRunContextOwnerStatus } from "./agent-run-registry-state.js";
 export { listAgentRunsForSession } from "./agent-run-registry-state.js";
+export { getAgentRunLifecycleGeneration, readAgentRunIndexVersion };
 export type { ProjectedAgentRunIndex } from "./agent-run-registry.types.js";
 
 const delegatedAuthorityFailures = new WeakMap<AgentRunDelegatedAuthority, { cause: unknown }>();
@@ -43,15 +46,6 @@ export function readAgentRunDelegatedAuthorityFailure(
   authority: AgentRunDelegatedAuthority,
 ): { cause: unknown } | undefined {
   return delegatedAuthorityFailures.get(authority);
-}
-
-/** Reads the process-local version of the active-run projection inputs. */
-export function readAgentRunIndexVersion(): number {
-  return getAgentRunRegistryState().version;
-}
-
-export function getAgentRunLifecycleGeneration(): string {
-  return getAgentRunRegistryState().lifecycleGeneration;
 }
 
 export function rotateAgentRunRegistryLifecycleGeneration(): string {
@@ -108,7 +102,9 @@ function storeRunContext(runId: string, context: AgentRunContext, predecessor?: 
   // Scheduler leases and observed activity never transfer to a fresh registration.
   context.capacityWaits = undefined;
   context.executionActivity = undefined;
+  context.localModelWait = undefined;
   context.eventState = { seq: 0 };
+  context.modelCallSequence = { value: 0 };
   context.registeredAt ??= Date.now();
   getAgentRunRegistryState().contexts.set(runId, context);
   recordAgentEventRouting(runId, context, predecessor);
@@ -147,7 +143,7 @@ export function registerAgentRunContext(
     return;
   }
   const runIndexInputBefore = projectedAgentRunInputKey(existing);
-  const previous = { sessionKey: existing.sessionKey, agentId: existing.agentId };
+  const { sessionKey, sessionId, agentId } = existing;
   for (const key of ["sessionKey", "sessionId", "agentId"] as const) {
     if (context[key] && existing[key] !== context[key]) {
       existing[key] = context[key];
@@ -187,7 +183,7 @@ export function registerAgentRunContext(
   }
   recordAgentEventRouting(runId, existing);
   if (runIndexInputBefore !== projectedAgentRunInputKey(existing)) {
-    bumpAgentRunIndexVersion(existing, previous);
+    bumpAgentRunIndexVersion(existing, { sessionKey, sessionId, agentId });
   }
 }
 
@@ -231,8 +227,7 @@ export function claimAgentRunContext(
         currentOwners.preserveAfterRelease = false;
       }
       if (options.onClearRequested) {
-        currentOwners.clearListeners ??= new Map();
-        currentOwners.clearListeners.set(claimId, options.onClearRequested);
+        (currentOwners.clearListeners ??= new Map()).set(claimId, options.onClearRequested);
       }
     } else {
       state.owners.set(runId, {
@@ -288,7 +283,7 @@ export function retainQueuedAgentRunContext(
     return undefined;
   }
 
-  const wasLive = hasLiveAgentRunContext(runId);
+  const wasLive = hasAgentRunContextExecutionOwner(runId);
   const leases = (state.queuedRunContextLeases ??= new WeakMap<AgentRunContext, number>());
   leases.set(context, (leases.get(context) ?? 0) + 1);
   if (!wasLive) {
@@ -317,7 +312,7 @@ export function retainQueuedAgentRunContext(
       if (outcome === "admitted") {
         context.lastActiveAt = Date.now();
       }
-      if (!hasLiveAgentRunContext(runId)) {
+      if (!hasAgentRunContextExecutionOwner(runId)) {
         bumpAgentRunIndexVersion(context);
       }
     }

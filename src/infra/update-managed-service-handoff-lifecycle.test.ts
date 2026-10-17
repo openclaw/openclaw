@@ -13,10 +13,19 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { installDatabaseEngineSelection } from "./database-engine/context.js";
+import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
+import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
+import { resolveRuntimeArgs } from "./runtime-worker-url.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "./update-control-plane-sentinel.js";
+import {
+  createManagedHandoffTempDirTracker,
+  readManagedHandoffArtifacts,
+} from "./update-managed-service-handoff-artifacts.test-support.js";
 import { registerManagedCampaignFailureTests } from "./update-managed-service-handoff-campaign.test-support.js";
 import {
   cleanupStaleManagedServiceUpdateHandoffs,
@@ -33,6 +42,13 @@ const MOCK_INSTALL_ROOT = path.join(os.tmpdir(), `openclaw-handoff-lifecycle-${p
 const { forceKillChildProcessTreeMock, spawnMock, tempDirs, runManagedServiceManagerBoundary } =
   useManagedServiceHandoffLifecycleFixture();
 const nodeTempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+// Gateway startup admits its engine before update requests. Cold discovery is
+// covered separately by update-managed-service-handoff-engine.test.ts.
+beforeAll(() => {
+  installDatabaseEngineSelection({ effectiveEngines: resolveDatabaseFamilyEngines({}) });
+});
+afterAll(resetDatabaseEngineSelectionForTest);
 
 async function createUserSystemdFixture() {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-run-"));
@@ -51,9 +67,49 @@ async function createUserSystemdFixture() {
 describe("managed service update handoff", () => {
   const itUnix = it.runIf(process.platform !== "win32");
 
+  it("refuses cleanup registration outside temporary descendants and at cwd", async () => {
+    const tracker = createManagedHandoffTempDirTracker();
+    for (const dir of [
+      ".",
+      "relative/path",
+      process.cwd(),
+      os.tmpdir(),
+      await fs.realpath(os.tmpdir()),
+    ]) {
+      expect(() => tracker.add(dir), dir).toThrow(JSON.stringify(dir));
+    }
+    expect(tracker.dirs.size).toBe(0);
+  });
+
+  itUnix("tracks the real handoff artifacts with Bun runtime arguments", async () => {
+    const root = tempDirs.make("openclaw-handoff-bun-args-");
+    const { startManagedServiceUpdateHandoff } =
+      await import("./update-managed-service-handoff.js");
+    const result = await startManagedServiceUpdateHandoff({
+      root,
+      restartDrainTimeoutMs: 300_000,
+      parentPid: process.pid,
+      execPath: path.join(root, "bun"),
+      argv1: path.join(root, "openclaw.mjs"),
+      meta: {},
+    });
+    const [command, args] = spawnMock.mock.calls[0] as [string, string[]];
+    const { dir, scriptPath, paramsPath } = readManagedHandoffArtifacts(args);
+    tempDirs.add(path.dirname(result.logPath));
+    expect(command).toBe(path.join(root, "bun"));
+    expect(args).toEqual(["--no-install", scriptPath, paramsPath]);
+    expect(dir).toBe(path.dirname(result.logPath));
+    expect(tempDirs.dirs.has(dir)).toBe(true);
+    const tmpRoot = await fs.realpath(os.tmpdir());
+    for (const registered of tempDirs.dirs) {
+      const relative = path.relative(tmpRoot, await fs.realpath(registered));
+      expect(relative === "" || relative.startsWith("..") || path.isAbsolute(relative)).toBe(false);
+    }
+  });
+
   registerManagedHandoffOwnerTests(runManagedServiceManagerBoundary, itUnix, expect);
 
-  itUnix.each(["addressed-unsafe", "rollback", "unsafe", "validation"] as const)(
+  itUnix.each(["addressed-unsafe", "rollback", "unsafe", "data-at-risk", "validation"] as const)(
     "coordinates CLI %s outcomes and preserves the notice destination",
     async (outcome) => {
       const rollback = outcome === "rollback";
@@ -92,7 +148,11 @@ describe("managed service update handoff", () => {
                   : {}),
                 recovery: rollback
                   ? { serviceRestartSafe: true, packageRollbackVerified: true, version: "1.0.0" }
-                  : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+                  : {
+                      serviceRestartSafe: false,
+                      reason: "runtime-verification-failed",
+                      ...(outcome === "data-at-risk" ? { dataAtRisk: "unreadable-state" } : {}),
+                    },
               },
             }),
       });
@@ -122,8 +182,14 @@ describe("managed service update handoff", () => {
           ).toBe(false);
         }
       }
+      if (outcome === "data-at-risk") {
+        expect(result.log).toContain("keep the gateway stopped: data at risk (unreadable-state)");
+      }
       if (outcome === "unsafe") {
-        expect(result.log).toContain("keep the gateway stopped");
+        expect(result.log).toContain("runtime-verification-failed");
+        expect(result.log).toContain("openclaw update repair");
+        expect(result.log).toContain("openclaw gateway status --deep");
+        expect(result.log).not.toContain("keep the gateway stopped");
       }
       if (outcome === "validation") {
         expect(result.commands).toEqual([]);
@@ -541,7 +607,7 @@ describe("managed service update handoff", () => {
     await expect(resultPromise).rejects.toMatchObject(expected);
     expect(spawnMock).toHaveBeenCalledTimes(1);
     const [, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
-    const handoffDir = path.dirname(args.at(-2) ?? "");
+    const { dir: handoffDir } = readManagedHandoffArtifacts(args);
     tempDirs.add(handoffDir);
 
     if (failure === "readiness timeout") {
@@ -573,7 +639,7 @@ describe("managed service update handoff", () => {
         : path.join(home, "old", "node");
     const wrapper = path.join(home, "gateway-wrapper");
     if (scenario !== "direct-missing") {
-      await fs.symlink(originalExecPath, replacement);
+      await fs.symlink(resolveTestNodeExecPath(), replacement);
     }
     if (wrapperScenario) {
       await fs.writeFile(
@@ -628,14 +694,15 @@ describe("managed service update handoff", () => {
           expect(beforePark).not.toHaveBeenCalled();
         }
       } else {
-        await expect(handoff).resolves.toMatchObject({ status: "started" });
+        const result = await handoff;
+        expect(result).toMatchObject({ status: "started" });
         const [command, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
-        tempDirs.add(path.dirname(expectDefined(args[0], "handoff script")));
+        tempDirs.add(path.dirname(result.logPath));
+        const { scriptPath, paramsPath } = readManagedHandoffArtifacts(args);
+        expect(args).toEqual([...resolveRuntimeArgs(command), scriptPath, paramsPath]);
         expect(command).toBe(scenario === "wrapper-present" ? originalExecPath : replacement);
         if (scenario === "versioned-service") {
-          const helperParams = JSON.parse(
-            await fs.readFile(expectDefined(args[1], "handoff parameters"), "utf8"),
-          ) as {
+          const helperParams = JSON.parse(await fs.readFile(paramsPath, "utf8")) as {
             commandArgv: string[];
             recoveryCommandArgv: string[];
             triageCommandArgv: string[];
@@ -700,7 +767,9 @@ describe("managed service update handoff", () => {
         if (systemd) {
           const spawnNormally = spawnMock.getMockImplementation()!;
           spawnMock.mockImplementationOnce((command: string, args: string[], options: unknown) => {
-            const params = JSON.parse(readFileSync(args.at(-1)!, "utf8"));
+            const params = JSON.parse(
+              readFileSync(readManagedHandoffArtifacts(args).paramsPath, "utf8"),
+            );
             const db = new DatabaseSync(params.updateLeaseDatabasePath, { readOnly: true });
             try {
               expect(
@@ -751,11 +820,9 @@ describe("managed service update handoff", () => {
           string[],
           { env: NodeJS.ProcessEnv; detached?: boolean; cwd?: string },
         ];
-        const scriptIndex = systemd ? 5 : 0;
-        tempDirs.add(path.dirname(args[scriptIndex] ?? result.logPath));
-        const helperParams = JSON.parse(
-          await fs.readFile(args[scriptIndex + 1] ?? "", "utf-8"),
-        ) as {
+        tempDirs.add(path.dirname(result.logPath));
+        const { paramsPath } = readManagedHandoffArtifacts(args);
+        const helperParams = JSON.parse(await fs.readFile(paramsPath, "utf-8")) as {
           metaPath: string;
           triageContextPath: string;
           commandArgv?: string[];

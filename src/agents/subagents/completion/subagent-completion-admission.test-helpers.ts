@@ -27,6 +27,12 @@ export async function admitCompletionFixtureDatabase(): Promise<void> {
   await loadPendingSessionDeliveries(captureOpenClawStateWorkerContext());
 }
 
+export function readCompletionSystemEvents(database: OpenClawStateDatabase) {
+  return database.db
+    .prepare("SELECT id FROM delivery_queue_entries WHERE entry_kind = 'systemEvent'")
+    .all();
+}
+
 export function seedSubagentCompletionDelivery(params: {
   subagent: SubagentRunRecord;
   databaseOptions?: OpenClawStateDatabaseOptions;
@@ -76,6 +82,7 @@ export function records() {
     runId: "completion-run",
     taskRunId: "original-run",
     childSessionKey: "agent:main:subagent:child",
+    childSessionIdentity: { sessionId: "session-id", lifecycleRevision: "session-revision" },
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "agent:main:main",
     requesterAgentId: "main",
@@ -85,7 +92,12 @@ export function records() {
     endedAt: now - 1_000,
     outcome: { status: "ok" },
     expectsCompletionMessage: true,
-    completion: { required: true, resultText: "canonical result", capturedAt: now },
+    completion: {
+      required: true,
+      resultText: "canonical result",
+      terminalReply: { disposition: "visible", text: "canonical result" },
+      capturedAt: now,
+    },
     delivery: {
       status: "in_progress",
       disposition: "session_queued",

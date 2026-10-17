@@ -4,7 +4,7 @@ import type { GitCheckoutContext } from "../infra/git-read-operations.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { readUserProfileAliasRevision } from "../state/user-profile-events.js";
-import { resolveUserProfileId } from "../state/user-profiles.js";
+import { readResidentUserProfileId } from "../state/user-profile-list.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { hasCurrentGatewayOperatorAccess } from "./operator-access-policy.js";
 import {
@@ -19,16 +19,18 @@ import { withReadySessionRows, type SessionRowReadView } from "./session-row-pre
 import type { MaterializedRow } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { createSessionListEntryFilter, resolveSessionVisibility } from "./session-sharing.js";
-import type { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+import type { GatewaySessionEntryRead } from "./session-utils-store.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 import { resolveSessionWorkspaceRoots } from "./session-workspace-roots.js";
 
 type SelectedSession = Pick<
-  ReturnType<typeof loadGatewaySessionEntryReadOnly>,
+  GatewaySessionEntryRead,
   "cfg" | "agentId" | "canonicalKey" | "storePath" | "readSource" | "entry"
 >;
 
 export type ControlUiSessionPrTarget = {
+  sessionId?: string;
+  lifecycleRevision?: string;
   params: { sessionKey: string; agentId: string };
   identity: string;
   readSource: { agentId: string; path: string };
@@ -70,6 +72,8 @@ export function resolveControlUiSessionPrTarget(
     source = resolveSessionWorkspaceRoots(cfg, agentId, entry).diffCwd ?? null;
   }
   return {
+    sessionId: entry.sessionId,
+    lifecycleRevision: entry.lifecycleRevision,
     params: { sessionKey: canonicalKey, agentId },
     githubHost,
     readSource,
@@ -205,7 +209,7 @@ export async function prepareControlUiSessionPrRead(params: {
       }
       const currentAliasRevision = readUserProfileAliasRevision();
       if (currentAliasRevision !== aliasRevision) {
-        if (actorProfile && resolveUserProfileId(actorProfile) !== actorProfile) {
+        if (actorProfile && readResidentUserProfileId(actorProfile) !== actorProfile) {
           return undefined;
         }
         aliasRevision = currentAliasRevision;
