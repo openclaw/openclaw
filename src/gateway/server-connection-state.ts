@@ -42,23 +42,11 @@ export function createGatewayConnectionState(params: {
     connectionRows.delete(client);
     client.presenceSnapshot = undefined;
   });
+  // Subscription changes revoke ancestor certification, not socket-held wire rows.
   const forgetConnectionAncestors = (connId: string) => {
     const client = clients.getByConnectionId(connId);
     if (client) {
       connectionRows.get(client)?.clearAncestors();
-    }
-  };
-  const resetConnectionRows = (connId: string) => {
-    const client = clients.getByConnectionId(connId);
-    if (client) {
-      connectionRows.get(client)?.clear();
-    }
-  };
-  const subscriptionChanged = (connId: string, retired?: true) => {
-    if (retired) {
-      resetConnectionRows(connId);
-    } else {
-      forgetConnectionAncestors(connId);
     }
   };
   const clearConnectionRows = () => {
@@ -79,11 +67,11 @@ export function createGatewayConnectionState(params: {
   };
   const sessionEventSubscribers = createSessionEventSubscriberRegistry(
     isConnectionActive,
-    subscriptionChanged,
+    forgetConnectionAncestors,
   );
   const sessionMessageSubscribers = createSessionMessageSubscriberRegistry(
     isConnectionActive,
-    subscriptionChanged,
+    forgetConnectionAncestors,
   );
   const eventWebPush = createEventWebPushDelivery({ getRuntimeConfig: loadRuntimeConfig });
   const gatewayBroadcaster = createGatewayBroadcaster({

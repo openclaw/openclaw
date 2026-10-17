@@ -167,24 +167,15 @@ describe("session row event ingress", () => {
     ).toEqual(event({ session: { key: "large", title: "After" } }));
   });
 
-  it.each(["close or hello", "sessions.unsubscribe", "sessions.messages.unsubscribe"])(
-    "clears the entire row store at %s",
-    async (boundary) => {
-      const h = harness();
-      h.send({ session: full({ key: "one" }), ancestorSessions: [full({ key: "two" })] });
-      if (boundary === "close or hello") {
-        h.events.clear();
-      } else {
-        await h.events.request({ request: vi.fn().mockResolvedValue({}) }, boundary, {
-          key: "one",
-        });
-      }
-      h.listener.mockClear();
-      h.send({ session: { key: "two", base: 1, version: 2, set: {}, remove: [] } });
-      expect(h.listener).not.toHaveBeenCalled();
-      expect(h.reconnect).toHaveBeenCalledOnce();
-    },
-  );
+  it("clears the entire row store when the transport resets", () => {
+    const h = harness();
+    h.send({ session: full({ key: "one" }), ancestorSessions: [full({ key: "two" })] });
+    h.events.clear();
+    h.listener.mockClear();
+    h.send({ session: { key: "two", base: 1, version: 2, set: {}, remove: [] } });
+    expect(h.listener).not.toHaveBeenCalled();
+    expect(h.reconnect).toHaveBeenCalledOnce();
+  });
 
   it("preserves legacy rows and isolates the same key for different agents", () => {
     const h = harness();

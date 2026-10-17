@@ -390,7 +390,8 @@ test("capable and legacy sockets produce identical session payloads and consumer
     }),
   );
   console.log("SESSION_ROW_DELTA_REAL_SOCKET_BYTES", JSON.stringify(measurements));
-  expect(readSessionEventRowRetention().entries).toBeGreaterThan(0);
+  const retainedBeforeUnsubscribe = readSessionEventRowRetention();
+  expect(retainedBeforeUnsubscribe.entries).toBeGreaterThan(0);
   await decoder.request(
     createTestGatewayClient(async (method, params) => {
       const result = await rpcReq(capable.ws, method, params);
@@ -403,7 +404,7 @@ test("capable and legacy sockets produce identical session payloads and consumer
     { key },
   );
   expect((await rpcReq(legacy.ws, "sessions.messages.unsubscribe", { key })).ok).toBe(true);
-  expect(readSessionEventRowRetention()).toEqual({ entries: 0, bytes: 0 });
+  expect(readSessionEventRowRetention()).toEqual(retainedBeforeUnsubscribe);
   const summaryTarget = await loadGatewaySessionEntryReadOnlyAsync(key, { agentId: "main" });
   const publishRecap = () =>
     broadcastSessionActivitySummary(
@@ -415,7 +416,16 @@ test("capable and legacy sockets produce identical session payloads and consumer
     );
   await publishRecap();
   await drain();
-  expectFullSessionRowFrame(encoded.at(-1), baseline.at(-1), decoder);
+  const afterUnsubscribe = encoded.at(-1);
+  if (!afterUnsubscribe) {
+    throw new Error("Expected warm recap after unsubscribe");
+  }
+  expect(afterUnsubscribe.payload).toHaveProperty("session.base");
+  let decodedAfterUnsubscribe: EventFrame | undefined;
+  decoder.dispatch(afterUnsubscribe, (event) => {
+    decodedAfterUnsubscribe = event;
+  });
+  expect(decodedAfterUnsubscribe?.payload).toEqual(baseline.at(-1)?.payload);
   await closeSessionRowSocket(capable.ws);
   const reopened = await harness.openClient({
     caps: ["session-scoped-events", "session-row-deltas"],

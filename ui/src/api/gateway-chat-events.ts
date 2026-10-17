@@ -31,10 +31,7 @@ export class GatewayChatEvents {
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
     const result = await client.request<T>(method, params, options);
-    if (method === "sessions.unsubscribe" || method === "sessions.messages.unsubscribe") {
-      this.rows.clear();
-    }
-    // Late custom-client ACKs may drop a baseline; missing-baseline recovery reconnects.
+    // Late ACKs can retire chat text baselines; session-row baselines belong to the socket.
     if (method === "sessions.messages.unsubscribe") {
       const key = asNullableRecord(result)?.key;
       const request = asNullableRecord(params);

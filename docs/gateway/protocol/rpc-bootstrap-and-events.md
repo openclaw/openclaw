@@ -436,9 +436,11 @@ First delivery, changed generation, eviction, or a patch no smaller than its ful
 wrapper sends `full`. Both ends retain at most 1,024 rows in delivery-order LRU.
 The server also bounds its field-hash vectors to 2 MiB per connection; `retain:
 false` on a full wrapper instructs both ends to discard that baseline. No row-byte
-charge is sent. Unsubscribe acknowledgments and connection retirement clear the
-state. A dropped event invalidates server baselines; subsequent rows are full,
-and sequence gaps trigger the existing reconnect behavior. List/describe replies
+charge is sent. Subscription changes invalidate ancestor certification but preserve
+wire baselines: a response can follow a newly delivered row on the same socket.
+Connection retirement clears the state. A dropped event invalidates server
+baselines; subsequent rows are full, and sequence gaps trigger the existing
+reconnect behavior. List/describe replies
 do not establish event baselines or overwrite the decoder's held rows.
 
 ## Node helper methods
