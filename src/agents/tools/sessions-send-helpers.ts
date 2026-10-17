@@ -31,13 +31,23 @@ export function sendFailure(
 
 export function sendReplyResult(
   receipt: { runId: string; sessionKey: string; watched?: boolean },
-  result: { replyText?: string; sourceReplyDelivered?: boolean },
+  result: { replyText?: string; replyTruncated?: true; sourceReplyDelivered?: boolean },
 ) {
-  const { replyText: reply, sourceReplyDelivered } = result;
+  const { replyText: reply, replyTruncated, sourceReplyDelivered } = result;
   return jsonResult({
     ...receipt,
     ...(reply
-      ? { status: "ok" as const, delivery: { status: "skipped" as const }, reply }
+      ? {
+          status: "ok" as const,
+          delivery: { status: "skipped" as const },
+          reply,
+          ...(replyTruncated
+            ? {
+                replyTruncated,
+                note: "The reply may have been cut at 4,096 characters; read the full reply with sessions_history.",
+              }
+            : {}),
+        }
       : {
           status: "no_reply" as const,
           message: sourceReplyDelivered

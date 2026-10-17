@@ -19,6 +19,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { sanitizeAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { createSessionStatusTool } from "./session-status-tool.js";
 import { createSessionsHistoryTool } from "./sessions-history-tool.js";
@@ -266,6 +267,37 @@ describe("sessions_send directed policy at the tool boundary", () => {
       inputProvenance: { sourceSessionKey: requesterKey, sourceTool: "sessions_send" },
     });
     expect(gatewayMethods().filter((method) => method === "agent.wait")).toHaveLength(1);
+  });
+
+  it("returns the accepted run's full reply when the terminal snapshot hit its bound", async () => {
+    const longReply = `${"Brief item with a source link https://example.com/notes.\n".repeat(80)}END-OF-BRIEF`;
+    const bounded = sanitizeAgentRunTerminalReply(longReply);
+    const transport = callGateway.getMockImplementation()!;
+    callGateway.mockImplementation(
+      async (request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
+        if (request.method === "agent.wait") {
+          return { runId, status: "ok", terminalReply: bounded };
+        }
+        if (request.method === "chat.history") {
+          return {
+            messages: [
+              {
+                role: "assistant",
+                __openclaw: { runId },
+                content: [{ type: "text", text: longReply }],
+              },
+            ],
+          };
+        }
+        return await transport(request);
+      },
+    );
+
+    const result = await send(configFor({ send: ["worker"] }), { agentId: "worker" });
+
+    expect(longReply.length).toBeGreaterThan(4_096);
+    expect(result.details).toMatchObject({ status: "ok", reply: longReply });
+    expect(result.details).not.toHaveProperty("replyTruncated");
   });
 
   it("denies an unlisted key even with all visibility before dispatch", async () => {

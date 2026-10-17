@@ -18,7 +18,9 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 const callGatewayMock = vi.spyOn(gatewayCallRuntime, "callGateway");
 afterAll(() => callGatewayMock.mockRestore());
 
+import { sanitizeAgentRunTerminalReply } from "./agent-run-terminal-reply.js";
 import {
+  readCompleteAgentRunReply,
   readLatestAssistantReply,
   waitForAgentRun,
   waitForAgentRunsToDrain,
@@ -630,5 +632,102 @@ describe("waitForAgentRunsToDrain", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("readCompleteAgentRunReply", () => {
+  beforeEach(() => {
+    callGatewayMock.mockReset();
+  });
+
+  const fullReply = `${"Item: see https://example.com/notes for the checklist.\n".repeat(90)}END-MARKER`;
+  const bounded = () => {
+    const snapshot = sanitizeAgentRunTerminalReply(fullReply);
+    if (snapshot.disposition !== "visible") {
+      throw new Error("expected visible snapshot");
+    }
+    return snapshot.text;
+  };
+
+  it("returns the accepted run's stored reply when terminal evidence hit its bound", async () => {
+    callGatewayMock.mockResolvedValue({
+      messages: [
+        { ...textAssistant(fullReply), __openclaw: { runId: "run-accepted" } },
+        { ...textAssistant("later reply from another run"), __openclaw: { runId: "run-later" } },
+      ],
+    });
+
+    const result = await readCompleteAgentRunReply({
+      runId: "run-accepted",
+      sessionKey: "agent:helper:main",
+      agentId: "helper",
+      replyText: bounded(),
+    });
+
+    expect(bounded().endsWith("END-MARKER")).toBe(false);
+    expect(result).toEqual({ replyText: fullReply });
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "chat.history",
+      params: { sessionKey: "agent:helper:main", agentId: "helper", limit: 50 },
+    });
+  });
+
+  it("marks the bounded reply as truncated when the full reply cannot be read", async () => {
+    callGatewayMock.mockResolvedValue({
+      messages: [{ ...textAssistant("other"), __openclaw: { runId: "run-other" } }],
+    });
+
+    const result = await readCompleteAgentRunReply({
+      runId: "run-accepted",
+      sessionKey: "agent:helper:main",
+      replyText: bounded(),
+    });
+
+    expect(result).toEqual({ replyText: bounded(), replyTruncated: true });
+  });
+
+  it("recovers a truncated reply that trailing whitespace shortened below the bound", async () => {
+    const reply = `${"a".repeat(4_000)}${" ".repeat(100)}TAIL`;
+    const snapshot = sanitizeAgentRunTerminalReply(reply);
+    if (snapshot.disposition !== "visible") {
+      throw new Error("expected visible snapshot");
+    }
+    callGatewayMock.mockResolvedValue({
+      messages: [{ ...textAssistant(reply), __openclaw: { runId: "run-accepted" } }],
+    });
+
+    const result = await readCompleteAgentRunReply({
+      runId: "run-accepted",
+      sessionKey: "agent:helper:main",
+      replyText: snapshot.text,
+    });
+
+    expect(snapshot.text).toBe(`${"a".repeat(4_000)}…`);
+    expect(result).toEqual({ replyText: reply });
+  });
+
+  it("keeps a complete reply that ends with an ellipsis unflagged", async () => {
+    callGatewayMock.mockResolvedValue({
+      messages: [{ ...textAssistant("Still thinking…"), __openclaw: { runId: "run-accepted" } }],
+    });
+
+    const result = await readCompleteAgentRunReply({
+      runId: "run-accepted",
+      sessionKey: "agent:helper:main",
+      replyText: "Still thinking…",
+    });
+
+    expect(result).toEqual({ replyText: "Still thinking…" });
+  });
+
+  it("does not read history for replies without the truncation marker", async () => {
+    const result = await readCompleteAgentRunReply({
+      runId: "run-accepted",
+      sessionKey: "agent:helper:main",
+      replyText: "short reply.",
+    });
+
+    expect(result).toEqual({ replyText: "short reply." });
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 });

@@ -27,7 +27,10 @@ import {
 import { sleep } from "../utils/sleep.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReceipt } from "./agent-run-terminal-receipt.js";
-import { normalizeAgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
+import {
+  mayBeTruncatedAgentRunTerminalReply,
+  normalizeAgentRunTerminalReplySnapshot,
+} from "./agent-run-terminal-reply.js";
 import type { AgentWaitResult } from "./run-wait.types.js";
 import { extractStoredAssistantText, stripToolMessages } from "./tools/chat-history-text.js";
 import { bindAgentToolGatewayRequest } from "./tools/in-process-gateway.js";
@@ -164,6 +167,8 @@ function readOpenClawMessageMeta(message: unknown): Record<string, unknown> | un
 export async function readLatestAssistantReply(params: {
   sessionKey: string;
   agentId?: string;
+  /** Only rows written by this run qualify. */
+  runId?: string;
   limit?: number;
   callGateway?: GatewayCaller;
 }): Promise<string | undefined> {
@@ -179,11 +184,14 @@ export async function readLatestAssistantReply(params: {
     if (isAssistantReplyTranscriptArtifact(message)) {
       continue;
     }
+    const meta = readOpenClawMessageMeta(message);
+    if (params.runId !== undefined && meta?.runId !== params.runId) {
+      continue;
+    }
     const text = extractStoredAssistantText(message);
     if (!text?.trim()) {
       continue;
     }
-    const meta = readOpenClawMessageMeta(message);
     if (meta?.truncated !== true) {
       return text;
     }
@@ -200,6 +208,40 @@ export async function readLatestAssistantReply(params: {
       : undefined;
   }
   return undefined;
+}
+
+/**
+ * Terminal replies are bounded evidence. When one reached its bound, read the
+ * accepted run's stored reply instead; report the cut when that is unavailable.
+ */
+export async function readCompleteAgentRunReply(params: {
+  runId: string;
+  sessionKey: string;
+  agentId?: string;
+  replyText?: string;
+  callGateway?: GatewayCaller;
+}): Promise<{ replyText?: string; replyTruncated?: true }> {
+  const bounded = params.replyText;
+  if (!bounded || !mayBeTruncatedAgentRunTerminalReply(bounded)) {
+    return { replyText: bounded };
+  }
+  // The accepted run's stored reply is authoritative: it either extends the
+  // bounded prefix (truncated) or equals it (a reply that ends with "…").
+  const stored = (
+    await readLatestAssistantReply({
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      runId: params.runId,
+      callGateway: params.callGateway,
+    }).catch(() => undefined)
+  )?.trim();
+  if (stored === bounded) {
+    return { replyText: bounded };
+  }
+  const prefix = bounded.slice(0, -1).trimEnd();
+  return stored && stored.length > prefix.length && stored.startsWith(prefix)
+    ? { replyText: stored }
+    : { replyText: bounded, replyTruncated: true };
 }
 
 export async function waitForAgentRun(params: {
