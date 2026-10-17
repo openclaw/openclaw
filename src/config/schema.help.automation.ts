@@ -128,6 +128,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Core transcript capture settings for meeting notes, recording-capable agent tools, and configured live meeting auto-start sources. Meeting plugins capture durable notes by default; set enabled to false to opt out globally.",
   "transcripts.enabled":
     "Enables durable automatic meeting notes, the transcripts agent tool, and configured auto-start sources. Default: true. Set false to disable persistence and the tool; explicit meeting transcribe mode retains its bounded live tail.",
+  "transcripts.summaryThinking":
+    "Thinking level for model-backed meeting notes only. Unset preserves existing behavior; explicit levels use model capability normalization. Does not change chat thinking, model selection, or the summary deadline.",
   "transcripts.autoStart":
     "Live transcript sources managed automatically from gateway startup. Each entry is enabled by being present; remove an entry to disable that source. Sources capture continuously unless whenOccupied is enabled.",
   "transcripts.autoStart[].providerId":

@@ -123,3 +123,32 @@ it("counts awaited backend setup against the automatic cutoff", async () => {
   await expect(executePreparedCliRun(context)).resolves.toMatchObject({ text: "done" });
   expect(resolveExecutionArgs.mock.calls[0]?.[0].fastMode).toBe(false);
 });
+
+it.each([undefined, true] as const)(
+  "carries the isolated thinking opt-in %s to argument resolution",
+  async (applyThinkingToSideQuestion) => {
+    const resolveExecutionArgs = vi.fn((context: CliBackendResolveExecutionArgsContext) => [
+      ...context.baseArgs,
+    ]);
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "claude-haiku-5-5",
+      thinkLevel: "high",
+      executionMode: "side-question",
+      cliToolAvailability: { native: [], openClaw: [] },
+      resolveExecutionArgs,
+      backend: { command: "/bin/sh", args: [], output: "text", input: "stdin" },
+    });
+    context.params.applyThinkingToSideQuestion = applyThinkingToSideQuestion;
+    supervisorSpawnMock.mockResolvedValue(
+      createManagedRun({ ...createSuccessfulProcessExit(), stdout: "done" }),
+    );
+    await expect(executePreparedCliRun(context)).resolves.toMatchObject({ text: "done" });
+    expect(resolveExecutionArgs.mock.calls[0]?.[0]).toMatchObject({
+      thinkingLevel: "high",
+      applyThinkingToSideQuestion,
+      executionMode: "side-question",
+      toolAvailability: { native: [], openClaw: [] },
+    });
+  },
+);

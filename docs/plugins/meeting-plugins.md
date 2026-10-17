@@ -65,6 +65,17 @@ durable notes globally. An explicitly selected `transcribe` session retains its
 bounded live-caption tail without writing durable rows. Caption availability
 still depends on the meeting platform, account, language, and host policy.
 
+Set `transcripts.summaryThinking: "high"` to request more thinking for model-backed
+meeting notes without changing chat thinking. The setting accepts the standard
+[thinking levels](/tools/thinking); unsupported levels use the selected model's
+normal capability handling. Leaving it unset preserves the existing summary
+behavior. It applies to utility and primary-model summary attempts, not the
+deterministic fallback.
+
+Summary requests still share a 20-second deadline and a 48,000-character input
+limit. Higher thinking can take longer and does not recover omitted context or
+guarantee more accurate notes. Model selection and authentication are unchanged.
+
 ## Configure Teams or Zoom
 
 The Teams and Zoom plugins share the same configuration shape for their common

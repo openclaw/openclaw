@@ -1,6 +1,7 @@
 import path from "node:path";
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
+import { ALL_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { SilentReplyPolicyConfigSchema } from "./zod-schema.agent-defaults.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
@@ -438,6 +439,7 @@ export const OpenClawSchemaShape = {
   transcripts: z
     .strictObject({
       enabled: z.boolean().optional(),
+      summaryThinking: z.enum(ALL_THINKING_LEVELS).optional(),
       autoStart: z
         .array(
           z.strictObject({

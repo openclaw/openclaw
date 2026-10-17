@@ -4,6 +4,7 @@ import {
   isolatedCompletionMocks as mocks,
   isolatedRequest,
   nativeAuthPlan,
+  preparedModelRuntime,
   registerIsolatedHarness,
   resetIsolatedCompletionTestState,
   runIsolatedCompletion,
@@ -91,3 +92,39 @@ describe("isolated completion token budgets", () => {
     );
   });
 });
+
+it.each([
+  { requested: "high", reasoning: true, expected: "high" },
+  { requested: "max", reasoning: true, expected: "high" },
+  { requested: "high", reasoning: false, expected: "off" },
+] as const)(
+  "normalizes $requested thinking (reasoning=$reasoning) before isolated dispatch",
+  async ({ requested, reasoning, expected }) => {
+    mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+    mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "done" }] });
+    Object.assign(preparedModelRuntime, {
+      modelCatalog: {
+        entries: [{ provider: "fixture", id: "fixture-model", reasoning }],
+        routeVariants: [],
+      },
+    });
+    await runIsolatedCompletion({
+      ...isolatedRequest(),
+      provider: "fixture",
+      model: "fixture-model",
+      thinkLevel: requested,
+      applyThinkingToSideQuestion: true,
+    });
+    expect(mocks.runCliAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        thinkLevel: expected,
+        applyThinkingToSideQuestion: true,
+        executionMode: "side-question",
+        cliToolAvailability: { native: [], openClaw: [] },
+        disableTools: true,
+        disableCliLiveSession: true,
+        timeoutMs: 1_000,
+      }),
+    );
+  },
+);

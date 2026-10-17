@@ -100,6 +100,8 @@ export type RunCliAgentParams = {
   executionMode?: CliBackendExecutionMode;
   /** Internal one-shot inference path: suppress transcript, hook, context-engine, and delivery work. */
   isolatedCompletion?: true;
+  /** Apply explicit thinking without relaxing the side-question isolation policy. */
+  applyThinkingToSideQuestion?: true;
   /** Diagnostic attribution only; must not change execution policy or timeout selection. */
   isolatedCompletionPurpose?: IsolatedCompletionPurpose;
   outputTextPolicy?: AgentHarnessIsolatedCompletionParamsV2["outputTextPolicy"];

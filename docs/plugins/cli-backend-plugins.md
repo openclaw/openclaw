@@ -277,6 +277,13 @@ effective `ctx.thinkingLevel`: `off`, `minimal`, `low`, `medium`, `high`,
 applied through launch environment or staged configuration; the same field is
 available to `resolveExecutionArgs(ctx)` for native CLI flags.
 
+`resolveExecutionArgs(ctx)` may receive `ctx.applyThinkingToSideQuestion: true`
+when an isolated completion explicitly opts into thinking control. Apply the
+effective `ctx.thinkingLevel` after removing conflicting side-question flags.
+This does not authorize tools, session reuse, or persistence; retain every
+side-question restriction. When absent, preserve the backend's existing
+side-question behavior.
+
 `resolveExecutionArgs(ctx)` also receives optional `ctx.fastMode`, the effective
 boolean for this invocation. Core resolves automatic mode after CLI and process
 scope admission and backend preparation, so elapsed waits count toward its cutoff. Explicit on

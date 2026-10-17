@@ -468,6 +468,7 @@ export async function executePreparedCliRun(
                   fastAutoOnSeconds: params.fastModeAutoOnSeconds,
                 }).enabled,
           executionMode: params.executionMode ?? "agent",
+          applyThinkingToSideQuestion: params.applyThinkingToSideQuestion,
           // Node runs project the native subset only: gateway-loopback MCP tools do
           // not exist on the node, and auto-approval must not cross that boundary.
           toolAvailability:

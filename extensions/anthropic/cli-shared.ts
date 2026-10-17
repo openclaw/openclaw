@@ -453,7 +453,13 @@ export function resolveClaudeCliExecutionArgs(
     : context.baseArgs;
   const executionArgs =
     context.executionMode === "side-question"
-      ? resolveClaudeCliSideQuestionExecutionArgs(baseArgs)
+      ? context.applyThinkingToSideQuestion
+        ? applyClaudeCliEffortArgs(
+            resolveClaudeCliSideQuestionExecutionArgs(baseArgs),
+            context.thinkingLevel,
+            context.modelId,
+          )
+        : resolveClaudeCliSideQuestionExecutionArgs(baseArgs)
       : applyClaudeCliEffortArgs(baseArgs, context.thinkingLevel, context.modelId);
   const resolvedArgs = context.toolAvailability
     ? resolveClaudeCliRestrictedExecutionArgs(executionArgs, context.toolAvailability)

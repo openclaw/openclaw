@@ -259,6 +259,27 @@ describe("resolveClaudeCliExecutionArgs", () => {
     ).toEqual(argv("-p --output-format stream-json --verbose --resume {sessionId}"));
   });
 
+  it("applies opt-in isolated thinking after sanitizing tools and persistence", () => {
+    const args = executionArgs({
+      modelId: "claude-haiku-5-5",
+      thinkingLevel: "high",
+      executionMode: "side-question",
+      applyThinkingToSideQuestion: true,
+      baseArgs: argv("-p --effort max --resume old-session --allowedTools Read --max-turns 4"),
+      toolAvailability: { native: [], openClaw: [] },
+    });
+    expect(args.slice(args.indexOf("--effort"), args.indexOf("--effort") + 2)).toEqual([
+      "--effort",
+      "high",
+    ]);
+    expect(args[args.indexOf("--tools") + 1]).toBe("");
+    expect(args[args.indexOf("--disallowedTools") + 1]).toContain("mcp__*");
+    expect(args).toContain("--no-session-persistence");
+    expect(args[args.indexOf("--max-turns") + 1]).toBe("1");
+    expect(args).not.toContain("--resume");
+    expect(args).not.toContain("--allowedTools");
+  });
+
   it("forces isolated no-tool one-shot args for side-question execution", () => {
     expect(
       executionArgs({

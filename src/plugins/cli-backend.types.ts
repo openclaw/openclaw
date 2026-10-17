@@ -260,6 +260,8 @@ export type CliBackendResolveExecutionArgsContext = Omit<
   CliBackendPrepareExecutionContext,
   "agentDir" | "contextWindow" | "contextTokenBudget" | "env"
 > & {
+  /** Apply effective thinking after side-question sanitization, retaining all isolation restrictions. */
+  applyThinkingToSideQuestion?: true;
   /** Effective fast mode at spawn, after queue admission and backend preparation. */
   fastMode?: boolean;
   /** Canonical tools routed through OpenClaw; disable equivalent native tools. */

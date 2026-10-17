@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { adjustMaxTokensForThinking } from "@openclaw/ai/internal/shared";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
-import type { ThinkLevel } from "../auto-reply/thinking.js";
+import { resolveSupportedThinkingLevel, type ThinkLevel } from "../auto-reply/thinking.js";
 /**
  * Fresh, prompt-only inference through the selected runtime.
  *
@@ -112,6 +112,8 @@ type RunIsolatedCompletionParams = {
   /** Adapt host authorization failures to the calling completion API's error contract. */
   mapOperatorAuthorizationError?: (error: unknown) => Error;
   thinkLevel?: ThinkLevel;
+  /** Opt in to explicit thinking while retaining the CLI side-question isolation policy. */
+  applyThinkingToSideQuestion?: true;
   outputTextPolicy?: AgentHarnessIsolatedCompletionParamsV2["outputTextPolicy"];
   /** Internal answer budget; reasoning reserves still obey model and explicit stream limits. */
   answerTokenBudget?: number;
@@ -217,6 +219,7 @@ async function runCliIsolatedCompletion(
             model: request.model,
             authProfileId,
             thinkLevel: request.thinkLevel,
+            applyThinkingToSideQuestion: request.applyThinkingToSideQuestion,
             streamParams: resolveIsolatedStreamParams(request),
             abortSignal: request.abortSignal,
             assertCurrent: request.assertCurrent,
@@ -493,6 +496,17 @@ async function runIsolatedCompletionOwned(
         explicitRuntimeOverride: request.agentHarnessRuntimeOverride,
         ...context,
       });
+      if (request.applyThinkingToSideQuestion && request.thinkLevel !== undefined) {
+        const catalog =
+          readAdmittedPublishedModelCatalog(lease.snapshot) ?? lease.snapshot.modelCatalog;
+        request.thinkLevel = resolveSupportedThinkingLevel({
+          provider,
+          model: request.model,
+          catalog: catalog?.entries,
+          agentRuntime: cliOwner ?? selection.selectedHarnessId,
+          level: request.thinkLevel,
+        });
+      }
       if (cliOwner) {
         return await runCliIsolatedCompletion(request, cliOwner, provider, diagnostics);
       }

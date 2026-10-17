@@ -576,6 +576,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "cron.sessionRetention": "Automations Session Retention",
   transcripts: "Transcripts",
   "transcripts.enabled": "Transcripts Enabled",
+  "transcripts.summaryThinking": "Transcript Summary Thinking",
   "transcripts.autoStart": "Transcripts Auto-start Sources",
   "transcripts.autoStart[].providerId": "Transcript Source Provider ID",
   "transcripts.autoStart[].sessionId": "Transcript Session ID",

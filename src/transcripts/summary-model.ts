@@ -169,7 +169,10 @@ export async function summarizeTranscriptsWithModel(params: {
             abortSignal: signal,
             assertCurrent: params.assertCurrent,
             outputTextPolicy: "strict-visible",
-            thinkLevel: "off",
+            thinkLevel: params.cfg.transcripts?.summaryThinking ?? "off",
+            ...(params.cfg.transcripts?.summaryThinking !== undefined
+              ? { applyThinkingToSideQuestion: true as const }
+              : {}),
             answerTokenBudget: 1_500,
           }),
         );
