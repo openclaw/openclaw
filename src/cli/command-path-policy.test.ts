@@ -30,14 +30,13 @@ type ConfigGuardResolver = Extract<
   (ctx: { argv: string[]; commandPath: string[] }) => unknown
 >;
 
-function expectResolvedPolicy(
-  commandPath: string[],
-  expected: Partial<CliCommandPathPolicy>,
-): void {
-  expect(resolveCliCommandPathPolicy(commandPath)).toEqual({
-    ...DEFAULT_EXPECTED_POLICY,
-    ...expected,
-  });
+function expectResolvedPolicy(commands: string[], expected: Partial<CliCommandPathPolicy>): void {
+  for (const command of commands) {
+    expect(resolveCliCommandPathPolicy(command.split(" ")), command).toEqual({
+      ...DEFAULT_EXPECTED_POLICY,
+      ...expected,
+    });
+  }
 }
 
 function expectNetworkProxyResolver(
@@ -85,34 +84,21 @@ describe("command-path-policy", () => {
     expect(agentPolicy.loadPlugins(commandContext(["agent"], ["--local"], true))).toBe(true);
     expect(agentPolicy.configGuard(commandContext(["agent"]))).toBe("skip");
     expect(agentPolicy.configGuard(commandContext(["agent"], ["--local"]))).toBe("run");
-    expectResolvedPolicy(["agent", "exec"], {
+    expectResolvedPolicy(["agent exec"], {
       configGuard: "skip",
       ownsProtocolStdout: true,
       hideBanner: true,
     });
 
-    for (const commandPath of [["agents"], ["agents", "list"]]) {
-      expectResolvedPolicy(commandPath, {
-        configGuard: "skip",
-        networkProxy: "bypass",
-      });
-    }
-    for (const commandPath of [
-      ["agents", "add"],
-      ["agents", "team", "create"],
-    ]) {
-      expectResolvedPolicy(commandPath, { configGuard: "defer", networkProxy: "bypass" });
-    }
-    for (const commandPath of [
-      ["agents", "bind"],
-      ["agents", "unbind"],
-      ["agents", "set-identity"],
-      ["agents", "delete"],
-    ]) {
-      expectResolvedPolicy(commandPath, { networkProxy: "bypass" });
-    }
-    expectResolvedPolicy(["agents", "bindings"], {
+    expectResolvedPolicy(["agents", "agents list", "agents bindings"], {
       configGuard: "skip",
+      networkProxy: "bypass",
+    });
+    expectResolvedPolicy(["agents add", "agents team create"], {
+      configGuard: "defer",
+      networkProxy: "bypass",
+    });
+    expectResolvedPolicy(["agents bind", "agents unbind", "agents set-identity", "agents delete"], {
       networkProxy: "bypass",
     });
   });
@@ -148,23 +134,17 @@ describe("command-path-policy", () => {
   });
 
   it("resolves mixed startup-only rules", () => {
-    expectResolvedPolicy(["qa", "suite"], {
-      configGuard: "skip",
-      networkProxy: "bypass",
-    });
     expectResolvedPolicy(["worker"], {
       configGuard: "skip",
       hideBanner: true,
       ownsProtocolStdout: true,
       networkProxy: "bypass",
     });
-    for (const action of ["install", "status", "pair", "setup"]) {
-      expectResolvedPolicy(["browser", "extension", action], {
-        configGuard: "validate",
-        networkProxy: "bypass",
-      });
-    }
-    expectResolvedPolicy(["browser", "extension", "native-host"], {
+    expectResolvedPolicy(
+      ["install", "status", "pair", "setup"].map((action) => `browser extension ${action}`),
+      { configGuard: "validate", networkProxy: "bypass" },
+    );
+    expectResolvedPolicy(["browser extension native-host"], {
       configGuard: "skip",
       ensureCliPath: false,
       hideBanner: true,
@@ -175,17 +155,13 @@ describe("command-path-policy", () => {
       configGuard: "skip",
       stateStoreGuard: "run",
     });
-    expectResolvedPolicy(["config"], {
-      configGuard: "skip",
-      networkProxy: "bypass",
-    });
-    expectResolvedPolicy(["config", "file"], {
+    expectResolvedPolicy(["config file"], {
       configGuard: "skip",
       ensureCliPath: false,
       ownsProtocolStdout: true,
       networkProxy: "bypass",
     });
-    expectResolvedPolicy(["config", "set"], {
+    expectResolvedPolicy(["config set"], {
       configGuard: "defer",
       networkProxy: "bypass",
     });
@@ -199,73 +175,51 @@ describe("command-path-policy", () => {
     expect(doctorPolicy.networkProxy(commandContext(["doctor"], ["--state-sqlite=compact"]))).toBe(
       "bypass",
     );
-    expectResolvedPolicy(["config", "validate"], {
-      configGuard: "skip",
-      networkProxy: "bypass",
-    });
-    expectResolvedPolicy(["config", "schema"], {
+    expectResolvedPolicy(["config schema"], {
       configGuard: "skip",
       ownsProtocolStdout: true,
       networkProxy: "bypass",
     });
-    expectResolvedPolicy(["gateway", "status"], {
-      configGuard: "skip",
-      networkProxy: "bypass",
-    });
-    expectResolvedPolicy(["gateway", "health"], {
-      configGuard: "skip",
-      networkProxy: "bypass",
-    });
-    expectResolvedPolicy(["plugins", "update"], { hideBanner: true });
-    expectResolvedPolicy(["plugins", "list"], {
+    expectResolvedPolicy(["plugins update"], { hideBanner: true });
+    expectResolvedPolicy(["plugins list"], {
       configGuard: "skip",
       ensureCliPath: false,
       networkProxy: "bypass",
     });
-    for (const commandPath of [
-      ["plugins", "install"],
-      ["plugins", "inspect"],
-      ["plugins", "registry"],
-      ["plugins", "doctor"],
-    ]) {
-      expectResolvedPolicy(commandPath, {});
-    }
+    expectResolvedPolicy(
+      ["plugins install", "plugins inspect", "plugins registry", "plugins doctor"],
+      {},
+    );
     // Authoring commands operate on a target package, not operator config, so
     // a host config the running CLI predates must not abort them.
-    for (const commandPath of [
-      ["plugins", "build"],
-      ["plugins", "validate"],
-      ["plugins", "init"],
-    ]) {
-      expectResolvedPolicy(commandPath, {
-        configGuard: "skip",
-      });
-    }
-    expectResolvedPolicy(["cron", "list"], {
+    expectResolvedPolicy(["plugins build", "plugins validate", "plugins init", "skills search"], {
       configGuard: "skip",
-      networkProxy: "bypass",
     });
-    for (const commandPath of [
-      ["hooks"],
-      ["hooks", "list"],
-      ["hooks", "info"],
-      ["hooks", "check"],
-      ["skills", "info"],
-    ]) {
-      expectResolvedPolicy(commandPath, {
+    expectResolvedPolicy(
+      [
+        "qa suite",
+        "config",
+        "config validate",
+        "gateway status",
+        "gateway health",
+        "cron list",
+        "hooks",
+        "hooks list",
+        "hooks info",
+        "hooks check",
+        "skills info",
+      ],
+      {
         configGuard: "skip",
         networkProxy: "bypass",
-      });
-    }
-    expectResolvedPolicy(["skills", "search"], {
-      configGuard: "skip",
-    });
-    expectResolvedPolicy(["memory", "index"], {
+      },
+    );
+    expectResolvedPolicy(["memory index"], {
       configGuard: "validate",
       loadPlugins: "always",
       pluginRegistry: { scope: "memory" },
     });
-    expectResolvedPolicy(["memory", "search"], {
+    expectResolvedPolicy(["memory search"], {
       configGuard: "skip",
       loadPlugins: "always",
       pluginRegistry: { scope: "memory" },

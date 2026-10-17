@@ -22,21 +22,14 @@ const ensureConfigReadyMock = vi.hoisted(() => vi.fn(async () => {}));
 const ensureCliPluginRegistryLoadedMock = vi.hoisted(() => vi.fn(async () => {}));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-vi.mock("./banner.js", () => ({
-  emitCliBanner: emitCliBannerMock,
-}));
+vi.mock("./banner.js", () => ({ emitCliBanner: emitCliBannerMock }));
 
 vi.mock("../logging/console.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../logging/console.js")>();
-  return {
-    ...actual,
-    routeLogsToStderr: routeLogsToStderrMock,
-  };
+  return { ...actual, routeLogsToStderr: routeLogsToStderrMock };
 });
 
-vi.mock("./program/config-guard.js", () => ({
-  ensureConfigReady: ensureConfigReadyMock,
-}));
+vi.mock("./program/config-guard.js", () => ({ ensureConfigReady: ensureConfigReadyMock }));
 
 vi.mock("./plugin-registry-loader.js", () => ({
   ensureCliPluginRegistryLoaded: ensureCliPluginRegistryLoadedMock,
@@ -44,15 +37,15 @@ vi.mock("./plugin-registry-loader.js", () => ({
 
 describe("command-execution-startup", () => {
   let mod: typeof import("./command-execution-startup.js");
+  const argv = ["node", "openclaw", "status"];
+  const cliRuntime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
   beforeAll(async () => {
     vi.resetModules();
     mod = await import("./command-execution-startup.js");
   });
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+  beforeEach(() => vi.clearAllMocks());
 
   it("preserves console exports for a co-sharded subsystem logger", async () => {
     const { createSubsystemLogger } = await import("../logging/subsystem.js");
@@ -62,81 +55,43 @@ describe("command-execution-startup", () => {
     ).not.toThrow();
   });
 
-  it("routes logs to stderr and emits banner only when allowed", async () => {
-    await mod.applyCliExecutionStartupPresentation({
-      startupPolicy: startupPolicy({ loadPlugins: true, pluginRegistry: { scope: "all" } }),
-      version: "1.2.3",
-      argv: ["node", "openclaw", "status"],
-    });
-
-    expect(routeLogsToStderrMock).toHaveBeenCalledTimes(1);
-    expect(emitCliBannerMock).toHaveBeenCalledWith("1.2.3", {
-      argv: ["node", "openclaw", "status"],
-    });
-
-    await mod.applyCliExecutionStartupPresentation({
-      startupPolicy: startupPolicy({
-        suppressDoctorStdout: false,
-        hideBanner: true,
-        loadPlugins: true,
-        pluginRegistry: { scope: "all" },
-      }),
-      version: "1.2.3",
+  it.each([
+    { name: "normal", startupPolicy: startupPolicy(), argv, banner: true },
+    {
+      name: "hidden",
+      startupPolicy: startupPolicy({ suppressDoctorStdout: false, hideBanner: true }),
       showBanner: true,
-    });
-
-    expect(emitCliBannerMock).toHaveBeenCalledTimes(1);
+      banner: false,
+    },
+    { name: "json", startupPolicy: startupPolicy(), argv: [...argv, "--json"], banner: false },
+  ])("routes diagnostics and respects $name banner policy", async ({ banner, ...params }) => {
+    await mod.applyCliExecutionStartupPresentation({ ...params, version: "1.2.3" });
+    expect(routeLogsToStderrMock).toHaveBeenCalledTimes(
+      Number(params.startupPolicy.suppressDoctorStdout),
+    );
+    expect(emitCliBannerMock.mock.calls).toEqual(banner ? [["1.2.3", { argv }]] : []);
   });
 
-  it("does not emit the banner for JSON output", async () => {
-    await mod.applyCliExecutionStartupPresentation({
-      startupPolicy: startupPolicy(),
-      version: "1.2.3",
-      argv: ["node", "openclaw", "status", "--json"],
-    });
-
-    expect(routeLogsToStderrMock).toHaveBeenCalledTimes(1);
-    expect(emitCliBannerMock).not.toHaveBeenCalled();
-  });
-
-  it("forwards startup policy into bootstrap defaults and overrides", async () => {
-    const statusRuntime = {} as never;
+  it.each([false, true])("forwards bootstrap policy with overrides=%s", async (overrides) => {
+    const commandPath = overrides ? ["message", "send"] : ["status"];
     await mod.ensureCliExecutionBootstrap({
-      runtime: statusRuntime,
-      commandPath: ["status"],
-      startupPolicy: startupPolicy(),
-    });
-
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: statusRuntime,
-      commandPath: ["status"],
-      measure: expect.any(Function),
-      suppressDoctorStdout: true,
-    });
-    expect(ensureCliPluginRegistryLoadedMock).not.toHaveBeenCalled();
-
-    const messageRuntime = {} as never;
-    await mod.ensureCliExecutionBootstrap({
-      runtime: messageRuntime,
-      commandPath: ["message", "send"],
+      runtime: cliRuntime,
+      commandPath,
       startupPolicy: startupPolicy({
-        suppressDoctorStdout: false,
-        pluginRegistry: { scope: "all" },
+        suppressDoctorStdout: !overrides,
+        pluginRegistry: { scope: overrides ? "all" : "channels" },
       }),
-      allowInvalid: true,
-      loadPlugins: true,
+      ...(overrides ? { allowInvalid: true, loadPlugins: true } : {}),
     });
-
-    expect(ensureConfigReadyMock).toHaveBeenLastCalledWith({
-      runtime: messageRuntime,
-      commandPath: ["message", "send"],
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: cliRuntime,
+      commandPath,
       measure: expect.any(Function),
-      allowInvalid: true,
+      ...(overrides ? { allowInvalid: true } : { suppressDoctorStdout: true }),
     });
-    expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
-      scope: "all",
-      routeLogsToStderr: false,
-    });
+    expect(ensureCliPluginRegistryLoadedMock.mock.calls).toEqual(
+      overrides ? [[{ scope: "all", routeLogsToStderr: false }]] : [],
+    );
   });
 
   it.each([
@@ -193,9 +148,11 @@ describe("command-execution-startup", () => {
               allowCurrentPluginMetadata: false,
             },
           );
-          expect(result.snapshot.issues).toEqual([]);
-          expect(result.snapshot.valid).toBe(true);
-          expect(result.snapshot.config.gateway?.port).toBe(port);
+          expect(result.snapshot).toMatchObject({
+            issues: [],
+            valid: true,
+            config: { gateway: { port } },
+          });
           expect(result.pluginMetadataSnapshot).toBeDefined();
         }
       });
