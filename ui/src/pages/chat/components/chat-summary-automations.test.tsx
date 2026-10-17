@@ -47,11 +47,17 @@ function sequence(...pages: (Page | Promise<Page>)[]) {
   pages.forEach((response) => request.mockResolvedValueOnce(response));
   return request;
 }
-function component(request = sequence(page([job()])), presented = true, offline = false) {
+function component(
+  request = sequence(page([job()])),
+  presented = true,
+  offline = false,
+  scopes = ["operator.read"],
+) {
   const source = createApplicationGateway({
     ...createApplicationGateway().gateway.snapshot,
     client: createTestGatewayClient(request),
     phase: offline ? "offline" : "connected",
+    hello: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes } },
     assistantAgentId: "ops",
     sessionKey: "agent:ops:task",
   });
@@ -298,4 +304,49 @@ it("uses the inventory continuation rather than silently dropping additional aut
   expect(element.querySelectorAll(".chat-summary__automation")).toHaveLength(2);
   expect(element.textContent).toContain("Running");
   expect(find(".chat-summary__automation-more")).toBeNull();
+});
+
+it("omits automation reads and retry UI without read authority", async () => {
+  const current = component(undefined, true, false, [
+    "operator.sessions.read",
+    "operator.sessions.write",
+  ]);
+  await current.empty();
+  current.cron();
+  window.dispatchEvent(new Event("focus"));
+  current.update({ presented: false });
+  current.update({ presented: true });
+  expect(current.request).not.toHaveBeenCalled();
+  expect(current.element.textContent).toBe("");
+});
+
+it.each([false, true])("retires automation access and late pages: loaded=%s", async (loaded) => {
+  const pending = createDeferred<Page>();
+  const current = component(sequence(loaded ? page([job()]) : pending.promise));
+  if (loaded) {
+    await current.ready();
+    current.request.mockReturnValueOnce(pending.promise);
+    current.cron();
+  }
+  flush();
+  const authorized = current.gateway.snapshot;
+  current.publish({
+    ...authorized,
+    hello: {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: ["operator.sessions.read"] },
+    },
+  });
+  await current.empty();
+  pending.resolve(page([job({ name: "Retired automation" })]));
+  await pending.promise;
+  flush();
+  current.cron();
+  expect(current.request).toHaveBeenCalledTimes(loaded ? 2 : 1);
+  expect(current.element.textContent).toBe("");
+  current.request.mockResolvedValueOnce(page([job({ name: "Current automation" })]));
+  current.publish(authorized);
+  await current.ready("Current automation");
+  expect(current.element.textContent).not.toContain("Retired automation");
 });
