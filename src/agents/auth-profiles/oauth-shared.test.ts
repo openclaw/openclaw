@@ -60,6 +60,8 @@ describe("OIDC registered identity", () => {
     const claimed = { ...existing, email: "same@example.test" };
     const incoming = {
       ...claimed,
+      access: "rotated-access",
+      refresh: "rotated-refresh",
       expires: claimed.expires + 600_000,
       ...metadata,
     };
@@ -84,9 +86,10 @@ describe("OIDC registered identity", () => {
       accountId: "account-a",
       ...metadata,
     };
-    expect(isSafeOAuthOwnerRefreshResult(claimed, { ...claimed })).toBe(true);
-    expect(isSafeOAuthPostClaimSettlement(claimed, { ...claimed })).toBe(true);
-    expect(isSafeToAdoptMainStoreOAuthIdentity(claimed, { ...claimed })).toBe(true);
+    const refreshed = { ...claimed, access: "rotated-access", refresh: "rotated-refresh" };
+    expect(isSafeOAuthOwnerRefreshResult(claimed, refreshed)).toBe(true);
+    expect(isSafeOAuthPostClaimSettlement(claimed, refreshed)).toBe(true);
+    expect(isSafeToAdoptMainStoreOAuthIdentity(claimed, refreshed)).toBe(true);
   });
 
   it("settles registered identity through a secret-free fence", () => {

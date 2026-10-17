@@ -2,20 +2,13 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { collectErrorGraphCandidates } from "../infra/errors.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  pluginConfig,
-  requireTool,
-  writeJson,
-  expectOnlyPlugin,
-} from "./loader-suite.test-support.js";
 import {
   acquirePluginRegistryForInspection,
   clearPluginRegistryLoadCache,
   loadOpenClawPlugins,
-  type PluginLoadOptions,
 } from "./loader.js";
 import {
   makePluginLoaderTempDir,
@@ -40,32 +33,28 @@ import {
   setActivePluginRegistry,
 } from "./runtime.js";
 
-beforeEach(useNoBundledPlugins);
-afterEach(resetPluginLoaderTestStateForTest);
-
 function writeToolPlugin(params: Parameters<typeof writePlugin>[0] & { tool: string }) {
   const { tool, ...definition } = params;
   const plugin = writePlugin(definition);
-  writeJson(path.join(plugin.dir, "openclaw.plugin.json"), {
-    id: plugin.id,
-    configSchema: { type: "object", properties: {} },
-    contracts: { tools: [tool] },
-  });
+  writeFileSync(
+    path.join(plugin.dir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: plugin.id,
+      configSchema: { type: "object", properties: {} },
+      contracts: { tools: [tool] },
+    }),
+  );
   return plugin;
 }
 
-function loadFixture(
-  plugin: ReturnType<typeof writePlugin> | ReturnType<typeof writePlugin>[],
-  options: PluginLoadOptions = {},
-  cache?: PluginCache,
-) {
-  const load = () =>
-    loadOpenClawPlugins({
-      config: pluginConfig(...(Array.isArray(plugin) ? plugin : [plugin])),
-      activate: false,
-      ...options,
-    });
-  return cache ? withPluginCache(cache, load) : load();
+function pluginConfig(...plugins: ReturnType<typeof writePlugin>[]) {
+  return {
+    plugins: {
+      allow: plugins.map((plugin) => plugin.id),
+      load: { paths: plugins.map((plugin) => plugin.file) },
+      slots: { memory: "none" },
+    },
+  };
 }
 
 it.each(["settled", "rejected", "pending"] as const)(
@@ -116,6 +105,7 @@ it.each(["settled", "rejected", "pending"] as const)(
       await instance.dispose();
       finished.resolve();
       await fixture.cleanup(inspection);
+      resetPluginLoaderTestStateForTest();
     }
   },
 );
@@ -123,6 +113,7 @@ it.each(["settled", "rejected", "pending"] as const)(
 it.each([true, false])(
   "keeps workflow admission through registration and retirement (activate: %s)",
   async (activate) => {
+    useNoBundledPlugins();
     const id = `registration-workflow-${activate}`;
     const observationFile = path.join(makePluginLoaderTempDir(), "observed.json");
     const plugin = writeToolPlugin({
@@ -143,11 +134,16 @@ it.each([true, false])(
         } };`,
     });
     const observed = () => JSON.parse(readFileSync(observationFile, "utf8"));
-    const registry = loadFixture(plugin, { activate, cache: false });
+    const registry = loadOpenClawPlugins({
+      config: pluginConfig(plugin),
+      activate,
+      cache: false,
+    });
     try {
       expect(registry.plugins[0]?.status).toBe("loaded");
       const expected = (phase: string) => ({
         phase,
+        // Admitted registration and callbacks can share scratch state without global activation.
         set: true,
         value: { phase },
         event: activate
@@ -167,6 +163,7 @@ it.each([true, false])(
       if (activate) {
         await clearActivePluginRegistry();
       }
+      resetPluginLoaderTestStateForTest();
     }
   },
 );
@@ -174,6 +171,7 @@ it.each([true, false])(
 it.each([true, false])(
   "retires successful cached instances but preserves caller-owned handles (cache: %s)",
   async (cached) => {
+    useNoBundledPlugins();
     const event = `successful-cache-retirement-${cached}`;
     const before = process.listenerCount(event);
     const order: string[] = [];
@@ -197,13 +195,17 @@ it.each([true, false])(
       };`,
     });
     const cache = createPluginCache();
-    const options = { cache: cached, config: pluginConfig(plugin) };
-    const registry = loadFixture(plugin, options, cache);
+    const options = {
+      config: pluginConfig(plugin),
+      cache: cached,
+      activate: false,
+    };
+    const registry = withPluginCache(cache, () => loadOpenClawPlugins(options));
     try {
       expect(registry.plugins[0]?.status).toBe("loaded");
       expect(process.listenerCount(event)).toBe(before + 1);
       if (cached) {
-        expect(loadFixture(plugin, options, cache)).toBe(registry);
+        expect(withPluginCache(cache, () => loadOpenClawPlugins(options))).toBe(registry);
       }
       withPluginCache(cache, clearPluginRegistryLoadCache);
       expect(process.listenerCount(event)).toBe(before + 1);
@@ -218,11 +220,13 @@ it.each([true, false])(
       await disposePluginRegistryInstances(registry);
       await retirePluginCache(cache);
       process.off(cleanupEvent, observeCleanup);
+      resetPluginLoaderTestStateForTest();
     }
   },
 );
 
 it("preserves an adopted published instance across cache retirement", async () => {
+  useNoBundledPlugins();
   const event = "cache-active-adopted";
   const before = process.listenerCount(event);
   const plugin = writeToolPlugin({
@@ -242,10 +246,18 @@ it("preserves an adopted published instance across cache retirement", async () =
   });
   const helper = path.join(plugin.dir, "lazy.mjs");
   writeFileSync(helper, 'export const value = "captured";');
-  await using cache = createPluginCache();
-  const registry = loadFixture(plugin, {}, cache);
+  const cache = createPluginCache();
+  const registry = withPluginCache(cache, () =>
+    loadOpenClawPlugins({
+      config: pluginConfig(plugin),
+      activate: false,
+    }),
+  );
   try {
-    const tool = requireTool(registry);
+    const tool = registry.tools[0]?.factory({});
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("Expected the registered lazy-import probe");
+    }
     setActivePluginRegistry(registry);
     setActivePluginRegistry({ ...registry, plugins: [...registry.plugins] });
     writeFileSync(helper, 'export const value = "edited after capture";');
@@ -261,11 +273,15 @@ it("preserves an adopted published instance across cache retirement", async () =
     ).rejects.toThrow("reloaded or disabled");
   } finally {
     await clearActivePluginRegistry();
+    await retirePluginCache(cache);
+    resetPluginLoaderTestStateForTest();
   }
 });
 
 it("keeps a module-scope resource open for the republished instance after the old one retires", async () => {
+  useNoBundledPlugins();
   const id = "module-resource-republish";
+  // Canonical external-plugin pattern: open a resource at import, close it in onDispose.
   const plugin = writeToolPlugin({
     id,
     tool: "resource_probe",
@@ -281,13 +297,24 @@ it("keeps a module-scope resource open for the republished instance after the ol
         });
       } };`,
   });
-  const load = (cache: PluginCache) => loadFixture(plugin, { cache: false }, cache);
+  // A republish loads the unchanged plugin through a fresh inventory, then retires the old one.
+  const load = (cache: PluginCache) =>
+    withPluginCache(cache, () =>
+      loadOpenClawPlugins({
+        config: pluginConfig(plugin),
+        activate: false,
+        cache: false,
+      }),
+    );
   const previousCache = createPluginCache();
   const nextCache = createPluginCache();
   const previous = load(previousCache);
   const next = load(nextCache);
   try {
-    const tool = requireTool(next);
+    const tool = next.tools[0]?.factory({});
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("Expected the registered resource probe");
+    }
     await disposePluginRegistryInstances(previous);
     await retirePluginCache(previousCache);
     await expect(tool.execute("after-republish", {})).resolves.toMatchObject({
@@ -298,6 +325,7 @@ it("keeps a module-scope resource open for the republished instance after the ol
     await disposePluginRegistryInstances(next);
     await retirePluginCache(previousCache);
     await retirePluginCache(nextCache);
+    resetPluginLoaderTestStateForTest();
   }
 });
 
@@ -329,9 +357,10 @@ it("preserves body and unexpected registry retirement failures with async dispos
   expect(cleanup).toHaveBeenCalledOnce();
 });
 
-it.each(["load", "register", "id-mismatch", "disabled-memory"] as const)(
-  "records %s admission and cleans only registered native resources",
+it.each(["load", "register", "id-mismatch"] as const)(
+  "records plugin %s failure and cleans only registered native resources",
   async (phase) => {
+    useNoBundledPlugins();
     const event = `plugin-failure-${phase}`;
     const previousListeners = process.listeners(event);
     const listenerCount = previousListeners.length;
@@ -344,38 +373,27 @@ it.each(["load", "register", "id-mismatch", "disabled-memory"] as const)(
         throw new Error("fixture failed");
       } };`,
       "id-mismatch": `${acquire} module.exports = { id: "wrong-owner", register() {} };`,
-      "disabled-memory": `${acquire}
-        module.exports = { id: "runtime-memory", kind: "memory", register() {
-          throw new Error("disabled plugin registered");
-        } };`,
     }[phase]!;
-    const plugin = writePlugin({
-      id: phase === "disabled-memory" ? "runtime-memory" : `failed-${phase}`,
-      body,
+    const plugin = writePlugin({ id: `failed-${phase}`, body });
+    const registry = loadOpenClawPlugins({
+      config: pluginConfig(plugin),
+      cache: false,
+      activate: false,
     });
-    const registry = loadFixture(plugin, { cache: false });
     const fixtureListeners = process
       .listeners(event)
       .filter((listener) => !previousListeners.includes(listener));
     try {
-      expectOnlyPlugin(
-        registry,
-        phase === "disabled-memory"
-          ? {
-              id: plugin.id,
-              enabled: false,
-              status: "disabled",
-              activationReason: expect.stringContaining("memory slot"),
-            }
-          : {
-              id: plugin.id,
-              status: "error",
-              failurePhase: phase === "load" || phase === "register" ? phase : "validation",
-              error: expect.stringContaining(
-                phase === "id-mismatch" ? "plugin id mismatch" : "fixture failed",
-              ),
-            },
-      );
+      expect(registry.plugins).toEqual([
+        expect.objectContaining({
+          id: plugin.id,
+          status: "error",
+          failurePhase: phase === "load" || phase === "register" ? phase : "validation",
+          error: expect.stringContaining(
+            phase === "id-mismatch" ? "plugin id mismatch" : "fixture failed",
+          ),
+        }),
+      ]);
       if (phase === "register") {
         await vi.waitFor(() => expect(process.listenerCount(event)).toBe(listenerCount));
       } else {
@@ -389,12 +407,57 @@ it.each(["load", "register", "id-mismatch", "disabled-memory"] as const)(
         for (const listener of fixtureListeners) {
           process.off(event, listener);
         }
+        resetPluginLoaderTestStateForTest();
       }
     }
   },
 );
 
+it("records a disabled runtime-only memory plugin without promising native effect cleanup", async () => {
+  useNoBundledPlugins();
+  const event = "plugin-disabled-memory";
+  const previousListeners = process.listeners(event);
+  const before = previousListeners.length;
+  const plugin = writePlugin({
+    id: "runtime-memory",
+    body: `process.on(${JSON.stringify(event)}, () => {});
+      module.exports = { id: "runtime-memory", kind: "memory", register() {
+        throw new Error("disabled plugin registered");
+      } };`,
+  });
+  const registry = loadOpenClawPlugins({
+    config: pluginConfig(plugin),
+    cache: false,
+    activate: false,
+  });
+  const fixtureListeners = process
+    .listeners(event)
+    .filter((listener) => !previousListeners.includes(listener));
+  try {
+    expect(registry.plugins).toEqual([
+      expect.objectContaining({
+        id: plugin.id,
+        enabled: false,
+        status: "disabled",
+        activationReason: expect.stringContaining("memory slot"),
+      }),
+    ]);
+    await disposePluginRegistryInstances(registry);
+    expect(process.listenerCount(event)).toBe(before + 1);
+  } finally {
+    try {
+      await disposePluginRegistryInstances(registry);
+    } finally {
+      for (const listener of fixtureListeners) {
+        process.off(event, listener);
+      }
+      resetPluginLoaderTestStateForTest();
+    }
+  }
+});
+
 it("retires every unpublished instance when a nonactivating builder throws", async () => {
+  useNoBundledPlugins();
   const event = "plugin-abandoned-builder";
   const before = process.listenerCount(event);
   const plugins = [
@@ -407,15 +470,28 @@ it("retires every unpublished instance when a nonactivating builder throws", asy
     }),
     writePlugin({ id: "abandoned-z", body: 'throw new Error("later plugin failed");' }),
   ];
-  await using cache = createPluginCache();
-  expect(() => loadFixture(plugins, { cache: false, throwOnLoadError: true }, cache)).toThrow(
-    "later plugin failed",
-  );
-  await retirePluginCache(cache);
-  expect(process.listenerCount(event)).toBe(before);
+  const cache = createPluginCache();
+  try {
+    expect(() =>
+      withPluginCache(cache, () =>
+        loadOpenClawPlugins({
+          config: pluginConfig(...plugins),
+          cache: false,
+          activate: false,
+          throwOnLoadError: true,
+        }),
+      ),
+    ).toThrow("later plugin failed");
+    await retirePluginCache(cache);
+    expect(process.listenerCount(event)).toBe(before);
+  } finally {
+    await retirePluginCache(cache);
+    resetPluginLoaderTestStateForTest();
+  }
 });
 
 it("joins failed registration cleanup through cache retirement and preserves both failures", async () => {
+  useNoBundledPlugins();
   const event = "plugin-pending-rollback-cleanup";
   const entered = createDeferredCore();
   let release: (() => void) | undefined;
@@ -438,15 +514,24 @@ it("joins failed registration cleanup through cache retirement and preserves bot
   let registry: ReturnType<typeof loadOpenClawPlugins> | undefined;
   let retirement: ReturnType<typeof retirePluginCache> | undefined;
   try {
-    registry = loadFixture(plugin, {}, cache);
+    registry = withPluginCache(cache, () =>
+      loadOpenClawPlugins({
+        config: pluginConfig(plugin),
+        activate: false,
+      }),
+    );
     expect(registry.plugins[0]?.error).toContain("original register failure");
     await entered.promise;
     let settled = false;
     retirement = retirePluginCache(cache);
-    const markSettled = () => {
-      settled = true;
-    };
-    void retirement.then(markSettled, markSettled);
+    void retirement.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
     await nextTurn();
     expect.soft(settled).toBe(false);
     release!();
@@ -468,6 +553,7 @@ it("joins failed registration cleanup through cache retirement and preserves bot
     }
     await retirePluginCache(cache).catch(() => {});
     process.removeListener(event, onCleanup);
+    resetPluginLoaderTestStateForTest();
   }
 });
 
@@ -488,6 +574,7 @@ it("closes loader admission before a retiring setup owner's abort callback", asy
 });
 
 it("rejects deferred runtime loading after cache retirement completes", async () => {
+  useNoBundledPlugins();
   const event = "retired-loader";
   const count = process.listenerCount(event);
   const plugin = writePlugin({
@@ -499,7 +586,10 @@ it("rejects deferred runtime loading after cache retirement completes", async ()
   let registry: ReturnType<typeof loadOpenClawPlugins> | undefined;
   const loading = withPluginCache(cache, async () => {
     await resume.promise;
-    return (registry = loadFixture(plugin));
+    return (registry = loadOpenClawPlugins({
+      config: pluginConfig(plugin),
+      activate: false,
+    }));
   });
   const rejected = expect(loading).rejects.toThrow("retired");
   const retiring = retirePluginCache(cache);
@@ -515,5 +605,6 @@ it("rejects deferred runtime loading after cache retirement completes", async ()
       await disposePluginRegistryInstances(registry);
     }
     await retiring;
+    resetPluginLoaderTestStateForTest();
   }
 });

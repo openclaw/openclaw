@@ -127,7 +127,9 @@ describe("imessage actions runtime", () => {
   it.each([
     {
       method: "tapback",
-      send: withOptions({ ...messageTarget, reaction: "like" }, api.sendReaction),
+      send: withOptions({ ...messageTarget, reaction: "like" }, (params) =>
+        api.sendReaction(params),
+      ),
       fields: wireFields({ reaction: "like" }),
       args: ["tapback", ...messageArgs, "--kind", "like", "--part", "0"],
     },
@@ -136,20 +138,22 @@ describe("imessage actions runtime", () => {
       rpcMethod: "tapback",
       send: withOptions(
         { ...messageTarget, reaction: "love", remove: true, partIndex: 2 },
-        api.sendReaction,
+        (params) => api.sendReaction(params),
       ),
       fields: wireFields({ reaction: "love", part_index: 2, remove: true }),
       args: ["tapback", ...messageArgs, "--kind", "love", "--part", "2", "--remove"],
     },
     {
       method: "message.unsend",
-      send: withOptions({ ...messageTarget, partIndex: 3 }, api.unsendMessage),
+      send: withOptions({ ...messageTarget, partIndex: 3 }, (params) => api.unsendMessage(params)),
       fields: wireFields({ part_index: 3 }),
       args: ["unsend", ...messageArgs, "--part", "3"],
     },
     {
       method: "group.removeParticipant",
-      send: withOptions({ ...chatTarget, address: "+15550000123" }, api.removeParticipant),
+      send: withOptions({ ...chatTarget, address: "+15550000123" }, (params) =>
+        api.removeParticipant(params),
+      ),
       fields: { chat_guid: "chat-guid", address: "+15550000123" },
       args: ["chat-remove-member", ...chatArgs, "--address", "+15550000123"],
     },
@@ -208,7 +212,7 @@ describe("imessage actions runtime", () => {
   it.each([
     {
       method: "send.attachment",
-      send: withOptions({ ...chatTarget, ...file }, api.sendAttachment),
+      send: withOptions({ ...chatTarget, ...file }, (params) => api.sendAttachment(params)),
       fields: {},
     },
     {
@@ -220,7 +224,7 @@ describe("imessage actions runtime", () => {
           replyToMessageId: "message-guid",
           attachment: { kind: "buffer" as const, ...file },
         },
-        api.sendRichMessage,
+        (params) => api.sendRichMessage(params),
       ),
       fields: {
         text: "caption",
@@ -231,7 +235,7 @@ describe("imessage actions runtime", () => {
     },
     {
       method: "group.setIcon",
-      send: withOptions({ ...chatTarget, ...file }, api.setGroupIcon),
+      send: withOptions({ ...chatTarget, ...file }, (params) => api.setGroupIcon(params)),
       fields: {},
     },
   ])(

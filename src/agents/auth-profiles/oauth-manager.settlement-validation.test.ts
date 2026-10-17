@@ -93,14 +93,13 @@ describe("createOAuthManager settlement credential validation", () => {
     };
   }
   async function createPeers(original: ReturnType<typeof createExpiredOauthStore>) {
-    return Promise.all(
-      Array.from({ length: 2 }, async (_, index) => {
-        const agentDir = path.join(tempRoot, "agents", `peer-${index}`, "agent");
-        await fs.mkdir(agentDir, { recursive: true });
-        saveAuthProfileStore(original, agentDir);
-        return agentDir;
-      }),
-    );
+    async function createPeer(index: number) {
+      const agentDir = path.join(tempRoot, "agents", `peer-${index}`, "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      saveAuthProfileStore(original, agentDir);
+      return agentDir;
+    }
+    return Promise.all([createPeer(0), createPeer(1)]);
   }
   beforeEach(async () => {
     envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);

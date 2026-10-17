@@ -1,3 +1,4 @@
+/** Verifies Docker packaging prunes plugin dist artifacts to the supported runtime surface. */
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -6,69 +7,43 @@ import {
   parseDockerPluginKeepList,
   pruneDockerPluginDist,
 } from "../../scripts/prune-docker-plugin-dist.mjs";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../../test/helpers/temp-dir.js";
 import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 
-type Dependencies = Record<string, string>;
-type NodeSpec = readonly [name: string, version?: string, dependencies?: Dependencies];
 const tempDirs: string[] = [];
 
-function packageAt(dir: string, name: string, metadata: Record<string, unknown> = {}) {
-  writeJsonFile(path.join(dir, "package.json"), { name, version: "0.0.0", ...metadata });
-  return dir;
+function makeRepoRoot(prefix: string): string {
+  return makeTempRepoRoot(tempDirs, prefix);
 }
 
-function fixture(excluded: string[], dependencies?: Dependencies, canonical = false) {
-  const directory = makeTempDir(tempDirs, "openclaw-docker-plugin-");
-  const root = canonical ? fs.realpathSync(directory) : directory;
-  writeJsonFile(path.join(root, "package.json"), {
-    files: ["dist/**", ...excluded.map((id) => `!dist/extensions/${id}/**`)],
-    dependencies,
+function writeDistPluginFile(repoRoot: string, root: "dist" | "dist-runtime", pluginId: string) {
+  const pluginDir = path.join(repoRoot, root, "extensions", pluginId);
+  fs.mkdirSync(pluginDir, { recursive: true });
+  fs.writeFileSync(path.join(pluginDir, "openclaw.plugin.json"), "{}\n", "utf8");
+}
+
+function writePluginSourcePackage(repoRoot: string, pluginId: string) {
+  const pluginDir = path.join(repoRoot, "extensions", pluginId);
+  fs.mkdirSync(pluginDir, { recursive: true });
+  writeJsonFile(path.join(pluginDir, "package.json"), {
+    name: `@openclaw/${pluginId}`,
+    version: "0.0.0",
   });
-  function node(name: string, metadata: Record<string, unknown> = {}, importer = root) {
-    return packageAt(path.join(importer, "node_modules", ...name.split("/")), name, metadata);
-  }
-  return {
-    root,
-    node,
-    plugin(
-      id: string,
-      deps?: Dependencies,
-      options: { sourceRoot?: string; optionalDependencies?: Dependencies } = {},
-    ) {
-      return packageAt(path.join(root, options.sourceRoot ?? "extensions", id), `@openclaw/${id}`, {
-        dependencies: deps,
-        optionalDependencies: options.optionalDependencies,
-      });
-    },
-    dist(id: string, kind: "dist" | "dist-runtime" = "dist") {
-      writeJsonFile(path.join(root, kind, "extensions", id, "openclaw.plugin.json"), {});
-    },
-    graph(nodes: readonly NodeSpec[], importer = root) {
-      for (const [name, version = "0.0.0", packageDependencies] of nodes) {
-        node(name, { version, dependencies: packageDependencies }, importer);
-      }
-    },
-    prune(env: NodeJS.ProcessEnv = {}) {
-      return pruneDockerPluginDist({ repoRoot: root, env });
-    },
-  };
 }
 
-function expectPaths(root: string, present: string[], absent: string[] = []) {
-  for (const [paths, expected] of [
-    [present, true],
-    [absent, false],
-  ] as const) {
-    for (const file of paths) {
-      expect(fs.existsSync(path.join(root, file))).toBe(expected);
-    }
-  }
-}
-
-function writeModule(root: string, file: string, dependency?: string) {
-  const exported = dependency ? `require(${JSON.stringify(dependency)})` : "{}";
-  fs.writeFileSync(path.join(root, file), `module.exports = ${exported};\n`);
+function writeNodePackage(
+  repoRoot: string,
+  packageName: string,
+  packageJson: Record<string, unknown> = {},
+  importerDir = repoRoot,
+) {
+  const packageDir = path.join(importerDir, "node_modules", ...packageName.split("/"));
+  fs.mkdirSync(packageDir, { recursive: true });
+  writeJsonFile(path.join(packageDir, "package.json"), {
+    name: packageName,
+    version: "0.0.0",
+    ...packageJson,
+  });
 }
 
 afterEach(() => {
@@ -85,66 +60,94 @@ describe("pruneDockerPluginDist", () => {
   });
 
   it("removes package-excluded plugin runtime artifacts unless Docker explicitly opts it in", () => {
-    const repo = fixture(["diagnostics-otel", "feishu"]);
-    repo.plugin("diagnostics-otel");
-    repo.plugin("feishu");
-    repo.plugin("telegram");
-    repo.dist("diagnostics-otel");
-    repo.dist("feishu");
-    repo.dist("feishu", "dist-runtime");
-    repo.dist("telegram");
+    const repoRoot = makeRepoRoot("openclaw-docker-plugin-dist-");
+    writeJsonFile(path.join(repoRoot, "package.json"), {
+      files: ["dist/**", "!dist/extensions/diagnostics-otel/**", "!dist/extensions/feishu/**"],
+    });
+    writePluginSourcePackage(repoRoot, "diagnostics-otel");
+    writePluginSourcePackage(repoRoot, "feishu");
+    writePluginSourcePackage(repoRoot, "telegram");
+    writeDistPluginFile(repoRoot, "dist", "diagnostics-otel");
+    writeDistPluginFile(repoRoot, "dist", "feishu");
+    writeDistPluginFile(repoRoot, "dist-runtime", "feishu");
+    writeDistPluginFile(repoRoot, "dist", "telegram");
 
-    const removed = repo.prune({ OPENCLAW_EXTENSIONS: "diagnostics-otel" });
+    const removed = pruneDockerPluginDist({
+      repoRoot,
+      env: { OPENCLAW_EXTENSIONS: "diagnostics-otel" } as NodeJS.ProcessEnv,
+    });
 
     expect(removed).toEqual([
       "extensions/feishu",
       "dist/extensions/feishu",
       "dist-runtime/extensions/feishu",
     ]);
-    expectPaths(
-      repo.root,
-      [
-        "extensions/diagnostics-otel",
-        "extensions/telegram",
-        "dist/extensions/diagnostics-otel",
-        "dist/extensions/telegram",
-      ],
-      ["extensions/feishu", "dist/extensions/feishu", "dist-runtime/extensions/feishu"],
-    );
+    expect(fs.existsSync(path.join(repoRoot, "extensions", "diagnostics-otel"))).toBe(true);
+    expect(fs.existsSync(path.join(repoRoot, "extensions", "feishu"))).toBe(false);
+    expect(fs.existsSync(path.join(repoRoot, "extensions", "telegram"))).toBe(true);
+    expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", "diagnostics-otel"))).toBe(true);
+    expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", "feishu"))).toBe(false);
+    expect(fs.existsSync(path.join(repoRoot, "dist-runtime", "extensions", "feishu"))).toBe(false);
+    expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", "telegram"))).toBe(true);
   });
 
   it("honors custom bundled plugin source roots when pruning Docker runtime importers", () => {
-    const repo = fixture(["acpx"]);
-    const pluginDir = repo.plugin("acpx", undefined, {
-      sourceRoot: "plugins",
+    const repoRoot = makeRepoRoot("openclaw-docker-plugin-source-");
+    writeJsonFile(path.join(repoRoot, "package.json"), {
+      files: ["dist/**", "!dist/extensions/acpx/**"],
+    });
+    const pluginDir = path.join(repoRoot, "plugins", "acpx");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    writeJsonFile(path.join(pluginDir, "package.json"), {
+      name: "@openclaw/acpx",
+      version: "0.0.0",
     });
 
-    const removed = repo.prune({ OPENCLAW_BUNDLED_PLUGIN_DIR: "plugins" });
+    const removed = pruneDockerPluginDist({
+      repoRoot,
+      env: {
+        OPENCLAW_BUNDLED_PLUGIN_DIR: "plugins",
+      } as NodeJS.ProcessEnv,
+    });
 
     expect(removed).toEqual(["plugins/acpx"]);
     expect(fs.existsSync(pluginDir)).toBe(false);
   });
 
   it("removes node_modules dependency closure that only omitted Docker plugins need", () => {
-    const repo = fixture(["acpx", "codex"], { zod: "0.0.0" });
-    repo.plugin("acpx", {
-      "@zed-industries/codex-acp": "0.0.0",
-      zod: "0.0.0",
+    const repoRoot = makeRepoRoot("openclaw-docker-plugin-node-modules-");
+    writeJsonFile(path.join(repoRoot, "package.json"), {
+      files: ["dist/**", "!dist/extensions/acpx/**", "!dist/extensions/codex/**"],
+      dependencies: {
+        zod: "0.0.0",
+      },
     });
-    repo.plugin("codex", {
-      "@openai/codex": "0.0.0",
-      zod: "0.0.0",
+    writeJsonFile(path.join(repoRoot, "extensions", "acpx", "package.json"), {
+      name: "@openclaw/acpx",
+      version: "0.0.0",
+      dependencies: {
+        "@zed-industries/codex-acp": "0.0.0",
+        zod: "0.0.0",
+      },
     });
-    repo.node("@openclaw/acpx");
-    repo.node("@openclaw/codex");
-    repo.node("zod");
-    repo.node("@openai/codex", {
+    writeJsonFile(path.join(repoRoot, "extensions", "codex", "package.json"), {
+      name: "@openclaw/codex",
+      version: "0.0.0",
+      dependencies: {
+        "@openai/codex": "0.0.0",
+        zod: "0.0.0",
+      },
+    });
+    writeNodePackage(repoRoot, "@openclaw/acpx");
+    writeNodePackage(repoRoot, "@openclaw/codex");
+    writeNodePackage(repoRoot, "zod");
+    writeNodePackage(repoRoot, "@openai/codex", {
       optionalDependencies: {
         "@openai/codex-linux-x64": "0.0.0",
       },
     });
-    repo.node("@openai/codex-linux-x64");
-    repo.node("@zed-industries/codex-acp", {
+    writeNodePackage(repoRoot, "@openai/codex-linux-x64");
+    writeNodePackage(repoRoot, "@zed-industries/codex-acp", {
       optionalDependencies: {
         "@zed-industries/codex-acp-linux-x64": "0.0.0",
       },
@@ -155,14 +158,23 @@ describe("pruneDockerPluginDist", () => {
         vitest: { optional: true },
       },
     });
-    repo.node("@zed-industries/codex-acp-linux-x64");
-    repo.graph([
-      ["vitest", "0.0.0", { vite: "0.0.0" }],
-      ["vite", "0.0.0", { postcss: "0.0.0" }],
-      ["postcss"],
-    ]);
+    writeNodePackage(repoRoot, "@zed-industries/codex-acp-linux-x64");
+    writeNodePackage(repoRoot, "vitest", {
+      dependencies: {
+        vite: "0.0.0",
+      },
+    });
+    writeNodePackage(repoRoot, "vite", {
+      dependencies: {
+        postcss: "0.0.0",
+      },
+    });
+    writeNodePackage(repoRoot, "postcss");
 
-    const removed = repo.prune({ OPENCLAW_EXTENSIONS: "codex" });
+    const removed = pruneDockerPluginDist({
+      repoRoot,
+      env: { OPENCLAW_EXTENSIONS: "codex" } as NodeJS.ProcessEnv,
+    });
 
     expect(removed).toEqual([
       "node_modules/@openclaw/acpx",
@@ -173,35 +185,43 @@ describe("pruneDockerPluginDist", () => {
       "node_modules/vitest",
       "extensions/acpx",
     ]);
-    expectPaths(
-      repo.root,
-      [
-        "node_modules/zod",
-        "node_modules/@openai/codex",
-        "node_modules/@openai/codex-linux-x64",
-        "extensions/codex",
-      ],
-      ["node_modules/@zed-industries", "node_modules/vitest"],
+    expect(fs.existsSync(path.join(repoRoot, "node_modules", "zod"))).toBe(true);
+    expect(fs.existsSync(path.join(repoRoot, "node_modules", "@openai", "codex"))).toBe(true);
+    expect(fs.existsSync(path.join(repoRoot, "node_modules", "@openai", "codex-linux-x64"))).toBe(
+      true,
     );
+    expect(fs.existsSync(path.join(repoRoot, "node_modules", "@zed-industries"))).toBe(false);
+    expect(fs.existsSync(path.join(repoRoot, "node_modules", "vitest"))).toBe(false);
+    expect(fs.existsSync(path.join(repoRoot, "extensions", "codex"))).toBe(true);
   });
 
   it("links retained externally distributed plugin dependencies under their packaged roots", () => {
-    const repo = fixture(["kept-external", "omitted-external"], { "root-dep": "1.0.0" }, true);
-    repo.node("root-dep");
+    const repoRoot = fs.realpathSync(makeRepoRoot("openclaw-docker-plugin-dist-links-"));
+    writeJsonFile(path.join(repoRoot, "package.json"), {
+      files: [
+        "dist/**",
+        "!dist/extensions/kept-external/**",
+        "!dist/extensions/omitted-external/**",
+      ],
+      dependencies: { "root-dep": "1.0.0" },
+    });
+    writeNodePackage(repoRoot, "root-dep");
     for (const pluginId of ["kept-external", "omitted-external", "internal"]) {
-      repo.dist(pluginId);
-      repo.plugin(
-        pluginId,
-        pluginId === "internal"
-          ? { "root-dep": "1.0.0" }
-          : { "@scope/native-cli": "1.0.0", "plain-dep": "1.0.0" },
-      );
+      writeDistPluginFile(repoRoot, "dist", pluginId);
+      writeJsonFile(path.join(repoRoot, "extensions", pluginId, "package.json"), {
+        name: `@openclaw/${pluginId}`,
+        version: "0.0.0",
+        dependencies:
+          pluginId === "internal"
+            ? { "root-dep": "1.0.0" }
+            : { "@scope/native-cli": "1.0.0", "plain-dep": "1.0.0" },
+      });
     }
     // Isolated pnpm installs link plugin-local packages into the shared virtual store.
-    const sourceModules = path.join(repo.root, "extensions", "kept-external", "node_modules");
+    const sourceModules = path.join(repoRoot, "extensions", "kept-external", "node_modules");
     for (const packageName of ["@scope/native-cli", "plain-dep"]) {
       const storeDir = path.join(
-        repo.root,
+        repoRoot,
         "node_modules",
         ".pnpm",
         `${packageName.replace("/", "+")}@1.0.0`,
@@ -216,69 +236,120 @@ describe("pruneDockerPluginDist", () => {
     fs.mkdirSync(path.join(sourceModules, ".bin"));
     fs.writeFileSync(path.join(sourceModules, ".bin", "native-cli"), "#!/bin/sh\n");
 
-    const removed = repo.prune({ OPENCLAW_EXTENSIONS: "kept-external" });
+    const removed = pruneDockerPluginDist({
+      repoRoot,
+      env: { OPENCLAW_EXTENSIONS: "kept-external" } as NodeJS.ProcessEnv,
+    });
 
     expect(removed).toEqual(["extensions/omitted-external", "dist/extensions/omitted-external"]);
-    const distModules = path.join(repo.root, "dist", "extensions", "kept-external", "node_modules");
+    const distModules = path.join(repoRoot, "dist", "extensions", "kept-external", "node_modules");
     expect(fs.lstatSync(distModules).isSymbolicLink()).toBe(false);
     expect(fs.lstatSync(path.join(distModules, "@scope")).isSymbolicLink()).toBe(false);
-    const nativeOwner = "node_modules/.pnpm/@scope+native-cli@1.0.0/node_modules/@scope/native-cli";
     for (const [name, owner] of [
-      ["@scope/native-cli", nativeOwner],
-      ["plain-dep", "node_modules/.pnpm/plain-dep@1.0.0/node_modules/plain-dep"],
-      [".bin", "extensions/kept-external/node_modules/.bin"],
+      [
+        "@scope/native-cli",
+        path.join(
+          repoRoot,
+          "node_modules/.pnpm/@scope+native-cli@1.0.0/node_modules/@scope/native-cli",
+        ),
+      ],
+      [
+        "plain-dep",
+        path.join(repoRoot, "node_modules/.pnpm/plain-dep@1.0.0/node_modules/plain-dep"),
+      ],
+      [".bin", path.join(sourceModules, ".bin")],
     ] as const) {
       const link = path.join(distModules, name);
       expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
       expect(path.isAbsolute(fs.readlinkSync(link))).toBe(process.platform === "win32");
-      expect(fs.realpathSync(link)).toBe(path.join(repo.root, owner));
+      expect(fs.realpathSync(link)).toBe(owner);
     }
     const requireFromPackagedPlugin = createRequire(
-      path.join(repo.root, "dist", "extensions", "kept-external", "package.json"),
+      path.join(repoRoot, "dist", "extensions", "kept-external", "package.json"),
     );
     expect(requireFromPackagedPlugin.resolve("@scope/native-cli/package.json")).toBe(
-      path.join(repo.root, nativeOwner, "package.json"),
+      path.join(
+        repoRoot,
+        "node_modules/.pnpm/@scope+native-cli@1.0.0/node_modules/@scope/native-cli/package.json",
+      ),
     );
     expect(
-      fs.existsSync(path.join(repo.root, "dist", "extensions", "internal", "node_modules")),
+      fs.existsSync(path.join(repoRoot, "dist", "extensions", "internal", "node_modules")),
     ).toBe(false);
   });
 
   it("fails closed when a retained plugin dependency stays unreachable from its packaged root", () => {
-    const repo = fixture(["kept-external"]);
-    repo.dist("kept-external");
-    repo.plugin(
-      "kept-external",
-      { "absent-dep": "1.0.0" },
-      {
-        optionalDependencies: { "absent-optional": "1.0.0" },
-      },
-    );
+    const repoRoot = makeRepoRoot("openclaw-docker-plugin-dist-unreachable-");
+    writeJsonFile(path.join(repoRoot, "package.json"), {
+      files: ["dist/**", "!dist/extensions/kept-external/**"],
+    });
+    writeDistPluginFile(repoRoot, "dist", "kept-external");
+    writeJsonFile(path.join(repoRoot, "extensions", "kept-external", "package.json"), {
+      name: "@openclaw/kept-external",
+      version: "0.0.0",
+      dependencies: { "absent-dep": "1.0.0" },
+      optionalDependencies: { "absent-optional": "1.0.0" },
+    });
 
-    expect(() => repo.prune({ OPENCLAW_EXTENSIONS: "kept-external" })).toThrow(
+    expect(() =>
+      pruneDockerPluginDist({
+        repoRoot,
+        env: { OPENCLAW_EXTENSIONS: "kept-external" } as NodeJS.ProcessEnv,
+      }),
+    ).toThrow(
       /^plugin dependencies are not reachable from their packaged dist roots:\nkept-external: absent-dep$/u,
     );
   });
 
   it("keeps root-hoisted transitives used through a kept plugin's nested dependency", () => {
-    const repo = fixture(["omitted-client"], { "shared-client": "1.0.0" });
-    const keptPluginDir = repo.plugin("kept-client", {
-      "shared-client": "2.0.0",
+    const repoRoot = makeRepoRoot("openclaw-docker-plugin-workspace-importer-");
+    writeJsonFile(path.join(repoRoot, "package.json"), {
+      files: ["dist/**", "!dist/extensions/omitted-client/**"],
+      dependencies: {
+        "shared-client": "1.0.0",
+      },
     });
-    repo.plugin("omitted-client", {
-      "kept-transitive": "1.0.0",
+    const keptPluginDir = path.join(repoRoot, "extensions", "kept-client");
+    writeJsonFile(path.join(keptPluginDir, "package.json"), {
+      name: "@openclaw/kept-client",
+      version: "0.0.0",
+      dependencies: {
+        "shared-client": "2.0.0",
+      },
+    });
+    writeJsonFile(path.join(repoRoot, "extensions", "omitted-client", "package.json"), {
+      name: "@openclaw/omitted-client",
+      version: "0.0.0",
+      dependencies: {
+        "kept-transitive": "1.0.0",
+      },
     });
 
-    repo.graph([
-      ["shared-client", "1.0.0"],
-      ["kept-transitive", "1.0.0"],
-    ]);
-    repo.graph([["shared-client", "2.0.0", { "kept-transitive": "1.0.0" }]], keptPluginDir);
-    writeModule(keptPluginDir, "index.js", "shared-client");
-    writeModule(keptPluginDir, "node_modules/shared-client/index.js", "kept-transitive");
-    writeModule(repo.root, "node_modules/kept-transitive/index.js");
+    writeNodePackage(repoRoot, "shared-client", { version: "1.0.0" });
+    writeNodePackage(
+      repoRoot,
+      "shared-client",
+      {
+        version: "2.0.0",
+        dependencies: { "kept-transitive": "1.0.0" },
+      },
+      keptPluginDir,
+    );
+    writeNodePackage(repoRoot, "kept-transitive", { version: "1.0.0" });
+    fs.writeFileSync(
+      path.join(keptPluginDir, "index.js"),
+      'module.exports = require("shared-client");\n',
+    );
+    fs.writeFileSync(
+      path.join(keptPluginDir, "node_modules", "shared-client", "index.js"),
+      'module.exports = require("kept-transitive");\n',
+    );
+    fs.writeFileSync(
+      path.join(repoRoot, "node_modules", "kept-transitive", "index.js"),
+      "module.exports = {};\n",
+    );
 
-    const removed = repo.prune();
+    const removed = pruneDockerPluginDist({ repoRoot, env: {} as NodeJS.ProcessEnv });
 
     expect(removed).toEqual(["extensions/omitted-client"]);
     const requireFromKeptPlugin = createRequire(path.join(keptPluginDir, "package.json"));
@@ -286,41 +357,79 @@ describe("pruneDockerPluginDist", () => {
   });
 
   it("keeps transitive dependencies resolved through nested package versions", () => {
-    const repo = fixture(["optional-client"], {
-      grammy: "1.45.1",
-      "modern-client": "1.0.0",
+    const repoRoot = makeRepoRoot("openclaw-docker-plugin-nested-dependencies-");
+    writeJsonFile(path.join(repoRoot, "package.json"), {
+      files: ["dist/**", "!dist/extensions/optional-client/**"],
+      dependencies: {
+        grammy: "1.45.1",
+        "modern-client": "1.0.0",
+      },
     });
-    repo.plugin("optional-client", {
-      "whatwg-url": "16.0.1",
+    writeJsonFile(path.join(repoRoot, "extensions", "optional-client", "package.json"), {
+      name: "@openclaw/optional-client",
+      version: "0.0.0",
+      dependencies: {
+        "whatwg-url": "16.0.1",
+      },
     });
 
-    repo.graph([
-      ["grammy", "0.0.0", { "node-fetch": "2.7.0" }],
-      ["modern-client", "0.0.0", { "node-fetch": "3.3.2" }],
-      ["node-fetch", "3.3.2"],
-      ["whatwg-url", "16.0.1", { tr46: "6.0.0" }],
-      ["tr46", "0.0.3"],
-    ]);
+    writeNodePackage(repoRoot, "grammy", {
+      dependencies: { "node-fetch": "2.7.0" },
+    });
+    writeNodePackage(repoRoot, "modern-client", {
+      dependencies: { "node-fetch": "3.3.2" },
+    });
+    writeNodePackage(repoRoot, "node-fetch", { version: "3.3.2" });
+    writeNodePackage(repoRoot, "whatwg-url", {
+      version: "16.0.1",
+      dependencies: { tr46: "6.0.0" },
+    });
+    writeNodePackage(repoRoot, "tr46", { version: "0.0.3" });
 
-    const grammyDir = path.join(repo.root, "node_modules", "grammy");
-    repo.graph(
-      [
-        ["node-fetch", "2.7.0", { "whatwg-url": "5.0.0" }],
-        ["whatwg-url", "5.0.0", { tr46: "0.0.3" }],
-      ],
+    const grammyDir = path.join(repoRoot, "node_modules", "grammy");
+    writeNodePackage(
+      repoRoot,
+      "node-fetch",
+      {
+        version: "2.7.0",
+        dependencies: { "whatwg-url": "5.0.0" },
+      },
       grammyDir,
     );
-    repo.graph([["tr46", "6.0.0"]], path.join(repo.root, "node_modules", "whatwg-url"));
-    writeModule(grammyDir, "index.js", "node-fetch");
-    writeModule(grammyDir, "node_modules/node-fetch/index.js", "whatwg-url");
-    writeModule(grammyDir, "node_modules/whatwg-url/index.js", "tr46");
-    writeModule(repo.root, "node_modules/tr46/index.js");
+    writeNodePackage(
+      repoRoot,
+      "whatwg-url",
+      {
+        version: "5.0.0",
+        dependencies: { tr46: "0.0.3" },
+      },
+      grammyDir,
+    );
+    writeNodePackage(
+      repoRoot,
+      "tr46",
+      { version: "6.0.0" },
+      path.join(repoRoot, "node_modules", "whatwg-url"),
+    );
+    fs.writeFileSync(path.join(grammyDir, "index.js"), 'module.exports = require("node-fetch");\n');
+    fs.writeFileSync(
+      path.join(grammyDir, "node_modules", "node-fetch", "index.js"),
+      'module.exports = require("whatwg-url");\n',
+    );
+    fs.writeFileSync(
+      path.join(grammyDir, "node_modules", "whatwg-url", "index.js"),
+      'module.exports = require("tr46");\n',
+    );
+    fs.writeFileSync(
+      path.join(repoRoot, "node_modules", "tr46", "index.js"),
+      "module.exports = {};\n",
+    );
 
-    const removed = repo.prune();
+    const removed = pruneDockerPluginDist({ repoRoot, env: {} as NodeJS.ProcessEnv });
 
     expect(removed).toEqual(["node_modules/whatwg-url", "extensions/optional-client"]);
-    expect(fs.existsSync(path.join(repo.root, "node_modules", "tr46"))).toBe(true);
-    const requireFromRepo = createRequire(path.join(repo.root, "package.json"));
+    expect(fs.existsSync(path.join(repoRoot, "node_modules", "tr46"))).toBe(true);
+    const requireFromRepo = createRequire(path.join(repoRoot, "package.json"));
     expect(() => requireFromRepo("grammy")).not.toThrow();
   });
 });

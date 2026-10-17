@@ -40,7 +40,7 @@ import { createOAuthManager } from "./oauth-manager.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
 import { withPersonalAuthProfileStore } from "./personal-store.js";
 import type { OAuthCredential, ProfileUsageStats, UserModelAuthProfile } from "./types.js";
-import { reconcileWhamBlock } from "./usage-reduction.js";
+import { reconcileWhamBlock, type WhamCooldownProbeResult } from "./usage-reduction.js";
 
 const authorityUnavailable = "Personal model account authority is unavailable";
 function expectUnavailable(read: () => unknown) {
@@ -364,7 +364,7 @@ it.for([false, true])(
       });
       return owner.update((store) => {
         const stats = expectDefined(store.usageStats?.[profileId], "claimed quota");
-        const quota = available
+        const quota: WhamCooldownProbeResult = available
           ? { available: true, cooldownMs: 0 }
           : { blockedUntil: blocked.blockedUntil, cooldownMs: 0 };
         Object.assign(stats, reconcileWhamBlock(stats, quota, now));
