@@ -154,18 +154,18 @@ describe("gateway cli backend live helpers", () => {
 
   it("requires provider results by default for explicit CLI backend live probes", async () => {
     const {
-      CLI_BACKEND_LIVE_ADVISORY_ENV,
-      CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV,
-      resolveCliBackendLiveProviderSkipDecision,
-      shouldAllowCliBackendLiveProviderSkip,
+      CLI_BACKEND_LIVE_ADVISORY_ENV: advisory,
+      CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV: skip,
+      resolveCliBackendLiveProviderSkipDecision: decision,
+      shouldAllowCliBackendLiveProviderSkip: allowsSkip,
     } = liveHelpers;
+    const request = { label: "agent request", providerId: "claude-cli" };
 
-    expect(shouldAllowCliBackendLiveProviderSkip({})).toBe(false);
+    expect(allowsSkip({})).toBe(false);
     expect(
-      resolveCliBackendLiveProviderSkipDecision({
+      decision({
+        ...request,
         allowProviderSkip: false,
-        label: "agent request",
-        providerId: "claude-cli",
         reasonLabel: "auth drift",
       }),
     ).toEqual({
@@ -174,20 +174,12 @@ describe("gateway cli backend live helpers", () => {
         'agent request for provider "claude-cli" was blocked by auth drift. Set OPENCLAW_LIVE_CLI_BACKEND_ADVISORY=1 and OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP=1 only for advisory live checks.',
     });
 
+    expect(allowsSkip({ [skip]: "1" })).toBe(false);
+    expect(allowsSkip({ [advisory]: "1", [skip]: "1" })).toBe(true);
     expect(
-      shouldAllowCliBackendLiveProviderSkip({ [CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV]: "1" }),
-    ).toBe(false);
-    expect(
-      shouldAllowCliBackendLiveProviderSkip({
-        [CLI_BACKEND_LIVE_ADVISORY_ENV]: "1",
-        [CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV]: "1",
-      }),
-    ).toBe(true);
-    expect(
-      resolveCliBackendLiveProviderSkipDecision({
+      decision({
+        ...request,
         allowProviderSkip: true,
-        label: "agent request",
-        providerId: "claude-cli",
         reasonLabel: "Claude API capacity",
       }),
     ).toEqual({
@@ -236,19 +228,10 @@ describe("gateway cli backend live helpers", () => {
 
   it("allows live env overrides for fresh and resume CLI args", async () => {
     const { resolveCliBackendLiveArgs } = liveHelpers;
-
-    process.env.OPENCLAW_LIVE_CLI_BACKEND_ARGS = JSON.stringify([
-      "exec",
-      "--sandbox",
-      "danger-full-access",
-    ]);
-    process.env.OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS = JSON.stringify([
-      "exec",
-      "resume",
-      "{sessionId}",
-      "-c",
-      'sandbox_mode="danger-full-access"',
-    ]);
+    const args = ["exec", "--sandbox", "danger-full-access"];
+    const resumeArgs = ["exec", "resume", "{sessionId}", "-c", 'sandbox_mode="danger-full-access"'];
+    process.env.OPENCLAW_LIVE_CLI_BACKEND_ARGS = JSON.stringify(args);
+    process.env.OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS = JSON.stringify(resumeArgs);
 
     expect(
       resolveCliBackendLiveArgs({
@@ -262,10 +245,7 @@ describe("gateway cli backend live helpers", () => {
           'sandbox_mode="workspace-write"',
         ],
       }),
-    ).toEqual({
-      args: ["exec", "--sandbox", "danger-full-access"],
-      resumeArgs: ["exec", "resume", "{sessionId}", "-c", 'sandbox_mode="danger-full-access"'],
-    });
+    ).toEqual({ args, resumeArgs });
   });
 
   it("retries cancelled cron MCP replies", async () => {
