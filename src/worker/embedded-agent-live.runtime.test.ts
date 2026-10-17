@@ -10,6 +10,36 @@ import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-
 import { readAgentAssistantSource } from "../infra/agent-events.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
 
+function liveFixture(preview = true, terminal = false) {
+  const emitted: WorkerLiveEvent[] = [];
+  const runtime = createWorkerLiveRuntime({
+    enqueuePreview: (event) => {
+      if (preview) {
+        emitted.push(event);
+      }
+      return preview;
+    },
+    emitTerminal: async (event) => {
+      if (terminal) {
+        emitted.push(event);
+      }
+    },
+  });
+  return { emitted, runtime };
+}
+
+function textUpdate(
+  runtime: ReturnType<typeof createWorkerLiveRuntime>,
+  message: ReturnType<typeof makeAgentAssistantMessage>,
+  delta: string,
+) {
+  runtime.handleSessionEvent({
+    type: "message_update",
+    message,
+    assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta },
+  });
+}
+
 describe("createWorkerLiveRuntime", () => {
   afterEach(() => vi.useRealTimers());
 
@@ -18,14 +48,7 @@ describe("createWorkerLiveRuntime", () => {
     (kind) => {
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(1_000);
-      const emitted: WorkerLiveEvent[] = [];
-      const runtime = createWorkerLiveRuntime({
-        enqueuePreview: (event) => {
-          emitted.push(event);
-          return true;
-        },
-        emitTerminal: async () => {},
-      });
+      const { emitted, runtime } = liveFixture();
       const message = makeAgentAssistantMessage({ content: [] });
       runtime.handleSessionEvent({ type: "message_start", message });
       let text = "";
@@ -85,35 +108,16 @@ describe("createWorkerLiveRuntime", () => {
     "handles an empty %s final after checked text was streamed",
     async (stopReason) => {
       vi.useFakeTimers({ toFake: ["Date"] });
-      const emitted: WorkerLiveEvent[] = [];
-      const runtime = createWorkerLiveRuntime({
-        enqueuePreview: (event) => {
-          emitted.push(event);
-          return true;
-        },
-        emitTerminal: async (event) => void emitted.push(event),
-      });
+      const { emitted, runtime } = liveFixture(true, true);
       const message = makeAgentAssistantMessage({
         content: [{ type: "text", text: "Checked partial reply." }],
       });
       runtime.handleSessionEvent({ type: "message_start", message });
-      runtime.handleSessionEvent({
-        type: "message_update",
-        message,
-        assistantMessageEvent: {
-          type: "text_delta",
-          contentIndex: 0,
-          delta: "Checked partial reply.",
-        },
-      });
+      textUpdate(runtime, message, "Checked partial reply.");
       const pending = makeAgentAssistantMessage({
         content: [{ type: "text", text: "Checked partial reply. More." }],
       });
-      runtime.handleSessionEvent({
-        type: "message_update",
-        message: pending,
-        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: " More." },
-      });
+      textUpdate(runtime, pending, " More.");
       expect(emitted).toHaveLength(1);
       const terminal = makeAgentAssistantMessage({ content: [], stopReason });
       runtime.handleSessionEvent({ type: "message_end", message: terminal });
@@ -135,27 +139,12 @@ describe("createWorkerLiveRuntime", () => {
 
   it("flushes late commentary metadata before starting a new assistant occurrence", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
-    const emitted: WorkerLiveEvent[] = [];
-    const runtime = createWorkerLiveRuntime({
-      enqueuePreview: (event) => {
-        emitted.push(event);
-        return true;
-      },
-      emitTerminal: async () => {},
-    });
+    const { emitted, runtime } = liveFixture();
     const message = makeAgentAssistantMessage({ content: [{ type: "text", text: "Checking" }] });
     runtime.handleSessionEvent({ type: "message_start", message });
-    runtime.handleSessionEvent({
-      type: "message_update",
-      message,
-      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Checking" },
-    });
+    textUpdate(runtime, message, "Checking");
     message.content = [{ type: "text", text: "Checking a detail." }];
-    runtime.handleSessionEvent({
-      type: "message_update",
-      message,
-      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: " a detail." },
-    });
+    textUpdate(runtime, message, " a detail.");
     message.content = [
       {
         type: "text",
@@ -196,14 +185,7 @@ describe("createWorkerLiveRuntime", () => {
   });
 
   it("keeps distinct reasoning occurrences through bounded worker payloads", () => {
-    const emitted: WorkerLiveEvent[] = [];
-    const runtime = createWorkerLiveRuntime({
-      enqueuePreview: (event) => {
-        emitted.push(event);
-        return true;
-      },
-      emitTerminal: async () => {},
-    });
+    const { emitted, runtime } = liveFixture();
     const text = "Synthetic reasoning. ".repeat(2_000);
     const sources: string[] = [];
     for (let occurrence = 0; occurrence < 2; occurrence++) {
@@ -236,23 +218,12 @@ describe("createWorkerLiveRuntime", () => {
   });
 
   it("publishes attachment references only when the assistant message is complete", () => {
-    const emitted: WorkerLiveEvent[] = [];
-    const runtime = createWorkerLiveRuntime({
-      enqueuePreview: (event) => {
-        emitted.push(event);
-        return true;
-      },
-      emitTerminal: async () => {},
-    });
+    const { emitted, runtime } = liveFixture();
     const message = makeAgentAssistantMessage({
       content: [{ type: "text", text: "MEDIA:./report.txt" }],
     });
     runtime.handleSessionEvent({ type: "message_start", message });
-    runtime.handleSessionEvent({
-      type: "message_update",
-      message,
-      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "MEDIA:./report.txt" },
-    });
+    textUpdate(runtime, message, "MEDIA:./report.txt");
     expect(emitted).toEqual([
       expect.objectContaining({
         payload: expect.not.objectContaining({ mediaUrls: expect.anything() }),
@@ -271,14 +242,7 @@ describe("createWorkerLiveRuntime", () => {
   });
 
   it("redacts media payloads from tool diagnostics before cloud egress", () => {
-    const emitted: WorkerLiveEvent[] = [];
-    const runtime = createWorkerLiveRuntime({
-      enqueuePreview: (event) => {
-        emitted.push(event);
-        return true;
-      },
-      emitTerminal: async (event) => void emitted.push(event),
-    });
+    const { emitted, runtime } = liveFixture(true, true);
     const events: AgentSessionEvent[] = [
       {
         type: "tool_execution_start",
@@ -317,11 +281,7 @@ describe("createWorkerLiveRuntime", () => {
   ] as const)(
     "preserves deferred $stopReason terminal after preview loss (cleanup failure: $cleanupFailed)",
     async ({ stopReason, cleanupFailed, expectedStopReason }) => {
-      const emitted: WorkerLiveEvent[] = [];
-      const runtime = createWorkerLiveRuntime({
-        enqueuePreview: () => false,
-        emitTerminal: async (event) => void emitted.push(event),
-      });
+      const { emitted, runtime } = liveFixture(false, true);
       runtime.handleSessionEvent({ type: "agent_start" });
       runtime.handleSessionEvent({
         type: "agent_end",
@@ -367,11 +327,7 @@ describe("createWorkerLiveRuntime", () => {
   ])(
     "retains only recorded replay stops across terminal merges ($recordedStop, $aborted)",
     async ({ recordedStop, aborted }) => {
-      const emitted: WorkerLiveEvent[] = [];
-      const runtime = createWorkerLiveRuntime({
-        enqueuePreview: () => false,
-        emitTerminal: async (event) => void emitted.push(event),
-      });
+      const { emitted, runtime } = liveFixture(false, true);
       const failure = Object.freeze(new Error("request timed out"));
       if (recordedStop) {
         recordModelFallbackStop(failure);
@@ -405,11 +361,7 @@ describe("createWorkerLiveRuntime", () => {
   );
 
   it("retains and redacts interruption errors before terminal cloud egress", async () => {
-    const emitted: WorkerLiveEvent[] = [];
-    const runtime = createWorkerLiveRuntime({
-      enqueuePreview: () => false,
-      emitTerminal: async (event) => void emitted.push(event),
-    });
+    const { emitted, runtime } = liveFixture(false, true);
 
     runtime.enqueueRunFailure({
       aborted: true,

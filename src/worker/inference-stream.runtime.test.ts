@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -40,8 +40,15 @@ const usage: Usage = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
+const clients: WorkerInferenceProxyClient[] = [];
+afterEach(() => {
+  for (const client of clients.splice(0)) {
+    client.dispose();
+  }
+});
+
 function createClient() {
-  return new WorkerInferenceProxyClient(
+  const client = new WorkerInferenceProxyClient(
     createWorkerConnection({
       endpoint: { kind: "unix", socketPath: "/tmp/worker-inference-size-test.sock" },
       connectParams: {
@@ -70,6 +77,8 @@ function createClient() {
       },
     }),
   );
+  clients.push(client);
+  return client;
 }
 
 function createAdapterFixture(
@@ -112,7 +121,12 @@ function createAdapterFixture(
     modelRef,
     computerContextEpoch,
   };
-  return { client, start, stream: createWorkerInferenceStreamAdapter(options) };
+  const stream = createWorkerInferenceStreamAdapter(options);
+  return {
+    start,
+    stream: (context: WorkerInferenceContext = { messages: [] }) =>
+      stream({ modelRef, context, options: {} }),
+  };
 }
 
 function inferenceFrameBytes(request: WorkerInferenceStartParams): number {
@@ -148,36 +162,28 @@ it("keeps text and thinking content and signatures in their own stream blocks", 
     { type: "thinking_delta", contentIndex: 1, delta: "reasoning" },
     { type: "thinking_end", contentIndex: 1, contentSignature: "final-thinking" },
   ]);
-  try {
-    const ended = [];
-    for await (const event of fixture.stream({
-      modelRef,
-      context: { messages: [] },
-      options: {},
-    })) {
-      if (event.type === "text_end" || event.type === "thinking_end") {
-        ended.push({
-          type: event.type,
-          content: event.content,
-          block: event.partial.content[event.contentIndex],
-        });
-      }
+  const ended = [];
+  for await (const event of fixture.stream()) {
+    if (event.type === "text_end" || event.type === "thinking_end") {
+      ended.push({
+        type: event.type,
+        content: event.content,
+        block: event.partial.content[event.contentIndex],
+      });
     }
-    expect(ended).toEqual([
-      {
-        type: "text_end",
-        content: "hello",
-        block: { type: "text", text: "hello", textSignature: "final-text" },
-      },
-      {
-        type: "thinking_end",
-        content: "reasoning",
-        block: { type: "thinking", thinking: "reasoning", thinkingSignature: "final-thinking" },
-      },
-    ]);
-  } finally {
-    fixture.client.dispose();
   }
+  expect(ended).toEqual([
+    {
+      type: "text_end",
+      content: "hello",
+      block: { type: "text", text: "hello", textSignature: "final-text" },
+    },
+    {
+      type: "thinking_end",
+      content: "reasoning",
+      block: { type: "thinking", thinking: "reasoning", thinkingSignature: "final-thinking" },
+    },
+  ]);
 });
 
 it.each([62_500, null])(
@@ -190,15 +196,9 @@ it.each([62_500, null])(
       message: "429: rate_limit_exceeded",
       retryAfterMs,
     });
-    try {
-      const result = await fixture
-        .stream({ modelRef, context: { messages: [] }, options: {} })
-        .result();
-      expect(result).toMatchObject({ stopReason: "error", retryAfterMs });
-      expect(isWorkerTranscriptMessageFrameSafe(result)).toBe(true);
-    } finally {
-      fixture.client.dispose();
-    }
+    const result = await fixture.stream().result();
+    expect(result).toMatchObject({ stopReason: "error", retryAfterMs });
+    expect(isWorkerTranscriptMessageFrameSafe(result)).toBe(true);
   },
 );
 
@@ -212,16 +212,10 @@ it.each([
       { type: kind === "text" ? "thinking_start" : "text_start", contentIndex: 0 },
       event,
     ]);
-    try {
-      await expect(
-        fixture.stream({ modelRef, context: { messages: [] }, options: {} }).result(),
-      ).resolves.toMatchObject({
-        stopReason: "error",
-        errorMessage: `worker inference ${kind} ${suffix} has no active ${kind} block`,
-      });
-    } finally {
-      fixture.client.dispose();
-    }
+    await expect(fixture.stream().result()).resolves.toMatchObject({
+      stopReason: "error",
+      errorMessage: `worker inference ${kind} ${suffix} has no active ${kind} block`,
+    });
   },
 );
 
@@ -236,19 +230,11 @@ it("tolerates missing text and thinking blocks after a stream gap", async () => 
     ],
     true,
   );
-  try {
-    const types = [];
-    for await (const event of fixture.stream({
-      modelRef,
-      context: { messages: [] },
-      options: {},
-    })) {
-      types.push(event.type);
-    }
-    expect(types).toEqual(["done"]);
-  } finally {
-    fixture.client.dispose();
+  const types = [];
+  for await (const event of fixture.stream()) {
+    types.push(event.type);
   }
+  expect(types).toEqual(["done"]);
 });
 
 it("preserves the provider failure and usage after an oversized partial response", async () => {
@@ -262,20 +248,14 @@ it("preserves the provider failure and usage after an oversized partial response
     return { type: "error", reason: "provider-error", message: "429: rate limit exceeded", usage };
   });
 
-  try {
-    const result = await fixture
-      .stream({ modelRef, context: { messages: [] }, options: {} })
-      .result();
-    expect(result).toMatchObject({
-      stopReason: "error",
-      errorMessage: "429: rate limit exceeded",
-      usage,
-      content: [],
-    });
-    expect(isWorkerTranscriptMessageFrameSafe(result)).toBe(true);
-  } finally {
-    fixture.client.dispose();
-  }
+  const result = await fixture.stream().result();
+  expect(result).toMatchObject({
+    stopReason: "error",
+    errorMessage: "429: rate limit exceeded",
+    usage,
+    content: [],
+  });
+  expect(isWorkerTranscriptMessageFrameSafe(result)).toBe(true);
 });
 
 it.each([false, true])(
@@ -316,10 +296,9 @@ it.each([false, true])(
       return encoded;
     });
     try {
-      await fixture.stream({ modelRef, context, options: {} }).result();
+      await fixture.stream(context).result();
     } finally {
       serialization.mockRestore();
-      fixture.client.dispose();
     }
     const [sent] = expectDefined(fixture.start.mock.calls[0], "inference start");
     expect(sent.context.messages).toEqual(expected);
@@ -358,37 +337,24 @@ it.each([true])(
         .digest("hex"),
     };
     const fixture = createAdapterFixture(computerContextEpoch);
-    try {
-      await fixture.stream({ modelRef, context: { messages }, options: {} }).result();
-      const request = fixture.start.mock.calls[0]?.[0];
-      expect(request).toBeDefined();
-      const bytes = Buffer.byteLength(
-        JSON.stringify({
-          type: "req",
-          id: "00000000-0000-4000-8000-000000000000",
-          method: "worker.inference.start",
-          params: request,
-        }),
-        "utf8",
-      );
-      expect(bytes).toBeLessThanOrEqual(WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES);
-      expect(request?.context.messages).toHaveLength(messages.length);
-      expect(request?.context.messages[2]).toEqual(current);
-      expect(request?.context.messages.at(-1)).toEqual(messages.at(-1));
-      for (const [index, message] of messages.entries()) {
-        expect(message.content).toBe(originalContents[index]);
-        if (message.role === "assistant") {
-          expect(request?.context.messages[index]).toEqual(message);
-        } else {
-          for (const part of message.content.filter((block) => block.type === "text")) {
-            expect(request?.context.messages[index]?.content).toContainEqual(part);
-          }
+    await fixture.stream({ messages }).result();
+    const [request] = expectDefined(fixture.start.mock.calls[0], "inference start");
+    const bytes = inferenceFrameBytes(request);
+    expect(bytes).toBeLessThanOrEqual(WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES);
+    expect(request?.context.messages).toHaveLength(messages.length);
+    expect(request?.context.messages[2]).toEqual(current);
+    expect(request?.context.messages.at(-1)).toEqual(messages.at(-1));
+    for (const [index, message] of messages.entries()) {
+      expect(message.content).toBe(originalContents[index]);
+      if (message.role === "assistant") {
+        expect(request?.context.messages[index]).toEqual(message);
+      } else {
+        for (const part of message.content.filter((block) => block.type === "text")) {
+          expect(request?.context.messages[index]?.content).toContainEqual(part);
         }
       }
-      expect(computerContextEpoch.value).toBe(0);
-    } finally {
-      fixture.client.dispose();
     }
+    expect(computerContextEpoch.value).toBe(0);
   },
 );
 
@@ -399,13 +365,9 @@ it("invalidates computer coordinates when the final model context lacks their sc
     frameImageIdentity: "missing",
   };
   const fixture = createAdapterFixture(computerContextEpoch);
-  try {
-    await fixture.stream({ modelRef, context: { messages: [] }, options: {} }).result();
-    expect(computerContextEpoch.value).toBe(1);
-    expect(computerContextEpoch).not.toHaveProperty("frameToolCallId");
-  } finally {
-    fixture.client.dispose();
-  }
+  await fixture.stream().result();
+  expect(computerContextEpoch.value).toBe(1);
+  expect(computerContextEpoch).not.toHaveProperty("frameToolCallId");
 });
 
 it("refuses oversized unprocessed images without discarding them", async () => {
@@ -414,16 +376,12 @@ it("refuses oversized unprocessed images without discarding them", async () => {
   );
   const context: WorkerInferenceContext = { messages: [{ role: "user", content, timestamp: 1 }] };
   const fixture = createAdapterFixture();
-  try {
-    const result = await fixture.stream({ modelRef, context, options: {} }).result();
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toMatch(/(image|context).*(limit|budget)/i);
-    expect(fixture.start).not.toHaveBeenCalled();
-    expect(context.messages[0]?.content).toBe(content);
-    expect(content.filter((part) => part.type === "image")).toHaveLength(7);
-  } finally {
-    fixture.client.dispose();
-  }
+  const result = await fixture.stream(context).result();
+  expect(result.stopReason).toBe("error");
+  expect(result.errorMessage).toMatch(/(image|context).*(limit|budget)/i);
+  expect(fixture.start).not.toHaveBeenCalled();
+  expect(context.messages[0]?.content).toBe(content);
+  expect(content.filter((part) => part.type === "image")).toHaveLength(7);
 });
 
 it("preserves opaque replay and its image history when the mandatory replay cannot fit", async () => {
@@ -442,15 +400,11 @@ it("preserves opaque replay and its image history when the mandatory replay cann
   };
   const before = JSON.stringify(messages);
   const fixture = createAdapterFixture();
-  try {
-    const result = await fixture.stream({ modelRef, context: { messages }, options: {} }).result();
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
-    expect(fixture.start).not.toHaveBeenCalled();
-    expect(JSON.stringify(messages)).toBe(before);
-  } finally {
-    fixture.client.dispose();
-  }
+  const result = await fixture.stream({ messages }).result();
+  expect(result.stopReason).toBe("error");
+  expect(result.errorMessage).toContain(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
+  expect(fixture.start).not.toHaveBeenCalled();
+  expect(JSON.stringify(messages)).toBe(before);
 });
 
 it("delays worker tool argument previews while preserving exact terminal arguments", async () => {
@@ -493,18 +447,9 @@ it("delays worker tool argument previews while preserving exact terminal argumen
       },
     } satisfies WorkerInferenceTerminalOutcome;
   };
-  const client = createClient();
-  vi.spyOn(client, "start").mockImplementation(start);
-  const streamFn = createWorkerInferenceStreamAdapter({
-    client,
-    sessionId: "session-1",
-    runEpoch: 1,
-    runId: "run-1",
-    turnId: "turn-1",
-    modelRef,
-  });
-
-  const stream = streamFn({ modelRef, context: { messages: [] }, options: {} });
+  const fixture = createAdapterFixture();
+  fixture.start.mockImplementation(start);
+  const stream = fixture.stream();
   const argumentSnapshots: Array<Record<string, unknown>> = [];
   let endArguments: Record<string, unknown> | undefined;
   for await (const event of stream) {
@@ -524,5 +469,4 @@ it("delays worker tool argument previews while preserving exact terminal argumen
   await expect(stream.result()).resolves.toMatchObject({
     content: [{ type: "toolCall", arguments: terminalArguments }],
   });
-  client.dispose();
 });

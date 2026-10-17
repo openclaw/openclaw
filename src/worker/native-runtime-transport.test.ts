@@ -4,8 +4,7 @@ import {
   createServer as createHttpServer,
   request,
   type Server,
-  type IncomingMessage,
-  type ServerResponse,
+  type RequestListener,
 } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import path from "node:path";
@@ -52,7 +51,11 @@ let trusted: ChildProcess;
 let untrusted: ChildProcess;
 let nextId = 0;
 
-async function listen(server: Server, host = "127.0.0.1"): Promise<string> {
+async function listen(handler: RequestListener, tls = false): Promise<string> {
+  const host = "127.0.0.1";
+  const server = tls
+    ? createHttpsServer({ key: PROXY_FIXTURE_KEY, cert: PROXY_FIXTURE_CERTIFICATE }, handler)
+    : createHttpServer(handler);
   servers.push(server);
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -65,7 +68,7 @@ async function listen(server: Server, host = "127.0.0.1"): Promise<string> {
   if (!address || typeof address === "string") {
     throw new Error("Missing fixture listener");
   }
-  return host + ":" + address.port;
+  return `${tls ? "https" : "http"}://${host}:${address.port}`;
 }
 function config(api: string, baseUrl: string): NativeRuntimeConfig {
   return {
@@ -112,6 +115,12 @@ function run(
   });
 }
 
+async function expectRejectedBeforeRequest(child: ChildProcess, url: string) {
+  const prior = observed.length;
+  expect((await run(child, "openai-completions", url)).stopReason).toBe("error");
+  expect(observed).toHaveLength(prior);
+}
+
 beforeAll(async () => {
   workspace = dirs.make("native-transport-qualification-");
   const entry = path.join(workspace, "probe.mjs");
@@ -141,35 +150,28 @@ beforeAll(async () => {
   };
   trusted = spawnProbe(true);
   untrusted = spawnProbe(false);
-  const upstream = await listen(
-    createHttpServer((req, res) => {
-      expect(req.headers.authorization).toBe("Bearer " + providerOnly);
-      providerHits++;
-      res.writeHead(200, { "content-type": "text/event-stream" });
-      res.end(
-        "data: " +
-          JSON.stringify({
-            id: "fixture",
-            object: "chat.completion.chunk",
-            created: 1,
-            model: "fixture-model",
-            choices: [{ index: 0, delta: { content: "qualified" }, finish_reason: "stop" }],
-          }) +
-          "\n\ndata: [DONE]\n\n",
-      );
-    }),
-  );
-  httpOrigin =
-    "http://" +
-    (await listen(
-      createHttpServer((req, res) => {
-        sinkHits++;
-        forwardedSensitiveHeaders += Number(req.headers["x-worker-session"] === sensitiveHeader);
-        res.writeHead(401);
-        res.end();
-      }),
-    ));
-  const handle = (req: IncomingMessage, res: ServerResponse) => {
+  const upstream = await listen((req, res) => {
+    expect(req.headers.authorization).toBe("Bearer " + providerOnly);
+    providerHits++;
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(
+      "data: " +
+        JSON.stringify({
+          id: "fixture",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "fixture-model",
+          choices: [{ index: 0, delta: { content: "qualified" }, finish_reason: "stop" }],
+        }) +
+        "\n\ndata: [DONE]\n\n",
+    );
+  });
+  httpOrigin = await listen((req, res) => {
+    sinkHits++;
+    forwardedSensitiveHeaders += Number(req.headers["x-worker-session"] === sensitiveHeader);
+    res.writeHead(401).end();
+  });
+  const handle: RequestListener = (req, res) => {
     const p = req.url ?? "";
     observed.push({
       path: p,
@@ -184,12 +186,11 @@ beforeAll(async () => {
       // Synthetic custodian owns this provider key in the parent; only opaque auth and CA
       // enter the compiled runtime child. This is not an OS workload-isolation claim.
       if (req.headers.authorization !== "Bearer " + opaque) {
-        res.writeHead(401);
-        res.end();
+        res.writeHead(401).end();
         return;
       }
       const forward = request(
-        "http://" + upstream,
+        upstream,
         { method: "POST", headers: { authorization: "Bearer " + providerOnly } },
         (reply) => {
           res.writeHead(reply.statusCode ?? 500, reply.headers);
@@ -197,37 +198,26 @@ beforeAll(async () => {
         },
       );
       forward.on("error", () => {
-        res.writeHead(502);
-        res.end();
+        res.writeHead(502).end();
       });
       req.pipe(forward);
       return;
     }
     if (p.startsWith("/same-origin/")) {
-      res.writeHead(307, { location: tlsOrigin + "/redirect-recipient" });
-      res.end();
+      res.writeHead(307, { location: tlsOrigin + "/redirect-recipient" }).end();
       return;
     }
     if (p.startsWith("/redirect/")) {
-      res.writeHead(307, { location: httpOrigin + "/redirect-recipient" });
-      res.end();
+      res.writeHead(307, { location: httpOrigin + "/redirect-recipient" }).end();
       return;
     }
     if (p.startsWith("/redirect-recipient")) {
       sinkHits++;
     }
-    res.writeHead(401);
-    res.end();
+    res.writeHead(401).end();
   };
-  const wrongNameAddress = await listen(
-    createHttpsServer({ key: PROXY_FIXTURE_KEY, cert: PROXY_FIXTURE_CERTIFICATE }, handle),
-  );
-  wrongNameOrigin = `https://localhost:${wrongNameAddress.split(":").at(-1)}`;
-  tlsOrigin =
-    "https://" +
-    (await listen(
-      createHttpsServer({ key: PROXY_FIXTURE_KEY, cert: PROXY_FIXTURE_CERTIFICATE }, handle),
-    ));
+  wrongNameOrigin = (await listen(handle, true)).replace("127.0.0.1", "localhost");
+  tlsOrigin = await listen(handle, true);
 });
 afterAll(async () => {
   await Promise.all(
@@ -268,11 +258,7 @@ it("uses a trusted private CA with a separate synthetic custodian and never send
   expect(JSON.stringify(config("openai-completions", tlsOrigin))).not.toContain(providerOnly);
 });
 it("rejects an untrusted certificate before auth reaches the endpoint", async () => {
-  const prior = observed.length;
-  expect((await run(untrusted, "openai-completions", tlsOrigin + "/observe")).stopReason).toBe(
-    "error",
-  );
-  expect(observed).toHaveLength(prior);
+  await expectRejectedBeforeRequest(untrusted, tlsOrigin + "/observe");
 });
 it("binds real built-in SDK requests to their endpoint without forwarding auth on redirects", async () => {
   const results = [];
@@ -307,11 +293,7 @@ it("rejects even a same-origin redirect instead of replaying sensitive headers",
 });
 
 it("keeps hostname verification enabled with a trusted CA", async () => {
-  const prior = observed.length;
-  expect((await run(trusted, "openai-completions", wrongNameOrigin + "/observe")).stopReason).toBe(
-    "error",
-  );
-  expect(observed).toHaveLength(prior);
+  await expectRejectedBeforeRequest(trusted, wrongNameOrigin + "/observe");
 });
 it("permits a directly configured literal loopback HTTP hop", async () => {
   const prior = sinkHits;

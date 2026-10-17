@@ -37,17 +37,38 @@ afterEach(async () => {
 });
 const binding = {
   workspacePath: undefined,
-  gatewayId: "gateway",
-  workspaceId: "workspace",
   sessionId: "session",
-  runId: "run",
-  attemptId: "attempt",
-  epoch: "epoch",
-  connectionId: "connection",
 };
 const selection = { provider: "openai", modelId: "local-model" };
 const turn = { binding, selection };
 const context: Context = { messages: [{ role: "user", content: "hello", timestamp: 1 }] };
+
+function completionEvent(
+  delta: { role?: string; content?: string },
+  finishReason: string | null,
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number },
+) {
+  return `data: ${JSON.stringify({
+    id: "fixture-completion",
+    object: "chat.completion.chunk",
+    created: 1,
+    model: "local-model",
+    choices: [{ index: 0, delta, finish_reason: finishReason }],
+    ...(usage ? { usage } : {}),
+  })}\n\n`;
+}
+
+function trackedEnv(reads: PropertyKey[], value?: string): NodeJS.ProcessEnv {
+  return new Proxy(
+    {},
+    {
+      get: (_target, key) => {
+        reads.push(key);
+        return value;
+      },
+    },
+  );
+}
 
 function configFor(workspace: string, baseUrl = "http://127.0.0.1:1/v1"): NativeRuntimeConfig {
   return {
@@ -94,28 +115,10 @@ async function providerServer() {
         url: request.url,
       });
       response.writeHead(200, { "content-type": "text/event-stream" });
-      const chunk = {
-        id: "fixture-completion",
-        object: "chat.completion.chunk",
-        created: 1,
-        model: "local-model",
-        choices: [
-          {
-            index: 0,
-            delta: { role: "assistant", content: "native response" },
-            finish_reason: null,
-          },
-        ],
-      };
-      response.write("data: " + JSON.stringify(chunk) + "\n\n");
+      response.write(completionEvent({ role: "assistant", content: "native response" }, null));
       response.end(
-        "data: " +
-          JSON.stringify({
-            ...chunk,
-            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-            usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
-          }) +
-          "\n\ndata: [DONE]\n\n",
+        completionEvent({}, "stop", { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 }) +
+          "data: [DONE]\n\n",
       );
     })().catch((error: unknown) =>
       response.destroy(error instanceof Error ? error : new Error(String(error))),
@@ -293,21 +296,8 @@ describe("native runtime startup authority", () => {
     vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
       requests.push(new Request(input, init).headers);
       return new Response(
-        "data: " +
-          JSON.stringify({
-            id: "opaque-fixture",
-            object: "chat.completion.chunk",
-            created: 1,
-            model: "local-model",
-            choices: [
-              {
-                index: 0,
-                delta: { role: "assistant", content: "native response" },
-                finish_reason: "stop",
-              },
-            ],
-          }) +
-          "\n\ndata: [DONE]\n\n",
+        completionEvent({ role: "assistant", content: "native response" }, "stop") +
+          "data: [DONE]\n\n",
         { headers: { "content-type": "text/event-stream" } },
       );
     });
@@ -326,16 +316,14 @@ describe("native runtime startup authority", () => {
         });
       }),
     );
-    expect(
+    const sortedHeader = (name: string) =>
       requests
-        .map((headers) => headers.get("authorization"))
-        .toSorted((a, b) => (a ?? "").localeCompare(b ?? "")),
-    ).toEqual(values.map((value) => "Bearer " + value).toSorted((a, b) => a.localeCompare(b)));
-    expect(
-      requests
-        .map((headers) => headers.get("x-custom-auth"))
-        .toSorted((a, b) => (a ?? "").localeCompare(b ?? "")),
-    ).toEqual(values.toSorted((a, b) => a.localeCompare(b)));
+        .map((headers) => headers.get(name))
+        .toSorted((a, b) => (a ?? "").localeCompare(b ?? ""));
+    expect(sortedHeader("authorization")).toEqual(
+      values.map((value) => "Bearer " + value).toSorted((a, b) => a.localeCompare(b)),
+    );
+    expect(sortedHeader("x-custom-auth")).toEqual(values.toSorted((a, b) => a.localeCompare(b)));
     expect(getDefaultAiTransportHost()).toBe(gatewayHost);
     expect(gatewayHost.resolveSecretSentinel(known)).toBe("synthetic-local-provider-value");
     expect(() => gatewayHost.resolveSecretSentinel(unknown)).toThrow("not registered");
@@ -344,15 +332,7 @@ describe("native runtime startup authority", () => {
   it("reads only named env keys once and fails missing credentials before opening workspaces", async () => {
     const config = configFor("/nonexistent-native-test-workspace");
     const reads: PropertyKey[] = [];
-    const env: NodeJS.ProcessEnv = new Proxy(
-      {},
-      {
-        get: (_target, key) => {
-          reads.push(key);
-          return undefined;
-        },
-      },
-    );
+    const env = trackedEnv(reads);
     await expect(
       createNativeRuntime(config, { "openai/local-model": env.NATIVE_TEST_KEY! }),
     ).rejects.toThrow("openai/local-model");
@@ -360,18 +340,7 @@ describe("native runtime startup authority", () => {
     config.workspace = tempDirs.make("native-runtime-");
     config.models.push({ ...config.models[0]!, id: "second-model" });
     reads.length = 0;
-    await start(
-      config,
-      new Proxy(
-        {},
-        {
-          get: (_target, key) => {
-            reads.push(key);
-            return "fixture-key";
-          },
-        },
-      ),
-    );
+    await start(config, trackedEnv(reads, "fixture-key"));
     expect(reads).toEqual(["NATIVE_TEST_KEY"]);
   });
 
