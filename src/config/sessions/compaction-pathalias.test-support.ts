@@ -2,14 +2,13 @@ import path from "node:path";
 import { expect } from "vitest";
 import { withSessionCompactionPersistenceAsync } from "../../agents/sessions/session-compaction-persistence.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import { withEngineStoreAdmission } from "../../infra/database-engine/admission-scope.js";
 import {
-  loadSessionEntry,
   loadTranscriptEvents,
   persistCompactionBoundaryWithSessionEntryAsync,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import { readSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
 
 export async function assertCompactionPathAlias(
   alias: SessionTranscriptRuntimeTarget & { env: NodeJS.ProcessEnv },
@@ -61,7 +60,7 @@ export async function assertCompactionPathAlias(
       await expect(pending).rejects.toThrow("session writer claim changed");
     }
     expect(await loadTranscriptEvents(canonical)).toEqual(before);
-    expect(withEngineStoreAdmission(() => loadSessionEntry(canonical))).toMatchObject({
+    expect(await readSessionEntryReadOnlyInWorker(canonical)).toMatchObject({
       compactionCount: 0,
       activeWriterRunId: refusal === "changed writer" ? "replacement-writer" : "compaction-writer",
     });
@@ -71,7 +70,7 @@ export async function assertCompactionPathAlias(
     return;
   }
   const boundaryId = await pending;
-  expect(withEngineStoreAdmission(() => loadSessionEntry(canonical))).toMatchObject({
+  expect(await readSessionEntryReadOnlyInWorker(canonical)).toMatchObject({
     compactionCount: 1,
   });
   expect((await loadTranscriptEvents(canonical)).at(-1)).toMatchObject({
