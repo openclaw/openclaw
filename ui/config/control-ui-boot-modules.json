@@ -1322,7 +1322,7 @@
   "ui/src/components/session-machine.ts",
   "ui/src/components/session-menu-descendants.ts",
   "ui/src/components/session-menu-work.ts",
-  "ui/src/components/session-organizer-controller.ts",
+  "ui/src/components/session-organizer.ts",
   "ui/src/components/session-owner-filter.ts",
   "ui/src/components/session-panel-toggle-buffer.ts",
   "ui/src/components/session-progress-hovercard-registration.ts",

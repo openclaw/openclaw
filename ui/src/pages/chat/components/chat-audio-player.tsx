@@ -458,7 +458,7 @@ function ChatAudioPlayerContent(
                 const height = () => (props.voiceNote ? 6 + peak() * 8 : Math.max(2, peak() * 20));
                 return (
                   <rect
-                    class={index / displayedPeaks().length < progress() ? "is-played" : ""}
+                    class={{ "is-played": index / displayedPeaks().length < progress() }}
                     x={String(index + 0.25)}
                     y={String((24 - height()) / 2)}
                     width="0.5"

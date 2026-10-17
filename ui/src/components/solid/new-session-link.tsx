@@ -2,7 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
+import { resolveNewSessionShortcut } from "../../lib/keyboard-shortcut-contract.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
@@ -31,7 +31,7 @@ export function renderNewSessionLink(params: {
     >
       <Show when={params.disabledReason == null && params.showShortcut}>
         <span slot="content">
-          <ShortcutHint label={params.label} combo={KEYBOARD_SHORTCUT_COMBOS.newSession} />
+          <ShortcutHint label={params.label} combo={resolveNewSessionShortcut()} />
         </span>
       </Show>
       <a

@@ -60,6 +60,7 @@ describe("progress card refresh control", () => {
           container,
         );
       show();
+      expect(container.querySelector(".session-progress-card__refresh")).toBeNull();
       await Promise.resolve();
       const options = container.querySelector<HTMLButtonElement>(
         ".session-progress-card__options",

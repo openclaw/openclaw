@@ -127,7 +127,6 @@ export type WizardConfigWriteOptions = {
   writeOptions?: ConfigWriteOptions;
   /** Runtime follow-up intent for the Gateway config watcher. */
   afterWrite?: ConfigWriteAfterWrite;
-  onPreparedCommit?: (snapshot: ConfigFileSnapshot, config: OpenClawConfig) => void;
 };
 
 /**
@@ -171,7 +170,7 @@ export async function writeWizardConfigFile(
         : {}),
       ...(opts.baseSnapshot ? { baseSnapshot: opts.baseSnapshot } : {}),
     },
-    transform: (current, context) => {
+    transform: (current) => {
       // SAFETY: Both sides of the wizard delta are typed configs.
       const nextConfig = opts.mergeBase
         ? (applyMergePatch(current, createMergePatch(opts.mergeBase, config)) as OpenClawConfig)
@@ -179,7 +178,6 @@ export async function writeWizardConfigFile(
       for (const path of explicitNullPaths) {
         setConfigValueAtPath(nextConfig, path, null);
       }
-      opts.onPreparedCommit?.(context.snapshot, nextConfig);
       return { nextConfig };
     },
   });
@@ -193,18 +191,17 @@ export function createWizardInferenceConfigTarget(
     options: SetupInferenceConfigWriteOptions,
     baseSnapshot?: ConfigFileSnapshot,
   ) => {
-    const result = await commit(config, {
+    const { snapshot, nextConfig } = await commit(config, {
       baseSnapshot,
       writeOptions: options.writeOptions,
-      onPreparedCommit: (snapshot, next) =>
-        options.captureUndo(
-          captureSetupInferenceFileUndo(
-            { ...snapshot, sourceConfig: stripPendingPluginInstallRecords(snapshot.sourceConfig) },
-            stripPendingPluginInstallRecords(next),
-          ),
-        ),
     });
-    return result.nextConfig;
+    options.captureUndo(
+      captureSetupInferenceFileUndo(
+        { ...snapshot, sourceConfig: stripPendingPluginInstallRecords(snapshot.sourceConfig) },
+        nextConfig,
+      ),
+    );
+    return nextConfig;
   };
   return {
     write,

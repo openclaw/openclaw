@@ -528,10 +528,13 @@ async function createBackupArchiveInScope(
     const gatewayLockDir = resolveGatewayLockDir(plan.stateDir);
     const skippedEntries = new Map<string, "volatile" | "vanished">();
     const opaqueSqliteSourcePaths = new Map<string, "archived" | "skipped">();
+    // Linked state roots can have distinct configured and canonical capture siblings.
+    // Otherwise the inventory owns privacy admission, except for config-only exports.
+    const checkConfiguredCaptureRoot = onlyConfig || plan.stateDir !== inventory.stateDir;
     const tarFilter = (entryPath: string, entryStat: import("node:fs").Stats): boolean => {
       const resolvedEntryPath = path.resolve(entryPath);
       const inventoryPath = sourcePathRemaps.get(resolvedEntryPath) ?? resolvedEntryPath;
-      if (isUpdateCapturePath(inventoryPath, plan.stateDir)) {
+      if (checkConfiguredCaptureRoot && isUpdateCapturePath(inventoryPath, plan.stateDir)) {
         return false;
       }
       const isDirectory = entryStat.isDirectory();

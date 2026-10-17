@@ -493,7 +493,17 @@ suite.define(() => {
             .fill(`${action} the Telegram-created reminder. [automation-proof:${marker}]`);
           await screenshot(page, `${marker}-request`);
           await page.getByRole("button", { name: "Send message" }).click();
-          await poll(() => provider.results.has(marker)).toBe(true);
+          try {
+            await poll(() => provider.results.has(marker)).toBe(true);
+          } catch (error) {
+            console.error("Admin automation provider round trip stalled", {
+              marker,
+              matchingInitialRequestObserved: provider.toolAvailability.has(marker),
+              automationsToolAvailable: provider.toolAvailability.get(marker) ?? null,
+              resultReceived: provider.results.has(marker),
+            });
+            throw error;
+          }
           const result = readResult(provider.results.get(marker) ?? "null");
           expect(result).toEqual(expect.objectContaining(expectedResults[action]));
           if (action === "update") {
@@ -514,6 +524,10 @@ suite.define(() => {
             }).toMatchObject({ succeeded: true });
           }
           await waitForReply(page, marker);
+          // Persisted replies can precede the browser's terminal event.
+          await page.getByRole("button", { name: "Stop generating", exact: true }).waitFor({
+            state: "hidden",
+          });
           await screenshot(page, `${marker}-result`);
           adminResults[action] = "succeeded";
         }

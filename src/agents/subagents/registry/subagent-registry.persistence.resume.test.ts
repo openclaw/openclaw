@@ -245,7 +245,7 @@ describe("subagent registry persistence resume", () => {
       vi.useFakeTimers();
     }
     try {
-      await withRegistryState(async () => {
+      await withRegistryState(async (stateDir) => {
         const endedAt = Date.now();
         const run = createDeliveredWake("run-rejected-requester-wake", {
           status: restarting && !waitingForActivation ? "dispatching" : "pending",
@@ -256,6 +256,7 @@ describe("subagent registry persistence resume", () => {
           afterRequesterYield: true,
           rearmGeneration: 1,
         });
+        await prepareSubagentRecoveryFixture(run, { stateDir });
         const wakeRequester = vi.fn<WakeRequester>(async (params) => {
           if (!restarting) {
             throw new admission.GatewayDrainingError();
@@ -385,7 +386,7 @@ describe("subagent registry persistence resume", () => {
       };
       vi.useFakeTimers();
       try {
-        await withRegistryState(async () => {
+        await withRegistryState(async (stateDir) => {
           try {
             const runs = Array.from({ length: runCount }, (_, index) => {
               const runId = `run-outstanding-wake-${index}`;
@@ -401,6 +402,9 @@ describe("subagent registry persistence resume", () => {
                 requesterSessionKey: `agent:main:requester-${index}`,
               };
             });
+            for (const run of runs) {
+              await prepareSubagentRecoveryFixture(run, { stateDir });
+            }
             const { run: wakeRequester, waitForCalls } = observeSubagentRequesterWake(
               async (params) => {
                 if (getGatewayContextResolver(params.settledEntry!)?.() === firstGateway) {
@@ -894,6 +898,7 @@ describe("subagent registry persistence resume", () => {
           endedAt,
           cleanupCompletedAt: endedAt,
         });
+        await prepareSubagentRecoveryFixture(run, { stateDir });
         const predecessor = {
           ...run,
           runId: "run-original",

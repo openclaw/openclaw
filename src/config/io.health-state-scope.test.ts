@@ -69,6 +69,25 @@ it("reads recovery health from the admitted snapshot without overwriting a forei
   ).toBe("foreign commit");
 });
 
+it("reads committed worker health writes and rejects a stale patch basis", async () => {
+  const { deps, configPath } = fixture();
+  using observation = captureConfigHealthStateStore(deps, configPath);
+  const before = await observation.read();
+  if (!before) {
+    throw new Error("Expected a current health observation");
+  }
+  await observation.update({ lastObservedSuspiciousSignature: "after" }, before);
+
+  using current = captureConfigHealthStateStore(deps, configPath);
+  expect((await current.read())?.state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe(
+    "after",
+  );
+  await current.update({ lastObservedSuspiciousSignature: "stale" }, before);
+  expect((await current.read())?.state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe(
+    "after",
+  );
+});
+
 it("compares every raw health field and absence before applying an observed patch", async () => {
   const { deps, configPath } = fixture();
   await closeOpenClawStateDatabaseAsync();
