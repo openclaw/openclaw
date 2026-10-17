@@ -96,16 +96,56 @@ export function createDownstreamTurnFixture(
     return downstreamTurns.mock.calls[0]?.[0] as MsgContext & Record<string, unknown>;
   }
 
-  function holdDownstreamLane(firstOnly = false) {
+  async function assertAlbumTurnAndTombstones(params: {
+    stateDir: string;
+    updateIds: number[];
+    monitor: ReturnType<typeof createTelegramTransportIngressMonitor>;
+  }) {
+    await params.monitor.waitForDeferredClaims();
+    const turn = await awaitSingleDownstreamTurn();
+    expect(turn.Body).toContain("Two photo album");
+    expect(turn.media).toMatchObject([
+      { path: "/tmp/photo-1.jpg", kind: "image" },
+      { path: "/tmp/photo-2.jpg", kind: "image" },
+    ]);
+    await assertSpoolTombstoned(params);
+  }
+
+  function holdFirstDownstreamTurn() {
+    const headDispatched = createDeferred<void>();
+    const releaseHead = createDeferred<void>();
+    downstreamTurns.mockImplementation(async (_ctx, abortSignal, lifecycle) => {
+      if (downstreamTurns.mock.calls.length === 1) {
+        if (!lifecycle?.deferredHeartbeatIntervalMs) {
+          throw new Error("Expected the deferred turn's heartbeat cadence");
+        }
+        lifecycle.onDeferred?.();
+        const heartbeat = setInterval(
+          () => lifecycle.onDeferredHeartbeat?.(),
+          lifecycle.deferredHeartbeatIntervalMs,
+        );
+        headDispatched.resolve();
+        try {
+          await releaseHead.promise;
+          if (!abortSignal?.aborted) {
+            await lifecycle.onAdopted();
+          }
+        } finally {
+          clearInterval(heartbeat);
+        }
+      }
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    });
+    return { headDispatched, releaseHead };
+  }
+
+  function holdDownstreamLane() {
     const releaseHead = createDeferred<void>();
     const turnsDeferred = [createDeferred<void>(), createDeferred<void>()] as const;
     let turnIndex = 0;
-    // Held turns heartbeat and adopt in order, like a session lane.
+    // Session-lane stand-in: every turn defers, heartbeats, and adopts after the turn ahead.
     let laneTail: Promise<void> = releaseHead.promise;
     downstreamTurns.mockImplementation(async (_ctx, abortSignal, lifecycle) => {
-      if (firstOnly && downstreamTurns.mock.calls.length > 1) {
-        return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
-      }
       if (!lifecycle?.deferredHeartbeatIntervalMs) {
         throw new Error("Expected the deferred turn's heartbeat cadence");
       }
@@ -136,6 +176,8 @@ export function createDownstreamTurnFixture(
   return {
     captureNextDownstreamTurn,
     awaitSingleDownstreamTurn,
+    assertAlbumTurnAndTombstones,
+    holdFirstDownstreamTurn,
     holdDownstreamLane,
   };
 }
@@ -204,10 +246,13 @@ export async function createIngressMonitor(
     bot,
     accountId: "default",
     botInfo: telegramBotInfoForTest,
-    adoptionStallTimeoutMs: options.adoptionStallTimeoutMs,
+    ...(options.adoptionStallTimeoutMs === undefined
+      ? {}
+      : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
     pollIntervalMs: options.pollIntervalMs ?? 10,
   });
-  return { monitor, telegramTransport, abortController, bot };
+  const resources = { monitor, telegramTransport, abortController, bot };
+  return resources;
 }
 
 export async function admitAlbum(
@@ -278,22 +323,32 @@ export function interceptReplayGuard(hooks: {
     .spyOn(messageDispatchDedupe, "createTelegramMessageDispatchReplayGuard")
     .mockImplementation((options) => {
       const guard = createGuard(options);
-      const claim = guard.claim;
-      guard.claim = async (...args) => {
-        const result = await claim(...args);
-        if (result.kind === "claimed") {
-          const commit = result.handle.commit;
-          result.handle.commit = (commitOptions) =>
-            hooks.commit(++commitCount, () => commit(commitOptions));
-        }
-        return result;
+      const forget = hooks.forget;
+      return {
+        ...guard,
+        claim: async (...args) => {
+          const claim = await guard.claim(...args);
+          if (claim.kind !== "claimed") {
+            return claim;
+          }
+          return {
+            ...claim,
+            handle: {
+              ...claim.handle,
+              commit: async (commitOptions) => {
+                commitCount += 1;
+                return await hooks.commit(commitCount, () => claim.handle.commit(commitOptions));
+              },
+            },
+          };
+        },
+        ...(forget
+          ? {
+              forget: async (...args: Parameters<typeof guard.forget>) =>
+                await forget(() => guard.forget(...args)),
+            }
+          : {}),
       };
-      const forgetHook = hooks.forget;
-      if (forgetHook) {
-        const forget = guard.forget;
-        guard.forget = (...args) => forgetHook(() => forget(...args));
-      }
-      return guard;
     });
   return {
     settlements,
