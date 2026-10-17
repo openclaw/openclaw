@@ -18,6 +18,13 @@ import { configureSqlitePreSchemaPragmas, configureSqliteWalMaintenance } from "
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function createDatabase() {
+  const dbPath = path.join(tempDirs.make("openclaw-sqlite-wal-tick-"), "openclaw.sqlite");
+  const db = new (requireNodeSqlite().DatabaseSync)(dbPath);
+  const pragma = (name: string) => Number(db.prepare(`PRAGMA ${name};`).get()?.[name]);
+  return { db, dbPath, pragma };
+}
+
 describe("sqlite WAL checkpoint tick", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -32,18 +39,7 @@ describe("sqlite WAL checkpoint tick", () => {
       const scheduler = new GatewayScheduler({ clock: clock.clock });
       const originalScope = GatewayScheduler.prototype.scope.bind(scheduler);
       vi.spyOn(GatewayScheduler.prototype, "scope").mockImplementation(() => originalScope());
-      const sqlite = requireNodeSqlite();
-      const dir = tempDirs.make("openclaw-sqlite-wal-worker-writer-");
-      const dbPath = path.join(dir, "openclaw.sqlite");
-      const db = new sqlite.DatabaseSync(dbPath);
-      const autocheckpoint = () =>
-        Number(
-          (
-            db.prepare("PRAGMA wal_autocheckpoint;").get() as {
-              wal_autocheckpoint: number | bigint;
-            }
-          ).wal_autocheckpoint,
-        );
+      const { db, dbPath, pragma } = createDatabase();
       let maintenance: ReturnType<typeof configureSqliteWalMaintenance> | undefined;
       try {
         let cancelled = 0;
@@ -68,11 +64,11 @@ describe("sqlite WAL checkpoint tick", () => {
           databasePath: dbPath,
         });
         if (registrationOrder === "after") {
-          expect(autocheckpoint()).toBe(16 * 1024);
+          expect(pragma("wal_autocheckpoint")).toBe(16 * 1024);
           expect(clock.armedAtMs).toBe(initialNowMs + 10_000);
           registerWorker();
         }
-        expect(autocheckpoint()).toBe(0);
+        expect(pragma("wal_autocheckpoint")).toBe(0);
         expect(clock.armedAtMs).toBe(initialNowMs + 60_000);
 
         await clock.advanceBy(50_000);
@@ -95,7 +91,7 @@ describe("sqlite WAL checkpoint tick", () => {
           prepare.mockRestore();
           exec.mockRestore();
         }
-        expect(autocheckpoint()).toBe(0);
+        expect(pragma("wal_autocheckpoint")).toBe(0);
         expect(clock.armedAtMs).toBeNull();
       } finally {
         maintenance?.close();
@@ -106,9 +102,7 @@ describe("sqlite WAL checkpoint tick", () => {
 
   it("joins admitted maintenance before native close and refuses subsequent wakes", async () => {
     vi.useFakeTimers();
-    const sqlite = requireNodeSqlite();
-    const dbPath = path.join(tempDirs.make("openclaw-sqlite-wal-retirement-"), "openclaw.sqlite");
-    const db = new sqlite.DatabaseSync(dbPath);
+    const { db } = createDatabase();
     const maintenance = configureSqliteWalMaintenance(db, { checkpointIntervalMs: 100 });
     const entered = createDeferredCore();
     const released = createDeferredCore();
@@ -147,15 +141,8 @@ describe("sqlite WAL checkpoint tick", () => {
 
   it("checkpoints on the maintenance tick and vacuums only on the periodic pass", async () => {
     vi.useFakeTimers();
-    const sqlite = requireNodeSqlite();
-    const dir = tempDirs.make("openclaw-sqlite-wal-tick-");
-    const dbPath = path.join(dir, "openclaw.sqlite");
-    const db = new sqlite.DatabaseSync(dbPath);
-    const freelistCount = () =>
-      Number(
-        (db.prepare("PRAGMA freelist_count;").get() as { freelist_count: number | bigint })
-          .freelist_count,
-      );
+    const { db, dbPath, pragma } = createDatabase();
+    const freelistCount = () => pragma("freelist_count");
     // The periodic pass yields between vacuum units on real immediates that fake timers do not own.
     const settle = async () => {
       for (let index = 0; index < 64; index += 1) {

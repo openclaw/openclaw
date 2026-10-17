@@ -22,6 +22,33 @@ import {
 import { configureSqliteWalMaintenance } from "./sqlite-wal.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const cleanup: Array<() => void> = [];
+
+function fixture(
+  options: Parameters<typeof configureSqliteWalMaintenance>[1] = {},
+  nativeOptions?: import("node:sqlite").DatabaseSyncOptions,
+) {
+  const databasePath = path.join(tempDirs.make("openclaw-wal-checkpoint-"), "state.sqlite");
+  const writer = nativeOptions
+    ? new (requireNodeSqlite().DatabaseSync)(databasePath, nativeOptions)
+    : openNodeSqliteDatabase(databasePath);
+  const maintenance = configureSqliteWalMaintenance(writer, {
+    databasePath,
+    checkpointIntervalMs: 0,
+    ...options,
+  });
+  cleanup.push(() => {
+    maintenance.close();
+    writer.close();
+  });
+  return { databasePath, writer, maintenance };
+}
+
+afterEach(() => {
+  for (const close of cleanup.splice(0).toReversed()) {
+    close();
+  }
+});
 
 describe("SQLite WAL checkpoint observations", () => {
   it("retains relayed health across native generations and rejects older observations", () => {
@@ -130,15 +157,8 @@ describe("SQLite WAL checkpoint observations", () => {
   });
 
   it("keeps a completed checkpoint successful when file-size observation fails", () => {
-    const databasePath = path.join(tempDirs.make("openclaw-wal-size-error-"), "state.sqlite");
-    const { DatabaseSync } = requireNodeSqlite();
-    const writer = new DatabaseSync(databasePath);
     const onCheckpointError = vi.fn();
-    const maintenance = configureSqliteWalMaintenance(writer, {
-      databasePath,
-      checkpointIntervalMs: 0,
-      onCheckpointError,
-    });
+    const { writer, maintenance } = fixture({ onCheckpointError }, {});
     writer.exec("CREATE TABLE events (value TEXT); INSERT INTO events VALUES ('committed');");
     const failure = new Error("file-size observation unavailable");
     const stat = vi.spyOn(fs, "statSync").mockImplementationOnce(() => {
@@ -155,8 +175,6 @@ describe("SQLite WAL checkpoint observations", () => {
       expect(onCheckpointError).toHaveBeenCalledWith(failure);
     } finally {
       stat.mockRestore();
-      maintenance.close();
-      writer.close();
     }
   });
 
@@ -166,12 +184,13 @@ describe("SQLite WAL checkpoint observations", () => {
   ] as const)(
     "records a $checkpointMode checkpoint blocked by another connection's reader (BigInt=$readBigInts, arrays=$returnArrays)",
     ({ checkpointMode, readBigInts, returnArrays }) => {
-      const tempDir = tempDirs.make("openclaw-sqlite-checkpoint-busy-");
-      const databasePath = path.join(tempDir, "state.sqlite");
       const { DatabaseSync } = requireNodeSqlite();
-      const writer = new DatabaseSync(databasePath, { readBigInts, returnArrays });
+      const onCheckpointError = vi.fn();
+      const { databasePath, writer, maintenance } = fixture(
+        { checkpointMode, databaseLabel: "test-db", onCheckpointError },
+        { readBigInts, returnArrays },
+      );
       let reader: InstanceType<typeof DatabaseSync> | undefined;
-      let maintenance: ReturnType<typeof configureSqliteWalMaintenance> | undefined;
       try {
         writer.exec(`
         PRAGMA journal_mode = WAL;
@@ -184,13 +203,12 @@ describe("SQLite WAL checkpoint observations", () => {
         reader.prepare("SELECT COUNT(*) FROM events").get();
         writer.prepare("INSERT INTO events (value) VALUES (?)").run("after-reader");
 
-        maintenance = configureSqliteWalMaintenance(writer, {
-          checkpointIntervalMs: 0,
-          checkpointMode,
-          databasePath,
-        });
-
         expect(maintenance.checkpoint()).toBe(false);
+        if (checkpointMode === "TRUNCATE") {
+          expect(onCheckpointError).toHaveBeenCalledWith(
+            expect.objectContaining({ message: "test-db WAL checkpoint TRUNCATE remained busy" }),
+          );
+        }
         expect(maintenance.inspectIdle?.()).toBe("healthy");
         expect(maintenance.health).toMatchObject({
           state: "blocked",
@@ -219,19 +237,12 @@ describe("SQLite WAL checkpoint observations", () => {
           } catch {}
           reader.close();
         }
-        maintenance?.close();
-        writer.close();
       }
     },
   );
 
   it("refuses retention after a native row-decoding failure until the reader is returned", () => {
-    const databasePath = path.join(tempDirs.make("openclaw-wal-idle-reader-"), "state.sqlite");
-    const db = openNodeSqliteDatabase(databasePath);
-    const maintenance = configureSqliteWalMaintenance(db, {
-      databasePath,
-      checkpointIntervalMs: 0,
-    });
+    const { databasePath, writer: db, maintenance } = fixture();
     db.exec("CREATE TABLE events (value INTEGER); INSERT INTO events VALUES (9007199254740993)");
     db.exec("PRAGMA query_only=ON");
     const reader = db.prepare("SELECT value FROM events").iterate();
@@ -247,18 +258,21 @@ describe("SQLite WAL checkpoint observations", () => {
       expect(readSqliteReaderDiagnosticsForPath(databasePath).activeReaders).toEqual([]);
     } finally {
       reader.return?.();
-      maintenance.close();
-      db.close();
     }
   });
 
   it("does not report unsupported non-WAL maintenance as healthy", () => {
     const { DatabaseSync } = requireNodeSqlite();
     const db = new DatabaseSync(":memory:");
-    const maintenance = configureSqliteWalMaintenance(db, { checkpointIntervalMs: 0 });
+    const maintenance = configureSqliteWalMaintenance(db, {
+      checkpointIntervalMs: 0,
+      databaseLabel: "in-memory-test-db",
+    });
     try {
+      expect(db.prepare("PRAGMA journal_mode;").get()).toEqual({ journal_mode: "memory" });
       expect(maintenance.checkpoint()).toBe(true);
       expect(maintenance.inspectIdle).toBeUndefined();
+      expect(maintenance.close()).toBe(true);
     } finally {
       maintenance.close();
       db.close();
@@ -266,15 +280,9 @@ describe("SQLite WAL checkpoint observations", () => {
   });
 
   it("bounds named Kysely reader diagnostics without claiming a blocking owner", () => {
-    const databasePath = path.join(tempDirs.make("openclaw-sqlite-reader-owner-"), "state.sqlite");
-    const writer = openNodeSqliteDatabase(databasePath);
+    const { databasePath, writer, maintenance } = fixture({ checkpointMode: "PASSIVE" });
     const readers: Array<ReturnType<typeof openNodeSqliteDatabase>> = [];
     const held: Array<ReturnType<typeof iterateSqliteQuerySync>> = [];
-    const maintenance = configureSqliteWalMaintenance(writer, {
-      checkpointIntervalMs: 0,
-      checkpointMode: "PASSIVE",
-      databasePath,
-    });
     try {
       writer.exec(
         "CREATE TABLE events(value TEXT); INSERT INTO events VALUES ('before-reader'); PRAGMA wal_checkpoint(TRUNCATE)",
@@ -333,23 +341,15 @@ describe("SQLite WAL checkpoint observations", () => {
       for (const reader of readers) {
         reader.close();
       }
-      maintenance.close();
-      writer.close();
     }
   });
 
   it("observes native transaction state without claiming custody and publishes checkpoint completion", () => {
-    const databasePath = path.join(tempDirs.make("openclaw-wal-reader-event-"), "state.sqlite");
-    const writer = openNodeSqliteDatabase(databasePath);
+    const { databasePath, writer, maintenance } = fixture({ busyTimeoutMs: 0 });
     const reader = withSqliteReaderOwner(
       { operation: "fixture.open-reader", ownerKind: "main" },
       () => openNodeSqliteDatabase(databasePath),
     );
-    const maintenance = configureSqliteWalMaintenance(writer, {
-      databasePath,
-      checkpointIntervalMs: 0,
-      busyTimeoutMs: 0,
-    });
     const states: string[] = [];
     const observations: SqliteWalCheckpointSnapshot[] = [];
     const unsubscribe = onSqliteWalCheckpoint((observation) => {
@@ -390,8 +390,6 @@ describe("SQLite WAL checkpoint observations", () => {
     } finally {
       unsubscribe();
       reader.close();
-      maintenance.close();
-      writer.close();
     }
   });
 
