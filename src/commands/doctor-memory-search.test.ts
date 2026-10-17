@@ -20,6 +20,7 @@ const resolveApiKeyForProviderCore = vi.hoisted(() => vi.fn());
 const hasAnyAuthProfileStoreSource = vi.hoisted(() => vi.fn(() => true));
 const hasAuthProfileStoreSourceForProvider = vi.hoisted(() => vi.fn(() => true));
 const isConfiguredAwsSdkAuthProfileForProvider = vi.hoisted(() => vi.fn(() => false));
+const getActiveMemorySearchManagerCore = vi.hoisted(() => vi.fn());
 const getActiveMemoryProviderCore = vi.hoisted(() => vi.fn());
 const resolveActiveMemoryBackendConfig = vi.hoisted(() => vi.fn());
 const noteWorkspaceMemoryHealth = vi.hoisted(() => vi.fn(async () => undefined));
@@ -91,6 +92,7 @@ vi.mock("../agents/auth-profiles.js", () => ({
 
 vi.mock("../plugins/memory-runtime.js", () => ({
   getActiveMemoryProviderCore,
+  getActiveMemorySearchManagerCore,
   resolveActiveMemoryBackendConfig,
 }));
 
@@ -240,6 +242,7 @@ describe("noteMemorySearchHealth", () => {
     hasAuthProfileStoreSourceForProvider.mockReturnValue(true);
     isConfiguredAwsSdkAuthProfileForProvider.mockReset();
     isConfiguredAwsSdkAuthProfileForProvider.mockReturnValue(false);
+    getActiveMemorySearchManagerCore.mockReset();
     getActiveMemoryProviderCore.mockReset();
     getMissingLocalMemoryEmbeddingProviderMessage.mockClear();
     inspectConfiguredEmbeddingProviderSetup.mockReset();
