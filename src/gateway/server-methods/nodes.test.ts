@@ -14,11 +14,9 @@ import * as nodePairing from "../../infra/device-pairing-node.js";
 import { rotateDeviceToken } from "../../infra/device-pairing-tokens.js";
 import {
   getPairedDevice,
-  listDevicePairing,
   requestDevicePairing,
   resolveNodePairingState,
 } from "../../infra/device-pairing.js";
-import type { PairedDevice } from "../../infra/device-pairing.types.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -70,13 +68,17 @@ async function createNodeState(
   return { stateDir: state.stateDir, nodeId };
 }
 
-function registerApns(nodeId: string) {
+function registerApns(
+  nodeId: string,
+  overrides: Partial<Parameters<typeof registerApnsRegistration>[0]> = {},
+) {
   return registerApnsRegistration({
     nodeId,
     transport: "direct",
     token: "ABCD1234ABCD1234ABCD1234ABCD1234",
     topic: "ai.openclaw.ios",
     environment: "sandbox",
+    ...overrides,
   });
 }
 
@@ -109,10 +111,7 @@ afterEach(async () => {
   }
 });
 
-function captureSecurityEvents(): {
-  events: Extract<DiagnosticEventPayload, { type: "security.event" }>[];
-  stop: () => void;
-} {
+function captureSecurityEvents() {
   const events: Extract<DiagnosticEventPayload, { type: "security.event" }>[] = [];
   const stop = onInternalDiagnosticEvent((event, metadata) => {
     if (metadata.trusted && event.type === "security.event") {
@@ -159,11 +158,7 @@ function createOptions(
   params: Record<string, unknown>,
   overrides?: Partial<GatewayRequestHandlerOptions>,
   registry?: NodeRegistry,
-): {
-  context: ReturnType<typeof createContext>;
-  opts: GatewayRequestHandlerOptions;
-  respond: ReturnType<typeof vi.fn>;
-} {
+) {
   const context = createContext();
   if (registry) {
     Object.assign(context, { nodeRegistry: registry });
@@ -192,23 +187,48 @@ function expectSuccess(opts: GatewayRequestHandlerOptions, payload: unknown) {
 async function publishRunner(
   registry: NodeRegistry,
   client: ReturnType<typeof createWorkerSupervisorNodeClient>,
-  workerHost: {
-    enabled: boolean;
-    capacity: { total: number; available: number };
-    bundleRetention?: number;
-    bundleStatus?: number;
-  } = { enabled: true, capacity: { total: 2, available: 2 } },
+  bundleSupport = false,
 ) {
   const publication = createOptions(
-    { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE], workerHost },
+    {
+      protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+      workerHost: {
+        enabled: true,
+        capacity: { total: 2, available: 2 },
+        ...(bundleSupport ? { bundleRetention: 1, bundleStatus: 1 } : {}),
+      },
+    },
     { client: client as never },
     registry,
   );
   await invokeNode("node.runnerInventory.update", publication.opts);
 }
 
-describe("nodeHandlers node.skills.update", () => {
-  it("stores and publishes a validated replacement catalog for the calling node", async () => {
+function connectNode(
+  nodeId: string,
+  pairingState: Awaited<ReturnType<typeof captureNodePairingState>>,
+  registry: NodeRegistry,
+  connId = "conn-1",
+) {
+  const client = createWorkerSupervisorNodeClient(connId);
+  client.connect.device = { ...client.connect.device!, id: nodeId };
+  const send = vi.spyOn(client.socket, "send");
+  registry.register(client, {
+    pairingIdentity: pairingState?.identity.key ?? "",
+    pairingGeneration: pairingState?.generation?.key,
+  });
+  return { client, send };
+}
+
+function expectDisconnected(context: ReturnType<typeof createContext>, nodeId: string) {
+  expect(context.invalidateClientsForDevice).toHaveBeenCalledWith(nodeId, {
+    role: "node",
+    reason: "device-pair-removed",
+  });
+  expect(context.disconnectClientsForDevice).toHaveBeenCalledWith(nodeId, { role: "node" });
+}
+
+it("node.skills.update stores and publishes a validated replacement catalog for the calling node", async () => {
     const skill = {
       name: "release-helper",
       description: "Prepare a release",
@@ -225,7 +245,6 @@ describe("nodeHandlers node.skills.update", () => {
     );
     context.nodeRegistry.updateNodeSkills.mockReturnValue({
       nodeId: "node-1",
-      displayName: "Build Mac",
       nodeSkills: [skill],
     });
 
@@ -233,7 +252,6 @@ describe("nodeHandlers node.skills.update", () => {
 
     expect(context.nodeRegistry.updateNodeSkills).toHaveBeenCalledWith("node-1", "conn-1", [skill]);
     expectSuccess(opts, { nodeId: "node-1", skills: [skill] });
-  });
 });
 
 function expectApproved(opts: GatewayRequestHandlerOptions, nodeId: string) {
@@ -287,24 +305,14 @@ async function approveNodeSurface(stateDir: string, nodeId: string): Promise<voi
   expect(approved).toEqual(expect.objectContaining({ node: expect.objectContaining({ nodeId }) }));
 }
 
-describe("nodeHandlers node.describe", () => {
-  it("projects exact runner slots with derived launch eligibility", async () => {
+it("node.describe projects exact runner slots with derived launch eligibility", async () => {
     const { nodeId } = await createNodeState("node-1", { surface: true });
     const pairingState = await captureNodePairingState(nodeId);
     expect(pairingState?.generation).not.toBeNull();
 
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    const nodeClient = createWorkerSupervisorNodeClient("conn-1");
-    runtime.nodeRegistry.register(nodeClient, {
-      pairingIdentity: pairingState?.identity.key ?? "",
-      pairingGeneration: pairingState?.generation?.key,
-    });
-    await publishRunner(runtime.nodeRegistry, nodeClient, {
-          enabled: true,
-          capacity: { total: 2, available: 2 },
-          bundleRetention: 1,
-          bundleStatus: 1,
-    });
+  const { client } = connectNode(nodeId, pairingState, runtime.nodeRegistry);
+  await publishRunner(runtime.nodeRegistry, client, true);
     const [proof] = await runtime.nodeWorkerSupervisorTransport.listCurrentNodes();
     expect(proof).toBeDefined();
     expect(
@@ -320,37 +328,22 @@ describe("nodeHandlers node.describe", () => {
     const describeCall = createOptions({ nodeId }, undefined, runtime.nodeRegistry);
     await invokeNode("node.describe", describeCall.opts);
 
+  const projected = {
+    nodeId,
+    workerSlots: { total: 2, available: 2 },
+    workerBundle: { status: "installed", version: "2026.8.9" },
+  };
     expectSuccess(
       listCall.opts,
       expect.objectContaining({
-        nodes: expect.arrayContaining([
-          expect.objectContaining({
-            nodeId,
-            workerSlots: { total: 2, available: 2 },
-            workerBundle: { status: "installed", version: "2026.8.9" },
-          }),
-        ]),
+      nodes: expect.arrayContaining([expect.objectContaining(projected)]),
       }),
     );
-    expectSuccess(
-      describeCall.opts,
-      expect.objectContaining({
-        nodeId,
-        sessionHost: true,
-        workerSlots: { total: 2, available: 2 },
-        workerBundle: { status: "installed", version: "2026.8.9" },
-      }),
-    );
+  expectSuccess(describeCall.opts, expect.objectContaining({ ...projected, sessionHost: true }));
     expect(JSON.stringify(listCall.respond.mock.calls)).not.toContain("bundleHash");
     expect(JSON.stringify(describeCall.respond.mock.calls)).not.toContain("bundleHash");
-    runtime.nodeRegistry.unregister(nodeClient.connId);
-  });
+  runtime.nodeRegistry.unregister(client.connId);
 });
-
-async function readPaired(stateDir: string): Promise<Record<string, PairedDevice>> {
-  const { paired } = await listDevicePairing(stateDir);
-  return Object.fromEntries(paired.map((device) => [device.deviceId, device]));
-}
 
 describe("nodeHandlers node.pair.approve", () => {
   it("promotes the first surface only for the same authenticated pairing identity", async () => {
@@ -481,30 +474,46 @@ describe("nodeHandlers node.pair.approve", () => {
     runtime.nodeRegistry.unregister("conn-surface-reapproval");
   });
 
-  it.each(["before approval", "after surface commit"])(
-    "does not deliver approval to the old session when device reapproval wins %s",
+  it.each(["before approval", "after surface commit", "node-token rotation"])(
+    "does not deliver approval to the old session after %s",
     async (timing) => {
-      const { stateDir, nodeId } = await createNodeState("node-reapproval-race", { surface: true });
+      const rotation = timing === "node-token rotation";
+      const { stateDir, nodeId } = await createNodeState("node-reapproval-race", {
+        surface: !rotation,
+      });
       const staleState = expectDefined(await captureNodePairingState(nodeId), "paired node");
-      const staleGeneration = expectDefined(staleState.generation, "approved surface");
+      if (rotation) {
+        expect(staleState.generation).toBeNull();
+      } else {
+        expectDefined(staleState.generation, "approved surface");
+      }
       const pending = await requestSurface(stateDir, nodeId, "Galaxy A54 5G reapproved");
+      if (rotation) {
+        expect(
+          await rotateDeviceToken({
+            deviceId: nodeId,
+            role: "node",
+            scopes: [],
+            baseDir: stateDir,
+          }),
+        ).toMatchObject({ ok: true });
+        const current = await captureNodePairingState(nodeId);
+        expect(current?.generation).toBeNull();
+        expect(current?.identity.key).not.toBe(staleState.identity.key);
+      }
       const registry = new NodeRegistry({
         resolveCurrentPairingState: resolveCurrentPairedDeviceNodeBinding,
         isPairingStateCurrent: isPairedDeviceNodeBindingCurrent,
       });
-      const client = createWorkerSupervisorNodeClient("conn-before-reapproval");
-      const send = vi.spyOn(client.socket, "send");
-      client.connect.device = { ...client.connect.device!, id: nodeId };
-      registry.register(client, {
-        pairingIdentity: staleState.identity.key,
-        pairingGeneration: staleGeneration.key,
-      });
+      const { client, send } = connectNode(nodeId, staleState, registry);
       const approve = nodePairing.approveNodePairing;
       const approval = vi.spyOn(nodePairing, "approveNodePairing");
       if (timing === "before approval") {
         await pairAndroidNodeDevice(stateDir, nodeId);
-        expect((await captureNodePairingGeneration(nodeId))?.key).not.toBe(staleGeneration.key);
-      } else {
+        expect((await captureNodePairingGeneration(nodeId))?.key).not.toBe(
+          staleState.generation?.key,
+        );
+      } else if (!rotation) {
         approval.mockImplementation(async (...args) => {
           const result = await approve(...args);
           await pairAndroidNodeDevice(stateDir, nodeId);
@@ -514,7 +523,11 @@ describe("nodeHandlers node.pair.approve", () => {
       const { opts } = createOptions({ requestId: pending.request.requestId }, undefined, registry);
       try {
         await invokeNode("node.pair.approve", opts);
-        expect((await captureNodePairingGeneration(nodeId))?.key).not.toBe(staleGeneration.key);
+        if (!rotation) {
+          expect((await captureNodePairingGeneration(nodeId))?.key).not.toBe(
+            staleState.generation?.key,
+          );
+        }
         expect(send).not.toHaveBeenCalled();
         await expect(registry.getCurrentConnected(nodeId)).resolves.toBeUndefined();
         expectApproved(opts, nodeId);
@@ -524,43 +537,6 @@ describe("nodeHandlers node.pair.approve", () => {
       }
     },
   );
-
-  it("does not promote a generation-less session after external node-token rotation", async () => {
-    const { stateDir, nodeId } = await createNodeState("node-pending-identity-rotation");
-    const pending = await requestSurface(stateDir, nodeId, "Galaxy A54 5G pending");
-    const staleState = await captureNodePairingState(nodeId);
-    expect(staleState?.generation).toBeNull();
-
-    const rotated = await rotateDeviceToken({
-      deviceId: nodeId,
-      role: "node",
-      scopes: [],
-      baseDir: stateDir,
-    });
-    expect(rotated.ok).toBe(true);
-    const currentState = await captureNodePairingState(nodeId);
-    expect(currentState?.generation).toBeNull();
-    expect(currentState?.identity.key).not.toBe(staleState?.identity.key);
-
-    const registry = new NodeRegistry({
-      resolveCurrentPairingState: resolveCurrentPairedDeviceNodeBinding,
-      isPairingStateCurrent: isPairedDeviceNodeBindingCurrent,
-    });
-    const client = createWorkerSupervisorNodeClient("conn-authenticated-before-token-rotation");
-    const send = vi.spyOn(client.socket, "send");
-    client.connect.device = { ...client.connect.device!, id: nodeId };
-    registry.register(client, { pairingIdentity: staleState?.identity.key ?? "" });
-    const { opts } = createOptions({ requestId: pending.request.requestId }, undefined, registry);
-
-    try {
-      await invokeNode("node.pair.approve", opts);
-      expect(send).not.toHaveBeenCalled();
-      await expect(registry.getCurrentConnected(nodeId)).resolves.toBeUndefined();
-      expectApproved(opts, nodeId);
-    } finally {
-      registry.unregister(client.connId);
-    }
-  });
 });
 
 describe("nodeHandlers node.pair.remove", () => {
@@ -615,7 +591,7 @@ describe("nodeHandlers node.pair.remove", () => {
       expect(opts.context.disconnectClientsForDevice).toHaveBeenCalledWith(nodeId, {
         role: "node",
       });
-      expect(Object.hasOwn(await readPaired(stateDir), nodeId)).toBe(false);
+      await expect(getPairedDevice(nodeId, stateDir)).resolves.toBeNull();
       if (cleanup === "failure") {
         expect(reconcileActive).not.toHaveBeenCalled();
         expect(order).toEqual(["environment", "respond"]);
@@ -645,16 +621,12 @@ describe("nodeHandlers node.pair.remove", () => {
       replacementWrite = (async () => {
         await pairAndroidNodeDevice(stateDir, nodeId);
         await approveNodeSurface(stateDir, nodeId);
-        const replacementGeneration = await captureNodePairingGeneration(nodeId);
-        if (!replacementGeneration) {
-          throw new Error("expected replacement pairing generation");
-        }
-        return await registerApnsRegistration({
-          nodeId,
-          transport: "direct",
+        const replacementGeneration = expectDefined(
+          await captureNodePairingGeneration(nodeId),
+          "replacement pairing generation",
+        );
+        return await registerApns(nodeId, {
           token: "DCBA4321DCBA4321DCBA4321DCBA4321",
-          topic: "ai.openclaw.ios",
-          environment: "sandbox",
           expectedPairingGeneration: replacementGeneration.key,
         });
       })();
@@ -673,7 +645,7 @@ describe("nodeHandlers node.pair.remove", () => {
   it("removes paired device rows with an approved node surface", async () => {
     const { stateDir, nodeId } = await createNodeState("android-node-1", { surface: true });
 
-    expect(Object.hasOwn(await readPaired(stateDir), nodeId)).toBe(true);
+    await expect(getPairedDevice(nodeId, stateDir)).resolves.not.toBeNull();
 
     const { context, opts } = createOptions({ nodeId: ` ${nodeId} ` });
     const captured = captureSecurityEvents();
@@ -694,12 +666,8 @@ describe("nodeHandlers node.pair.remove", () => {
     }
 
     expect(respond).toHaveBeenCalledWith(true, { nodeId }, undefined);
-    expect(Object.hasOwn(await readPaired(stateDir), nodeId)).toBe(false);
-    expect(context.invalidateClientsForDevice).toHaveBeenCalledWith(nodeId, {
-      role: "node",
-      reason: "device-pair-removed",
-    });
-    expect(context.disconnectClientsForDevice).toHaveBeenCalledWith(nodeId, { role: "node" });
+    await expect(getPairedDevice(nodeId, stateDir)).resolves.toBeNull();
+    expectDisconnected(context, nodeId);
     expect(context.nodeRegistry.updateSurface).toHaveBeenCalledWith(nodeId, {
       caps: [],
       commands: [],
@@ -714,8 +682,8 @@ describe("nodeHandlers node.pair.remove", () => {
       }),
       { dropIfSlow: true },
     );
-    expect(captured.events).toHaveLength(1);
-    expect(captured.events[0]).toMatchObject({
+    expect(captured.events).toMatchObject([
+      {
       type: "security.event",
       category: "auth",
       action: "device.role.removed",
@@ -725,7 +693,8 @@ describe("nodeHandlers node.pair.remove", () => {
       policy: { id: "gateway.device-pairing", decision: "allow" },
       control: { id: "node.pair.remove", family: "auth" },
       attributes: { role: "node", removed_device: true },
-    });
+      },
+    ]);
     expect(JSON.stringify(captured.events)).not.toContain(nodeId);
   });
 
@@ -735,8 +704,8 @@ describe("nodeHandlers node.pair.remove", () => {
     });
     await registerApns(nodeId);
 
-    const before = await readPaired(stateDir);
-    expect(before[nodeId]?.roles).toEqual(["operator", "node"]);
+    const before = await getPairedDevice(nodeId, stateDir);
+    expect(before?.roles).toEqual(["operator", "node"]);
 
     const { context, opts } = createOptions(
       { nodeId },
@@ -749,26 +718,19 @@ describe("nodeHandlers node.pair.remove", () => {
     await Promise.resolve();
 
     expectSuccess(opts, { nodeId });
-    const after = await readPaired(stateDir);
-    expect(after[nodeId]?.roles).toEqual(["operator"]);
-    expect(Object.hasOwn(after[nodeId]?.tokens ?? {}, "operator")).toBe(true);
-    expect(Object.hasOwn(after[nodeId]?.tokens ?? {}, "node")).toBe(false);
+    const after = await getPairedDevice(nodeId, stateDir);
+    expect(after?.roles).toEqual(["operator"]);
+    expect(Object.hasOwn(after?.tokens ?? {}, "operator")).toBe(true);
+    expect(Object.hasOwn(after?.tokens ?? {}, "node")).toBe(false);
     await expect(loadApnsRegistration(nodeId)).resolves.toMatchObject({
       nodeId,
       transport: "direct",
       token: "abcd1234abcd1234abcd1234abcd1234",
     });
-    expect(context.invalidateClientsForDevice).toHaveBeenCalledWith(nodeId, {
-      role: "node",
-      reason: "device-pair-removed",
-    });
-    expect(context.disconnectClientsForDevice).toHaveBeenCalledWith(nodeId, { role: "node" });
+    expectDisconnected(context, nodeId);
   });
 
   it("rejects mixed-role device-backed node removal from non-admin device-token self-service callers", async () => {
-    // Mirror device.pair.remove: a device-token self-service caller (proves
-    // ownership of its own device id, no operator.admin) cannot remove the node
-    // role from a mixed-role row it owns.
     const { stateDir, nodeId } = await createNodeState("device-token-mixed-role-android-node-1", {
       role: "operator",
     });
@@ -790,11 +752,11 @@ describe("nodeHandlers node.pair.remove", () => {
       undefined,
       expect.objectContaining({ message: "node pairing removal denied" }),
     );
-    expect(Object.hasOwn(await readPaired(stateDir), nodeId)).toBe(true);
+    await expect(getPairedDevice(nodeId, stateDir)).resolves.not.toBeNull();
     expect(context.invalidateClientsForDevice).not.toHaveBeenCalled();
     expect(context.disconnectClientsForDevice).not.toHaveBeenCalled();
-    expect(captured.events).toHaveLength(1);
-    expect(captured.events[0]).toMatchObject({
+    expect(captured.events).toMatchObject([
+      {
       action: "device.role.removal_denied",
       outcome: "denied",
       severity: "medium",
@@ -805,6 +767,7 @@ describe("nodeHandlers node.pair.remove", () => {
       },
       control: { id: "node.pair.remove", family: "auth" },
       attributes: { role: "node" },
-    });
+      },
+    ]);
   });
 });
