@@ -134,6 +134,7 @@ async function capturePostgresBackupInWorker(params: {
   config: OpenClawConfig;
   pluginOwners?: DatabasePortPluginOwners;
   assertCurrent: () => void;
+  gitIdentity?: GitBackupIdentity;
 }): Promise<PostgresExportEnvelope> {
   const { createVerifiedSqliteSnapshot } = await import("../infra/sqlite-snapshot.js");
   const anchor = readBackupEngine(params.sourcePath);
@@ -315,21 +316,36 @@ export async function captureGitPostgresBackup(params: {
   outputPath: string;
   identity: GitBackupIdentity;
   physicalEngine?: BackupEngine["engine"];
+  excludeSecrets?: boolean;
 }): Promise<GitBackupManifest | undefined> {
   if ((params.physicalEngine ?? readBackupEngine(params.snapshotPath).engine) !== "postgres") {
     return undefined;
   }
   await fs.mkdir(params.outputPath, { mode: 0o700 });
-  const exported = await capturePostgresBackup({
-    sourcePath: params.snapshotPath,
-    directory: path.join(params.outputPath, "postgres"),
-  });
+  const exported = await runOfflineDatabaseBackup(
+    params.snapshotPath,
+    ({ config, assertCurrent }) =>
+      capturePostgresBackup({
+        sourcePath: params.snapshotPath,
+        directory: path.join(params.outputPath, "postgres"),
+        profile: "user-backup",
+        config,
+        assertCurrent,
+        ...(params.excludeSecrets ? { gitIdentity: params.identity } : {}),
+      }),
+  );
+  const { gitBackupRedaction } = await import("./git-backup-sanitizer.js");
+  const redaction = gitBackupRedaction(
+    params.identity,
+    new Set(Object.keys(exported.verification.tables)),
+    params.excludeSecrets === true,
+    exported.source.owner,
+  );
   const manifest: GitBackupManifest = {
     schemaVersion: 2,
     identity: params.identity,
     userVersion: exported.exportSchemaVersion,
-    excludedTables: [],
-    excludedConfigStateKeyPrefixes: [],
+    ...redaction,
     tables: {},
   };
   await fs.writeFile(

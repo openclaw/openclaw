@@ -11,9 +11,9 @@ import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import type { DesktopFullscreen } from "../desktop-fullscreen.ts";
-import { DockLayoutController } from "../dock-layout-controller.ts";
+import { createDockLayout } from "../dock-layout.ts";
 import type { DesktopPanelToggleDetail } from "../panel-toggle-contract.ts";
-import { SolidPanelController } from "../solid-panel-controller.ts";
+import { SolidPanelOwner } from "../solid-panel-owner.ts";
 import type { DesktopAppLauncher } from "./desktop-app-launcher.ts";
 import type { DesktopAudio } from "./desktop-audio.ts";
 import * as desktopTransport from "./desktop-client.ts";
@@ -34,7 +34,7 @@ import { desktopSourceForEnvironment } from "./desktop-source.ts";
 
 registerDesktopEnglish();
 
-export class DesktopPanelController extends SolidPanelController {
+export class DesktopPanelController extends SolidPanelOwner {
   client: GatewayBrowserClient | null = null;
   sessions!: Pick<SessionCapability, "describe">;
   available = false;
@@ -129,7 +129,9 @@ export class DesktopPanelController extends SolidPanelController {
   );
   mobileKeyboard!: DesktopMobileKeyboard;
   readonly keyboardTarget = () => (this.controlling ? this.connection.handle : null);
-  readonly dockLayout = new DockLayoutController(this, {
+  readonly dockLayout = createDockLayout({
+    notify: () => this.invalidate(),
+    isEmbedded: () => this.embedded,
     layout: desktopPanelLayout,
     reservationPrefix: "desktop",
     isAvailable: () => this.available,
@@ -152,6 +154,7 @@ export class DesktopPanelController extends SolidPanelController {
   }
 
   override connectedCallback(): void {
+    this.dockLayout.connect();
     this.dockLayout.setSuppressed(this.suppressed);
     // The first document update owns startup; reconnects still need a fresh lookup.
     if (
@@ -170,6 +173,7 @@ export class DesktopPanelController extends SolidPanelController {
     }
     this.sessionSource.clearDesktopSource();
     this.credentials = undefined;
+    this.dockLayout.dispose();
   }
 
   override updated(changed: Map<PropertyKey, unknown>): void {

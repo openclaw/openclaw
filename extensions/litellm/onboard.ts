@@ -1,3 +1,4 @@
+import { resolveMergedModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   createDefaultModelsPresetAppliers,
   type ModelDefinitionConfig,
@@ -32,9 +33,8 @@ export const { applyConfig: applyLitellmConfig, applyProviderConfig: applyLitell
   createDefaultModelsPresetAppliers<[]>({
     primaryModelRef: LITELLM_DEFAULT_MODEL_REF,
     resolveParams: (cfg: OpenClawConfig) => {
-      const existingProvider = cfg.models?.providers?.litellm;
       const resolvedBaseUrl =
-        typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
+        resolveMergedModelProviderConfig(cfg, "litellm")?.baseUrl?.trim() ?? "";
 
       return {
         providerId: "litellm",

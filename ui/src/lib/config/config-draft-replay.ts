@@ -29,7 +29,7 @@ export function replayConfigDraftEdits(
       } else if (isRecord(before[key]) && isRecord(after[key]) && isRecord(canonical[key])) {
         replay(before[key], after[key], canonical[key], nextPath);
       } else if (stableStringify(before[key]) !== stableStringify(after[key])) {
-        setPathValue(draft, nextPath, structuredClone(after[key]));
+        setPathValue(draft, nextPath, after[key]);
       }
     }
   };

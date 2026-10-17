@@ -106,7 +106,6 @@ it("keeps a cron context prefix readable when an inbound turn persists before qu
               resolved: { provider: "test", model: "test" },
               fallback: { exhausted: false, attempts: [] },
               autoCompactionCount: 0,
-              didLogHeartbeatStrip: false,
             },
           };
         },

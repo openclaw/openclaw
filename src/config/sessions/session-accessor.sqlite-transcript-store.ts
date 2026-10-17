@@ -675,25 +675,29 @@ function reconcileRewrittenTranscriptIndex(
 
 // Preserves seq, created_at, session_key, and session activity recency; rotates the transcript
 // generation and rebuilds bounded projections immediately or defers large projections.
+// `indexUnchanged` is for rewrites that keep every indexed fact (searchable text, tree links,
+// active events, context eligibility); the index stays current and is not rebuilt.
 export function updateSqliteTranscriptEventJsonInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
   updates: ReadonlyArray<{ seq: number; eventJson: string }>,
+  options: { indexUnchanged?: boolean } = {},
 ): void {
   if (updates.length === 0) {
     return;
   }
   return withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(sessionId)], () => {
-    const rebuildSynchronously = shouldRebuildSessionTranscriptIndexSynchronously(
-      database.db,
-      sessionId,
-    );
+    const rebuildSynchronously =
+      !options.indexUnchanged &&
+      shouldRebuildSessionTranscriptIndexSynchronously(database.db, sessionId);
     const update = createTranscriptPayloadUpdater(database.db, sessionId);
     for (const row of updates) {
       update({ seq: row.seq, ...prepareTranscriptPayload(database.db, row.eventJson) });
     }
     rotateTranscriptGenerationInTransaction(database, sessionId);
-    reconcileRewrittenTranscriptIndex(database, sessionId, rebuildSynchronously);
+    if (!options.indexUnchanged) {
+      reconcileRewrittenTranscriptIndex(database, sessionId, rebuildSynchronously);
+    }
     recordTranscriptReplacementMutation(
       database,
       sessionId,

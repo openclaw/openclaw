@@ -103,7 +103,7 @@ it("retains the primary input and the region-owned outlet while changing the lay
   ).toBe(false);
 });
 
-it("parks on owner events and reveals only with the matching parent props", () => {
+it("parks on owner events and reveals with the parent's next props", () => {
   const owner = new EventTarget();
   let presented = true;
   const binding: PresentationBinding = { owner, isPresented: () => presented };

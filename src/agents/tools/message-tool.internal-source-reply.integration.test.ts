@@ -159,6 +159,10 @@ describe("WebChat message tool internal source reply", () => {
           expect(assistants[0]?.content).toEqual([
             { type: "text", text: "Still working after restart." },
           ]);
+          expect(assistants[0]).toMatchObject({
+            __openclaw: { runId },
+            openclawDeliveryMirror: { kind: "message-tool-source-reply", final: false },
+          });
         },
       );
     },
@@ -369,7 +373,6 @@ describe("WebChat message tool internal source reply", () => {
       const { replyPayloads: payloads } = await buildReplyPayloads({
         payloads: embeddedPayloads,
         isHeartbeat: false,
-        didLogHeartbeatStrip: false,
         blockStreamingEnabled: false,
         blockReplyPipeline: null,
         replyToMode: "off",

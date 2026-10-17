@@ -109,7 +109,8 @@ scan. Missing, malformed, stale, or nonmatching seals take the normal full
 validation path. Killing a writer, changing the file externally, changing its
 schema identity, or restoring a different physical file prevents seal reuse.
 The seven-day limit is checked on admission; it does not introduce a daily
-runtime scan or a new timer.
+runtime scan or a new timer. Already admitted physical databases do not queue
+another post-ready integrity scan; Doctor and explicit verification remain available.
 
 Before the first write after admission, the owner unlinks the seal. Explicit
 maintenance also invalidates it before checkpointing or rewriting a database.
@@ -475,7 +476,7 @@ durability, transaction contents, reader lifetimes, schemas, or history retentio
 it never unlinks a live WAL. Upgrades need no state migration, and older binaries
 can continue reading the same databases.
 
-Quarantine decisions live only in a dedicated `openclaw-quarantine.sqlite` store, so they survive damage to the databases being quarantined. Verification results are logged.
+Quarantine decisions live only in a dedicated `openclaw-quarantine.sqlite` store, so they survive damage to the databases being quarantined.
 
 Successful writable agent admission also preserves this store as evidence that
 shared state previously existed, including for unconfigured external agent
@@ -492,14 +493,13 @@ initial schema and index metadata. Stores with user data, unknown contents, or
 previous recovery holds remain held until their deletion history is resolved.
 Doctor reports failure when a held store prevents a required agent from starting.
 
-Background verification errors retain the original name and message and append bounded Node `code` and SQLite `errcode` values from up to eight cause-chain nodes. These diagnostics do not change the verdict: I/O failures remain inconclusive, while proven corruption is reconfirmed by the database owner before quarantine. A generic `disk I/O error` (`errcode=10`) does not establish disk exhaustion.
+Native integrity-worker errors retain the original name and message and append bounded Node `code` and SQLite `errcode` values from up to eight cause-chain nodes. These diagnostics do not change the verdict: I/O failures remain inconclusive, while integrity checks distinguish proven corruption from transient failures. A generic `disk I/O error` (`errcode=10`) does not establish disk exhaustion.
 
-The background verifier retains its child through native exit and IPC disconnect,
-including when sending work fails. Failed native launches settle after closure
-without requiring an exit event. If the operating system refuses a termination
-request, the verifier logs the failure and keeps waiting for native exit; an
-undelivered signal does not mean the child has stopped. The original worker or
-IPC error remains the reported failure even if termination also fails.
+Terminal agent-open recovery still performs full verification in a separate
+native process before clearing its latch. Ordinary asynchronous integrity
+admission uses its existing worker; neither path repeats an advisory scan after
+cached admission. The retired advisory IPC verifier and its generation-bound
+reconfirmation path are not separate integrity owners.
 
 Agent database maintenance fences other writers with a 60-second lease in the shared state database. A dedicated worker renews that lease during synchronous integrity scans and migration phases. Maintenance still checks the exact persisted owner before mutations and commit, and stops if the heartbeat fails or ownership expires or changes. Finishing or cancelling maintenance stops renewal before releasing the lease; process death leaves at most the remaining lease duration.
 
@@ -838,18 +838,13 @@ frames than total frames still records a blocked checkpoint. An absent reader li
 means that the blocker is untracked or belongs to another process, not that no
 reader exists.
 
-Shared-state SQLite worker actors inspect their already-open WAL connection after
-60 seconds without an active operation. An admitted PASSIVE checkpoint that
-positively inspects a healthy connection keeps the actor until 30 minutes after
-its last real operation; the inspection does not extend that deadline. Another
-connection's reader can prevent a complete checkpoint without making this actor
-unhealthy. A local native reader that refuses the checkpoint, an unavailable
-inspection, or an actor without an inspectable WAL connection retains the
-60-second retirement behavior. Inspection never opens a database for an
-artifact-preserving reader. Retirement closes the native database borrow before
-a later request opens a replacement actor. An actor that returns from an
-operation with a tracked reader still active fails settlement and retires
-immediately.
+Shared-state SQLite worker actors retire 30 minutes after their last real
+operation, without an intermediate health probe. Retirement closes the native
+database borrow before a later request opens a replacement actor. An actor that
+returns from an operation with a tracked reader still active fails settlement
+and retires immediately. A rare untracked native reader pin can remain until the
+normal idle deadline; periodic WAL maintenance and pressure/capacity retirement
+retain their existing owners.
 
 At the broker's 64-client limit, new opens can retire an owner-confirmed idle
 shared-state client before its normal deadline. Accepted scopes, pending commands,
@@ -966,7 +961,7 @@ the underlying database error.
 
 ### A database is quarantined after integrity verification failed
 
-The background verifier proved the file is corrupt, and every open now fails fast instead of rescanning. Restore the database from a backup or repair it, then run `openclaw doctor --fix` to clear the quarantine record. Doctor reports an explicit error if the quarantine record itself cannot be cleared; rerun it until it reports clean.
+A recorded corruption refusal makes opens fail fast instead of rescanning. Restore the database from a backup or repair it, then run `openclaw doctor --fix` to clear the quarantine record. Doctor reports an explicit error if the quarantine record itself cannot be cleared; rerun it until it reports clean.
 
 If an agent database cannot be repaired by `doctor --fix`, stop the Gateway, back up
 the database and its SQLite sidecars, and run

@@ -208,7 +208,7 @@ describe("browser panel route handoff", () => {
     const afterClick = focusCount();
     expect(afterClick).toBe(1);
     panel.preferredTab = { tab: { ...hostTab }, revision: "first" };
-    panel.requestUpdate();
+    panel.invalidate();
     await panel.updateComplete;
     expect(focusCount()).toBe(afterClick);
     expect(pageTitle(panel)).toBe("work");
@@ -225,7 +225,7 @@ describe("browser panel route handoff", () => {
     panel.preferredTab = { tab: nodeTab, revision: "third" };
     await panel.updateComplete;
     const hiddenCount = gateway.request.mock.calls.length;
-    panel.requestUpdate();
+    panel.invalidate();
     await panel.updateComplete;
     expect(gateway.request).toHaveBeenCalledTimes(hiddenCount);
     panel.presented = true;

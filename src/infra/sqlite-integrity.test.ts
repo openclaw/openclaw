@@ -4,11 +4,9 @@ import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import * as nodeSqlite from "./node-sqlite.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   assertSqliteIntegrity,
-  confirmSqliteFileIntegrity,
   isTerminalSqliteIntegrityError,
   runSqliteIntegrityOperationSync,
   sqliteIntegrityCheckSteps,
@@ -486,65 +484,5 @@ describe("isTerminalSqliteIntegrityError", () => {
     expect(isTerminalSqliteIntegrityError(busy)).toBe(false);
     expect(isTerminalSqliteIntegrityError(malformed)).toBe(true);
     expect(isTerminalSqliteIntegrityError(corruptIndex)).toBe(true);
-  });
-});
-
-describe("confirmSqliteFileIntegrity", () => {
-  it("confirms page corruption despite empty WAL sidecars created by its own reader", () => {
-    const databasePath = path.join(tempDirs.make("sqlite-corrupt-wal-"), "database.sqlite");
-    const database = new (requireNodeSqlite().DatabaseSync)(databasePath);
-    database.exec(
-      "PRAGMA journal_mode=WAL; CREATE TABLE damaged(value TEXT); INSERT INTO damaged VALUES ('preserved');",
-    );
-    const pageSize = Number(database.prepare("PRAGMA page_size").get()?.page_size);
-    const rootPage = Number(
-      database.prepare("SELECT rootpage FROM sqlite_schema WHERE name='damaged'").get()?.rootpage,
-    );
-    database.close();
-    expect(fs.existsSync(`${databasePath}-wal`)).toBe(false);
-    const file = fs.openSync(databasePath, "r+");
-    try {
-      fs.writeSync(file, Buffer.from([0xff]), 0, 1, (rootPage - 1) * pageSize);
-    } finally {
-      fs.closeSync(file);
-    }
-    const open = nodeSqlite.openNodeSqliteDatabase;
-    let opening = 0;
-    const reader = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-      const db = open(...args);
-      // Reproduce native empty-WAL creation/retouching independently of SQLite and filesystem versions.
-      fs.writeFileSync(`${databasePath}-wal`, "");
-      fs.utimesSync(`${databasePath}-wal`, ++opening, opening);
-      return db;
-    });
-    try {
-      expect(confirmSqliteFileIntegrity(databasePath, "damaged WAL database")).toMatchObject({
-        status: "failed",
-        terminal: true,
-        error: { name: "SqliteIntegrityError" },
-        generation: { database: { size: BigInt(fs.statSync(databasePath).size) } },
-      });
-    } finally {
-      reader.mockRestore();
-    }
-  });
-
-  it("leaves SQLite open failures unbound because the failed file identity is unknown", () => {
-    const databasePath = path.join(tempDirs.make("sqlite-open-integrity-"), "database.sqlite");
-    fs.writeFileSync(databasePath, "not a sqlite database");
-    const openError = Object.assign(new Error("file is not a database"), { errcode: 26 });
-    const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementationOnce(() => {
-      throw openError;
-    });
-
-    try {
-      expect(confirmSqliteFileIntegrity(databasePath, "test database")).toEqual({
-        status: "failed",
-        error: openError,
-        terminal: false,
-      });
-    } finally {
-      open.mockRestore();
-    }
   });
 });
