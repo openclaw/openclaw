@@ -53,10 +53,18 @@ async function readModelRunImageFiles(files: string[] | undefined) {
   if (!files || files.length === 0) {
     return [];
   }
+  const { readRegularFile } = await import("../../infra/fs-safe.js");
   return await Promise.all(
     files.map(async (filePath) => {
       const resolvedPath = path.resolve(filePath);
-      const buffer = await fs.readFile(resolvedPath);
+      const { buffer } = await readRegularFile({
+        filePath: await fs.realpath(resolvedPath),
+      }).catch((error: unknown) => {
+        throw new Error(
+          `Cannot read model image file: ${resolvedPath}. Use a readable regular file containing an image and retry.`,
+          { cause: error },
+        );
+      });
       const mimeType = normalizeMimeType(
         await detectMime({
           buffer,
