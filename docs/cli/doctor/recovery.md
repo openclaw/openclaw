@@ -52,6 +52,14 @@ definition was unchanged, restored, or needs inspection; follow the reported
 status and installer commands after the active maintenance or update finishes.
 Unverified restoration keeps recovery pending instead of claiming a safe restart.
 
+State migration requires the Gateway and other state writers to be stopped; it
+does not require a writable or up-to-date service definition. An inactive
+systemd service can migrate even when its stop timeout is short or its native
+policy cannot be refreshed. Doctor reports those service issues as warnings.
+Policy refresh checks current native ownership, so a removed system unit does
+not keep an earlier system-owned observation in force. A live system unit still
+belongs to its system supervisor and is never replaced by a competing user unit.
+
 When explicit repair stops a managed Gateway, Doctor waits for that process to
 release shared-state lifecycle ownership within the service stop deadline before
 repairing state. If ownership remains held, Doctor warns, restores the service,

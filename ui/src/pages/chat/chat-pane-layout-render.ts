@@ -58,7 +58,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       revision();
       return {
         context: this.context,
-        session: this.state && !this.catalogHost ? this.resolveChatReadTarget() : undefined,
+        session: this.state && !this.history.catalogHost ? this.resolveChatReadTarget() : undefined,
       };
     });
   }
@@ -206,7 +206,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         }
       : null;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
-    const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());
+    const discussionState = this.sessionDiscussion.snapshot.states.get(state.sessionKey.trim());
     const discussionAvailable = discussionState === "available" || discussionState === "open";
     const desktopAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
     const companionSessionKey = state.sessionKey;
@@ -292,7 +292,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       },
       dashboard: !this.compact ? this.renderBoardPanel(board, sidebarLayout) : null,
       workspace: sessionWorkspace,
-      detail: { chat: chatProps, host: state, requestUpdate: state.requestUpdate! },
+      detail: { chat: chatProps, host: state },
       digest: observerDigest,
       activeRunId: observerRunId,
       pullRequests: this.sessionPullRequests,
@@ -322,7 +322,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       layout: savedLayout,
       closePanelSlot,
       openPanelSlot,
-      forgetDiscussionUrl: () => this.sessionDiscussionOpenUrls.delete(state.sessionKey.trim()),
+      forgetDiscussionUrl: () => this.sessionDiscussion.forgetOpenUrl(state.sessionKey.trim()),
       resizePanel: (columnId, size) => this.commitSidebarPanelResize(savedLayout, columnId, size),
       setPanelOpen: (open) => this.setChatSidePanelOpen(open, savedLayout),
     });
@@ -372,7 +372,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       sideFocusOrigin: this.sideFocusOrigin,
       panelDefinitions,
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
-      requestUpdate: state.requestUpdate!,
     });
     return {
       region,

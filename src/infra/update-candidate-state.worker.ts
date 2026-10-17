@@ -29,14 +29,12 @@ async function snapshotCandidateState(): Promise<unknown> {
     | (Parameters<typeof snapshotUpdateCandidateState>[0] & {
         mode: "snapshot";
         streamProgress?: boolean;
-        streamEntryProgress?: boolean;
       })
     | (Parameters<typeof discoverUpdateStateSchemaInspectionInProcess>[0] & { mode: "discover" })
     | (Parameters<typeof readUpdateStateSchemaVersionsInProcess>[0] & { mode: "versions" })
     | (Parameters<typeof readUpdateCandidateStateInventoryInProcess>[0] & {
         mode: "inventory";
         streamProgress?: boolean;
-        streamEntryProgress?: boolean;
       })
     | (Parameters<
         typeof import("./update-database-backup.js").createUpdateDatabaseBackupInProcess
@@ -64,10 +62,7 @@ async function snapshotCandidateState(): Promise<unknown> {
       const { resolveDatabaseFamilyEngines } = await import("./database-engine/registry.js");
       const { databases, ...inventory } = await readUpdateCandidateStateInventoryInProcess({
         ...input,
-        onProgress: createUpdateStateInspectionReporter(
-          !input.streamProgress,
-          input.streamEntryProgress,
-        ),
+        onProgress: createUpdateStateInspectionReporter(!input.streamProgress),
       });
       return {
         ...inventory,
@@ -91,10 +86,7 @@ async function snapshotCandidateState(): Promise<unknown> {
       return snapshotUpdateCandidateState({
         ...input,
         includeLocalStoreVersions: input.includeLocalStoreVersions === true,
-        onProgress: createUpdateStateInspectionReporter(
-          !input.streamProgress,
-          input.streamEntryProgress,
-        ),
+        onProgress: createUpdateStateInspectionReporter(!input.streamProgress),
       });
     case "discover":
       return discoverUpdateStateSchemaInspectionInProcess({

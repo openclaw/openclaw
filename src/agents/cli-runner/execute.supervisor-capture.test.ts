@@ -1,7 +1,8 @@
 // Covers CLI execution paths where the process supervisor keeps stdout capture
 // disabled and the runner must parse streamed chunks without relying on tails.
-import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { buildExternalRunFailureReply } from "../../auto-reply/reply/agent-runner-failure-reply.js";
 import {
   markMcpLoopbackRequestFinished,
   markMcpLoopbackRequestStarted,
@@ -673,6 +674,39 @@ describe("executePreparedCliRun supervisor output capture", () => {
       ),
     ).rejects.toMatchObject({ name: "FailoverError", message: "Credit balance is too low" });
   });
+
+  it.each([0, 1])(
+    "preserves the prepared backend failure code through process exit %i and reply copy",
+    async (exitCode) => {
+      const message =
+        "Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. This is usually transient; retry in a minute, and if it persists close other Claude Code processes or sign in again";
+      mockOutput(
+        [
+          jsonl({
+            type: "result",
+            subtype: "error_during_execution",
+            is_error: true,
+            errors: [message],
+            session_id: "session-refresh-contention",
+          }),
+        ],
+        { exitCode },
+      );
+      const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+      const classifyErrorCode = vi.fn(() => "refresh_contention");
+      context.backendResolved.classifyErrorCode = classifyErrorCode;
+
+      const error = await executePreparedCliRun(context).catch((caught: unknown) => caught);
+
+      assert(error instanceof Error);
+      expect(classifyErrorCode).toHaveBeenCalledExactlyOnceWith(message);
+      expect(error).toMatchObject({ name: "FailoverError", code: "refresh_contention", message });
+      expect(buildExternalRunFailureReply({ message: error.message, error })).toEqual({
+        text: "Another sign-in is still in progress. Wait a moment, then try again.",
+        isGenericRunnerFailure: false,
+      });
+    },
+  );
 
   it("surfaces a local Claude synthetic empty terminal through the output error path", async () => {
     const stdout = [

@@ -1,11 +1,11 @@
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
 import { resolveAttachmentSource } from "./chat-message-attachment-source.ts";
-import { releaseChatMediaResourceSubscriber, type AttachmentItem } from "./chat-message-media.ts";
+import { releaseChatMediaResourceOwner, type AttachmentItem } from "./chat-message-media.ts";
 
 const subscribers: (() => void)[] = [];
 afterEach(() => {
-  subscribers.splice(0).forEach(releaseChatMediaResourceSubscriber);
+  subscribers.splice(0).forEach(releaseChatMediaResourceOwner);
   vi.useRealTimers();
 });
 
@@ -26,7 +26,7 @@ it("shares a managed artifact read across URL aliases without sharing other targ
     return (connectionEpoch = 1) =>
       resolveAttachmentSource(attachment, {
         connectionEpoch,
-        onRequestUpdate: subscriber,
+        onMediaChange: subscriber,
         resolveArtifactDownload,
       });
   };

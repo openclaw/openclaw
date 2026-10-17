@@ -2690,6 +2690,23 @@ or deduplication still precedes marker settlement. Failed event recording leaves
 the marker available for the next check. Schemas, stored bytes, retention, provider
 contracts, and update behavior are unchanged; no migration is required.
 
+## Trajectory payload compression
+
+The trajectory writer worker prepares Brotli quality 3 payloads before its
+existing transaction. Values of at least 1 KiB compress only when they save
+at least 64 bytes and 10%; values larger than 256 KiB remain text. New rows store
+a codec marker and exact logical UTF-8 size alongside compressed bytes. Bounded
+decoding preserves original strings without JSON reserialization. Narrow SQL
+projections decode inside SQLite so diagnostics do not transfer full event bodies.
+
+The schema migration keeps old text rows intact and replaces the retention index
+expression with `COALESCE(event_utf8_bytes, octet_length(event_json))`. This keeps
+retention indexed and leaves logical history limits unchanged. There is no eager
+conversion or new worker request. Native PostgreSQL uses raw JSON text and TOAST;
+engine ports decode compressed SQLite rows before copying them. See
+[trajectory payload storage](/reference/database-schemas/agent-schema-history#trajectory-payload-storage)
+for migration and rollback details.
+
 ## Trajectory retention covering index
 
 The accepted trajectory retention design keeps stored runtime events in the
@@ -2783,7 +2800,7 @@ consults after call closure, independently of the open-state check.
 
 Session usage retains its derived cache in the existing `cache_entries` owner.
 The `session-cost-usage-rollup-v3` scope holds the versioned transcript checkpoint
-and untimestamped contribution. The adjacent `session-cost-usage-projection-v1`
+and untimestamped contribution. The adjacent `session-cost-usage-projection-v2`
 scope stores UTC-month partitions containing quarter-hour session and model
 aggregates. The checkpoint and affected partitions commit atomically. This
 replaces the previous whole-history per-event cache body; no tables, indexes,
@@ -2792,6 +2809,12 @@ process-local, nonpersistent cache and create no month partitions. Projection
 version 2 packs sparse quarters into monthly compressed bodies; version 1 daily
 rows are ignored and replaced by the normal resumable refresh, without a schema
 migration. Checkpoint and partition replacement remain atomic.
+
+Projection envelope version 3 encodes the source as a JSON string before the
+month separator, so PostgreSQL text never receives the former NUL separator. Older `v1` cache
+rows remain inactive and rebuild from transcripts. Database port removes only
+those retired partitions from its private source copy before verification;
+other cache scopes, including durable voice sessions, remain unchanged.
 
 Usage-bearing transcript publications schedule advancement through the existing
 usage worker queue. Each dirty session waits for 30 seconds without another

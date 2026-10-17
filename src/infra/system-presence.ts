@@ -27,6 +27,7 @@ type StoredPresence = {
 // The gateway owns a private key; caller-supplied string identities remain peers.
 const SELF_KEY = Symbol("system-presence-self");
 const entries = new Map<string | symbol, StoredPresence>();
+const presenceKeys = new WeakMap<SystemPresence, string>();
 const TTL_MS = 5 * 60 * 1000;
 const MAX_ENTRIES = 200;
 const SELF_INSTANCE_ID = randomUUID();
@@ -36,7 +37,17 @@ function setPresence(
   presence: SystemPresence,
   pending = entries.get(key)?.pending ?? false,
 ) {
+  presenceKeys.set(presence, typeof key === "string" ? `entry:${key}` : "gateway");
   entries.set(key, { presence, pending });
+}
+
+/** Stable owner key without adding fields to legacy presence rows. */
+export function getSystemPresenceKey(presence: SystemPresence): string {
+  const key = presenceKeys.get(presence);
+  if (key === undefined) {
+    throw new Error("presence row has no owner key");
+  }
+  return key;
 }
 
 function initSelfPresence() {

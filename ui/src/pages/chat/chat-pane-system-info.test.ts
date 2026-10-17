@@ -36,7 +36,7 @@ it.each([false, true])(
     const client = createTestGatewayClient(request);
     const { pane } = createTestChatPane({ client });
     pane.context.gateway.snapshot.hello = gatewayHelloForMethods(["system.info"]);
-    const update = vi.spyOn(pane, "requestUpdate");
+    const update = vi.spyOn(pane, "invalidate");
     const row = { key: "agent:main:current", kind: "direct", updatedAt: 0 } as const;
     const pending = pane.loadHeaderMenuData(row, "/workspace", false);
     expect(request).toHaveBeenCalledOnce();

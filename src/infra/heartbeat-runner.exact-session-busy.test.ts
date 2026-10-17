@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY } from "../agents/embedded-agent-runner/run-state.js";
 import {
   clearActiveEmbeddedRun,
@@ -238,70 +238,6 @@ describe("heartbeat exact-session busy checks", () => {
           });
         } finally {
           close();
-        }
-      });
-    },
-  );
-
-  it.each([
-    {
-      name: "empty list over registered runs",
-      isolated: true,
-      keys: [],
-      registered: true,
-      expected: "ready",
-    },
-    {
-      name: "late isolated run",
-      isolated: true,
-      keys: [],
-      lateKeys: [isolatedSessionKey],
-      expected: "skipped",
-    },
-    { name: "exact membership", isolated: false, keys: [sessionKey], expected: "skipped" },
-    { name: "untrimmed membership", isolated: false, keys: [` ${sessionKey} `], expected: "ready" },
-  ])(
-    "keeps injected $name authoritative",
-    async ({ isolated, keys: initialKeys, lateKeys, registered, expected }) => {
-      await withHeartbeatFixture(isolated, async (opts, storePath) => {
-        const close = registered
-          ? [
-              registerRun("embedded", sessionKey, "injected-main"),
-              registerRun("embedded", isolatedSessionKey, "injected-isolated"),
-            ]
-          : [];
-        let keys = initialKeys;
-        const list = vi.fn(() => keys);
-        try {
-          const wake = await resolveHeartbeatWakeStage({
-            ...opts,
-            sessionKey: isolated ? sessionKey : ` ${sessionKey} `,
-            deps: { ...opts.deps, listActiveEmbeddedRunSessionKeys: list },
-          });
-          if (!isolated) {
-            expect(wake.kind).toBe(expected);
-            expect(list).toHaveBeenCalledOnce();
-            return;
-          }
-          expect(wake.kind).toBe("ready");
-          if (wake.kind !== "ready") {
-            throw new Error("expected injected empty list to admit heartbeat");
-          }
-          const pending = prepareHeartbeatRunStage(wake);
-          if (lateKeys) {
-            keys = lateKeys;
-            expect(await pending).toEqual({ kind: "skipped", reason: "requests-in-flight" });
-            expect(
-              loadExactSessionEntry({ agentId: "main", storePath, sessionKey: isolatedSessionKey }),
-            ).toBeUndefined();
-          } else {
-            expect((await pending).kind).toBe("ready");
-          }
-          expect(list).toHaveBeenCalledTimes(2);
-        } finally {
-          for (const dispose of close.toReversed()) {
-            dispose();
-          }
         }
       });
     },

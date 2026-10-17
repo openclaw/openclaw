@@ -54,7 +54,7 @@ import {
 } from "./chat-state-refresh.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
-import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
+import { releaseChatMediaResourceOwner } from "./components/chat-message-media.ts";
 import { retireSessionWorkspaceCheckout } from "./components/chat-session-workspace.ts";
 import { retireChatPairingQr } from "./history-merge.ts";
 import {
@@ -452,7 +452,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.continueInTerminalDialog = null;
       this.cancelHeaderRename();
       cancelChatScroll(state);
-      releaseChatMediaResourceSubscriber(state.requestUpdate);
+      releaseChatMediaResourceOwner(state);
       if (wasConnected) {
         if (snapshot.phase === "connected") {
           markQueuedChatSendsWaitingForReconnect(state);
@@ -472,8 +472,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.resetSessionSuggestions();
       this.resetSessionReactions();
       this.clearTypingActors();
-      this.sessionDiscussionStates.clear();
-      this.sessionDiscussionOpenUrls.clear();
+      this.sessionDiscussion.clear();
       this.sessionDiscussionPanels.clear();
       this.sessionParticipationTracker.reset();
       if (state.client !== snapshot.client) {
@@ -484,7 +483,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
           clearLocalRun: true,
           clearToolStream: true,
           clearRunStatus: true,
-          requestUpdate: false,
+          publishRunState: false,
         });
         state.pendingAbort = null;
       }
@@ -548,7 +547,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       retireCachedPairingQr(state.chatMessagesBySession);
     }
     if (!sourceChanged && mediaAuthChanged) {
-      releaseChatMediaResourceSubscriber(state.requestUpdate);
+      releaseChatMediaResourceOwner(state);
     }
     state.canvasPluginSurfaceUrl = snapshot.canvasPluginSurfaceUrl;
     state.terminalAvailable = isTerminalAvailable(

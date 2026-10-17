@@ -2,7 +2,6 @@ import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/
 import type {
   SessionCatalogHost,
   SessionCatalogSession,
-  SessionDiscussionState,
   SessionSharingRole,
   SessionSuggestion,
 } from "../../../../packages/gateway-protocol/src/index.js";
@@ -44,6 +43,7 @@ import {
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.tsx";
+import { projectChatFields } from "./chat-field-projection.ts";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
   CHAT_RUN_ACTIVITY_CHANGED_EVENT,
@@ -54,6 +54,7 @@ import {
   getChatHistoryLoadState,
   isChatHistoryRetrying,
 } from "./chat-history-state.ts";
+import { createChatPaneDiscussionState } from "./chat-pane-discussion-state.ts";
 import { sameChatPanePresence } from "./chat-pane-presence.ts";
 import type { PendingSessionPanelToggle } from "./chat-pane-session-panel-toggle.ts";
 import type { ChatPaneConnectionScope, PaneSessionChangeOptions } from "./chat-pane-shared.ts";
@@ -368,7 +369,7 @@ export abstract class ChatPaneStateOwner {
   get runActivity() {
     return this.chatState.projectRunActivity(this.state);
   }
-  protected readonly composerCapabilities = new ChatComposerCapabilityHost(() => this.invalidate());
+  readonly composerCapabilities = new ChatComposerCapabilityHost();
   protected readonly transcript = createChatTranscript(
     () => this.invalidate(),
     () => this.paneId,
@@ -528,8 +529,7 @@ export abstract class ChatPaneStateOwner {
   };
   protected swarmHydrator: SwarmRosterHydrator | null = null;
   protected swarmEnabled = true;
-  protected readonly sessionDiscussionStates = new Map<string, SessionDiscussionState>();
-  protected readonly sessionDiscussionOpenUrls = new Map<string, string | null>();
+  readonly sessionDiscussion = createChatPaneDiscussionState();
   protected readonly pendingPanelToggleRequests = new Map<
     SessionPanelToggleSlot,
     PendingSessionPanelToggle
@@ -590,12 +590,21 @@ export abstract class ChatPaneStateOwner {
   protected githubPublication: GitHubPublicationBinding | null = null;
   protected dismissedSessionPullRequestIds: ReadonlySet<string> = new Set();
   protected readonly dismissedWorkspaceConflictRefs = new Map<string, string>();
-  protected catalogMessages: unknown[] = [];
-  protected catalogLoading = false;
-  protected loadingOlder = false;
-  protected catalogCursor: string | undefined;
-  protected catalogSession: SessionCatalogSession | null = null;
-  protected catalogHost: SessionCatalogHost | null = null;
+  readonly history = projectChatFields<{
+    catalogMessages: unknown[];
+    catalogLoading: boolean;
+    loadingOlder: boolean;
+    catalogCursor: string | undefined;
+    catalogSession: SessionCatalogSession | null;
+    catalogHost: SessionCatalogHost | null;
+  }>({
+    catalogMessages: [],
+    catalogLoading: false,
+    loadingOlder: false,
+    catalogCursor: undefined,
+    catalogSession: null,
+    catalogHost: null,
+  });
   protected catalogLoadGeneration = 0;
   protected catalogRequestedSessionKey: string | null = null;
   protected olderLoadGeneration = 0;

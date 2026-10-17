@@ -18,6 +18,7 @@ import {
   prepareSystemdGatewayMaintenance,
   readSystemdGatewayStopTimeout,
 } from "./systemd-maintenance.js";
+import * as systemdScope from "./systemd-scope.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
 
 vi.mock("./service-layout.js", async (original) => ({
@@ -105,7 +106,7 @@ it.each([false, true])(
       expect(commands.some((argv) => argv.includes("daemon-reload"))).toBe(false);
       expect(await fs.readFile(f.sourcePath, "utf8")).toBe(original);
     } else {
-      await expect(preparing).resolves.toBe(true);
+      await expect(preparing).resolves.toEqual({ kind: "refreshed" });
       expect(commands.some((argv) => argv.includes("daemon-reload"))).toBe(true);
       expect(await fs.readFile(f.sourcePath, "utf8")).toContain("TimeoutStopSec=330");
     }
@@ -209,7 +210,7 @@ it.each([
     );
   } else if (scenario !== "reload-failed") {
     const refreshRequired = scenario !== "current-nonstop-override";
-    expect(await prepare()).toBe(refreshRequired);
+    expect(await prepare()).toEqual({ kind: refreshRequired ? "refreshed" : "unchanged" });
     expect(managerTimeout).toBe(unsafeOverride ? 30 : GATEWAY_SERVICE_STOP_TIMEOUT_MS / 1_000);
     expect(reloads).toBe(refreshRequired ? 1 : 0);
     if (scenario === "repairable") {
@@ -240,7 +241,7 @@ it.each([
     }
     expect(await fs.readFile(f.sourcePath, "utf8")).toContain("TimeoutStartSec=30");
   } else {
-    expect(await prepare()).toBe(false);
+    expect(await prepare()).toEqual({ kind: "failed" });
     expect(warnings.join(" ")).toContain("refresh skipped");
     expect(await fs.readFile(f.sourcePath, "utf8")).toBe(original);
     expect(managerTimeout).toBe(30);
@@ -285,7 +286,7 @@ it.each([
         warn: (warning) => warnings.push(warning),
       }),
     );
-    expect(result).toBe(true);
+    expect(result).toEqual({ kind: "refreshed" });
     const refreshed = await fs.readFile(f.sourcePath, "utf8");
     expect(refreshed).toContain("TimeoutStartSec=45");
     expect(refreshed).toContain(`TimeoutStopSec=${stopSeconds === 30 ? 330 : stopSeconds}`);
@@ -295,5 +296,70 @@ it.each([
     expect(native.identity.mock.calls.some(([, args]) => args.includes("daemon-reload"))).toBe(
       true,
     );
+  },
+);
+
+it.each([false, true])("reports current policy as unchanged (stopping: %s)", async (stopping) => {
+  const f = await policyFixture();
+  await fs.writeFile(f.sourcePath, buildSystemdUnit(f.command));
+  native.identity.mockResolvedValue({
+    code: 0,
+    stdout:
+      "LoadState=loaded\nAfter=network-online.target\nWants=network-online.target\nRestartUSec=5s\nKillMode=mixed\nTimeoutStopUSec=330s\n",
+    stderr: "",
+    termination: "exit",
+  });
+  const result = await prepareSystemdGatewayMaintenance({
+    state: installedState(f, false),
+    root: "/old",
+    stopping,
+    assertCurrent: f.assertCurrent,
+    warn: vi.fn(),
+  });
+  expect(result).toEqual({ kind: "unchanged" });
+  expect(native.identity.mock.calls.some(([, args]) => args.includes("daemon-reload"))).toBe(false);
+});
+
+it.each([false, true])(
+  "rechecks system ownership before refresh (live system unit: %s)",
+  async (liveSystemUnit) => {
+    const f = await policyFixture();
+    await fs.writeFile(
+      f.sourcePath,
+      buildSystemdUnit(f.command).replace("TimeoutStopSec=330", "TimeoutStopSec=30"),
+    );
+    native.identity.mockResolvedValue({
+      code: 0,
+      stdout:
+        "LoadState=loaded\nAfter=network-online.target\nWants=network-online.target\nRestartUSec=5s\nKillMode=mixed\nTimeoutStopUSec=30s\n",
+      stderr: "",
+      termination: "exit",
+    });
+    if (liveSystemUnit) {
+      vi.spyOn(systemdScope, "assertNoSystemGatewayOwnership").mockRejectedValue(
+        new Error("A live system unit owns this Gateway"),
+      );
+    }
+    const warnings: string[] = [];
+    const result = await withGatewayServiceOperationLock(f.env, async (assertCurrent) =>
+      prepareSystemdGatewayMaintenance({
+        state: {
+          ...installedState(f, false),
+          definitionMutationCapability: { kind: "sealed", reason: "system-owned" },
+        },
+        root: "/old",
+        stopping: false,
+        assertCurrent,
+        warn: (message) => warnings.push(message),
+      }),
+    );
+    expect(result).toEqual({ kind: liveSystemUnit ? "failed" : "refreshed" });
+    expect(await fs.readFile(f.sourcePath, "utf8")).toContain(
+      `TimeoutStopSec=${liveSystemUnit ? 30 : 330}`,
+    );
+    expect(warnings.join(" ")).not.toContain("SERVICE_DEFINITION_SEALED");
+    if (liveSystemUnit) {
+      expect(warnings.join(" ")).toContain("A live system unit owns this Gateway");
+    }
   },
 );

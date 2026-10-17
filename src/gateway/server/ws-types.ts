@@ -1,6 +1,7 @@
 import type { WebSocket } from "ws";
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { PairedDeviceTokenIdentity } from "../../infra/device-pairing-core.types.js";
+import type { SystemPresence } from "../../infra/system-presence.js";
 import type { UserProfileIdentity } from "../../state/user-profiles.types.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { GatewayAuthPolicy } from "../auth-policy.types.js";
@@ -31,6 +32,11 @@ export type GatewayIngressWebSocket = WebSocket & {
   __openclawPreauthBudgetKey?: string;
 };
 
+export type PresenceDeliverySnapshot = {
+  version: number;
+  rows: Map<string, SystemPresence>;
+};
+
 export type GatewayWsClient = PluginNodeCapabilityClient & {
   socket: GatewayConnectionTransport;
   /** Physical WS liveness capability; absent on transports without ping/pong. */
@@ -50,6 +56,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   sharedGatewaySessionGeneration?: string;
   authPolicy?: GatewayAuthPolicy;
   presenceKey?: string;
+  /** Last projected roster handed to this transport; absent after a drop or reset request. */
+  presenceSnapshot?: PresenceDeliverySnapshot;
   /** Connection-owned timing facts, reconciled across live peers independently of the TTL cache. */
   personPresence?: { onlineSince: number; lastActivityAt?: number };
   /** Accepted interaction on this exact connection, never copied from another client. */

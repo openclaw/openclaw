@@ -601,8 +601,12 @@ its `--timeout` option cannot increase this cap.
 Plugin rehearsal copies are temporary and rebuilt after interruption. Copying
 uses up to four concurrent file copies and avoids a disk flush for every file.
 If a copy fails, active copies finish before cleanup; link publication and
-verification run only after all file copies succeed. Stored state and recovery backups
-retain their existing durability guarantees. An older installed updater keeps
+verification run only after all file copies succeed. Each private copy or inspection
+uses one generous absolute allowance derived from its inventoried size, with the
+caller's larger allowance preserved. Progress remains diagnostic and does not renew
+the allowance. Exceptionally slow storage may require another update attempt after
+a visible timeout. Stored state and recovery backups retain their existing
+durability guarantees. An older installed updater keeps
 its initial snapshot behavior until you launch an update from the newer version.
 
 Runtime retention looks for hoisted dependencies within the package manager's
@@ -670,6 +674,18 @@ directory. `status` reads the operation, `repair` resumes only its recorded
 package publication, and `retire` removes only its recorded obsolete objects.
 These commands do not replace post-update plugin, migration or service recovery.
 Keep other package managers stopped while recovering the operation.
+
+If an updater-owned recovery directory, helper, or journal gains group or other
+permissions, the updater restores owner-only access and warns with the path,
+observed mode, and link count. On Linux, this also clears the effective POSIX ACL
+mask; named ACL entries can remain but no longer grant access. When `getfacl` is
+available, the warning identifies detected ACL entries. Foreign ownership,
+symlinks, unexpected object types, multiply linked files, and permissions that
+cannot be repaired still require intervention. Repairing these private objects
+does not change package-content fingerprints or authorize recovery of modified
+package files.
+If recovery still refuses, automatic update and managed-service handoff reports
+retain its reason code and diagnostic message in the failed phase.
 
 On FreeBSD, `repair` and `retire` read process identity through the recorded
 installation's own `@openclaw/proc-safe` dependency and its FreeBSD platform

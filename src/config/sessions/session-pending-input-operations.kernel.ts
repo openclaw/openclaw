@@ -8,13 +8,15 @@ import {
   withoutSqliteDatabaseWriteScope,
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
-import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import {
   ensureSessionInputCompletionsSchema,
   ensureSessionPendingInputsSchema,
+  hasSessionPendingInputsSchema,
+  SESSION_INPUT_COMPLETIONS_TABLE,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import {
   readSessionEntryIdentity,
   readSessionEntryRow,
@@ -52,8 +54,7 @@ function readPendingInputStage(
   existing: SessionPendingInputRow | undefined,
 ): PendingInputSnapshot {
   const previous =
-    input.trackCompletion &&
-    getAdmittedSqliteSchemaFacts(database.db)?.tables.has("session_input_completions")
+    input.trackCompletion && tableExists(database.db, SESSION_INPUT_COMPLETIONS_TABLE)
       ? readSessionInputCompletion(database, input)
       : undefined;
   const committed =
@@ -167,12 +168,11 @@ export function mutatePendingInput(
           );
         }
         withoutSqliteDatabaseWriteScope(current.db, () => admit("transaction", grant));
-        const schema = getAdmittedSqliteSchemaFacts(current.db);
         if (input.kind === "stage") {
-          if (!schema?.tables.has("session_pending_inputs")) {
+          if (!hasSessionPendingInputsSchema(current.db)) {
             ensureSessionPendingInputsSchema(current.db);
           }
-          if (input.trackCompletion && !schema?.tables.has("session_input_completions")) {
+          if (input.trackCompletion && !tableExists(current.db, SESSION_INPUT_COMPLETIONS_TABLE)) {
             ensureSessionInputCompletionsSchema(current.db);
           }
           if (row) {
@@ -214,7 +214,7 @@ export function mutatePendingInput(
             actor.pendingInputs.set(input.idempotencyKey, receipt.stagedInput);
           }
         } else if (input.kind === "complete") {
-          if (!schema?.tables.has("session_input_completions")) {
+          if (!tableExists(current.db, SESSION_INPUT_COMPLETIONS_TABLE)) {
             ensureSessionInputCompletionsSchema(current.db);
           }
           receipt.outcome = writeSessionInputCompletion(current, input, input.outcome);

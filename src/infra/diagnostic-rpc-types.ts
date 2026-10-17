@@ -1,6 +1,34 @@
 import type { GatewayClientId } from "../../packages/gateway-protocol/src/client-info.js";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/schema/sessions-list.js";
 
+/** Process totals for retained session-list views and their estimated memory. */
+type DiagnosticSessionsListRetentionFields = {
+  type: "sessions.list.retention";
+  views: number;
+  refs: number;
+  estimatedBytes: number;
+};
+
+/** Process totals for per-connection session-event field-hash vectors. */
+export type DiagnosticSessionEventRetentionFields = {
+  type: "sessions.event.retention";
+  entries: number;
+  estimatedBytes: number;
+};
+
+export type SessionsListBaseMissReason = "unknown-base" | "all-rows-changed";
+
+type DiagnosticSessionsListBaselineRetiredFields = {
+  type: "sessions.list.baseline.retired";
+  cause:
+    | "projection-revision"
+    | "config"
+    | "identity"
+    | "selection-reset"
+    | "view-evicted"
+    | "history-evicted";
+};
+
 type SessionsListAttribution = {
   clientKind: GatewayClientId;
   source: "wire" | "internal";
@@ -10,7 +38,7 @@ type SessionsListAttribution = {
 };
 
 /** Payload-free facts from authenticated Gateway WebSocket request owners. */
-export type DiagnosticGatewayRpcFields = {
+type DiagnosticGatewayRpcFields = {
   type: "gateway.rpc";
   /** Registered method name, or a fixed other/unknown bucket. */
   method: string;
@@ -43,6 +71,7 @@ export type DiagnosticGatewayRpcFields = {
       responseBytes?: number;
       sessionsList?: SessionsListAttribution & {
         rowsOutcome: "unchanged" | "delta" | "full-no-base" | "full-with-base" | "not-sidebar";
+        baseMissReason?: SessionsListBaseMissReason;
       };
       chatHistory?: {
         clientKind: GatewayClientId;
@@ -69,7 +98,25 @@ export type DiagnosticGatewayRpcFields = {
     }
 );
 
+export type GatewayWsSessionEventAttribution = {
+  reason: string;
+  delivery: "subscribed" | "roster";
+};
+
 /** Payload-free observations from the physical WebSocket transport. */
-export type DiagnosticGatewayWsFields =
-  | { type: "gateway.ws.event"; event: string; count: number; bytes: number }
+type DiagnosticGatewayWsFields =
+  | {
+      type: "gateway.ws.event";
+      event: string;
+      count: number;
+      bytes: number;
+      sessionEvent?: GatewayWsSessionEventAttribution;
+    }
   | { type: "gateway.ws.connections"; operators: number };
+
+export type DiagnosticGatewayFields =
+  | DiagnosticGatewayRpcFields
+  | DiagnosticGatewayWsFields
+  | DiagnosticSessionsListBaselineRetiredFields
+  | DiagnosticSessionsListRetentionFields
+  | DiagnosticSessionEventRetentionFields;

@@ -83,7 +83,15 @@ function readRuns(database: EngineConnection, sessionId?: string, runId?: string
     .select(["session_id as sessionId", "run_id as runId"])
     .select((eb) => [
       eb.fn.max<number>("created_at").as("newest"),
-      eb.fn.sum<number>(eb(eb.fn<number>("octet_length", ["event_json"]), "+", 1)).as("bytes"),
+      eb.fn
+        .sum<number>(
+          eb(
+            eb.fn.coalesce("event_utf8_bytes", eb.fn<number>("octet_length", ["event_json"])),
+            "+",
+            1,
+          ),
+        )
+        .as("bytes"),
       eb.fn.countAll<number>().as("events"),
       engineTextHexSql(database, eb.ref("session_id")).as("sessionOrder"),
       engineTextHexSql(database, eb.ref("run_id")).as("runOrder"),

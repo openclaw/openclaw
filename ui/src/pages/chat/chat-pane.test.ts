@@ -1026,7 +1026,7 @@ describe("chat pane history pagination intent", () => {
 
     thread.scrollTop = 120;
     pane.handleTranscriptScroll(event);
-    pane.loadingOlder = true;
+    pane.history.loadingOlder = true;
     thread.scrollTop = 80;
     pane.handleTranscriptScroll(event);
 

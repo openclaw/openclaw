@@ -29,7 +29,6 @@ import { runCronCommandJob } from "../cron/command-runner.js";
 import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
-import { toPublicCronJob } from "../cron/public-job.js";
 import { cronScriptFailureMetadata } from "../cron/script-failure.js";
 import { CronService, type CronEvent } from "../cron/service.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
@@ -723,7 +722,34 @@ export function buildGatewayCronService(params: {
         jobSnapshot?.sessionKey ??
         evt.sessionKey;
       const scopedAgentId = jobSnapshot?.owner?.agentId ?? jobSnapshot?.agentId;
-      params.broadcast("cron", evt.job ? { ...evt, job: toPublicCronJob(evt.job) } : evt, {
+      // Views fetch definitions and run details on demand; the sidebar only needs
+      // attention state. Keep the full event for hooks and notifications below.
+      const {
+        job: eventJob,
+        summary: _summary,
+        diagnostics: _diagnostics,
+        delivery: _delivery,
+        ...event
+      } = evt;
+      const payload = {
+        ...event,
+        ...(eventJob
+          ? {
+              job: {
+                ...pickDefined(eventJob, ["id", "name", "agentId", "enabled", "updatedAtMs"]),
+                state: pickDefined(eventJob.state, [
+                  "nextRunAtMs",
+                  "lastRunAtMs",
+                  "lastRunStatus",
+                  "lastStatus",
+                  "runningAtMs",
+                  "autoDisabled",
+                ]),
+              },
+            }
+          : {}),
+      };
+      params.broadcast("cron", payload, {
         dropIfSlow: true,
         ...(scopedSessionKey
           ? {

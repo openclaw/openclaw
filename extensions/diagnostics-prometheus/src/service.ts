@@ -25,6 +25,7 @@ import { recordChildProcessSpawn } from "./service-child-process.js";
 import { recordMemorySample } from "./service-memory.js";
 import { recordModelUsage } from "./service-model-usage.js";
 import { recordOperationTimingEvent } from "./service-operation-timing.js";
+import { recordSessionRetention } from "./service-retention.js";
 import {
   createGatewayWorkMetricsRecorder,
   recordSessionDiagnosticEvent,
@@ -86,6 +87,21 @@ function recordDiagnosticEvent(
         labels,
         evt.bytes,
       );
+      if (evt.sessionEvent) {
+        const sessionLabels = { event: evt.event, ...evt.sessionEvent };
+        store.counter(
+          "openclaw_gateway_ws_session_event_frames_total",
+          "Outbound session event frames by reason and exact message subscription per socket.",
+          sessionLabels,
+          evt.count,
+        );
+        store.counter(
+          "openclaw_gateway_ws_session_event_bytes_total",
+          "Encoded outbound session event bytes by reason and exact message subscription per socket.",
+          sessionLabels,
+          evt.bytes,
+        );
+      }
       return;
     }
     case "gateway.ws.connections":
@@ -98,6 +114,12 @@ function recordDiagnosticEvent(
         );
       }
       return;
+    case "sessions.list.retention":
+    case "sessions.event.retention":
+      if (metadata.trusted) {
+        recordSessionRetention(store, evt);
+      }
+      return;
     case "worker.request":
       if (metadata.trusted) {
         recordWorkerRequest(store, evt);
@@ -107,6 +129,7 @@ function recordDiagnosticEvent(
     case "secret.egress":
     case "tool.catalog":
     case "gateway.rpc":
+    case "sessions.list.baseline.retired":
     case "gateway.http.cancelled":
     case "diagnostic.gc":
     case "gateway.event_loop.sample":

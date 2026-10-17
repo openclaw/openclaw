@@ -17,6 +17,7 @@ packages/agent-core/package.json
 packages/agent-core/src/harness/env/kill-tree.ts
 packages/agent-core/src/harness/messages.ts
 packages/agent-core/src/harness/session/tool-result-pairing.ts
+packages/agent-core/src/harness/session/transcript-model.ts
 packages/agent-core/src/operator-messages.ts
 packages/gateway-client/package.json
 packages/gateway-client/src/timeouts.ts
@@ -916,6 +917,7 @@ src/infra/delivery-queue-retention-columns.ts
 src/infra/delivery-queue-sqlite-bound.ts
 src/infra/delivery-queue-sqlite.types.ts
 src/infra/diagnostic-event-listener-presence.ts
+src/infra/diagnostic-event-queue-policy.ts
 src/infra/diagnostic-event-snapshot.ts
 src/infra/diagnostic-events.ts
 src/infra/diagnostic-flags-env.ts
@@ -939,7 +941,6 @@ src/infra/dotenv-global-core.ts
 src/infra/dotenv-global.ts
 src/infra/dotenv.ts
 src/infra/ed25519-signature.ts
-src/infra/env-log.runtime.ts
 src/infra/env.ts
 src/infra/errno.ts
 src/infra/child-runtime-viability.ts
@@ -1860,6 +1861,7 @@ src/state/openclaw-agent-db-registry.read.ts
 src/state/openclaw-agent-db-registry.ts
 src/state/openclaw-agent-db-registry.worker.ts
 src/state/openclaw-agent-db-resources.ts
+src/state/openclaw-agent-db-schema-admission.ts
 src/state/openclaw-agent-db-schema-compatibility.ts
 src/state/openclaw-agent-db-schema-helpers.ts
 src/state/openclaw-agent-db-schema-read.ts
@@ -1891,7 +1893,6 @@ src/state/openclaw-agent-outbox-sequence-migration.ts
 src/state/openclaw-agent-participants-migration.ts
 src/state/openclaw-agent-pending-inputs-schema.ts
 src/state/openclaw-agent-progress-card-schema.ts
-src/state/openclaw-agent-schema-inspection-operations.worker.ts
 src/state/openclaw-agent-schema-inspection-response.ts
 src/state/openclaw-agent-schema-inspection-worker.ts
 src/state/openclaw-agent-schema.sql
@@ -1905,6 +1906,7 @@ src/state/openclaw-agent-session-snapshots-schema.ts
 src/state/openclaw-agent-session-transcript-archive-schema.ts
 src/state/openclaw-agent-standing-intents-schema.ts
 src/state/openclaw-agent-storage-schema.ts
+src/state/openclaw-agent-trajectory-storage-migration.ts
 src/state/openclaw-agent-transcript-fts-schema-source.ts
 src/state/openclaw-agent-transcript-fts-schema.ts
 src/state/openclaw-agent-transcript-payload-migration.ts

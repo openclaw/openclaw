@@ -524,7 +524,7 @@ export function createUsagePage(context: ApplicationContext) {
       data: {
         loading: usageLoading(),
         exporting: usageExportRequest.pending,
-        error: usageError,
+        error: usageError ?? usageResult()?.partial?.message ?? null,
         sessions: usageRosterResult()?.sessions ?? [],
         sessionPage: usageRosterResult()?.overview,
         creatorOptions: usageCreatorOptions(),

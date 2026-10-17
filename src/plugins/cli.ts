@@ -36,7 +36,10 @@ export async function registerPluginCliCommandsFromValidatedConfig(
   const session = options?.session ?? createPluginCliLoadSession(getPluginCache());
   try {
     const snapshot = await session.readConfig(() =>
-      readConfigFileSnapshot({ skipPluginValidation: options?.skipPluginValidation }),
+      readConfigFileSnapshot({
+        observe: false,
+        skipPluginValidation: options?.skipPluginValidation,
+      }),
     );
     if (!snapshot.valid) {
       throw createInvalidConfigError(snapshot.path, formatInvalidConfigDetails(snapshot.issues));

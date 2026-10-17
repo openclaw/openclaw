@@ -5,10 +5,6 @@ import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import { channelOmitsEnvBackedSetupOption } from "../channels/plugins/cli-add-options.js";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
-import {
-  resolveChannelsAddChannelFromArgv,
-  resolveChannelsAddOptions,
-} from "./channels-cli-add-args.js";
 import { registerChannelsCli } from "./channels-cli.js";
 
 const listBundledPackageChannelMetadataMock = vi.hoisted(() =>
@@ -311,22 +307,41 @@ describe("registerChannelsCli", () => {
     },
   );
 
-  it("forwards only explicitly supplied setup options", () => {
-    const sources = new Map<string, "cli" | "default">([
-      ["channel", "cli"],
-      ["signalTransport", "cli"],
-      ["useEnv", "default"],
+  it("forwards only explicitly supplied setup options", async () => {
+    listBundledPackageChannelMetadataMock.mockReturnValueOnce([
+      createSetupChannel("signal", [
+        {
+          key: "signalTransport",
+          kind: "choice",
+          choices: ["external-native", "container"],
+          cli: { flags: "--signal-transport <kind>", description: "Signal transport kind" },
+        },
+        {
+          key: "useEnv",
+          kind: "boolean",
+          cli: {
+            flags: "--use-env",
+            description: "Use environment credentials",
+            defaultValue: false,
+          },
+        },
+      ]),
     ]);
 
-    expect(
-      resolveChannelsAddOptions(
-        undefined,
-        { channel: "signal", signalTransport: "container", useEnv: false },
-        {
-          getOptionValueSource: (key) => sources.get(key),
-        } as Pick<Command, "getOptionValueSource">,
-      ),
-    ).toEqual({ channel: "signal", signalTransport: "container" });
+    await runChannelsAddCli([
+      "channels",
+      "add",
+      "--channel",
+      "signal",
+      "--signal-transport",
+      "container",
+    ]);
+
+    expect(channelsAddCommandMock).toHaveBeenCalledWith(
+      { channel: "signal", signalTransport: "container", agent: undefined },
+      runtimeMock,
+      { hasFlags: true },
+    );
   });
 
   it("omits empty legacy integer defaults while still rejecting explicit blanks", async () => {
@@ -497,23 +512,23 @@ describe("registerChannelsCli", () => {
         kind: "string",
         cli: { flags: "--mode <mode>", description: "Chat A mode" },
       }),
-      channelWithSetupField("chat-b", {
+      channelWithSetupField("telegram", {
         key: "mode",
         kind: "boolean",
-        cli: { flags: "--mode", description: "Enable Chat B mode" },
+        cli: { flags: "--mode", description: "Enable Telegram mode" },
       }),
     ]);
 
-    await expect(
-      resolveChannelsAddChannelFromArgv([
-        "node",
-        "openclaw",
-        "channels",
-        "add",
-        "--mode",
-        "telegram",
-      ]),
-    ).resolves.toBeUndefined();
+    const args = ["channels", "add", "--mode", "telegram"];
+    const program = new Command().name("openclaw").exitOverride();
+    program.configureOutput({ writeErr: () => {} });
+    await registerChannelsCli(program, ["node", "openclaw", ...args]);
+
+    await expect(program.parseAsync(args, { from: "user" })).rejects.toMatchObject({
+      code: "commander.unknownOption",
+      message: expect.stringContaining("unknown option '--mode'"),
+    });
+    expect(channelsAddCommandMock).not.toHaveBeenCalled();
   });
 
   it("finds a positional channel after shared option-value pairs", async () => {

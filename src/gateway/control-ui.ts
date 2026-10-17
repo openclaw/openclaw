@@ -92,6 +92,7 @@ import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
 } from "./ingress-attribution.js";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { readControlUiRootAsset, type ControlUiRootState } from "./server-control-ui-root.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
@@ -582,6 +583,7 @@ async function prepareControlUiBootstrapConfig(
     res,
     cfg: opts?.cfg ?? opts?.config,
     replyOnFailure,
+    requiredOperatorMethod: "sessions.list",
     onPluginFrameGrants: (grants) => {
       pluginFrameGrants = grants;
     },
@@ -610,13 +612,15 @@ async function prepareControlUiBootstrapConfig(
           : { avatar: identity.avatar, resolution: null };
       return { identity, agentId: resolvedIdentity?.agentId, avatarProjection };
     })(),
-    import("./control-ui-plugin-assets.js").then(({ listControlUiPluginCatalog }) =>
-      listControlUiPluginCatalog().then(
-        ({ plugins }) => plugins,
-        // The post-connect plugins.controlUi.list RPC owns user-visible catalog errors.
-        () => [],
-      ),
-    ),
+    authorizeOperatorScopesForMethod("plugins.controlUi.list", requestAuth.operatorScopes).allowed
+      ? import("./control-ui-plugin-assets.js").then(({ listControlUiPluginCatalog }) =>
+          listControlUiPluginCatalog().then(
+            ({ plugins }) => plugins,
+            // The post-connect plugins.controlUi.list RPC owns user-visible catalog errors.
+            () => [],
+          ),
+        )
+      : [],
     resolveDevInstallGitBranch(),
     import("./control-ui-bootstrap-preferences.js").then(
       ({ prepareControlUiBootstrapPreferences }) =>

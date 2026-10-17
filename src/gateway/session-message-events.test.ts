@@ -483,11 +483,13 @@ describe("session.message websocket events", () => {
       await redeclaredPresence;
 
       const disconnectPresence = onceMessage(observerWs, (message) => {
-        const entry = findWatchedEntry(message);
-        return entry?.reason === "disconnect" && entry.watchedSessions === undefined;
+        // A live sibling with the same signed device keeps the closed tab out of the roster.
+        const record = requireRecord(message, "presence event");
+        return record.event === "presence" && findWatchedEntry(record) === undefined;
       });
       watchedWs.close();
       const disconnectedEvent = await disconnectPresence;
+      expect(findWatchedEntry(disconnectedEvent)).toBeUndefined();
       const hiddenPresenceVersion = hiddenEvent.stateVersion?.presence;
       expect(disconnectedEvent.stateVersion?.presence).toBeGreaterThan(
         typeof hiddenPresenceVersion === "number" ? hiddenPresenceVersion : 0,

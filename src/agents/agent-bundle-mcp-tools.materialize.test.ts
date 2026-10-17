@@ -99,6 +99,7 @@ async function executeMcpToolResult(result: CallToolResult) {
 describe("createBundleMcpToolRuntime", () => {
   afterEach(() => {
     mcpUiResourceTesting.clearViewStore();
+    vi.restoreAllMocks();
   });
 
   it("joins concurrent disposal without releasing the captured lease twice", async () => {
@@ -218,12 +219,12 @@ describe("createBundleMcpToolRuntime", () => {
           throw cleanupFailure;
         }
       };
+      const runtimeModule = await import("./agent-bundle-mcp-runtime.js");
+      vi.spyOn(runtimeModule, "createSessionMcpRuntime").mockReturnValueOnce(runtime);
       const work = new AsyncWorkScope();
       const cleanupScope = createAgentCleanupScope();
       const pending = cleanupScope.run(() =>
-        work.track(() =>
-          createBundleMcpToolRuntime({ workspaceDir: "/tmp", createRuntime: () => runtime }),
-        ),
+        work.track(() => createBundleMcpToolRuntime({ workspaceDir: "/tmp" })),
       );
       let settled = false;
       void pending
@@ -280,13 +281,14 @@ describe("createBundleMcpToolRuntime", () => {
           ? vi.fn().mockRejectedValue(new Error("cleanup failed"))
           : vi.fn(async () => {});
       runtime.joinCleanup = vi.fn(async () => {});
+      const runtimeModule = await import("./agent-bundle-mcp-runtime.js");
+      vi.spyOn(runtimeModule, "createSessionMcpRuntime").mockReturnValueOnce(runtime);
       const cleanupScope = createAgentCleanupScope();
       await cleanupScope.run(async () => {
         await expect(
           (async () => {
             const materialized = await createBundleMcpToolRuntime({
               workspaceDir: "/tmp",
-              createRuntime: () => runtime,
             });
             await materialized.dispose();
           })(),
@@ -626,9 +628,15 @@ describe("createBundleMcpToolRuntime", () => {
   });
 
   it("materializes configured MCP tools through the session runtime boundary", async () => {
-    const created: Parameters<
-      NonNullable<Parameters<typeof createBundleMcpToolRuntime>[0]["createRuntime"]>
-    >[0][] = [];
+    const runtimeModule = await import("./agent-bundle-mcp-runtime.js");
+    const created: Parameters<typeof runtimeModule.createSessionMcpRuntime>[0][] = [];
+    vi.spyOn(runtimeModule, "createSessionMcpRuntime").mockImplementationOnce((params) => {
+      created.push(params);
+      return makeToolRuntime({
+        serverName: "configuredProbe",
+        resultText: "FROM-CONFIG",
+      });
+    });
     const runtime = await createBundleMcpToolRuntime({
       workspaceDir: "/workspace",
       cfg: {
@@ -643,13 +651,6 @@ describe("createBundleMcpToolRuntime", () => {
             },
           },
         },
-      },
-      createRuntime: (params) => {
-        created.push(params);
-        return makeToolRuntime({
-          serverName: "configuredProbe",
-          resultText: "FROM-CONFIG",
-        });
       },
     });
 
