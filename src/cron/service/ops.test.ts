@@ -498,11 +498,11 @@ describe("cron service operations", () => {
   });
 
   it("uses explicit lifecycle events instead of scheduled duplicates for the target job", async () => {
-    const { storePath } = await makeStorePath();
+    const { storePath: lifecycleStorePath } = await makeStorePath();
     const now = Date.parse("2026-06-09T00:00:00.000Z");
     const events: CronEvent[] = [];
     const state = createOkIsolatedCronState({
-      storePath,
+      storePath: lifecycleStorePath,
       now,
       onEvent: (event) => events.push(structuredClone(event)),
     });

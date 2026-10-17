@@ -55,12 +55,12 @@ describe("readSessionMethodAccess", () => {
   });
 
   it("requires admin for privileged create params", () => {
-    const access = readSessionMethodAccess(snapshot({ scopes: ["operator.write"] }), {
+    const result = readSessionMethodAccess(snapshot({ scopes: ["operator.write"] }), {
       method: "sessions.create",
       params: { agentId: "main", incognito: true },
     });
-    expect(access.allowed).toBe(false);
-    expect(access).toMatchObject({
+    expect(result.allowed).toBe(false);
+    expect(result).toMatchObject({
       cause: "missing-scope",
       requiredScope: "operator.admin",
     });
