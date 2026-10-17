@@ -107,9 +107,16 @@ describe("async login-shell PATH preparation", () => {
     const probe = await holdProbe();
     const options = { env: {}, platform: "linux" as const };
     const pending = prepareShellPathFromLoginShell(options);
-    probe.sync.mockReturnValue(Buffer.from("\0PATH=/sync/bin\0"));
+    // The default sync probe redirects stdout to a temp file; answer through the fd.
+    probe.sync.mockImplementation(((_file: string, _args: readonly string[], execOptions) => {
+      const stdio = (execOptions as { stdio: [string, number, number] }).stdio;
+      fs.writeSync(stdio[1], "\0PATH=/sync/bin\0");
+      return Buffer.alloc(0);
+    }) as typeof childProcess.execFileSync);
     expect(getShellPathFromLoginShell(options)).toBe("/sync/bin");
-    expect(probe.exec.mock.calls[0]).toEqual(probe.sync.mock.calls[0]);
+    expect(probe.sync.mock.calls[0]?.[0]).toBe(probe.exec.mock.calls[0]?.[0]);
+    expect(probe.sync.mock.calls[0]?.[1]).toEqual(probe.exec.mock.calls[0]?.[1]);
+    expect(probe.sync.mock.calls[0]?.[2]).toMatchObject({ detached: true });
     expect(probe.exec.mock.calls[0]?.[2]).toMatchObject({
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -265,6 +272,101 @@ describe("async login-shell PATH preparation", () => {
     probe.finish(null);
     await Promise.all([first, second]);
   });
+});
+
+describe("sync login-shell probe stdio", () => {
+  // The default sync probe runs the real execFileSync; route it through a fake login-shell
+  // script so tests control the shell's exit and its descendants.
+  function mockExecThroughScript(script: string) {
+    const root = tempDirs.make("openclaw-shell-env-probe-");
+    const scriptPath = path.join(root, "fake-login-shell.sh");
+    fs.writeFileSync(scriptPath, script, { mode: 0o755 });
+    const realExecFileSync = childProcess.execFileSync;
+    const calls: Array<readonly [string, readonly string[]]> = [];
+    vi.doMock("node:child_process", () => ({
+      ...childProcess,
+      execFileSync: (
+        file: string,
+        args: readonly string[],
+        options: childProcess.ExecFileSyncOptionsWithBufferEncoding,
+      ) => {
+        calls.push([file, args]);
+        return realExecFileSync(scriptPath, [], options);
+      },
+    }));
+    vi.resetModules();
+    return { calls, module: import("./shell-env.js") };
+  }
+
+  afterEach(() => {
+    vi.doUnmock("node:child_process");
+    vi.restoreAllMocks();
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "returns the login-shell env without waiting on descendant-held pipes",
+    async () => {
+      const { calls, module } = mockExecThroughScript(
+        "#!/bin/sh\nprintf '\\0PATH=/login-shell/bin\\0OPENAI_API_KEY=from-shell\\0'\nsleep 30 &\nexit 0\n",
+      );
+      const shellEnv = await module;
+      const started = Date.now();
+      expect(
+        shellEnv.getShellPathFromLoginShell({ env: {}, timeoutMs: 10_000, platform: "linux" }),
+      ).toBe("/login-shell/bin");
+      expect(Date.now() - started).toBeLessThan(5_000);
+      expect(calls[0]).toStrictEqual(["/bin/sh", ["-l", "-c", "printf '\\0'; env -0"]]);
+    },
+    20_000,
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "returns identical output for a login shell without background children",
+    async () => {
+      const { module } = mockExecThroughScript(
+        "#!/bin/sh\nprintf 'startup banner\\n'\nprintf '\\0PATH=/login-shell/bin:/usr/bin\\0OPENAI_API_KEY=from-shell\\0'\nexit 0\n",
+      );
+      const shellEnv = await module;
+      expect(shellEnv.getShellPathFromLoginShell({ env: {}, platform: "linux" })).toBe(
+        "/login-shell/bin:/usr/bin",
+      );
+    },
+    20_000,
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "keeps startup stderr in probe failure errors",
+    async () => {
+      const { module } = mockExecThroughScript("#!/bin/sh\necho 'profile exploded' >&2\nexit 3\n");
+      const shellEnv = await module;
+      const result = shellEnv.loadShellEnvFallback({
+        enabled: true,
+        env: {},
+        expectedKeys: ["OPENAI_API_KEY"],
+        logger: { warn: () => {} },
+        platform: "linux",
+      });
+      if (result.ok) {
+        throw new Error("expected the failing login shell to fail the probe");
+      }
+      expect(result.error).toContain("profile exploded");
+    },
+    20_000,
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "still times out a login shell that never exits",
+    async () => {
+      const { module } = mockExecThroughScript("#!/bin/sh\nsleep 60\n");
+      const shellEnv = await module;
+      const started = Date.now();
+      expect(
+        shellEnv.getShellPathFromLoginShell({ env: {}, timeoutMs: 1_000, platform: "linux" }),
+      ).toBeNull();
+      expect(Date.now() - started).toBeLessThan(10_000);
+    },
+    20_000,
+  );
 });
 
 describe("shell env fallback", () => {

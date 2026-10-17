@@ -124,6 +124,69 @@ function createLoginShellExecSpec(params: LoginShellExecParams) {
   return { shell: params.shell, args, options };
 }
 
+/**
+ * execFileSync waits for EOF on piped stdio. A login startup file that leaves a background
+ * process holding the pipes open (keychain, ssh-agent, …) stalls the probe until the timeout
+ * even though the shell itself exited long ago, and the env import fails. Redirecting stdio
+ * to temp files removes the pipes, so the probe settles as soon as the login shell exits.
+ */
+function execLoginShellEnvZeroSync(spec: ReturnType<typeof createLoginShellExecSpec>): Buffer {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-env-"));
+  const stdoutPath = path.join(tempDir, "stdout");
+  const stderrPath = path.join(tempDir, "stderr");
+  let stdoutFd: number | undefined;
+  let stderrFd: number | undefined;
+  const closeDescriptors = () => {
+    for (const fd of [stdoutFd, stderrFd]) {
+      if (fd !== undefined) {
+        try {
+          fs.closeSync(fd);
+        } catch {
+          // Best effort; the probe result does not depend on close failures.
+        }
+      }
+    }
+    stdoutFd = undefined;
+    stderrFd = undefined;
+  };
+  try {
+    stdoutFd = fs.openSync(stdoutPath, "wx", 0o600);
+    stderrFd = fs.openSync(stderrPath, "wx", 0o600);
+    try {
+      execFileSync(spec.shell, spec.args, {
+        ...spec.options,
+        stdio: ["ignore", stdoutFd, stderrFd],
+      });
+    } catch (err) {
+      closeDescriptors();
+      // execFileSync embeds captured stderr in thrown errors; preserve that diagnostic
+      // now that stderr is redirected to a file.
+      const stderr = fs.readFileSync(stderrPath);
+      if (stderr.length > 0 && err instanceof Error) {
+        (err as Error & { stderr?: Buffer }).stderr ??= stderr;
+        const text = stderr.toString("utf8");
+        if (!err.message.includes(text)) {
+          err.message = `${err.message}\n${text}`;
+        }
+      }
+      throw err;
+    }
+    closeDescriptors();
+    const stdout = fs.readFileSync(stdoutPath);
+    // Piped stdio fails with ENOBUFS past maxBuffer; keep the same bound on file output.
+    if (
+      stdout.length > spec.options.maxBuffer ||
+      fs.statSync(stderrPath).size > spec.options.maxBuffer
+    ) {
+      throw Object.assign(new Error(`spawnSync ${spec.shell} ENOBUFS`), { code: "ENOBUFS" });
+    }
+    return stdout;
+  } finally {
+    closeDescriptors();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
 function execLoginShellEnvZeroAsync(params: LoginShellExecParams): Promise<Buffer> {
   const { shell, args, options } = createLoginShellExecSpec(params);
   return new Promise((resolve, reject) => {
@@ -297,7 +360,12 @@ function probeLoginShellEnv(
 
   try {
     const spec = createLoginShellExecSpec(request);
-    const stdout = exec(spec.shell, spec.args, spec.options);
+    // Injected exec implementations (tests) receive the historical piped spec. The default
+    // sync probe redirects stdio through temp files so descendant-held pipes cannot stall it.
+    const stdout =
+      exec === execFileSync
+        ? execLoginShellEnvZeroSync(spec)
+        : exec(spec.shell, spec.args, spec.options);
     const shellEnv = parseShellEnv(stdout);
     // Failed startup can recover on the next lookup; retain only successful probes.
     loginShellEnvProbeCache.set(cacheKey, [...shellEnv.entries()]);
