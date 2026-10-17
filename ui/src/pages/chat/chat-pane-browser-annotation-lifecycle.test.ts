@@ -291,6 +291,38 @@ it("discards a staged package captured without a client when the first client ar
   expectPayloads([ordinary], [annotation]);
 });
 
+it("publishes annotation capture, removal, and Undo through the composer owner", async () => {
+  const { mount } = mountedPanes();
+  const pane = mount();
+  pane.active = true;
+  const state = pane.state;
+  const source = getPaneTestRuntime(pane).chatState.composerDraft;
+  const published: ChatAttachment[][] = [];
+  const unsubscribe = source.subscribe(() => published.push(source.read().attachments));
+  const toastHost = document.createElement("openclaw-toast-host");
+  document.body.append(toastHost);
+
+  try {
+    receive(pane);
+    const attachment = state.chatAttachments[0]!;
+    expect(published.at(-1)).toEqual([attachment]);
+
+    (pane as AnnotationPane).removeBrowserAnnotation(attachment);
+    expect(published.at(-1)).toEqual([]);
+    await waitForSolid(() =>
+      expect(toastHost.querySelector(".app-toast__action")?.textContent).toBe("Undo"),
+    );
+    toastHost.querySelector<HTMLButtonElement>(".app-toast__action")!.click();
+
+    expect(published.at(-1)).toEqual([attachment]);
+    expect(state.chatAttachments[0]).toBe(attachment);
+    pane.discardStagedAttachments?.();
+  } finally {
+    unsubscribe();
+    toastHost.remove();
+  }
+});
+
 it("invalidates annotation Undo when the logical Gateway client is replaced", async () => {
   const { pane, state, annotation, ordinary } = annotatedPane();
   const toastHost = document.createElement("openclaw-toast-host");

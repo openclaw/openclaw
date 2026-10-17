@@ -25,10 +25,9 @@ export abstract class ChatPaneBrowserAnnotationRender extends ChatPaneHeader {
         getAttachments: () => this.state?.chatAttachments ?? [],
         setAttachments: (attachments) => {
           if (this.state) {
-            this.state.chatAttachments = attachments;
+            this.chatState.attachmentInputProps(this.state).onAttachmentsChange(attachments);
           }
         },
-        requestUpdate: () => this.state?.requestUpdate?.(),
         focusComposer: () =>
           focusAfterUpdate(() => getChatComposerState(this.presentationId).composerTextarea),
         // Restored attachment cards own their controls; resolve after the card commits.

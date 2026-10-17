@@ -65,13 +65,14 @@ describe("browser annotation admission", () => {
         annotation("three"),
         annotation("four"),
       ],
-      requestUpdate: vi.fn(),
     } as unknown as ChatPageHost;
     const event = new CustomEvent<BrowserAnnotationDraft>("openclaw:browser-annotation", {
       detail: draft("Rejected context"),
       cancelable: true,
     });
-    expect(receiveBrowserAnnotation(state, true, event, 0)).toBe(false);
+    const replaceAttachments = vi.fn();
+    expect(receiveBrowserAnnotation(state, true, event, 0, replaceAttachments)).toBe(false);
+    expect(replaceAttachments).not.toHaveBeenCalled();
     expect(event.defaultPrevented).toBe(false);
     expect((event as BrowserAnnotationEvent).rejection).toBe("limit");
     expect(state.chatAttachments).toHaveLength(4);
@@ -85,23 +86,25 @@ describe("browser annotation admission", () => {
       hello: {
         policy: { maxPayload: 256 * 1024 + 12, attachments: { maxBytes: 100, maxImageBytes: 100 } },
       },
-      requestUpdate: vi.fn(),
     } as unknown as ChatPageHost;
     const capture = () =>
       new CustomEvent<BrowserAnnotationDraft>("openclaw:browser-annotation", {
         detail: draft("Page context"),
         cancelable: true,
       });
+    const replaceAttachments = (attachments: ChatAttachment[]) => {
+      state.chatAttachments = attachments;
+    };
 
     const rejected = capture();
-    expect(receiveBrowserAnnotation(state, true, rejected, 5)).toBe(false);
+    expect(receiveBrowserAnnotation(state, true, rejected, 5, replaceAttachments)).toBe(false);
     expect(rejected.defaultPrevented).toBe(false);
     expect(state.chatAttachments).toEqual([]);
     expect(showToast).toHaveBeenCalledExactlyOnceWith({
       message: "Too large to send: annotated-page.png",
     });
 
-    expect(receiveBrowserAnnotation(state, true, capture(), 0)).toBe(true);
+    expect(receiveBrowserAnnotation(state, true, capture(), 0, replaceAttachments)).toBe(true);
     expect(state.chatAttachments).toHaveLength(1);
   });
 });

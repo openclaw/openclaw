@@ -188,14 +188,17 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
 
   /** Receives one complete browser annotation without mixing generated context into the user's draft. */
   protected receiveBrowserAnnotation(event: Event): void {
+    const state = this.state;
     if (
+      !state ||
       !admitBrowserAnnotation(
-        this.state,
+        state,
         this.active && this.presented,
         event,
         this.chatState.attachmentReads.pendingBytes(
-          resolveChatAttachmentLimits(this.state?.hello?.policy),
+          resolveChatAttachmentLimits(state.hello?.policy),
         ),
+        this.chatState.attachmentInputProps(state).onAttachmentsChange,
       )
     ) {
       return;
