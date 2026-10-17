@@ -9,6 +9,7 @@ import {
   BlobsterUnsupportedRuntimeError,
 } from "../../agents/blobster-generation-errors.js";
 import { generateBlobsterForAgent } from "../../agents/blobster-generation.js";
+import { isLlmOperatorAuthorizationError } from "../../plugins/runtime/runtime-llm-error.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
 
@@ -59,6 +60,12 @@ export const agentAvatarGenerateHandler = defineValidatedGatewayMethod(
   (error) => {
     if (error instanceof BlobsterGenerationAuthorityChangedError) {
       return errorShape(ErrorCodes.UNAVAILABLE, error.message);
+    }
+    if (isLlmOperatorAuthorizationError(error)) {
+      return errorShape(
+        ErrorCodes.FORBIDDEN,
+        "Avatar generation is not authorized for this operator or model. Choose an allowed model or ask a Gateway administrator to update your role's model policy.",
+      );
     }
     if (error instanceof BlobsterUnsupportedRuntimeError) {
       return errorShape(

@@ -103,6 +103,25 @@ it("retries once when the model returns an invalid design", async () => {
   );
 });
 
+it("retries a design with an empty description before returning a preview", async () => {
+  complete.mockResolvedValueOnce({ text: JSON.stringify({ ...design, description: "" }) });
+  const result = await generateBlobsterForAgent(input);
+  expect(result.description).toBe(design.description);
+  expect(complete).toHaveBeenCalledTimes(2);
+});
+
+it("passes model-policy denials through the typed completion authorization mapper", async () => {
+  complete.mockImplementationOnce(async (request) => {
+    throw request.mapOperatorAuthorizationError(
+      new Error("Your operator role cannot use this model."),
+    );
+  });
+  await expect(generateBlobsterForAgent(input)).rejects.toMatchObject({
+    code: "LLM_COMPLETION_NOT_AUTHORIZED",
+  });
+  expect(complete).toHaveBeenCalledTimes(1);
+});
+
 it("does not retry provider errors", async () => {
   complete.mockRejectedValueOnce(new Error("provider offline"));
   await expect(generateBlobsterForAgent(input)).rejects.toThrow("provider offline");

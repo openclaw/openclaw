@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { BlobsterUnsupportedRuntimeError } from "../../agents/blobster-generation-errors.js";
+import { createLlmOperatorAuthorizationError } from "../../plugins/runtime/runtime-llm-error.js";
 import { agentAvatarGenerateHandler } from "./agents-avatar.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
@@ -131,6 +132,20 @@ describe("agents.avatar.generate", () => {
         code: "UNAVAILABLE",
         message:
           "The selected agent runtime cannot generate avatars without tools. Choose a supported runtime and try again.",
+      }),
+    );
+  });
+
+  it("returns an actionable authorization error for a disallowed selected model", async () => {
+    generation.mockRejectedValue(
+      createLlmOperatorAuthorizationError(new Error("Your operator role cannot use this model.")),
+    );
+    expect(await generate({ agentId: "garden", prompt: "A gardener" })).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "FORBIDDEN",
+        message: expect.stringContaining("Choose an allowed model"),
       }),
     );
   });

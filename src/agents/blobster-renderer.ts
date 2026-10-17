@@ -40,7 +40,7 @@ export const blobsterDesignSchema = z.strictObject({
     .max(80)
     .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
   name: z.string().min(1).max(120),
-  description: z.string().max(1_000),
+  description: z.string().min(1).max(1_000),
   palette: z.strictObject({ shell: color, claw: color, glint: color }),
   layers: z.strictObject({
     back: fragment,

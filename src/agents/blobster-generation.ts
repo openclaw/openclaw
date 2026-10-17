@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createLlmOperatorAuthorizationError } from "../plugins/runtime/runtime-llm-error.js";
 import type { AdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import gardener from "./blobster-fixtures/garden-keeper.json" with { type: "json" };
@@ -88,6 +89,7 @@ export async function generateBlobsterForAgent(params: {
       answerTokenBudget: 6_000,
       assertCurrent: params.assertCurrent,
       operatorAuthority: params.operatorAuthority,
+      mapOperatorAuthorizationError: createLlmOperatorAuthorizationError,
       abortSignal: params.signal,
     });
     params.assertCurrent();
