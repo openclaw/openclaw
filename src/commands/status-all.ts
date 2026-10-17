@@ -163,7 +163,6 @@ async function resolveStatusAllLocalDiagnosis(params: {
   };
 }
 
-// Entry point for `openclaw status --all`.
 // Orchestrates the scan, local service probes, and report rendering while report builders own formatting.
 
 /** Runs the full read-only status report and writes it to the runtime logger. */

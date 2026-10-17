@@ -1,4 +1,3 @@
-// Post-selection model/auth sanity checks shown during onboarding and agent setup.
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
 import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles.js";
 import { createModelAuthAvailabilityResolver } from "../agents/model-auth-availability.js";
