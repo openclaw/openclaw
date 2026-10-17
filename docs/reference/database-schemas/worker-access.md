@@ -2132,13 +2132,13 @@ Both stages still read the exact stored payload bytes, and the conditional updat
 rejects concurrent edits. Missing residency uses the existing worker readers.
 Admission- and projection-preserving rewrites publish through the same actor owner;
 resets, cold archives, and incompatible writes invalidate its retained facts.
-SQLite turn preparation in the serialized execution worker reuses the actor's
+SQLite and PostgreSQL turn preparation in the serialized execution worker reuse the actor's
 committed exact entry, window, pending-input rows, and transcript version. Existing
 write receipts keep these facts current; missing residency, moved keys, cold
 archives, and turn mutations retain canonical readers. Idempotency still reads
 the canonical identity because a bounded transcript window cannot prove absence.
 Source validation, pending-input custody, and final write authority remain with
-their existing owners. PostgreSQL retains canonical preparation.
+their existing owners.
 Bounded context reads inside the actor transaction also derive logical parents
 from its active positions and identities and reuse its projection, reset, and
 prefix facts; standalone reads retain their SQL lookups. Hydration does not

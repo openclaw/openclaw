@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isPostgresSqlConnection, sqlPublicationAnchor } from "../../infra/sql-connection.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import {
   readSqliteDatabasePendingScopedWriteToken,
   readSqliteDatabaseScopedWriteToken,
@@ -408,9 +408,7 @@ export function createSessionActorWorker(
   return {
     prepareTurn(input: SessionTurnPlan) {
       const database = context.open();
-      const resident = isPostgresSqlConnection(database.db)
-        ? undefined
-        : retainedState(database, input.sessionKey);
+      const resident = retainedState(database, input.sessionKey);
       // Only the exact current window proves runtime selection. Moved, cold, or
       // evicted sessions retain canonical preparation, without hydrating an actor.
       const reusable =
