@@ -1,3 +1,6 @@
+/**
+ * Public SDK type surface for model provider and model definition config.
+ */
 import type { ModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ModelApi } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

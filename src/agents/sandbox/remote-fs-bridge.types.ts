@@ -9,6 +9,7 @@ export type ResolvedRemotePath = SandboxResolvedPath & {
   mountRootPath: string;
 };
 
+/** Minimal remote shell contract used by the SSH filesystem bridge. */
 export type RemoteShellSandboxHandle = {
   remoteWorkspaceDir: string;
   remoteAgentWorkspaceDir: string;

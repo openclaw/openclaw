@@ -1,3 +1,5 @@
+/** Public SDK subpath for runtime logging, env, backup, and process helpers. */
+
 export type { OutputRuntimeEnv, RuntimeEnv } from "../runtime.js";
 export { defaultRuntime } from "../runtime.js";
 export { createNonExitingRuntime } from "../runtime.js";

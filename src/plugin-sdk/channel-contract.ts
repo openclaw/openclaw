@@ -1,3 +1,4 @@
+// Pure channel contract types used by plugin implementations and tests.
 export type {
   BaseProbeResult,
   BaseTokenResolution,

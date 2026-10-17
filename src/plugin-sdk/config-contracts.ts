@@ -1,3 +1,5 @@
+// Focused public config shape types used by bundled and third-party plugins.
+
 export { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 
 export type { ChannelGroupPolicy } from "../config/group-policy.js";

@@ -16,6 +16,8 @@ export type { RuntimeLogger };
 
 type PluginRuntimeChannel = import("./types-channel.js").PluginRuntimeChannel;
 
+// ── Subagent runtime types ──────────────────────────────────────────
+
 type SubagentRunParams = {
   /** Revalidate command authority at the host's run admission boundary. */
   assertCurrent?: () => void;
