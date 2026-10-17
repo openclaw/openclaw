@@ -528,7 +528,7 @@
   object-fit: contain;
 }
 
-.chat-pane__workspace-chip span {
+.chat-pane__workspace-chip > .oc-menu-item__label > span {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
@@ -593,7 +593,11 @@
     display: none;
   }
 
-  .sidebar-region__header .chat-pane__header .chat-pane__workspace-chip span {
+  .sidebar-region__header
+    .chat-pane__header
+    .chat-pane__workspace-chip
+    > .oc-menu-item__label
+    > span {
     display: block;
   }
 }
@@ -605,7 +609,7 @@
 
   /* The project name is gone at this width, so the separator would trail an
      icon-only pill and read as punctuation with nothing on its left. */
-  .chat-pane__workspace-chip span,
+  .chat-pane__workspace-chip > .oc-menu-item__label > span,
   .chat-pane__project-row + .chat-pane__session-trail > .chat-pane__crumb-sep:first-child {
     display: none;
   }
