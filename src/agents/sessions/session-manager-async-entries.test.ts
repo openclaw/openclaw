@@ -13,6 +13,7 @@ import { SessionManager } from "../../plugin-sdk/agent-sessions.js";
 import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
+import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import type { SessionEntry } from "./session-manager-types.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -28,12 +29,7 @@ async function withFixture(
   guardHostWrites = true,
 ) {
   await withOpenClawTestState({ label: `async-entry-${name}` }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: name,
-      sessionKey: `agent:main:${name}`,
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-    };
+    const target = sessionScope(path.join(state.agentDir("main"), "openclaw-agent.sqlite"), name);
     await replaceSessionEntry(target, { sessionId: name, updatedAt: 1 });
     const reopen = () => SessionManager.openAsync(target, state.workspaceDir);
     const manager = await reopen();
@@ -55,12 +51,6 @@ const rawEntry = (id: string, parentId: string): Extract<SessionEntry, { type: "
   parentId,
   timestamp: new Date(0).toISOString(),
 });
-const navigation = (manager: SessionManager) => ({
-  leaf: manager.getLeafId(),
-  parent: manager.getAppendParentId(),
-  mode: manager.getAppendMode(),
-});
-
 function refuseHostWrites() {
   const refuse = () => {
     throw new Error("Transcript persistence ran on the host");
@@ -131,7 +121,9 @@ it("awaits leaf, branch, raw persistence, and static transcript operations witho
       type: "leaf",
     });
     const leafReopened = await reopen();
-    expect(navigation(leafReopened)).toEqual({ leaf: seed, parent: tail, mode: "side" });
+    expect(leafReopened.getLeafId()).toBe(seed);
+    expect(leafReopened.getAppendParentId()).toBe(tail);
+    expect(leafReopened.getAppendMode()).toBe("side");
 
     const newerUser = expectDefined(
       await leafReopened.appendMessageAsync({ role: "user", content: "Newer turn", timestamp: 2 }),
@@ -141,7 +133,8 @@ it("awaits leaf, branch, raw persistence, and static transcript operations witho
     await expect(manager.appendLeafControlAsync(selectedLeaf)).rejects.toThrow(
       "SQLite transcript changed",
     );
-    expect(navigation(manager)).toMatchObject({ leaf: seed, parent: tail });
+    expect(manager.getLeafId()).toBe(seed);
+    expect(manager.getAppendParentId()).toBe(tail);
     expect(await loadTranscriptEvents(target)).toEqual(beforeStaleLeaf);
     await manager.reloadPersistedTranscriptAsync();
     expect(manager.getLeafId()).toBe(newerUser);

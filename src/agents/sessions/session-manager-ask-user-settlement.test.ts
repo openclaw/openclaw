@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterAll, assert, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, assert, beforeAll, expect, it } from "vitest";
 import {
   loadTranscriptEvents,
   readTranscriptMutationAtSync,
@@ -21,8 +21,9 @@ import { installSessionToolResultGuard } from "../session-tool-result-guard.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { createAskUserTool } from "../tools/ask-user-tool.js";
 import { persistAgentSessionMessage } from "./agent-session-transcript.js";
-import * as metadataRuntime from "./session-manager-metadata-runtime.js";
+import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
+import { interceptSessionMetadataWorker } from "./session-metadata-worker.test-support.js";
 
 let state: OpenClawTestState;
 beforeAll(async () => {
@@ -37,12 +38,10 @@ for (const outcome of ["timeout", "answer"] as const) {
     `${outcome} settlement after %s rewrite`,
     async (mutation) => {
       const sessionId = `${outcome}-${mutation}`;
-      const target = {
-        agentId: "main",
+      const target = sessionScope(
+        path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
         sessionId,
-        sessionKey: `agent:main:${sessionId}`,
-        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      };
+      );
       await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
       const manager = await SessionManager.openAsync(target, state.workspaceDir);
       installSessionToolResultGuard(manager);
@@ -84,29 +83,17 @@ for (const outcome of ["timeout", "answer"] as const) {
       }).execute("ask", args);
       const rewriteReady = createDeferredCore();
       const releaseRewrite = createDeferredCore();
-      const withWorker = metadataRuntime.withSessionMetadataWorker;
       const blocker =
         mutation === "own-in-flight"
-          ? vi
-              .spyOn(metadataRuntime, "withSessionMetadataWorker")
-              .mockImplementation((options, database, assertCurrent, operation, controls) =>
-                withWorker(
-                  options,
-                  database,
-                  assertCurrent,
-                  (worker) =>
-                    operation({
-                      execute: async (command, commandOptions) => {
-                        if (command.type === "session.transcript.rewrite") {
-                          rewriteReady.resolve();
-                          await releaseRewrite.promise;
-                        }
-                        return worker.execute(command, commandOptions);
-                      },
-                    }),
-                  controls,
-                ),
-              )
+          ? interceptSessionMetadataWorker((worker) => ({
+              execute: async (command, commandOptions) => {
+                if (command.type === "session.transcript.rewrite") {
+                  rewriteReady.resolve();
+                  await releaseRewrite.promise;
+                }
+                return worker.execute(command, commandOptions);
+              },
+            }))
           : undefined;
       let commit: Promise<unknown> | undefined;
       let settlement: Promise<unknown> | undefined;

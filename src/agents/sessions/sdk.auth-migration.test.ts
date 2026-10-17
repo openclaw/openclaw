@@ -104,6 +104,14 @@ function authWithFallback(agentDir: string, fallbackKey = "synthetic-other-accou
   return { storage, fallback };
 }
 
+function atCredentialCheck(change: (assertSelected: () => void) => void) {
+  const check = migrationDiagnostics.assertAuthProfileCredentialMigrationStateAtDatabasePath;
+  vi.spyOn(
+    migrationDiagnostics,
+    "assertAuthProfileCredentialMigrationStateAtDatabasePath",
+  ).mockImplementationOnce((...args) => change(() => check(...args)));
+}
+
 afterEach(() => {
   clearAuthProfileMigrationDiagnostics();
   vi.restoreAllMocks();
@@ -345,12 +353,7 @@ it("rejects imported credentials across a pending unresolved-Ref reload", async 
       await importLegacy(state, apiKeyStore("arcee", { key: "synthetic-imported-key" }));
       const { storage, fallback } = authWithFallback(agentDir);
       let reloadedSelectedCredential = false;
-      const assertSelected =
-        migrationDiagnostics.assertAuthProfileCredentialMigrationStateAtDatabasePath;
-      vi.spyOn(
-        migrationDiagnostics,
-        "assertAuthProfileCredentialMigrationStateAtDatabasePath",
-      ).mockImplementationOnce((...args) => {
+      atCredentialCheck((assertSelected) => {
         writeStore(
           apiKeyStore("arcee", {
             keyRef: { source: "env", provider: "default", id: "UNRESOLVED_IMPORTED_ARCEE" },
@@ -358,7 +361,7 @@ it("rejects imported credentials across a pending unresolved-Ref reload", async 
         );
         storage.reload();
         reloadedSelectedCredential = true;
-        assertSelected(...args);
+        assertSelected();
       });
       await expect(storage.getApiKey("arcee", { baseUrl })).rejects.toMatchObject(migrationError);
       expect(reloadedSelectedCredential).toBe(true);
@@ -376,13 +379,8 @@ it("revalidates the selected owner after another reload changes the view", async
     const storage = AuthStorage.forAgent(agentDir, config);
     const localKey = "synthetic-new-local-key";
     let reloadedSelectedCredential = false;
-    const assertSelected =
-      migrationDiagnostics.assertAuthProfileCredentialMigrationStateAtDatabasePath;
-    vi.spyOn(
-      migrationDiagnostics,
-      "assertAuthProfileCredentialMigrationStateAtDatabasePath",
-    ).mockImplementationOnce((...args) => {
-      assertSelected(...args);
+    atCredentialCheck((assertSelected) => {
+      assertSelected();
       writeStore(emptyStore);
       expectMigrationRequired();
       writeStore(apiKeyStore("arcee", { key: localKey }), agentDir);

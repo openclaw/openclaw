@@ -7,7 +7,6 @@ import {
   readSessionTranscriptWatermark,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import {
   getOwnedSessionTranscriptWriterFence,
   SessionTranscriptWriterClaimReboundError,
@@ -25,6 +24,7 @@ import type { ExtensionAPI } from "./extensions/types.js";
 import { ModelRegistry } from "./model-registry.js";
 import { createAgentSession, type CreateAgentSessionOptions } from "./sdk.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
+import { afterModelRead, sessionScope } from "./session-manager-fixtures.test-support.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import type { ModelChangeEntry, ThinkingLevelChangeEntry } from "./session-manager-types.js";
 import * as writeAdmission from "./session-manager-write-admission.js";
@@ -32,12 +32,7 @@ import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
 function sessionTarget(agentDir: string, sessionId: string) {
-  return {
-    agentId: "main",
-    sessionId,
-    sessionKey: `agent:main:${sessionId}`,
-    storePath: path.join(agentDir, "openclaw-agent.sqlite"),
-  };
+  return sessionScope(path.join(agentDir, "openclaw-agent.sqlite"), sessionId);
 }
 
 function seedTarget(target: ReturnType<typeof sessionTarget>) {
@@ -260,17 +255,12 @@ it.each([
       const select = () => (selection === "branch" ? manager.branch(firstId) : manager.resetLeaf());
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const readContext = contextWorker.readSessionTranscriptModelContextInWorker;
       const intercepted =
         timing === "during"
-          ? vi
-              .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
-              .mockImplementationOnce(async (...args) => {
-                const context = await readContext(...args);
-                entered.resolve();
-                await release.promise;
-                return context;
-              })
+          ? afterModelRead(async () => {
+              entered.resolve();
+              await release.promise;
+            })
           : undefined;
       if (timing === "before") {
         select();
