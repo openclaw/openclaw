@@ -251,27 +251,30 @@ try { & $launcher; $passed=$true; $message=$null } catch { $passed=$false; $mess
 
 describe.skipIf(!hasPowerShell)("Windows desktop VNC handover", () => {
   it("hands over authenticated VNC, preserves replay, and rejects changed or cancelled ownership", () => {
+    function handover(scenario: string, error = "", stops = 0, launches = 0, kills = 0) {
+      return { scenario, passed: !error, launches, stops, kills, error };
+    }
     const cases = [
-      { scenario: "launch", passed: true, launches: 1, stops: 1, kills: 0 },
-      { scenario: "launcher-command-whitespace", passed: true, launches: 1, stops: 1, kills: 0 },
-      { scenario: "reuse", passed: true, launches: 0, stops: 0, kills: 0 },
-      { scenario: "replay-pid-change", passed: false, launches: 0, stops: 0, kills: 0 },
-      { scenario: "replay-birth-change", passed: false, launches: 0, stops: 0, kills: 0 },
-      { scenario: "fresh-listener-appeared", passed: false, launches: 0, stops: 1, kills: 0 },
-      { scenario: "service-only", passed: false, launches: 0, stops: 0, kills: 0 },
-      { scenario: "service-birth-change", passed: false, launches: 0, stops: 0, kills: 0 },
-      { scenario: "account-before-stop", passed: false, launches: 0, stops: 0, kills: 0 },
-      { scenario: "session-after-stop", passed: false, launches: 0, stops: 1, kills: 0 },
-      { scenario: "account-after-discovery", passed: false, launches: 0, stops: 1, kills: 0 },
-      { scenario: "missing-auth", passed: false, launches: 0, stops: 0, kills: 0 },
-      { scenario: "wrong-account", passed: false, launches: 0, stops: 0, kills: 0 },
-      { scenario: "wrong-session", passed: false, launches: 0, stops: 0, kills: 0 },
-      { scenario: "wrong-arguments", passed: false, launches: 0, stops: 0, kills: 0 },
-      { scenario: "public-listener", passed: false, launches: 0, stops: 0, kills: 0 },
-      { scenario: "changed-settings", passed: false, launches: 0, stops: 0, kills: 0 },
-      { scenario: "cancel-launch", passed: false, launches: 1, stops: 1, kills: 1 },
-      { scenario: "cancel-during-discovery", passed: false, launches: 0, stops: 1, kills: 0 },
-      { scenario: "cancel-reuse", passed: false, launches: 0, stops: 0, kills: 0 },
+      handover("launch", "", 1, 1),
+      handover("launcher-command-whitespace", "", 1, 1),
+      handover("reuse"),
+      handover("replay-pid-change", "VNC changed during setup handover"),
+      handover("replay-birth-change", "VNC changed during setup handover"),
+      handover("fresh-listener-appeared", "VNC appeared during setup handover", 1),
+      handover("service-only", "forbids TightVNC application mode"),
+      handover("service-birth-change", "changed before VNC service handover"),
+      handover("account-before-stop", "changed before VNC service handover"),
+      handover("session-after-stop", "changed before VNC configuration", 1),
+      handover("account-after-discovery", "changed before VNC configuration", 1),
+      handover("missing-auth", "authentication is not enabled"),
+      handover("wrong-account", "VNC process identity changed"),
+      handover("wrong-session", "VNC process identity changed"),
+      handover("wrong-arguments", "VNC process identity changed"),
+      handover("public-listener", "one worker-owned loopback listener"),
+      handover("changed-settings", "VNC settings changed"),
+      handover("cancel-launch", "launch was cancelled", 1, 1, 1),
+      handover("cancel-during-discovery", "launch was cancelled", 1),
+      handover("cancel-reuse", "launch was cancelled"),
     ];
     const root = tempDirs.make("windows-vnc-owner-");
     const browser = path.join(root, "browser.exe");
@@ -423,7 +426,7 @@ try { $output=& $setup; $passed=$true; $message=$null } catch { $passed=$false; 
       .split("\n")
       .map((line: string) => JSON.parse(line));
     expect(results).toHaveLength(cases.length);
-    for (const expected of cases) {
+    for (const { error, ...expected } of cases) {
       const observed = results.find((entry) => entry.scenario === expected.scenario);
       expect(observed, expected.scenario).toMatchObject(expected);
       if (
@@ -449,26 +452,7 @@ try { $output=& $setup; $passed=$true; $message=$null } catch { $passed=$false; 
           RemoveWallpaper: 0,
         });
       } else {
-        const errors: Record<string, string> = {
-          "replay-pid-change": "VNC changed during setup handover",
-          "replay-birth-change": "VNC changed during setup handover",
-          "fresh-listener-appeared": "VNC appeared during setup handover",
-          "service-only": "forbids TightVNC application mode",
-          "service-birth-change": "changed before VNC service handover",
-          "account-before-stop": "changed before VNC service handover",
-          "session-after-stop": "changed before VNC configuration",
-          "account-after-discovery": "changed before VNC configuration",
-          "missing-auth": "authentication is not enabled",
-          "wrong-account": "VNC process identity changed",
-          "wrong-session": "VNC process identity changed",
-          "wrong-arguments": "VNC process identity changed",
-          "public-listener": "one worker-owned loopback listener",
-          "changed-settings": "VNC settings changed",
-          "cancel-launch": "launch was cancelled",
-          "cancel-during-discovery": "launch was cancelled",
-          "cancel-reuse": "launch was cancelled",
-        };
-        expect(observed.message, expected.scenario).toContain(errors[expected.scenario]);
+        expect(observed.message, expected.scenario).toContain(error);
       }
     }
   });

@@ -127,6 +127,15 @@ function setup(handler: (argv: string[]) => SpawnResult | Promise<SpawnResult> =
     manager: createCrabboxSandboxBackendManager(dependencies),
   };
 }
+function failedWarmup(inspection: SpawnResult) {
+  return setup((argv) =>
+    argv[1] === "warmup"
+      ? result("fixture-credential@ssh.example.test", 4)
+      : argv[1] === "inspect"
+        ? inspection
+        : respond(argv),
+  );
+}
 beforeEach(() => {
   vi.mocked(runCommandWithTimeout).mockReset();
   remote.commands.length = 0;
@@ -183,38 +192,18 @@ describe("Crabbox sandbox provider lifecycle", () => {
     expect(remote.commands[0]?.argv[0]).toBe(binary);
   });
 
-  it.each(["released"])("retires only a matching released inspection (%s)", async (state) => {
-    const { factory } = setup((argv) =>
-      argv[1] === "warmup"
-        ? result("fixture-credential@ssh.example.test", 4)
-        : argv[1] === "inspect"
-          ? inspect(state)
-          : respond(argv),
-    );
-    await expect(factory(params())).rejects.toThrow(
-      state === "released" ? /is retired/ : "Crabbox sandbox warmup failed: exit 4",
-    );
+  it("retires only a matching released inspection", async () => {
+    const { factory } = failedWarmup(inspect("released"));
+    await expect(factory(params())).rejects.toThrow(/is retired/);
   });
 
   it("rejects a foreign released ID without retiring the reservation", async () => {
-    const { factory } = setup((argv) =>
-      argv[1] === "warmup"
-        ? result("failed", 4)
-        : argv[1] === "inspect"
-          ? inspect("released", "cbx_aaaaaaaaaaaa")
-          : respond(argv),
-    );
+    const { factory } = failedWarmup(inspect("released", "cbx_aaaaaaaaaaaa"));
     await expect(factory(params())).rejects.toThrow("warmup failed");
   });
 
   it("does not retire a reservation from failed inspection output", async () => {
-    const { factory } = setup((argv) =>
-      argv[1] === "warmup"
-        ? result("fixture-credential@ssh.example.test", 4)
-        : argv[1] === "inspect"
-          ? { ...inspect("released"), code: 1 }
-          : respond(argv),
-    );
+    const { factory } = failedWarmup({ ...inspect("released"), code: 1 });
     await expect(factory(params())).rejects.toThrow("Crabbox sandbox warmup failed: exit 4");
   });
 
@@ -261,14 +250,8 @@ it("keeps management routed by the stored claim and original workspace", async (
     argv[1] === "stop" && ++stops === 1 ? result("missing claim", 4) : respond(argv),
   );
   const entry = {
-    containerName: LEASE_ID,
-    backendId: "crabbox",
+    ...runtimeEntry(),
     runtimeLabel: LEASE_ID,
-    sessionKey: "scope",
-    createdAtMs: 1,
-    lastUsedAtMs: 1,
-    image: "daytona/small",
-    workspaceDir: temporaryRoot,
     runtimeState: "removing-pending" as const,
   };
   await manager.removeRuntime({ entry, config: {} });

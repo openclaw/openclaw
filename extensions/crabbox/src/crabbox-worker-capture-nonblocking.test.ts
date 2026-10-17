@@ -24,6 +24,33 @@ function receipt(leaseId: string, state: string, captureEstablished?: boolean) {
   };
 }
 
+function captureResult(argv: string[], state: string, established?: boolean) {
+  return commandResult({
+    stdout: JSON.stringify(receipt(argv[argv.indexOf("--id") + 1]!, state, established)),
+  });
+}
+
+function availability(available = false) {
+  return commandResult({
+    stdout: JSON.stringify({
+      localState: "metadata_available",
+      providerState: available ? "available" : "pending",
+      nextAction: available ? "fork_or_delete" : "wait_or_delete",
+    }),
+  });
+}
+
+function useCliVersion(version = "0.79.0") {
+  vi.mocked(managedBinary.ensureManagedCrabboxBinary).mockResolvedValue({
+    binary: "crabbox",
+    version,
+  });
+}
+
+function preparation(purpose: "session" | "reserve" = "session") {
+  return { key: "c".repeat(64), cacheKey: "d".repeat(64), purpose, demandAtMs: Date.now() };
+}
+
 describe("Crabbox capture receipt", () => {
   it.each([
     ["pending", "pending"],
@@ -58,33 +85,17 @@ describe("Crabbox first capture without upload wait", () => {
   ])(
     "enrolls safely with CLI $version (non-blocking=$nonBlocking)",
     async ({ version, nonBlocking }) => {
-      const preparation = {
-        key: "c".repeat(64),
-        cacheKey: "d".repeat(64),
-        purpose: "session" as const,
-        demandAtMs: Date.now(),
-      };
-      const { options, observe } = createProjectOptions([], undefined, preparation);
+      const prepared = preparation();
+      const { options, observe } = createProjectOptions([], undefined, prepared);
       const statuses: { phase?: string }[] = [];
       const { provider, calls } = createWarmProvider((call) => {
         observe(call);
         if (call.argv[2] === "create") {
-          return commandResult({
-            stdout: JSON.stringify(
-              receipt(
-                call.argv[call.argv.indexOf("--id") + 1]!,
-                nonBlocking ? "pending" : "available",
-                true,
-              ),
-            ),
-          });
+          return captureResult(call.argv, nonBlocking ? "pending" : "available", true);
         }
         return undefined;
       });
-      vi.mocked(managedBinary.ensureManagedCrabboxBinary).mockResolvedValue({
-        binary: "crabbox",
-        version,
-      });
+      useCliVersion(version);
       const enroll = options.beginNodeEnrollment.getMockImplementation()!;
       options.beginNodeEnrollment.mockImplementation(async () => {
         const record = openWarmImageStore().entries()[0]!.value;
@@ -94,8 +105,8 @@ describe("Crabbox first capture without upload wait", () => {
           state: nonBlocking ? "pending" : "available",
           baseCommit: BASE_COMMIT,
           runtimeIdentity: options.nodeRuntimeIdentity,
-          preparationKey: preparation.key,
-          cacheKey: preparation.cacheKey,
+          preparationKey: prepared.key,
+          cacheKey: prepared.cacheKey,
           purpose: "session",
         });
         expect(statuses.some((status) => status.phase === "saving")).toBe(true);
@@ -135,29 +146,16 @@ describe("Crabbox first capture without upload wait", () => {
       const { options } = createProjectOptions([]);
       const { provider, calls, warn } = createWarmProvider(({ argv }) => {
         if (argv[2] === "create") {
-          return commandResult({
-            stdout: JSON.stringify(
-              receipt(argv[argv.indexOf("--id") + 1]!, "pending", established),
-            ),
-          });
+          return captureResult(argv, "pending", established);
         }
         if (argv[2] === "inspect") {
           expect(argv[3]).toBe(CHECKPOINT_ID);
           entered.resolve();
-          return commandResult({
-            stdout: JSON.stringify({
-              localState: "metadata_available",
-              providerState: available ? "available" : "pending",
-              nextAction: available ? "fork_or_delete" : "wait_or_delete",
-            }),
-          });
+          return availability(available);
         }
         return undefined;
       });
-      vi.mocked(managedBinary.ensureManagedCrabboxBinary).mockResolvedValue({
-        binary: "crabbox",
-        version: "0.79.0",
-      });
+      useCliVersion();
       const enroll = options.beginNodeEnrollment.getMockImplementation()!;
       options.beginNodeEnrollment.mockImplementation(async () => {
         const record = openWarmImageStore().entries()[0]!.value;
@@ -191,26 +189,15 @@ describe("Crabbox first capture without upload wait", () => {
       const { options } = createProjectOptions([], controller);
       const { provider, calls } = createWarmProvider(({ argv }) => {
         if (argv[2] === "create") {
-          return commandResult({
-            stdout: JSON.stringify(receipt(argv[argv.indexOf("--id") + 1]!, "pending")),
-          });
+          return captureResult(argv, "pending");
         }
         if (argv[2] === "inspect") {
           entered.resolve();
-          return commandResult({
-            stdout: JSON.stringify({
-              localState: "metadata_available",
-              providerState: "pending",
-              nextAction: "wait_or_delete",
-            }),
-          });
+          return availability();
         }
         return undefined;
       });
-      vi.mocked(managedBinary.ensureManagedCrabboxBinary).mockResolvedValue({
-        binary: "crabbox",
-        version: "0.79.0",
-      });
+      useCliVersion();
       const provisioning = provider.provision(PROFILE, "interrupted-capture", options);
       const rejected = expect(provisioning).rejects.toThrow(
         outcome === "timeout" ? "capture is unresolved" : `${outcome} capture`,
@@ -240,46 +227,30 @@ describe("Crabbox first capture without upload wait", () => {
 
   it("goes cold while upload is pending, then verifies and forks the exact available checkpoint", async () => {
     let available = false;
-    const preparation = {
-      key: "c".repeat(64),
-      cacheKey: "d".repeat(64),
-      purpose: "session" as const,
-      demandAtMs: Date.now(),
-    };
+    const prepared = preparation();
     const { provider, calls } = createWarmProvider(({ argv }) => {
       if (argv[2] === "create") {
-        return commandResult({
-          stdout: JSON.stringify(receipt(argv[argv.indexOf("--id") + 1]!, "pending", true)),
-        });
+        return captureResult(argv, "pending", true);
       }
       if (argv[2] === "inspect") {
-        return commandResult({
-          stdout: JSON.stringify({
-            localState: "metadata_available",
-            providerState: available ? "available" : "pending",
-            nextAction: available ? "fork_or_delete" : "wait_or_delete",
-          }),
-        });
+        return availability(available);
       }
       return undefined;
     });
-    vi.mocked(managedBinary.ensureManagedCrabboxBinary).mockResolvedValue({
-      binary: "crabbox",
-      version: "0.79.0",
-    });
+    useCliVersion();
     const first = await provider.provision(
       PROFILE,
       "upload-source",
-      createProjectOptions([], undefined, preparation).options,
+      createProjectOptions([], undefined, prepared).options,
     );
     await provider.notePreparedDemand!(
       { leaseId: first.leaseId, profile: PROFILE },
-      { preparationKey: preparation.key, demandAtMs: preparation.demandAtMs },
+      { preparationKey: prepared.key, demandAtMs: prepared.demandAtMs },
     );
     const whileUploading = await provider.provision(
       PROFILE,
       "upload-pending",
-      createProjectOptions([], undefined, preparation).options,
+      createProjectOptions([], undefined, prepared).options,
     );
     expect(whileUploading.node).toBeDefined();
     expect(calls.some((call) => call.argv[2] === "fork")).toBe(false);
@@ -289,7 +260,7 @@ describe("Crabbox first capture without upload wait", () => {
     await provider.provision(
       PROFILE,
       "upload-ready",
-      createProjectOptions([], undefined, preparation).options,
+      createProjectOptions([], undefined, prepared).options,
     );
     expect(calls.find((call) => call.argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
     expect(openWarmImageStore().entries()[0]!.value.image?.state).toBe("available");
@@ -314,22 +285,14 @@ describe("Crabbox first capture without upload wait", () => {
         }),
       });
     });
-    vi.mocked(managedBinary.ensureManagedCrabboxBinary).mockResolvedValue({
-      binary: "crabbox",
-      version: "0.79.0",
-    });
-    const preparation = {
-      key: "c".repeat(64),
-      cacheKey: "d".repeat(64),
-      purpose: "reserve" as const,
-      demandAtMs: Date.now(),
-    };
+    useCliVersion();
+    const prepared = preparation("reserve");
     await provider.provision(
       PROFILE,
       "refresh-source",
-      createProjectOptions([], undefined, preparation).options,
+      createProjectOptions([], undefined, prepared).options,
     );
-    const next = createProjectOptions([], undefined, preparation).options;
+    const next = createProjectOptions([], undefined, prepared).options;
     next.project.prepare.mockResolvedValue({
       seedKey: PROJECT_KEY,
       cacheHit: false,

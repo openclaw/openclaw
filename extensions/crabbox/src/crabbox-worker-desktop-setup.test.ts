@@ -232,10 +232,18 @@ printf '%s\\n' "$pid" >"$FIXTURE_ROOT/renderers"`,
   expect(result.error).toBeUndefined();
   return {
     result,
-    home,
+    readWallpaper: () =>
+      fs.readFileSync(path.join(home, ".local/share/backgrounds/openclaw-worker.png")),
     renderers: fs.readFileSync(renderers, "utf8").trim(),
     events: fs.readFileSync(path.join(root, "events"), "utf8").trim().split("\n"),
   };
+}
+
+function expectRestart({ result, renderers, events }: ReturnType<typeof desktopFixture>) {
+  expect(result.status, result.stderr).toBe(0);
+  expect(renderers).toBe("200");
+  expect(events.slice(0, 2)).toEqual(["kill:-TERM", "kill:-KILL"]);
+  expect(events.filter((event) => event === "launch")).toHaveLength(1);
 }
 
 describe.skipIf(process.platform !== "linux")("Crabbox desktop renderer setup", () => {
@@ -289,44 +297,30 @@ describe.skipIf(process.platform !== "linux")("Crabbox desktop renderer setup", 
   });
 
   it("retains the bound renderer without termination, launch, or settling on resumed setup", () => {
-    const { result, home, renderers, events } = desktopFixture("healthy");
+    const { result, readWallpaper, renderers, events } = desktopFixture("healthy");
     expect(result.status, result.stderr).toBe(0);
     expect(renderers).toBe("101");
     expect(events.filter((event) => /^(kill:|launch$|settle$)/u.test(event))).toEqual([]);
     expect(events.at(-1)).toBe("reload");
     expect(events.some((event) => event.endsWith("/last-image"))).toBe(true);
-    expect(
-      fs.readFileSync(path.join(home, ".local/share/backgrounds/openclaw-worker.png")),
-    ).toEqual(wallpaper);
+    expect(readWallpaper()).toEqual(wallpaper);
   });
 
   it.each(["changed", "missing"] as const)(
     "restarts a bound renderer when the installed wallpaper is %s",
     (installedWallpaper) => {
-      const { result, home, renderers, events } = desktopFixture(
-        "healthy",
-        "healthy",
-        true,
-        installedWallpaper,
-      );
-      expect(result.status, result.stderr).toBe(0);
-      expect(renderers).toBe("200");
-      expect(events.slice(0, 2)).toEqual(["kill:-TERM", "kill:-KILL"]);
-      expect(events.filter((event) => event === "launch")).toHaveLength(1);
-      expect(
-        fs.readFileSync(path.join(home, ".local/share/backgrounds/openclaw-worker.png")),
-      ).toEqual(wallpaper);
+      const fixture = desktopFixture("healthy", "healthy", true, installedWallpaper);
+      expectRestart(fixture);
+      expect(fixture.readWallpaper()).toEqual(wallpaper);
     },
   );
 
   it.each<RendererState>(["wrong-bus", "wrong-display", "missing", "multiple", "disappeared"])(
     "re-homes a %s renderer before updating the wallpaper",
     (renderer) => {
-      const { result, renderers, events } = desktopFixture(renderer);
-      expect(result.status, result.stderr).toBe(0);
-      expect(renderers).toBe("200");
-      expect(events.slice(0, 2)).toEqual(["kill:-TERM", "kill:-KILL"]);
-      expect(events.filter((event) => event === "launch")).toHaveLength(1);
+      const fixture = desktopFixture(renderer);
+      expectRestart(fixture);
+      const { events } = fixture;
       expect(events.indexOf("launch")).toBeLessThan(
         events.findIndex((event) => event.startsWith("setting:")),
       );

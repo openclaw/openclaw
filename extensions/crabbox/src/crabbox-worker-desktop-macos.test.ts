@@ -148,8 +148,8 @@ printf '%s --user-data-dir=%s --remote-debugging-port=9222 about:blank\\n' "$FIX
   const result = run("/bin/bash", [], script);
   return {
     result,
-    root,
     desktop,
+    read: (name: string) => fs.readFileSync(path.join(root, name), "utf8"),
     expectedContext: [
       "501",
       "adopted",
@@ -252,21 +252,15 @@ describe.skipIf(process.platform === "win32")("Crabbox macOS desktop setup", () 
         expect(fs.readFileSync(path.join(fixture.desktop, "wallpaper.png"))).toEqual(wallpaper);
         const repeated = fixture.repeat();
         expect(repeated.status, repeated.stderr).toBe(0);
-        expect(fs.readFileSync(path.join(fixture.root, "launches"), "utf8")).toBe("launch\n");
-        expect(fs.readFileSync(path.join(fixture.root, "browser-context"), "utf8")).toBe(
-          fixture.expectedContext,
-        );
+        expect(fixture.read("launches")).toBe("launch\n");
+        expect(fixture.read("browser-context")).toBe(fixture.expectedContext);
         const terminal = fixture.terminal();
         expect(terminal.status, terminal.stderr).toBe(0);
-        expect(fs.readFileSync(path.join(fixture.root, "terminal-context"), "utf8")).toBe(
-          fixture.expectedContext,
-        );
+        expect(fixture.read("terminal-context")).toBe(fixture.expectedContext);
         const host = fixture.host();
         expect(host.status, host.stderr).toBe(0);
-        expect(fs.readFileSync(path.join(fixture.root, "terminal-context"), "utf8")).toBe(
-          fixture.expectedContext,
-        );
-        expect(fs.readFileSync(path.join(fixture.root, "gui-arguments"), "utf8")).toBe(
+        expect(fixture.read("terminal-context")).toBe(fixture.expectedContext);
+        expect(fixture.read("gui-arguments")).toBe(
           "--cloud-worker-host\n--display-name\nWorker with spaces\n",
         );
         expect(fixture.result.stdout + fixture.result.stderr).not.toContain(

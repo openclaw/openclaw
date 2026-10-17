@@ -16,6 +16,8 @@ import {
 const require = createRequire(import.meta.url);
 const archive = Buffer.from("verified worker archive".repeat(3));
 const runtimeArchive = Buffer.from("verified runtime archive".repeat(3));
+const workerToken = "Bearer synthetic-worker-archive-token";
+const runtimeToken = "Bearer synthetic-bootstrap-token";
 
 type DownloadOutcome =
   | string
@@ -428,23 +430,29 @@ async function download(
   };
 }
 
+function expectDownload(
+  result: Awaited<ReturnType<typeof download>>,
+  code: 0 | 1,
+  details: Partial<Awaited<ReturnType<typeof download>>> = {},
+) {
+  expect(result.code, result.output).toBe(code);
+  expect(result.published).toEqual(code === 0 ? [archive] : []);
+  expect(result).toMatchObject(details);
+}
+
 describe("bootstrap artifact download retries", () => {
   it.each([502, 503, 504, 520, 521, 522, 523, 524, 530])(
     "recovers after HTTP %s",
     async (statusCode) => {
       const result = await download([statusCode, "success"]);
-      expect(result.code, result.output).toBe(0);
+      expectDownload(result, 0);
       expect(result.requests).toHaveLength(2);
-      expect(result.published).toEqual([archive]);
     },
   );
 
   it("rides out a 30-second edge outage for both bootstrap artifacts", async () => {
     const result = await download((elapsedMs) => (elapsedMs < 30_000 ? 530 : "success"), true);
-    expect(result.code, result.output).toBe(0);
-    expect(result.elapsedMs).toBe(31_750);
-    expect(result.installations).toEqual([31_750]);
-    expect(result.published).toEqual([archive]);
+    expectDownload(result, 0, { elapsedMs: 31_750, installations: [31_750] });
   });
 
   it("resets the failure budget only when retained bytes advance", async () => {
@@ -457,14 +465,10 @@ describe("bootstrap artifact download retries", () => {
       reset,
       "success",
     ]);
-    expect(result.code, result.output).toBe(0);
+    expectDownload(result, 0, {
+      ranges: [...Array(9).fill(undefined), ...Array(10).fill("bytes=1-"), "bytes=2-"],
+    });
     expect(result.requests).toHaveLength(20);
-    expect(result.ranges).toEqual([
-      ...Array(9).fill(undefined),
-      ...Array(10).fill("bytes=1-"),
-      "bytes=2-",
-    ]);
-    expect(result.published).toEqual([archive]);
   });
 
   it.each(["resume", "ignore Range", "discard partial"])(
@@ -476,14 +480,13 @@ describe("bootstrap artifact download retries", () => {
         ...(mode === "discard partial" ? [416] : []),
         { durationMs: 0, resetAfterBytes: ignoreRange ? 1 : 0, ignoreRange },
       ]);
-      expect(result.code).toBe(1);
+      expectDownload(result, 1);
       expect(result.requests).toHaveLength(10);
       expect(result.ranges).toEqual(
         mode === "discard partial"
           ? [undefined, "bytes=1-", ...Array(8).fill(undefined)]
           : [undefined, ...Array(9).fill("bytes=1-")],
       );
-      expect(result.published).toEqual([]);
       expect(result.output).toContain("download attempt 10; 9 consecutive no-progress failures");
       expect(result.output).not.toContain("The worker could not reach");
     },
@@ -504,20 +507,15 @@ describe("bootstrap artifact download retries", () => {
         { durationMs: 2 * 60_000, exitCode: 0 },
         bootstrapTimeoutMs,
       );
-      expect(result.code, result.output).toBe(0);
-      expect(result.elapsedMs).toBe(Math.max(runtimeMinutes + 2, workerMinutes) * 60_000);
-      expect(result.completedAt).toEqual(
-        [runtimeMinutes, workerMinutes]
+      expectDownload(result, 0, {
+        elapsedMs: Math.max(runtimeMinutes + 2, workerMinutes) * 60_000,
+        completedAt: [runtimeMinutes, workerMinutes]
           .toSorted((left, right) => left - right)
           .map((minutes) => minutes * 60_000),
-      );
-      expect(result.aborted).toEqual([]);
-      expect(result.requests).toEqual([
-        "Bearer synthetic-bootstrap-token",
-        "Bearer synthetic-worker-archive-token",
-      ]);
-      expect(result.installations).toEqual([runtimeMinutes * 60_000]);
-      expect(result.published).toEqual([archive]);
+        aborted: [],
+        requests: [runtimeToken, workerToken],
+        installations: [runtimeMinutes * 60_000],
+      });
       expect(result.output).toContain("CRABBOX_PHASE:openclaw-bootstrap-complete");
     },
   );
@@ -526,19 +524,19 @@ describe("bootstrap artifact download retries", () => {
     "retries a stalled %s attempt after two idle minutes, retaining received bytes",
     async (stall) => {
       const result = await download([{ durationMs: 5 * 60_000, stall }, "success"]);
-      expect(result.code, result.output).toBe(0);
-      expect(result.elapsedMs).toBe(2 * 60_000 + 250);
-      expect(result.requests).toEqual(Array(2).fill("Bearer synthetic-worker-archive-token"));
-      expect(result.ranges).toEqual([
-        undefined,
-        stall === "body" ? `bytes=${Math.floor(archive.length * 0.4)}-` : undefined,
-      ]);
-      expect(result.aborted).toEqual(["Bearer synthetic-worker-archive-token"]);
+      expectDownload(result, 0, {
+        elapsedMs: 2 * 60_000 + 250,
+        requests: [workerToken, workerToken],
+        ranges: [
+          undefined,
+          stall === "body" ? `bytes=${Math.floor(archive.length * 0.4)}-` : undefined,
+        ],
+        aborted: [workerToken],
+      });
       expect(result.output).toContain(
         "failed (ETIMEDOUT) from https://gateway.example.test; retrying download attempt 2",
       );
       expect(result.removed.filter(({ bytes }) => bytes > 0)).toEqual([]);
-      expect(result.published).toEqual([archive]);
     },
   );
 
@@ -548,19 +546,12 @@ describe("bootstrap artifact download retries", () => {
       const failure = { durationMs: 1_000, failure: "synthetic archive failure" };
       const slow = failed === "runtime during peer backoff" ? "busy" : { durationMs: 8 * 60_000 };
       const result = await download(failed === "worker" ? [slow, failure] : [failure, slow], true);
-      expect(result.code).toBe(1);
-      expect(result.elapsedMs).toBe(1_000);
+      expectDownload(result, 1, { elapsedMs: 1_000, installations: [] });
       expect(result.requests.length).toBeGreaterThanOrEqual(2);
-      expect(result.aborted).toContain(
-        failed === "worker"
-          ? "Bearer synthetic-bootstrap-token"
-          : "Bearer synthetic-worker-archive-token",
-      );
+      expect(result.aborted).toContain(failed === "worker" ? runtimeToken : workerToken);
       expect(result.output).toContain(
         `Cloud worker ${failed === "worker" ? "archive" : "node bootstrap"} download body failed from https://gateway.example.test: synthetic archive failure (download attempt 1)`,
       );
-      expect(result.installations).toEqual([]);
-      expect(result.published).toEqual([]);
     },
   );
 
@@ -570,25 +561,22 @@ describe("bootstrap artifact download retries", () => {
       true,
       { durationMs: 2_000, exitCode: 17 },
     );
-    expect(result.code).toBe(1);
-    expect(result.installations).toEqual([0]);
-    expect(result.terminations).toEqual([{ pid: -1234, signal: "SIGKILL", atMs: 1_000 }]);
-    expect(result.elapsedMs).toBe(2_000);
+    expectDownload(result, 1, {
+      installations: [0],
+      elapsedMs: 2_000,
+      terminations: [{ pid: -1234, signal: "SIGKILL", atMs: 1_000 }],
+    });
     expect(result.output).toContain(
       "archive download body failed from https://gateway.example.test: synthetic worker failure",
     );
     expect(result.output).not.toContain("package installation failed");
-    expect(result.published).toEqual([]);
   });
 
   it("cancels worker retry backoff when npm fails first", async () => {
     const result = await download(["success", "busy"], true, { durationMs: 1_000, exitCode: 17 });
-    expect(result.code).toBe(1);
-    expect(result.elapsedMs).toBe(1_000);
-    expect(result.installations).toEqual([0]);
+    expectDownload(result, 1, { elapsedMs: 1_000, installations: [0] });
     expect(result.output).toContain("installation and worker download failed");
     expect(result.output).toContain("package installation failed (exit code 17)");
-    expect(result.published).toEqual([]);
   });
 
   it("waits for delayed serve settlement without spending content-transfer attempts", async () => {
@@ -599,54 +587,45 @@ describe("bootstrap artifact download retries", () => {
       }
       return ++transfers < 3 ? "ECONNRESET" : "success";
     });
-    expect(result.code).toBe(0);
+    expectDownload(result, 0);
     expect(transfers).toBe(3);
     expect(result.requests.length).toBeGreaterThan(5);
-    expect(new Set(result.requests)).toEqual(new Set(["Bearer synthetic-worker-archive-token"]));
-    expect(result.published).toEqual([archive]);
+    expect(new Set(result.requests)).toEqual(new Set([workerToken]));
     expect(result.created).toHaveLength(3);
   });
 
   it("restarts from the full response when the server ignores Range", async () => {
     const result = await download(["ECONNRESET", "ignore-range"]);
-    expect(result.code, result.output).toBe(0);
-    expect(result.ranges).toEqual([undefined, `bytes=${Math.floor(archive.length * 0.4)}-`]);
-    expect(result.published).toEqual([archive]);
+    expectDownload(result, 0, {
+      ranges: [undefined, `bytes=${Math.floor(archive.length * 0.4)}-`],
+    });
   });
   it.each(["range-mismatch", 416])(
     "discards range failure %s before retrying from byte zero",
     async (failure) => {
       const result = await download(["ECONNRESET", failure, "success"]);
-      expect(result.code, result.output).toBe(0);
-      expect(result.ranges).toEqual([
-        undefined,
-        `bytes=${Math.floor(archive.length * 0.4)}-`,
-        undefined,
-      ]);
-      expect(result.published).toEqual([archive]);
+      expectDownload(result, 0, {
+        ranges: [undefined, `bytes=${Math.floor(archive.length * 0.4)}-`, undefined],
+      });
     },
   );
   it("verifies all received bytes after a reset without requesting an empty range", async () => {
     const result = await download(["late-reset"]);
-    expect(result.code, result.output).toBe(0);
-    expect(result.ranges).toEqual([undefined]);
-    expect(result.published).toEqual([archive]);
+    expectDownload(result, 0, { ranges: [undefined] });
   });
   it("rejects corrupted resumed bytes before publishing the archive", async () => {
     const result = await download(["ECONNRESET", "digest"]);
-    expect(result.code).toBe(1);
-    expect(result.ranges).toEqual([undefined, `bytes=${Math.floor(archive.length * 0.4)}-`]);
-    expect(result.published).toEqual([]);
+    expectDownload(result, 1, {
+      ranges: [undefined, `bytes=${Math.floor(archive.length * 0.4)}-`],
+    });
     expect(result.output).toContain("failed integrity verification (download attempt 2)");
   });
   it.each(["short", "size", "pin", 401, 403, 404, 429, 500, 501, 505, 525, 526, 529, 531])(
     "keeps %s terminal without retrying",
     async (failure) => {
       const result = await download([failure, "success"]);
-      expect(result.code).toBe(1);
+      expectDownload(result, 1, { delays: [] });
       expect(result.requests).toHaveLength(1);
-      expect(result.delays).toEqual([]);
-      expect(result.published).toEqual([]);
       expect(result.output).toContain("download attempt 1");
     },
   );
@@ -654,11 +633,11 @@ describe("bootstrap artifact download retries", () => {
     "reports %s and total attempts after exhaustion",
     async (failure) => {
       const result = await download([failure]);
-      expect(result.code).toBe(1);
-      expect(result.requests).toEqual(Array(9).fill("Bearer synthetic-worker-archive-token"));
-      expect(result.delays).toEqual([250, 500, 1_000, 2_000, 4_000, 8_000, 8_000, 8_000]);
-      expect(result.elapsedMs).toBe(31_750);
-      expect(result.published).toEqual([]);
+      expectDownload(result, 1, {
+        requests: Array(9).fill(workerToken),
+        delays: [250, 500, 1_000, 2_000, 4_000, 8_000, 8_000, 8_000],
+        elapsedMs: 31_750,
+      });
       expect(result.output).toContain(
         (typeof failure === "number" ? `HTTP ${failure}` : "transport interrupted") +
           " (download attempt 9; 9 consecutive no-progress failures)",
