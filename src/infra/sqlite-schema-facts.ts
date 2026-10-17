@@ -680,6 +680,13 @@ export function adoptSqliteSchemaFacts(database: DatabaseSync, facts: SqliteSche
   );
 }
 
+/** Publication owners consume the engine's admitted schema without probing its catalog again. */
+export function getAdmittedSqlSchemaFacts(database: EngineConnection) {
+  return isPostgresSqlConnection(database)
+    ? getPostgresPhysicalFacts(database)
+    : getAdmittedSqliteSchemaFacts(database);
+}
+
 /** Consume the physical database's admitted facts and owner-published schema changes. */
 export function getAdmittedSqliteSchemaFacts(
   database: EngineConnection,
