@@ -72,7 +72,7 @@ import {
 } from "./session-message-cache.ts";
 import { migrateLegacyDockVisibility } from "./sidebar-layout-legacy-migration.ts";
 import { normalizeSidebarLayout } from "./sidebar-layout.ts";
-import { maybeResetToolStream } from "./stream-reconciliation.ts";
+import { resetToolStream } from "./tool-stream-state.ts";
 import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-status.ts";
 
 export abstract class ChatPaneContext extends ChatPaneLifecycle {
@@ -624,7 +624,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.connectedClient = null;
       setQuestionPromptClient(this.questionPromptState, null);
       stopChatRealtimeTalk(state);
-      maybeResetToolStream(state, { preserveStreamSegments: state.chatRunId !== null });
+      resetToolStream(state, { preserveStreamSegments: state.chatRunId !== null });
       return;
     }
     this.refreshSwarmRoster();

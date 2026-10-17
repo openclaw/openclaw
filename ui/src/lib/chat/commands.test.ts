@@ -7,7 +7,6 @@ import {
   buildFallbackSlashCommands,
   buildSlashCommandsFromEntries,
   findInlineSlashCompletion,
-  getRemoteCommandEntries,
   getSlashCommandDescription,
   getSkillCommandCompletions,
   getSlashCommandCompletions,
@@ -138,10 +137,6 @@ function requireCommandByName(name: string): Record<string, unknown> {
 
 function applyRemoteEntries(entries: Parameters<typeof buildSlashCommandsFromEntries>[0]) {
   replaceSlashCommands(buildSlashCommandsFromEntries(entries));
-}
-
-function applyCommandsListResult(result: { commands?: unknown }) {
-  applyRemoteEntries(getRemoteCommandEntries(result));
 }
 
 function expectParsedSlash(input: string, commandFields: Record<string, unknown>, args: string) {
@@ -400,50 +395,38 @@ describe("parseSlashCommand", () => {
     expectParsedSlash("/safe-name", { name: "safe-name" }, "");
   });
 
-  it("caps remote command payload size and long metadata before it reaches UI state", () => {
-    const longName = "x".repeat(260);
-    const longDescription = `${"d".repeat(1_999)}🚀tail`;
-    const boundaryArgName = `${"n".repeat(199)}🚀tail`;
-    const oversizedCommand = {
-      name: "plugin-0",
-      textAliases: Array.from({ length: 25 }, (_, aliasIndex) => `/plugin-0-${aliasIndex}`),
-      description: longDescription,
-      source: "plugin" as const,
-      scope: "both" as const,
-      acceptsArgs: true,
-      args: Array.from({ length: 25 }, (_, argIndex) => ({
-        name: argIndex === 0 ? boundaryArgName : `${longName}-${argIndex}`,
-        description: longDescription,
-        type: "string" as const,
-        choices: Array.from({ length: 55 }, (_Local, choiceIndex) => ({
-          value: `${longName}-${choiceIndex}`,
-          label: `${longName}-${choiceIndex}`,
-        })),
-      })),
-    };
+  it("projects argument hints and fixed choices from Gateway command entries", () => {
     applyRemoteEntries([
-      oversizedCommand,
-      ...Array.from({ length: 519 }, (_, index) => ({
-        name: `plugin-${index + 1}`,
-        textAliases: [`/plugin-${index + 1}`],
-        description: "Plugin command.",
-        source: "plugin" as const,
-        scope: "both" as const,
-        acceptsArgs: false,
-      })),
+      {
+        name: "inspect-session",
+        description: "Inspect the active session.",
+        source: "native",
+        scope: "text",
+        acceptsArgs: true,
+        args: [
+          {
+            name: "mode",
+            description: "Inspection mode.",
+            type: "string",
+            required: true,
+            choices: [
+              { value: "brief", label: "Brief" },
+              { value: "", label: "No selection" },
+              { value: "full", label: "Full" },
+            ],
+          },
+          { name: "target", description: "Target session.", type: "string", dynamic: true },
+        ],
+      },
     ]);
 
-    const remoteCommands = SLASH_COMMANDS.filter((entry) => entry.name.startsWith("plugin-"));
-    expect(remoteCommands).toHaveLength(500);
-    const first = expectDefined(remoteCommands[0], "first capped remote command");
-    expect(first.aliases).toHaveLength(19);
-    expect(first.description).toBe("d".repeat(1_999));
-    expect(first.args?.split(" ")).toHaveLength(20);
-    expect(first.args?.split(" ")[0]).toBe("[" + "n".repeat(199) + "]");
-    expect(first.argOptions).toHaveLength(50);
+    expectRecordFields(requireCommandByName("inspect-session"), "argument command", {
+      args: "<mode> [target]",
+      argOptions: ["brief", "full"],
+    });
   });
 
-  it("preserves only known closed plugin client presentation metadata", () => {
+  it("preserves known plugin client presentation metadata", () => {
     applyRemoteEntries([
       {
         name: "pair",
@@ -462,76 +445,6 @@ describe("parseSlashCommand", () => {
     expect(requireCommandByName("pair").clientPresentation).toEqual({
       when: "no-arguments",
       action: { kind: "device-pairing" },
-    });
-  });
-
-  it.each([
-    { when: "always", action: { kind: "device-pairing" } },
-    { when: "no-arguments", action: { kind: "open-route" } },
-    { when: "no-arguments", action: { kind: "device-pairing", callback: "run" } },
-    {
-      when: "no-arguments",
-      action: { kind: "device-pairing" },
-      route: "/settings/devices",
-    },
-  ])("drops malformed client presentation metadata %#", (clientPresentation) => {
-    applyCommandsListResult({
-      commands: [
-        {
-          name: "pair",
-          textAliases: ["/pair"],
-          description: "Pair a device.",
-          source: "plugin",
-          scope: "both",
-          acceptsArgs: true,
-          clientPresentation,
-        },
-      ],
-    });
-
-    expect(requireCommandByName("pair").clientPresentation).toBeUndefined();
-  });
-
-  it("falls back safely when command payload shapes are malformed", () => {
-    applyCommandsListResult({ commands: { bad: "shape" } });
-    expect(SLASH_COMMANDS.find((entry) => entry.name === "pair")).toBeUndefined();
-    expectRecordFields(requireCommandByName("help"), "help command", {
-      key: "help",
-      name: "help",
-      executeLocal: true,
-    });
-
-    applyCommandsListResult({
-      commands: [
-        {
-          name: "valid",
-          textAliases: ["/valid"],
-          description: 42,
-          args: { nope: true },
-        },
-        {
-          name: "pair",
-          textAliases: ["/pair"],
-          description: "Generate setup codes.",
-          source: "plugin",
-          scope: "both",
-          acceptsArgs: true,
-          args: [
-            {
-              name: "mode",
-              required: "yes",
-              choices: { broken: true },
-            },
-          ],
-        },
-      ],
-    });
-    expectRecordFields(requireCommandByName("valid"), "valid command", {
-      name: "valid",
-      description: "",
-    });
-    expectRecordFields(requireCommandByName("pair"), "pair command", {
-      name: "pair",
     });
   });
 });

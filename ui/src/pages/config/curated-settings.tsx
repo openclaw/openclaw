@@ -1,9 +1,7 @@
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { createMemo, For, Match, onCleanup, Switch, untrack } from "solid-js";
 import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
-import "../../components/select-picker.ts";
-import type { PickerParams } from "../../components/select-picker.ts";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
+import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import {
   LearnMoreLink,
   SettingsDefaultDescription,
@@ -124,17 +122,25 @@ function CuratedField(props: { settings: CuratedSettingsProps; spec: CuratedSett
         <SettingsRow
           {...row}
           control={
-            <CuratedModelPicker
+            <ModelPicker
               label={t(props.spec.labelKey)}
-              customLabel={props.spec.kind === "model" ? t(props.spec.customLabelKey) : ""}
               value={text()}
-              defaultValue={defaultValue()}
               disabled={props.settings.disabled}
-              placeholder={
-                props.spec.kind === "model" && props.spec.placeholderKey
-                  ? t(props.spec.placeholderKey)
-                  : ""
-              }
+              options={[
+                {
+                  value: "",
+                  label: defaultValue(),
+                  provider: providerIdFromModelRef(defaultValue()) ?? undefined,
+                },
+              ]}
+              custom={{
+                label: props.spec.kind === "model" ? t(props.spec.customLabelKey) : "",
+                placeholder:
+                  props.spec.kind === "model" && props.spec.placeholderKey
+                    ? t(props.spec.placeholderKey)
+                    : "",
+                commit: "change",
+              }}
               onChange={(model) =>
                 props.settings.onPatch(props.spec.path, model.trim() || undefined)
               }
@@ -209,79 +215,6 @@ function CuratedField(props: { settings: CuratedSettingsProps; spec: CuratedSett
         />
       </Match>
     </Switch>
-  );
-}
-
-type CuratedModelOption = { value: string; label: string; provider?: string };
-type CuratedModelPickerProps = {
-  label: string;
-  customLabel: string;
-  value: string;
-  defaultValue: string;
-  disabled: boolean;
-  placeholder: string;
-  onChange: (value: string) => void;
-};
-
-function CuratedModelPicker(props: CuratedModelPickerProps) {
-  let input!: HTMLInputElement;
-  const customValue = () =>
-    props.value === "__openclaw_custom_model__"
-      ? "__openclaw_custom_model___"
-      : "__openclaw_custom_model__";
-  const params = (): PickerParams<CuratedModelOption> => ({
-    label: props.label,
-    value: props.value,
-    options: [
-      {
-        value: "",
-        label: props.defaultValue,
-        provider: providerIdFromModelRef(props.defaultValue) ?? undefined,
-      },
-      { value: customValue(), label: props.customLabel },
-    ],
-    get disabled() {
-      return props.disabled;
-    },
-    searchable: true,
-    showOptionTooltips: false,
-    className: "model-picker__select ",
-    renderLeading: (option) =>
-      option.provider ? (
-        <ProviderBrandIcon provider={option.provider} class="model-picker__provider-icon" />
-      ) : undefined,
-    onChange: props.onChange,
-    onChangeTarget: (value) => {
-      if (value === customValue()) {
-        input.hidden = false;
-        queueMicrotask(() => input.focus());
-        return;
-      }
-      input.hidden = true;
-      props.onChange(value);
-    },
-  });
-  return (
-    <div class="model-picker">
-      <openclaw-select-picker
-        class="settings-select picker-select model-picker__select "
-        style={{ width: "100%", "min-width": "min(138px,100%)" }}
-        prop:params={params()}
-      />
-      <input
-        ref={(element) => {
-          input = element;
-        }}
-        class="settings-input model-picker__custom"
-        aria-label={props.customLabel}
-        aria-invalid="false"
-        placeholder={props.placeholder}
-        value={props.value}
-        hidden={!props.value || props.value === customValue()}
-        disabled={props.disabled}
-        onChange={(event) => props.onChange(event.currentTarget.value)}
-      />
-    </div>
   );
 }
 

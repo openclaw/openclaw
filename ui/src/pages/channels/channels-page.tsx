@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
 import type {
   ChannelsPairingListResult,
   ChannelsPairingRequest,
@@ -12,16 +12,14 @@ import { LearnMoreLink, SettingsPageHeader } from "../../components/solid/settin
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { resolveChannelPairingAuthSignature } from "../../lib/channels/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import {
-  createGatewayConnectionLifecycle,
-  type GatewayConnectionScope,
-} from "../../lib/gateway-connection-lifecycle.ts";
+import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
+import { GatewayPageBinding, type GatewayPageChange } from "../../lib/gateway-page-binding.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { projectChannels, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { listen } from "../../lib/reactive/listener.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
+import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { importNostrProfile, parseValidationErrors, putNostrProfile } from "./nostr-profile-ops.ts";
 import { createChannelPluginPresentation } from "./plugin-presentation-loader.ts";
@@ -78,9 +76,7 @@ function createChannelsPage(getContext: () => ApplicationContext) {
     publishOperations();
   }
   let active = true;
-  let currentGateway: ApplicationContext["gateway"] | undefined;
-  let currentClient: ApplicationContext["gateway"]["snapshot"]["client"] = null;
-  let pairingTimer: ReturnType<typeof setInterval> | null = null;
+  const pairingPoll = useVisiblePoll(CHANNEL_PAIRING_POLL_INTERVAL_MS, pollPairing);
   let pairingRoot: HTMLElement | undefined;
   // Projection identities belong to this mounted page; replacement only swaps their sources.
   const initialContext = untrack(getContext);
@@ -108,22 +104,14 @@ function createChannelsPage(getContext: () => ApplicationContext) {
   let schemaLoadStarted = false;
   let channelsSource: ApplicationContext["channels"] | undefined;
   let gatewayPairingAuthSignature: string | null = null;
-  const connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
+  const connection = new GatewayPageBinding(() => {}, {
+    getGateway: () => getContext().gateway,
+    onSnapshot: handleGatewaySnapshot,
+  });
 
-  function handleGatewaySnapshot(source: ApplicationContext["gateway"]) {
-    if (getContext().gateway !== source) {
-      return;
-    }
-    const snapshot = source.snapshot;
-    const initial = currentGateway === undefined;
-    const identityChanged =
-      !initial && (currentGateway !== source || currentClient !== snapshot.client);
-    const transportChanged = connection.transition(snapshot);
-    if (identityChanged && !transportChanged) {
-      connection.invalidate();
-    }
-    currentGateway = source;
-    currentClient = snapshot.client;
+  function handleGatewaySnapshot(change: GatewayPageChange) {
+    const { snapshot, initial, identityChanged } = change;
+    const transportChanged = change.clientChanged || change.connectionChanged;
     const pairingAccess = hasOperatorPairingAccess(snapshot.hello?.auth ?? null);
     const pairingAuthSignature = resolveChannelPairingAuthSignature(snapshot);
     const pairingAuthChanged = !initial && gatewayPairingAuthSignature !== pairingAuthSignature;
@@ -139,7 +127,11 @@ function createChannelsPage(getContext: () => ApplicationContext) {
       setPairingNotice(null);
     }
     gatewayPairingAuthSignature = pairingAuthSignature;
-    syncPairingPolling();
+    if (snapshot.phase === "connected" && snapshot.client && pairingAccess) {
+      pairingPoll.start();
+    } else {
+      pairingPoll.stop();
+    }
     if (snapshot.phase === "connected" && snapshot.client) {
       if (!initial) {
         ensureInitialData();
@@ -187,42 +179,15 @@ function createChannelsPage(getContext: () => ApplicationContext) {
     }
   }
 
-  const handleVisibilityChange = () => {
-    if (syncPairingPolling()) {
-      pollPairing();
-    }
-  };
-
   function pollPairing() {
     const snapshot = getContext().gateway.snapshot;
     if (
       active &&
-      document.visibilityState !== "hidden" &&
       snapshot.phase === "connected" &&
       hasOperatorPairingAccess(snapshot.hello?.auth ?? null)
     ) {
       void getContext().channels.refreshPairing();
     }
-  }
-
-  function syncPairingPolling() {
-    const snapshot = getContext().gateway.snapshot;
-    const enabled =
-      active &&
-      snapshot.phase === "connected" &&
-      snapshot.client &&
-      hasOperatorPairingAccess(snapshot.hello?.auth ?? null) &&
-      document.visibilityState !== "hidden";
-    if (!enabled) {
-      if (pairingTimer !== null) {
-        clearInterval(pairingTimer);
-        pairingTimer = null;
-      }
-    } else if (pairingTimer === null) {
-      pairingTimer = setInterval(() => pollPairing(), CHANNEL_PAIRING_POLL_INTERVAL_MS);
-      return true;
-    }
-    return false;
   }
 
   function setShowAdvancedSettings(enabled: boolean) {
@@ -267,7 +232,7 @@ function createChannelsPage(getContext: () => ApplicationContext) {
   }
 
   function beginNostrOperation(): NostrOperation | null {
-    const gateway = currentGateway;
+    const gateway = connection.gateway;
     const channels = getContext().channels;
     let scope = connection.capture();
     if (!gateway || !scope || channelsSource !== channels || getContext().gateway !== gateway) {
@@ -609,10 +574,8 @@ function createChannelsPage(getContext: () => ApplicationContext) {
       channelsProjection.replaceSource(context.channels);
       configProjection.replaceSource(context.runtimeConfig);
       settings.replaceSource(context.theme);
-      const applyGateway = () => handleGatewaySnapshot(context.gateway);
-      // Gateway receipts retire profile operations, pairing prompts, and polling before connection or access changes settle.
-      const stopGateway = gatewayProjection.subscribe(applyGateway);
-      applyGateway();
+      // Gateway receipts retire profile operations and pairing prompts synchronously.
+      connection.refresh();
       if (channelsSource && channelsSource !== context.channels) {
         invalidateNostrForm();
       }
@@ -637,7 +600,6 @@ function createChannelsPage(getContext: () => ApplicationContext) {
       const stopConfig = configProjection.subscribe(applyConfig);
       applyConfig();
       return () => {
-        stopGateway();
         stopChannels();
         stopConfig();
       };
@@ -645,12 +607,8 @@ function createChannelsPage(getContext: () => ApplicationContext) {
   );
   // Scroll the pairing section only after its requested DOM has committed.
   createEffect(pairingScrollPending, afterRender);
-  onSettled(() => listen(document, "visibilitychange", handleVisibilityChange));
   onCleanup(() => {
     active = false;
-    if (pairingTimer !== null) {
-      clearInterval(pairingTimer);
-    }
     connection.dispose();
   });
   return viewProps;

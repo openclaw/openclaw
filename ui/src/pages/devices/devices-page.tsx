@@ -112,14 +112,9 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   const presenceTask = createPageRequest({
     task: (signal) =>
       gatewayBinding.connected && gatewayBinding.gateway
-        ? gatewayBinding.client?.request("system-presence", {}, { signal })
+        ? gatewayBinding.client?.request<PresenceEntry[]>("system-presence", {}, { signal })
         : undefined,
-    onComplete: (response) => {
-      if (Array.isArray(response)) {
-        // SAFETY: system-presence returns listSystemPresence() rows conforming to PresenceEntry.
-        updatePresence(response as PresenceEntry[]);
-      }
-    },
+    onComplete: updatePresence,
     onError: (error) => {
       if (isMissingOperatorReadScopeError(error)) {
         updatePresence([]);

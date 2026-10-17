@@ -2562,7 +2562,6 @@ ui/src/lib/sessions/index.ts	1
 ui/src/lib/sessions/session-key.ts	3
 ui/src/local-storage.ts	2
 ui/src/main.ts	1
-ui/src/pages/agents/model-config.ts	2
 ui/src/pages/chat/chat-gateway.ts	1
 ui/src/pages/chat/chat-history-retry.ts	1
 ui/src/pages/chat/chat-page-retained-sessions.ts	1

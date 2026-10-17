@@ -740,18 +740,38 @@ describe("ActivityPage gateway lifecycle", () => {
         message: "decision cursor is no longer retained",
       }),
       "restart",
+      true,
+    ],
+    [
+      "unknown inspection method without a cursor",
+      new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "unknown method: audit.run.inspect",
+      }),
+      "retry",
+      false,
+    ],
+    [
+      "unexpected admin scope without a cursor",
+      new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "missing scope: operator.admin",
+      }),
+      "retry",
+      false,
     ],
     [
       "non-invalid request",
       new GatewayProtocolRequestError({ code: "UNAVAILABLE", message: "gateway unavailable" }),
       "retry",
+      true,
     ],
-  ] as const)("classifies a %s cursor failure", async (_label, error, recovery) => {
+  ] as const)("classifies a %s failure", async (_label, error, recovery, hasCursor) => {
     const client = createTestGatewayClient(vi.fn(() => Promise.reject(error)));
     const activeGateway = inspectorGateway(client);
     const page = createActivityPage(activityContext(activeGateway), {
       pathname: "/activity",
-      search: "?view=run&run=run-1&receipt=receipt-1&decision=cursor-1",
+      search: `?view=run&run=run-1${hasCursor ? "&receipt=receipt-1&decision=cursor-1" : ""}`,
       hash: "",
     });
     await waitForSolid(() =>

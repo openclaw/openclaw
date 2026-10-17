@@ -29,6 +29,10 @@ function makeIdleStreamState<T extends Record<string, unknown>>(overrides: T) {
   return {
     chatStream: null,
     chatStreamStartedAt: null,
+    chatStreamSegments: [],
+    chatToolMessages: [],
+    toolStreamById: new Map<string, ToolStreamEntry>(),
+    toolStreamOrder: [],
     ...overrides,
   } satisfies StreamReconciliationState;
 }
@@ -379,12 +383,12 @@ describe("stream reconciliation", () => {
     };
     const fallbackA = materializeVisibleStreamState(
       [userA],
-      {
+      makeIdleStreamState({
         chatRunId: "run-a",
         chatStream: "Interrupted A",
         chatStreamStartedAt: 2,
         chatStreamSegments: [],
-      },
+      }),
       visibleStreamOptions,
     )[1];
     const userB = {
@@ -408,7 +412,7 @@ describe("stream reconciliation", () => {
   });
 
   it("reconciles a stream segment only inside its persisted ordinary-user interval", () => {
-    const state = {
+    const state = makeIdleStreamState({
       chatStream: "Before steer. After steer.",
       chatStreamStartedAt: 4,
       chatStreamSegments: [
@@ -418,7 +422,7 @@ describe("stream reconciliation", () => {
           runId: "active-run",
         },
       ],
-    } satisfies StreamReconciliationState;
+    });
     const messages = [
       {
         role: "user",
@@ -492,13 +496,11 @@ describe("stream reconciliation", () => {
   });
 
   it("still materializes the current stream tail when persistCommentary is false", () => {
-    const state = {
+    const state = makeIdleStreamState({
       chatStream: "draft answer",
       chatStreamStartedAt: 3,
       chatStreamSegments: [{ text: "transient preamble", ts: 2, itemId: "preamble-1" }],
-    } satisfies StreamReconciliationState & {
-      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
-    };
+    });
     const messages = [{ role: "user", content: "latest ask", timestamp: 1 }];
 
     const next = materializeVisibleStreamState(messages, state, {
@@ -510,7 +512,7 @@ describe("stream reconciliation", () => {
   });
 
   it("sequentially consumes incremental tool fallbacks before one terminal", () => {
-    const state = {
+    const state = makeIdleStreamState({
       chatRunId: "active-run",
       chatStream: null,
       chatStreamStartedAt: null,
@@ -518,7 +520,7 @@ describe("stream reconciliation", () => {
         { text: "A", ts: 2, runId: "active-run", toolCallId: "call-a" },
         { text: "A B", ts: 3, runId: "active-run", toolCallId: "call-b" },
       ],
-    } satisfies StreamReconciliationState;
+    });
     const messages = [
       {
         role: "user",

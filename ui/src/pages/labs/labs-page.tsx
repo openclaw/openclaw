@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, createEffect, createSignal, onCleanup, untrack } from "solid-js";
+import { For, createEffect, createSignal, untrack } from "solid-js";
 import { pathForPluginSettings } from "../../app-route-paths.ts";
 import {
   LearnMoreLink,
@@ -16,10 +16,10 @@ import {
 } from "../../lib/config/config-state-model.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
+import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { pluginDetailLocation } from "../plugins/detail-tabs.ts";
 import {
@@ -32,9 +32,8 @@ import {
 
 export function LabsPage() {
   const context = useApplication();
-  // The mounted projection and request lifecycle are seeded once; source replacement is bound below.
+  // The mounted projection is seeded once; source replacement is bound below.
   const config = projectRuntimeConfig(untrack(() => context.runtimeConfig));
-  const lifecycle = createGatewayConnectionLifecycle(untrack(() => context.gateway.snapshot));
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   let pending: { featureId: string; value: boolean | string } | null = null;
   let saveError: string | null = null;
@@ -47,7 +46,15 @@ export function LabsPage() {
     revision();
     return saveError;
   };
-  // Config and Gateway replacements retire pending saves before reloading and resubscribing.
+  const page = useGatewayPage({
+    getGateway: () => context.gateway,
+    invalidateRequests: () => {
+      pending = null;
+      saveError = null;
+      publish();
+    },
+  });
+  // Config replacements retire pending saves before reloading and resubscribing.
   createEffect(
     () => context.runtimeConfig,
     (runtimeConfig) => {
@@ -58,31 +65,6 @@ export function LabsPage() {
       void runtimeConfig.ensureLoaded();
     },
   );
-  createEffect(
-    () => context.gateway,
-    (gateway) => {
-      lifecycle.transition(gateway.snapshot);
-      // A same-tick reconnect must retire a save before Solid's next flush.
-      const unsubscribe = gateway.subscribe((snapshot) => {
-        if (context.gateway !== gateway) {
-          return;
-        }
-        if (lifecycle.transition(snapshot)) {
-          pending = null;
-          saveError = null;
-          publish();
-        }
-      });
-      return () => {
-        unsubscribe();
-        lifecycle.invalidate();
-        pending = null;
-        saveError = null;
-        publish();
-      };
-    },
-  );
-  onCleanup(() => lifecycle.dispose());
 
   function editableConfig(): Record<string, unknown> | null {
     return resolveEditableSnapshotConfig(config.read().state.configSnapshot);
@@ -112,7 +94,7 @@ export function LabsPage() {
     value: boolean | string,
     raw: Record<string, unknown>,
   ) {
-    const scope = lifecycle.capture();
+    const scope = page.capture();
     const gateway = context.gateway;
     const runtimeConfig = context.runtimeConfig;
     if (
@@ -123,7 +105,7 @@ export function LabsPage() {
       return;
     }
     const isCurrent = () =>
-      lifecycle.isCurrent(scope) &&
+      page.isCurrent(scope) &&
       context.gateway === gateway &&
       context.runtimeConfig === runtimeConfig;
     pending = { featureId, value };

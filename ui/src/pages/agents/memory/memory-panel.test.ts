@@ -244,27 +244,40 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     },
   );
 
-  it("resets stale panel data when the selected agent changes", async () => {
-    const reply = deferred<unknown>();
-    const request = vi.fn((method: string, params?: unknown) =>
-      method === "doctor.memory.dreamDiary"
-        ? asOptionalRecord(params)?.agentId === "main"
-          ? Promise.resolve({ found: true, path: "DREAMS.md", content: "main-only" })
-          : reply.promise
-        : Promise.resolve(emptyReply(method)),
-    );
-    const page = await createPage(contextWithGateway(createTestGatewayClient(request), true));
-    await waitForSolid(() =>
-      expect(page.state.view().dreaming.dreamDiaryContent).toBe("main-only"),
-    );
-    page.state.setAgentId("support");
-    expect(page.state.view().dreaming.selectedAgentId).toBe("support");
-    expect(page.state.view().dreaming.dreamDiaryContent).toBeNull();
-    page.state.setAgentId("");
-    reply.resolve({ found: true, path: "DREAMS.md", content: "support-only" });
-    await waitForSolid(() => expect(page.state.view().dreaming.selectedAgentId).toBe(""));
-    expect(page.state.view().dreaming.dreamDiaryContent).toBeNull();
-  });
+  it.each(["", "main"])(
+    "resets stale panel data after switching through support to %s",
+    async (agentId) => {
+      const reply = deferred<unknown>();
+      const request = vi.fn((method: string, params?: unknown) =>
+        method === "doctor.memory.dreamDiary"
+          ? asOptionalRecord(params)?.agentId === "main"
+            ? Promise.resolve({ found: true, path: "DREAMS.md", content: "main-only" })
+            : reply.promise
+          : Promise.resolve(emptyReply(method)),
+      );
+      const page = await createPage(contextWithGateway(createTestGatewayClient(request), true));
+      await waitForSolid(() =>
+        expect(page.state.view().dreaming.dreamDiaryContent).toBe("main-only"),
+      );
+      page.state.setAgentId("support");
+      expect(page.state.view().dreaming.selectedAgentId).toBe("support");
+      expect(page.state.view().dreaming.dreamDiaryContent).toBeNull();
+      await waitForSolid(() =>
+        expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "support" }),
+      );
+      page.state.setAgentId(agentId);
+      await waitForSolid(() => expect(page.state.view().dreaming.selectedAgentId).toBe(agentId));
+      if (agentId) {
+        await waitForSolid(() =>
+          expect(page.state.view().dreaming.dreamDiaryContent).toBe("main-only"),
+        );
+      }
+      reply.resolve({ found: true, path: "DREAMS.md", content: "support-only" });
+      await reply.promise;
+      flush();
+      expect(page.state.view().dreaming.dreamDiaryContent).toBe(agentId ? "main-only" : null);
+    },
+  );
 
   it.each(["agent", "client", "reconnect", "unmount"] as const)(
     "retires pending wiki requests and modal state on %s replacement",
