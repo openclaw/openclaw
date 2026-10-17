@@ -168,6 +168,21 @@ Observations use the bounded diagnostic queue. Check
 `openclaw.diagnostic.async_queue.dropped` before treating counts or latency
 distributions as complete during saturation.
 
+### Session-list retention
+
+Session-list retention also exports three gauges with no attributes:
+`openclaw.sessions.list.retained_views`, `openclaw.sessions.list.retained_refs`,
+and `openclaw.sessions.list.retained_bytes`. They report process-wide totals
+across live projections. Counters update when views are inserted, changed, evicted,
+or retired; gauge reports coalesce to the final values once per event-loop turn.
+References include row/history references and cached selection/partition
+entries. Bytes estimate eight bytes per row reference, 48 per selection entry,
+1 KiB per view, UTF-16 query keys, and small array/partition overhead. Shared row
+objects and encodings are excluded; this is a retention budget estimate, not V8
+heap attribution. Each projection retains at most 512 slots and 32 MiB estimated
+bytes, and disposal clears its contribution. Prometheus exposes these names
+with underscores in place of dots.
+
 ### Gateway WebSocket events
 
 | Metric                                     | Type    | Measurement                                                    |
