@@ -10,29 +10,27 @@ import {
   createContext,
   createGatewayHarness,
   createSessions,
-  mountSidebar,
   mountSidebarContext,
 } from "../app-sidebar.ts";
 import { domProbe } from "../dom-probe.ts";
 import { waitForSolid } from "../solid-settle.ts";
+import { sidebarDriver } from "./sidebar-driver.test-support.ts";
 import "../../components/app-sidebar.tsx";
 
-async function mountIdentity() {
-  const gateway = createGatewayHarness({ instanceId: "self-instance" } as GatewayBrowserClient);
-  const { sidebar } = await mountSidebar(
-    gateway.gateway,
-    createSessions("main", ["agent:main:main"]),
-  );
-  return { gateway, sidebar, dom: domProbe(sidebar) };
-}
-
-function expectAttributes(
-  element: Element | null | undefined,
-  attributes: Record<string, string | null>,
+async function mountIdentity(
+  prepare?: (
+    context: ReturnType<typeof createContext>,
+    gateway: ReturnType<typeof createGatewayHarness>,
+  ) => void,
 ) {
-  for (const [name, value] of Object.entries(attributes)) {
-    expect(element?.getAttribute(name), name).toBe(value);
-  }
+  const gateway = createGatewayHarness({ instanceId: "self-instance" } as GatewayBrowserClient);
+  const context = createContext(gateway.gateway, createSessions("main", ["agent:main:main"]));
+  prepare?.(context, gateway);
+  const { sidebar } = await mountSidebarContext(context);
+  const navigate = vi.fn();
+  sidebar.onNavigate = navigate;
+  const dom = sidebarDriver(sidebar);
+  return { gateway, context, dom, navigate, open: () => dom.click(".sidebar-identity-card") };
 }
 
 function menuItems(menu: HTMLElement | null, enabledOnly = false) {
@@ -47,46 +45,30 @@ function menuItems(menu: HTMLElement | null, enabledOnly = false) {
 
 describe("AppSidebar footer identity menu", () => {
   it("opens Profile from the Owner header without a self user", async () => {
-    const { sidebar, dom } = await mountIdentity();
-    const onNavigate = vi.fn();
-    sidebar.onNavigate = onNavigate;
-    dom.query<HTMLButtonElement>(".sidebar-identity-card")?.click();
-    await sidebar.updateComplete;
+    const { dom, navigate, open } = await mountIdentity();
+    await open();
 
-    const menu = dom.query<HTMLElement>(".sidebar-identity-menu");
-    const view = domProbe(menu!);
-    const header = view.query<HTMLElement>('[data-value="command:profile"]');
-    expect(header?.querySelector(".sidebar-identity-menu__name")?.textContent?.trim()).toBe(
-      "Owner",
-    );
-    expect(header?.querySelector('[data-viewer-id="owner"]')?.textContent).toContain("O");
-    header?.click();
-    await sidebar.updateComplete;
-    expect(onNavigate).toHaveBeenCalledWith("profile", { hash: "#settings-profile-identity" });
+    const header = dom.query<HTMLElement>('[data-value="command:profile"]');
+    const profile = domProbe(header!);
+    expect(profile.text(".sidebar-identity-menu__name")?.trim()).toBe("Owner");
+    expect(profile.text('[data-viewer-id="owner"]')).toContain("O");
+    await dom.click(header!);
+    expect(navigate).toHaveBeenCalledWith("profile", { hash: "#settings-profile-identity" });
   });
 
   it("keeps release availability on Updates after dismissing the Inbox notice", async () => {
-    const gatewayHarness = createGatewayHarness({
-      instanceId: "self-instance",
-    } as GatewayBrowserClient);
-    gatewayHarness.publish({
-      selfUser: { id: "alice", name: "Alice" },
-      hello: {
-        ...gatewayHarness.gateway.snapshot.hello!,
-        server: { ...gatewayHarness.gateway.snapshot.hello!.server, bootId: "boot-a" },
-      },
-    });
-    const context = createContext(
-      gatewayHarness.gateway,
-      createSessions("main", ["agent:main:main"]),
-    );
     const subscribers = new Set<Parameters<ApplicationOverlays["subscribe"]>[0]>();
-    vi.mocked(context.overlays.subscribe).mockImplementation((notify) => {
-      subscribers.add(notify);
-      return () => subscribers.delete(notify);
+    const { gateway, context, dom, open } = await mountIdentity((ctx, harness) => {
+      const hello = harness.gateway.snapshot.hello!;
+      harness.publish({
+        selfUser: { id: "alice", name: "Alice" },
+        hello: { ...hello, server: { ...hello.server, bootId: "boot-a" } },
+      });
+      vi.mocked(ctx.overlays.subscribe).mockImplementation((notify) => {
+        subscribers.add(notify);
+        return () => subscribers.delete(notify);
+      });
     });
-    const { sidebar } = await mountSidebarContext(context);
-    const dom = domProbe(sidebar);
     (context.overlays as unknown as { snapshot: ApplicationOverlays["snapshot"] }).snapshot = {
       ...context.overlays.snapshot,
       updateAvailable: { currentVersion: "2026.8.1", latestVersion: "2026.8.2", channel: "stable" },
@@ -97,12 +79,9 @@ describe("AppSidebar footer identity menu", () => {
       gatewayBootId: "boot-a",
       updateAvailable: context.overlays.snapshot.updateAvailable,
     });
-    if (!dismissal) {
-      throw new Error("expected update dismissal fact");
-    }
-    dismissSidebarAttention(resolveSidebarAttentionKey(gatewayHarness.gateway), dismissal);
-    dom.query<HTMLButtonElement>(".sidebar-identity-card")?.click();
-    await sidebar.updateComplete;
+    expect(dismissal).not.toBeNull();
+    dismissSidebarAttention(resolveSidebarAttentionKey(gateway.gateway), dismissal!);
+    await open();
     const updates = () => dom.query<HTMLElement>('[data-value="command:updates"]');
     expect(updates()?.textContent).toContain("Available");
     expect(updates()?.getAttribute("aria-label")).toBe("Updates. Update available");
@@ -123,27 +102,18 @@ describe("AppSidebar footer identity menu", () => {
     const fullName = "Ada Lovelace With A Deliberately Long Display Name";
     const email = "ada.with.a.deliberately.long.address@example.test";
     const avatarUrl = "/api/users/self/avatar?v=1";
-    const { sidebar, gateway, dom } = await mountIdentity();
-    const onNavigate = vi.fn();
-    sidebar.connected = true;
-    sidebar.canPairDevice = false;
-    sidebar.onNavigate = onNavigate;
+    const { gateway, dom, navigate, open } = await mountIdentity();
+    await dom.update({ connected: true, canPairDevice: false });
     gateway.publish({ selfUser: { id: "self", name: fullName, email, avatarUrl } });
-    await sidebar.updateComplete;
+    await dom.update();
 
     const identity = dom.query<HTMLButtonElement>(".sidebar-identity-card");
     const card = domProbe(identity!);
-    expectAttributes(identity, { "aria-haspopup": "menu", "aria-expanded": "false" });
+    expect(identity).toMatchObject({ ariaHasPopup: "menu", ariaExpanded: "false" });
     expect(identity?.getAttribute("aria-label")).toContain(fullName);
     expect(card.query("[title], [data-tooltip], openclaw-tooltip")).toBeNull();
-    vi.spyOn(identity!, "getBoundingClientRect").mockReturnValue({
-      left: 12,
-      right: 224,
-      top: 700,
-      width: 212,
-    } as DOMRect);
-    identity?.click();
-    await sidebar.updateComplete;
+    vi.spyOn(identity!, "getBoundingClientRect").mockReturnValue(new DOMRect(12, 700, 212));
+    await open();
 
     const menu = dom.query<HTMLElement>(".sidebar-identity-menu");
     const view = domProbe(menu!);
@@ -158,40 +128,30 @@ describe("AppSidebar footer identity menu", () => {
       "command:debug-overlay",
       "command:help",
     ]);
-    for (const [root, selector, title] of [
-      [identity, ".sidebar-identity-card__name", null],
-      [menu, ".sidebar-identity-menu__name", fullName],
-    ] as const) {
-      const name = root?.querySelector(selector);
-      expect(name?.textContent?.trim()).toBe(fullName);
-      expectAttributes(name, { title });
-      expectAttributes(root?.querySelector('[data-viewer-id="self"] img'), { src: avatarUrl });
+    expect(card.text(".sidebar-identity-card__name")?.trim()).toBe(fullName);
+    expect(card.attr(".sidebar-identity-card__name", "title")).toBeNull();
+    for (const [field, value] of Object.entries({ name: fullName, email })) {
+      const detail = view.query(`.sidebar-identity-menu__${field}`);
+      expect(detail).toMatchObject({ textContent: value, title: value });
     }
-    const menuEmail = view.query(".sidebar-identity-menu__email");
-    expect(menuEmail?.textContent?.trim()).toBe(email);
-    expectAttributes(menuEmail, { title: email });
-    expectAttributes(view.query(".sidebar-identity-menu__avatar"), { "aria-hidden": "true" });
+    for (const subject of [card, view]) {
+      expect(subject.attr('[data-viewer-id="self"] img', "src")).toBe(avatarUrl);
+    }
+    expect(view.attr(".sidebar-identity-menu__avatar", "aria-hidden")).toBe("true");
     const shortcut = view.query('[data-value="command:settings"] .session-menu__shortcut');
     expect(shortcut?.textContent?.replace(/\s+/gu, "").trim()).toMatch(/^(⌘⇧,|Ctrl\+Shift\+,)$/u);
     expect(menu?.style.getPropertyValue("--sidebar-identity-menu-min-width")).toBe("212px");
     expect(view.query(".sidebar-pair-mobile")?.hasAttribute("disabled")).toBe(true);
-    const buildChip = view.query("openclaw-sidebar-build-chip");
-    expect(buildChip).not.toBeNull();
-    expect(buildChip?.variant).toBe("identity");
+    expect(view.query("openclaw-sidebar-build-chip")).toMatchObject({ variant: "identity" });
     expect(view.query("openclaw-theme-mode-toggle")).not.toBeNull();
     expect(menu?.textContent).not.toContain("Recent activity");
     expect(view.all(':scope > [role="separator"]')).toHaveLength(4);
-    expect(card.query(".sidebar-identity-card__more")).toBeNull();
-    expect(card.query(".sidebar-identity-card__chevron")).toBeNull();
+    expect(card.query(".sidebar-identity-card__more, .sidebar-identity-card__chevron")).toBeNull();
 
     const helpRow = view.query<HTMLElement>(".sidebar-identity-menu__help");
-    await (helpRow as (HTMLElement & { updateComplete?: Promise<unknown> }) | null)?.updateComplete;
     expect(helpRow?.getAttribute("aria-haspopup")).toBe("menu");
-    expect(
-      [...(helpRow?.parentElement?.querySelectorAll('[role="menu"] a[href]') ?? [])].map((link) =>
-        link.getAttribute("href"),
-      ),
-    ).toEqual([
+    const links = domProbe(helpRow!.parentElement!).all('[role="menu"] a[href]');
+    expect([...links].map((link) => link.getAttribute("href"))).toEqual([
       "https://docs.openclaw.ai",
       "https://docs.openclaw.ai/help",
       "https://discord.gg/clawd",
@@ -199,33 +159,26 @@ describe("AppSidebar footer identity menu", () => {
     ]);
 
     view.query<HTMLElement>('[data-value="command:profile"]')?.focus();
-    menu?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await sidebar.updateComplete;
+    await dom.key(menu, "Escape", { cancelable: false });
     expect(dom.query(".sidebar-identity-menu")).toBeNull();
     expect(document.activeElement).toBe(identity);
 
-    identity?.click();
-    await sidebar.updateComplete;
-    const reopened = dom.query<HTMLElement>(".sidebar-identity-menu");
-    const profile = reopened?.querySelector<HTMLElement>('[data-value="command:profile"]');
-    profile?.click();
-    await sidebar.updateComplete;
-    expect(onNavigate).toHaveBeenCalledWith("profile", { hash: "#settings-profile-identity" });
+    await open();
+    await dom.click('.sidebar-identity-menu [data-value="command:profile"]');
+    expect(navigate).toHaveBeenCalledWith("profile", { hash: "#settings-profile-identity" });
     expect(dom.query(".sidebar-identity-menu")).toBeNull();
   });
 
   it.each([false, true])(
     "traverses footer controls without losing the active menu item (offline: %s)",
     async (offline) => {
-      const { sidebar, dom } = await mountIdentity();
-      sidebar.connected = true;
-      sidebar.canPairDevice = false;
-      sidebar.connectionStatus = offline ? "reconnecting" : null;
-      await sidebar.updateComplete;
-
-      const identity = dom.query<HTMLButtonElement>(".sidebar-identity-card");
-      identity?.click();
-      await sidebar.updateComplete;
+      const { dom, open } = await mountIdentity();
+      await dom.update({
+        connected: true,
+        canPairDevice: false,
+        connectionStatus: offline ? "reconnecting" : null,
+      });
+      await open();
 
       const menu = dom.query<HTMLElement>(".sidebar-identity-menu");
       const view = domProbe(menu!);
@@ -233,34 +186,25 @@ describe("AppSidebar footer identity menu", () => {
       const lastItem = items.at(-1);
       const theme = view.query<HTMLButtonElement>(".theme-mode-toggle");
       const build = view.query<HTMLAnchorElement>(".sidebar-footer-build");
-      const arrow = async (
-        target: HTMLElement | null | undefined,
-        key: "ArrowDown" | "ArrowUp",
-      ) => {
-        target?.dispatchEvent(
-          new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
-        );
-        await sidebar.updateComplete;
-      };
       lastItem?.focus();
-      await arrow(lastItem, "ArrowDown");
-      if (build) {
-        expect(document.activeElement).toBe(build);
-        await arrow(build, "ArrowDown");
+      let current: HTMLElement | null | undefined = lastItem;
+      const buildControls = build ? [build] : [];
+      for (const [key, targets] of [
+        ["ArrowDown", [...buildControls, theme]],
+        ["ArrowUp", [...buildControls, lastItem]],
+      ] as const) {
+        for (const target of targets) {
+          await dom.key(current, key);
+          expect(document.activeElement).toBe(target);
+          current = target;
+        }
       }
-      expect(document.activeElement).toBe(theme);
-      await arrow(theme, "ArrowUp");
-      if (build) {
-        expect(document.activeElement).toBe(build);
-        await arrow(build, "ArrowUp");
-      }
-      expect(document.activeElement).toBe(lastItem);
       expect(lastItem?.getAttribute("data-highlighted")).not.toBeNull();
 
       items[0]?.focus();
-      await arrow(items[0], "ArrowUp");
+      await dom.key(items[0], "ArrowUp");
       expect(document.activeElement).toBe(theme);
-      await arrow(theme, "ArrowDown");
+      await dom.key(theme, "ArrowDown");
       expect(document.activeElement).toBe(items[0]);
     },
   );
