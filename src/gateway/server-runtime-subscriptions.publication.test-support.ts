@@ -1,5 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { assert, expect, it, vi, type Mock } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -34,37 +34,6 @@ import { registerSubscriptionChatRun } from "./server-runtime-subscriptions.test
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import type { readSessionMessageByIdAsync } from "./session-transcript-readers.js";
 
-type ReadResult = Awaited<ReturnType<typeof readSessionMessageByIdAsync>>;
-const textContent = (text: string) => [{ type: "text", text }];
-const assistantMessage = (
-  text: string,
-  metadata: Record<string, unknown>,
-  idempotencyKey?: string,
-) => ({
-  role: "assistant",
-  ...(idempotencyKey ? { idempotencyKey } : {}),
-  content: textContent(text),
-  __openclaw: metadata,
-});
-const foundMessage = (message: unknown, seq = 1): ReadResult => ({
-  found: true,
-  oversized: false,
-  seq,
-  message,
-});
-const publishMessage = (
-  sessionId: string,
-  storePath: string,
-  messageId: string,
-  message: unknown,
-) =>
-  emitSessionTranscriptUpdate({
-    sessionKey: "agent:main:main",
-    messageId,
-    message,
-    target: { agentId: "main", sessionId, sessionKey: "agent:main:main", storePath },
-  });
-
 export function registerSessionPublicationTests(fixture: {
   createParams: ReturnType<typeof createSubscriptionTestFixture>["createParams"];
   start: (
@@ -79,33 +48,7 @@ export function registerSessionPublicationTests(fixture: {
   ) => void;
   warn: ReturnType<typeof createSubscriptionTestFixture>["warn"];
 }): void {
-  const { createParams, start, transcriptBroadcastMocks: transcript, warn } = fixture;
-  const publicationParams = (
-    published: ReturnType<typeof createDeferred>,
-    conn = "conn-transcript",
-  ) => {
-    const params = createParams();
-    params.sessionEventSubscribers.subscribe(conn);
-    params.broadcastToConnIds = vi.fn(() => published.resolve());
-    return params;
-  };
-  const readBarrier = () => {
-    const entered = createDeferred();
-    const release = createDeferred();
-    return {
-      entered,
-      release,
-      hold(read: () => ReadResult, checkSignal = false) {
-        transcript.readMessageById.mockImplementationOnce(async () => {
-          const signal = checkSignal ? getAsyncWorkSignal() : undefined;
-          entered.resolve();
-          await release.promise;
-          signal?.throwIfAborted();
-          return read();
-        });
-      },
-    };
-  };
+  const { createParams, start, transcriptBroadcastMocks, warn } = fixture;
   it("joins committed lifecycle publication before subscription shutdown", async ({ signal }) => {
     vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
     const key = "agent:main:finished-child";
@@ -126,7 +69,9 @@ export function registerSessionPublicationTests(fixture: {
         return prepare(...args);
       });
     const producer = new AsyncWorkScope();
-    const params = publicationParams(published, "conn-lifecycle");
+    const params = createParams();
+    params.sessionEventSubscribers.subscribe("conn-lifecycle");
+    params.broadcastToConnIds = vi.fn(() => published.resolve());
     warn.mockImplementation((_message: string, context: { error: unknown }) =>
       published.reject(context.error),
     );
@@ -183,17 +128,23 @@ export function registerSessionPublicationTests(fixture: {
       if (mode === "paced") {
         vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       }
-      transcript.useActualHandler = true;
+      transcriptBroadcastMocks.useActualHandler = true;
       const params = createParams();
       const runId = "delayed-transcript-run";
       const sessionKey = "agent:main:main";
       const sessionId = "delayed-transcript-session";
       const registration = registerSubscriptionChatRun(params, { runId, sessionId, sessionKey });
       claimAgentRunContext(runId, { sessionId, sessionKey });
-      const continuation = "Unpersisted continuation.";
+      const successorRunId = "queued-successor-run";
+      if (mode === "queued") {
+        params.chatRunState.registry.add(runId, { sessionKey, clientRunId: runId });
+        params.chatRunState.registry.add(runId, { sessionKey, clientRunId: successorRunId });
+      }
+      const firstText = createDeferred();
+      const readEntered = createDeferred();
+      const releaseRead = createDeferred();
       const continued = createDeferred();
       const ended = createDeferred();
-      const firstText = createDeferred();
       const delivered: Array<{ event: string; payload: unknown }> = [];
       params.broadcast = (event, payload) => {
         if (event === "chat") {
@@ -221,18 +172,17 @@ export function registerSessionPublicationTests(fixture: {
           }
         }, handler);
       });
-      const successorRunId = "queued-successor-run";
-      if (mode === "queued") {
-        params.chatRunState.registry.add(runId, { sessionKey, clientRunId: runId });
-        params.chatRunState.registry.add(runId, { sessionKey, clientRunId: successorRunId });
-      }
-      const { entered: readEntered, release: releaseRead, hold } = readBarrier();
-      const storedMessage = assistantMessage(
-        "Visible before persistence.",
-        { runId },
-        "committed-item",
-      );
-      hold(() => foundMessage(storedMessage));
+      const storedMessage = {
+        role: "assistant",
+        idempotencyKey: "committed-item",
+        content: [{ type: "text", text: "Visible before persistence." }],
+        __openclaw: { runId },
+      };
+      transcriptBroadcastMocks.readMessageById.mockImplementationOnce(async () => {
+        readEntered.resolve();
+        await releaseRead.promise;
+        return { found: true, oversized: false, seq: 1, message: storedMessage };
+      });
       const unsubs = start(params);
       let shutdown: Promise<void> | undefined;
       let handlerShutdown: Promise<void> | undefined;
@@ -243,12 +193,17 @@ export function registerSessionPublicationTests(fixture: {
           data: { itemId: "committed-item", text: "Visible before persistence." },
         });
         await withinTest(firstText.promise, signal);
-        publishMessage(
-          sessionId,
-          "/tmp/openclaw-delayed-transcript.sqlite",
-          "committed-message",
-          storedMessage,
-        );
+        emitSessionTranscriptUpdate({
+          sessionKey,
+          messageId: "committed-message",
+          message: storedMessage,
+          target: {
+            agentId: "main",
+            sessionId,
+            sessionKey,
+            storePath: "/tmp/openclaw-delayed-transcript.sqlite",
+          },
+        });
         await withinTest(readEntered.promise, signal);
         expect(delivered).toHaveLength(1);
         if (mode === "replacement") {
@@ -265,7 +220,7 @@ export function registerSessionPublicationTests(fixture: {
             stream: "assistant",
             data: {
               itemId: "continued-item",
-              text: continuation,
+              text: "Unpersisted continuation.",
               ...(mode === "paced" ? {} : { replace: true }),
             },
           });
@@ -273,7 +228,7 @@ export function registerSessionPublicationTests(fixture: {
           emitContinuation();
           await withinTest(continued.promise, signal);
           expect(params.chatRunState.resolveBuffer(runId).text).toBe(
-            mode === "disposed" ? "" : continuation,
+            mode === "disposed" ? "" : "Unpersisted continuation.",
           );
         }
         const terminal = mode === "terminal" || mode === "replacement" || mode === "queued";
@@ -307,12 +262,24 @@ export function registerSessionPublicationTests(fixture: {
         expect(delivered.findLast(({ event }) => event === "chat")?.payload).toMatchObject({
           runId,
           state: terminal ? "final" : "delta",
-          message:
-            mode === "queued"
-              ? { openclawDisplayContent: [] }
-              : mode === "terminal"
-                ? { openclawDisplayContent: textContent(continuation) }
-                : { content: textContent(mode === "disposed" ? "" : continuation) },
+          ...(mode === "queued"
+            ? { message: { openclawDisplayContent: [] } }
+            : mode === "terminal"
+              ? {
+                  message: {
+                    openclawDisplayContent: [{ type: "text", text: "Unpersisted continuation." }],
+                  },
+                }
+              : {
+                  message: {
+                    content: [
+                      {
+                        type: "text",
+                        text: mode === "disposed" ? "" : "Unpersisted continuation.",
+                      },
+                    ],
+                  },
+                }),
         });
         expect(warn).not.toHaveBeenCalled();
       } finally {
@@ -335,10 +302,8 @@ export function registerSessionPublicationTests(fixture: {
   ])(
     "retains failed publication text without duplicating saved rows (terminal=$terminal, mixed=$mixed, claimedError=$claimedError, failure=$failureKind, retry=$retry)",
     async ({ terminal, mixed, claimedError, failureKind, retry }, { signal }) => {
-      const pendingText = "Keep this reply visible.";
-      const correctedText = "Keep this corrected reply visible.";
       const actual = await vi.importActual<typeof import("./server-chat.js")>("./server-chat.js");
-      transcript.useActualHandler = true;
+      transcriptBroadcastMocks.useActualHandler = true;
       const params = createParams();
       const runId = "failed-publication-run";
       const sessionKey = "agent:main:main";
@@ -350,9 +315,12 @@ export function registerSessionPublicationTests(fixture: {
         ...(claimedError ? { kind: "agent" as const } : {}),
       });
       claimAgentRunContext(runId, { sessionId, sessionKey });
-      const savedPublished = createDeferred();
+      const readEntered = createDeferred();
+      const releaseRead = createDeferred();
       const failureReported = createDeferred();
+      const savedPublished = createDeferred();
       let processed = createDeferred();
+      let errorClaim: string | undefined;
       const delivered: Array<{ event: string; payload: unknown }> = [];
       params.broadcast = (event, payload) => {
         if (event === "chat") {
@@ -381,8 +349,6 @@ export function registerSessionPublicationTests(fixture: {
           processed.resolve();
         }, handler);
       });
-      const { entered: readEntered, release: releaseRead, hold } = readBarrier();
-      let errorClaim: string | undefined;
       const emitText = async (
         itemId: string,
         text: string,
@@ -396,7 +362,17 @@ export function registerSessionPublicationTests(fixture: {
         await withinTest(processed.promise, signal);
       };
       const persist = (messageId: string, message: unknown) =>
-        publishMessage(sessionId, "/synthetic/session.sqlite", messageId, message);
+        emitSessionTranscriptUpdate({
+          sessionKey,
+          messageId,
+          message,
+          target: {
+            agentId: "main",
+            sessionId,
+            sessionKey,
+            storePath: "/synthetic/session.sqlite",
+          },
+        });
       const failure =
         failureKind === "rebuilding"
           ? new SessionTranscriptProjectionUnavailableError(sessionId)
@@ -406,15 +382,31 @@ export function registerSessionPublicationTests(fixture: {
       if (failureKind === "exception") {
         warn.mockImplementationOnce(() => failureReported.resolve());
       }
-      const savedMessage = assistantMessage("Already published.", { runId }, "successful-item");
+      const savedMessage = {
+        role: "assistant",
+        idempotencyKey: "successful-item",
+        content: [{ type: "text", text: "Already published." }],
+        __openclaw: { runId },
+      };
       if (mixed) {
-        transcript.readMessageById.mockResolvedValueOnce(foundMessage(savedMessage));
+        transcriptBroadcastMocks.readMessageById.mockResolvedValueOnce({
+          found: true,
+          oversized: false,
+          seq: 1,
+          message: savedMessage,
+        });
       }
-      hold(() => {
+      transcriptBroadcastMocks.readMessageById.mockImplementationOnce(async () => {
+        readEntered.resolve();
+        await releaseRead.promise;
         throw failure;
       });
       const source: AgentAssistantSourceReceipt = { itemId: "failed-item" };
-      const failedMessage = assistantMessage(pendingText, { runId });
+      const failedMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: "Keep this reply visible." }],
+        __openclaw: { runId },
+      };
       bindAgentAssistantSource(failedMessage, source);
       const unsubs = start(params);
       try {
@@ -423,7 +415,7 @@ export function registerSessionPublicationTests(fixture: {
           persist("successful-message", savedMessage);
           await withinTest(savedPublished.promise, signal);
         }
-        await emitText("failed-item", pendingText, source);
+        await emitText("failed-item", "Keep this reply visible.", source);
         source.committedMessageSeq = 2;
         persist("failed-message", failedMessage);
         await withinTest(readEntered.promise, signal);
@@ -433,15 +425,19 @@ export function registerSessionPublicationTests(fixture: {
             const claim = claimAgentRunContext(
               runId,
               { sessionId, sessionKey },
-              { trackOwner: true, ownsContext: true },
+              {
+                trackOwner: true,
+                ownsContext: true,
+              },
             );
             errorClaim = claim;
-            assert(claim, "Expected a claimed error lifecycle");
+            if (!claim) {
+              throw new Error("Expected a claimed error lifecycle");
+            }
             const lifecycleGeneration = getAgentRunContext(runId)?.lifecycleGeneration;
-            assert(
-              directHandler && lifecycleGeneration,
-              "Expected the loaded chat handler and its run generation",
-            );
+            if (!directHandler || !lifecycleGeneration) {
+              throw new Error("Expected the loaded chat handler and its run generation");
+            }
             // Invoke the finalizer after its write is admitted; the subscription's
             // captured-write queue is not part of this publication-barrier ordering.
             const terminalEvent: AgentEventRuntimePayload = {
@@ -475,12 +471,17 @@ export function registerSessionPublicationTests(fixture: {
         await withinTest(failureReported.promise, signal);
         if (!terminal) {
           await vi.waitFor(() =>
-            expect(params.chatRunState.resolveBuffer(runId).text).toBe(pendingText),
+            expect(params.chatRunState.resolveBuffer(runId).text).toBe("Keep this reply visible."),
           );
           // A later callback carrying the same durable receipt must not hide the fallback again.
-          await emitText("failed-item", correctedText, source);
+          await emitText("failed-item", "Keep this corrected reply visible.", source);
           if (retry) {
-            transcript.readMessageById.mockResolvedValueOnce(foundMessage(failedMessage, 2));
+            transcriptBroadcastMocks.readMessageById.mockResolvedValueOnce({
+              found: true,
+              oversized: false,
+              seq: 2,
+              message: failedMessage,
+            });
             persist("failed-message", failedMessage);
             await withinTest(savedPublished.promise, signal);
           }
@@ -510,12 +511,24 @@ export function registerSessionPublicationTests(fixture: {
         });
         const message = asNullableRecord(asNullableRecord(last)?.message);
         expect(message?.openclawDisplayContent ?? message?.content).toEqual(
-          textContent(retry ? "" : terminal ? pendingText : correctedText),
+          retry
+            ? [{ type: "text", text: "" }]
+            : [
+                {
+                  type: "text",
+                  text: terminal
+                    ? "Keep this reply visible."
+                    : "Keep this corrected reply visible.",
+                },
+              ],
         );
         if (terminal) {
-          expect(message?.content).toEqual(
-            textContent((mixed ? "Already published.\n\n" : "") + pendingText),
-          );
+          expect(message?.content).toEqual([
+            {
+              type: "text",
+              text: (mixed ? "Already published.\n\n" : "") + "Keep this reply visible.",
+            },
+          ]);
         }
       } finally {
         releaseRead.resolve();
@@ -529,18 +542,31 @@ export function registerSessionPublicationTests(fixture: {
   it("publishes committed transcripts after the producer drains and before Gateway shutdown", async ({
     signal,
   }) => {
-    transcript.useActualHandler = true;
-    const { entered: readEntered, release: releaseRead, hold } = readBarrier();
+    transcriptBroadcastMocks.useActualHandler = true;
+    const readEntered = createDeferred();
+    const releaseRead = createDeferred();
     const published = createDeferred();
     const producer = new AsyncWorkScope();
-    const storedMessage = assistantMessage("committed completion", {
-      transcriptPosition: { source: "committed-generation", rawSeq: 1 },
+    const storedMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "committed completion" }],
+      __openclaw: { transcriptPosition: { source: "committed-generation", rawSeq: 1 } },
+    };
+    transcriptBroadcastMocks.readMessageById.mockImplementationOnce(async () => {
+      const readSignal = getAsyncWorkSignal();
+      readEntered.resolve();
+      await releaseRead.promise;
+      readSignal?.throwIfAborted();
+      return { found: true, oversized: false, seq: 1, message: storedMessage };
     });
-    hold(() => foundMessage(storedMessage), true);
-    const params = publicationParams(published);
+    const params = createParams();
+    params.sessionEventSubscribers.subscribe("conn-transcript");
+    params.broadcastToConnIds = vi.fn(() => published.resolve());
     const unsubs = start(params);
     const admission = tryBeginGatewayRootWorkAdmission("test:committed-transcript-publisher");
-    assert(admission, "Transcript publisher admission was closed");
+    if (!admission) {
+      throw new Error("Transcript publisher admission was closed");
+    }
     let shutdown: Promise<void> | undefined;
     try {
       await admission.run(async () =>
@@ -593,19 +619,29 @@ export function registerSessionPublicationTests(fixture: {
   it("logs real asynchronous transcript failures and recovers the broadcast queue", async ({
     signal,
   }) => {
-    transcript.useActualHandler = true;
-    const { entered: readEntered, release: failedRead, hold } = readBarrier();
+    transcriptBroadcastMocks.useActualHandler = true;
+    const readEntered = createDeferred();
+    const failedRead = createDeferred();
     const failureReported = createDeferred();
     const recoveredPublication = createDeferred();
     const persistenceFailure = new Error("session transcript read failed");
     const transcriptPosition = { source: "recovered-generation", rawSeq: 7 };
-    const storedMessage = assistantMessage("visible answer", { transcriptPosition });
-    hold(() => {
-      throw persistenceFailure;
-    });
-    transcript.readMessageById.mockResolvedValueOnce(foundMessage(storedMessage, 2));
+    const storedMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "visible answer" }],
+      __openclaw: { transcriptPosition },
+    };
+    transcriptBroadcastMocks.readMessageById
+      .mockImplementationOnce(async () => {
+        readEntered.resolve();
+        await failedRead.promise;
+        throw persistenceFailure;
+      })
+      .mockResolvedValueOnce({ found: true, oversized: false, seq: 2, message: storedMessage });
 
-    const params = publicationParams(recoveredPublication);
+    const params = createParams();
+    params.sessionEventSubscribers.subscribe("conn-transcript");
+    params.broadcastToConnIds = vi.fn(() => recoveredPublication.resolve());
     warn.mockImplementationOnce(() => failureReported.resolve());
     const unsubs = start(params);
 
@@ -613,7 +649,7 @@ export function registerSessionPublicationTests(fixture: {
       emitSessionTranscriptUpdate({
         sessionFile: "/tmp/openclaw-transcript-dispatch.sqlite",
         sessionKey: "agent:main:main",
-        message: { role: "assistant", content: textContent("stale queued answer") },
+        message: { role: "assistant", content: [{ type: "text", text: "stale queued answer" }] },
         messageId,
         target: {
           agentId: "main",
@@ -624,13 +660,15 @@ export function registerSessionPublicationTests(fixture: {
       });
 
     const admission = tryBeginGatewayRootWorkAdmission("test:transcript-publisher");
-    assert(admission, "Transcript publisher admission was closed");
+    if (!admission) {
+      throw new Error("Transcript publisher admission was closed");
+    }
     let shutdown: Promise<void> | undefined;
     try {
       await admission.run(async () => emitMessage("failed-message"));
       admission.release();
       await withinTest(readEntered.promise, signal);
-      expect(transcript.readMessageById).toHaveBeenCalledOnce();
+      expect(transcriptBroadcastMocks.readMessageById).toHaveBeenCalledOnce();
       expect(getActiveGatewayRootWorkCount()).toBe(1);
       failedRead.resolve();
       await withinTest(failureReported.promise, signal);
@@ -657,7 +695,7 @@ export function registerSessionPublicationTests(fixture: {
         new Set(["conn-transcript"]),
         undefined,
       );
-      expect(transcript.readMessageById).toHaveBeenCalledTimes(2);
+      expect(transcriptBroadcastMocks.readMessageById).toHaveBeenCalledTimes(2);
       expect(warn).toHaveBeenCalledOnce();
       shutdown = unsubs.agentUnsub();
       await shutdown;

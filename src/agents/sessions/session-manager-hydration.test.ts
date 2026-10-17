@@ -293,7 +293,8 @@ it("pairs current-turn entries with the complete hydrated version and captured p
           entryId: hiddenEntryId,
           includeEntry,
         });
-        expect(hidden).toMatchObject({ anchor: undefined, event: undefined });
+        expect(hidden.anchor).toBeUndefined();
+        expect(hidden.event).toBeUndefined();
       }
     }
     await expect(fencedReader.readCurrentTurnEntry(request)).rejects.toThrow(

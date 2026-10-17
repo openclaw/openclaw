@@ -50,7 +50,9 @@ it.each(["dispose", "selection", "capability", "deadline"] as const)(
   "settles transient subscription recovery on %s without touching drafts",
   async (change) => {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const subscribeMessages = subscriptionTimeout();
     const { state } = createSubscriptionState({ subscribeMessages });
     state.chatMessage = "New unsent draft";

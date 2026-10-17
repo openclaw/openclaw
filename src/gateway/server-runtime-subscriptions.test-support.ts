@@ -1,4 +1,4 @@
-import { assert, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   bindTestChannelParticipantAdmissionEvidence,
   createChannelParticipantAdmissionEvidence,
@@ -35,10 +35,6 @@ import {
 } from "./server-chat-state.js";
 import type { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
 
-type SubscriptionParams = Parameters<typeof startGatewayEventSubscriptions>[0];
-type AuditConfig = NonNullable<NonNullable<OpenClawConfig["logging"]>["audit"]>;
-type InstallHandler = (factory: typeof import("./server-chat.js").createAgentEventHandler) => void;
-
 export function createSubscriptionTestFixture() {
   const warn = vi.fn();
   const log: SubsystemLogger = {
@@ -56,7 +52,7 @@ export function createSubscriptionTestFixture() {
   return {
     log,
     warn,
-    createParams: (): SubscriptionParams => {
+    createParams: (): Parameters<typeof startGatewayEventSubscriptions>[0] => {
       const chatRunState = createChatRunState();
       return {
         scheduler: createTestGatewayScheduler(),
@@ -80,7 +76,7 @@ export function createSubscriptionTestFixture() {
 }
 
 export function registerSubscriptionChatRun(
-  params: SubscriptionParams,
+  params: Parameters<typeof startGatewayEventSubscriptions>[0],
   input: Omit<
     Parameters<typeof registerChatAbortController>[0],
     "chatAbortControllers" | "timeoutMs"
@@ -91,34 +87,40 @@ export function registerSubscriptionChatRun(
     chatAbortControllers: params.chatAbortControllers,
     timeoutMs: 60_000,
   });
-  assert(registration.entry, "expected registered chat abort controller");
+  if (!registration.entry) {
+    throw new Error("expected registered chat abort controller");
+  }
   return { ...registration, entry: registration.entry };
 }
 
-export const readLifecycleState = (entry: ChatAbortControllerEntry) => ({
-  projectSessionActive: entry.projectSessionActive,
-  projectSessionTerminalPending: entry.projectSessionTerminalPending,
-  projectSessionTerminalObservedAt: entry.projectSessionTerminalObservedAt,
-  projectSessionTerminalPersistence: entry.projectSessionTerminalPersistence,
-  projectSessionTerminalPersisted: entry.projectSessionTerminalPersisted,
-  registrationCleanupRequested: entry.registrationCleanupRequested,
-});
+export function readLifecycleState(entry: ChatAbortControllerEntry) {
+  return {
+    projectSessionActive: entry.projectSessionActive,
+    projectSessionTerminalPending: entry.projectSessionTerminalPending,
+    projectSessionTerminalObservedAt: entry.projectSessionTerminalObservedAt,
+    projectSessionTerminalPersistence: entry.projectSessionTerminalPersistence,
+    projectSessionTerminalPersisted: entry.projectSessionTerminalPersisted,
+    registrationCleanupRequested: entry.registrationCleanupRequested,
+  };
+}
 
-export const lifecycleState = (
+export function lifecycleState(
   projectSessionActive: boolean | undefined,
   projectSessionTerminalPending?: boolean,
   projectSessionTerminalObservedAt?: number,
   projectSessionTerminalPersistence?: Promise<void>,
   projectSessionTerminalPersisted?: boolean,
   registrationCleanupRequested?: boolean,
-): ReturnType<typeof readLifecycleState> => ({
-  projectSessionActive,
-  projectSessionTerminalPending,
-  projectSessionTerminalObservedAt,
-  projectSessionTerminalPersistence,
-  projectSessionTerminalPersisted,
-  registrationCleanupRequested,
-});
+): ReturnType<typeof readLifecycleState> {
+  return {
+    projectSessionActive,
+    projectSessionTerminalPending,
+    projectSessionTerminalObservedAt,
+    projectSessionTerminalPersistence,
+    projectSessionTerminalPersisted,
+    registrationCleanupRequested,
+  };
+}
 
 export function registerAuditSubscriptionTests(params: {
   start: () => ReturnType<typeof startGatewayEventSubscriptions>;
@@ -134,36 +136,57 @@ export function registerAuditSubscriptionTests(params: {
   warn: ReturnType<typeof createSubscriptionTestFixture>["warn"];
 }) {
   const { start, runtimeConfigState, auditTestState, warn } = params;
-  const setAudit = (audit: AuditConfig, unsubs?: ReturnType<typeof start>) => {
-    runtimeConfigState.value = { logging: { audit } };
-    unsubs?.reconcileAuditPolicy(runtimeConfigState.value);
-  };
-  const emitAudit = (runId: string, startedAt = 1_000) =>
-    emitAgentAuditEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt } });
+  it("records audit events by default and stops the recorder on unsubscribe", async () => {
+    runtimeConfigState.value = { logging: { audit: { executionIdentity: true } } };
+    const unsubs = start();
+
+    expect(auditTestState.created).toBe(1);
+    emitAgentAuditEvent({
+      runId: "enabled-audit",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    expect(auditTestState.recorded).toBe(1);
+    expect(hasExecutionIdentityAdmissionSink()).toBe(true);
+    expect(
+      enqueueExecutionIdentityContextAtAdmission(
+        {
+          runId: "gateway-admission",
+          agentId: "main",
+          ingress: { kind: "system", boundary: "gateway.boot", state: "present" },
+          runtime: { kind: "embedded" },
+        },
+        { enabled: true, runtimeInstanceId: "runtime-1" },
+      )?.accepted,
+    ).toBe(true);
+    expect(auditTestState.identityRecorded).toBe(1);
+    await unsubs.agentUnsub();
+    expect(auditTestState.stopped).toBe(1);
+    expect(hasExecutionIdentityAdmissionSink()).toBe(false);
+  });
+
   it("owns channel evidence collection without retiring host routing on audit changes", async () => {
     const unsubs = start();
     const participant = { channelId: "test", participantId: "person-1" };
-    const createEvidence = (audit = unsubs.channelAdmissionAudit) =>
-      createChannelParticipantAdmissionEvidence({ audit, ...participant });
-    const bindEvidence = (context: object) =>
+    const context = {};
+    expect(
       bindTestChannelParticipantAdmissionEvidence({
         audit: unsubs.channelAdmissionAudit,
         context,
         ...participant,
-      });
-    const context = {};
-    expect(bindEvidence(context)).toBeUndefined();
+      }),
+    ).toBeUndefined();
     const resolveGateway = readChannelContextGatewayContextResolver(context);
     expect(resolveGateway).toBeTypeOf("function");
     const gateway = resolveGateway?.();
-    const expectRoutingUnchanged = () => {
-      expect(readChannelContextGatewayContextResolver(context)).toBe(resolveGateway);
-      expect(resolveGateway?.()).toBe(gateway);
-    };
     expect(gateway?.channelAdmissionAudit).toBe(unsubs.channelAdmissionAudit);
 
-    setAudit({ executionIdentity: true }, unsubs);
-    const evidence = createEvidence();
+    runtimeConfigState.value = { logging: { audit: { executionIdentity: true } } };
+    unsubs.reconcileAuditPolicy(runtimeConfigState.value);
+    const evidence = createChannelParticipantAdmissionEvidence({
+      audit: unsubs.channelAdmissionAudit,
+      ...participant,
+    });
     expect(evidence).toBeDefined();
     unsubs.reconcileAuditPolicy(runtimeConfigState.value);
     expect(consumeChannelAdmissionEvidence(evidence)).toMatchObject({ ingressState: "present" });
@@ -178,23 +201,39 @@ export function registerAuditSubscriptionTests(params: {
     expect(recordChannelAdmissionDecision(evidence, decision)).toBe(true);
     expect(auditTestState.decisionRecorded).toBe(1);
 
-    const retired = createEvidence();
+    const retired = createChannelParticipantAdmissionEvidence({
+      audit: unsubs.channelAdmissionAudit,
+      ...participant,
+    });
     expect(retired).toBeDefined();
-    setAudit({ enabled: false, executionIdentity: true }, unsubs);
+    runtimeConfigState.value = { logging: { audit: { enabled: false, executionIdentity: true } } };
+    unsubs.reconcileAuditPolicy(runtimeConfigState.value);
     const disabledContext = {};
-    expect(bindEvidence(disabledContext)).toBeUndefined();
-    expectRoutingUnchanged();
+    expect(
+      bindTestChannelParticipantAdmissionEvidence({
+        audit: unsubs.channelAdmissionAudit,
+        context: disabledContext,
+        ...participant,
+      }),
+    ).toBeUndefined();
+    expect(readChannelContextGatewayContextResolver(context)).toBe(resolveGateway);
+    expect(resolveGateway?.()).toBe(gateway);
     expect(
       readChannelContextGatewayContextResolver(disabledContext)?.()?.channelAdmissionAudit,
     ).toBe(unsubs.channelAdmissionAudit);
 
-    setAudit({ executionIdentity: true }, unsubs);
+    runtimeConfigState.value = { logging: { audit: { executionIdentity: true } } };
+    unsubs.reconcileAuditPolicy(runtimeConfigState.value);
     expect(consumeChannelAdmissionEvidence(retired)).toMatchObject({ ingressState: "unknown" });
     expect(recordChannelAdmissionDecision(evidence, decision)).toBe(false);
     expect(auditTestState.decisionRecorded).toBe(1);
-    expectRoutingUnchanged();
+    expect(readChannelContextGatewayContextResolver(context)).toBe(resolveGateway);
+    expect(resolveGateway?.()).toBe(gateway);
 
-    const beforeShutdown = createEvidence();
+    const beforeShutdown = createChannelParticipantAdmissionEvidence({
+      audit: unsubs.channelAdmissionAudit,
+      ...participant,
+    });
     expect(beforeShutdown).toBeDefined();
     await unsubs.agentUnsub();
     unsubs.reconcileAuditPolicy({ logging: { audit: { enabled: false } } });
@@ -202,14 +241,24 @@ export function registerAuditSubscriptionTests(params: {
     expect(consumeChannelAdmissionEvidence(beforeShutdown)).toMatchObject({
       ingressState: "unknown",
     });
-    expect(createEvidence()).toBeUndefined();
+    expect(
+      createChannelParticipantAdmissionEvidence({
+        audit: unsubs.channelAdmissionAudit,
+        ...participant,
+      }),
+    ).toBeUndefined();
 
     unsubs.heartbeatUnsub();
     unsubs.transcriptUnsub();
     unsubs.lifecycleUnsub();
     const restarted = start();
     expect(
-      consumeChannelAdmissionEvidence(createEvidence(restarted.channelAdmissionAudit)),
+      consumeChannelAdmissionEvidence(
+        createChannelParticipantAdmissionEvidence({
+          audit: restarted.channelAdmissionAudit,
+          ...participant,
+        }),
+      ),
     ).toMatchObject({ ingressState: "present", invoker: { state: "present" } });
     expect(consumeChannelAdmissionEvidence(beforeShutdown)).toMatchObject({
       ingressState: "unknown",
@@ -217,20 +266,44 @@ export function registerAuditSubscriptionTests(params: {
   });
 
   it("applies audit policy changes through the existing event subscriptions", async () => {
-    setAudit({ enabled: false });
+    runtimeConfigState.value = { logging: { audit: { enabled: false } } };
     const unsubs = start();
-    expect(hasExecutionIdentityAdmissionSink()).toBe(true);
-    const steps: Array<[AuditConfig, number, number, number]> = [
-      [{ enabled: false, messages: "all", executionIdentity: true }, 0, 0, 0],
-      [{}, 1, 0, 0],
-      [{ messages: "direct", executionIdentity: true }, 2, 1, 1],
-      [{ messages: "all" }, 3, 3, 1],
-      [{ enabled: false, messages: "all", executionIdentity: true }, 3, 3, 1],
+    const steps: Array<{
+      audit: NonNullable<NonNullable<OpenClawConfig["logging"]>["audit"]>;
+      events: number;
+      messages: number;
+      identities: number;
+    }> = [
+      {
+        audit: { enabled: false, messages: "all", executionIdentity: true },
+        events: 0,
+        messages: 0,
+        identities: 0,
+      },
+      { audit: {}, events: 1, messages: 0, identities: 0 },
+      {
+        audit: { messages: "direct", executionIdentity: true },
+        events: 2,
+        messages: 1,
+        identities: 1,
+      },
+      { audit: { messages: "all" }, events: 3, messages: 3, identities: 1 },
+      {
+        audit: { enabled: false, messages: "all", executionIdentity: true },
+        events: 3,
+        messages: 3,
+        identities: 1,
+      },
     ];
-    for (const [index, [audit, recorded, messages, identityRecorded]] of steps.entries()) {
-      setAudit(audit, unsubs);
+    for (const [index, step] of steps.entries()) {
+      runtimeConfigState.value = { logging: { audit: step.audit } };
+      unsubs.reconcileAuditPolicy(runtimeConfigState.value);
       const runId = `live-audit-${index}`;
-      emitAudit(runId);
+      emitAgentAuditEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 1_000 },
+      });
       for (const conversationKind of ["direct", "group"] as const) {
         emitTrustedMessageAuditEvent({
           occurredAt: 1_000,
@@ -245,37 +318,37 @@ export function registerAuditSubscriptionTests(params: {
           outcome: "completed",
         });
       }
-      const admission = enqueueExecutionIdentityContextAtAdmission(
+      enqueueExecutionIdentityContextAtAdmission(
         {
           runId,
           agentId: "main",
-          ingress: { kind: "system", boundary: "gateway.boot", state: "present" },
-          runtime: { kind: "embedded" },
+          ingress: { kind: "system", boundary: "test" },
+          runtime: { kind: "gateway" },
         },
-        { enabled: true, runtimeInstanceId: "runtime-1" },
+        { enabled: true },
       );
-      if (audit.executionIdentity && audit.enabled !== false) {
-        expect(admission?.accepted).toBe(true);
-      }
       expect(auditTestState).toMatchObject({
         created: 1,
         stopped: 0,
-        recorded,
-        messages,
-        identityRecorded,
+        recorded: step.events,
+        messages: step.messages,
+        identityRecorded: step.identities,
       });
     }
     await unsubs.agentUnsub();
     expect(auditTestState.stopped).toBe(1);
-    expect(hasExecutionIdentityAdmissionSink()).toBe(false);
   });
 
   it("keeps retention maintenance and applies audit enablement to subsequent events", async () => {
-    setAudit({ enabled: false });
+    runtimeConfigState.value = { logging: { audit: { enabled: false } } };
     const unsubs = start();
 
     expect(auditTestState.created).toBe(1);
-    emitAudit("disabled-private");
+    emitAgentAuditEvent({
+      runId: "disabled-private",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
     emitAgentEvent({
       runId: "disabled-public",
       stream: "lifecycle",
@@ -283,10 +356,18 @@ export function registerAuditSubscriptionTests(params: {
     });
     expect(auditTestState.recorded).toBe(0);
     runtimeConfigState.value = {};
-    emitAudit("resumed-private", 2_000);
+    emitAgentAuditEvent({
+      runId: "resumed-private",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 2_000 },
+    });
     expect(auditTestState.recorded).toBe(1);
-    setAudit({ enabled: false });
-    emitAudit("disabled-again", 3_000);
+    runtimeConfigState.value = { logging: { audit: { enabled: false } } };
+    emitAgentAuditEvent({
+      runId: "disabled-again",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 3_000 },
+    });
     expect(auditTestState.recorded).toBe(1);
     await vi.waitFor(() => expect(warn).toHaveBeenCalledOnce(), { interval: 1 });
     warn.mockClear();
@@ -311,7 +392,9 @@ export function registerSubscriptionRegistrationTests(
     let registration = registerSubscriptionChatRun(params, { runId, ...identity });
     const ownership = { exclusive: true, ownsContext: true, trackOwner: true };
     const originalClaim = claimAgentRunContext(runId, identity, ownership);
-    assert(originalClaim, "Missing original claim");
+    if (!originalClaim) {
+      throw new Error("Missing original claim");
+    }
     let replacementClaim: string | undefined;
     const removeListener = onAgentRuntimeEvent((event) => {
       if (event.runId !== runId) {
@@ -361,23 +444,29 @@ export function registerAssistantTailSubscriptionTests({
   start,
 }: {
   createParams: ReturnType<typeof createSubscriptionTestFixture>["createParams"];
-  installHandlerFactory: InstallHandler;
-  start: (params: SubscriptionParams) => void;
+  installHandlerFactory: (
+    factory: typeof import("./server-chat.js").createAgentEventHandler,
+  ) => void;
+  start: (params: Parameters<typeof startGatewayEventSubscriptions>[0]) => void;
 }): void {
-  const tailCase = (
-    source: string,
-    initial?: string,
-    committed = [initial ?? "Saved paragraph."],
-  ) => ({ source, committed, initial });
   it.each([
-    tailCase("plain", "Saved paragraph."),
-    tailCase("native raw directive", "[[reply_to_current]]Saved paragraph."),
-    tailCase("native partial before directive", "Saved", ["Saved[[reply_to_current]] paragraph."]),
-    tailCase("before first bytes"),
-    tailCase("identical receipts before first bytes", undefined, [
-      "Saved paragraph.",
-      "Saved paragraph.",
-    ]),
+    { source: "plain", committed: ["Saved paragraph."], initial: "Saved paragraph." },
+    {
+      source: "native raw directive",
+      committed: ["[[reply_to_current]]Saved paragraph."],
+      initial: "[[reply_to_current]]Saved paragraph.",
+    },
+    {
+      source: "native partial before directive",
+      committed: ["Saved[[reply_to_current]] paragraph."],
+      initial: "Saved",
+    },
+    { source: "before first bytes", committed: ["Saved paragraph."], initial: undefined },
+    {
+      source: "identical receipts before first bytes",
+      committed: ["Saved paragraph.", "Saved paragraph."],
+      initial: undefined,
+    },
   ])(
     "retires $source by identity before queued continuation without session subscribers",
     async ({ committed, initial }) => {
@@ -385,16 +474,16 @@ export function registerAssistantTailSubscriptionTests({
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const params = createParams();
       const runId = "run-persisted-tail";
-      const identity = {
-        sessionKey: "agent:main:main",
-        sessionId: "session-persisted-tail",
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      };
-      const registration = registerSubscriptionChatRun(params, { runId, ...identity });
-      claimAgentRunContext(runId, identity);
-      const { sessionKey, sessionId } = identity;
-      const emitText = (itemId: string, text: string) =>
-        emitAgentEvent({ runId, stream: "assistant", data: { itemId, text } });
+      const sessionKey = "agent:main:main";
+      const sessionId = "session-persisted-tail";
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const registration = registerSubscriptionChatRun(params, {
+        runId,
+        sessionId,
+        sessionKey,
+        lifecycleGeneration,
+      });
+      claimAgentRunContext(runId, { lifecycleGeneration, sessionId, sessionKey });
       const delivered = createDeferred();
       installHandlerFactory((options) => {
         const handler = actual.createAgentEventHandler(options);
@@ -434,9 +523,17 @@ export function registerAssistantTailSubscriptionTests({
           });
         }
         for (const [index, text] of committed.entries()) {
-          emitText(`saved-paragraph-${index}`, text);
+          emitAgentEvent({
+            runId,
+            stream: "assistant",
+            data: { itemId: `saved-paragraph-${index}`, text },
+          });
         }
-        emitText("new-paragraph", "Unpersisted tail.");
+        emitAgentEvent({
+          runId,
+          stream: "assistant",
+          data: { itemId: "new-paragraph", text: "Unpersisted tail." },
+        });
         await delivered.promise;
         expect(params.chatRunState.resolveBuffer(runId).text.trim()).toBe("Unpersisted tail.");
         expect(params.chatRunState.resolveBuffer(runId, { final: true }).text).toBe(

@@ -33,13 +33,12 @@ export function registerActivitySummaryPublicationTests(
   start: Start,
   getOnChanged: () => ((target: ActivitySummaryTarget & { storePath: string }) => void) | undefined,
 ): void {
-  const config = () => ({ agents: { entries: { main: {} } } });
   it("delivers a coalesced recap after producer closure and joins it during shutdown", async () => {
     vi.useFakeTimers();
     const target = { key: "agent:main:recap", agentId: "main", storePath: "/recap/agent.sqlite" };
     const entry = { sessionId: "recap", lifecycleRevision: "original", updatedAt: 1 };
     const projection = createSessionRowProjectionFixture({
-      cfg: config(),
+      cfg: { agents: { entries: { main: {} } } },
       store: { [target.key]: entry },
       storePath: target.storePath,
     });
@@ -71,7 +70,8 @@ export function registerActivitySummaryPublicationTests(
       projection.setEntry(target.key, { ...entry, label: "latest recap row" });
       producer.run(() => onChanged(target));
       await producer.drain();
-      // Preserve server-lifecycle/server-close admission and drain order.
+      // server-lifecycle closes scheduler admission before connection work;
+      // server-close then joins subscriptions before sockets and projection.
       params.scheduler.beginClose();
       connectionWork.beginClose();
       let closed = false;
@@ -111,6 +111,7 @@ export function registerActivitySummaryPublicationTests(
 
   it("publishes a prepared recap while the real projection retains an unrelated dirty row", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = { agents: { entries: { main: {} } } };
       const target = {
         key: "agent:main:recap",
         agentId: "main",
@@ -128,75 +129,84 @@ export function registerActivitySummaryPublicationTests(
         );
       }
       const placements = createWorkerSessionPlacementStore();
-      await using cleanup = new AsyncDisposableStack();
       const releaseForeground = retainSessionListForegroundWork();
-      cleanup.defer(releaseForeground);
       const projection = await createSessionRowProjection({
-        cfg: config(),
+        cfg,
         modelCatalog: [],
         placementFactsReader: placements,
+      }).catch((error: unknown) => {
+        releaseForeground();
+        throw error;
       });
-      cleanup.defer(() => projection.dispose());
       const entered = createDeferred();
       const release = createDeferred();
-      const resources: {
-        unsubs?: ReturnType<Start>["unsubs"];
-        sql?: ReturnType<typeof observeHostDataSql>;
-      } = {};
-      cleanup.defer(async () => {
-        resources.sql?.restore();
+      let unsubs: ReturnType<Start>["unsubs"] | undefined;
+      let sql: ReturnType<typeof observeHostDataSql> | undefined;
+      try {
+        const started = start(projection);
+        const { params } = started;
+        unsubs = started.unsubs;
+        await projection.ensureMaterialized();
+        const read = placements.readProjection.bind(placements);
+        vi.spyOn(placements, "readProjection").mockImplementation(async (ids) => {
+          const snapshot = await read(ids);
+          if (ids.includes("unrelated")) {
+            entered.resolve();
+            await release.promise;
+          }
+          return snapshot;
+        });
+        sessionChanges.emit({ all: true, scope: "worker-placements" });
+        await entered.promise;
+        await withReadySessionRows(
+          projection,
+          () => [target],
+          () => undefined,
+          {
+            includeAncestors: true,
+          },
+        );
+        const row = projection.describe(target)!;
+        expect(projection.ancestorRows(row)?.map((ancestor) => ancestor.key)).toEqual([parent.key]);
+        expect(projection.needsMaterialization).toBe(true);
+        const onChanged = getOnChanged();
+        if (!onChanged) {
+          throw new Error("missing activity-summary publication callback");
+        }
+        vi.useFakeTimers();
+        sql = observeHostDataSql();
+        onChanged(target);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(params.broadcast).toHaveBeenCalledExactlyOnceWith(
+          "sessions.changed",
+          expect.objectContaining({
+            reason: "activity-summary",
+            session: expect.objectContaining({ key: target.key, sessionId: "recap" }),
+          }),
+          {
+            sessionKeys: [target.key],
+            agentId: target.agentId,
+            dropIfSlow: true,
+            prepareSessionProjection: expect.any(Function),
+          },
+        );
+        expect(projection.needsMaterialization).toBe(true);
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql?.restore();
         vi.useRealTimers();
         release.resolve();
-        await resources.unsubs?.agentUnsub();
-        await projection.ensureMaterialized();
-      });
-      const started = start(projection);
-      const { params } = started;
-      resources.unsubs = started.unsubs;
-      await projection.ensureMaterialized();
-      const read = placements.readProjection.bind(placements);
-      vi.spyOn(placements, "readProjection").mockImplementation(async (ids) => {
-        const snapshot = await read(ids);
-        if (ids.includes("unrelated")) {
-          entered.resolve();
-          await release.promise;
+        try {
+          await unsubs?.agentUnsub();
+          await projection.ensureMaterialized();
+        } finally {
+          try {
+            projection.dispose();
+          } finally {
+            releaseForeground();
+          }
         }
-        return snapshot;
-      });
-      sessionChanges.emit({ all: true, scope: "worker-placements" });
-      await entered.promise;
-      await withReadySessionRows(
-        projection,
-        () => [target],
-        () => undefined,
-        { includeAncestors: true },
-      );
-      const row = projection.describe(target)!;
-      expect(projection.ancestorRows(row)?.map((ancestor) => ancestor.key)).toEqual([parent.key]);
-      expect(projection.needsMaterialization).toBe(true);
-      const onChanged = getOnChanged();
-      if (!onChanged) {
-        throw new Error("missing activity-summary publication callback");
       }
-      vi.useFakeTimers();
-      const sql = (resources.sql = observeHostDataSql());
-      onChanged(target);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(params.broadcast).toHaveBeenCalledExactlyOnceWith(
-        "sessions.changed",
-        expect.objectContaining({
-          reason: "activity-summary",
-          session: expect.objectContaining({ key: target.key, sessionId: "recap" }),
-        }),
-        {
-          sessionKeys: [target.key],
-          agentId: target.agentId,
-          dropIfSlow: true,
-          prepareSessionProjection: expect.any(Function),
-        },
-      );
-      expect(projection.needsMaterialization).toBe(true);
-      expect(sql.queries).toEqual([]);
     });
   });
 }

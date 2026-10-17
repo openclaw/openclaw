@@ -13,55 +13,43 @@ import type { CliSessionReseedReceipt } from "../../config/sessions.js";
 import { contextBudgetStatusFixture } from "../../config/sessions/context-budget.test-support.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
-import * as h from "./run.test-harness.js";
+import {
+  ensureAgentWorkspaceMock,
+  getCliSessionBindingMock,
+  isCliProviderMock,
+  isThinkingLevelSupportedMock,
+  loadModelCatalogMock,
+  loadModelCatalogOwnerMock,
+  loadRunCronIsolatedAgentTurn,
+  loadSessionEntryMock,
+  logWarnMock,
+  makeCronSession,
+  makeCronSessionEntry,
+  mockRunCronFallbackPassthrough,
+  patchSessionEntryMock,
+  resolveAgentConfigMock,
+  resolveAgentModelFallbacksOverrideMock,
+  resolveAllowedModelRefMock,
+  resolveConfiguredModelRefMock,
+  resolveCronSessionMock,
+  resolveEffectiveAgentRuntimeMock,
+  resolveSessionAuthSelectionMock,
+  resolveSupportedThinkingLevelMock,
+  resolveThinkingDefaultMock,
+  runCliAgentMock,
+  runEmbeddedAgentMock,
+  runWithModelFallbackMock,
+} from "./run.test-harness.js";
 
-function expectCall(mock: unknown, fields: Record<string, unknown>) {
-  expect(mock).toHaveBeenCalledWith(expect.objectContaining(fields));
-}
+const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
-const runAgent = await h.loadRunCronIsolatedAgentTurn();
-const opus = { provider: "anthropic", model: "claude-opus-4-6" };
-const sonnet = { provider: "anthropic", model: "claude-sonnet-4-6" };
-const luna = { provider: "openai", model: "gpt-5.6-luna" };
-const gemini = { provider: "google", model: "gemini-2.0-flash" };
-const ollama = { provider: "ollama", model: "minimax-m3:cloud" };
-const cli = { provider: "claude-cli", model: "claude-opus-4-6" };
-
-function setSession(
-  entry: Parameters<typeof h.makeCronSessionEntry>[0],
-  overrides: Parameters<typeof h.makeCronSession>[0] = {},
-) {
-  const session = h.makeCronSession({ ...overrides, sessionEntry: h.makeCronSessionEntry(entry) });
-  h.resolveCronSessionMock.mockReturnValue(session);
-  return session;
-}
-
-function runTurn(overrides?: Record<string, unknown>) {
-  return runAgent(
-    makeIsolatedAgentParamsFixture({ job: makeJob(), sessionKey: "cron:model-fwd", ...overrides }),
-  );
-}
-
-setupRunCronIsolatedAgentTurnSuite();
-beforeEach(() => {
-  h.mockRunCronFallbackPassthrough();
-  h.resolveConfiguredModelRefMock.mockReturnValue(opus);
-});
-
-function resolveRawModel({ raw }: { raw: string }) {
-  const [provider, model] = raw.split("/");
-  return { ref: { provider, model } };
-}
-
-function useFallback(provider: string, model: string) {
-  h.runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
-    await runInitialModelFallbackAttempt(params);
-    return {
-      result: await runFallbackModelAttempt(params, provider, model, "unknown"),
-      provider,
-      model,
-      attempts: [],
-    };
+function setupModelSuite() {
+  setupRunCronIsolatedAgentTurnSuite();
+  beforeEach(() => {
+    resolveConfiguredModelRefMock.mockReturnValue({
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+    });
   });
 }
 
@@ -73,12 +61,26 @@ function makeJob(overrides?: Record<string, unknown>) {
   });
 }
 
+function makeParams(overrides?: Record<string, unknown>) {
+  return makeIsolatedAgentParamsFixture({
+    job: makeJob(),
+    sessionKey: "cron:model-fwd",
+    ...overrides,
+  });
+}
+
 function makeSuccessfulRunResult(provider = "google", model = "gemini-2.0-flash") {
   return {
     result: {
       result: {
         payloads: [{ text: "summary done" }],
-        meta: { agentMeta: { model, provider, usage: { input: 100, output: 50 } } },
+        meta: {
+          agentMeta: {
+            model,
+            provider,
+            usage: { input: 100, output: 50 },
+          },
+        },
       },
     },
     provider,
@@ -88,59 +90,28 @@ function makeSuccessfulRunResult(provider = "google", model = "gemini-2.0-flash"
 }
 
 function makeJobWithoutModel(overrides?: Record<string, unknown>) {
-  return makeJob({ payload: { kind: "agentTurn", message: "summarize" }, ...overrides });
-}
-
-function modelConfig(models: Record<string, unknown>) {
-  return { agents: { defaults: { models } } };
-}
-
-function modelJob(model: string, message = "summarize", overrides: Record<string, unknown> = {}) {
-  return makeJob({ ...overrides, payload: { kind: "agentTurn", message, model } });
+  return makeJob({
+    payload: { kind: "agentTurn", message: "summarize" },
+    ...overrides,
+  });
 }
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
-function mockArg(mock: { mock: { calls: unknown[][] } }, index = 0): Record<string, unknown> {
-  return requireRecord(mock.mock.calls[index]?.[0]);
-}
-
-function cliBinding(sessionId: string, localSessionId = "openclaw-session") {
-  return {
-    sessionId,
-    reseedReceipt: {
-      version: 1 as const,
-      promptHash: "a".repeat(64),
-      localSessionId,
-      userTurnDisposition: "persisted" as const,
-    },
-  };
-}
-
-function recordWrites(
-  fail: (key: string, options?: { fallbackEntry?: { systemSent?: boolean } }) => boolean,
-) {
-  const persist = expectDefined(h.patchSessionEntryMock.getMockImplementation(), "persist mock");
-  const writes: { sessionKey: string; entry: unknown }[] = [];
-  h.patchSessionEntryMock.mockImplementation(async (...args) => {
-    const sessionKey = args[0].sessionKey;
-    if (fail(sessionKey, args[2])) {
-      throw new Error("ENOSPC: no space left on device");
-    }
-    const entry = await persist(...args);
-    if (entry) {
-      writes.push({ sessionKey, entry: structuredClone(entry) });
-    }
-    return entry;
-  });
-  return writes;
+function firstMockArg(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
+  return requireRecord(mock.mock.calls[0]?.[0]);
 }
 
 describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)", () => {
+  setupModelSuite();
+
   beforeEach(() => {
-    h.resolveAllowedModelRefMock.mockImplementation(({ raw }: { raw: string }) => ({
-      ref: raw.includes("gemini") ? gemini : opus,
-    }));
+    resolveAllowedModelRefMock.mockImplementation(({ raw }: { raw: string }) => {
+      if (raw.includes("gemini")) {
+        return { ref: { provider: "google", model: "gemini-2.0-flash" } };
+      }
+      return { ref: { provider: "anthropic", model: "claude-opus-4-6" } };
+    });
   });
 
   it("builds cron context from the published replacement owner", async () => {
@@ -152,33 +123,37 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
       },
     };
     const ownerCatalog = [{ provider: "google", id: "gemini-2.0-flash", name: "Gemini 2.0 Flash" }];
-    h.loadModelCatalogOwnerMock.mockResolvedValueOnce({
+    loadModelCatalogOwnerMock.mockResolvedValueOnce({
       agentId: "main",
       agentDir: "/tmp/owner-agent",
       workspaceDir: "/tmp/replacement-workspace",
       config: ownerConfig,
       modelCatalog: { entries: ownerCatalog, routeVariants: [] },
     });
-    h.ensureAgentWorkspaceMock.mockImplementationOnce(async ({ dir }: { dir: string }) => ({
-      dir,
-    }));
-    h.runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
+    ensureAgentWorkspaceMock.mockImplementationOnce(async ({ dir }: { dir: string }) => ({ dir }));
+    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
 
-    const result = await runTurn({ cfg: callerConfig });
+    const result = await runCronIsolatedAgentTurn(makeParams({ cfg: callerConfig }));
 
     expect(result.status).toBe("ok");
-    expect(h.loadModelCatalogOwnerMock).toHaveBeenCalledWith({
+    expect(loadModelCatalogOwnerMock).toHaveBeenCalledWith({
       config: callerConfig,
       readOnly: true,
       allowGatewaySubagentBinding: true,
     });
-    expectCall(h.ensureAgentWorkspaceMock, { dir: "/tmp/replacement-workspace" });
-    expectCall(h.resolveCronSessionMock, { cfg: ownerConfig, agentId: "main" });
+    expect(ensureAgentWorkspaceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ dir: "/tmp/replacement-workspace" }),
+    );
+    expect(resolveCronSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: ownerConfig, agentId: "main" }),
+    );
   });
 
   it("rejects a replacement owner that changes an explicitly requested agent", async () => {
-    const callerConfig = { agents: { entries: { main: {}, worker: {} } } };
-    h.loadModelCatalogOwnerMock.mockResolvedValueOnce({
+    const callerConfig = {
+      agents: { entries: { main: {}, worker: {} } },
+    };
+    loadModelCatalogOwnerMock.mockResolvedValueOnce({
       agentId: "main",
       agentDir: "/tmp/main-agent",
       workspaceDir: "/tmp/main-workspace",
@@ -186,25 +161,38 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
       modelCatalog: { entries: [], routeVariants: [] },
     });
 
-    await expect(runTurn({ cfg: callerConfig, agentId: "worker" })).rejects.toThrow(
-      "cron model catalog owner changed from worker to main",
-    );
-    expect(h.runWithModelFallbackMock).not.toHaveBeenCalled();
+    await expect(
+      runCronIsolatedAgentTurn(makeParams({ cfg: callerConfig, agentId: "worker" })),
+    ).rejects.toThrow("cron model catalog owner changed from worker to main");
+    expect(runWithModelFallbackMock).not.toHaveBeenCalled();
   });
 
   it("does not mark CLI cron runs as model-started before CLI session resolution", async () => {
-    h.isCliProviderMock.mockReturnValue(true);
-    setSession({ model: undefined, modelProvider: undefined }, { isNewSession: false });
+    isCliProviderMock.mockReturnValue(true);
+    mockRunCronFallbackPassthrough();
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        sessionEntry: makeCronSessionEntry({
+          model: undefined,
+          modelProvider: undefined,
+        }),
+        isNewSession: false,
+      }),
+    );
     const getCliSessionStarted = createDeferred();
     const releaseCliSessionLookup = createDeferred<
       { sessionId: string; reseedReceipt: CliSessionReseedReceipt } | undefined
     >();
-    h.getCliSessionBindingMock.mockImplementation(async () => {
+    getCliSessionBindingMock.mockImplementation(async () => {
       getCliSessionStarted.resolve();
       return await releaseCliSessionLookup.promise;
     });
-    h.runCliAgentMock.mockImplementation(async ({ onExecutionPhase }) => {
-      onExecutionPhase?.({ phase: "model_call_started", ...gemini });
+    runCliAgentMock.mockImplementation(async ({ onExecutionPhase }) => {
+      onExecutionPhase?.({
+        phase: "model_call_started",
+        provider: "google",
+        model: "gemini-2.0-flash",
+      });
       return {
         payloads: [{ text: "summary done" }],
         meta: { agentMeta: { usage: { input: 10, output: 20 } } },
@@ -212,58 +200,93 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     });
     const phases: unknown[] = [];
 
-    const runPromise = runTurn({
-      sessionKey: "existing-cron-session",
-      job: makeJob({ sessionTarget: "session:existing-cron-session" }),
-      onExecutionPhase: (info: unknown) => phases.push(info),
-    });
+    const runPromise = runCronIsolatedAgentTurn(
+      makeParams({
+        sessionKey: "existing-cron-session",
+        job: makeJob({ sessionTarget: "session:existing-cron-session" }),
+        onExecutionPhase: (info: unknown) => phases.push(info),
+      }),
+    );
 
     await getCliSessionStarted.promise;
     expect(phases).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ phase: "model_call_started" })]),
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "model_call_started",
+        }),
+      ]),
     );
 
-    const cliSessionBinding = cliBinding("previous-cli-session");
+    const cliSessionBinding = {
+      sessionId: "previous-cli-session",
+      reseedReceipt: {
+        version: 1 as const,
+        promptHash: "a".repeat(64),
+        localSessionId: "openclaw-session",
+        userTurnDisposition: "persisted" as const,
+      },
+    };
     releaseCliSessionLookup.resolve(cliSessionBinding);
     const result = await runPromise;
 
     expect(result.status).toBe("ok");
-    const cliCall = mockArg(h.runCliAgentMock);
+    const cliCall = firstMockArg(runCliAgentMock);
     expect(cliCall.cliSessionId).toBe("previous-cli-session");
     expect(cliCall.cliSessionBinding).toEqual(cliSessionBinding);
     expect(typeof cliCall.onExecutionPhase).toBe("function");
     expect(phases).toEqual(
-      expect.arrayContaining([expect.objectContaining({ phase: "model_call_started" })]),
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "model_call_started",
+        }),
+      ]),
     );
   });
 
   it("does not replay accepted CLI work when continuity saving fails", async () => {
-    h.isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
-    h.resolveAllowedModelRefMock.mockReturnValue({ ref: cli });
-    const cronSession = setSession(
-      { cliSessionBindings: { "claude-cli": { sessionId: "previous-cli-session" } } },
-      { isNewSession: false },
-    );
+    isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
+    resolveAllowedModelRefMock.mockReturnValue({
+      ref: { provider: "claude-cli", model: "claude-opus-4-6" },
+    });
+    mockRunCronFallbackPassthrough();
+    const cronSession = makeCronSession({
+      sessionEntry: makeCronSessionEntry({
+        cliSessionBindings: { "claude-cli": { sessionId: "previous-cli-session" } },
+      }),
+      isNewSession: false,
+    });
+    resolveCronSessionMock.mockReturnValue(cronSession);
     const localSessionId = cronSession.sessionEntry.sessionId;
-    const cliSessionBinding = cliBinding("fresh-cli-session", localSessionId);
+    const cliSessionBinding = {
+      sessionId: "fresh-cli-session",
+      reseedReceipt: {
+        version: 1 as const,
+        promptHash: "a".repeat(64),
+        localSessionId: cronSession.sessionEntry.sessionId,
+        userTurnDisposition: "persisted",
+      },
+    };
     const candidateResult = {
       payloads: [{ text: "summary done" }],
       meta: {
+        durationMs: 1,
+        executionTrace: { runner: "cli" },
         agentMeta: {
-          ...cli,
+          provider: "claude-cli",
+          model: "claude-opus-4-6",
           sessionId: "fresh-cli-session",
           cliSessionBinding,
           usage: { input: 10, output: 20 },
         },
       },
     };
-    h.runCliAgentMock.mockImplementationOnce(async () => {
-      h.patchSessionEntryMock.mockRejectedValueOnce(new Error("synthetic continuity write failed"));
+    runCliAgentMock.mockImplementationOnce(async () => {
+      patchSessionEntryMock.mockRejectedValueOnce(new Error("synthetic continuity write failed"));
       return candidateResult;
     });
     let inspectedCandidate: unknown;
     let inspectedClassification: unknown;
-    h.runWithModelFallbackMock.mockImplementationOnce(
+    runWithModelFallbackMock.mockImplementationOnce(
       async (
         params: TestModelFallbackRunnerParams & {
           classifyResult: typeof classifyEmbeddedAgentRunResultForModelFallback;
@@ -280,10 +303,12 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
       },
     );
 
-    const result = await runTurn({
-      sessionKey: "existing-cron-session",
-      job: makeJob({ sessionTarget: "session:existing-cron-session" }),
-    });
+    const result = await runCronIsolatedAgentTurn(
+      makeParams({
+        sessionKey: "existing-cron-session",
+        job: makeJob({ sessionTarget: "session:existing-cron-session" }),
+      }),
+    );
 
     expect(result.status).toBe("error");
     expect(inspectedCandidate).toMatchObject({
@@ -300,8 +325,8 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
       },
     });
     expect(inspectedClassification).toBeNull();
-    expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(h.runCliAgentMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(runCliAgentMock).toHaveBeenCalledOnce();
     expect(cronSession.sessionEntry.sessionId).toBe(localSessionId);
     expect(cronSession.sessionEntry.cliSessionBindings?.["claude-cli"]).toEqual({
       sessionId: "previous-cli-session",
@@ -309,89 +334,177 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
   });
 
   it("restores the requested thinking level when a later fallback supports it", async () => {
-    h.resolveAllowedModelRefMock.mockImplementation(resolveRawModel);
-    h.resolveEffectiveAgentRuntimeMock.mockReturnValue("codex");
-    h.isThinkingLevelSupportedMock.mockImplementation(
+    resolveAllowedModelRefMock.mockImplementation(({ raw }: { raw: string }) => {
+      const [provider, model] = raw.split("/");
+      return { ref: { provider, model } };
+    });
+    resolveEffectiveAgentRuntimeMock.mockReturnValue("codex");
+    isThinkingLevelSupportedMock.mockImplementation(
       ({ model, level }: { model?: string; level?: string }) =>
         model === "gpt-5.6-sol" || level !== "ultra",
     );
-    h.resolveSupportedThinkingLevelMock.mockImplementation(
+    resolveSupportedThinkingLevelMock.mockImplementation(
       ({ model, level }: { model?: string; level?: string }) =>
         model === "gpt-5.6-luna" && level === "ultra" ? "max" : level,
     );
-    h.loadModelCatalogMock.mockResolvedValue([
+    loadModelCatalogMock.mockResolvedValue([
       { provider: "openai", id: "gpt-5.6-luna", reasoning: true },
       { provider: "openai", id: "gpt-5.6-sol", reasoning: true },
     ]);
-    const cronSession = setSession({ thinkingLevel: "ultra", agentRuntimeOverride: "codex" });
-    useFallback("openai", "gpt-5.6-sol");
-
-    const result = await runTurn({
-      cfg: modelConfig({
-        "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
-        "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+    const cronSession = makeCronSession({
+      sessionEntry: makeCronSessionEntry({
+        thinkingLevel: "ultra",
+        agentRuntimeOverride: "codex",
       }),
-      job: modelJob("openai/gpt-5.6-luna"),
+      isNewSession: true,
+    });
+    resolveCronSessionMock.mockReturnValue(cronSession);
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+      await runInitialModelFallbackAttempt(params);
+      const result = await runFallbackModelAttempt(params, "openai", "gpt-5.6-sol", "unknown");
+      return {
+        result,
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        attempts: [],
+      };
     });
 
+    const result = await runCronIsolatedAgentTurn(
+      makeParams({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
+                "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+              },
+            },
+          },
+        },
+        job: makeJob({
+          payload: {
+            kind: "agentTurn",
+            message: "summarize",
+            model: "openai/gpt-5.6-luna",
+          },
+        }),
+      }),
+    );
+
     expect(result.status).toBe("ok");
-    expect(h.runEmbeddedAgentMock.mock.calls.map((call) => call[0].thinkLevel)).toEqual([
+    expect(runEmbeddedAgentMock.mock.calls.map((call) => call[0].thinkLevel)).toEqual([
       "max",
       "ultra",
     ]);
     expect(cronSession.sessionEntry.thinkingLevel).toBe("ultra");
   });
 
-  it.each([false, true])(
-    "keeps stored model overrides strict, otherwise inherits defaults (stored=%s)",
-    async (stored) => {
-      const primary = "deepseek/deepseek-v4-pro";
-      const fallbacks = ["deepseek/deepseek-v4-flash", "moonshot/kimi-k2.6"];
-      h.resolveAgentConfigMock.mockReturnValue({ model: primary });
-      h.resolveConfiguredModelRefMock.mockReturnValue({
-        provider: "deepseek",
-        model: "deepseek-v4-pro",
-      });
-      if (stored) {
-        h.resolveAgentModelFallbacksOverrideMock.mockReturnValue([]);
-        h.resolveAllowedModelRefMock.mockImplementation(({ raw }: { raw: string }) =>
-          raw === "openai/gpt-5.4" || raw === primary
-            ? resolveRawModel({ raw })
-            : resolveRawModel({ raw: "anthropic/claude-opus-4-6" }),
-        );
-        setSession(
-          { modelOverride: "gpt-5.4", providerOverride: "openai" },
-          { isNewSession: false },
-        );
-      }
-      const agentId = stored ? "main" : "default";
-      h.runWithModelFallbackMock.mockResolvedValueOnce(
-        stored
-          ? makeSuccessfulRunResult("openai", "gpt-5.4")
-          : makeSuccessfulRunResult("deepseek", "deepseek-v4-pro"),
-      );
-      await runTurn({
+  it("inherits default fallbacks for implicit default-agent cron runs", async () => {
+    const jobWithoutModel = makeJobWithoutModel();
+    resolveAgentConfigMock.mockReturnValue({
+      model: "deepseek/deepseek-v4-pro",
+    });
+    resolveConfiguredModelRefMock.mockReturnValue({
+      provider: "deepseek",
+      model: "deepseek-v4-pro",
+    });
+
+    runWithModelFallbackMock.mockResolvedValueOnce(
+      makeSuccessfulRunResult("deepseek", "deepseek-v4-pro"),
+    );
+
+    await runCronIsolatedAgentTurn(
+      makeParams({
         cfg: {
           agents: {
-            defaults: { model: { primary, fallbacks } },
-            entries: { [agentId]: { model: primary } },
+            defaults: {
+              model: {
+                primary: "deepseek/deepseek-v4-pro",
+                fallbacks: ["deepseek/deepseek-v4-flash", "moonshot/kimi-k2.6"],
+              },
+            },
+            entries: { default: { model: "deepseek/deepseek-v4-pro" } },
           },
         },
-        job: makeJobWithoutModel(stored ? { sessionTarget: "session:existing-cron-session" } : {}),
-        ...(stored ? { agentId, sessionKey: "existing-cron-session" } : {}),
-      });
-      const request = mockArg(h.runWithModelFallbackMock);
-      expect(request.fallbacksOverride).toStrictEqual(stored ? [] : fallbacks);
-      if (stored) {
-        expect(request).toMatchObject({ provider: "openai", model: "gpt-5.4" });
+        job: jobWithoutModel,
+      }),
+    );
+
+    expect(firstMockArg(runWithModelFallbackMock).fallbacksOverride).toEqual([
+      "deepseek/deepseek-v4-flash",
+      "moonshot/kimi-k2.6",
+    ]);
+  });
+
+  it("keeps stored cron session model overrides strict for matching string agent models", async () => {
+    const jobWithoutModel = makeJobWithoutModel({
+      sessionTarget: "session:existing-cron-session",
+    });
+    resolveAgentConfigMock.mockReturnValue({
+      model: "deepseek/deepseek-v4-pro",
+    });
+    resolveAgentModelFallbacksOverrideMock.mockReturnValue([]);
+    resolveConfiguredModelRefMock.mockReturnValue({
+      provider: "deepseek",
+      model: "deepseek-v4-pro",
+    });
+    resolveAllowedModelRefMock.mockImplementation(({ raw }: { raw: string }) => {
+      if (raw === "openai/gpt-5.4") {
+        return { ref: { provider: "openai", model: "gpt-5.4" } };
       }
-    },
-  );
+      if (raw === "deepseek/deepseek-v4-pro") {
+        return { ref: { provider: "deepseek", model: "deepseek-v4-pro" } };
+      }
+      return { ref: { provider: "anthropic", model: "claude-opus-4-6" } };
+    });
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        sessionEntry: makeCronSessionEntry({
+          modelOverride: "gpt-5.4",
+          providerOverride: "openai",
+        }),
+        isNewSession: false,
+      }),
+    );
+
+    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult("openai", "gpt-5.4"));
+
+    await runCronIsolatedAgentTurn(
+      makeParams({
+        agentId: "main",
+        cfg: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "deepseek/deepseek-v4-pro",
+                fallbacks: ["deepseek/deepseek-v4-flash", "moonshot/kimi-k2.6"],
+              },
+            },
+            entries: { main: { model: "deepseek/deepseek-v4-pro" } },
+          },
+        },
+        job: jobWithoutModel,
+        sessionKey: "existing-cron-session",
+      }),
+    );
+
+    expect(firstMockArg(runWithModelFallbackMock).provider).toBe("openai");
+    expect(firstMockArg(runWithModelFallbackMock).model).toBe("gpt-5.4");
+    expect(firstMockArg(runWithModelFallbackMock).fallbacksOverride).toStrictEqual([]);
+  });
 });
 
-function runPersist(overrides?: Record<string, unknown>) {
-  return runTurn({
-    job: modelJob("anthropic/claude-sonnet-4-6", "run daily digest", { id: "digest-job" }),
+function makePersistParams(overrides?: Record<string, unknown>) {
+  return makeParams({
+    job: makeJob({
+      id: "digest-job",
+      payload: {
+        kind: "agentTurn",
+        message: "run daily digest",
+        model: "anthropic/claude-sonnet-4-6",
+      },
+    }),
     message: "run daily digest",
     sessionKey: "cron:digest",
     ...overrides,
@@ -399,36 +512,47 @@ function runPersist(overrides?: Record<string, unknown>) {
 }
 
 describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
-  let cronSession: ReturnType<typeof h.makeCronSession>;
+  setupModelSuite();
+  let cronSession: ReturnType<typeof makeCronSession>;
 
   beforeEach(() => {
-    h.resolveAllowedModelRefMock.mockReturnValue({ ref: sonnet });
+    resolveAllowedModelRefMock.mockReturnValue({
+      ref: { provider: "anthropic", model: "claude-sonnet-4-6" },
+    });
 
-    cronSession = h.makeCronSession();
-    h.resolveCronSessionMock.mockReturnValue(cronSession);
+    cronSession = makeCronSession();
+    resolveCronSessionMock.mockReturnValue(cronSession);
   });
 
   it.each([false, true])(
     "persists the model and harness before execution (pre-run write fails: %s)",
     async (preRunWriteFails) => {
+      const persistedSnapshots: { sessionKey: string; entry: unknown }[] = [];
+      const persist = expectDefined(patchSessionEntryMock.getMockImplementation(), "persist mock");
       let failNextBaseWrite = preRunWriteFails;
-      const persistedSnapshots = recordWrites((sessionKey) => {
+      patchSessionEntryMock.mockImplementation(async (...args) => {
+        const sessionKey = args[0].sessionKey;
         if (failNextBaseWrite && !sessionKey.includes(":run:")) {
           failNextBaseWrite = false;
-          return true;
+          throw new Error("ENOSPC: no space left on device");
         }
-        return false;
+        const committed = await persist(...args);
+        if (committed) {
+          persistedSnapshots.push({ sessionKey, entry: structuredClone(committed) });
+        }
+        return committed;
       });
 
       let snapshotsAtRun: typeof persistedSnapshots = [];
-      h.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      mockRunCronFallbackPassthrough();
+      runEmbeddedAgentMock.mockImplementationOnce(async () => {
         snapshotsAtRun = structuredClone(persistedSnapshots);
         return {
           payloads: [{ text: "summary done" }],
-          meta: { agentMeta: sonnet },
+          meta: { agentMeta: { provider: "anthropic", model: "claude-sonnet-4-6" } },
         };
       });
-      const result = await runPersist();
+      const result = await runCronIsolatedAgentTurn(makePersistParams());
       expect(result.status).toBe("ok");
 
       expect(snapshotsAtRun).toHaveLength(2);
@@ -444,7 +568,7 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
         });
       }
       if (preRunWriteFails) {
-        expect(h.logWarnMock).toHaveBeenCalledWith(
+        expect(logWarnMock).toHaveBeenCalledWith(
           "[cron:digest-job] Failed to persist pre-run session entry: Error: ENOSPC: no space left on device",
         );
       }
@@ -452,23 +576,33 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
   );
 
   it("selects the configured model auth profile separately", async () => {
+    const ref = { provider: "openai", model: "gpt-5.6-luna" };
     const modelRef = "openai/gpt-5.6-luna@openai:test-profile";
-    h.resolveConfiguredModelRefMock.mockReturnValue(luna);
-    h.runWithModelFallbackMock.mockResolvedValueOnce(
-      makeSuccessfulRunResult(luna.provider, luna.model),
+    resolveConfiguredModelRefMock.mockReturnValue(ref);
+    runWithModelFallbackMock.mockResolvedValueOnce(
+      makeSuccessfulRunResult(ref.provider, ref.model),
     );
-    await runPersist({
-      cfg: {
-        auth: { profiles: { "openai:test-profile": { provider: "openai", mode: "token" } } },
-        agents: { defaults: { model: { primary: modelRef } } },
-      },
-      job: makeJob({ payload: { kind: "agentTurn", message: "run daily digest" } }),
-    });
-    expectCall(h.resolveSessionAuthSelectionMock, {
-      provider: "openai",
-      modelId: "gpt-5.6-luna",
-      configuredProfileId: "openai:test-profile",
-    });
+    await runCronIsolatedAgentTurn(
+      makePersistParams({
+        cfg: {
+          auth: { profiles: { "openai:test-profile": { provider: "openai", mode: "token" } } },
+          agents: { defaults: { model: { primary: modelRef } } },
+        },
+        job: makeJob({
+          payload: {
+            kind: "agentTurn",
+            message: "run daily digest",
+          },
+        }),
+      }),
+    );
+    expect(resolveSessionAuthSelectionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        modelId: "gpt-5.6-luna",
+        configuredProfileId: "openai:test-profile",
+      }),
+    );
   });
 
   it("blocks required work when pre-run persistence fails without configured roles", async () => {
@@ -481,46 +615,77 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
       skillsSnapshot: undefined,
     };
     cronSession.initialSessionEntry = initialEntry;
-    h.loadSessionEntryMock.mockReturnValue(initialEntry);
-    recordWrites(
-      (key, options) => !key.includes(":run:") && options?.fallbackEntry?.systemSent === true,
-    );
+    loadSessionEntryMock.mockReturnValue(initialEntry);
+    const persist = expectDefined(patchSessionEntryMock.getMockImplementation(), "persist mock");
+    patchSessionEntryMock.mockImplementation(async (...args) => {
+      if (!args[0].sessionKey.includes(":run:") && args[2]?.fallbackEntry?.systemSent === true) {
+        throw new Error("ENOSPC: no space left on device");
+      }
+      return persist(...args);
+    });
 
-    h.runWithModelFallbackMock.mockResolvedValueOnce(
+    runWithModelFallbackMock.mockResolvedValueOnce(
       makeSuccessfulRunResult("anthropic", "claude-sonnet-4-6"),
     );
 
-    const running = runPersist();
+    const running = runCronIsolatedAgentTurn(makePersistParams());
     await expect(running).rejects.toThrow("ENOSPC");
-    expect(h.runWithModelFallbackMock).not.toHaveBeenCalled();
-    expect(h.logWarnMock).toHaveBeenCalledWith(
+    expect(runWithModelFallbackMock).not.toHaveBeenCalled();
+    expect(logWarnMock).toHaveBeenCalledWith(
       "[cron:digest-job] Failed to persist pre-run session entry: Error: ENOSPC: no space left on device",
     );
   });
 });
 
 describe("runCronIsolatedAgentTurn runtime model thinking", () => {
-  it("skips live catalog hydration when model thinking is off", async () => {
-    h.resolveAllowedModelRefMock.mockReturnValue({ ref: ollama });
-    await runTurn({
-      cfg: modelConfig({ "ollama/minimax-m3:cloud": { params: { thinking: "off" } } }),
-      job: modelJob("ollama/minimax-m3:cloud"),
-    });
+  setupModelSuite();
 
-    expect(h.loadModelCatalogMock).toHaveBeenCalledTimes(1);
-    expect(h.resolveThinkingDefaultMock).not.toHaveBeenCalled();
-    const embeddedCall = mockArg(h.runEmbeddedAgentMock);
-    expect(embeddedCall).toMatchObject({ ...ollama, thinkLevel: "off" });
+  beforeEach(() => {
+    mockRunCronFallbackPassthrough();
+  });
+
+  it("skips live catalog hydration when model thinking is off", async () => {
+    resolveAllowedModelRefMock.mockReturnValue({
+      ref: { provider: "ollama", model: "minimax-m3:cloud" },
+    });
+    loadModelCatalogMock.mockResolvedValue([]);
+
+    await runCronIsolatedAgentTurn(
+      makeParams({
+        cfg: {
+          agents: {
+            defaults: { models: { "ollama/minimax-m3:cloud": { params: { thinking: "off" } } } },
+          },
+        },
+        job: makeJob({
+          payload: {
+            kind: "agentTurn",
+            message: "summarize",
+            model: "ollama/minimax-m3:cloud",
+          },
+        }),
+      }),
+    );
+
+    expect(loadModelCatalogMock).toHaveBeenCalledTimes(1);
+    expect(resolveThinkingDefaultMock).not.toHaveBeenCalled();
+    const embeddedCall = firstMockArg(runEmbeddedAgentMock);
+    expect(embeddedCall.provider).toBe("ollama");
+    expect(embeddedCall.model).toBe("minimax-m3:cloud");
+    expect(embeddedCall.thinkLevel).toBe("off");
   });
 
   it("hydrates runtime metadata for a reasoning-capable fallback candidate", async () => {
-    h.resolveAllowedModelRefMock.mockImplementation(resolveRawModel);
-    h.loadModelCatalogMock.mockImplementation(({ provider }: { provider?: string }) =>
+    resolveAllowedModelRefMock.mockImplementation(({ raw }: { raw: string }) => {
+      const [provider, model] = raw.split("/");
+      return { ref: { provider, model } };
+    });
+    loadModelCatalogMock.mockImplementation(({ provider }: { provider?: string }) =>
       provider?.toLowerCase() === "ollama"
         ? [{ provider: "OLLAMA", id: "minimax-m3:cloud", reasoning: true }]
         : [{ provider: "openai", id: "gpt-5.6-sol", reasoning: true }],
     );
-    h.resolveThinkingDefaultMock.mockImplementation(
+    resolveThinkingDefaultMock.mockImplementation(
       ({
         catalog,
         model,
@@ -533,60 +698,108 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
           ? "medium"
           : "off",
     );
-    useFallback("ollama", "minimax-m3:cloud");
-
-    await runTurn({
-      cfg: modelConfig({ "openai/gpt-5.6-sol": {}, "ollama/*": {} }),
-      job: modelJob("openai/gpt-5.6-sol"),
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+      await runInitialModelFallbackAttempt(params);
+      const result = await runFallbackModelAttempt(params, "ollama", "minimax-m3:cloud", "unknown");
+      return {
+        result,
+        provider: "ollama",
+        model: "minimax-m3:cloud",
+        attempts: [],
+      };
     });
 
-    expectCall(h.loadModelCatalogMock, ollama);
+    await runCronIsolatedAgentTurn(
+      makeParams({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-5.6-sol": {},
+                "ollama/*": {},
+              },
+            },
+          },
+        },
+        job: makeJob({
+          payload: {
+            kind: "agentTurn",
+            message: "summarize",
+            model: "openai/gpt-5.6-sol",
+          },
+        }),
+      }),
+    );
+
+    expect(loadModelCatalogMock).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "ollama", model: "minimax-m3:cloud" }),
+    );
     expect(
-      h.runEmbeddedAgentMock.mock.calls.map(([call]) => ({
+      runEmbeddedAgentMock.mock.calls.map(([call]) => ({
         provider: call.provider,
         model: call.model,
         thinkLevel: call.thinkLevel,
       })),
     ).toEqual([
       { provider: "openai", model: "gpt-5.6-sol", thinkLevel: "off" },
-      { ...ollama, thinkLevel: "medium" },
+      { provider: "ollama", model: "minimax-m3:cloud", thinkLevel: "medium" },
     ]);
   });
 });
 
-function runSwitch(overrides?: Record<string, unknown>) {
-  return runTurn({
-    job: modelJob("anthropic/claude-sonnet-4-6", "run task", { id: "cron-model-switch-job" }),
+function makeSwitchParams(overrides?: Record<string, unknown>) {
+  return makeParams({
+    job: makeJob({
+      id: "cron-model-switch-job",
+      payload: { kind: "agentTurn", message: "run task", model: "anthropic/claude-sonnet-4-6" },
+    }),
     message: "run task",
     sessionKey: "cron:model-switch",
     ...overrides,
   });
 }
 
+function requireEmbeddedAgentCall(index: number): Record<string, unknown> {
+  return requireRecord(runEmbeddedAgentMock.mock.calls[index]?.[0]);
+}
+
 describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206)", () => {
+  setupModelSuite();
+
   beforeEach(() => {
-    h.resolveAllowedModelRefMock.mockImplementation(resolveRawModel);
+    resolveAllowedModelRefMock.mockImplementation(({ raw }: { raw: string }) => {
+      const [provider, model] = raw.split("/");
+      return { ref: { provider, model } };
+    });
   });
 
   it("retries with switched auth profile state from LiveSessionModelSwitchError", async () => {
-    h.resolveSessionAuthSelectionMock.mockResolvedValue({
+    resolveSessionAuthSelectionMock.mockResolvedValue({
       profileId: "profile-a",
       source: "auto",
       routeRequirement: undefined,
     });
-    const cronSession = setSession({
-      authProfileOverride: "profile-a",
-      compactionCount: 7,
-      authProfileOverrideCompactionCount: 7,
+    const cronSession = makeCronSession({
+      sessionEntry: makeCronSessionEntry({
+        model: undefined,
+        modelProvider: undefined,
+        authProfileOverride: "profile-a",
+        compactionCount: 7,
+        authProfileOverrideCompactionCount: 7,
+      }),
+      isNewSession: true,
     });
-    h.runEmbeddedAgentMock
+    resolveCronSessionMock.mockReturnValue(cronSession);
+    mockRunCronFallbackPassthrough();
+    runEmbeddedAgentMock
       .mockImplementationOnce(async (request) => {
         request.userTurnTranscriptRecorder?.markRuntimePersisted({
           role: "user",
           content: "run task",
         });
         throw new LiveSessionModelSwitchError({
-          ...sonnet,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
           authProfileId: "profile-b",
           authProfileIdSource: "user",
         });
@@ -595,118 +808,146 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
         makeSuccessfulRunResult("anthropic", "claude-sonnet-4-6").result.result,
       );
 
-    const result = await runSwitch();
+    const result = await runCronIsolatedAgentTurn(makeSwitchParams());
 
     expect(result.status).toBe("ok");
-    expect(h.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
-    const retryParams = mockArg(h.runEmbeddedAgentMock, 1);
-    expect(retryParams).toMatchObject({
-      ...sonnet,
-      authProfileId: "profile-b",
-      authProfileIdSource: "user",
-      suppressNextUserMessagePersistence: true,
-    });
-    const firstParams = mockArg(h.runEmbeddedAgentMock);
-    expect(firstParams).toMatchObject({
-      authProfileIdSource: "auto",
-      suppressNextUserMessagePersistence: false,
-    });
-    expect(h.runWithModelFallbackMock).toHaveBeenNthCalledWith(
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    const retryParams = requireEmbeddedAgentCall(1);
+    expect(retryParams.provider).toBe("anthropic");
+    expect(retryParams.model).toBe("claude-sonnet-4-6");
+    expect(retryParams.authProfileId).toBe("profile-b");
+    expect(retryParams.authProfileIdSource).toBe("user");
+    const firstParams = requireEmbeddedAgentCall(0);
+    expect(firstParams.authProfileIdSource).toBe("auto");
+    expect(runWithModelFallbackMock).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ userLockedAuthProfileId: undefined }),
     );
-    expect(h.runWithModelFallbackMock).toHaveBeenNthCalledWith(
+    expect(runWithModelFallbackMock).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ userLockedAuthProfileId: "profile-b" }),
     );
     expect(retryParams.userTurnTranscriptRecorder).toBe(firstParams.userTurnTranscriptRecorder);
-    expect(cronSession.sessionEntry).toMatchObject({
-      authProfileOverride: "profile-b",
-      authProfileOverrideSource: "user",
-    });
+    expect(firstParams.suppressNextUserMessagePersistence).toBe(false);
+    expect(retryParams.suppressNextUserMessagePersistence).toBe(true);
+    expect(cronSession.sessionEntry.authProfileOverride).toBe("profile-b");
+    expect(cronSession.sessionEntry.authProfileOverrideSource).toBe("user");
   });
 
   it("retries persistence after a pre-candidate model switch write fails", async () => {
+    const persist = expectDefined(patchSessionEntryMock.getMockImplementation(), "persist mock");
     let failSwitchWrite = false;
-    const writes = recordWrites((key) => {
-      if (!key.includes(":run:") && failSwitchWrite) {
+    let persistedBase: unknown;
+    patchSessionEntryMock.mockImplementation(async (...args) => {
+      const isBase = !args[0].sessionKey.includes(":run:");
+      if (isBase && failSwitchWrite) {
         failSwitchWrite = false;
-        return true;
+        throw new Error("ENOSPC: no space left on device");
       }
-      return false;
+      const committed = await persist(...args);
+      if (isBase) {
+        persistedBase = structuredClone(committed);
+      }
+      return committed;
     });
-    h.runWithModelFallbackMock.mockImplementationOnce(async () => {
+    mockRunCronFallbackPassthrough();
+    runWithModelFallbackMock.mockImplementationOnce(async () => {
       failSwitchWrite = true;
       throw new LiveSessionModelSwitchError({
-        ...sonnet,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
         authProfileId: "profile-b",
         authProfileIdSource: "user",
       });
     });
     let persistedAtExecution: unknown;
-    h.runEmbeddedAgentMock.mockImplementationOnce(async () => {
-      persistedAtExecution = structuredClone(
-        writes.findLast(({ sessionKey }) => !sessionKey.includes(":run:"))?.entry,
-      );
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      persistedAtExecution = structuredClone(persistedBase);
       return makeSuccessfulRunResult("anthropic", "claude-sonnet-4-6").result.result;
     });
 
-    const result = await runSwitch();
+    const result = await runCronIsolatedAgentTurn(makeSwitchParams());
 
     expect(result.status).toBe("ok");
     expect(persistedAtExecution).toMatchObject({
       authProfileOverride: "profile-b",
       authProfileOverrideSource: "user",
     });
-    expect(h.logWarnMock).toHaveBeenCalledWith(
+    expect(logWarnMock).toHaveBeenCalledWith(
       "[cron:cron-model-switch-job] Failed to persist model switch session entry: Error: ENOSPC: no space left on device",
     );
   });
 
   it("retries a same-model switch with the runtime carried by the error", async () => {
-    h.resolveConfiguredModelRefMock.mockReturnValue(luna);
-    const cronSession = setSession(
-      {
+    resolveConfiguredModelRefMock.mockReturnValue({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+    });
+    const cronSession = makeCronSession({
+      sessionEntry: makeCronSessionEntry({
         model: "gpt-5.6-luna",
         modelProvider: "openai",
         agentRuntimeOverride: "openclaw",
         contextTokens: 272_000,
         contextTokensSource: "runtime",
-        contextBudgetStatus: contextBudgetStatusFixture({ ...luna, contextTokenBudget: 272_000 }),
-      },
-      { isNewSession: false },
-    );
-    h.runEmbeddedAgentMock
+        contextBudgetStatus: contextBudgetStatusFixture({
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          contextTokenBudget: 272_000,
+        }),
+      }),
+      isNewSession: false,
+    });
+    resolveCronSessionMock.mockReturnValue(cronSession);
+    mockRunCronFallbackPassthrough();
+    runEmbeddedAgentMock
       .mockRejectedValueOnce(
-        new LiveSessionModelSwitchError({ ...luna, agentRuntimeOverride: "codex" }),
+        new LiveSessionModelSwitchError({
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          agentRuntimeOverride: "codex",
+        }),
       )
       .mockResolvedValueOnce(makeSuccessfulRunResult("openai", "gpt-5.6-luna").result.result);
 
-    const result = await runSwitch({
-      job: modelJob("openai/gpt-5.6-luna", "run task"),
-    });
+    const result = await runCronIsolatedAgentTurn(
+      makeSwitchParams({
+        job: makeJob({
+          payload: {
+            kind: "agentTurn",
+            message: "run task",
+            model: "openai/gpt-5.6-luna",
+          },
+        }),
+      }),
+    );
 
     expect(result.status).toBe("ok");
-    expect(mockArg(h.runEmbeddedAgentMock).agentHarnessRuntimeOverride).toBe("openclaw");
-    expect(mockArg(h.runEmbeddedAgentMock, 1).agentHarnessRuntimeOverride).toBe("codex");
-    expect(cronSession.sessionEntry).toMatchObject({
-      agentRuntimeOverride: "codex",
-      contextTokens: 128_000,
-      contextTokensSource: "resolved",
-    });
+    expect(requireEmbeddedAgentCall(0).agentHarnessRuntimeOverride).toBe("openclaw");
+    expect(requireEmbeddedAgentCall(1).agentHarnessRuntimeOverride).toBe("codex");
+    expect(cronSession.sessionEntry.agentRuntimeOverride).toBe("codex");
+    expect(cronSession.sessionEntry.contextTokens).toBe(128_000);
+    expect(cronSession.sessionEntry.contextTokensSource).toBe("resolved");
     expect(cronSession.sessionEntry.contextBudgetStatus).toBeUndefined();
   });
 
   it("aborts after exceeding LiveSessionModelSwitchError retry limit (#58466)", async () => {
-    const switchError = new LiveSessionModelSwitchError(sonnet);
+    const switchError = new LiveSessionModelSwitchError({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
 
-    h.runWithModelFallbackMock.mockRejectedValue(switchError);
+    let callCount = 0;
+    runWithModelFallbackMock.mockImplementation(async () => {
+      callCount++;
+      throw switchError;
+    });
 
-    const result = await runSwitch();
+    const result = await runCronIsolatedAgentTurn(makeSwitchParams());
 
     expect(result.status).toBe("error");
-    expect(h.runWithModelFallbackMock).toHaveBeenCalledTimes(3);
-    expect(h.logWarnMock).toHaveBeenCalledWith(
+    expect(callCount).toBe(3);
+    expect(logWarnMock).toHaveBeenCalledWith(
       "[cron:cron-model-switch-job] LiveSessionModelSwitchError retry limit reached (2); aborting",
     );
   });

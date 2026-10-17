@@ -68,6 +68,7 @@ vi.mock("../../infra/outbound/channel-selection.runtime.js", () => ({
     .mockResolvedValue({ channel: "alpha", configured: ["alpha"] }),
 }));
 
+// mock-isolation: Resolve delivery targets from scenario fixtures, not host channel state.
 vi.mock("../../infra/outbound/targets.runtime.js", () => ({ resolveOutboundTarget: vi.fn() }));
 const mockedModuleIds = [
   "../../config/sessions/main-session.js",

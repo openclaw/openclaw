@@ -80,6 +80,7 @@ vi.mock("../../agents/model-auth-label.js", () => ({
   resolveModelAuthLabelAsync: () => undefined,
 }));
 
+// mock-isolation: Model browsing must not load host provider runtimes.
 vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
 }));

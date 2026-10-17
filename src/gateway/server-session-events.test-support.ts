@@ -4,7 +4,7 @@ import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
-export const sessionRow = vi.hoisted(() => ({
+const sessionRow = vi.hoisted(() => ({
   key: "agent:main:main",
   kind: "direct",
   sessionId: "sess-main",
@@ -16,48 +16,54 @@ export const sessionRow = vi.hoisted(() => ({
   thinkingDefault: "medium",
   agentRuntime: { id: "openclaw", source: "model" },
 }));
-export const resolveEmbeddedAgentSessionProgressStateMock = vi.hoisted(() => vi.fn());
-export const loadGatewaySessionRowMock = vi.hoisted(() => vi.fn());
-export const projectChatDisplayMessageMock = vi.hoisted(() => vi.fn((message: unknown) => message));
-export const listAccessorSessionEntriesReadOnlyMock = vi.hoisted(() => vi.fn());
-export const loadAccessorSessionEntryReadOnlyMock = vi.hoisted(() => vi.fn());
-export const loadGatewaySessionEntryReadOnlyMock = vi.hoisted(() => vi.fn());
-export const readSessionMessageCountAsyncMock = vi.hoisted(() => vi.fn());
-export const readSessionMessageByIdAsyncMock = vi.hoisted(() => vi.fn());
-export const runtimeConfigState = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
+const resolveEmbeddedAgentSessionProgressStateMock = vi.hoisted(() => vi.fn());
+const loadGatewaySessionRowMock = vi.hoisted(() => vi.fn());
+const projectChatDisplayMessageMock = vi.hoisted(() => vi.fn((message: unknown) => message));
+const listAccessorSessionEntriesReadOnlyMock = vi.hoisted(() => vi.fn());
+const loadAccessorSessionEntryReadOnlyMock = vi.hoisted(() => vi.fn());
+const loadGatewaySessionEntryReadOnlyMock = vi.hoisted(() => vi.fn());
+const readSessionMessageCountAsyncMock = vi.hoisted(() => vi.fn());
+const readSessionMessageByIdAsyncMock = vi.hoisted(() => vi.fn());
+const runtimeConfigState = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => runtimeConfigState.value }));
-vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
-  listSessionEntriesReadOnly: listAccessorSessionEntriesReadOnlyMock,
-  loadSessionEntryReadOnly: loadAccessorSessionEntryReadOnlyMock,
-}));
-vi.mock("./chat-display-projection.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./chat-display-projection.js")>()),
-  projectChatDisplayMessage: projectChatDisplayMessageMock,
-}));
-vi.mock("./session-transcript-readers.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-transcript-readers.js")>()),
-  readSessionMessageCountAsync: readSessionMessageCountAsyncMock,
-  readSessionMessageByIdAsync: readSessionMessageByIdAsyncMock,
-}));
-vi.mock("../agents/embedded-agent-runner/runs.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../agents/embedded-agent-runner/runs.js")>()),
-  resolveEmbeddedAgentSessionProgressState: resolveEmbeddedAgentSessionProgressStateMock,
-}));
+vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
+  return {
+    ...actual,
+    listSessionEntriesReadOnly: listAccessorSessionEntriesReadOnlyMock,
+    loadSessionEntryReadOnly: loadAccessorSessionEntryReadOnlyMock,
+  };
+});
+vi.mock("./chat-display-projection.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./chat-display-projection.js")>();
+  return { ...actual, projectChatDisplayMessage: projectChatDisplayMessageMock };
+});
+vi.mock("./session-transcript-readers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-transcript-readers.js")>();
+  return {
+    ...actual,
+    readSessionMessageCountAsync: readSessionMessageCountAsyncMock,
+    readSessionMessageByIdAsync: readSessionMessageByIdAsyncMock,
+  };
+});
+vi.mock("../agents/embedded-agent-runner/runs.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/embedded-agent-runner/runs.js")>(
+    "../agents/embedded-agent-runner/runs.js",
+  );
+  return {
+    ...actual,
+    resolveEmbeddedAgentSessionProgressState: (...args: unknown[]) =>
+      resolveEmbeddedAgentSessionProgressStateMock(...args),
+  };
+});
 
 const {
   createLifecycleEventBroadcastHandler: createLifecycleHandler,
   createTranscriptUpdateBroadcastHandler: createTranscriptHandler,
 } = await import("./server-session-events.js");
-export const { createGatewayBroadcaster } = await import("./server-broadcast.js");
-export const { subscribePluginSessionsChanged } =
-  await import("../plugins/services.test-support.js");
-
-type RowQuery = { key?: string; agentId?: string; storePath?: string };
-function projectedEntry(row: { key: string; entry: unknown }, { agentId, storePath }: RowQuery) {
-  return Object.assign({}, row, { agentId, storeTarget: { agentId, storePath } });
-}
+const { createGatewayBroadcaster } = await import("./server-broadcast.js");
+const { subscribePluginSessionsChanged } = await import("../plugins/services.test-support.js");
 
 const projection = {
   get state() {
@@ -72,31 +78,54 @@ const projection = {
     return consume(projection);
   }) satisfies SessionRowProjection["withPreparedExactRows"],
   isCurrent: () => true,
-  selectEntries({ key, agentId, storePath }: RowQuery) {
-    if (!key) {
-      return (listAccessorSessionEntriesReadOnlyMock({ agentId, storePath }) ?? []).map(
-        (row: { key: string; entry: unknown }) => projectedEntry(row, { agentId, storePath }),
+  selectEntries(query: { key?: string; agentId?: string; storePath?: string }) {
+    if (!query.key) {
+      return (
+        listAccessorSessionEntriesReadOnlyMock({
+          agentId: query.agentId,
+          storePath: query.storePath,
+        }) ?? []
+      ).map((row: { key: string; entry: unknown }) =>
+        Object.assign({}, row, {
+          agentId: query.agentId,
+          storeTarget: { agentId: query.agentId, storePath: query.storePath },
+        }),
       );
     }
-    const target = storePath
+    const target = query.storePath
       ? {
-          entry: loadAccessorSessionEntryReadOnlyMock({ agentId, sessionKey: key, storePath }),
-          storePath,
+          entry: loadAccessorSessionEntryReadOnlyMock({
+            agentId: query.agentId,
+            sessionKey: query.key,
+            storePath: query.storePath,
+          }),
+          storePath: query.storePath,
         }
-      : loadGatewaySessionEntryReadOnlyMock(key, { agentId });
+      : loadGatewaySessionEntryReadOnlyMock(query.key, { agentId: query.agentId });
     return target?.entry
-      ? [projectedEntry({ key, entry: target.entry }, { agentId, storePath: target.storePath })]
+      ? [
+          {
+            key: query.key,
+            agentId: query.agentId,
+            entry: target.entry,
+            storeTarget: { agentId: query.agentId, storePath: target.storePath },
+          },
+        ]
       : [];
   },
-  capture: (query: { key: string; agentId: string; storePath?: string }) =>
-    projection.selectEntries(query)[0],
+  capture(query: { key: string; agentId: string; storePath?: string }) {
+    return projection.selectEntries(query)[0];
+  },
   findBySessionId(query: { sessionId: string; agentId?: string; storePath?: string }) {
     return projection
       .selectEntries({ agentId: query.agentId, storePath: query.storePath })
       .filter(({ entry }) => entry.sessionId === query.sessionId);
   },
+  snapshot(query: { key: string; agentId: string }) {
+    return { row: loadGatewaySessionRowMock(query.key, { agentId: query.agentId }) };
+  },
   describe(query: { key: string; agentId: string }) {
-    const row = loadGatewaySessionRowMock(query.key, { agentId: query.agentId });
+    const row = projection.snapshot(query).row;
     return row ? { materialized: { row } } : undefined;
   },
   present(record: Parameters<SessionRowProjection["present"]>[0]) {
@@ -104,43 +133,53 @@ const projection = {
   },
 } as unknown as SessionRowProjection;
 
-export const createLifecycleEventBroadcastHandler = (
+function createLifecycleEventBroadcastHandler(
   params: Parameters<typeof createLifecycleHandler>[0],
-) => createLifecycleHandler({ getSessionRowProjection: () => projection, ...params });
-export const createTranscriptUpdateBroadcastHandler = (
+) {
+  return createLifecycleHandler({ getSessionRowProjection: () => projection, ...params });
+}
+function createTranscriptUpdateBroadcastHandler(
   params: Parameters<typeof createTranscriptHandler>[0],
-) => createTranscriptHandler({ getSessionRowProjection: () => projection, ...params });
+) {
+  return createTranscriptHandler({ getSessionRowProjection: () => projection, ...params });
+}
 
-export const createActiveRun = (
+function createActiveRun(
   projectSessionActive: boolean,
   executionStarted = true,
-): ChatAbortControllerEntry => ({
-  controller: new AbortController(),
-  sessionId: "sess-main",
-  sessionKey: "agent:main:main",
-  startedAtMs: Date.now(),
-  executionStarted,
-  expiresAtMs: Date.now() + 60_000,
-  projectSessionActive,
-});
+): ChatAbortControllerEntry {
+  return {
+    controller: new AbortController(),
+    sessionId: "sess-main",
+    sessionKey: "agent:main:main",
+    startedAtMs: Date.now(),
+    executionStarted,
+    expiresAtMs: Date.now() + 60_000,
+    projectSessionActive,
+  };
+}
 
-export const storedMessage = (messageId: string, seq = 1) => ({
-  found: true,
-  oversized: false,
-  seq,
-  message: { role: "assistant", content: `Stored ${messageId}` },
-});
+function storedMessage(messageId: string, seq = 1) {
+  return {
+    found: true,
+    oversized: false,
+    seq,
+    message: { role: "assistant", content: `Stored ${messageId}` },
+  };
+}
 
-export const fixedStoreRuntimeConfig = (ownerAgentId: string, configuredAgentIds: string[]) => ({
-  session: { store: "/tmp/shared.sqlite" },
-  agents: {
-    ownership: "explicit",
-    defaults: { sessionStore: { agentId: ownerAgentId } },
-    entries: Object.fromEntries(configuredAgentIds.map((agentId) => [agentId, {}])),
-  },
-});
+function fixedStoreRuntimeConfig(ownerAgentId: string, configuredAgentIds: string[]) {
+  return {
+    session: { store: "/tmp/shared.sqlite" },
+    agents: {
+      ownership: "explicit",
+      defaults: { sessionStore: { agentId: ownerAgentId } },
+      entries: Object.fromEntries(configuredAgentIds.map((agentId) => [agentId, {}])),
+    },
+  };
+}
 
-export function createHandler(
+function createHandler(
   projectSessionActive: boolean,
   executionStarted = true,
   getSessionMessageSubscribers: SessionMessageSubscriberRegistry["get"] = () => new Set<string>(),
@@ -157,7 +196,7 @@ export function createHandler(
   return { broadcastToConnIds, handler };
 }
 
-export const ownerGoal = {
+const ownerGoal = {
   schemaVersion: 1 as const,
   id: "goal-ops",
   objective: "Ops only",
@@ -169,15 +208,18 @@ export const ownerGoal = {
   continuationTurns: 0,
 };
 
-export function expectPrivateSessionInvalidation(payload: unknown) {
-  for (const field of "agentId session message owner goal status hasActiveRun activeRunIds model responseUsage".split(
+const PRIVATE_SESSION_FIELDS =
+  "agentId session message owner goal status hasActiveRun activeRunIds model responseUsage".split(
     " ",
-  )) {
+  );
+
+function expectPrivateSessionInvalidation(payload: unknown) {
+  for (const field of PRIVATE_SESSION_FIELDS) {
     expect(payload, field).not.toHaveProperty(field);
   }
 }
 
-export async function emitAssistantTranscriptUpdate(
+async function emitAssistantTranscriptUpdate(
   projectSessionActive: boolean,
   message: unknown = { role: "assistant", content: [{ type: "text", text: "Final answer" }] },
   executionStarted = true,
@@ -193,3 +235,27 @@ export async function emitAssistantTranscriptUpdate(
   expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
   return broadcastToConnIds.mock.calls[0]?.[1];
 }
+
+export {
+  createActiveRun,
+  createGatewayBroadcaster,
+  createHandler,
+  createLifecycleEventBroadcastHandler,
+  createTranscriptUpdateBroadcastHandler,
+  emitAssistantTranscriptUpdate,
+  expectPrivateSessionInvalidation,
+  fixedStoreRuntimeConfig,
+  listAccessorSessionEntriesReadOnlyMock,
+  loadAccessorSessionEntryReadOnlyMock,
+  loadGatewaySessionEntryReadOnlyMock,
+  loadGatewaySessionRowMock,
+  ownerGoal,
+  projectChatDisplayMessageMock,
+  readSessionMessageByIdAsyncMock,
+  readSessionMessageCountAsyncMock,
+  resolveEmbeddedAgentSessionProgressStateMock,
+  runtimeConfigState,
+  sessionRow,
+  storedMessage,
+  subscribePluginSessionsChanged,
+};

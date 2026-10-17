@@ -36,7 +36,8 @@ it.each([
   "keeps session lists resident when %s changes no environment rows",
   async (operation) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      onTestFinished(vi.spyOn(Date, "now").mockReturnValue(10_000).mockRestore);
+      const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
+      onTestFinished(() => clock.mockRestore());
       const database = openOpenClawStateDatabase();
       const store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
       const environmentId = "worker-unchanged";

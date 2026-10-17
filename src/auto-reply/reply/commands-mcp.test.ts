@@ -37,10 +37,12 @@ vi.mock("../../infra/outbound/deliver-runtime.js", () => ({
   deliverOutboundPayloadsInternal: deliverOutboundPayloads,
 }));
 
+// mock-isolation: Keep MCP configuration in the test's in-memory server map.
 vi.mock("../../config/mcp-config.js", () => ({
   listConfiguredMcpServers: vi.fn(async () => configuredServers()),
 }));
 
+// mock-isolation: Exercise command mutations without writing host MCP configuration.
 vi.mock("../../agents/mcp-config-mutation.js", () => ({
   setConfiguredMcpServer: vi.fn(async ({ name, server }) => {
     mcpServers.set(name, { ...(server as Record<string, unknown>) });

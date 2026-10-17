@@ -136,7 +136,10 @@ async function writeFile(root: string, name: string, bytes: string | Uint8Array,
 
 async function withResources(
   resources: Awaited<ReturnType<typeof transferSkillResources>>,
-  check: (resources: NonNullable<typeof resources>, remote: string) => Promise<void>,
+  check: (
+    resources: NonNullable<Awaited<ReturnType<typeof transferSkillResources>>>,
+    remote: string,
+  ) => Promise<void>,
 ) {
   expect(resources).toBeDefined();
   try {
