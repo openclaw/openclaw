@@ -130,7 +130,7 @@ export function readIdempotencyKeyOwner(
   return row ? { eventId: row.event_id, seq: row.seq } : undefined;
 }
 
-export function readTranscriptMessageByIdentity(
+function readTranscriptMessageByIdentity(
   database: Pick<OpenClawAgentDatabase, "db">,
   scope: ResolvedTranscriptScope,
   identity: { eventId: string; seq: number },
