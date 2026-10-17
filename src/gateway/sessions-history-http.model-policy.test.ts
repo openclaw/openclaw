@@ -53,6 +53,23 @@ function expectHidden(message: unknown) {
   expect(message).not.toHaveProperty("model");
 }
 
+function expectPrivateText(message: unknown, text: string) {
+  expectHidden(message);
+  expect(message).toMatchObject({ content: [{ type: "text", text }] });
+}
+
+function heldRead() {
+  const entered = createDeferred();
+  const release = createDeferred();
+  const hold = async <T>(read: Promise<T>) => {
+    const value = await read;
+    entered.resolve();
+    await release.promise;
+    return value;
+  };
+  return { entered, release, hold };
+}
+
 function config(allow = ["example/allowed"]): OpenClawConfig {
   return {
     agents: { entries: { main: {} }, defaults: { model: "example/allowed" } },
@@ -214,13 +231,18 @@ describe("HTTP historical model disclosure", () => {
     return { reader, next: () => readSseEvent(reader, buffer) };
   }
 
+  const jsonHistory = (params?: Parameters<typeof requestHistory>[0]) =>
+    requestHistory(params).then((response) => response.json());
+
   function expectRestrictedSnapshot(value: unknown, count: number) {
     const rows = messages(value, count);
     expect(rows[0]).toMatchObject({ content: hiddenText });
     expectHidden(rows[0]);
-    expect(rows[1]).toMatchObject({ provider: "example", model: "allowed" });
-    expect(rows[2]).toMatchObject({ provider: "openclaw", model: "delivery-mirror" });
-    expect(rows[3]).toMatchObject({ provider: null, model: null });
+    expect(rows.slice(1, 4)).toMatchObject([
+      { provider: "example", model: "allowed" },
+      { provider: "openclaw", model: "delivery-mirror" },
+      { provider: null, model: null },
+    ]);
     return rows;
   }
 
@@ -242,7 +264,7 @@ describe("HTTP historical model disclosure", () => {
 
   it("filters identified JSON and all SSE publications without changing stored rows", async () => {
     const saved = await loadTranscriptEvents(scope);
-    const json = await requestHistory().then((response) => response.json());
+    const json = await jsonHistory();
     const rows = expectRestrictedSnapshot(json, 4);
     const stream = await openStream();
     const initial = await stream.next();
@@ -264,10 +286,7 @@ describe("HTTP historical model disclosure", () => {
       messageSeq: 5,
       message: { __openclaw: { id, seq: 5 } },
     });
-    expectHidden(record(inline.data).message);
-    expect(record(inline.data).message).toMatchObject({
-      content: [{ type: "text", text: "inline private model reply" }],
-    });
+    expectPrivateText(record(inline.data).message, "inline private model reply");
     const stored = await loadTranscriptEvents(scope);
     emitSessionTranscriptUpdate(
       expectDefined(
@@ -278,10 +297,7 @@ describe("HTTP historical model disclosure", () => {
     const repeated = await stream.next();
     expect(repeated.event).toBe("history");
     const repeatedRows = expectRestrictedSnapshot(repeated.data, 5);
-    expectHidden(repeatedRows[4]);
-    expect(repeatedRows[4]).toMatchObject({
-      content: [{ type: "text", text: "inline private model reply" }],
-    });
+    expectPrivateText(repeatedRows[4], "inline private model reply");
     expect(await loadTranscriptEvents(scope)).toEqual(stored);
     await append("refresh private model reply", "file-only");
     const refreshed = await stream.next();
@@ -293,7 +309,7 @@ describe("HTTP historical model disclosure", () => {
 
     const persisted = await loadTranscriptEvents(scope);
     expect(persisted.slice(0, saved.length)).toEqual(saved);
-    const staff = await requestHistory({ email: staffEmail }).then((response) => response.json());
+    const staff = await jsonHistory({ email: staffEmail });
     const staffRows = messages(staff, 6);
     expect(staffRows[0]).toMatchObject({
       provider: "example",
@@ -302,9 +318,7 @@ describe("HTTP historical model disclosure", () => {
     });
     expect(staffRows[4]).toMatchObject({ provider: "example", model: "historical" });
     expect(await loadTranscriptEvents(scope)).toEqual(persisted);
-    const page = await requestHistory({ query: "?limit=2&cursor=5" }).then((response) =>
-      response.json(),
-    );
+    const page = await jsonHistory({ query: "?limit=2&cursor=5" });
     expect(messages(page, 2)).toEqual(rows.slice(2));
     expect(page).toMatchObject({ hasMore: true, nextCursor: "3" });
   });
@@ -318,14 +332,7 @@ describe("HTTP historical model disclosure", () => {
       if (stream) {
         expect(messages((await stream.next()).data, 4)[0]).toHaveProperty("model", "historical");
       }
-      const entered = createDeferred();
-      const release = createDeferred();
-      const hold = async <T>(read: Promise<T>) => {
-        const value = await read;
-        entered.resolve();
-        await release.promise;
-        return value;
-      };
+      const { entered, release, hold } = heldRead();
       if (stream) {
         expect(fromSnapshot).toHaveBeenCalledTimes(1);
         const streamState = expectDefined(
@@ -343,7 +350,7 @@ describe("HTTP historical model disclosure", () => {
       const pending = stream
         ? append("held refresh reply", "file-only").then(async () => (await stream.next()).data)
         : kind === "JSON"
-          ? requestHistory().then((response) => response.json())
+          ? jsonHistory()
           : openStream().then(async (opened) => (await opened.next()).data);
       try {
         await Promise.race([
@@ -370,16 +377,10 @@ describe("HTTP historical model disclosure", () => {
     const stream = await openStream();
     expect(messages((await stream.next()).data, 4)[0]).toHaveProperty("model", "historical");
     publishConfig(config(), false);
-    const entered = createDeferred();
-    const release = createDeferred();
+    const { entered, release, hold } = heldRead();
     const original = profileAuthority.prepareUserProfileRoleAuthority;
     vi.spyOn(profileAuthority, "prepareUserProfileRoleAuthority").mockImplementationOnce(
-      async (...args) => {
-        const profile = await original(...args);
-        entered.resolve();
-        await release.promise;
-        return profile;
-      },
+      (...args) => hold(original(...args)),
     );
     const appended = append("publication after committed narrowing");
     try {
@@ -391,14 +392,8 @@ describe("HTTP historical model disclosure", () => {
     }
     const inline = await stream.next();
     expect(inline.event).toBe("message");
-    expectHidden(record(inline.data).message);
-    expect(record(inline.data).message).toMatchObject({
-      content: [{ type: "text", text: "publication after committed narrowing" }],
-    });
-    const rows = expectRestrictedSnapshot(
-      await requestHistory().then((response) => response.json()),
-      5,
-    );
+    expectPrivateText(record(inline.data).message, "publication after committed narrowing");
+    const rows = expectRestrictedSnapshot(await jsonHistory(), 5);
     expectHidden(rows[4]);
   });
 
@@ -406,7 +401,7 @@ describe("HTTP historical model disclosure", () => {
     const stream = await openStream();
     expectRestrictedSnapshot((await stream.next()).data, 4);
     publishConfig(config(["example/*"]), false);
-    expectRestrictedSnapshot(await requestHistory().then((response) => response.json()), 4);
+    expectRestrictedSnapshot(await jsonHistory(), 4);
     await append("tentative widening inline");
     const hidden = await stream.next();
     expect(hidden.event).toBe("message");

@@ -74,12 +74,7 @@ async function seedSession(params?: { text?: string }) {
     storePath,
   });
   if (params?.text) {
-    const appended = await appendExactAssistantMessageToSessionTranscript({
-      sessionKey: SESSION_KEY,
-      storePath,
-      message: makeTranscriptAssistantMessage({ text: params.text }),
-    });
-    expect(appended.ok).toBe(true);
+    await appendText(storePath, params.text);
   }
   return { storePath };
 }
@@ -341,6 +336,13 @@ describe("session history HTTP endpoints", () => {
       return created;
     });
     const oldAvatarUrl = currentProfileAvatarUrl(profile.id);
+    const expectTurns = (
+      body: SessionHistoryBody,
+      expected: ReturnType<typeof attributedHistoryMessageProjection>[],
+    ) => {
+      expect(body.messages).toHaveLength(expected.length);
+      expect(body.messages?.map(attributedHistoryMessageProjection)).toEqual(expected);
+    };
     const persistAttributedTurn = async (id: string, senderName: string, text: string) => {
       const turn = await persistUserTurnTranscript({
         agentId: AGENT_ID,
@@ -407,14 +409,13 @@ describe("session history HTTP endpoints", () => {
         const refreshEvent = await inlineEventPromise;
         expect(refreshEvent.event).toBe("history");
         const newSecondExpected = {
-          role: "user",
+          ...oldExpected,
           content: "second attributed history turn",
           __openclaw: {
+            ...oldExpected["__openclaw"],
             id: second.messageId,
             seq: 2,
-            senderId: profile.id,
             senderName: "Current Ada",
-            senderUsername: "ada",
             senderProfileAvatarUrl: newAvatarUrl,
           },
         };
@@ -425,23 +426,11 @@ describe("session history HTTP endpoints", () => {
             senderProfileAvatarUrl: newAvatarUrl,
           },
         };
-        const refreshedSse = refreshEvent.data as SessionHistoryBody;
-        expect(refreshedSse.messages).toHaveLength(2);
-        expect(attributedHistoryMessageProjection(refreshedSse.messages?.[0])).toEqual(
+        expectTurns(refreshEvent.data as SessionHistoryBody, [newFirstExpected, newSecondExpected]);
+        expectTurns(await readSessionHistoryBody(harness.port, sessionKey), [
           newFirstExpected,
-        );
-        expect(attributedHistoryMessageProjection(refreshedSse.messages?.[1])).toEqual(
           newSecondExpected,
-        );
-
-        const refreshedRest = await readSessionHistoryBody(harness.port, sessionKey);
-        expect(refreshedRest.messages).toHaveLength(2);
-        expect(attributedHistoryMessageProjection(refreshedRest.messages?.[0])).toEqual(
-          newFirstExpected,
-        );
-        expect(attributedHistoryMessageProjection(refreshedRest.messages?.[1])).toEqual(
-          newSecondExpected,
-        );
+        ]);
       } finally {
         await stream.reader.cancel();
       }
@@ -453,6 +442,18 @@ describe("session history HTTP endpoints", () => {
     const sessionId = "sess-same-sequence";
     const sessionKey = SESSION_KEY;
     const sharedTimestamp = Date.UTC(2026, 7, 15, 9, 30, 0);
+    const assistantRow = (
+      id: string,
+      content: ReturnType<typeof makeTranscriptAssistantMessage>["content"],
+    ) => ({
+      id,
+      message: {
+        ...makeTranscriptAssistantMessage({ text: "" }),
+        content,
+        timestamp: sharedTimestamp,
+      },
+    });
+    const hiddenRow = (id: string) => assistantRow(id, [{ type: "text", text: "NO_REPLY" }]);
     await writeSessionStore({
       entries: { main: { sessionId, updatedAt: sharedTimestamp } },
       storePath,
@@ -467,53 +468,30 @@ describe("session history HTTP endpoints", () => {
           timestamp: sharedTimestamp,
         },
       },
-      {
-        id: "history-tool-call",
-        message: {
-          ...makeTranscriptAssistantMessage({ text: "" }),
-          content: [
-            {
-              type: "toolCall",
-              id: "call-message-first",
-              name: "message",
-              arguments: { action: "send", message: "First visible reply." },
-            },
-            {
-              type: "toolCall",
-              id: "call-message-second",
-              name: "message",
-              arguments: { action: "send", message: "Second visible reply." },
-            },
-          ],
-          timestamp: sharedTimestamp,
+      assistantRow("history-tool-call", [
+        {
+          type: "toolCall",
+          id: "call-message-first",
+          name: "message",
+          arguments: { action: "send", message: "First visible reply." },
         },
-      },
-      {
-        id: "history-commentary",
-        message: {
-          ...makeTranscriptAssistantMessage({ text: "" }),
-          content: ["First visible reply.", "Second visible reply."].map((text, index) => ({
-            type: "text",
-            text,
-            textSignature: JSON.stringify({ v: 1, id: `commentary-${index}`, phase: "commentary" }),
-          })),
-          timestamp: sharedTimestamp,
+        {
+          type: "toolCall",
+          id: "call-message-second",
+          name: "message",
+          arguments: { action: "send", message: "Second visible reply." },
         },
-      },
-      {
-        id: "history-hidden-reply",
-        message: {
-          ...makeTranscriptAssistantMessage({ text: "NO_REPLY" }),
-          timestamp: sharedTimestamp,
-        },
-      },
-      {
-        id: "history-hidden-control",
-        message: {
-          ...makeTranscriptAssistantMessage({ text: "NO_REPLY" }),
-          timestamp: sharedTimestamp,
-        },
-      },
+      ]),
+      assistantRow(
+        "history-commentary",
+        ["First visible reply.", "Second visible reply."].map((text, index) => ({
+          type: "text",
+          text,
+          textSignature: JSON.stringify({ v: 1, id: `commentary-${index}`, phase: "commentary" }),
+        })),
+      ),
+      hiddenRow("history-hidden-reply"),
+      hiddenRow("history-hidden-control"),
     ]);
 
     await withGatewayHarness(async (harness) => {

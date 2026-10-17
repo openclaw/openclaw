@@ -42,6 +42,19 @@ async function appendMessage(storePath: string, text: string, key = sessionKey) 
   return result.messageId;
 }
 
+async function captureAppend(storePath: string, text: string, key: string) {
+  const updates: InternalSessionTranscriptUpdate[] = [];
+  const stop = onInternalSessionTranscriptUpdate((update) => updates.push(update));
+  try {
+    const id = await appendMessage(storePath, text, key);
+    return updates.find((update) => update.messageId === id);
+  } finally {
+    stop();
+  }
+}
+
+const historyMessage = (text: string) => ({ content: [{ text }] });
+
 describe("session history SSE source ownership", () => {
   installGatewayTestHooks();
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -55,31 +68,22 @@ describe("session history SSE source ownership", () => {
       const storePath = path.join(root, "bound", "sessions.json");
       const otherStorePath = path.join(root, "other", "sessions.json");
       testState.sessionStorePath = storePath;
+      const entries = {
+        [requestedKey]: { sessionId, updatedAt: 1, lifecycleRevision: "copied-history-owner" },
+      };
       await writeSessionStore({
         storePath,
-        entries: {
-          [requestedKey]: { sessionId, updatedAt: 1, lifecycleRevision: "copied-history-owner" },
-        },
+        entries,
       });
       if (mismatch === "physical store") {
         await writeSessionStore({
           storePath: otherStorePath,
-          entries: {
-            [requestedKey]: { sessionId, updatedAt: 1, lifecycleRevision: "copied-history-owner" },
-          },
+          entries,
         });
         await appendMessage(otherStorePath, "other store first row", requestedKey);
         await appendMessage(otherStorePath, "other store second row", requestedKey);
       }
-      const committed: InternalSessionTranscriptUpdate[] = [];
-      const unsubscribe = onInternalSessionTranscriptUpdate((update) => committed.push(update));
-      let initialId: string;
-      try {
-        initialId = await appendMessage(storePath, "bound initial message", requestedKey);
-      } finally {
-        unsubscribe();
-      }
-      const initialUpdate = committed.find((update) => update.messageId === initialId);
+      const initialUpdate = await captureAppend(storePath, "bound initial message", requestedKey);
       if (!initialUpdate?.target || initialUpdate.messageSeq === undefined) {
         throw new Error("expected the committed inline transcript update");
       }
@@ -102,7 +106,7 @@ describe("session history SSE source ownership", () => {
         const initial = await readSseEvent(reader, stream);
         expect(initial.event).toBe("history");
         expect(initial.data).toMatchObject({
-          messages: [{ content: [{ text: "bound initial message" }] }],
+          messages: [historyMessage("bound initial message")],
         });
         if (mismatch === "lifecycle owner") {
           const reset = await resetSessionEntryLifecycle({
@@ -155,15 +159,7 @@ describe("session history SSE source ownership", () => {
         }
         const foreignText = `unrelated payload from ${mismatch}`;
         if (mismatch === "physical store") {
-          const updates: InternalSessionTranscriptUpdate[] = [];
-          const stop = onInternalSessionTranscriptUpdate((update) => updates.push(update));
-          let foreignId: string;
-          try {
-            foreignId = await appendMessage(otherStorePath, foreignText, requestedKey);
-          } finally {
-            stop();
-          }
-          const foreignUpdate = updates.find((update) => update.messageId === foreignId);
+          const foreignUpdate = await captureAppend(otherStorePath, foreignText, requestedKey);
           expect(foreignUpdate).toMatchObject({
             target: {
               agentId: initialUpdate.target.agentId,
@@ -205,10 +201,7 @@ describe("session history SSE source ownership", () => {
         const history = await fetch(url, { headers });
         expect(history.status).toBe(200);
         expect(await history.json()).toMatchObject({
-          messages: [
-            { content: [{ text: "bound initial message" }] },
-            { content: [{ text: visibleText }] },
-          ],
+          messages: [historyMessage("bound initial message"), historyMessage(visibleText)],
         });
       } finally {
         clearTimeout(deadline);

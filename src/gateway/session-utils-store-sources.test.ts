@@ -52,6 +52,61 @@ import {
   prepareGatewaySessionStoreReadSourcesAsync,
 } from "./session-utils-store-sources.js";
 
+const linkType = process.platform === "win32" ? "junction" : "dir";
+type SourceParams = Parameters<typeof prepareGatewaySessionStoreReadSources>[0];
+function mainSources(state: { env: NodeJS.ProcessEnv }) {
+  const main = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+  const params: SourceParams = {
+    cfg: { agents: { ownership: "explicit", entries: { main: {} } } },
+    currentSource: { agentId: "main", path: main.path },
+    env: state.env,
+    registryPath: openOpenClawStateDatabase().path,
+  };
+  return { main, params };
+}
+
+function aliasSources(
+  state: Parameters<typeof mainSources>[0] & { path: (...parts: string[]) => string },
+) {
+  const { main, params } = mainSources(state);
+  const alias = state.path("source-alias");
+  const replacement = state.path("replacement");
+  fs.mkdirSync(replacement);
+  fs.writeFileSync(path.join(replacement, path.basename(main.path)), "synthetic replacement");
+  fs.symlinkSync(path.dirname(main.path), alias, linkType);
+  params.currentSource = { agentId: "main", path: path.join(alias, path.basename(main.path)) };
+  return { main, params, alias, replacement };
+}
+
+function notifyAlias(alias: string) {
+  for (const entry of observedDirectories) {
+    if (entry.active && entry.directory === path.dirname(alias)) {
+      entry.notify(path.basename(alias));
+    }
+  }
+}
+
+function holdRegistryRead() {
+  const entered = createDeferred();
+  const resume = createDeferred();
+  const prepare = registryListing.prepareOpenClawAgentDatabaseRegistrySnapshotRead;
+  const spy = vi
+    .spyOn(registryListing, "prepareOpenClawAgentDatabaseRegistrySnapshotRead")
+    .mockImplementation((...args) => {
+      const prepared = prepare(...args);
+      return {
+        ...prepared,
+        async read(signal) {
+          const result = await prepared.read(signal);
+          entered.resolve();
+          await resume.promise;
+          return result;
+        },
+      };
+    });
+  return { entered, resume, spy };
+}
+
 it.each([false, true])(
   "bounds discovery and refreshes only the next roster (fixed: %s)",
   async (fixed) => {
@@ -188,11 +243,7 @@ it.each(["alias", "missing-parent"] as const)(
       if (kind === "alias") {
         const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
         fs.copyFileSync(database.path, path.join(replacement, path.basename(database.path)));
-        fs.symlinkSync(
-          path.dirname(database.path),
-          parent,
-          process.platform === "win32" ? "junction" : "dir",
-        );
+        fs.symlinkSync(path.dirname(database.path), parent, linkType);
         currentSource = {
           agentId: database.agentId,
           path: path.join(parent, path.basename(database.path)),
@@ -211,7 +262,7 @@ it.each(["alias", "missing-parent"] as const)(
       expect(prepared.sources.main?.[0]).toBe(currentSource);
       if (kind === "alias") {
         fs.unlinkSync(parent);
-        fs.symlinkSync(replacement, parent, process.platform === "win32" ? "junction" : "dir");
+        fs.symlinkSync(replacement, parent, linkType);
       } else {
         fs.renameSync(parent, `${parent}.previous`);
         fs.mkdirSync(parent);
@@ -330,23 +381,7 @@ it.each([false, true])(
 
 it("retains source preparation until directory or registry ownership changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const main = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    const registryPath = openOpenClawStateDatabase().path;
-    const alias = state.path("source-alias");
-    const replacement = state.path("replacement");
-    fs.mkdirSync(replacement);
-    fs.writeFileSync(path.join(replacement, path.basename(main.path)), "synthetic replacement");
-    fs.symlinkSync(
-      path.dirname(main.path),
-      alias,
-      process.platform === "win32" ? "junction" : "dir",
-    );
-    const params = {
-      cfg: { agents: { ownership: "explicit", entries: { main: {} } } } satisfies OpenClawConfig,
-      currentSource: { agentId: "main", path: path.join(alias, path.basename(main.path)) },
-      env: state.env,
-      registryPath,
-    };
+    const { main, params, alias, replacement } = aliasSources(state);
     const first = await prepareGatewaySessionStoreReadSourcesAsync(params);
     const realpath = vi.spyOn(fs.realpathSync, "native");
     const stat = vi.spyOn(fs, "statSync");
@@ -378,12 +413,8 @@ it("retains source preparation until directory or registry ownership changes", a
       expect(realpath.mock.calls.length).toBe(revalidationReads);
       await Promise.resolve();
       fs.unlinkSync(alias);
-      fs.symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
-      for (const entry of observedDirectories) {
-        if (entry.active && entry.directory === path.dirname(alias)) {
-          entry.notify(path.basename(alias));
-        }
-      }
+      fs.symlinkSync(replacement, alias, linkType);
+      notifyAlias(alias);
       expect(first.assertCurrent).toThrow("Session store changed");
       const refreshed = await prepareGatewaySessionStoreReadSourcesAsync(params);
       refreshed.assertCurrent();
@@ -405,17 +436,10 @@ it("retains source preparation until directory or registry ownership changes", a
 });
 
 async function prepareMainSources(state: { env: NodeJS.ProcessEnv }) {
-  const main = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-  const registryPath = openOpenClawStateDatabase().path;
-  const params = {
-    cfg: { agents: { ownership: "explicit", entries: { main: {} } } } satisfies OpenClawConfig,
-    currentSource: { agentId: "main", path: main.path },
-    env: state.env,
-    registryPath,
-  };
+  const { main, params } = mainSources(state);
   const prepared = await prepareGatewaySessionStoreReadSourcesAsync(params);
   releasedDirectories.length = 0;
-  return { main, params, prepared, registryPath };
+  return { main, params, prepared, registryPath: params.registryPath };
 }
 
 it("retains source preparation when another state database closes", async () => {
@@ -451,28 +475,12 @@ it("keeps shared directories observed while a registry generation refreshes", as
 
 it("keeps shared directories observed after a source path changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const main = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    const alias = state.path("source-alias");
-    const replacement = state.path("replacement");
-    const linkType = process.platform === "win32" ? "junction" : "dir";
-    fs.mkdirSync(replacement);
-    fs.writeFileSync(path.join(replacement, path.basename(main.path)), "synthetic replacement");
-    fs.symlinkSync(path.dirname(main.path), alias, linkType);
-    const params = {
-      cfg: { agents: { ownership: "explicit", entries: { main: {} } } } satisfies OpenClawConfig,
-      currentSource: { agentId: "main", path: path.join(alias, path.basename(main.path)) },
-      env: state.env,
-      registryPath: openOpenClawStateDatabase().path,
-    };
+    const { params, alias, replacement } = aliasSources(state);
     const first = await prepareGatewaySessionStoreReadSourcesAsync(params);
     releasedDirectories.length = 0;
     fs.unlinkSync(alias);
     fs.symlinkSync(replacement, alias, linkType);
-    for (const entry of observedDirectories) {
-      if (entry.active && entry.directory === path.dirname(alias)) {
-        entry.notify(path.basename(alias));
-      }
-    }
+    notifyAlias(alias);
     expect(first.assertCurrent).toThrow("Session store changed");
     const refreshed = await prepareGatewaySessionStoreReadSourcesAsync(params);
     refreshed.assertCurrent();
@@ -482,31 +490,9 @@ it("keeps shared directories observed after a source path changes", async () => 
 
 it("does not resume directory observation after its root closes during preparation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const main = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    const registryPath = openOpenClawStateDatabase().path;
-    const entered = createDeferred();
-    const resume = createDeferred();
-    const prepare = registryListing.prepareOpenClawAgentDatabaseRegistrySnapshotRead;
-    const spy = vi
-      .spyOn(registryListing, "prepareOpenClawAgentDatabaseRegistrySnapshotRead")
-      .mockImplementation((...args) => {
-        const prepared = prepare(...args);
-        return {
-          ...prepared,
-          async read(signal) {
-            const result = await prepared.read(signal);
-            entered.resolve();
-            await resume.promise;
-            return result;
-          },
-        };
-      });
-    const pending = prepareGatewaySessionStoreReadSourcesAsync({
-      cfg: { agents: { ownership: "explicit", entries: { main: {} } } },
-      currentSource: { agentId: "main", path: main.path },
-      env: state.env,
-      registryPath,
-    });
+    const { params } = mainSources(state);
+    const { entered, resume, spy } = holdRegistryRead();
+    const pending = prepareGatewaySessionStoreReadSourcesAsync(params);
     void pending.catch(() => undefined);
     try {
       await awaitGateBeforeSettlement(
@@ -530,30 +516,8 @@ it("does not resume directory observation after its root closes during preparati
 
 it("cancels one waiter while retaining shared source preparation", async ({ signal }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const main = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    const params = {
-      cfg: { agents: { ownership: "explicit", entries: { main: {} } } } satisfies OpenClawConfig,
-      currentSource: { agentId: "main", path: main.path },
-      env: state.env,
-      registryPath: openOpenClawStateDatabase().path,
-    };
-    const entered = createDeferred();
-    const resume = createDeferred();
-    const prepare = registryListing.prepareOpenClawAgentDatabaseRegistrySnapshotRead;
-    const spy = vi
-      .spyOn(registryListing, "prepareOpenClawAgentDatabaseRegistrySnapshotRead")
-      .mockImplementation((...args) => {
-        const prepared = prepare(...args);
-        return {
-          ...prepared,
-          async read(readSignal) {
-            const result = await prepared.read(readSignal);
-            entered.resolve();
-            await resume.promise;
-            return result;
-          },
-        };
-      });
+    const { main, params } = mainSources(state);
+    const { entered, resume, spy } = holdRegistryRead();
     const controller = new AbortController();
     const first = prepareGatewaySessionStoreReadSourcesAsync(params, controller.signal);
     void first.catch(() => undefined);

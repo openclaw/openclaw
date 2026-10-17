@@ -22,35 +22,47 @@ import {
 import { withQualifiedGatewaySessionStoreTarget } from "./session-utils-store-retained.js";
 import { withQualifiedGatewaySessionEntry } from "./session-utils-store.js";
 
-it("reads current qualified facts and recovers lifecycle timestamps only when requested", async () => {
+async function withSession(
+  run: (fixture: {
+    cfg: OpenClawConfig;
+    key: string;
+    env: NodeJS.ProcessEnv;
+    scope: { agentId: string; sessionKey: string; env: NodeJS.ProcessEnv };
+  }) => Promise<void>,
+) {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
-    const key = "agent:main:qualified-lifecycle";
+    const key = "agent:main:freshness";
+    await run({ cfg, key, env, scope: { agentId: "main", sessionKey: key, env } });
+  });
+}
+
+async function qualify(cfg: OpenClawConfig, key: string, env: NodeJS.ProcessEnv) {
+  const selected = await resolveGatewaySessionStoreTargetWithStoreAsync({
+    cfg,
+    key,
+    env,
+    exactRead: true,
+  });
+  const qualified = await prepareQualifiedSessionEntryTarget(
+    { ...selected, requestedKey: key, storeKey: key, readSource: selected.capturedReadSource },
+    selected.capturedReadSources,
+    env,
+  );
+  return { selected, qualified };
+}
+
+it("reads current qualified facts and recovers lifecycle timestamps only when requested", async () => {
+  await withSession(async ({ cfg, key, env, scope }) => {
     const sessionId = "qualified-lifecycle";
-    const scope = { agentId: "main", sessionKey: key, env };
     const entry = { sessionId, updatedAt: 2_000, lastInteractionAt: 1_500 };
     await replaceSessionEntry(scope, { ...entry, label: "before" });
     await replaceTranscriptEvents({ ...scope, sessionId }, [
       { type: "session", id: sessionId, version: 3, timestamp: "1970-01-01T00:00:01.000Z" },
     ]);
     addSessionMember(scope, { identityId: "first-member", addedBy: "owner", addedAt: 1 });
-    const selected = await resolveGatewaySessionStoreTargetWithStoreAsync({
-      cfg,
-      key,
-      env,
-      exactRead: true,
-    });
-    const qualified = await prepareQualifiedSessionEntryTarget(
-      {
-        ...selected,
-        requestedKey: key,
-        storeKey: key,
-        readSource: selected.capturedReadSource,
-      },
-      selected.capturedReadSources,
-      env,
-    );
+    const { selected, qualified } = await qualify(cfg, key, env);
     const read = (includeLifecycle = false) =>
       withQualifiedGatewaySessionEntry({
         cfg,
@@ -95,28 +107,9 @@ it("reads current qualified facts and recovers lifecycle timestamps only when re
 it.for(["membership", "explicit", "qualified"] as const)(
   "consumes facts committed before its %s-ordered snapshot",
   async (ordering) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-      setRuntimeConfigSnapshot(cfg);
-      const key = "agent:main:sharing-before-snapshot";
-      const scope = { agentId: "main", sessionKey: key, env };
+    await withSession(async ({ cfg, key, env, scope }) => {
       await replaceSessionEntry(scope, { sessionId: "same-session", updatedAt: 1 });
-      const selected =
-        ordering === "qualified"
-          ? await resolveGatewaySessionStoreTargetWithStoreAsync({ cfg, key, env, exactRead: true })
-          : undefined;
-      const qualified = selected
-        ? await prepareQualifiedSessionEntryTarget(
-            {
-              ...selected,
-              requestedKey: key,
-              storeKey: key,
-              readSource: selected.capturedReadSource,
-            },
-            selected.capturedReadSources,
-            env,
-          )
-        : undefined;
+      const { selected, qualified } = ordering === "qualified" ? await qualify(cfg, key, env) : {};
       const database = openOpenClawAgentDatabase({ agentId: "main", env });
       const committedValues: string[] = [];
       const pendingValues = ["first-value", "second-value"];
@@ -196,11 +189,7 @@ it.for(["membership", "explicit", "qualified"] as const)(
 );
 
 it("consumes a fresh metadata snapshot before the next queued writer", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-    setRuntimeConfigSnapshot(cfg);
-    const key = "agent:main:concurrent-metadata";
-    const scope = { agentId: "main", sessionKey: key, env };
+  await withSession(async ({ cfg, key, env, scope }) => {
     replaceSessionEntrySync(scope, {
       sessionId: "same-session",
       updatedAt: 1,
@@ -263,11 +252,7 @@ it("consumes a fresh metadata snapshot before the next queued writer", async () 
 it.each(["during", "repeated", "consume"] as const)(
   "consumes an ordered sharing snapshot with a native write %s admission",
   async (timing) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-      setRuntimeConfigSnapshot(cfg);
-      const key = "agent:main:sharing-before-snapshot";
-      const scope = { agentId: "main", sessionKey: key, env };
+    await withSession(async ({ cfg, key, env, scope }) => {
       await replaceSessionEntry(scope, { sessionId: "same-session", updatedAt: 1 });
       const database = openOpenClawAgentDatabase({ agentId: "main", env });
       const committedMembers: string[] = [];
