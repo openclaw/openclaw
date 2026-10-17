@@ -144,16 +144,10 @@ describe("registerPreActionHooks", () => {
       .argument("<value>")
       .option("--json")
       .action(() => {});
-    config.command("file").action(() => {});
-    config
-      .command("unset")
-      .argument("<path>")
-      .action(() => {});
     config
       .command("validate")
       .option("--json")
       .action(() => {});
-    config.command("schema").action(() => {});
     registerPreActionHooks(programLocal, "9.9.9-test");
     return programLocal;
   }
@@ -170,13 +164,28 @@ describe("registerPreActionHooks", () => {
     return current;
   }
 
-  async function runPreAction(params: { parseArgv: string[]; processArgv?: string[] }) {
-    process.argv = params.processArgv ?? ["node", "openclaw", ...params.parseArgv];
-    const actionCommand = resolveActionCommand(params.parseArgv);
+  async function runPreAction(parseArgv: string[], processArgv?: string[]) {
+    process.argv = processArgv ?? ["node", "openclaw", ...parseArgv];
+    const actionCommand = resolveActionCommand(parseArgv);
     if (!preActionHook) {
       throw new Error("missing preAction hook");
     }
     await preActionHook(program, actionCommand);
+  }
+
+  async function parse(args: string[]) {
+    const parser = buildProgram();
+    process.argv = ["node", "openclaw", ...args];
+    await parser.parseAsync(process.argv);
+  }
+
+  function expectConfig(commandPath: string[], options = {}) {
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      measure: expect.any(Function),
+      commandPath,
+      ...options,
+    });
   }
 
   registerNativeExecutorPreActionTests(() => registerPreActionHooks, {
@@ -190,9 +199,9 @@ describe("registerPreActionHooks", () => {
     const gatewayRunCommand = resolveActionCommand(["gateway", "run"]);
     gatewayRunCommand.setOptionValueWithSource("force", true, "cli");
     try {
-      await runPreAction({
-        parseArgv: ["gateway", "run"],
-        processArgv: [
+      await runPreAction(
+        ["gateway", "run"],
+        [
           "node",
           "openclaw",
           "--log-level",
@@ -203,7 +212,7 @@ describe("registerPreActionHooks", () => {
           "--reset",
           "--force",
         ],
-      });
+      );
     } finally {
       gatewayRunCommand.setOptionValueWithSource("force", false, "default");
     }
@@ -216,9 +225,7 @@ describe("registerPreActionHooks", () => {
   });
 
   it("passes the gateway config recheck to the state migration boundary", async () => {
-    await runPreAction({
-      parseArgv: ["gateway", "run"],
-    });
+    await runPreAction(["gateway", "run"]);
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -239,50 +246,26 @@ describe("registerPreActionHooks", () => {
   });
 
   it("loads plugins for text local agent runs", async () => {
-    await runPreAction({
-      parseArgv: ["agent"],
-      processArgv: ["node", "openclaw", "agent", "--local", "--message", "hi"],
-    });
-
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: runtimeMock,
-      measure: expect.any(Function),
-      commandPath: ["agent"],
-    });
+    await runPreAction(["agent"], ["node", "openclaw", "agent", "--local", "--message", "hi"]);
+    expectConfig(["agent"]);
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
     });
   });
 
   it("keeps setup alias and channels add manifest-first", async () => {
-    await runPreAction({
-      parseArgv: ["onboard"],
-    });
-
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: runtimeMock,
-      measure: expect.any(Function),
-      commandPath: ["onboard"],
-    });
+    await runPreAction(["onboard"]);
+    expectConfig(["onboard"]);
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
 
     vi.clearAllMocks();
-    await runPreAction({
-      parseArgv: ["channels", "add"],
-    });
-
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: runtimeMock,
-      measure: expect.any(Function),
-      commandPath: ["channels", "add"],
-    });
+    await runPreAction(["channels", "add"]);
+    expectConfig(["channels", "add"]);
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("skips startup bootstrap for parent default help actions", async () => {
-    await runPreAction({
-      parseArgv: ["channels"],
-    });
+    await runPreAction(["channels"]);
 
     expect(emitCliBannerMock).not.toHaveBeenCalled();
     expect(setVerboseMock).not.toHaveBeenCalled();
@@ -311,10 +294,7 @@ describe("registerPreActionHooks", () => {
     ];
     for (const { args, allowInvalid } of scenarios) {
       vi.clearAllMocks();
-      await runPreAction({
-        parseArgv: ["plugins", "install", ...args],
-        processArgv: ["node", "openclaw", "plugins", "install", ...args],
-      });
+      await runPreAction(["plugins", "install", ...args]);
 
       expect(ensureConfigReadyMock, args.join(" ")).toHaveBeenCalledWith({
         runtime: runtimeMock,
@@ -326,10 +306,7 @@ describe("registerPreActionHooks", () => {
   });
 
   it("skips help/version preaction and respects banner opt-out", async () => {
-    await runPreAction({
-      parseArgv: ["status"],
-      processArgv: ["node", "openclaw", "--version"],
-    });
+    await runPreAction(["status"], ["node", "openclaw", "--version"]);
 
     expect(emitCliBannerMock).not.toHaveBeenCalled();
     expect(setVerboseMock).not.toHaveBeenCalled();
@@ -338,38 +315,27 @@ describe("registerPreActionHooks", () => {
     vi.clearAllMocks();
     process.env.OPENCLAW_HIDE_BANNER = "1";
 
-    await runPreAction({
-      parseArgv: ["status"],
-    });
+    await runPreAction(["status"]);
 
     expect(emitCliBannerMock).not.toHaveBeenCalled();
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
   });
 
   it("bootstraps when Commander consumed --help as a required option value", async () => {
-    const parseProgram = buildProgram();
-    process.argv = ["node", "openclaw", "agent", "--message", "--help", "--message", "hello"];
-
-    await parseProgram.parseAsync(process.argv);
+    await parse(["agent", "--message", "--help", "--message", "hello"]);
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
   });
 
   it("does not select JSON output when Commander consumed --json as an option value", async () => {
-    const parseProgram = buildProgram();
-    process.argv = ["node", "openclaw", "agent", "", "--message", "--json", "--message", "hello"];
-
-    await parseProgram.parseAsync(process.argv);
+    await parse(["agent", "", "--message", "--json", "--message", "hello"]);
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(routeLogsToStderrMock).not.toHaveBeenCalled();
   });
 
   it("routes logs to stderr in --json mode so stdout stays clean", async () => {
-    await runPreAction({
-      parseArgv: ["channels", "send"],
-      processArgv: ["node", "openclaw", "channels", "send", "--json"],
-    });
+    await runPreAction(["channels", "send"], ["node", "openclaw", "channels", "send", "--json"]);
 
     expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
 
@@ -378,9 +344,7 @@ describe("registerPreActionHooks", () => {
     // Early argv detection routes literal --json conservatively until Commander metadata resolves.
     loggingState.forceConsoleToStderr = true;
     loggingState.earlyConsoleRoutingRestore = false;
-    await runPreAction({
-      parseArgv: ["config", "set", "gateway.auth.mode", "local", "--json"],
-    });
+    await runPreAction(["config", "set", "gateway.auth.mode", "local", "--json"]);
 
     expect(routeLogsToStderrMock).not.toHaveBeenCalled();
     expect(loggingState.forceConsoleToStderr).toBe(false);
@@ -389,19 +353,7 @@ describe("registerPreActionHooks", () => {
 
     loggingState.forceConsoleToStderr = true;
     loggingState.earlyConsoleRoutingRestore = false;
-    await runPreAction({
-      parseArgv: ["config", "set", "gateway.auth.mode", "local", "--dry-run", "--json"],
-      processArgv: [
-        "node",
-        "openclaw",
-        "config",
-        "set",
-        "gateway.auth.mode",
-        "local",
-        "--dry-run",
-        "--json",
-      ],
-    });
+    await runPreAction(["config", "set", "gateway.auth.mode", "local", "--dry-run", "--json"]);
 
     expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
     expect(loggingState.forceConsoleToStderr).toBe(true);
@@ -409,9 +361,7 @@ describe("registerPreActionHooks", () => {
     vi.clearAllMocks();
 
     // non-json command should not route
-    await runPreAction({
-      parseArgv: ["agents", "list"],
-    });
+    await runPreAction(["agents", "list"]);
 
     expect(routeLogsToStderrMock).not.toHaveBeenCalled();
   });
@@ -420,20 +370,15 @@ describe("registerPreActionHooks", () => {
     loggingState.forceConsoleToStderr = true;
     loggingState.earlyConsoleRoutingRestore = false;
 
-    await runPreAction({
-      parseArgv: ["models", "aliases", "list"],
-      processArgv: ["node", "openclaw", "models", "aliases", "list", "--plain"],
-    });
+    await runPreAction(
+      ["models", "aliases", "list"],
+      ["node", "openclaw", "models", "aliases", "list", "--plain"],
+    );
 
     expect(loggingState.forceConsoleToStderr).toBe(true);
     expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
     expect(emitCliBannerMock).not.toHaveBeenCalled();
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: runtimeMock,
-      measure: expect.any(Function),
-      commandPath: ["models", "aliases", "list"],
-      suppressDoctorStdout: true,
-    });
+    expectConfig(["models", "aliases", "list"], { suppressDoctorStdout: true });
   });
 
   describe("infer model run startup", () => {
@@ -468,39 +413,30 @@ describe("registerPreActionHooks", () => {
   });
 
   it("leaves gateway call config loading to the transport past parent option values", async () => {
-    const parseProgram = buildProgram();
-    process.argv = ["node", "openclaw", "gateway", "--token", "secret", "call", "health", "--json"];
-
-    await parseProgram.parseAsync(process.argv);
+    await parse(["gateway", "--token", "secret", "call", "health", "--json"]);
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("uses the shared skip policy for gateway health on the Commander path", async () => {
-    const parseProgram = buildProgram();
-    process.argv = ["node", "openclaw", "gateway", "--port", "19083", "health", "--json"];
-
-    await parseProgram.parseAsync(process.argv);
+    await parse(["gateway", "--port", "19083", "health", "--json"]);
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
   });
 
   it("defers message config preparation until the action selects local or Gateway execution", async () => {
-    const parseProgram = buildProgram();
-    process.argv = ["node", "openclaw", "message", "send", "--json"];
-
-    await parseProgram.parseAsync(process.argv);
+    await parse(["message", "send", "--json"]);
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("bypasses config guard for config validate when root option values are present", async () => {
-    await runPreAction({
-      parseArgv: ["config", "validate"],
-      processArgv: ["node", "openclaw", "--profile", "work", "config", "validate"],
-    });
+    await runPreAction(
+      ["config", "validate"],
+      ["node", "openclaw", "--profile", "work", "config", "validate"],
+    );
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
@@ -512,10 +448,7 @@ describe("registerPreActionHooks", () => {
       stderrDuringPluginLoad = loggingState.forceConsoleToStderr;
     });
 
-    await runPreAction({
-      parseArgv: ["channels", "send"],
-      processArgv: ["node", "openclaw", "channels", "send", "--json"],
-    });
+    await runPreAction(["channels", "send"], ["node", "openclaw", "channels", "send", "--json"]);
 
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "configured-channels",

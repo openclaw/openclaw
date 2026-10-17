@@ -112,11 +112,32 @@ describe("ensureConfigReady", () => {
   let preflightCache: ReturnType<typeof createPluginCache>;
   let preflightMetadata: ReturnType<typeof createPluginMetadataSnapshotFixture>;
   let statePath: string;
+  let runtime: ReturnType<typeof makeRuntime>;
+  let originalArgv: string[];
+
+  function preflightResult(snapshot = makeSnapshot()) {
+    return {
+      snapshot,
+      baseConfig: {},
+      pluginCache: preflightCache,
+      pluginMetadataSnapshot: preflightMetadata,
+    };
+  }
+
+  function throwOnExit() {
+    runtime.exit.mockImplementation((code: number): never => {
+      throw new ExitError(code);
+    });
+  }
 
   async function runEnsureConfigReady(commandPath: string[], suppressDoctorStdout = false) {
-    const runtime = makeRuntime();
-    await ensureConfigReady({ runtime: runtime as never, commandPath, suppressDoctorStdout });
-    return runtime;
+    const commandRuntime = makeRuntime();
+    await ensureConfigReady({
+      runtime: commandRuntime as never,
+      commandPath,
+      suppressDoctorStdout,
+    });
+    return commandRuntime;
   }
 
   function setInvalidSnapshot(overrides?: Partial<ReturnType<typeof makeSnapshot>>) {
@@ -128,12 +149,7 @@ describe("ensureConfigReady", () => {
       ...overrides,
     };
     readConfigFileSnapshotMock.mockResolvedValue(snapshot);
-    runStartupConfigPreflightMock.mockResolvedValue({
-      snapshot,
-      baseConfig: {},
-      pluginCache: preflightCache,
-      pluginMetadataSnapshot: preflightMetadata,
-    });
+    runStartupConfigPreflightMock.mockResolvedValue(preflightResult(snapshot));
     return snapshot;
   }
 
@@ -149,6 +165,8 @@ describe("ensureConfigReady", () => {
   }
 
   beforeEach(() => {
+    runtime = makeRuntime();
+    originalArgv = process.argv;
     processCache = getProcessPluginCache();
     preflightCache = createPluginCache();
     preflightMetadata = withPluginCache(preflightCache, createPluginMetadataSnapshotFixture);
@@ -170,15 +188,11 @@ describe("ensureConfigReady", () => {
     }
     statePath = path.join(useTempOpenClawHome(), ".openclaw", "state", "openclaw.sqlite");
     readConfigFileSnapshotMock.mockResolvedValue(makeSnapshot());
-    runStartupConfigPreflightMock.mockImplementation(async () => ({
-      snapshot: makeSnapshot(),
-      baseConfig: {},
-      pluginCache: preflightCache,
-      pluginMetadataSnapshot: preflightMetadata,
-    }));
+    runStartupConfigPreflightMock.mockImplementation(async () => preflightResult());
   });
 
   afterEach(async () => {
+    process.argv = originalArgv;
     adoptProcessPluginCache(processCache);
     await preflightCache[Symbol.asyncDispose]();
     envSnapshot?.restore();
@@ -206,10 +220,7 @@ describe("ensureConfigReady", () => {
         ? []
         : [{ path: "plugins.entries.fixture.config", message: "invalid plugin value" }],
     });
-    const runtime = makeRuntime();
-    runtime.exit.mockImplementation((code: number): never => {
-      throw new ExitError(code);
-    });
+    throwOnExit();
     recoveryMocks.isInteractive.mockReturnValue(true);
     const result = withExistingOpenClawStateSchema({ path: statePath }, () =>
       ensureConfigReady({ runtime, commandPath }),
@@ -266,10 +277,7 @@ describe("ensureConfigReady", () => {
       setInvalidSnapshot();
     }
     const retired = getPluginCacheRetirementSignal(preflightCache);
-    const runtime = makeRuntime();
-    runtime.exit.mockImplementation((code: number): never => {
-      throw new ExitError(code);
-    });
+    throwOnExit();
 
     const ready = ensureConfigReady({ runtime, commandPath: ["message"] });
     if (valid) {
@@ -315,7 +323,6 @@ describe("ensureConfigReady", () => {
         preflightUnwound = true;
       }
     });
-    const runtime = makeRuntime();
     runtime.exit.mockImplementation(() => {
       expect(preflightUnwound).toBe(true);
     });
@@ -328,49 +335,33 @@ describe("ensureConfigReady", () => {
     expect(getProcessPluginCache()).toBe(processCache);
   });
 
-  it("forwards config snapshot phase measurement", async () => {
-    const snapshot = makeSnapshot();
+  async function expectMeasurement(commandPath: string[], preflight: boolean) {
     const measuredStages: string[] = [];
     const measure: ConfigSnapshotReadMeasure = async (stage, run) => {
       measuredStages.push(stage);
       return await run();
     };
-    readConfigFileSnapshotMock.mockImplementationOnce(
-      async (options?: { measure?: ConfigSnapshotReadMeasure }) => {
-        await options?.measure?.("config.snapshot.read.validate", async () => undefined);
-        return snapshot;
-      },
-    );
+    const read = preflight ? runStartupConfigPreflightMock : readConfigFileSnapshotMock;
+    read.mockImplementationOnce(async (options?: { measure?: ConfigSnapshotReadMeasure }) => {
+      await options?.measure?.("config.snapshot.read.validate", async () => undefined);
+      return preflight ? { snapshot: makeSnapshot(), baseConfig: {} } : makeSnapshot();
+    });
 
     await ensureConfigReady({
-      runtime: makeRuntime() as never,
-      commandPath: ["health"],
+      runtime,
+      commandPath,
       measure,
     });
 
     expect(measuredStages).toEqual(["config.snapshot.read.validate"]);
+  }
+
+  it("forwards config snapshot phase measurement", async () => {
+    await expectMeasurement(["health"], false);
   });
 
   it("forwards config snapshot phase measurement through startup preflight", async () => {
-    const measuredStages: string[] = [];
-    const measure: ConfigSnapshotReadMeasure = async (stage, run) => {
-      measuredStages.push(stage);
-      return await run();
-    };
-    runStartupConfigPreflightMock.mockImplementationOnce(
-      async (options?: { measure?: ConfigSnapshotReadMeasure }) => {
-        await options?.measure?.("config.snapshot.read.validate", async () => undefined);
-        return { snapshot: makeSnapshot(), baseConfig: {} };
-      },
-    );
-
-    await ensureConfigReady({
-      runtime: makeRuntime() as never,
-      commandPath: ["agent"],
-      measure,
-    });
-
-    expect(measuredStages).toEqual(["config.snapshot.read.validate"]);
+    await expectMeasurement(["agent"], true);
   });
 
   it("retries the cached config snapshot after a read rejection", async () => {
@@ -399,18 +390,15 @@ describe("ensureConfigReady", () => {
       .mockResolvedValueOnce({ snapshot: invalidSnapshot, baseConfig: {} })
       .mockResolvedValueOnce({ snapshot: validSnapshot, baseConfig: validSnapshot.config });
     readConfigFileSnapshotMock.mockResolvedValue(validSnapshot);
-    const runtime = makeRuntime();
-    const confirm = recoveryMocks.confirm;
     recoveryMocks.isInteractive.mockReturnValue(true);
-    const runDoctor = recoveryMocks.runDoctor;
 
     await ensureConfigReady({ runtime: runtime as never, commandPath: ["message"] });
 
-    expect(confirm).toHaveBeenCalledWith(
+    expect(recoveryMocks.confirm).toHaveBeenCalledWith(
       `Run "${formatCliCommand("openclaw doctor --fix")}" now?`,
       true,
     );
-    expect(runDoctor).toHaveBeenCalledOnce();
+    expect(recoveryMocks.runDoctor).toHaveBeenCalledOnce();
     expect(runStartupConfigPreflightMock).toHaveBeenCalledTimes(2);
     expect(runStartupConfigPreflightMock).toHaveBeenLastCalledWith({ gateway: false });
     expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
@@ -423,19 +411,9 @@ describe("ensureConfigReady", () => {
 
   it("preserves JSON output ownership for blocked commands", async () => {
     setInvalidSnapshot();
-    const runtime = makeRuntime();
     recoveryMocks.isInteractive.mockReturnValue(true);
-    const originalArgv = process.argv;
     process.argv = ["node", "openclaw", "onboard", "--json"];
-    try {
-      await ensureConfigReady({
-        runtime,
-        commandPath: ["onboard"],
-        suppressDoctorStdout: true,
-      });
-    } finally {
-      process.argv = originalArgv;
-    }
+    await ensureConfigReady({ runtime, commandPath: ["onboard"], suppressDoctorStdout: true });
 
     expect(runtime.log).toHaveBeenCalledOnce();
     expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toMatchObject({
@@ -452,18 +430,8 @@ describe("ensureConfigReady", () => {
 
   it("preserves protocol-owned stdout for MCP serve", async () => {
     setInvalidSnapshot();
-    const runtime = makeRuntime();
-    const originalArgv = process.argv;
     process.argv = ["node", "openclaw", "mcp", "serve"];
-    try {
-      await ensureConfigReady({
-        runtime,
-        commandPath: ["mcp", "serve"],
-        suppressDoctorStdout: true,
-      });
-    } finally {
-      process.argv = originalArgv;
-    }
+    await ensureConfigReady({ runtime, commandPath: ["mcp", "serve"], suppressDoctorStdout: true });
 
     expect(runtime.log).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(1);
@@ -472,13 +440,11 @@ describe("ensureConfigReady", () => {
   it("keeps invalid Nix config on the manual recovery path", async () => {
     setInvalidSnapshot();
     setTestEnvValue("OPENCLAW_NIX_MODE", "1");
-    const runtime = makeRuntime();
-    const confirm = recoveryMocks.confirm;
     recoveryMocks.isInteractive.mockReturnValue(true);
 
     await ensureConfigReady({ runtime: runtime as never, commandPath: ["gateway", "run"] });
 
-    expect(confirm).not.toHaveBeenCalled();
+    expect(recoveryMocks.confirm).not.toHaveBeenCalled();
     expect(plainErrorCalls(runtime).join("\n")).toContain("OPENCLAW_NIX_MODE=1");
     expect(runtime.exit).toHaveBeenCalledWith(78);
   });
@@ -499,12 +465,12 @@ describe("ensureConfigReady", () => {
         },
       ],
     });
-    const runtime = await runEnsureConfigReady(["message"]);
-    const calls = plainErrorCalls(runtime);
+    const messageRuntime = await runEnsureConfigReady(["message"]);
+    const calls = plainErrorCalls(messageRuntime);
 
     expect(calls).toContain(`Fix: ${pluginPackagingRecoveryHint}`);
     expect(calls).not.toContain(`Fix: ${formatCliCommand("openclaw doctor --fix")}`);
-    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(messageRuntime.exit).toHaveBeenCalledWith(1);
 
     const gatewayRuntime = await runEnsureConfigReady(["gateway", "start"]);
     expect(gatewayRuntime.exit).toHaveBeenCalledWith(78);
@@ -514,26 +480,17 @@ describe("ensureConfigReady", () => {
     setInvalidSnapshot({
       issues: [{ path: "agents.defaults", message: 'Unrecognized key: "agentRuntime"' }],
     });
-    const statusRuntime = await runEnsureConfigReady(["status"]);
-    expect(statusRuntime.exit).not.toHaveBeenCalled();
-
-    const auditRuntime = await runEnsureConfigReady(["audit"]);
-    expect(auditRuntime.exit).not.toHaveBeenCalled();
-
-    const bareGatewayRuntime = await runEnsureConfigReady(["gateway"]);
-    expect(bareGatewayRuntime.exit).toHaveBeenCalledWith(78);
-
-    const gatewayRunRuntime = await runEnsureConfigReady(["gateway", "run"]);
-    expect(gatewayRunRuntime.exit).toHaveBeenCalledWith(78);
-
-    const gatewayStartRuntime = await runEnsureConfigReady(["gateway", "start"]);
-    expect(gatewayStartRuntime.exit).toHaveBeenCalledWith(78);
-
-    const gatewayRestartRuntime = await runEnsureConfigReady(["gateway", "restart"]);
-    expect(gatewayRestartRuntime.exit).toHaveBeenCalledWith(78);
-
-    const gatewayRuntime = await runEnsureConfigReady(["gateway", "health"]);
-    expect(gatewayRuntime.exit).not.toHaveBeenCalled();
+    for (const commandPath of [["status"], ["audit"], ["gateway", "health"]]) {
+      expect((await runEnsureConfigReady(commandPath)).exit).not.toHaveBeenCalled();
+    }
+    for (const commandPath of [
+      ["gateway"],
+      ["gateway", "run"],
+      ["gateway", "start"],
+      ["gateway", "restart"],
+    ]) {
+      expect((await runEnsureConfigReady(commandPath)).exit).toHaveBeenCalledWith(78);
+    }
 
     const doctorRuntime = await runEnsureConfigReady(["doctor", "fix"]);
     expect(doctorRuntime.exit).not.toHaveBeenCalled();
@@ -545,15 +502,13 @@ describe("ensureConfigReady", () => {
     setInvalidSnapshot({
       issues: [{ path: "", errorCode: "CONFIG_READ_FAILED", message: "read failed: ENOSPC" }],
     });
-    const runtime = makeRuntime();
-    const confirm = recoveryMocks.confirm;
     recoveryMocks.isInteractive.mockReturnValue(true);
     await ensureConfigReady({
       runtime,
       commandPath: ["gateway", "start"],
     });
     expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
-    expect(confirm).not.toHaveBeenCalled();
+    expect(recoveryMocks.confirm).not.toHaveBeenCalled();
     expect(plainErrorCalls(runtime).join("\n")).not.toContain("doctor --fix");
   });
 

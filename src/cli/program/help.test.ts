@@ -53,12 +53,12 @@ describe("configureProgramHelp", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     process.argv = originalArgv;
     originalEnv.restore();
   });
 
-  function makeProgramWithCommands() {
-    const program = new Command();
+  function makeProgramWithCommands(program = new Command()) {
     program.command("models").description("models");
     program.command("status").description("status");
     return program;
@@ -66,18 +66,12 @@ describe("configureProgramHelp", () => {
 
   function captureHelpOutput(program: Command): string {
     let output = "";
-    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
-      chunk: string | Uint8Array,
-    ) => {
+    vi.spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array) => {
       output += String(chunk);
       return true;
     }) as typeof process.stdout.write);
-    try {
-      program.outputHelp();
-      return output;
-    } finally {
-      writeSpy.mockRestore();
-    }
+    program.outputHelp();
+    return output;
   }
 
   function expectVersionExit(params: { expectedVersion: string }) {
@@ -86,15 +80,10 @@ describe("configureProgramHelp", () => {
       throw new Error(`exit:${code ?? ""}`);
     }) as typeof process.exit);
 
-    try {
-      const program = makeProgramWithCommands();
-      expect(() => configureProgramHelp(program, testProgramContext)).toThrow(new ExitError(0));
-      expect(logSpy).toHaveBeenCalledWith(params.expectedVersion);
-      expect(exitSpy).not.toHaveBeenCalled();
-    } finally {
-      logSpy.mockRestore();
-      exitSpy.mockRestore();
-    }
+    const program = makeProgramWithCommands();
+    expect(() => configureProgramHelp(program, testProgramContext)).toThrow(new ExitError(0));
+    expect(logSpy).toHaveBeenCalledWith(params.expectedVersion);
+    expect(exitSpy).not.toHaveBeenCalled();
   }
 
   async function parseHelp(argv: string[]) {
@@ -111,8 +100,7 @@ describe("configureProgramHelp", () => {
         stderr += value;
       },
     });
-    program.command("models").description("models");
-    program.command("status").description("status");
+    makeProgramWithCommands(program);
     const plugins = program.command("plugins").description("Manage plugins");
     plugins
       .command("list")
@@ -166,14 +154,16 @@ describe("configureProgramHelp", () => {
       .command("list")
       .action(() => {});
 
-    const firstError = await program.parseAsync(process.argv).catch((error: unknown) => error);
-    expect(firstError).toBeInstanceOf(CommanderError);
-    process.argv = ["node", "openclaw", "plugins", "list", "--still-wat"];
-    const secondError = await program.parseAsync(process.argv).catch((error: unknown) => error);
-    expect(secondError).toBeInstanceOf(CommanderError);
-    process.argv = ["node", "openclaw", "plugins", "lis"];
-    const thirdError = await program.parseAsync(process.argv).catch((error: unknown) => error);
-    expect(thirdError).toBeInstanceOf(CommanderError);
+    for (const args of [
+      ["plugins", "--source", "list", "list", "--wat"],
+      ["plugins", "list", "--still-wat"],
+      ["plugins", "lis"],
+    ]) {
+      process.argv = ["node", "openclaw", ...args];
+      expect(
+        await program.parseAsync(process.argv).catch((error: unknown) => error),
+      ).toBeInstanceOf(CommanderError);
+    }
 
     expect(stderr.match(/Try: openclaw plugins list --help/g)).toHaveLength(2);
     expect(stderr).not.toContain("openclaw plugins list list --help");
