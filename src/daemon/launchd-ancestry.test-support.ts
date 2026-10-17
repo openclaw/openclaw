@@ -237,8 +237,10 @@ vi.mock("./exec-file.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Record restart handoffs without launching detached processes.
 vi.mock("./launchd-restart-handoff.js", () => launchdRestartHandoffState);
 
+// mock-isolation: System ownership comes from the synthetic launchd state.
 vi.mock("./launchd-system.js", () => ({
   ...launchdSystemState,
   formatSystemLaunchDaemonOwnershipSummary: (ownership: { serviceTarget: string }) =>
@@ -255,6 +257,7 @@ vi.mock("../infra/restart-stale-pids.js", () => ({
       : cleanStaleGatewayProcessesSync(port, options),
 }));
 
+// mock-isolation: Port diagnostics must match the synthetic listener state.
 vi.mock("../infra/ports-format.js", () => ({ formatPortDiagnostics }));
 
 vi.mock("../infra/ports-inspect.js", () => ({ inspectPortUsage }));
@@ -264,6 +267,7 @@ vi.mock("../infra/ports-probe.js", () => ({
   probePortUsage,
 }));
 
+// mock-isolation: Probe only the addresses supplied by each launchd scenario.
 vi.mock("./gateway-service-probe-hosts.js", () => ({
   resolveGatewayServiceProbeHosts,
 }));

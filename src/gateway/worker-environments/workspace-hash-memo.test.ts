@@ -26,11 +26,12 @@ const { REMOTE_WORKSPACE_MANIFEST_JS } = await importToolingTypeScript(
 if (typeof REMOTE_WORKSPACE_MANIFEST_JS !== "string") {
   throw new Error("Source workspace sync module did not export its manifest script");
 }
+const remoteWorkspaceManifestScript = REMOTE_WORKSPACE_MANIFEST_JS;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const hashMetrics = () => ({ contentHashCount: 0, contentHashDurationMs: 0, memoHitCount: 0 });
-function remoteCapture(workspace: string, home: string, script = REMOTE_WORKSPACE_MANIFEST_JS) {
+function remoteCapture(workspace: string, home: string, script = remoteWorkspaceManifestScript) {
   return async (memo: [string, string][]): Promise<RemoteWorkspaceManifestEnvelope> => {
     const result = await runCommandWithTimeout(
       [process.execPath, "-e", script, workspace, "", "memo-v1"],
@@ -40,7 +41,7 @@ function remoteCapture(workspace: string, home: string, script = REMOTE_WORKSPAC
     return JSON.parse(result.stdout) as RemoteWorkspaceManifestEnvelope;
   };
 }
-async function remoteFixture(script = REMOTE_WORKSPACE_MANIFEST_JS) {
+async function remoteFixture(script = remoteWorkspaceManifestScript) {
   const home = tempDirs.make("openclaw-remote-home-");
   const workspace = await fs.realpath(tempDirs.make("openclaw-remote-workspace-"));
   return { workspace, capture: remoteCapture(workspace, home, script) };

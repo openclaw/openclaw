@@ -60,16 +60,13 @@ function videoRequest(voiceSessionId = "voice-1") {
     method === "talk.catalog" ? videoCatalog(true) : createWebRtcSession(voiceSessionId),
   );
 }
-function sessionFor<T>(
-  request: T,
+function sessionFor(
+  request: unknown,
   callbacks: ConstructorParameters<typeof RealtimeTalkSession>[2] = {},
 ) {
   return new RealtimeTalkSession({ request } as never, "main", callbacks);
 }
-function called<T extends [string, ...unknown[]]>(
-  request: { mock: { calls: T[] } },
-  method: string,
-) {
+function called(request: { mock: { calls: [string, ...unknown[]][] } }, method: string) {
   return request.mock.calls.some(([name]) => name === method);
 }
 

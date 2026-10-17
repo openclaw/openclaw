@@ -126,8 +126,8 @@ async function stageHistoricalV1Result(
 }
 
 it("recovers the shipped v1 full tree while applying only changed entries", async () => {
-  const local = await temporaryDirectory("workspace-staged-v1-local");
-  const complete = await temporaryDirectory("workspace-staged-v1-complete");
+  const local = temporaryDirectory("workspace-staged-v1-local");
+  const complete = temporaryDirectory("workspace-staged-v1-complete");
   const baseContents = { "changed.txt": "base\n", "keep.txt": "keep\n" };
   const currentContents = { ...baseContents, "changed.txt": "worker\n" };
   for (const [name, contents] of Object.entries(baseContents)) {
@@ -159,7 +159,7 @@ it("recovers the shipped v1 full tree while applying only changed entries", asyn
 });
 
 it("recovers a converged shipped v1 deletion above the historical 25,000-record limit", async () => {
-  const local = await temporaryDirectory("workspace-staged-v1-converged-local");
+  const local = temporaryDirectory("workspace-staged-v1-converged-local");
   const baseManifest = fileManifest(
     numberedPaths("deleted", 25_001).map((name) => `${name}.txt`),
     "a",
@@ -184,8 +184,8 @@ it("recovers a converged shipped v1 deletion above the historical 25,000-record 
 }, 30_000);
 
 it("stages a directory-only v2 result above 25,000 reconciliation records", async () => {
-  const local = await temporaryDirectory("workspace-directory-entry-limit-local");
-  const payload = await temporaryDirectory("workspace-directory-entry-limit-payload");
+  const local = temporaryDirectory("workspace-directory-entry-limit-local");
+  const payload = temporaryDirectory("workspace-directory-entry-limit-payload");
   const directoryCount = 13_000;
   const manifest = (prefix: string) =>
     encodeManifest({
@@ -204,8 +204,8 @@ it("stages a directory-only v2 result above 25,000 reconciliation records", asyn
 });
 
 it("stages, applies, and recovers modified files across Git tree batches", async () => {
-  const local = await temporaryDirectory("workspace-modification-local");
-  const payload = await temporaryDirectory("workspace-modification-payload");
+  const local = temporaryDirectory("workspace-modification-local");
+  const payload = temporaryDirectory("workspace-modification-payload");
   // Cross writeRawWorkspaceTree's 256-entry batches with the smallest physical fixture.
   const paths = numberedPaths("changed", 257, 3).map((name) => `${name}.txt`);
   await Promise.all(
@@ -256,8 +256,8 @@ it("stages, applies, and recovers modified files across Git tree batches", async
 });
 
 it("stages only a one-file delta for a 31,274-entry Git baseline", async () => {
-  const local = await temporaryDirectory("workspace-large-baseline-local");
-  const payload = await temporaryDirectory("workspace-large-baseline-payload");
+  const local = temporaryDirectory("workspace-large-baseline-local");
+  const payload = temporaryDirectory("workspace-large-baseline-payload");
   await git(local, "init", "--quiet");
   const baseContent = Buffer.from("base\n");
   const currentContent = Buffer.from("worker\n");

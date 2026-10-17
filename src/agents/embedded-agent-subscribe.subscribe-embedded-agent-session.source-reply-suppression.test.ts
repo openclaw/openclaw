@@ -426,11 +426,9 @@ describe("subscribeEmbeddedAgentSession", () => {
     const { emit, onBlockReply } = createBlockReplyHarness("message_end");
 
     const messageText = "Please retry the send.";
-    await emitMessageToolLifecycle({
-      emit,
+    await emitMessageToolLifecycle(emit, messageText, {
       toolCallId: "tool-message-err",
-      message: messageText,
-      result: { details: { status: "error" } },
+      details: { status: "error" },
     });
     emitAssistantMessageEnd(emit, messageText);
     await vi.waitFor(() => {

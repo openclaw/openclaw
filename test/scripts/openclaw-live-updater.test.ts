@@ -1317,20 +1317,40 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     },
   );
 
-  test.each([
-    ["resumes a prepared suspension when stopped proof never converges", null, 141],
-    ["allows launchd teardown past the old ten-second proof window", 12_000, 49],
-  ] as const)("%s", async (_name, stoppedAtMs, attempts) => {
-    const { mirror, run } = makeFixture({ dependencies: true });
-    const commands = fakeCommands(mirror);
+  test("resumes a prepared suspension when stopped proof never converges", async () => {
+    const { mirror, run } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
     const resumed: string[] = [];
+    let proofAttempts = 0;
+
+    await expect(
+      run({
+        proveGatewayStopped: () => {
+          proofAttempts += 1;
+          throw new Error("listener still present");
+        },
+        sleep() {},
+        resumeGatewaySuspension: (_checkout: string, suspensionId: string) => {
+          resumed.push(suspensionId);
+        },
+      }),
+    ).rejects.toThrow("native stopped proof did not converge");
+    expect(proofAttempts).toBe(141);
+    expect(resumed).toEqual(["fixture-suspension"]);
+  });
+
+  test("allows launchd teardown to converge after the old ten-second proof window", async () => {
+    const { mirror, run } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    const commands = fakeCommands(mirror);
     let elapsedMs = 0;
     let proofAttempts = 0;
-    const result = run({
+
+    const output = await run({
       runCommand: commands.runCommand,
       proveGatewayStopped: () => {
         proofAttempts += 1;
-        if (stoppedAtMs === null || elapsedMs < stoppedAtMs) {
+        if (elapsedMs < 12_000) {
           throw new Error("launchd is still releasing the stopped job");
         }
         return stoppedGateway();
@@ -1338,16 +1358,12 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
       sleep: (ms: number) => {
         elapsedMs += ms;
       },
-      resumeGatewaySuspension: (_checkout: string, id: string) => resumed.push(id),
+      resumeGatewaySuspension: () => {},
     });
-    if (stoppedAtMs === null) {
-      await expect(result).rejects.toThrow("native stopped proof did not converge");
-      expect(resumed).toEqual(["fixture-suspension"]);
-    } else {
-      await expect(result).resolves.toMatchObject({ ok: true });
-      expect(elapsedMs).toBe(stoppedAtMs);
-    }
-    expect(proofAttempts).toBe(attempts);
+
+    expect(output.ok).toBe(true);
+    expect(elapsedMs).toBe(12_000);
+    expect(proofAttempts).toBe(49);
   });
 
   test("refuses Gateway mutations when suspension and stopped proof both fail", async () => {
@@ -1472,9 +1488,9 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
         controlEntrypoint = deployment.entrypoint;
         return preparedSuspension();
       },
-      prepareGatewayEntrypointReplacement: fixture.prepareReplacement,
+      prepareGatewayEntrypointReplacement: () => fixture.prepareReplacement(),
       verifyAndAuditGateway: passGatewayRestartVerification,
-      proveGatewayStopped: fixture.stopped,
+      proveGatewayStopped: () => fixture.stopped(),
     });
     expectRetargeted(output.gatewayDeployment, source, snapshot);
     expect(JSON.stringify(output)).not.toContain("not-serialized");
@@ -1559,8 +1575,8 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
                 : { status: args[0] === "-lint" ? 0 : 1, stdout: "", stderr: "" },
           });
         },
-        prepareGatewayEntrypointReplacement: fixture.prepareReplacement,
-        proveGatewayStopped: fixture.stopped,
+        prepareGatewayEntrypointReplacement: () => fixture.prepareReplacement(),
+        proveGatewayStopped: () => fixture.stopped(),
         isGatewayLoaded: () => serviceLoaded,
         verifyAndAuditGateway: () => {
           commands.calls.push("verify replacement readiness");

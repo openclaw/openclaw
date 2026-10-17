@@ -10,7 +10,9 @@ const transportMock = vi.hoisted(() => ({
   stop: vi.fn(),
 }));
 
+// mock-isolation: Queue tests must not open a Gateway relay.
 vi.mock("./gateway-relay.ts", () => ({ GatewayRelayRealtimeTalkTransport: vi.fn() }));
+// mock-isolation: Queue tests must not connect to a provider.
 vi.mock("./google-live.ts", () => ({ GoogleLiveRealtimeTalkTransport: vi.fn() }));
 vi.mock("./webrtc.ts", () => ({
   WebRtcSdpRealtimeTalkTransport: vi.fn(function (
@@ -24,7 +26,7 @@ vi.mock("./webrtc.ts", () => ({
 
 import { RealtimeTalkSession } from "./session.ts";
 
-async function start<T>(request: T, callbacks: RealtimeTalkCallbacks) {
+async function start(request: unknown, callbacks: RealtimeTalkCallbacks) {
   const session = new RealtimeTalkSession({ request } as never, "agent:main:main", callbacks);
   await session.start();
   const context = transportMock.context;

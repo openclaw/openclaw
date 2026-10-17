@@ -33,8 +33,8 @@ function respond(version = update.version, url = TELEMETRY_URL) {
   mockHttp.intercept({ url, reply: { json: { version } } });
 }
 
-function readState<T = unknown>() {
-  return readConfigMachineState<T>(TELEMETRY_STATE_KEY);
+function readState() {
+  return readConfigMachineState(TELEMETRY_STATE_KEY);
 }
 
 function payloadFor(config: OpenClawConfig = {}, surface: "gateway" | "cli" = "gateway") {
@@ -512,7 +512,7 @@ describe("anonymous telemetry", () => {
     });
 
     const result = await checkUpdate();
-    const persisted = readState<{ note?: string }>();
+    const persisted = readConfigMachineState<{ note?: string }>(TELEMETRY_STATE_KEY);
 
     expect(result?.note).toHaveLength(500);
     expect(persisted?.note).toHaveLength(500);

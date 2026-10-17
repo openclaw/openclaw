@@ -14,8 +14,11 @@ function mockTransport(_session: unknown, context: RealtimeTalkTransportContext)
   return { start: async () => "ready" as const, stop };
 }
 
+// mock-isolation: Capture input ownership without opening real WebRTC connections.
 vi.mock("./webrtc.ts", () => ({ WebRtcSdpRealtimeTalkTransport: vi.fn(mockTransport) }));
+// mock-isolation: Capture input ownership without connecting to a provider.
 vi.mock("./google-live.ts", () => ({ GoogleLiveRealtimeTalkTransport: vi.fn(mockTransport) }));
+// mock-isolation: Capture input ownership without opening a Gateway relay.
 vi.mock("./gateway-relay.ts", () => ({ GatewayRelayRealtimeTalkTransport: vi.fn(mockTransport) }));
 
 import { RealtimeTalkSession } from "./session.ts";

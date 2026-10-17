@@ -91,6 +91,7 @@ vi.mock("../../agents/workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir: mocks.resolveDefaultAgentWorkspaceDir,
 }));
 
+// mock-isolation: Provider classification is controlled by each auth scenario.
 vi.mock("../../agents/model-selection-cli.js", () => ({ isCliProvider: mocks.isCliProvider }));
 
 vi.mock("../../plugins/providers.runtime.js", () => ({
@@ -134,10 +135,13 @@ vi.mock("../../plugins/install-record-commit.js", () => ({
   },
 }));
 
+// mock-isolation: Observe config notices without initializing the real logger.
 vi.mock("../../config/logging.js", () => ({ logConfigUpdated: mocks.logConfigUpdated }));
 
+// mock-isolation: Auth scenarios must not open an operator browser.
 vi.mock("../../infra/browser-open.js", () => ({ openUrl: mocks.openUrl }));
 
+// mock-isolation: The fixture selects local versus remote auth behavior explicitly.
 vi.mock("../../infra/remote-env.js", () => ({ isRemoteEnvironment: mocks.isRemoteEnvironment }));
 
 vi.mock("../../gateway/call.js", async () => {

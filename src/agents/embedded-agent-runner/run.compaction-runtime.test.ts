@@ -163,9 +163,9 @@ describe("embedded compaction recovery authority", () => {
         const after = fixture.loadEntry();
         expect(after).toMatchObject({
           sessionId: successorId,
-          lifecycleRevision: before?.lifecycleRevision,
           activeWriterRunId: fixture.runId,
         });
+        expect(after?.lifecycleRevision).toBe(before?.lifecycleRevision);
         expect(fixture.getSessionTarget()).toMatchObject({
           sessionId: successorId,
           threadId: "thread-hint",

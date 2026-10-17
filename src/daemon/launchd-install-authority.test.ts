@@ -23,6 +23,7 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
   runCommandWithTimeout: native.command,
 }));
+// mock-isolation: Exercise ownership revocation without reading host LaunchDaemons.
 vi.mock("./launchd-system.js", () => ({ assertNoSystemLaunchDaemonOwnership: native.ownership }));
 vi.mock("./launchd-current-service.js", () => ({
   isCurrentProcessInsideLaunchdService: async () => false,

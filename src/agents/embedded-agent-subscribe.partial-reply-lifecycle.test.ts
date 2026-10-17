@@ -11,6 +11,7 @@ const logger = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
 
+// mock-isolation: Keep process-wide logger state outside the reply lifecycle fixture.
 vi.mock("../logging/subsystem.js", () => ({ createSubsystemLogger: () => logger }));
 
 import {

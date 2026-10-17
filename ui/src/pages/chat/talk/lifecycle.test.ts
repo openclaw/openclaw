@@ -91,7 +91,7 @@ function voiceRequest(create: () => unknown, transcriptEntryIds?: string[]) {
     return { ok: true };
   });
 }
-function sessionFor<T>(request: T) {
+function sessionFor(request: unknown) {
   return new RealtimeTalkSession({ request } as never, "agent:main:main");
 }
 function calls<T extends [string, ...unknown[]]>(

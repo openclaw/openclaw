@@ -16,6 +16,7 @@ import {
   captureWorkspaceSnapshot,
   parseWorkspaceManifestPair,
 } from "./workspace-manifest-worker.js";
+import type { WorkerWorkspaceManifestEntry } from "./workspace-manifest.js";
 import { workspaceProcessTestEntrypoints } from "./workspace-process-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -23,7 +24,7 @@ const adapterUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.manif
 const limitsUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.inventoryLimits).href;
 afterEach(() => vi.restoreAllMocks());
 
-const encode = (entries: { path: string }[], baseCommit: string | null = null) => {
+const encode = (entries: WorkerWorkspaceManifestEntry[], baseCommit: string | null = null) => {
   const raw = JSON.stringify({
     version: 1,
     baseCommit,
@@ -171,7 +172,13 @@ it("captures eligible files outside the Gateway thread and returns the canonical
 });
 
 it("authenticates both manifests before selecting changed transfer payloads", async () => {
-  const entry = { path: "input.txt", type: "file", mode: 0o644, size: 1, sha256: "a".repeat(64) };
+  const entry = {
+    path: "input.txt",
+    type: "file" as const,
+    mode: 0o644,
+    size: 1,
+    sha256: "a".repeat(64),
+  };
   const base = encode([entry]);
   const current = encode([{ ...entry, sha256: "b".repeat(64) }]);
   const input = pair(base, current);

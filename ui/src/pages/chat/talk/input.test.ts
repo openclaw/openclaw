@@ -14,6 +14,13 @@ function mediaDevice(kind: MediaDeviceKind, deviceId: string, label: string): Me
   return { kind, deviceId, label, groupId: "", toJSON: () => ({}) } as MediaDeviceInfo;
 }
 
+function legacyWebKitOverconstrainedError(): Error & { constraint: string } {
+  return Object.assign(new Error("Invalid constraint"), {
+    name: "OverconstrainedError",
+    constraint: "",
+  });
+}
+
 function stubMediaDevices(devices: Partial<MediaDevices>) {
   vi.stubGlobal("navigator", { mediaDevices: devices });
 }
