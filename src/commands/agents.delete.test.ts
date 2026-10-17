@@ -326,54 +326,54 @@ describe("agents delete command", () => {
     expectSessionStore(cfg, sessions);
   });
 
-  it("warns about Gateway cleanup failures without failing committed deletion", async ({
-    state,
-  }) => {
-    const workspace = path.join(state.stateDir, "workspace-ops");
-    await state.setup();
-    gatewayMocks.callGateway.mockResolvedValue({
-      ok: true,
-      agentId: "ops",
-      removedBindings: 0,
-      removed: [],
-      failed: [{ path: workspace, reason: "trash unavailable" }],
-      purgeFailed: true,
-    });
-    await removeAgent();
-    expect(runtime.log).toHaveBeenCalledWith("Deleted agent: ops");
-    expect(runtime.error).toHaveBeenCalledWith(
-      `Warning: path could not be moved to Trash: trash unavailable; remove it manually at ${workspace}`,
-    );
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining('session-store purge failed for deleted agent "ops"'),
-    );
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
-
-  it("reports remote Gateway purge failure as JSON", async ({ state }) => {
-    const url = "ws://127.0.0.1:18789";
-    const cfg = {
-      ...config(state.stateDir),
-      gateway: { mode: "remote", remote: { url } },
-    } satisfies OpenClawConfig;
-    await state.setup({ cfg });
-    gatewayMocks.callGateway.mockResolvedValue({
-      ok: true,
-      agentId: "ops",
-      removedBindings: 0,
-      removed: [],
-      failed: [],
-      purgeFailed: true,
-    });
-    await removeAgent({ json: true });
-    expect(readJson()).toMatchObject({ purgeFailed: true, transport: "gateway" });
-    expect(gatewayMocks.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({ gateway: cfg.gateway }),
-        expectUrl: url,
-      }),
-    );
-  });
+  it.for(["gateway", "remote JSON", "local"] as const)(
+    "reports %s cleanup failure without undoing the committed deletion",
+    async (mode, { state }) => {
+      const json = mode === "remote JSON";
+      const local = mode === "local";
+      const workspace = path.join(state.stateDir, "workspace-ops");
+      const url = "ws://127.0.0.1:18789";
+      const cfg = config(state.stateDir);
+      if (json) {
+        cfg.gateway = { mode: "remote", remote: { url } };
+      }
+      await state.setup({ cfg });
+      if (local) {
+        moveToTrash.mockRejectedValueOnce(new Error("trash unavailable"));
+      } else {
+        gatewayMocks.callGateway.mockResolvedValue({
+          removedBindings: 0,
+          removed: [],
+          failed: json ? [] : [{ path: workspace, reason: "trash unavailable" }],
+          purgeFailed: true,
+        });
+      }
+      await removeAgent({ json });
+      if (json) {
+        expect(readJson()).toMatchObject({ purgeFailed: true, transport: "gateway" });
+        expect(gatewayMocks.callGateway).toHaveBeenCalledWith(
+          expect.objectContaining({
+            config: expect.objectContaining({ gateway: cfg.gateway }),
+            expectUrl: url,
+          }),
+        );
+      } else {
+        expect(runtime.log).toHaveBeenCalledWith("Deleted agent: ops");
+        expect(runtime.error).toHaveBeenCalledWith(
+          `Warning: path could not be moved to Trash: trash unavailable; remove it manually at ${workspace}`,
+        );
+        if (local) {
+          expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
+          expect(readAgentDeletionJournal("ops")?.cleanupCompleted).toBe(false);
+        } else {
+          expect(runtime.error).toHaveBeenCalledWith(
+            expect.stringContaining('session-store purge failed for deleted agent "ops"'),
+          );
+        }
+      }
+      expect(runtime.exit).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps cron and shared workspace on credential fallback while clearing owner references", async ({
     state,
@@ -638,20 +638,6 @@ describe("agents delete command", () => {
       }
     },
   );
-
-  it("reports local Trash failures and retains workspace state for retry", async ({ state }) => {
-    const workspace = path.join(state.stateDir, "workspace-ops");
-    await state.setup();
-    moveToTrash.mockRejectedValueOnce(new Error("trash unavailable"));
-    await removeAgent();
-    expect(runtime.log).toHaveBeenCalledWith("Deleted agent: ops");
-    expect(runtime.error).toHaveBeenCalledWith(
-      `Warning: path could not be moved to Trash: trash unavailable; remove it manually at ${workspace}`,
-    );
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
-    expect(readAgentDeletionJournal("ops")?.cleanupCompleted).toBe(false);
-  });
 
   it.for([
     ["parent", "main-child", ""],
