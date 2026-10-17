@@ -19,6 +19,7 @@ import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectProgressCard } from "../../lib/reactive/domain-keyed.ts";
 import { i18nRevision } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
+import { projectTheme } from "../../lib/reactive/theme.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { ChatComposerCapabilityDialogs } from "./chat-composer-capability-host.tsx";
@@ -108,6 +109,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   function MountedPane() {
     const context = runtime.context;
     const gateway = projectGateway(context.gateway);
+    const theme = projectTheme(context.theme);
     const composerCapabilities = projectOwner(runtime.composerCapabilities, (owner) => owner);
     const realtimeOwner = createMemo(() => {
       revision();
@@ -187,6 +189,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         composerCapabilities.read();
         realtime()?.read();
         projects.read();
+        theme.preferences.read();
         resources.read();
         discussion.read();
         board().forEach((source) => source.read());
