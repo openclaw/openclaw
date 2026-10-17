@@ -1,7 +1,6 @@
 import type { Bot } from "grammy";
 import type { Message } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { SavedRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import type * as MediaRuntime from "openclaw/plugin-sdk/media-runtime";
 import type * as ModelsRuntime from "openclaw/plugin-sdk/models-provider-runtime";
 import {
@@ -317,7 +316,7 @@ beforeEach(async () => {
     path: "/tmp/replied-photo.jpg",
     size: 4,
     contentType: "image/jpeg",
-  } satisfies SavedRemoteMedia);
+  } satisfies MediaRuntime.SavedRemoteMedia);
 });
 
 afterEach(async () => {

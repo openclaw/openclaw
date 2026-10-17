@@ -1,4 +1,5 @@
-import { webhookCallback } from "grammy";
+import { webhookCallback, type Bot } from "grammy";
+import type { Message } from "grammy/types";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as configMutation from "openclaw/plugin-sdk/config-mutation";
@@ -12,7 +13,7 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
 import { createRequireRecord, resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { runWithTelegramSpooledReplayUpdate } from "./bot-processing-outcome.js";
 import {
   createBot,
@@ -39,6 +40,8 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => ({
 }));
 const requireRecord = createRequireRecord("record", "expected-label-object");
 type TelegramConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>;
+const openDm = { dmPolicy: "open", allowFrom: ["*"] } satisfies TelegramConfig;
+const openUnstreamed = { ...openDm, streaming: { mode: "off" } } satisfies TelegramConfig;
 const apiPayloads = (method: string) =>
   apiCalls.mock.calls.flatMap(([name, payload]) => (name === method ? [payload] : []));
 const configuredBot = (
@@ -48,6 +51,8 @@ const configuredBot = (
   account?: string,
 ) => createBot(false, true, { ...config, channels: { telegram } }, topics, account);
 const messageBase = { date: 1736380800, chat, from };
+const handleMessage = (bot: Bot, update_id: number, message: Message) =>
+  bot.handleUpdate({ update_id, message });
 const callback = (id: string, data: string, chat_instance: string, message_id: number) => ({
   id,
   data,
@@ -58,7 +63,7 @@ const callback = (id: string, data: string, chat_instance: string, message_id: n
 
 it("runs the login executor without dispatching a turn", async () => {
   const bot = await createBot();
-  await bot.handleUpdate({ update_id: 1004, message: commandMessage("/login") });
+  await handleMessage(bot, 1004, commandMessage("/login"));
   expect(loginExecutor).toHaveBeenCalledWith(expect.objectContaining({ commandText: "/login" }));
   expect(harness.replySpy).not.toHaveBeenCalled();
 });
@@ -77,19 +82,18 @@ it.each(["forum", "DM"] as const)("routes native commands to the %s topic", asyn
     dm
       ? { dmPolicy: "pairing", autoTopicLabel: false, streaming: { mode: "off" } }
       : {
-          dmPolicy: "open",
-          allowFrom: ["*"],
+          ...openUnstreamed,
           replyToMode: "first",
-          streaming: { mode: "off" },
           groups: { "*": { requireMention: false } },
         },
     { commands: { native: true } },
     dm,
   );
-  await bot.handleUpdate({
-    update_id: 1007,
-    message: dm ? { ...commandMessage("/status"), message_thread_id: 99 } : groupCommand(),
-  });
+  await handleMessage(
+    bot,
+    1007,
+    dm ? { ...commandMessage("/status"), message_thread_id: 99 } : groupCommand(),
+  );
   if (dm) {
     expect(harness.replySpy).toHaveBeenCalledTimes(1);
     expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
@@ -160,14 +164,9 @@ it.each([
       };
   const bot = await configuredBot(
     { ...telegram, streaming: { mode: "off" } },
-    {
-      commands: { native: true, ...commands },
-    },
+    { commands: { native: true, ...commands } },
   );
-  await bot.handleUpdate({
-    update_id: 1010,
-    message: direct ? commandMessage(command) : groupCommand(command),
-  });
+  await handleMessage(bot, 1010, direct ? commandMessage(command) : groupCommand(command));
   const pairing = [
     "sendMessage",
     expect.objectContaining({ text: expect.stringContaining("Pairing code:") }),
@@ -206,10 +205,7 @@ it("enforces sender identity for ordinary senderless messages", async () => {
     text: "senderless request",
   };
   apiCalls.mockClear();
-  await bot.handleUpdate({
-    update_id: 2001,
-    message: { ...message, from: { ...from, id: 99999 } },
-  });
+  await handleMessage(bot, 2001, { ...message, from: { ...from, id: 99999 } });
   expect(harness.replySpy).not.toHaveBeenCalled();
   expect(apiCalls).not.toHaveBeenCalled();
   await expect(
@@ -221,23 +217,16 @@ it("enforces sender identity for ordinary senderless messages", async () => {
 });
 
 it("inherits named-account group access and composes exact-topic overrides on wildcard scope", async () => {
-  const nonForumChat = {
-    id: -10042002,
-    type: "supergroup",
-    title: "Non-forum group",
-  } as const;
+  const nonForumChat = { ...groupChat, id: -10042002, is_forum: undefined };
+  const groupAccess = { allowFrom: ["accessGroup:operators"], requireMention: false };
   const bot = await configuredBot(
     {
       groupPolicy: "allowlist",
       groupAllowFrom: ["99999"],
       groups: {
-        [String(nonForumChat.id)]: {
-          allowFrom: ["accessGroup:operators"],
-          requireMention: false,
-        },
+        [String(nonForumChat.id)]: groupAccess,
         [String(groupChat.id)]: {
-          allowFrom: ["accessGroup:operators"],
-          requireMention: false,
+          ...groupAccess,
           skills: ["group-skill"],
           systemPrompt: "Group prompt",
           topics: {
@@ -268,40 +257,25 @@ it("inherits named-account group access and composes exact-topic overrides on wi
     text: "group request",
   };
   apiCalls.mockClear();
-  await bot.handleUpdate({ update_id: 2010, message });
-  await bot.handleUpdate({
-    update_id: 2011,
-    message: {
-      ...message,
-      message_id: 211,
-      chat: groupChat,
-      from: { ...from, id: 42002 },
-      message_thread_id: 77,
-      is_topic_message: true,
-    },
+  const topicRequest = (threadId: number) => ({
+    ...message,
+    message_id: 213 + threadId,
+    chat: groupChat,
+    from: { ...from, id: 42002 },
+    message_thread_id: threadId,
+    is_topic_message: true,
   });
+  await handleMessage(bot, 2010, message);
+  await handleMessage(bot, 2011, { ...topicRequest(77), message_id: 211 });
   expect(harness.replySpy).not.toHaveBeenCalled();
   expect(
     apiCalls.mock.calls.filter(
       ([method]) => !["getChat", "setMyCommands", "deleteMyCommands"].includes(method),
     ),
   ).toEqual([]);
-  await bot.handleUpdate({
-    update_id: 2012,
-    message: { ...message, message_id: 212, from },
-  });
+  await handleMessage(bot, 2012, { ...message, message_id: 212, from });
   for (const threadId of [88, 99]) {
-    await bot.handleUpdate({
-      update_id: 2013 + threadId,
-      message: {
-        ...message,
-        message_id: 213 + threadId,
-        chat: groupChat,
-        from: { ...from, id: 42002 },
-        message_thread_id: threadId,
-        is_topic_message: true,
-      },
-    });
+    await handleMessage(bot, 2013 + threadId, topicRequest(threadId));
   }
   expect(harness.replySpy.mock.calls.map(([ctx]) => [ctx.SessionKey, ctx.RawBody])).toEqual([
     ["agent:main:telegram:group:-10042002", "group request"],
@@ -317,8 +291,7 @@ it("inherits named-account group access and composes exact-topic overrides on wi
 it("dispatches registered reaction updates to the routed event queue", async () => {
   resetSystemEventsForTest();
   const bot = await configuredBot({
-    dmPolicy: "open",
-    allowFrom: ["*"],
+    ...openDm,
     reactionNotifications: "all",
   });
   try {
@@ -356,15 +329,12 @@ it("handles the overlapping migration filter once without starting an ordinary t
   const persist = vi.spyOn(configMutation, "mutateConfigFile").mockResolvedValue({} as never);
   try {
     const bot = await createBot(false, true, config);
-    await bot.handleUpdate({
-      update_id: 2300,
-      message: {
-        message_id: 1,
-        date: 1736380800,
-        chat: { id: -1001, type: "group", title: "Old group" },
-        migrate_to_chat_id: -1002,
-        from,
-      },
+    await handleMessage(bot, 2300, {
+      message_id: 1,
+      date: 1736380800,
+      chat: { id: -1001, type: "group", title: "Old group" },
+      migrate_to_chat_id: -1002,
+      from,
     });
     expect(config.channels?.telegram?.groups).toEqual({
       "-1002": { requireMention: false, systemPrompt: "Keep this room" },
@@ -397,8 +367,7 @@ it("re-answers a durable callback after a new bot loses the prior admission stat
   const duplicate = startTelegramCallbackQueryAnswer(restarted, callbackId, false);
   try {
     expect(apiPayloads("answerCallbackQuery")).toHaveLength(1);
-    expect(answer).toHaveBeenCalledOnce();
-    expect(answer).toHaveBeenCalledWith(callbackId);
+    expect(answer.mock.calls).toEqual([[callbackId]]);
   } finally {
     pending.resolve(true);
     await Promise.all([replay, duplicate]);
@@ -409,17 +378,17 @@ it("re-answers a durable callback after a new bot loses the prior admission stat
 it("reloads native command routing bindings without recreating the registered bot", async () => {
   const config: OpenClawConfig = {
     commands: { native: true },
-    channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    channels: { telegram: { ...openDm } },
     agents: { entries: { "agent-a": {}, "agent-b": {} } },
     bindings: [{ agentId: "agent-a", match: { channel: "telegram", accountId: "default" } }],
   };
   const bot = await createBot(true, true, config);
-  await bot.handleUpdate({ update_id: 2500, message: commandMessage("/status") });
+  await handleMessage(bot, 2500, commandMessage("/status"));
   publishTelegramTestConfig({
     ...config,
     bindings: [{ agentId: "agent-b", match: { channel: "telegram", accountId: "default" } }],
   });
-  await bot.handleUpdate({ update_id: 2501, message: commandMessage("/status") });
+  await handleMessage(bot, 2501, commandMessage("/status"));
   expect(harness.replySpy.mock.calls.map(([ctx]) => ctx.SessionKey)).toEqual([
     "agent:agent-a:main",
     "agent:agent-b:main",
@@ -427,27 +396,22 @@ it("reloads native command routing bindings without recreating the registered bo
 });
 
 it.each([
-  {
-    provider: "openai",
-    model: "gpt-5",
-    runtime: "codex",
-    receipt: "Compatible auth profile retained.",
-  },
-  {
-    provider: "amazon-bedrock",
-    model: "us.anthropic.claude-3-5-sonnet-20240620-v1:0",
-    runtime: "openclaw",
-    receipt: "Incompatible auth profile cleared.",
-  },
+  ["openai", "gpt-5", "codex", "Compatible auth profile retained."],
+  [
+    "amazon-bedrock",
+    "us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+    "openclaw",
+    "Incompatible auth profile cleared.",
+  ],
 ])(
-  "resets a registered $provider default callback and reports compatibility without credentials",
-  async ({ provider, model, runtime, receipt }) => {
+  "resets a registered %s default callback and reports compatibility without credentials",
+  async (provider, model, runtime, receipt) => {
     const storePath = resolveStorePath(undefined, { agentId: "main" });
     const config: OpenClawConfig = {
       agents: { defaults: { model: `${provider}/${model}` } },
       auth: { profiles: { "team:prod": { provider: "openai", mode: "api_key" } } },
       session: { store: storePath },
-      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+      channels: { telegram: { ...openDm } },
     };
     await upsertSessionEntry({
       storePath,
@@ -515,19 +479,14 @@ it("labels an enabled first DM topic but not an established session with bounded
   try {
     const bot = await configuredBot(
       {
-        dmPolicy: "open",
-        allowFrom: ["*"],
+        ...openUnstreamed,
         autoTopicLabel: true,
         direct: { [String(chat.id)]: { autoTopicLabel: true } },
-        streaming: { mode: "off" },
       },
       {},
       true,
     );
-    await bot.handleUpdate({
-      update_id: 2700,
-      message: topicMessage(`${bounded}\u{1F600}tail`),
-    });
+    await handleMessage(bot, 2700, topicMessage(`${bounded}\u{1F600}tail`));
     await renamed.promise;
     expect(generated.mock.calls[0]?.[0].userMessage).toBe(bounded);
     expect(apiPayloads("editForumTopic")).toEqual([
@@ -538,19 +497,14 @@ it("labels an enabled first DM topic but not an established session with bounded
       }),
     ]);
     const sessionKey = harness.replySpy.mock.calls[0]?.[0].SessionKey;
-    if (!sessionKey) {
-      throw new Error("Expected the first topic turn to reach the model");
-    }
+    assert(sessionKey, "Expected the first topic turn to reach the model");
     // The controlled model substitutes for the engine that persists first-turn completion.
     await upsertSessionEntry({
       storePath: resolveStorePath(undefined, { agentId: "main" }),
       sessionKey,
       entry: { sessionId: "delivered-dm-topic", updatedAt: Date.now(), systemSent: true },
     });
-    await bot.handleUpdate({
-      update_id: 2701,
-      message: topicMessage("Continue the same topic"),
-    });
+    await handleMessage(bot, 2701, topicMessage("Continue the same topic"));
     expect(generated).toHaveBeenCalledTimes(1);
     expect(apiPayloads("sendMessage")).toHaveLength(2);
   } finally {
@@ -604,7 +558,7 @@ it("commits a first sticker description before model admission and never describ
         },
       },
     },
-    channels: { telegram: { dmPolicy: "open", allowFrom: ["*"], streaming: { mode: "off" } } },
+    channels: { telegram: { ...openUnstreamed } },
   };
   const sticker = {
     file_id: "first-sticker-file",
@@ -639,7 +593,7 @@ it("commits a first sticker description before model admission and never describ
   try {
     const bot = await createBot(false, true, cfg);
     // Durable ingress dispatches accepted updates outside the HTTP request deadline.
-    const receiving = bot.handleUpdate({ update_id: 2800, message });
+    const receiving = handleMessage(bot, 2800, message);
     await Promise.race([
       describeStarted.promise,
       receiving.then(() => {

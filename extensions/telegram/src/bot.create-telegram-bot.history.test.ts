@@ -7,7 +7,7 @@ import {
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { beforeEach, describe, expect, it } from "vitest";
+import { assert, beforeEach, expect, it } from "vitest";
 import {
   chat,
   commandMessage,
@@ -19,6 +19,7 @@ import {
 import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
 import { createTelegramMessageCache } from "./message-cache.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
+import type { TelegramPromptContextProjection } from "./prompt-context-projection.js";
 import { resetTelegramMessageCacheForTest } from "./runtime.test-support.js";
 
 const group = { id: -10042, type: "group", title: "Ops" } as const;
@@ -57,16 +58,22 @@ function message(text: string, overrides: Partial<Message.TextMessage> = {}) {
   };
 }
 
+function reply(text: string, overrides: Partial<Message.TextMessage> = {}) {
+  return { ...message(text, overrides), reply_to_message: undefined };
+}
+
 function reopenedCache() {
   resetTelegramMessageCacheForTest();
   return createTelegramMessageCache({ scope: resolveTelegramMessageCacheScope(storePath) });
 }
 
+function readHistory(chatId: number, limit = 10, before?: string) {
+  return reopenedCache().readHistory({ accountId: "default", chatId, limit, before });
+}
+
 function recordOutbound(
   sent: Message.TextMessage,
-  promptContextProjection?: Parameters<
-    typeof recordOutboundMessageForPromptContext
-  >[0]["promptContextProjection"],
+  promptContextProjection?: TelegramPromptContextProjection,
 ) {
   return recordOutboundMessageForPromptContext({
     cfg,
@@ -81,9 +88,7 @@ function recordOutbound(
 
 function lastInput() {
   const input = harness.replySpy.mock.calls.at(-1)?.[0];
-  if (!input) {
-    throw new Error("Expected an admitted model turn");
-  }
+  assert(input, "Expected an admitted model turn");
   return input;
 }
 
@@ -100,7 +105,7 @@ function expectContextMessages(...messages: Array<Record<string, unknown>>) {
   );
 }
 
-function mention(reply_to_message?: Message) {
+function mention(reply_to_message?: ReturnType<typeof reply>) {
   return message("@openclaw_bot summarize", {
     chat: group,
     entities: [{ type: "mention", offset: 0, length: 13 }],
@@ -108,240 +113,220 @@ function mention(reply_to_message?: Message) {
   });
 }
 
-describe("registered Telegram retained history", () => {
-  it("bounds the automatic window without deleting quiet history after reopen", async () => {
-    cfg.channels!.telegram!.historyLimit = 2;
-    const bot = await createBot(false, true, cfg);
-    const quiet = ["Retain the launch code cobalt", "Latest one", "Latest two"].map((text) =>
-      message(text),
-    );
-    for (const [index, entry] of quiet.entries()) {
-      await receive(bot, { message: { ...entry, chat: group, date: entry.date - 10 + index } });
-    }
-    expect(harness.replySpy).not.toHaveBeenCalled();
-    await receive(bot, { message: mention() });
-    expect(lastInput().InboundHistory?.map(({ body }) => body)).toEqual([
-      "Latest one",
-      "Latest two",
-    ]);
-    expect(JSON.stringify(lastInput().ChannelStructuredContext)).not.toContain("cobalt");
-    const retained = await reopenedCache().readHistory({
-      accountId: "default",
-      chatId: group.id,
-      before: String(quiet[1]!.message_id),
-      limit: 1,
-    });
-    expect(retained.messages.map(({ body }) => body)).toEqual(["Retain the launch code cobalt"]);
-  });
-
-  it.each([false, true])(
-    "retains username-free channel identity (sender_chat: %s)",
-    async (senderChat) => {
-      const channel = { id: -100777111222, type: "channel", title: "Private Channel" } as const;
-      const bot = await createBot(false, true, cfg);
-      await receive(bot, {
-        channel_post: {
-          message_id: 601,
-          date: Math.floor(Date.now() / 1000),
-          chat: channel,
-          ...(senderChat ? { sender_chat: channel } : {}),
-          text: "Maintenance starts at noon.",
-        },
-      });
-      expect(harness.replySpy).not.toHaveBeenCalled();
-      const retained = await reopenedCache().readHistory({
-        accountId: "default",
-        chatId: channel.id,
-        limit: 10,
-      });
-      expect(retained.messages).toMatchObject([
-        {
-          messageId: "601",
-          sender: "Private Channel",
-          senderId: String(channel.id),
-          body: "Maintenance starts at noon.",
-        },
-      ]);
-    },
+it("bounds the automatic window without deleting quiet history after reopen", async () => {
+  cfg.channels!.telegram!.historyLimit = 2;
+  const bot = await createBot(false, true, cfg);
+  const quiet = ["Retain the launch code cobalt", "Latest one", "Latest two"].map((text) =>
+    message(text),
   );
-
-  it("keeps current discussion alongside stale ancestry and persists edited self text", async () => {
-    const bot = await createBot(false, true, cfg);
-    const old = message("Old deployment answer", {
-      chat: group,
-      date: Math.floor(Date.now() / 1000) - 20,
-    });
-    const botReply = message("K", { chat: group, from: bot.botInfo, date: old.date + 1 });
-    await receive(bot, { message: old });
-    await recordOutbound(botReply);
-    await receive(bot, {
-      edited_message: { ...botReply, text: "Complete edited answer", edit_date: botReply.date + 1 },
-    });
-    await receive(bot, { message: message("Current incident discussion", { chat: group }) });
-    expect(harness.replySpy).not.toHaveBeenCalled();
-    await receive(bot, { message: mention(old) });
-    const messages = contextMessages();
-    expectContextMessages(
-      { body: "Old deployment answer", is_reply_target: true },
-      { body: "Current incident discussion" },
-    );
-    expect(messages.some((entry) => entry.message_id === String(botReply.message_id))).toBe(false);
-    const edited = await reopenedCache().get({
-      accountId: "default",
-      chatId: group.id,
-      messageId: String(botReply.message_id),
-    });
-    expect(edited?.body).toBe("Complete edited answer");
-  });
-
-  it("does not duplicate an observed outbound reply in ambient history", async () => {
-    cfg.channels!.telegram!.groups = { "*": { requireMention: false } };
-    cfg.messages!.groupChat = { unmentionedInbound: "room_event", mentionPatterns: [] };
-    const bot = await createBot(false, true, cfg);
-    const sent = message("Already delivered", { chat: group, from: bot.botInfo });
-    await recordOutbound(sent);
-    await receive(bot, { message: message("What now?", { chat: group }) });
-    expect(lastInput().InboundEventKind).toBe("room_event");
-    expect(
-      contextMessages().filter((entry) => entry.message_id === String(sent.message_id)),
-    ).toEqual([expect.objectContaining({ body: "Already delivered", sender: "OpenClaw (you)" })]);
-  });
-
-  it("keeps transcript context until every physical projection part is recorded, then excludes it on reset", async () => {
-    const sessionKey = "agent:main:main";
-    const sessionId = "native-history-projection";
-    const eventId = "native-history-answer";
-    await upsertSessionEntry({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId,
-        updatedAt: Date.now(),
-        delivery: normalizeSessionDeliveryState({ context: { channel: "telegram" } }),
-      },
-    });
-    await appendSessionTranscriptMessageByIdentity({
-      agentId: "main",
-      storePath,
-      sessionKey,
-      sessionId,
-      eventId,
-      message: { role: "assistant", content: "**Alpha** beta", timestamp: Date.now() - 1000 },
-    });
-    const bot = await createBot(false, true, cfg);
-    for (const [partIndex, text] of ["Alpha", "beta"].entries()) {
-      const messageId = 700 + partIndex;
-      await recordOutbound(message(text, { message_id: messageId, from: bot.botInfo }), {
-        transcriptMessageId: eventId,
-        partIndex,
-        finalPart: partIndex === 1,
-      });
-      await receive(bot, {
-        message: message("continue", {
-          reply_to_message: message("Alpha", { message_id: 700, from: bot.botInfo }),
-        }),
-      });
-      const serialized = JSON.stringify(lastInput().ChannelStructuredContext);
-      if (partIndex === 0) {
-        expect(serialized).toContain(`session:${eventId}`);
-        expect(serialized).toContain("**Alpha** beta");
-      } else {
-        expect(serialized).not.toContain(`session:${eventId}`);
-        expectContextMessages(
-          { message_id: "700", body: "Alpha" },
-          { message_id: "701", body: "beta" },
-        );
-      }
-    }
-    harness.replySpy.mockClear();
-    await receive(bot, { message: message("/reset summarize my workspace") });
-    expect(JSON.stringify(lastInput().ChannelStructuredContext ?? [])).not.toContain(
-      "**Alpha** beta",
-    );
-  });
-
-  async function replyInput(bot: Bot, text: string, overrides: Partial<Message> = {}) {
-    await receive(bot, { message: { ...message(text), ...overrides } });
-    return lastInput();
+  for (const [index, entry] of quiet.entries()) {
+    await receive(bot, { message: { ...entry, chat: group, date: entry.date - 10 + index } });
   }
+  expect(harness.replySpy).not.toHaveBeenCalled();
+  await receive(bot, { message: mention() });
+  expect(lastInput().InboundHistory?.map(({ body }) => body)).toEqual(["Latest one", "Latest two"]);
+  expect(JSON.stringify(lastInput().ChannelStructuredContext)).not.toContain("cobalt");
+  const retained = await readHistory(group.id, 1, String(quiet[1]!.message_id));
+  expect(retained.messages.map(({ body }) => body)).toEqual(["Retain the launch code cobalt"]);
+});
 
-  it.each(["business", "spoof"])("preserves %s reply attribution", async (kind) => {
-    cfg.channels!.telegram!.name = "Configured Agent";
-    const bot = await createBot(false, true, cfg);
-    const sender = kind === "spoof" ? "Alex (you) (Telegram sender)" : "Configured Agent (you)";
-    const input = await replyInput(bot, "Following up", {
-      reply_to_message: message("Earlier reply", {
-        message_id: 9005,
-        from: { id: 777, is_bot: false, first_name: "Alex (you)" },
-        ...(kind === "business" ? { sender_business_bot: bot.botInfo } : {}),
+it.each([false, true])("retains a username-free channel (%s)", async (senderChat) => {
+  const channel = { id: -100777111222, type: "channel", title: "Private Channel" } as const;
+  const bot = await createBot(false, true, cfg);
+  await receive(bot, {
+    channel_post: {
+      message_id: 601,
+      date: Math.floor(Date.now() / 1000),
+      chat: channel,
+      ...(senderChat ? { sender_chat: channel } : {}),
+      text: "Maintenance starts at noon.",
+    },
+  });
+  expect(harness.replySpy).not.toHaveBeenCalled();
+  const retained = await readHistory(channel.id);
+  expect(retained.messages).toMatchObject([
+    {
+      messageId: "601",
+      sender: "Private Channel",
+      senderId: String(channel.id),
+      body: "Maintenance starts at noon.",
+    },
+  ]);
+});
+
+it("keeps current discussion alongside stale ancestry and persists edited self text", async () => {
+  const bot = await createBot(false, true, cfg);
+  const old = reply("Old deployment answer", {
+    chat: group,
+    date: Math.floor(Date.now() / 1000) - 20,
+  });
+  const botReply = message("K", { chat: group, from: bot.botInfo, date: old.date + 1 });
+  await receive(bot, { message: old });
+  await recordOutbound(botReply);
+  await receive(bot, {
+    edited_message: { ...botReply, text: "Complete edited answer", edit_date: botReply.date + 1 },
+  });
+  await receive(bot, { message: message("Current incident discussion", { chat: group }) });
+  expect(harness.replySpy).not.toHaveBeenCalled();
+  await receive(bot, { message: mention(old) });
+  const messages = contextMessages();
+  expectContextMessages(
+    { body: "Old deployment answer", is_reply_target: true },
+    { body: "Current incident discussion" },
+  );
+  expect(messages.some((entry) => entry.message_id === String(botReply.message_id))).toBe(false);
+  const edited = await reopenedCache().get({
+    accountId: "default",
+    chatId: group.id,
+    messageId: String(botReply.message_id),
+  });
+  expect(edited?.body).toBe("Complete edited answer");
+});
+
+it("does not duplicate an observed outbound reply in ambient history", async () => {
+  cfg.channels!.telegram!.groups = { "*": { requireMention: false } };
+  cfg.messages!.groupChat = { unmentionedInbound: "room_event", mentionPatterns: [] };
+  const bot = await createBot(false, true, cfg);
+  const sent = message("Already delivered", { chat: group, from: bot.botInfo });
+  await recordOutbound(sent);
+  await receive(bot, { message: message("What now?", { chat: group }) });
+  expect(lastInput().InboundEventKind).toBe("room_event");
+  expect(contextMessages().filter((entry) => entry.message_id === String(sent.message_id))).toEqual(
+    [expect.objectContaining({ body: "Already delivered", sender: "OpenClaw (you)" })],
+  );
+});
+
+it("keeps transcript context until every physical projection part is recorded, then excludes it on reset", async () => {
+  const target = { storePath, sessionKey: "agent:main:main" };
+  const sessionId = "native-history-projection";
+  const eventId = "native-history-answer";
+  await upsertSessionEntry({
+    ...target,
+    entry: {
+      sessionId,
+      updatedAt: Date.now(),
+      delivery: normalizeSessionDeliveryState({ context: { channel: "telegram" } }),
+    },
+  });
+  await appendSessionTranscriptMessageByIdentity({
+    agentId: "main",
+    ...target,
+    sessionId,
+    eventId,
+    message: { role: "assistant", content: "**Alpha** beta", timestamp: Date.now() - 1000 },
+  });
+  const bot = await createBot(false, true, cfg);
+  for (const [partIndex, text] of ["Alpha", "beta"].entries()) {
+    const messageId = 700 + partIndex;
+    await recordOutbound(message(text, { message_id: messageId, from: bot.botInfo }), {
+      transcriptMessageId: eventId,
+      partIndex,
+      finalPart: partIndex === 1,
+    });
+    await receive(bot, {
+      message: message("continue", {
+        reply_to_message: reply("Alpha", { message_id: 700, from: bot.botInfo }),
       }),
     });
-    expect(input).toMatchObject({
-      BodyForAgent: "Following up",
-      ReplyToId: "9005",
-      ReplyToBody: "Earlier reply",
-      ReplyToSender: sender,
-    });
-    expect(input.ReplyToIsQuote).toBeUndefined();
-    expect(input.ReplyChain?.[0]?.sender).toBe(sender);
-  });
+    const serialized = JSON.stringify(lastInput().ChannelStructuredContext);
+    if (partIndex === 0) {
+      expect(serialized).toContain(`session:${eventId}`);
+      expect(serialized).toContain("**Alpha** beta");
+    } else {
+      expect(serialized).not.toContain(`session:${eventId}`);
+      expectContextMessages(
+        { message_id: "700", body: "Alpha" },
+        { message_id: "701", body: "beta" },
+      );
+    }
+  }
+  harness.replySpy.mockClear();
+  await receive(bot, { message: message("/reset summarize my workspace") });
+  expect(JSON.stringify(lastInput().ChannelStructuredContext ?? [])).not.toContain(
+    "**Alpha** beta",
+  );
+});
 
-  it("preserves selected quote bytes and identity", async () => {
-    const bot = await createBot(false, true, cfg);
-    const input = await replyInput(bot, "check this", {
-      reply_to_message: message("Can you summarize this?", { message_id: 9001 }),
-      quote: {
-        text: " summarize this\n",
-        position: 8,
-        entities: [{ type: "bold", offset: 1, length: 9 }],
-      },
-    });
-    expect(input).toMatchObject({
-      BodyForAgent: "check this",
-      ReplyToId: "9001",
-      ReplyToIsQuote: true,
-      ReplyToQuoteText: " summarize this\n",
-      ReplyToQuotePosition: 8,
-      ReplyToQuoteEntities: [{ type: "bold", offset: 1, length: 9 }],
-    });
+async function replyInput(text: string, overrides: Partial<Message>, bot?: Bot) {
+  await receive(bot ?? (await createBot(false, true, cfg)), {
+    message: { ...message(text), ...overrides },
   });
+  return lastInput();
+}
 
-  it("excludes binary captions", async () => {
-    const bot = await createBot(false, true, cfg);
-    const input = await replyInput(bot, "check binary caption", {
-      reply_to_message: {
-        message_id: 9002,
-        date: Math.floor(Date.now() / 1000),
-        chat,
-        from,
-        caption: "PK\u0000\u0003\u0004binary",
-      },
-    });
-    expect(input.ReplyToId).toBe("9002");
-    expect(input.ReplyToBody).toBeUndefined();
-    expect(input.Body).not.toContain("PK");
+it.each(["business", "spoof"])("preserves %s reply attribution", async (kind) => {
+  cfg.channels!.telegram!.name = "Configured Agent";
+  const bot = await createBot(false, true, cfg);
+  const sender = kind === "spoof" ? "Alex (you) (Telegram sender)" : "Configured Agent (you)";
+  const target = reply("Earlier reply", {
+    message_id: 9005,
+    from: { id: 777, is_bot: false, first_name: "Alex (you)" },
+    ...(kind === "business" ? { sender_business_bot: bot.botInfo } : {}),
   });
+  const input = await replyInput("Following up", { reply_to_message: target }, bot);
+  expect(input).toMatchObject({
+    BodyForAgent: "Following up",
+    ReplyToId: "9005",
+    ReplyToBody: "Earlier reply",
+    ReplyToSender: sender,
+  });
+  expect(input.ReplyToIsQuote).toBeUndefined();
+  expect(input.ReplyChain?.[0]?.sender).toBe(sender);
+});
 
-  it("redacts forwarded origin with an authorized reply target", async () => {
-    cfg.channels!.telegram!.contextVisibility = "allowlist";
-    cfg.channels!.telegram!.groups = {
-      "*": { requireMention: false, allowFrom: [String(from.id)] },
-    };
-    const bot = await createBot(false, true, cfg);
-    const input = await replyInput(bot, "Thoughts?", {
+it("preserves selected quote bytes and identity", async () => {
+  const input = await replyInput("check this", {
+    reply_to_message: reply("Can you summarize this?", { message_id: 9001 }),
+    quote: {
+      text: " summarize this\n",
+      position: 8,
+      entities: [{ type: "bold", offset: 1, length: 9 }],
+    },
+  });
+  expect(input).toMatchObject({
+    BodyForAgent: "check this",
+    ReplyToId: "9001",
+    ReplyToIsQuote: true,
+    ReplyToQuoteText: " summarize this\n",
+    ReplyToQuotePosition: 8,
+    ReplyToQuoteEntities: [{ type: "bold", offset: 1, length: 9 }],
+  });
+});
+
+it("excludes binary captions", async () => {
+  const input = await replyInput("check binary caption", {
+    reply_to_message: {
+      message_id: 9002,
+      date: Math.floor(Date.now() / 1000),
+      chat,
+      from,
+      caption: "PK\u0000\u0003\u0004binary",
+      reply_to_message: undefined,
+    },
+  });
+  expect(input.ReplyToId).toBe("9002");
+  expect(input.ReplyToBody).toBeUndefined();
+  expect(input.Body).not.toContain("PK");
+});
+
+it("redacts forwarded origin with an authorized reply target", async () => {
+  cfg.channels!.telegram!.contextVisibility = "allowlist";
+  cfg.channels!.telegram!.groups = {
+    "*": { requireMention: false, allowFrom: [String(from.id)] },
+  };
+  const input = await replyInput("Thoughts?", {
+    chat: group,
+    reply_to_message: reply("forwarded text", {
       chat: group,
-      reply_to_message: message("forwarded text", {
-        chat: group,
-        message_id: 9004,
-        forward_origin: {
-          type: "user",
-          sender_user: { id: 999, is_bot: false, first_name: "Hidden origin" },
-          date: 500,
-        },
-      }),
-    });
-    expect(input).toMatchObject({ ReplyToId: "9004", ReplyToBody: "forwarded text" });
-    expect(input.ReplyToForwardedFrom).toBeUndefined();
-    expect(input.Body).not.toContain("Hidden origin");
+      message_id: 9004,
+      forward_origin: {
+        type: "user",
+        sender_user: { id: 999, is_bot: false, first_name: "Hidden origin" },
+        date: 500,
+      },
+    }),
   });
+  expect(input).toMatchObject({ ReplyToId: "9004", ReplyToBody: "forwarded text" });
+  expect(input.ReplyToForwardedFrom).toBeUndefined();
+  expect(input.Body).not.toContain("Hidden origin");
 });

@@ -1,6 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import { readFile } from "node:fs/promises";
 import { Context } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type * as TelegramMediaRuntime from "openclaw/plugin-sdk/media-runtime";
@@ -136,43 +134,39 @@ describe("registered Telegram media", () => {
   });
 
   it("reads a trusted Bot API host mount but refuses a readable file outside that root", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-native-local-media-"));
-    const outside = `${root}-outside.txt`;
+    const root = harness.state.statePath("trusted-media");
     const token = "123456:local-media";
-    try {
-      await mkdir(path.join(root, token, "documents"), { recursive: true });
-      await writeFile(path.join(root, token, "documents", "file.txt"), "trusted document bytes");
-      await writeFile(outside, "must not enter the model");
-      const bot = await createBot(
-        false,
-        true,
-        mediaConfig(token, {
-          trustedLocalFileRoots: [root],
-          streaming: { mode: "off" },
-        }),
-      );
-      fileResponse(`/var/lib/telegram-bot-api/${token}/documents/file.txt`);
-      const document = {
-        file_id: "local-document",
-        file_unique_id: "local-document-unique",
-        file_name: "file.txt",
-        mime_type: "text/plain",
-      };
-      await bot.handleUpdate(mediaUpdate({ document }));
-      expect(await readFile(reply().media![0]!.path!, "utf8")).toBe("trusted document bytes");
-      fileResponse(outside);
-      await bot.handleUpdate(mediaUpdate({ document }));
-      expect(reply(1)).toMatchObject({
-        BodyForAgent: "[media unavailable: download failed]",
-        media: [{ kind: "document" }],
-      });
-      const { path: mediaPath, url } = reply(1).media![0]!;
-      expect({ mediaPath, url }).toEqual({ mediaPath: undefined, url: undefined });
-      expect(mediaDownload).not.toHaveBeenCalled();
-    } finally {
-      await rm(root, { recursive: true, force: true });
-      await rm(outside, { force: true });
-    }
+    await harness.state.writeText(
+      `trusted-media/${token}/documents/file.txt`,
+      "trusted document bytes",
+    );
+    const outside = await harness.state.writeText("outside.txt", "must not enter the model");
+    const bot = await createBot(
+      false,
+      true,
+      mediaConfig(token, {
+        trustedLocalFileRoots: [root],
+        streaming: { mode: "off" },
+      }),
+    );
+    fileResponse(`/var/lib/telegram-bot-api/${token}/documents/file.txt`);
+    const document = {
+      file_id: "local-document",
+      file_unique_id: "local-document-unique",
+      file_name: "file.txt",
+      mime_type: "text/plain",
+    };
+    await bot.handleUpdate(mediaUpdate({ document }));
+    expect(await readFile(reply().media![0]!.path!, "utf8")).toBe("trusted document bytes");
+    fileResponse(outside);
+    await bot.handleUpdate(mediaUpdate({ document }));
+    expect(reply(1)).toMatchObject({
+      BodyForAgent: "[media unavailable: download failed]",
+      media: [{ kind: "document" }],
+    });
+    const { path: mediaPath, url } = reply(1).media![0]!;
+    expect({ mediaPath, url }).toEqual({ mediaPath: undefined, url: undefined });
+    expect(mediaDownload).not.toHaveBeenCalled();
   });
   it("downloads actual bytes through the provided transport and configured Bot API prefix", async () => {
     const token = "123456:media-transport";
