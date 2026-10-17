@@ -6,7 +6,7 @@ import type {
   TerminalPanelAction,
   TerminalPanelError,
   TerminalPanelSessionTab,
-  TerminalPanelSessionControllerState,
+  TerminalPanelSessionState,
 } from "./terminal-panel-session-types.ts";
 import {
   loadPersistedTerminalActions,
@@ -39,7 +39,7 @@ export type TerminalIntentHost = {
   cancelledRestoreCompleted: () => void;
   ensureInitial: (agentId: string | null, cancelIntent: () => void) => Promise<boolean>;
   hasTabs: () => boolean;
-  requestUpdate: () => void;
+  publish: () => void;
   setBooting: (booting: boolean) => void;
   timeoutMs: () => number;
   showTimeout: () => void;
@@ -53,27 +53,23 @@ export type TerminalIntentHost = {
  * over one storage key drop each other's intents and run the same open twice.
  * Hosts bind while connected; the most recent binding executes.
  */
-export class TerminalIntentQueue {
-  private actions: QueuedTerminalAction[] = [];
-  private refreshPending = false;
-  private refreshTimedOut = false;
-  private refreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private drainScheduled = false;
-  private hosts: TerminalIntentHost[] = [];
-  private fenceHost: TerminalIntentHost | null = null;
-  private fenceGeneration = 0;
-  private timeoutHost: TerminalIntentHost | null = null;
-
-  constructor(private readonly persistent = true) {
-    this.rehydrate();
-  }
-
+export type TerminalIntentQueue = ReturnType<typeof createTerminalIntentQueue>;
+export function createTerminalIntentQueue(persistent = true) {
+  let ownedActions: QueuedTerminalAction[] = [];
+  let ownedRefreshPending = false;
+  let ownedRefreshTimedOut = false;
+  let ownedRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  let ownedDrainScheduled = false;
+  let ownedHosts: TerminalIntentHost[] = [];
+  let ownedFenceHost: TerminalIntentHost | null = null;
+  let ownedFenceGeneration = 0;
+  let ownedTimeoutHost: TerminalIntentHost | null = null;
   /**
    * Mirrors the persisted record whenever no panel is bound, so a document with
    * its terminals unmounted resumes exactly like a freshly loaded one.
    */
-  private rehydrate(): void {
-    if (!this.persistent || this.actions.some((action) => action.kind === "handoff")) {
+  function rehydrate(): void {
+    if (!persistent || ownedActions.some((action) => action.kind === "handoff")) {
       return;
     }
     const persisted = loadPersistedTerminalActions();
@@ -82,16 +78,16 @@ export class TerminalIntentQueue {
     const admitted = persisted.some((action) => action.kind !== "restore")
       ? persisted.filter((action) => action.kind !== "restore")
       : persisted;
-    this.actions = admitted;
+    ownedActions = admitted;
     if (admitted.length !== persisted.length) {
-      this.persist();
+      persist();
     }
   }
 
-  private persist(): void {
-    if (this.persistent) {
+  function persist(): void {
+    if (persistent) {
       persistTerminalActions(
-        this.actions.flatMap((action): TerminalPanelAction[] => {
+        ownedActions.flatMap((action): TerminalPanelAction[] => {
           if (action.kind !== "handoff") {
             return [action];
           }
@@ -112,228 +108,29 @@ export class TerminalIntentQueue {
     }
   }
 
-  private get host(): TerminalIntentHost | null {
-    return this.hosts.at(-1) ?? null;
+  function readHost(): TerminalIntentHost | null {
+    return ownedHosts.at(-1) ?? null;
   }
 
-  bindHost(host: TerminalIntentHost): void {
-    if (this.hosts.length === 0) {
-      this.rehydrate();
-    }
-    this.hosts = [...this.hosts.filter((bound) => bound !== host), host];
-    void this.drain();
-  }
-
-  releaseHost(host: TerminalIntentHost): void {
-    this.hosts = this.hosts.filter((bound) => bound !== host);
-    // A fence outlives its opener only as a deadlock: nothing else can release it.
-    if (this.fenceHost === host) {
-      this.resetLifecycle(host);
-    }
-    if (this.hosts.length === 0) {
-      this.clearRefreshTimer();
-      this.refreshTimedOut = false;
-      this.timeoutHost = null;
-      this.rehydrate();
-    }
-  }
-
-  get hasActions(): boolean {
-    return this.actions.length > 0;
-  }
-
-  get fenced(): boolean {
-    return this.refreshPending;
-  }
-
-  get waitingForRefresh(): boolean {
-    return this.refreshPending && !this.refreshTimedOut && this.actions.length > 0;
-  }
-
-  refreshBeforeReconnect(
-    host: TerminalIntentHost,
-    isConnected: () => boolean,
-    restore?: () => void,
-  ): void {
-    const generation = host.currentGeneration();
-    this.beginRefreshFence(host, generation);
-    restore?.();
-    const release = () => {
-      if (generation !== host.currentGeneration() || !isConnected()) {
-        return;
-      }
-      this.releaseRefreshFence(host);
-    };
-    void import("../../app/sw-refresh.runtime.ts")
-      .then(({ refreshControlUiServiceWorker }) => refreshControlUiServiceWorker())
-      .then((replacementActivated) => {
-        if (!replacementActivated) {
-          release();
-        }
-      }, release);
-  }
-
-  beginRefreshFence(host: TerminalIntentHost, generation: number): void {
-    this.refreshPending = true;
-    this.fenceHost = host;
-    this.fenceGeneration = generation;
-    this.clearRefreshFailure();
-    this.clearRefreshTimer();
-    this.armRefreshTimer();
-  }
-
-  releaseRefreshFence(host: TerminalIntentHost): void {
-    if (this.fenceHost !== host) {
-      return;
-    }
-    this.resetLifecycle(host);
-    void this.drain();
-  }
-
-  // Only the panel that opened the fence may drop it; another panel disposing
-  // its tabs must not unblock a refresh it knows nothing about.
-  resetLifecycle(host: TerminalIntentHost): void {
-    if (this.fenceHost !== null && this.fenceHost !== host) {
-      return;
-    }
-    this.clearRefreshTimer();
-    this.refreshPending = false;
-    this.fenceHost = null;
-    this.clearRefreshFailure();
-  }
-
-  canHandoff(source: Pick<TerminalPanelSessionControllerState, "booting" | "tabs">): boolean {
-    return (
-      !source.booting &&
-      !this.fenced &&
-      !this.hasActions &&
-      !source.tabs.some((tab) => tab.status === "connecting")
-    );
-  }
-
-  /** Transfers view ownership before the destination binds, active tab last. */
-  queueHandoff(
-    source: Pick<TerminalPanelSessionControllerState, "tabs" | "activeId" | "error">,
-    client: TerminalGatewayClient | null,
-  ): TerminalPanelSessionTab[] {
-    const tabs = source.tabs.toSorted(
-      (a, b) => Number(a.id === source.activeId) - Number(b.id === source.activeId),
-    );
-    this.discardRestoreActions();
-    this.actions.push(
-      ...tabs.map((tab, index): TerminalHandoff => ({
-        kind: "handoff",
-        tab,
-        client,
-        error: index === tabs.length - 1 ? source.error : null,
-      })),
-    );
-    this.persist();
-    // The queue owns retained emulators; only live views follow source teardown.
-    return source.tabs.filter((tab) => tab.status !== "exited");
-  }
-
-  async queue(
-    action: TerminalPanelAction,
-    options: { deferUntilHostChange?: boolean } = {},
-  ): Promise<void> {
-    let changed = action.kind !== "restore" && this.discardRestoreActions();
-    const explicitIntentPending = this.actions.some((pending) => pending.kind !== "restore");
-    const key = JSON.stringify(action);
-    if (
-      !(action.kind === "restore" && explicitIntentPending) &&
-      !this.actions.some((pending) => pending.kind !== "handoff" && JSON.stringify(pending) === key)
-    ) {
-      this.actions.push(action);
-      changed = true;
-    }
-    if (changed) {
-      this.persist();
-    }
-    // A session-route intent is persisted before its embedded panel mounts.
-    // The shell's bottom-only panel must not claim it in that gap; the next
-    // host binding drains it from the canonical document queue.
-    if (options.deferUntilHostChange) {
-      return;
-    }
-    this.armRefreshTimer();
-    const host = this.host;
-    if (this.refreshPending) {
-      host?.requestUpdate();
-    } else if (host && !host.hasTabs()) {
-      host.setBooting(true);
-    }
-    await this.drain();
-  }
-
-  async drain(): Promise<void> {
-    const host = this.host;
-    if (this.drainScheduled || this.actions.length === 0 || !host || !this.canRun(host)) {
-      return;
-    }
-    this.drainScheduled = true;
-    try {
-      await host.bootQueue.enqueue(async (isCurrent) => {
-        const action = this.actions[0];
-        if (!action || !isCurrent() || !this.canRun(host)) {
-          return;
-        }
-        const completed = await this.execute(host, action, () => this.retireAction(action));
-        if (!completed || !isCurrent()) {
-          return;
-        }
-        this.retireAction(action);
-        if (completed === "cancelled-restore" && this.host === host) {
-          host.cancelledRestoreCompleted();
-        }
-      });
-    } finally {
-      this.drainScheduled = false;
-      const current = this.host;
-      current?.requestUpdate();
-      if (this.actions.length > 0 && current && this.canRun(current)) {
-        void this.drain();
-      } else if (this.actions.length === 0 && current && !current.hasTabs()) {
-        current.setBooting(false);
-      }
-    }
-  }
-
-  private retireAction(action: QueuedTerminalAction): void {
-    const index = this.actions.indexOf(action);
+  function retireAction(action: QueuedTerminalAction): void {
+    const index = ownedActions.indexOf(action);
     if (index !== -1) {
-      this.actions.splice(index, 1);
-      this.persist();
+      ownedActions.splice(index, 1);
+      persist();
     }
   }
 
-  private discardRestoreActions(): boolean {
-    const count = this.actions.length;
-    this.actions = this.actions.filter((action) => action.kind !== "restore");
-    return count !== this.actions.length;
+  function discardRestoreActions(): boolean {
+    const count = ownedActions.length;
+    ownedActions = ownedActions.filter((action) => action.kind !== "restore");
+    return count !== ownedActions.length;
   }
 
-  // Closing a terminal drops the intents queued for it, but only the panel the
-  // operator is actually looking at may do that to the shared queue.
-  cancel(host: TerminalIntentHost): void {
-    if (this.host !== host) {
-      return;
-    }
-    for (const action of this.actions.splice(0)) {
-      if (action.kind === "handoff" && action.tab.status === "exited") {
-        disposeTerminalController(action.tab.controller, action.tab.host);
-      }
-    }
-    this.persist();
-    host.setBooting(false);
-    this.clearRefreshFailure();
+  function canRun(host: TerminalIntentHost): boolean {
+    return !ownedRefreshPending && host.canRun();
   }
 
-  private canRun(host: TerminalIntentHost): boolean {
-    return !this.refreshPending && host.canRun();
-  }
-
-  private async execute(
+  async function execute(
     host: TerminalIntentHost,
     action: QueuedTerminalAction,
     cancelIntent: () => void,
@@ -350,14 +147,14 @@ export class TerminalIntentQueue {
       if (tab.status === "exited") {
         // Publish ownership synchronously: closing the destination must never
         // dispose a view both as a pending handoff and as an adopted tab.
-        this.retireAction(action);
+        retireAction(action);
         host.present(tab);
       } else if (
         !(await host.attach(tab.gatewaySessionId, tab.agentOwned ?? false, cancelIntent))
       ) {
         return false;
       }
-      if (error && this.canRun(host) && generation === host.currentGeneration()) {
+      if (error && canRun(host) && generation === host.currentGeneration()) {
         host.showError(error.text);
       }
       return true;
@@ -371,7 +168,7 @@ export class TerminalIntentQueue {
     const userClosedTab = await host.reattach(action.kind === "restore" ? cancelIntent : undefined);
     // A second panel mounting mid-flight must not strand this action: the host
     // that started it is still connected, so it finishes what it began.
-    if (!this.canRun(host)) {
+    if (!canRun(host)) {
       return false;
     }
     return action.kind === "catalog"
@@ -381,51 +178,244 @@ export class TerminalIntentQueue {
         : host.ensureInitial(action.agentId, cancelIntent);
   }
 
-  private clearRefreshTimer(): void {
-    if (this.refreshTimer !== null) {
-      globalThis.clearTimeout(this.refreshTimer);
-      this.refreshTimer = null;
+  function clearRefreshTimer(): void {
+    if (ownedRefreshTimer !== null) {
+      globalThis.clearTimeout(ownedRefreshTimer);
+      ownedRefreshTimer = null;
     }
   }
 
-  private clearRefreshFailure(): void {
-    if (this.refreshTimedOut) {
+  function clearRefreshFailure(): void {
+    if (ownedRefreshTimedOut) {
       // The panel that surfaced the timeout owns the text that clears it.
-      this.timeoutHost?.clearTimeout();
-      this.timeoutHost = null;
-      this.refreshTimedOut = false;
+      ownedTimeoutHost?.clearTimeout();
+      ownedTimeoutHost = null;
+      ownedRefreshTimedOut = false;
     }
   }
 
-  private armRefreshTimer(): void {
-    const fenceHost = this.fenceHost;
-    if (!this.refreshPending || !fenceHost || this.refreshTimer !== null) {
+  function armRefreshTimer(): void {
+    const fenceHost = ownedFenceHost;
+    if (!ownedRefreshPending || !fenceHost || ownedRefreshTimer !== null) {
       return;
     }
-    if (this.actions.length === 0) {
+    if (ownedActions.length === 0) {
       return;
     }
-    const generation = this.fenceGeneration;
-    this.refreshTimer = globalThis.setTimeout(() => {
-      this.refreshTimer = null;
+    const generation = ownedFenceGeneration;
+    ownedRefreshTimer = globalThis.setTimeout(() => {
+      ownedRefreshTimer = null;
       if (
-        this.fenceHost !== fenceHost ||
+        ownedFenceHost !== fenceHost ||
         generation !== fenceHost.currentGeneration() ||
-        !this.refreshPending ||
-        this.actions.length === 0
+        !ownedRefreshPending ||
+        ownedActions.length === 0
       ) {
         return;
       }
-      this.refreshTimedOut = true;
-      this.timeoutHost = fenceHost;
+      ownedRefreshTimedOut = true;
+      ownedTimeoutHost = fenceHost;
       fenceHost.showTimeout();
       fenceHost.setBooting(false);
     }, fenceHost.timeoutMs());
   }
+  const api = {
+    bindHost(host: TerminalIntentHost): void {
+      if (ownedHosts.length === 0) {
+        rehydrate();
+      }
+      ownedHosts = [...ownedHosts.filter((bound) => bound !== host), host];
+      void api.drain();
+    },
+    releaseHost(host: TerminalIntentHost): void {
+      ownedHosts = ownedHosts.filter((bound) => bound !== host);
+      // A fence outlives its opener only as a deadlock: nothing else can release it.
+      if (ownedFenceHost === host) {
+        api.resetLifecycle(host);
+      }
+      if (ownedHosts.length === 0) {
+        clearRefreshTimer();
+        ownedRefreshTimedOut = false;
+        ownedTimeoutHost = null;
+        rehydrate();
+      }
+    },
+    get hasActions(): boolean {
+      return ownedActions.length > 0;
+    },
+    get fenced(): boolean {
+      return ownedRefreshPending;
+    },
+    get waitingForRefresh(): boolean {
+      return ownedRefreshPending && !ownedRefreshTimedOut && ownedActions.length > 0;
+    },
+    refreshBeforeReconnect(
+      host: TerminalIntentHost,
+      isConnected: () => boolean,
+      restore?: () => void,
+    ): void {
+      const generation = host.currentGeneration();
+      api.beginRefreshFence(host, generation);
+      restore?.();
+      const release = () => {
+        if (generation !== host.currentGeneration() || !isConnected()) {
+          return;
+        }
+        api.releaseRefreshFence(host);
+      };
+      void import("../../app/sw-refresh.runtime.ts")
+        .then(({ refreshControlUiServiceWorker }) => refreshControlUiServiceWorker())
+        .then((replacementActivated) => {
+          if (!replacementActivated) {
+            release();
+          }
+        }, release);
+    },
+    beginRefreshFence(host: TerminalIntentHost, generation: number): void {
+      ownedRefreshPending = true;
+      ownedFenceHost = host;
+      ownedFenceGeneration = generation;
+      clearRefreshFailure();
+      clearRefreshTimer();
+      armRefreshTimer();
+    },
+    releaseRefreshFence(host: TerminalIntentHost): void {
+      if (ownedFenceHost !== host) {
+        return;
+      }
+      api.resetLifecycle(host);
+      void api.drain();
+    },
+    // Only the panel that opened the fence may drop it; another panel disposing
+    // its tabs must not unblock a refresh it knows nothing about.
+    resetLifecycle(host: TerminalIntentHost): void {
+      if (ownedFenceHost !== null && ownedFenceHost !== host) {
+        return;
+      }
+      clearRefreshTimer();
+      ownedRefreshPending = false;
+      ownedFenceHost = null;
+      clearRefreshFailure();
+    },
+    canHandoff(source: Pick<TerminalPanelSessionState, "booting" | "tabs">): boolean {
+      return (
+        !source.booting &&
+        !api.fenced &&
+        !api.hasActions &&
+        !source.tabs.some((tab) => tab.status === "connecting")
+      );
+    },
+    /** Transfers view ownership before the destination binds, active tab last. */
+    queueHandoff(
+      source: Pick<TerminalPanelSessionState, "tabs" | "activeId" | "error">,
+      client: TerminalGatewayClient | null,
+    ): TerminalPanelSessionTab[] {
+      const tabs = source.tabs.toSorted(
+        (a, b) => Number(a.id === source.activeId) - Number(b.id === source.activeId),
+      );
+      discardRestoreActions();
+      ownedActions.push(
+        ...tabs.map((tab, index): TerminalHandoff => ({
+          kind: "handoff",
+          tab,
+          client,
+          error: index === tabs.length - 1 ? source.error : null,
+        })),
+      );
+      persist();
+      // The queue owns retained emulators; only live views follow source teardown.
+      return source.tabs.filter((tab) => tab.status !== "exited");
+    },
+    async queue(
+      action: TerminalPanelAction,
+      options: { deferUntilHostChange?: boolean } = {},
+    ): Promise<void> {
+      let changed = action.kind !== "restore" && discardRestoreActions();
+      const explicitIntentPending = ownedActions.some((pending) => pending.kind !== "restore");
+      const key = JSON.stringify(action);
+      if (
+        !(action.kind === "restore" && explicitIntentPending) &&
+        !ownedActions.some(
+          (pending) => pending.kind !== "handoff" && JSON.stringify(pending) === key,
+        )
+      ) {
+        ownedActions.push(action);
+        changed = true;
+      }
+      if (changed) {
+        persist();
+      }
+      // A session-route intent is persisted before its embedded panel mounts.
+      // The shell's bottom-only panel must not claim it in that gap; the next
+      // host binding drains it from the canonical document queue.
+      if (options.deferUntilHostChange) {
+        return;
+      }
+      armRefreshTimer();
+      const host = readHost();
+      if (ownedRefreshPending) {
+        host?.publish();
+      } else if (host && !host.hasTabs()) {
+        host.setBooting(true);
+      }
+      await api.drain();
+    },
+    async drain(): Promise<void> {
+      const host = readHost();
+      if (ownedDrainScheduled || ownedActions.length === 0 || !host || !canRun(host)) {
+        return;
+      }
+      ownedDrainScheduled = true;
+      try {
+        await host.bootQueue.enqueue(async (isCurrent) => {
+          const action = ownedActions[0];
+          if (!action || !isCurrent() || !canRun(host)) {
+            return;
+          }
+          const completed = await execute(host, action, () => retireAction(action));
+          if (!completed || !isCurrent()) {
+            return;
+          }
+          retireAction(action);
+          if (completed === "cancelled-restore" && readHost() === host) {
+            host.cancelledRestoreCompleted();
+          }
+        });
+      } finally {
+        ownedDrainScheduled = false;
+        const current = readHost();
+        current?.publish();
+        if (ownedActions.length > 0 && current && canRun(current)) {
+          void api.drain();
+        } else if (ownedActions.length === 0 && current && !current.hasTabs()) {
+          current.setBooting(false);
+        }
+      }
+    },
+    // Closing a terminal drops the intents queued for it, but only the panel the
+    // operator is actually looking at may do that to the shared queue.
+    cancel(host: TerminalIntentHost): void {
+      if (readHost() !== host) {
+        return;
+      }
+      for (const action of ownedActions.splice(0)) {
+        if (action.kind === "handoff" && action.tab.status === "exited") {
+          disposeTerminalController(action.tab.controller, action.tab.host);
+        }
+      }
+      persist();
+      host.setBooting(false);
+      clearRefreshFailure();
+    },
+  };
+
+  rehydrate();
+
+  return api;
 }
 
 /** Document-scoped owner; panels bind to it, they do not own copies. */
-export const terminalIntentQueue = new TerminalIntentQueue();
+export const terminalIntentQueue = createTerminalIntentQueue();
 
 /**
  * The durable intent a toggle implies, if any. Observers record it here rather

@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, untrack } from "solid-js";
+import { For, Show, createEffect, createMemo } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -49,6 +49,7 @@ export type TerminalPanelViewState = {
   picker: TerminalSessionPickerState;
   upload: TerminalPanelUpload;
   fileInputRef: (element: HTMLInputElement) => void;
+  viewportRef: (element: HTMLDivElement) => void;
   onSelect: (id: string) => void;
   onClose: (id: string) => Promise<void>;
   onNew: () => void;
@@ -60,7 +61,7 @@ export type TerminalPanelViewState = {
 function SessionPickerTrigger(props: { state: TerminalSessionPickerState; dialogId: string }) {
   return (
     <button
-      ref={(element) => untrack(() => props.state.triggerRef(element))}
+      ref={(element) => props.state.triggerRef(element)}
       class={props.state.hosted ? "rail-header__action" : "rail-header__action tp-icon"}
       type="button"
       title={props.state.hosted ? undefined : t("terminal.sessions")}
@@ -89,7 +90,7 @@ export function TerminalPanelHostedActions(props: {
     () => props.view().hosted,
     (hosted) => {
       if (hosted) {
-        untrack(() => props.view().picker.triggerRef(trigger));
+        props.view().picker.triggerRef(trigger);
       }
     },
   );
@@ -101,7 +102,7 @@ export function TerminalPanelHostedActions(props: {
             trigger = element;
             toggle(element);
             focusOut(element);
-            untrack(() => props.view().picker.triggerRef(element));
+            props.view().picker.triggerRef(element);
           }}
           class="rail-header__action"
           type="button"
@@ -448,6 +449,7 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
         </Show>
         <div
           id={viewportId}
+          ref={(element) => props.view().viewportRef(element)}
           class="tp-viewport"
           role="tabpanel"
           aria-hidden="false"
