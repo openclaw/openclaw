@@ -33,9 +33,9 @@ const declaration: PluginManifestTheme = {
   critters: { ferris: { source: "ferris.svg", title: "a crab, allegedly", crossMs: 15000 } },
 };
 
-function fixture() {
+function fixture(theme = declaration, palette = definition) {
   const rootDir = tempDirs.make("openclaw-theme-artwork-");
-  fs.writeFileSync(path.join(rootDir, "theme.json"), JSON.stringify(definition));
+  fs.writeFileSync(path.join(rootDir, "theme.json"), JSON.stringify(palette));
   fs.writeFileSync(path.join(rootDir, "rocket.svg"), SVG);
   fs.writeFileSync(path.join(rootDir, "beret.svg"), SVG);
   fs.writeFileSync(path.join(rootDir, "ferris.svg"), SVG);
@@ -45,7 +45,7 @@ function fixture() {
       loadManifestThemeDefinitions({
         pluginId: "theme-pack",
         rootDir,
-        themes: [declaration],
+        themes: [theme],
         rejectHardlinks,
         diagnostics,
       }),
@@ -255,30 +255,20 @@ describe("manifest theme artwork", () => {
   });
 
   it("captures sniffed raster backgrounds and omits the theme for unusable images", () => {
-    const rootDir = tempDirs.make("openclaw-theme-background-");
     const plain = createThemeDefinitionFixture();
-    fs.writeFileSync(path.join(rootDir, "theme.json"), JSON.stringify(plain));
+    const plugin = fixture(
+      {
+        id: "night",
+        name: plain.name,
+        description: plain.description,
+        source: "theme.json",
+        backgrounds: { dark: "night.webp" },
+      },
+      plain,
+    );
     const capture = (bytes: Buffer | string) => {
-      fs.writeFileSync(path.join(rootDir, "night.webp"), bytes);
-      const diagnostics: PluginDiagnostic[] = [];
-      const themes = withPluginCache(createPluginCache(), () =>
-        loadManifestThemeDefinitions({
-          pluginId: "theme-pack",
-          rootDir,
-          themes: [
-            {
-              id: "night",
-              name: plain.name,
-              description: plain.description,
-              source: "theme.json",
-              backgrounds: { dark: "night.webp" },
-            },
-          ],
-          rejectHardlinks: true,
-          diagnostics,
-        }),
-      );
-      return { themes, diagnostics };
+      fs.writeFileSync(path.join(plugin.rootDir, "night.webp"), bytes);
+      return plugin.capture();
     };
     const captured = capture(WEBP);
     expect(captured.diagnostics).toEqual([]);
