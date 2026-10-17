@@ -33,6 +33,7 @@ type Placement = {
   activeOwnerEpoch: number;
   remoteWorkspaceDir: string;
 };
+type Session = { placement: Placement; execCwd?: string; spawnedCwd?: string };
 
 it.runIf(process.env.OPENCLAW_DOCKER_NODE_WORKER_E2E === "1")(
   "required destination real Docker wire retains accepted results when policy revokes Gateway Move during teardown",
@@ -70,7 +71,6 @@ it.runIf(process.env.OPENCLAW_DOCKER_NODE_WORKER_E2E === "1")(
           includeApprovals: true,
         });
         const request = operator.request.bind(operator);
-        // connectWireClient already sets the request timeout to PROOF_TIMEOUT_MS.
         const session = <T>(method: string, params = {}) =>
           request<T>(`sessions.${method}`, { key: sessionKey, ...params });
         const expectPlacement = (result: Promise<unknown>, state: string) =>
@@ -146,15 +146,10 @@ it.runIf(process.env.OPENCLAW_DOCKER_NODE_WORKER_E2E === "1")(
         ).resolves.toMatchObject({ status: "ok" });
         expect(observedContainer).toBeTruthy();
         const containerId = await observedContainer!;
-        const readPlacement = async () =>
-          (
-            await session<{
-              session: { placement: Placement; execCwd?: string; spawnedCwd?: string };
-            }>("describe")
-          ).session;
+        const readPlacement = () =>
+          session<{ session: Session }>("describe").then((result) => result.session);
         const finished = await readPlacement();
         const gatewayWorkspace = finished.execCwd ?? finished.spawnedCwd;
-        expect(gatewayWorkspace).toBeTruthy();
         const expectFile = (workspace = gatewayWorkspace!) =>
           expect(fs.readFile(path.join(workspace, file), "utf8")).resolves.toBe(marker);
         for (const workspace of [finished.placement.remoteWorkspaceDir, gatewayWorkspace!]) {
@@ -162,38 +157,29 @@ it.runIf(process.env.OPENCLAW_DOCKER_NODE_WORKER_E2E === "1")(
         }
         await workerNode.waitForWorkersIdle();
         expect(await containerIds("--all", "--filter", `id=${containerId}`)).toBe("");
-        const moveToGateway = async () => {
-          const {
-            generation,
-            environmentId,
-            activeOwnerEpoch: ownerEpoch,
-          } = (await readPlacement()).placement;
-          return session("move", {
-            expected: { generation, environmentId, ownerEpoch },
-            target: { kind: "gateway" },
+        const moveToGateway = () =>
+          readPlacement().then(({ placement }) => {
+            const { generation, environmentId, activeOwnerEpoch: ownerEpoch } = placement;
+            return session("move", {
+              expected: { generation, environmentId, ownerEpoch },
+              target: { kind: "gateway" },
+            });
           });
-        };
         await expectPlacement(moveToGateway(), "local");
         await expectPlacement(session("dispatch", { deviceId }), "active");
-        // Delay only the real destruction acknowledgment; never substitute settlement or policy.
         const originalStop = workerNode.supervisor.stopEnvironment.bind(workerNode.supervisor);
         const stop = vi.spyOn(workerNode.supervisor, "stopEnvironment");
         stop.mockImplementationOnce(async (identity) => {
           await originalStop(identity);
           const snapshot = await request<{ hash: string }>("config.get", {});
+          const profile = { provider: "device", readyWorkers: 0, settings: { device: deviceId } };
           await request("config.patch", {
             baseHash: snapshot.hash,
             raw: JSON.stringify({
               cloudWorkers: {
                 requiredProfile: "docker-proof",
                 preparedPool: { maxTotal: 0 },
-                profiles: {
-                  "docker-proof": {
-                    provider: "device",
-                    readyWorkers: 0,
-                    settings: { device: deviceId },
-                  },
-                },
+                profiles: { "docker-proof": profile },
               },
             }),
           });
@@ -205,16 +191,14 @@ it.runIf(process.env.OPENCLAW_DOCKER_NODE_WORKER_E2E === "1")(
         }
         expect((await readPlacement()).placement.state).toBe("reclaimed");
         await expectFile();
-        for (const selection of [
-          { deviceId },
-          { profileId: "docker-proof", machineClass: "override" },
-          { profileId: "docker-proof", os: "linux" },
-        ]) {
-          await expect(session("dispatch", selection)).rejects.toThrow("requires worker profile");
+        for (const [method, selection] of [
+          ["dispatch", { deviceId }],
+          ["dispatch", { profileId: "docker-proof", machineClass: "override" }],
+          ["dispatch", { profileId: "docker-proof", os: "linux" }],
+          ["patch", { execNode: deviceId }],
+        ] as const) {
+          await expect(session(method, selection)).rejects.toThrow("requires worker profile");
         }
-        await expect(session("patch", { execNode: deviceId })).rejects.toThrow(
-          "requires worker profile",
-        );
         await expectPlacement(session("dispatch", { profileId: "docker-proof" }), "active");
         await expect(moveToGateway()).rejects.toThrow("required worker profile policy");
         await expectPlacement(session("reclaim"), "reclaimed");

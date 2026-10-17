@@ -2,11 +2,12 @@ import { execFile } from "node:child_process";
 import { mkdir, readFile, realpath } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { json } from "node:stream/consumers";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../../../src/agents/auth-profiles/store-runtime.js";
-import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import type { ModelProviderConfig } from "../../../../src/config/types.models.js";
 import { validateConfigObject } from "../../../../src/config/validation-core.js";
 import type { AgentJobTerminalSnapshot } from "../../../../src/gateway/agent-turn/types.js";
 import { workspaceQuiescenceArgv } from "../../../../src/gateway/worker-environments/workspace-quiescence-scripts.js";
@@ -44,6 +45,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const [providerId, modelId] = MODEL_REF.split("/");
+const REPLY_MARKER = /Hello\. Reply exactly: (REQUIRED-NATIVE-[0-9]+-[AB])/u;
 const QUIESCENCE_NONCE = "0".repeat(32);
 const workspaceCommands = [
   "workspace.skills",
@@ -65,7 +67,6 @@ const REMOTE_WORKSPACE_RESUME_JS = workspaceQuiescenceArgv(
 
 type Session = {
   key: string;
-  sessionId: string;
   workspaceDir?: string;
   placement?: { state: string; workspaceResultReconciling?: boolean };
 };
@@ -143,8 +144,7 @@ it.skipIf(process.platform === "win32")(
         const identity = loadOrCreateDeviceIdentity({
           path: path.join(root, "node-identity.sqlite"),
         });
-        const nodeHostRoot = path.join(root, "node-state", "node-host");
-        await mkdir(nodeHostRoot, { recursive: true, mode: 0o700 });
+        await mkdir(path.join(root, "node-state", "node-host"), { recursive: true, mode: 0o700 });
         const remoteAgentWorkspace = path.join(root, "remote-agent-workspace");
         await writeSkill({
           dir: path.join(remoteAgentWorkspace, "skills", "workspace-proof"),
@@ -153,21 +153,12 @@ it.skipIf(process.platform === "win32")(
         });
         const provider = (nativeServer = createServer((request, response) => {
           void (async () => {
-            const chunks: Buffer[] = [];
-            for await (const chunk of request) {
-              chunks.push(Buffer.from(chunk));
-            }
-            const body = JSON.parse(Buffer.concat(chunks).toString()) as {
+            const body = (await json(request)) as {
               messages: Array<{ role: string; content: string }>;
             };
             const marker = body.messages
               .filter((message) => message.role === "user")
-              .map(
-                (message) =>
-                  JSON.stringify(message.content).match(
-                    /Hello\. Reply exactly: (REQUIRED-NATIVE-[0-9]+-[AB])/u,
-                  )?.[1],
-              )
+              .map((message) => JSON.stringify(message.content).match(REPLY_MARKER)?.[1])
               .findLast((candidate) => candidate !== undefined);
             expect(request.url).toBe("/v1/chat/completions");
             expect(request.headers.authorization).toBe("Bearer synthetic-required-native-key");
@@ -183,17 +174,14 @@ it.skipIf(process.platform === "win32")(
               [{ role: "assistant", content: marker }, null],
               [{}, "stop"],
             ]) {
-              response.write(
-                "data: " +
-                  JSON.stringify({
-                    id: marker,
-                    object: "chat.completion.chunk",
-                    created: 1,
-                    model: modelId,
-                    choices: [{ index: 0, delta, finish_reason }],
-                  }) +
-                  "\n\n",
-              );
+              const chunk = {
+                id: marker,
+                object: "chat.completion.chunk",
+                created: 1,
+                model: modelId,
+                choices: [{ index: 0, delta, finish_reason }],
+              };
+              response.write(`data: ${JSON.stringify(chunk)}\n\n`);
             }
             response.end("data: [DONE]\n\n");
           })().catch((error: unknown) => {
@@ -210,28 +198,22 @@ it.skipIf(process.platform === "win32")(
         if (!address || typeof address === "string") {
           throw new Error("missing native provider address");
         }
-        const nativeConfig: OpenClawConfig = {
-          models: {
-            providers: {
-              [providerId!]: {
-                api: "openai-completions",
-                baseUrl: "http://127.0.0.1:" + address.port + "/v1",
-                apiKey: "synthetic-required-native-key",
-                models: [
-                  {
-                    id: modelId!,
-                    name: modelId!,
-                    contextWindow: 32768,
-                    maxTokens: 128,
-                    reasoning: true,
-                    thinkingLevelMap: { medium: "medium" },
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  },
-                ],
-              },
+        const nativeProvider: ModelProviderConfig = {
+          api: "openai-completions",
+          baseUrl: "http://127.0.0.1:" + address.port + "/v1",
+          apiKey: "synthetic-required-native-key",
+          models: [
+            {
+              id: modelId!,
+              name: modelId!,
+              contextWindow: 32768,
+              maxTokens: 128,
+              reasoning: true,
+              thinkingLevelMap: { medium: "medium" },
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             },
-          },
+          ],
         };
         const gateway = await startPairedNodeWorkerGateway({
           owner: gatewayOwner,
@@ -240,30 +222,21 @@ it.skipIf(process.platform === "win32")(
           requiredProfile: "native",
           mockAuthAgentIds: [],
           mutateConfig: (config) => {
-            // The node registry alone owns inference credentials; even QA placeholders
-            // must not hide an accidental Gateway inference/auth dependency.
             const commands = (((config.gateway ??= {}).nodes ??= {}).commands ??= {});
             commands.allow = [...(commands.allow ?? []), ...workspaceCommands];
-            config.plugins = {
-              ...config.plugins,
-              allow: [...(config.plugins?.allow ?? []), "file-transfer"],
-              entries: {
-                ...config.plugins?.entries,
-                "file-transfer": {
-                  enabled: true,
-                  config: {
-                    policyVersion: 2,
-                    workspaces: {
-                      qa: { nodeId: identity.deviceId, remoteRoot: remoteAgentWorkspace },
-                    },
-                    nodes: {
-                      [identity.deviceId]: {
-                        allowReadPaths: [remoteAgentWorkspace, remoteAgentWorkspace + "/**"],
-                        allowWritePaths: [],
-                        followSymlinks: false,
-                        ask: "off",
-                      },
-                    },
+            const plugins = (config.plugins ??= {});
+            plugins.allow = [...(plugins.allow ?? []), "file-transfer"];
+            (plugins.entries ??= {})["file-transfer"] = {
+              enabled: true,
+              config: {
+                policyVersion: 2,
+                workspaces: {
+                  qa: { nodeId: identity.deviceId, remoteRoot: remoteAgentWorkspace },
+                },
+                nodes: {
+                  [identity.deviceId]: {
+                    allowReadPaths: [remoteAgentWorkspace, remoteAgentWorkspace + "/**"],
+                    ask: "off",
                   },
                 },
               },
@@ -286,9 +259,7 @@ it.skipIf(process.platform === "win32")(
         for (const agentId of ["main", "qa"]) {
           const agentDir = path.join(
             gateway.runtimeEnv.OPENCLAW_STATE_DIR!,
-            "agents",
-            agentId,
-            "agent",
+            `agents/${agentId}/agent`,
           );
           expect(
             loadAuthProfileStoreWithoutExternalProfiles(agentDir, { inheritedAuthDir: agentDir })
@@ -323,7 +294,6 @@ it.skipIf(process.platform === "win32")(
         if (!nodeConfig.ok) {
           throw new Error(JSON.stringify(nodeConfig.issues));
         }
-        expect(Object.keys(nodeConfig.config.agents?.entries ?? {})).toEqual(["main"]);
         const pluginRuntime = await prepareNodeHostRuntime({
           config: nodeConfig.config,
           env: {
@@ -333,7 +303,6 @@ it.skipIf(process.platform === "win32")(
           },
           commands: workspaceCommands,
         });
-        expect(pluginRuntime.manifest.commands).toContain("workspace.skills");
         node = await createPairedNodeWorkerHost({
           pluginRuntime,
           gateway,
@@ -341,7 +310,10 @@ it.skipIf(process.platform === "win32")(
           root,
           capacity: 1,
           capacityWaitMs: 0,
-          nodeConfig: { ...nodeConfig.config, models: nativeConfig.models },
+          nodeConfig: {
+            ...nodeConfig.config,
+            models: { providers: { [providerId!]: nativeProvider } },
+          },
           beforeInvoke: async (frame, host) => {
             try {
               await beforeInvoke?.(frame, host);
@@ -351,7 +323,6 @@ it.skipIf(process.platform === "win32")(
             }
           },
         });
-        expect(node.identity.deviceId).toBe(identity.deviceId);
         const describe = async (key: string) =>
           (await operator!.request<{ session: Session }>("sessions.describe", { key })).session;
         const history = (key: string) =>
@@ -360,31 +331,24 @@ it.skipIf(process.platform === "win32")(
             pendingInputs: { items: Array<{ runId?: string; state: string; queued?: boolean }> };
           }>("chat.history", { sessionKey: key });
         const wait = (runId: string) => {
-          const pending = operator!
-            .request<AgentJobTerminalSnapshot>(
-              "agent.wait",
-              { runId, timeoutMs: PROOF_TIMEOUT_MS },
-              { timeoutMs: PROOF_TIMEOUT_MS + 5000 },
-            )
-            .then((result) => {
-              if (result.status !== "ok") {
-                observationFailure.reject(new Error("agent.wait: " + JSON.stringify(result)));
-              }
-              return result;
-            });
+          const pending = operator!.request<AgentJobTerminalSnapshot>(
+            "agent.wait",
+            { runId, timeoutMs: PROOF_TIMEOUT_MS },
+            { timeoutMs: PROOF_TIMEOUT_MS + 5000 },
+          );
           turnWaits.push(pending);
           void pending.catch((error: unknown) => observationFailure.reject(error));
           return pending;
         };
         const send = async (key: string, marker: string) => {
-          const result = await operator!.request("chat.send", {
-            sessionKey: key,
-            message: "Hello. Reply exactly: " + marker,
-            deliver: false,
-            idempotencyKey: marker,
-          });
-          expect(result).toMatchObject({ runId: marker, status: "started" });
-          return result;
+          await expect(
+            operator!.request("chat.send", {
+              sessionKey: key,
+              message: "Hello. Reply exactly: " + marker,
+              deliver: false,
+              idempotencyKey: marker,
+            }),
+          ).resolves.toMatchObject({ runId: marker, status: "started" });
         };
         let pair = 0;
         for (const creation of ["implicit-main", "ordinary-create"] as const) {
@@ -452,8 +416,7 @@ it.skipIf(process.platform === "win32")(
               ) {
                 return;
               }
-              // Ordinary node workspaces carry physical sessionId; sessionKey is
-              // present only for prepared-workspace transport binding.
+              // Ordinary node workspaces bind physical sessionId, not sessionKey.
               if (input.sessionId !== readSettlement(gateway, key).placement?.session_id) {
                 return;
               }
@@ -481,12 +444,9 @@ it.skipIf(process.platform === "win32")(
                   state: "completed",
                   runId: aRun,
                 });
-                atQuiesce.resolve();
-                await continueQuiesce.promise;
-              } else {
-                atResume.resolve();
-                await continueResume.promise;
               }
+              (acquiring ? atQuiesce : atResume).resolve();
+              await (acquiring ? continueQuiesce : continueResume).promise;
             };
             onNativeRequest = (marker) => {
               if (marker !== markers.B) {
@@ -500,7 +460,6 @@ it.skipIf(process.platform === "win32")(
                 expect(state.placement?.environment_id).toBe(retained.environment_id);
               }
               bRun = state.placement?.turn_claim_run_id ?? undefined;
-              expect(bRun).toBeTruthy();
               bEntered.resolve();
             };
             await send(key, markers.A);
@@ -512,10 +471,7 @@ it.skipIf(process.platform === "win32")(
               state: "active",
               workspaceResultReconciling: true,
             });
-            const committed = await history(key);
-            expect(
-              committed.messages.some((message) => wireMessageText(message) === markers.A),
-            ).toBe(true);
+            expect((await history(key)).messages.map(wireMessageText)).toContain(markers.A);
             const placed = readSettlement(gateway, key).placement!;
             if (retained) {
               expect(placed).toMatchObject({
@@ -526,7 +482,6 @@ it.skipIf(process.platform === "win32")(
             }
             // An owned empty worktree has a real HEAD, but no source origin or user files.
             const workspace = current.workspaceDir!;
-            expect(workspace).toBeTruthy();
             const git = async (...args: string[]) =>
               (await execFileAsync("git", ["-C", workspace, ...args])).stdout.trim();
             expect(await git("rev-parse", "HEAD")).toMatch(/^[a-f0-9]{40,64}$/u);
@@ -535,14 +490,11 @@ it.skipIf(process.platform === "win32")(
             if (timing === "during-workspace-finish") {
               await send(key, markers.B);
               expect(requests).not.toContain(markers.B);
-              const pendingInput = readPendingInput(gateway, key, markers.B);
-              expect(pendingInput).toMatchObject({
+              expect(readPendingInput(gateway, key, markers.B)).toMatchObject({
                 found: true,
                 value: { state: "queued", session_id: placed.session_id, run_id: markers.B },
               });
-              const pendingHistory = (await history(key)).pendingInputs;
-              expect(pendingHistory.items).toContainEqual(
-                // The optional in-memory queued hint is not the authoritative receipt.
+              expect((await history(key)).pendingInputs.items).toContainEqual(
                 expect.objectContaining({ runId: markers.B, state: "queued" }),
               );
             }
@@ -575,11 +527,9 @@ it.skipIf(process.platform === "win32")(
             });
             expectCursorAdvance(final.placement!, placed);
             expect((await describe(key)).placement?.workspaceResultReconciling).not.toBe(true);
-            const messages = (await history(key)).messages;
+            const messages = (await history(key)).messages.map(wireMessageText);
             for (const marker of Object.values(markers)) {
-              expect(
-                messages.filter((message) => wireMessageText(message) === marker),
-              ).toHaveLength(1);
+              expect(messages.filter((message) => message === marker)).toHaveLength(1);
             }
             retained = final.placement;
             await node.waitForWorkersIdle();

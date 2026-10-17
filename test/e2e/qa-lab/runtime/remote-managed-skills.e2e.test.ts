@@ -35,11 +35,8 @@ import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const ignore = () => {};
-async function writeResourceSkill(
-  root: string,
-  name: string,
-  host: "Gateway project" | "Node agent",
-) {
+type SkillRequest = { operation: string; request: string };
+async function writeResourceSkill(root: string, name: string, host: "Gateway" | "Node") {
   const dir = path.join(root, "skills", name);
   await writeSkill({ dir, name, description: `${host} skill`, body: `${host} instructions` });
   await fs.writeFile(path.join(dir, "resource.txt"), `${host} resource`);
@@ -52,7 +49,6 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-// Real managed Git -> reply preparation -> file-transfer service -> node policy.
 it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
   "prepares %s canonical skills on their owning host",
   async (kind) => {
@@ -63,9 +59,8 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
     await fs.mkdir(local, { recursive: true });
     await fs.mkdir(remote, { recursive: true });
     vi.stubEnv("OPENCLAW_TEST_FAST", "0");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const worktrees = new ManagedWorktreeService({
-      env,
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
       getConfig: () => ({ worktreeAcceleration: false }),
     });
     const owner = { ownerKind: "session" as const, ownerId: "agent:main:" + kind, name: kind };
@@ -73,28 +68,19 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
     if (kind === "repository") {
       await fs.mkdir(source);
       await requireGit(source, ["init", "-b", "main"]);
-      await writeResourceSkill(source, "project-only", "Gateway project");
+      await writeResourceSkill(source, "project-only", "Gateway");
       await requireGit(source, ["add", "."]);
       const identity = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"];
       await requireGit(source, [...identity, "commit", "-m", "Fixture"]);
     }
+    const worktreeOptions = { ...owner, repoRoot: source, baseRef: "HEAD", runSetupScript: false };
     const worktree =
       kind === "empty"
         ? await worktrees.createEmpty(owner)
-        : await worktrees.create({
-            ...owner,
-            repoRoot: source,
-            baseRef: "HEAD",
-            runSetupScript: false,
-          });
-    await writeResourceSkill(remote, "agent-only", "Node agent");
-    const policy = {
-      allowReadPaths: [remote, remote + "/**"],
-      allowWritePaths: [],
-      denyPaths: [] as string[],
-      followSymlinks: false,
-      ask: "off",
-    };
+        : await worktrees.create(worktreeOptions);
+    await writeResourceSkill(remote, "agent-only", "Node");
+    const denyPaths: string[] = [];
+    const policy = { allowReadPaths: [remote, remote + "/**"], denyPaths, ask: "off" };
     const pluginConfig = {
       policyVersion: 2,
       workspaces: { main: { nodeId: "node-1", remoteRoot: remote } },
@@ -105,21 +91,17 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
       plugins: { enabled: false, entries: { "file-transfer": { config: pluginConfig } } },
     };
     setRuntimeConfigSnapshot(config);
-    let service!: Parameters<OpenClawPluginApi["registerService"]>[0];
+    const registerService = vi.fn<OpenClawPluginApi["registerService"]>();
+    const runtime = { agent: { resolveAgentWorkspaceDir: () => local } };
     const api = createTestPluginApi({
-      registrationMode: "full",
       config,
       pluginConfig,
-      runtime: {
-        agent: { resolveAgentWorkspaceDir: () => local },
-      } as unknown as OpenClawPluginApi["runtime"],
-      registerService(value) {
-        service = value;
-      },
+      runtime: runtime as unknown as OpenClawPluginApi["runtime"],
+      registerService,
     });
     registerNodeWorkspaces(api);
-    const transport = createNodeWorkspaceTestTransport(api, remote);
-    const requests: Array<{ operation: string; request: string }> = [];
+    const service = registerService.mock.calls[0]![0];
+    const transport = vi.fn(createNodeWorkspaceTestTransport(api, remote));
     const scheduler = createTestPluginServiceScheduler();
     const context = {
       scheduler,
@@ -127,22 +109,15 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
       logger: api.logger,
       stateDir,
       invokeNode: vi.fn(),
-      openNodeDuplex: async (...args: Parameters<typeof transport>) => {
-        requests.push(args[0].params as { operation: string; request: string });
-        return transport(...args);
-      },
+      openNodeDuplex: transport,
     };
     await service.start(context);
     const retainedReader = getAgentWorkspaceAccess(local)!.skillResources!;
+    const { id, branch, repoRoot } = worktree;
     const entry: SessionEntry = {
       sessionId: kind,
       updatedAt: 1,
-      worktree: {
-        id: worktree.id,
-        branch: worktree.branch,
-        repoRoot: worktree.repoRoot,
-        canonicalWorkspaceDir: worktree.repoRoot,
-      },
+      worktree: { id, branch, repoRoot, canonicalWorkspaceDir: repoRoot },
     };
     const snapshot = (sessionEntry?: SessionEntry, isFirstTurnInSession = true) =>
       ensureSkillSnapshot({
@@ -159,48 +134,36 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
         expect.arrayContaining([expect.objectContaining({ name: "agent-only" })]),
       );
       for (const isFirstTurnInSession of [true, false]) {
-        const result = await snapshot(entry, isFirstTurnInSession);
-        const serializedSnapshot = JSON.stringify(result.skillsSnapshot);
+        const { skillsSnapshot } = await snapshot(entry, isFirstTurnInSession);
+        const serializedSnapshot = JSON.stringify(skillsSnapshot);
         entry.skillsSnapshot = JSON.parse(serializedSnapshot);
-        for (const [name, skillRoot, host] of [
-          ["agent-only", remote, "workspace"],
-          ...(kind === "repository" ? [["project-only", source, "gateway"]] : []),
-        ]) {
-          const skill = result.skillsSnapshot?.resolvedSkills?.find(
-            (candidate) => candidate.name === name,
-          );
-          expect(skill).toMatchObject({
-            filePath: path.join(skillRoot!, "skills", name!, "SKILL.md"),
-          });
-          expect(resolveSkillFileHost(skill!)).toBe(host);
-        }
-        const delivery = await prepareSkillResourceDelivery(
-          result.skillsSnapshot,
-          ignore,
-          [],
-          local,
-        );
+        const delivery = await prepareSkillResourceDelivery(skillsSnapshot, ignore, [], local);
         const materialized = await materializeSkillResources(delivery!, ignore);
         try {
-          for (const skill of materialized.snapshot.resolvedSkills!.filter((s) =>
-            ["agent-only", "project-only"].includes(s.name),
-          )) {
-            const host = skill.name === "agent-only" ? "Node agent" : "Gateway project";
-            expect(await fs.readFile(skill.filePath, "utf8")).toContain(`${host} instructions`);
-            expect(await fs.readFile(path.join(skill.baseDir, "resource.txt"), "utf8")).toBe(
-              `${host} resource`,
-            );
+          for (const [name, skillRoot, host] of [
+            ["agent-only", remote, "workspace"],
+            ...(kind === "repository" ? [["project-only", source, "gateway"]] : []),
+          ]) {
+            const original = skillsSnapshot?.resolvedSkills?.find((skill) => skill.name === name);
+            expect(original?.filePath).toBe(path.join(skillRoot!, "skills", name!, "SKILL.md"));
+            expect(resolveSkillFileHost(original!)).toBe(host);
+            const copied = materialized.snapshot.resolvedSkills!.find((s) => s.name === name)!;
+            const label = name === "agent-only" ? "Node" : "Gateway";
+            expect(await fs.readFile(copied.filePath, "utf8")).toContain(`${label} instructions`);
+            const resource = path.join(copied.baseDir, "resource.txt");
+            expect(await fs.readFile(resource, "utf8")).toBe(`${label} resource`);
           }
         } finally {
           await materialized.cleanup();
         }
       }
+      const requests = transport.mock.calls.map(([call]) => call.params as SkillRequest);
       expect(requests.map((r) => r.operation)).toContain("watch");
       expect(requests.map((r) => r.operation)).toContain("discovery");
       for (const request of requests.filter((r) => ["watch", "discovery"].includes(r.operation))) {
         expect(request.request).not.toContain(worktree.repoRoot);
       }
-      policy.denyPaths.push(path.join(remote, "skills", "agent-only", "SKILL.md"));
+      denyPaths.push(path.join(remote, "skills", "agent-only", "SKILL.md"));
       await expect(
         prepareWorkspaceSkills(local, {
           config,
@@ -217,7 +180,6 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
         await service.stop?.(context);
       } finally {
         await scheduler.stop();
-        await closeSkillsWatchers(true);
       }
     }
     expect(() => getAgentWorkspaceAccess(local)).toThrow("stopped or not ready");
