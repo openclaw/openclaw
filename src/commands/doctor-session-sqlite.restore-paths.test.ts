@@ -2,14 +2,20 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesForTest as closeDatabases } from "../state/openclaw-agent-db.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
-import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
+import { restoreSessionSqliteMigrationRun as restoreRun } from "./doctor-session-sqlite-restore.js";
+import { writePrivateFile, runStoreDoctor } from "./doctor-session-sqlite.fixtures.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
+import {
+  expectMissing,
+  expectFiles,
+  writeManifest,
+} from "./doctor-session-sqlite.publication-spies.test-support.js";
 import {
   importLegacyStore,
   type TestStore,
-  readMigrationManifest,
+  readMigrationManifest as readManifest,
   requireMigrationManifestPath,
   trustedMigrationTarget,
   canonicalTestPath,
@@ -28,7 +34,7 @@ async function createRestoreFixture(tempRoot?: string) {
   const store = createLegacyStore({ tempRoot });
   const imported = await importLegacyStore(store);
   const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
-  const manifest = readMigrationManifest(manifestPath);
+  const manifest = readManifest(manifestPath);
   const target = expectDefined(manifest.targets[0], "restore target");
   const move = expectDefined(
     target.plannedMoves.find((candidate) => candidate.kind === "transcript"),
@@ -41,10 +47,9 @@ async function createRestoreFixture(tempRoot?: string) {
     manifest,
     target,
     move,
-    save: () =>
-      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 }),
+    save: () => writePrivateFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`),
     restore: () =>
-      restoreSessionSqliteMigrationRun({
+      restoreRun({
         manifestPath,
         trustedTargets: [trustedMigrationTarget(store)],
       }),
@@ -58,7 +63,7 @@ function restoreAll(store: TestStore) {
 async function importWithIndexArchive(store: TestStore) {
   const imported = await importLegacyStore(store);
   const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
-  const manifest = readMigrationManifest(manifestPath);
+  const manifest = readManifest(manifestPath);
   const indexArchive = expectDefined(
     manifest.targets[0]?.plannedMoves.find((move) => move.kind === "legacy-store"),
     "legacy archive move",
@@ -70,18 +75,14 @@ describe("runDoctorSessionSqlite", () => {
   it.each(["missing-database", "missing-database-all-agents", "planned-only"] as const)(
     "restores archived artifacts with %s recovery evidence",
     async (state) => {
-      const store = createLegacyStore();
-      const imported = await importLegacyStore(store);
-      const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
-      const manifest = readMigrationManifest(manifestPath);
-      const target = expectDefined(manifest.targets[0], "restore target");
+      const { store, imported, target, save } = await createRestoreFixture();
       const sourcePaths = target.plannedMoves.map((move) => move.sourcePath);
       if (state === "planned-only") {
         target.completedMoves = [];
-        fs.writeFileSync(manifestPath, JSON.stringify(manifest), { mode: 0o600 });
+        save();
       } else {
         const sqlitePath = expectDefined(imported.targets[0]?.sqlitePath, "imported SQLite path");
-        closeOpenClawAgentDatabasesForTest();
+        closeDatabases();
         for (const file of [sqlitePath, `${sqlitePath}-wal`, `${sqlitePath}-shm`]) {
           fs.rmSync(file, { force: true });
         }
@@ -147,7 +148,7 @@ describe("runDoctorSessionSqlite", () => {
         outsidePath = path.join(path.dirname(outsideDir), "payload.jsonl");
         fs.mkdirSync(outsideDir, { recursive: true });
         fs.symlinkSync(outsideDir, path.join(archiveDir, "escape"));
-        fs.writeFileSync(outsidePath, '{"type":"outside"}\n', { mode: 0o600 });
+        writePrivateFile(outsidePath, '{"type":"outside"}\n');
         sourcePath = path.join(canonicalTestPath(store.sessionDir), "payload.jsonl");
         archivePath = path.join(archiveDir, "payload.jsonl");
         const traversal = {
@@ -160,7 +161,7 @@ describe("runDoctorSessionSqlite", () => {
         reason = "source and archive are both missing";
       } else if (location === "entry") {
         outsidePath = path.join(store.tempDir, "outside-payload.jsonl");
-        fs.writeFileSync(outsidePath, '{"type":"outside"}\n', { mode: 0o600 });
+        writePrivateFile(outsidePath, '{"type":"outside"}\n');
         fs.rmSync(move.archivePath);
         fs.symlinkSync(outsidePath, move.archivePath);
         reason = "archive is not a regular file; refusing restore";
@@ -188,7 +189,7 @@ describe("runDoctorSessionSqlite", () => {
           : { archivePath, sourcePath, reason },
       ]);
       expect(restored.restoredFiles).toEqual([]);
-      expect(fs.existsSync(sourcePath)).toBe(false);
+      expectMissing(sourcePath);
       expect(fs.existsSync(move.archivePath)).toBe(true);
       if (outsidePath) {
         expect(fs.existsSync(outsidePath)).toBe(true);
@@ -230,13 +231,7 @@ describe("runDoctorSessionSqlite", () => {
       const restored =
         version === 1
           ? await restore()
-          : (
-              await runDoctorSessionSqlite({
-                env: store.env,
-                mode: "restore",
-                store: store.storePath,
-              })
-            ).targets[0]?.restore;
+          : (await runStoreDoctor(store, "restore")).targets[0]?.restore;
       expect(restored?.conflicts).toEqual([]);
       expect(restored?.restoredFiles).toContain(canonicalTestPath(store.transcriptPath));
       expect(fs.existsSync(store.transcriptPath)).toBe(true);
@@ -256,14 +251,14 @@ describe("runDoctorSessionSqlite", () => {
 
     expect(restore.targets[0]?.restore?.manifestPaths).toEqual([]);
     expect(restore.targets[0]?.restore?.restoredFiles).toEqual([]);
-    expect(fs.existsSync(store.transcriptPath)).toBe(false);
+    expectMissing(store.transcriptPath);
   });
 
   it("reports restore conflicts without overwriting existing files", async () => {
     const store = createLegacyStore();
     const transcriptPath = canonicalTestPath(store.transcriptPath);
     await importLegacyStore(store);
-    fs.writeFileSync(store.transcriptPath, '{"type":"event","id":"new"}\n', { mode: 0o600 });
+    writePrivateFile(store.transcriptPath, '{"type":"event","id":"new"}\n');
 
     const restore = await runDoctorSessionSqlite({
       allAgents: true,
@@ -277,7 +272,7 @@ describe("runDoctorSessionSqlite", () => {
       reason: "source and archive both exist; refusing to overwrite source",
       sourcePath: transcriptPath,
     });
-    expect(fs.readFileSync(store.transcriptPath, "utf-8")).toBe('{"type":"event","id":"new"}\n');
+    expectFiles('{"type":"event","id":"new"}\n', store.transcriptPath);
   });
 
   it.each(["empty", "distinct", "missing", "invalid"] as const)(
@@ -289,7 +284,7 @@ describe("runDoctorSessionSqlite", () => {
       if (state === "missing") {
         fs.rmSync(firstArchive);
       } else if (state === "invalid") {
-        fs.writeFileSync(firstArchive, "{broken", { mode: 0o600 });
+        writePrivateFile(firstArchive, "{broken");
       }
       const laterIndex =
         state === "distinct"
@@ -298,7 +293,7 @@ describe("runDoctorSessionSqlite", () => {
       const laterArchives: string[] = [];
       // Archive names have collision handling; selection must not depend on elapsed milliseconds.
       for (let run = 0; run < (state === "empty" ? 2 : 1); run++) {
-        fs.writeFileSync(store.storePath, laterIndex, { mode: 0o600 });
+        writePrivateFile(store.storePath, laterIndex);
         laterArchives.push((await importWithIndexArchive(store)).indexArchive);
       }
       const restore = await restoreAll(store);
@@ -307,15 +302,15 @@ describe("runDoctorSessionSqlite", () => {
         "aggregate restore report",
       );
       for (const archive of laterArchives) {
-        expect(fs.readFileSync(archive, "utf8")).toBe(laterIndex);
+        expectFiles(laterIndex, archive);
       }
       if (state === "empty") {
-        expect(fs.readFileSync(store.storePath, "utf8")).toBe(original);
+        expectFiles(original, store.storePath);
         expect(restored.conflicts).toEqual([]);
         expect(restore.totals.issues).toBe(0);
         return;
       }
-      expect(fs.existsSync(store.storePath)).toBe(false);
+      expectMissing(store.storePath);
       const conflicts = restored.conflicts.filter((conflict) =>
         [firstArchive, ...laterArchives].includes(conflict.archivePath),
       );
@@ -326,11 +321,11 @@ describe("runDoctorSessionSqlite", () => {
             "multiple distinct nonempty session indexes require explicit archive selection",
           ]),
         );
-        expect(fs.readFileSync(firstArchive, "utf8")).toBe(original);
+        expectFiles(original, firstArchive);
         expect(restore.totals.issues).toBeGreaterThan(0);
       } else {
         if (state === "invalid") {
-          expect(fs.readFileSync(firstArchive, "utf8")).toBe("{broken");
+          expectFiles("{broken", firstArchive);
         }
         expect(conflicts.map((conflict) => conflict.reason)).toEqual(
           expect.arrayContaining([
@@ -348,22 +343,18 @@ describe("runDoctorSessionSqlite", () => {
     const store = createLegacyStore();
     const { manifestPath: firstManifestPath, indexArchive: firstArchive } =
       await importWithIndexArchive(store);
-    const sourcePaths = readMigrationManifest(firstManifestPath).targets[0]!.plannedMoves.map(
+    const sourcePaths = readManifest(firstManifestPath).targets[0]!.plannedMoves.map(
       (move) => move.sourcePath,
     );
     await restoreAll(store);
-    expect(readMigrationManifest(firstManifestPath).restore?.consumedArchives).toContain(
-      firstArchive,
-    );
+    expect(readManifest(firstManifestPath).restore?.consumedArchives).toContain(firstArchive);
     // Shipped manifests recorded only restored source paths. Exercise the additive-field upgrade
     // path instead of relying only on provenance written by this version.
-    const shippedManifest = readMigrationManifest(firstManifestPath);
+    const shippedManifest = readManifest(firstManifestPath);
     if (shippedManifest.restore) {
       delete shippedManifest.restore.consumedArchives;
     }
-    fs.writeFileSync(firstManifestPath, `${JSON.stringify(shippedManifest, null, 2)}\n`, {
-      mode: 0o600,
-    });
+    writeManifest(firstManifestPath, shippedManifest);
     const { manifestPath: secondManifestPath, indexArchive: secondArchive } =
       await importWithIndexArchive(store);
 
@@ -377,12 +368,8 @@ describe("runDoctorSessionSqlite", () => {
       canonicalTestPath(store.storePath),
     );
     expect(fs.readFileSync(store.storePath, "utf-8")).toContain("agent:main:main");
-    expect(readMigrationManifest(firstManifestPath).restore?.consumedArchives).toContain(
-      firstArchive,
-    );
-    expect(readMigrationManifest(secondManifestPath).restore?.consumedArchives).toContain(
-      secondArchive,
-    );
+    expect(readManifest(firstManifestPath).restore?.consumedArchives).toContain(firstArchive);
+    expect(readManifest(secondManifestPath).restore?.consumedArchives).toContain(secondArchive);
     const repeated = await restoreAll(store);
     expect(repeated.totals.issues).toBe(0);
     expect(repeated.targets[0]?.restore?.restoredFiles).toEqual([]);
