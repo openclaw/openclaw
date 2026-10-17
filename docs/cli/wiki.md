@@ -81,6 +81,18 @@ digests already carry the active runtime agent context.
 
 Show vault mode and scope, resolved agent, health, and Obsidian CLI availability. Use this first to check whether the intended vault is initialized, bridge mode is healthy, or Obsidian integration is available.
 
+The text output separates configured integration from CLI discovery. The same
+status block appears in `wiki doctor`:
+
+- `Obsidian integration: enabled` or `disabled` reflects `obsidian.enabled`.
+- `Obsidian CLI: available` or `missing` reports discovery on `PATH`, not a
+  successful Obsidian operation. `(requested)` appears only when both
+  `obsidian.enabled` and `obsidian.useOfficialCli` are true.
+
+An available CLI does not mean the integration is enabled. A missing CLI does
+not produce an Obsidian warning unless the CLI is requested. JSON keeps the
+existing `obsidianCli` fields unchanged.
+
 When bridge mode is active and configured to read memory artifacts, this command queries the running Gateway so it sees the same active memory plugin context as agent/runtime memory.
 
 ### `wiki doctor`
