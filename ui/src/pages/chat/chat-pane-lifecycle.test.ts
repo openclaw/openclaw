@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-lifecycle.test/"} */
 import type {
+  EnvironmentSummary,
   SessionSuggestion,
   SessionSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
@@ -14,6 +15,10 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import {
+  gatewayHelloForMethods,
+  SESSION_MUTATION_TEST_METHODS,
+} from "../../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
@@ -124,6 +129,54 @@ function selectSuggestionRows(state: ChatPageHost, ...sessions: GatewaySessionRo
 
 const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
 const confirmationOwners = new Set<HTMLElement>();
+
+it("discovers an assigned desktop when only runner inventory becomes available", async () => {
+  vi.useFakeTimers();
+  const key = "agent:main:inventory-desktop";
+  let available = false;
+  const inventory = vi.fn(async (): Promise<EnvironmentSummary> => ({
+    id: "node:assigned-desktop",
+    type: "node",
+    status: available ? "available" : "unavailable",
+    desktop: true,
+  }));
+  const fixture = createMountedPanes(
+    [
+      {
+        key,
+        sessionId: "inventory-session",
+        kind: "direct",
+        updatedAt: 1,
+        execNode: "assigned-desktop",
+      },
+    ],
+    "main",
+    undefined,
+    { "environments.status": inventory },
+  );
+  fixture.context.gateway.snapshot.hello = gatewayHelloForMethods([
+    ...SESSION_MUTATION_TEST_METHODS,
+    "desktop.observe",
+  ]);
+  const pane = fixture.mount(key);
+  await vi.waitFor(() => expect(inventory).toHaveBeenCalledTimes(1));
+  await vi.waitFor(() => expect(pane.state.chatLoading).toBe(false));
+  await vi.dynamicImportSettled();
+  await pane.updateComplete;
+  // Isolate inventory publication from deferred startup frames.
+  for (let pass = 0; pass < 2; pass++) {
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(160);
+  }
+  expect(isSidebarSlotVisible(pane.state.sidebarLayout, "desktop")).toBe(false);
+
+  available = true;
+  fixture.emitGatewayEvent("node.runnerInventory.changed", { nodeId: "assigned-desktop" });
+
+  await vi.waitFor(() =>
+    expect(isSidebarSlotVisible(pane.state.sidebarLayout, "desktop")).toBe(true),
+  );
+});
 
 it("publishes queued-edit retention changes while its pane is parked", async () => {
   vi.useFakeTimers();

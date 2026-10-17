@@ -30,7 +30,8 @@ export function createMountedPanes(
       | "models.list"
       | "sessions.describe"
       | "sessions.list"
-      | "sessions.patch",
+      | "sessions.patch"
+      | "environments.status",
       GatewayRequestHandler
     >
   >,
@@ -43,7 +44,8 @@ export function createMountedPanes(
       method === "models.list" ||
       method === "sessions.describe" ||
       method === "sessions.list" ||
-      method === "sessions.patch"
+      method === "sessions.patch" ||
+      method === "environments.status"
     ) {
       const response = responses?.[method];
       if (response) {

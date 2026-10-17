@@ -491,7 +491,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           }
           handlePageGatewayEvent(state, event, () => this.presented);
           if (event.event === "node.runnerInventory.changed") {
-            this.activeSessionResources.invalidate();
+            this.activeSessionResources.reconcileObservation();
           }
         }
       }),
