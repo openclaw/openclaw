@@ -199,8 +199,10 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       );
     // Avoid flashing view-only while metadata loads; failed lookups still explain the gate.
     const catalogDisabledReason =
-      catalogKey && !this.catalogLoading && this.catalogSession?.canContinue !== true
-        ? this.catalogHost?.kind === "node"
+      catalogKey &&
+      !this.history.catalogLoading &&
+      this.history.catalogSession?.canContinue !== true
+        ? this.history.catalogHost?.kind === "node"
           ? t("chat.catalog.remoteViewOnly")
           : t("chat.catalog.unsupportedViewOnly")
         : null;
@@ -229,7 +231,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       queue: state.chatQueue,
     });
     const historyHasMore = catalogKey
-      ? Boolean(this.catalogCursor)
+      ? Boolean(this.history.catalogCursor)
       : state.chatHistoryPagination.hasMore;
     const sessionActionCallbacks = createChatPaneSessionActionCallbacks({
       getSnapshot: () => this.context.gateway.snapshot,
@@ -327,7 +329,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       !providerPaused &&
       sessionDisabledBanner?.kind !== "composer-replacement" &&
       (catalogKey
-        ? this.catalogSession?.canContinue === true
+        ? this.history.catalogSession?.canContinue === true
         : !disabledReason &&
           !(selectedSessionArchived || restartRecoveryTombstoned || placementComposer.blocksSend));
     const composerAvailability = {
@@ -377,7 +379,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       // Recovery can temporarily withhold the first turn after history loaded empty.
       // Keep its pane loading until startup can display the retained message again.
       loading: catalogKey
-        ? this.catalogLoading
+        ? this.history.catalogLoading
         : (!state.connected && !state.currentSessionId) ||
           state.chatLoading ||
           (!runActive && pendingReason !== null && placementStartup === null),
@@ -433,14 +435,20 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         isCurrent: () => this.state === state,
       }),
       historyPagination:
-        historyHasMore || this.loadingOlder
+        historyHasMore || this.history.loadingOlder
           ? {
               hasMore: historyHasMore,
-              loading: this.loadingOlder || (catalogKey ? this.catalogLoading : state.chatLoading),
+              loading:
+                this.history.loadingOlder ||
+                (catalogKey ? this.history.catalogLoading : state.chatLoading),
               onShowEarlier: () => void this.loadOlderMessages(),
             }
           : undefined,
-      ...projectChatPaneTranscript(state, catalog ? this.catalogMessages : null, projectionRunId),
+      ...projectChatPaneTranscript(
+        state,
+        catalog ? this.history.catalogMessages : null,
+        projectionRunId,
+      ),
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
       followUpMode: state.chatFollowUpMode,

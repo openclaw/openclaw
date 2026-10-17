@@ -99,7 +99,8 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     };
     previousInputs = next;
     focusPending ||= changes.focusComposer;
-    runtime.chatState.prepareRender();
+    // Persistence/scroll bookkeeping samples state; it is not a render dependency.
+    untrack(() => runtime.chatState.prepareRender());
     runtime.synchronizeInputs(changes);
   }
   function commitRender() {

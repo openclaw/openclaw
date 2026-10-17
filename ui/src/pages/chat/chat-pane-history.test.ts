@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
-import { createComponent, createSignal, getOwner, merge } from "solid-js";
+import { createComponent, createMemo, createSignal, getOwner, merge } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -31,6 +31,7 @@ import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
+import { ChatHistoryBoundary } from "./components/chat-history-boundary.tsx";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import {
@@ -116,6 +117,33 @@ function appendSentinel(thread: HTMLElement) {
   thread.append(sentinel);
   return sentinel;
 }
+
+it("updates the earlier-history control directly from pane loading state", () => {
+  const { pane, state, context } = createRefreshChatPane();
+  state.chatHistoryPagination = { hasMore: true, nextOffset: 2 };
+  const view = mountSolid(
+    () => {
+      const history = createMemo(() => {
+        pane.render();
+        return pane.chatProps!.historyPagination!;
+      });
+      return createComponent(ChatHistoryBoundary, merge(history));
+    },
+    { wrapper: createSolidApplicationContextProvider(context).wrapper },
+  );
+  const button = view.container.querySelector("button")!;
+  expect(button.disabled).toBe(false);
+
+  pane.history.loadingOlder = true;
+  flush();
+  expect(button.disabled).toBe(true);
+  expect(button.getAttribute("aria-busy")).toBe("true");
+
+  pane.history.loadingOlder = false;
+  flush();
+  expect(button.disabled).toBe(false);
+  expect(button.getAttribute("aria-busy")).toBe("false");
+});
 
 it("passes only a proven profile viewer identity to transcript rendering", () => {
   const { pane, context } = createRefreshChatPane();
@@ -392,7 +420,7 @@ it("reveals a final catalog page even when its cursor is exhausted", async () =>
   const key = "catalog:claude:gateway%3Alocal:thread-1";
   state.sessionKey = key;
   pane.sessionKey = key;
-  pane.catalogCursor = "final-page";
+  pane.history.catalogCursor = "final-page";
   appendChatThread(pane);
   vi.spyOn(pane, "updateComplete", "get").mockReturnValue(Promise.resolve(true));
   const scrollToOffset = vi.spyOn(pane.transcript, "scrollToOffset");
@@ -403,8 +431,8 @@ it("reveals a final catalog page even when its cursor is exhausted", async () =>
     "sessions.catalog.read",
     expect.objectContaining({ cursor: "final-page" }),
   );
-  expect(pane.catalogMessages).toHaveLength(1);
-  expect(pane.catalogCursor).toBeUndefined();
+  expect(pane.history.catalogMessages).toHaveLength(1);
+  expect(pane.history.catalogCursor).toBeUndefined();
   expect(scrollToOffset).not.toHaveBeenCalled();
 });
 
@@ -599,7 +627,7 @@ it("deduplicates projected catalog transcript records by catalog message id", ()
   if (!current || !overlapping) {
     throw new Error("expected catalog transcript projections");
   }
-  pane.catalogMessages = [current];
+  pane.history.catalogMessages = [current];
 
   expect(pane.prependUniqueCatalogMessages([overlapping])).toEqual([current]);
 });

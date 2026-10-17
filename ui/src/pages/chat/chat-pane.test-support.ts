@@ -4,7 +4,6 @@ import type {
   SessionSuggestion,
   SessionSuggestionEvent,
   SessionTypingEvent,
-  SessionCatalogSession,
   SessionCatalogTranscriptItem,
   TaskSuggestion,
   TaskSuggestionEvent,
@@ -131,7 +130,7 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   readonly element: HTMLElement;
   render: ChatPaneRuntime["render"];
   readonly transcript: ChatTranscript;
-  catalogMessages: unknown[];
+  readonly history: ChatPaneRuntime["history"];
   active: boolean;
   presented: boolean;
   presentationId: string;
@@ -219,7 +218,6 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
     transcriptLoad: Promise<boolean>,
   ) => void;
   paneLabel: string | undefined;
-  catalogSession: SessionCatalogSession | null;
   catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;
   handleTranscriptScroll: (event: Event) => void;
   handleTranscriptHistoryIntent: (event: Event) => void;
@@ -233,8 +231,6 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   resetOlderMessagesViewport: () => void;
   readReplyMessage: (messageId: string) => unknown;
   hasOlderMessages: () => boolean;
-  loadingOlder: boolean;
-  catalogCursor: string | undefined;
   olderCursorsSeen: Set<string>;
   headerRenameSession: Pick<GatewaySessionRow, "key" | "sessionId" | "label"> | null;
   headerRenameValue: string;

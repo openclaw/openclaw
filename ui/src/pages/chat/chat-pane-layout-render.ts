@@ -58,7 +58,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       revision();
       return {
         context: this.context,
-        session: this.state && !this.catalogHost ? this.resolveChatReadTarget() : undefined,
+        session: this.state && !this.history.catalogHost ? this.resolveChatReadTarget() : undefined,
       };
     });
   }

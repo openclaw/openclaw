@@ -306,9 +306,10 @@ export function createChatState<TState extends ChatPageHost>(
       if (state?.chatStreamRenderFrame != null) {
         cancelChatStreamRenderFrame(state);
         composerPersistence.persistChangedState();
-        captureRenderLifecycleChanges();
         onStateChange?.();
       }
+      // Field projections can schedule a frame without a page-wide invalidation.
+      captureRenderLifecycleChanges();
     },
   };
   return api;

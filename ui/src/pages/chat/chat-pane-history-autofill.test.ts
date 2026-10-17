@@ -48,7 +48,7 @@ function setup(notifyOnObserve = false) {
       pane.syncHistoryObserver();
       notify?.();
       // Join the production load rather than waiting on timers.
-      if (pane.loadingOlder) {
+      if (pane.history.loadingOlder) {
         await pane.loadOlderMessages();
       }
     },
