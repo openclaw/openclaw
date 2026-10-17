@@ -49,7 +49,7 @@ function transcriptSources(state: ChatPageHost): readonly unknown[] {
     state.chatStreamSegments,
     state.chatReasoning,
     state.guardianNotices,
-    state.realtimeTalkConversationState.entries,
+    state.realtimeTalk.snapshot.realtimeTalkConversationState.entries,
   ];
 }
 
@@ -303,10 +303,11 @@ export function createChatState<TState extends ChatPageHost>(
       // A render consumes both deferred producers before their next frame.
       cancelBackgroundRender();
       const state = stateValue;
+      // Owner projections can publish transcript changes without a page redraw request.
+      captureRenderLifecycleChanges();
       if (state?.chatStreamRenderFrame != null) {
         cancelChatStreamRenderFrame(state);
         composerPersistence.persistChangedState();
-        captureRenderLifecycleChanges();
         onStateChange?.();
       }
     },

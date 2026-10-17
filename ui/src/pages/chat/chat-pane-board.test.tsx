@@ -95,7 +95,7 @@ type TestChatPane = HTMLElement & {
   renderResetConfirmation: () => Parameters<typeof ChatBoardResetConfirmation>[0] | null;
   syncRetainedBoardSession: (board: ResolvedBoardView) => void;
   refreshSwarmRoster: () => void;
-  requestUpdate: () => void;
+  invalidate: () => void;
 };
 
 let theme: ReturnType<typeof createApplicationTheme>;
@@ -433,7 +433,7 @@ describe("chat pane board shell", () => {
     const frames: FrameRequestCallback[] = [];
     const requestFrame = vi.fn((callback: FrameRequestCallback) => frames.push(callback));
     vi.stubGlobal("requestAnimationFrame", requestFrame);
-    const requestUpdate = vi.spyOn(pane, "requestUpdate");
+    const invalidate = vi.spyOn(pane, "invalidate");
 
     try {
       for (let index = 0; index < 3; index += 1) {
@@ -441,7 +441,7 @@ describe("chat pane board shell", () => {
       }
       await vi.dynamicImportSettled();
 
-      expect(requestUpdate).not.toHaveBeenCalled();
+      expect(invalidate).not.toHaveBeenCalled();
       expect(pane.state.requestUpdate).not.toHaveBeenCalled();
       expect(requestFrame).toHaveBeenCalledTimes(1);
       frames[0]?.(0);
