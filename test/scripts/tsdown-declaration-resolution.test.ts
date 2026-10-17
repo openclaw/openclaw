@@ -12,7 +12,7 @@ import { prepareTsgoCommand } from "../../scripts/run-tsgo.mts";
 import type { CommandFixture } from "../helpers/command-fixture.js";
 import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import {
-  createDeclarationFixture as createFixture,
+  createDeclarationFixture,
   createDeclarationTest,
   declarationCacheRecords,
   expectStagingClean,
@@ -32,6 +32,15 @@ function writeFiles(write: (file: string, text: string) => void, files: Record<s
   }
 }
 
+function typesPackage(directory: string, name: string, source: string, version = "2.0.0") {
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(
+    path.join(directory, "package.json"),
+    JSON.stringify({ name: `@types/${name}`, version, types: "index.d.ts" }),
+  );
+  fs.writeFileSync(path.join(directory, "index.d.ts"), source);
+}
+
 async function runModule(command: CommandFixture, root: string, source: string) {
   const result = await runFixtureModule(
     command,
@@ -48,6 +57,16 @@ ${source}`,
   expect(result.status, result.stdout + result.stderr).toBe(0);
 }
 
+function createFixture(
+  command: CommandFixture,
+  groups?: readonly string[],
+  root?: string,
+  extraEntrypoints?: readonly string[],
+) {
+  const fixture = createDeclarationFixture(command, groups, root, extraEntrypoints);
+  return { ...fixture, run: (source: string) => runModule(command, fixture.root, source) };
+}
+
 function containedFixture(
   command: CommandFixture,
   groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
@@ -62,25 +81,17 @@ function containedFixture(
   const ancestorInput = path.join(ancestorPackage, "index.d.ts");
   const wrapper = "node_modules/.pnpm/wrapper/node_modules/@types/synthetic-wrapper";
   const local = "node_modules/.pnpm/core/node_modules/@types/synthetic-core";
-  for (const [directory, name, text] of [
-    [
-      wrapper,
-      "synthetic-wrapper",
-      '/// <reference types="synthetic-core" />\nexport type { Marker } from "synthetic-core";\n',
-    ],
-    [local, "synthetic-core", coreText("local")],
-    [
-      "node_modules/@types/synthetic-automatic",
-      "synthetic-automatic",
-      'declare function declarationDirectoryName(): "declared-cwd";\n',
-    ],
-  ] as const) {
-    fixture.write(
-      `${directory}/package.json`,
-      JSON.stringify({ name: `@types/${name}`, version: "2.0.0", types: "index.d.ts" }),
-    );
-    fixture.write(`${directory}/index.d.ts`, text);
-  }
+  typesPackage(
+    path.join(root, wrapper),
+    "synthetic-wrapper",
+    '/// <reference types="synthetic-core" />\nexport type { Marker } from "synthetic-core";\n',
+  );
+  typesPackage(path.join(root, local), "synthetic-core", coreText("local"));
+  typesPackage(
+    path.join(root, "node_modules/@types/synthetic-automatic"),
+    "synthetic-automatic",
+    'declare function declarationDirectoryName(): "declared-cwd";\n',
+  );
   const link = (target: string, alias: string) => {
     fs.mkdirSync(path.dirname(alias), { recursive: true });
     fs.symlinkSync(path.relative(path.dirname(alias), target), alias, "junction");
@@ -109,13 +120,12 @@ function nestedFixture(
   groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 ) {
   const fixture = containedFixture(command, groups);
-  const ancestorPackage = path.dirname(fixture.ancestorInput);
-  fs.mkdirSync(ancestorPackage, { recursive: true });
-  fs.writeFileSync(
-    path.join(ancestorPackage, "package.json"),
-    JSON.stringify({ name: "@types/synthetic-core", version: "1.0.0", types: "index.d.ts" }),
+  typesPackage(
+    path.dirname(fixture.ancestorInput),
+    "synthetic-core",
+    coreText("ancestor"),
+    "1.0.0",
   );
-  fs.writeFileSync(fixture.ancestorInput, coreText("ancestor"));
   return fixture;
 }
 
@@ -123,7 +133,7 @@ it.concurrent("bounds standalone package builds while preserving public declarat
   command,
 }) =>
   command.lifetime.run(async () => {
-    const { root, write } = containedFixture(command, undefined, [
+    const { root, write, run } = containedFixture(command, undefined, [
       "scripts/build-workspace-package.mts",
     ]);
     fs.symlinkSync(
@@ -175,10 +185,7 @@ it.concurrent("bounds standalone package builds while preserving public declarat
       }
     `,
     );
-    await runModule(
-      command,
-      root,
-      `
+    await run(`
 import { pathToFileURL } from "node:url";
 import { buildWorkspacePackage } from "./scripts/build-workspace-package.mts";
 import configs from "./tsdown.config.ts";
@@ -215,8 +222,7 @@ assert.equal(fs.readFileSync(path.join(root, "packages/gateway-protocol/dist/kee
 fs.writeFileSync("src/index.ts", 'export const invalid: number = "selected";');
 await assert.rejects(buildWorkspacePackage("gateway-client"), /TS2322/);
 assert.equal(process.cwd(), packageDir);
-`,
-    );
+`);
   }));
 
 it.runIf(process.platform === "win32").concurrent(
@@ -259,7 +265,7 @@ for (const kind of [
     `compiles and receipts every local input through a ${kind}`,
     ({ command, skip }) =>
       command.lifetime.run(async () => {
-        const { root, localInput } = nestedFixture(command);
+        const { root, localInput, run } = nestedFixture(command);
         let target = root;
         if (kind.includes("Windows")) {
           const short = spawnSync(
@@ -296,10 +302,7 @@ for (const kind of [
           expect(alias).not.toBe(target);
           expect(target).not.toBe(root);
         }
-        await runModule(
-          command,
-          root,
-          `
+        await run(`
 import { build } from "tsdown";
 import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration-boundary.mts";
 import { createDeclarationStage, createDeclarationInputCapture, requestDeclarationInputs, readDeclarationInputs } from "./scripts/lib/tsdown-declaration-inputs.mts";
@@ -329,8 +332,7 @@ try {
   await dispose(bundles);
   fs.rmSync(stage, { recursive: true, force: true });
 }
-`,
-        );
+`);
         if (!kind.includes("Windows")) {
           return;
         }
@@ -361,11 +363,8 @@ it.concurrent("preserves object and registration hooks while enforcing the decla
   command,
 }) =>
   command.lifetime.run(async () => {
-    const { root } = containedFixture(command);
-    await runModule(
-      command,
-      root,
-      `
+    const { run } = containedFixture(command);
+    await run(`
 import { build } from "tsdown";
 import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration-boundary.mts";
 const buildFixture = makeBuild(build);
@@ -387,15 +386,14 @@ for (const registration of [false, true]) {
     await dispose(bundles);
   }
 }
-`,
-    );
+`);
   }));
 
 it.concurrent("preserves inherited ambient declarations without admitting unrelated source roots", ({
   command,
 }) =>
   command.lifetime.run(async () => {
-    const { root, write } = createFixture(command);
+    const { write, run } = createFixture(command);
     writeFiles(write, {
       "config/ambient.json": JSON.stringify({
         compilerOptions: {
@@ -417,10 +415,7 @@ it.concurrent("preserves inherited ambient declarations without admitting unrela
       "node_modules/synthetic-qrcode/index.js":
         "export function encode(value) { return { data: value }; }\n",
     });
-    await runModule(
-      command,
-      root,
-      `
+    await run(`
 import { build } from "tsdown";
 import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration-boundary.mts";
 import { createDeclarationStage, createDeclarationInputCapture, requestDeclarationInputs, readDeclarationInputs } from "./scripts/lib/tsdown-declaration-inputs.mts";
@@ -449,15 +444,14 @@ try {
 } finally {
   fs.rmSync(stage, { recursive: true, force: true });
 }
-`,
-    );
+`);
   }));
 
 it.skipIf(process.platform === "win32").concurrent(
   "admits cold sibling workspace outputs through installed aliases",
   ({ command }) =>
     command.lifetime.run(async () => {
-      const { root, write } = createFixture(command);
+      const { root, write, run } = createFixture(command);
       write("src/consumer.ts", "export const consumer = 1;\n");
       write("packages/output-producer/package.json", '{"type":"module"}');
       write("packages/output-producer/index.ts", "export const produced = 2;\n");
@@ -485,10 +479,7 @@ export default [
 ];
 `,
       );
-      await runModule(
-        command,
-        root,
-        `
+      await run(`
 import { Program } from "typescript/unstable/async";
 import { build } from "tsdown";
 const buildFixture = makeBuild(build);
@@ -522,8 +513,7 @@ try {
   written.resolve();
   Program.prototype.emitToString = originalEmit;
 }
-`,
-      );
+`);
     }),
 );
 
@@ -531,13 +521,10 @@ it.concurrent.for(
   ["node", "workspace", "AI"].flatMap((owner) => [true, false].map((dts) => ({ owner, dts }))),
 )("honors resolved dts=$dts over the opposite $owner default", ({ owner, dts }, { command }) =>
   command.lifetime.run(async () => {
-    const { root } = containedFixture(command, undefined, ["tsdown.ai.config.ts"]);
+    const { root, run } = containedFixture(command, undefined, ["tsdown.ai.config.ts"]);
     const outside = path.join(path.dirname(root), "runtime.ts");
     fs.writeFileSync(outside, 'export const runtimeValue = "outside-runtime";');
-    await runModule(
-      command,
-      root,
-      `
+    await run(`
 import { build } from "tsdown";
 const buildFixture = makeBuild(build);
 process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = ${JSON.stringify(dts ? "1" : "0")};
@@ -602,8 +589,7 @@ try {
 } finally {
   await dispose(bundles);
 }
-`,
-    );
+`);
   }),
 );
 
@@ -611,15 +597,12 @@ it.concurrent("isolates native compilation across overlapping workspace and AI b
   command,
 }) =>
   command.lifetime.run(async () => {
-    const { root, write } = containedFixture(command, undefined, ["tsdown.ai.config.ts"]);
+    const { write, run } = containedFixture(command, undefined, ["tsdown.ai.config.ts"]);
     write(
       "src/second.ts",
       'import "synthetic-wrapper"; export const secondOrigin = declarationOrigin;',
     );
-    await runModule(
-      command,
-      root,
-      `
+    await run(`
 import { build } from "tsdown";
 const buildFixture = makeBuild(build);
 const { default: configs } = await import("./tsdown.config.ts");
@@ -659,8 +642,7 @@ for (const failure of [false, true]) {
     assert.match(fs.readFileSync(path.join(root, ".artifacts/lifecycle-1/second.d.mts"), "utf8"), /secondOrigin: "local"/);
   }
 }
-`,
-    );
+`);
   }));
 
 it.concurrent.for([

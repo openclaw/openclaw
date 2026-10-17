@@ -141,6 +141,17 @@ function outputLines(result: ReturnType<typeof runNode>) {
     .map((line) => JSON.parse(line));
 }
 
+function prepareBuildFixture(root: string, extra: string[] = []) {
+  copyUiFixture(root, extra);
+  const modules = path.join(root, "node_modules");
+  writeUiPackageBin(modules, "dompurify", "export {};\n");
+  return {
+    vite: (source: string) => writeUiPackageBin(modules, "vite", source),
+    run: (env: NodeJS.ProcessEnv, args = ["scripts/ui.js", "build"]) =>
+      runNode(root, args, { env: { ...process.env, ...buildEnvironment, ...env } }),
+  };
+}
+
 function processFixture(label: string) {
   // Outside Vitest's disposable namespace: retain until every process has stopped.
   const root = fs.mkdtempSync(path.join(path.dirname(os.tmpdir()), `openclaw-ui-${label}-`));
@@ -299,12 +310,7 @@ describe("scripts/ui", () => {
           builtAt: env.OPENCLAW_BUILD_TIMESTAMP,
           buildId: env.OPENCLAW_CONTROL_UI_BUILD_ID,
         }),
-      ).toMatchObject({
-        builtAt: firstBuild.builtAt,
-        buildId: firstBuild.buildId,
-        commit: firstBuild.commit,
-        version: firstBuild.version,
-      });
+      ).toMatchObject(firstBuild);
     } else {
       expect(env).toMatchObject({
         GIT_COMMIT: revision.repeat(40),
@@ -407,7 +413,7 @@ process.exitCode = 0;\n`,
   it("invalidates a warm required-plugin cache when source metadata promises a new owner", () => {
     // Preload module URLs must preserve spaces and URL fragment characters.
     const root = fs.realpathSync(tempDirs.make("openclaw-ui-required-cache #"));
-    copyUiFixture(root, [
+    const build = prepareBuildFixture(root, [
       "scripts/lib/build-artifact-cache.mts",
       "scripts/lib/bundled-plugin-build-entries.mjs",
       "scripts/lib/bundled-plugin-paths.mjs",
@@ -415,10 +421,9 @@ process.exitCode = 0;\n`,
       "scripts/lib/root-package-bundled-plugin-excludes.mjs",
       "src/shared/non-packaged-plugin-dirs.ts",
     ]);
-    const modules = path.join(root, "node_modules");
     fs.symlinkSync(
       path.dirname(createRequire(import.meta.url).resolve("@openclaw/fs-safe/package.json")),
-      path.join(modules, "@openclaw/fs-safe"),
+      path.join(root, "node_modules/@openclaw/fs-safe"),
       "junction",
     );
     fs.mkdirSync(path.join(root, "extensions"));
@@ -426,11 +431,7 @@ process.exitCode = 0;\n`,
     // exercised with real source and distribution bytes in its delivery suite.
     fs.writeFileSync(path.join(root, "scripts/tsx.mjs"), "export {};\n");
     fs.writeFileSync(path.join(root, "scripts/build-plugin-control-ui.mts"), "export {};\n");
-    writeUiPackageBin(modules, "dompurify", "export {};\n");
-    writeUiPackageBin(
-      modules,
-      "vite",
-      `
+    build.vite(`
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -443,21 +444,16 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   for (const file of ["index.html", "sw.js", ".build-inputs.json"]) fs.writeFileSync(path.join(out, file), "[]");
   console.log("fixture-bundler-ran");
 }
-`,
-    );
+`);
     for (const file of validatorNames) {
       fs.writeFileSync(path.join(root, "scripts", file), "export {};\n");
     }
     const run = () => {
-      const result = runNode(root, ["scripts/ui.js", "build"], {
-        env: {
-          ...process.env,
-          BUILD_ALL_CACHE_ROOT: path.join(root, "cache"),
-          OPENCLAW_BUILD_CACHE: "1",
-          ...buildEnvironment,
-          OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS: "1",
-          OPENCLAW_CONTROL_UI_BUILD_ID: "cache-test",
-        },
+      const result = build.run({
+        BUILD_ALL_CACHE_ROOT: path.join(root, "cache"),
+        OPENCLAW_BUILD_CACHE: "1",
+        OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS: "1",
+        OPENCLAW_CONTROL_UI_BUILD_ID: "cache-test",
       });
       expectExit(result);
       return result.stdout;
@@ -477,71 +473,38 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   });
 
   it.each([
-    {
-      label: "b: Vite failure with stale output",
-      viteExit: 1,
-    },
-    {
-      label: "d: success replacing stale output and cleaning dead siblings",
-      seedSiblings: true,
-      expectedExit: 0,
-      expectedHealth: "ready",
-      expectedOutputId: "fixture-runtime",
-      expectedDistEntries: ["control-ui", ...liveUiBuildSiblings],
-    },
-    {
-      label: "e: EPERM publication failure with stale output",
-      publishDenials: 100,
-      expectedWaits: [100, 200, 400, 800, 1600],
-      expectedStderr: "Failed to publish Control UI build; previous output retained.",
-    },
-    {
-      label: "f: interrupted swap restored before a failed retry",
-      retiredOnly: true,
-      viteExit: 1,
-    },
-  ])(
-    "publishes only validated complete output ($label)",
-    ({
-      retiredOnly = false,
-      viteExit = 0,
-      seedSiblings = false,
-      publishDenials = 0,
-      expectedExit = 1,
-      expectedHealth = "stale",
-      expectedOutputId = "stale-runtime",
-      expectedDistEntries = ["control-ui"],
-      expectedWaits = [],
-      expectedStderr = null,
-    }) => {
-      const root = fs.realpathSync(tempDirs.make("openclaw-ui-publication-"));
-      copyUiFixture(root);
-      const output = path.join(root, "dist/control-ui");
-      const deadPid = 2_147_483_647;
-      if (seedSiblings || retiredOnly) {
-        expect(isPidDefinitelyDead(deadPid)).toBe(true);
-      }
-      const buildId = "fixture-runtime";
-      const buildFiles = (id: string) => ({
-        "index.html": `<html ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${id}-${"a".repeat(64)}"><script type="module" src="./assets/index.js"></script></html>`,
-        "assets/index.js": `console.log(${JSON.stringify(id)});`,
-        "assets/lazy.js": `export default ${JSON.stringify(id)};`,
-      });
-      writeFiles(
-        retiredOnly ? path.join(root, "dist", `control-ui.build-${deadPid}-x.retired`) : output,
-        buildFiles("stale-runtime"),
-      );
-      if (retiredOnly) {
-        const unfinished = path.join(root, "dist", `control-ui.build-${deadPid}-y`);
-        fs.mkdirSync(unfinished);
-        fs.writeFileSync(path.join(unfinished, "junk"), "incomplete");
-      }
-      const modules = path.join(root, "node_modules");
-      writeUiPackageBin(modules, "dompurify", "export {};\n");
-      writeUiPackageBin(
-        modules,
-        "vite",
-        `
+    "Vite failure with stale output",
+    "success replacing stale output and cleaning dead siblings",
+    "EPERM publication failure with stale output",
+    "interrupted swap restored before a failed retry",
+  ])("publishes only validated complete output (%s)", (scenario) => {
+    const seedSiblings = scenario.startsWith("success");
+    const retiredOnly = scenario.startsWith("interrupted");
+    const publishDenials = scenario.startsWith("EPERM") ? 100 : 0;
+    const viteExit = scenario.startsWith("Vite") || retiredOnly ? 1 : 0;
+    const root = fs.realpathSync(tempDirs.make("openclaw-ui-publication-"));
+    const build = prepareBuildFixture(root);
+    const output = path.join(root, "dist/control-ui");
+    const deadPid = 2_147_483_647;
+    if (seedSiblings || retiredOnly) {
+      expect(isPidDefinitelyDead(deadPid)).toBe(true);
+    }
+    const buildId = "fixture-runtime";
+    const buildFiles = (id: string) => ({
+      "index.html": `<html ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${id}-${"a".repeat(64)}"><script type="module" src="./assets/index.js"></script></html>`,
+      "assets/index.js": `console.log(${JSON.stringify(id)});`,
+      "assets/lazy.js": `export default ${JSON.stringify(id)};`,
+    });
+    writeFiles(
+      retiredOnly ? path.join(root, "dist", `control-ui.build-${deadPid}-x.retired`) : output,
+      buildFiles("stale-runtime"),
+    );
+    if (retiredOnly) {
+      const unfinished = path.join(root, "dist", `control-ui.build-${deadPid}-y`);
+      fs.mkdirSync(unfinished);
+      fs.writeFileSync(path.join(unfinished, "junk"), "incomplete");
+    }
+    build.vite(`
 import fs from "node:fs";
 import path from "node:path";
 const args = process.argv.slice(2);
@@ -552,15 +515,14 @@ for (const [file, bytes] of Object.entries(${JSON.stringify(buildFiles(buildId))
 }
 console.log(JSON.stringify({ tool: "vite", out, args }));
 process.exitCode = ${viteExit};
-`,
-      );
-      for (const [validator, name, exitCode] of [
-        ["check-control-ui-precompressed-assets.mts", "precompressed", 0],
-        ["check-control-ui-performance.mts", "performance", 0],
-      ] as const) {
-        fs.writeFileSync(
-          path.join(root, "scripts", validator),
-          `
+`);
+    for (const [validator, name] of [
+      ["check-control-ui-precompressed-assets.mts", "precompressed"],
+      ["check-control-ui-performance.mts", "performance"],
+    ] as const) {
+      fs.writeFileSync(
+        path.join(root, "scripts", validator),
+        `
 import fs from "node:fs";
 import path from "node:path";
 const args = process.argv.slice(2);
@@ -568,15 +530,14 @@ const out = args.includes("--dist") ? args[args.indexOf("--dist") + 1]
   : args.find(arg => !arg.startsWith("--")) ?? path.resolve("dist/control-ui");
 console.log(JSON.stringify({ tool: ${JSON.stringify(name)}, out, args }));
 if (out && !fs.existsSync(path.join(out, "index.html"))) throw new Error("missing staged index");
-process.exitCode = ${exitCode};
 `,
-        );
-      }
-      const fsGuard = path.join(root, "fs-guard.cjs");
-      const waitsFile = path.join(root, "rename-waits.json");
-      fs.writeFileSync(
-        fsGuard,
-        `
+      );
+    }
+    const fsGuard = path.join(root, "fs-guard.cjs");
+    const waitsFile = path.join(root, "rename-waits.json");
+    fs.writeFileSync(
+      fsGuard,
+      `
 const fs = require("node:fs");
 const rename = fs.renameSync;
 let remainingDenials = ${publishDenials};
@@ -596,86 +557,74 @@ fs.renameSync = function(from, to) {
 };
 require("node:module").syncBuiltinESMExports();
 `,
-      );
-      const args = [
-        "--require",
-        fsGuard,
-        "scripts/ui.js",
-        "build",
-        "--mode",
-        "fixture with spaces",
-      ];
-      if (seedSiblings) {
-        for (const name of [
-          ...liveUiBuildSiblings,
-          `control-ui.build-${deadPid}-dead`,
-          `control-ui.build-${deadPid}-dead.retired`,
-        ]) {
-          fs.mkdirSync(path.join(root, "dist", name), { recursive: true });
-          fs.writeFileSync(path.join(root, "dist", name, "sentinel"), name);
+    );
+    const args = ["--require", fsGuard, "scripts/ui.js", "build", "--mode", "fixture with spaces"];
+    if (seedSiblings) {
+      for (const name of [
+        ...liveUiBuildSiblings,
+        `control-ui.build-${deadPid}-dead`,
+        `control-ui.build-${deadPid}-dead.retired`,
+      ]) {
+        fs.mkdirSync(path.join(root, "dist", name), { recursive: true });
+        fs.writeFileSync(path.join(root, "dist", name, "sentinel"), name);
+      }
+    }
+    const result = build.run({ OPENCLAW_CONTROL_UI_BUILD_ID: buildId }, args);
+    expectExit(result, seedSiblings ? 0 : 1);
+    expect(JSON.parse(fs.readFileSync(waitsFile, "utf8"))).toEqual(
+      publishDenials ? [100, 200, 400, 800, 1600] : [],
+    );
+    expect(inspectControlUiRootAssets(output, buildId).kind).toBe(seedSiblings ? "ready" : "stale");
+    const expected = buildFiles(seedSiblings ? buildId : "stale-runtime");
+    expect(
+      fs
+        .readdirSync(output, { recursive: true, encoding: "utf8" })
+        .toSorted((left, right) => left.localeCompare(right)),
+    ).toEqual(["assets", ...Object.keys(expected)].map((file) => path.normalize(file)).toSorted());
+    for (const [file, bytes] of Object.entries(expected)) {
+      expect(fs.readFileSync(path.join(output, file))).toEqual(Buffer.from(bytes));
+    }
+    expect(fs.readdirSync(path.join(root, "dist")).toSorted()).toEqual(
+      ["control-ui", ...(seedSiblings ? liveUiBuildSiblings : [])].toSorted(),
+    );
+    if (seedSiblings) {
+      for (const name of liveUiBuildSiblings) {
+        expect(fs.readFileSync(path.join(root, "dist", name, "sentinel"), "utf8")).toBe(name);
+      }
+    }
+    if (seedSiblings) {
+      if (process.platform !== "win32") {
+        const published = [
+          output,
+          ...fs
+            .readdirSync(output, { recursive: true, encoding: "utf8" })
+            .map((entry) => path.join(output, entry)),
+        ];
+        for (const entry of published) {
+          const stat = fs.statSync(entry);
+          expect(stat.mode & 0o777, entry).toBe(stat.isDirectory() ? 0o755 : 0o644);
         }
       }
-      const result = runNode(root, args, {
-        env: {
-          ...process.env,
-          ...buildEnvironment,
-          OPENCLAW_CONTROL_UI_BUILD_ID: buildId,
+      const calls = outputLines(result);
+      const staging = calls[0].out;
+      expect(path.dirname(staging)).toBe(path.join(root, "dist"));
+      expect(staging).not.toBe(output);
+      expect(calls).toEqual([
+        {
+          tool: "vite",
+          out: staging,
+          args: ["build", "--mode", "fixture with spaces", "--outDir", staging],
         },
-      });
-      expectExit(result, expectedExit);
-      expect(JSON.parse(fs.readFileSync(waitsFile, "utf8"))).toEqual(expectedWaits);
-      expect(inspectControlUiRootAssets(output, buildId).kind).toBe(expectedHealth);
-      const expected = buildFiles(expectedOutputId);
-      expect(
-        fs
-          .readdirSync(output, { recursive: true, encoding: "utf8" })
-          .toSorted((left, right) => left.localeCompare(right)),
-      ).toEqual(
-        ["assets", ...Object.keys(expected)].map((file) => path.normalize(file)).toSorted(),
+        { tool: "precompressed", out: staging, args: [staging] },
+        { tool: "performance", out: staging, args: ["--report-only", "--dist", staging] },
+      ]);
+    }
+    if (publishDenials) {
+      expect(result.stderr).toContain(
+        "Failed to publish Control UI build; previous output retained.",
       );
-      for (const [file, bytes] of Object.entries(expected)) {
-        expect(fs.readFileSync(path.join(output, file))).toEqual(Buffer.from(bytes));
-      }
-      expect(fs.readdirSync(path.join(root, "dist")).toSorted()).toEqual(
-        expectedDistEntries.toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
-      );
-      if (seedSiblings) {
-        for (const name of liveUiBuildSiblings) {
-          expect(fs.readFileSync(path.join(root, "dist", name, "sentinel"), "utf8")).toBe(name);
-        }
-      }
-      if (expectedExit === 0) {
-        if (process.platform !== "win32") {
-          const published = [
-            output,
-            ...fs
-              .readdirSync(output, { recursive: true, encoding: "utf8" })
-              .map((entry) => path.join(output, entry)),
-          ];
-          for (const entry of published) {
-            const stat = fs.statSync(entry);
-            expect(stat.mode & 0o777, entry).toBe(stat.isDirectory() ? 0o755 : 0o644);
-          }
-        }
-        const calls = outputLines(result);
-        const staging = calls[0].out;
-        expect(path.dirname(staging)).toBe(path.join(root, "dist"));
-        expect(staging).not.toBe(output);
-        expect(calls).toEqual([
-          {
-            tool: "vite",
-            out: staging,
-            args: ["build", "--mode", "fixture with spaces", "--outDir", staging],
-          },
-          { tool: "precompressed", out: staging, args: [staging] },
-          { tool: "performance", out: staging, args: ["--report-only", "--dist", staging] },
-        ]);
-      }
-      if (expectedStderr) {
-        expect(result.stderr).toContain(expectedStderr);
-      }
-    },
-  );
+    }
+  });
 
   it("checks the selected staged directory with both real validators", () => {
     const root = tempDirs.make("openclaw-ui-validators-");
@@ -703,14 +652,8 @@ require("node:module").syncBuiltinESMExports();
   it("reports budgets and enforces asset validity without compiler children or disk caches", () => {
     const tempDir = fs.realpathSync(tempDirs.make("openclaw-ui-cache-"));
     const root = path.join(tempDir, "repo");
-    copyUiFixture(root);
-    const modules = path.join(root, "node_modules");
-    const vite = writeUiPackageBin(
-      modules,
-      "vite",
-      'throw new Error("build must be intercepted");',
-    );
-    writeUiPackageBin(modules, "dompurify", "export {};\n");
+    const build = prepareBuildFixture(root);
+    const vite = build.vite('throw new Error("build must be intercepted");');
     const tempRoot = path.join(tempDir, "temp");
     const cacheRoots = ["tsx", `tsx-${process.geteuid?.() ?? os.userInfo().username}`].map((name) =>
       path.join(tempRoot, name),
@@ -858,73 +801,59 @@ require("node:module").syncBuiltinESMExports();
   });
 
   it.runIf(process.platform !== "win32").for([
-    ["acknowledged SIGTERM", null, 143, null],
-    ["raw SIGKILL", "SIGKILL", null, "SIGKILL"],
+    ["acknowledged SIGTERM", false, false, null, 143, null],
+    ["raw SIGKILL", false, false, "SIGKILL", null, "SIGKILL"],
+    ["resistant descendant", true, false, null, null, "SIGKILL"],
+    ["failed descendant capture", true, true, null, null, "SIGTERM"],
   ] as const)(
     "preserves %s after UI wrapper shutdown",
-    async ([_label, childSignal, code, signal], { signal: testSignal }) => {
+    async (
+      [_label, descendant, failedCapture, childSignal, code, signal],
+      { signal: testSignal },
+    ) => {
       const { root, files, runner, env } = processFixture("wrapper-signals");
-      const childOutcome = childSignal
-        ? `process.kill(process.pid, '${childSignal}');`
-        : "setTimeout(() => process.exit(0), 25);";
-      const handlerLines = ["SIGTERM", "SIGHUP"].flatMap((handledSignal) => [
-        `process.once('${handledSignal}', () => {`,
-        `  fs.writeFileSync(process.env.SIGNALED_FILE, '${handledSignal}');`,
-        childOutcome,
-        "});",
-      ]);
-      fs.writeFileSync(
-        runner,
-        [
-          "import fs from 'node:fs';",
-          fixtureReceiptClientSource(receipts.endpoint),
-          ...handlerLines,
-          "fs.writeFileSync(process.env.RUNNER_PID_FILE, String(process.pid));",
-          "fs.writeFileSync(process.env.READY_FILE, process.argv.slice(2).join(' '));",
-          "sendReceipt(process.env.READY_FILE, 'ready');",
-          "setInterval(() => { if (fs.existsSync(process.env.RELEASE_FILE)) process.exit(0); }, 20);",
-        ].join("\n"),
-      );
-      const { wrapper, completion } = startWrapper(env);
-      await withUiProcessCleanup(wrapper, completion, root, [files.runnerPid], async () => {
-        await withinTest(
-          fixtureReadyBeforeExit(files.ready, "UI runner readiness", completion),
-          testSignal,
-        );
-        expect(fs.readFileSync(files.ready, "utf8")).toBe("install");
-        const runnerPid = Number(fs.readFileSync(files.runnerPid, "utf8"));
-        wrapper.kill("SIGTERM");
-        const exit = await withinTest(completion, testSignal);
-        expect(exit).toEqual({ code, signal });
-        expect(fs.readFileSync(files.signaled, "utf8")).toBe("SIGTERM");
-        expect(pidAlive(runnerPid), "UI wrapper returned before its child stopped").toBe(false);
-      });
-    },
-  );
-
-  it.runIf(process.platform !== "win32").for([false, true])(
-    "keeps resistant-descendant cleanup raw with failed capture=%s",
-    async (failedCapture, { signal }) => {
-      const { root, files, runner, env } = processFixture("wrapper-tree");
+      const keepAlive =
+        "setInterval(() => { if (fs.existsSync(process.env.RELEASE_FILE)) process.exit(0); }, 20);";
       const descendantSource = [
         "import fs from 'node:fs';",
         fixtureReceiptClientSource(receipts.endpoint),
         "process.on('SIGTERM', () => {});",
         "fs.writeFileSync(process.env.DESCENDANT_PID_FILE, String(process.pid));",
         "sendReceipt(process.env.DESCENDANT_PID_FILE, 'ready');",
-        "setInterval(() => { if (fs.existsSync(process.env.RELEASE_FILE)) process.exit(0); }, 20);",
+        keepAlive,
       ].join("\n");
+      const childOutcome = childSignal
+        ? `process.kill(process.pid, '${childSignal}');`
+        : "setTimeout(() => process.exit(0), 25);";
+      const handlerLines = descendant
+        ? ["process.on('SIGTERM', () => process.exit(0));"]
+        : ["SIGTERM", "SIGHUP"].flatMap((handledSignal) => [
+            `process.once('${handledSignal}', () => {`,
+            `  fs.writeFileSync(process.env.SIGNALED_FILE, '${handledSignal}');`,
+            childOutcome,
+            "});",
+          ]);
       fs.writeFileSync(
         runner,
         [
           "import { spawn } from 'node:child_process';",
           "import fs from 'node:fs';",
-          "process.on('SIGTERM', () => process.exit(0));",
+          ...(descendant ? [] : [fixtureReceiptClientSource(receipts.endpoint)]),
+          ...handlerLines,
           "fs.writeFileSync(process.env.RUNNER_PID_FILE, String(process.pid));",
-          "fs.writeFileSync(process.env.READY_FILE, 'ready');",
-          `const child = spawn(process.execPath, ['--input-type=module', '--eval', ${JSON.stringify(descendantSource)}], { stdio: 'ignore' });`,
-          "child.unref();",
-          "setInterval(() => { if (fs.existsSync(process.env.RELEASE_FILE)) process.exit(0); }, 20);",
+          ...(descendant
+            ? ["fs.writeFileSync(process.env.READY_FILE, 'ready');"]
+            : [
+                "fs.writeFileSync(process.env.READY_FILE, process.argv.slice(2).join(' '));",
+                "sendReceipt(process.env.READY_FILE, 'ready');",
+              ]),
+          ...(descendant
+            ? [
+                `const child = spawn(process.execPath, ['--input-type=module', '--eval', ${JSON.stringify(descendantSource)}], { stdio: 'ignore' });`,
+                "child.unref();",
+              ]
+            : []),
+          keepAlive,
         ].join("\n"),
       );
       if (failedCapture) {
@@ -943,22 +872,26 @@ require("node:module").syncBuiltinESMExports();
         wrapper,
         completion,
         root,
-        [files.runnerPid, files.descendantPid],
+        descendant ? [files.runnerPid, files.descendantPid] : [files.runnerPid],
         async () => {
           // The descendant publishes only after its resistant handler is installed.
+          const ready = descendant ? files.descendantPid : files.ready;
           await withinTest(
-            fixtureReadyBeforeExit(
-              files.descendantPid,
-              "UI runner descendant readiness",
-              completion,
-            ),
-            signal,
+            fixtureReadyBeforeExit(ready, "UI runner readiness", completion),
+            testSignal,
           );
-          const descendantPid = Number(fs.readFileSync(files.descendantPid, "utf8"));
+          const watchedPid = Number(
+            fs.readFileSync(descendant ? files.descendantPid : files.runnerPid, "utf8"),
+          );
           wrapper.kill("SIGTERM");
-          const exit = await withinTest(completion, signal);
-          expect(exit).toEqual({ code: null, signal: failedCapture ? "SIGTERM" : "SIGKILL" });
-          expect(pidAlive(descendantPid)).toBe(failedCapture);
+          expect(await withinTest(completion, testSignal)).toEqual({ code, signal });
+          expect(pidAlive(watchedPid), "UI wrapper returned before its child stopped").toBe(
+            failedCapture,
+          );
+          if (!descendant) {
+            expect(fs.readFileSync(files.ready, "utf8")).toBe("install");
+            expect(fs.readFileSync(files.signaled, "utf8")).toBe("SIGTERM");
+          }
           if (failedCapture) {
             expect(fs.readFileSync(files.captureFailed, "utf8")).toBe("failed");
           }
