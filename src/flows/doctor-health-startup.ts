@@ -6,7 +6,9 @@ import type { DoctorDatabasePreflight } from "../commands/doctor-database-prefli
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import { resolveDoctorRepairMode } from "../commands/doctor-repair-mode.js";
 import { resolveIsNixMode, resolveStateDir } from "../config/paths.js";
+import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { createNonExitingRuntime, defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 
 export const showDoctorIntro = (message: string) =>
   clackIntro(stylePromptTitle(message) ?? message);
@@ -134,6 +136,7 @@ export async function prepareDoctorMaintenanceArchives(
   runtime: RuntimeEnv,
   preflightOptions: { preserveSourceArtifacts?: true } = {},
 ): Promise<DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"]> {
+  const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
   let discovery: DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"];
   try {
     const { prepareDoctorDatabasePreflight } =
@@ -149,9 +152,8 @@ export async function prepareDoctorMaintenanceArchives(
     // Offline admission still owns repairable schema and discovery failures.
     runtime.log(`Archive verification preparation deferred: ${String(error)}`);
   }
-  const { waitForCliSignalExit } = await import("../cli/signal-exit-barrier.js");
-  // Keep an accepted signal during preparation ahead of service custody.
-  await waitForCliSignalExit();
+  // Exit cleanup waits for this command to unwind; never join it from inside the command.
+  signal?.throwIfAborted();
   return discovery;
 }
 

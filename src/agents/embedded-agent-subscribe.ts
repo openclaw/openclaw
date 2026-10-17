@@ -414,7 +414,6 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     // Reject pending compaction wait to unblock awaiting code.
     // Don't resolve, as that would incorrectly signal "compaction complete" when it's still in-flight.
     if (compactionRetry) {
-      log.debug(`unsubscribe: rejecting compaction wait runId=${params.runId}`);
       const { reject } = compactionRetry;
       compactionRetry = undefined;
       reject(createAbortError("Unsubscribed during compaction"));
@@ -422,7 +421,6 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     // Cancel any in-flight compaction to prevent resource leaks when unsubscribing.
     // Only abort if compaction is actually running to avoid unnecessary work.
     if (params.session.isCompacting) {
-      log.debug(`unsubscribe: aborting in-flight compaction runId=${params.runId}`);
       try {
         params.session.abortCompaction();
       } catch (err) {

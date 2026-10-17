@@ -1,13 +1,3 @@
-.session-menu__compact-details {
-  display: inline-flex;
-  flex: 0 1 auto;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  max-width: 96px;
-  overflow: hidden;
-}
-
 .sidebar-session-sort-menu.oc-menu {
   box-sizing: border-box;
   width: min(220px, calc(100dvw - 16px));

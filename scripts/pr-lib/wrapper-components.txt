@@ -705,6 +705,7 @@ src/state/incognito-session-error.ts
 src/config/sessions/session-model-context-projection.ts
 src/config/sessions/session-model-context-navigation.ts
 src/config/sessions/session-model-context-pages.ts
+src/config/sessions/session-model-context-pairing.ts
 src/config/sessions/session-model-context-read.ts
 src/config/sessions/session-model-context-window.ts
 src/config/sessions/session-mutation-conflict-error.ts

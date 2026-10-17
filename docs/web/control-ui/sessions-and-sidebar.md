@@ -129,8 +129,9 @@ or connections without a durable profile stay browser-local rather than writing
 another person’s layout or shared Gateway configuration.
 
 New session previews the first prompt immediately while the Gateway accepts it.
-A temporary selected row appears in the sidebar immediately, clearing the previous
-chat’s highlight without changing the saved session until creation is accepted.
+A temporary selected row appears in the sidebar immediately, at the top of the
+session list or under its agent in the agent roster, clearing the previous chat’s
+highlight without changing the saved session until creation is accepted.
 The temporary row has no session actions; a failed creation restores the draft.
 As soon as creation is accepted, the submitted prompt and attachments are cleared
 from the New session composer, without waiting for its chat preview to load. The

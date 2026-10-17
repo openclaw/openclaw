@@ -140,6 +140,10 @@ export interface SessionListHost {
   showMoreChildren(sessionKey: string): void;
   toggleSection(sectionId: string): void;
   expandedAgentId(): string;
+  /** Unadmitted New session handoff; presentation only, never a saved selection. */
+  pendingSessionCreate():
+    | Readonly<{ creation: Readonly<{ sessionKey: string }>; displayName?: string }>
+    | undefined;
   readNewSessionAccess(): SessionMethodAccess;
   readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess;
   requestOpenNewSession(agentId: string, target?: NewSessionTarget): void;
