@@ -117,11 +117,15 @@ export async function restoreColdLoadWarmState(
   await page.unroute(resetUrl);
   await page.evaluate("globalThis.__name = (fn) => fn");
   await page.evaluate(
-    async ({ storage, url }) => {
+    async ({ storage: savedStorage, url: deepLink }) => {
       localStorage.clear();
       sessionStorage.clear();
-      for (const [key, value] of storage.localStorage) localStorage.setItem(key, value);
-      for (const [key, value] of storage.sessionStorage) sessionStorage.setItem(key, value);
+      for (const [key, value] of savedStorage.localStorage) {
+        localStorage.setItem(key, value);
+      }
+      for (const [key, value] of savedStorage.sessionStorage) {
+        sessionStorage.setItem(key, value);
+      }
       const request = indexedDB.open("openclaw-chat-snapshots");
       const database = await new Promise<IDBDatabase>((resolve, reject) => {
         request.addEventListener("success", () => resolve(request.result), { once: true });
@@ -145,13 +149,15 @@ export async function restoreColdLoadWarmState(
         for (const name of names) {
           const store = transaction.objectStore(name);
           store.clear();
-          for (const record of storage[name]) store.put(record);
+          for (const record of savedStorage[name]) {
+            store.put(record);
+          }
         }
         await complete;
       } finally {
         database.close();
       }
-      history.replaceState(null, "", url);
+      history.replaceState(null, "", deepLink);
     },
     { storage, url },
   );
