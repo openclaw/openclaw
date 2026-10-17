@@ -19,7 +19,7 @@ export function extractBtwQuestion(
     return null;
   }
   const normalized = normalizeCommandBody(text, options).trim();
-  const match = normalized.match(/^\/btw(?:\s+(.*))?$/i);
+  const match = normalized.match(/^\/btw(?:\s+([\s\S]*))?$/i);
   if (!match) {
     return null;
   }

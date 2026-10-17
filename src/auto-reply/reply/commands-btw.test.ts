@@ -179,6 +179,32 @@ describe("handleBtwCommand", () => {
     expectReply(result, "nothing important", "what changed?");
   });
 
+  it("passes every line of a multi-line side question to the runner", async () => {
+    const cases = [
+      [
+        "/btw why does this fail?\nError: ENOSPC\n  at write",
+        "why does this fail?\nError: ENOSPC\n  at write",
+      ],
+      ["/btw\nwhy does this fail?", "why does this fail?"],
+      ["/side first\n\nsecond", "first\n\nsecond"],
+    ] as const;
+    for (const [body, question] of cases) {
+      runBtwSideQuestionMock.mockReset();
+      runBtwSideQuestionMock.mockResolvedValue({ text: "answer" });
+      const params = buildParams(body);
+      params.agentDir = "/tmp/agent";
+      params.sessionEntry = { sessionId: "session-1", updatedAt: Date.now() };
+
+      const result = await handleBtwCommand(params, true);
+
+      expect(mockFirstObjectArg(runBtwSideQuestionMock).question).toBe(question);
+      expect(result).toEqual({
+        shouldContinue: false,
+        reply: { text: "answer", btw: { question } },
+      });
+    }
+  });
+
   it("uses the originating target before the command transport target", async () => {
     const params = activeParams();
     params.ctx.OriginatingTo = "channel:source";
