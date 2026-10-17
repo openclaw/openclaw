@@ -36,6 +36,7 @@ export async function resolveModelBackedReviewerPolicyProvider(params: {
 
 export const {
   resolveCodexAppServerAuthProfileId,
+  resolveCodexAppServerAuthProfileOrder,
   resolveCodexAppServerAuthProfileIdForAgent,
   resolveCodexAppServerAuthProfileStore,
 } = createCodexAuthProfileSelection({

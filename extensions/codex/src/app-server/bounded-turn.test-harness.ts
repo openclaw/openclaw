@@ -65,6 +65,7 @@ export function createClientFactory(
     errorBeforeCompletion?: { message: string; willRetry: boolean; codexErrorInfo?: JsonValue };
     terminalStatus?: "completed" | "interrupted" | "failed";
     terminalError?: { message: string; codexErrorInfo?: JsonValue };
+    rateLimits?: JsonValue;
     assistantDelta?: string;
     emptyAnswer?: boolean;
     completeTurn?: boolean;
@@ -235,6 +236,9 @@ export function createClientFactory(
         }
       });
       return inProgressTurnResult();
+    }
+    if (method === "account/rateLimits/read" && options.rateLimits !== undefined) {
+      return options.rateLimits;
     }
     throw new Error(`unexpected request: ${method}`);
   });
