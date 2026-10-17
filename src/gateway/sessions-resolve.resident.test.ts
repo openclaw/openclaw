@@ -163,6 +163,7 @@ it.each(["exact", "broad"] as const)(
   async (publication) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       seed();
+      addUnrelatedSessions();
       using owner = await residentProjection();
       const { projection } = owner;
       const resolve = (sessionId: string) =>
@@ -180,14 +181,20 @@ it.each(["exact", "broad"] as const)(
               return emit({ all: true, scope: { agentId, storePath } }, database);
             })
           : undefined;
-      runOpenClawAgentWriteTransaction(
-        (database) => writeSessionEntry(database, key, { ...entry, sessionId: "replacement-id" }),
-        { agentId: "main" },
-      );
-      publicationSpy?.mockRestore();
-      expect(await resolve("replacement-id")).toEqual(resolved(key));
-      expect(await resolve(entry.sessionId)).toEqual(missing);
-      expect(await resolve(key)).toEqual(resolved(key));
+      await projection.withSelectionPreparation(async () => {
+        runOpenClawAgentWriteTransaction(
+          (database) => writeSessionEntry(database, key, { ...entry, sessionId: "replacement-id" }),
+          { agentId: "main" },
+        );
+        publicationSpy?.mockRestore();
+        expect(projection.dirtyRowCount).toBeGreaterThan(0);
+        expect(await resolve("replacement-id")).toEqual(resolved(key));
+        expect(await resolve(entry.sessionId)).toEqual(missing);
+        expect(await resolve(key)).toEqual(resolved(key));
+        if (publication === "broad") {
+          expect(projection.dirtyRowCount).toBeGreaterThanOrEqual(96);
+        }
+      });
     });
   },
 );

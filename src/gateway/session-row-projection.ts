@@ -572,6 +572,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       rows,
       dirty,
       matching,
+      hasUnresolvedCategories: rowFacts.needsPreparation(),
       acquire: (row) =>
         acquireEntry(row, row.retainedDatabaseFacts?.entry ?? readSessionRowEntry(row)),
       referenced,
