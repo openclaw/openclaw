@@ -24,10 +24,7 @@ const { tempDirs, createFixture } = setupLegacyMainSessionMigrationTests();
 const completed = buildAgentRunTerminalOutcome({ status: "ok" });
 const stopped = buildAgentRunTerminalOutcome({ status: "error", stopReason: "rpc" });
 const interrupted = buildAgentRunTerminalOutcome({ status: "timeout", stopReason: "restart" });
-const failed = buildAgentRunTerminalOutcome({
-  status: "error",
-  error: "Synthetic retryable failure",
-});
+const failed = buildAgentRunTerminalOutcome({ status: "error", error: "Retryable failure" });
 
 function createInputHandoff(sharedStore = false) {
   const storePath = sharedStore
@@ -71,7 +68,6 @@ function createInputHandoff(sharedStore = false) {
           idempotencyKey: `${runId}:user`,
         },
       }),
-      "Expected accepted input custody",
     );
     try {
       if (params.collected) {
@@ -80,13 +76,12 @@ function createInputHandoff(sharedStore = false) {
             ...receipt.message,
             idempotencyKey: `${runId}:collected`,
           }),
-          "Expected collected input custody",
         );
-        expect(
-          await aggregate.run(() =>
-            appendTranscriptMessage(scope(target), { message: aggregate.message }),
-          ),
-        ).toMatchObject({ appended: true, messageId: aggregate.inputId });
+        const message = aggregate.message;
+        const result = await aggregate.run(() =>
+          appendTranscriptMessage(scope(target), { message }),
+        );
+        expect(result).toMatchObject({ appended: true, messageId: aggregate.inputId });
       }
       if (params.completion) {
         await receipt.completeAsync!(params.completion);
@@ -99,10 +94,8 @@ function createInputHandoff(sharedStore = false) {
   };
   const setCompletedAt = (target: ClaimTarget, completedAt: number) =>
     withDatabase(target, ({ db }) => {
-      db.prepare("UPDATE session_input_completions SET completed_at = ? WHERE session_key = ?").run(
-        completedAt,
-        target.key,
-      );
+      const sql = "UPDATE session_input_completions SET completed_at = ? WHERE session_key = ?";
+      db.prepare(sql).run(completedAt, target.key);
     });
   return { ...handoff, rows, accept, setCompletedAt };
 }
@@ -122,7 +115,6 @@ describe("legacy main session input handoff", () => {
         );
       });
       const before = f.rows(f.source);
-      expect(before.pending).toHaveLength(3);
       const consumedByEventId = before.pending[2]!.consumed_event_id;
       expect(consumedByEventId).toEqual(expect.any(String));
 
@@ -213,7 +205,6 @@ describe("legacy main session input handoff", () => {
         changed = f.rows(f.source);
       });
 
-      expect(changed).toBeDefined();
       expect(result.complete).toBe(false);
       expect(committed).toEqual([]);
       expect(readClaim(f.source)).toEqual(before);

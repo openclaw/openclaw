@@ -8,15 +8,16 @@ import { deriveSessionMetaPatch, prepareSessionMetaPatch } from "./metadata.js";
 import type { SessionEntry, SessionOrigin } from "./types.js";
 
 const sessionKey = "agent:user";
-const telegramPeer = (id: string) =>
+const directTurn = (provider: string, account: string, from: string, to = from) =>
   ({
-    Provider: "telegram",
-    Surface: "telegram",
+    Provider: provider,
+    Surface: provider,
     ChatType: "direct",
-    AccountId: "sample-bot",
-    From: `telegram:${id}`,
-    To: `telegram:${id}`,
+    AccountId: account,
+    From: from,
+    To: to,
   }) satisfies Partial<MsgContext>;
+const telegramPeer = (id: string) => directTurn("telegram", "sample-bot", `telegram:${id}`);
 
 type ProjectedSessionEntry = SessionEntry & { origin?: SessionOrigin };
 
@@ -57,15 +58,10 @@ it("drops the old native portrait when a shared main session moves to another pe
 });
 
 const slackTurn = {
-  Provider: "slack",
-  Surface: "slack",
-  ChatType: "direct",
-  From: "slack:U0001",
-  To: "slack:D111SLACK",
+  ...directTurn("slack", "slack-team-1", "slack:U0001", "slack:D111SLACK"),
   NativeChannelId: "D111SLACK",
   NativeDirectUserId: "U0001",
   ConversationAvatar: "/media/inbound/slack-avatar.png",
-  AccountId: "slack-team-1",
   MessageThreadId: "1700000000.000100",
 } satisfies Partial<MsgContext>;
 
@@ -81,24 +77,13 @@ it.each<[string, Partial<MsgContext>]>([
     "provider with native identity",
     { ...telegramTurn, NativeChannelId: "C222TG", MessageThreadId: 555 },
   ],
-  [
-    "account",
-    {
-      Provider: "slack",
-      Surface: "slack",
-      ChatType: "direct",
-      From: "slack:U0002",
-      To: "slack:D222SLACK",
-      AccountId: "slack-team-2",
-    },
-  ],
+  ["account", directTurn("slack", "slack-team-2", "slack:U0002", "slack:D222SLACK")],
   ["surface", { ...slackTurn, Surface: "slack-canvas", To: "slack:D222SLACK" }],
 ])("replaces stale channel identity after a %s change", (name, turn) => {
   const { NativeChannelId: channel, MessageThreadId: thread } = turn;
   const afterSlack = applyOrigin(undefined, slackTurn);
   expect(afterSlack.origin).toMatchObject({
-    nativeChannelId: "D111SLACK",
-    threadId: "1700000000.000100",
+    ...slackIdentity,
     avatar: "/media/inbound/slack-avatar.png",
   });
   const switched = applyOrigin(afterSlack, turn);
@@ -120,6 +105,7 @@ it.each<[string, Partial<MsgContext>]>([
   expect(applyOrigin(switched, turn).origin).toEqual(switched.origin);
 });
 
+const slackIdentity = { nativeChannelId: "D111SLACK", threadId: "1700000000.000100" };
 it.each([false, true])("preserves sparse metadata when identity was incomplete=%s", (sparse) => {
   const existing: SessionEntry = sparse
     ? {
@@ -127,11 +113,7 @@ it.each([false, true])("preserves sparse metadata when identity was incomplete=%
         updatedAt: 1,
         delivery: normalizeSessionDeliveryState({
           context: { channel: "slack", to: "slack:D111SLACK" },
-          origin: {
-            provider: "slack",
-            nativeChannelId: "D111SLACK",
-            threadId: "1700000000.000100",
-          },
+          origin: { provider: "slack", ...slackIdentity },
         }),
       }
     : applyOrigin(undefined, slackTurn);
@@ -145,8 +127,7 @@ it.each([false, true])("preserves sparse metadata when identity was incomplete=%
   expect(next.origin).toMatchObject({
     surface: "slack",
     accountId: "slack-team-1",
-    nativeChannelId: "D111SLACK",
-    threadId: "1700000000.000100",
+    ...slackIdentity,
   });
 });
 
@@ -164,10 +145,7 @@ it("preserves a fresh rich route when the inbound identity switches providers", 
     metadata: prepareSessionMetaPatch({ ctx: telegramTurn as MsgContext }),
   });
 
-  expect(patch.delivery).toMatchObject({
-    kind: "external",
-    route,
-  });
+  expect(patch.delivery).toMatchObject({ kind: "external", route });
 });
 
 function buildDirectTurn(

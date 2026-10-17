@@ -332,7 +332,7 @@ describe("typed Goal operation persistence", () => {
     },
   );
 
-  it("rolls back Goal, lifecycle, and transcript when receipt persistence fails", async () => {
+  it("rolls back full receipt stores, prunes expired receipts, and rejects expired retries", async () => {
     await fillReceipts();
     const retained = receipts();
     const rejected = admit();
@@ -362,6 +362,18 @@ describe("typed Goal operation persistence", () => {
     ).rejects.toMatchObject({ code: "capacity" });
     expect(loadSessionEntry(scope())).toEqual(acceptedEntry);
     expect(receipts()).toEqual(acceptedReceipts);
+
+    await clearSessionGoal(scope());
+    await writeSql("UPDATE session_goal_operations SET expires_at = ?", now - 1);
+    const prunedOperation = { ...startOperation(), ...identity("start-after-pruning") };
+    await admit(prunedOperation);
+    expect(receipts()).toHaveLength(1);
+    await clearSessionGoal(scope());
+    await writeSql("DELETE FROM session_goal_operations");
+    await expect(
+      admit({ ...prunedOperation, issuedAtMs: now - 24 * 60 * 60 * 1000 }),
+    ).rejects.toMatchObject({ code: "expired" });
+    expect(loadSessionEntry(scope())?.goal).toBeUndefined();
   });
 
   it("does not commit a Goal when admission skips its message", async () => {
@@ -434,24 +446,6 @@ describe("typed Goal operation persistence", () => {
       rejectedReason: "session-rebound",
       appendedCount: 0,
     });
-    expect(loadSessionEntry(scope())?.goal).toBeUndefined();
-  });
-
-  it("rejects expired operations after pruning and preserves unexpired receipts at capacity", async () => {
-    const db = database().db;
-    await fillReceipts();
-    await expect(admit()).rejects.toMatchObject({ code: "capacity" });
-    await expectNoTurn();
-    await writeSql("UPDATE session_goal_operations SET expires_at = ?", now - 1);
-    await admit();
-    expect(db.prepare("SELECT count(*) AS count FROM session_goal_operations").get()).toEqual({
-      count: 1,
-    });
-    await clearSessionGoal(scope());
-    await writeSql("DELETE FROM session_goal_operations");
-    await expect(
-      admit({ ...startOperation(), issuedAtMs: now - 24 * 60 * 60 * 1000 }),
-    ).rejects.toMatchObject({ code: "expired" });
     expect(loadSessionEntry(scope())?.goal).toBeUndefined();
   });
 
