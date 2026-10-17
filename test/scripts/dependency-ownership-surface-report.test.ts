@@ -22,19 +22,13 @@ function writeRepoFile(repoRoot: string, relativePath: string, value: string) {
 const writeRepoJson = (root: string, file: string, value: unknown) =>
   writeRepoFile(root, file, JSON.stringify(value));
 
-describe("packageNameFromLockKey", () => {
+describe("dependency ownership surface report", () => {
   it("extracts scoped and unscoped names from pnpm snapshot keys", () => {
     expect(packageNameFromLockKey("@scope/pkg@1.2.3(peer@1.0.0)")).toBe("@scope/pkg");
     expect(packageNameFromLockKey("left-pad@1.3.0")).toBe("left-pad");
   });
-});
-
-describe("parseArgs", () => {
   it("keeps json as a boolean or optional artifact path", () => {
-    expect(parseArgs(["--json"])).toMatchObject({
-      asJson: true,
-      jsonPath: null,
-    });
+    expect(parseArgs(["--json"])).toMatchObject({ asJson: true, jsonPath: null });
     expect(parseArgs(["--json", "report.json"])).toMatchObject({
       asJson: true,
       jsonPath: "report.json",
@@ -50,9 +44,6 @@ describe("parseArgs", () => {
       "--markdown was provided more than once.",
     );
   });
-});
-
-describe("collectDependencyOwnershipSurfaceReport", () => {
   it("reports ownership and install surface with toolchain metadata", () => {
     const repoRoot = makeTempRepo();
     writeRepoJson(repoRoot, "package.json", {
@@ -63,10 +54,8 @@ describe("collectDependencyOwnershipSurfaceReport", () => {
       "pnpm-lock.yaml",
       `---
 lockfileVersion: '9.0'
-packages:
-  toolchain@12.0.0: {hasBin: true}
-snapshots:
-  toolchain@12.0.0: {}
+packages: {toolchain@12.0.0: {hasBin: true}}
+snapshots: {toolchain@12.0.0: {}}
 ---
 lockfileVersion: '9.0'
 importers:
@@ -153,9 +142,9 @@ snapshots:
     expect(markdown).toContain("`core-lib`: 3 resolved transitive packages");
     expect(markdown).toContain("## Workspace Packages With The Most Dependencies");
     expect(markdown).toContain("3 direct dependencies");
-    expect(markdown).not.toContain("dependencys");
     expect(markdown).toContain("## Packages With Install-Time Or Platform-Specific Behavior");
     expect(markdown).toContain("`transitive-native@1.0.0`: requires build");
+    expect(markdown).not.toContain("dependencys");
     expect(markdown).not.toContain("# Dependency Risk Report");
     expect(markdown).not.toContain("Ownership gaps");
     expect(markdown).not.toContain("Largest root dependency cones");
@@ -172,17 +161,11 @@ snapshots:
 lockfileVersion: '9.0'
 importers:
   .:
-    dependencies:
-      core-lib: {specifier: 1.0.0, version: 1.0.0}
+    dependencies: {core-lib: {specifier: 1.0.0, version: 1.0.0}}
   extensions/web-readability:
-    dependencies:
-      plugin-readable: {specifier: 2.0.0, version: 2.0.0}
-packages:
-  core-lib@1.0.0: {}
-  plugin-readable@2.0.0: {}
-snapshots:
-  core-lib@1.0.0: {}
-  plugin-readable@2.0.0: {}
+    dependencies: {plugin-readable: {specifier: 2.0.0, version: 2.0.0}}
+packages: {core-lib@1.0.0: {}, plugin-readable@2.0.0: {}}
+snapshots: {core-lib@1.0.0: {}, plugin-readable@2.0.0: {}}
 `,
     );
     writeRepoJson(repoRoot, "scripts/lib/dependency-ownership.json", {
@@ -200,7 +183,9 @@ snapshots:
 
     const report = collectDependencyOwnershipSurfaceReport({ repoRoot });
 
-    expect(report.ownershipGaps).toStrictEqual([]);
-    expect(report.staleOwnershipRecords).toEqual(["removed-lib"]);
+    expect([report.ownershipGaps, report.staleOwnershipRecords]).toStrictEqual([
+      [],
+      ["removed-lib"],
+    ]);
   });
 });

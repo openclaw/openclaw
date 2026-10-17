@@ -27,12 +27,50 @@ const headSha = "a".repeat(40);
 const staleSha = "b".repeat(40);
 const rolloutSha = "c".repeat(40);
 const mergeBaseSha = "d".repeat(40);
-const comparisonPath = `/repos/openclaw/openclaw/compare/${staleSha}...${headSha}`;
+const repoPath = "/repos/openclaw/openclaw";
+const comparisonPath = `${repoPath}/compare/${staleSha}...${headSha}`;
+const graphPath = `${repoPath}/dependency-graph/compare/${staleSha}...${headSha}`;
+const statusPath = `${repoPath}/commits/${headSha}/statuses`;
+const contentsPath = `${repoPath}/contents`;
+const manifestPath = `${contentsPath}/package.json`;
+const contributorPermission = `${repoPath}/collaborators/contributor/permission`;
+const maintainerPermission = `${repoPath}/collaborators/maintainer/permission`;
 const { isDependencyFile, isDependencyManifest, isPackageLockfile } = loadSecurityReviewPolicy();
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+function comparison(base = staleSha, mergeBase = base) {
+  return { base_commit: { sha: base }, merge_base_commit: { sha: mergeBase } };
+}
 function contentFile(text: string) {
   return { type: "file", encoding: "base64", content: Buffer.from(text).toString("base64") };
+}
+function manifestContent(version: string, test = "old") {
+  return contentFile(JSON.stringify({ devDependencies: { example: version }, scripts: { test } }));
+}
+function changedDependencyFields(version: string, test: string) {
+  return {
+    optionalDependencies: { a: version },
+    peerDependencies: { b: version },
+    overrides: { c: version },
+    packageManager: `pnpm@10.${version === "1" ? "0" : "1"}.0`,
+    pnpm: { patchedDependencies: { d: `patches/d${version === "1" ? "" : "2"}.patch` } },
+    scripts: { test },
+  };
+}
+function connectionError(message = "terminated", code = "ECONNRESET", cause?: string) {
+  return new TypeError(message, { cause: Object.assign(new Error(cause), { code }) });
+}
+function failedFetch(phase: string, error: Error, status?: number) {
+  if (phase === "http") {
+    return new Response("unicorn", { status, statusText: "Server Error" });
+  }
+  if (phase === "invalid-json") {
+    return new Response("invalid JSON");
+  }
+  if (phase === "body") {
+    return interruptedJsonResponse(error);
+  }
+  throw error;
 }
 function interruptedJsonResponse(error: Error) {
   let started = false;
@@ -50,8 +88,8 @@ function interruptedJsonResponse(error: Error) {
   );
 }
 
-const pullPath = "/repos/openclaw/openclaw/pulls/7";
-const issuePath = "/repos/openclaw/openclaw/issues/7";
+const pullPath = `${repoPath}/pulls/7`;
+const issuePath = `${repoPath}/issues/7`;
 const pullRequest = {
   number: 7,
   state: "open",
@@ -100,7 +138,7 @@ function runDependencyGuard(
       logPath,
       routes: {
         [`GET ${pullPath}`]: pullRequest,
-        [`GET /repos/openclaw/openclaw/commits/${headSha}/statuses`]: [],
+        [`GET ${statusPath}`]: [],
         "GET /repos/openclaw/openclaw/pulls/152415": {
           number: 152415,
           state: "closed",
@@ -110,16 +148,11 @@ function runDependencyGuard(
           base: { ref: "main", repo: { full_name: "openclaw/openclaw" } },
         },
         [`GET ${pullPath}/files`]: [{ filename: "pnpm-workspace.yaml" }],
-        [`GET ${comparisonPath}`]: {
-          base_commit: { sha: staleSha },
-          merge_base_commit: { sha: staleSha },
-        },
+        [`GET ${comparisonPath}`]: comparison(),
         [`GET ${issuePath}/comments`]: [],
         [`GET ${issuePath}/labels`]: [],
-        "GET /repos/openclaw/openclaw/collaborators/contributor/permission": { role_name: "write" },
-        "GET /repos/openclaw/openclaw/collaborators/maintainer/permission": {
-          role_name: "maintain",
-        },
+        [`GET ${contributorPermission}`]: { role_name: "write" },
+        [`GET ${maintainerPermission}`]: { role_name: "maintain" },
         ...routes,
       },
     }),
@@ -159,14 +192,28 @@ function runDependencyGuard(
     calls,
     output: readFileSync(outputPath, "utf8"),
     statuses: calls.filter((call) => call.path.includes("/statuses/")),
+    writes: calls.filter((call) => call.path === "/graphql"),
   };
+}
+function expectGuard(
+  result: ReturnType<typeof runDependencyGuard>,
+  states: string[],
+  status = 0,
+  name = "",
+) {
+  expect(result.status, `${name}: ${result.stderr}`).toBe(status);
+  expect(result.statuses.map((call) => call.body?.state)).toEqual(states);
+}
+function expectGuardState(result: ReturnType<typeof runDependencyGuard>, state: string) {
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.statuses.at(-1)?.body?.state).toBe(state);
 }
 
 describe("dependency guard script", () => {
   it("does not transfer command approval to a duplicate PR with the same head", () => {
     const result = runDependencyGuard({
       [`GET ${issuePath}/comments`]: [approvalNotice, approval],
-      [`GET /repos/openclaw/openclaw/commits/${headSha}/statuses`]: [
+      [`GET ${statusPath}`]: [
         {
           context: "openclaw/ci-gate",
           description: "PR #8: Security review has not completed",
@@ -221,11 +268,7 @@ describe("dependency guard script", () => {
           { role_name: role },
         [`GET ${issuePath}/comments`]: author ? [] : [approvalNotice, comment],
       });
-      expect(result.status, `${name}: ${result.stderr}`).toBe(0);
-      expect(result.statuses.map((call) => call.body?.state)).toEqual([
-        "failure",
-        allowed ? "success" : "failure",
-      ]);
+      expectGuard(result, ["failure", allowed ? "success" : "failure"], 0, name);
       if (author) {
         expect(result.stdout).toContain("informational");
         expect(result.stdout).toContain("- `pnpm-workspace.yaml`\n");
@@ -244,59 +287,48 @@ describe("dependency guard script", () => {
         responses: [[approvalNotice, approval], [approvalNotice, approval], [approvalNotice]],
       },
     });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.statuses.at(-1)?.body?.state).toBe("failure");
+    expectGuardState(result, "failure");
     expect(result.stdout).toContain("Maintainer dependency review required");
   });
 
   it("requires review for renamed protected files and preserves lockfile artifacts", () => {
     const manifest = contentFile(JSON.stringify({ dependencies: { example: "1" } }));
-    const cases: Array<{
-      filename: string;
-      previous_filename: string;
-      routes?: Record<string, unknown>;
-      notice?: string;
-      detect?: boolean;
-    }> = [
-      {
-        filename: "archived.patch",
-        previous_filename: "patches/package.patch",
-        notice: "patches/package.patch",
-      },
-      {
-        filename: "extensions/new/package.json",
-        previous_filename: "extensions/old/package.json",
-        notice: "- `extensions/old/package.json`\n- `extensions/new/package.json`\n",
-        routes: {
-          "GET /repos/openclaw/openclaw/contents/extensions/old/package.json": manifest,
-          "GET /repos/openclaw/openclaw/contents/extensions/new/package.json": manifest,
-          [`GET /repos/openclaw/openclaw/dependency-graph/compare/${staleSha}...${headSha}`]: [
+    const cases: Array<[string, string, Record<string, unknown>?, string?, boolean?]> = [
+      ["archived.patch", "patches/package.patch", {}, "patches/package.patch"],
+      [
+        "extensions/new/package.json",
+        "extensions/old/package.json",
+        {
+          [`GET ${contentsPath}/extensions/old/package.json`]: manifest,
+          [`GET ${contentsPath}/extensions/new/package.json`]: manifest,
+          [`GET ${graphPath}`]: [
             { change_type: "removed", name: "example", manifest: "extensions/old/package.json" },
           ],
         },
-      },
-      {
-        filename: "fixtures/old-lockfile.txt",
-        previous_filename: "pnpm-lock.yaml",
-        detect: true,
-        routes: {
-          [`GET /repos/openclaw/openclaw/dependency-graph/compare/${staleSha}...${headSha}`]: [
+        "- `extensions/old/package.json`\n- `extensions/new/package.json`\n",
+      ],
+      [
+        "fixtures/old-lockfile.txt",
+        "pnpm-lock.yaml",
+        {
+          [`GET ${graphPath}`]: [
             { change_type: "removed", name: "example", manifest: "pnpm-lock.yaml" },
           ],
         },
-      },
+        undefined,
+        true,
+      ],
     ];
-    for (const { filename, previous_filename, routes, notice, detect } of cases) {
+    for (const [filename, previous_filename, routes, notice, detect] of cases) {
       const fixture = { [`GET ${pullPath}/files`]: [{ filename, previous_filename }], ...routes };
       if (detect) {
         const detection = runDependencyGuard(fixture, "detect");
         expect(detection.status, detection.stderr).toBe(0);
         expect(detection.output).toBe("autoscrub=false\n");
-        expect(detection.calls.some((call) => call.path === "/graphql")).toBe(false);
+        expect(detection.writes).toEqual([]);
       }
       const result = runDependencyGuard(fixture);
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.statuses.at(-1)?.body?.state).toBe("failure");
+      expectGuardState(result, "failure");
       if (notice) {
         expect(result.stdout).toContain(notice);
       }
@@ -310,23 +342,15 @@ describe("dependency guard script", () => {
       { role: "write", headVersion: "2", expected: "failure", notice: true },
     ];
     for (const { role, headVersion, expected, notice } of cases) {
-      const content = (version: string, test: string) =>
-        contentFile(JSON.stringify({ devDependencies: { example: version }, scripts: { test } }));
-      const manifestPath = "/repos/openclaw/openclaw/contents/package.json";
       const result = runDependencyGuard({
         [`GET ${pullPath}/files`]: [{ filename: "package.json" }],
-        [`GET ${comparisonPath}`]: {
-          base_commit: { sha: staleSha },
-          merge_base_commit: { sha: mergeBaseSha },
-        },
-        [`GET ${manifestPath}?ref=${mergeBaseSha}`]: content("1", "old"),
-        [`GET ${manifestPath}?ref=${staleSha}`]: content("2", "old"),
-        [`GET ${manifestPath}?ref=${headSha}`]: content(headVersion, "new"),
-        [`GET /repos/openclaw/openclaw/dependency-graph/compare/${staleSha}...${headSha}`]: [],
-        "GET /repos/openclaw/openclaw/collaborators/contributor/permission": { role_name: role },
+        [`GET ${comparisonPath}`]: comparison(staleSha, mergeBaseSha),
+        [`GET ${manifestPath}?ref=${mergeBaseSha}`]: manifestContent("1"),
+        [`GET ${manifestPath}?ref=${headSha}`]: manifestContent(headVersion, "new"),
+        [`GET ${graphPath}`]: [],
+        [`GET ${contributorPermission}`]: { role_name: role },
       });
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.statuses.at(-1)?.body?.state).toBe(expected);
+      expectGuardState(result, expected);
       expect(result.calls.some((call) => call.body?.body)).toBe(notice);
       if (notice) {
         expect(result.stdout).toContain("/allow-dependencies-change");
@@ -337,45 +361,36 @@ describe("dependency guard script", () => {
   it("still detects added and removed manifests", () => {
     const cases = ["added", "removed"];
     for (const status of cases) {
-      const manifestPath = "/repos/openclaw/openclaw/contents/package.json";
       const content = contentFile(JSON.stringify({ dependencies: { example: "1" } }));
       const result = runDependencyGuard({
         [`GET ${pullPath}/files`]: [{ filename: "package.json", status }],
         [`GET ${manifestPath}?ref=${staleSha}`]: status === "added" ? { httpError: 404 } : content,
         [`GET ${manifestPath}?ref=${headSha}`]: status === "removed" ? { httpError: 404 } : content,
-        [`GET /repos/openclaw/openclaw/dependency-graph/compare/${staleSha}...${headSha}`]: [],
+        [`GET ${graphPath}`]: [],
       });
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.statuses.at(-1)?.body?.state).toBe("failure");
+      expectGuardState(result, "failure");
       expect(result.stdout).toContain("/allow-dependencies-change");
     }
   });
 
   it("fails closed when the manifest merge base is invalid", () => {
-    const cases = [
-      { base_commit: { sha: headSha }, merge_base_commit: { sha: mergeBaseSha } },
-      { base_commit: { sha: staleSha }, merge_base_commit: { sha: "invalid" } },
-    ];
-    for (const comparison of cases) {
+    const cases = [comparison(headSha, mergeBaseSha), comparison(staleSha, "invalid")];
+    for (const invalidComparison of cases) {
       const result = runDependencyGuard({
         [`GET ${pullPath}/files`]: [{ filename: "package.json" }],
-        [`GET ${comparisonPath}`]: comparison,
+        [`GET ${comparisonPath}`]: invalidComparison,
       });
-      expect(result.status).toBe(1);
+      expectGuard(result, ["failure"], 1);
       expect(result.stderr).toContain("merge base");
-      expect(result.statuses.map((call) => call.body?.state)).toEqual(["failure"]);
-      expect(result.calls.some((call) => call.path === "/graphql")).toBe(false);
+      expect(result.writes).toEqual([]);
     }
   });
 
   it("preserves autoscrub authority and reports rejected cleanup writes", () => {
-    const cases = [
-      { lateApproval: false, writeError: false, headChanged: false },
-      { lateApproval: true, writeError: false, headChanged: false },
-      { lateApproval: false, writeError: true, headChanged: false },
-      { lateApproval: false, writeError: false, headChanged: true },
-    ];
-    for (const { lateApproval, writeError, headChanged } of cases) {
+    for (const outcome of ["cleanup", "late-approval", "write-error", "head-changed"]) {
+      const lateApproval = outcome === "late-approval";
+      const writeError = outcome === "write-error";
+      const headChanged = outcome === "head-changed";
       const result = runDependencyGuard(
         {
           [`GET ${pullPath}`]: {
@@ -395,22 +410,22 @@ describe("dependency guard script", () => {
               lateApproval ? [approvalNotice, approval] : [approvalNotice],
             ],
           },
-          [`GET /repos/openclaw/openclaw/dependency-graph/compare/${staleSha}...${headSha}`]: [],
-          "GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml": contentFile("base lockfile"),
+          [`GET ${graphPath}`]: [],
+          [`GET ${contentsPath}/pnpm-lock.yaml`]: contentFile("base lockfile"),
           "POST /graphql": writeError
             ? { httpError: 403 }
             : { data: { createCommitOnBranch: { commit: { oid: staleSha } } } },
         },
         "autoscrub",
       );
-      expect(result.status, result.stderr).toBe(writeError ? 1 : 0);
+      expectGuard(result, ["failure"], writeError ? 1 : 0);
       if (writeError) {
         expect(result.stderr).toContain("Fixture API failure");
         expect(result.stdout).toContain(
           "Auto-scrub was attempted, but GitHub rejected the cleanup commit",
         );
       }
-      const writes = result.calls.filter((call) => call.path === "/graphql");
+      const { writes } = result;
       expect(writes).toHaveLength(lateApproval || headChanged ? 0 : 1);
       if (headChanged) {
         expect(result.stdout).toContain("Superseded");
@@ -427,7 +442,6 @@ describe("dependency guard script", () => {
           },
         });
       }
-      expect(result.statuses.map((call) => call.body?.state)).toEqual(["failure"]);
     }
   });
 
@@ -442,32 +456,21 @@ describe("dependency guard script", () => {
           { filename: "new/package-lock.json", status: "added" },
           { filename: "README.md", status: "modified" },
         ],
-        [`GET ${comparisonPath}`]: {
-          base_commit: { sha: staleSha },
-          merge_base_commit: { sha: mergeBaseSha },
-        },
-        [`GET /repos/openclaw/openclaw/dependency-graph/compare/${staleSha}...${headSha}`]: [],
-        [`GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml?ref=${mergeBaseSha}`]:
-          content("original lockfile"),
-        [`GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml?ref=${staleSha}`]:
-          content("unrelated main update"),
-        [`GET /repos/openclaw/openclaw/contents/tools/package-lock.json?ref=${mergeBaseSha}`]:
-          content("original nested lockfile"),
-        [`GET /repos/openclaw/openclaw/contents/tools/package-lock.json?ref=${staleSha}`]: {
-          httpError: 404,
-        },
-        [`GET /repos/openclaw/openclaw/contents/new/package-lock.json?ref=${mergeBaseSha}`]: {
-          httpError: 404,
-        },
-        [`GET /repos/openclaw/openclaw/contents/new/package-lock.json?ref=${staleSha}`]: content(
-          "independently added on main",
+        [`GET ${comparisonPath}`]: comparison(staleSha, mergeBaseSha),
+        [`GET ${graphPath}`]: [],
+        [`GET ${contentsPath}/pnpm-lock.yaml?ref=${mergeBaseSha}`]: content("original lockfile"),
+        [`GET ${contentsPath}/tools/package-lock.json?ref=${mergeBaseSha}`]: content(
+          "original nested lockfile",
         ),
+        [`GET ${contentsPath}/new/package-lock.json?ref=${mergeBaseSha}`]: {
+          httpError: 404,
+        },
         "POST /graphql": { data: { createCommitOnBranch: { commit: { oid: rolloutSha } } } },
       },
       "autoscrub",
     );
     expect(result.status, result.stderr).toBe(0);
-    const writes = result.calls.filter((call) => call.path === "/graphql");
+    const { writes } = result;
     expect(writes).toHaveLength(1);
     expect(writes[0]?.body?.variables?.input).toEqual({
       branch: { repositoryNameWithOwner: "openclaw/openclaw", branchName: "change" },
@@ -497,12 +500,11 @@ describe("dependency guard script", () => {
         head: { ...pullRequest.head, repo: { id: 2, full_name: "contributor/openclaw" } },
       },
       [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml" }],
-      [`GET /repos/openclaw/openclaw/dependency-graph/compare/${staleSha}...${headSha}`]: [],
+      [`GET ${graphPath}`]: [],
     };
     const autoscrub = runDependencyGuard(routes, "autoscrub", null);
-    expect(autoscrub.status, autoscrub.stderr).toBe(0);
-    expect(autoscrub.calls.some((call) => call.path === "/graphql")).toBe(false);
-    expect(autoscrub.statuses.map((call) => call.body?.state)).toEqual(["failure"]);
+    expectGuard(autoscrub, ["failure"]);
+    expect(autoscrub.writes).toEqual([]);
     const notice = autoscrub.calls.find(
       (call) => call.path === `${issuePath}/comments` && call.method === "POST",
     );
@@ -511,8 +513,7 @@ describe("dependency guard script", () => {
     expect(notice?.body?.body).toContain("git restore");
 
     const enforcement = runDependencyGuard(routes, "enforce", null);
-    expect(enforcement.status, enforcement.stderr).toBe(0);
-    expect(enforcement.statuses.at(-1)?.body?.state).toBe("failure");
+    expectGuardState(enforcement, "failure");
     expect(enforcement.stdout).toContain("/allow-dependencies-change");
     expect(enforcement.stdout).toContain("Automatic lockfile cleanup is best effort.");
   });
@@ -524,17 +525,15 @@ describe("dependency guard script", () => {
         {
           [`GET ${pullPath}`]: { ...pullRequest, created_at: "2025-11-01T00:00:00Z" },
           [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml" }],
-          [`GET /repos/openclaw/openclaw/compare/${rolloutSha}...${headSha}`]: {
-            base_commit: { sha: rolloutSha },
-            merge_base_commit: { sha: staleSha },
+          [`GET ${repoPath}/compare/${rolloutSha}...${headSha}`]: {
+            ...comparison(rolloutSha, staleSha),
             status: "diverged",
           },
         },
         mode,
       );
-      expect(result.status, result.stderr).toBe(0);
+      expectGuard(result, []);
       expect(result.stdout).toContain("grandfathered");
-      expect(result.statuses).toEqual([]);
       expect(result.calls.every((call) => call.method === "GET")).toBe(true);
     }
   });
@@ -572,41 +571,23 @@ describe("dependency guard script", () => {
     ).toEqual(["dependencies", "devDependencies"]);
     expect(
       dependencyFieldChanges(
-        {
-          optionalDependencies: { a: "1" },
-          peerDependencies: { b: "1" },
-          overrides: { c: "1" },
-          packageManager: "pnpm@10.0.0",
-          pnpm: { patchedDependencies: { d: "patches/d.patch" } },
-          scripts: { test: "old" },
-        },
-        {
-          optionalDependencies: { a: "2" },
-          peerDependencies: { b: "2" },
-          overrides: { c: "2" },
-          packageManager: "pnpm@10.1.0",
-          pnpm: { patchedDependencies: { d: "patches/d2.patch" } },
-          scripts: { test: "new" },
-        },
+        changedDependencyFields("1", "old"),
+        changedDependencyFields("2", "new"),
       ),
     ).toEqual(["optionalDependencies", "peerDependencies", "overrides", "packageManager", "pnpm"]);
   });
 
   it("allows only dependency graph removals without approval", () => {
-    expect(
-      isRemovalOnlyDependencyGraphChange([
-        { change_type: "removed", name: "a" },
-        { change_type: "removed", name: "b" },
-      ]),
-    ).toBe(true);
-    expect(
-      isRemovalOnlyDependencyGraphChange([
-        { change_type: "removed", name: "a" },
-        { change_type: "added", name: "b" },
-      ]),
-    ).toBe(false);
-    expect(isRemovalOnlyDependencyGraphChange([{ change_type: "changed", name: "a" }])).toBe(false);
-    expect(isRemovalOnlyDependencyGraphChange([])).toBe(false);
+    const cases: Array<[string[], boolean]> = [
+      [["removed", "removed"], true],
+      [["removed", "added"], false],
+      [["changed"], false],
+      [[], false],
+    ];
+    for (const [changes, expected] of cases) {
+      const graph = changes.map((change_type) => ({ change_type }));
+      expect(isRemovalOnlyDependencyGraphChange(graph)).toBe(expected);
+    }
   });
 
   it("renders dependency removals as informational", () => {
@@ -648,16 +629,14 @@ describe("dependency guard script", () => {
   });
 
   it("renders blocked cleanup guidance and shell-quotes PR-controlled paths", () => {
-    const cases: Array<{
-      options: Partial<Parameters<typeof renderBlockedDependencyComment>[0]>;
-      expected: string[];
-    }> = [
-      {
-        options: {
+    type BlockedOptions = Partial<Parameters<typeof renderBlockedDependencyComment>[0]>;
+    const cases: Array<[BlockedOptions, string[]]> = [
+      [
+        {
           lockfileChanges: ["pnpm-lock.yaml", "tools/nested/pnpm-lock.yaml"],
           dependencyManifestChanges: [{ path: "package.json", fields: ["dependencies"] }],
         },
-        expected: [
+        [
           "<!-- openclaw:dependency-graph-guard -->",
           "Maintainer dependency review required",
           "- `pnpm-lock.yaml`\n",
@@ -669,54 +648,51 @@ describe("dependency guard script", () => {
           `Current SHA: \`${headSha}\``,
           "A later push requires a fresh approval comment.",
         ],
-      },
-      {
-        options: {
+      ],
+      [
+        {
           baseBranch: "release/canary branch",
           lockfileChanges: [
             "dir with spaces/pnpm-lock.yaml",
             "safe/quote'$(touch bad);/package-lock.json",
           ],
         },
-        expected: [
+        [
           "git restore --source=\"$(git merge-base HEAD FETCH_HEAD)\" --staged --worktree -- 'dir with spaces/pnpm-lock.yaml' 'safe/quote'\\''$(touch bad);/package-lock.json'",
         ],
-      },
-      {
-        options: { autoscrubStatus: { kind: "unavailable" } },
-        expected: [
-          "Automatic lockfile cleanup is best effort.",
-          "These lockfile changes remain in this PR.",
-        ],
-      },
-      {
-        options: {
+      ],
+      [
+        { autoscrubStatus: { kind: "unavailable" } },
+        ["Automatic lockfile cleanup is best effort.", "These lockfile changes remain in this PR."],
+      ],
+      [
+        {
           autoscrubStatus: {
             kind: "blocked-by-dependency-manifest-fields",
             changes: [{ path: "package.json", fields: ["dependencies"] }],
           },
         },
-        expected: [
+        [
           "changes package manifest dependency graph fields",
           "- `package.json`\n",
           "Dependency graph changes require maintainer review",
         ],
-      },
-      {
-        options: {
+      ],
+      [
+        {
           autoscrubStatus: {
             kind: "blocked-by-other-dependency-files",
             files: ["patches/example.patch", "pnpm-workspace.yaml"],
           },
         },
-        expected: [
+        [
           "also changes dependency-related files",
           "`patches/example.patch`",
           "`pnpm-workspace.yaml`",
         ],
-      },
+      ],
     ];
-    for (const { options, expected } of cases) {
+    for (const [options, expected] of cases) {
       const body = renderBlockedDependencyComment({
         baseRepository: "openclaw/openclaw",
         baseBranch: "main",
@@ -781,7 +757,7 @@ describe("dependency guard script", () => {
       request: async (requestPath: string) => {
         calls.push({ api: "base", path: requestPath });
         if (requestPath.includes("/compare/")) {
-          return { base_commit: { sha: "base-sha" }, merge_base_commit: { sha: mergeBaseSha } };
+          return comparison("base-sha", mergeBaseSha);
         }
         if (requestPath.includes("/contents/pnpm-lock.yaml?")) {
           return { ...contentFile("base lockfile"), sha: "base-file" };
@@ -906,33 +882,29 @@ describe("dependency guard script", () => {
   });
 
   it("retries transient reads within one connection, HTTP, and body budget", async () => {
-    const cases: Array<{ method: string; phase: string; status?: number; code?: string }> = [
-      { method: "GET", phase: "http", status: 500 },
-      { method: "HEAD", phase: "http", status: 500 },
-      { method: "GET", phase: "http", status: 503 },
-      { method: "GET", phase: "connection", code: "ECONNRESET" },
-      { method: "GET", phase: "connection", code: "EAI_AGAIN" },
-      { method: "GET", phase: "connection", code: "ENOTFOUND" },
-      { method: "HEAD", phase: "connection", code: "UND_ERR_SOCKET" },
-      { method: "GET", phase: "body", code: "UND_ERR_SOCKET" },
-      { method: "GET", phase: "body", code: "ECONNRESET" },
-      { method: "GET", phase: "budget", code: "ECONNRESET" },
+    const cases: Array<[method: string, phase: string, failure: number | string]> = [
+      ["GET", "http", 500],
+      ["HEAD", "http", 500],
+      ["GET", "http", 503],
+      ["GET", "connection", "ECONNRESET"],
+      ["GET", "connection", "EAI_AGAIN"],
+      ["GET", "connection", "ENOTFOUND"],
+      ["HEAD", "connection", "UND_ERR_SOCKET"],
+      ["GET", "body", "UND_ERR_SOCKET"],
+      ["GET", "body", "ECONNRESET"],
+      ["GET", "budget", "ECONNRESET"],
     ];
-    for (const { method, phase, status, code } of cases) {
-      const error = new TypeError("terminated", {
-        cause: Object.assign(new Error(phase === "budget" ? "connection reset" : undefined), {
-          code,
-        }),
-      });
-      const fetchImpl = vi.fn<typeof fetch>().mockImplementationOnce(async () => {
-        if (phase === "http") {
-          return new Response("unicorn", { status, statusText: "Server Error" });
-        }
-        if (phase === "body") {
-          return interruptedJsonResponse(error);
-        }
-        throw error;
-      });
+    for (const [method, phase, failure] of cases) {
+      const error = connectionError(
+        "terminated",
+        String(failure),
+        phase === "budget" ? "connection reset" : undefined,
+      );
+      const fetchImpl = vi
+        .fn<typeof fetch>()
+        .mockImplementationOnce(async () =>
+          failedFetch(phase, error, typeof failure === "number" ? failure : undefined),
+        );
       const responseBody = phase === "http" ? { ok: true } : { complete: true };
       if (phase === "budget") {
         fetchImpl
@@ -962,78 +934,50 @@ describe("dependency guard script", () => {
   });
 
   it("never replays writes, aborted requests, or non-transient failures", async () => {
-    const cases: Array<{
-      method: string;
-      phase: string;
+    type FailureOptions = {
       status?: number;
       code?: string;
       error?: Error;
       abort?: boolean;
       matchMessage?: boolean;
-    }> = [
-      { method: "POST", phase: "http", status: 500 },
-      { method: "PATCH", phase: "http", status: 500 },
-      { method: "DELETE", phase: "http", status: 500 },
-      { method: "POST", phase: "http", status: 503 },
-      { method: "POST", phase: "body", code: "UND_ERR_SOCKET", matchMessage: true },
-      { method: "GET", phase: "invalid-json" },
-      { method: "GET", phase: "body", error: new Error("unknown stream error") },
-      ...["POST", "PATCH", "DELETE"].map((method) => ({
-        method,
-        phase: "connection",
-        code: "ECONNRESET",
-        matchMessage: true,
-      })),
-      { method: "GET", phase: "connection", error: new DOMException("aborted", "AbortError") },
-      {
-        method: "GET",
-        phase: "connection",
-        error: new TypeError("fetch failed", {
-          cause: Object.assign(new Error("certificate expired"), { code: "CERT_HAS_EXPIRED" }),
-        }),
-      },
-      { method: "GET", phase: "connection", error: new TypeError("invalid request") },
-      ...["GET", "POST"].flatMap((method) =>
-        ["connection", "body"].map((phase) => ({
-          method,
-          phase,
-          code: "ECONNRESET",
-          abort: true,
-        })),
-      ),
+    };
+    const reset = { code: "ECONNRESET", matchMessage: true };
+    const aborted = { code: "ECONNRESET", abort: true };
+    const certificate = connectionError("fetch failed", "CERT_HAS_EXPIRED", "certificate expired");
+    const cases: Array<[string, string, FailureOptions?]> = [
+      ["POST", "http", { status: 500 }],
+      ["PATCH", "http", { status: 500 }],
+      ["DELETE", "http", { status: 500 }],
+      ["POST", "http", { status: 503 }],
+      ["POST", "body", { code: "UND_ERR_SOCKET", matchMessage: true }],
+      ["GET", "invalid-json"],
+      ["GET", "body", { error: new Error("unknown stream error") }],
+      ["POST", "connection", reset],
+      ["PATCH", "connection", reset],
+      ["DELETE", "connection", reset],
+      ["GET", "connection", { error: new DOMException("aborted", "AbortError") }],
+      ["GET", "connection", { error: certificate }],
+      ["GET", "connection", { error: new TypeError("invalid request") }],
+      ["GET", "connection", aborted],
+      ["GET", "body", aborted],
+      ["POST", "connection", aborted],
+      ["POST", "body", aborted],
     ];
-    for (const {
-      method,
-      phase,
-      status,
-      code,
-      error: suppliedError,
-      abort,
-      matchMessage,
-    } of cases) {
+    for (const [method, phase, options = {}] of cases) {
+      const { status, code, error: suppliedError, abort, matchMessage } = options;
       const controller = new AbortController();
       const error =
         suppliedError ??
-        new TypeError(phase === "body" && !abort ? "terminated" : "fetch failed", {
-          cause: Object.assign(
-            new Error(abort || phase === "body" ? undefined : "connection reset"),
-            { code },
-          ),
-        });
+        connectionError(
+          phase === "body" && !abort ? "terminated" : "fetch failed",
+          code,
+          abort || phase === "body" ? undefined : "connection reset",
+        );
       const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => {
         if (abort) {
           controller.abort(error);
         }
-        if (phase === "http") {
-          return new Response("unicorn", { status, statusText: "Server Error" });
-        }
-        if (phase === "invalid-json") {
-          return new Response("invalid JSON");
-        }
-        if (phase === "body") {
-          return interruptedJsonResponse(error);
-        }
-        throw error;
+        return failedFetch(phase, error, status);
       });
       const requestPath =
         abort || method === "GET"
@@ -1095,9 +1039,7 @@ describe("dependency guard script", () => {
               headers: { "content-type": "application/json" },
             });
           }
-          const error = new TypeError("terminated", {
-            cause: Object.assign(new Error(), { code: "ECONNRESET" }),
-          });
+          const error = connectionError();
           if (phase === "body-backoff") {
             return interruptedJsonResponse(error);
           }
