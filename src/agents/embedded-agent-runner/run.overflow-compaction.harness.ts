@@ -876,7 +876,8 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     };
   });
 
-  vi.doMock("./context-engine-maintenance.js", () => ({
+  vi.doMock("./context-engine-maintenance.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("./context-engine-maintenance.js")>()),
     runContextEngineMaintenance: mockedRunContextEngineMaintenance,
   }));
   vi.doMock("../session-maintenance/coordinator.js", async (importOriginal) => ({
