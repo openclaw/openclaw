@@ -1,6 +1,5 @@
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import type { Server as HttpsServer } from "node:https";
-import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { connectGatewayClient } from "../../src/gateway/test-helpers.e2e.js";
 import type { OpenClawTestInstance } from "./openclaw-test-instance.js";
@@ -45,17 +44,6 @@ export async function closeHttpServer(server: Server | HttpsServer) {
   await new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
-}
-
-export function contentTexts(content: unknown): string[] {
-  if (typeof content === "string") {
-    return [content];
-  }
-  return Array.isArray(content)
-    ? content
-        .map((part: unknown) => asNonArrayRecord(part)?.text)
-        .filter((text): text is string => typeof text === "string")
-    : [];
 }
 
 export async function connectProofClient(
