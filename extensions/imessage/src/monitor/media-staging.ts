@@ -2,9 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ChannelInboundMediaInput } from "openclaw/plugin-sdk/channel-inbound";
 import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";
-import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
+import { isInboundPathAllowed, kindFromMime, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
-import { FsSafeError, openLocalFileSafely } from "openclaw/plugin-sdk/security-runtime";
+import {
+  FsSafeError,
+  openLocalFileSafely,
+  writeExternalFileWithinRoot,
+} from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { IMessageAttachment } from "./types.js";
@@ -32,6 +36,20 @@ function isHeicAttachment(attachmentPath: string, mimeType?: string | null): boo
   }
   const ext = path.extname(attachmentPath).toLowerCase();
   return ext === ".heic" || ext === ".heif";
+}
+
+function isCafAttachment(
+  buffer: Buffer,
+  attachmentPath: string,
+  mimeType?: string | null,
+): boolean {
+  const mime = mimeType?.split(";", 1)[0]?.trim().toLowerCase();
+  return (
+    buffer.toString("ascii", 0, 4) === "caff" ||
+    path.extname(attachmentPath).toLowerCase() === ".caf" ||
+    mime === "audio/x-caf" ||
+    mime === "audio/caf"
+  );
 }
 
 async function readAttachmentBuffer(params: {
@@ -74,6 +92,63 @@ async function readAttachmentBuffer(params: {
       throw error;
     },
   );
+
+  // Native voice notes use CAF, which common transcription providers reject.
+  // Convert the pinned bytes, never reopen the original attachment pathname.
+  if (isCafAttachment(buffer, params.attachmentPath, params.mimeType)) {
+    const converted = await withTempWorkspace(
+      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-imessage-caf-" },
+      async (workspace) => {
+        const inputPath = await workspace.write("input.caf", buffer);
+        await writeExternalFileWithinRoot({
+          rootDir: workspace.dir,
+          path: "output.wav",
+          write: async (outputPath) => {
+            await runFfmpeg(
+              [
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "caf",
+                "-i",
+                inputPath,
+                "-vn",
+                "-sn",
+                "-dn",
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "-c:a",
+                "pcm_s16le",
+                "-f",
+                "wav",
+                // ffmpeg can succeed after reaching its size cap. Exceed the
+                // staging limit so a truncated voice note is rejected below.
+                "-fs",
+                String(params.maxBytes + 1),
+                outputPath,
+              ],
+              { timeoutMs: 30_000 },
+            );
+          },
+        });
+        const wav = await workspace.read("output.wav");
+        if (wav.length > params.maxBytes) {
+          throw new Error("converted iMessage audio exceeds the attachment limit");
+        }
+        return wav;
+      },
+    );
+    return {
+      buffer: converted,
+      contentType: "audio/wav",
+      originalFilename: `${path.parse(params.attachmentPath).name || "imessage-attachment"}.wav`,
+    };
+  }
 
   if (isHeicAttachment(params.attachmentPath, params.mimeType)) {
     try {

@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import * as mediaRuntime from "openclaw/plugin-sdk/media-runtime";
 import * as mediaStore from "openclaw/plugin-sdk/media-store";
 import * as securityRuntime from "openclaw/plugin-sdk/security-runtime";
 import * as webMedia from "openclaw/plugin-sdk/web-media";
@@ -29,6 +30,7 @@ describe("stageIMessageAttachments", () => {
 
   it("copies allowed iMessage attachments into the inbound media store", async () => {
     const sourcePath = await writeTempFile("photo.png", Buffer.from("png-bytes"));
+    const runFfmpeg = vi.spyOn(mediaRuntime, "runFfmpeg");
     const saveMediaBuffer = vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
       id: "saved.png",
       path: "/state/media/inbound/saved.png",
@@ -55,7 +57,105 @@ describe("stageIMessageAttachments", () => {
       1024,
       "photo.png",
     );
+    expect(runFfmpeg).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { filename: "voice.bin", mimeType: "application/octet-stream", input: "caff-voice" },
+    { filename: "voice.CAF", mimeType: undefined, input: "voice" },
+    { filename: "voice.bin", mimeType: "audio/x-caf; codecs=opus", input: "voice" },
+    { filename: "voice.bin", mimeType: "audio/caf", input: "voice" },
+  ])(
+    "stages CAF voice notes as WAV ($filename, $mimeType)",
+    async ({ filename, mimeType, input }) => {
+      const sourcePath = await writeTempFile(filename, input);
+      const wav = Buffer.from(
+        "524946462600000057415645666d74201000000001000100803e0000007d00000200100064617461020000000000",
+        "hex",
+      );
+      const saveMediaBuffer = vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+        id: "saved.wav",
+        path: "/state/media/inbound/saved.wav",
+        size: wav.length,
+        contentType: "audio/wav",
+      });
+      let conversionDir: string | undefined;
+      const runFfmpeg = vi.spyOn(mediaRuntime, "runFfmpeg").mockImplementation(async (args) => {
+        const inputIndex = args.indexOf("-i");
+        expect(args.slice(inputIndex - 2, inputIndex)).toEqual(["-f", "caf"]);
+        const inputPath = args[inputIndex + 1];
+        const outputPath = args.at(-1);
+        if (!inputPath || !outputPath) {
+          throw new Error("missing conversion paths");
+        }
+        conversionDir = path.dirname(inputPath);
+        await expect(fs.readFile(inputPath, "utf8")).resolves.toBe(input);
+        await fs.writeFile(outputPath, wav);
+        return "";
+      });
+      // Conversion must use the bounded, pinned bytes even if the original name changes.
+      vi.spyOn(securityRuntime, "openLocalFileSafely").mockImplementation(async (options) => {
+        const opened = await openLocalFileSafely(options);
+        await fs.rename(sourcePath, `${sourcePath}.displaced`);
+        await fs.writeFile(sourcePath, "replacement");
+        return opened;
+      });
+
+      await expect(
+        stageIMessageAttachments([{ original_path: sourcePath, mime_type: mimeType }], {
+          maxBytes: 1024,
+          allowedRoots: [tempDir],
+        }),
+      ).resolves.toEqual({
+        attachments: [
+          { path: "/state/media/inbound/saved.wav", contentType: "audio/wav", kind: "audio" },
+        ],
+        unavailableCount: 0,
+      });
+      expect(saveMediaBuffer).toHaveBeenCalledWith(wav, "audio/wav", "inbound", 1024, "voice.wav");
+      expect(runFfmpeg).toHaveBeenCalledWith(expect.arrayContaining(["-fs", "1025"]), {
+        timeoutMs: 30_000,
+      });
+      expect(conversionDir).toBeDefined();
+      await expect(fs.stat(conversionDir!)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it.each(["invalid CAF", "ffmpeg unavailable", "oversized WAV"])(
+    "marks failed CAF conversion unavailable and cleans up (%s)",
+    async (failure) => {
+      const sourcePath = await writeTempFile("voice.caf", "caff-voice");
+      const saveMediaBuffer = vi.spyOn(mediaStore, "saveMediaBuffer");
+      const logVerbose = vi.fn();
+      let conversionDir: string | undefined;
+      vi.spyOn(mediaRuntime, "runFfmpeg").mockImplementation(async (args) => {
+        const outputPath = args.at(-1);
+        if (!outputPath) {
+          throw new Error("missing output path");
+        }
+        conversionDir = path.dirname(outputPath);
+        if (failure !== "oversized WAV") {
+          throw new Error(failure);
+        }
+        await fs.writeFile(outputPath, Buffer.alloc(1025));
+        return "";
+      });
+
+      await expect(
+        stageIMessageAttachments([{ original_path: sourcePath, mime_type: "audio/x-caf" }], {
+          maxBytes: 1024,
+          deps: { logVerbose },
+        }),
+      ).resolves.toEqual({
+        attachments: [{ contentType: "audio/x-caf", kind: "audio" }],
+        unavailableCount: 1,
+      });
+      expect(saveMediaBuffer).not.toHaveBeenCalled();
+      expect(logVerbose).toHaveBeenCalledWith(expect.stringContaining("failed to stage"));
+      expect(conversionDir).toBeDefined();
+      await expect(fs.stat(conversionDir!)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 
   it("reads from the pinned attachment when its pathname is replaced", async () => {
     const sourcePath = await writeTempFile("photo.png", Buffer.from("original"));
