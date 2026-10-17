@@ -379,6 +379,42 @@ describe("MatrixRecoveryKeyStore", () => {
     }
   });
 
+  it("does not recreate secret storage when the local recovery key cannot be read", async () => {
+    const recoveryKeyPath = createTempRecoveryKeyPath();
+    const original = getMatrixRuntime().state.openKeyedStoreV2;
+    const failure = new Error("synthetic recovery-key read failure");
+    const stateRuntime: MatrixSnapshotStateRuntime = {
+      openKeyedStoreV2: <T>(options: Parameters<typeof original>[0]) => ({
+        ...original<T>(options),
+        lookup: async () => {
+          throw failure;
+        },
+      }),
+    };
+    const store = new MatrixRecoveryKeyStore(recoveryKeyPath, stateRuntime);
+    const createRecoveryKeyFromPassphrase = vi.fn(async () =>
+      createGeneratedRecoveryKey({
+        keyId: "REPLACEMENT",
+        name: "replacement",
+        bytes: [1, 2, 3, 4],
+        encodedPrivateKey: "fixture-replacement-key",
+      }),
+    );
+    const bootstrapSecretStorage = createBootstrapSecretStorageMock();
+    const crypto = createRecoveryKeyCrypto({
+      bootstrapSecretStorage,
+      createRecoveryKeyFromPassphrase,
+      status: { ready: false, defaultKeyId: "EXISTING" },
+    });
+    try {
+      await expect(store.bootstrapSecretStorageWithRecoveryKey(crypto)).rejects.toBe(failure);
+      expect(createRecoveryKeyFromPassphrase).not.toHaveBeenCalled();
+      expect(bootstrapSecretStorage).not.toHaveBeenCalled();
+    } finally {
+      await store.close();
+    }
+  });
+
   it("keeps failed writes best-effort and drains later writes on the worker store", async () => {
     const recoveryKeyPath = createTempRecoveryKeyPath();
     const original = getMatrixRuntime().state.openKeyedStoreV2;

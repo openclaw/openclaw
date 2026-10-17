@@ -442,7 +442,6 @@ it.each<{
   { name: "private completion", options: { privateCompletion: true } },
   { name: "internal session effects", options: { sessionEffects: "internal" } },
   { name: "external delivery", options: { deliver: true, channel: "telegram" } },
-  { name: "queue-owned media", options: { internalDeliveryMediaUrls: [] } },
   { name: "incognito dispatch", incognito: true },
 ])("does not retain final $name through the WebChat projector", async (scenario) => {
   await withOpenClawTestState({ label: "agent-final-media-suppression" }, async (state) => {

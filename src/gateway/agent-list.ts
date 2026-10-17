@@ -14,6 +14,7 @@ import {
   readAgentDatabaseAdmissionRefusal,
   type AgentDatabaseAdmissionRefusal,
 } from "../state/agent-database-admission.js";
+import { prepareAgentDatabaseDeletionSnapshotRead } from "../state/agent-deletion-journal.read.js";
 import { SYSTEM_AGENT_ROSTER_ENTRIES } from "../system-agent/agent-id.js";
 
 type GatewayAgentListRow = {
@@ -119,21 +120,34 @@ export async function listGatewayAgentsBasic(cfg: OpenClawConfig): Promise<
     orderedIds.push(mainKey);
   }
 
-  const agents: GatewayAgentListRow[] = orderedIds.map((id) => {
-    const admissionRefusal = readAgentDatabaseAdmissionRefusal(id);
-    const agent: GatewayAgentListRow = {
-      id,
-      kind:
-        !configuredById.has(id) && diskIds.has(id)
-          ? (ownerEntries.get(id)?.kind ?? "agent")
-          : "agent",
-      name: configuredById.get(id),
-    };
-    if (admissionRefusal) {
-      agent.status = "degraded";
-      agent.admissionRefusal = admissionRefusal;
-    }
-    return agent;
-  });
+  const { snapshot } = await prepareAgentDatabaseDeletionSnapshotRead(
+    {},
+    "runtime-discovery",
+  ).read();
+  const disposition = snapshot?.retainedDeletions;
+  const deletions =
+    disposition?.status === "present"
+      ? disposition.entries
+      : disposition?.status === "unavailable"
+        ? disposition.known?.entries
+        : undefined;
+  const agents: GatewayAgentListRow[] = orderedIds
+    .filter((id) => !deletions?.some((entry) => entry.agentId === id))
+    .map((id) => {
+      const admissionRefusal = readAgentDatabaseAdmissionRefusal(id);
+      const agent: GatewayAgentListRow = {
+        id,
+        kind:
+          !configuredById.has(id) && diskIds.has(id)
+            ? (ownerEntries.get(id)?.kind ?? "agent")
+            : "agent",
+        name: configuredById.get(id),
+      };
+      if (admissionRefusal) {
+        agent.status = "degraded";
+        agent.admissionRefusal = admissionRefusal;
+      }
+      return agent;
+    });
   return { ...selection, mainKey, scope, agents };
 }

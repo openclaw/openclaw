@@ -1155,7 +1155,7 @@ src/agents/cli-runner/cli-run-transcript.ts	1
 src/agents/cli-runner/execute-node-claude.ts	5
 src/agents/cli-runner/execute.ts	2
 src/agents/cli-runner/prepare.ts	1
-src/agents/cli-runner/session-history.ts	3
+src/agents/cli-runner/session-history.ts	1
 src/agents/code-mode-runtime.ts	2
 src/agents/code-mode-script-syntax.ts	1
 src/agents/code-mode.ts	2
@@ -1654,7 +1654,7 @@ src/commands/doctor-session-canonical-keys.ts	1
 src/commands/doctor-session-incognito-key-repair-state.ts	4
 src/commands/doctor-session-snapshots.ts	3
 src/commands/doctor-session-sqlite-recover-report.ts	1
-src/commands/doctor-session-transcript-headers.ts	4
+src/commands/doctor-session-transcript-headers.ts	2
 src/commands/doctor-session-transcript-labels.ts	1
 src/commands/doctor-session-transcripts.ts	1
 src/commands/doctor-skills.ts	1
@@ -1686,7 +1686,7 @@ src/commands/doctor/shared/open-policy-allowfrom.ts	1
 src/commands/doctor/shared/plugin-tool-allowlist-warnings.ts	1
 src/commands/doctor/shared/stale-agent-model-ref-repair.ts	2
 src/commands/doctor/shared/stale-auth-order-store.ts	2
-src/commands/doctor/shared/stale-auth-order.ts	4
+src/commands/doctor/shared/stale-auth-order.ts	3
 src/commands/gateway-health-auth-diagnostic.ts	1
 src/commands/gateway-presence.ts	1
 src/commands/gateway-status/helpers.ts	11
@@ -1929,7 +1929,6 @@ src/gateway/server-plugins-node-runtime.ts	1
 src/gateway/server-plugins.ts	2
 src/gateway/server-reload-restart.ts	2
 src/gateway/server-reload-utils.ts	1
-src/gateway/server-restart-sentinel-agent-delivery.ts	2
 src/gateway/server-runtime-state-prepare.ts	1
 src/gateway/server-startup-config-helpers.ts	1
 src/gateway/server-startup-post-attach.ts	1
@@ -2568,12 +2567,11 @@ ui/src/lib/config-form-utils.ts	1
 ui/src/lib/config/config-draft-model.ts	2
 ui/src/lib/keyboard-shortcuts.ts	1
 ui/src/lib/nodes/index.ts	2
-ui/src/lib/nodes/inventory.ts	1
 ui/src/lib/session-pull-requests.ts	2
 ui/src/lib/sessions/custom-groups.ts	5
 ui/src/lib/sessions/grouping.ts	4
 ui/src/lib/sessions/index.ts	1
-ui/src/lib/sessions/session-key.ts	4
+ui/src/lib/sessions/session-key.ts	3
 ui/src/lib/subscriptions-controller.ts	1
 ui/src/local-storage.ts	2
 ui/src/main.ts	1
@@ -2610,6 +2608,5 @@ ui/src/pages/config/settings-search.ts	1
 ui/src/pages/config/view-diff.ts	2
 ui/src/pages/custodian/session-lifecycle.ts	1
 ui/src/pages/labs/labs-registry.ts	4
-ui/src/pages/new-session/draft-place-browser.ts	1
 ui/src/pages/new-session/preferences.ts	1
 ui/src/pages/portals/portal-reachability.ts	1

@@ -315,8 +315,28 @@ suite.define(() => {
           .locator(".chat-pane__sharing-menu")
           .getByText("Members", { exact: true })
           .waitFor();
+        const sharing = pane.locator(".chat-pane__sharing-menu");
+        const search = sharing.getByRole("searchbox", { name: "Search people and agents…" });
+        await search.fill("Person 109");
+        await nextFrame(page);
+        await page.keyboard.press("ArrowDown");
+        expect(await sharing.locator(".chat-pane__sharing-member").count()).toBe(1);
+        expect(
+          await sharing
+            .locator('[data-value="member:person-109"]')
+            .evaluate((element) => element === document.activeElement),
+        ).toBe(true);
+        await page.keyboard.press("ArrowUp");
+        expect(await search.evaluate((element) => element === document.activeElement)).toBe(true);
+        await page.keyboard.press("Escape");
+        expect(await search.inputValue()).toBe("");
         await page.screenshot({ path: path.join(suite.artifactDir, "chat-boot-sharing-open.png") });
         await page.keyboard.press("Escape");
+        expect(
+          await sharing
+            .locator(".chat-pane__sharing-trigger")
+            .evaluate((element) => element === document.activeElement),
+        ).toBe(true);
         expect(await composer.inputValue()).toBe("Keep this draft while the menus open.");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       },

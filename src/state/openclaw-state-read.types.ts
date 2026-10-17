@@ -225,11 +225,8 @@ export type OpenClawStateReadCommand =
   | UserProfileAvatarReadCommand
   | { type: "userProfiles.channelIdentity.list"; profileId: string }
   | { type: "userProfiles.channelIdentity.resolve"; identity: UserChannelIdentitySelector }
-  | { type: "userProfiles.authority.resolve"; profileId: string; includeProfile?: boolean }
-  | { type: "userProfiles.aliases.resolve"; profileId: string }
   | ({ type: "userProfiles.githubIdentity.cached" } & CachedGitHubIdentityBinding)
   | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[]; host?: string }
-  | { type: "userProfiles.email.resolve"; email: string }
   | { type: "userProfiles.catalog" }
   | {
       type: "userProfiles.catalogIdentity";

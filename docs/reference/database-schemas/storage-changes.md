@@ -719,8 +719,9 @@ avatar bytes are not part of enumeration. Mention directory preparation respects
 the existing profile-version invalidation, then evaluates current requester,
 session, and role policy and publishes the RPC response in one synchronous step.
 Prepared directory rows are descriptive
-facts, never permission or current alias authority. Project recents retain a narrow
-fresh primary-profile and alias query for their disclosure scope. Profile creation,
+facts, never permission or current alias authority. Project recents prepare aliases
+from the committed profile catalog and retain live merge-authority checks across
+their disclosure waits. Profile creation,
 display-name and role changes, explicit avatar uploads, identity merges, and final
 identity/permission lookups keep their existing native owners.
 
@@ -728,8 +729,9 @@ Chat startup prepares its requester from the profile catalog retained by the
 session projection. Metadata reads the current merge head after preparation
 waits and rejects a changed client identity or retired physical database. A
 missing catalog leaves optional metadata unavailable without opening SQLite.
-Legacy email clients resolve their alias through the read-only worker; only
-a missing alias enters the shared-state writer and existing profile transaction.
+Legacy email clients resolve their alias through the canonical profile owner,
+reusing its committed email bindings when resident and its existing profile
+transaction otherwise.
 Committed creation updates the same resident catalog before profile observers,
 including retained reconciliation when result delivery fails. Other profile
 mutation and authorization paths retain their existing owners. Schema, migration,
@@ -1681,14 +1683,13 @@ Each new operation uses current rows or facts invalidated by owning-writer recei
 These changes preserve
 schemas, retention, synchronous cold-load compatibility, and update behavior.
 
-The native Gateway host supplies snapshot preparation through its registered
-config owner. Those reads prepare deferred migration and plugin metadata with the
-existing shared-state actor. Each read captures one exact owner before awaiting
-preparation and rejects its result if that owner closes; failures never select a
-replacement or switch readers. Direct servers and standalone config readers keep
-their existing execution path unless their host explicitly supplies this operation.
+Gateway, direct-server, and standalone asynchronous config snapshots share the
+same validation, materialization, and plugin metadata preparation owners. Metadata
+reads use the existing asynchronous state reader without a host-supplied adapter.
+Unobserved snapshots preserve source artifacts through metadata completion;
+config writes retain their live source authority and runtime activation owner.
 Missing-file defaults still load plugin metadata only when those defaults need it.
-The operation changes no schema, persisted representation, or publication authority.
+This routing changes no schema, persisted representation, or publication authority.
 
 Meeting transcript identity, descriptor, notes, summary, utterance, and export-ownership reads use
 the shared-state worker. Typed commands call the existing synchronous query
@@ -2355,7 +2356,8 @@ Shared-state database drainage also joins resources registered while an earlier
 resource is closing. Native retirement waits for those resources; failed cleanup
 remains owned for a later explicit retry.
 Maintenance cleanup joins work started by earlier cleanup phases before closing
-the resources it uses. Clients adopted by actor retirement share its cleanup result.
+the resources it uses. The broker joins every client's accepted commands and native
+close; shared-state owners await that result without a second adoption protocol.
 
 Memory managers admit writes on their exact borrowed agent connection. Provider
 calls and source preparation run before admission; generated-cache and source

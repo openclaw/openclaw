@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import {
+  SessionGitHubPublicationFailedSchema,
+  type SessionGitHubPublicationResult,
+} from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import type {
   GitHubPublicationExecutionRow,
@@ -8,18 +11,9 @@ import type {
 
 type PublicationFailureCode = Extract<SessionGitHubPublicationResult, { status: "failed" }>["code"];
 
-const PUBLICATION_FAILURE_CODES = new Set<string>([
-  "identity_changed",
-  "identity_unavailable",
-  "session_changed",
-  "workspace_changed",
-  "not_git",
-  "not_github",
-  "no_changes",
-  "push_rejected",
-  "github_rejected",
-  "unavailable",
-]);
+const PUBLICATION_FAILURE_CODES = new Set<string>(
+  SessionGitHubPublicationFailedSchema.properties.code.anyOf.map((code) => code.const),
+);
 
 function publicationFailureCode(value: string): PublicationFailureCode {
   // SAFETY: membership in the closed protocol vocabulary narrows this stored string.

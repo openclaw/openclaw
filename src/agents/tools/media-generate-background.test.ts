@@ -342,9 +342,10 @@ describe("music generate background helpers", () => {
       const event = getDeliveredInternalEvents().at(0);
       expect(event?.attachments).toEqual(attachments);
       const replyInstruction = String(event?.replyInstruction);
+      expect(replyInstruction).toContain("do not send them again");
+      expect(replyInstruction).toContain("Check the result against what the user asked for");
+      expect(replyInstruction).toContain("generate again with adjusted parameters");
       expect(replyInstruction).toContain("current visible-reply contract");
-      expect(replyInstruction).toContain("short user-facing caption");
-      expect(replyInstruction).toContain("every structured generated attachment from this event");
       expect(replyInstruction).toContain("Keep internal task/session details private");
       expect(replyInstruction).not.toContain('message(action="send")');
       expect(replyInstruction).not.toContain("NO_REPLY");
@@ -422,8 +423,8 @@ describe("video generate background helpers", () => {
 
     expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
     const replyInstruction = String(getDeliveredInternalEvents().at(0)?.replyInstruction);
-    expect(replyInstruction).toContain("current visible-reply contract");
-    expect(replyInstruction).toContain("concise user-facing failure");
+    expect(replyInstruction).toContain("retry with adjusted parameters");
+    expect(replyInstruction).toContain("tell the user briefly what failed");
     expect(replyInstruction).toContain("Keep internal task/session details private");
     expect(replyInstruction).toContain("do not copy the internal event text verbatim");
     expect(replyInstruction).not.toContain('message(action="send")');

@@ -104,6 +104,7 @@ function SessionProgressWidgetContent(
         previous[0] === next[0] && previous[1] === next[1] && previous[2] === next[2],
     },
   );
+  // The session roster's imperative subscription and reads follow the visible widget scope.
   createEffect(rosterScope, ([agentId, active, connected]) => {
     if (!connected || !context || !active) {
       return undefined;

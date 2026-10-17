@@ -11,7 +11,6 @@ export {
   getInternalToolResultProvenance,
   getInternalToolExecutionPreparer,
   getInternalToolTurnCompletion,
-  getInternalToolTurnInputScope,
   setInternalBeforeToolBatch,
   setInternalRepetitionGuard,
   setInternalToolTurnCompletion,

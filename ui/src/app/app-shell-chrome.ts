@@ -31,6 +31,7 @@ import {
   type KeyboardShortcutsDialogElement,
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import {
   CHAT_HISTORY_RECOVERY_CHANGED_EVENT,
@@ -80,7 +81,7 @@ import { isHomePanelAvailable } from "./panel-availability.ts";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
 import { retryStaleChunkReloadWhenReachable } from "./stale-chunk-reload.ts";
 
-let nativeCommandsOwner: AbortController | undefined;
+let nativeCommandsOwner: (() => void)[] | undefined;
 
 export interface ShellChromeHost extends ShellNewSessionHost, ShellPanelHost {
   readonly element: HTMLElement;
@@ -110,7 +111,7 @@ export class ShellChromeOwner {
   readonly panels: ShellPanelOwner;
   private readonly palette: ShellCommandPaletteOwner;
   private pendingLazyAction = readLazyShellAction();
-  private listeners: AbortController | undefined;
+  private listeners: (() => void)[] | undefined;
   private readonly navDrawerSwipe: NavDrawerSwipeLoader;
   constructor(private readonly host: ShellChromeHost) {
     this.palette = new ShellCommandPaletteOwner(host, {
@@ -127,26 +128,18 @@ export class ShellChromeOwner {
 
   connect(): void {
     this.disconnect();
-    this.listeners = new AbortController();
-    // One connection owns all three targets; abort removes exactly its listeners.
-    const options = { signal: this.listeners.signal };
     const host = this.host;
     host.setNativeHistoryState(readNativeHistoryState());
-    host.element.addEventListener(
-      COMMAND_PALETTE_TARGET_EVENT,
-      this.handleCommandPaletteTarget,
-      options,
-    );
+    this.listeners = [
+      listen(host.element, COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget),
+      listen(document, "keydown", this.handleDocumentKeydown, { capture: true }),
+      listen(document, "keydown", this.handleDocumentKeydownBubble),
+      listen(window, "dragover", this.handleUnhandledFileDrag),
+      listen(window, "drop", this.handleUnhandledFileDrag),
+    ];
     for (const type of [CHAT_HISTORY_RECOVERY_CHANGED_EVENT, CHAT_PANE_LIFECYCLE_CHANGED_EVENT]) {
-      host.element.addEventListener(type, () => host.invalidate(), options);
+      this.listeners.push(listen(host.element, type, () => host.invalidate()));
     }
-    document.addEventListener("keydown", this.handleDocumentKeydown, {
-      capture: true,
-      signal: this.listeners.signal,
-    });
-    document.addEventListener("keydown", this.handleDocumentKeydownBubble, options);
-    window.addEventListener("dragover", this.handleUnhandledFileDrag, options);
-    window.addEventListener("drop", this.handleUnhandledFileDrag, options);
     // Shipped Mac hosts use these same events even when native web chrome is absent.
     for (const [type, listener] of [
       [COMMAND_PALETTE_OPEN_EVENT, this.palette.open],
@@ -168,7 +161,7 @@ export class ShellChromeOwner {
       [HOME_PANEL_TOGGLE_EVENT, this.handleAssistantToggleBeforeMount],
       [SHELL_APPROVALS_OPEN_EVENT, this.handleApprovalsOpen],
     ] as const) {
-      window.addEventListener(type, listener, options);
+      this.listeners.push(listen(window, type, listener));
     }
     this.navDrawerSwipe.connect();
     if (isMobileNavLayout()) {
@@ -183,7 +176,7 @@ export class ShellChromeOwner {
   disconnect(): void {
     this.commandPaletteLoading.clear();
     const listenerOwner = this.listeners;
-    this.listeners?.abort();
+    this.listeners?.forEach((stop) => stop());
     this.listeners = undefined;
     this.navDrawerSwipe.disconnect();
     if (listenerOwner && nativeCommandsOwner === listenerOwner) {

@@ -192,13 +192,8 @@ export async function finishGatewayStartup(params: {
           ),
         );
   // Join independent preparation before channels start or failure cleanup retires its owners.
-  const requestRuntimeReady = runtime.ensureRequestRuntimeReady().then(async () => {
+  const requestRuntimeReady = runtime.ensureRequestRuntimeReady().then(() => {
     kernel.setDispatchReady(true);
-    if (!minimalTestGateway && !opts.updateCanary) {
-      const { startOpenClawDatabaseIntegrityVerifier } =
-        await import("../state/openclaw-database-verify.js");
-      registerGatewayLifetimeSidecars(startOpenClawDatabaseIntegrityVerifier({ env: process.env }));
-    }
     if (databaseStartupAdmission && !opts.updateCanary && !lifecycle.closePreludeStarted) {
       activateGatewayAgentDatabaseStartup({
         admission: databaseStartupAdmission,
@@ -465,7 +460,6 @@ export async function finishGatewayStartup(params: {
     subscribeToWrites: (listener) =>
       registerConfigWriteListener(listener, {
         ownsRuntimeActivationFor: configSnapshot.path,
-        prepareSnapshot: opts.prepareConfigSnapshot,
         preCommitRuntimePreflight: async (sourceConfig, runtimeRefresh) => {
           const candidate = await prepareReloadCandidate({
             runtimeConfig: sourceConfig,

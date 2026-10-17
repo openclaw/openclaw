@@ -11,16 +11,10 @@ import (
 	"testing"
 )
 
-type behaviorReplacePair struct {
-	From string `json:"from"`
-	To   string `json:"to"`
-}
-
 type behaviorRule struct {
-	Method       string                `json:"method"`
-	MatchAll     []string              `json:"match_all"`
-	ResponseFile string                `json:"response_file,omitempty"`
-	ReplacePairs []behaviorReplacePair `json:"replace_pairs,omitempty"`
+	Method       string   `json:"method"`
+	MatchAll     []string `json:"match_all"`
+	ResponseFile string   `json:"response_file,omitempty"`
 }
 
 type behaviorFixture struct {
@@ -57,18 +51,10 @@ func (tr *behaviorFixtureTranslator) run(method, text string) string {
 		if !matchesAll(text, rule.MatchAll) {
 			continue
 		}
-		switch {
-		case rule.ResponseFile != "":
+		if rule.ResponseFile != "" {
 			return readFixtureTextInDir(tr.t, tr.dir, rule.ResponseFile)
-		case len(rule.ReplacePairs) > 0:
-			out := text
-			for _, pair := range rule.ReplacePairs {
-				out = strings.ReplaceAll(out, pair.From, pair.To)
-			}
-			return out
-		default:
-			return text
 		}
+		return text
 	}
 	return text
 }

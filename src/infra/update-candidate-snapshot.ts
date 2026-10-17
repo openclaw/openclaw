@@ -37,10 +37,15 @@ import type { UpdateStepResult } from "./update-step-result.js";
 
 type SnapshotSize = { bytes: number; largest: number; pluginBytes: number | null };
 
-function requiredSnapshotBytes(size: SnapshotSize): number {
-  // Keep the completed generation and Doctor backup, plus the largest raw,
-  // compacting and publication copies. Metadata needs room on an empty state too.
-  return size.bytes * 2 + size.largest * 3 + (size.pluginBytes ?? 0) + 64 * 1024 * 1024;
+function requiredSnapshotBytes(size: SnapshotSize, legacyCandidate = false): number {
+  // Current workers keep one generation and process families sequentially.
+  // Recovery, transform journals and publication without hard links can each
+  // need one extra family, but do not overlap. No VACUUM or Doctor backup is
+  // part of this copy phase. Keep the old allowance for older candidate workers.
+  const sqliteBytes = legacyCandidate
+    ? size.bytes * 2 + size.largest * 3
+    : size.bytes + size.largest;
+  return sqliteBytes + (size.pluginBytes ?? 0) + 64 * 1024 * 1024;
 }
 
 function measureSnapshotCapacity(
@@ -48,6 +53,7 @@ function measureSnapshotCapacity(
   size: SnapshotSize,
   env: NodeJS.ProcessEnv,
   previous?: UpdateSnapshotCapacity,
+  legacyCandidate = false,
 ): UpdateSnapshotCapacity {
   const roots: Array<{
     kind: NonNullable<UpdateSnapshotCapacity["selection"]>["kind"];
@@ -89,7 +95,7 @@ function measureSnapshotCapacity(
       }
       return candidate;
     });
-  const requiredBytes = requiredSnapshotBytes(size);
+  const requiredBytes = requiredSnapshotBytes(size, legacyCandidate);
   return {
     reason: "snapshot-capacity-insufficient",
     sqliteBytes: size.bytes,
@@ -481,7 +487,13 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
       )),
       pluginBytes: inventory.pluginBytes,
     };
-    capacity = measureSnapshotCapacity(params.stateDir, size, params.env, capacity);
+    capacity = measureSnapshotCapacity(
+      params.stateDir,
+      size,
+      params.env,
+      capacity,
+      inventory.snapshotSpace !== "single-generation",
+    );
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
     directory = await allocateSnapshotRoot(capacity, { root: selectedRoot.directory, directory });

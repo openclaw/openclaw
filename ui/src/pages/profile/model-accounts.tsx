@@ -17,6 +17,7 @@ export function ModelAccounts(props: ModelAccountsProps) {
     untrack(() => state.applySnapshot(context.gateway.snapshot));
     state.publish();
   };
+  // Retire account reads and auth polls synchronously with connection authority.
   const stopGateway = context.gateway.subscribe(sync);
   const stopEvents = context.gateway.subscribeEvents((event) => {
     if (modelAuthEventInvalidates(event)) {

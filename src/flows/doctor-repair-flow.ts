@@ -1,7 +1,6 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
-import { copyHealthChecks, normalizeHealthCheck } from "./health-check-adapter.js";
 import { listHealthChecks } from "./health-check-registry.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import type {
@@ -35,8 +34,7 @@ export async function runDoctorHealthRepairs(
   ctx: HealthRepairContext,
   opts: DoctorRepairRunOptions = {},
 ): Promise<DoctorRepairRunResult> {
-  const inputs = opts.checks ?? copyHealthChecks(listHealthChecks());
-  const checks: readonly DoctorHealthCheck[] = inputs.map(normalizeHealthCheck);
+  const checks = opts.checks ?? listHealthChecks();
   const findings: HealthFinding[] = [];
   const allRemainingFindings: HealthFinding[] = [];
   const changes: string[] = [];
@@ -71,7 +69,7 @@ export async function runDoctorHealthRepairs(
       continue;
     }
 
-    let remainingFindings: readonly HealthFinding[] = [...checkFindings];
+    let remainingFindings = checkFindings;
     // Split checks expose detect/repair separately, so repair output must be validated by detect().
     try {
       const result = await check.repair(
