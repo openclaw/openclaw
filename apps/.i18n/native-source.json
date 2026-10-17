@@ -993,6 +993,8 @@
     {"path":"apps/macos/Sources/OpenClaw/NativeConversationView.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.2dbf6ad0c51ce172","source":"Could not open this conversation. Select another thread or reopen the window."},
     {"path":"apps/macos/Sources/OpenClaw/NativeConversationView.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.a8af6c8ec7a093c1","source":"Finish pending native work before opening this session's web actions."},
     {"path":"apps/macos/Sources/OpenClaw/ExecApprovalsPromptPresenter.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.d2cc88d671ae73df","source":"OpenClaw Command Approval"},
+    {"path":"apps/ios/Sources/Gateway/GatewayConnectionController+Capabilities.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.1cc88f9143dd4ea0","source":"Enter only a host name or IP address."},
+    {"path":"apps/ios/Sources/Gateway/GatewayConnectionController+Capabilities.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.36e5dc142becf1fd","source":"Enter the host without https:// or wss://."},
     {"path":"apps/ios/Sources/Gateway/GatewayConnectionController+Capabilities.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.25f10dfdc6cd5627","source":"Secure connection is required for this host."},
     {"path":"apps/ios/Sources/Gateway/GatewayConnectionController+Capabilities.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.807a926a075ac4db","source":"Use only on a trusted private network."},
     {"path":"apps/macos/Sources/OpenClaw/QuickChatRecents.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.5983db15745983fc","source":"New message to %@"},
