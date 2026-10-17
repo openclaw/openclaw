@@ -56,10 +56,12 @@ import {
   resolveAndApplyOutboundThreadId,
 } from "./message-action-threading.js";
 import { maybeApplyTtsToMessageActionSendPayload } from "./message-action-tts.js";
+import type { OutboundMirror } from "./mirror.js";
 import {
   executeSendAction,
   hasCorePresentationDelivery,
   materializeMessagePresentationFallback,
+  mirrorPluginHandledDelivery,
 } from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 
@@ -529,10 +531,32 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
           dryRun,
         }),
       });
+  const resolveTranscriptMirror = (): OutboundMirror | undefined =>
+    !dryRun && input.transcriptMirror
+      ? {
+          ...input.transcriptMirror,
+          text: sendPayload.message,
+          mediaUrls: sendPayload.mediaUrls,
+        }
+      : outboundRoute && !dryRun && input.suppressTranscriptMirror !== true
+        ? {
+            sessionKey: outboundRoute.sessionKey,
+            agentId,
+            text: sendPayload.message,
+            mediaUrls: sendPayload.mediaUrls,
+            idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
+          }
+        : undefined;
   if (gatewayPluginAction) {
     const deliveryFact = projectPluginMessageDeliveryFact(gatewayPluginAction.payload);
     if (!deliveryFact || deliveryFact.status === "settled") {
       await commitOutboundSessionRoute();
+      // The Gateway RPC mirrors only replies into the requester's own session;
+      // a send to another conversation is mirrored here, like local plugin sends.
+      const mirror = resolveTranscriptMirror();
+      if (mirror && !deliveryFact?.partialDelivery && mirror.sessionKey !== input.sessionKey) {
+        await mirrorPluginHandledDelivery({ cfg, mirror });
+      }
     }
     return await annotateSourceDelivery(
       withSendNormalization(gatewayPluginAction, sendPayload.normalization),
@@ -567,22 +591,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       deliveryRetryOwner: input.actionOrigin === "message-tool" ? "caller" : undefined,
       // Both delivery paths must commit a first-contact route before mirroring.
       onSendAccepted: commitOutboundSessionRoute,
-      mirror:
-        !dryRun && input.transcriptMirror
-          ? {
-              ...input.transcriptMirror,
-              text: sendPayload.message,
-              mediaUrls: sendPayload.mediaUrls,
-            }
-          : outboundRoute && !dryRun && input.suppressTranscriptMirror !== true
-            ? {
-                sessionKey: outboundRoute.sessionKey,
-                agentId,
-                text: sendPayload.message,
-                mediaUrls: sendPayload.mediaUrls,
-                idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
-              }
-            : undefined,
+      mirror: resolveTranscriptMirror(),
       silent: sendPayload.silent ?? undefined,
     },
     to,

@@ -17,6 +17,7 @@ import {
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { sessionDeliveryOrigin } from "../../utils/delivery-context.read.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { runMessageAction } from "./message-action-runner.js";
 
 vi.mock("../../tts/tts.runtime.js", () => ({
@@ -32,6 +33,7 @@ describe("outbound mirror route ordering", () => {
   let cfg: OpenClawConfig;
   const handleAction = vi.fn();
   const sendMedia = vi.fn();
+  let executionMode: "local" | "gateway" = "local";
   const transcriptScope = () => ({
     agentId: "main",
     sessionKey: MAIN_SESSION_KEY,
@@ -67,6 +69,7 @@ describe("outbound mirror route ordering", () => {
       actions: {
         describeMessageTool: () => ({ actions: ["send"] }),
         supportsAction: ({ action }) => action === "send",
+        resolveExecutionMode: () => executionMode,
         handleAction,
       },
       outbound: {
@@ -142,6 +145,74 @@ describe("outbound mirror route ordering", () => {
       expect(handledBy === "plugin" ? handleAction : sendMedia).toHaveBeenCalledTimes(3);
     },
   );
+
+  describe("Gateway-executed plugin sends", () => {
+    const OTHER_SESSION_KEY = "agent:main:testchat:direct:12345";
+    const gatewayRequest = vi.fn();
+    const sendViaGateway = (sessionKey: string) =>
+      runMessageAction({
+        cfg,
+        action: "send",
+        params: { channel: "testchat", to: "user:12345", message: "card details" },
+        agentId: "main",
+        sessionKey,
+        dryRun: false,
+        gateway: {
+          clientName: GATEWAY_CLIENT_NAMES.CLI,
+          mode: GATEWAY_CLIENT_MODES.CLI,
+          request: gatewayRequest,
+        },
+      });
+    const transcriptEvents = (sessionKey: string) => {
+      const entry = loadExactSessionEntry({ ...transcriptScope(), sessionKey })?.entry;
+      if (!entry?.sessionId) {
+        return [];
+      }
+      return loadTranscriptEventsSync({
+        ...transcriptScope(),
+        sessionKey,
+        sessionId: entry.sessionId,
+      });
+    };
+
+    beforeEach(() => {
+      gatewayRequest.mockReset();
+      gatewayRequest.mockResolvedValue({ ok: true, messageId: "gw-1" });
+      executionMode = "gateway";
+      cfg = { ...cfg, session: { ...cfg.session, dmScope: "per-channel-peer" } };
+    });
+
+    afterEach(() => {
+      executionMode = "local";
+    });
+
+    it("mirrors a send to another conversation into the destination session", async () => {
+      const result = await sendViaGateway(MAIN_SESSION_KEY);
+
+      expect(result.handledBy).toBe("plugin");
+      expect(gatewayRequest).toHaveBeenCalledOnce();
+      expect(handleAction).not.toHaveBeenCalled();
+      const messages = transcriptEvents(OTHER_SESSION_KEY).filter((event) =>
+        expect.objectContaining({ type: "message" }).asymmetricMatch(event),
+      );
+      expect(messages).toEqual([
+        expect.objectContaining({
+          message: expect.objectContaining({
+            content: [{ type: "text", text: "card details" }],
+          }),
+        }),
+      ]);
+    });
+
+    it("leaves a send into the requester's own session to the Gateway's source-reply mirror", async () => {
+      await sendViaGateway(OTHER_SESSION_KEY);
+
+      expect(gatewayRequest).toHaveBeenCalledOnce();
+      expect(transcriptEvents(OTHER_SESSION_KEY)).not.toContainEqual(
+        expect.objectContaining({ type: "message" }),
+      );
+    });
+  });
 
   it.each([
     ["suppresses delivery", { status: "suppressed", reason: "cancelled_by_message_sending_hook" }],
