@@ -77,6 +77,7 @@ and resolved values still fail startup or reject the update.
     </ParamField>
     <ParamField path="applyTextNormalization" type='"auto" | "on" | "off"'>Text normalization mode.</ParamField>
     <ParamField path="languageCode" type="string">2-letter ISO 639-1 (e.g. `en`, `de`).</ParamField>
+    <ParamField path="textPrefix" type="string">Audio tag (e.g. `"[warmly]"`) added before the text on every request to Eleven v3 and later models. Skipped for older models and when the text already starts with a `[` tag. Use it to fix a delivery style without asking the agent to emit tags.</ParamField>
     <ParamField path="seed" type="number">Integer `0..4294967295` for best-effort determinism.</ParamField>
     <ParamField path="baseUrl" type="string">Override ElevenLabs API base URL.</ParamField>
   </Accordion>
