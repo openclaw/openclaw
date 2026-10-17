@@ -433,10 +433,7 @@ describe("saved message attachment response authority", () => {
     options: Parameters<typeof request>[1] = {},
   ) {
     const response = await request({ ...query, meta: "1" }, options);
-    expect(
-      response.status,
-      `${query.messageId ?? "comment"}: ${await response.clone().text()}`,
-    ).toBe(200);
+    expect(response.status).toBe(200);
     const result = await response.json();
     expect(result).toMatchObject({ available: true, mediaTicket: expect.any(String) });
     return String(result.mediaTicket);

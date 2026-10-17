@@ -196,6 +196,31 @@ export function makeGatewayPortConfig(port: number): OpenClawConfig {
   return { gateway: { reload: {}, port } };
 }
 
+export async function ownedConfigReloadOptions(snapshot: ConfigFileSnapshot, configPath: string) {
+  const { registerConfigWriteListener } = await import("../config/io.runtime.js");
+  return {
+    scheduler: createTestGatewayScheduler("fake-timers"),
+    initialConfig: snapshot.config,
+    initialCompareConfig: snapshot.sourceConfig ?? snapshot.config,
+    initialSnapshotRawHash: snapshot.hash ?? null,
+    initialAuthoredConfig: snapshot.parsed,
+    initialSnapshotValid: snapshot.valid,
+    initialSnapshotIssues: snapshot.issues,
+    testDebounceMs: 0,
+    watchPath: configPath,
+    initialPluginInstallRecords: {},
+    readPluginInstallRecords: async () => ({}),
+    subscribeToWrites: (listener: (event: ConfigWriteNotification) => void) =>
+      registerConfigWriteListener(listener, {
+        ownsRuntimeActivationFor: configPath,
+        preCommitRuntimePreflight: async (config) => ({
+          runtimeConfig: config,
+          compareConfig: config,
+        }),
+      }),
+  };
+}
+
 export function makeSnapshot(partial: Partial<ConfigFileSnapshot> = {}): ConfigFileSnapshot {
   const config = partial.config ?? {};
   const sourceConfig = (partial.sourceConfig ??

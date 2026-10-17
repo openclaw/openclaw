@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { readConfigFileSnapshotForWrite, registerConfigWriteListener } from "../config/config.js";
+import { readConfigFileSnapshotForWrite } from "../config/config.js";
 import { createConfigIO } from "../config/io.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -17,7 +17,6 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createTranscriptsAutoStartService } from "../transcripts/auto-start.js";
 import type {
   TranscriptSourceProvider,
@@ -26,6 +25,7 @@ import type {
 import { readTranscriptLibraryStatus } from "../transcripts/status.js";
 import { TranscriptsStore, transcriptSessionSelector } from "../transcripts/store.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
+import { ownedConfigReloadOptions } from "./config-reload.test-support.js";
 import { commitGatewayConfigWrite } from "./server-methods/config-write-flow.js";
 
 const tempDirs = createTempDirTracker();
@@ -143,13 +143,7 @@ it.for([false, true])(
               providerEntered = undefined;
             }
           };
-          const restart = vi.fn<ReloadOptions["onRestart"]>(async (_plan, next) => {
-            application.resolve();
-            current = next;
-            await service.stop();
-            service = createService(next);
-            service.start();
-          });
+          const restart = vi.fn(() => application.resolve());
           const commit = vi.fn<ReloadOptions["onNoopConfigCommit"]>(
             async (plan, next, ownership) => {
               ownership.markRuntimeCommitted(next, plan);
@@ -166,26 +160,11 @@ it.for([false, true])(
             },
           );
           const reloader = startGatewayConfigReloader({
-            scheduler: createTestGatewayScheduler("fake-timers"),
-            initialConfig: current,
-            initialCompareConfig: snapshot.sourceConfig ?? current,
-            initialSnapshotRawHash: snapshot.hash ?? null,
+            ...(await ownedConfigReloadOptions(snapshot, configPath)),
             initialAuthoredConfig: initial,
             initialSnapshotValid: true,
             initialSnapshotIssues: [],
-            testDebounceMs: 0,
-            watchPath: configPath,
             readSnapshot: () => io.readConfigFileSnapshot(),
-            initialPluginInstallRecords: {},
-            readPluginInstallRecords: async () => ({}),
-            subscribeToWrites: (listener) =>
-              registerConfigWriteListener(listener, {
-                ownsRuntimeActivationFor: configPath,
-                preCommitRuntimePreflight: async (config) => ({
-                  runtimeConfig: config,
-                  compareConfig: config,
-                }),
-              }),
             onNoopConfigCommit: commit,
             onHotReload: hotReload,
             onRestart: restart,
