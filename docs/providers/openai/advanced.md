@@ -306,9 +306,9 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     the built-in OpenClaw runtime and embedded OpenAI provider hooks. The native
     Codex app-server harness continues to own its own compaction.
 
-    Defaults, explicit opt-in, and stored checkpoint replay follow
+    On direct API-key `openai-responses` routes, defaults, explicit opt-in, and
+    stored checkpoint replay follow
     [context-engine compaction ownership](/concepts/context-engine#provider-compaction-ownership).
-    This applies to both inline Responses compaction and the V2 path below.
 
     On the native ChatGPT sign-in route, the built-in runtime instead uses
     **Codex V2 compaction** by default for context-budget pressure before a model
@@ -344,8 +344,9 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     compactor handles the fallback and logs its reason; explicit compact-endpoint
     opt-ins still apply there. Cancellation
     does not start a fallback, and a committed checkpoint is not compacted again
-    because a later observer fails. Explicitly configured compaction models or
-    summarization providers retain their existing behavior.
+    because a later observer fails. Context engines that own compaction retain
+    their existing behavior, as do explicitly configured compaction models or
+    summarization providers.
 
     OpenAI emits the compacted state as an encrypted `compaction` output item.
     Keep that item opaque. For stateless continuation, carry the newest item
