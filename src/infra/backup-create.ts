@@ -58,7 +58,6 @@ import {
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { walkBackupTar } from "./backup-tar-walk.js";
 import { isErrno } from "./errors.js";
-import { safeStat } from "./path-existence.js";
 import {
   createLegacyAuditBackupCapture,
   legacyAuditBackupCapturesMatch,
@@ -142,8 +141,12 @@ async function resolveOutputPath(params: {
     return path.join(resolved, basename);
   }
 
-  if ((await safeStat(resolved))?.isDirectory()) {
-    return path.join(resolved, basename);
+  try {
+    if ((await fs.stat(resolved)).isDirectory()) {
+      return path.join(resolved, basename);
+    }
+  } catch {
+    // Treat as a file path when the target does not exist yet.
   }
 
   return resolved;
