@@ -258,6 +258,7 @@ export async function updateWorkspaceFile(
   content: string | Buffer,
   expectedHash: string | undefined,
   assertCurrent?: () => void,
+  options?: { maxBytes?: number },
 ): Promise<WorkspaceFileUpdateResult> {
   const workspaceRoot = await openWorkspaceRoot(rootDir);
   if (!workspaceRoot) {
@@ -272,7 +273,7 @@ export async function updateWorkspaceFile(
   return await enqueueWorkspaceFileUpdate<WorkspaceFileUpdateResult>(async () => {
     let current: ReadResult;
     try {
-      current = await workspaceRoot.read(browserPath);
+      current = await workspaceRoot.read(browserPath, { maxBytes: options?.maxBytes });
     } catch {
       return { status: "unsafe" };
     }
