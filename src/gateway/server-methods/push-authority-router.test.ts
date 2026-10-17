@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { assert, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -26,26 +25,14 @@ import {
 import "../server/ws-connection/authenticated-request-dispatch.server-methods.runtime.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { pushHandlers } from "./push.js";
-import { pushClient, pushSubscription } from "./push.test-support.js";
+import { holdPushStorage, pushClient, pushSubscription } from "./push.test-support.js";
 
-vi.mock("../../infra/push-apns.js", () => ({
-  clearApnsRegistrationIfCurrent: vi.fn(),
-  loadApnsRegistration: vi.fn(),
-  normalizeApnsEnvironment: vi.fn(),
-  resolveApnsAuthConfigFromEnv: vi.fn(),
-  resolveApnsRelayConfigFromEnv: vi.fn(),
-  sendApnsAlert: vi.fn(),
-  shouldClearStoredApnsRegistration: vi.fn(),
-}));
-vi.mock("../../infra/push-web.js", () => ({
-  WebPushSubscriptionBindingError: class extends Error {},
-  broadcastWebPush: vi.fn(),
-  clearBoundWebPushSubscription: vi.fn(),
-  withBoundWebPushSubscriptionByEndpoint: vi.fn(),
-  registerWebPushSubscription: vi.fn(),
-  resolveVapidKeys: vi.fn(),
-  setWebPushSubscriptionPreferences: vi.fn(),
-}));
+vi.mock("../../infra/push-apns.js", async () =>
+  (await import("./push.test-support.js")).mockPushApns(),
+);
+vi.mock("../../infra/push-web.js", async () =>
+  (await import("./push.test-support.js")).mockPushWeb(),
+);
 vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
   readResidentUserProfileId: vi.fn(),
@@ -72,57 +59,42 @@ beforeEach(() => {
   resetGatewayWorkAdmission();
 });
 
-describe("Web Push router authority at the worker grant", () => {
-  it.each([
-    "merged alias",
-    "transport retirement",
-    "retained device revoked",
-    "Gateway closed",
-    "worker selection mismatch",
-  ] as const)("keeps profile SQL outside the grant for %s", async (scenario) => {
+it.each([
+  "merged alias",
+  "transport retirement",
+  "retained device revoked",
+  "Gateway closed",
+  "worker selection mismatch",
+] as const)(
+  "Web Push router keeps profile SQL outside the worker grant for %s",
+  async (scenario) => {
     let inGrant = false;
     const forbiddenGrantReads = vi.fn();
-    vi.mocked(prepareUserProfileSelectionAuthority).mockImplementation(async (profileId) => {
+    const selectProfile = (profileId: string) => {
       if (inGrant) {
         forbiddenGrantReads();
-        throw new Error("profile authority acquisition attempted during worker admission");
-      }
-      return {
-        profileId: profileId === "retired-profile" ? "profile-owner" : profileId,
-        isCurrent: () => true,
-      };
-    });
-    vi.mocked(readResidentUserProfileId).mockImplementation((profileId) => {
-      if (inGrant) {
-        forbiddenGrantReads();
-        throw new Error("profile SQL attempted while the worker owns its transaction");
+        throw new Error("profile lookup attempted during worker admission");
       }
       return profileId === "retired-profile" ? "profile-owner" : profileId;
-    });
-    vi.mocked(readResidentUserProfileIdentity).mockImplementation((profileId) => {
-      if (inGrant) {
-        forbiddenGrantReads();
-        throw new Error("profile catalog acquisition attempted during worker admission");
-      }
-      return {
-        profileId: profileId === "retired-profile" ? "profile-owner" : profileId,
-        role: null,
-        aliases: new Set([profileId]),
-      };
-    });
-    const entered = createDeferred();
-    const release = createDeferred();
+    };
+    vi.mocked(prepareUserProfileSelectionAuthority).mockImplementation(async (profileId) => ({
+      profileId: selectProfile(profileId),
+      isCurrent: () => true,
+    }));
+    vi.mocked(readResidentUserProfileId).mockImplementation(selectProfile);
+    vi.mocked(readResidentUserProfileIdentity).mockImplementation((profileId) => ({
+      profileId: selectProfile(profileId),
+      role: null,
+      aliases: new Set([profileId]),
+    }));
+    const storage = holdPushStorage();
     const persisted = vi.fn();
     vi.mocked(registerWebPushSubscription).mockImplementation(async (params) => {
-      entered.resolve();
-      await release.promise;
+      await storage.wait();
       inGrant = true;
       try {
         const guard = expectDefined(params.guard, "worker grant authority");
-        expect(guard.family).toBe("worker");
-        if (guard.family !== "worker") {
-          throw new Error("WebSocket request lost its worker authority");
-        }
+        assert(guard.family === "worker", "WebSocket request lost its worker authority");
         guard.assertCurrent();
         guard.assertProfiles({
           profileId: scenario === "worker selection mismatch" ? "other-profile" : "profile-owner",
@@ -135,15 +107,17 @@ describe("Web Push router authority at the worker grant", () => {
       return pushSubscription(params.endpoint, params.keys, "router-subscription");
     });
     const connection = new AbortController();
+    const clientProfile = pushClient(
+      scenario === "merged alias" ? "retired-profile" : "profile-owner",
+      "original-connection",
+      connection.signal,
+    );
     const client: GatewayWsClient = {
       ...createOperatorWsClient(),
-      ...pushClient("profile-owner", "original-connection", connection.signal),
+      ...clientProfile,
       authenticatedUserProfile: {
-        profileId: scenario === "merged alias" ? "retired-profile" : "profile-owner",
-        displayName: null,
+        ...expectDefined(clientProfile.authenticatedUserProfile, "bound profile"),
         avatarRevision: "1",
-        hasAvatar: false,
-        updatedAt: 1,
       },
     };
     const isConnectionActive = vi.fn(() => true);
@@ -176,36 +150,25 @@ describe("Web Push router authority at the worker grant", () => {
       },
       client,
     );
-    try {
-      await Promise.race([
-        entered.promise,
-        request.then(() => {
-          throw new Error("router returned before storage admission");
-        }),
-      ]);
+    await storage.settle(request, () => {
       expect(prepareUserProfileSelectionAuthority).toHaveBeenCalledWith(
         client.authenticatedUserProfile?.profileId,
       );
       expect(readResidentUserProfileId).not.toHaveBeenCalled();
       expect(persisted).not.toHaveBeenCalled();
-      if (scenario === "transport retirement") {
+      if (scenario === "transport retirement" || scenario === "retained device revoked") {
         connection.abort();
         isConnectionActive.mockReturnValue(false);
         getClientConnIds.mockReturnValue(new Set());
-      } else if (scenario === "retained device revoked") {
-        connection.abort();
-        isConnectionActive.mockReturnValue(false);
-        getClientConnIds.mockReturnValue(new Set());
+      }
+      if (scenario === "retained device revoked") {
         invalidateGatewayDeviceRevocation(context, "browser-device", "operator");
         expect(client.invalidated).not.toBe(true);
       } else if (scenario === "Gateway closed") {
         closeGatewayDeviceRevocation(context);
         expect(client.invalidated).not.toBe(true);
       }
-    } finally {
-      release.resolve();
-      await request;
-    }
+    });
     expect(forbiddenGrantReads).not.toHaveBeenCalled();
     if (scenario === "retained device revoked" || scenario === "Gateway closed") {
       expect(persisted).not.toHaveBeenCalled();
@@ -230,5 +193,5 @@ describe("Web Push router authority at the worker grant", () => {
       ok: true,
       payload: { subscriptionId: "router-subscription" },
     });
-  });
-});
+  },
+);

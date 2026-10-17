@@ -21,16 +21,11 @@ function session(name: string, updatedAt: number, fields: Partial<SessionEntry>)
 
 function worktree(name: string, ownerId: string | undefined, lastActiveAt: number) {
   return {
-    id: name,
-    name,
     repoFingerprint: name,
     repoRoot: `/repos/${name}`,
     path: `/worktrees/${name}`,
-    branch: `openclaw/${name}`,
-    baseRef: "main",
-    ownerKind: "session",
+    ownerKind: ownerId ? "session" : "manual",
     ownerId,
-    createdAt: 100,
     lastActiveAt,
   };
 }
@@ -81,20 +76,29 @@ function authenticatedClient(user: string, scopes = ["operator.write"]): Gateway
   };
 }
 
-function assertObservedProjectsPayload(
-  payload: unknown,
-): asserts payload is { observedProjects: unknown[] } {
-  if (!isRecord(payload) || !Array.isArray(payload.observedProjects)) {
-    throw new TypeError("projects.list response is missing observedProjects");
-  }
-}
-
 type IdentityResolver = (checkoutPath: string) => Promise<{
   checkoutRoot: string;
   repoRoot: string;
   originUrl: string;
   fingerprint: string;
 }>;
+
+function identity(
+  checkoutPath: string,
+  overrides: Partial<Awaited<ReturnType<IdentityResolver>>> = {},
+) {
+  return {
+    checkoutRoot: checkoutPath,
+    repoRoot: checkoutPath,
+    originUrl: `https://example.test${checkoutPath}.git`,
+    fingerprint: checkoutPath,
+    ...overrides,
+  };
+}
+
+function seedSessions(entries: ReturnType<typeof session>[]) {
+  seededSessions.store = Object.fromEntries(entries);
+}
 
 async function listObservedProjects(
   resolveRepositoryIdentity: IdentityResolver,
@@ -110,11 +114,7 @@ async function listObservedProjects(
   } as never);
   const responses: Parameters<RespondFn>[] = [];
   const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-  const projection = createSessionRowProjectionFixture({
-    cfg,
-    store: {},
-    modelCatalog: [],
-  });
+  const projection = createSessionRowProjectionFixture({ cfg, store: {}, modelCatalog: [] });
   try {
     await handlers["projects.list"]?.({
       params: { includeObserved: true },
@@ -129,13 +129,12 @@ async function listObservedProjects(
     projection.dispose();
   }
   expect(responses).toHaveLength(1);
-  const response = responses[0];
-  if (!response) {
-    throw new Error("projects.list did not respond");
+  const [ok, payload] = responses[0]!;
+  expect(ok).toBe(true);
+  if (!isRecord(payload) || !Array.isArray(payload.observedProjects)) {
+    throw new TypeError("projects.list response is missing observedProjects");
   }
-  expect(response[0]).toBe(true);
-  assertObservedProjectsPayload(response[1]);
-  return response[1].observedProjects;
+  return payload.observedProjects;
 }
 
 beforeEach(() => {
@@ -144,22 +143,21 @@ beforeEach(() => {
 
 describe("projects.list observed projects", () => {
   it("deduplicates admitted paths and preserves result order when a checkout is unavailable", async () => {
-    seededSessions.store = Object.fromEntries(
-      Array.from({ length: 5_000 }, (_, index) => [
-        `agent:main:session-${index}`,
-        { sessionId: `session-${index}`, updatedAt: index, execCwd: `/repos/${index % 8}` },
-      ]),
+    seedSessions(
+      Array.from({ length: 5_000 }, (_, index) =>
+        session(`session-${index}`, index, { execCwd: `/repos/${index % 8}` }),
+      ),
     );
     const resolveRepositoryIdentity = vi.fn(async (checkoutPath: string) => {
       if (checkoutPath === "/repos/3") {
         throw new Error("checkout unavailable");
       }
-      return {
+      return identity(checkoutPath, {
         checkoutRoot: checkoutPath.replace("/repos/", "/physical/"),
         repoRoot: "/physical/main",
         originUrl: "https://example.test/project.git",
         fingerprint: "project",
-      };
+      });
     });
 
     await expect(listObservedProjects(resolveRepositoryIdentity)).resolves.toEqual([
@@ -179,93 +177,41 @@ describe("projects.list observed projects", () => {
     );
   });
 
-  it.each([["operator.write"]])(
-    "returns detailed observed projects to %s callers",
-    async (scope) => {
-      seededSessions.store = Object.fromEntries([
-        session("old", 100, { execCwd: "/links/alpha-old" }),
-        session("new", 300, { execCwd: "/links/alpha-new" }),
-        session("device", 400, { execCwd: "/device/alpha", execNode: "paired-mac" }),
-      ]);
-      const resolveRepositoryIdentity = vi.fn(async (checkoutPath: string) => ({
-        checkoutRoot: checkoutPath.replace("/links/", "/physical/"),
-        repoRoot: "/physical/alpha",
-        originUrl: "https://github.com/openclaw/alpha.git",
-        fingerprint: "alpha-fingerprint",
-      }));
+  it("excludes device-owned checkouts before identity resolution", async () => {
+    seedSessions([session("device", 400, { execCwd: "/device/alpha", execNode: "paired-mac" })]);
+    const resolveRepositoryIdentity = vi.fn(async (checkoutPath: string) => identity(checkoutPath));
+    await expect(listObservedProjects(resolveRepositoryIdentity)).resolves.toEqual([]);
+    expect(resolveRepositoryIdentity).not.toHaveBeenCalled();
+  });
 
-      await expect(
-        listObservedProjects(resolveRepositoryIdentity, {
-          client: authenticatedClient(`${scope}@example.com`, [scope]),
-        }),
-      ).resolves.toEqual([
-        {
-          name: "alpha-new",
-          originUrl: "https://github.com/openclaw/alpha.git",
-          checkouts: [
-            { runnerId: "gateway", path: "/physical/alpha-new" },
-            { runnerId: "gateway", path: "/physical/alpha-old" },
-          ],
-          lastUsedAt: 300,
-        },
-      ]);
-      expect(resolveRepositoryIdentity).not.toHaveBeenCalledWith("/device/alpha");
-    },
-  );
-
-  it("admits managed worktrees only when their owning session is visible", async () => {
+  it.each<[string, string[], string[]]>([
+    ["viewer", ["operator.write"], ["visible"]],
+    ["admin", ["operator.admin"], ["visible", "private", "orphan", "manual"]],
+  ])("admits managed worktrees visible to %s", async (user, scopes, names) => {
     const createdActor = { type: "human", source: "profile", id: "owner@example.com" } as const;
-    seededSessions.store = Object.fromEntries([
-      session("visible", 200, {
-        visibility: "shared",
-        createdActor,
-      }),
-      session("private", 300, {
-        visibility: "draft",
-        createdActor,
-      }),
+    seedSessions([
+      session("visible", 200, { visibility: "shared", createdActor }),
+      session("private", 300, { visibility: "draft", createdActor }),
     ]);
     const worktrees = [
       worktree("visible", "agent:main:visible", 500),
       worktree("private", "agent:main:private", 490),
       worktree("orphan", "agent:main:missing", 480),
-      {
-        ...worktree("manual", "ignored", 470),
-        ownerKind: "manual",
-        ownerId: undefined,
-      },
+      worktree("manual", undefined, 470),
     ];
-    const resolveRepositoryIdentity = vi.fn(async (checkoutPath: string) => ({
-      checkoutRoot: checkoutPath,
-      repoRoot: checkoutPath,
-      originUrl: `https://example.test${checkoutPath}.git`,
-      fingerprint: checkoutPath,
-    }));
-
-    const viewer = (await listObservedProjects(resolveRepositoryIdentity, {
-      worktrees,
-      client: authenticatedClient("viewer@example.com"),
-    })) as Array<{ name: string }>;
-    expect(viewer.map((project) => project.name)).toEqual(["visible"]);
-
-    const admin = (await listObservedProjects(resolveRepositoryIdentity, {
-      worktrees,
-      client: authenticatedClient("admin@example.com", ["operator.admin"]),
-    })) as Array<{ name: string }>;
-    expect(admin.map((project) => project.name)).toEqual([
-      "visible",
-      "private",
-      "orphan",
-      "manual",
-    ]);
+    await expect(
+      listObservedProjects(async (checkoutPath) => identity(checkoutPath), {
+        worktrees,
+        client: authenticatedClient(`${user}@example.com`, scopes),
+      }),
+    ).resolves.toMatchObject(names.map((name) => ({ name })));
   });
 
   it("redacts URL and SCP-style userinfo and omits unknown remote forms", async () => {
-    seededSessions.store = Object.fromEntries(
-      ["url", "token-scp", "git-scp", "unknown"].map((name, index) => [
-        `agent:main:${name}`,
-        { sessionId: name, updatedAt: 400 - index, execCwd: `/repos/${name}` },
-      ]),
+    seedSessions(
+      ["url", "token-scp", "git-scp", "unknown"].map((name, index) =>
+        session(name, 400 - index, { execCwd: `/repos/${name}` }),
+      ),
     );
     const origins: Record<string, string> = {
       "/repos/url": ["https://user", ":placeholder", "@host/repo.git?visible=value#branch"].join(
@@ -276,12 +222,9 @@ describe("projects.list observed projects", () => {
       "/repos/unknown": "opaque credential-shaped remote",
     };
 
-    const projects = (await listObservedProjects(async (checkoutPath) => ({
-      checkoutRoot: checkoutPath,
-      repoRoot: checkoutPath,
-      originUrl: origins[checkoutPath] ?? "",
-      fingerprint: checkoutPath,
-    }))) as Array<{ name: string; originUrl?: string }>;
+    const projects = (await listObservedProjects(async (checkoutPath) =>
+      identity(checkoutPath, { originUrl: origins[checkoutPath] ?? "" }),
+    )) as Array<{ name: string; originUrl?: string }>;
 
     expect(projects.map(({ name, originUrl }) => ({ name, originUrl }))).toEqual([
       { name: "url", originUrl: "https://host/repo.git" },
@@ -299,18 +242,14 @@ describe("projects.list observed projects", () => {
         repoFingerprint: "alpha-fingerprint",
         repoRoot: "/repos/alpha",
         path: `/worktrees/${String(index).padStart(2, "0")}`,
-        ownerKind: "manual",
-        createdAt: 1,
       }),
     );
 
     const projects = (await listObservedProjects(
-      async (checkoutPath) => ({
-        checkoutRoot: checkoutPath,
-        repoRoot: checkoutPath,
-        originUrl: "https://github.com/openclaw/alpha.git",
-        fingerprint: "alpha-fingerprint",
-      }),
+      async (checkoutPath) =>
+        identity(checkoutPath, {
+          originUrl: "https://github.com/openclaw/alpha.git",
+        }),
       { worktrees, client: authenticatedClient("admin@example.com", ["operator.admin"]) },
     )) as Array<{ checkouts: Array<{ path: string }> }>;
 
@@ -325,11 +264,10 @@ describe("projects.list observed projects", () => {
       PROJECTS_LIST_MAX_IDENTITY_PROBES,
       50,
     );
-    seededSessions.store = Object.fromEntries(
-      Array.from({ length: rawCandidateLimit + 5 }, (_, index) => [
-        `agent:main:session-${index}`,
-        { sessionId: `session-${index}`, updatedAt: index, execCwd: `/repos/${index}` },
-      ]),
+    seedSessions(
+      Array.from({ length: rawCandidateLimit + 5 }, (_, index) =>
+        session(`session-${index}`, index, { execCwd: `/repos/${index}` }),
+      ),
     );
     const resolveRepositoryIdentity = vi.fn<IdentityResolver>(async (_checkoutPath) => {
       throw new Error("checkout unavailable");
