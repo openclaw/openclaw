@@ -105,9 +105,6 @@ export function createSessionRowDescriptionReader(owner: {
           owner.refresh([records.identity(row)]);
           row = owner.lookup(query);
         }
-        if (row && !row.materialized && !isColdArchivedSessionRow(row)) {
-          throw new SessionRowFactsPending([query]);
-        }
         row = owner.describeArchived(row);
       }
       if (captured && !owner.isCurrent(captured)) {
