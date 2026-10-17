@@ -233,6 +233,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/agent-command.admission-failure.test.ts",
   "src/agents/agent-command.compaction-rotation.test.ts",
   "src/agents/agent-command.compaction-custody.test.ts",
+  "src/agents/agent-command.private-completion-obligation.test.ts",
   "src/agents/agent-command.harness-compaction-custody.test.ts",
   "src/agents/agent-command.recovery-source.test.ts",
   "src/agents/agent-command.live-model-switch.test.ts",
