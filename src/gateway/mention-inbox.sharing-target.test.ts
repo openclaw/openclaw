@@ -26,7 +26,6 @@ import {
   emitSessionsChanged,
   emitSessionTitleChanged,
 } from "./server-methods/session-change-event.js";
-import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { setSessionActivitySummaryState } from "./session-activity-summary-state.js";
 import {
   invalidateSessionAutomationIndex,
@@ -37,6 +36,26 @@ import * as sessionSharing from "./session-sharing.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+type Fixture = Parameters<Parameters<typeof withMentionInbox>[0]>[0];
+
+function sessionContext(f: Fixture, cfg: OpenClawConfig = {}) {
+  return {
+    mentionInbox: f.inbox,
+    getRuntimeConfig: () => cfg,
+    getSessionEventSubscriberConnIds: () => new Set<string>(),
+    broadcastToConnIds: f.broadcast,
+    chatAbortControllers: new Map(),
+  };
+}
+
+function emitSettlement(f: Fixture, cfg: OpenClawConfig = {}) {
+  emitSessionsChanged(
+    sessionContext(f, cfg),
+    { sessionKey: SESSION_KEY, agentId: "main", reason: "agent.input.settled" },
+    { accessChanged: false, rowScope: "runtime" },
+  );
+}
+
 it.each(["runtime settlement", "agent runs", "automation"] as const)(
   "serves the prepared mention Inbox without storage reads after %s",
   async (publication) => {
@@ -46,13 +65,7 @@ it.each(["runtime settlement", "agent runs", "automation"] as const)(
       expect(before).toMatchObject({ ok: true, payload: { items: [expect.any(Object)] } });
       const reads = vi.spyOn(sessionEntryReads, "readSessionEntriesFromStoreInWorker");
       if (publication === "runtime settlement") {
-        const context = requestContext({});
-        context.mentionInbox = f.inbox;
-        emitSessionsChanged(
-          context,
-          { sessionKey: SESSION_KEY, agentId: "main", reason: "agent.input.settled" },
-          { accessChanged: false, rowScope: "runtime" },
-        );
+        emitSettlement(f);
       } else if (publication === "agent runs") {
         sessionChanges.emit({ all: true, scope: "agent-runs" });
       } else {
@@ -95,9 +108,9 @@ it.each(["activity summary", "runtime settlement", "automation", "sharing revoca
   "keeps mention dismissal authority aligned with %s publication",
   async (publication) => {
     const cfg = {};
-    await withMentionInbox(async (fixture) => {
-      await fixture.post("presentation-publication");
-      const original = (await fixture.items())[0]!;
+    await withMentionInbox(async (f) => {
+      await f.post("presentation-publication");
+      const original = (await f.items())[0]!;
       const jobs: CronJob[] = [];
       if (publication === "automation") {
         registerSessionAutomationSource({ getJobs: () => jobs, getDefaultAgentId: () => "main" });
@@ -122,7 +135,7 @@ it.each(["activity summary", "runtime settlement", "automation", "sharing revoca
           });
         });
       const changesAccess = publication === "sharing revocation";
-      const dismissal = dismissMentionInbox(fixture.inbox, fixture.bobClient, [original.id]);
+      const dismissal = dismissMentionInbox(f.inbox, f.bobClient, [original.id]);
       const owner = Symbol("mention-presentation");
       const target = { key: SESSION_KEY, agentId: "main" };
       try {
@@ -138,13 +151,7 @@ it.each(["activity summary", "runtime settlement", "automation", "sharing revoca
             state: "updating",
           });
         } else if (publication === "runtime settlement") {
-          const context = requestContext(cfg);
-          context.mentionInbox = fixture.inbox;
-          emitSessionsChanged(
-            context,
-            { sessionKey: SESSION_KEY, agentId: "main", reason: "agent.input.settled" },
-            { accessChanged: false, rowScope: "runtime" },
-          );
+          emitSettlement(f, cfg);
         } else if (publication === "automation") {
           jobs.push({
             id: "mention-automation",
@@ -161,20 +168,20 @@ it.each(["activity summary", "runtime settlement", "automation", "sharing revoca
           invalidateSessionAutomationIndex();
           expect(sessionHasAutomation(SESSION_KEY, cfg, "main")).toBe(true);
         } else {
-          await fixture.setSession({ visibility: "draft" });
+          await f.setSession({ visibility: "draft" });
         }
         release.resolve();
         const result = await dismissal;
         if (changesAccess) {
           expectMentionError(result, "UNAVAILABLE");
           expect(guardErrors).toContainEqual(new Error("Mention authority changed before commit"));
-          await fixture.setSession({ visibility: "shared" });
+          await f.setSession({ visibility: "shared" });
         } else {
           expect(guardErrors).toEqual([]);
           expect(result).toMatchObject({ ok: true, value: { items: [] } });
         }
-        const reopened = fixture.openInbox("after-presentation-publication");
-        expect(await fixture.items(fixture.bobClient, reopened)).toEqual(
+        const reopened = f.openInbox("after-presentation-publication");
+        expect(await f.items(f.bobClient, reopened)).toEqual(
           changesAccess
             ? [expect.objectContaining({ id: original.id, messageId: original.messageId })]
             : [],
@@ -221,7 +228,6 @@ it("refreshes 50 connected mention views after session and viewer changes", asyn
       }
       expect((await f.items())[0]?.sessionTitle).toBe("Design review");
       f.broadcast.mockClear();
-      // This spy counts host SQL; invalidated targets are now prepared in the worker.
       let exactRowReads = 0;
       // oxlint-disable-next-line typescript/unbound-method -- apply preserves the intercepted statement receiver.
       const originalGet = StatementSync.prototype.get;
@@ -234,62 +240,43 @@ it("refreshes 50 connected mention views after session and viewer changes", asyn
         }
         return originalGet.apply(this, values);
       });
-      const context: Parameters<typeof emitSessionsChanged>[0] = {
-        mentionInbox: f.inbox,
-        getRuntimeConfig: () => cfg,
-        getSessionEventSubscriberConnIds: () => new Set(),
-        broadcastToConnIds: f.broadcast,
-        chatAbortControllers: new Map(),
-      };
+      const context = sessionContext(f, cfg);
       const invalidation = vi.spyOn(f.inbox, "invalidateAsync");
       const emit = async (sessionKey = "agent:main:unrelated") => {
         emitSessionsChanged(context, { sessionKey, agentId: "main", reason: "patch" });
         await invalidation.mock.results.at(-1)?.value;
       };
-      const start = performance.now();
-      await emit();
-      const elapsed = performance.now() - start;
-      const reads = exactRowReads;
-      console.log(
-        JSON.stringify({ viewers: f.clients.length, exactRowReads: reads, elapsedMs: elapsed }),
-      );
-      expect(f.broadcast).not.toHaveBeenCalled();
-      expect(reads).toBe(0);
+      const expectPublication = async (count: number, publish = emit) => {
+        exactRowReads = 0;
+        await publish();
+        expect({ reads: exactRowReads, broadcasts: f.broadcast.mock.calls.length }).toEqual({
+          reads: 0,
+          broadcasts: count,
+        });
+      };
+      await expectPublication(0);
 
-      // The owner publication must invalidate even if the next fan-out names another session.
       await f.setSession({ visibility: "draft" });
-      exactRowReads = 0;
-      await emit();
-      expect(exactRowReads).toBe(0);
-      expect(f.broadcast).toHaveBeenCalledTimes(50);
+      await expectPublication(50);
       expect(await f.items()).toEqual([]);
 
       await f.setSession({ displayName: "Renamed conversation" });
-      exactRowReads = 0;
       f.broadcast.mockClear();
-      emitSessionTitleChanged(context, { sessionKey: SESSION_KEY, agentId: "main" });
-      await invalidation.mock.results.at(-1)?.value;
-      expect(exactRowReads).toBe(0);
-      expect(f.broadcast).toHaveBeenCalledTimes(50);
+      await expectPublication(50, async () => {
+        emitSessionTitleChanged(context, { sessionKey: SESSION_KEY, agentId: "main" });
+        await invalidation.mock.results.at(-1)?.value;
+      });
       expect((await f.items())[0]?.sessionTitle).toBe("Renamed conversation");
 
-      // Target reuse never retains the viewer's identity or authorization decision.
       f.clients[0]!.authenticatedUserProfile = f.carolClient.authenticatedUserProfile;
-      exactRowReads = 0;
       f.broadcast.mockClear();
-      await emit();
-      expect(exactRowReads).toBe(0);
-      expect(f.broadcast).toHaveBeenCalledTimes(1);
+      await expectPublication(1);
       expect([...f.broadcast.mock.calls[0]![2]]).toEqual(["viewer-0"]);
 
-      // Keyless invalidation also covers in-place runtime configuration updates.
       cfg.session = { store: alternateStorePath };
       setRuntimeConfigSnapshot(cfg);
-      exactRowReads = 0;
       f.broadcast.mockClear();
-      await f.inbox.invalidateAsync();
-      expect(exactRowReads).toBe(0);
-      expect(f.broadcast).toHaveBeenCalledTimes(49);
+      await expectPublication(49, () => f.inbox.invalidateAsync());
       expect((await f.items())[0]?.sessionTitle).toBe("Alternate conversation");
     },
     cfg,

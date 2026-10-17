@@ -189,15 +189,12 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
       }
     },
     post(sourceId = "source-one", overrides: Partial<MentionCommittedInput> = {}, target = inbox) {
-      let committedSource = committedSources.get(sourceId);
-      if (!committedSource) {
-        committedSource = {
-          generation: "test-generation",
-          sequence: committedSources.size + 1,
-          timestamp: Date.now(),
-        };
-        committedSources.set(sourceId, committedSource);
-      }
+      const committedSource = committedSources.get(sourceId) ?? {
+        generation: "test-generation",
+        sequence: committedSources.size + 1,
+        timestamp: Date.now(),
+      };
+      committedSources.set(sourceId, committedSource);
       return target.recordCommittedInputAsync({
         sourceId,
         committedSource,

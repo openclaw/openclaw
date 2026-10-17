@@ -8,13 +8,10 @@ import {
   revokeMessageActionTurnCapability as revokeCapability,
 } from "./message-action-turn-capability.js";
 
+const identity = { agentId: "main", runId: "run-1", sessionKey: "session-1" };
+
 describe("message action turn capability", () => {
   it("keeps a delivery-only restriction private without granting channel context", async () => {
-    const identity = {
-      agentId: "main",
-      runId: "legacy-cron",
-      sessionKey: "agent:main:cron:legacy",
-    };
     const assertCurrent = vi.fn();
     const beforeAttempt = vi.fn(async () => {
       revokeCapability(token);
@@ -28,9 +25,11 @@ describe("message action turn capability", () => {
     const restriction = authorization?.deliveryAttempt;
     try {
       expect(resolveCapability(lookup)).not.toHaveProperty("deliveryAttempt");
-      expect(authorization?.scheduled).toBeUndefined();
-      expect(authorization?.toolContext).toBeUndefined();
-      expect(authorization?.requesterAccountId).toBeUndefined();
+      expect([
+        authorization?.scheduled,
+        authorization?.toolContext,
+        authorization?.requesterAccountId,
+      ]).toEqual([undefined, undefined, undefined]);
       const authority = createMessageToolTurnAuthority({ ...lookup, getConfig: () => ({}) });
       expect(authority.beginInvocation("send").hasChannelTurnContext).toBe(false);
       expect(restriction).toBeDefined();
@@ -48,7 +47,6 @@ describe("message action turn capability", () => {
 
   it("keeps dashboard permission private and rejects a retained grant after revocation", () => {
     const assertSourceCurrent = vi.fn();
-    const identity = { agentId: "main", runId: "dashboard-run", sessionKey: "agent:main:main" };
     const token = mintCapability({
       ...identity,
       assertDashboardReadCurrent: assertSourceCurrent,
@@ -57,8 +55,7 @@ describe("message action turn capability", () => {
     const authorization = resolveAuthorization(lookup);
     const assertCurrent = authorization?.assertDashboardReadCurrent;
     expect(resolveCapability(lookup)).not.toHaveProperty("assertDashboardReadCurrent");
-    expect(authorization?.toolContext).toBeUndefined();
-    expect(authorization?.scheduled).toBeUndefined();
+    expect([authorization?.toolContext, authorization?.scheduled]).toEqual([undefined, undefined]);
     expect(assertCurrent).toBeTypeOf("function");
     assertCurrent?.();
     expect(assertSourceCurrent).toHaveBeenCalledOnce();
@@ -68,22 +65,23 @@ describe("message action turn capability", () => {
   });
 
   it("admits channel ingress but rejects Gateway and internal run sources", () => {
-    expect(isTrustedIngress("whatsapp")).toBe(true);
-    expect(isTrustedIngress("matrix")).toBe(true);
-    expect(isTrustedIngress("webchat")).toBe(false);
-    expect(isTrustedIngress("cron")).toBe(false);
-    expect(isTrustedIngress(undefined)).toBe(false);
+    expect(["whatsapp", "matrix", "webchat", "cron", undefined].map(isTrustedIngress)).toEqual([
+      true,
+      true,
+      false,
+      false,
+      false,
+    ]);
   });
 
   it("resolves only for the exact admitted run identity", () => {
-    const identity = {
+    const admittedIdentity = {
       agentId: "main",
       runId: "run-1",
       sessionKey: "agent:main:matrix:direct:room-1",
       sessionId: "session-1",
     };
-    const token = mintCapability({
-      ...identity,
+    const context = {
       sourceReplySessionKey: "agent:main:main",
       requesterAccountId: "ops",
       requesterSenderId: "@sender:example.org",
@@ -96,26 +94,13 @@ describe("message action turn capability", () => {
         currentChatType: "direct",
         currentSourceTurnId: "channel-user:v1:source-1",
       },
-      nowMs: 1000,
-      ttlMs: 5000,
-    });
-
-    const lookup = { ...identity, token, nowMs: 2000 };
+    } as const;
+    const token = mintCapability({ ...admittedIdentity, ...context, nowMs: 1000, ttlMs: 5000 });
+    const lookup = { ...admittedIdentity, token, nowMs: 2000 };
     expect(resolveCapability(lookup)).toMatchObject({
-      expiresAtMs: 6000,
-      sourceReplySessionKey: "agent:main:main",
+      ...context,
       sessionId: "session-1",
-      requesterAccountId: "ops",
-      requesterSenderId: "@sender:example.org",
-      requesterSenderName: "Sender Name",
-      requesterSenderUsername: "sender-user",
-      requesterSenderE164: "+15551234567",
-      toolContext: {
-        currentChannelProvider: "matrix",
-        currentChannelId: "!room-1:example.org",
-        currentChatType: "direct",
-        currentSourceTurnId: "channel-user:v1:source-1",
-      },
+      expiresAtMs: 6000,
     });
 
     for (const mismatch of [
@@ -130,12 +115,6 @@ describe("message action turn capability", () => {
 
   it("preserves reply-to-first state across capability resolutions", () => {
     const hasRepliedRef = { value: false };
-    const identity = {
-      agentId: "main",
-      runId: "run-1",
-      sessionKey: "agent:main:matrix:group:room",
-      sessionId: "session-1",
-    };
     const token = mintCapability({
       ...identity,
       toolContext: {
@@ -157,19 +136,8 @@ describe("message action turn capability", () => {
   });
 
   it("expires and revokes capabilities fail closed", () => {
-    const identity = { agentId: "main", runId: "run-1", sessionKey: "session-1" };
-    const token = mintCapability({
-      ...identity,
-      nowMs: 1000,
-      ttlMs: 1000,
-    });
-    expect(
-      resolveCapability({
-        ...identity,
-        token,
-        nowMs: 2000,
-      }),
-    ).toBeUndefined();
+    const token = mintCapability({ ...identity, nowMs: 1000, ttlMs: 1000 });
+    expect(resolveCapability({ ...identity, token, nowMs: 2000 })).toBeUndefined();
 
     const nextIdentity = { ...identity, runId: "run-2", sessionKey: "session-2" };
     const revoked = mintCapability(nextIdentity);

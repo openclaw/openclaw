@@ -78,6 +78,42 @@ const connectAccount = (
   ownerProfileId: string,
   overrides: Partial<Parameters<typeof connectUserModelAccountAsync>[0]> = {},
 ) => connectUserModelAccountAsync({ ownerProfileId, credential, ...authority, ...overrides });
+const role = (scopes: string[]): GatewayOperatorRoleDefinition => ({
+  agents: [],
+  scopes,
+  sessions: { others: "none" },
+});
+const withAccount = (email: string, run: (owner: string) => Promise<void>) =>
+  withOpenClawTestState({ scenario: "minimal" }, () => run(ensureProfileForEmail(email).id));
+const operator = (profileId: string) =>
+  createOperatorClient({
+    profileId,
+    scopes: ["operator.read", "operator.write", "operator.admin"],
+  });
+const resolvePin = (rawProfile: string, requesterProfileId: string) =>
+  resolveProfileOverride({ rawProfile, provider: credential.provider, requesterProfileId });
+
+async function withoutSql<T>(run: () => T | Promise<T>): Promise<T> {
+  const sql = observeHostDataSql();
+  try {
+    const result = await run();
+    expect(sql.queries).toEqual([]);
+    return result;
+  } finally {
+    sql.restore();
+  }
+}
+
+function calibrateSql(queries: string[]) {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.prepare("SELECT 1").get();
+    expect(queries).toContain("SELECT 1");
+  } finally {
+    db.close();
+  }
+  queries.length = 0;
+}
 
 function accountContext(
   client: ReturnType<typeof createOperatorClient>,
@@ -120,17 +156,13 @@ it("prepares cold personal account policy with GitHub assignments and current ro
       authenticationAlias: { kind: "email", email: "cold-account-owner@example.test" },
     }).id;
     const client = createOperatorClient({ profileId: owner, scopes: ["operator.write"] });
-    const writer: GatewayOperatorRoleDefinition = {
-      agents: "*",
-      scopes: ["operator.write"],
-      sessions: { others: "none" },
-    };
+    const writer: GatewayOperatorRoleDefinition = { ...role(["operator.write"]), agents: "*" };
     const cfg: OpenClawConfig = {
       gateway: {
         roles: {
           default: "denied",
           definitions: {
-            denied: { agents: [], scopes: [], sessions: { others: "none" } },
+            denied: role([]),
             writer,
           },
           assignments: { byGithubLogin: { "account-owner": "writer" } },
@@ -156,16 +188,10 @@ it("prepares cold personal account policy with GitHub assignments and current ro
   });
 });
 
-it("prepares personal account ownership from the next foreign commit", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const owner = ensureProfileForEmail("pin-freshness@example.test").id;
+it("prepares personal account ownership from the next foreign commit", () =>
+  withAccount("pin-freshness@example.test", async (owner) => {
     const { authProfileId } = await connectAccount(owner);
-    const input = {
-      rawProfile: authProfileId,
-      provider: credential.provider,
-      requesterProfileId: owner,
-    };
-    expect((await resolveProfileOverride(input)).profileId).toBe(authProfileId);
+    expect((await resolvePin(authProfileId, owner)).profileId).toBe(authProfileId);
     const foreign = new DatabaseSync(resolveOpenClawStateSqlitePath());
     try {
       foreign
@@ -173,41 +199,27 @@ it("prepares personal account ownership from the next foreign commit", async () 
           "DELETE FROM secret_store_entries WHERE scope_kind = 'identity' AND scope_id = ? AND name = ?",
         )
         .run(owner, `model-account:${authProfileId}`);
-      expect(await resolveProfileOverride(input)).toMatchObject({
+      expect(await resolvePin(authProfileId, owner)).toMatchObject({
         error: expect.stringContaining("signed-in profile"),
       });
     } finally {
       foreign.close();
     }
-  });
-});
+  }));
 
-it("prepares and validates personal pins without caller SQL, retaining identity authority", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const owner = ensureProfileForEmail("pin-owner@example.test").id;
+it("prepares and validates personal pins without caller SQL, retaining identity authority", () =>
+  withAccount("pin-owner@example.test", async (owner) => {
     const successor = ensureProfileForEmail("pin-successor@example.test").id;
     const { authProfileId } = await connectAccount(owner);
-    const sql = observeHostDataSql();
-    let selected: Awaited<ReturnType<typeof resolveProfileOverride>>;
-    try {
-      selected = await resolveProfileOverride({
-        rawProfile: authProfileId,
-        provider: credential.provider,
-        requesterProfileId: owner,
+    const selected = await withoutSql(async () => {
+      const pin = await resolvePin(authProfileId, owner);
+      expect(pin.profileId).toBe(authProfileId);
+      expect(pin.validateSelection?.()).toBeUndefined();
+      expect(await resolvePin(authProfileId, successor)).toMatchObject({
+        error: expect.stringContaining("signed-in profile"),
       });
-      expect(selected.profileId).toBe(authProfileId);
-      expect(selected.validateSelection?.()).toBeUndefined();
-      expect(
-        await resolveProfileOverride({
-          rawProfile: authProfileId,
-          provider: credential.provider,
-          requesterProfileId: successor,
-        }),
-      ).toMatchObject({ error: expect.stringContaining("signed-in profile") });
-      expect(sql.queries).toEqual([]);
-    } finally {
-      sql.restore();
-    }
+      return pin;
+    });
     await clearUserProfileAuthLinkAsync({
       profileId: owner,
       provider: credential.provider,
@@ -215,29 +227,19 @@ it("prepares and validates personal pins without caller SQL, retaining identity 
     });
     expect(selected.validateSelection?.()).toBeUndefined();
     linkEmail("pin-owner@example.test", successor);
-    const finalSql = observeHostDataSql();
-    try {
+    await withoutSql(() => {
       expect(selected.validateSelection?.()).toContain("signed-in profile");
-      expect(finalSql.queries).toEqual([]);
-    } finally {
-      finalSql.restore();
-    }
-  });
-});
+    });
+  }));
 
-it("rejects a pin whose identity changed before an awaited account read was accepted", async ({
+it("rejects a pin whose identity changed before an awaited account read was accepted", ({
   signal,
-}) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const owner = ensureProfileForEmail("pin-read-owner@example.test").id;
+}) =>
+  withAccount("pin-read-owner@example.test", async (owner) => {
     const successor = ensureProfileForEmail("pin-read-successor@example.test").id;
     const { authProfileId } = await connectAccount(owner);
-    const client = createOperatorClient({
-      profileId: owner,
-      scopes: ["operator.read", "operator.write", "operator.admin"],
-    });
-    const context = createContext();
-    context.getClientConnIds = () => new Set(client.connId ? [client.connId] : []);
+    const client = operator(owner);
+    const context = accountContext(client);
     const scanned = createDeferredCore();
     const consume = createDeferredCore();
     const read = stateReads.executeExistingOpenClawStateRead;
@@ -261,8 +263,7 @@ it("rejects a pin whose identity changed before an awaited account read was acce
       consume.resolve();
     }
     await refused;
-  });
-});
+  }));
 
 function observeAccountAdmission(observer: (stage: "transaction" | "commit") => void) {
   return probe.admission(workerAdmission, (request, grant, admit) => {
@@ -277,13 +278,9 @@ function observeAccountAdmission(observer: (stage: "transaction" | "commit") => 
   });
 }
 
-it("serves personal account RPCs without caller-thread SQL or credentials", async ({ signal }) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const owner = ensureProfileForEmail("worker-accounts@example.test").id;
-    const client = createOperatorClient({
-      profileId: owner,
-      scopes: ["operator.read", "operator.write", "operator.admin"],
-    });
+it("serves personal account RPCs without caller-thread SQL or credentials", ({ signal }) =>
+  withAccount("worker-accounts@example.test", async (owner) => {
+    const client = operator(owner);
     const clients = new Set([client]);
     const context = createContext();
     context.getClientConnIds = (filter) =>
@@ -334,14 +331,7 @@ it("serves personal account RPCs without caller-thread SQL or credentials", asyn
     };
     const sql = observeHostDataSql();
     try {
-      const calibration = new DatabaseSync(":memory:");
-      try {
-        calibration.prepare("SELECT 1").get();
-        expect(sql.queries).toContain("SELECT 1");
-      } finally {
-        calibration.close();
-      }
-      sql.queries.length = 0;
+      calibrateSql(sql.queries);
       for (const call of sql.calls) {
         call.mockClear();
       }
@@ -418,14 +408,12 @@ it("serves personal account RPCs without caller-thread SQL or credentials", asyn
       cancellation.mockRestore();
       await service.stop();
     }
-  });
-});
+  }));
 
 it.each(["transaction", "commit"] as const)(
   "uses the stored role to refuse selection when policy enables at %s, without grant SQL",
-  async (stage) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const owner = ensureProfileForEmail("grant-role@example.test").id;
+  (stage) =>
+    withAccount("grant-role@example.test", async (owner) => {
       setUserProfileRole(owner, "member");
       const first = await connectAccount(owner);
       const second = await connectAccount(owner);
@@ -439,16 +427,8 @@ it.each(["transaction", "commit"] as const)(
           roles: {
             default: "fallback",
             definitions: {
-              member: {
-                sessions: { others: "none" },
-                agents: [],
-                scopes: [],
-              },
-              fallback: {
-                sessions: { others: "none" },
-                agents: [],
-                scopes: ["operator.write"],
-              },
+              member: role([]),
+              fallback: role(["operator.write"]),
             },
           },
         },
@@ -478,16 +458,12 @@ it.each(["transaction", "commit"] as const)(
         }
       });
       try {
-        const calibration = new DatabaseSync(":memory:");
         try {
           inGrant = true;
-          calibration.prepare("SELECT 1").get();
-          expect(grantSql).toContain("SELECT 1");
+          calibrateSql(grantSql);
         } finally {
           inGrant = false;
-          calibration.close();
         }
-        grantSql.length = 0;
         const respond = await callAccount(client, context, "users.selectModelAccount", {
           profileId: owner,
           authProfileId: first.authProfileId,
@@ -510,15 +486,13 @@ it.each(["transaction", "commit"] as const)(
         sql.restore();
         await service.stop();
       }
-    });
-  },
+    }),
 );
 
 it.each(["transaction", "commit"] as const)(
   "refuses revoked %s authority without committing either credential or link",
-  async (refusalStage) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const owner = ensureProfileForEmail("refused-account@example.test").id;
+  (refusalStage) =>
+    withAccount("refused-account@example.test", async (owner) => {
       let live = true;
       const observed: string[] = [];
       const admission = observeAccountAdmission((stage) => {
@@ -545,15 +519,13 @@ it.each(["transaction", "commit"] as const)(
       } finally {
         admission.mockRestore();
       }
-    });
-  },
+    }),
 );
 
 it.each(["credential", "selection"] as const)(
   "compares before BEGIN and rereads %s account rows inside the transaction",
-  async (race) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const owner = ensureProfileForEmail("replacement-account@example.test").id;
+  (race) =>
+    withAccount("replacement-account@example.test", async (owner) => {
       const first = await connectAccount(owner);
       const order: string[] = [];
       const admission = observeAccountAdmission((stage) => order.push(stage));
@@ -592,13 +564,11 @@ it.each(["credential", "selection"] as const)(
       } finally {
         admission.mockRestore();
       }
-    });
-  },
+    }),
 );
 
-it("does not replay a committed account mutation whose worker reply is lost", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const owner = ensureProfileForEmail("lost-account-reply@example.test").id;
+it("does not replay a committed account mutation whose worker reply is lost", () =>
+  withAccount("lost-account-reply@example.test", async (owner) => {
     let target: { worker: Worker; id: number } | undefined;
     let terminated: Promise<number> | undefined;
     let attempts = 0;
@@ -659,5 +629,4 @@ it("does not replay a committed account mutation whose worker reply is lost", as
       posted.mockRestore();
       emitted.mockRestore();
     }
-  });
-});
+  }));

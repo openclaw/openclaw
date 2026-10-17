@@ -37,6 +37,13 @@ function expectScope(
 ) {
   required(...args).toEqual([scope]);
 }
+function expectAccess(scope: string, method: string, params?: unknown, deniedScope?: string) {
+  expectScope(scope, method, params);
+  allow(method, [scope], params);
+  if (deniedScope) {
+    deny(scope, method, [deniedScope], params);
+  }
+}
 
 const RESERVED_ADMIN_PLUGIN_METHOD = "config.plugin.inspect";
 const pluginHandler: GatewayRequestHandler = ({ respond }) => respond(true, {});
@@ -76,9 +83,7 @@ describe("method scope resolution and authorization", () => {
   it("keeps private background mutations under ordinary write scope", () => {
     expectScope("operator.read", "users.background.get");
     for (const method of ["users.background.upload", "users.background.remove"]) {
-      expectScope("operator.write", method);
-      deny("operator.write", method, ["operator.read"]);
-      allow(method, ["operator.write"]);
+      expectAccess("operator.write", method, undefined, "operator.read");
     }
   });
 
@@ -116,17 +121,12 @@ describe("method scope resolution and authorization", () => {
   });
 
   it("adds talk secret scope only when unredacted config is requested", () => {
+    const params = { includeSecrets: true };
     expectScope("operator.read", "talk.config", {});
-    required("talk.config", { includeSecrets: true }).toEqual([
-      "operator.read",
-      "operator.talk.secrets",
-    ]);
-    deny("operator.talk.secrets", "talk.config", ["operator.read"], {
-      includeSecrets: true,
-    });
-    allow("talk.config", ["operator.read", "operator.talk.secrets"], {
-      includeSecrets: true,
-    });
+    const scopes = ["operator.read", "operator.talk.secrets"];
+    required("talk.config", params).toEqual(scopes);
+    deny("operator.talk.secrets", "talk.config", ["operator.read"], params);
+    allow("talk.config", scopes, params);
   });
 
   it("accepts dedicated Talk access and preserves operator.write compatibility", () => {
@@ -136,16 +136,12 @@ describe("method scope resolution and authorization", () => {
   });
 
   it("requires admin only when DM pairing approval bootstraps a command owner", () => {
+    const params = { bootstrapCommandOwner: true };
+    const scopes = ["operator.pairing", "operator.admin"];
     expectScope("operator.pairing", "channels.pairing.approve", {});
-    required("channels.pairing.approve", {
-      bootstrapCommandOwner: true,
-    }).toEqual(["operator.pairing", "operator.admin"]);
-    deny("operator.admin", "channels.pairing.approve", ["operator.pairing"], {
-      bootstrapCommandOwner: true,
-    });
-    allow("channels.pairing.approve", ["operator.pairing", "operator.admin"], {
-      bootstrapCommandOwner: true,
-    });
+    required("channels.pairing.approve", params).toEqual(scopes);
+    deny("operator.admin", "channels.pairing.approve", ["operator.pairing"], params);
+    allow("channels.pairing.approve", scopes, params);
   });
 
   it("classifies plugin session actions with a CLI-safe default operator scope", () => {
@@ -174,10 +170,8 @@ describe("method scope resolution and authorization", () => {
     }));
     setActivePluginRegistry(registry);
 
-    expectScope("operator.approvals", "plugins.sessionAction", {
-      pluginId: "scope-plugin",
-      actionId: "approve",
-    });
+    const approve = { pluginId: "scope-plugin", actionId: "approve" };
+    expectAccess("operator.approvals", "plugins.sessionAction", approve, "operator.write");
     expectScope("operator.read", "plugins.sessionAction", {
       pluginId: " scope-plugin ",
       actionId: " view ",
@@ -190,30 +184,13 @@ describe("method scope resolution and authorization", () => {
       pluginId: "scope-plugin",
       actionId: "missing",
     }).toEqual(createExpectedBroadOperatorScopes());
-    allow("plugins.sessionAction", ["operator.approvals"], {
-      pluginId: "scope-plugin",
-      actionId: "approve",
-    });
-    deny("operator.approvals", "plugins.sessionAction", ["operator.write"], {
-      pluginId: "scope-plugin",
-      actionId: "approve",
-    });
   });
 
   it("defers Gateway cwd containment to sessions.create while keeping node cwd admin-only", () => {
     expectScope("operator.write", "sessions.create", { worktree: true });
-    expectScope("operator.write", "sessions.create", { cwd: "/other/repo" });
-    allow("sessions.create", ["operator.write"], {
-      cwd: "/other/repo",
-    });
-    expectScope("operator.write", "sessions.create", {
-      worktree: true,
-      cwd: "/other/repo",
-    });
-    allow("sessions.create", ["operator.write"], {
-      worktree: true,
-      cwd: "/other/repo",
-    });
+    for (const params of [{ cwd: "/other/repo" }, { worktree: true, cwd: "/other/repo" }]) {
+      expectAccess("operator.write", "sessions.create", params);
+    }
     expectScope("operator.admin", "sessions.create", {
       execNode: "macbook",
       cwd: "/other/repo",
@@ -222,9 +199,7 @@ describe("method scope resolution and authorization", () => {
 
   it("requires operator.write rather than own-session scope for device folders", () => {
     const params = { deviceFolder: { deviceId: "paired-device", path: "~/project" } };
-    expectScope("operator.write", "sessions.create", params);
-    allow("sessions.create", ["operator.write"], params);
-    deny("operator.write", "sessions.create", ["operator.sessions.write"], params);
+    expectAccess("operator.write", "sessions.create", params, "operator.sessions.write");
   });
 
   it("keeps Gateway fs.listDir write-scoped and node browsing admin-only", () => {
@@ -232,10 +207,9 @@ describe("method scope resolution and authorization", () => {
     allow("fs.listDir", ["operator.write"], {
       path: "/configured/workspace",
     });
-    expectScope("operator.admin", "fs.listDir", { nodeId: "macbook" });
-    deny("operator.admin", "fs.listDir", ["operator.write"], {
-      nodeId: "macbook",
-    });
+    const nodeParams = { nodeId: "macbook" };
+    expectScope("operator.admin", "fs.listDir", nodeParams);
+    deny("operator.admin", "fs.listDir", ["operator.write"], nodeParams);
   });
 
   it.each([
@@ -274,11 +248,12 @@ describe("method scope resolution and authorization", () => {
   ] as const)(
     "derives %s authorization from its placement target",
     (_name, method, params, scope) => {
-      required(method, params).toEqual([scope]);
-      allow(method, [scope], params);
-      if (scope === "operator.admin") {
-        deny("operator.admin", method, ["operator.write"], params);
-      }
+      expectAccess(
+        scope,
+        method,
+        params,
+        scope === "operator.admin" ? "operator.write" : undefined,
+      );
     },
   );
 
@@ -290,61 +265,33 @@ describe("method scope resolution and authorization", () => {
       { parentSessionKey: incognitoKey },
       { agentId: "main", toolOverrides: { skills: { release: false } } },
     ]) {
-      expectScope("operator.admin", "sessions.create", params);
-      deny("operator.admin", "sessions.create", ["operator.write"], params);
-      allow("sessions.create", ["operator.admin"], params);
+      expectAccess("operator.admin", "sessions.create", params, "operator.write");
     }
     expectScope("operator.write", "sessions.create", { incognito: false });
   });
 
   it("grants write-scope sessions.delete only with the archivedOnly opt-in", () => {
-    // Internal callers (subagent cleanup, fallback synthetic dispatch, CLI
-    // minting) never set archivedOnly and keep requiring admin; the handler
-    // enforces that archivedOnly targets are actually archived.
     expectScope("operator.admin", "sessions.delete");
     expectScope("operator.admin", "sessions.delete", {
       key: "agent:main:old",
       deleteTranscript: true,
     });
-    expectScope("operator.write", "sessions.delete", {
-      key: "agent:main:old",
-      archivedOnly: true,
-    });
     const archivedParams = { key: "agent:main:old", archivedOnly: true };
-    allow("sessions.delete", ["operator.write"], archivedParams);
-    deny("operator.write", "sessions.delete", ["operator.read"], archivedParams);
-    deny("operator.admin", "sessions.delete", ["operator.write"], {
-      key: "agent:main:old",
-    });
-    deny("operator.admin", "sessions.delete", ["operator.write"], {
-      key: "agent:main:old",
-      archivedOnly: "yes",
-    });
-    // Internal-only controls must not ride along on the write-scope path.
-    deny("operator.admin", "sessions.delete", ["operator.write"], {
-      key: "agent:main:old",
-      archivedOnly: true,
-      emitLifecycleHooks: false,
-    });
-    allow("sessions.delete", ["operator.write"], {
-      key: "agent:main:old",
-      archivedOnly: true,
+    expectAccess("operator.write", "sessions.delete", archivedParams, "operator.read");
+    for (const params of [
+      { key: archivedParams.key },
+      { ...archivedParams, archivedOnly: "yes" },
+      { ...archivedParams, emitLifecycleHooks: false },
+      { ...archivedParams, expectedSessionId: "sess-1", futureField: true },
+    ]) {
+      deny("operator.admin", "sessions.delete", ["operator.write"], params);
+    }
+    expectAccess("operator.write", "sessions.delete", {
+      ...archivedParams,
       expectedSessionId: "sess-1",
-    });
-    expectScope("operator.write", "sessions.delete", {
-      key: "agent:main:old",
-      archivedOnly: true,
-      expectedSessionId: "sess-1",
-    });
-    deny("operator.admin", "sessions.delete", ["operator.write"], {
-      key: "agent:main:old",
-      archivedOnly: true,
-      expectedSessionId: "sess-1",
-      futureField: true,
     });
     expectScope("operator.admin", "sessions.delete", {
-      key: "agent:main:old",
-      archivedOnly: true,
+      ...archivedParams,
       emitLifecycleHooks: false,
     });
     allow("sessions.delete", ["operator.admin"]);
@@ -353,9 +300,7 @@ describe("method scope resolution and authorization", () => {
   it("requires admin for browser.request", () => {
     setPluginGatewayMethodScope("browser.request", "operator.admin");
 
-    expectScope("operator.admin", "browser.request");
-    deny("operator.admin", "browser.request", ["operator.write"]);
-    allow("browser.request", ["operator.admin"]);
+    expectAccess("operator.admin", "browser.request", undefined, "operator.write");
   });
 
   it("requires pairing scope for node pairing approvals", () => {
@@ -391,33 +336,24 @@ describe("method scope resolution and authorization", () => {
   });
 
   it("exposes skill proposal methods through the core gateway registry", () => {
-    for (const method of [
-      "skills.proposals.list",
-      "skills.proposals.events.list",
-      "skills.proposals.inspect",
-      "skills.proposals.historyStatus",
-    ]) {
-      expect(listGatewayMethods()).toContain(method);
-      expect(coreGatewayHandlers).toHaveProperty(method);
-      expectScope("operator.read", method);
-      allow(method, ["operator.read"]);
-    }
-
-    for (const method of [
-      "skills.proposals.create",
-      "skills.proposals.update",
-      "skills.proposals.revise",
-      "skills.proposals.evaluate",
-      "skills.proposals.historyScan",
-      "skills.proposals.apply",
-      "skills.proposals.reject",
-      "skills.proposals.quarantine",
-    ]) {
-      expect(listGatewayMethods()).toContain(method);
-      expect(coreGatewayHandlers).toHaveProperty(method);
-      expectScope("operator.admin", method);
-      deny("operator.admin", method, ["operator.write"]);
-      allow(method, ["operator.admin"]);
+    for (const [scope, names] of [
+      ["operator.read", ["list", "events.list", "inspect", "historyStatus"]],
+      [
+        "operator.admin",
+        ["create", "update", "revise", "evaluate", "historyScan", "apply", "reject", "quarantine"],
+      ],
+    ] as const) {
+      for (const name of names) {
+        const method = `skills.proposals.${name}`;
+        expect(listGatewayMethods()).toContain(method);
+        expect(coreGatewayHandlers).toHaveProperty(method);
+        expectAccess(
+          scope,
+          method,
+          undefined,
+          scope === "operator.admin" ? "operator.write" : undefined,
+        );
+      }
     }
   });
 
@@ -427,8 +363,7 @@ describe("method scope resolution and authorization", () => {
       expectedPermissionMode: "read-only",
       permissionMode: "guarded",
     };
-    expectScope("operator.write", "sessions.patch", guarded);
-    allow("sessions.patch", ["operator.write"], guarded);
+    expectAccess("operator.write", "sessions.patch", guarded);
     deny("operator.admin", "sessions.patch", ["operator.write"], {
       ...guarded,
       permissionMode: "full",

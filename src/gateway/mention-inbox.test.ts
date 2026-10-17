@@ -1,8 +1,8 @@
 import { statSync } from "node:fs";
-import { StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateMentionsListResult } from "../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
@@ -41,19 +41,31 @@ import { identifiedClient, soloClient } from "./server-methods/sessions-sharing.
 
 afterEach(() => vi.restoreAllMocks());
 
-function holdMentionRead() {
-  const readSnapshot = mentionWorker.readMentionSnapshot;
+const storedSnapshot = () => readMentionStoreSnapshot(-1, openOpenClawStateDatabase().db);
+
+function pauseOperation<Args extends unknown[], Result>(
+  operation: (...args: Args) => Promise<Result>,
+  afterRelease?: (result: Result, args: Args) => void,
+) {
   const ready = createDeferred();
   const release = createDeferred();
-  const spy = vi
-    .spyOn(mentionWorker, "readMentionSnapshot")
-    .mockImplementationOnce(async (...args) => {
-      const snapshot = await readSnapshot(...args);
+  return {
+    ready: ready.promise,
+    release: release.resolve,
+    async run(...args: Args) {
+      const result = await operation(...args);
       ready.resolve();
       await release.promise;
-      return snapshot;
-    });
-  return { ready: ready.promise, release: release.resolve, restore: () => spy.mockRestore() };
+      afterRelease?.(result, args);
+      return result;
+    },
+  };
+}
+
+function holdMentionRead() {
+  const held = pauseOperation(mentionWorker.readMentionSnapshot);
+  const spy = vi.spyOn(mentionWorker, "readMentionSnapshot").mockImplementationOnce(held.run);
+  return { ...held, restore: () => spy.mockRestore() };
 }
 
 describe("temporary human mention Inbox", () => {
@@ -152,33 +164,27 @@ describe("temporary human mention Inbox", () => {
         await f.post("original");
         f.push.mockClear();
         f.broadcast.mockClear();
-        const commitChanges = mentionWorker.commitMentionChanges;
-        const committed = createDeferred();
-        const release = createDeferred();
         const readHead = mentionStore.getMentionStoreHeadAdmission;
         let staleHead: mentionStore.MentionStoreHead | undefined;
         const head = vi
           .spyOn(mentionStore, "getMentionStoreHeadAdmission")
           .mockImplementation((databasePath) => staleHead ?? readHead(databasePath));
+        const held = pauseOperation(mentionWorker.commitMentionChanges, (_result, [, mutation]) => {
+          if (lost) {
+            // Native commit can outlive its worker's last head publication.
+            staleHead = { ...mutation.expectedHead };
+            throw new SqliteWorkerError("synthetic lost Mention Inbox reply", "outcome-unknown");
+          }
+        });
         const spy = vi
           .spyOn(mentionWorker, "commitMentionChanges")
-          .mockImplementationOnce(async (...args) => {
-            const result = await commitChanges(...args);
-            committed.resolve();
-            await release.promise;
-            if (lost) {
-              // Native commit can outlive its worker's last head publication.
-              staleHead = { ...args[1].expectedHead };
-              throw new SqliteWorkerError("synthetic lost Mention Inbox reply", "outcome-unknown");
-            }
-            return result;
-          });
+          .mockImplementationOnce(held.run);
         const pending = f.post("awaiting-receipt");
         try {
-          await awaitGateBeforeSettlement(committed.promise, pending, "Mutation did not commit");
+          await awaitGateBeforeSettlement(held.ready, pending, "Mutation did not commit");
           expect(f.push).not.toHaveBeenCalled();
           expect(f.broadcast).not.toHaveBeenCalled();
-          release.resolve();
+          held.release();
           await pending;
           expect(f.push).toHaveBeenCalledTimes(lost ? 0 : 1);
           const snapshots = vi.spyOn(mentionWorker, "readMentionSnapshot");
@@ -201,7 +207,7 @@ describe("temporary human mention Inbox", () => {
           await f.post("awaiting-receipt");
           expect(f.push).toHaveBeenCalledTimes(lost ? 0 : 1);
         } finally {
-          release.resolve();
+          held.release();
           await pending;
           spy.mockRestore();
           head.mockRestore();
@@ -227,10 +233,10 @@ describe("temporary human mention Inbox", () => {
   it("fences committed input when the Gateway scheduler closes", async () => {
     await withInbox(async (f) => {
       await f.post("before-close");
-      const before = readMentionStoreSnapshot(-1, openOpenClawStateDatabase().db);
+      const before = storedSnapshot();
       f.scheduler.beginClose();
       await f.post("after-close");
-      expect(readMentionStoreSnapshot(-1, openOpenClawStateDatabase().db)).toEqual(before);
+      expect(storedSnapshot()).toEqual(before);
       expect(f.push).toHaveBeenCalledTimes(1);
       expectMentionError(await listInbox(f.inbox, f.bobClient), "UNAVAILABLE");
     });
@@ -253,7 +259,7 @@ describe("temporary human mention Inbox", () => {
         disposal = f.inbox.dispose();
         held.release();
         await Promise.all([pending, disposal]);
-        expect(readMentionStoreSnapshot(-1, openOpenClawStateDatabase().db)?.sources).toEqual([
+        expect(storedSnapshot()?.sources).toEqual([
           expect.objectContaining({ recipients: [[f.bob.id, null]] }),
         ]);
       } finally {
@@ -306,7 +312,7 @@ describe("temporary human mention Inbox", () => {
     try {
       await withInbox(async (f) => {
         await f.post("distant-expiry");
-        const snapshot = readMentionStoreSnapshot(-1, openOpenClawStateDatabase().db)!;
+        const snapshot = storedSnapshot()!;
         const reads = vi.spyOn(mentionWorker, "readMentionSnapshot");
         const fail = () =>
           reads.mockRejectedValueOnce(
@@ -390,20 +396,18 @@ describe("temporary human mention Inbox", () => {
       await f.post("before-clock-rollback");
       f.clock.setTime(f.scheduler.now() - 60_000);
       await f.post("after-clock-rollback");
-      const sources = readMentionStoreSnapshot(-1, openOpenClawStateDatabase().db)!.sources;
+      const sources = storedSnapshot()!.sources;
       expect(sources).toHaveLength(2);
       const [original, earlier] = sources;
       expect(earlier!.expiresAt).toBe(original!.expiresAt - 60_000);
 
       await f.clock.advanceTo(earlier!.expiresAt);
-      expect(
-        readMentionStoreSnapshot(-1, openOpenClawStateDatabase().db)!.sources.map(
-          (source) => source.message?.content.messageId,
-        ),
-      ).toEqual(["message-before-clock-rollback"]);
+      expect(storedSnapshot()!.sources.map((source) => source.message?.content.messageId)).toEqual([
+        "message-before-clock-rollback",
+      ]);
 
       await f.clock.advanceTo(original!.expiresAt);
-      expect(readMentionStoreSnapshot(-1, openOpenClawStateDatabase().db)!.sources).toEqual([]);
+      expect(storedSnapshot()!.sources).toEqual([]);
     });
   });
 
@@ -507,9 +511,7 @@ describe("temporary human mention Inbox", () => {
         await read(f.inbox, client);
       }
       await f.post();
-      const sql = (["all", "get", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      );
+      const sql = observeHostDataSql();
       try {
         const result = await f.call("mentions.list", {});
         expect(result.ok && validateMentionsListResult(result.payload)).toBe(true);
@@ -546,23 +548,12 @@ describe("temporary human mention Inbox", () => {
         expect(await f.items()).toHaveLength(1);
         expect(f.push).toHaveBeenCalledTimes(2);
         expect(
-          sql
-            .flatMap((spy) =>
-              spy.mock.contexts.map((statement) => {
-                if (!(statement instanceof StatementSync)) {
-                  throw new Error("Expected a native SQLite statement receiver");
-                }
-                return statement.sourceSQL;
-              }),
-            )
-            .filter((query) =>
-              /config_machine_state|\bselect\b[\s\S]*\bsession_nodes\b/i.test(query),
-            ),
+          sql.queries.filter((query) =>
+            /config_machine_state|\bselect\b[\s\S]*\bsession_nodes\b/i.test(query),
+          ),
         ).toEqual([]);
       } finally {
-        for (const spy of sql) {
-          spy.mockRestore();
-        }
+        sql.restore();
       }
     });
   });
@@ -668,21 +659,12 @@ describe("temporary human mention Inbox", () => {
       expect(bob.id).not.toBe(carol.id);
       bob.excerpt = "Changed by a caller";
       expect(await f.items(f.carolClient)).toEqual([carol]);
-      const commitChanges = mentionWorker.commitMentionChanges;
-      const committed = createDeferred();
-      const release = createDeferred();
-      const spy = vi
-        .spyOn(mentionWorker, "commitMentionChanges")
-        .mockImplementationOnce(async (...args) => {
-          const result = await commitChanges(...args);
-          committed.resolve();
-          await release.promise;
-          return result;
-        });
+      const held = pauseOperation(mentionWorker.commitMentionChanges);
+      const spy = vi.spyOn(mentionWorker, "commitMentionChanges").mockImplementationOnce(held.run);
       const dismissal = dismiss(f.inbox, f.bobClient, [bob.id]);
       try {
         await awaitGateBeforeSettlement(
-          committed.promise,
+          held.ready,
           dismissal,
           "Dismissal did not reach its committed receipt",
         );
@@ -690,10 +672,10 @@ describe("temporary human mention Inbox", () => {
           true,
           true,
         ]);
-        release.resolve();
+        held.release();
         expect((await dismissal).ok).toBe(true);
       } finally {
-        release.resolve();
+        held.release();
         await dismissal;
         spy.mockRestore();
       }
@@ -775,7 +757,7 @@ describe("temporary human mention Inbox", () => {
             recipientProfileIds: recipientsFor(index),
           });
         await post(0);
-        const stored = readMentionStoreSnapshot(-1, openOpenClawStateDatabase().db)!;
+        const stored = storedSnapshot()!;
         expect(stored.sources).toHaveLength(1);
         const template = stored.sources[0]!;
         const message = template.message!;
