@@ -38,6 +38,14 @@ import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const openDatabase = nodeSqlite.openNodeSqliteDatabase;
+function withDatabase<T>(file: string, body: (db: DatabaseSync) => T, readOnly = false): T {
+  const db = new DatabaseSync(file, { readOnly });
+  try {
+    return body(db);
+  } finally {
+    db.close();
+  }
+}
 let root: string;
 let assertDatabasePath: (path: string) => void;
 let childGuardEnv: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
@@ -91,7 +99,6 @@ it("refuses foreign or aliased handoff and state paths before opening any store"
   fs.symlinkSync(foreignNested, nestedAlias, "junction");
   // Do not use path.join: it would erase the traversal this case must exercise.
   const traversedState = `${nestedAlias}${path.sep}..${path.sep}traversed-state.sqlite`;
-  const blockedResults = [];
   const refusedPaths = [
     "/tmp/openclaw/managed-update-handoffs.sqlite",
     "/private/tmp/openclaw/managed-update-handoffs.sqlite",
@@ -103,18 +110,17 @@ it("refuses foreign or aliased handoff and state paths before opening any store"
     `file:${traversedState.replace(`${path.sep}..${path.sep}`, `${path.sep}%2e%2e${path.sep}`)}`,
   ];
   const requireGuard = `require('node:assert/strict').equal(globalThis[Symbol.for('openclaw.test.privateHandoffGuard')], ${JSON.stringify(privatePath)});`;
-  for (const livePath of refusedPaths) {
-    // Refuse the probe itself if the runtime did not install the guard.
-    const blocked = spawnSync(
+  const probe = (file: string, close = false) =>
+    spawnSync(
       process.execPath,
       [
         "-e",
-        `${requireGuard}new (require('node:sqlite').DatabaseSync)(${JSON.stringify(livePath)})`,
+        `${requireGuard}new (require('node:sqlite').DatabaseSync)(${JSON.stringify(file)})${close ? ".close()" : ""}`,
       ],
       { env, encoding: "utf8" },
     );
-    blockedResults.push(blocked);
-  }
+  // The guard assertion runs before each attempt to open an untrusted path.
+  const blockedResults = refusedPaths.map((file) => probe(file));
   expect(blockedResults.map((result) => result.status)).toEqual(refusedPaths.map(() => 1));
   for (const blocked of blockedResults) {
     expect(blocked.error).toBeUndefined();
@@ -129,14 +135,7 @@ it("refuses foreign or aliased handoff and state paths before opening any store"
     expect(fs.existsSync(foreignPath)).toBe(false);
   }
   for (const privateDatabase of [privatePath, path.join(root, "openclaw-state.sqlite")]) {
-    const accepted = spawnSync(
-      process.execPath,
-      [
-        "-e",
-        `${requireGuard}new (require('node:sqlite').DatabaseSync)(${JSON.stringify(privateDatabase)}).close()`,
-      ],
-      { env, encoding: "utf8" },
-    );
+    const accepted = probe(privateDatabase, true);
     expect(accepted.error).toBeUndefined();
     expect(accepted.status, accepted.stderr).toBe(0);
     expect(fs.realpathSync(privateDatabase)).toBe(privateDatabase);
@@ -144,19 +143,21 @@ it("refuses foreign or aliased handoff and state paths before opening any store"
       nodeSqlite.resolveExistingSqliteFileUri(privateDatabase),
       nodeSqlite.resolveImmutableSqliteFileUri(privateDatabase),
     ]) {
-      const reopened = spawnSync(
-        process.execPath,
-        [
-          "-e",
-          `${requireGuard}new (require('node:sqlite').DatabaseSync)(${JSON.stringify(uri)}).close()`,
-        ],
-        { env, encoding: "utf8" },
-      );
+      const reopened = probe(uri, true);
       expect(reopened.error).toBeUndefined();
       expect(reopened.status, reopened.stderr).toBe(0);
     }
   }
 });
+
+function preparation(
+  name: PackageActivationDescriptor["preparation"][number]["name"],
+  source: string,
+  parent = path.dirname(source),
+  identity = packageActivationIdentity(source, true),
+) {
+  return { name, source, sourceParentIdentity: packageActivationIdentity(parent, true), identity };
+}
 
 async function fixture() {
   const packages = await createPackageSwapFixture(root);
@@ -181,36 +182,20 @@ async function fixture() {
         false,
       ),
       preparation: [
-        {
-          name: "anchor",
-          source: stagedAnchor,
-          sourceParentIdentity: packageActivationIdentity(path.dirname(stagedAnchor), true),
-          identity: packageActivationIdentity(stagedAnchor, true),
-        },
-        {
-          name: "helper",
-          source: resolvePackageActivationHelper(anchor),
-          sourceParentIdentity: packageActivationIdentity(stagedControl, true),
-          identity: packageActivationIdentity(resolvePackageActivationHelper(stagedAnchor), false),
-        },
-        {
-          name: "candidate",
-          source: packages.params.stage.packageRoot,
-          sourceParentIdentity: packageActivationIdentity(
-            path.dirname(packages.params.stage.packageRoot),
-            true,
-          ),
-          identity: packageActivationIdentity(packages.params.stage.packageRoot, true),
-        },
-        {
-          name: "launchers",
-          source: packages.params.stage.layout.binDir,
-          sourceParentIdentity: packageActivationIdentity(
-            path.dirname(packages.params.stage.layout.binDir),
-            true,
-          ),
-          identity: packageActivationIdentity(launcherRoot, true),
-        },
+        preparation("anchor", stagedAnchor),
+        preparation(
+          "helper",
+          resolvePackageActivationHelper(anchor),
+          stagedControl,
+          packageActivationIdentity(resolvePackageActivationHelper(stagedAnchor), false),
+        ),
+        preparation("candidate", packages.params.stage.packageRoot),
+        preparation(
+          "launchers",
+          packages.params.stage.layout.binDir,
+          path.dirname(packages.params.stage.layout.binDir),
+          packageActivationIdentity(launcherRoot, true),
+        ),
       ],
       operationId: randomUUID(),
       authority,
@@ -297,12 +282,9 @@ function replaceField(
   column: "descriptor_json" | "revision" | "phase" | "intent_json" | "publications_json",
   value: string | number,
 ) {
-  const db = new DatabaseSync(journalPath);
-  try {
-    db.prepare(`UPDATE package_activation SET ${column} = ? WHERE slot = 1`).run(value);
-  } finally {
-    db.close();
-  }
+  withDatabase(journalPath, (db) =>
+    db.prepare(`UPDATE package_activation SET ${column} = ? WHERE slot = 1`).run(value),
+  );
 }
 
 function createHotJournal(journalPath: string) {
@@ -380,14 +362,15 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
       const rollbackPath = `${f.journalPath}-journal`;
       expect(fs.statSync(rollbackPath).size).toBeGreaterThan(512);
       const before = journalFiles(f.anchor);
-      const readOnly = new DatabaseSync(f.journalPath, { readOnly: true });
-      try {
-        expect(() => readOnly.prepare("SELECT phase FROM package_activation").get()).toThrow(
-          expect.objectContaining({ errcode: 776 }),
-        );
-      } finally {
-        readOnly.close();
-      }
+      withDatabase(
+        f.journalPath,
+        (db) => {
+          expect(() => db.prepare("SELECT phase FROM package_activation").get()).toThrow(
+            expect.objectContaining({ errcode: 776 }),
+          );
+        },
+        true,
+      );
       await expect(
         readPackageActivationStatus(f.anchor, f.record.descriptor.operationId),
       ).rejects.toThrow();
@@ -497,14 +480,15 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
       phase: "rolled-back",
       descriptor: record.descriptor,
     });
-    const db = new DatabaseSync(f.journalPath, { readOnly: true });
-    try {
-      expect(db.prepare("SELECT COUNT(*) AS count FROM package_activation").get()).toEqual({
-        count: 1,
-      });
-    } finally {
-      db.close();
-    }
+    withDatabase(
+      f.journalPath,
+      (db) => {
+        expect(db.prepare("SELECT COUNT(*) AS count FROM package_activation").get()).toEqual({
+          count: 1,
+        });
+      },
+      true,
+    );
   });
 
   it.each([
@@ -555,12 +539,7 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
   ] as const)("preserves a journal with $name", async ({ name, column, value }) => {
     const f = await fixture();
     if (column === null) {
-      const db = new DatabaseSync(f.journalPath);
-      try {
-        db.exec(value());
-      } finally {
-        db.close();
-      }
+      withDatabase(f.journalPath, (db) => db.exec(value()));
     } else {
       replaceField(f.journalPath, column, value(f.record));
     }

@@ -24,6 +24,9 @@ import {
 } from "./package-update-activation.js";
 import { legacyPackageFingerprint } from "./package-update-legacy.test-support.js";
 
+const bytes = (...parts: string[]) => fs.readFileSync(path.join(...parts));
+const settle = (f: { packageRoot: string; operationId: string }, operationId = f.operationId) =>
+  settlePendingPackageActivation(f.packageRoot, undefined, undefined, { operationId });
 const { setup, prepare, lifetime } = createPackageActivationLifetimeFixture();
 beforeEach(() => {
   setup();
@@ -49,119 +52,116 @@ describe.skipIf(process.platform === "win32")("completed package receipt history
     "non-linux",
     "installation-key",
     "active",
-  ] as const)(
-    "keeps %s drift historical without admitting unfinished or foreign work",
-    async (scenario) => {
-      const first = await prepare();
-      if (scenario === "settled-evidence") {
-        fs.renameSync(first.packageRoot, `${first.packageRoot}.original`);
-        fs.mkdirSync(first.packageRoot, { mode: 0o700 });
-        fs.writeFileSync(
-          path.join(first.packageRoot, "package.json"),
-          '{"name":"openclaw","version":"3.0.0"}',
+  ] as const)("keeps %s drift historical without admitting foreign work", async (scenario) => {
+    const first = await prepare();
+    if (scenario === "settled-evidence") {
+      fs.renameSync(first.packageRoot, `${first.packageRoot}.original`);
+      fs.mkdirSync(first.packageRoot, { mode: 0o700 });
+      fs.writeFileSync(
+        path.join(first.packageRoot, "package.json"),
+        '{"name":"openclaw","version":"3.0.0"}',
+      );
+      // A completed older repair can still leave its receipt in the active slot.
+      await expect(
+        settlePendingPackageActivation(first.packageRoot, () => {
+          throw new Error("reporting interrupted before archival");
+        }),
+      ).rejects.toThrow("reporting interrupted before archival");
+    } else if (scenario !== "active") {
+      await runPackageActivationRecovery(first.anchor, "repair", first.operationId);
+      await runPackageActivationRecovery(first.anchor, "retire", first.operationId);
+    }
+    const record = openPackageActivationJournal(first.anchor).read();
+    const differentInode = (identity: string) =>
+      identity.replace(/\d+$/u, (inode) => String(BigInt(inode) + 1n));
+    if (scenario === "helper-replaced") {
+      fs.writeFileSync(resolvePackageActivationHelper(first.anchor), "historical replacement");
+    } else if (scenario === "anchor-replaced") {
+      fs.mkdirSync(first.anchor, { mode: 0o700 });
+      fs.writeFileSync(path.join(first.anchor, "note.txt"), "historical replacement");
+    } else if (scenario === "journal-inode") {
+      record.descriptor.journalIdentity = differentInode(record.descriptor.journalIdentity);
+    } else if (scenario === "package-inode") {
+      record.descriptor.candidate.identity = differentInode(record.descriptor.candidate.identity);
+      record.descriptor.preparation = record.descriptor.preparation.map((entry) =>
+        entry.name === "candidate"
+          ? { ...entry, identity: record.descriptor.candidate.identity }
+          : entry,
+      );
+    } else if (scenario === "lease-identity") {
+      record.descriptor.authority.databaseIdentity = differentInode(
+        record.descriptor.authority.databaseIdentity,
+      );
+    } else if (scenario === "missing-lease") {
+      fs.renameSync(
+        record.descriptor.authority.databasePath,
+        `${record.descriptor.authority.databasePath}.old`,
+      );
+    } else if (scenario === "installation-key") {
+      record.descriptor.authority.installKey = `${first.packageRoot}-other`;
+    } else if (scenario === "settled-evidence") {
+      // Evidence remains active when reporting interrupts archival, but the
+      // durable close is already final. Its removal cannot rearm recovery.
+      fs.rmSync(first.anchor, { recursive: true });
+      fs.unlinkSync(resolvePackageActivationHelper(first.anchor));
+    }
+    const historical = (value: unknown) =>
+      JSON.stringify(value, (_key, entry: unknown) => {
+        if (typeof entry !== "string" || !/^\d+:\d+$/u.test(entry)) {
+          return entry;
+        }
+        return entry.replace(/^\d+/u, (device) => String(BigInt(device) + 1n));
+      });
+    const journalPath = resolvePackageActivationJournalPath(first.anchor);
+    const database = new DatabaseSync(journalPath);
+    try {
+      database
+        .prepare("UPDATE package_activation SET descriptor_json = ?, intent_json = ?")
+        .run(historical(record.descriptor), historical(record.intent));
+    } finally {
+      database.close();
+    }
+    const before = fs.readFileSync(journalPath);
+    const platform = vi
+      .spyOn(process, "platform", "get")
+      .mockReturnValue(scenario === "non-linux" ? "darwin" : "linux");
+    try {
+      if (scenario === "active" || scenario === "installation-key") {
+        expect(() => assertNoPendingPackageActivation(first.packageRoot)).toThrow(
+          "does not match its installation",
         );
-        // A completed older repair can still leave its receipt in the active slot.
-        await expect(
-          settlePendingPackageActivation(first.packageRoot, () => {
-            throw new Error("reporting interrupted before archival");
-          }),
-        ).rejects.toThrow("reporting interrupted before archival");
-      } else if (scenario !== "active") {
-        await runPackageActivationRecovery(first.anchor, "repair", first.operationId);
-        await runPackageActivationRecovery(first.anchor, "retire", first.operationId);
+        expect(fs.readFileSync(journalPath)).toEqual(before);
+        return;
       }
-      const record = openPackageActivationJournal(first.anchor).read();
-      const differentInode = (identity: string) =>
-        identity.replace(/\d+$/u, (inode) => String(BigInt(inode) + 1n));
-      if (scenario === "helper-replaced") {
-        fs.writeFileSync(resolvePackageActivationHelper(first.anchor), "historical replacement");
-      } else if (scenario === "anchor-replaced") {
-        fs.mkdirSync(first.anchor, { mode: 0o700 });
-        fs.writeFileSync(path.join(first.anchor, "note.txt"), "historical replacement");
-      } else if (scenario === "journal-inode") {
-        record.descriptor.journalIdentity = differentInode(record.descriptor.journalIdentity);
-      } else if (scenario === "package-inode") {
-        record.descriptor.candidate.identity = differentInode(record.descriptor.candidate.identity);
-        record.descriptor.preparation = record.descriptor.preparation.map((entry) =>
-          entry.name === "candidate"
-            ? { ...entry, identity: record.descriptor.candidate.identity }
-            : entry,
-        );
-      } else if (scenario === "lease-identity") {
-        record.descriptor.authority.databaseIdentity = differentInode(
-          record.descriptor.authority.databaseIdentity,
-        );
-      } else if (scenario === "missing-lease") {
-        fs.renameSync(
-          record.descriptor.authority.databasePath,
-          `${record.descriptor.authority.databasePath}.old`,
-        );
-      } else if (scenario === "installation-key") {
-        record.descriptor.authority.installKey = `${first.packageRoot}-other`;
-      } else if (scenario === "settled-evidence") {
-        // Evidence remains active when reporting interrupts archival, but the
-        // durable close is already final. Its removal cannot rearm recovery.
-        fs.rmSync(first.anchor, { recursive: true });
-        fs.unlinkSync(resolvePackageActivationHelper(first.anchor));
-      }
-      const historical = (value: unknown) =>
-        JSON.stringify(value, (_key, entry: unknown) => {
-          if (typeof entry !== "string" || !/^\d+:\d+$/u.test(entry)) {
-            return entry;
-          }
-          return entry.replace(/^\d+/u, (device) => String(BigInt(device) + 1n));
+      for (let attempt = 0; attempt < 2; attempt++) {
+        expect(() => assertNoPendingPackageActivation(first.packageRoot)).not.toThrow();
+        expect(readPackageActivationReceipt(first.packageRoot)).toMatchObject({
+          phase: "complete",
         });
-      const journalPath = resolvePackageActivationJournalPath(first.anchor);
-      const database = new DatabaseSync(journalPath);
-      try {
-        database
-          .prepare("UPDATE package_activation SET descriptor_json = ?, intent_json = ?")
-          .run(historical(record.descriptor), historical(record.intent));
-      } finally {
-        database.close();
+        await expect(
+          readPackageActivationStatus(first.anchor, first.operationId),
+        ).resolves.toMatchObject({ phase: "complete" });
+        await expect(
+          runPackageActivationRecovery(first.anchor, "retire", first.operationId),
+        ).resolves.toMatchObject({ phase: "complete" });
+        expect(fs.existsSync(resolvePackageActivationHelper(first.anchor))).toBe(
+          scenario === "helper-replaced",
+        );
+        expect(fs.readFileSync(journalPath)).toEqual(before);
       }
-      const before = fs.readFileSync(journalPath);
-      const platform = vi
-        .spyOn(process, "platform", "get")
-        .mockReturnValue(scenario === "non-linux" ? "darwin" : "linux");
-      try {
-        if (scenario === "active" || scenario === "installation-key") {
-          expect(() => assertNoPendingPackageActivation(first.packageRoot)).toThrow(
-            "does not match its installation",
-          );
-          expect(fs.readFileSync(journalPath)).toEqual(before);
-          return;
-        }
-        for (let attempt = 0; attempt < 2; attempt++) {
-          expect(() => assertNoPendingPackageActivation(first.packageRoot)).not.toThrow();
-          expect(readPackageActivationReceipt(first.packageRoot)).toMatchObject({
-            phase: "complete",
-          });
-          await expect(
-            readPackageActivationStatus(first.anchor, first.operationId),
-          ).resolves.toMatchObject({ phase: "complete" });
-          await expect(
-            runPackageActivationRecovery(first.anchor, "retire", first.operationId),
-          ).resolves.toMatchObject({ phase: "complete" });
-          expect(fs.existsSync(resolvePackageActivationHelper(first.anchor))).toBe(
-            scenario === "helper-replaced",
-          );
-          expect(fs.readFileSync(journalPath)).toEqual(before);
-        }
-      } finally {
-        platform.mockRestore();
-      }
-      const second = await prepare();
-      if (scenario === "helper-replaced" || scenario === "anchor-replaced") {
-        const preserved = scenario === "helper-replaced" ? "control/recovery.mjs" : "note.txt";
-        expect(
-          fs.readFileSync(`${first.anchor}.superseded-${first.operationId}/${preserved}`, "utf8"),
-        ).toBe("historical replacement");
-      }
-      expect(second.operationId).not.toBe(first.operationId);
-      expect(openPackageActivationJournal(second.anchor).read().phase).toBe("prepared");
-    },
-  );
+    } finally {
+      platform.mockRestore();
+    }
+    const second = await prepare();
+    if (scenario === "helper-replaced" || scenario === "anchor-replaced") {
+      const preserved = scenario === "helper-replaced" ? "control/recovery.mjs" : "note.txt";
+      expect(
+        fs.readFileSync(`${first.anchor}.superseded-${first.operationId}/${preserved}`, "utf8"),
+      ).toBe("historical replacement");
+    }
+    expect(second.operationId).not.toBe(first.operationId);
+    expect(openPackageActivationJournal(second.anchor).read().phase).toBe("prepared");
+  });
 });
 
 describe.skipIf(process.platform === "win32")("unfinished remounted publication settlement", () => {
@@ -177,85 +177,71 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
     "launcher",
     "publishing-intent",
     "publishing-launcher",
-  ] as const)(
-    "verifies the previous generation before settling remounted preparation: %s",
-    async (scenario) => {
-      const { root } = fixture.setup();
-      const f = await prepareRemountedPublication(
-        fixture,
-        root,
-        false,
-        "different-files",
-        "previous",
+  ] as const)("settles only verified remounted preparation: %s", async (scenario) => {
+    const { root } = fixture.setup();
+    const f = await prepareRemountedPublication(
+      fixture,
+      root,
+      false,
+      "different-files",
+      "previous",
+    );
+    if (scenario === "candidate") {
+      fs.appendFileSync(path.join(f.anchor, "candidate/openclaw.mjs"), "damaged unused candidate");
+    } else if (scenario === "content") {
+      fs.appendFileSync(path.join(f.packageRoot, "package.json"), " ");
+    } else if (scenario === "launcher") {
+      fs.appendFileSync(f.launcher, "changed");
+    } else if (scenario.startsWith("publishing")) {
+      const database = new DatabaseSync(f.journalPath);
+      try {
+        database
+          .prepare(
+            "UPDATE package_activation SET phase = 'publishing', intent_json = ?, publications_json = ?",
+          )
+          .run(
+            scenario === "publishing-intent" ? JSON.stringify({ kind: "displace" }) : "null",
+            scenario === "publishing-launcher"
+              ? JSON.stringify([
+                  { name: "openclaw", identity: f.historical.launchers[0]!.candidateIdentity },
+                ])
+              : "[]",
+          );
+      } finally {
+        database.close();
+      }
+    }
+    const liveTree = legacyPackageFingerprint(f.packageRoot);
+    const launcher = fs.readFileSync(f.launcher);
+    const before = fs.readFileSync(f.journalPath);
+    if (scenario === "prepared" || scenario === "candidate") {
+      await expect(
+        settlePendingPackageActivation(f.packageRoot, undefined, undefined, { dryRun: true }),
+      ).resolves.toMatchObject({ reason: "publication-not-started" });
+      expect(fs.readFileSync(f.journalPath)).toEqual(before);
+      await expect(settle(f)).resolves.toMatchObject({ reason: "publication-not-started" });
+      expect(fs.existsSync(f.journalPath)).toBe(false);
+      expect(fs.existsSync(`${f.anchor}.superseded-${f.operationId}/candidate`)).toBe(true);
+      expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+    } else {
+      await expect(settle(f)).rejects.toThrow(
+        scenario.startsWith("publishing")
+          ? "previous package has unfinished publication"
+          : /fingerprint changed|launcher changed/u,
       );
-      if (scenario === "candidate") {
-        fs.appendFileSync(
-          path.join(f.anchor, "candidate/openclaw.mjs"),
-          "damaged unused candidate",
-        );
-      } else if (scenario === "content") {
-        fs.appendFileSync(path.join(f.packageRoot, "package.json"), " ");
-      } else if (scenario === "launcher") {
-        fs.appendFileSync(f.launcher, "changed");
-      } else if (scenario.startsWith("publishing")) {
-        const database = new DatabaseSync(f.journalPath);
-        try {
-          database
-            .prepare(
-              "UPDATE package_activation SET phase = 'publishing', intent_json = ?, publications_json = ?",
-            )
-            .run(
-              scenario === "publishing-intent" ? JSON.stringify({ kind: "displace" }) : "null",
-              scenario === "publishing-launcher"
-                ? JSON.stringify([
-                    { name: "openclaw", identity: f.historical.launchers[0]!.candidateIdentity },
-                  ])
-                : "[]",
-            );
-        } finally {
-          database.close();
-        }
-      }
-      const liveTree = legacyPackageFingerprint(f.packageRoot);
-      const launcher = fs.readFileSync(f.launcher);
-      const before = fs.readFileSync(f.journalPath);
-      const settle = () =>
-        settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
-          operationId: f.operationId,
-        });
-      if (scenario === "prepared" || scenario === "candidate") {
-        await expect(
-          settlePendingPackageActivation(f.packageRoot, undefined, undefined, { dryRun: true }),
-        ).resolves.toMatchObject({ reason: "publication-not-started" });
-        expect(fs.readFileSync(f.journalPath)).toEqual(before);
-        await expect(settle()).resolves.toMatchObject({ reason: "publication-not-started" });
-        expect(fs.existsSync(f.journalPath)).toBe(false);
-        expect(fs.existsSync(`${f.anchor}.superseded-${f.operationId}/candidate`)).toBe(true);
-        expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
-      } else {
-        await expect(settle()).rejects.toThrow(
-          scenario.startsWith("publishing")
-            ? "previous package has unfinished publication"
-            : /fingerprint changed|launcher changed/u,
-        );
-        expect(fs.readFileSync(f.journalPath)).toEqual(before);
-        expect(fs.existsSync(path.join(f.anchor, "candidate"))).toBe(true);
-      }
-      expect(legacyPackageFingerprint(f.packageRoot)).toEqual(liveTree);
-      expect(fs.readFileSync(f.launcher)).toEqual(launcher);
-    },
-  );
+      expect(fs.readFileSync(f.journalPath)).toEqual(before);
+      expect(fs.existsSync(path.join(f.anchor, "candidate"))).toBe(true);
+    }
+    expect(legacyPackageFingerprint(f.packageRoot)).toEqual(liveTree);
+    expect(fs.readFileSync(f.launcher)).toEqual(launcher);
+  });
 
-  it("keeps separate-helper settlement from retiring an ordinary prepared operation", async () => {
+  it("refuses separate-helper settlement without a remount", async () => {
     fixture.setup();
     const f = await fixture.prepare();
     const journalPath = resolvePackageActivationJournalPath(f.anchor);
     const before = fs.readFileSync(journalPath);
-    await expect(
-      settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
-        operationId: f.operationId,
-      }),
-    ).rejects.toThrow("requires a verified device remount");
+    await expect(settle(f)).rejects.toThrow("requires a verified device remount");
     expect(fs.readFileSync(journalPath)).toEqual(before);
     expect(fs.existsSync(path.join(f.anchor, "candidate"))).toBe(true);
   });
@@ -270,7 +256,7 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
       }
       const liveTree = legacyPackageFingerprint(f.packageRoot);
       const previousTree = legacyPackageFingerprint(path.join(f.anchor, "previous"));
-      const liveBytes = fs.readFileSync(path.join(f.packageRoot, "package.json"));
+      const liveBytes = bytes(f.packageRoot, "package.json");
       // Verification reads the link, which may advance its atime (Linux relatime).
       const launcherState = () => {
         const { dev, ino, mode, nlink, uid, gid, size, mtimeNs, ctimeNs } = fs.lstatSync(
@@ -281,7 +267,7 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
         return { dev, ino, mode, nlink, uid, gid, size, mtimeNs, ctimeNs, target };
       };
       const launcher = launcherState();
-      const previousBytes = fs.readFileSync(path.join(f.anchor, "previous/package.json"));
+      const previousBytes = bytes(f.anchor, "previous/package.json");
       const helperBytes = fs.readFileSync(resolvePackageActivationHelper(f.anchor));
       const before = fs.readFileSync(f.journalPath);
       expect(() =>
@@ -323,9 +309,7 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
       const result =
         scenario === "settle"
           ? await settlePendingPackageActivation(f.packageRoot)
-          : await settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
-              operationId: f.operationId,
-            });
+          : await settle(f);
       expect(result).toMatchObject({ reason: "publication-settled-external-change" });
       cut?.mockRestore();
       if (scenario === "archive-interrupted") {
@@ -350,10 +334,10 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
       }
       expect(legacyPackageFingerprint(f.packageRoot)).toEqual(liveTree);
       expect(legacyPackageFingerprint(path.join(retained, "previous"))).toEqual(previousTree);
-      expect(fs.readFileSync(path.join(f.packageRoot, "package.json"))).toEqual(liveBytes);
+      expect(bytes(f.packageRoot, "package.json")).toEqual(liveBytes);
       expect(launcherState()).toEqual(launcher);
-      expect(fs.readFileSync(path.join(retained, "previous/package.json"))).toEqual(previousBytes);
-      expect(fs.readFileSync(path.join(retained, "control/recovery.mjs"))).toEqual(helperBytes);
+      expect(bytes(retained, "previous/package.json")).toEqual(previousBytes);
+      expect(bytes(retained, "control/recovery.mjs")).toEqual(helperBytes);
       expect(fs.statSync(path.join(retained, "control/operation.sqlite")).mode & 0o777).toBe(0o600);
       expect(fs.existsSync(f.journalPath)).toBe(false);
       expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
@@ -361,7 +345,7 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
   );
 
   it.each(["before-commit", "before-archive"] as const)(
-    "refuses settlement after executor ownership is reassigned: %s",
+    "refuses settlement after ownership reassignment: %s",
     async (scenario) => {
       const { root } = fixture.setup();
       const f = await prepareRemountedPublication(fixture, root);
@@ -403,9 +387,7 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
           },
         );
       }
-      const refusal = await settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
-        operationId: f.operationId,
-      }).then(
+      const refusal = await settle(f).then(
         () => undefined,
         (error: unknown) => error,
       );
@@ -454,7 +436,7 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
     );
     if (scenario === "rewritten-original-launcher") {
       const before = fs.lstatSync(f.launcher, { bigint: true });
-      fs.writeFileSync(f.launcher, fs.readFileSync(path.join(f.anchor, "launchers/openclaw")));
+      fs.writeFileSync(f.launcher, bytes(f.anchor, "launchers/openclaw"));
       expect(fs.lstatSync(f.launcher, { bigint: true }).ino).toBe(before.ino);
     }
     if (scenario === "content") {
@@ -512,11 +494,7 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
     }
     const before = fs.readFileSync(f.journalPath);
     const refuse = () =>
-      expect(
-        settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
-          operationId: scenario === "operation" ? randomUUID() : f.operationId,
-        }),
-      ).rejects.toThrow();
+      expect(settle(f, scenario === "operation" ? randomUUID() : f.operationId)).rejects.toThrow();
     if (scenario === "active-lease") {
       await withUpdateCommandExecutor(randomUUID(), async (executor) => {
         await executor.enter(f.packageRoot);

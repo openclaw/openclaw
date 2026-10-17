@@ -17,7 +17,10 @@ import {
   settlePendingPackageActivation,
 } from "./package-update-activation.js";
 import { writePackageRoot } from "./package-update-steps.test-support.js";
-import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import type {
+  PackageActivationOptions,
+  PackageUpdateTransaction,
+} from "./package-update-swap-contract.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 
@@ -34,6 +37,27 @@ afterEach(async () => {
   }
 });
 
+const text = (...parts: string[]) => fs.readFileSync(path.join(...parts), "utf8");
+const version = (packageRoot: string) => JSON.parse(text(packageRoot, "package.json")).version;
+const assertAdmitted = (packageRoot: string) =>
+  expect(() => assertNoPendingPackageActivation(packageRoot)).not.toThrow();
+
+async function swap(
+  f: Awaited<ReturnType<typeof createPackageSwapFixture>>,
+  fence: PackageActivationOptions["fence"],
+) {
+  let transaction: PackageUpdateTransaction | undefined;
+  const result = await swapStagedPackageInstall({
+    ...f.params,
+    activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
+    onTransaction: (issued) => {
+      transaction = issued;
+    },
+  });
+  expect(result.status, result.step.stderrTail ?? "").toBe("committed");
+  return transaction!;
+}
+
 describe.skipIf(process.platform === "win32")("verified package cleanup", () => {
   it.each(["rollback", "displacement"] as const)(
     "settles the previous generation after link-count drift following %s",
@@ -43,17 +67,9 @@ describe.skipIf(process.platform === "win32")("verified package cleanup", () => 
       const anchor = resolvePackageActivationAnchor(f.packageRoot);
       await withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(f.packageRoot);
-        let transaction: PackageUpdateTransaction | undefined;
-        const result = await swapStagedPackageInstall({
-          ...f.params,
-          activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
-          onTransaction: (issued) => {
-            transaction = issued;
-          },
-        });
-        expect(result.status, result.step.stderrTail ?? "").toBe("committed");
+        const transaction = await swap(f, fence);
         if (boundary === "rollback") {
-          expect(await transaction!.rollback(fence.assertCurrent)).toMatchObject({ exitCode: 0 });
+          expect(await transaction.rollback(fence.assertCurrent)).toMatchObject({ exitCode: 0 });
         } else {
           // Recreate the durable cut after displacement, before publication.
           fs.renameSync(f.packageRoot, path.join(anchor, "candidate"));
@@ -73,11 +89,7 @@ describe.skipIf(process.platform === "win32")("verified package cleanup", () => 
       fs.linkSync(manifest, link);
       const after = fs.statSync(manifest, { bigint: true });
       expect(after.nlink).toBe(before.nlink + 1n);
-      expect([after.dev, after.ino, after.mtimeNs]).toEqual([
-        before.dev,
-        before.ino,
-        before.mtimeNs,
-      ]);
+      expect(after).toMatchObject({ dev: before.dev, ino: before.ino, mtimeNs: before.mtimeNs });
 
       const operationId = openPackageActivationJournal(anchor).read().descriptor.operationId;
       await expect(
@@ -89,9 +101,7 @@ describe.skipIf(process.platform === "win32")("verified package cleanup", () => 
       ).resolves.toMatchObject({
         phase: boundary === "rollback" ? "complete" : "publication-complete",
       });
-      expect(
-        JSON.parse(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")).version,
-      ).toBe(boundary === "rollback" ? "1.0.0" : "2.0.0");
+      expect(version(f.packageRoot)).toBe(boundary === "rollback" ? "1.0.0" : "2.0.0");
     },
   );
 
@@ -133,7 +143,7 @@ describe.skipIf(process.platform === "win32")("verified package cleanup", () => 
       expect(fs.readFileSync(`${f.anchor}.superseded-${f.operationId}/${evidence}`, "utf8")).toBe(
         "preserved unused evidence",
       );
-      expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+      assertAdmitted(f.packageRoot);
       const next = await fixtures.prepare();
       expect(next.operationId).not.toBe(f.operationId);
     },
@@ -146,15 +156,7 @@ describe.skipIf(process.platform === "win32")("verified package cleanup", () => 
       await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
       await withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(f.packageRoot);
-        let transaction: PackageUpdateTransaction | undefined;
-        const result = await swapStagedPackageInstall({
-          ...f.params,
-          activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
-          onTransaction: (issued) => {
-            transaction = issued;
-          },
-        });
-        expect(result.status, result.step.stderrTail ?? "").toBe("committed");
+        const transaction = await swap(f, fence);
         const anchor = resolvePackageActivationAnchor(f.packageRoot);
         const record = openPackageActivationJournal(anchor).read();
         let preserved: string;
@@ -162,19 +164,22 @@ describe.skipIf(process.platform === "win32")("verified package cleanup", () => 
           fs.renameSync(path.join(anchor, "previous"), path.join(root, "original-previous"));
           fs.mkdirSync(path.join(anchor, "previous"));
           preserved = "previous/foreign.txt";
-          fs.writeFileSync(path.join(anchor, preserved), "preserved bytes");
         } else if (changed === "helper") {
           preserved = "control/recovery.mjs";
-          fs.writeFileSync(resolvePackageActivationHelper(anchor), "preserved bytes");
         } else {
           preserved = "operator-note.txt";
-          fs.writeFileSync(path.join(anchor, preserved), "preserved bytes");
         }
+        fs.writeFileSync(
+          changed === "helper"
+            ? resolvePackageActivationHelper(anchor)
+            : path.join(anchor, preserved),
+          "preserved bytes",
+        );
         expect(
-          await transaction!.complete({ activationVerified: false }, fence.assertCurrent),
+          await transaction.complete({ activationVerified: false }, fence.assertCurrent),
         ).toMatchObject({ exitCode: 1 });
         expect(() => assertNoPendingPackageActivation(f.packageRoot)).toThrow();
-        const completion = await transaction!.complete(
+        const completion = await transaction.complete(
           { activationVerified: true },
           fence.assertCurrent,
         );
@@ -183,10 +188,10 @@ describe.skipIf(process.platform === "win32")("verified package cleanup", () => 
           advisory: { kind: "recoverable-maintenance" },
         });
         const retained = `${anchor}.superseded-${record.descriptor.operationId}`;
-        expect(fs.readFileSync(path.join(retained, preserved), "utf8")).toBe("preserved bytes");
-        expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
-        expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
-        expect(await transaction!.complete({ activationVerified: true }, fence.assertCurrent)).toBe(
+        expect(text(retained, preserved)).toBe("preserved bytes");
+        assertAdmitted(f.packageRoot);
+        expect(text(f.launcher)).toBe("candidate launcher\n");
+        expect(await transaction.complete({ activationVerified: true }, fence.assertCurrent)).toBe(
           completion,
         );
       });
@@ -198,23 +203,7 @@ describe.skipIf(process.platform === "win32")("verified package cleanup", () => 
     await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
     await withUpdateCommandExecutor(randomUUID(), async (executor) => {
       const fence = await executor.enter(f.packageRoot);
-      let transaction: PackageUpdateTransaction | undefined;
-      const activation = {
-        fence,
-        runtime: packageActivationRuntimeForTest(),
-        onPrepared: () => {},
-      };
-      expect(
-        (
-          await swapStagedPackageInstall({
-            ...f.params,
-            activation,
-            onTransaction: (issued) => {
-              transaction = issued;
-            },
-          })
-        ).status,
-      ).toBe("committed");
+      const transaction = await swap(f, fence);
       const anchor = resolvePackageActivationAnchor(f.packageRoot);
       const record = openPackageActivationJournal(anchor).read();
       fs.writeFileSync(path.join(anchor, "operator-note.txt"), "retained note");
@@ -226,31 +215,21 @@ describe.skipIf(process.platform === "win32")("verified package cleanup", () => 
         return rename(from, to);
       });
       expect(
-        await transaction!.complete({ activationVerified: true }, fence.assertCurrent),
+        await transaction.complete({ activationVerified: true }, fence.assertCurrent),
       ).toMatchObject({ advisory: { kind: "recoverable-maintenance" } });
-      expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+      assertAdmitted(f.packageRoot);
       await writePackageRoot(f.params.stage.packageRoot, "3.0.0");
       await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
-      let next: PackageUpdateTransaction | undefined;
-      const result = await swapStagedPackageInstall({
-        ...f.params,
-        activation,
-        onTransaction: (issued) => {
-          next = issued;
-        },
-      });
-      expect(result.status, result.step.stderrTail ?? "").toBe("committed");
-      await next!.complete({ activationVerified: true }, fence.assertCurrent);
-      expect(
-        JSON.parse(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")).version,
-      ).toBe("3.0.0");
+      const next = await swap(f, fence);
+      await next.complete({ activationVerified: true }, fence.assertCurrent);
+      expect(version(f.packageRoot)).toBe("3.0.0");
       expect(
         fs.readFileSync(
           `${anchor}.superseded-${record.descriptor.operationId}/operator-note.txt`,
           "utf8",
         ),
       ).toBe("retained note");
-      expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+      assertAdmitted(f.packageRoot);
     });
   });
 });
