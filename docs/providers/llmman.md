@@ -25,7 +25,7 @@ Three modes are supported:
 | Property         | Value                                                                         |
 | ---------------- | ----------------------------------------------------------------------------- |
 | Provider id      | `llmman` (custom; configure under `models.providers.llmman`)                  |
-| Plugin           | none; not a bundled OpenClaw provider plugin, so models are listed explicitly |
+| Plugin           | none; models are listed explicitly (the `ollama` route discovers them)        |
 | API              | OpenAI-compatible (`api: "openai-completions"`)                               |
 | Default base URL | `http://127.0.0.1:17434/v1`                                                   |
 | Auth             | none on loopback; off loopback a key is required, sent as the `apiKey` bearer |
@@ -157,7 +157,7 @@ Qwen3.8 on a local llmman server:
 
 ## Model discovery
 
-llmman is not a bundled OpenClaw plugin, so there is no implicit discovery. List every model you want under `models.providers.llmman.models` with a provider-local `id` (no `llmman/` prefix).
+llmman is not a bundled OpenClaw plugin, so the `llmman` provider id has no implicit discovery. List every model you want under `models.providers.llmman.models` with a provider-local `id` (no `llmman/` prefix). To discover models instead, use the `ollama` route in [Advanced configuration](#advanced-configuration).
 
 | Behavior     | Detail                                                                                                                                                                   |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -933,7 +933,18 @@ container, or service account.
   </Accordion>
 
   <Accordion title="Ollama-compatible API">
-    llmman also implements Ollama's native `/api/chat`, `/api/tags`, `/api/show`, and `/api/ps`, and `OLLAMA_HOST=127.0.0.1:17434 ollama run <model>` works against it. The native route also works from OpenClaw. Use a custom provider id such as `llmman`, not `ollama`: discovery on that id reads llmman's `/api/show`, which reports only `completion` and `vision`, and marks every model `compat.supportsTools: false`. Set `api: "ollama"`, omit `/v1`, and list models explicitly:
+    llmman also implements Ollama's native `/api/chat`, `/api/tags`, `/api/show`, and `/api/ps`, and `OLLAMA_HOST=127.0.0.1:17434 ollama run <model>` works against it. Since llmman 0.1.550, `/api/show` reports `tools`, `thinking`, and `vision`, so the bundled [Ollama](/providers/ollama) provider works unchanged. Moving from an Ollama host changes only `baseUrl` (omit `/v1`), and discovery lists the pulled models with their context window, vision, tools, and reasoning. Use the fully qualified id from `llmman list`:
+
+    ```json5
+    {
+      agents: { defaults: { model: { primary: "ollama/docker.io/ai/qwen3.5:2b" } } },
+      models: {
+        providers: { ollama: { baseUrl: "http://127.0.0.1:17434", api: "ollama", apiKey: "ollama-local" } },
+      },
+    }
+    ```
+
+    Older builds report only `completion` and `vision`, which marks every model `compat.supportsTools: false` under the `ollama` id. Upgrade, or use a custom provider id such as `llmman` with `api: "ollama"` and list models explicitly:
 
     ```json5
     {
