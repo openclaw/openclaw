@@ -1,4 +1,5 @@
 // OpenClaw MCP tools tests cover core tool server startup and registration.
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -89,6 +90,54 @@ describe("OpenClaw tools MCP server", () => {
     for (const name of ["automations", "cron"]) {
       await expect(handlers.callTool({ name, arguments: { action: "status" } })).resolves.toEqual({
         content: [{ type: "text", text: `Unknown tool: ${name}` }],
+        isError: true,
+      });
+    }
+  });
+
+  it("applies configured tool policy to the served tools", async () => {
+    const served = async (config: unknown) =>
+      (
+        await resolveOpenClawToolsForMcp({
+          agentSessionKey: "agent:work:acp:policy",
+          agentId: "work",
+          config: config as never,
+        })
+      ).map((tool) => tool.name);
+
+    expect(await served({ agents: { entries: { work: {} } } })).toEqual(["automations"]);
+    expect(await served({ agents: { entries: { work: { tools: { deny: ["cron"] } } } } })).toEqual(
+      [],
+    );
+    expect(await served({ tools: { deny: ["automations"] } })).toEqual([]);
+    expect(await served({ tools: { profile: "minimal" } })).toEqual([]);
+  });
+
+  it("rechecks configured tool policy before each served tool call", async () => {
+    const configPath = path.join(sessionDirs.make(), "openclaw.json");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    await fs.writeFile(configPath, JSON.stringify({ agents: { entries: { work: {} } } }));
+    const handlers = createPluginToolsMcpHandlers(
+      await resolveOpenClawToolsForMcp({
+        agentSessionKey: "agent:work:acp:withdrawn",
+        agentId: "work",
+        config: { agents: { entries: { work: {} } } },
+      }),
+    );
+    expect((await handlers.listTools()).tools.map((tool) => tool.name)).toEqual(["automations"]);
+
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({ agents: { entries: { work: { tools: { deny: ["cron"] } } } } }),
+    );
+    for (const name of ["automations", "cron"]) {
+      await expect(handlers.callTool({ name, arguments: { action: "status" } })).resolves.toEqual({
+        content: [
+          {
+            type: "text",
+            text: "Tool error: automations is no longer allowed by the configured tool policy",
+          },
+        ],
         isError: true,
       });
     }
