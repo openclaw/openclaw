@@ -238,6 +238,28 @@ describe("extension executable test plans", () => {
     }
   });
 
+  it("keeps Workboard directory and glob selections beside explicit PostgreSQL files", () => {
+    const cwd = tempDirs.make("extension-mixed-postgres-");
+    const files = [
+      "extensions/workboard/src/store.test.ts",
+      "extensions/workboard/src/retained-roots.test.ts",
+      "extensions/logbook/src/postgres-store.test.ts",
+      "extensions/matrix/src/matrix/account-state.postgres.test.ts",
+    ];
+    for (const file of files) {
+      const absolute = path.join(cwd, file);
+      mkdirSync(path.dirname(absolute), { recursive: true });
+      writeFileSync(absolute, "export {};\n");
+    }
+    for (const workboard of ["extensions/workboard", "extensions/workboard/**/*.test.ts"]) {
+      const plans = buildVitestRunPlans([workboard, ...files.slice(2)], cwd);
+      expect(plans.flatMap((plan) => plan.includePatterns ?? []).toSorted()).toEqual(
+        files.toSorted(),
+      );
+      expect(plans.every((plan) => plan.config === workerConfig)).toBe(true);
+    }
+  });
+
   it.each([telegramConfig])("does not widen an excluded inherited selection for %s", (config) => {
     const includeFile = path.join(tempDirs.make("extension-excluded-selection-"), "include.json");
     writeFileSync(includeFile, JSON.stringify(["extensions/telegram/src/api-fetch.live.test.ts"]));

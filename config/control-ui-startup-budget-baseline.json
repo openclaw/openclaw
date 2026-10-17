@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 337669,
-  "reason": "Combined protocol, Cron, and New Session deferrals measured 337669 B startup; retain the reduced baseline.",
+  "startupJsGzipBytes": 338803,
+  "reason": "Integrated main after schema and syntax-highlighting deferrals measures 338803 B at startup; cap at 338900 B with the existing 64 B build-variance allowance.",
   "updatedAt": "2026-10-17"
 }

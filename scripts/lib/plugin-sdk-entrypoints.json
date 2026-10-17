@@ -68,6 +68,7 @@
   "dedupe-runtime",
   "delivery-queue-runtime",
   "file-access-runtime",
+  "node-crypto-runtime",
   "node-selection-runtime",
   "heartbeat-runtime",
   "http-response-runtime",

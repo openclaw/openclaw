@@ -147,6 +147,13 @@ export const SessionRowSchema = Type.Object(
     titlePending: Type.Optional(Type.Boolean()),
     derivedTitle: Type.Optional(Type.String()),
     lastMessagePreview: Type.Optional(Type.String()),
+    /** Latest visible assistant text in the bounded transcript preview, with its message time. */
+    lastAssistantMessage: Type.Optional(
+      Type.Object(
+        { text: Type.String(), timestamp: Type.Number() },
+        { additionalProperties: false },
+      ),
+    ),
     channel: Type.Optional(Type.String()),
     /** Stable non-sensitive facts derived from the canonical session route. */
     classification: Type.Optional(SessionClassificationSchema),

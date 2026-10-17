@@ -12,9 +12,11 @@ import {
 import {
   addSafeTimeoutDelayGraceMs,
   addTimerTimeoutGraceMs,
+  asFiniteNumberInRange,
+  floorPositiveFiniteNumber as readPositiveFiniteTimeoutMs,
   parseStrictNonNegativeInteger,
 } from "openclaw/plugin-sdk/number-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
 import {
   createFailedDynamicToolResponse,
   failedToolResult,
@@ -64,9 +66,11 @@ function normalizeLogField(value: unknown): string | undefined {
   if (!normalized) {
     return undefined;
   }
-  return normalized.length > LOG_FIELD_MAX_LENGTH
-    ? `${truncateUtf16Safe(normalized, LOG_FIELD_MAX_LENGTH - 3)}...`
-    : normalized;
+  return truncateWithMarker(normalized, LOG_FIELD_MAX_LENGTH, {
+    marker: "...",
+    reserve: 3,
+    trimEnd: false,
+  });
 }
 
 function readNumericTimeoutMs(value: unknown): number | undefined {
@@ -532,21 +536,8 @@ function readTimeoutSecondsAsMs(value: unknown): number | undefined {
 function readDynamicToolTimeoutSecondsAsMs(value: unknown): number | undefined {
   // Model-facing timeoutSeconds schemas use integers. Reject malformed
   // fractions instead of silently shortening the caller's budget.
-  if (
-    typeof value !== "number" ||
-    !Number.isFinite(value) ||
-    !Number.isInteger(value) ||
-    value <= 0
-  ) {
-    return undefined;
-  }
-  return value * 1000;
-}
-
-function readPositiveFiniteTimeoutMs(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
+  const seconds = asFiniteNumberInRange(value, { min: 1 });
+  return seconds !== undefined && Number.isInteger(seconds) ? seconds * 1000 : undefined;
 }
 
 function clampDynamicToolTimeoutMs(

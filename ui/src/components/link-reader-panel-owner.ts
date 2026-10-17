@@ -19,14 +19,17 @@ import {
   type ReaderSection,
   createReaderReadyView,
 } from "./link-reader-panel-view.ts";
-import { linkReaderResponseMatchesTarget } from "./link-reader-response.ts";
+import {
+  LINK_READER_METADATA_UPDATED_EVENT,
+  linkReaderResponseMatchesTarget,
+  type LinkReaderMetadataUpdate,
+} from "./link-reader-response.ts";
 import {
   resolveLinkReaderTarget,
   linkReaderTargetKey as targetKey,
   type LinkReaderTarget,
 } from "./link-reader-target.ts";
 import { PANEL_HOSTED_TABS_CHANGE_EVENT, type PanelHostedTab } from "./panel-hosted-tabs.ts";
-import { LINK_READER_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 
 registerLinkReaderEnglish();
 
@@ -45,147 +48,100 @@ export type LinkReaderPanelProps = {
   onClose: (() => void) | undefined;
 };
 
-/** Browser-style, memory-only tabs for plugin-provided read-only documents. */
-export class LinkReaderPanelOwner {
-  constructor(
-    readonly host: HTMLElement,
-    readonly props: LinkReaderPanelProps,
-    readonly invalidate: () => void,
-  ) {}
-  get client() {
-    return this.props.client;
-  }
-  get available() {
-    return this.props.available;
-  }
-  get agentId() {
-    return this.props.agentId;
-  }
-  get readers() {
-    return this.props.readers;
-  }
-  get suppressed() {
-    return this.props.suppressed;
-  }
-  get embedded() {
-    return this.props.embedded;
-  }
-  get presented() {
-    return this.props.presented;
-  }
-  get tabsInHeader() {
-    return this.props.tabsInHeader;
-  }
-  get sessionKey() {
-    return this.props.sessionKey;
-  }
-  get onClose() {
-    return this.props.onClose;
-  }
-  get isConnected() {
-    return this.host.isConnected;
-  }
-  dispatchEvent(event: Event) {
-    return this.host.dispatchEvent(event);
-  }
-  private hostedSignature = "";
+/** Browser-style, memory-only tabs and connection-scoped document authority. */
+export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelProps) {
+  const listeners = new Set<() => void>();
+  const publish = () => listeners.forEach((listener) => listener());
+  let hostedSignature = "";
 
-  get hostedTabs() {
-    return this.tabs.map((tab) => ({
+  function hostedTabs() {
+    return state.tabs.map((tab) => ({
       id: tab.id,
       label: tabLabel(tab),
       url: tabTarget(tab)?.href,
       title: tabTarget(tab)?.href,
-      icon: readerIcon(tabTarget(tab)?.reader.icon, this.host.ownerDocument),
+      icon: readerIcon(tabTarget(tab)?.reader.icon, host.ownerDocument),
       className: tab.view.status === "loading" ? "is-connecting" : "",
     })) satisfies PanelHostedTab[];
   }
-  get activeHostedTabId(): string | null {
-    return this.activeId;
-  }
-  urlDraft = "";
-  invalidUrl = false;
-  tabLimitUrl: string | null = null;
-  tabs: ReaderTab[] = [];
-  activeId: string | null = null;
-  private nextTabId = 0;
-  private requestAbort: AbortController | null = null;
-  private returnFocus: HTMLElement | null = null;
-  private scrollContent = false;
-  private focusAddress = false;
-  refreshRequested = false;
-  readonly dockLayout = createDockLayout({
-    notify: () => this.invalidate(),
-    isEmbedded: () => this.embedded,
+  // Request admission and tab identity are synchronous; the projection only observes them.
+  const state: {
+    urlDraft: string;
+    invalidUrl: boolean;
+    tabLimitUrl: string | null;
+    tabs: ReaderTab[];
+    activeId: string | null;
+  } = {
+    urlDraft: "",
+    invalidUrl: false,
+    tabLimitUrl: null,
+    tabs: [],
+    activeId: null,
+  };
+  let refreshRequested = false;
+  let nextTabId = 0;
+  let requestAbort: AbortController | null = null;
+  let returnFocus: HTMLElement | null = null;
+  let scrollContent = false;
+  let focusAddress = false;
+  const dockLayout = createDockLayout({
+    notify: publish,
+    isEmbedded: () => props.embedded,
     layout: linkReaderPanelLayout,
     reservationPrefix: "link-reader",
-    isAvailable: () => this.tabs.length > 0 && !this.suppressed && !this.embedded,
+    isAvailable: () => state.tabs.length > 0 && !props.suppressed && !props.embedded,
     // Embedded geometry belongs to the region, never the standalone dock store.
-    isFullscreen: () => this.embedded,
+    isFullscreen: () => props.embedded,
   });
 
-  get activeTab(): ReaderTab | undefined {
-    return this.tabs.find((tab) => tab.id === this.activeId);
+  function activeTab(): ReaderTab | undefined {
+    return state.tabs.find((tab) => tab.id === state.activeId);
   }
-  get target(): LinkReaderTarget | null {
-    return tabTarget(this.activeTab);
-  }
-
-  get panelPresented(): boolean {
-    return !this.suppressed && (this.embedded ? this.presented : this.dockLayout.open);
+  function currentTarget(): LinkReaderTarget | null {
+    return tabTarget(activeTab());
   }
 
-  connect(): void {
-    this.dockLayout.connect();
-    if (!this.embedded) {
-      window.addEventListener(LINK_READER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
-      this.dockLayout.setSuppressed(this.suppressed);
-    }
+  function panelPresented(): boolean {
+    return !props.suppressed && (props.embedded ? props.presented : dockLayout.open);
   }
-  dispose(): void {
-    this.resetTabViews();
-    this.tabs = [];
-    this.activeId = null;
-    this.returnFocus = null;
-    window.removeEventListener(LINK_READER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
-    this.dockLayout.dispose();
+
+  function dispose(): void {
+    resetTabViews();
+    state.tabs = [];
+    state.activeId = null;
+    returnFocus = null;
+    dockLayout.dispose();
   }
-  sync(previous?: LinkReaderPanelProps): void {
+  function sync(previous?: LinkReaderPanelProps): void {
     const changed = {
-      has: (key: keyof LinkReaderPanelProps) => !previous || previous[key] !== this.props[key],
+      has: (key: keyof LinkReaderPanelProps) => !previous || previous[key] !== props[key],
       get: <K extends keyof LinkReaderPanelProps>(key: K): LinkReaderPanelProps[K] | undefined =>
         previous?.[key],
     };
     // SAFETY: PanelView supplies the complete, explicitly keyed props snapshot.
     if (!previous || (Object.keys(previous) as (keyof LinkReaderPanelProps)[]).some(changed.has)) {
-      this.invalidate();
-    }
-    if (changed.has("embedded")) {
-      window.removeEventListener(LINK_READER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
-      if (!this.embedded && this.isConnected) {
-        window.addEventListener(LINK_READER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
-      }
+      publish();
     }
     if (changed.has("sessionKey") && changed.get("sessionKey") !== undefined) {
-      this.resetTabViews();
-      this.tabs = [];
-      this.activeId = null;
-      this.urlDraft = "";
-      this.invalidUrl = false;
-      this.tabLimitUrl = null;
-      this.returnFocus = null;
-      this.focusAddress = false;
-      this.scrollContent = false;
+      resetTabViews();
+      state.tabs = [];
+      state.activeId = null;
+      state.urlDraft = "";
+      state.invalidUrl = false;
+      state.tabLimitUrl = null;
+      returnFocus = null;
+      focusAddress = false;
+      scrollContent = false;
     }
-    if (this.embedded && !this.presented) {
-      this.abortRequest();
+    if (props.embedded && !props.presented) {
+      abortRequest();
     }
     const previousReaders = changed.get("readers");
     const readersChanged =
       changed.has("readers") &&
       (!previousReaders ||
-        previousReaders.length !== this.readers.length ||
-        previousReaders.some((reader, index) => reader !== this.readers[index]));
+        previousReaders.length !== props.readers.length ||
+        previousReaders.some((reader, index) => reader !== props.readers[index]));
     if (
       changed.has("client") ||
       changed.has("available") ||
@@ -193,82 +149,89 @@ export class LinkReaderPanelOwner {
       readersChanged
     ) {
       // Cached documents belong to this connection epoch, never a replacement gateway.
-      this.resetTabViews();
+      resetTabViews();
     }
-    if (readersChanged && this.available) {
+    if (readersChanged && props.available) {
       // Disabled or replaced contributions cannot retain old data or request authority.
-      this.tabs = this.tabs.flatMap((tab) => {
+      state.tabs = state.tabs.flatMap((tab) => {
         const current = tabTarget(tab);
         if (!current) {
-          return this.readers.length > 0 ? [tab] : [];
+          return props.readers.length > 0 ? [tab] : [];
         }
-        if (!resolveLinkReaderTarget(current.href, this.readers)) {
+        if (!resolveLinkReaderTarget(current.href, props.readers)) {
           return [];
         }
         tab.history = tab.history.flatMap((entry) => {
-          const resolved = resolveLinkReaderTarget(entry.href, this.readers);
+          const resolved = resolveLinkReaderTarget(entry.href, props.readers);
           return resolved ? [resolved] : [];
         });
         tab.index = tab.history.findIndex((entry) => entry.href === current.href);
         return [tab];
       });
-      if (!this.tabs.some((tab) => tab.id === this.activeId)) {
-        this.activeId = this.tabs[0]?.id ?? null;
+      if (!state.tabs.some((tab) => tab.id === state.activeId)) {
+        state.activeId = state.tabs[0]?.id ?? null;
       }
-      this.urlDraft = this.target?.href ?? "";
-      if (this.tabs.length === 0 && previousReaders?.length) {
-        this.closePanel();
+      state.urlDraft = currentTarget()?.href ?? "";
+      if (state.tabs.length === 0 && previousReaders?.length) {
+        closePanel();
       }
     }
     if (changed.has("suppressed")) {
-      this.abortRequest();
+      abortRequest();
     }
-    if (!this.embedded) {
-      this.dockLayout.setSuppressed(this.suppressed);
-      this.dockLayout.restoreOpenState();
-      this.dockLayout.syncReservation();
+    if (!props.embedded) {
+      dockLayout.setSuppressed(props.suppressed);
+      dockLayout.restoreOpenState();
+      dockLayout.syncReservation();
     }
     // A menu-opened slot starts with an address draft. Closing its last tab
     // lets the region remove the slot instead of recreating it on every update.
     if (
-      this.embedded &&
-      this.panelPresented &&
-      this.tabs.length === 0 &&
-      this.available &&
-      this.readers.length > 0 &&
+      props.embedded &&
+      panelPresented() &&
+      state.tabs.length === 0 &&
+      props.available &&
+      props.readers.length > 0 &&
       (["embedded", "presented", "sessionKey", "available"] as const).some((key) =>
         changed.has(key),
       )
     ) {
-      this.createTab();
-      this.focusAddress = false;
+      createTab();
+      focusAddress = false;
     }
+    resume();
+  }
+  function resume(): void {
+    const active = activeTab();
     if (
-      this.isConnected &&
-      this.panelPresented &&
-      (this.activeTab?.view.status === "idle" || this.refreshRequested)
+      host.isConnected &&
+      panelPresented() &&
+      (active?.view.status === "idle" || refreshRequested)
     ) {
-      void this.loadDetail();
+      void loadDetail();
     }
     if (
-      this.isConnected &&
-      this.panelPresented &&
-      this.activeTab?.view.status === "ready" &&
-      !this.activeTab.view.refreshing
+      host.isConnected &&
+      panelPresented() &&
+      active?.view.status === "ready" &&
+      !active.view.refreshing
     ) {
       for (const section of ["checks", "discussion"] as const) {
-        if (this.activeTab.view.sections[section] === "idle") {
-          void this.loadDetail(section);
+        if (active.view.sections[section] === "idle") {
+          void loadDetail(section);
         }
       }
     }
   }
-  afterRender(): void {
+  function afterRender(
+    address: HTMLInputElement | undefined,
+    content: HTMLElement | undefined,
+  ): void {
     const signature = JSON.stringify([
-      this.activeId,
-      this.available,
-      this.readers.length,
-      this.tabs.map((tab) => [
+      state.activeId,
+      props.available,
+      props.readers.length,
+      state.tabs.map((tab) => [
         tab.id,
         tabLabel(tab),
         tabTarget(tab)?.href,
@@ -276,251 +239,252 @@ export class LinkReaderPanelOwner {
         tab.view.status,
       ]),
     ]);
-    if (signature !== this.hostedSignature) {
-      this.hostedSignature = signature;
-      this.dispatchEvent(
+    if (signature !== hostedSignature) {
+      hostedSignature = signature;
+      host.dispatchEvent(
         new Event(PANEL_HOSTED_TABS_CHANGE_EVENT, { bubbles: true, composed: true }),
       );
     }
-    if (!this.panelPresented) {
+    if (!panelPresented()) {
       return;
     }
-    if (this.focusAddress) {
-      this.focusAddress = false;
-      this.host.querySelector<HTMLInputElement>(".lr-url")?.focus();
+    if (focusAddress) {
+      focusAddress = false;
+      address?.focus();
     }
-    const content = this.host.querySelector<HTMLElement>(".lr-content:not([hidden])");
-    if (this.scrollContent && content && this.activeTab?.view.status === "ready") {
-      this.scrollContent = false;
+    if (scrollContent && content && activeTab()?.view.status === "ready") {
+      scrollContent = false;
       content.scrollTop = 0;
-      const hash = this.target ? new URL(this.target.href).hash.slice(1) : "";
+      const target = currentTarget();
+      const hash = target ? new URL(target.href).hash.slice(1) : "";
       const anchor = [...content.querySelectorAll<HTMLElement>("[id]")].find(
         (node) => node.id === hash,
       );
       anchor?.scrollIntoView?.({ block: "start" });
     }
   }
-  private abortRequest(): void {
-    this.requestAbort?.abort();
-    this.requestAbort = null;
-    if (this.activeTab?.view.status === "loading") {
-      this.activeTab.view = { status: "idle" };
+  function abortRequest(): void {
+    const active = activeTab();
+    requestAbort?.abort();
+    requestAbort = null;
+    if (active?.view.status === "loading") {
+      active.view = { status: "idle" };
     }
-    if (this.activeTab?.view.status === "ready") {
-      this.activeTab.view.refreshing = false;
+    if (active?.view.status === "ready") {
+      active.view.refreshing = false;
       for (const section of ["checks", "files", "discussion"] as const) {
-        if (this.activeTab.view.sections[section] === "loading") {
-          this.activeTab.view.sections[section] = "idle";
+        if (active.view.sections[section] === "loading") {
+          active.view.sections[section] = "idle";
         }
       }
     }
-    this.refreshRequested = false;
+    refreshRequested = false;
   }
-  private setTabView(tab: ReaderTab, view: ReaderTab["view"]): void {
+  function setTabView(tab: ReaderTab, view: ReaderTab["view"]): void {
     if (tab.view.status === "ready") {
       tab.view.images?.dispose();
     }
     tab.view = view;
   }
-  private resetTabViews(): void {
-    this.abortRequest();
-    for (const tab of this.tabs) {
-      this.setTabView(tab, { status: "idle" });
+  function resetTabViews(): void {
+    abortRequest();
+    for (const tab of state.tabs) {
+      setTabView(tab, { status: "idle" });
     }
   }
-  selectHostedTab(id: string): void {
-    if (id === this.activeId || !this.tabs.some((tab) => tab.id === id)) {
+  function selectHostedTab(id: string): void {
+    if (id === state.activeId || !state.tabs.some((tab) => tab.id === id)) {
       return;
     }
-    this.abortRequest();
-    this.activeId = id;
-    this.urlDraft = this.target?.href ?? "";
-    this.invalidUrl = false;
-    this.tabLimitUrl = null;
-    this.scrollContent = false;
-    this.invalidate();
+    abortRequest();
+    state.activeId = id;
+    state.urlDraft = currentTarget()?.href ?? "";
+    state.invalidUrl = false;
+    state.tabLimitUrl = null;
+    scrollContent = false;
+    publish();
   }
-  createTab(target?: LinkReaderTarget): void {
-    if (this.tabs.length >= LINK_READER_TAB_LIMIT) {
-      this.tabLimitUrl = target?.href ?? null;
-      this.invalidate();
+  function createTab(target?: LinkReaderTarget): void {
+    if (state.tabs.length >= LINK_READER_TAB_LIMIT) {
+      state.tabLimitUrl = target?.href ?? null;
+      publish();
       return;
     }
-    this.abortRequest();
+    abortRequest();
     const tab: ReaderTab = {
-      id: "link-reader-tab-" + ++this.nextTabId,
+      id: "link-reader-tab-" + ++nextTabId,
       history: target ? [target] : [],
       index: target ? 0 : -1,
       view: { status: "idle" },
     };
-    this.tabs.push(tab);
-    this.activeId = tab.id;
-    this.urlDraft = target?.href ?? "";
-    this.invalidUrl = false;
-    this.tabLimitUrl = null;
-    this.focusAddress = !target;
-    this.scrollContent = Boolean(target);
-    if (!this.embedded) {
-      this.dockLayout.setOpen(true);
+    state.tabs.push(tab);
+    state.activeId = tab.id;
+    state.urlDraft = target?.href ?? "";
+    state.invalidUrl = false;
+    state.tabLimitUrl = null;
+    focusAddress = !target;
+    scrollContent = Boolean(target);
+    if (!props.embedded) {
+      dockLayout.setOpen(true);
     } else {
-      this.invalidate();
+      publish();
     }
   }
-  closeTab(id: string): void {
-    const index = this.tabs.findIndex((tab) => tab.id === id);
+  function closeTab(id: string): void {
+    const index = state.tabs.findIndex((tab) => tab.id === id);
     if (index < 0) {
       return;
     }
-    const active = id === this.activeId;
+    const active = id === state.activeId;
     if (active) {
-      this.abortRequest();
+      abortRequest();
     }
-    this.setTabView(this.tabs[index]!, { status: "idle" });
-    this.tabs.splice(index, 1);
-    this.tabLimitUrl = null;
-    if (this.tabs.length === 0) {
-      this.activeId = null;
-      this.closePanel();
+    setTabView(state.tabs[index]!, { status: "idle" });
+    state.tabs.splice(index, 1);
+    state.tabLimitUrl = null;
+    if (state.tabs.length === 0) {
+      state.activeId = null;
+      closePanel();
       return;
     }
     if (active) {
-      this.activeId = null;
-      const fallback = this.tabs[Math.min(index, this.tabs.length - 1)];
+      state.activeId = null;
+      const fallback = state.tabs[Math.min(index, state.tabs.length - 1)];
       if (fallback) {
-        this.selectHostedTab(fallback.id);
+        selectHostedTab(fallback.id);
       }
     }
-    this.invalidate();
+    publish();
   }
-  private navigate(target: LinkReaderTarget): void {
-    const tab = this.activeTab;
+  function navigate(target: LinkReaderTarget): void {
+    const tab = activeTab();
     if (!tab) {
-      this.createTab(target);
+      createTab(target);
       return;
     }
     const previous = tabTarget(tab);
     if (previous?.href !== target.href) {
-      this.abortRequest();
+      abortRequest();
       tab.history = [...tab.history.slice(0, tab.index + 1), target].slice(-HISTORY_LIMIT);
       tab.index = tab.history.length - 1;
       if (!previous || targetKey(previous) !== targetKey(target)) {
-        this.setTabView(tab, { status: "idle" });
+        setTabView(tab, { status: "idle" });
       }
     }
-    this.urlDraft = target.href;
-    this.invalidUrl = false;
-    this.focusAddress = false;
-    this.scrollContent = true;
-    this.invalidate();
+    state.urlDraft = target.href;
+    state.invalidUrl = false;
+    focusAddress = false;
+    scrollContent = true;
+    publish();
   }
-  readonly handleToggleRequest = (event: Event): void => {
+  const handleToggleRequest = (event: Event): void => {
     const payload: unknown = event instanceof CustomEvent ? event.detail : undefined;
     const detail = isRecord(payload) ? payload : null;
     if (detail?.open === false) {
-      this.closePanel();
+      closePanel();
       return;
     }
     const target =
-      typeof detail?.url === "string" ? resolveLinkReaderTarget(detail.url, this.readers) : null;
+      typeof detail?.url === "string" ? resolveLinkReaderTarget(detail.url, props.readers) : null;
     if (
-      !this.isConnected ||
-      !this.available ||
-      !this.client ||
-      this.suppressed ||
-      (this.embedded && !this.presented) ||
-      !this.readers.length ||
+      !host.isConnected ||
+      !props.available ||
+      !props.client ||
+      props.suppressed ||
+      (props.embedded && !props.presented) ||
+      !props.readers.length ||
       (detail?.url !== undefined && !target)
     ) {
       return;
     }
     event.preventDefault();
-    if (!this.panelPresented || (this.embedded && !this.returnFocus)) {
+    if (!panelPresented() || (props.embedded && !returnFocus)) {
       const active = document.activeElement;
-      this.returnFocus =
+      returnFocus =
         detail?.trigger instanceof HTMLElement
           ? detail.trigger
-          : active instanceof HTMLElement && active !== this.host
+          : active instanceof HTMLElement && active !== host
             ? active
             : null;
     }
     if (!target && detail?.newTab) {
-      this.createTab();
+      createTab();
       return;
     }
     if (target) {
       const existing =
         detail?.newTab !== false
-          ? this.tabs.find((tab) => {
+          ? state.tabs.find((tab) => {
               const current = tabTarget(tab);
               return current && targetKey(current) === targetKey(target);
             })
           : undefined;
       if (existing) {
-        this.selectHostedTab(existing.id);
-        this.navigate(target);
-      } else if (detail?.newTab === false || (this.activeTab && !this.target)) {
-        this.navigate(target);
+        selectHostedTab(existing.id);
+        navigate(target);
+      } else if (detail?.newTab === false || (activeTab() && !currentTarget())) {
+        navigate(target);
       } else {
-        this.createTab(target);
+        createTab(target);
       }
-    } else if (!this.activeTab) {
-      this.createTab();
+    } else if (!activeTab()) {
+      createTab();
     }
-    if (!this.embedded) {
-      this.dockLayout.setOpen(true);
+    if (!props.embedded) {
+      dockLayout.setOpen(true);
     } else {
-      this.invalidate();
+      publish();
     }
   };
-  closePanel(): void {
-    this.abortRequest();
-    if (!this.embedded) {
-      this.dockLayout.setOpen(false);
+  function closePanel(): void {
+    abortRequest();
+    if (!props.embedded) {
+      dockLayout.setOpen(false);
     } else {
-      this.onClose?.();
-      this.invalidate();
+      props.onClose?.();
+      publish();
     }
-    this.scrollContent = false;
-    this.focusAddress = false;
-    if (this.returnFocus?.isConnected) {
-      this.returnFocus.focus({ preventScroll: true });
+    scrollContent = false;
+    focusAddress = false;
+    if (returnFocus?.isConnected) {
+      returnFocus.focus({ preventScroll: true });
     }
-    this.returnFocus = null;
+    returnFocus = null;
   }
-  refresh(): void {
-    this.abortRequest();
-    this.refreshRequested = true;
-    this.invalidate();
+  function refreshDocument(): void {
+    abortRequest();
+    refreshRequested = true;
+    publish();
   }
-  goHistory(offset: number): void {
-    const tab = this.activeTab;
+  function goHistory(offset: number): void {
+    const tab = activeTab();
     if (!tab || tab.index + offset < 0 || tab.index + offset >= tab.history.length) {
       return;
     }
-    this.abortRequest();
+    abortRequest();
     tab.index += offset;
-    this.setTabView(tab, { status: "idle" });
-    this.urlDraft = this.target?.href ?? "";
-    this.invalidUrl = false;
-    this.scrollContent = true;
-    this.invalidate();
+    setTabView(tab, { status: "idle" });
+    state.urlDraft = currentTarget()?.href ?? "";
+    state.invalidUrl = false;
+    scrollContent = true;
+    publish();
   }
-  commitUrl(event: Event): void {
+  function commitUrl(event: Event): void {
     event.preventDefault();
-    const draft = this.urlDraft.trim();
+    const draft = state.urlDraft.trim();
     const target = resolveLinkReaderTarget(
       /^[a-z][a-z0-9+.-]*:/iu.test(draft) ? draft : "https://" + draft,
-      this.readers,
+      props.readers,
     );
-    this.invalidUrl = !target;
+    state.invalidUrl = !target;
     if (target) {
-      this.navigate(target);
+      navigate(target);
     } else {
-      this.invalidate();
+      publish();
     }
   }
-  requestSection(section: ReaderSection): void {
-    const view = this.activeTab?.view;
+  function requestSection(section: ReaderSection): void {
+    const view = activeTab()?.view;
     if (view?.status !== "ready" || view.refreshing || !view.sections[section]) {
       return;
     }
@@ -528,31 +492,28 @@ export class LinkReaderPanelOwner {
     if (refresh) {
       view.sections[section] = "idle";
     }
-    void this.loadDetail(section, refresh);
+    void loadDetail(section, refresh);
   }
-  private async loadDetail(
-    section?: ReaderSection,
-    refresh = this.refreshRequested,
-  ): Promise<void> {
-    const target = this.target;
-    const tab = this.activeTab;
-    const client = this.client;
-    const agentId = this.agentId;
-    const sessionKey = this.sessionKey;
+  async function loadDetail(section?: ReaderSection, refresh = refreshRequested): Promise<void> {
+    const target = currentTarget();
+    const tab = activeTab();
+    const client = props.client;
+    const agentId = props.agentId;
+    const sessionKey = props.sessionKey;
     const generation = client?.connectionGeneration;
     const recoveryScope = client?.recoveryScope;
-    if (!target || !tab || !client || !this.available || !this.panelPresented) {
+    if (!target || !tab || !client || !props.available || !panelPresented()) {
       return;
     }
     const previous = tab.view.status === "ready" ? tab.view : undefined;
     if (section && (!previous || previous.refreshing || previous.sections[section] !== "idle")) {
       return;
     }
-    const request = section ? (this.requestAbort ??= new AbortController()) : new AbortController();
+    const request = section ? (requestAbort ??= new AbortController()) : new AbortController();
     if (section && previous) {
       previous.sections[section] = "loading";
     } else {
-      this.requestAbort = request;
+      requestAbort = request;
       if (previous) {
         previous.refreshing = true;
         previous.message = undefined;
@@ -561,19 +522,19 @@ export class LinkReaderPanelOwner {
       }
     }
     const isCurrent = () =>
-      this.requestAbort === request &&
+      requestAbort === request &&
       !request.signal.aborted &&
-      this.isConnected &&
-      this.client === client &&
-      this.agentId === agentId &&
-      this.sessionKey === sessionKey &&
+      host.isConnected &&
+      props.client === client &&
+      props.agentId === agentId &&
+      props.sessionKey === sessionKey &&
       client.connectionGeneration === generation &&
       client.recoveryScope === recoveryScope &&
-      this.available &&
-      this.panelPresented &&
-      this.activeTab === tab &&
-      this.target?.href === target.href &&
-      this.readers.includes(target.reader);
+      props.available &&
+      panelPresented() &&
+      activeTab() === tab &&
+      currentTarget()?.href === target.href &&
+      props.readers.includes(target.reader);
     const requestParams: ControlUiLinkReaderDetailParams = {
       url: target.href,
       ...(target.reader.linkReader.sessionScoped ? { sessionKey } : {}),
@@ -581,8 +542,8 @@ export class LinkReaderPanelOwner {
       ...(refresh ? { refresh: true } : {}),
       ...(target.reader.linkReader.progressive ? { section: section ?? "overview" } : {}),
     };
-    this.refreshRequested = false;
-    this.invalidate();
+    refreshRequested = false;
+    publish();
     try {
       const detail = await client.request<ControlUiLinkReaderDocument>(
         target.reader.linkReader.detailMethod,
@@ -634,7 +595,7 @@ export class LinkReaderPanelOwner {
             previous.detail = { ...previous.detail, ...fields };
             delete previous.sections[section];
           }
-          this.invalidate();
+          publish();
           return;
         }
         const next = createReaderReadyView(detail, previous);
@@ -644,24 +605,31 @@ export class LinkReaderPanelOwner {
               client,
               imageMethod,
               () =>
-                this.isConnected &&
-                this.available &&
-                this.client === client &&
-                this.agentId === agentId &&
-                this.sessionKey === sessionKey &&
+                host.isConnected &&
+                props.available &&
+                props.client === client &&
+                props.agentId === agentId &&
+                props.sessionKey === sessionKey &&
                 client.connectionGeneration === generation &&
                 client.recoveryScope === recoveryScope &&
-                this.tabs.includes(tab) &&
-                this.readers.includes(target.reader) &&
+                state.tabs.includes(tab) &&
+                props.readers.includes(target.reader) &&
                 tab.view === next,
             )
           : undefined;
         next.images = images;
-        this.setTabView(tab, next);
+        setTabView(tab, next);
         if (next.sections.files && previous?.detail.files) {
-          void this.loadDetail("files");
+          void loadDetail("files");
         }
-        this.invalidate();
+        publish();
+        if (!detail.stale) {
+          window.dispatchEvent(
+            new CustomEvent<LinkReaderMetadataUpdate>(LINK_READER_METADATA_UPDATED_EVENT, {
+              detail: { client, agentId, sessionKey, target, preview: detail },
+            }),
+          );
+        }
       }
     } catch (error) {
       if (isCurrent()) {
@@ -678,11 +646,44 @@ export class LinkReaderPanelOwner {
             previous.message = linkReaderErrorMessage(error);
           }
         } else {
-          this.abortRequest();
-          this.setTabView(tab, { status: "error", message: linkReaderErrorMessage(error) });
+          abortRequest();
+          setTabView(tab, { status: "error", message: linkReaderErrorMessage(error) });
         }
-        this.invalidate();
+        publish();
       }
     }
   }
+  return {
+    state,
+    props,
+    dockLayout,
+    activeTab,
+    target: currentTarget,
+    hostedTabs,
+    sync,
+    resume,
+    afterRender,
+    dispose,
+    selectHostedTab,
+    createTab,
+    closeTab,
+    handleToggleRequest,
+    closePanel,
+    refresh: refreshDocument,
+    goHistory,
+    commitUrl,
+    requestSection,
+    editUrl(value: string) {
+      state.urlDraft = value;
+      state.invalidUrl = false;
+      publish();
+    },
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
 }
+export type LinkReaderPanelOwner = ReturnType<typeof createLinkReaderPanel>;

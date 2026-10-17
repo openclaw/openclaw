@@ -4,6 +4,7 @@ import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/sessi
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, expect, it, vi } from "vitest";
+import { scopeCodexRunBindingStore } from "./session-binding-scope.js";
 import { createLazyCodexAppServerBindingStore } from "./session-binding-store.js";
 import {
   bindingStoreKey,
@@ -153,6 +154,54 @@ it("rechecks physical ownership after a worker comparison loses to a same-thread
   expect(await collect(peer.readMany([identity]))).toEqual([successor]);
   await expect(peer.mutate(identity, clearOwner(successor))).resolves.toBe(true);
   expect(await collect(peer.readMany([identity]))).toEqual([undefined]);
+});
+
+it.each([
+  ["eager", createBindingStore],
+  ["lazy", createLazyCodexAppServerBindingStore],
+] as const)("%s prepared binding observes native and worker commits", async (_, createStore) => {
+  const fixture = await createStateFixture("codex-prepared-binding-");
+  const state = createSqliteState({
+    namespace: "prepared-binding",
+    maxEntries: 10,
+    env: { ...process.env, OPENCLAW_STATE_DIR: fixture.stateDir },
+  });
+  const store = createStore(state);
+  const identity = { kind: "session" as const, agentId: "main", sessionId: "current" };
+  const key = bindingStoreKey(identity);
+  const original = { threadId: "original", cwd: "/repo" };
+  const replacement = { threadId: "replacement", cwd: "/repo" };
+  state.register(key, activeRow(original));
+  const current = await store.prepareRead(identity);
+  expect(current).toBeDefined();
+  const logicalIdentity = { ...identity, sessionId: "logical-session" };
+  const scoped = scopeCodexRunBindingStore({
+    bindingStore: store,
+    logicalIdentity,
+    physicalIdentity: identity,
+  });
+  const scopedCurrent = await scoped.prepareRead(logicalIdentity);
+  expect(scopedCurrent).toBeDefined();
+  const lookup = vi.spyOn(state, "lookup");
+  try {
+    expect(current?.read()).toEqual(original);
+    expect(scopedCurrent?.read()).toEqual(original);
+    state.register(key, activeRow(replacement));
+    expect(current?.read()).toEqual(replacement);
+    expect(scopedCurrent?.read()).toEqual(replacement);
+    state.delete(key);
+    expect(current?.read()).toBeUndefined();
+    await store.mutate(identity, { kind: "set", binding: original });
+    expect(current?.read()).toEqual(original);
+    await store.mutate(identity, { kind: "set", binding: replacement });
+    expect(current?.read()).toEqual(replacement);
+    await store.mutate(identity, { kind: "clear" });
+    expect(current?.read()).toBeUndefined();
+    expect(lookup).not.toHaveBeenCalled();
+  } finally {
+    current?.release();
+    scopedCurrent?.release();
+  }
 });
 
 it("keeps ordered failures without synchronous reads or retrying failed bulk acquisition", async () => {

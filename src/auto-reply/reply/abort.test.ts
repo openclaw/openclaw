@@ -83,13 +83,17 @@ vi.mock(
   import("../../agents/embedded-agent-runner/runs.abort-target.js"),
   async (importOriginal) => ({
     ...(await importOriginal()),
-    prepareEmbeddedAgentRunAbort: (sessionId: string) => () => ({
-      active:
-        runtimeAbortMocks.isEmbeddedAgentRunActive() ||
-        runtimeAbortMocks.resolveActiveEmbeddedRunSessionId() === sessionId,
-      aborted: runtimeAbortMocks.abortEmbeddedAgentRun(sessionId),
-      sessionId,
-    }),
+    prepareEmbeddedAgentRunAbort: (sessionId: string) =>
+      Object.assign(
+        () => ({
+          active:
+            runtimeAbortMocks.isEmbeddedAgentRunActive() ||
+            runtimeAbortMocks.resolveActiveEmbeddedRunSessionId() === sessionId,
+          aborted: runtimeAbortMocks.abortEmbeddedAgentRun(sessionId),
+          sessionId,
+        }),
+        { isWaitingForLocalModel: () => false },
+      ),
   }),
 );
 vi.mock("../../agents/embedded-agent-runner/active-run-projections.js", () => ({

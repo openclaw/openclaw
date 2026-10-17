@@ -99,6 +99,7 @@ export function buildOpenAICodexForwardCompatExpectation(
 
 export function resetMockDiscoverModels(discoverModelsMock: DiscoverModelsMock): void {
   vi.mocked(discoverModelsMock).mockResolvedValue({
+    getProviderMetadataOwners: () => undefined,
     find: vi.fn(() => null),
   } as unknown as Awaited<ReturnType<DiscoverModelsMock>>);
 }
@@ -114,6 +115,7 @@ export function mockDiscoveredModel(
   // Discovery mock returns exactly one template row so fallback tests cannot
   // accidentally pass by matching a sibling model.
   vi.mocked(discoverModelsMock).mockResolvedValue({
+    getProviderMetadataOwners: () => undefined,
     find: vi.fn((provider: string, modelId: string) => {
       if (provider === params.provider && modelId === params.modelId) {
         return params.templateModel;

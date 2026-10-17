@@ -42,10 +42,15 @@ export function ImageLightboxContent(props: ImageLightboxProps & { host: ImageLi
   const [resolvingOriginal, setResolvingOriginal] = createSignal(false, { ownedWrite: true });
   const [scale, setScale] = createSignal(1, { ownedWrite: true });
   const [canZoom, setCanZoom] = createSignal(false, { ownedWrite: true });
-  const image = () => host.querySelector<HTMLImageElement>(".image") ?? undefined;
-  const stage = () => host.querySelector<HTMLDivElement>(".stage") ?? undefined;
-  const slide = () => host.querySelector<HTMLDivElement>(".slide") ?? undefined;
-  const video = () => host.querySelector<HTMLVideoElement>(".video") ?? undefined;
+  let imageElement: HTMLImageElement | undefined;
+  let stageElement: HTMLDivElement | undefined;
+  let slideElement: HTMLDivElement | undefined;
+  let videoElement: HTMLVideoElement | undefined;
+  // Show can retain a detached branch; media callbacks only consume its mounted nodes.
+  const image = () => (imageElement?.isConnected ? imageElement : undefined);
+  const stage = () => (stageElement?.isConnected ? stageElement : undefined);
+  const slide = () => (slideElement?.isConnected ? slideElement : undefined);
+  const video = () => (videoElement?.isConnected ? videoElement : undefined);
   const direction = () => (getComputedStyle(host).direction === "rtl" ? -1 : 1);
   const motionQuery = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)");
   let disposed = false;
@@ -546,7 +551,12 @@ export function ImageLightboxContent(props: ImageLightboxProps & { host: ImageLi
                 "stage--gallery": props.mediaKind !== "video" && hasGallery(),
               },
             ]}
-            ref={nativeListener("pointerdown", handleStagePointerDown, true)}
+            ref={[
+              (element) => {
+                stageElement = element;
+              },
+              nativeListener("pointerdown", handleStagePointerDown, true),
+            ]}
             onPointerMove={handleStagePointerMove}
             onPointerUp={handleStagePointerUp}
             onPointerCancel={handleStagePointerCancel}
@@ -555,9 +565,17 @@ export function ImageLightboxContent(props: ImageLightboxProps & { host: ImageLi
             <Show
               when={props.mediaKind === "video"}
               fallback={
-                <div class="slide">
+                <div
+                  class="slide"
+                  ref={(element) => {
+                    slideElement = element;
+                  }}
+                >
                   <img
                     class={["image", { zoomed: scale() > 1 }]}
+                    ref={(element) => {
+                      imageElement = element;
+                    }}
                     style={lightboxImageStyle(currentImage())}
                     src={currentImage()?.src ?? props.src}
                     alt={title()}
@@ -572,6 +590,9 @@ export function ImageLightboxContent(props: ImageLightboxProps & { host: ImageLi
             >
               <video
                 class="video"
+                ref={(element) => {
+                  videoElement = element;
+                }}
                 onLoadedData={() => gallery.updateVideoStatus("ready")}
                 onPlaying={() => gallery.updateVideoStatus("ready")}
                 onError={() => gallery.updateVideoStatus("unavailable")}

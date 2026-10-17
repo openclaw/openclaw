@@ -131,10 +131,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       const client = createWorkerSupervisorNodeClient();
       const sent: string[] = [];
       client.socket.send = (frame) => {
-        if (typeof frame !== "string") {
-          throw new Error("expected a JSON text frame");
-        }
-        sent.push(frame);
+        sent.push(frame.toString());
       };
       client.connect.client.id = clientId;
       runtime.nodeRegistry.register(client, {

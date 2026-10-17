@@ -4,21 +4,14 @@
  */
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { Value } from "typebox/value";
-import {
-  AgentActivityItemSchema,
-  type AgentActivityItem,
-} from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { summarizeAgentActivity } from "../../../../src/agents/agent-activity-presentation.js";
 import { t } from "../../i18n/index.ts";
+import { isAgentActivityItem } from "../protocol-validators.generated/activity.js";
 
 export function readPreparedActivity(message: unknown): AgentActivityItem[] {
   const activity = asOptionalRecord(message)?.activity;
-  return Array.isArray(activity)
-    ? activity.filter((item): item is AgentActivityItem =>
-        Value.Check(AgentActivityItemSchema, item),
-      )
-    : [];
+  return Array.isArray(activity) ? activity.filter(isAgentActivityItem) : [];
 }
 
 export function hasVisiblePreparedActivity(message: unknown): boolean {

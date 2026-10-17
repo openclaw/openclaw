@@ -36,6 +36,59 @@ function createDetail(
 }
 
 describe("Claws on Agents Home", () => {
+  it.each([
+    {
+      names: ["AGENTS.md", "SOUL.md", "USER.md", "notes/context.md"],
+      ordered: ["SOUL.md", "AGENTS.md", "USER.md", "notes/context.md"],
+    },
+    { names: ["USER.md", "notes/context.md"], ordered: ["USER.md", "notes/context.md"] },
+    { names: ["IDENTITY.md"], ordered: ["IDENTITY.md"] },
+  ])("lists every release file inline for $names", async ({ names, ordered }) => {
+    const { detail } = createDetail({ clawsEnabled: true, workspaceFileNames: names });
+    await vi.waitFor(() => expect(detail.querySelector(".plugin-capabilities")).not.toBeNull());
+    const section = detail.querySelector(".plugin-capabilities")!;
+    expect(section.querySelector("h2 > span")?.textContent).toBe(String(names.length));
+    const titles = [...section.querySelectorAll(".plugin-capability__copy strong")].map(
+      (node) => node.textContent,
+    );
+    expect(titles).toEqual(ordered);
+    expect(section.querySelectorAll(".claws-workspace-file__info")).toHaveLength(names.length);
+  });
+
+  it("opens every release file inline without treating help as navigation", async () => {
+    const names = ["AGENTS.md", "SOUL.md", "USER.md", "BOOTSTRAP.md", "notes/context.md"];
+    const { detail, request } = createDetail({ clawsEnabled: true, workspaceFileNames: names });
+    await vi.waitFor(() =>
+      expect(detail.querySelector(".claws-workspace-file__info")).not.toBeNull(),
+    );
+    const section = detail.querySelector(".plugin-capabilities")!;
+    section.querySelector<HTMLButtonElement>(".claws-workspace-file__info")!.click();
+    expect(
+      request.mock.calls.filter(([method]) => method === "claws.catalog.preview"),
+    ).toHaveLength(0);
+    section.querySelector<HTMLButtonElement>(".claws-workspace-file__open")!.click();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "claws.catalog.preview",
+        expect.objectContaining({ name: "SOUL.md" }),
+      ),
+    );
+    const preview = detail.querySelector("openclaw-file-preview-modal")!;
+    expect(preview.files.map((file) => file.path)).toEqual(names);
+    expect(section.querySelectorAll(".claws-workspace-file__open")).toHaveLength(names.length);
+    for (const name of names) {
+      preview.dispatchEvent(
+        new CustomEvent("file-preview-select", { detail: name, bubbles: true }),
+      );
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith(
+          "claws.catalog.preview",
+          expect.objectContaining({ name }),
+        ),
+      );
+    }
+  });
+
   it("shows official Claws and opens their dedicated route", async () => {
     const { page, navigate, request, ensureConfigLoaded } = createPage({ clawsEnabled: true });
     await vi.waitFor(() => expect(page.querySelectorAll("[data-claws-entry]")).toHaveLength(1));

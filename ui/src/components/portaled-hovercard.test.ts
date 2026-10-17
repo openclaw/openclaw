@@ -2,7 +2,7 @@
 import { delegateEvents } from "@solidjs/web";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
+import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -15,7 +15,7 @@ function fixture(shadow = false) {
   const owner = shadow ? pane.attachShadow({ mode: "open" }) : pane;
   const trigger = owner.appendChild(document.createElement("a"));
   const dismiss = vi.fn(() => controller.reset());
-  const controller = new PortaledHovercardController(dismiss);
+  const controller = createPortaledHovercardOwner(dismiss);
   controller.markTrigger(trigger);
   const mount = () => {
     controller.mount(trigger, createPortaledHovercard("preview", "preview"), "vertical");

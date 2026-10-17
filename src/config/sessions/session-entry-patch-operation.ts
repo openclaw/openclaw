@@ -25,6 +25,7 @@ import {
   type SessionLifecyclePatchInput,
   type SessionLifecyclePatchEffects,
 } from "./session-run-lifecycle-projection.js";
+import { mergeSessionSnapshotChanges } from "./session-snapshot-merge.js";
 import {
   mergeSessionEntry,
   mergeSessionEntryPreserveActivity,
@@ -63,6 +64,13 @@ export type SessionEntryBookkeepingReducer =
 /** Closed internal operations; arbitrary updater callbacks retain prepare/CAS. */
 type SessionEntryPatchStep = (
   | { kind: "fields"; patch: Partial<SessionEntry> }
+  | {
+      kind: "cron-session";
+      sessionKey: string;
+      initial?: SessionEntry;
+      next: SessionEntry;
+      creation: ReturnType<typeof buildSessionCreationStamp>;
+    }
   | {
       kind: "cron-run-continuation";
       sessionKey: string;
@@ -128,6 +136,23 @@ type SessionEntryPatchStep = (
 export type SessionEntryPatchOperation =
   | SessionEntryPatchStep
   | { kind: "compound"; operations: readonly SessionEntryPatchStep[] };
+
+/** Shared by ordinary cron writes and the atomic reset-boundary owner. */
+export function projectCronSessionEntry(
+  operation: Extract<SessionEntryPatchOperation, { kind: "cron-session" }>,
+  current: SessionEntry | undefined,
+): SessionEntry {
+  const { initial, next } = operation;
+  // Serialized admission owns the revision; protect only row replacement or deletion here.
+  if (
+    current ? current.sessionId !== (initial?.sessionId ?? next.sessionId) : initial !== undefined
+  ) {
+    throw createSessionWorkStartChangedError(operation.sessionKey);
+  }
+  return current && initial
+    ? mergeSessionSnapshotChanges({ initial, next, current })
+    : { ...next, ...(!current ? operation.creation : {}) };
+}
 
 /** Each reducer observes its predecessor's postimage; callers persist only the result. */
 export function projectSessionEntryPatch(
@@ -214,6 +239,8 @@ export function reduceSessionEntryPatch(
     return null;
   }
   switch (operation.kind) {
+    case "cron-session":
+      return projectCronSessionEntry(operation, existingEntry);
     case "cron-run-continuation": {
       const { source, continuation, sessionKey } = operation;
       if (

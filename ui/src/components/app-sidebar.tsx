@@ -54,6 +54,7 @@ function disconnectSidebarOwner(host: HTMLElement): void {
   if (owner) {
     sidebarOwners.delete(host);
     owner.detach();
+    owner.disposeMenus();
   }
 }
 
@@ -62,6 +63,7 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
   const context = useApplication();
   const catalog = createSidebarNavigationCatalog(context, () => props.navigationView, host);
   const owner = sidebarOwners.get(host) ?? new AppSidebarOwner(catalog, props, context, host);
+  sidebarOwners.set(host, owner);
   owner.navigationCatalog = catalog;
   owner.bindInputs(props, context);
   owner.attention = createSessionAttention(
@@ -170,8 +172,10 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
     return proxy;
   };
   const hostView = observe(owner);
-  owner.sidebarMenus.catalogMenuView = owner.sidebarMenus.catalogMenu.createView(hostView);
-  [owner.sidebarMenus, owner.sessionData, owner.sessionOrganizer, owner.people].forEach(observe);
+  onCleanup(
+    owner.sidebarMenus.bindCatalogMenuView(owner.sidebarMenus.catalogMenu.createView(hostView)),
+  );
+  [owner.sessionData, owner.sessionOrganizer, owner.people].forEach(observe);
   owner.sessionPullRequests = createSessionPullRequestIndicators({
     getConnected: () => prepared().isConnected && props.connected,
     getPresented: () => props.navigationVisible,
@@ -250,7 +254,6 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
       }),
   );
   onSettled(() => {
-    sidebarOwners.set(host, owner);
     if (host.isConnected && !owner.isConnected) {
       owner.attach();
     } else {

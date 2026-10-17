@@ -251,14 +251,17 @@ export async function prepareCronRunContext(params: {
       const persistCronSessionRow: CronSessionRowWriter = async ({
         storePath,
         sessionKey,
-        fallbackEntry,
+        operation,
         resetBoundary,
-        update,
         assertCommitAllowed,
       }) => {
-        const { applySessionEntryLifecycleMutation, patchSessionEntryCore } =
-          await loadSessionAccessorRuntime();
         if (resetBoundary) {
+          const [{ applySessionEntryLifecycleMutation }, { projectCronSessionEntry }] =
+            await Promise.all([
+              loadSessionAccessorRuntime(),
+              import("../../config/sessions/session-entry-patch-operation.js"),
+            ]);
+          let entry = operation.next;
           await applySessionEntryLifecycleMutation({
             activeSessionKey: sessionKey,
             agentId,
@@ -267,19 +270,21 @@ export async function prepareCronRunContext(params: {
               {
                 sessionKey,
                 resetBoundary,
-                buildEntry: ({ currentEntry }) => update(currentEntry),
+                buildEntry: ({ currentEntry }) =>
+                  (entry = projectCronSessionEntry(operation, currentEntry)),
               },
             ],
             skipMaintenance: true,
           });
-          return;
+          return entry;
         }
-        // Guarded replace reads the freshest row so lifecycle claims reject stale owners.
-        await patchSessionEntryCore(
+        const { applySessionEntryOperation } =
+          await import("../../config/sessions/session-accessor.sqlite-entry.js");
+        const entry = await applySessionEntryOperation(
           { storePath, sessionKey, agentId },
-          (_entry, context) => update(context.existingEntry),
+          operation,
           {
-            fallbackEntry,
+            fallbackEntry: operation.next,
             replaceEntry: true,
             // The maintenance owner follows later writes through its receipt subscription.
             skipMaintenance: baseSessionMaintenanceStarted || sessionKey !== agentSessionKey,
@@ -289,6 +294,7 @@ export async function prepareCronRunContext(params: {
         if (sessionKey === agentSessionKey) {
           baseSessionMaintenanceStarted = true;
         }
+        return entry;
       };
       const persistSessionEntry = createPersistCronSessionEntry({
         cronSession,

@@ -15,12 +15,12 @@ import type { SidebarCatalogSessionMutationScope } from "./app-sidebar-session-t
 import { CatalogSessionMenu } from "./catalog-session-menu-solid.tsx";
 import { showConfirmDialog } from "./confirm-dialog.ts";
 import { SESSION_MENU_OPEN_EVENT } from "./session-progress-hovercard-target.ts";
-import type { SidebarMenusControllerHost } from "./sidebar-menus-controller-types.ts";
+import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 
 type SidebarCatalogSessionMenuState = CatalogSessionMenuRequest & { x: number; y: number };
 
 type SidebarCatalogMenuHost = Pick<
-  SidebarMenusControllerHost,
+  SidebarMenusOwner,
   | "activeRouteId"
   | "basePath"
   | "getRouteSessionKey"
@@ -29,7 +29,7 @@ type SidebarCatalogMenuHost = Pick<
   | "terminalAvailable"
 > & {
   sessionData: Pick<
-    SidebarMenusControllerHost["sessionData"],
+    SidebarMenusOwner["sessionData"],
     | "beginSessionMutation"
     | "isSessionMutationScopeCurrent"
     | "archiveSessionCatalog"

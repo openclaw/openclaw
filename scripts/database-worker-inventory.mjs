@@ -414,6 +414,7 @@ const reviewedOperations = new Map([
         operations: [
           "readTranscriptExportSnapshotReadOnlySync",
           "readTranscriptExportSnapshotFromDatabase",
+          "readTranscriptExportSnapshotsFromDatabase",
         ],
         evidence:
           "Transcript hydration, memory-entry export, and reset-recall dispatch run in transcript workers. Main-thread buildSessionEntry supplies a worker snapshot for SQLite; its in-process branch has no SQLite identity. Actor projection also receives a supplied snapshot. Other readers retain native SDK callers.",
@@ -2143,15 +2144,10 @@ const reviewedOperations = new Map([
           "seedCanonicalSessionValidation",
           "readPendingCanonicalSessionValidationBatch",
           "compareAndCertifyCanonicalSessionValidationBatch",
+          "hasPendingCanonicalSessionValidation",
         ],
         evidence:
-          "Only session-accessor.sqlite-mutation-worker.runtime.ts:375,280,381 calls these operations in the mutation-worker message handler.",
-      },
-      {
-        tier: "T2",
-        operations: ["hasPendingCanonicalSessionValidation"],
-        evidence:
-          "Native readiness serves startup and Doctor maintenance through startup-migration.ts and session-canonical-validation-readiness.ts. Prepared Gateway row reads consume worker-admitted facts without a native readiness probe; the other caller is the mutation worker's has-pending operation.",
+          "Only session-accessor.sqlite-mutation-worker.runtime.ts calls these operations in the mutation-worker message handler. Startup and Doctor readiness trust the canonical-validation receipt instead of probing pending rows.",
       },
     ],
   ],

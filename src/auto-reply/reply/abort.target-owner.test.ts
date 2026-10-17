@@ -37,6 +37,11 @@ import {
   resolvePhysicalSessionStorePath,
 } from "../../config/sessions/session-store-path.js";
 import {
+  clearAgentRunContext,
+  getAgentRunContext,
+  registerAgentRunContext,
+} from "../../infra/agent-run-registry.js";
+import {
   captureExecRequestOwners,
   withExecRequestTurn,
   type ExecRequestIdentity,
@@ -53,7 +58,7 @@ import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { executeFastAbortRequest } from "./abort-operation.js";
-import { tryFastAbortFromMessage } from "./abort.js";
+import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { handleStopCommand } from "./commands-session-abort.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
@@ -183,6 +188,62 @@ it.each([false, true])(
 );
 
 describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) => {
+  it.each([
+    { waiting: false, abortable: true },
+    { waiting: true, abortable: true },
+    { waiting: true, abortable: false },
+  ])(
+    "reports a captured local wait only for accepted cancellation: %j",
+    async ({ waiting, abortable }) => {
+      const state = await setupStop();
+      const runId = `cancel-wait-${pathKind}`;
+      registerAgentRunContext(runId, { sessionKey, agentId: "main" });
+      const context = expectDefined(getAgentRunContext(runId), "run context");
+      context.localModelWait = waiting ? { requestId: "request-1" } : undefined;
+      const operation = createReplyOperation({
+        sessionKey,
+        sessionId: state.entry.sessionId,
+        resetTriggered: false,
+      });
+      operation.attachBackend({
+        kind: "embedded",
+        runId,
+        cancel: () => {
+          context.localModelWait = undefined;
+        },
+      });
+      if (!abortable) {
+        operation.freezeAbort();
+      }
+      const handle = createEmbeddedRunHandle({ runId, isAbortable: abortable });
+      setActiveEmbeddedRun(state.entry.sessionId, handle, sessionKey, undefined, "main");
+      try {
+        const result =
+          pathKind === "fast"
+            ? await tryFastAbortFromMessage(state)
+            : await handleStopCommand(state.params, true);
+        const text =
+          result && "handled" in result
+            ? formatAbortReplyText(
+                result.stoppedSubagents,
+                result.rejectionReason,
+                result.failedSubagents,
+                result.localModelMayStillBeFinishing,
+              )
+            : result?.reply?.text;
+        expect(text).toBe(
+          abortable
+            ? `⚙️ Agent was aborted.${waiting ? " Cancellation requested; the local model may still be finishing." : ""}`
+            : "Agent reply is already finalizing and can no longer be aborted.",
+        );
+      } finally {
+        operation.complete();
+        clearActiveEmbeddedRun(state.entry.sessionId, handle);
+        clearAgentRunContext(runId);
+      }
+    },
+  );
+
   it.each(["completed", "running", "backend-error", "cleanup-error"] as const)(
     "stops a %s request's command while preserving its independent service",
     async (phase) => {

@@ -121,6 +121,18 @@ describe("isHeartbeatUserMessage", () => {
 });
 
 describe("filterHeartbeatTranscriptArtifacts", () => {
+  it.each(Object.entries(INTERNAL_WAKE_TRANSCRIPT_PROMPTS))(
+    "limits truncated silence to heartbeat context: %s",
+    (kind, marker) => {
+      for (const prompt of [marker, `${MESSAGE_TOOL_DELIVERY_HINTS[0]} ${marker}`]) {
+        const messages = [user(prompt), assistant("no_r"), user("Continue")];
+        expect(filterHeartbeatTranscriptArtifacts(messages)).toEqual(
+          kind === "heartbeat" ? [user("Continue")] : messages,
+        );
+      }
+    },
+  );
+
   it.each([
     "[OpenClaw heartbeat poll]",
     "[OpenClaw exec completion]",

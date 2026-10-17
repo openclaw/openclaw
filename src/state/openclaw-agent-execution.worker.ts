@@ -443,6 +443,7 @@ function openAgentDatabaseBackend(
     "session.turn.commit": loadAgentCompoundOperations,
     "session.lifecycle.reset": loadAgentCompoundOperations,
     "session.lifecycle.project": loadAgentCompoundOperations,
+    "session.lifecycle.deletePlan": loadAgentEntryDeletionOperations,
     "session.lifecycle.delete": loadAgentEntryDeletionOperations,
     "session.agentPurge.prepare": loadAgentPurgeOperations,
     "session.agentPurge.commit": loadAgentPurgeOperations,

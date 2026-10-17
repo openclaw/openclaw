@@ -396,7 +396,6 @@ export async function withCodexAppServerJsonClient<T>(
                 : undefined;
           }
           setPhase("prepare");
-          assertCurrent();
           const scopedRequest: CodexAppServerScopedRequest = async <R>(
             request: Parameters<CodexAppServerScopedRequest>[0],
           ) => {
@@ -414,7 +413,6 @@ export async function withCodexAppServerJsonClient<T>(
               if (sandboxGuard.block) {
                 throw new CodexAppServerScopedRequestRejectedError(sandboxGuard.block);
               }
-              assertCurrent();
               const method = request.method;
               const requestParams = request.requestParams;
               const attemptWaiterFinished =
@@ -440,8 +438,6 @@ export async function withCodexAppServerJsonClient<T>(
                   await params.assertCurrentAsync?.();
                   await request.assertCurrentAsync?.();
                   await sandboxGuard.assertCurrent();
-                  assertCurrent();
-                  request.assertCurrent?.();
                   write();
                 },
               };

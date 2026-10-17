@@ -463,7 +463,7 @@ describe("cron view editor", () => {
     expect(onFormChange).toHaveBeenCalledWith({ triggerEnabled: false });
   });
 
-  it("keeps an incompatible existing script condition trigger visible and explicitly clearable", () => {
+  it("keeps an incompatible existing script condition trigger visible and explicitly clearable", async () => {
     const onFormChange = vi.fn();
     const script = "const result = await agent('check status')";
     const job = createJob("job-script-trigger", {
@@ -492,7 +492,9 @@ describe("cron view editor", () => {
     expect(container.textContent).toContain("Script payloads cannot use condition triggers");
     const payload = getElement(container, "#cron-payload-text", HTMLPreElement);
     expect(payload.textContent).toBe(script);
-    expect(payload.querySelector(".hljs-keyword")?.textContent).toBe("const");
+    await waitForSolid(() =>
+      expect(payload.querySelector(".hljs-keyword")?.textContent).toBe("const"),
+    );
     expect(payload.querySelector(".hljs-string")?.textContent).toBe("'check status'");
     expect(container.querySelector("textarea#cron-payload-text")).toBeNull();
     getButtonByText(container, "Clear trigger").click();

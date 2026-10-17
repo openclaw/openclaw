@@ -212,7 +212,7 @@ export function parseUpdateRecoveryBackupManifest(raw: string): UpdateRecoveryBa
   return manifest;
 }
 
-export function backupManifestSizeError(bytes: number): Error | undefined {
+function backupManifestSizeError(bytes: number): Error | undefined {
   const maxBytes = 1024 * 1024;
   return bytes > maxBytes
     ? new Error(`Backup manifest exceeds ${maxBytes} byte limit.`)

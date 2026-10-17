@@ -1,9 +1,10 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
 import {
   validateJsonSchemaValue,
   type JsonSchemaObject,
 } from "openclaw/plugin-sdk/json-schema-runtime";
+import { sha256Hex as hashText } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { generateSecureToken } from "openclaw/plugin-sdk/secure-random-runtime";
 
 /** OpenAI's webhook profile, not the experimental polling/streaming extensions. */
@@ -98,7 +99,7 @@ export function canonicalArguments(value: Record<string, unknown>): string {
 }
 
 export function identityHash(parts: readonly string[]): string {
-  return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
+  return hashText(JSON.stringify(parts));
 }
 
 export function createSigningSecret(): string {

@@ -5,7 +5,7 @@ import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { installTestLinkReader } from "../test-helpers/link-reader.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { linkReaderHovercardBootstrap } from "./link-reader-hovercard-registration.ts";
-import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
+import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 import { Kbd } from "./solid/kbd.tsx";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import {
@@ -662,7 +662,7 @@ describe("title tooltips", () => {
     vi.advanceTimersByTime(150);
     await expectOpenCount(1);
 
-    const hovercard = new PortaledHovercardController(() => hovercard.reset());
+    const hovercard = createPortaledHovercardOwner(() => hovercard.reset());
     hovercard.markTrigger(trigger);
     await Promise.resolve();
     await commitTooltip(tooltip);

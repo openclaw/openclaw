@@ -53,7 +53,7 @@ function Diff(props: { patch: string; filename: string }) {
                 : line.startsWith("@@")
                   ? "hunk"
                   : "context";
-            return <span class={"lr-diff-line lr-diff-line--" + kind}>{line}</span>;
+            return <span class={["lr-diff-line", `lr-diff-line--${kind}`]}>{line}</span>;
           }}
         </For>
       </code>
@@ -181,7 +181,7 @@ function ChecksContent(props: {
     props.checks.url ? documentUrl(props.checks.url, props.base)?.href : undefined;
   return (
     <details
-      class={"lr-checks lr-checks--" + props.checks.state}
+      class={["lr-checks", `lr-checks--${props.checks.state}`]}
       data-reader-section="checks"
       tabindex={-1}
       open={props.checks.state === "failure"}
@@ -216,7 +216,7 @@ function ChecksContent(props: {
         >
           <span class="lr-checks-meter" aria-hidden="true">
             <For each={props.checks.items}>
-              {(item) => <span class={"lr-check-segment lr-check-segment--" + item.state} />}
+              {(item) => <span class={["lr-check-segment", `lr-check-segment--${item.state}`]} />}
             </For>
           </span>
         </Show>
@@ -226,7 +226,7 @@ function ChecksContent(props: {
           {(item) => {
             const url = () => (item.url ? documentUrl(item.url, props.base)?.href : undefined);
             return (
-              <li class={"lr-check lr-check--" + item.state}>
+              <li class={["lr-check", `lr-check--${item.state}`]}>
                 <span class="lr-check-symbol" role="img" aria-label={t(checkLabels[item.state])}>
                   <Icon name={checkIcons[item.state]} />
                 </span>
@@ -307,7 +307,7 @@ function ListSection(props: {
   return (
     <section
       aria-label={t(`linkReader.${props.kind}`)}
-      class={`lr-${props.kind}`}
+      class={{ "lr-files": props.kind === "files", "lr-comments": props.kind === "comments" }}
       id={props.kind === "files" ? "files" : undefined}
       data-reader-section={props.kind}
       tabindex={-1}
@@ -433,7 +433,9 @@ export function LinkReaderContent(props: {
         <h1>{props.detail.title}</h1>
         <div class="lr-meta lr-item-meta">
           <Show when={props.detail.badge}>
-            {(badge) => <span class={"lr-state lr-state--" + badge().tone}>{badge().label}</span>}
+            {(badge) => (
+              <span class={["lr-state", `lr-state--${badge().tone}`]}>{badge().label}</span>
+            )}
           </Show>{" "}
           <Show when={props.detail.author}>
             {(author) => (

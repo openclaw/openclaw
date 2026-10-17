@@ -4,6 +4,7 @@ import {
   dispatchGatewayMethod,
   type GatewayMethodDispatchError,
 } from "openclaw/plugin-sdk/gateway-method-runtime";
+import { sendJsonNoStore as sendJson } from "openclaw/plugin-sdk/http-response-runtime";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -51,13 +52,6 @@ function rpcHttpStatus(response: RpcResponse): number {
     default:
       return 500;
   }
-}
-
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  res.statusCode = status;
-  res.setHeader("Cache-Control", "no-store");
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(body));
 }
 
 function sendError(res: ServerResponse, status: number, error: { type: string; message: string }) {

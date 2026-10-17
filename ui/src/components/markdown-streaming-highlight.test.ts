@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
+
+beforeAll(async () => {
+  await waitForSolid(() =>
+    expect(toSanitizedMarkdownHtml("```ts\nconst ready = true;\n```")).toContain("hljs-keyword"),
+  );
+});
 
 function htmlFragment(html: string): HTMLElement {
   const container = document.createElement("div");

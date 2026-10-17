@@ -581,6 +581,7 @@ export function createTestChatPane(params: {
     sessions: context.sessions,
     sessionsError: null,
     sessionsLoading: false,
+    settings: loadSettings(),
     sidebarContent: null,
     sidebarFocusPanelId: "",
     sidebarFocusVersion: 0,

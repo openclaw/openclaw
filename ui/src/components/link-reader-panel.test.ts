@@ -8,7 +8,7 @@ import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid as waitForFast } from "../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { LINK_READER_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
-import "./link-reader-panel.ts";
+import "./link-reader-panel.tsx";
 
 type Panel = HTMLElementTagNameMap["openclaw-link-reader-panel"];
 const storageKey = "openclaw.link-reader.panel.v1";

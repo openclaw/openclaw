@@ -227,6 +227,47 @@ export function recordOperationTimingEvent(
           evt.responseBytes,
           RESPONSE_BYTE_BUCKETS,
         );
+        if (evt.responseBytes !== undefined && evt.sessionsList) {
+          const sessions = evt.sessionsList;
+          store.counter(
+            "openclaw_sessions_list_response_bytes_total",
+            "Encoded successful session list response bytes by request shape and row outcome.",
+            {
+              client_kind: sessions.clientKind,
+              source: sessions.source,
+              caller_source: sessions.callerSource,
+              row_mode: sessions.rowMode,
+              filter: sessions.filter,
+              rows_outcome: sessions.rowsOutcome,
+            },
+            evt.responseBytes,
+          );
+        }
+        if (evt.chatHistory) {
+          const history = evt.chatHistory;
+          const historyLabels = {
+            client_kind: history.clientKind,
+            source: history.source,
+            shape: history.shape,
+            limit_bucket: history.limitBucket,
+            outcome: history.outcome,
+          };
+          if (evt.firstResponse !== false) {
+            store.counter(
+              "openclaw_chat_history_requests_total",
+              "Successful chat history requests by request shape and response outcome.",
+              historyLabels,
+            );
+          }
+          if (evt.responseBytes !== undefined) {
+            store.counter(
+              "openclaw_chat_history_response_bytes_total",
+              "Encoded successful chat history response bytes by request shape and response outcome.",
+              historyLabels,
+              evt.responseBytes,
+            );
+          }
+        }
         if (evt.firstResponse === false) {
           return;
         }

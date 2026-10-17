@@ -678,13 +678,24 @@ describe("official external plugin catalog", () => {
     }
   });
 
-  it.each([
+  it.each<[string, string, string?]>([
     ["2026-06-21T23:59:59.000Z", "expiresAt must be later than generatedAt"],
     ["2026-02-30T00:00:00.000Z", "requires a valid expiresAt value"],
-  ])("rejects invalid signed feed expiry %s", async (expiresAt, error) => {
-    const signed = signedHostedCatalogFeed({
-      feed: hostedCatalogFeed({ sequence: 8, pluginName: "@openclaw/invalid-expiry", expiresAt }),
+    [
+      "2026-06-22T00:01:00.000Z",
+      "expiresAt must be later than generatedAt",
+      " 2026-06-22T00:02:00.000Z ",
+    ],
+  ])("rejects invalid signed feed expiry %s", async (expiresAt, error, generatedAt) => {
+    const feed = hostedCatalogFeed({
+      sequence: 8,
+      pluginName: "@openclaw/invalid-expiry",
+      expiresAt,
     });
+    if (generatedAt !== undefined) {
+      feed.generatedAt = generatedAt;
+    }
+    const signed = signedHostedCatalogFeed({ feed });
     const result = await loadSigned(signed, { now: () => new Date("2026-06-22T00:00:30.000Z") });
     expectSource(result, "bundled-fallback");
     expect(result.entries).toEqual([]);

@@ -463,7 +463,7 @@ suite.define(() => {
     });
   });
 
-  it("searches a crowded agent menu without losing keyboard navigation or actions", async () => {
+  it("keeps a crowded agent menu scrollable and keyboard accessible without search", async () => {
     await suite.withPage(
       {
         ...desktop,
@@ -491,9 +491,9 @@ suite.define(() => {
         const trigger = sidebar.locator(".sidebar-agent-card__main");
         await trigger.click();
         const menu = sidebar.locator(".sidebar-agent-menu");
-        const search = menu.getByRole("searchbox", { name: "Find an agent…" });
         const rows = menu.locator('.sidebar-agent-menu__agent-list > [role^="menuitem"]');
         await expectCount(rows, 41);
+        await expectCount(menu.getByRole("searchbox"), 0);
         await menu.evaluate(async (dropdown) => {
           await document.fonts.ready;
           await Promise.all(dropdown.getAnimations().map((animation) => animation.finished));
@@ -514,33 +514,18 @@ suite.define(() => {
         });
         expect(geometry).toMatchObject({ scrolls: true, actionsFit: true });
         expect(geometry.heights.every((height) => height === 56)).toBe(true);
-        await page.keyboard.press("Home");
-        await pressAndExpectFocus(page, "ArrowUp", search);
-        await page.keyboard.type("support");
-        await expectCount(rows, 2);
         expect(await rows.locator(".agent-select__option-description").allTextContents()).toEqual([
           "agent-1",
           "agent-2",
         ]);
-        await search.press("Home");
-        await expectFocused(search);
-        await search.fill("no-such-agent");
-        await expect.poll(() => menu.getByRole("status").textContent()).toBe("No matching agents");
-        expect(await menu.locator(':scope > [role^="menuitem"]').count()).toBe(4);
-        await search.fill("agent-39");
-        await expectCount(rows, 1);
-        expect(
-          await rows
-            .first()
-            .getByRole("button", { name: /Pin to switcher/ })
-            .count(),
-        ).toBe(1);
-        await search.press("ArrowDown");
-        await expectFocused(rows.first());
+        const lastAgent = menu.locator('[data-value="agent:agent-39"]');
+        expect(await lastAgent.getByRole("button", { name: /Pin to switcher/ }).count()).toBe(1);
+        await lastAgent.focus();
+        await expectFocused(lastAgent);
         await page.keyboard.press("Enter");
         await expectPath(page, controlUiSessionPath("agent:agent-39:main"));
         await trigger.click();
-        await expect.poll(() => search.inputValue()).toBe("");
+        await expectCount(menu.getByRole("searchbox"), 0);
         const active = menu.locator('[aria-current="true"]');
         await expectInScrollPort(active);
         await page.keyboard.press("Escape");

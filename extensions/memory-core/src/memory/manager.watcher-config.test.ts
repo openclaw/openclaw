@@ -17,6 +17,15 @@ import { runInMemoryTestBackgroundContext } from "./background-context.test-supp
 import { MemoryIndexManager } from "./manager.js";
 import * as settling from "./watch-settle.js";
 
+// Keep owner fault injection in this process; real worker transport has separate coverage.
+vi.mock("./local-file-watcher.js", async (original) => {
+  const { MemoryFileWatcher } = await import("./file-watcher.js");
+  return {
+    ...(await original<typeof import("./local-file-watcher.js")>()),
+    LocalMemoryFileWatcher: MemoryFileWatcher,
+  };
+});
+
 vi.mock("./watch-settle.js", async (original) => ({
   ...(await original<typeof import("./watch-settle.js")>()),
 }));

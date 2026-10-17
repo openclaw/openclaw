@@ -87,6 +87,7 @@ export function createAgentViewTestProps(
     overview: {
       identityDraft: { name: null, emoji: null, avatar: null },
       identitySaving: false,
+      identityScope: 0,
       identityError: null,
       modelCatalog: [],
       decisionModels: [],
@@ -98,6 +99,8 @@ export function createAgentViewTestProps(
       onModelCatalogOpen: () => undefined,
       onIdentityFieldChange: () => undefined,
       onIdentityAvatarSelect: () => undefined,
+      onIdentityAvatarSet: () => undefined,
+      onIdentityAvatarGenerate: async () => ({ name: "", description: "", svg: "" }),
       onIdentitySave: () => undefined,
     },
     agentSkills: {

@@ -141,7 +141,7 @@ async function withDefaultLoader(provider: typeof fetch, run: (f: Fixture) => Pr
 
 function frames(socket: ReturnType<typeof createGatewayWsTestSocket>) {
   return socket.send.mock.calls.flatMap(([data]) => {
-    const frame: unknown = JSON.parse(data);
+    const frame: unknown = JSON.parse(data.toString());
     return isRecord(frame) && frame.event === EVENT ? [frame] : [];
   });
 }

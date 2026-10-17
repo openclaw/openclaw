@@ -24,18 +24,12 @@ import {
 } from "./diagnostic-liveness.js";
 import {
   emitDiagnosticMemorySample,
-  resetDiagnosticMemoryForTest,
   type EmitDiagnosticMemorySample,
 } from "./diagnostic-memory.js";
 import { emitMessageProcessedDiagnosticEvent } from "./diagnostic-message-content.js";
-import {
-  getCurrentDiagnosticPhase,
-  getRecentDiagnosticPhases,
-  resetDiagnosticPhasesForTest,
-} from "./diagnostic-phase.js";
+import { getCurrentDiagnosticPhase, getRecentDiagnosticPhases } from "./diagnostic-phase.js";
 import {
   getDiagnosticSessionActivitySnapshot,
-  resetDiagnosticRunActivityForTest,
   resolveRunStaleThresholdMs,
   startDiagnosticRunActivityTracking,
   stopDiagnosticRunActivityTracking,
@@ -46,7 +40,6 @@ import {
   getLastDiagnosticActivityAt,
   logMessageQueuedWithBacklogPolicy,
   markDiagnosticActivity as markActivity,
-  resetDiagnosticActivityForTest,
 } from "./diagnostic-runtime.js";
 import {
   classifySessionAttention,
@@ -57,7 +50,6 @@ import {
 import { logWithSessionDiagnosticContext } from "./diagnostic-session-context.js";
 import {
   requestStuckSessionRecovery,
-  resetDiagnosticSessionRecoveryCoordinatorForTest,
   type RecoverStuckSession,
 } from "./diagnostic-session-recovery-coordinator.js";
 import type {
@@ -70,7 +62,6 @@ import {
   getDiagnosticSessionState,
   isDiagnosticSessionStateCurrent,
   pruneDiagnosticSessionStates,
-  resetDiagnosticSessionStateForTest,
   touchDiagnosticSessionState,
   type SessionRef,
   type SessionState,
@@ -81,7 +72,6 @@ import {
   uninstallDiagnosticStabilityFatalHook,
 } from "./diagnostic-stability-bundle.js";
 import {
-  resetDiagnosticStabilityRecorderForTest,
   startDiagnosticStabilityRecorder,
   stopDiagnosticStabilityRecorder,
 } from "./diagnostic-stability.js";
@@ -1001,27 +991,4 @@ export function stopGatewayDiagnosticHeartbeat() {
   stopDiagnosticObservations();
 }
 
-function resetDiagnosticStateForTest(): void {
-  stopGatewayDiagnosticHeartbeat();
-  resetDiagnosticSessionRecoveryCoordinatorForTest();
-  resetDiagnosticSessionStateForTest();
-  resetDiagnosticActivityForTest();
-  resetDiagnosticRunActivityForTest();
-  webhookStats.received = 0;
-  webhookStats.processed = 0;
-  webhookStats.errors = 0;
-  resetDiagnosticMemoryForTest();
-  resetDiagnosticPhasesForTest();
-  resetDiagnosticStabilityRecorderForTest();
-}
-
-const testing = {
-  resetDiagnosticStateForTest,
-  resolveStuckSessionAbortMs,
-  resolveStuckSessionWarnMs,
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.diagnosticTestApi")] = testing;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

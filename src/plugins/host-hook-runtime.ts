@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
@@ -22,11 +21,7 @@ import type { PluginRegistry } from "./registry-types.js";
 type PluginRunContextNamespaces = Map<string, PluginJsonValue>;
 type PluginRunContextByPlugin = Map<string, PluginRunContextNamespaces>;
 type PluginRunContexts = Map<string, PluginRunContextByPlugin>;
-type PluginRunContextCleanup = {
-  source: PluginRunContexts;
-  contexts: PluginRunContexts;
-  owners: ReadonlySet<PluginRunContextNamespaces>;
-};
+
 type PluginAgentEventSubscriptionContext = Parameters<
   PluginAgentEventSubscriptionRegistration["handle"]
 >[1];
@@ -60,15 +55,6 @@ function getPluginHostRuntimeState(): PluginHostRuntimeState {
     closedRunIds: new Set(),
     terminalEventCleanupExpiredRunIds: new Set(),
   }));
-}
-
-const runContextCleanup = resolveGlobalSingleton(
-  Symbol.for("openclaw.pluginRunContextCleanup"),
-  () => new AsyncLocalStorage<PluginRunContextCleanup>(),
-);
-
-function getPluginRunContexts(): PluginRunContexts {
-  return runContextCleanup.getStore()?.contexts ?? getPluginHostRuntimeState().runContextByRunId;
 }
 
 function rememberBoundedRunId(runIds: Set<string>, runId: string): void {
@@ -157,11 +143,10 @@ export function setPluginRunContext(params: {
   if (params.patch.value === undefined || !isPluginJsonValue(params.patch.value)) {
     return false;
   }
-  const contexts = getPluginRunContexts();
+  const contexts = getPluginHostRuntimeState().runContextByRunId;
   const byPlugin = contexts.get(runId) ?? new Map<string, PluginRunContextNamespaces>();
   contexts.set(runId, byPlugin);
-  // A new write owns its namespace map, even when it repeats the same value.
-  const namespaces = new Map(byPlugin.get(params.pluginId));
+  const namespaces = byPlugin.get(params.pluginId) ?? new Map<string, PluginJsonValue>();
   byPlugin.set(params.pluginId, namespaces);
   namespaces.set(namespace, structuredClone(params.patch.value));
   return true;
@@ -177,7 +162,8 @@ export function getPluginRunContext(params: {
   if (!runId || !namespace) {
     return undefined;
   }
-  const value = getPluginRunContexts().get(runId)?.get(params.pluginId)?.get(namespace);
+  const contexts = getPluginHostRuntimeState().runContextByRunId;
+  const value = contexts.get(runId)?.get(params.pluginId)?.get(namespace);
   return value === undefined ? undefined : structuredClone(value);
 }
 
@@ -187,50 +173,23 @@ type PluginRunContextSelection = {
   namespace?: string;
 };
 
-function capturePluginRunContextCleanup(): PluginRunContextCleanup {
-  const current = runContextCleanup.getStore();
-  if (current) {
-    return current;
-  }
-  const source = getPluginRunContexts();
-  return {
-    source,
-    contexts: new Map(Array.from(source, ([runId, byPlugin]) => [runId, new Map(byPlugin)])),
-    owners: new Set(
-      Array.from(source.values()).flatMap((byPlugin) => Array.from(byPlugin.values())),
-    ),
-  };
-}
-
-/** Capture before publication or drains can replace the retiring namespace bindings. */
+/** Retained for the public test-runtime cleanup-scope option. */
 export function preparePluginRunContextCleanup(): <T>(run: () => T) => T {
-  const scope = capturePluginRunContextCleanup();
-  return (run) => runContextCleanup.run(scope, run);
+  return (run) => run();
 }
 
-/** Cleanup owns a private view across awaits; later serving writes keep their own bindings. */
 export function withPluginRunContextCleanup<T>(
   params: PluginRunContextSelection,
   run: (clear: () => void) => T,
 ): T {
-  const scope = capturePluginRunContextCleanup();
-  return runContextCleanup.run(scope, () =>
-    run(() => clearPluginRunContextState(params, scope.owners, scope.source)),
-  );
+  return run(() => clearPluginRunContext(params));
 }
 
 export function clearPluginRunContext(params: PluginRunContextSelection): void {
-  clearPluginRunContextState(params);
-}
-
-function clearPluginRunContextState(
-  params: PluginRunContextSelection,
-  owners?: ReadonlySet<PluginRunContextNamespaces>,
-  contexts = getPluginRunContexts(),
-): void {
   // Empty namespaces select all entries; set/get cannot address an empty key.
   const namespaceFilter = normalizePluginHostHookId(params.namespace) || undefined;
   const state = getPluginHostRuntimeState();
+  const contexts = state.runContextByRunId;
   const runIds = params.runId ? [params.runId] : [...contexts.keys()];
   for (const runId of runIds) {
     const byPlugin = contexts.get(runId);
@@ -239,14 +198,12 @@ function clearPluginRunContextState(
     }
     const pluginIds = params.pluginId ? [params.pluginId] : [...byPlugin.keys()];
     for (const pluginId of pluginIds) {
-      let namespaces = byPlugin.get(pluginId);
-      if (!namespaces || (owners && !owners.has(namespaces))) {
+      const namespaces = byPlugin.get(pluginId);
+      if (!namespaces) {
         continue;
       }
       if (namespaceFilter !== undefined) {
-        namespaces = new Map(namespaces);
         namespaces.delete(namespaceFilter);
-        byPlugin.set(pluginId, namespaces);
       }
       if (namespaceFilter === undefined || namespaces.size === 0) {
         byPlugin.delete(pluginId);
@@ -256,12 +213,7 @@ function clearPluginRunContextState(
       contexts.delete(runId);
     }
   }
-  if (
-    contexts === state.runContextByRunId &&
-    params.runId &&
-    !params.pluginId &&
-    namespaceFilter === undefined
-  ) {
+  if (params.runId && !params.pluginId && namespaceFilter === undefined) {
     state.pendingAgentEventHandlersByRunId.delete(params.runId);
   }
 }
@@ -425,12 +377,8 @@ export function publishPluginSessionSchedulerJobs(registry: PluginRegistry): voi
     if (registration.generation !== undefined) {
       continue;
     }
+    registration.generation = state.nextSchedulerJobGeneration;
     registerPluginSessionSchedulerJob({ ...registration, ownerRegistry: registry });
-    registration.generation = getPluginSessionSchedulerJobGeneration({
-      pluginId: registration.pluginId,
-      jobId: registration.job.id,
-      sessionKey: registration.job.sessionKey,
-    });
   }
 }
 

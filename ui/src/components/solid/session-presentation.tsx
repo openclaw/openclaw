@@ -339,6 +339,7 @@ export type TeamSessionSlotsProps = {
   childCount: number;
   groupConflicts?: number;
   runVisibility?: SessionRunVisibility;
+  statusOnly?: boolean;
 };
 
 export function TeamSessionSlots(props: TeamSessionSlotsProps) {
@@ -355,13 +356,14 @@ export function TeamSessionSlots(props: TeamSessionSlotsProps) {
       summary().attention.kind !== "none" ||
       summary().failed ||
       Boolean(props.groupConflicts) ||
-      summary().active > 0 ||
-      Boolean(idleChild()),
+      (!props.statusOnly && (summary().active > 0 || Boolean(idleChild()))),
   );
   return (
-    <Show when={props.childCount > 0 || summary().unread > 0 || hasState()}>
+    <Show
+      when={(!props.statusOnly && (props.childCount > 0 || summary().unread > 0)) || hasState()}
+    >
       <span class="sidebar-session-team-state">
-        <Show when={props.childCount > 0 || summary().unread > 0}>
+        <Show when={!props.statusOnly && (props.childCount > 0 || summary().unread > 0)}>
           <span class="sidebar-session-team-state__counts">
             <Show when={props.childCount > 0}>
               <span
@@ -412,7 +414,7 @@ export function TeamSessionSlots(props: TeamSessionSlotsProps) {
                   <Icon name="globe" />
                 </span>
               </Match>
-              <Match when={summary().active > 0}>
+              <Match when={!props.statusOnly && summary().active > 0}>
                 <SessionGlyph
                   content={undefined}
                   running={true}
@@ -420,7 +422,9 @@ export function TeamSessionSlots(props: TeamSessionSlotsProps) {
                   runVisibility={props.runVisibility}
                 />
               </Match>
-              <Match when={idleChild()}>{(row) => <SessionIdleState session={row()} />}</Match>
+              <Match when={!props.statusOnly && idleChild()}>
+                {(row) => <SessionIdleState session={row()} />}
+              </Match>
             </Switch>
           </span>
         </Show>

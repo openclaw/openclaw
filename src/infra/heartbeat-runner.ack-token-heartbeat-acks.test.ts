@@ -157,20 +157,15 @@ describe("heartbeat acknowledgements", () => {
       sends: 1,
       sentText: "HEARTBEAT_OK",
     },
-    {
-      name: "truncated NO_REPLY final",
-      payload: { text: "NO_R" },
-      options: { telegram: true },
-      sends: 1,
-      sentText: "NO_R",
-    },
-    {
-      name: "truncated NO_REPLY acknowledgement",
-      payload: { text: "NO_RE" },
-      options: { showOk: true },
-      sends: 1,
-      sentText: "NO_RE",
-    },
+    ...["NO_R", "NO_RE", "no_r"].flatMap((text) =>
+      [false, true].map((showOk) => ({
+        name: `truncated ${text} heartbeat (showOk=${showOk})`,
+        payload: { text },
+        options: { telegram: !showOk, showOk },
+        sends: showOk ? 1 : 0,
+        sentText: showOk ? "HEARTBEAT_OK" : undefined,
+      })),
+    ),
     {
       name: "exec summary with trailing acknowledgement",
       payload: { text: "Command completed: uploaded report.txt\nHEARTBEAT_OK" },

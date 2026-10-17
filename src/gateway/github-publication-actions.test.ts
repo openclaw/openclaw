@@ -90,7 +90,7 @@ async function fixture(backend: "local" | "repository" = "local") {
   };
   const writes: { action: string; input: Record<string, unknown> }[] = [];
   let beforeRead: (() => Promise<void>) | undefined;
-  let rejectMerge = false;
+  let rejectMerge: ReturnType<typeof commandResult> | Error | undefined;
   let rejectClose = false;
   let rejectEdit = false;
   let loseResponse = false;
@@ -109,7 +109,10 @@ async function fixture(backend: "local" | "repository" = "local") {
     } else if (argv.some((arg) => arg.endsWith("/merge"))) {
       writes.push({ action: "merge", input: JSON.parse(options!.input!) });
       if (rejectMerge) {
-        return commandResult('{"message":"Required checks have not passed"}', 1);
+        if (rejectMerge instanceof Error) {
+          throw rejectMerge;
+        }
+        return rejectMerge;
       }
       state.merged = true;
       state.state = "closed";
@@ -189,8 +192,13 @@ async function fixture(backend: "local" | "repository" = "local") {
     onRead(callback: () => Promise<void>) {
       beforeRead = callback;
     },
-    rejectMerge() {
-      rejectMerge = true;
+    rejectMerge(
+      result: ReturnType<typeof commandResult> | Error = commandResult(
+        '{"message":"Required checks have not passed"}',
+        1,
+      ),
+    ) {
+      rejectMerge = result;
     },
     rejectEdit() {
       rejectEdit = true;
@@ -398,7 +406,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
         title: "New title",
         expectedTitle: f.state.title,
       }),
-    ).rejects.toThrow("not confirmed the metadata edit");
+    ).rejects.toThrow(/not confirmed the metadata edit.*Resource not accessible/u);
     expect(f.writes).toEqual([{ action: "edit", input: { title: "New title" } }]);
     expect((await f.invoke("guest", { action: "edit" })).details).toMatchObject({
       title: f.state.title,
@@ -482,7 +490,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
     const f = await fixture();
     f.rejectClose();
     await expect(f.invoke("admin", { action: "close", ...f.expected })).rejects.toThrow(
-      "GitHub has not confirmed close",
+      /GitHub has not confirmed close.*Resource not accessible/u,
     );
     expect((await f.invoke("admin", { action: "inspect" })).details).toMatchObject({
       state: "draft",
@@ -578,7 +586,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
     f.rejectMerge();
     await expect(
       f.invoke("admin", { action: "merge", ...f.expected, mergeMethod: "merge" }),
-    ).rejects.toThrow("required reviews, checks");
+    ).rejects.toThrow(/required reviews, checks.*gh api exit 1.*Required checks have not passed/u);
     expect(f.state.merged).toBe(false);
     expect(f.writes).toHaveLength(1);
     expect(f.writes[0]?.input).toEqual({ sha: f.publication.headCommit, merge_method: "merge" });
@@ -586,6 +594,44 @@ describe("session PR actions through the agent tool and registered Gateway metho
       "required",
     );
   });
+
+  it.each(["stderr", "transport", "exit zero", "readback", "changed head"])(
+    "reports a bounded, redacted %s failure without retrying",
+    async (kind) => {
+      const f = await fixture();
+      f.state.draft = false;
+      const token = `ghp_${"a".repeat(36)}`;
+      const detail = `HTTP 403: merge refused. Authorization: Bearer ${token}\n${"x".repeat(3000)}`;
+      f.rejectMerge(
+        kind === "transport"
+          ? new Error(detail)
+          : kind === "stderr"
+            ? { ...commandResult("", 1), stderr: Buffer.from(detail) }
+            : commandResult(detail),
+      );
+      if (kind === "readback" || kind === "changed head") {
+        let reads = 0;
+        f.onRead(async () => {
+          if (++reads === 2) {
+            if (kind === "readback") {
+              throw new Error("PR state readback unavailable");
+            }
+            f.state.head.sha = "f".repeat(40);
+          }
+        });
+      }
+      const error = await f
+        .invoke("admin", { action: "merge", ...f.expected, mergeMethod: "squash" })
+        .catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(Error);
+      expect(String(error)).toContain("HTTP 403: merge refused");
+      expect(String(error)).toContain("Command result:");
+      expect(String(error)).not.toContain(token);
+      expect(String(error).length).toBeLessThan(2300);
+      expect(f.writes).toHaveLength(1);
+      expect(f.state.merged).toBe(false);
+    },
+  );
 
   it("uses an explicitly selected publishing child and rejects an unrelated target", async () => {
     const f = await fixture();

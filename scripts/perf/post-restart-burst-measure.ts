@@ -40,6 +40,7 @@ const { values } = parseArgs({
     seconds: { type: "string", default: "300" },
     "poll-ms": { type: "string", default: "5000" },
     "writer-reads": { type: "boolean", default: false },
+    "worktree-churn": { type: "boolean", default: false },
     "cheap-handlers": { type: "boolean", default: false },
     "transcript-reads": { type: "boolean", default: false },
     "sqlite-queues": { type: "boolean", default: false },
@@ -59,12 +60,27 @@ const clientCount = integer(values.clients, "--clients");
 const runCount = integer(values.runs, "--runs");
 const durationMs = integer(values.seconds, "--seconds") * 1000;
 const pollMs = integer(values["poll-ms"], "--poll-ms");
+if (values["worktree-churn"] && durationMs < 180_000) {
+  throw new Error(
+    "--worktree-churn requires --seconds at least 180 for a separate post-reconnect burst",
+  );
+}
 const root = path.resolve(values["state-dir"]);
 const fixture: unknown = JSON.parse(
   readFileSync(path.join(root, "team-shape-summary.json"), "utf8"),
 );
 if (!isRecord(fixture) || fixture.format !== "openclaw-team-shape-v1") {
   throw new Error("--state-dir must contain a generated team-shape fixture; never use live state");
+}
+const worktreeProject = Array.isArray(fixture.projectWorktrees)
+  ? fixture.projectWorktrees[0]
+  : undefined;
+const worktreeProjectId =
+  isRecord(worktreeProject) && typeof worktreeProject.projectId === "string"
+    ? worktreeProject.projectId
+    : undefined;
+if (values["worktree-churn"] && !worktreeProjectId) {
+  throw new Error("Worktree churn requires a seeded project");
 }
 const output = path.join(root, `post-restart-burst-${Date.now()}`);
 mkdirSync(output);
@@ -80,7 +96,12 @@ cfg.plugins = {
   enabled: true,
   entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
 };
-if (values["writer-reads"] || values["cheap-handlers"] || values["transcript-reads"]) {
+if (
+  values["writer-reads"] ||
+  values["cheap-handlers"] ||
+  values["transcript-reads"] ||
+  values["worktree-churn"]
+) {
   cfg.diagnostics = { ...cfg.diagnostics, enabled: true };
   cfg.plugins.entries["diagnostics-prometheus"] = { enabled: true };
 }
@@ -321,8 +342,15 @@ if (isMainThread) {
       const kind = body.input.kind;
       const request = body.input.request?.kind;
       if (typeof kind === 'string' && /^[a-z-]{1,80}$/.test(kind) && (taskCounts.has(kind) || taskCounts.size < 128)) {
-        const label = kind === 'history-page' && typeof request === 'string' && /^[a-z-]{1,80}$/.test(request)
-          ? kind + ':' + request : kind;
+        const input = body.input;
+        const label = kind === 'session-exact-entries'
+          ? [kind, input.projection ?? 'full', input.selection?.kind ?? 'keys',
+              input.snapshotFields?.length === 0 ? 'metadata' : 'snapshots',
+              input.transcript ? 'transcript' : 'entry',
+              input.includeMembers ? 'members' : 'no-members',
+              input.includeAuthorization ? 'authorization' : 'no-authorization'].join(':')
+          : kind === 'history-page' && typeof request === 'string' && /^[a-z-]{1,80}$/.test(request)
+            ? kind + ':' + request : kind;
         taskCounts.set(label, (taskCounts.get(label) ?? 0) + 1);
       }
     }
@@ -663,9 +691,10 @@ async function rpc(
   client: ReturnType<typeof createGatewayWsClient>,
   method: string,
   params: unknown,
+  timeoutMs = 360_000,
 ) {
   assertAlive();
-  const reply = await client.request(method, params, 360_000);
+  const reply = await client.request(method, params, timeoutMs);
   assertAlive();
   if (!reply.ok) {
     throw new Error(`${method}: ${JSON.stringify(reply.error)}`);
@@ -840,6 +869,164 @@ async function connect(index: number) {
     throw error;
   } finally {
     clearTimeout(challengeTimer);
+  }
+}
+async function scrapeWriterMetrics(name: string) {
+  const response = await fetch(`http://127.0.0.1:${port}/api/diagnostics/prometheus`, {
+    headers: { authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) {
+    throw new Error(`Diagnostic metrics scrape failed: ${response.status}`);
+  }
+  const metrics = await response.text();
+  writeFileSync(path.join(output, `${name}.prom`), metrics);
+  const byClass: Record<string, { count: number; waitSeconds: number }> = {};
+  for (const line of metrics.split("\n")) {
+    const match = /^openclaw_worker_queue_wait_seconds_(sum|count)\{([^}]+)\} ([\d.e+-]+)$/.exec(
+      line,
+    );
+    const labels = match?.[2];
+    if (!match || !labels?.includes('kind="sqlite_writer"')) {
+      continue;
+    }
+    const requestClass = /request_class="([^"]+)"/.exec(labels)?.[1];
+    if (!requestClass) {
+      continue;
+    }
+    const entry = (byClass[requestClass] ??= { count: 0, waitSeconds: 0 });
+    entry[match[1] === "count" ? "count" : "waitSeconds"] = Number(match[3]);
+  }
+  return { elapsedMs: performance.now() - restartAt, byClass };
+}
+async function settleWorktreeOperations<T>(operations: Promise<T>[]): Promise<T[]> {
+  const results = await Promise.allSettled(operations);
+  return results.map((result) => {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+    return result.value;
+  });
+}
+async function settleArchivedWorktreeCleanup(client: ReturnType<typeof createGatewayWsClient>) {
+  const deadline = performance.now() + 60_000;
+  let jobId: string | undefined;
+  for (let firstPoll = true; performance.now() < deadline; firstPoll = false) {
+    // Receipt polls consume the same 30-per-minute control-plane budget as GC requests.
+    if (!firstPoll) {
+      await delay(2_100);
+    }
+    if (performance.now() >= deadline) {
+      break;
+    }
+    let receipt: unknown;
+    try {
+      receipt = await rpc(
+        client,
+        "worktrees.gc",
+        jobId ? { jobId } : {},
+        Math.max(1, deadline - performance.now()),
+      );
+    } catch (error) {
+      // Archive notifications can queue a follow-up pass that replaces the latest receipt.
+      if (error instanceof Error && error.message.includes("only the latest job is retained")) {
+        jobId = undefined;
+        continue;
+      }
+      throw error;
+    }
+    if (performance.now() >= deadline) {
+      break;
+    }
+    if (!isRecord(receipt) || typeof receipt.jobId !== "string") {
+      throw new Error("worktrees.gc did not return a cleanup receipt");
+    }
+    if (receipt.state === "failed" || receipt.outcome === "partial") {
+      throw new Error(`Archive cleanup failed: ${JSON.stringify(receipt)}`);
+    }
+    if (receipt.state === "completed") {
+      return receipt;
+    }
+    jobId = receipt.jobId;
+  }
+  throw new Error("Archive cleanup did not settle within 60 seconds");
+}
+async function measureWorktreeChurn() {
+  await delay(Math.max(0, 120_000 - (performance.now() - restartAt)));
+  const firstTwoMinutes = await scrapeWriterMetrics("worktree-first-120s");
+  const client = await connect(clientCount);
+  try {
+    const before = await scrapeWriterMetrics("worktree-burst-before");
+    const sessions = await settleWorktreeOperations(
+      Array.from({ length: 12 }, async (_, index) => {
+        const key = `agent:main:worktree-burst-${cohort}-${index}`;
+        const created = await rpc(client, "sessions.create", {
+          key,
+          projectId: worktreeProjectId,
+          worktree: true,
+          worktreeBaseRef: "main",
+          worktreeName: `burst-${index}`,
+          visibility: "shared",
+          displayName: `Synthetic worktree ${index}`,
+        });
+        if (
+          !isRecord(created) ||
+          typeof created.sessionId !== "string" ||
+          !isRecord(created.worktree) ||
+          typeof created.worktree.id !== "string"
+        ) {
+          throw new Error("sessions.create did not return an owned worktree");
+        }
+        return { key, expectedSessionId: created.sessionId };
+      }),
+    );
+    const created = await scrapeWriterMetrics("worktree-burst-created");
+    await settleWorktreeOperations(
+      sessions.map((session) =>
+        rpc(client, "sessions.patch", {
+          ...session,
+          archived: true,
+        }),
+      ),
+    );
+    const archiveCleanup = await settleArchivedWorktreeCleanup(client);
+    const archived = await scrapeWriterMetrics("worktree-burst-archived");
+    await settleWorktreeOperations(
+      sessions.map(async (session) => {
+        const deleted = await rpc(client, "sessions.delete", {
+          ...session,
+          archivedOnly: true,
+          deleteTranscript: true,
+        });
+        if (!isRecord(deleted) || deleted.deleted !== true || deleted.worktreePreserved) {
+          throw new Error("sessions.delete did not finish synthetic worktree cleanup");
+        }
+      }),
+    );
+    const cleaned = await scrapeWriterMetrics("worktree-burst-cleaned");
+    if (
+      !Object.entries(cleaned.byClass).some(
+        ([requestClass, sample]) =>
+          requestClass.startsWith("worktrees.") &&
+          sample.count > (before.byClass[requestClass]?.count ?? 0),
+      )
+    ) {
+      throw new Error("Worktree burst produced no per-operation writer queue observations");
+    }
+    return {
+      count: sessions.length,
+      firstTwoMinutes,
+      before,
+      created,
+      archived,
+      archiveCleanup,
+      cleaned,
+      boundary:
+        "cumulative exporter counts; subtract adjacent snapshots for create/archive/cleanup; concurrent reconnect reads remain included",
+    };
+  } finally {
+    client.close();
+    clients.delete(client);
   }
 }
 const shapes: Array<{ method: string; params: Record<string, unknown> }> = [
@@ -1219,7 +1406,10 @@ try {
   void diagnosticMetrics.catch((error: unknown) => {
     failure ??= error instanceof Error ? error : new Error(String(error));
   });
-  await Promise.all(Array.from({ length: clientCount }, (_, index) => observeClient(index)));
+  const [worktreeChurn] = await Promise.all([
+    values["worktree-churn"] ? measureWorktreeChurn() : Promise.resolve(undefined),
+    Promise.all(Array.from({ length: clientCount }, (_, index) => observeClient(index))),
+  ]);
   assertAlive();
   const summarize = (rows: typeof timings) => {
     const successful = rows
@@ -1249,6 +1439,7 @@ try {
     durationMs,
     pollMs,
     sqliteQueues,
+    worktreeChurn,
     nativeTaskInputs: {
       windowMs: Math.min(durationMs, 120_000),
       counts: transcriptTaskCounts,

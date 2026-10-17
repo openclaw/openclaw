@@ -97,6 +97,30 @@ function successfulNativeSetup() {
 }
 
 describe("PostgreSQL conformance selection", () => {
+  it("runs both shards independently under the existing aggregate gate", () => {
+    const workflow = readCiWorkflow();
+    const job = workflow.jobs["postgres-conformance"];
+    expect(job.strategy).toEqual({
+      "fail-fast": false,
+      "max-parallel": 2,
+      matrix: { shard: ["infra", "integrations"] },
+    });
+    expect(job["timeout-minutes"]).toBe(30);
+    expect(
+      evaluateWorkflowExpression(job["runs-on"], {
+        eventName: "pull_request",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+      }),
+    ).toBe("ubuntu-24.04");
+    expect(
+      job.steps.find((step: WorkflowStep) => step.name === "Run PostgreSQL conformance").run,
+    ).toBe(
+      "node scripts/test-database-conformance.mjs --engine postgres --connection postgresql://postgres@127.0.0.1:5432/postgres --shard ${{ matrix.shard }}",
+    );
+    expect(workflow.jobs["ci-gate"].needs).toContain("postgres-conformance");
+  });
+
   it.each<[string[] | null, boolean, Partial<Parameters<typeof runCiManifestFixture>[0]>?]>([
     [["extensions/workboard/README.md", "src/utils/absolute-deadline.test.ts"], false],
     [["extensions/workboard/README.md", "extensions/workboard/src/store.ts"], true],
@@ -120,8 +144,10 @@ describe("PostgreSQL conformance selection", () => {
     [null, false, { scopeEnv: { OPENCLAW_CI_DOCS_ONLY: "true" } }],
     [["extensions/workboard/README.md"], false, { scopeEnv: { OPENCLAW_CI_DOCS_ONLY: "true" } }],
     [[], true, { runNode: false, eventName: "schedule" }],
+    [[], true, { runNode: false, eventName: "workflow_dispatch" }],
     [null, true, { runNode: false }],
     [[], false, { runNode: false, eventName: "schedule", targetFiles: [] }],
+    [[], false, { runNode: false, eventName: "workflow_dispatch", targetFiles: [] }],
     [["extensions/workboard/src/store.ts"], false, { runNode: false, eventName: "push" }],
   ])("selects conformance for %j: %s (%j)", (changedPaths, selected, options) => {
     const result = runCiManifestFixture({
@@ -3113,6 +3139,24 @@ describe("ci workflow guards", () => {
         },
       });
     }
+
+    it("counts both PostgreSQL conformance shards in hosted admission", () => {
+      const result = manifestWithHostedNodeRows(0, {
+        eventName: "pull_request",
+        changedPaths: ["src/infra/database-engine/open.ts"],
+        targetFiles: ["scripts/test-database-conformance.mjs"],
+      });
+      expect(result.status, result.output).toBe(0);
+      const rows = emittedHostedRows(
+        {
+          ...result.outputs,
+          hybrid_hosted_offload: "false",
+        },
+        { eventName: "pull_request" },
+      );
+      expect(rows.filter((name) => name === "postgres-conformance")).toHaveLength(2);
+      expect(Number(result.outputs.hybrid_hosted_base_rows)).toBe(rows.length);
+    });
 
     it("reserves tiny hybrid controls and fork owners before admitting optional hosted rows", () => {
       const eventName = "pull_request" as const;

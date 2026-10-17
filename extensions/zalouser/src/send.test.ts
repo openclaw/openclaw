@@ -1,28 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createZalouserSendReceipt } from "./send-receipt.js";
-import { sendImageZalouser, sendMessageZalouser, sendReactionZalouser } from "./send.js";
+import { sendImageZalouser, sendMessageZalouser } from "./send.js";
 import { parseZalouserTextStyles } from "./text-styles.js";
-import { sendZaloReaction, sendZaloTextMessage } from "./zalo-js.js";
+import { sendZaloTextMessage } from "./zalo-js.js";
 import { TextStyle } from "./zca-constants.js";
 
-vi.mock("./zalo-js.js", () => ({
+vi.mock("./zalo-js.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./zalo-js.js")>()),
   sendZaloTextMessage: vi.fn(),
-  sendZaloReaction: vi.fn(),
 }));
 
 const mockSendText = vi.mocked(sendZaloTextMessage);
-const mockSendReaction = vi.mocked(sendZaloReaction);
 
 function sendResult(
   messageId: string,
   threadId = "thread",
 ): {
-  ok: true;
   messageId: string;
   receipt: ReturnType<typeof createZalouserSendReceipt>;
 } {
   return {
-    ok: true,
     messageId,
     receipt: createZalouserSendReceipt({ messageId, threadId, kind: "text" }),
   };
@@ -51,7 +48,6 @@ function expectSendTextOptions(callIndex: number, fields: Record<string, unknown
 describe("zalouser send helpers", () => {
   beforeEach(() => {
     mockSendText.mockReset();
-    mockSendReaction.mockReset();
   });
 
   it("formats image captions in markdown mode", async () => {
@@ -104,7 +100,7 @@ describe("zalouser send helpers", () => {
       .mockImplementationOnce(async (_threadId, _text, _options, onDeliveryResult) => {
         const accepted = sendResult("mid-caption");
         await onDeliveryResult?.(accepted);
-        return { ...accepted, ok: false, error: "voice send failed" };
+        throw new Error("voice send failed");
       });
 
     await expect(sendMessageZalouser("thread", "a".repeat(2001))).rejects.toMatchObject({
@@ -189,7 +185,7 @@ describe("zalouser send helpers", () => {
       textChunkMode: "newline",
       textStyles: undefined,
     });
-    expect(result).toMatchObject({ ok: true, messageId: "mid-2d-4" });
+    expect(result).toMatchObject({ messageId: "mid-2d-4" });
   });
 
   it("sends overflow markdown captions as follow-up text after the media message", async () => {
@@ -220,31 +216,6 @@ describe("zalouser send helpers", () => {
     expect(requireSendTextCall(1)[0]).toBe("thread-2e");
     expect(typeof requireSendTextCall(1)[1]).toBe("string");
     expect(requireSendTextOptions(1).mediaUrl).toBeUndefined();
-    expect(result).toMatchObject({ ok: true, messageId: "mid-2e-2" });
-  });
-
-  it("delegates reaction helper to JS transport", async () => {
-    mockSendReaction.mockResolvedValueOnce({ ok: true });
-
-    const result = await sendReactionZalouser({
-      threadId: "thread-5",
-      profile: "p5",
-      isGroup: true,
-      msgId: "100",
-      cliMsgId: "200",
-      emoji: "👍",
-    });
-
-    expect(mockSendReaction).toHaveBeenCalledWith({
-      profile: "p5",
-      threadId: "thread-5",
-      isGroup: true,
-      msgId: "100",
-      cliMsgId: "200",
-      emoji: "👍",
-      remove: undefined,
-    });
-    expect(result).toMatchObject({ ok: true, error: undefined });
-    expect(result.receipt.platformMessageIds).toStrictEqual([]);
+    expect(result).toMatchObject({ messageId: "mid-2e-2" });
   });
 });

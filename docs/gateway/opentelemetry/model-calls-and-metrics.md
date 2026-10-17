@@ -168,6 +168,25 @@ Observations use the bounded diagnostic queue. Check
 `openclaw.diagnostic.async_queue.dropped` before treating counts or latency
 distributions as complete during saturation.
 
+### Gateway WebSocket events
+
+| Metric                                     | Type    | Measurement                                                    |
+| ------------------------------------------ | ------- | -------------------------------------------------------------- |
+| `openclaw.gateway.ws.events`               | counter | Outbound event frames accepted by the sender, once per socket  |
+| `openclaw.gateway.ws.event_bytes`          | counter | Encoded UTF-8 bytes of those full JSON frames, once per socket |
+| `openclaw.gateway.ws.operator_connections` | gauge   | Connected authenticated operator sockets                       |
+
+The counters have only `openclaw.gateway.ws.event`: a known protocol event name,
+or `other` for an unrecognized name. The connection gauge has no attributes; it
+updates on connect/disconnect and refreshes every 30 seconds to recover dropped
+snapshots or initialize late-starting exporters.
+Event observations are batched by event name within one event-loop turn; fan-out
+still counts each socket separately. Bytes exclude WebSocket framing and
+compression, and send acceptance does not prove client receipt. No event payload,
+session, user, or connection identifiers are exported. These metrics use the
+same bounded diagnostic queue as Gateway RPC observations; check
+`openclaw.diagnostic.async_queue.dropped` when interpreting traffic totals.
+
 ### Model usage
 
 - `openclaw.tokens` (counter, attrs: `openclaw.token`, `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.agent`)

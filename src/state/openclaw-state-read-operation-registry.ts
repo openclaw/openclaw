@@ -1,6 +1,7 @@
-import { worktreeReadOperations } from "../agents/worktrees/registry-read.kernel.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import { diagnosticReadOperations } from "../infra/sqlite-audit-record.kernel.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
+import { pluginMetadataReadOperations } from "../plugins/plugin-metadata-state.read.worker.js";
 import { sessionUpstreamReadOperations } from "../sessions/session-upstream-links.kernel.js";
 import {
   createWorkerOperationRegistry,
@@ -8,6 +9,18 @@ import {
 } from "./worker-operation-registry.js";
 
 const loaders = {
+  worktrees: async () => {
+    const [registry, templates, pending] = await Promise.all([
+      import("../agents/worktrees/registry-read.kernel.js"),
+      import("../agents/worktrees/template-registry.worker.js"),
+      import("../agents/worktrees/pending-slots.worker.js"),
+    ]);
+    return {
+      ...registry.worktreeReadOperations,
+      ...templates.worktreeTemplateReadOperations,
+      ...pending.pendingWorktreeReadOperations,
+    };
+  },
   agentProvenance: () =>
     import("./agent-provenance.kernel.js").then((m) => m.agentProvenanceReadOperations),
   managedImages: () =>
@@ -24,8 +37,6 @@ const loaders = {
     import("./config-machine-state.read.worker.js").then((m) => m.machineStateReadOperations),
   projects: () =>
     import("../projects/project-registry.kernel.js").then((m) => m.projectRegistryReadOperations),
-  // Cleanup-state reads already require this kernel in the same read-worker graph.
-  worktrees: async () => worktreeReadOperations,
   agentDeletion: () =>
     import("../agents/agent-delete-session-store-safety.kernel.js").then(
       (m) => m.agentDeletionSessionStoreReadOperations,
@@ -47,17 +58,11 @@ const loaders = {
   config: () =>
     import("../config/io.health-state.kernel.js").then((m) => m.configHealthReadOperations),
   plugins: async () => {
-    const [migrations, metadata] = await Promise.all([
-      import("../infra/deferred-plugin-migrations.js").then(
-        (m) => m.deferredPluginMigrationReadOperations,
-      ),
-      import("../plugins/plugin-metadata-state.read.worker.js").then(
-        (m) => m.pluginMetadataReadOperations,
-      ),
-    ]);
+    const { deferredPluginMigrationReadOperations } =
+      await import("../infra/deferred-plugin-migrations.js");
     return {
-      ...migrations,
-      ...metadata,
+      ...deferredPluginMigrationReadOperations,
+      ...pluginMetadataReadOperations,
     };
   },
   generatedHtmlProvenance: () =>
@@ -76,10 +81,10 @@ const loaders = {
     import("../sessions/session-state-events.read.worker.js").then(
       (m) => m.sessionStateReadOperations,
     ),
-  // Session-state handlers also require this kernel in the same lazy read-worker graph.
+  // Session-state handlers also require this kernel in the read-worker graph.
   sessionUpstream: async () => sessionUpstreamReadOperations,
-  diagnostic: () =>
-    import("../infra/sqlite-audit-record.kernel.js").then((m) => m.diagnosticReadOperations),
+  // Schema readers already require this kernel in the read-worker graph.
+  diagnostic: async () => diagnosticReadOperations,
   restartLifecycle: () =>
     import("../infra/restart-handoff.read.worker.js").then((m) => m.restartHandoffReadOperations),
   restartSentinel: () =>

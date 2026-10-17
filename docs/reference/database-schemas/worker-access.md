@@ -267,8 +267,11 @@ credential, lease, and external-effect authority stays with the execution owner.
 Cron retains a memory-only clock check for future jobs so forward clock changes
 can trigger overdue work without reloading SQL every minute.
 
-Cron history reads selection metadata in bounded keyset batches using the
-`created_at, task_id` indexes. Completion-time ordering, exact totals, search,
+Cron history streams selection metadata through one SQLite statement using the
+`created_at, task_id` indexes; that statement owns the read snapshot. The
+PostgreSQL bridge buffers query results, so its reader retains bounded keyset
+batches within one snapshot. Both readers retain only selection metadata after
+matching. Completion-time ordering, exact totals, search,
 and live session visibility still select the response page; only that page's
 response fields are hydrated. Summary pages exclude diagnostics and delivery
 traces in SQL, and neither view loads trigger or script recovery state.
@@ -438,6 +441,7 @@ row for session certification. Offline import, Doctor repair, and main-key
 policy changes explicitly queue validation and revoke the shared readiness cell
 and persisted receipt; rollback may conservatively leave readiness revoked.
 Those operations require exclusive offline or startup maintenance custody.
+Startup and Doctor reuse a valid canonical receipt without querying pending rows again.
 Physical integrity admission remains valid independently of session readiness.
 The schema 25 migration seeds every existing node before admission; see
 [session writer validation](/reference/database-schemas/agent-schema-history#canonical-writer-validation).
@@ -5517,10 +5521,12 @@ including unchanged projection revisions, and returns only matching messages.
 Cold archive decoding and restoration retain the existing archive worker and
 host generation/commit authorization; transcript read fences still bind the
 subsequent read. No validation cache or new restoration owner is introduced.
-The archive FIFO can hand its idle worker between scopes using the same captured
-state directory. Each request closes its native handles before handoff; the new
-scope supplies its own authority. Different state directories and retiring workers
-still require native exit before replacement. Schema and update behavior are unchanged.
+The archive FIFO retains one idle worker after successful scopes and can hand it
+to the next scope using the same captured state directory. Each request closes
+its native handles before handoff; the new scope supplies its own authority.
+Released scopes refuse further work, and the idle worker does not keep the process
+alive. Failures, database shutdown, different state directories, and retiring
+workers still require native exit before replacement. Schema and update behavior are unchanged.
 
 Single-message lookups and display-message counts use that same history worker.
 Session-message broadcasts await the stored content and sequence in their existing
@@ -5641,6 +5647,8 @@ compressed-payload bound, before streaming 64 KiB frames; oversized identity tex
 keeps native slice queries. Large compressed-event frame buffers transfer ownership to the host. The
 cursor and follow-up reads retain one SQLite snapshot across transport
 acknowledgments.
+SQLite streams the ordered cursor through a native iterator; PostgreSQL uses
+16-row keyset batches because its bridge buffers results.
 Manual compaction reads entry and transcript statistics after the previous writer
 settles, then reuses them while its lifecycle owner holds admission closed.
 The initial canonical lookup supplies session identity without an unchanged-entry
@@ -6208,7 +6216,10 @@ are unchanged.
 
 GitHub publication preparation and per-turn tool availability read the selected
 live worktree through the existing worktree reader and shared-state worker. They
-refresh discovery on identity, configuration, and workspace-binding changes;
+create discovery work only when a turn requests a session's publication hint,
+not while hydrating the session roster. A cold hint is unavailable until that
+asynchronous preparation finishes. Requested sessions refresh discovery on
+identity, configuration, and workspace-binding changes;
 otherwise a read refreshes facts older than one minute instead of polling idle
 sessions. The first read after expiry retains the availability hint but retires
 credentials until asynchronous preparation finishes, so an expired token cannot
@@ -6352,13 +6363,17 @@ event still commits before the runtime advances; bulk transcript imports reuse
 their transaction-local append cursor. Root checks read metadata without saved
 prompt payloads. No cross-transaction root cache is introduced.
 
-Bulk appends retain attempt recency and projection watermarks in that cursor,
-then flush the index once and fold final recency into the transcript mutation
-write. Rejected identities still update attempt recency without advancing the
-mutation watermark. If an iterator fails, its accepted prefix's index and
-recency settle before the error escapes; the enclosing transaction still owns
-rollback. Identity and foreign-key checks, rewrite generations, stored payloads,
-and commit boundaries are unchanged.
+Bulk appends resolve prepared arrays' identity and idempotency-key conflicts in
+one read, then insert payloads, identities, and active projection rows in bounded
+groups. Streaming imports retain per-row acceptance feedback and buffer only the
+accepted writes. Payloads precede their dependent rows, preserving immediate
+foreign keys. The cursor flushes its watermark once and folds final recency into
+the transcript mutation write. Rejected identities still update attempt recency
+without advancing the mutation watermark. If an iterator fails, its accepted
+prefix settles before the error escapes; the enclosing transaction owns rollback.
+Scalar appends without complete actor facts fold identity rejection into the
+payload insertion. Rewrite generations, stored payloads, and commit boundaries
+are unchanged.
 
 Awaited metadata and compaction retain the database executor without opening a
 native handle on the Gateway thread. The worker prepares storage and publishes
@@ -6701,14 +6716,11 @@ admission refusals after awaiting. Optional provenance-table absence keeps the
 legacy identity; reads do not create it.
 
 Final OAuth device-code token polling and publication, credential subprocess,
-repository transfer, and provider consumption guards retain a synchronous current
-read because native and SDK writers can revoke the agent outside
-host publication. That guard
-uses the same indexed journal/provenance projection without a transaction envelope
-or journal payload scan; it never treats prepared facts as current authority.
-Retire this native guard at the next Plugin SDK major after synchronous writers
-are removed and the lifecycle owner publishes complete revocation facts. The
-accepted GitHub config draft mutation retains its synchronous incarnation check; the preparation cutover adds no new final config-publication contract.
+repository transfer, and provider consumption guards consume the lifecycle owner's
+prepared provenance and deletion facts. Committed native and worker receipts update
+those facts; unknown settlement or retired admission refuses the effect. The final
+incarnation comparison remains synchronous without querying the database. The
+accepted GitHub config draft mutation uses that same current authority check.
 Schemas, stored bytes, permissions, retention, and update behavior are unchanged.
 
 The serving Claw monitor handler prepares its deletion journal through the shared
@@ -6719,17 +6731,12 @@ handoffs likewise retain their current deletion checks immediately before the ef
 an awaited preparation reply cannot replace these final guards.
 
 Agent retirement also retains an owner-minted synchronous final-effect guard for
-filesystem and config mutation callbacks. The original host lease lifetime is
-checked before and after one indexed current SELECT covering the deletion
-journal, lease ownership and expiry, and the expected Claw installation when
-present. The guard reads current rows without a freshness probe, opens no write
-transaction, and sends no worker request.
-Worker transaction grants continue to use SQL-free host checks and authoritative
-worker predicates. Removing this final guard requires the next Plugin SDK major's
-removal of synchronous writers and complete lifecycle revocation publication;
-prepared worker replies cannot replace it. The GitHub identity draft mutation
-likewise keeps its single current incarnation query at its original accepted
-mutation checkpoint.
+filesystem and config mutation callbacks. It consumes the original host lease and
+current journal publication without querying the database. Begin validates the
+expected Claw installation, whose writers refuse mutation while its journal is
+pending. Worker cleanup retains authoritative journal, lease, and installation
+predicates inside its shared-state transaction and holds that guard through the
+agent commit. Lease loss still aborts destructive work.
 
 Package cleanup during deletion also retains its artifact-scoped package lease
 guard before filesystem apply and rollback. It checks the live package owner and
@@ -6826,11 +6833,21 @@ The native accessor kernels remain shared with released synchronous
 `SessionManager` methods and opaque transcript transaction callbacks.
 Bundled callers use the asynchronous replacements; incognito uses memory actor
 operations without native kernels.
+Hook-blocked worker turns carry their existing prepared transcript-source authority
+through persistence, so the append worker checks the source in its committing
+transaction. Run, cancellation, and hook checks retain their existing boundaries;
+the redacted user message is unchanged.
 Unbound harness deletion callbacks are deprecated in favor of the native binding
 lifecycle or commit-finalizer helpers; their native transaction behavior remains
 until the next Plugin SDK major. Initialization rollback and offline maintenance
 also retain their existing native transaction. These mixed kernels are not
 classified as worker-only. The native incognito owner is removed.
+
+Session-event capture and admission prepare agent-deletion status through the
+shared-state reader. Their final host guards consume the journal owner's published
+status, including transaction-local staged facts for native writes; an unknown
+status refuses admission. Journal completion, rollback, and recreation publish
+through the same owner. Destructive cleanup retains its lease and journal checks.
 
 ### Anchor read watermark facts
 

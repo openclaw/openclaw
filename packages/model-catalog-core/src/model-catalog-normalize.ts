@@ -14,6 +14,8 @@ import { normalizeModelCatalogContextWindowSelection } from "./model-catalog-con
 import { buildModelCatalogMergeKey, buildModelCatalogRef } from "./model-catalog-refs.js";
 import {
   MODEL_CATALOG_APIS,
+  MODEL_CATALOG_INPUTS as MODEL_CATALOG_INPUT_VALUES,
+  MODEL_CATALOG_STATUSES as MODEL_CATALOG_STATUS_VALUES,
   MODEL_CATALOG_THINKING_LEVELS,
   isModelCatalogThinkingFormat,
   type ModelCatalog,
@@ -39,9 +41,9 @@ import { ModelInferenceCapabilitiesSchema } from "./model-inference-capabilities
 import { normalizeProviderId } from "./provider-id.js";
 export { normalizeOpenRouterModelReasoning } from "./model-catalog-reasoning.js";
 
-const MODEL_CATALOG_INPUTS = new Set(["text", "image", "video", "document"]);
+const MODEL_CATALOG_INPUTS = new Set<string>(MODEL_CATALOG_INPUT_VALUES);
 const MODEL_CATALOG_DISCOVERY_MODES = new Set(["static", "refreshable", "runtime"]);
-const MODEL_CATALOG_STATUSES = new Set(["available", "preview", "deprecated", "disabled"]);
+const MODEL_CATALOG_STATUSES = new Set<string>(MODEL_CATALOG_STATUS_VALUES);
 const MODEL_CATALOG_API_SET = new Set<string>(MODEL_CATALOG_APIS);
 const DEFAULT_MODEL_INPUT: ModelCatalogInput[] = ["text"];
 const DEFAULT_MODEL_STATUS: ModelCatalogStatus = "available";
