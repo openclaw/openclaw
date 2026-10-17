@@ -956,24 +956,35 @@ describe("native SQLite schema snapshots and callbacks", () => {
     },
   );
 
-  it("qualifies managed snapshots at their first native read", () => {
+  it.each([
+    { read: "SELECT id FROM original", version: 1 },
+    { read: "SELECT 1", version: 2 },
+    { read: "PRAGMA busy_timeout", version: 2 },
+    { read: "PRAGMA query_only", version: 2 },
+  ])("qualifies managed snapshots after read=$read", ({ read, version }) => {
     const filename = path.join(tempDirs.make("openclaw-schema-managed-snapshot-"), "state.sqlite");
     const reader = openDatabase(undefined, true, filename);
     reader.exec("PRAGMA journal_mode=WAL");
     const writer = openDatabase("", true, filename);
     reader.exec("BEGIN");
     runSqliteReadOperationSync(reader, () => {
-      reader.prepare("SELECT id FROM original").all();
+      reader.prepare(read).all();
       writer.exec("CREATE TABLE committed_sibling (id); PRAGMA user_version=2");
       const observation = observeSqliteReadSql(StatementSync.prototype);
       try {
-        expect(getAdmittedSqliteSchemaFacts(reader)?.userVersion).toBe(1);
-        expect(getAdmittedSqliteSchemaFacts(reader)?.tables.has("committed_sibling")).toBe(false);
-        expect(observation.queries).toEqual([]);
+        const qualified = getAdmittedSqliteSchemaFacts(reader);
+        expect(qualified?.userVersion).toBe(version);
+        expect(qualified?.tables.has("committed_sibling")).toBe(version === 2);
+        const qualificationQueries = [...observation.queries];
+        expect(
+          qualificationQueries.filter((query) => query.includes("sqlite_schema")),
+        ).toHaveLength(1);
+        expect(getAdmittedSqliteSchemaFacts(reader)).toBe(qualified);
+        expect(observation.queries).toEqual(qualificationQueries);
       } finally {
         observation.restore();
       }
-      expect(reader.prepare("PRAGMA user_version").get()?.user_version).toBe(1);
+      expect(reader.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
     });
     reader.exec("ROLLBACK");
     runSqliteSchemaReadSnapshotSync(reader, () => {

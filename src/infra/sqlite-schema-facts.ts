@@ -296,15 +296,9 @@ function trackSchemaChanges(
     if (dataChange || mutation.temporaryTableSchemaChange || control?.kind === "ROLLBACK") {
       owner.mutationRevision += 1;
     }
-    if (
-      phase !== "bind" &&
-      wasTransaction &&
-      !control &&
-      owner.readDepth === 0 &&
-      !owner.transactionCatalogBound
-    ) {
-      // SQLite has no public txn_state API here. A raw read might have established a
-      // historical snapshot; only a local catalog capture can qualify it afterward.
+    if (phase !== "bind" && wasTransaction && !control && !owner.transactionCatalogBound) {
+      // Constants and connection PRAGMAs do not pin MAIN. Qualify this transaction's
+      // native catalog if a sibling publishes DDL, even for managed reads.
       owner.transactionRead = true;
     }
     const changesReadScope = schemaChange || dataChange || control !== undefined;
@@ -329,18 +323,6 @@ function trackSchemaChanges(
       owner.unmanagedSnapshots.add(iterator);
     }
     return {
-      stepped: () => {
-        if (
-          database.isTransaction &&
-          !control &&
-          !owner.transactionRead &&
-          !owner.transactionCatalogBound &&
-          owner.facts &&
-          owner.processRevision === getSqliteDatabaseSchemaRevision(database)
-        ) {
-          owner.transactionCatalogBound = true;
-        }
-      },
       finish: (succeeded, abandoned) => {
         if (iterator && owner.unmanagedSnapshots.delete(iterator) && owner.iteratorFacts) {
           invalidate(owner);

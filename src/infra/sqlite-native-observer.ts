@@ -48,7 +48,6 @@ export type SqliteNativeMutation = ReturnType<typeof classifySqliteMutation>;
 type NativePhase = "exec" | "execute" | "bind" | "iterate";
 type NativeOperation = {
   finish: (succeeded: boolean, abandoned?: boolean) => void;
-  stepped?: () => void;
 };
 type IteratorLifetime = {
   observed?: NativeOperation;
@@ -170,9 +169,6 @@ export function observeSqliteNativeOperations(
     let succeeded = false;
     try {
       const result = operation();
-      if (phase !== "bind") {
-        observed.stepped?.();
-      }
       succeeded = true;
       return result;
     } finally {
@@ -262,8 +258,6 @@ export function observeSqliteNativeOperations(
           } else {
             lifetime.stopObservation(true);
           }
-        } else {
-          lifetime.observed?.stepped?.();
         }
         return result;
       };
