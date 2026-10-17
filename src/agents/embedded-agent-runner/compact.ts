@@ -1,5 +1,6 @@
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
+import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -104,6 +105,8 @@ export async function compactNativeCliSession(params: {
         sessionFile: params.compactParams.sessionFile,
         agentId: params.compactParams.agentId,
         workspaceDir: params.compactParams.workspaceDir,
+        bootstrapWorkspaceDir: params.compactParams.bootstrapWorkspaceDir,
+        bootstrapUserProfileId: sessionPersonalProfileId(params.compactParams.sessionEntry),
         cwd: params.compactParams.cwd,
         agentDir: params.compactParams.agentDir,
         config: params.compactParams.config,

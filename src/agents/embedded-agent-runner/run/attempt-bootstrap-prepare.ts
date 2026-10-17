@@ -1,17 +1,21 @@
 import path from "node:path";
+import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.types.js";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { buildBootstrapBudgetState, buildBootstrapInjectionStats } from "../../bootstrap-budget.js";
 import {
   hasCompletedBootstrapTurn,
   makeBootstrapWarn,
   resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
+  resolveWorkspaceContextRefresh,
 } from "../../bootstrap-files.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import {
   isPrimaryBootstrapRun,
   resolveWorkspaceBootstrapRouting,
 } from "../../bootstrap-routing.js";
+import { prepareBootstrapSnapshot } from "../../bootstrap-snapshot.js";
 import { buildBootstrapContextForFiles } from "../../embedded-agent-helpers/bootstrap.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -23,17 +27,22 @@ import { log } from "../logger.js";
 import { resolveAttemptBootstrapContext } from "./attempt-context-engine-helpers.js";
 import { remapInjectedContextFilesToWorkspace } from "./attempt-setup.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
+import type { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
 import type { EmbeddedRunAttemptBase, EmbeddedRunAttemptParams } from "./types.js";
 
 export async function prepareEmbeddedAttemptBootstrap(params: {
   attempt: Omit<EmbeddedRunAttemptBase, "workspaceDir" | "prompt" | "timeoutMs" | "runId"> &
-    Pick<EmbeddedRunAttemptParams, "operation">;
+    Pick<EmbeddedRunAttemptParams, "operation" | "runId" | "admittedRunContext" | "contextEngine">;
+  snapshotTarget?: SessionTranscriptRuntimeTarget;
   setup: Pick<
     EmbeddedAttemptSetup,
     "effectiveWorkspace" | "resolvedWorkspace" | "sessionAgentId"
   > & {
     prepStages?: Pick<EmbeddedAttemptSetup["prepStages"], "mark">;
   };
+  withOwnedTranscriptWrite?: Awaited<
+    ReturnType<typeof prepareEmbeddedAttemptTranscriptLifecycle>
+  >["withOwnedTranscriptWrite"];
   hasReadTool: boolean;
   isRawModelRun: boolean;
 }) {
@@ -56,6 +65,16 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     workspaceDir: bootstrapWorkspaceDir,
     warn: (message) => log.warn(message),
   });
+  const lifecycleWorkspaceContext =
+    !suppressAmbientContext &&
+    contextInjectionMode !== "never" &&
+    resolveWorkspaceContextRefresh(attempt.config, params.setup.sessionAgentId) === "compaction";
+  const snapshotEnabled = lifecycleWorkspaceContext && attempt.sessionPersistence !== "detached";
+  if (snapshotEnabled && attempt.contextEngine?.info.ownsCompaction) {
+    throw new Error(
+      "workspaceContextRefresh=compaction requires built-in embedded compaction; the selected context engine owns an unsupported lifecycle.",
+    );
+  }
   const resolveWorkspaceBootstrapFiles = (workspaceDir: string) =>
     resolveBootstrapFilesForRun({
       bootstrapUserProfileId: attempt.bootstrapUserProfileId,
@@ -69,130 +88,187 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
       contextMode: attempt.bootstrapContextMode,
       runKind: attempt.bootstrapContextRunKind,
     });
-  let completedBootstrapTurn: boolean | undefined;
-  const hasCompletedBootstrapTurnForAttempt = async () =>
-    (completedBootstrapTurn ??= await hasCompletedBootstrapTurn(attempt.sessionTarget));
-  const resolveBootstrapRouting = (bootstrapFiles?: readonly WorkspaceBootstrapFile[]) =>
-    resolveWorkspaceBootstrapRouting({
-      bootstrapContextRunKind: attempt.bootstrapContextRunKind,
-      trigger: attempt.trigger,
-      sessionKey: attempt.sessionKey,
-      isCanonicalWorkspace: attempt.isCanonicalWorkspace,
-      isWorkspaceBootstrapPending,
-      bootstrapFiles,
-      isPrimaryRun: isPrimaryBootstrapRun(attempt.sessionKey),
-      effectiveWorkspace: params.setup.effectiveWorkspace,
-      resolvedWorkspace: bootstrapWorkspaceDir,
-      hasBootstrapFileAccess: params.hasReadTool,
-    });
-  const shouldProbeContinuationSkip =
-    !suppressAmbientContext &&
-    contextInjectionMode === "continuation-skip" &&
-    !isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind) &&
-    (await hasCompletedBootstrapTurnForAttempt());
-  let preloadedBootstrapFiles: WorkspaceBootstrapFile[] | undefined;
-  let bootstrapRouting =
-    shouldProbeContinuationSkip || suppressAmbientContext || contextInjectionMode === "never"
-      ? await resolveBootstrapRouting()
-      : undefined;
-  if (
-    !suppressAmbientContext &&
-    contextInjectionMode !== "never" &&
-    (bootstrapRouting === undefined || bootstrapRouting.bootstrapMode === "full")
-  ) {
-    preloadedBootstrapFiles = await resolveWorkspaceBootstrapFiles(bootstrapWorkspaceDir);
-    bootstrapRouting = await resolveBootstrapRouting(preloadedBootstrapFiles);
-  }
-  bootstrapRouting ??= await resolveBootstrapRouting(preloadedBootstrapFiles);
-  const bootstrapMode = bootstrapRouting.bootstrapMode;
-  const {
-    bootstrapFiles: hookAdjustedBootstrapFiles,
-    contextFiles: resolvedContextFiles,
-    shouldRecordCompletedBootstrapTurn,
-  } = await resolveAttemptBootstrapContext({
-    // Raw probes and isolated finalization must not load AGENTS/BOOTSTRAP
-    // context even though finalization preserves the settled transcript.
-    contextInjectionMode: suppressAmbientContext ? "never" : contextInjectionMode,
-    bootstrapContextMode: attempt.bootstrapContextMode,
-    bootstrapContextRunKind: attempt.bootstrapContextRunKind ?? "default",
-    bootstrapMode,
-    deliversCompleteWorkspaceContext: bootstrapRouting.deliversCompleteWorkspaceContext,
-    hasCompletedBootstrapTurn: hasCompletedBootstrapTurnForAttempt,
-    resolveBootstrapContextForRun: async () => {
-      const bootstrapFiles =
-        preloadedBootstrapFiles ?? (await resolveWorkspaceBootstrapFiles(bootstrapWorkspaceDir));
-      const executionAgentsPath = path.join(
-        path.resolve(params.setup.resolvedWorkspace),
-        DEFAULT_AGENTS_FILENAME,
-      );
-      const executionProjectFiles =
-        bootstrapWorkspaceDir === params.setup.resolvedWorkspace
-          ? []
-          : (await resolveWorkspaceBootstrapFiles(params.setup.resolvedWorkspace)).filter(
-              (file) =>
-                file.name === DEFAULT_AGENTS_FILENAME &&
-                !file.missing &&
-                path.resolve(file.path) === executionAgentsPath,
-            );
-      const layeredBootstrapFiles = [...bootstrapFiles, ...executionProjectFiles];
-      return {
-        bootstrapFiles: layeredBootstrapFiles,
-        contextFiles: buildBootstrapContextForFiles(layeredBootstrapFiles, {
-          config: attempt.config,
-          agentId: params.setup.sessionAgentId,
-          warn: bootstrapWarn,
-        }),
-      };
-    },
-  });
-  params.setup.prepStages?.mark("bootstrap-context");
-  const injectedContextFiles = bootstrapRouting.includeBootstrapInSystemContext
-    ? resolvedContextFiles
-    : resolvedContextFiles.filter((file) => !/(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()));
-  // Injection accounting keys on the source path the bootstrap file was loaded
-  // from, so it runs before the remap rewrites paths onto the prompt workspace.
-  const bootstrapInjectionStats = buildBootstrapInjectionStats({
-    bootstrapFiles: hookAdjustedBootstrapFiles,
-    injectedFiles: injectedContextFiles,
-  });
-  const contextFiles = remapInjectedContextFilesToWorkspace({
-    files: injectedContextFiles,
-    sourceWorkspaceDir: bootstrapWorkspaceDir,
-    targetWorkspaceDir: bootstrapPromptWorkspaceDir,
-  });
-  // Stats retain input order. Reports include suppressed BOOTSTRAP rows; budgets do not.
-  const bootstrapBudgetFiles = bootstrapRouting.includeBootstrapInSystemContext
-    ? bootstrapInjectionStats
-    : bootstrapInjectionStats.filter(
-        (_, index) => hookAdjustedBootstrapFiles[index]!.name !== DEFAULT_BOOTSTRAP_FILENAME,
-      );
-  const bootstrapBudget = buildBootstrapBudgetState({
-    config: attempt.config,
-    agentId: params.setup.sessionAgentId,
-    files: bootstrapBudgetFiles,
-    seenSignatures: attempt.bootstrapPromptWarningSignaturesSeen,
-    previousSignature: attempt.bootstrapPromptWarningSignature,
-  });
-  const workspaceNotes: string[] = [];
-  if (
-    hookAdjustedBootstrapFiles.some(
-      (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
-    )
-  ) {
-    workspaceNotes.push("Reminder: commit your changes in this workspace after edits.");
-  }
-  if (isEmbeddedMode()) {
-    workspaceNotes.push(
-      "Running in local embedded mode (no gateway). Most tools work locally. Gateway-dependent tools (canvas, nodes, cron, message, sessions_send, sessions_spawn, gateway) are unavailable. Subagent kill/steer require a gateway. Do not attempt to read gateway-specific files such as sessions.json, gateway.log, or gateway.pid.",
+  const loadFiles = async () => {
+    const bootstrapFiles = await resolveWorkspaceBootstrapFiles(bootstrapWorkspaceDir);
+    const executionAgentsPath = path.join(
+      path.resolve(params.setup.resolvedWorkspace),
+      DEFAULT_AGENTS_FILENAME,
+    );
+    const executionProjectFiles =
+      bootstrapWorkspaceDir === params.setup.resolvedWorkspace
+        ? []
+        : (await resolveWorkspaceBootstrapFiles(params.setup.resolvedWorkspace)).filter(
+            (file) =>
+              file.name === DEFAULT_AGENTS_FILENAME &&
+              !file.missing &&
+              path.resolve(file.path) === executionAgentsPath,
+          );
+    return { bootstrapFiles: [...bootstrapFiles, ...executionProjectFiles], contextFiles: [] };
+  };
+  const assertCurrent = resolveAdmittedRunActiveAssertion(
+    attempt.admittedRunContext,
+    attempt.abortSignal,
+  );
+  const withOwnedTranscriptWrite = params.withOwnedTranscriptWrite;
+  let snapshot: Awaited<ReturnType<typeof prepareBootstrapSnapshot>> | undefined;
+  if (snapshotEnabled) {
+    if (!withOwnedTranscriptWrite || !assertCurrent) {
+      throw new Error("Workspace snapshots require an admitted local embedded transcript owner.");
+    }
+    snapshot = await withOwnedTranscriptWrite(() =>
+      prepareBootstrapSnapshot({
+        target: params.snapshotTarget,
+        expectedWriterRunId: attempt.runId,
+        workspaceDir: bootstrapWorkspaceDir,
+        executionWorkspaceDir: params.setup.resolvedWorkspace,
+        profileId: attempt.bootstrapUserProfileId,
+        audience: attempt.chatType,
+        contextMode: attempt.bootstrapContextMode,
+        assertCurrent,
+        load: loadFiles,
+        render: (files) =>
+          buildBootstrapContextForFiles(files, {
+            config: attempt.config,
+            agentId: params.setup.sessionAgentId,
+            warn: bootstrapWarn,
+          }),
+      }),
     );
   }
+  let refreshPending = false;
+  const resolveFiles = async (refresh = false) =>
+    snapshot
+      ? (await withOwnedTranscriptWrite!(() => snapshot.load(refresh))).bootstrapFiles
+      : (await loadFiles()).bootstrapFiles;
+  const render = async (files?: WorkspaceBootstrapFile[]) => {
+    let completedBootstrapTurn: boolean | undefined;
+    const hasCompletedBootstrapTurnForAttempt = async () =>
+      (completedBootstrapTurn ??= await hasCompletedBootstrapTurn(attempt.sessionTarget));
+    const resolveBootstrapRouting = (bootstrapFiles?: readonly WorkspaceBootstrapFile[]) =>
+      resolveWorkspaceBootstrapRouting({
+        bootstrapContextRunKind: attempt.bootstrapContextRunKind,
+        trigger: attempt.trigger,
+        sessionKey: attempt.sessionKey,
+        isCanonicalWorkspace: attempt.isCanonicalWorkspace,
+        isWorkspaceBootstrapPending,
+        bootstrapFiles,
+        isPrimaryRun: isPrimaryBootstrapRun(attempt.sessionKey),
+        effectiveWorkspace: params.setup.effectiveWorkspace,
+        resolvedWorkspace: bootstrapWorkspaceDir,
+        hasBootstrapFileAccess: params.hasReadTool,
+      });
+    const shouldProbeContinuationSkip =
+      !suppressAmbientContext &&
+      contextInjectionMode === "continuation-skip" &&
+      !isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind) &&
+      (await hasCompletedBootstrapTurnForAttempt());
+    let preloadedBootstrapFiles: WorkspaceBootstrapFile[] | undefined;
+    let bootstrapRouting =
+      shouldProbeContinuationSkip || suppressAmbientContext || contextInjectionMode === "never"
+        ? await resolveBootstrapRouting()
+        : undefined;
+    if (
+      !suppressAmbientContext &&
+      contextInjectionMode !== "never" &&
+      (bootstrapRouting === undefined || bootstrapRouting.bootstrapMode === "full")
+    ) {
+      preloadedBootstrapFiles = files ?? (await resolveFiles());
+      bootstrapRouting = await resolveBootstrapRouting(preloadedBootstrapFiles);
+    }
+    bootstrapRouting ??= await resolveBootstrapRouting(preloadedBootstrapFiles);
+    const bootstrapMode = bootstrapRouting.bootstrapMode;
+    const {
+      bootstrapFiles: hookAdjustedBootstrapFiles,
+      contextFiles: resolvedContextFiles,
+      shouldRecordCompletedBootstrapTurn,
+    } = await resolveAttemptBootstrapContext({
+      // Raw probes and isolated finalization must not load AGENTS/BOOTSTRAP
+      // context even though finalization preserves the settled transcript.
+      contextInjectionMode: suppressAmbientContext ? "never" : contextInjectionMode,
+      bootstrapContextMode: attempt.bootstrapContextMode,
+      bootstrapContextRunKind: attempt.bootstrapContextRunKind ?? "default",
+      bootstrapMode,
+      deliversCompleteWorkspaceContext: bootstrapRouting.deliversCompleteWorkspaceContext,
+      hasCompletedBootstrapTurn: hasCompletedBootstrapTurnForAttempt,
+      resolveBootstrapContextForRun: async () => {
+        const layeredBootstrapFiles = preloadedBootstrapFiles ?? (await resolveFiles());
+        return {
+          bootstrapFiles: layeredBootstrapFiles,
+          contextFiles: buildBootstrapContextForFiles(layeredBootstrapFiles, {
+            config: attempt.config,
+            agentId: params.setup.sessionAgentId,
+            warn: bootstrapWarn,
+          }),
+        };
+      },
+    });
+    params.setup.prepStages?.mark("bootstrap-context");
+    const injectedContextFiles = bootstrapRouting.includeBootstrapInSystemContext
+      ? resolvedContextFiles
+      : resolvedContextFiles.filter((file) => !/(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()));
+    // Injection accounting keys on the source path the bootstrap file was loaded
+    // from, so it runs before the remap rewrites paths onto the prompt workspace.
+    const bootstrapInjectionStats = buildBootstrapInjectionStats({
+      bootstrapFiles: hookAdjustedBootstrapFiles,
+      injectedFiles: injectedContextFiles,
+    });
+    const contextFiles = remapInjectedContextFilesToWorkspace({
+      files: injectedContextFiles,
+      sourceWorkspaceDir: bootstrapWorkspaceDir,
+      targetWorkspaceDir: bootstrapPromptWorkspaceDir,
+    });
+    // Stats retain input order. Reports include suppressed BOOTSTRAP rows; budgets do not.
+    const bootstrapBudgetFiles = bootstrapRouting.includeBootstrapInSystemContext
+      ? bootstrapInjectionStats
+      : bootstrapInjectionStats.filter(
+          (_, index) => hookAdjustedBootstrapFiles[index]!.name !== DEFAULT_BOOTSTRAP_FILENAME,
+        );
+    const bootstrapBudget = buildBootstrapBudgetState({
+      config: attempt.config,
+      agentId: params.setup.sessionAgentId,
+      files: bootstrapBudgetFiles,
+      seenSignatures: attempt.bootstrapPromptWarningSignaturesSeen,
+      previousSignature: attempt.bootstrapPromptWarningSignature,
+    });
+    const workspaceNotes: string[] = [];
+    if (
+      hookAdjustedBootstrapFiles.some(
+        (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
+      )
+    ) {
+      workspaceNotes.push("Reminder: commit your changes in this workspace after edits.");
+    }
+    if (isEmbeddedMode()) {
+      workspaceNotes.push(
+        "Running in local embedded mode (no gateway). Most tools work locally. Gateway-dependent tools (canvas, nodes, cron, message, sessions_send, sessions_spawn, gateway) are unavailable. Subagent kill/steer require a gateway. Do not attempt to read gateway-specific files such as sessions.json, gateway.log, or gateway.pid.",
+      );
+    }
 
-  return {
-    ...bootstrapBudget,
-    bootstrapMode,
-    contextFiles,
-    bootstrapInjectionStats,
-    shouldRecordCompletedBootstrapTurn,
-    workspaceNotes,
+    return {
+      ...bootstrapBudget,
+      bootstrapMode,
+      contextFiles,
+      bootstrapInjectionStats,
+      shouldRecordCompletedBootstrapTurn,
+      workspaceNotes,
+    };
   };
+  const prepared: Awaited<ReturnType<typeof render>> & {
+    markWorkspaceContextCompacted?: () => void;
+    refreshWorkspaceContext?: () => Promise<boolean>;
+  } = await render();
+  if (snapshot) {
+    prepared.markWorkspaceContextCompacted = () => {
+      refreshPending = true;
+    };
+    prepared.refreshWorkspaceContext = async () => {
+      if (!refreshPending) {
+        return false;
+      }
+      Object.assign(prepared, await render(await resolveFiles(true)));
+      refreshPending = false;
+      return true;
+    };
+  }
+  return prepared;
 }

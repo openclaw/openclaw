@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, expect, it, onTestFinished, vi } from "vitest";
 import { delegateCompactionToRuntime } from "../../context-engine/delegate.js";
@@ -14,6 +15,7 @@ import {
   getApiKeyForModelMock,
   loadCompactHooksHarness,
   resetCompactHooksHarnessMocks,
+  resolveBootstrapContextForRunMock,
   resolveContextEngineMock,
   resolveModelMock,
   sessionCompactImpl,
@@ -63,6 +65,33 @@ async function runOwnedCompaction(run: () => ReturnType<typeof compactEmbeddedAg
     );
   }
 }
+
+it("loads workspace files through direct manual compaction in snapshot mode", async () => {
+  const baseParams = await prepareCompactionParams();
+  await writeFile(join(baseParams.workspaceDir, "AGENTS.md"), "MANUAL_COMPACT_WORKSPACE");
+  const { resolveBootstrapContextForRun } =
+    await vi.importActual<typeof import("../bootstrap-files.js")>("../bootstrap-files.js");
+  resolveBootstrapContextForRunMock.mockImplementation(resolveBootstrapContextForRun);
+  const result = await runOwnedCompaction(() =>
+    compactEmbeddedAgentSessionDirect({
+      ...baseParams,
+      provider: "openai",
+      model: "gpt-primary",
+      trigger: "manual",
+      config: { agents: { defaults: { workspaceContextRefresh: "compaction" } } },
+    }),
+  );
+  expect(result.reason).toBeUndefined();
+  expect(result).toMatchObject({ ok: true, compacted: true });
+  expect(resolveBootstrapContextForRunMock).toHaveBeenCalled();
+  const resolved = await resolveBootstrapContextForRunMock.mock.results[0]?.value;
+  expect(resolved?.contextFiles).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ content: expect.stringContaining("MANUAL_COMPACT_WORKSPACE") }),
+    ]),
+  );
+  expect(sessionCompactImpl).toHaveBeenCalled();
+});
 
 it.each(["lookup", "hook", "allowed"] as const)(
   "honors direct compaction cancellation across provider auth (%s)",

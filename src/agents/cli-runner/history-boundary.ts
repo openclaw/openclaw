@@ -20,7 +20,11 @@ import {
 import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
-import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
+import {
+  captureOwnedTranscriptWriteAssertion,
+  getOwnedSessionTranscriptWriterFence,
+  type SessionTranscriptWriterFence,
+} from "../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { hasLiveAgentRunContext } from "../../infra/agent-run-registry.js";
 import { bindAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
@@ -35,6 +39,166 @@ import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { buildSessionContext, SessionManager } from "../sessions/session-manager.js";
 import { createCliRunCurrentAssertion } from "./execution-target.js";
 import type { PreparedCliRunContext } from "./types.js";
+
+/** Claim workspace metadata writes without granting account-history provenance. */
+export async function prepareCliTranscriptWriter(params: PreparedCliRunContext["params"]) {
+  const source:
+    | (SessionTranscriptRuntimeTarget & Partial<SessionTranscriptWriterFence>)
+    | undefined = params.sessionTarget;
+  if (
+    !source ||
+    source.sessionId !== params.sessionId ||
+    (params.sessionKey !== undefined && source.sessionKey !== params.sessionKey)
+  ) {
+    throw new Error("CLI transcript owner requires the exact admitted session target");
+  }
+  const assertRun = createCliRunCurrentAssertion(params);
+  const assertInherited = captureOwnedTranscriptWriteAssertion(source);
+  const assertInheritedCurrent = composeSessionSourceAssertion([assertRun, assertInherited]);
+  assertInheritedCurrent();
+  if (
+    (params.expectedWriterRunId !== undefined &&
+      source.expectedWriterRunId !== undefined &&
+      params.expectedWriterRunId !== source.expectedWriterRunId) ||
+    (params.expectedLifecycleRevision !== undefined &&
+      source.expectedLifecycleRevision !== undefined &&
+      params.expectedLifecycleRevision !== source.expectedLifecycleRevision)
+  ) {
+    throw new Error("CLI transcript owner expectations disagree");
+  }
+  const expectedWriter = params.expectedWriterRunId ?? source.expectedWriterRunId;
+  const expectedLifecycle = params.expectedLifecycleRevision ?? source.expectedLifecycleRevision;
+  const inherited = getOwnedSessionTranscriptWriterFence({ sessionTarget: source });
+  if (inherited) {
+    if (
+      (expectedWriter !== undefined && expectedWriter !== inherited.expectedWriterRunId) ||
+      (expectedLifecycle !== undefined &&
+        expectedLifecycle !== inherited.expectedLifecycleRevision) ||
+      (params.sessionEntry &&
+        (params.sessionEntry.sessionId !== source.sessionId ||
+          params.sessionEntry.lifecycleRevision !== inherited.expectedLifecycleRevision))
+    ) {
+      throw new Error("CLI transcript owner changed before preparation");
+    }
+    return { target: { ...source, ...inherited }, assertCurrent: assertInheritedCurrent };
+  }
+  const requested = { ...source, storePath: resolveSessionTranscriptDatabasePath(source) };
+  await waitForSessionTranscriptProjection(requested, params.abortSignal);
+  assertInheritedCurrent();
+  const memory = captureSessionActorStorageOwner(requested, {
+    assertCurrent: assertInheritedCurrent,
+    authorize() {},
+  });
+  let target = memory ? { ...requested, storePath: memory.path } : requested;
+  let assertPhysicalSource = () => {
+    memory?.owner?.assertCurrent();
+    memory?.binding?.actor.assertReadable();
+  };
+  const { readSessionEntryInWorker } =
+    await import("../../config/sessions/session-entry-read-runtime.js");
+  assertInheritedCurrent();
+  const snapshot = memory
+    ? await readSessionEntryInWorker(target, assertInheritedCurrent)
+    : await withSessionTranscriptReadSource(
+        requested,
+        ({ scope, expectedIdentity, assertCurrent: assertReaderCurrent }) => {
+          target = { ...requested, storePath: scope.storePath };
+          assertPhysicalSource = () => {
+            if (expectedIdentity) {
+              assertExistingDatabaseIdentity(
+                target.storePath,
+                expectedIdentity.key,
+                expectedIdentity.birthtime,
+              );
+            }
+          };
+          return readSessionEntryInWorker(target, () => {
+            assertReaderCurrent();
+            assertInheritedCurrent();
+          });
+        },
+        params.abortSignal,
+      );
+  const assertCurrent = composeSessionSourceAssertion(
+    [assertRun, assertInherited],
+    (assertSources) => {
+      assertSources();
+      memory?.authority.assertCurrent();
+      assertPhysicalSource();
+    },
+  );
+  assertCurrent();
+  if (
+    !snapshot ||
+    snapshot.sessionId !== target.sessionId ||
+    (expectedLifecycle !== undefined && snapshot.lifecycleRevision !== expectedLifecycle) ||
+    (expectedWriter !== undefined && snapshot.activeWriterRunId !== expectedWriter) ||
+    (params.sessionEntry &&
+      (params.sessionEntry.sessionId !== snapshot.sessionId ||
+        params.sessionEntry.lifecycleRevision !== snapshot.lifecycleRevision))
+  ) {
+    throw new Error("CLI transcript owner changed before preparation");
+  }
+  const writerRunId = expectedWriter ?? params.runId;
+  // The snapshot's awaited SessionManager worker read validates transcript admission.
+  // This claim changes only metadata ownership, never history provenance.
+  const assertClaim = () => {
+    if (
+      snapshot.activeWriterRunId &&
+      snapshot.activeWriterRunId !== writerRunId &&
+      hasLiveAgentRunContext(snapshot.activeWriterRunId)
+    ) {
+      throw new Error("CLI transcript owner is still active");
+    }
+  };
+  assertCurrent();
+  assertClaim();
+  const claimed: InternalSessionEntry | null = await patchSessionEntryCore(
+    target,
+    (current) => {
+      if (
+        current.sessionId !== snapshot.sessionId ||
+        current.lifecycleRevision !== snapshot.lifecycleRevision ||
+        current.activeWriterRunId !== snapshot.activeWriterRunId
+      ) {
+        throw new Error("CLI transcript owner changed before writer claim");
+      }
+      return { activeWriterRunId: writerRunId };
+    },
+    {
+      preserveActivity: true,
+      skipMaintenance: true,
+      ...sessionEntryCommitGuardOptions(
+        composeSessionSourceAssertion([assertCurrent], (assertSources) => {
+          assertSources();
+          assertClaim();
+        }),
+      ),
+      onCommitted: (entry) => {
+        const caller: InternalSessionEntry | undefined = params.sessionEntry;
+        if (
+          caller?.sessionId === snapshot.sessionId &&
+          caller.lifecycleRevision === snapshot.lifecycleRevision &&
+          caller.activeWriterRunId === snapshot.activeWriterRunId
+        ) {
+          caller.activeWriterRunId = entry.activeWriterRunId;
+        }
+      },
+    },
+  );
+  assertCurrent();
+  if (!claimed || claimed.activeWriterRunId !== writerRunId) {
+    throw new Error("CLI transcript writer claim was not persisted");
+  }
+  return {
+    target: {
+      ...target,
+      expectedWriterRunId: writerRunId,
+      expectedLifecycleRevision: snapshot.lifecycleRevision,
+    },
+    assertCurrent,
+  };
+}
 
 /**
  * History belongs to the local transcript, not the latest native handle. Cover only

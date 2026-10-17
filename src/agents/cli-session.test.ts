@@ -198,6 +198,87 @@ describe("cli-session helpers", () => {
     ).toEqual({ mode: "reuse", sessionId: "cli-session-1" });
   });
 
+  it.each([
+    [undefined, "scope-a"],
+    ["scope-a", undefined],
+    ["scope-a", "scope-b"],
+  ])(
+    "starts fresh native history when workspace scope changes from %s to %s",
+    (stored, current) => {
+      const entry: SessionEntry = { sessionId: "local", updatedAt: 1 };
+      setCliSessionBinding(entry, "claude-cli", {
+        sessionId: "native-private",
+        workspaceContextScopeHash: stored,
+        forceReuse: true,
+      });
+      expect(
+        resolveCliSessionReuse({
+          binding: getCliSessionBinding(entry, "claude-cli"),
+          workspaceContextScopeHash: current,
+          authEpochVersion: 2,
+        }),
+      ).toEqual({ mode: "invalidate", invalidatedReason: "workspace-context" });
+    },
+  );
+
+  it.each([
+    { reason: "auth-epoch", changes: { authEpoch: "different" } },
+    { reason: "cwd", changes: { cwdHash: "different" } },
+    { reason: "mcp", changes: { mcpConfigHash: "different" } },
+  ])("keeps $reason checks when adopting a first workspace scope", ({ reason, changes }) => {
+    const current = {
+      authEpochVersion: 7,
+      authEpoch: "epoch",
+      cwdHash: "cwd",
+      mcpConfigHash: "mcp",
+    };
+    const binding = { sessionId: "native", ...current };
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        ...current,
+        workspaceContextScopeHash: "scope",
+        allowWorkspaceContextAdoption: true,
+      }),
+    ).toEqual({ mode: "reuse", sessionId: "native" });
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        ...current,
+        ...changes,
+        workspaceContextScopeHash: "scope",
+        allowWorkspaceContextAdoption: true,
+      }),
+    ).toEqual({ mode: "invalidate", invalidatedReason: reason });
+    expect(
+      resolveCliSessionReuse({
+        binding: { ...binding, forceReuse: true },
+        ...current,
+        workspaceContextScopeHash: "scope",
+        allowWorkspaceContextAdoption: true,
+      }),
+    ).toEqual({ mode: "invalidate", invalidatedReason: "workspace-context" });
+  });
+
+  it("preserves native history for the same workspace scope despite changed Markdown", () => {
+    expect(
+      resolveCliSessionReuse({
+        binding: {
+          sessionId: "native-private",
+          workspaceContextScopeHash: "scope-a",
+          extraSystemPromptHash: "old-content",
+        },
+        workspaceContextScopeHash: "scope-a",
+        extraSystemPromptHash: "new-content",
+        authEpochVersion: 2,
+      }),
+    ).toEqual({
+      mode: "reuse-with-drift",
+      sessionId: "native-private",
+      drift: { reasons: ["system-prompt"] },
+    });
+  });
+
   it("leaves the Claude-only field to Doctor instead of selecting it for resume", () => {
     const entry: SessionEntry = {
       sessionId: "local-session",

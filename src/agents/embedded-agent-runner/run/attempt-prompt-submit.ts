@@ -30,6 +30,7 @@ import type { UserTranscriptContext } from "./attempt-history.js";
 import {
   installModelPromptProjection,
   installRuntimeContextMessageForPrompt,
+  normalizeMessagesForLlmBoundary,
 } from "./attempt-llm-boundary.js";
 import {
   isSessionsYieldAbortError,
@@ -91,6 +92,14 @@ export async function submitEmbeddedAttemptPrompt(input: {
   assertHostActive?: SessionSourceAssertion;
   getUserTranscriptContexts?: () => readonly UserTranscriptContext[] | undefined;
   withTranscriptWrite?: <T>(write: () => Promise<T>) => Promise<T>;
+  /** Refreshes owned workspace context before a foreground model request. */
+  preparePrimaryModelRequest?: () =>
+    | Promise<
+        () => Pick<Parameters<StreamFn>[1], "tools" | "systemPrompt"> & {
+          promptUpdate?: { update?: RuntimeContextCustomMessage; commit: () => void };
+        }
+      >
+    | undefined;
   onModelRequest?: (
     model: Parameters<StreamFn>[0],
     context: Parameters<StreamFn>[1],
@@ -190,6 +199,45 @@ export async function submitEmbeddedAttemptPrompt(input: {
           assertRequestCurrent();
           let requestContext = context;
           const foregroundRequest = captureCurrentPromptForModel && !activeSession.isCompacting;
+          const prepareRequestContext = async () => {
+            const preparation = foregroundRequest
+              ? input.preparePrimaryModelRequest?.()
+              : undefined;
+            if (preparation) {
+              const readPreparedContext = await preparation;
+              assertRequestCurrent();
+              // Read the live permitted surface only after all awaited preparation.
+              // Do not reuse the tools snapshot captured before workspace preparation.
+              const projection = readPreparedContext().promptUpdate;
+              if (projection?.update) {
+                await activeSession[agentSessionQueuePromptContext](projection.update, {
+                  delivery: "current-request",
+                });
+                lateUpdates.push(projection.update);
+                requestContext = {
+                  ...requestContext,
+                  messages: [
+                    ...requestContext.messages,
+                    ...normalizeMessagesForLlmBoundary([projection.update], {
+                      inHistorySystemUpdates: true,
+                      appendOnlyRuntimeContext: true,
+                      includeTimestamp: false,
+                    }).filter((message) => message.role === "user"),
+                  ],
+                };
+              }
+              assertRequestCurrent();
+              if (projection) {
+                input.assertHostActive?.();
+                projection.commit();
+                await input.persistToolResultProjections();
+                assertRequestCurrent();
+              }
+              const { tools, systemPrompt } = readPreparedContext();
+              requestContext = { ...requestContext, tools, systemPrompt };
+            }
+          };
+          await prepareRequestContext();
           // Observe before V2 decides: only this observation can anchor the request's
           // measured prefix. A checkpoint request is observed again as its own request.
           const requestAnchor = foregroundRequest
@@ -221,6 +269,8 @@ export async function submitEmbeddedAttemptPrompt(input: {
                 ...requestContext,
                 messages: [...requestContext.messages, checkpoint],
               };
+              await prepareRequestContext();
+              assertRequestCurrent();
               await input.onModelRequest?.(model, requestContext, options?.signal);
             }
           }

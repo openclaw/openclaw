@@ -98,6 +98,7 @@ export const AgentEntryBaseSchema = z.strictObject({
   contextInjection: z
     .union([z.literal("always"), z.literal("continuation-skip"), z.literal("never")])
     .optional(),
+  workspaceContextRefresh: z.enum(["every-turn", "compaction"]).optional(),
   bootstrapMaxChars: z.number().int().positive().optional(),
   bootstrapTotalMaxChars: z.number().int().positive().optional(),
   experimental: z

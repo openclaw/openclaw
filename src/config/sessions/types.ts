@@ -141,6 +141,8 @@ export type CliSessionBinding = {
   authProfileId?: string;
   authEpoch?: string;
   authEpochVersion?: number;
+  /** Hard native-history identity for lifecycle-owned workspace context. */
+  workspaceContextScopeHash?: string;
   extraSystemPromptHash?: string;
   messageToolPolicyHash?: string;
   promptToolNamesHash?: string;

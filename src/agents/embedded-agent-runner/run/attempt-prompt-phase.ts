@@ -425,6 +425,8 @@ export async function runEmbeddedAttemptPromptPhase(
     publishDispatchState(state);
 
     if (!state.skipPromptSubmission) {
+      let workspacePromptRefreshPending = false;
+      const refreshWorkspace = prepared.bootstrap.refreshWorkspaceContext;
       await submitEmbeddedAttemptPrompt({
         ...(promptBuildAppendContext ? { appendContext: promptBuildAppendContext } : {}),
         attempt,
@@ -496,6 +498,50 @@ export async function runEmbeddedAttemptPromptPhase(
         assertHostActive: promptAssembly.assertHostActive,
         withTranscriptWrite,
         getUserTranscriptContexts: sessionRuntime.boundary.getUserTranscriptContexts,
+        preparePrimaryModelRequest: refreshWorkspace
+          ? async () => {
+              workspacePromptRefreshPending ||= await refreshWorkspace();
+              if (!workspacePromptRefreshPending) {
+                return () => ({
+                  tools: activeSession.agent.state.tools.slice(),
+                  systemPrompt: activeSession.agent.state.systemPrompt,
+                });
+              }
+              const refresh = await prepared.systemPrompt.prepareToolPrompt?.(
+                promptToolPolicy.current.effectiveTools,
+              );
+              input.runAbortController.signal.throwIfAborted();
+              promptAssembly.assertHostActive?.();
+              const refreshedPrompt = refresh?.(activeSession.agent.state.systemPrompt);
+              const projection =
+                refreshedPrompt !== undefined && sessionRuntime.prepareSystemPromptUpdate
+                  ? await sessionRuntime.prepareSystemPromptUpdate(
+                      refreshedPrompt,
+                      refresh?.freshlyRendered === true,
+                    )
+                  : undefined;
+              if (refreshedPrompt !== undefined && !projection) {
+                setActiveSessionSystemPrompt(refreshedPrompt);
+                workspacePromptRefreshPending = false;
+              }
+              return () => ({
+                tools: activeSession.agent.state.tools.slice(),
+                systemPrompt: projection?.systemPrompt ?? activeSession.agent.state.systemPrompt,
+                ...(projection
+                  ? {
+                      promptUpdate: {
+                        update: projection.update,
+                        commit: () => {
+                          projection.commit();
+                          setActiveSessionSystemPrompt(projection.systemPrompt);
+                          workspacePromptRefreshPending = false;
+                        },
+                      },
+                    }
+                  : {}),
+              });
+            }
+          : undefined,
         onSteeringAcknowledged: () => {
           leasedSteering = undefined;
         },

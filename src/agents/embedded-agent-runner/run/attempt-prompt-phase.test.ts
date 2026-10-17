@@ -80,6 +80,83 @@ afterEach(() => {
 });
 
 describe("runEmbeddedAttemptPromptPhase", () => {
+  it("refreshes compacted workspace through the existing prompt-series commit when tool selection is unchanged", async () => {
+    const f = createFixture();
+    using lease = retainEmbeddedSessionPromptState("phase-system-update");
+    const runtime = f.input.prepared.sessionRuntime;
+    const session = runtime.agentSession.activeSession;
+    const manager = SessionManager.inMemory();
+    runtime.sessionManager = manager;
+    runtime.sessionPromptState = lease.state;
+    runtime.toolResultPromptProjectionState = lease.state.toolResults;
+    runtime.transcriptPolicy.inHistorySystemUpdates = true;
+    session.agent.state.systemPrompt = "old workspace baseline";
+    const project = (systemPrompt: string) =>
+      prepareSessionSystemPrompt({
+        state: lease.state,
+        routeKey: "fixture-route",
+        systemPrompt,
+        entries: manager.getBranch(),
+      });
+    project("old workspace baseline").commit();
+    await persistSessionSystemPrompt(lease.state, (type, data) =>
+      manager.appendCustomEntryAsync(type, data),
+    );
+    const messageId = await manager.appendMessageAsync({
+      role: "user",
+      content: "conversation",
+      timestamp: 1,
+    });
+    await manager.appendCompactionAsync("summary", messageId, 100);
+    f.input.prepared.bootstrap.refreshWorkspaceContext = vi
+      .fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValue(false);
+    f.input.prepared.systemPrompt.prepareToolPrompt = vi.fn(async () =>
+      Object.assign(() => "fresh workspace baseline", { freshlyRendered: true }),
+    );
+    runtime.prepareSystemPromptUpdate = async (prompt) => project(prompt);
+    vi.mocked(runtime.agentSession.setActiveSessionSystemPrompt).mockImplementation((prompt) => {
+      session.agent.state.systemPrompt = prompt;
+      return prompt;
+    });
+    mocks.submitPrompt.mockImplementation(async (input: PromptSubmissionCall) => {
+      const read = await expectDefined(
+        input.preparePrimaryModelRequest?.(),
+        "workspace preparation",
+      );
+      const prepared = read();
+      expect(prepared.systemPrompt).toBe("fresh workspace baseline");
+      expect(prepared.promptUpdate?.update).toBeUndefined();
+      expect(session.agent.state.systemPrompt).toBe("old workspace baseline");
+      prepared.promptUpdate?.commit();
+      await input.persistToolResultProjections();
+      expect(session.agent.state.systemPrompt).toBe("fresh workspace baseline");
+      const checkpoints = manager
+        .getBranch()
+        .filter(
+          (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
+        );
+      expect(checkpoints.at(-1)).toMatchObject({ data: { prefix: "fresh workspace baseline" } });
+      const again = await expectDefined(
+        input.preparePrimaryModelRequest?.(),
+        "subsequent foreground preparation",
+      );
+      expect(again()).toMatchObject({ systemPrompt: "fresh workspace baseline" });
+      expect(again().promptUpdate).toBeUndefined();
+      await input.persistToolResultProjections();
+      expect(
+        manager
+          .getBranch()
+          .filter(
+            (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
+          ),
+      ).toHaveLength(checkpoints.length);
+    });
+    await runEmbeddedAttemptPromptPhase(f.input, f.promptState);
+    expect(f.readState().promptError).toBeNull();
+  });
+
   it.each([
     { appendOnlyRuntimeContext: true, queued: false },
     { appendOnlyRuntimeContext: false, queued: false },

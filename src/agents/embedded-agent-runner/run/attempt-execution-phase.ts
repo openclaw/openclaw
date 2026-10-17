@@ -48,6 +48,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     throw new Error("embedded attempt requires an active admitted run");
   }
   activeSession[agentSessionSetContextReplacementHook]((tokensAfter) => {
+    input.prepared.bootstrap.markWorkspaceContextCompacted?.();
     declarePromptHistoryRewrite({ ...attempt, reason: "compaction" });
     toolBase.skillInstructionDeliveryCache.clear();
     attempt.onContextAccountingEvent?.({ kind: "compaction", tokensAfter });

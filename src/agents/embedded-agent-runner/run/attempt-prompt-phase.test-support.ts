@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import type { SubsystemLogger } from "../../../logging/subsystem.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
 import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import type { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-build.js";
 import type {
@@ -236,6 +237,14 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
     },
     diagnostics: { diagnosticTrace: {}, runTrace: {} },
     prepared: {
+      bootstrap: {
+        ...buildBootstrapBudgetState({ files: [] }),
+        bootstrapMode: "full",
+        contextFiles: [],
+        bootstrapInjectionStats: [],
+        shouldRecordCompletedBootstrapTurn: false,
+        workspaceNotes: [],
+      },
       sessionRuntime: {
         agentSession: {
           activeSession,

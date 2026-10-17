@@ -6,6 +6,7 @@ import {
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
+import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -14,6 +15,7 @@ import {
   streamMocks,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { agentSessionRunProviderCompaction } from "../../sessions/agent-session-types.js";
 import {
   clearEmbeddedSessionPromptStates,
   prepareSessionSystemPrompt,
@@ -23,7 +25,10 @@ import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import { installAttemptPermissionPrompt } from "./attempt-permission-prompt.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { createBaseInput, createSession, sessionId } from "./attempt-prompt-submit.test-support.js";
-import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
+import {
+  buildRuntimeContextCustomMessage,
+  buildSystemUpdateMessage,
+} from "./runtime-context-prompt.js";
 
 registerAgentSessionLoopTestLifecycle();
 
@@ -32,6 +37,56 @@ afterEach(() => {
 });
 
 describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
+  it("awaits preparation again after a provider checkpoint and preserves its current request tail", async () => {
+    const { session, sessionManager } = await createTestSession();
+    let compacted = false;
+    session[agentSessionSetContextReplacementHook](() => {
+      compacted = true;
+    });
+    const requests: Context[] = [];
+    streamMocks.streamSimple.mockImplementation((model, context) => {
+      requests.push(structuredClone(context));
+      return createAssistantResultStream(createAssistant(model, [{ type: "text", text: "Done" }]));
+    });
+    const checkpoint = createAssistant(testModel, []);
+    checkpoint.providerReplay = {
+      type: "openai-responses-retained-compaction",
+      data: "fixture-checkpoint",
+    };
+    await submitEmbeddedAttemptPrompt({
+      ...createBaseInput(),
+      activeSession: session,
+      appendContext: undefined,
+      prependContext: undefined,
+      compactBeforeRequest: async () =>
+        session[agentSessionRunProviderCompaction](async (_signal, committed) => {
+          await sessionManager.appendMessageAsync(checkpoint);
+          committed(100, 20);
+          return checkpoint;
+        }),
+      preparePrimaryModelRequest: async () => {
+        const update = buildSystemUpdateMessage(
+          compacted ? "AFTER_CHECKPOINT_UPDATE" : "BEFORE_CHECKPOINT_UPDATE",
+          "prompt-update",
+          false,
+        );
+        return () => ({
+          tools: session.agent.state.tools,
+          systemPrompt: compacted ? "FRESH_WORKSPACE_PREFIX" : "SAVED_WORKSPACE_PREFIX",
+          promptUpdate: { update, commit: () => {} },
+        });
+      },
+      promptActiveSession: (prompt, options) => session.prompt(prompt, options),
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.systemPrompt).toBe("FRESH_WORKSPACE_PREFIX");
+    expect(requests[0]?.messages).toContainEqual(
+      expect.objectContaining({ providerReplay: checkpoint.providerReplay }),
+    );
+    expect(JSON.stringify(requests[0]?.messages)).toContain("BEFORE_CHECKPOINT_UPDATE");
+    expect(JSON.stringify(requests[0]?.messages)).toContain("AFTER_CHECKPOINT_UPDATE");
+  });
+
   it.each(["tool", "steer", "steer-backlog", "cancelled", "initial-backlog", "agent-end"] as const)(
     "refreshes permissions only for admitted %s continuation input",
     async (continuation) => {
@@ -227,30 +282,49 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
     },
   );
 
-  it("rechecks authority after awaiting persistence, before dispatch", async () => {
-    const { activeSession } = createSession();
-    const stream = vi.fn<StreamFn>();
-    activeSession.agent.streamFn = stream;
-    const admission = prepareSystemAgentRunAdmission({}, "prompt-restoration", "main", "prompt");
-    try {
-      const admitted = await admission.admit("embedded");
-      await expect(
-        submitEmbeddedAttemptPrompt({
-          ...createBaseInput(),
-          activeSession,
-          assertHostActive: resolveAdmittedRunActiveAssertion(admitted),
-          persistToolResultProjections: async () => {
-            admission.close();
-          },
-          promptActiveSession: async (_prompt, options) => {
-            options?.preflightResult?.(true);
-            await activeSession.agent.streamFn(testModel, { messages: [] }, {});
-          },
-        }),
-      ).rejects.toThrow("admitted run authority is no longer active");
-      expect(stream).not.toHaveBeenCalled();
-    } finally {
-      admission.close();
-    }
-  });
+  it.each(["workspace preparation", "persistence"] as const)(
+    "rechecks authority after awaiting %s, before dispatch",
+    async (boundary) => {
+      const { activeSession } = createSession();
+      const stream = vi.fn<StreamFn>();
+      activeSession.agent.streamFn = stream;
+      const admission = prepareSystemAgentRunAdmission(
+        {},
+        "prompt-workspace-preparation",
+        "main",
+        "prompt",
+      );
+      const reader = vi.fn(() => ({ tools: [], systemPrompt: "refreshed" }));
+      try {
+        const admitted = await admission.admit("embedded");
+        await expect(
+          submitEmbeddedAttemptPrompt({
+            ...createBaseInput(),
+            activeSession,
+            assertHostActive: resolveAdmittedRunActiveAssertion(admitted),
+            preparePrimaryModelRequest:
+              boundary === "workspace preparation"
+                ? async () => {
+                    admission.close();
+                    return reader;
+                  }
+                : undefined,
+            persistToolResultProjections: async () => {
+              if (boundary === "persistence") {
+                admission.close();
+              }
+            },
+            promptActiveSession: async (_prompt, options) => {
+              options?.preflightResult?.(true);
+              await activeSession.agent.streamFn(testModel, { messages: [] }, {});
+            },
+          }),
+        ).rejects.toThrow("admitted run authority is no longer active");
+        expect(reader).not.toHaveBeenCalled();
+        expect(stream).not.toHaveBeenCalled();
+      } finally {
+        admission.close();
+      }
+    },
+  );
 });

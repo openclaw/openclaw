@@ -221,7 +221,9 @@ export async function executePreparedCliRun(
       });
   prompt = imagePayload.prompt;
   const promptInputBackend =
-    params.controlOperation === "compact" && context.backendResolved.manualCompaction
+    !usePluginOwnedExecution &&
+    params.controlOperation === "compact" &&
+    context.backendResolved.manualCompaction
       ? { ...backend, input: context.backendResolved.manualCompaction.input }
       : backend;
   const { argsPrompt, stdin } = resolvePromptInput({ backend: promptInputBackend, prompt });

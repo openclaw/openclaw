@@ -61,6 +61,8 @@ type ClaudeCliTurn = {
   submittedInputUuids: Set<string>;
   inputStarted: boolean;
   promptSubmitted: boolean;
+  /** Rewritten hook passes for the first input must retain its workspace context. */
+  workspaceContext?: string;
   /** Hook reruns carry no input UUID and may rewrite text; retain their native input owner. */
   promptInputUuid: string;
   sawTerminalResult: boolean;
@@ -93,17 +95,14 @@ type ClaudeCliSession = {
   currentTurn?: ClaudeCliTurn;
   idleTimer?: ReturnType<typeof setTimeout>;
   hasInputLifecycle: boolean;
+  workspaceContextInjected?: boolean;
   closed: boolean;
 };
 const sessions = new WeakMap<CliBackendLiveSessionHandle, ClaudeCliSession>();
 
-function activeTurn(session: ClaudeCliSession): ClaudeCliTurn | undefined {
+function admittedTurn(session: ClaudeCliSession): ClaudeCliTurn | undefined {
   const turn = session.currentTurn;
   if (!turn || turn.controller.signal.aborted || turn.context.abortSignal?.aborted) {
-    return undefined;
-  }
-  // A warm child can emit prior-input callbacks while the next admitted input is queued.
-  if (session.hasInputLifecycle && !turn.inputStarted) {
     return undefined;
   }
   try {
@@ -112,6 +111,18 @@ function activeTurn(session: ClaudeCliSession): ClaudeCliTurn | undefined {
   } catch {
     return undefined;
   }
+}
+
+function activeTurn(session: ClaudeCliSession): ClaudeCliTurn | undefined {
+  const turn = admittedTurn(session);
+  if (!turn) {
+    return undefined;
+  }
+  // A warm child can emit prior-input callbacks while the next admitted input is queued.
+  if (session.hasInputLifecycle && !turn.inputStarted) {
+    return undefined;
+  }
+  return turn;
 }
 
 async function authorizeTool(
@@ -187,12 +198,46 @@ async function handleRequest(
   }
   const input = request.input;
   const turn = activeTurn(session);
+  if (request.callback_id === "SessionStart" && input.hook_event_name === "SessionStart") {
+    const lifecycleTurn = admittedTurn(session);
+    if (!lifecycleTurn || signal.aborted || !lifecycleTurn.context.workspaceContext) {
+      return {};
+    }
+    const source = input.source;
+    if (source !== "startup" && source !== "resume" && source !== "compact") {
+      throw new Error("Unsupported Claude workspace context lifecycle source.");
+    }
+    if (source !== "compact" && session.workspaceContextInjected) {
+      return {};
+    }
+    const additionalContext = await lifecycleTurn.context.workspaceContext(source);
+    if (admittedTurn(session) !== lifecycleTurn || signal.aborted) {
+      throw new Error("OpenClaw run closed while refreshing workspace context.");
+    }
+    session.workspaceContextInjected = true;
+    if (source === "compact") {
+      lifecycleTurn.workspaceContext = undefined;
+    }
+    return { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext } };
+  }
   if (request.callback_id === "UserPromptSubmit" && input.hook_event_name === "UserPromptSubmit") {
     if (!turn || signal.aborted || isInjectedPrompt(turn, input.prompt)) {
       return {};
     }
     turn.promptSubmitted = true;
+    // Native startup happens before initialize registers hooks. Seed the saved
+    // snapshot at the first submitted input of each process; warm turns retain it.
+    if (turn.context.workspaceContext && !session.workspaceContextInjected) {
+      turn.workspaceContext = await turn.context.workspaceContext(
+        turn.context.useResume ? "resume" : "startup",
+      );
+      if (activeTurn(session) !== turn || signal.aborted) {
+        throw new Error("OpenClaw run closed while loading workspace context.");
+      }
+      session.workspaceContextInjected = true;
+    }
     const additionalContext = [
+      turn.workspaceContext,
       turn.context.promptContext?.prependContext,
       turn.context.promptContext?.appendContext,
     ]
@@ -606,6 +651,9 @@ export async function* executeClaudeCli(
             systemPromptSnapshot: false,
             excludeDynamicSections,
             hooks: {
+              ...(context.workspaceContext
+                ? { SessionStart: [{ hookCallbackIds: ["SessionStart"] }] }
+                : {}),
               UserPromptSubmit: [{ hookCallbackIds: ["UserPromptSubmit"] }],
               PreToolUse: [{ hookCallbackIds: ["PreToolUse"] }],
             },
@@ -616,11 +664,30 @@ export async function* executeClaudeCli(
             if (request.subtype === "elicitation") {
               return () => ({ action: "decline" });
             }
-            const admittedTurn = activeTurn(session);
-            const response = await handleRequest(session, request, signal);
+            const currentTurn =
+              request.callback_id === "SessionStart" ? admittedTurn(session) : activeTurn(session);
+            let response: unknown;
+            try {
+              response = await handleRequest(session, request, signal);
+            } catch (error) {
+              // Native hook errors can be nonfatal. A missing required snapshot
+              // must close the turn rather than resume with incomplete policy.
+              if (
+                context.workspaceContext &&
+                (request.callback_id === "SessionStart" ||
+                  request.callback_id === "UserPromptSubmit")
+              ) {
+                session.handle.close("abort", error);
+              }
+              throw error;
+            }
             // The transport invokes this synchronously at its final write, after all awaits.
             return () => {
-              if (admittedTurn && activeTurn(session) === admittedTurn && !signal.aborted) {
+              const current =
+                request.callback_id === "SessionStart"
+                  ? admittedTurn(session)
+                  : activeTurn(session);
+              if (currentTurn && current === currentTurn && !signal.aborted) {
                 return response;
               }
               const message = "The OpenClaw run is no longer active.";

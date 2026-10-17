@@ -392,6 +392,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     tools,
     capabilities: [...params.capabilityToolNames].toSorted(),
     catalogEntries: params.toolSearchCatalogRef?.current?.entries,
+    contextFiles: params.bootstrap.contextFiles,
     permissionChanged,
   });
   let toolPromptPreparation = {
@@ -414,6 +415,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         toolPromptPreparation.mode === mode &&
         toolPromptPreparation.permissionChanged === permissionChanged &&
         toolPromptPreparation.catalogEntries === catalogEntries &&
+        toolPromptPreparation.contextFiles === params.bootstrap.contextFiles &&
         toolPromptPreparation.tools.length === effectiveTools.length &&
         toolPromptPreparation.tools.every((tool, index) => tool === effectiveTools[index]) &&
         toolPromptPreparation.capabilities.length === capabilities.length &&
@@ -430,6 +432,12 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         const refreshedSandboxInfo = await sandboxInfoPreparation;
         const embeddedSystemPrompt = {
           ...promptInputs.embeddedSystemPrompt,
+          contextFiles: params.bootstrap.contextFiles,
+          bootstrapMode: params.bootstrap.bootstrapMode,
+          workspaceNotes: params.bootstrap.workspaceNotes,
+          bootstrapTruncationNotice: buildBootstrapPromptWarningNotice(
+            params.bootstrap.bootstrapPromptWarning.lines,
+          ),
           tools,
           webSearchUnconfigured: params.webSearchUnconfigured?.(),
           capabilityToolNames: capabilities,
@@ -461,6 +469,12 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
             systemPromptReport,
             buildSystemPromptReport({
               ...reportInputs,
+              bootstrapTruncation: buildBootstrapTruncationReportMeta({
+                analysis: params.bootstrap.bootstrapAnalysis,
+                warningMode: params.bootstrap.bootstrapPromptWarningMode,
+                warning: params.bootstrap.bootstrapPromptWarning,
+              }),
+              injectedWorkspaceFiles: params.bootstrap.bootstrapInjectionStats,
               generatedAt: Date.now(),
               systemPrompt,
               skillsPrompt: nextSystemPrompt.skillsPrompt,

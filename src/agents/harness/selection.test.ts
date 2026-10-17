@@ -556,6 +556,44 @@ function registerTestCompactor(
 }
 
 describe("runAgentHarnessAttempt", () => {
+  it.each([
+    "ordinary",
+    "every-turn",
+    "model-run",
+    "no-prompt",
+    "finalization",
+    "detached",
+    "no-injection",
+  ] as const)("keeps workspace snapshot eligibility at plugin admission (%s)", async (mode) => {
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("codex"));
+    registerHarness({ runAttempt });
+    const params: EmbeddedRunAttemptParams = {
+      ...createAttemptParams({
+        agents: {
+          defaults: {
+            workspaceContextRefresh: mode === "every-turn" ? "every-turn" : "compaction",
+            ...(mode === "no-injection" ? { contextInjection: "never" } : {}),
+          },
+        },
+      }),
+      agentHarnessId: "codex",
+      ...(mode === "model-run" ? { modelRun: true } : {}),
+      ...(mode === "no-prompt" ? { promptMode: "none" } : {}),
+      ...(mode === "finalization" ? { operation: "settled-tool-finalization" } : {}),
+      ...(mode === "detached" ? { sessionPersistence: "detached" } : {}),
+    };
+    if (mode === "ordinary") {
+      await expect(runAgentHarnessAttempt(params)).rejects.toThrow(
+        "workspaceContextRefresh=compaction requires a supported lifecycle harness",
+      );
+      expect(runAttempt).not.toHaveBeenCalled();
+    } else {
+      await expect(runAgentHarnessAttempt(params)).resolves.toMatchObject({
+        assistantTexts: ["codex ok"],
+      });
+      expect(runAttempt).toHaveBeenCalledOnce();
+    }
+  });
   it.each(["close", "abort", "lifecycle replacement"] as const)(
     "revokes retained settled-turn callbacks after %s",
     async (revocation) => {

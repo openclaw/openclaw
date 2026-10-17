@@ -88,6 +88,7 @@ export function buildCliLiveSessionFingerprint(params: {
         ? sha256Hex(context.effectiveAuthProfileId)
         : undefined,
       authEpochHash: context.authEpoch ? sha256Hex(context.authEpoch) : undefined,
+      workspaceContextScopeHash: context.workspaceContextScopeHash,
       extraSystemPromptHash: context.extraSystemPromptHash,
       promptToolNamesHash: context.promptToolNamesHash,
       mcpResumeHash: context.preparedBackend.mcpResumeHash ?? context.preparedBackend.mcpConfigHash,

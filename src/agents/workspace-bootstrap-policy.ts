@@ -38,7 +38,8 @@ export const WORKSPACE_BOOTSTRAP_FILENAMES = [
 export type WorkspaceBootstrapFileName = (typeof WORKSPACE_BOOTSTRAP_FILENAMES)[number];
 
 export type WorkspaceBootstrapFile = {
-  name: WorkspaceBootstrapFileName;
+  /** Bootstrap hooks may add files beyond the standard workspace names. */
+  name: string;
   path: string;
   content?: string;
   missing: boolean;

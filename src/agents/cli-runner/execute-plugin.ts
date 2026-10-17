@@ -603,6 +603,9 @@ export async function executePluginOwnedProcess(params: {
         env: params.env,
         prompt: params.prompt,
         ...(params.promptContext ? { promptContext: params.promptContext } : {}),
+        ...(params.context.workspaceContext
+          ? { workspaceContext: AsyncLocalStorage.bind(params.context.workspaceContext) }
+          : {}),
         modelId: params.context.normalizedModel,
         systemPrompt: stripSystemPromptCacheBoundary(params.context.systemPrompt).trim(),
         ...(params.sessionId ? { sessionId: params.sessionId } : {}),

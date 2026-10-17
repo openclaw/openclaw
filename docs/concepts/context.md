@@ -291,3 +291,60 @@ Either way, it reports sizes and top contributors; it does **not** dump the full
     The full agent execution cycle from inbound message to final reply.
   </Card>
 </CardGroup>
+
+## Workspace Markdown refresh cadence
+
+Workspace Markdown is refreshed each turn by default. The managed local Claude CLI
+harness and the local embedded runtime with built-in compaction support an opt-in cadence:
+
+```json5
+{
+  agents: {
+    defaults: { workspaceContextRefresh: "compaction" },
+  },
+}
+```
+
+An agent entry can override `workspaceContextRefresh`. Use `"every-turn"` to keep
+the default behavior. Managed Codex, external CLI processes, remote Claude placement,
+and context engines that own compaction reject `"compaction"` explicitly; their
+first post-compaction continuation is not covered by this lifecycle contract.
+
+In compaction mode, OpenClaw saves the effective workspace context in the existing
+SQLite transcript before dispatch. The snapshot includes personal context,
+bootstrap hook additions and normal audience filtering. Selected file contents
+are retained as snapshot metadata; the injected context still obeys file budgets. A process
+restart, cache eviction, model change, or native recovery reuses that saved
+content. A new OpenClaw session reads fresh content.
+
+Snapshots retain file inputs, not whole prompts. Each harness applies its current
+budgets, routing, and rendering to the retained files. Tool permissions, skills,
+memory-provider guidance, and current job instructions keep their existing refresh
+rules. Detached preparation does not write snapshots.
+
+In the embedded runtime, successful local compaction or a provider checkpoint marks
+the retained files stale. The first foreground request after that boundary awaits
+fresh file loading and snapshot persistence, then uses the existing prompt-series
+owner to install the refreshed context. This also applies to automatic retries in
+the same turn. A restart recognizes the durable compaction/checkpoint before
+reusing a snapshot. Failed compaction retains the previous files; a failed refresh
+stops dispatch until it can be retried.
+
+In managed Claude, the workspace block is delivered through private native lifecycle context instead
+of the stable system prompt. The first submitted input in a native process
+receives the saved snapshot. Native subscription login needs no Anthropic API key:
+workspace metadata uses the admitted host transcript owner, independently of
+account-bound conversation-history reseeding. Existing unknown-provenance history
+stays unknown. On first enable, an existing native binding can retain its ID only
+when ordinary authentication, workspace and MCP reuse checks pass and no prior
+private workspace snapshot exists. Native `SessionStart` with source `compact` awaits a
+fresh snapshot and its durable write before returning context to the continuation.
+Changing the personal profile, audience, or full/lightweight context mode starts a
+fresh native session and recovers eligible conversation history from OpenClaw.
+Native compaction cannot cross those scopes; run a regular turn first to activate
+the new scope. Ordinary turns do not reinject the workspace block. Snapshot records are storage
+metadata and do not become conversation messages or reseed text.
+
+External edits intentionally remain invisible until compaction or a new session.
+An agent's own edits remain visible through its existing tool history. Skills,
+tool permissions, and unrelated per-turn hooks keep their existing lifecycles.

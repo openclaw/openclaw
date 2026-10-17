@@ -321,6 +321,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Exact configured native target agents that may omit this requester agent’s tools.deny at spawn. Requires allowAgents independently. Deny-only handoffs preserve all nonlocal restrictions; restrictive initial profiles/allowlists or unsupported transports refuse the handoff instead of widening them. Same-target native helpers preserve their own additional ceilings. Sender-restricted and ACP requests never use this grant. Revocation restores the original requester snapshot.",
   "agents.entries.*.subagents.delegationMode":
     'Per-agent override for sub-agent delegation strength. Omit to use "prefer" in this agent\'s main session and "suggest" elsewhere; explicit "prefer" or "suggest" always wins.',
+  "agents.entries.*.workspaceContextRefresh":
+    "Per-agent workspace Markdown refresh cadence; inherits agents.defaults.workspaceContextRefresh. compaction requires managed local Claude CLI or local embedded built-in compaction.",
   "agents.entries.*.contextInjection":
     "Per-agent override for workspace bootstrap-file injection in the embedded runtime. Omit to inherit agents.defaults.contextInjection. Does not control CLI-backed prompt preparation.",
   "agents.entries.*.cwd":

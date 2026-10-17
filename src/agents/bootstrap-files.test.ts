@@ -556,6 +556,26 @@ describe("resolveBootstrapContextForRun", () => {
   beforeEach(() => clearInternalHooks());
   afterEach(() => clearInternalHooks());
 
+  it("loads compaction-configured workspace for prompt inspection and diagnostics", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "INSPECT_WORKSPACE");
+    const params = {
+      workspaceDir,
+      config: { agents: { defaults: { workspaceContextRefresh: "compaction" as const } } },
+    };
+    const contexts = await Promise.all([
+      resolveBootstrapContextForRun(params),
+      resolveBootstrapContextForDiagnostics(params),
+    ]);
+    for (const context of contexts) {
+      expect(context.contextFiles).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ content: expect.stringContaining("INSPECT_WORKSPACE") }),
+        ]),
+      );
+    }
+  });
+
   it("keeps bootstrap context empty in lightweight heartbeat mode", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "persona", "utf8");

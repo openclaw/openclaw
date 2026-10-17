@@ -1,10 +1,11 @@
-/** Prepares the admitted writer context and teardown tracker for one attempt. */
 import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { prepareSessionEntryReplacementDatabase } from "../../../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
+/** Prepares the admitted writer context and teardown tracker for one attempt. */
+import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.types.js";
 import { createSessionActorFactory } from "../../../config/sessions/session-actor-durable.js";
 import { prepareCronRootSessionGeneration } from "../../../config/sessions/session-delivery-generation.js";
 import { assertSessionEntryCohortScope } from "../../../config/sessions/session-entry-cohort-scope.js";
@@ -51,6 +52,7 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
     throwIfFiredAfterPrepCleanup: () => Promise<void>;
   };
 }): Promise<{
+  sessionTarget: SessionTranscriptRuntimeTarget;
   compactionTimeoutMs: number;
   assertCronRootCurrent?: () => void;
   ownedTranscriptWriteContext: OwnedSessionTranscriptWriteContext;
@@ -240,6 +242,7 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
   }
 
   return {
+    sessionTarget: fencedSessionTarget,
     compactionTimeoutMs: resolveCompactionTimeoutMs(attempt.config),
     assertCronRootCurrent: generation ? ownedTranscriptWriteContext.assertCommitAllowed : undefined,
     ownedTranscriptWriteContext,

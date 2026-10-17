@@ -119,17 +119,18 @@ async function preparePermissionPrompt(
     ...attemptOverrides,
   } as EmbeddedRunAttemptParams;
   const capabilityToolNames = new Set(tools.map(({ name }) => name));
+  const bootstrap: Parameters<typeof prepareEmbeddedAttemptSystemPrompt>[0]["bootstrap"] = {
+    ...buildBootstrapBudgetState({ files: [] }),
+    bootstrapMode: "full",
+    contextFiles: [],
+    bootstrapInjectionStats: [],
+    shouldRecordCompletedBootstrapTurn: false,
+    workspaceNotes: [],
+  };
   const prepared = await prepareEmbeddedAttemptSystemPrompt({
     attempt,
     activeContextEngine: undefined,
-    bootstrap: {
-      ...buildBootstrapBudgetState({ files: [] }),
-      bootstrapMode: "full",
-      contextFiles: [],
-      bootstrapInjectionStats: [],
-      shouldRecordCompletedBootstrapTurn: false,
-      workspaceNotes: [],
-    },
+    bootstrap,
     capabilityToolNames,
     requireExplicitMessageTarget,
     effectiveTools: skills?.initialToolNames
@@ -158,6 +159,7 @@ async function preparePermissionPrompt(
   return {
     attempt,
     capabilityToolNames,
+    bootstrap,
     prepared,
     read,
     refreshSystemPrompt: async (prompt: string, refreshedTools: AgentTool[]) =>
@@ -183,6 +185,47 @@ describe("buildAttemptSystemPrompt", () => {
     expect(await refreshSystemPrompt(prepared.systemPromptText, [read])).not.toContain(
       "Web search is supported but not configured.",
     );
+  });
+
+  it("rerenders refreshed workspace files with current permissions and preserves whole hook overrides", async () => {
+    const { bootstrap, prepared, attempt, read, capabilityToolNames } =
+      await preparePermissionPrompt();
+    const files = (content: string) => [{ path: "/tmp/openclaw/AGENTS.md", content }];
+    bootstrap.contextFiles = files("FIRST_WORKSPACE_CONTEXT");
+    const first = (await prepared.prepareToolPrompt([read]))(prepared.systemPromptText);
+    expect(first).toContain("FIRST_WORKSPACE_CONTEXT");
+    expect(prepared.systemPromptReport.bootstrapTruncation?.truncatedFiles).toBe(0);
+    bootstrap.contextFiles = files("FRESH_WORKSPACE_CONTEXT");
+    Object.assign(
+      bootstrap,
+      buildBootstrapBudgetState({
+        config: { agents: { defaults: { bootstrapMaxChars: 1000 } } },
+        files: [
+          {
+            name: "AGENTS.md",
+            path: "/tmp/openclaw/AGENTS.md",
+            missing: false,
+            rawChars: 10_000,
+            injectedChars: 1000,
+            truncated: true,
+          },
+        ],
+      }),
+    );
+    const next = (await prepared.prepareToolPrompt([read]))(first);
+    expect(next).toContain("FRESH_WORKSPACE_CONTEXT");
+    expect(next).not.toContain("FIRST_WORKSPACE_CONTEXT");
+    expect(prepared.systemPromptReport.bootstrapTruncation?.truncatedFiles).toBe(1);
+    attempt.permissionMode = "read-only";
+    capabilityToolNames.delete("write");
+    const refresh = await prepared.prepareToolPrompt([read], { permissionChanged: true });
+    const permitted = refresh(next);
+    expect(permitted).toContain("FRESH_WORKSPACE_CONTEXT");
+    expect(permitted).toContain("permissions to read-only");
+    expect(permitted).not.toContain("- write:");
+    const override = refresh("Use the deliberate hook override.");
+    expect(override).toContain("Use the deliberate hook override.");
+    expect(override).not.toContain("WORKSPACE_CONTEXT");
   });
 
   const skillsCatalog = "<available_skills><skill><name>weather</name></skill></available_skills>";

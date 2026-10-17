@@ -278,71 +278,11 @@ async function runEmbeddedAttemptOwned(
     releasePreparedTools = preparedToolBase.releaseTools;
     prepStages.mark("core-plugin-tools");
     emitCorePluginToolStageSummary("core-plugin-tools", corePluginToolStages.snapshot());
-    const preparedBootstrap = await prepare("attempt.bootstrap", () =>
-      prepareEmbeddedAttemptBootstrap({
-        attempt: params,
-        setup,
-        hasReadTool: toolsEnabled && toolsRaw.some((tool) => tool.name === "read"),
-        isRawModelRun,
-      }),
-    );
     let yieldDetected = false;
     let yieldMessage: string | null = null;
     let yieldAcknowledgment: string | undefined;
     let yieldMessageWaitRegistered: boolean | undefined;
     let yieldAbortSettled: Promise<void> | null = null;
-    const preparedBundleTools = await prepare("attempt.bundle-tools", () =>
-      prepStages.measure("bundle-tools", () =>
-        prepareEmbeddedAttemptBundleTools({
-          agentDir,
-          attempt: params,
-          setup,
-          isRawModelRun,
-          preparedToolBase,
-        }),
-      ),
-    );
-    bundleRuntimes.bundleMcpRuntime = preparedBundleTools.bundleMcpRuntime;
-    bundleRuntimes.bundleLspRuntime = preparedBundleTools.bundleLspRuntime;
-    const { clientTools, uncompactedEffectiveTools } = preparedBundleTools;
-    // Catalog preparation registers global run state before tool projection and
-    // diagnostics, so arm cleanup before either can fail and leak the catalog.
-    toolSearchCatalogApplied = toolSearchCatalogRef !== undefined;
-    const preparedToolCatalog = await prepare("attempt.tool-catalog", () =>
-      prepStages.measure("tool-catalog", () =>
-        prepareEmbeddedAttemptToolCatalog({
-          attempt: params,
-          setup,
-          preparedToolBase,
-          bundleTools: { clientTools, uncompactedEffectiveTools },
-          abortSignal: runAbortController.signal,
-          executeCodeModeTool: (toolParams) => executeCatalogTool(toolParams, "Code Mode"),
-        }),
-      ),
-    );
-    // Close the inclusive checkpoint; the owner spans exclude preparation admission.
-    prepStages.mark("tool-preparation");
-    const { effectiveTools, toolSearch, toolSearchRunPlan } = preparedToolCatalog;
-    toolSearchCatalogApplied = toolSearch.catalogRegistered;
-    const preparedSystemPrompt = await prepare("attempt.system-prompt", () =>
-      prepareEmbeddedAttemptSystemPrompt({
-        activeContextEngine,
-        attempt: params,
-        setup,
-        bootstrap: preparedBootstrap,
-        capabilityToolNames: toolSearchRunPlan.capabilityToolNames,
-        requireExplicitMessageTarget: preparedToolBase.requireExplicitMessageTarget,
-        effectiveTools,
-        isRawModelRun,
-        modelToolsEnabled: toolsEnabled,
-        skillsPrompt,
-        codeModeActive: codeModeControlsEnabledForRun,
-        webSearchUnconfigured: () => preparedToolBase.webSearchUnconfigured,
-        toolSearchCatalogRef,
-        toolSearchDirectoryEnabled: toolSearchControlsEnabledForRun && toolSearch.catalogRegistered,
-        toolSearchRuntimeConfig,
-      }),
-    );
     const sessionLock = await prepare("attempt.transcript-lifecycle", () =>
       prepareEmbeddedAttemptTranscriptLifecycle({
         attempt: params,
@@ -351,6 +291,69 @@ async function runEmbeddedAttemptOwned(
       }),
     );
     try {
+      const preparedBootstrap = await prepare("attempt.bootstrap", () =>
+        prepareEmbeddedAttemptBootstrap({
+          attempt: params,
+          snapshotTarget: sessionLock.sessionTarget,
+          setup,
+          hasReadTool: toolsEnabled && toolsRaw.some((tool) => tool.name === "read"),
+          isRawModelRun,
+          withOwnedTranscriptWrite: sessionLock.withOwnedTranscriptWrite,
+        }),
+      );
+      const preparedBundleTools = await prepare("attempt.bundle-tools", () =>
+        prepStages.measure("bundle-tools", () =>
+          prepareEmbeddedAttemptBundleTools({
+            agentDir,
+            attempt: params,
+            setup,
+            isRawModelRun,
+            preparedToolBase,
+          }),
+        ),
+      );
+      bundleRuntimes.bundleMcpRuntime = preparedBundleTools.bundleMcpRuntime;
+      bundleRuntimes.bundleLspRuntime = preparedBundleTools.bundleLspRuntime;
+      const { clientTools, uncompactedEffectiveTools } = preparedBundleTools;
+      // Catalog preparation registers global run state before tool projection and
+      // diagnostics, so arm cleanup before either can fail and leak the catalog.
+      toolSearchCatalogApplied = toolSearchCatalogRef !== undefined;
+      const preparedToolCatalog = await prepare("attempt.tool-catalog", () =>
+        prepStages.measure("tool-catalog", () =>
+          prepareEmbeddedAttemptToolCatalog({
+            attempt: params,
+            setup,
+            preparedToolBase,
+            bundleTools: { clientTools, uncompactedEffectiveTools },
+            abortSignal: runAbortController.signal,
+            executeCodeModeTool: (toolParams) => executeCatalogTool(toolParams, "Code Mode"),
+          }),
+        ),
+      );
+      // Close the inclusive checkpoint; the owner spans exclude preparation admission.
+      prepStages.mark("tool-preparation");
+      const { effectiveTools, toolSearch, toolSearchRunPlan } = preparedToolCatalog;
+      toolSearchCatalogApplied = toolSearch.catalogRegistered;
+      const preparedSystemPrompt = await prepare("attempt.system-prompt", () =>
+        prepareEmbeddedAttemptSystemPrompt({
+          activeContextEngine,
+          attempt: params,
+          setup,
+          bootstrap: preparedBootstrap,
+          capabilityToolNames: toolSearchRunPlan.capabilityToolNames,
+          requireExplicitMessageTarget: preparedToolBase.requireExplicitMessageTarget,
+          effectiveTools,
+          isRawModelRun,
+          modelToolsEnabled: toolsEnabled,
+          skillsPrompt,
+          codeModeActive: codeModeControlsEnabledForRun,
+          webSearchUnconfigured: () => preparedToolBase.webSearchUnconfigured,
+          toolSearchCatalogRef,
+          toolSearchDirectoryEnabled:
+            toolSearchControlsEnabledForRun && toolSearch.catalogRegistered,
+          toolSearchRuntimeConfig,
+        }),
+      );
       const preparedSessionRuntime = await prepare("attempt.session-runtime", () =>
         prepareEmbeddedAttemptSessionRuntime({
           attempt: params,

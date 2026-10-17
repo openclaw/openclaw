@@ -268,6 +268,7 @@ export type PreparedCliRunContext = {
   deferContextEngineDisposalUntil?: (promise: Promise<void>) => void;
   contextEngineTurnPrompt?: string;
   promptContext?: CliBackendPromptContext;
+  workspaceContext?: import("../../plugins/cli-backend.types.js").CliBackendExecuteContext["workspaceContext"];
   /** Logical model input retained for policy/observation hooks when transport context is separate. */
   promptForHooks?: string;
   modelId: string;
@@ -291,6 +292,7 @@ export type PreparedCliRunContext = {
   runtimeArtifactFingerprint?: string;
   authBindingSkipsLocalCredential?: true;
   authEpochVersion: number;
+  workspaceContextScopeHash?: string;
   extraSystemPromptHash?: string;
   messageToolPolicyHash?: string;
   promptToolNamesHash?: string;

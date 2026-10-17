@@ -549,6 +549,7 @@ describe("Claude native stdio boundary", () => {
     async ({ scenario, results, samePrompt }) => {
       const { context, running, injection } = await startInjection(scenario, {
         promptContext: { prependContext: PRIVATE },
+        workspaceContext: async () => "SAVED_WORKSPACE",
       });
       const withCurrent = vi.fn(async (submit: () => void) => submit());
       const notificationReplay = scenario.includes("notification-replay");
@@ -572,7 +573,10 @@ describe("Claude native stdio boundary", () => {
         false,
       ]);
       const detail = resultDetail(records);
-      expect(detail).toMatchObject({ user: input, privateContext: PRIVATE });
+      expect(detail).toMatchObject({
+        user: input,
+        privateContext: `SAVED_WORKSPACE\n\n${PRIVATE}`,
+      });
       if (notificationReplay) {
         expect(detail.finalBackgroundAnswer).toBe(true);
       }

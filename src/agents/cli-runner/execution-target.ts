@@ -74,6 +74,7 @@ export function resolveCliExecutionTarget(context: {
   params: Pick<RunCliAgentParams, "sessionEntry" | "controlOperation">;
   backendId: string;
   execute?: CliBackendExecute;
+  lifecycleWorkspaceContext?: boolean;
 }): CliExecutionTarget {
   const entry = context.params.sessionEntry;
   // Claude placement owns its CLI, auth, transcript, and exec tools together.
@@ -87,7 +88,8 @@ export function resolveCliExecutionTarget(context: {
       placement: { nodeId, ...(entry.execCwd?.trim() ? { cwd: entry.execCwd.trim() } : {}) },
     };
   }
-  return context.execute && context.params.controlOperation !== "compact"
+  return context.execute &&
+    (context.params.controlOperation !== "compact" || context.lifecycleWorkspaceContext)
     ? { kind: "plugin", execute: context.execute }
     : { kind: "process" };
 }

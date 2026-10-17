@@ -229,6 +229,8 @@ export type CliBackendExecuteContext = {
   env: Record<string, string>;
   prompt: string;
   promptContext?: CliBackendPromptContext;
+  /** Awaited native lifecycle context; ordinary turns must not replay it. */
+  workspaceContext?: (source: "startup" | "resume" | "compact") => Promise<string>;
   modelId: string;
   systemPrompt: string;
   sessionId?: string;

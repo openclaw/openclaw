@@ -65,6 +65,20 @@ export function resolveContextInjectionMode(
   return config?.agents?.defaults?.contextInjection ?? "always";
 }
 
+/** Workspace content cadence is independent of whether a runtime injects context. */
+export function resolveWorkspaceContextRefresh(
+  config?: OpenClawConfig,
+  agentId?: string,
+): "every-turn" | "compaction" {
+  return (
+    (config && agentId
+      ? resolveAgentConfig(config, agentId)?.workspaceContextRefresh
+      : undefined) ??
+    config?.agents?.defaults?.workspaceContextRefresh ??
+    "every-turn"
+  );
+}
+
 /** Checks the active SQLite transcript branch for a valid full-bootstrap marker. */
 export async function hasCompletedBootstrapTurn(
   sessionTarget?: AgentRunSessionTarget,

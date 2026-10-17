@@ -100,6 +100,7 @@ export function setCliSessionBinding(
       : {}),
   };
   for (const field of [
+    "workspaceContextScopeHash",
     "extraSystemPromptHash",
     "messageToolPolicyHash",
     "promptToolNamesHash",
@@ -173,7 +174,13 @@ export function resolveCliSessionClearReason(error: unknown): string {
   return isFailoverError(error) ? error.reason : (readErrorName(error) ?? "error");
 }
 
-type CliSessionInvalidatedReason = "auth-profile" | "auth-epoch" | "message-policy" | "cwd" | "mcp";
+type CliSessionInvalidatedReason =
+  | "auth-profile"
+  | "auth-epoch"
+  | "message-policy"
+  | "cwd"
+  | "mcp"
+  | "workspace-context";
 
 type CliSessionContentDriftReason = "system-prompt" | "prompt-tools";
 
@@ -235,6 +242,8 @@ export function resolveCliSessionReuse(params: {
   authProfileId?: string;
   authEpoch?: string;
   authEpochVersion: number;
+  workspaceContextScopeHash?: string;
+  allowWorkspaceContextAdoption?: boolean;
   extraSystemPromptHash?: string;
   messageToolPolicyHash?: string;
   promptToolNamesHash?: string;
@@ -246,6 +255,20 @@ export function resolveCliSessionReuse(params: {
   const sessionId = normalizeOptionalString(binding?.sessionId);
   if (!sessionId) {
     return { mode: "none" };
+  }
+  // A private workspace snapshot is retained in native history. Even explicitly
+  // attached sessions cannot cross owner/audience/context-mode boundaries.
+  if (
+    normalizeOptionalString(binding?.workspaceContextScopeHash) !==
+      normalizeOptionalString(params.workspaceContextScopeHash) &&
+    !(
+      params.allowWorkspaceContextAdoption === true &&
+      !binding?.forceReuse &&
+      !binding?.workspaceContextScopeHash &&
+      params.workspaceContextScopeHash
+    )
+  ) {
+    return { mode: "invalidate", invalidatedReason: "workspace-context" };
   }
   if (binding?.forceReuse === true) {
     return { mode: "reuse", sessionId };

@@ -81,6 +81,7 @@ export function getCliSessionBinding(
       authProfileId: normalizeOptionalString(fromBindings?.authProfileId),
       authEpoch: normalizeOptionalString(fromBindings?.authEpoch),
       authEpochVersion: fromBindings?.authEpochVersion,
+      workspaceContextScopeHash: normalizeOptionalString(fromBindings?.workspaceContextScopeHash),
       extraSystemPromptHash: normalizeOptionalString(fromBindings?.extraSystemPromptHash),
       messageToolPolicyHash: normalizeOptionalString(fromBindings?.messageToolPolicyHash),
       promptToolNamesHash: normalizeOptionalString(fromBindings?.promptToolNamesHash),

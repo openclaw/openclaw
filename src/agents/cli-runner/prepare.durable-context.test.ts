@@ -6,19 +6,28 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
-import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  patchSessionEntryCore,
+  loadSessionEntryReadOnly,
+} from "../../config/sessions/session-accessor.js";
 import { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
+import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import type { CliBackendExecuteContext } from "../../plugins/cli-backend.types.js";
 import * as globalHooks from "../../plugins/hook-runner-global.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
+import { runCliAgent } from "../cli-runner.js";
 import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
 } from "../cli-runner.test-helpers.js";
+import { setCliSessionBinding, getCliSessionBinding } from "../cli-session.js";
+import { buildBootstrapContextForFiles } from "../embedded-agent-helpers/bootstrap.js";
 import * as maintenance from "../embedded-agent-runner/context-engine-maintenance.js";
+import { withAdmittedCliCandidate } from "../embedded-agent-runner/run-entry-cli.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { executePreparedCliRun } from "./execute.js";
 import { prepareCliRunContext } from "./prepare.js";
@@ -26,6 +35,7 @@ import {
   resetCliRunnerPrepareTestDeps,
   setCliRunnerPrepareTestDeps,
 } from "./prepare.test-support.js";
+import type { RunCliAgentParams, PreparedCliRunContext } from "./types.js";
 
 describe("CLI durable session context", () => {
   let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
@@ -102,6 +112,489 @@ describe("CLI durable session context", () => {
       await fixture.cleanup();
       clearRuntimeConfigSnapshot();
     }
+  });
+
+  it("claims metadata ownership through the actual admitted CLI entry without an injected scope", async () => {
+    const target = fixture.session.sessionTarget;
+    const config = { agents: { defaults: { workspaceContextRefresh: "compaction" as const } } };
+    setRuntimeConfigSnapshot(config);
+    let content = "ENTRY_FIRST";
+    let executions = 0;
+    const delivered: string[] = [];
+    let retained: CliBackendExecuteContext["workspaceContext"];
+    const backend = {
+      ...buildDefaultTestCliBackend(),
+      id: "claude-cli",
+      modelProvider: "test-cli",
+      config: {
+        ...buildDefaultTestCliBackend().config,
+        command: process.execPath,
+        output: "json" as const,
+      },
+      prepareExecution: () => ({
+        async *execute(context: CliBackendExecuteContext) {
+          retained = context.workspaceContext;
+          delivered.push((await retained?.("resume")) ?? "MISSING");
+          if (++executions === 2) {
+            delivered.push((await retained?.("compact")) ?? "MISSING");
+          }
+          yield { type: "result", subtype: "success", result: "complete" };
+        },
+      }),
+    };
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [backend],
+    });
+    setCliRunnerPrepareTestDeps({
+      resolveBootstrapContextForRun: async () => ({
+        bootstrapFiles: [{ name: "AGENTS.md", path: "AGENTS.md", content, missing: false }],
+        contextFiles: [{ path: "AGENTS.md", content }],
+      }),
+    });
+    const run = async (runId: string, beforeRun?: () => Promise<void>) => {
+      const admission = prepareSystemAgentRunAdmission(config, runId, "main", "cli-entry-test");
+      try {
+        return await withAdmittedCliCandidate(
+          {
+            claim: {
+              agentId: "main",
+              sessionId: target.sessionId,
+              sessionKey: target.sessionKey,
+              runId,
+            },
+            admission: { preparedRunAdmission: admission },
+            provider: "claude-cli",
+            sessionTarget: target,
+            expectedLifecycleRevision: loadSessionEntryReadOnly(target)?.lifecycleRevision,
+            readMode: "read-only",
+            getSessionEntry: () => loadSessionEntryReadOnly(target),
+          },
+          async ({ sessionEntry, assertSettlementCurrent }) => {
+            await beforeRun?.();
+            return runCliAgent({
+              sessionId: target.sessionId,
+              sessionKey: target.sessionKey,
+              sessionTarget: target,
+              sessionEntry,
+              storePath: target.storePath,
+              sessionFile: fixture.session.sessionFile,
+              workspaceDir: fixture.session.dir,
+              prompt: "latest ask",
+              provider: "claude-cli",
+              model: "test-model",
+              timeoutMs: 1000,
+              runId,
+              config,
+              skillsSnapshot: { prompt: "", skills: [] },
+              preparedRunAdmission: admission,
+              assertCurrent: assertSettlementCurrent,
+              persistAssistantTranscript: true,
+            });
+          },
+        );
+      } finally {
+        admission.close();
+      }
+    };
+    expect(
+      (await run("entry-first")).payloads?.some((payload) => payload.text === "complete"),
+    ).toBe(true);
+    expect(delivered[0]).toContain("ENTRY_FIRST");
+    await expect(retained?.("compact")).rejects.toThrow();
+    content = "ENTRY_SECOND";
+    expect(
+      (await run("entry-second")).payloads?.some((payload) => payload.text === "complete"),
+    ).toBe(true);
+    expect(delivered[1]).toContain("ENTRY_FIRST");
+    expect(delivered[2]).toContain("ENTRY_SECOND");
+    expect(loadSessionEntryReadOnly(target)).toMatchObject({ activeWriterRunId: "entry-second" });
+    expect(loadSessionEntryReadOnly(target)?.cliHistoryBoundary).toBeUndefined();
+    const messages = (await SessionManager.openAsync(target, fixture.session.dir)).getEntries();
+    expect(messages.filter((entry) => entry.type === "message")).toHaveLength(2);
+    expect(JSON.stringify(messages)).toContain("complete");
+    const inheritedTarget = {
+      ...target,
+      storePath: path.join(fixture.session.dir, "agents", "main", "sessions", "sessions.json"),
+      expectedWriterRunId: "entry-inherited",
+    };
+    await patchSessionEntryCore(target, () => ({ activeWriterRunId: "entry-inherited" }));
+    const inherited = await withOwnedSessionTranscriptWrites(
+      { sessionTarget: inheritedTarget, withTranscriptWrite: async (write) => await write() },
+      () =>
+        fixture.prepare({
+          runId: "entry-inherited",
+          provider: "claude-cli",
+          sessionKey: target.sessionKey,
+          sessionTarget: inheritedTarget,
+          sessionEntry: loadSessionEntryReadOnly(target),
+          config,
+        }),
+    );
+    cleanups.push(() => inherited.preparedBackend.cleanup?.());
+    expect(inherited.params.sessionTarget?.storePath).toBe(inheritedTarget.storePath);
+    expect(await inherited.workspaceContext?.("resume")).toContain("ENTRY_SECOND");
+    await expect(
+      run("entry-stale", async () => {
+        await patchSessionEntryCore(target, () => ({ lifecycleRevision: "reset-after-admission" }));
+      }),
+    ).rejects.toThrow("CLI transcript owner changed");
+    const foreign = prepareSystemAgentRunAdmission(
+      config,
+      "foreign-writer",
+      "main",
+      "foreign-test",
+    );
+    try {
+      await foreign.admit("embedded");
+      await patchSessionEntryCore(target, () => ({ activeWriterRunId: "foreign-writer" }));
+      await expect(run("entry-foreign")).rejects.toThrow("CLI transcript owner is still active");
+      expect(loadSessionEntryReadOnly(target)).toMatchObject({
+        activeWriterRunId: "foreign-writer",
+      });
+    } finally {
+      foreign.close();
+    }
+  });
+
+  it("prestamps a legacy native binding before snapshot persistence and retries without adopting history", async () => {
+    const backend = {
+      ...buildDefaultTestCliBackend(),
+      id: "claude-cli",
+      config: { ...buildDefaultTestCliBackend().config, input: "stdin" as const },
+      prepareExecution: () => ({
+        async *execute() {
+          yield { type: "result" };
+        },
+      }),
+    };
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [backend],
+    });
+    let content = "LEGACY_WORKSPACE_FIRST";
+    setCliRunnerPrepareTestDeps({
+      resolveBootstrapContextForRun: async () => ({
+        bootstrapFiles: [{ name: "AGENTS.md", path: "AGENTS.md", content, missing: false }],
+        contextFiles: [{ path: "AGENTS.md", content }],
+      }),
+      claudeCliSessionTranscriptHasContent: async () => true,
+      claudeCliSessionTranscriptHasOrphanedToolUse: async () => false,
+    });
+    fixture.appendTranscript({
+      id: "legacy-input",
+      parentId: null,
+      timestamp: new Date(1).toISOString(),
+      message: { role: "user", content: "LEGACY_PRIVATE_HISTORY", timestamp: 1 },
+    });
+    const baseline = await fixture.prepare({ provider: "claude-cli" });
+    cleanups.push(() => baseline.preparedBackend.cleanup?.());
+    const binding = {
+      sessionId: "existing-native-id",
+      authProfileId: baseline.effectiveAuthProfileId,
+      authEpoch: baseline.authEpoch,
+      authEpochVersion: baseline.authEpochVersion,
+      extraSystemPromptHash: baseline.extraSystemPromptHash,
+      messageToolPolicyHash: baseline.messageToolPolicyHash,
+      promptToolNamesHash: baseline.promptToolNamesHash,
+      cwdHash: baseline.cwdHash,
+      mcpConfigHash: baseline.preparedBackend.mcpConfigHash,
+      mcpResumeHash: baseline.preparedBackend.mcpResumeHash,
+    };
+    const target = fixture.session.sessionTarget;
+    await patchSessionEntryCore(target, (entry) => {
+      setCliSessionBinding(entry, "claude-cli", binding);
+      return entry;
+    });
+    let attempt = 0;
+    const prepare = async () => {
+      const runId = `host-legacy-${++attempt}`;
+      await patchSessionEntryCore(target, (entry) => ({ ...entry, activeWriterRunId: runId }));
+      return await withOwnedSessionTranscriptWrites(
+        {
+          sessionTarget: { ...target, expectedWriterRunId: runId },
+          withTranscriptWrite: async (run) => await run(),
+        },
+        async () => {
+          const prepared = await fixture.prepare({
+            runId,
+            expectedWriterRunId: runId,
+            provider: "claude-cli",
+            sessionKey: target.sessionKey,
+            cliSessionBinding: getCliSessionBinding(loadSessionEntryReadOnly(target), "claude-cli"),
+            config: { agents: { defaults: { workspaceContextRefresh: "compaction" } } },
+          });
+          cleanups.push(() => prepared.preparedBackend.cleanup?.());
+          return prepared;
+        },
+      );
+    };
+    const append = vi
+      .spyOn(SessionManager.prototype, "appendCustomEntryAsync")
+      .mockRejectedValueOnce(new Error("snapshot persistence failed"));
+    await expect(prepare()).rejects.toThrow("snapshot persistence failed");
+    append.mockRestore();
+    const stamped = getCliSessionBinding(loadSessionEntryReadOnly(target), "claude-cli");
+    expect(stamped?.sessionId).toBe("existing-native-id");
+    expect(stamped?.workspaceContextScopeHash).toBeTruthy();
+    expect(loadSessionEntryReadOnly(target)?.cliHistoryBoundary).toBeUndefined();
+    const retry = await prepare();
+    expect(retry.reusableCliSession).toMatchObject({ sessionId: "existing-native-id" });
+    expect(retry.cliHistoryWriter).toBeUndefined();
+    expect(retry.openClawHistoryPrompt ?? "").not.toContain("LEGACY_PRIVATE_HISTORY");
+    expect(await retry.workspaceContext?.("resume")).toContain("LEGACY_WORKSPACE_FIRST");
+    content = "LEGACY_WORKSPACE_SECOND";
+    const restarted = await prepare();
+    expect(restarted.reusableCliSession).toMatchObject({ sessionId: "existing-native-id" });
+    expect(await restarted.workspaceContext?.("resume")).toContain("LEGACY_WORKSPACE_FIRST");
+    expect(await restarted.workspaceContext?.("compact")).toContain("LEGACY_WORKSPACE_SECOND");
+    expect(loadSessionEntryReadOnly(target)?.cliHistoryBoundary).toBeUndefined();
+    const manager = await SessionManager.openAsync(target, fixture.session.dir);
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionTarget: { ...target, expectedWriterRunId: `host-legacy-${attempt}` },
+        withTranscriptWrite: async (write) => await write(),
+      },
+      async () => {
+        const message = await manager.appendMessageAsync({
+          role: "user",
+          content: "Before compact",
+          timestamp: 2,
+        });
+        await manager.appendCompactionAsync("Summary", message, 100);
+      },
+    );
+    await patchSessionEntryCore(target, (entry) => {
+      setCliSessionBinding(entry, "claude-cli", {
+        ...stamped!,
+        workspaceContextScopeHash: undefined,
+      });
+      return entry;
+    });
+    const previouslyPrivate = await prepare();
+    expect(previouslyPrivate.reusableCliSession).toEqual({
+      mode: "invalidate",
+      invalidatedReason: "workspace-context",
+    });
+  });
+
+  it("keeps workspace bytes out of the stable system and recovers the durable snapshot across preparation", async () => {
+    const sent: CliBackendExecuteContext[] = [];
+    const baseBackend = buildDefaultTestCliBackend({
+      reseedFromRawTranscriptWhenUncompacted: true,
+    });
+    const backend = {
+      ...baseBackend,
+      id: "claude-cli",
+      config: { ...baseBackend.config, command: process.execPath, input: "stdin" as const },
+      manualCompaction: {
+        input: "arg" as const,
+        buildPrompt: () => "/compact",
+        validateOutput: (output: string) =>
+          output.includes('"compact_boundary"')
+            ? { ok: true as const }
+            : { ok: false as const, reason: "No native compaction boundary" },
+      },
+      prepareExecution: () => ({
+        async *execute(context: CliBackendExecuteContext) {
+          sent.push(context);
+          yield { type: "system", subtype: "compact_boundary" };
+          yield { type: "result" };
+        },
+      }),
+    };
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [backend],
+    });
+    let content = "WORKSPACE_FIRST";
+    let policyTail = "Policy body. ".repeat(100);
+    const load = vi.fn(
+      async (input: {
+        contextMode?: string;
+        config?: import("../../config/types.openclaw.js").OpenClawConfig;
+      }) => {
+        const bootstrapFiles =
+          input.contextMode === "lightweight"
+            ? []
+            : [
+                {
+                  name: "BOOTSTRAP.md",
+                  path: "BOOTSTRAP.md",
+                  content: "EXCLUDED_RITUAL".repeat(100),
+                  missing: false,
+                },
+                {
+                  name: "AGENTS.md",
+                  path: "AGENTS.md",
+                  content: content + "\n" + policyTail,
+                  missing: false,
+                },
+              ];
+        return {
+          bootstrapFiles,
+          contextFiles: buildBootstrapContextForFiles(bootstrapFiles, { config: input.config }),
+        };
+      },
+    );
+    setCliRunnerPrepareTestDeps({ resolveBootstrapContextForRun: load });
+    const agentDir = path.join(fixture.session.dir, "agents", "main", "agent");
+    const authProfileId = "snapshot:account";
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "token",
+            provider: "claude-cli",
+            token: "synthetic-snapshot-account",
+          },
+        },
+      },
+      agentDir,
+    );
+    let snapshotRun = 0;
+    let previousSnapshotAdmission: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
+    const prepare = async (
+      bootstrapContextMode: "full" | "lightweight" = "full",
+      overrides: Partial<RunCliAgentParams> = {},
+    ) => {
+      previousSnapshotAdmission?.close();
+      const config = {
+        agents: {
+          defaults: { workspaceContextRefresh: "compaction" as const, bootstrapMaxChars: 200 },
+        },
+      };
+      const runId = `workspace-snapshot-${++snapshotRun}`;
+      const admission = prepareSystemAgentRunAdmission(
+        config,
+        runId,
+        "main",
+        "workspace-snapshot-test",
+      );
+      previousSnapshotAdmission = admission;
+      cleanups.push(() => admission.close());
+      return fixture.prepare({
+        bootstrapContextMode,
+        runId,
+        admittedRunContext: await admission.admit("embedded"),
+        provider: "claude-cli",
+        agentDir,
+        authProfileId,
+        sessionKey: fixture.session.sessionTarget.sessionKey,
+        config,
+        ...overrides,
+      });
+    };
+    const persistNativeBinding = async (context: PreparedCliRunContext) => {
+      const stored = await patchSessionEntryCore(fixture.session.sessionTarget, (entry) => {
+        setCliSessionBinding(entry, "claude-cli", {
+          sessionId: "synthetic-private-native-session",
+          workspaceContextScopeHash: context.workspaceContextScopeHash,
+          authProfileId: context.effectiveAuthProfileId,
+          authEpoch: context.authEpoch,
+          authEpochVersion: context.authEpochVersion,
+          extraSystemPromptHash: context.extraSystemPromptHash,
+          messageToolPolicyHash: context.messageToolPolicyHash,
+          promptToolNamesHash: context.promptToolNamesHash,
+          cwdHash: context.cwdHash,
+          mcpConfigHash: context.preparedBackend.mcpConfigHash,
+          mcpResumeHash: context.preparedBackend.mcpResumeHash,
+        });
+        return entry;
+      });
+      return stored ? getCliSessionBinding(stored, "claude-cli") : undefined;
+    };
+    const first = await prepare();
+    cleanups.push(() => first.preparedBackend.cleanup?.());
+    expect(first.systemPrompt).not.toContain("WORKSPACE_FIRST");
+    const startupContext = await first.workspaceContext?.("startup");
+    expect(startupContext).toContain("WORKSPACE_FIRST");
+    expect(startupContext).toContain("AGENTS.md");
+    expect(startupContext).toContain("[Bootstrap truncation warning]");
+    expect(startupContext).not.toContain("BOOTSTRAP.md");
+    expect(startupContext).not.toContain("EXCLUDED_RITUAL");
+    await expect(first.cliHistoryWriter?.assertReadable()).resolves.toBeUndefined();
+    const history = await SessionManager.openAsync(
+      fixture.session.sessionTarget,
+      fixture.session.dir,
+    );
+    await runWithCliHistoryWriter(first.cliHistoryWriter, () =>
+      history.appendMessageAsync({
+        role: "user",
+        content: "RECOVERABLE_CONVERSATION",
+        timestamp: 1,
+      }),
+    );
+    content = "WORKSPACE_SECOND";
+    const resumed = await prepare();
+    cleanups.push(() => resumed.preparedBackend.cleanup?.());
+    expect(await resumed.workspaceContext?.("resume")).toContain("WORKSPACE_FIRST");
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(await resumed.workspaceContext?.("compact")).toContain("WORKSPACE_SECOND");
+    expect(load).toHaveBeenCalledTimes(2);
+    await expect(resumed.cliHistoryWriter?.assertReadable()).resolves.toBeUndefined();
+    expect(resumed.systemPrompt).toBe(first.systemPrompt);
+    const fullBinding = await persistNativeBinding(resumed);
+    const lightweight = await prepare("lightweight", { cliSessionBinding: fullBinding });
+    cleanups.push(() => lightweight.preparedBackend.cleanup?.());
+    expect(lightweight.reusableCliSession).toEqual({
+      mode: "invalidate",
+      invalidatedReason: "workspace-context",
+    });
+    expect(lightweight.openClawHistoryPrompt).toContain("RECOVERABLE_CONVERSATION");
+    expect(lightweight.openClawHistoryPrompt).not.toContain("WORKSPACE_FIRST");
+    expect(await lightweight.workspaceContext?.("startup")).toBe("");
+    expect(await lightweight.workspaceContext?.("compact")).toBe("");
+    await expect(lightweight.cliHistoryWriter?.assertReadable()).resolves.toBeUndefined();
+    const fullAgain = await prepare();
+    cleanups.push(() => fullAgain.preparedBackend.cleanup?.());
+    expect(await fullAgain.workspaceContext?.("resume")).toContain("WORKSPACE_SECOND");
+    expect(fullAgain.workspaceContextScopeHash).not.toBe(lightweight.workspaceContextScopeHash);
+    policyTail = "";
+    const untruncated = await fullAgain.workspaceContext?.("compact");
+    expect(untruncated).toContain("WORKSPACE_SECOND");
+    expect(untruncated).not.toContain("[Bootstrap truncation warning]");
+    expect(untruncated).not.toContain("BOOTSTRAP.md");
+    const sameScopeBinding = await persistNativeBinding(fullAgain);
+    const beforeControl = load.mock.calls.length;
+    const compact = await prepare("full", {
+      cliSessionBinding: sameScopeBinding,
+      controlOperation: "compact",
+      prompt: "/compact",
+    });
+    cleanups.push(() => compact.preparedBackend.cleanup?.());
+    expect(compact.reusableCliSession).toEqual({
+      mode: "reuse",
+      sessionId: "synthetic-private-native-session",
+    });
+    expect(load.mock.calls.length).toBe(beforeControl);
+    expect(compact.executionTarget.kind).toBe("plugin");
+    await executePreparedCliRun(compact, "synthetic-private-native-session");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.prompt).toBe("/compact");
+    expect(sent[0]?.args).not.toContain("/compact");
+    expect(sent[0]?.workspaceContext).toBeTypeOf("function");
+    expect(await compact.workspaceContext?.("compact")).toContain("WORKSPACE_SECOND");
+    await expect(compact.cliHistoryWriter?.assertReadable()).resolves.toBeUndefined();
+    await expect(
+      prepare("lightweight", {
+        cliSessionBinding: sameScopeBinding,
+        controlOperation: "compact",
+        prompt: "/compact",
+      }),
+    ).rejects.toThrow("Native compaction cannot cross workspace context scopes");
+    const changedProfile = await prepare("full", {
+      cliSessionBinding: sameScopeBinding,
+      bootstrapUserProfileId: "other-owner",
+    });
+    cleanups.push(() => changedProfile.preparedBackend.cleanup?.());
+    expect(changedProfile.reusableCliSession).toEqual({
+      mode: "invalidate",
+      invalidatedReason: "workspace-context",
+    });
+    expect(changedProfile.openClawHistoryPrompt).toContain("RECOVERABLE_CONVERSATION");
+    expect(changedProfile.openClawHistoryPrompt).not.toContain("WORKSPACE_FIRST");
   });
 
   it.each(["plugin", "first-only"])(
