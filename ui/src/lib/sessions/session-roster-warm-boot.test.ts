@@ -336,7 +336,9 @@ describe("session capability warm roster", () => {
         const currentResult = h.sessions.state.result;
         if (release === "frame") {
           frame(16);
-          await new Promise<void>((resolve) => setImmediate(resolve));
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
           // rAF callbacks precede paint; routing must wait for the following task.
           expect(settled).not.toHaveBeenCalled();
           await vi.advanceTimersByTimeAsync(0);
