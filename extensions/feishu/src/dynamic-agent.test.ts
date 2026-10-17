@@ -169,6 +169,26 @@ describe("maybeCreateDynamicAgent", () => {
     expect(commitConfig).not.toHaveBeenCalled();
   });
 
+  it("defaults agent paths to the active state dir instead of the home state dir", async () => {
+    const stateDir = path.join(tempRoot, "state");
+    vi.stubEnv("HOME", path.join(tempRoot, "home"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const cfg = createConfig({ dynamicAgentCreation: { enabled: true } });
+    const { runtime } = createRuntime(cfg);
+
+    const result = await createAgent(cfg, runtime);
+
+    const workspace = path.join(stateDir, "workspace-feishu-ou_sender");
+    const agentDir = path.join(stateDir, "agents", "feishu-ou_sender", "agent");
+    expect(result.updatedCfg.agents?.entries?.["feishu-ou_sender"]).toEqual({
+      workspace,
+      agentDir,
+    });
+    expect(await pathExists(workspace)).toBe(true);
+    expect(await pathExists(agentDir)).toBe(true);
+    expect(await pathExists(path.join(tempRoot, "home", ".openclaw"))).toBe(false);
+  });
+
   it("scopes bindings to the normalized account id", async () => {
     const cfg = createConfig();
     const { runtime } = createRuntime(cfg);

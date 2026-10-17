@@ -36,8 +36,6 @@ If a named account created an unscoped dynamic agent on an older release, that l
       allowFrom: ["*"],
       dynamicAgentCreation: {
         enabled: true,
-        workspaceTemplate: "~/.openclaw/workspace-{agentId}",
-        agentDirTemplate: "~/.openclaw/agents/{agentId}/agent",
       },
     },
   },
@@ -65,14 +63,16 @@ When a new user sends their first DM:
 | Setting                                                  | Description                                | Default                              |
 | -------------------------------------------------------- | ------------------------------------------ | ------------------------------------ |
 | `channels.feishu.dynamicAgentCreation.enabled`           | Enable automatic per-user agent creation   | `false`                              |
-| `channels.feishu.dynamicAgentCreation.workspaceTemplate` | Path template for dynamic agent workspaces | `~/.openclaw/workspace-{agentId}`    |
-| `channels.feishu.dynamicAgentCreation.agentDirTemplate`  | Agent directory name template              | `~/.openclaw/agents/{agentId}/agent` |
+| `channels.feishu.dynamicAgentCreation.workspaceTemplate` | Path template for dynamic agent workspaces | `<state-dir>/workspace-{agentId}`    |
+| `channels.feishu.dynamicAgentCreation.agentDirTemplate`  | Agent directory name template              | `<state-dir>/agents/{agentId}/agent` |
 | `channels.feishu.dynamicAgentCreation.maxAgents`         | Maximum number of dynamic agents to create | unlimited                            |
 
 Template variables:
 
 - `{agentId}` - the generated agent ID (e.g., `feishu-ou_xxxxxx` or `feishu-support-<identity_digest>`)
 - `{userId}` - the sender's Feishu open_id (e.g., `ou_xxxxxx`)
+
+Without templates, dynamic agents live under the active state directory (`~/.openclaw` for the default profile), so `--profile`, `OPENCLAW_STATE_DIR`, and `OPENCLAW_HOME` keep them with the rest of that profile's state.
 
 ### Session scope
 
@@ -105,8 +105,6 @@ Use `"per-account-channel-peer"` when named Feishu accounts should keep separate
       requireMention: true,
       dynamicAgentCreation: {
         enabled: true,
-        workspaceTemplate: "~/.openclaw/workspace-{agentId}",
-        agentDirTemplate: "~/.openclaw/agents/{agentId}/agent",
       },
     },
   },

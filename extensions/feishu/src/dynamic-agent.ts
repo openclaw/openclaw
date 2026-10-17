@@ -4,6 +4,7 @@ import path from "node:path";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
 import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { normalizeAccountId, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
@@ -143,10 +144,13 @@ export async function maybeCreateDynamicAgent(params: {
         }
 
         if (!agentExists) {
+          // Default to core's layout for non-default agents under the active state dir
+          // (when agents.defaults.workspace is unset).
+          const stateDir = resolveStateDir();
           const workspaceTemplate =
-            dynamicCfg.workspaceTemplate ?? "~/.openclaw/workspace-{agentId}";
+            dynamicCfg.workspaceTemplate ?? path.join(stateDir, "workspace-{agentId}");
           const agentDirTemplate =
-            dynamicCfg.agentDirTemplate ?? "~/.openclaw/agents/{agentId}/agent";
+            dynamicCfg.agentDirTemplate ?? path.join(stateDir, "agents", "{agentId}", "agent");
           const workspace = resolveUserPath(
             workspaceTemplate.replace("{userId}", senderOpenId).replace("{agentId}", agentId),
           );
