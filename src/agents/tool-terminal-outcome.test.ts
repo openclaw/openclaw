@@ -7,7 +7,7 @@ import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js"
 import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
-  preExecutionBlockedToolCallIds,
+  recordPreExecutionBlockedToolCall,
   recordToolExecutionStarted,
   recordToolExecutionTracked,
   resetAdjustedParamsByToolCallIdForTests,
@@ -290,7 +290,7 @@ describe("tool terminal outcome observer", () => {
   it("uses settled pre-execution evidence after active tracking is released", () => {
     const runId = "run-3";
     const toolCallId = "call-blocked";
-    preExecutionBlockedToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
+    recordPreExecutionBlockedToolCall(toolCallId, runId);
 
     const resolution = createToolTerminalObserver(runId)({
       toolCallId,

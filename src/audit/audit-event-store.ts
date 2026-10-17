@@ -18,6 +18,12 @@ import {
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { getAuditEventQueries, type AuditEventInsert } from "./audit-event-queries.js";
 import {
+  invalidateSkillSelectionAuditCachesForDatabase,
+  pruneExpiredSkillSelectionAuditEvents,
+  recordSkillSelectionAuditEvent,
+} from "./audit-event-store.skill-selection-storage.js";
+import { parseSkillSelectionAuditRow } from "./audit-event-store.skill-selection.js";
+import {
   AUDIT_EVENT_SCHEMA_VERSION,
   AUDIT_INBOUND_MESSAGE_COMPLETED_REASONS,
   AUDIT_INBOUND_MESSAGE_SKIPPED_REASONS,
@@ -465,6 +471,9 @@ export function rowToAuditEvent(row: AuditEventRow): AuditEventRecord {
   if (row.kind === "tool_action") {
     return parseToolActionRow(row);
   }
+  if (row.kind === "skill_selection") {
+    return parseSkillSelectionAuditRow(row);
+  }
   if (row.kind !== "message") {
     corruptAuditRow(row, "invalid kind");
   }
@@ -524,7 +533,10 @@ function bindAuditEvent(db: EngineConnection, input: AuditEventInput) {
     session_id: input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? null : (input.sessionId ?? null),
     run_id: input.runId ?? null,
     tool_call_id: input.kind === "tool_action" ? (input.toolCallId ?? null) : null,
-    tool_name: input.kind === "tool_action" ? input.toolName : null,
+    tool_name:
+      input.kind === "tool_action" || input.kind === "skill_selection"
+        ? (input.toolName ?? null)
+        : null,
     direction: input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? input.direction : null,
     channel: input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? input.channel : null,
     conversation_kind: input.kind === "message" ? input.conversationKind : null,
@@ -640,6 +652,12 @@ export function recordAuditEventInDatabase(
     ensureTerminalMessageExecutionBindingSchema(options);
   }
   const { db } = options.database;
+  if (input.kind === "skill_selection") {
+    return runOpenClawStateWriteTransaction(
+      () => recordSkillSelectionAuditEvent(input, db, Date.now() - AUDIT_EVENT_RETENTION_MS),
+      options,
+    );
+  }
   const nested = db.isTransaction;
   try {
     const retention = auditEventRetention.get(db);
@@ -702,6 +720,7 @@ export function recordAuditEventInDatabase(
     }, options);
   } catch (error) {
     auditEventRetention.delete(db);
+    invalidateSkillSelectionAuditCachesForDatabase(db);
     clearAuditIdentityKeyCacheForDatabase(db);
     throw error;
   }
@@ -730,13 +749,12 @@ export function pruneExpiredAuditEventsInDatabase(params: {
   now?: number;
   database: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase };
 }): number {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const deleted = deleteExpiredAuditEvents(db, params.now ?? Date.now());
-      auditEventRetention.delete(db);
-      return Number(deleted.numAffectedRows ?? 0n);
-    },
-    params.database,
-    { singleStatement: true },
-  );
+  return runOpenClawStateWriteTransaction(({ db }) => {
+    const now = params.now ?? Date.now();
+    const deleted = deleteExpiredAuditEvents(db, now);
+    const retainedAfter = now - AUDIT_EVENT_RETENTION_MS;
+    const deletedSkillSelections = pruneExpiredSkillSelectionAuditEvents({ db, retainedAfter });
+    auditEventRetention.delete(db);
+    return Number(deleted.numAffectedRows ?? 0n) + deletedSkillSelections;
+  }, params.database);
 }
