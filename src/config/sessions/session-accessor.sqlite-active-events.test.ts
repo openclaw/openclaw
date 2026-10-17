@@ -337,7 +337,7 @@ describe("SQLite active transcript event projection", () => {
     );
     const facts: unknown[] = [];
     expect(
-      everySessionTranscriptUserInputFrom(scope, "source:user", (message) => {
+      everyUserInput(scope, "source:user", (message) => {
         facts.push(message);
         return true;
       }),
