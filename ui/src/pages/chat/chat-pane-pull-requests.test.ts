@@ -804,7 +804,6 @@ describe("PR refresh wire ownership", () => {
         {
           chatMessagesBySession: new Map(),
           pendingSessionMessageReloadSessionKey: null,
-          requestUpdate: vi.fn(),
         },
       );
       state.refreshSessionPullRequests = (options) => pane.refreshSessionPullRequests(options);
