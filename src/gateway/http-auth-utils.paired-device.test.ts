@@ -65,36 +65,34 @@ it.each(["operator.admin", "operator.read"])(
       const token = await pairBrowser([scope]);
       const bodyStarted = createDeferred();
       let effects = 0;
+      const registry = createGatewayTestRegistry();
+      registry.httpRoutes.push({
+        pluginId: "profile",
+        source: "fixture",
+        path: "/profile",
+        match: "exact",
+        auth: "gateway",
+        gatewayRuntimeScopeSurface: "trusted-operator",
+        handler: async (req, res) => {
+          const runtime = getPluginRuntimeGatewayRequestScope();
+          const granted = runtime?.client?.connect.scopes ?? [];
+          if (req.headers["content-type"] === "application/json") {
+            const body = readJsonBodyWithLimit(req, { maxBytes: 1024 });
+            bodyStarted.resolve();
+            expect((await body).ok).toBe(true);
+          }
+          await runtime?.revalidate?.();
+          const allowed = authorizeOperatorScopesForMethod("set-heartbeats", granted).allowed;
+          if (allowed) {
+            effects += 1;
+          }
+          res.statusCode = allowed ? 200 : 403;
+          res.end(JSON.stringify({ scopes: granted }));
+          return true;
+        },
+      });
       const handlePluginRequest = createGatewayPluginRequestHandler({
-        registry: createGatewayTestRegistry({
-          httpRoutes: [
-            {
-              pluginId: "profile",
-              source: "fixture",
-              path: "/profile",
-              match: "exact",
-              auth: "gateway",
-              gatewayRuntimeScopeSurface: "trusted-operator",
-              handler: async (req, res) => {
-                const runtime = getPluginRuntimeGatewayRequestScope();
-                const granted = runtime?.client?.connect.scopes ?? [];
-                if (req.headers["content-type"] === "application/json") {
-                  const body = readJsonBodyWithLimit(req, { maxBytes: 1024 });
-                  bodyStarted.resolve();
-                  expect((await body).ok).toBe(true);
-                }
-                await runtime?.revalidate?.();
-                const allowed = authorizeOperatorScopesForMethod("set-heartbeats", granted).allowed;
-                if (allowed) {
-                  effects += 1;
-                }
-                res.statusCode = allowed ? 200 : 403;
-                res.end(JSON.stringify({ scopes: granted }));
-                return true;
-              },
-            },
-          ],
-        }),
+        registry,
         log: createSubsystemLogger("test/plugin-device-auth"),
       });
       await withGatewayServer({
@@ -105,6 +103,10 @@ it.each(["operator.admin", "operator.read"])(
           shouldEnforcePluginGatewayAuth: (path) => path.pathname === "/profile",
         },
         run: async (server) => {
+          const isAdmin = scope === "operator.admin";
+          const expectedScopes = isAdmin
+            ? ["operator.admin", "operator.read", "operator.write"]
+            : ["operator.read"];
           for (const method of ["PUT", "POST"]) {
             const response = await sendRequest(server, {
               path: "/profile",
@@ -112,13 +114,8 @@ it.each(["operator.admin", "operator.read"])(
               authorization: `Bearer ${token}`,
               headers: { "x-openclaw-scopes": "operator.admin" },
             });
-            expect(response.res.statusCode).toBe(scope === "operator.admin" ? 200 : 403);
-            expect(JSON.parse(response.getBody())).toEqual({
-              scopes:
-                scope === "operator.admin"
-                  ? ["operator.admin", "operator.read", "operator.write"]
-                  : ["operator.read"],
-            });
+            expect(response.res.statusCode).toBe(isAdmin ? 200 : 403);
+            expect(JSON.parse(response.getBody())).toEqual({ scopes: expectedScopes });
           }
           const pending = createRequest({
             path: "/profile",

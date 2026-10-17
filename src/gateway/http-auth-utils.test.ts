@@ -55,6 +55,8 @@ const roles = {
   definitions: { reader: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] } },
 } satisfies NonNullable<NonNullable<OpenClawConfig["gateway"]>["roles"]>;
 const req = { headers: {}, socket: { remoteAddress: "127.0.0.1" } } as IncomingMessage;
+const noAuth = { mode: "none" as const, allowTailscale: false };
+const accessDenied = { ok: false, authResult: { reason: "operator_access_denied" } };
 
 async function authenticate(
   method: GatewayAuthResult["method"],
@@ -63,12 +65,11 @@ async function authenticate(
 ) {
   setRuntimeConfigSnapshot(cfg);
   authorize.mockResolvedValueOnce({ ok: true, method, ...(user ? { user } : {}) });
-  return checkGatewayHttpRequestAuth({
-    req,
-    auth: { mode: "none", allowTailscale: false },
-    cfg,
-    getRuntimeConfig: () => cfg,
-  });
+  return checkAuth(cfg);
+}
+
+function checkAuth(cfg: OpenClawConfig) {
+  return checkGatewayHttpRequestAuth({ req, auth: noAuth, cfg, getRuntimeConfig: () => cfg });
 }
 
 async function admitResponse(response: ReturnType<typeof makeMockHttpResponse>, email: string) {
@@ -76,7 +77,7 @@ async function admitResponse(response: ReturnType<typeof makeMockHttpResponse>, 
   const admitted = await authorizeGatewayHttpRequestOrReply({
     req: response.res.req,
     res: response.res,
-    auth: { mode: "none", allowTailscale: false },
+    auth: noAuth,
   });
   assert(admitted?.operatorAccessAuthority, "Expected admitted response access");
   return admitted.operatorAccessAuthority;
@@ -135,10 +136,7 @@ async function registerPersonAccessFixture() {
           if (!current || !profile.emails.includes(email)) {
             throw new Error("Current access required");
           }
-          return {
-            signal: current.signal,
-            assertCurrent: () => current.signal.throwIfAborted(),
-          };
+          return { signal: current.signal, assertCurrent: () => current.signal.throwIfAborted() };
         },
       });
     },
@@ -169,33 +167,20 @@ describe("HTTP gateway owner profiles", () => {
       try {
         for (let index = 0; index < 200; index += 1) {
           authorize.mockResolvedValueOnce({ ok: true, method: "trusted-proxy", user: email });
-          const result = await checkGatewayHttpRequestAuth({
-            req,
-            auth: { mode: "none", allowTailscale: false },
-            cfg,
-            getRuntimeConfig: () => cfg,
-          });
-          expect(result).toMatchObject({
-            ok: true,
-            requestAuth: { authenticatedUserProfile: { profileId: person.id } },
-          });
+          const result = await checkAuth(cfg);
+          assert(result.ok);
+          expect(result.requestAuth.authenticatedUserProfile?.profileId).toBe(person.id);
         }
-        const counts = {
-          profileSchemaWrites: exec.mock.calls.filter(([sql]) =>
-            /CREATE TABLE IF NOT EXISTS user_profiles/iu.test(sql),
-          ).length,
-          schemaReads: observation.queries.filter((sql) =>
-            /sqlite_schema|sqlite_master|pragma_table_info|PRAGMA user_version/iu.test(sql),
-          ).length,
-          dataVersionReads: observation.queries.filter((sql) =>
-            /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql),
-          ).length,
-        };
-        expect(counts).toMatchObject({
-          profileSchemaWrites: 0,
-          schemaReads: 0,
-        });
-        expect(counts.dataVersionReads).toBeLessThanOrEqual(1000);
+        const reads = (pattern: RegExp) => observation.queries.filter((sql) => pattern.test(sql));
+        expect(
+          exec.mock.calls.filter(([sql]) => /CREATE TABLE IF NOT EXISTS user_profiles/iu.test(sql)),
+        ).toHaveLength(0);
+        expect(
+          reads(/sqlite_schema|sqlite_master|pragma_table_info|PRAGMA user_version/iu),
+        ).toHaveLength(0);
+        expect(
+          reads(/^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu).length,
+        ).toBeLessThanOrEqual(1000);
       } finally {
         observation.restore();
         exec.mockRestore();
@@ -228,10 +213,7 @@ describe("HTTP gateway owner profiles", () => {
       for (const assignment of [null, "reader", "removed-role"]) {
         await setCanonicalUserProfileRole(person.id, assignment);
         invalidateOperatorRolePolicy(person.id);
-        expect(await authenticate("trusted-proxy", cfg, email)).toMatchObject({
-          ok: false,
-          authResult: { reason: "operator_access_denied" },
-        });
+        expect(await authenticate("trusted-proxy", cfg, email)).toMatchObject(accessDenied);
       }
       await setCanonicalUserProfileRole(person.id, "staff");
       invalidateOperatorRolePolicy(person.id);
@@ -290,10 +272,7 @@ describe("HTTP gateway owner profiles", () => {
           linkEmail(email, person.id);
         }
       };
-      expect(await authenticate("trusted-proxy", cfg, email)).toMatchObject({
-        ok: false,
-        authResult: { reason: "operator_access_denied" },
-      });
+      expect(await authenticate("trusted-proxy", cfg, email)).toMatchObject(accessDenied);
       expect(getUserProfileListItem(person.id).id).toBe(person.id);
       expect(access.grant.signal.aborted).toBe(false);
     }),

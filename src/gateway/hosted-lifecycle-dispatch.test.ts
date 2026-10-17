@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
@@ -59,9 +60,7 @@ function createGateway(handlers: GatewayRequestHandlers) {
   const registry = createGatewayMethodRegistry(
     Object.entries(handlers).map(([name, handler]) => {
       const scope = resolveLeastPrivilegeOperatorScopesForMethod(name)[0];
-      if (!scope) {
-        throw new Error(`Missing fixture scope for ${name}`);
-      }
+      assert(scope, `Missing fixture scope for ${name}`);
       return { name, handler, owner: { kind: "core" as const, area: "test" }, scope };
     }),
   );
@@ -196,12 +195,9 @@ describe("hosted lifecycle Gateway dispatch", () => {
         },
         scopes: ["operator.write"],
       },
-      async () => {
-        const run = AsyncLocalStorage.snapshot();
-        return () => run(cleanup);
-      },
+      async () => AsyncLocalStorage.snapshot(),
     );
-    const result = invoke();
+    const result = invoke(cleanup);
     try {
       await awaitGateBeforeSettlement(
         beforeCommit.promise,
@@ -229,10 +225,7 @@ describe("hosted lifecycle Gateway dispatch", () => {
     const resolveContext = () => current;
     await withinGateway(resolveContext, async () => {
       await expect(
-        resolveQuestionOverGateway({
-          ...questionRequest,
-          authorize: () => true,
-        }),
+        resolveQuestionOverGateway({ ...questionRequest, authorize: () => true }),
       ).resolves.toMatchObject({ status: "answered", optionValue: "Staging" });
       await expect(
         resolveQuestionOverGateway({

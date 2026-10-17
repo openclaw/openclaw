@@ -210,11 +210,7 @@ describe("repository checkpoint workflow authority", () => {
               node_id: "repository-node",
               fork: true,
               default_branch: "main",
-              parent: {
-                name: "repository",
-                owner: { login: "upstream" },
-                default_branch: "main",
-              },
+              parent: { name: "repository", owner: { login: "upstream" }, default_branch: "main" },
             });
           }
           if (endpoint === "repos/owner/repository/git/ref/heads/main") {
@@ -288,10 +284,7 @@ describe("repository checkpoint workflow authority", () => {
         }
         return await transport(args, options);
       });
-      expect(await f.publish(failure)).toMatchObject({
-        status: "failed",
-        code: "unavailable",
-      });
+      expect(await f.publish(failure)).toMatchObject({ status: "failed", code: "unavailable" });
       expect(writes()).toEqual([]);
     },
   );
