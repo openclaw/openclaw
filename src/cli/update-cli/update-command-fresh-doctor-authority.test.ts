@@ -17,7 +17,6 @@ import { adoptUpdateRun, createUpdateRun } from "../../infra/update-run-ledger.j
 import { defaultRuntime } from "../../runtime.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import type { UpdateCommandOptions } from "./shared.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { runUpdateFinalizationDoctorInFreshProcess } from "./update-command-fresh-doctor.js";
@@ -35,9 +34,7 @@ let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
 });
-afterAll(async () => {
-  await receipts.close();
-});
+afterAll(() => receipts.close());
 
 const source = (name: string) =>
   resolveRuntimeWorkerUrl({
@@ -153,19 +150,17 @@ it.for(["healthy", "original-owner-replaced"] as const)(
           path.join(root, "dist", runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath),
           `${barrier}\nawait import(${JSON.stringify(worker.href)});`,
         );
-        const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
-        adoptUpdateRun(run.runId, { env: state.env });
-        const opts: UpdateCommandOptions = { run: { runId: run.runId, env: state.env } };
-        const pending = withUpdateCommandExecutor(run.runId, async (executor) => {
+        const { runId } = createUpdateRun({ trigger: "cli" }, { env: state.env });
+        adoptUpdateRun(runId, { env: state.env });
+        const pending = withUpdateCommandExecutor(runId, async (executor) => {
           const fence = await executor.enter(root);
-          opts.run!.executorFence = fence;
           await runUpdateFinalizationDoctorInFreshProcess({
             phase: "post-plugin",
             doctorConfigWrites: true,
             root,
             entryPath,
-            opts,
-            runId: run.runId,
+            opts: { run: { runId, env: state.env, executorFence: fence } },
+            runId,
             yes: true,
             json: true,
             workspaceSuggestions: false,

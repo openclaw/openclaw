@@ -19,6 +19,7 @@ import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import * as updateRunLedger from "../../infra/update-run-ledger.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as stateOwnership from "../../state/openclaw-state-ownership-preflight.js";
+import { updateConfigSource } from "./schema-preflight.js";
 import * as shared from "./shared.js";
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
@@ -357,8 +358,9 @@ it.each([
     params.opts.run = foregroundRun(env);
     params.timeoutMs = omittedTimeout ? undefined : 30_000;
     params.opts.timeout = omittedTimeout ? undefined : "30";
+    const caller = schemaContext("caller");
     mocks.captureSchemaContext.mockResolvedValue({
-      ...schemaContext("caller"),
+      ...caller,
       env,
       readEnv: env,
     });
@@ -373,15 +375,11 @@ it.each([
     vi.spyOn(managedContext, "readUpdateCandidateSource").mockResolvedValue({
       config: {},
       hash: "unchanged",
-      source: {
+      source: updateConfigSource({
+        ...caller.configSnapshot,
         path: path.join(root, "openclaw.json"),
-        exists: true,
-        raw: "{}",
         hash: "unchanged",
-        includedPaths: [],
-        includeProvenance: [],
-        sourceConfig: schemaContext("caller").configSnapshot.sourceConfig,
-      },
+      }),
     });
     vi.spyOn(candidateState, "readUpdateStateSchemaVersions").mockResolvedValue([
       { path: path.join(root, "state", "openclaw.sqlite"), userVersion: migrating ? 14 : 15 },
