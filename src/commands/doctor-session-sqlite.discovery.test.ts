@@ -47,19 +47,41 @@ function discoveryState(state: OpenClawTestState) {
       runDoctorSessionSqlite({ mode, store, env: state.env }),
   };
 }
-function protectedMove(sourcePath: string, archivePath: string): SessionSqliteMigrationMove {
-  return {
-    kind: "unreferenced-jsonl",
+async function publishArchive(
+  run: MigrationRun,
+  target: MigrationTarget,
+  sourcePath: string,
+  archivePath: string,
+  {
+    kind = "unreferenced-jsonl",
+    imported = false,
+    remounted = false,
+  }: {
+    kind?: SessionSqliteMigrationMove["kind"];
+    imported?: boolean;
+    remounted?: boolean;
+  } = {},
+): Promise<SessionSqliteMigrationMove> {
+  const move: SessionSqliteMigrationMove = {
+    kind,
     sourcePath,
     archivePath,
     artifact: {
       identity: readMigrationArtifactIdentity(sourcePath),
-      classification: "protected",
-      reason: "unreferenced-history",
+      classification: imported ? "imported" : "protected",
+      reason: imported ? "verified-index-import" : "unreferenced-history",
       dependencies: [],
       disposal: { state: "retained" },
     },
   };
+  recordPlannedMigrationMoves(run, target, [move]);
+  await moveMigrationArtifact(sourcePath, archivePath, move.artifact!.identity);
+  // Publish against the live device, then model the retained receipt's pre-remount identity.
+  if (remounted) {
+    move.artifact!.identity.dev = String(BigInt(move.artifact!.identity.dev) + 1n);
+  }
+  recordCompletedMigrationMoves(run, target, [move]);
+  return move;
 }
 function completeRun(run: MigrationRun, target: MigrationTarget) {
   updateMigrationManifestTarget(run, target, [], { validationBeforeArchive: "passed" });
@@ -68,22 +90,11 @@ function completeRun(run: MigrationRun, target: MigrationTarget) {
 }
 
 function transcript(id: string, phrase: string) {
+  const message = { role: "user", content: phrase };
   return (
     [
-      {
-        type: "session",
-        id,
-        version: 3,
-        timestamp: "2026-06-15T00:00:00.000Z",
-        cwd: "/legacy/workspace",
-      },
-      {
-        type: "message",
-        id: `${id}-user`,
-        parentId: null,
-        timestamp: "2026-06-15T00:00:01.000Z",
-        message: { role: "user", content: phrase },
-      },
+      { type: "session", id, version: 3 },
+      { type: "message", id: `${id}-user`, parentId: null, message },
     ]
       .map((row) => JSON.stringify(row))
       .join("\n") + "\n"
@@ -171,60 +182,41 @@ it("retains growing duplicate archives and the restore refusal without leaking i
   });
 });
 
-it.each([{ agent: "retired" }])(
-  "admits transcript-only retired agents through the public selector %j",
-  async (selector) => {
-    await withOpenClawTestState({ label: "doctor-transcript-only" }, async (state) => {
-      const sessions = state.sessionsDir("retired");
-      fs.mkdirSync(sessions, { recursive: true });
-      const store = path.join(sessions, "sessions.json");
-      const id = "77777777-7777-4777-8777-777777777777";
-      const source = path.join(sessions, `${id}.jsonl`);
-      const bytes = transcript(id, "retiredhistoryneedle");
-      fs.writeFileSync(source, bytes);
-      const sqlitePath = resolveTargetSqlitePath(
-        { agentId: "retired", storePath: store },
-        state.env,
-      );
-      expect(fs.existsSync(store)).toBe(false);
+it("admits transcript-only retired agents through the public selector", async () => {
+  await withOpenClawTestState({ label: "doctor-transcript-only" }, async (state) => {
+    const run = (mode: Parameters<typeof runDoctorSessionSqlite>[0]["mode"]) =>
+      runDoctorSessionSqlite({ mode, agent: "retired", cfg: {}, env: state.env });
+    const sessions = state.sessionsDir("retired");
+    fs.mkdirSync(sessions, { recursive: true });
+    const store = path.join(sessions, "sessions.json");
+    const id = "77777777-7777-4777-8777-777777777777";
+    const source = path.join(sessions, `${id}.jsonl`);
+    const bytes = transcript(id, "retiredhistoryneedle");
+    fs.writeFileSync(source, bytes);
+    const sqlitePath = resolveTargetSqlitePath({ agentId: "retired", storePath: store }, state.env);
+    expect(fs.existsSync(store)).toBe(false);
+    expect(fs.existsSync(sqlitePath)).toBe(false);
+    for (const mode of ["dry-run", "validate"] as const) {
+      const report = await run(mode);
+      expect(report.targets).toEqual([
+        expect.objectContaining({ agentId: "retired", legacyEntries: 1 }),
+      ]);
       expect(fs.existsSync(sqlitePath)).toBe(false);
-      for (const mode of ["dry-run", "validate"] as const) {
-        const report = await runDoctorSessionSqlite({ mode, ...selector, cfg: {}, env: state.env });
-        expect(report.targets).toEqual([
-          expect.objectContaining({ agentId: "retired", legacyEntries: 1 }),
-        ]);
-        expect(fs.existsSync(sqlitePath)).toBe(false);
-        expect(fs.readFileSync(source, "utf8")).toBe(bytes);
-      }
-      const report = await runDoctorSessionSqlite({
-        mode: "import",
-        ...selector,
-        cfg: {},
-        env: state.env,
-      });
-      expect(report.totals.importedEntries).toBe(1);
-      expect(report.targets.flatMap((target) => target.issues)).toEqual([]);
-      closeAgentHandles();
-      expect(
-        searchTranscripts({ agentId: "retired", env: state.env, query: "retiredhistoryneedle" })
-          .hits,
-      ).toEqual([expect.objectContaining({ sessionId: id })]);
-      const archived = report.targets.flatMap((target) => target.archivedTranscriptFiles);
-      expect(archived).toHaveLength(1);
-      expect(fs.readFileSync(archived[0]!, "utf8")).toBe(bytes);
-      expect(
-        (
-          await runDoctorSessionSqlite({
-            mode: "import",
-            ...selector,
-            cfg: {},
-            env: state.env,
-          })
-        ).totals.importedEntries,
-      ).toBe(0);
-    });
-  },
-);
+      expect(fs.readFileSync(source, "utf8")).toBe(bytes);
+    }
+    const report = await run("import");
+    expect(report.totals.importedEntries).toBe(1);
+    expect(report.targets.flatMap((target) => target.issues)).toEqual([]);
+    closeAgentHandles();
+    expect(
+      searchTranscripts({ agentId: "retired", env: state.env, query: "retiredhistoryneedle" }).hits,
+    ).toEqual([expect.objectContaining({ sessionId: id })]);
+    const archived = report.targets.flatMap((target) => target.archivedTranscriptFiles);
+    expect(archived).toHaveLength(1);
+    expect(fs.readFileSync(archived[0]!, "utf8")).toBe(bytes);
+    expect((await run("import")).totals.importedEntries).toBe(0);
+  });
+});
 
 it.each(["lineage", "generated"] as const)(
   "imports primary history without changing its logical owner (%s)",
@@ -237,37 +229,35 @@ it.each(["lineage", "generated"] as const)(
           ? "11111111-1111-4111-8111-111111111111"
           : "77777777-7777-4777-8777-777777777777";
       const query = variant === "lineage" ? "oldfamilyneedle" : "generatedcurrentneedle";
-      {
-        const entry =
-          variant === "lineage"
-            ? {
-                sessionId: "current",
-                updatedAt: 42,
-                sessionFile: "current.jsonl",
-                previousSessionId: id,
-              }
-            : {
-                sessionId: id,
-                updatedAt: 123,
-                sessionFile: `${id}.jsonl`,
-                label: "retained-label",
-              };
-        fs.writeFileSync(store, JSON.stringify({ [key]: entry }));
+      const entry =
+        variant === "lineage"
+          ? {
+              sessionId: "current",
+              updatedAt: 42,
+              sessionFile: "current.jsonl",
+              previousSessionId: id,
+            }
+          : {
+              sessionId: id,
+              updatedAt: 123,
+              sessionFile: `${id}.jsonl`,
+              label: "retained-label",
+            };
+      fs.writeFileSync(store, JSON.stringify({ [key]: entry }));
+      fs.writeFileSync(
+        path.join(sessions, `2026-06-15T00-00-00-000Z_${id}.jsonl`),
+        transcript(id, query),
+      );
+      if (variant === "lineage") {
+        const standalone = "22222222-2222-4222-8222-222222222222";
         fs.writeFileSync(
-          path.join(sessions, `2026-06-15T00-00-00-000Z_${id}.jsonl`),
-          transcript(id, query),
+          path.join(sessions, "current.jsonl"),
+          transcript("current", "currentword"),
         );
-        if (variant === "lineage") {
-          const standalone = "22222222-2222-4222-8222-222222222222";
-          fs.writeFileSync(
-            path.join(sessions, "current.jsonl"),
-            transcript("current", "currentword"),
-          );
-          fs.writeFileSync(
-            path.join(sessions, `${standalone}.jsonl`),
-            transcript(standalone, "oldstandaloneneedle"),
-          );
-        }
+        fs.writeFileSync(
+          path.join(sessions, `${standalone}.jsonl`),
+          transcript(standalone, "oldstandaloneneedle"),
+        );
       }
       const report = await run("import");
       expect(report.targets.flatMap((target) => target.issues)).toEqual([]);
@@ -275,13 +265,11 @@ it.each(["lineage", "generated"] as const)(
       expect(searchTranscripts({ ...scope, query }).hits).toEqual([
         expect.objectContaining({ sessionKey: key, sessionId: id }),
       ]);
-      {
-        expect(loadEntry({ ...scope, sessionKey: key, storePath: store })?.entry).toMatchObject(
-          variant === "lineage"
-            ? { sessionId: "current", updatedAt: 42 }
-            : { sessionId: id, updatedAt: 123, label: "retained-label" },
-        );
-      }
+      expect(loadEntry({ ...scope, sessionKey: key, storePath: store })?.entry).toMatchObject(
+        variant === "lineage"
+          ? { sessionId: "current", updatedAt: 42 }
+          : { sessionId: id, updatedAt: 123, label: "retained-label" },
+      );
       if (variant === "lineage") {
         expect(searchTranscripts({ ...scope, query: "oldstandaloneneedle" }).hits).toHaveLength(1);
       }
@@ -303,10 +291,7 @@ it("recovers a completed old archive once, preserves bytes, and does not resurre
     );
     fs.mkdirSync(path.dirname(archive), { recursive: true });
     const old = createSessionSqliteMigrationRun(state.env, [target]);
-    const move = protectedMove(original, archive);
-    recordPlannedMigrationMoves(old, target, [move]);
-    await moveMigrationArtifact(original, archive, move.artifact!.identity);
-    recordCompletedMigrationMoves(old, target, [move]);
+    const move = await publishArchive(old, target, original, archive);
     completeRun(old, target);
     const completed = migrationRun.recordCompletedMigrationMoves;
     const interrupted = vi
@@ -400,12 +385,9 @@ it.each(["recover"] as const)(
           const bytes = transcript(id, id === "identical" ? "duplicateneedle" : `${id}-${copy}`);
           originals.set(archivePath, bytes);
           fs.writeFileSync(sourcePath, bytes);
-          const move = protectedMove(sourcePath, archivePath);
-          recordPlannedMigrationMoves(old, target, [move]);
-          await moveMigrationArtifact(sourcePath, archivePath, move.artifact!.identity);
-          // Retained receipts predate the remount; publication still used the live device.
-          move.artifact!.identity.dev = String(BigInt(move.artifact!.identity.dev) + 1n);
-          recordCompletedMigrationMoves(old, target, [move]);
+          const move = await publishArchive(old, target, sourcePath, archivePath, {
+            remounted: true,
+          });
           moves.push(move);
         }
         completeRun(old, target);
@@ -520,10 +502,7 @@ it("keeps diagnostic, deleted, mismatched, and ambiguous inputs out of searchabl
       const sourcePath = path.join(sessions, name);
       const archivePath = path.join(archiveDir, `${name}.imported-1`);
       fs.writeFileSync(sourcePath, archivedBytes);
-      const move = protectedMove(sourcePath, archivePath);
-      recordPlannedMigrationMoves(old, target, [move]);
-      await moveMigrationArtifact(sourcePath, archivePath, move.artifact!.identity);
-      recordCompletedMigrationMoves(old, target, [move]);
+      await publishArchive(old, target, sourcePath, archivePath);
       archivedPaths.push(archivePath);
     }
     updateMigrationManifestTarget(old, target, [], { validationBeforeArchive: "passed" });
@@ -599,25 +578,12 @@ it.each(["device changed", "metadata changed"])(
           archiveDir,
           `${source === store ? "legacy-store" : "archive-tier"}.${path.basename(source)}.imported-1788290346376`,
         );
-        const move: SessionSqliteMigrationMove = {
-          kind: source === store ? "legacy-store" : "unreferenced-jsonl",
-          sourcePath: source,
-          archivePath,
-          artifact: {
-            identity: readMigrationArtifactIdentity(source),
-            classification: source === store ? "imported" : "protected",
-            reason: source === store ? "verified-index-import" : "unreferenced-history",
-            dependencies: [],
-            disposal: { state: "retained" },
-          },
-        };
         saved.set(archivePath, fs.readFileSync(source, "utf8"));
-        recordPlannedMigrationMoves(old, target, [move]);
-        await moveMigrationArtifact(source, archivePath, move.artifact!.identity);
-        if (archiveState === "device changed") {
-          move.artifact!.identity.dev = String(BigInt(move.artifact!.identity.dev) + 1n);
-        }
-        recordCompletedMigrationMoves(old, target, [move]);
+        await publishArchive(old, target, source, archivePath, {
+          kind: source === store ? "legacy-store" : "unreferenced-jsonl",
+          imported: source === store,
+          remounted: archiveState === "device changed",
+        });
       }
       completeRun(old, target);
       const scope = { agentId: "main", env: state.env };
@@ -648,15 +614,15 @@ it.each(["device changed", "metadata changed"])(
           });
           const issue = report.targets[0]!.issues[0]!;
           expect(issue.code).toBe("historical_transcript_deferred");
-          expect(issue.message).toContain("no longer matches its migration receipt");
-          expect(issue.message).toContain("Historical transcript import skipped");
-          expect(issue.message).toContain("does not indicate SQLite corruption");
-          expect(issue.message).toContain(
+          for (const text of [
+            "no longer matches its migration receipt",
+            "Historical transcript import skipped",
+            "does not indicate SQLite corruption",
             "No action is needed if all expected conversations are present",
-          );
-          expect(issue.message).toContain(
             "https://docs.openclaw.ai/cli/doctor/sqlite-maintenance#changed-archived-registry",
-          );
+          ]) {
+            expect(issue.message).toContain(text);
+          }
           expect(issue.message).not.toContain("Error:");
           if (report.migrationRun) {
             const receipt = migrationRun.readSessionSqliteMigrationManifest(
@@ -707,21 +673,9 @@ it("preserves retained shared aliases after the old migration cleared their file
       }
       const archive = path.join(archiveDir, `archive-tier.${name}.imported-1`);
       originals.set(archive, fs.readFileSync(source, "utf8"));
-      const move: SessionSqliteMigrationMove = {
+      await publishArchive(old, target, source, archive, {
         kind: name === "sessions.json" ? "legacy-store" : "unreferenced-jsonl",
-        sourcePath: source,
-        archivePath: archive,
-        artifact: {
-          identity: readMigrationArtifactIdentity(source),
-          classification: "protected",
-          reason: "unreferenced-history",
-          dependencies: [],
-          disposal: { state: "retained" },
-        },
-      };
-      recordPlannedMigrationMoves(old, target, [move]);
-      await moveMigrationArtifact(source, archive, move.artifact!.identity);
-      recordCompletedMigrationMoves(old, target, [move]);
+      });
     }
     completeRun(old, target);
     for (const mode of ["validate", "import"] as const) {

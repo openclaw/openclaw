@@ -10,7 +10,6 @@ import {
 import { assertSessionStoreMigrationComplete as assertMigrated } from "../config/sessions/startup-migration.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runSessionSnapshotsHealth } from "../flows/doctor-health-contribution-runners.state.js";
 import * as packageRoots from "../infra/openclaw-root.js";
 import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
@@ -31,6 +30,13 @@ import {
   noteSessionSnapshotHealth as noteHealth,
   sessionSnapshotIssueToHealthFinding as toHealthFinding,
 } from "./doctor-session-snapshots.js";
+
+function expectNote(...parts: string[]) {
+  expect(note).toHaveBeenCalledTimes(1);
+  for (const part of parts) {
+    expect(note.mock.calls[0]?.[0]).toContain(part);
+  }
+}
 
 function sessionEntry(patch: Partial<SessionEntry>): SessionEntry {
   return { sessionId: "session-1", updatedAt: Date.now(), ...patch };
@@ -100,39 +106,17 @@ describe("doctor session snapshot stale runtime metadata", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  async function scanSessionStoreForStaleRuntimeSnapshotPaths(params: {
-    store: Record<string, SessionEntry>;
-    bundledSkillsDir: string;
-    pathExists?: (filePath: string) => boolean;
-    env?: NodeJS.ProcessEnv;
-  }) {
-    const scanPath = path.join(root, "snapshot-scan.json");
-    await writeSessionStore(scanPath, params.store);
-    vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", params.bundledSkillsDir);
-    const pathExists = params.pathExists;
-    const exists = pathExists
-      ? vi
-          .spyOn(fsSync, "existsSync")
-          .mockImplementation(
-            (filePath) => String(filePath) === scanPath || pathExists(String(filePath)),
-          )
-      : undefined;
-    try {
-      const findings = await detectIssues({
-        cfg: { session: { store: scanPath } },
-        env: params.env,
-      });
-      return findings.map(({ storePath: _storePath, ...finding }) => finding);
-    } finally {
-      exists?.mockRestore();
-    }
+  async function scanStore(store: Record<string, SessionEntry>) {
+    await writeSessionStore(storePath, store);
+    const findings = await detectIssues({ cfg: { session: { store: storePath } } });
+    return findings.map(({ storePath: _storePath, ...finding }) => finding);
   }
 
   it("flags cached bundled skill locations from inactive and temp-backed runtime roots", async () => {
     const tempBackedPath = path.join(path.sep, "private/tmp/openclaw/skills/doctor/SKILL.md");
-    const findings = await scanSessionStoreForStaleRuntimeSnapshotPaths({
-      bundledSkillsDir,
-      store: { "agent:main": skillSession(stalePath), "agent:temp": skillSession(tempBackedPath) },
+    const findings = await scanStore({
+      "agent:main": skillSession(stalePath),
+      "agent:temp": skillSession(tempBackedPath),
     });
 
     expect(findings).toEqual([
@@ -205,13 +189,13 @@ describe("doctor session snapshot stale runtime metadata", () => {
       "opt/node_modules/openclaw/skills/doctor/SKILL.md",
     );
 
-    const findings = await scanSessionStoreForStaleRuntimeSnapshotPaths({
-      bundledSkillsDir: windowsBundledSkillsDir,
-      store: {
-        "agent:current": skillSession(currentPath),
-        "agent:stale": skillSession(windowsStalePath),
-      },
-      pathExists: (filePath) => filePath === currentPath,
+    vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", windowsBundledSkillsDir);
+    vi.spyOn(fsSync, "existsSync").mockImplementation(
+      (file) => String(file) === storePath || String(file) === currentPath,
+    );
+    const findings = await scanStore({
+      "agent:current": skillSession(currentPath),
+      "agent:stale": skillSession(windowsStalePath),
     });
 
     expect(findings).toEqual([expectedIssue("agent:stale", windowsStalePath, currentPath)]);
@@ -233,11 +217,7 @@ describe("doctor session snapshot stale runtime metadata", () => {
 
     await noteHealth({ cfg: { session: { store: storePath } } });
 
-    expect(note).toHaveBeenCalledTimes(1);
-    const [message] = note.mock.calls[0] as [string, string];
-    expect(message).toContain("agent:main");
-    expect(message).toContain("skillsSnapshot.resolvedSkills");
-    expect(message).toContain(stalePath);
+    expectNote("agent:main", "skillsSnapshot.resolvedSkills", stalePath);
   });
 
   it("reports stale cached metadata from configured session stores", async () => {
@@ -248,15 +228,11 @@ describe("doctor session snapshot stale runtime metadata", () => {
     await writeSessionStore(configuredStorePath, { "agent:configured": skillSession(stalePath) });
 
     await noteHealth({
-      cfg: { session: { store: configuredStorePath } } as OpenClawConfig,
+      cfg: { session: { store: configuredStorePath } },
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
 
-    expect(note).toHaveBeenCalledTimes(1);
-    const [message] = note.mock.calls[0] as [string, string];
-    expect(message).toContain(configuredStorePath);
-    expect(message).toContain("agent:configured");
-    expect(message).toContain(stalePath);
+    expectNote(configuredStorePath, "agent:configured", stalePath);
   });
 
   it("preserves a missing prompt blob without reporting false findings", async () => {
@@ -334,8 +310,7 @@ describe("doctor session snapshot stale runtime metadata", () => {
           label: "current",
           skillsSnapshot: { prompt },
         });
-        expect(note).toHaveBeenCalledTimes(1);
-        expect(note.mock.calls[0]?.[0]).toContain("No cleanup or session reset is needed");
+        expectNote("No cleanup or session reset is needed");
         expect(() => assertMigrated({ cfg, env: state.env })).not.toThrow();
       },
     );

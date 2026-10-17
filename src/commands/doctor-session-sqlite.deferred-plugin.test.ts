@@ -37,10 +37,45 @@ import {
   seedConcurrentDeferredPluginMigration,
   seedDeferredPluginSessionSource as seedSource,
 } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
-import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
+import { runDoctorSessionSqlite, type DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+function writeJson(file: string, value: unknown) {
+  fs.writeFileSync(file, JSON.stringify(value));
+}
+function writeTranscript(file: string, id: string, messageId: string, content: string) {
+  fs.writeFileSync(
+    file,
+    [
+      { type: "session", version: 3, id },
+      { type: "message", id: messageId, parentId: null, message: { role: "user", content } },
+    ]
+      .map((row) => JSON.stringify(row))
+      .join("\n") + "\n",
+  );
+}
+function reportIssues(report: DoctorSessionSqliteReport) {
+  return report.targets.flatMap((target) => target.issues);
+}
+function expectTranscriptsArchived(originals: Map<string, Buffer>) {
+  for (const file of [...originals.keys()].filter((name) => name.endsWith(".jsonl"))) {
+    expect(fs.existsSync(file)).toBe(false);
+  }
+}
+async function expectInterruptedPublication(run: () => Promise<DoctorSessionSqliteReport>) {
+  const publication = vi
+    .spyOn(migrationRun, "recordCompletedMigrationMoves")
+    .mockImplementationOnce(() => {
+      throw new Error("interrupted after transcript publication");
+    });
+  try {
+    await expect(run()).rejects.toThrow("interrupted after transcript publication");
+  } finally {
+    publication.mockRestore();
+  }
+}
 
 function importSessions(cfg: OpenClawConfig, env: NodeJS.ProcessEnv) {
   return runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "import" });
@@ -78,22 +113,6 @@ async function emptySource(state: Parameters<typeof seedSource>[0]) {
   });
   return { cfg, directory, storePath };
 }
-function settlementScenario(
-  overrides: Partial<{
-    changeSource: boolean | string;
-    siblingPending: boolean;
-    pendingChange: string;
-    missingTranscript: string;
-  }> = {},
-) {
-  return {
-    changeSource: false,
-    siblingPending: false,
-    pendingChange: "none",
-    missingTranscript: "none",
-    ...overrides,
-  };
-}
 
 type SessionScope = Awaited<ReturnType<typeof seedSource>>["scope"];
 
@@ -115,20 +134,17 @@ describe("session sources needed by deferred plugin migrations", () => {
         if (damage !== "transcript_malformed") {
           const entries = JSON.parse(fs.readFileSync(storePath, "utf8"));
           entries["agent:main:invalid"] = { updatedAt: 20 };
-          fs.writeFileSync(storePath, JSON.stringify(entries));
+          writeJson(storePath, entries);
           originals.set(storePath, fs.readFileSync(storePath));
         }
-        {
-          fs.appendFileSync(transcript, '{broken\n{"type":"message","id":"unimported"}\n');
-          originals.set(transcript, fs.readFileSync(transcript));
-        }
+        fs.appendFileSync(transcript, '{broken\n{"type":"message","id":"unimported"}\n');
+        originals.set(transcript, fs.readFileSync(transcript));
         const run = () => importSessions(cfg, state.env);
         const imported = await run();
-        expect(imported.totals.importedEntries).toBe(2);
-        expect(imported.totals.importedTranscriptEvents).toBe(4);
+        expect(imported.totals).toMatchObject({ importedEntries: 2, importedTranscriptEvents: 4 });
         // This is the same readiness decision made by doctor --non-interactive --fix.
         expect(() => assertMigrated({ cfg, env: state.env, operation: "doctor" })).not.toThrow();
-        const issues = imported.targets.flatMap((target) => target.issues);
+        const issues = reportIssues(imported);
         expect(issues.every(isWarning)).toBe(true);
         for (const code of damage === "both"
           ? ["entry_invalid", "transcript_malformed"]
@@ -139,21 +155,15 @@ describe("session sources needed by deferred plugin migrations", () => {
         await editAndDeleteImportedSessions(scope, "changed after partial import");
         const retried = await run();
         expect(retried.totals.importedEntries).toBe(0);
-        expect(retried.targets.flatMap((target) => target.issues).every(isWarning)).toBe(true);
+        expect(reportIssues(retried).every(isWarning)).toBe(true);
         expectCanonicalSessions(scope, "changed after partial import");
         await resolvePlugin(state.env);
         if (interrupted) {
-          const publication = vi
-            .spyOn(migrationRun, "recordCompletedMigrationMoves")
-            .mockImplementationOnce(() => {
-              throw new Error("interrupted after transcript publication");
-            });
-          await expect(run()).rejects.toThrow("interrupted after transcript publication");
-          publication.mockRestore();
+          await expectInterruptedPublication(run);
         }
         const settled = await run();
         expect(settled.totals.importedEntries).toBe(0);
-        expect(settled.targets.flatMap((target) => target.issues)).toContainEqual(
+        expect(reportIssues(settled)).toContainEqual(
           expect.objectContaining({ code: "transcript_malformed" }),
         );
         expectReady(cfg, state.env);
@@ -223,7 +233,7 @@ describe("session sources needed by deferred plugin migrations", () => {
         expect(readPending({ env: state.env })).toEqual([
           expect.objectContaining({ pluginId: "fixture-plugin", requiresStateMigration: true }),
         ]);
-        expect(interrupted.targets.flatMap((target) => target.issues)).toContainEqual(
+        expect(reportIssues(interrupted)).toContainEqual(
           expect.objectContaining({
             message: expect.stringContaining("Plugin migration obligations changed"),
           }),
@@ -237,27 +247,34 @@ describe("session sources needed by deferred plugin migrations", () => {
         await resolvePlugin(state.env);
         const resumed = await run();
         expect(resumed.totals.importedEntries).toBe(0);
-        expect(resumed.targets.flatMap((target) => target.issues)).toEqual([]);
+        expect(reportIssues(resumed)).toEqual([]);
         expect(fs.existsSync(storePath)).toBe(false);
-        for (const source of originals.keys()) {
-          if (source.endsWith(".jsonl")) {
-            expect(fs.existsSync(source)).toBe(false);
-          }
-        }
+        expectTranscriptsArchived(originals);
       });
     },
   );
 
-  it.each([
-    settlementScenario(),
-    settlementScenario({ changeSource: "orphan", missingTranscript: "absent" }),
-    settlementScenario({ siblingPending: true }),
-    settlementScenario({ pendingChange: "plugin" }),
-    settlementScenario({ pendingChange: "publication" }),
-    settlementScenario({ missingTranscript: "absent" }),
+  it.each<{
+    name: string;
+    changeSource?: string;
+    siblingPending?: boolean;
+    pendingChange?: string;
+    missingTranscript?: string;
+  }>([
+    { name: "unchanged source" },
+    { name: "changed orphan", changeSource: "orphan", missingTranscript: "absent" },
+    { name: "pending sibling", siblingPending: true },
+    { name: "new plugin obligation", pendingChange: "plugin" },
+    { name: "new publication obligation", pendingChange: "publication" },
+    { name: "absent transcript", missingTranscript: "absent" },
   ])(
-    "settles a retained source in the same Doctor after late plugin completion (source changed: $changeSource, sibling pending: $siblingPending, pending change: $pendingChange, missing transcript: $missingTranscript)",
-    async ({ changeSource, siblingPending, pendingChange, missingTranscript }) => {
+    "settles a retained source in the same Doctor after late plugin completion ($name)",
+    async ({
+      changeSource = "",
+      siblingPending = false,
+      pendingChange = "none",
+      missingTranscript = "none",
+    }) => {
       await withState({ label: "deferred-plugin-late-settlement" }, async (state) => {
         const {
           cfg: seededConfig,
@@ -311,32 +328,27 @@ describe("session sources needed by deferred plugin migrations", () => {
           JSON.stringify({ type: "session", version: 3, id: newHistoryId }) + "\n";
         fs.mkdirSync(pluginRoot);
         fs.writeFileSync(marker, "pending");
-        fs.writeFileSync(
-          path.join(pluginRoot, "package.json"),
-          JSON.stringify({
-            name: "@example/fixture-plugin",
-            version: "1.0.0",
-            openclaw: { extensions: ["./index.cjs"] },
-          }),
-        );
+        writeJson(path.join(pluginRoot, "package.json"), {
+          name: "@example/fixture-plugin",
+          version: "1.0.0",
+          openclaw: { extensions: ["./index.cjs"] },
+        });
         fs.writeFileSync(path.join(pluginRoot, "index.cjs"), "module.exports = {};\n");
-        fs.writeFileSync(
-          path.join(pluginRoot, "openclaw.plugin.json"),
-          JSON.stringify({
-            id: "fixture-plugin",
-            configSchema: { type: "object", properties: {}, additionalProperties: false },
-            doctorContract: {
-              stateMigrations: [
-                { id: "late-state", phase: "after-session-repair", doctorOnly: true },
-              ],
-            },
-          }),
-        );
+        const migrationAction = {
+          id: "late-state",
+          phase: "after-session-repair",
+          doctorOnly: true,
+        };
+        writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
+          id: "fixture-plugin",
+          configSchema: { type: "object", properties: {}, additionalProperties: false },
+          doctorContract: { stateMigrations: [migrationAction] },
+        });
         fs.writeFileSync(
           path.join(pluginRoot, "doctor-contract-api.cjs"),
           `const fs = require("node:fs");
           module.exports = { stateMigrations: [{
-            id: "late-state", label: "Late fixture state", phase: "after-session-repair", doctorOnly: true,
+            ...${JSON.stringify(migrationAction)}, label: "Late fixture state",
             detectLegacyState: () => fs.existsSync(${JSON.stringify(marker)}) ? { preview: ["Consume retained fixture state"] } : null,
             migrateLegacyState: () => {
               fs.writeFileSync(${JSON.stringify(newHistory)}, ${JSON.stringify(newHistoryBytes)});
@@ -408,13 +420,13 @@ describe("session sources needed by deferred plugin migrations", () => {
               expect(fs.statSync(file).nlink).toBe(1);
             }
           }
-        } else if (changeSource || missingTranscript === "appears") {
+        } else if (changeSource) {
           expectReady(cfg, state.env);
           expect(readPending({ env: state.env })).toEqual([
             expect.objectContaining({ pluginId: "fixture-plugin" }),
           ]);
           expect(fs.readFileSync(changedSource, "utf8")).toBe(
-            originals.get(changedSource)?.toString() + (changeSource ? "\n" : ""),
+            originals.get(changedSource)?.toString() + "\n",
           );
         } else if (siblingPending) {
           expectReady(cfg, state.env);
@@ -453,11 +465,7 @@ describe("session sources needed by deferred plugin migrations", () => {
                 ?.classification,
             ).toBe("protected");
           }
-          for (const file of originals.keys()) {
-            if (file.endsWith(".jsonl")) {
-              expect(fs.existsSync(file)).toBe(false);
-            }
-          }
+          expectTranscriptsArchived(originals);
         }
       });
     },
@@ -485,12 +493,7 @@ describe("session sources needed by deferred plugin migrations", () => {
           scope.storePath = storePath;
           cfg.session = { store: storePath };
         }
-        let foreignSource:
-          | {
-              path: string;
-              bytes: Buffer;
-            }
-          | undefined;
+        let foreignSource: { path: string; bytes: Buffer } | undefined;
         if (layout === "relocated-interrupted") {
           const foreignPath = state.path("foreign-root/agents/main/sessions/legacy-kept.jsonl");
           const bytes = fs.readFileSync(path.join(path.dirname(storePath), "legacy-kept.jsonl"));
@@ -499,7 +502,7 @@ describe("session sources needed by deferred plugin migrations", () => {
           foreignSource = { path: foreignPath, bytes };
           const entries = JSON.parse(fs.readFileSync(storePath, "utf8"));
           entries["agent:main:kept"].sessionFile = foreignPath;
-          fs.writeFileSync(storePath, JSON.stringify(entries));
+          writeJson(storePath, entries);
           originals.set(storePath, fs.readFileSync(storePath));
         }
         expect(() => assertMigrated({ cfg, env: state.env })).toThrow(
@@ -508,7 +511,7 @@ describe("session sources needed by deferred plugin migrations", () => {
         const run = () => importSessions(cfg, state.env);
         const imported = await run();
         expect(imported.totals.importedEntries).toBe(2);
-        expect(imported.targets.flatMap((target) => target.issues)).toEqual([
+        expect(reportIssues(imported)).toEqual([
           expect.objectContaining({ code: "plugin_migration_source_retained" }),
         ]);
         expectOriginals(originals);
@@ -536,26 +539,13 @@ describe("session sources needed by deferred plugin migrations", () => {
           }
         }
         if (layout === "relocated-interrupted") {
-          const publication = vi
-            .spyOn(migrationRun, "recordCompletedMigrationMoves")
-            .mockImplementationOnce(() => {
-              throw new Error("interrupted after transcript publication");
-            });
-          try {
-            await expect(run()).rejects.toThrow("interrupted after transcript publication");
-          } finally {
-            publication.mockRestore();
-          }
-          for (const file of originals.keys()) {
-            if (file.endsWith(".jsonl")) {
-              expect(fs.existsSync(file)).toBe(false);
-            }
-          }
+          await expectInterruptedPublication(run);
+          expectTranscriptsArchived(originals);
           expect(fs.readFileSync(storePath)).toEqual(originals.get(storePath));
         }
         const resumed = await run();
         expect(resumed.totals.importedEntries).toBe(0);
-        expect(resumed.targets.flatMap((target) => target.issues)).toEqual([]);
+        expect(reportIssues(resumed)).toEqual([]);
         expect(fs.existsSync(storePath)).toBe(false);
         expect(resumed.totals.archivedTranscriptFiles).toBe(
           layout === "relocated-interrupted" ? 0 : 2,
@@ -594,19 +584,11 @@ describe("session sources needed by deferred plugin migrations", () => {
         const sqlitePath = resolveTarget(storePath, scope).path;
         const run = () => importSessions(cfg, state.env);
         if (kind === "unindexed history") {
-          fs.writeFileSync(
+          writeTranscript(
             path.join(directory, "historical.jsonl"),
-            [
-              { type: "session", version: 3, id: "historical" },
-              {
-                type: "message",
-                id: "message",
-                parentId: null,
-                message: { role: "user", content: "Retained history" },
-              },
-            ]
-              .map((entry) => JSON.stringify(entry))
-              .join("\n") + "\n",
+            "historical",
+            "message",
+            "Retained history",
           );
         } else {
           await upsertEntry(
@@ -615,7 +597,7 @@ describe("session sources needed by deferred plugin migrations", () => {
           );
           const report = await run();
           expect(report.totals.importedEntries).toBe(0);
-          expect(report.targets.flatMap((target) => target.issues)).toContainEqual(
+          expect(reportIssues(report)).toContainEqual(
             expect.objectContaining({ code: "plugin_migration_source_retained" }),
           );
           expectReady(cfg, state.env);
@@ -635,7 +617,7 @@ describe("session sources needed by deferred plugin migrations", () => {
         if (kind === "unindexed history") {
           const report = await run();
           expect(report.totals.importedEntries).toBe(1);
-          expect(report.targets.flatMap((target) => target.issues)).toEqual([
+          expect(reportIssues(report)).toEqual([
             expect.objectContaining({ code: "plugin_migration_source_retained" }),
           ]);
           expect(
@@ -676,19 +658,11 @@ describe("session sources needed by deferred plugin migrations", () => {
         { env: state.env },
       );
       const retiredTranscript = path.join(path.dirname(storePath), "legacy-retired.jsonl");
-      fs.writeFileSync(
+      writeTranscript(
         retiredTranscript,
-        [
-          { type: "session", version: 3, id: "legacy-retired" },
-          {
-            type: "message",
-            id: "retired-message",
-            parentId: null,
-            message: { role: "user", content: "Retained deleted history" },
-          },
-        ]
-          .map((entry) => JSON.stringify(entry))
-          .join("\n") + "\n",
+        "legacy-retired",
+        "retired-message",
+        "Retained deleted history",
       );
       const entries = JSON.parse(fs.readFileSync(storePath, "utf8"));
       entries["agent:retired:waiting"] = {
@@ -696,7 +670,7 @@ describe("session sources needed by deferred plugin migrations", () => {
         sessionFile: path.basename(retiredTranscript),
         updatedAt: 1,
       };
-      fs.writeFileSync(storePath, JSON.stringify(entries));
+      writeJson(storePath, entries);
       for (const file of [storePath, retiredPath, retiredTranscript]) {
         originals.set(file, fs.readFileSync(file));
       }
@@ -705,7 +679,7 @@ describe("session sources needed by deferred plugin migrations", () => {
 
       const imported = await importSessions(cfg, state.env);
       expect(imported.totals).toMatchObject({ importedEntries: 2, importedTranscriptEvents: 4 });
-      expect(imported.targets.flatMap((target) => target.issues)).toContainEqual(
+      expect(reportIssues(imported)).toContainEqual(
         expect.objectContaining({ code: "plugin_migration_source_retained" }),
       );
       closeAgentHandles();
@@ -719,7 +693,7 @@ describe("session sources needed by deferred plugin migrations", () => {
       fs.appendFileSync(storePath, "\n");
       expect(assertReady).not.toThrow();
       entries["voice:unassigned"] = { sessionId: "unassigned", updatedAt: 1 };
-      fs.writeFileSync(storePath, JSON.stringify(entries));
+      writeJson(storePath, entries);
       expect(assertReady).toThrow("Legacy session store requires migration");
       expect(fs.readFileSync(retiredPath)).toEqual(originals.get(retiredPath));
       expect(fs.readFileSync(retiredTranscript)).toEqual(originals.get(retiredTranscript));
@@ -745,9 +719,8 @@ describe("session sources needed by deferred plugin migrations", () => {
           fs.unlinkSync(storePath);
           fs.mkdirSync(storePath);
         } else {
-          const key = kind === "unimported-owner" ? "agent:ops:waiting" : "agent:retired:waiting";
-          source[key] = { sessionId: "waiting", updatedAt: 1 };
-          fs.writeFileSync(storePath, JSON.stringify(source));
+          source["agent:ops:waiting"] = { sessionId: "waiting", updatedAt: 1 };
+          writeJson(storePath, source);
         }
         const run = () =>
           runDoctorSessionSqlite({
@@ -764,7 +737,7 @@ describe("session sources needed by deferred plugin migrations", () => {
           const imported = await run();
           if (kind !== "malformed") {
             expect(imported.totals.importedEntries).toBe(2);
-            expect(imported.targets.flatMap((target) => target.issues)).toContainEqual(
+            expect(reportIssues(imported)).toContainEqual(
               expect.objectContaining({ code: "plugin_migration_source_retained" }),
             );
           }
@@ -796,13 +769,12 @@ describe("session sources needed by deferred plugin migrations", () => {
         const contents = '{"type":"session","version":3,"id":"legacy-missing"}\n';
         fs.writeFileSync(transcript, contents);
         const retry = await importSessions(cfg, state.env);
-        const issues = retry.targets.flatMap((target) => target.issues);
+        const issues = reportIssues(retry);
         expect(issues).toContainEqual(
           expect.objectContaining({ code: "retained_plugin_source_conflict" }),
         );
         expect(issues.every(isWarning)).toBe(true);
-        expect(retry.totals.importedEntries).toBe(0);
-        expect(retry.totals.archivedTranscriptFiles).toBe(1);
+        expect(retry.totals).toMatchObject({ importedEntries: 0, archivedTranscriptFiles: 1 });
         expect(fs.existsSync(transcript)).toBe(false);
         const manifest = migrationRun.readSessionSqliteMigrationManifest(
           retry.migrationRun!.manifestPath,

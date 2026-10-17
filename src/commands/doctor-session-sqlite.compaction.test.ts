@@ -35,6 +35,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { recoverDoctorSessionSqliteTargets } from "./doctor-session-sqlite-recover-report.js";
 import { createDoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
+import { sessionSqlFixture } from "./doctor-session-sqlite.sql.test-support.js";
 import {
   importLegacyStore,
   useDoctorSessionSqliteTestFixture,
@@ -74,12 +75,27 @@ function withSqlite<T>(
   use: (database: DatabaseSync) => T,
   readOnly = false,
 ): T {
-  const database = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(sqlitePath, { readOnly });
-  try {
-    return use(database);
-  } finally {
-    database.close();
-  }
+  using database = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(sqlitePath, { readOnly });
+  return use(database);
+}
+
+function expectDatabase(
+  sqlitePath: string,
+  rows: Record<string, unknown>,
+  lists: Record<string, unknown> = {},
+) {
+  withSqlite(
+    sqlitePath,
+    (database) => {
+      for (const [query, expected] of Object.entries(rows)) {
+        expect(database.prepare(query).get()).toEqual(expected);
+      }
+      for (const [query, expected] of Object.entries(lists)) {
+        expect(database.prepare(query).all()).toEqual(expected);
+      }
+    },
+    true,
+  );
 }
 
 describe("runDoctorSessionSqlite", () => {
@@ -89,13 +105,14 @@ describe("runDoctorSessionSqlite", () => {
       const { sqlitePath, store } = await createImportedStoreForCompaction();
       fs.writeFileSync(store.storePath, "{}\n");
       const database = nodeSqlite.openNodeSqliteDatabase(sqlitePath);
+      const sql = sessionSqlFixture(database);
       let freelistBefore: number;
       try {
         database.exec(`PRAGMA auto_vacuum = ${autoVacuum}; VACUUM;
           CREATE TABLE cleanup_payload (id INTEGER PRIMARY KEY, body TEXT NOT NULL);
           CREATE TABLE cleanup_discard (body BLOB);
           BEGIN;`);
-        const insert = database.prepare("INSERT INTO cleanup_payload VALUES (?, ?)");
+        const insert = sql`INSERT INTO cleanup_payload VALUES (?, ?)`;
         for (let index = 0; index < 1000; index++) {
           insert.run(index, "x".repeat(1000));
         }
@@ -104,20 +121,17 @@ describe("runDoctorSessionSqlite", () => {
         database.exec(`COMMIT; UPDATE cleanup_payload SET body = 'keep';
           INSERT INTO cleanup_discard VALUES (zeroblob(1048576));
           DELETE FROM cleanup_discard; PRAGMA wal_checkpoint(TRUNCATE);`);
-        freelistBefore = Number(database.prepare("PRAGMA freelist_count").get()?.freelist_count);
+        freelistBefore = Number(sql`PRAGMA freelist_count`.get()?.freelist_count);
       } finally {
         database.close();
       }
       const imported = await importLegacyStore(store);
       expect(imported.totals.issues).toBe(0);
       const cleanup = expectDefined(imported.targets[0]?.compact, "import cleanup");
-      expect(cleanup.freelistAfterPages).toBe(0);
-      expect(cleanup.skipped).toBe(false);
-      {
-        expect(freelistBefore).toBeGreaterThan(0);
-        expect(cleanup.freelistBeforePages).toBeGreaterThan(0);
-        expect(cleanup.reclaimedBytes).toBeGreaterThan(0);
-      }
+      expect(cleanup).toMatchObject({ freelistAfterPages: 0, skipped: false });
+      expect(freelistBefore).toBeGreaterThan(0);
+      expect(cleanup.freelistBeforePages).toBeGreaterThan(0);
+      expect(cleanup.reclaimedBytes).toBeGreaterThan(0);
       quarantine(store, sqlitePath, "corrupt index");
       const externalStorePath = path.join(store.tempDir, "external-sessions.json");
       if (process.platform !== "win32") {
@@ -136,11 +150,12 @@ describe("runDoctorSessionSqlite", () => {
         expect(compacted.totals.reclaimedBytes).toBeGreaterThan(0);
       }
       const after = nodeSqlite.openNodeSqliteDatabase(sqlitePath, { readOnly: true });
+      const afterSql = sessionSqlFixture(after);
       try {
-        expect(after.prepare("PRAGMA auto_vacuum").get()).toEqual({ auto_vacuum: 2 });
-        expect(after.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-        expect(after.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-        expect(after.prepare("SELECT id, body FROM cleanup_payload ORDER BY id").all()).toEqual(
+        expect(afterSql`PRAGMA auto_vacuum`.get()).toEqual({ auto_vacuum: 2 });
+        expect(afterSql`PRAGMA integrity_check`.get()).toEqual({ integrity_check: "ok" });
+        expect(afterSql`PRAGMA foreign_key_check`.all()).toEqual([]);
+        expect(afterSql`SELECT id, body FROM cleanup_payload ORDER BY id`.all()).toEqual(
           Array.from({ length: 1000 }, (_, id) => ({ id, body: "keep" })),
         );
       } finally {
@@ -206,18 +221,17 @@ describe("runDoctorSessionSqlite", () => {
   it("rejects wrong schema role before compaction", async () => {
     const { sqlitePath, store } = await createImportedStoreForCompaction();
     withSqlite(sqlitePath, (database) => {
-      database.prepare("UPDATE schema_meta SET role = 'global' WHERE meta_key = 'primary'").run();
+      const sql = sessionSqlFixture(database);
+      sql`UPDATE schema_meta SET role = 'global' WHERE meta_key = 'primary'`.run();
     });
 
     const report = await runStore(store);
 
-    expect(report.targets[0]?.issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "sqlite_compact_failed",
-          message: expect.stringMatching(/schema role global.*expected agent/iu),
-        }),
-      ]),
+    expect(report.targets[0]?.issues).toContainEqual(
+      expect.objectContaining({
+        code: "sqlite_compact_failed",
+        message: expect.stringMatching(/schema role global.*expected agent/iu),
+      }),
     );
   });
 });
@@ -248,20 +262,12 @@ describe("runDoctorSessionSqlite", () => {
       expect(fs.existsSync(sqlitePath)).toBe(true);
       expect(readQuarantine(sqlitePath, { env: store.env })).toBeUndefined();
 
-      withSqlite(
-        sqlitePath,
-        (database) => {
-          expect(database.prepare("PRAGMA integrity_check").get()).toEqual({
-            integrity_check: "ok",
-          });
-          expect(
-            database
-              .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
-              .get("doctor", "canonical-index"),
-          ).toEqual({ value_json: '{"ok":true}' });
+      expectDatabase(sqlitePath, {
+        "PRAGMA integrity_check": { integrity_check: "ok" },
+        "SELECT value_json FROM cache_entries WHERE scope = 'doctor' AND key = 'canonical-index'": {
+          value_json: '{"ok":true}',
         },
-        true,
-      );
+      });
       expect(
         openAgentDatabase({ agentId: shared ? "alpha" : "main", env: store.env, path: sqlitePath })
           .db.isOpen,
@@ -338,15 +344,12 @@ describe("runDoctorSessionSqlite", () => {
     async (failure) => {
       const { sqlitePath, store } = await createImportedStoreForCompaction();
       createCanonicalCacheIndexDrift(sqlitePath);
-      {
-        const version = failure === "newer schema" ? OPENCLAW_AGENT_SCHEMA_VERSION + 1 : 1;
-        withSqlite(sqlitePath, (database) => {
-          database.exec(`PRAGMA user_version = ${version};`);
-          database
-            .prepare("UPDATE schema_meta SET schema_version = ? WHERE meta_key = 'primary'")
-            .run(failure === "newer schema" ? version : 2);
-        });
-      }
+      const version = failure === "newer schema" ? OPENCLAW_AGENT_SCHEMA_VERSION + 1 : 1;
+      withSqlite(sqlitePath, (database) => {
+        const sql = sessionSqlFixture(database);
+        database.exec(`PRAGMA user_version = ${version};`);
+        sql`UPDATE schema_meta SET schema_version = ${failure === "newer schema" ? version : 2} WHERE meta_key = 'primary'`.run();
+      });
       const before = fs.readFileSync(sqlitePath);
       const report = await runStore(store, "recover");
       expect(report.targets[0]?.issues).toMatchObject([{ code: "sqlite_recovery_inspect_failed" }]);
@@ -402,15 +405,13 @@ describe("runDoctorSessionSqlite", () => {
 
     const report = await runStore(store);
 
-    expect(report.targets[0]?.issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "sqlite_compact_failed",
-          message: expect.stringMatching(
-            /integrity_check failed.*missing from index unsafe_session_index/iu,
-          ),
-        }),
-      ]),
+    expect(report.targets[0]?.issues).toContainEqual(
+      expect.objectContaining({
+        code: "sqlite_compact_failed",
+        message: expect.stringMatching(
+          /integrity_check failed.*missing from index unsafe_session_index/iu,
+        ),
+      }),
     );
     expect(readQuarantine(sqlitePath, { env: store.env })?.reason).toBe("stale secondary index");
 
@@ -428,7 +429,7 @@ function rewriteIndexSchema(database: DatabaseSync, query: string) {
   database.exec("PRAGMA writable_schema = ON;");
   database.prepare(query).run();
   database.exec("PRAGMA writable_schema = OFF;");
-  const row = database.prepare("PRAGMA schema_version;").get();
+  const row = sql`PRAGMA schema_version;`.get();
   const version = Number(row?.schema_version ?? (row ? Object.values(row)[0] : undefined));
   database.exec(`PRAGMA schema_version = ${version + 1};`);
 }
@@ -436,15 +437,9 @@ function rewriteIndexSchema(database: DatabaseSync, query: string) {
 function createUnsafeIndexDrift(sqlitePath: string): void {
   withSqlite(sqlitePath, (database) => {
     database.exec(`
-      CREATE TABLE unsafe_session_index_records (
-        id INTEGER PRIMARY KEY,
-        indexed_value TEXT NOT NULL,
-        alternate_value TEXT NOT NULL
-      );
-      CREATE INDEX unsafe_session_index
-      ON unsafe_session_index_records(indexed_value);
-      INSERT INTO unsafe_session_index_records (indexed_value, alternate_value)
-      VALUES ('alpha', 'zeta'), ('beta', 'eta'), ('gamma', 'theta');
+      CREATE TABLE unsafe_session_index_records (indexed_value TEXT, alternate_value TEXT);
+      CREATE INDEX unsafe_session_index ON unsafe_session_index_records(indexed_value);
+      INSERT INTO unsafe_session_index_records VALUES ('alpha', 'zeta');
     `);
     rewriteIndexSchema(
       database,
@@ -478,17 +473,14 @@ describe("runDoctorSessionSqlite", () => {
     fs.mkdirSync(path.dirname(storePath), { recursive: true });
     fs.writeFileSync(storePath, "{}\n", { mode: 0o600 });
     const database = openAgentDatabase({ agentId: "main", env });
+    const agentSql = sessionSqlFixture(database.db);
     const entryJson = JSON.stringify({
       payload: "empty-import-sentinel".repeat(64 * 1024),
       sessionId: "canonical-only-session",
       updatedAt: 19,
     });
-    database.db
-      .prepare(
-        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
-      )
-      .run("agent:main:main", "canonical-only-session", entryJson, 19);
-    database.db.prepare("UPDATE session_nodes SET entry_valid = 1").run();
+    agentSql`INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (${"agent:main:main"}, ${"canonical-only-session"}, ${entryJson}, ${19})`.run();
+    agentSql`UPDATE session_nodes SET entry_valid = 1`.run();
     const sqlitePath = database.path;
     closeAgentHandles();
     const parseSpy = vi.spyOn(JSON, "parse");
@@ -504,15 +496,9 @@ describe("runDoctorSessionSqlite", () => {
     } finally {
       parseSpy.mockRestore();
     }
-    withSqlite(
-      sqlitePath,
-      (verifier) => {
-        expect(verifier.prepare("SELECT entry_json FROM session_nodes").get()).toEqual({
-          entry_json: entryJson,
-        });
-      },
-      true,
-    );
+    expectDatabase(sqlitePath, {
+      "SELECT entry_json FROM session_nodes": { entry_json: entryJson },
+    });
   });
 
   it.each(["dry-run", "sqlite-only", "directory"] as const)(
@@ -540,9 +526,7 @@ describe("runDoctorSessionSqlite", () => {
         expect(report.targets[0]?.issues).toEqual([
           expect.objectContaining({
             code: "store_unreadable",
-            ...(kind === "directory"
-              ? { message: expect.stringContaining("not a regular file") }
-              : {}),
+            message: expect.stringContaining("not a regular file"),
           }),
         ]);
         return;
@@ -590,10 +574,11 @@ describe("runDoctorSessionSqlite", () => {
 
     const sqlite = nodeSqlite.requireNodeSqlite();
     const currentBefore = new sqlite.DatabaseSync(currentPath);
+    const currentSql = sessionSqlFixture(currentBefore);
     const currentUpdatedAt = expectDefined(
-      currentBefore
-        .prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'")
-        .get() as { updated_at?: number } | undefined,
+      currentSql`SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'`.get() as
+        | { updated_at?: number }
+        | undefined,
       "current schema metadata",
     ).updated_at;
     currentBefore.close();
@@ -609,42 +594,40 @@ describe("runDoctorSessionSqlite", () => {
     expect(report.targets.find((target) => target.agentId === "dormant")?.compact).toMatchObject({
       skipped: false,
     });
-    const dormantAfter = new sqlite.DatabaseSync(dormantPath);
-    const currentAfter = new sqlite.DatabaseSync(currentPath);
-    try {
-      expect(dormantAfter.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-      });
-      expect(
-        dormantAfter
-          .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
-          .get(),
-      ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
-      expect(
-        dormantAfter
-          .prepare("PRAGMA table_info(session_windows)")
-          .all()
-          .map((column) => (column as { name?: unknown }).name),
-      ).toContain("session_scope");
-      expect(
-        dormantAfter
-          .prepare("PRAGMA table_info(memory_index_sources)")
-          .all()
-          .map((column) => (column as { name?: unknown }).name),
-      ).toEqual(["id", "path", "source", "hash", "mtime", "size"]);
-      expect(dormantAfter.prepare("PRAGMA integrity_check").get()).toEqual({
-        integrity_check: "ok",
-      });
-      expect(dormantAfter.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-      expect(
-        currentAfter
-          .prepare("SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary'")
-          .get(),
-      ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION, updated_at: currentUpdatedAt });
-    } finally {
-      dormantAfter.close();
-      currentAfter.close();
-    }
+    expectDatabase(
+      dormantPath,
+      {
+        "PRAGMA user_version": { user_version: OPENCLAW_AGENT_SCHEMA_VERSION },
+        "SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'": {
+          schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+        },
+        "PRAGMA integrity_check": { integrity_check: "ok" },
+      },
+      { "PRAGMA foreign_key_check": [] },
+    );
+    withSqlite(
+      dormantPath,
+      (dormantAfter) => {
+        const dormantSql = sessionSqlFixture(dormantAfter);
+        expect(
+          dormantSql`PRAGMA table_info(session_windows)`
+            .all()
+            .map((column) => (column as { name?: unknown }).name),
+        ).toContain("session_scope");
+        expect(
+          dormantSql`PRAGMA table_info(memory_index_sources)`
+            .all()
+            .map((column) => (column as { name?: unknown }).name),
+        ).toEqual(["id", "path", "source", "hash", "mtime", "size"]);
+      },
+      true,
+    );
+    expectDatabase(currentPath, {
+      "SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary'": {
+        schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+        updated_at: currentUpdatedAt,
+      },
+    });
   });
 
   it("keeps mismatched older agent schema versions blocking during all-agent import", async () => {
@@ -658,10 +641,9 @@ describe("runDoctorSessionSqlite", () => {
     closeAgentHandles();
 
     withSqlite(sqlitePath, (database) => {
+      const sql = sessionSqlFixture(database);
       database.exec("PRAGMA user_version = 1;");
-      database
-        .prepare("UPDATE schema_meta SET schema_version = 2 WHERE meta_key = 'primary'")
-        .run();
+      sql`UPDATE schema_meta SET schema_version = 2 WHERE meta_key = 'primary'`.run();
     });
 
     const report = await runDoctorSessionSqlite({
@@ -683,11 +665,9 @@ describe("runDoctorSessionSqlite", () => {
     expect(failureReport).toContain("sqlite_compact_failed");
     expect(failureReport).toContain("openclaw doctor --session-sqlite recover --github-issue");
     expect(failureReport).not.toContain("supersecret");
-    withSqlite(sqlitePath, (after) => {
-      expect(after.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
-      expect(
-        after.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
-      ).toEqual({ schema_version: 2 });
+    expectDatabase(sqlitePath, {
+      "PRAGMA user_version": { user_version: 1 },
+      "SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'": { schema_version: 2 },
     });
   });
 });
