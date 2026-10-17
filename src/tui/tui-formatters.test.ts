@@ -16,6 +16,13 @@ import {
   sanitizeRenderableText,
 } from "./tui-formatters.js";
 
+const attachment = (kind: string, url: string, label: string) => ({
+  type: "attachment",
+  attachment: { kind, url, label },
+});
+const assistantText = (content: unknown, fields: Record<string, unknown> = {}) =>
+  extractTextFromMessage({ role: "assistant", content, ...fields });
+
 describe("resolveFinalAssistantText", () => {
   it("hides complete HTML error pages after an HTTP reason phrase", () => {
     const raw = "HTTP 502 Bad Gateway\n\n<!doctype html><html><body>down</body></html>";
@@ -98,19 +105,9 @@ describe("formatTuiFooter", () => {
   });
 
   it.each([
-    {
-      status: "active",
-      tokensUsed: 12_000,
-      tokenBudget: 30_000,
-      expected: "Pursuing goal (12k/30k)",
-    },
-    {
-      status: "blocked",
-      tokensUsed: 0,
-      tokenBudget: undefined,
-      expected: "Goal blocked (/goal resume)",
-    },
-  ] as const)("renders $status goals", ({ status, tokensUsed, tokenBudget, expected }) => {
+    ["active", 12_000, 30_000, "Pursuing goal (12k/30k)"],
+    ["blocked", 0, undefined, "Goal blocked (/goal resume)"],
+  ] as const)("renders %s goals", (status, tokensUsed, tokenBudget, expected) => {
     const footer = formatTuiFooter({
       agentLabel: "Main",
       sessionLabel: "main",
@@ -137,46 +134,28 @@ describe("formatTuiFooter", () => {
 
 describe("extractTextFromMessage", () => {
   it.each([
-    {
-      name: "a browser file with the default label",
-      content: [
-        {
-          type: "attachment",
-          attachment: { url: "/document", kind: "document", label: "Attached file" },
-        },
-      ],
-      expected: "Attached file",
-    },
-    {
-      name: "multiple ordered browser attachments",
-      content: [
+    [[attachment("document", "/document", "Attached file")], "Attached file"],
+    [
+      [
         { type: "image", source: { type: "url", url: "/image.png" } },
-        {
-          type: "attachment",
-          attachment: { url: "/report.pdf", kind: "document", label: "report.pdf" },
-        },
+        attachment("document", "/report.pdf", "report.pdf"),
       ],
-      expected: "Attached image\nAttached file: report.pdf",
-    },
-  ])("renders an attachment-only user turn containing $name", ({ content, expected }) => {
+      "Attached image\nAttached file: report.pdf",
+    ],
+  ] as const)("renders attachment-only user content %j", (content, expected) => {
     expect(extractTextFromMessage({ role: "user", content })).toBe(expected);
   });
 
   it.each([
-    {
-      name: "image inferred from its canonical path",
-      media: [{ path: "/media/inbound/media-only.png" }],
-      expected: "Attached image",
-    },
-    {
-      name: "ordered image and file",
-      media: [
+    [[{ path: "/media/inbound/media-only.png" }], "Attached image"],
+    [
+      [
         { path: "/media/inbound/generated-image.png", contentType: "image/png" },
         { path: "/media/inbound/generated-report.pdf", contentType: "application/pdf" },
       ],
-      expected: "Attached image\nAttached file",
-    },
-  ])("renders an empty durable user turn with canonical $name media", ({ media, expected }) => {
+      "Attached image\nAttached file",
+    ],
+  ] as const)("renders canonical media %j for an empty user turn", (media, expected) => {
     expect(
       extractTextFromMessage({
         role: "user",
@@ -190,56 +169,26 @@ describe("extractTextFromMessage", () => {
     expect(
       extractTextFromMessage({
         role: "user",
-        content: [
-          {
-            type: "attachment",
-            attachment: {
-              url: "/report.pdf",
-              kind: "document",
-              label: "\u001b[31mreport.pdf\u001b[0m\u0000",
-            },
-          },
-        ],
+        content: [attachment("document", "/report.pdf", "\u001b[31mreport.pdf\u001b[0m\u0000")],
       }),
     ).toBe("Attached file: report.pdf");
   });
 
   it.each([
-    { name: "image", block: { type: "image", data: "secret-image" }, expected: "Attached image" },
-    {
-      name: "audio",
-      block: { type: "audio", source: { type: "base64", data: "secret-audio" } },
-      expected: "Attached audio",
-    },
-    {
-      name: "video",
-      block: { type: "video", url: "file:///Users/operator/private/clip.mp4" },
-      expected: "Attached video",
-    },
-    {
-      name: "file",
-      block: { type: "file", url: "file:///etc/passwd", title: "private.txt" },
-      expected: "Attached file",
-    },
-    {
-      name: "nested audio attachment",
-      block: {
-        type: "attachment",
-        attachment: {
-          kind: "audio",
-          label: "private.ogg",
-          url: "file:///Users/operator/private/audio.ogg",
-        },
-      },
-      expected: "Attached audio",
-    },
-    {
-      name: "provider image URL block",
-      block: { type: "image_url", image_url: { url: "https://secret.test/image?ticket=secret" } },
-      expected: "Attached image",
-    },
-  ])("renders a terminal-safe assistant $name summary", ({ block, expected }) => {
-    const text = extractTextFromMessage({ role: "assistant", content: [block] });
+    [{ type: "image", data: "secret-image" }, "Attached image"],
+    [{ type: "audio", source: { type: "base64", data: "secret-audio" } }, "Attached audio"],
+    [{ type: "video", url: "file:///Users/operator/private/clip.mp4" }, "Attached video"],
+    [{ type: "file", url: "file:///etc/passwd", title: "private.txt" }, "Attached file"],
+    [
+      attachment("audio", "file:///Users/operator/private/audio.ogg", "private.ogg"),
+      "Attached audio",
+    ],
+    [
+      { type: "image_url", image_url: { url: "https://secret.test/image?ticket=secret" } },
+      "Attached image",
+    ],
+  ] as const)("renders a terminal-safe assistant summary for %j", (block, expected) => {
+    const text = assistantText([block]);
     expect(text).toBe(expected);
     expect(text).not.toMatch(/secret|file:|operator|passwd|private/i);
   });
@@ -270,21 +219,18 @@ describe("extractTextFromMessage", () => {
   });
 
   it("prefers final_answer text over commentary text for assistant messages", () => {
-    const text = extractTextFromMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: "Commentary that should not render",
-          textSignature: JSON.stringify({ v: 1, id: "c1", phase: "commentary" }),
-        },
-        {
-          type: "text",
-          text: "Final answer for the TUI",
-          textSignature: JSON.stringify({ v: 1, id: "f1", phase: "final_answer" }),
-        },
-      ],
-    });
+    const text = assistantText([
+      {
+        type: "text",
+        text: "Commentary that should not render",
+        textSignature: JSON.stringify({ v: 1, id: "c1", phase: "commentary" }),
+      },
+      {
+        type: "text",
+        text: "Final answer for the TUI",
+        textSignature: JSON.stringify({ v: 1, id: "f1", phase: "final_answer" }),
+      },
+    ]);
 
     expect(text).toBe("Final answer for the TUI");
   });
@@ -301,12 +247,7 @@ describe("extractTextFromMessage", () => {
     },
     { errorMessage: "", expected: ["unknown error"] },
   ])("renders an empty assistant error turn: $errorMessage", ({ errorMessage, expected }) => {
-    const text = extractTextFromMessage({
-      role: "assistant",
-      content: [],
-      stopReason: "error",
-      errorMessage,
-    });
+    const text = assistantText([], { stopReason: "error", errorMessage });
 
     for (const fragment of expected) {
       expect(text).toContain(fragment);
@@ -314,13 +255,10 @@ describe("extractTextFromMessage", () => {
   });
 
   it("joins multiple text blocks with single newlines", () => {
-    const text = extractTextFromMessage({
-      role: "assistant",
-      content: [
-        { type: "text", text: "first\ncontinued" },
-        { type: "text", text: "second" },
-      ],
-    });
+    const text = assistantText([
+      { type: "text", text: "first\ncontinued" },
+      { type: "text", text: "second" },
+    ]);
 
     expect(text).toBe("first\ncontinued\nsecond");
   });
@@ -352,21 +290,10 @@ describe("extractTextFromMessage", () => {
   );
 
   it.each([
-    {
-      content: "Hello\x1b[31m red\x1b[0m\x00world\nNext line",
-      expected: "Hello redworld\nNext line",
-    },
-    {
-      content: [{ type: "text", text: "������������������������" }],
-      expected: "[binary data omitted]",
-    },
-  ])("sanitizes assistant content: $expected", ({ content, expected }) => {
-    const text = extractTextFromMessage({
-      role: "assistant",
-      content,
-    });
-
-    expect(text).toBe(expected);
+    ["Hello\x1b[31m red\x1b[0m\x00world\nNext line", "Hello redworld\nNext line"],
+    [[{ type: "text", text: "������������������������" }], "[binary data omitted]"],
+  ] as const)("sanitizes assistant content %j", (content, expected) => {
+    expect(assistantText(content)).toBe(expected);
   });
 
   it.each([

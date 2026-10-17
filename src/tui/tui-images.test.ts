@@ -5,9 +5,8 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { ChatLog } from "./components/chat-log.js";
 import type { TuiImageData, TuiImageRequest } from "./tui-backend.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
-import { makeTui, makeTuiBackend } from "./tui-session-actions-test-support.js";
+import { createBaseState, makeTui, makeTuiBackend } from "./tui-session-actions-test-support.js";
 import { createSessionActions } from "./tui-session-actions.js";
-import type { TuiStateAccess } from "./tui-types.js";
 
 const png = createSolidPngBuffer(80, 40, { r: 20, g: 140, b: 200 }).toString("base64");
 const imageData = { data: png, mimeType: "image/png" };
@@ -25,28 +24,11 @@ function createHarness(
   messages: unknown[] = [],
   loadImage = vi.fn<(request: TuiImageRequest) => Promise<TuiImageData>>(async () => imageData),
 ) {
-  const state: TuiStateAccess = {
-    agentDefaultId: "main",
-    sessionMainKey: "agent:main:main",
+  const state = createBaseState({
     sessionScope: "per-sender",
-    agents: [],
-    currentAgentId: "main",
-    currentSessionKey: "agent:main:main",
     currentSessionId: "session-1",
-    activeChatRunId: null,
-    pendingSubmit: null,
     historyLoaded: true,
-    sessionInfo: {},
-    initialSessionApplied: true,
-    isConnected: true,
-    autoMessageSent: false,
-    toolsExpanded: false,
-    showThinking: false,
-    connectionStatus: "connected",
-    activityStatus: "idle",
-    statusTimeout: null,
-    lastCtrlCAt: 0,
-  };
+  });
   const tui = makeTui();
   const chatLog = new ChatLog(180, {
     loadImage,

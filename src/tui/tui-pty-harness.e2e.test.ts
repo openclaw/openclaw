@@ -30,13 +30,29 @@ const STARTUP_TIMEOUT_MS = 20_000;
 const TEST_TIMEOUT_MS = 5_000;
 const STARTUP_TEST_TIMEOUT_MS = 25_000;
 
+const fixtureEntry =
+  (method: string, fields: Record<string, unknown> = {}) =>
+  (entry: FixtureLogEntry) =>
+    entry.method === method &&
+    Object.entries(fields).every(([key, value]) => objectFieldEquals(entry, key, value));
+
+async function withFixture(
+  options: Parameters<typeof startTuiFixture>[0],
+  exercise: (fixture: Awaited<ReturnType<typeof startTuiFixture>>) => Promise<void>,
+) {
+  const fixture = await startTuiFixture(options);
+  try {
+    await exercise(fixture);
+  } finally {
+    await fixture.cleanup();
+  }
+}
+
 const countFixtureCalls = (entries: FixtureLogEntry[], method: string) =>
   entries.filter((entry) => entry.method === method).length;
 
 const countFixtureMessages = (entries: FixtureLogEntry[], message: string) =>
-  entries.filter(
-    (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
-  ).length;
+  entries.filter(fixtureEntry("sendChat", { message })).length;
 
 it("rejects rendering oracle false positives", () => {
   const tokens = Array.from({ length: 64 }, (_, i) => `T${String(i).padStart(3, "0")}`);
@@ -132,16 +148,12 @@ describe("TUI PTY harness", { concurrent: false }, () => {
       );
       expect(
         (await readFixtureLog(thinkingOverrideFixture.logPath)).some(
-          (entry) =>
-            entry.method === "sendChat" &&
-            objectFieldEquals(entry, "message", "thinking override proof") &&
-            objectFieldEquals(entry, "thinking", "high"),
+          fixtureEntry("sendChat", { message: "thinking override proof", thinking: "high" }),
         ),
       ).toBe(true);
       await thinkingOverrideFixture.run.write("/think low\r");
       await thinkingOverrideFixture.waitForLogEntry(
-        (entry) =>
-          entry.method === "patchSession" && objectFieldEquals(entry, "thinkingLevel", "low"),
+        fixtureEntry("patchSession", { thinkingLevel: "low" }),
         signal,
       );
       const sessionChangeOutputOffset = thinkingOverrideFixture.run.visibleOutput().length;
@@ -152,10 +164,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
       );
       expect(
         (await readFixtureLog(thinkingOverrideFixture.logPath)).some(
-          (entry) =>
-            entry.method === "sendChat" &&
-            objectFieldEquals(entry, "message", "second thinking override proof") &&
-            objectFieldEquals(entry, "thinking", "high"),
+          fixtureEntry("sendChat", { message: "second thinking override proof", thinking: "high" }),
         ),
       ).toBe(true);
       const outputAfterSessionChange = thinkingOverrideFixture.run
@@ -189,23 +198,23 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   it.each([{ failures: 4 }])(
     "recovers session subscription after $failures startup failures",
     async ({ failures }) => {
-      const subscriptionFixture = await startTuiFixture({
-        env: { OPENCLAW_TUI_PTY_SUBSCRIBE_FAILURES: String(failures) },
-      });
-      try {
-        await subscriptionFixture.run.waitForOutput("local ready | idle", STARTUP_TIMEOUT_MS);
-        const entries = await readFixtureLog(subscriptionFixture.logPath);
-        expect(countFixtureCalls(entries, "subscribeSessionEvents")).toBe(failures + 1);
-        expect(countFixtureCalls(entries, "subscribeSessionFailure")).toBe(failures);
+      await withFixture(
+        {
+          env: { OPENCLAW_TUI_PTY_SUBSCRIBE_FAILURES: String(failures) },
+        },
+        async (subscriptionFixture) => {
+          await subscriptionFixture.run.waitForOutput("local ready | idle", STARTUP_TIMEOUT_MS);
+          const entries = await readFixtureLog(subscriptionFixture.logPath);
+          expect(countFixtureCalls(entries, "subscribeSessionEvents")).toBe(failures + 1);
+          expect(countFixtureCalls(entries, "subscribeSessionFailure")).toBe(failures);
 
-        await subscriptionFixture.run.write("after subscription recovery proof\r");
-        await subscriptionFixture.run.waitForOutput(
-          "PTY_RESPONSE: after subscription recovery proof",
-          STARTUP_TIMEOUT_MS,
-        );
-      } finally {
-        await subscriptionFixture.cleanup();
-      }
+          await subscriptionFixture.run.write("after subscription recovery proof\r");
+          await subscriptionFixture.run.waitForOutput(
+            "PTY_RESPONSE: after subscription recovery proof",
+            STARTUP_TIMEOUT_MS,
+          );
+        },
+      );
     },
     STARTUP_TEST_TIMEOUT_MS,
   );
@@ -213,58 +222,56 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   it(
     "blocks submits after subscription exhaustion until reconnect succeeds",
     async ({ signal }) => {
-      const subscriptionFixture = await startTuiFixture({
-        env: {
-          OPENCLAW_TUI_PTY_SUBSCRIBE_FAILURES: "5",
-          OPENCLAW_TUI_PTY_SUBSCRIBE_RECONNECT: "1",
+      await withFixture(
+        {
+          env: {
+            OPENCLAW_TUI_PTY_SUBSCRIBE_FAILURES: "5",
+            OPENCLAW_TUI_PTY_SUBSCRIBE_RECONNECT: "1",
+          },
         },
-      });
-      try {
-        await subscriptionFixture.run.waitForOutput(
-          "session event subscribe failed",
-          STARTUP_TIMEOUT_MS,
-        );
-        const entries = await readFixtureLog(subscriptionFixture.logPath);
-        expect(countFixtureCalls(entries, "subscribeSessionEvents")).toBe(5);
-        expect(countFixtureCalls(entries, "subscribeSessionFailure")).toBe(5);
-        expect(entries.some((entry) => entry.method === "loadHistory")).toBe(false);
-        expect(subscriptionFixture.run.visibleOutput()).not.toContain("local ready | idle");
+        async (subscriptionFixture) => {
+          await subscriptionFixture.run.waitForOutput(
+            "session event subscribe failed",
+            STARTUP_TIMEOUT_MS,
+          );
+          const entries = await readFixtureLog(subscriptionFixture.logPath);
+          expect(countFixtureCalls(entries, "subscribeSessionEvents")).toBe(5);
+          expect(countFixtureCalls(entries, "subscribeSessionFailure")).toBe(5);
+          expect(entries.some(fixtureEntry("loadHistory"))).toBe(false);
+          expect(subscriptionFixture.run.visibleOutput()).not.toContain("local ready | idle");
 
-        const message = "after subscription reconnect proof";
-        await subscriptionFixture.run.write(`${message}\r`, { delay: false });
-        await subscriptionFixture.run.waitForOutput(
-          "local runtime not ready — message not sent",
-          STARTUP_TIMEOUT_MS,
-        );
-        const blockedEntries = await readFixtureLog(subscriptionFixture.logPath);
-        expect(countFixtureMessages(blockedEntries, message)).toBe(0);
+          const message = "after subscription reconnect proof";
+          await subscriptionFixture.run.write(`${message}\r`, { delay: false });
+          await subscriptionFixture.run.waitForOutput(
+            "local runtime not ready — message not sent",
+            STARTUP_TIMEOUT_MS,
+          );
+          const blockedEntries = await readFixtureLog(subscriptionFixture.logPath);
+          expect(countFixtureMessages(blockedEntries, message)).toBe(0);
 
-        await subscriptionFixture.run.write("\x03", { delay: false });
-        await subscriptionFixture.run.waitForOutput("cleared input", STARTUP_TIMEOUT_MS);
-        await subscriptionFixture.run.write("/gateway-status\r", { delay: false });
-        await subscriptionFixture.waitForLogEntry(
-          (entry) => entry.method === "subscriptionReconnect",
-          signal,
-        );
-        await subscriptionFixture.run.waitForOutput("local ready | idle", STARTUP_TIMEOUT_MS);
-        await subscriptionFixture.run.write(`${message}\r`, { delay: false });
-        await subscriptionFixture.run.waitForOutput(`PTY_RESPONSE: ${message}`, STARTUP_TIMEOUT_MS);
-        const reconnectedEntries = await readFixtureLog(subscriptionFixture.logPath);
-        expect(countFixtureMessages(reconnectedEntries, message)).toBe(1);
-      } finally {
-        await subscriptionFixture.cleanup();
-      }
+          await subscriptionFixture.run.write("\x03", { delay: false });
+          await subscriptionFixture.run.waitForOutput("cleared input", STARTUP_TIMEOUT_MS);
+          await subscriptionFixture.run.write("/gateway-status\r", { delay: false });
+          await subscriptionFixture.waitForLogEntry(fixtureEntry("subscriptionReconnect"), signal);
+          await subscriptionFixture.run.waitForOutput("local ready | idle", STARTUP_TIMEOUT_MS);
+          await subscriptionFixture.run.write(`${message}\r`, { delay: false });
+          await subscriptionFixture.run.waitForOutput(
+            `PTY_RESPONSE: ${message}`,
+            STARTUP_TIMEOUT_MS,
+          );
+          const reconnectedEntries = await readFixtureLog(subscriptionFixture.logPath);
+          expect(countFixtureMessages(reconnectedEntries, message)).toBe(1);
+        },
+      );
     },
     STARTUP_TEST_TIMEOUT_MS,
   );
 
   it("refreshes pending approvals before loading history", async () => {
     const entries = await readFixtureLog(fixture.logPath);
-    const approvalRefreshIndex = entries.findIndex(
-      (entry) => entry.method === "listPluginApprovals",
-    );
-    const historyLoadIndex = entries.findIndex((entry) => entry.method === "loadHistory");
-    const taskRefreshIndex = entries.findIndex((entry) => entry.method === "listTaskSuggestions");
+    const approvalRefreshIndex = entries.findIndex(fixtureEntry("listPluginApprovals"));
+    const historyLoadIndex = entries.findIndex(fixtureEntry("loadHistory"));
+    const taskRefreshIndex = entries.findIndex(fixtureEntry("listTaskSuggestions"));
 
     expect(approvalRefreshIndex).toBeGreaterThanOrEqual(0);
     expect(approvalRefreshIndex).toBeLessThan(historyLoadIndex);
@@ -279,8 +286,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
       await fixture.run.waitForOutput("PTY_RESPONSE: hello from pty");
       expect(
         (await readFixtureLog(fixture.logPath)).some(
-          (entry) =>
-            entry.method === "sendChat" && objectFieldEquals(entry, "message", "hello from pty"),
+          fixtureEntry("sendChat", { message: "hello from pty" }),
         ),
       ).toBe(true);
       await exerciseFragmentedUnicodePrompt(startTuiFixture, STARTUP_TIMEOUT_MS);
@@ -291,26 +297,26 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   it(
     "renders each live assistant reply once without replaying stale history",
     async () => {
-      const liveFixture = await startTuiFixture({
-        env: { OPENCLAW_TUI_PTY_COLS: "220", OPENCLAW_TUI_PTY_ROWS: "50" },
-      });
-      try {
-        await liveFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
-        await liveFixture.run.write("live reply dedupe proof: first\r", { delay: false });
-        await liveFixture.run.waitForOutput("TUI_LIVE_FIRST");
-        await liveFixture.run.write("live reply dedupe proof: second\r", { delay: false });
-        const rows = await waitForSynchronizedFrameRows(
-          liveFixture.run,
-          (frame) => frame.some((row) => row.includes("TUI_LIVE_SECOND")),
-          STARTUP_TIMEOUT_MS,
-        );
-        const assistantRows = rows.filter(
-          (row) => row.includes("TUI_LIVE_FIRST") || row.includes("TUI_LIVE_SECOND"),
-        );
-        expect(assistantRows).toEqual(["TUI_LIVE_FIRST", "TUI_LIVE_SECOND"]);
-      } finally {
-        await liveFixture.cleanup();
-      }
+      await withFixture(
+        {
+          env: { OPENCLAW_TUI_PTY_COLS: "220", OPENCLAW_TUI_PTY_ROWS: "50" },
+        },
+        async (liveFixture) => {
+          await liveFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+          await liveFixture.run.write("live reply dedupe proof: first\r", { delay: false });
+          await liveFixture.run.waitForOutput("TUI_LIVE_FIRST");
+          await liveFixture.run.write("live reply dedupe proof: second\r", { delay: false });
+          const rows = await waitForSynchronizedFrameRows(
+            liveFixture.run,
+            (frame) => frame.some((row) => row.includes("TUI_LIVE_SECOND")),
+            STARTUP_TIMEOUT_MS,
+          );
+          const assistantRows = rows.filter(
+            (row) => row.includes("TUI_LIVE_FIRST") || row.includes("TUI_LIVE_SECOND"),
+          );
+          expect(assistantRows).toEqual(["TUI_LIVE_FIRST", "TUI_LIVE_SECOND"]);
+        },
+      );
     },
     STARTUP_TEST_TIMEOUT_MS,
   );
@@ -373,34 +379,29 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   it(
     "cancels a buffered submit before Ctrl+D shutdown",
     async ({ signal }) => {
-      const bufferedFixture = await startTuiFixture({
-        env: { OPENCLAW_TUI_PTY_SUBMIT_BURST_WINDOW_MS: "500" },
-      });
-      try {
-        const message = "buffered shutdown proof";
-        await bufferedFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
-        await bufferedFixture.run.write(`${message}\r`, { delay: false });
-        await bufferedFixture.waitForLogEntry(
-          (entry) =>
-            entry.method === "submitBurstCaptured" && objectFieldEquals(entry, "value", message),
-          signal,
-        );
+      await withFixture(
+        {
+          env: { OPENCLAW_TUI_PTY_SUBMIT_BURST_WINDOW_MS: "500" },
+        },
+        async (bufferedFixture) => {
+          const message = "buffered shutdown proof";
+          await bufferedFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+          await bufferedFixture.run.write(`${message}\r`, { delay: false });
+          await bufferedFixture.waitForLogEntry(
+            fixtureEntry("submitBurstCaptured", { value: message }),
+            signal,
+          );
 
-        await bufferedFixture.run.write("\u0004", { delay: false });
-        expect((await bufferedFixture.run.waitForExit()).exitCode).toBe(0);
+          await bufferedFixture.run.write("\u0004", { delay: false });
+          expect((await bufferedFixture.run.waitForExit()).exitCode).toBe(0);
 
-        const entries = await readFixtureLog(bufferedFixture.logPath);
-        expect(entries).toEqual(
-          expect.arrayContaining([expect.objectContaining({ method: "stop" })]),
-        );
-        expect(
-          entries.some(
-            (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
-          ),
-        ).toBe(false);
-      } finally {
-        await bufferedFixture.cleanup();
-      }
+          const entries = await readFixtureLog(bufferedFixture.logPath);
+          expect(entries).toEqual(
+            expect.arrayContaining([expect.objectContaining({ method: "stop" })]),
+          );
+          expect(entries.some(fixtureEntry("sendChat", { message }))).toBe(false);
+        },
+      );
     },
     STARTUP_TEST_TIMEOUT_MS,
   );
@@ -412,13 +413,11 @@ describe("TUI PTY harness", { concurrent: false }, () => {
     "stops the real terminal cleanly when $name interrupts an active run",
     { timeout: STARTUP_TEST_TIMEOUT_MS },
     async ({ input }, { signal }) => {
-      const busyFixture = await startTuiFixture();
-      try {
+      await withFixture(undefined, async (busyFixture) => {
         await busyFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
         await busyFixture.run.write("slow prompt\r", { delay: false });
         await busyFixture.waitForLogEntry(
-          (entry) =>
-            entry.method === "sendChat" && objectFieldEquals(entry, "message", "slow prompt"),
+          fixtureEntry("sendChat", { message: "slow prompt" }),
           signal,
         );
 
@@ -428,9 +427,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
         expect(await readFixtureLog(busyFixture.logPath)).toEqual(
           expect.arrayContaining([expect.objectContaining({ method: "stop" })]),
         );
-      } finally {
-        await busyFixture.cleanup();
-      }
+      });
     },
   );
 
@@ -438,81 +435,66 @@ describe("TUI PTY harness", { concurrent: false }, () => {
     "presents and resolves plugin approval in a %i×%i terminal",
     { timeout: STARTUP_TEST_TIMEOUT_MS },
     async ([cols, rows], { signal }) => {
-      const compactFixture = await startTuiFixture({
-        env: {
-          OPENCLAW_TUI_PTY_COLS: String(cols),
-          OPENCLAW_TUI_PTY_ROWS: String(rows),
+      await withFixture(
+        {
+          env: {
+            OPENCLAW_TUI_PTY_COLS: String(cols),
+            OPENCLAW_TUI_PTY_ROWS: String(rows),
+          },
         },
-      });
-
-      try {
-        await compactFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
-        await approveWorkspaceSkill(compactFixture, "skill approval proof", signal);
-      } finally {
-        await compactFixture.cleanup();
-      }
+        async (compactFixture) => {
+          await compactFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+          await approveWorkspaceSkill(compactFixture, "skill approval proof", signal);
+        },
+      );
     },
   );
 
   it(
     "keeps Enter focused on model and session pickers beside a side result in a 20×18 terminal",
     async ({ signal }) => {
-      const compactPickerFixture = await startTuiFixture({
-        env: {
-          OPENCLAW_TUI_PTY_COLS: "20",
-          OPENCLAW_TUI_PTY_ROWS: "18",
-          OPENCLAW_TUI_PTY_PICKER_FIXTURE: "1",
+      await withFixture(
+        {
+          env: {
+            OPENCLAW_TUI_PTY_COLS: "20",
+            OPENCLAW_TUI_PTY_ROWS: "18",
+            OPENCLAW_TUI_PTY_PICKER_FIXTURE: "1",
+          },
         },
-      });
+        async (compactPickerFixture) => {
+          await compactPickerFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+          await compactPickerFixture.run.write("/btw picker focus proof\r", { delay: false });
+          await compactPickerFixture.waitForLogEntry(fixtureEntry("pickerSideResult"), signal);
 
-      try {
-        await compactPickerFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
-        await compactPickerFixture.run.write("/btw picker focus proof\r", { delay: false });
-        await compactPickerFixture.waitForLogEntry(
-          (entry) => entry.method === "pickerSideResult",
-          signal,
-        );
+          await compactPickerFixture.run.write("\u000c", { delay: false });
+          await compactPickerFixture.waitForLogEntry(fixtureEntry("listModels"), signal);
+          await compactPickerFixture.run.write("\u001b[B", { delay: false });
+          await compactPickerFixture.run.write("\r", { delay: false });
+          await compactPickerFixture.waitForLogEntry(
+            fixtureEntry("patchSession", { model: "fixture-provider/fixture-model-2" }),
+            signal,
+          );
 
-        await compactPickerFixture.run.write("\u000c", { delay: false });
-        await compactPickerFixture.waitForLogEntry(
-          (entry) => entry.method === "listModels",
-          signal,
-        );
-        await compactPickerFixture.run.write("\u001b[B", { delay: false });
-        await compactPickerFixture.run.write("\r", { delay: false });
-        await compactPickerFixture.waitForLogEntry(
-          (entry) =>
-            entry.method === "patchSession" &&
-            objectFieldEquals(entry, "model", "fixture-provider/fixture-model-2"),
-          signal,
-        );
+          await compactPickerFixture.run.write("\u0010", { delay: false });
+          await compactPickerFixture.waitForLogEntry(
+            fixtureEntry("listSessions", { purpose: "picker" }),
+            signal,
+          );
+          await compactPickerFixture.run.write("\u001b[B", { delay: false });
+          await compactPickerFixture.run.write("\r", { delay: false });
+          await compactPickerFixture.waitForLogEntry(
+            fixtureEntry("loadHistory", { sessionKey: "agent:main:picker-target" }),
+            signal,
+          );
 
-        await compactPickerFixture.run.write("\u0010", { delay: false });
-        await compactPickerFixture.waitForLogEntry(
-          (entry) =>
-            entry.method === "listSessions" && objectFieldEquals(entry, "purpose", "picker"),
-          signal,
-        );
-        await compactPickerFixture.run.write("\u001b[B", { delay: false });
-        await compactPickerFixture.run.write("\r", { delay: false });
-        await compactPickerFixture.waitForLogEntry(
-          (entry) =>
-            entry.method === "loadHistory" &&
-            objectFieldEquals(entry, "sessionKey", "agent:main:picker-target"),
-          signal,
-        );
-
-        await compactPickerFixture.run.write("picker target proof\r", { delay: false });
-        const sent = await compactPickerFixture.waitForLogEntry(
-          (entry) =>
-            entry.method === "sendChat" &&
-            objectFieldEquals(entry, "message", "picker target proof"),
-          signal,
-        );
-        expect(sent.payload).toMatchObject({ sessionKey: "agent:main:picker-target" });
-      } finally {
-        await compactPickerFixture.cleanup();
-      }
+          await compactPickerFixture.run.write("picker target proof\r", { delay: false });
+          const sent = await compactPickerFixture.waitForLogEntry(
+            fixtureEntry("sendChat", { message: "picker target proof" }),
+            signal,
+          );
+          expect(sent.payload).toMatchObject({ sessionKey: "agent:main:picker-target" });
+        },
+      );
     },
     STARTUP_TEST_TIMEOUT_MS,
   );
@@ -520,11 +502,10 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   it(
     "recovers the visible conversation from session history after a Gateway event gap",
     async ({ signal }) => {
-      const gapFixture = await startTuiFixture();
-      try {
+      await withFixture(undefined, async (gapFixture) => {
         await gapFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
         await gapFixture.run.write("history gap proof\r");
-        await gapFixture.waitForLogEntry((entry) => entry.method === "gapHistoryRecovered", signal);
+        await gapFixture.waitForLogEntry(fixtureEntry("gapHistoryRecovered"), signal);
         await gapFixture.run.waitForOutput("PTY_GAP_RECOVERED");
         const gapNotice = "gateway event gap: expected 4, got 5";
         await gapFixture.run.waitForOutput(gapNotice);
@@ -535,15 +516,11 @@ describe("TUI PTY harness", { concurrent: false }, () => {
 
         await gapFixture.run.write("after gap recovery proof\r");
         await gapFixture.waitForLogEntry(
-          (entry) =>
-            entry.method === "sendChat" &&
-            objectFieldEquals(entry, "message", "after gap recovery proof"),
+          fixtureEntry("sendChat", { message: "after gap recovery proof" }),
           signal,
         );
         await gapFixture.run.waitForOutput("PTY_RESPONSE: after gap recovery proof");
-      } finally {
-        await gapFixture.cleanup();
-      }
+      });
     },
     STARTUP_TEST_TIMEOUT_MS,
   );
@@ -552,19 +529,13 @@ describe("TUI PTY harness", { concurrent: false }, () => {
     "refreshes pending plugin approvals after an event gap",
     async ({ signal }) => {
       await fixture.run.write("skill approval gap proof\r");
-      await fixture.waitForLogEntry(
-        (entry) =>
-          entry.method === "listPluginApprovals" && objectFieldEquals(entry, "pending", true),
-        signal,
-      );
+      await fixture.waitForLogEntry(fixtureEntry("listPluginApprovals", { pending: true }), signal);
       await fixture.run.waitForOutput("plugin approval: Apply workspace skill proposal");
 
       await fixture.run.write("\x1b[A", { delay: false });
       await fixture.run.write("\r");
       await fixture.waitForLogEntry(
-        (entry) =>
-          entry.method === "resolvePluginApproval" &&
-          objectFieldEquals(entry, "decision", "allow-once"),
+        fixtureEntry("resolvePluginApproval", { decision: "allow-once" }),
         signal,
       );
       await fixture.run.waitForOutput("PTY_SKILL_APPROVAL_RESOLVED: allow-once");
@@ -585,8 +556,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
       await fixture.run.waitForOutput("Press Enter again to start this task.");
       await fixture.run.write("\r", { delay: false });
       await fixture.waitForLogEntry(
-        (entry) =>
-          entry.method === "acceptTaskSuggestion" && objectFieldEquals(entry, "taskId", "task_pty"),
+        fixtureEntry("acceptTaskSuggestion", { taskId: "task_pty" }),
         signal,
       );
       await fixture.run.waitForOutput("session agent:main:task-pty");
@@ -601,16 +571,12 @@ describe("TUI PTY harness", { concurrent: false }, () => {
       await fixture.run.waitForOutput("VISIBLE_TUI_SOURCE_REPLY_PROOF");
       expect(
         (await readFixtureLog(fixture.logPath)).some(
-          (entry) =>
-            entry.method === "sendChat" &&
-            objectFieldEquals(entry, "message", "message tool only source reply proof"),
+          fixtureEntry("sendChat", { message: "message tool only source reply proof" }),
         ),
       ).toBe(true);
       expect(
         (await readFixtureLog(fixture.logPath)).some(
-          (entry) =>
-            entry.method === "sourceReplyMetadata" &&
-            objectFieldEquals(entry, "text", "VISIBLE_TUI_SOURCE_REPLY_PROOF"),
+          fixtureEntry("sourceReplyMetadata", { text: "VISIBLE_TUI_SOURCE_REPLY_PROOF" }),
         ),
       ).toBe(true);
     },
@@ -621,7 +587,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
     "renders an attachment-only assistant reply without exposing its source",
     async ({ signal }) => {
       await fixture.run.write("attachment-only assistant proof\r");
-      await fixture.waitForLogEntry((entry) => entry.method === "attachmentOnlyComplete", signal);
+      await fixture.waitForLogEntry(fixtureEntry("attachmentOnlyComplete"), signal);
       await fixture.run.waitForOutput("Attached image");
 
       const rendered = fixture.run.visibleOutput();
@@ -659,10 +625,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
     },
   ])("$name", { timeout: TEST_TIMEOUT_MS }, async ({ message, output, hidden }, { signal }) => {
     await fixture.run.write(`${message}\r`);
-    await fixture.waitForLogEntry(
-      (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
-      signal,
-    );
+    await fixture.waitForLogEntry(fixtureEntry("sendChat", { message }), signal);
     for (const text of output) {
       await fixture.run.waitForOutput(text);
     }
@@ -675,20 +638,19 @@ describe("TUI PTY harness", { concurrent: false }, () => {
     "keeps an active session intact when /reset is submitted from the terminal",
     async ({ signal }) => {
       const priorResetCount = (await readFixtureLog(fixture.logPath)).filter(
-        (entry) => entry.method === "resetSession",
+        fixtureEntry("resetSession"),
       ).length;
 
       await fixture.run.write("slow reset proof\r");
       await fixture.waitForLogEntry(
-        (entry) =>
-          entry.method === "sendChat" && objectFieldEquals(entry, "message", "slow reset proof"),
+        fixtureEntry("sendChat", { message: "slow reset proof" }),
         signal,
       );
       await fixture.run.write("/reset\r", { delay: false });
       await fixture.run.waitForOutput("abort the current run before /reset");
 
       const resetCalls = (await readFixtureLog(fixture.logPath)).filter(
-        (entry) => entry.method === "resetSession",
+        fixtureEntry("resetSession"),
       );
       expect(resetCalls).toHaveLength(priorResetCount);
       await fixture.run.waitForOutput("PTY_RESPONSE: slow reset proof");
@@ -704,9 +666,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
       await fixture.run.waitForOutput("PTY_STREAMING: streaming prompt");
       await fixture.run.write("queued while streaming\r");
       await fixture.waitForLogEntry(
-        (entry) =>
-          entry.method === "sendChat" &&
-          objectFieldEquals(entry, "message", "queued while streaming"),
+        fixtureEntry("sendChat", { message: "queued while streaming" }),
         signal,
       );
       await fixture.run.waitForOutput("PTY_RESPONSE: streaming prompt");
@@ -735,45 +695,32 @@ describe("TUI PTY harness", { concurrent: false }, () => {
         await isolationFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
         await isolationFixture.run.write(`/session ${sourceSessionKey}\r`, { delay: false });
         await isolationFixture.waitForLogEntry(
-          (entry) =>
-            entry.method === "loadHistory" &&
-            objectFieldEquals(entry, "sessionKey", sourceSessionKey),
+          fixtureEntry("loadHistory", { sessionKey: sourceSessionKey }),
           signal,
         );
         await isolationFixture.run.write("cross-session abort source proof\r", { delay: false });
         await isolationFixture.waitForLogEntry(
-          (entry) =>
-            entry.method === "sendChat" &&
-            objectFieldEquals(entry, "message", "cross-session abort source proof"),
+          fixtureEntry("sendChat", { message: "cross-session abort source proof" }),
           signal,
         );
 
         await isolationFixture.run.write("/abort\r", { delay: false });
         await isolationFixture.waitForLogEntry(
-          (entry) =>
-            entry.method === "abortChat" &&
-            objectFieldEquals(entry, "sessionKey", sourceSessionKey),
+          fixtureEntry("abortChat", { sessionKey: sourceSessionKey }),
           signal,
         );
         const outputOffset = isolationFixture.run.visibleOutput().length;
         await isolationFixture.run.write(`/session ${targetSessionKey}\r`, { delay: false });
         await isolationFixture.waitForLogEntry(
-          (entry) =>
-            entry.method === "loadHistory" &&
-            objectFieldEquals(entry, "sessionKey", targetSessionKey),
+          fixtureEntry("loadHistory", { sessionKey: targetSessionKey }),
           signal,
         );
         await isolationFixture.waitForLogEntry(
-          (entry) =>
-            entry.method === "abortResolved" &&
-            objectFieldEquals(entry, "sessionKey", sourceSessionKey),
+          fixtureEntry("abortResolved", { sessionKey: sourceSessionKey }),
           signal,
         );
         await isolationFixture.waitForLogEntry(
-          (entry) =>
-            entry.method === "lateSessionEvent" &&
-            objectFieldEquals(entry, "sessionKey", sourceSessionKey) &&
-            objectFieldEquals(entry, "state", "final"),
+          fixtureEntry("lateSessionEvent", { sessionKey: sourceSessionKey, state: "final" }),
           signal,
         );
 
@@ -783,9 +730,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
 
         await isolationFixture.run.write("cross-session target proof\r", { delay: false });
         const sent = await isolationFixture.waitForLogEntry(
-          (entry) =>
-            entry.method === "sendChat" &&
-            objectFieldEquals(entry, "message", "cross-session target proof"),
+          fixtureEntry("sendChat", { message: "cross-session target proof" }),
           signal,
         );
         expect(sent.payload).toMatchObject({ sessionKey: targetSessionKey });
@@ -812,9 +757,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
       await fixture.run.waitForOutput("model set to fixture-provider/fixture-model-2");
       expect(
         (await readFixtureLog(fixture.logPath)).some(
-          (entry) =>
-            entry.method === "patchSession" &&
-            objectFieldEquals(entry, "model", "fixture-provider/fixture-model-2"),
+          fixtureEntry("patchSession", { model: "fixture-provider/fixture-model-2" }),
         ),
       ).toBe(true);
     },
@@ -869,12 +812,9 @@ describe("TUI PTY harness", { concurrent: false }, () => {
 
       const outputOffset = fixture.run.visibleOutput().length;
       await fixture.run.write(`${message}\r`, { delay: false });
-      const sent = await fixture.waitForLogEntry(
-        (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
-        signal,
-      );
+      const sent = await fixture.waitForLogEntry(fixtureEntry("sendChat", { message }), signal);
       expect(sent.payload).toMatchObject({ sessionKey, message });
-      await fixture.waitForLogEntry((entry) => entry.method === "foreignSessionEvent", signal);
+      await fixture.waitForLogEntry(fixtureEntry("foreignSessionEvent"), signal);
       await fixture.run.waitForOutput(`PTY_RESPONSE: ${message}`);
 
       const sessionOutput = fixture.run.visibleOutput().slice(outputOffset);
@@ -888,15 +828,13 @@ describe("TUI PTY harness", { concurrent: false }, () => {
     async ({ signal }) => {
       await fixture.run.write("/new\r", { delay: false });
       await fixture.run.waitForOutput("new session: agent:main:tui-");
-      const created = (await readFixtureLog(fixture.logPath)).find(
-        (entry) => entry.method === "createSession",
-      );
+      const created = (await readFixtureLog(fixture.logPath)).find(fixtureEntry("createSession"));
       expect(created?.payload).toMatchObject({ agentId: "main" });
       expect(created?.payload).not.toHaveProperty("parentSessionKey");
 
       await fixture.run.write("after new\r", { delay: false });
       const sent = await fixture.waitForLogEntry(
-        (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", "after new"),
+        fixtureEntry("sendChat", { message: "after new" }),
         signal,
       );
       expect(sent.payload).toMatchObject({ sessionKey: expect.stringMatching(/^agent:main:tui-/) });
@@ -932,16 +870,13 @@ describe("TUI PTY harness", { concurrent: false }, () => {
       await fixture.run.write("/session agent:main:switch-b\r", { delay: false });
       await fixture.run.waitForOutput("B_HISTORY_MARKER");
       await fixture.waitForLogEntry(
-        (entry) =>
-          entry.method === "loadHistoryResolved" &&
-          objectFieldEquals(entry, "sessionKey", "agent:main:switch-a"),
+        fixtureEntry("loadHistoryResolved", { sessionKey: "agent:main:switch-a" }),
         signal,
       );
 
       await fixture.run.write("after switch\r", { delay: false });
       const sent = await fixture.waitForLogEntry(
-        (entry) =>
-          entry.method === "sendChat" && objectFieldEquals(entry, "message", "after switch"),
+        fixtureEntry("sendChat", { message: "after switch" }),
         signal,
       );
       expect(sent.payload).toMatchObject({ sessionKey: "agent:main:switch-b" });
