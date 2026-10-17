@@ -157,6 +157,27 @@ function interceptSourceReads(
 }
 
 describe("stable read-only snapshot copies", () => {
+  it("rejects a changed main image beside an empty WAL", () => {
+    const fixture = createFixture(Buffer.alloc(0));
+    const sqlite = requireNodeSqlite();
+    const source = new sqlite.DatabaseSync(fixture.sourcePath);
+    source.exec("PRAGMA journal_mode=WAL; PRAGMA user_version=7;");
+    source.close();
+    fs.writeFileSync(`${fixture.sourcePath}-wal`, Buffer.alloc(0));
+    afterPrivateCopy(fixture.stagingRoot, (target) => {
+      if (target.endsWith("database.sqlite.partial")) {
+        const bytes = fs.readFileSync(target);
+        bytes.writeUInt32BE(8, 60);
+        fs.writeFileSync(target, bytes);
+      }
+    });
+
+    expect(() =>
+      prepareSqliteReadOnlyLocationSyncInProcess(fixture.sourcePath, fixture.stagingRoot),
+    ).toThrow(/did not stabilize/);
+    expect(fs.readdirSync(fixture.stagingRoot)).toEqual([]);
+  });
+
   it.skipIf(process.platform === "win32").each(["-journal", "-wal"])(
     "preserves an admitted %s alias and retries its retargeted inode",
     (suffix) => {

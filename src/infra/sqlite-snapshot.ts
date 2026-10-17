@@ -1,7 +1,6 @@
 // Creates verified SQLite snapshots, compacting by default.
 import fsSync, { type BigIntStats, type Stats } from "node:fs";
-import fs from "node:fs/promises";
-import type { FileHandle } from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import {
@@ -20,6 +19,7 @@ import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { copySqliteFile } from "./sqlite-file-copy.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
+import { captureSqliteMaintenanceIntegrity } from "./sqlite-maintenance-integrity.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
 import { withPreparedSqliteSnapshot } from "./sqlite-readonly-location-cleanup.js";
 import {
@@ -160,12 +160,8 @@ async function assertMutationFingerprintUnchanged(
 }
 
 async function syncFile(filePath: string): Promise<void> {
-  const handle = await fs.open(filePath, "r+");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
+  await using handle = await fs.open(filePath, "r+");
+  await handle.sync();
 }
 
 /** Only the native updater's stopped, checkpointed inventory may use raw file capture. */
@@ -628,11 +624,12 @@ export async function createVerifiedSqliteSnapshot(
   if (options.preserveRowIds && !options.sourceAcquisition) {
     // Preserve physical pages as well as row IDs. Raw family descriptors must
     // stay outside a live native owner's process so close cannot release its locks.
+    const recordSourceIntegrity = captureSqliteMaintenanceIntegrity(sourcePath, options.integrity);
     const prepared = await prepareSqliteReadOnlyLocation(sourcePath, {
       preserveSourceArtifacts: true,
     });
     return withPreparedSqliteSnapshot(prepared, (privateSourcePath) =>
-      verifyAndPublishSqliteSnapshot(options, privateSourcePath),
+      verifyAndPublishSqliteSnapshot(options, privateSourcePath, recordSourceIntegrity),
     );
   }
   if (options.sourceAcquisition) {
@@ -654,6 +651,7 @@ export async function createVerifiedSqliteSnapshot(
 async function verifyAndPublishSqliteSnapshot(
   options: CreateVerifiedSqliteSnapshotOptions,
   privateSourcePath?: string,
+  recordSourceIntegrity?: () => void,
 ): Promise<VerifiedSqliteSnapshot> {
   const stagingDir = privateSourcePath
     ? path.dirname(privateSourcePath)
@@ -688,6 +686,7 @@ async function verifyAndPublishSqliteSnapshot(
             // to the final private image; all publication byte checks still apply.
             if (autoVacuum !== 0 && autoVacuum !== 2) {
               assertSqliteIntegrity(source, options.sourcePath, options.integrity);
+              recordSourceIntegrity?.();
             }
             options.validate?.(source, options.sourcePath);
             if (!privateSourcePath) {
