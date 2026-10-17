@@ -35,50 +35,21 @@ describe("model-independent commands", () => {
 });
 
 describe("findInlineSlashCompletion", () => {
-  it("finds slash tokens at the start or in normal prose", () => {
-    expect(findInlineSlashCompletion("/thi")).toEqual({
-      query: "thi",
-      start: 0,
-      end: 4,
-      inline: false,
-    });
-    expect(findInlineSlashCompletion("Please use /wea")).toEqual({
-      query: "wea",
-      start: 11,
-      end: 15,
-      inline: true,
-    });
-  });
-
-  it("uses the caret and replaces the complete token", () => {
-    expect(findInlineSlashCompletion("Use /weather tomorrow", 8)).toEqual({
-      query: "wea",
-      start: 4,
-      end: 12,
-      inline: true,
-    });
-    expect(findInlineSlashCompletion("/thinking please", 4)).toEqual({
-      query: "thi",
-      start: 0,
-      end: 9,
-      inline: true,
-    });
-  });
-
-  it("recognizes a trailing colon as a skill-only inline reference", () => {
-    expect(findInlineSlashCompletion("Please use /weather:")).toEqual({
-      query: "weather",
-      start: 11,
-      end: 20,
-      inline: true,
-      skillOnly: true,
-    });
-  });
-
-  it("ignores URLs, paths, and escaped double slashes", () => {
-    expect(findInlineSlashCompletion("https://example.com/wea")).toBeNull();
-    expect(findInlineSlashCompletion("Open tmp/wea")).toBeNull();
-    expect(findInlineSlashCompletion("Use //wea")).toBeNull();
+  it.each([
+    ["/thi", undefined, { query: "thi", start: 0, end: 4, inline: false }],
+    ["Please use /wea", undefined, { query: "wea", start: 11, end: 15, inline: true }],
+    ["Use /weather tomorrow", 8, { query: "wea", start: 4, end: 12, inline: true }],
+    ["/thinking please", 4, { query: "thi", start: 0, end: 9, inline: true }],
+    [
+      "Please use /weather:",
+      undefined,
+      { query: "weather", start: 11, end: 20, inline: true, skillOnly: true },
+    ],
+    ["https://example.com/wea", undefined, null],
+    ["Open tmp/wea", undefined, null],
+    ["Use //wea", undefined, null],
+  ])("finds only slash tokens at the caret in %j", (text, caret, expected) => {
+    expect(findInlineSlashCompletion(text, caret)).toEqual(expected);
   });
 
   it("offers every non-skill command inline and can hide them when no command owner exists", () => {
@@ -254,21 +225,14 @@ describe("parseSlashCommand", () => {
     ]);
   });
 
-  it("keeps model-hidden skills in slash commands but out of $ completions", () => {
-    applyRemoteEntries([
-      remoteCommand("hidden_skill", { source: "skill", skillModelVisible: false }),
-    ]);
-
-    expectParsedSlash("/hidden_skill", { name: "hidden_skill" }, "");
-    expect(getSkillCommandCompletions("hidden")).toEqual([]);
-  });
-
-  it("fails closed when an older gateway omits skill visibility metadata", () => {
-    applyRemoteEntries([remoteCommand("legacy_skill", { source: "skill" })]);
-
-    expectParsedSlash("/legacy_skill", { name: "legacy_skill" }, "");
-    expect(getSkillCommandCompletions("legacy")).toEqual([]);
-  });
+  it.each([false, undefined])(
+    "keeps skills with visibility %j in slash commands but out of $ completions",
+    (skillModelVisible) => {
+      applyRemoteEntries([remoteCommand("hidden_skill", { source: "skill", skillModelVisible })]);
+      expectParsedSlash("/hidden_skill", { name: "hidden_skill" }, "");
+      expect(getSkillCommandCompletions("hidden")).toEqual([]);
+    },
+  );
 
   it("does not let remote commands collide with reserved local commands", () => {
     applyRemoteEntries([remoteCommand("redirect")]);
@@ -312,13 +276,9 @@ describe("parseSlashCommand", () => {
     const longName = "x".repeat(260);
     const longDescription = `${"d".repeat(1_999)}🚀tail`;
     const boundaryArgName = `${"n".repeat(199)}🚀tail`;
-    const oversizedCommand = {
-      name: "plugin-0",
+    const oversizedCommand = remoteCommand("plugin-0", {
       textAliases: Array.from({ length: 25 }, (_, aliasIndex) => `/plugin-0-${aliasIndex}`),
       description: longDescription,
-      source: "plugin" as const,
-      scope: "both" as const,
-      acceptsArgs: true,
       args: Array.from({ length: 25 }, (_, argIndex) => ({
         name: argIndex === 0 ? boundaryArgName : `${longName}-${argIndex}`,
         description: longDescription,
@@ -328,7 +288,7 @@ describe("parseSlashCommand", () => {
           label: `${longName}-${choiceIndex}`,
         })),
       })),
-    };
+    });
     applyRemoteEntries([
       oversizedCommand,
       ...Array.from({ length: 519 }, (_, index) =>
