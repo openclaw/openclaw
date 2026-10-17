@@ -17,8 +17,8 @@ import {
   prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "../admitted-run-context.js";
-import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
 import { SessionManager } from "../sessions/session-manager.js";
+import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import {
   compactEmbeddedRunForRecovery,
@@ -73,22 +73,12 @@ const recoveryRequest = {
 } satisfies Parameters<typeof compactEmbeddedRunForRecovery>[1];
 
 function makeAttempt(overrides: Partial<EmbeddedRunAttemptResult> = {}): EmbeddedRunAttemptResult {
-  return {
+  return makeAttemptResult({
     terminal: { kind: "failed", source: "prompt", error: new Error("context overflow") },
     sessionIdUsed: "session-1",
-    messagesSnapshot: [],
     assistantTexts: [],
-    toolMetas: [],
-    lastAssistant: undefined,
-    didSendViaMessagingTool: false,
-    messagingToolSentTexts: [],
-    messagingToolSentMediaUrls: [],
-    messagingToolSentTargets: [],
-    cloudCodeAssistFormatError: false,
-    replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
     ...overrides,
-  };
+  });
 }
 
 function makeContextEngine(
@@ -181,33 +171,10 @@ function makeRecoveryInput(
 
 describe("compactEmbeddedRunForRecovery", () => {
   beforeEach(() => {
-    const completionSelection = { provider: "openai", modelId: "gpt-5.5", agentDir: "/tmp/main" };
     compactRuntimeMocks.compactEmbeddedAgentSessionOnDemand.mockReset();
-    completionMocks.acquireSimpleCompletionModelForAgent.mockReset();
-    completionMocks.completeWithPreparedSimpleCompletionModel.mockReset();
-    completionMocks.resolveSimpleCompletionSelectionForAgent.mockReset();
-    completionMocks.acquireSimpleCompletionModelForAgent.mockResolvedValue({
-      selection: completionSelection,
-      model: {
-        provider: "openai",
-        id: "gpt-5.5",
-        name: "gpt-5.5",
-        api: "openai",
-        baseUrl: "https://fixture.invalid/v1",
-        input: ["text"],
-        reasoning: false,
-        contextWindow: 128_000,
-        maxTokens: 4096,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-      auth: { apiKey: "test-api-key", source: "test", mode: "api-key" },
-      async [Symbol.asyncDispose]() {},
-    });
-    completionMocks.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
-      content: [{ type: "text", text: "done" }],
-      usage: { input: 1, output: 1, total: 2 },
-    });
-    completionMocks.resolveSimpleCompletionSelectionForAgent.mockReturnValue(completionSelection);
+    for (const mock of Object.values(completionMocks)) {
+      mock.mockReset();
+    }
   });
 
   it("carries locked model, auth, fallback, cache, and overflow facts into compaction", async () => {
@@ -223,11 +190,6 @@ describe("compactEmbeddedRunForRecovery", () => {
       observation: { broke: false, cacheRead: 32_000 },
       lastCacheTouchAt: 1_700_000_000_000,
     };
-    const runtimeAuthPlan = {
-      authProfileProviderForAuth: "openai",
-      providerForAuth: "openai",
-    } satisfies AgentRuntimeAuthPlan;
-
     const result = await compactEmbeddedRunForRecovery(
       makeRecoveryInput({
         runParams: {
@@ -241,7 +203,6 @@ describe("compactEmbeddedRunForRecovery", () => {
         contextEngine,
         contextTokenBudget: 200_000,
         attempt: makeAttempt({ promptCache }),
-        runtimeAuthPlan,
         thinkLevel: "ultra",
         modelSelection: {
           provider: "openai",
@@ -445,12 +406,7 @@ describe("createEmbeddedRunCompactionRuntime", () => {
   beforeEach(() => setRuntimeConfigSnapshot({}));
   afterEach(() => clearRuntimeConfigSnapshot());
 
-  async function createRuntime(
-    params: {
-      compactResult?: Awaited<ReturnType<ContextEngine["compact"]>>;
-      sessionTarget?: ContextEngineSessionTarget;
-    } = {},
-  ) {
+  async function createRuntime(sessionTarget?: ContextEngineSessionTarget) {
     const hookRunner = {
       hasHooks: vi.fn(() => true),
       runBeforeCompaction: vi.fn(async () => undefined),
@@ -500,28 +456,24 @@ describe("createEmbeddedRunCompactionRuntime", () => {
       },
       sessionPromptState,
     });
-    const compactResult =
-      params.compactResult ??
-      ({
-        ok: true,
-        compacted: true,
-        result: {
-          summary: "compacted",
-          tokensBefore: 120,
-          tokensAfter: 50,
-          sessionId: "rotated-session",
-          sessionTarget: params.sessionTarget,
-        },
-      } as Awaited<ReturnType<ContextEngine["compact"]>>);
+    const compactResult = {
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "compacted",
+        tokensBefore: 120,
+        tokensAfter: 50,
+        sessionId: "rotated-session",
+        sessionTarget,
+      },
+    };
     return { compactResult, hookRunner, onAgentEvent, runtime, sessionPromptState, currentTarget };
   }
 
   it("adopts the top-level successor id for a partial session target", async () => {
     const fixture = await createRuntime({
-      sessionTarget: {
-        sessionKey: "agent:main:session-1",
-        threadId: "thread-hint",
-      },
+      sessionKey: "agent:main:session-1",
+      threadId: "thread-hint",
     });
 
     const previousSessionId = await fixture.runtime.adoptCompactionTranscript(

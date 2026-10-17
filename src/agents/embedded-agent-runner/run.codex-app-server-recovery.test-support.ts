@@ -1,9 +1,8 @@
-// Full-entry coverage for replay-safe Codex app-server recovery retries.
-
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createModelFallbackConfig } from "../test-helpers/model-fallback-config-fixture.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   createOverflowRunParams,
@@ -15,28 +14,45 @@ import {
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
-import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./run/types.js";
+import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
 const CODEX_MISSING_TERMINAL_MESSAGE =
   "Codex stopped before confirming the turn was complete. The response may be incomplete; retry if needed.";
+const UNSAFE_TIMEOUT_MESSAGE =
+  "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.";
+type AttemptParams = Parameters<typeof mockedRunEmbeddedAttempt>[0];
 
-function codexClientClosedAttempt(
+function runtimeTimeout(message: string): EmbeddedRunAttemptResult["terminal"] {
+  return {
+    kind: "timeout",
+    phase: "prompt",
+    source: "runtime",
+    aborted: true,
+    failure: { source: "prompt", error: new Error(message) },
+  };
+}
+
+function codexFailure(
+  kind: "closed" | "idle",
   overrides: Partial<EmbeddedRunAttemptResult> = {},
 ): EmbeddedRunAttemptResult {
-  // Stdio client-close failures can be replay-safe when Codex reports that the
-  // turn ended before completion and no user-visible side effect escaped.
+  const closed = kind === "closed";
   return makeAttemptResult({
     assistantTexts: [],
-    terminal: {
-      kind: "failed",
-      source: "prompt",
-      error: new Error("codex app-server client closed before turn completed"),
-    },
+    terminal: closed
+      ? {
+          kind: "failed",
+          source: "prompt",
+          error: new Error("codex app-server client closed before turn completed"),
+        }
+      : runtimeTimeout("codex app-server turn idle timed out waiting for turn/completed"),
+    ...(!closed ? { promptTimeoutOutcome: { message: CODEX_MISSING_TERMINAL_MESSAGE } } : {}),
     codexAppServerFailure: {
-      kind: "client_closed_before_turn_completed",
+      kind: closed ? "client_closed_before_turn_completed" : "turn_completion_idle_timeout",
+      ...(!closed ? { turnWatchTimeoutKind: "completion" as const } : {}),
       transport: "stdio",
       threadId: "thread-1",
       turnId: "turn-1",
@@ -46,54 +62,7 @@ function codexClientClosedAttempt(
   });
 }
 
-function codexTurnCompletionIdleTimeoutAttempt(
-  overrides: Partial<EmbeddedRunAttemptResult> = {},
-): EmbeddedRunAttemptResult {
-  // Completion-watch idle timeouts are retried separately from progress timeouts
-  // because only the former indicates Codex may have lost the final event.
-  return makeAttemptResult({
-    assistantTexts: [],
-    terminal: {
-      kind: "timeout",
-      phase: "prompt",
-      source: "runtime",
-      aborted: true,
-      failure: {
-        source: "prompt",
-        error: new Error("codex app-server turn idle timed out waiting for turn/completed"),
-      },
-    },
-    promptTimeoutOutcome: {
-      message: CODEX_MISSING_TERMINAL_MESSAGE,
-    },
-    codexAppServerFailure: {
-      kind: "turn_completion_idle_timeout",
-      turnWatchTimeoutKind: "completion",
-      transport: "stdio",
-      threadId: "thread-1",
-      turnId: "turn-1",
-      replaySafe: true,
-    },
-    ...overrides,
-  });
-}
-
-function successAttempt(): EmbeddedRunAttemptResult {
-  return makeAttemptResult({
-    assistantTexts: ["Done."],
-  });
-}
-
-function ordinaryPromptFailureAttempt(): EmbeddedRunAttemptResult {
-  return makeAttemptResult({
-    assistantTexts: [],
-    terminal: { kind: "failed", source: "prompt", error: new Error("codex exploded") },
-  });
-}
-
-function asAttemptParams(value: unknown): EmbeddedRunAttemptParams {
-  return value as EmbeddedRunAttemptParams;
-}
+const successAttempt = () => makeAttemptResult({ assistantTexts: ["Done."] });
 
 function runCodex(runId: string, overrides: Partial<Parameters<typeof runEmbeddedAgent>[0]> = {}) {
   return runEmbeddedAgent({
@@ -103,6 +72,10 @@ function runCodex(runId: string, overrides: Partial<Parameters<typeof runEmbedde
     runId,
     ...overrides,
   });
+}
+
+function runNative(runId: string, overrides: Partial<Parameters<typeof runEmbeddedAgent>[0]> = {}) {
+  return runCodex(runId, { provider: "openai", model: "gpt-5.6-luna", ...overrides });
 }
 
 function replyWithAbort(abortByUser: () => boolean) {
@@ -136,32 +109,21 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
   it("passes native deadline ownership through dispatch and fences retained callbacks", async () => {
     useOpenAIPlatformAuthFixture();
     vi.useFakeTimers();
-    const entered = createDeferred<EmbeddedRunAttemptParams>();
+    const entered = createDeferred<AttemptParams>();
     const finish = createDeferred<EmbeddedRunAttemptResult>();
     let run: ReturnType<typeof runEmbeddedAgent> | undefined;
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async (value) => {
-      const params = asAttemptParams(value);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
       params.onAttemptDeadlineChanged?.({ kind: "unlimited" });
       entered.resolve(params);
       return await finish.promise;
     });
     try {
-      run = runEmbeddedAgent({
-        ...createOverflowRunParams(state),
-        provider: "openai",
-        model: "gpt-5.6-luna",
-        runId: "runtime-deadline-handoff",
-        timeoutMs: 1,
-      });
+      run = runNative("runtime-deadline-handoff", { timeoutMs: 1 });
       let settled = false;
-      void run.then(
-        () => {
-          settled = true;
-        },
-        () => {
-          settled = true;
-        },
-      );
+      const markSettled = () => {
+        settled = true;
+      };
+      void run.then(markSettled, markSettled);
       const params = await Promise.race([
         entered.promise,
         run.then(() => {
@@ -183,14 +145,9 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
       params.onAttemptAbort?.();
       expect(vi.getTimerCount()).toBe(timerCount);
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(successAttempt());
-      await expect(
-        runEmbeddedAgent({
-          ...createOverflowRunParams(state),
-          provider: "openai",
-          model: "gpt-5.6-luna",
-          runId: "runtime-deadline-successor",
-        }),
-      ).resolves.toMatchObject({ meta: { aborted: false } });
+      await expect(runNative("runtime-deadline-successor")).resolves.toMatchObject({
+        meta: { aborted: false },
+      });
     } finally {
       finish.resolve(successAttempt());
       await run?.catch(() => undefined);
@@ -219,24 +176,11 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
         content: [{ type: "text" as const, text }],
         stopReason: "stop" as const,
         timestamp: Date.now(),
-        usage: {
-          input: 1,
-          output: 1,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 2,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: { ...createZeroUsageFixture(), input: 1, output: 1, totalTokens: 2 },
       };
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(
         makeAttemptResult({
-          terminal: {
-            kind: "timeout",
-            phase: "prompt",
-            source: "runtime",
-            aborted: true,
-            failure: { source: "prompt", error: new Error(message) },
-          },
+          terminal: runtimeTimeout(message),
           assistantTexts: delivery === "message-tool" ? [] : [text],
           lastAssistant: delivery === "completed" ? assistant : undefined,
           currentAttemptAssistant: delivery === "completed" ? assistant : undefined,
@@ -257,12 +201,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
             : {}),
         }),
       );
-      const result = await runEmbeddedAgent({
-        ...createOverflowRunParams(state),
-        provider: "openai",
-        model: "gpt-5.6-luna",
-        runId: `owned-${deadline}-${delivery}`,
-      });
+      const result = await runNative(`owned-${deadline}-${delivery}`);
       expect(result.payloads).toContainEqual(
         expect.objectContaining({ text: message, isError: true }),
       );
@@ -303,7 +242,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
           if (owner === "replaced") {
             await replacement.admit("embedded");
           }
-          return codexClientClosedAttempt({ sessionIdUsed: runId });
+          return codexFailure("closed", { sessionIdUsed: runId });
         })
         .mockImplementationOnce(async () => {
           expect(freezeAbort).not.toHaveBeenCalled();
@@ -311,13 +250,9 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
         });
 
       try {
-        const run = runEmbeddedAgent({
-          ...createOverflowRunParams(state),
+        const run = runCodex(runId, {
           sessionId: runId,
           sessionKey,
-          provider: "codex",
-          model: "gpt-5.5",
-          runId,
           preparedRunAdmission: admission,
           replyOperation,
         });
@@ -337,68 +272,50 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     },
   );
 
-  it("stops ordinary failure handling after cancellation during finalization", async () => {
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
-      asAttemptParams(attemptParams).onAttemptAbort?.();
-      return ordinaryPromptFailureAttempt();
-    });
-
-    await expect(runCodex("run-codex-cancel-ordinary-failure")).rejects.toMatchObject({
-      name: "AbortError",
-      message: "agent run aborted",
-    });
-
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not expose a cancelled replay-safe failure to outer model fallback", async () => {
-    const abortByUser = vi.fn(() => true);
-    const replyOperation = replyWithAbort(abortByUser);
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
-      asAttemptParams(attemptParams).onAttemptAbort?.();
-      return codexClientClosedAttempt();
-    });
-
-    await expect(
-      runCodex("run-codex-cancel-before-model-fallback", {
-        isFinalFallbackAttempt: false,
-        replyOperation,
-      }),
-    ).rejects.toMatchObject({
-      name: "AbortError",
-      message: "agent run aborted",
-    });
-
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    expect(abortByUser).toHaveBeenCalledTimes(1);
-  });
-
-  it("preserves upstream abort ownership during replay-safe finalization", async () => {
-    const controller = new AbortController();
-    const upstreamAbort = new Error("upstream cancelled");
-    const abortByUser = vi.fn(() => true);
-    const replyOperation = replyWithAbort(abortByUser);
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
-      controller.abort(upstreamAbort);
-      asAttemptParams(attemptParams).onAttemptAbort?.();
-      return codexClientClosedAttempt();
-    });
-
-    await expect(
-      runCodex("run-codex-upstream-cancel-before-model-fallback", {
-        isFinalFallbackAttempt: false,
-        abortSignal: controller.signal,
-        replyOperation,
-      }),
-    ).rejects.toBe(upstreamAbort);
-
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    expect(abortByUser).not.toHaveBeenCalled();
-  });
+  it.each(["ordinary", "replay-safe", "upstream"] as const)(
+    "preserves %s cancellation ownership without exposing failure to fallback",
+    async (kind) => {
+      const controller = new AbortController();
+      const upstreamAbort = new Error("upstream cancelled");
+      const abortByUser = vi.fn(() => true);
+      mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+        if (kind === "upstream") {
+          controller.abort(upstreamAbort);
+        }
+        attemptParams.onAttemptAbort?.();
+        return kind === "ordinary"
+          ? makeAttemptResult({
+              assistantTexts: [],
+              terminal: { kind: "failed", source: "prompt", error: new Error("codex exploded") },
+            })
+          : codexFailure("closed");
+      });
+      const pending = runCodex(
+        `run-codex-cancel-${kind}`,
+        kind === "ordinary"
+          ? {}
+          : {
+              isFinalFallbackAttempt: false,
+              ...(kind === "upstream" ? { abortSignal: controller.signal } : {}),
+              replyOperation: replyWithAbort(abortByUser),
+            },
+      );
+      if (kind === "upstream") {
+        await expect(pending).rejects.toBe(upstreamAbort);
+      } else {
+        await expect(pending).rejects.toMatchObject({
+          name: "AbortError",
+          message: "agent run aborted",
+        });
+      }
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+      expect(abortByUser).toHaveBeenCalledTimes(kind === "replay-safe" ? 1 : 0);
+    },
+  );
 
   it("suppresses duplicate Codex prompt mirroring on retry", async () => {
     mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(codexClientClosedAttempt())
+      .mockResolvedValueOnce(codexFailure("closed"))
       .mockResolvedValueOnce(successAttempt());
 
     await runCodex("run-codex-client-close-retry-mirror");
@@ -409,8 +326,8 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
 
   it("returns a timeout payload after a replay-safe turn/completed idle timeout retry is exhausted", async () => {
     mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(codexTurnCompletionIdleTimeoutAttempt())
-      .mockResolvedValueOnce(codexTurnCompletionIdleTimeoutAttempt());
+      .mockResolvedValueOnce(codexFailure("idle"))
+      .mockResolvedValueOnce(codexFailure("idle"));
 
     const result = await runCodex("run-codex-turn-completion-idle-timeout-retry-exhausted");
 
@@ -418,12 +335,14 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
       isError: true,
       text: CODEX_MISSING_TERMINAL_MESSAGE,
     });
-    expect(result.meta.timeoutPhase).toBe("provider");
-    expect(result.meta.providerStarted).toBe(true);
-    expect(result.meta.error).toEqual({
-      kind: "incomplete_turn",
-      message: CODEX_MISSING_TERMINAL_MESSAGE,
-      fallbackSafe: false,
+    expect(result.meta).toMatchObject({
+      timeoutPhase: "provider",
+      providerStarted: true,
+      error: {
+        kind: "incomplete_turn",
+        message: CODEX_MISSING_TERMINAL_MESSAGE,
+        fallbackSafe: false,
+      },
     });
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
@@ -434,12 +353,11 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     async (kind) => {
       mockedClassifyFailoverReason.mockReturnValue("timeout");
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-        codexTurnCompletionIdleTimeoutAttempt({
+        codexFailure("idle", {
           didSendViaMessagingTool: true,
           replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
           promptTimeoutOutcome: {
-            message:
-              "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
+            message: UNSAFE_TIMEOUT_MESSAGE,
             replayInvalid: true,
             livenessState: "abandoned",
           },
@@ -463,15 +381,16 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
 
       expect(result.payloads?.[0]).toMatchObject({
         isError: true,
-        text: "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
+        text: UNSAFE_TIMEOUT_MESSAGE,
       });
-      expect(result.meta.replayInvalid).toBe(true);
-      expect(result.meta.livenessState).toBe("abandoned");
-      expect(result.meta.error).toEqual({
-        kind: "incomplete_turn",
-        message:
-          "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
-        fallbackSafe: false,
+      expect(result.meta).toMatchObject({
+        replayInvalid: true,
+        livenessState: "abandoned",
+        error: {
+          kind: "incomplete_turn",
+          message: UNSAFE_TIMEOUT_MESSAGE,
+          fallbackSafe: false,
+        },
       });
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
       expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();

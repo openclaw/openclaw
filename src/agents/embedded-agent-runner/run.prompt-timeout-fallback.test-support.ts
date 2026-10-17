@@ -1,4 +1,3 @@
-// Full-entry coverage for prompt timeout continuation and model fallback ownership.
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   consumeSubagentCompletionToolHandoff,
@@ -25,12 +24,12 @@ import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harnes
 
 let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
+const model = { provider: "openai", model: "gpt-5.4" };
 
 function runPrompt(runId: string, overrides: Partial<Parameters<typeof runEmbeddedAgent>[0]> = {}) {
   return runEmbeddedAgent({
     ...createOverflowRunParams(state),
-    provider: "openai",
-    model: "gpt-5.4",
+    ...model,
     runId,
     ...overrides,
   });
@@ -53,8 +52,7 @@ function promptFailure(message = "LLM request timed out.") {
 function completedAttempt(text?: string) {
   const assistant = {
     role: "assistant" as const,
-    provider: "openai",
-    model: "gpt-5.4",
+    ...model,
     stopReason: "stop" as const,
     content: text ? [{ type: "text", text }] : [],
   };
@@ -69,8 +67,7 @@ function settledWriteTimeout(prompt: string, aborted = false) {
   const toolUseAssistant = {
     role: "assistant" as const,
     stopReason: "toolUse" as const,
-    provider: "openai",
-    model: "gpt-5.4",
+    ...model,
     content: [
       {
         type: "toolCall",
@@ -83,8 +80,7 @@ function settledWriteTimeout(prompt: string, aborted = false) {
   const abortedAssistant = {
     role: "assistant" as const,
     stopReason: "aborted" as const,
-    provider: "openai",
-    model: "gpt-5.4",
+    ...model,
     content: [],
   };
   return makeAttemptResult({
@@ -125,13 +121,15 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
   });
 
   it.each([
-    { reason: "timeout", sourceTool: "subagent_announce", harness: "openclaw" },
-    { reason: "timeout", sourceTool: "subagent_settle", harness: "codex" },
-    { reason: "overloaded", sourceTool: "subagent_settle", harness: "openclaw" },
-    { reason: "server_error", sourceTool: "subagent_settle", harness: "openclaw" },
+    ["timeout", "subagent_announce", "openclaw", undefined],
+    ["timeout", "subagent_settle", "codex", undefined],
+    ["overloaded", "subagent_settle", "openclaw", undefined],
+    ["server_error", "subagent_settle", "openclaw", undefined],
+    ["timeout", "subagent_settle", "openclaw", { disableTools: true }],
+    ["timeout", "subagent_settle", "openclaw", { toolsAllow: ["message"] }],
   ] as const)(
-    "preserves delegation after a same-model $reason retry of $sourceTool under $harness",
-    async ({ reason, sourceTool, harness }) => {
+    "preserves retry delegation and restrictions (%s, %s, %s, %j)",
+    async (reason, sourceTool, harness, restriction) => {
       mockedClassifyFailoverReason.mockReturnValue(reason);
       mockedRunEmbeddedAttempt
         .mockResolvedValueOnce(
@@ -145,22 +143,27 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
         )
         .mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["Completion received."] }));
 
-      const config = await fallbackConfig();
       await runPrompt("run-completion-transient-retry", {
         agentHarnessRuntimeOverride: harness,
         inputProvenance: { kind: "inter_session", sourceTool },
-        config,
+        ...(restriction
+          ? {
+              ...restriction,
+              toolsAllow: "toolsAllow" in restriction ? [...restriction.toolsAllow] : undefined,
+            }
+          : { config: await fallbackConfig() }),
       });
 
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
       for (const [attempt] of mockedRunEmbeddedAttempt.mock.calls) {
         expect(attempt).toMatchObject({
-          provider: "openai",
-          modelId: "gpt-5.4",
+          ...(restriction ? {} : { provider: "openai", modelId: "gpt-5.4", fallbackReason: null }),
           fallbackActive: false,
-          fallbackReason: null,
-          delegationCapability: "full",
+          delegationCapability: restriction ? "report_only" : "full",
         });
+        if (restriction) {
+          continue;
+        }
         // The shared gate consumes this exact dispatched capability; it cannot
         // restore a tool removed by ordinary authorization before this stage.
         const authorizedTools = ["sessions_send", "sessions_spawn"].map(
@@ -223,24 +226,24 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
         ...registration,
         handoffId: registerSubagentCompletionToolHandoff(registration),
         sourceTool: "subagent_settle",
-        provider: "openai",
-        model: "gpt-5.4",
+        ...model,
       });
       mockedRunEmbeddedAttempt.mockImplementationOnce(async (attempt) => {
         expect(attempt.fallbackActive).toBe(true);
         if (harness === "codex") {
+          const dynamicTools = ["sessions_send", "sessions_spawn"].map((name) => ({
+            type: "function" as const,
+            name,
+            description: name,
+            inputSchema: { type: "object" },
+          }));
           const codex = await loadBundledPluginFacade<{
             resolveCodexPromptSnapshotAppServerOptions: () => unknown;
             buildCodexHarnessPromptSnapshot: (params: {
               attempt: EmbeddedRunAttemptParamsV2;
               cwd: string;
               threadId: string;
-              dynamicTools: Array<{
-                type: "function";
-                name: string;
-                description: string;
-                inputSchema: { type: string };
-              }>;
+              dynamicTools: typeof dynamicTools;
               appServer: unknown;
             }) => Promise<{
               developerInstructions: string;
@@ -252,12 +255,6 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
           if (!hostCapabilities) {
             throw new Error("Native attempt lacks its admitted host capability");
           }
-          const dynamicTools = ["sessions_send", "sessions_spawn"].map((name) => ({
-            type: "function" as const,
-            name,
-            description: name,
-            inputSchema: { type: "object" },
-          }));
           const render = (delegationCapability: typeof attempt.delegationCapability) =>
             codex.buildCodexHarnessPromptSnapshot({
               attempt: { ...attempt, delegationCapability, hostCapabilities },
@@ -288,8 +285,7 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
         ...run,
         config,
         toolsAllow: toolsAllow ? [...toolsAllow] : undefined,
-        provider: "openai",
-        model: "gpt-5.4",
+        ...model,
         agentHarnessRuntimeOverride: harness,
         inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle", sourceSessionKey },
         trustedInternalHandoff,
@@ -343,62 +339,54 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
     },
   );
 
-  it.each([{ disableTools: true }, { toolsAllow: ["message"] }])(
-    "retains completion restrictions after retry: %j",
-    async (restriction) => {
-      mockedClassifyFailoverReason.mockReturnValue("timeout");
-      mockedRunEmbeddedAttempt
-        .mockResolvedValueOnce(promptFailure())
-        .mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["Completion received."] }));
-      await runPrompt("run-restricted-completion-retry", {
-        agentHarnessRuntimeOverride: "openclaw",
-        inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
-        ...restriction,
-      });
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-      for (const [attempt] of mockedRunEmbeddedAttempt.mock.calls) {
-        expect(attempt).toMatchObject({
-          fallbackActive: false,
-          delegationCapability: "report_only",
-        });
-      }
-    },
-  );
-
   it("throws FailoverError for persistent replay-safe prompt timeouts after transient retries", async () => {
-    // The transient retry owner continues the same model first; a timeout that
-    // persists past the retry budget hands off to the configured fallback.
     mockedClassifyFailoverReason.mockReturnValue("timeout");
     mockedRunEmbeddedAttempt.mockResolvedValue(promptFailure());
     const promise = runPrompt("run-prompt-timeout-fallback", { config: await fallbackConfig() });
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
     await expect(promise).rejects.toThrow("LLM request timed out.");
-    // Initial attempt plus the full same-model transient retry budget.
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(9);
   });
 
-  it.each(["openclaw", "codex"] as const)(
-    "recovers an idle timeout after a settled write under the %s harness without replaying the prompt",
-    async (harness) => {
-      const prompt = "Write note.txt, then read it to verify its contents.";
+  it.each([
+    { harness: "openclaw", answered: true },
+    { harness: "codex", answered: true },
+    { harness: "openclaw", answered: false },
+  ] as const)(
+    "settles an idle timeout without replay under $harness (answered: $answered)",
+    async ({ harness, answered }) => {
+      const prompt = answered
+        ? "Write note.txt, then read it to verify its contents."
+        : "Write note.txt";
       mockedClassifyFailoverReason.mockReturnValue("timeout");
-      mockedRunEmbeddedAttempt
-        .mockResolvedValueOnce(settledWriteTimeout(prompt, true))
-        .mockResolvedValueOnce(completedAttempt("The note was written once and verified."));
-      mockedBuildEmbeddedRunPayloads.mockImplementation(({ assistantTexts }) =>
-        assistantTexts.map((text) => ({ text })),
-      );
-
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(settledWriteTimeout(prompt, answered));
+      if (answered) {
+        mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+          completedAttempt("The note was written once and verified."),
+        );
+        mockedBuildEmbeddedRunPayloads.mockImplementation(({ assistantTexts }) =>
+          assistantTexts.map((text) => ({ text })),
+        );
+      } else {
+        mockedRunEmbeddedAttempt.mockResolvedValue(completedAttempt());
+      }
       const result = await runPrompt("run-post-tool-idle-continuation", {
-        agentHarnessRuntimeOverride: harness,
-        prompt,
+        ...(answered ? { agentHarnessRuntimeOverride: harness, prompt } : {}),
         config: await fallbackConfig(),
       });
-
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(answered ? 2 : 3);
+      if (!answered) {
+        expect(result.meta.executionTrace?.fallbackUsed).not.toBe(true);
+        expect(result.meta.error).toMatchObject({ kind: "incomplete_turn" });
+        expect(result.payloads).toEqual([
+          { text: expect.stringContaining("model idle timeout"), isError: true },
+        ]);
+        expect(JSON.stringify(result.payloads)).not.toContain("no final summary was produced");
+        return;
+      }
       expect(result.payloads).toEqual([{ text: "The note was written once and verified." }]);
       expect(result.meta.executionTrace?.fallbackUsed).toBe(false);
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
       const continuation = mockedRunEmbeddedAttempt.mock.calls[1]?.[0];
       expect(continuation?.skipPreparedUserTurnMessage).toBe(true);
       if (harness === "openclaw") {
@@ -419,23 +407,4 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
       expect(mockedGetApiKeyForModel).toHaveBeenCalledTimes(1);
     },
   );
-
-  it("reports the idle timeout when settled-write finalization produces no answer", async () => {
-    mockedClassifyFailoverReason.mockReturnValue("timeout");
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(settledWriteTimeout("Write note.txt"))
-      .mockResolvedValue(completedAttempt());
-    const result = await runPrompt("run-post-tool-idle-finalization-empty", {
-      config: await fallbackConfig(),
-    });
-
-    // Initial attempt plus both tool-free finalization attempts; no replay, no fallback model.
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
-    expect(result.meta.executionTrace?.fallbackUsed).not.toBe(true);
-    expect(result.meta.error).toMatchObject({ kind: "incomplete_turn" });
-    expect(result.payloads).toEqual([
-      { text: expect.stringContaining("model idle timeout"), isError: true },
-    ]);
-    expect(JSON.stringify(result.payloads)).not.toContain("no final summary was produced");
-  });
 });

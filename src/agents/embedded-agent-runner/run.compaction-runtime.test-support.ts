@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { expect, vi } from "vitest";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
@@ -32,8 +33,6 @@ export type RecoveryFixture = Awaited<ReturnType<typeof createRecoveryFixture>>;
 async function createRecoveryFixture(state: OpenClawTestState, options: FixtureOptions) {
   const { appendTranscriptMessage, loadTranscriptEvents, loadSessionEntry, replaceSessionEntry } =
     await import("../../config/sessions/session-accessor.js");
-  const { resolveSessionTranscriptDatabasePath, resolveSessionTranscriptRuntimeTarget } =
-    await import("../../config/sessions/session-accessor.transcript-target.js");
   const { waitForSessionTranscriptIndexReconcile } =
     await import("../../config/sessions/session-transcript-reconcile.js");
   const { closeOpenClawAgentDatabaseByPathAsync } =
@@ -131,19 +130,10 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       recentUserId = messageId;
     }
   }
-  if (!recentUserId) {
-    throw new Error("Fixture must persist the recent user before compaction");
-  }
-  const firstKeptEntryId = recentUserId;
-  if (!memoryManager) {
-    const runtimeTarget = await resolveSessionTranscriptRuntimeTarget({
-      ...target,
-      sessionFile: target.sessionKey,
-    });
-    expect(resolveSessionTranscriptDatabasePath(runtimeTarget)).toBe(target.storePath);
-    expect(runtimeTarget).toMatchObject({ sessionId, sessionKey: target.sessionKey });
-  }
-
+  const firstKeptEntryId = expectDefined(
+    recentUserId,
+    "Fixture must persist the recent user before compaction",
+  );
   const controller = new AbortController();
   const callerError = new Error("caller stopped the admitted recovery");
   const runId = randomUUID();
@@ -179,10 +169,10 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
   };
   try {
     const admittedRunContext = await admission.admit("embedded");
-    const assertActive = resolveAdmittedRunActiveAssertion(admittedRunContext, controller.signal);
-    if (!assertActive) {
-      throw new Error("Fixture must capture a real live admission");
-    }
+    const assertActive = expectDefined(
+      resolveAdmittedRunActiveAssertion(admittedRunContext, controller.signal),
+      "Fixture must capture a real live admission",
+    );
     assertActive();
     const runParams: PreparedEmbeddedRunInput["runParams"] = {
       runId,
@@ -239,16 +229,18 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     const openWriter = async () =>
       memoryManager ??
       (await SessionManager.openAsync({ ...target, ...writerFence }, state.workspaceDir));
-    const commitCompaction = async () => {
-      await (
-        await openWriter()
-      ).appendCompactionAsync("Summary of earlier topic", firstKeptEntryId, 4_097);
+    const compact = vi.fn<ContextEngine["compact"]>(async () => {
+      const writer = await openWriter();
+      await writer.appendCompactionAsync("Summary of earlier topic", firstKeptEntryId, 4_097);
       return recoveryCompaction({ summary: "Summary of earlier topic", firstKeptEntryId });
-    };
-    const compact = vi.fn<ContextEngine["compact"]>(async () => commitCompaction());
+    });
     const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () =>
       unchangedMaintenance(),
     );
+    const track = <T>(pending: Promise<T>) => {
+      work.push(pending);
+      return pending;
+    };
     const contextEngine: ContextEngine = {
       info: { id: "fixture-engine", name: "Fixture engine", ownsCompaction: true },
       ingest: async () => {
@@ -257,16 +249,8 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       assemble: async () => {
         throw new Error("Unexpected assemble in recovery");
       },
-      compact: (params) => {
-        const pending = compact(params);
-        work.push(pending);
-        return pending;
-      },
-      maintain: (params) => {
-        const pending = maintain(params);
-        work.push(pending);
-        return pending;
-      },
+      compact: (params) => track(compact(params)),
+      maintain: (params) => track(maintain(params)),
     };
     const beforeHook = vi.fn(async () => {});
     const afterHook = vi.fn(async () => {});
@@ -376,26 +360,28 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       const events = memoryManager
         ? memoryManager.getEntries()
         : await loadTranscriptEvents(target);
+      const entries = manager.getEntries();
+      const toolResults = manager
+        .buildSessionContext()
+        .messages.filter((message) => message.role === "toolResult");
       return {
-        resetCount: manager.getEntries().filter((entry) => entry.type === "reset").length,
+        resetCount: entries.filter((entry) => entry.type === "reset").length,
         eventDigests: events.map((entry) =>
           createHash("sha256").update(JSON.stringify(entry)).digest("hex"),
         ),
         leafId: manager.getLeafId(),
-        compactionIds: manager
-          .getEntries()
+        compactionIds: entries
           .filter((entry) => entry.type === "compaction")
           .map((entry) => entry.id),
-        toolResultChars: manager
-          .buildSessionContext()
-          .messages.flatMap((message) =>
-            message.role === "toolResult"
-              ? message.content.flatMap((block) =>
-                  block.type === "text" ? [block.text.length] : [],
-                )
-              : [],
-          )
-          .reduce((sum, chars) => sum + chars, 0),
+        toolResultChars: toolResults.reduce(
+          (sum, message) =>
+            sum +
+            message.content.reduce(
+              (chars, block) => chars + (block.type === "text" ? block.text.length : 0),
+              0,
+            ),
+          0,
+        ),
       };
     };
     const invalidate = async (loss: AuthorityLoss) => {

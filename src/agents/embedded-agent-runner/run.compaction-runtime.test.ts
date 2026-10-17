@@ -73,54 +73,40 @@ describe("embedded compaction recovery authority", () => {
     vi.restoreAllMocks();
   });
 
-  recoveryTest(
-    "shrinks current tool output without replaying archived resets after compaction",
-    { historicalTurns: 4 },
-    async (fixture) => {
-      const before = await fixture.snapshot();
-
-      await expect(fixture.recover("overflow", true)).resolves.toEqual({
-        action: "retry",
-      });
-
-      const after = await fixture.snapshot();
-      expectArchivedEvents(before, after);
-      expect(after.resetCount).toBe(before.resetCount);
-      expect(after.eventDigests.length - before.eventDigests.length).toBeLessThanOrEqual(5);
-      expect(after.toolResultChars).toBeLessThan(before.toolResultChars);
-      fixture.assertActive();
-    },
-  );
-
-  recoveryTest(
-    "leaves archived tool output untouched when the compacted context needs no truncation",
-    { historicalTurns: 4, oversized: false },
-    async (fixture) => {
-      const before = await fixture.snapshot();
-
-      await expect(fixture.recover("overflow", true)).resolves.toEqual({ action: "retry" });
-
-      const after = await fixture.snapshot();
-      expectArchivedEvents(before, after);
-      expect(after.eventDigests).toHaveLength(before.eventDigests.length + 1);
-      expect(after.resetCount).toBe(before.resetCount);
-      expect(after.toolResultChars).toBe(before.toolResultChars);
-    },
-  );
-
-  recoveryTest(
-    "uses the resolved model budget to recover current output beyond the default reader window",
-    { historicalTurns: 4, contextTokenBudget: 200_000, toolResultText: "x".repeat(1_200_000) },
-    async (fixture) => {
-      const before = await fixture.snapshot();
-      fixture.compact.mockRejectedValueOnce(new Error("independent engine failure"));
-
-      await expect(fixture.recover("overflow")).resolves.toEqual({ action: "retry" });
-
-      const after = await fixture.snapshot();
-      expect(after.toolResultChars).toBeLessThan(before.toolResultChars);
-      expect(after.resetCount).toBe(before.resetCount);
-      expectArchivedEvents(before, after);
+  it.each(["truncate", "small", "beyond-reader-window"] as const)(
+    "preserves archived resets while recovering %s output",
+    async (mode) => {
+      await withRecoveryFixture(
+        {
+          historicalTurns: 4,
+          ...(mode === "small" ? { oversized: false } : {}),
+          ...(mode === "beyond-reader-window"
+            ? { contextTokenBudget: 200_000, toolResultText: "x".repeat(1_200_000) }
+            : {}),
+        },
+        async (fixture) => {
+          const before = await fixture.snapshot();
+          if (mode === "beyond-reader-window") {
+            fixture.compact.mockRejectedValueOnce(new Error("independent engine failure"));
+          }
+          await expect(
+            fixture.recover("overflow", mode !== "beyond-reader-window"),
+          ).resolves.toEqual({ action: "retry" });
+          const after = await fixture.snapshot();
+          expectArchivedEvents(before, after);
+          expect(after).toMatchObject({ resetCount: before.resetCount });
+          if (mode === "small") {
+            expect(after).toMatchObject({ toolResultChars: before.toolResultChars });
+            expect(after.eventDigests).toHaveLength(before.eventDigests.length + 1);
+          } else {
+            expect(after.toolResultChars).toBeLessThan(before.toolResultChars);
+            if (mode === "truncate") {
+              expect(after.eventDigests.length - before.eventDigests.length).toBeLessThanOrEqual(5);
+              fixture.assertActive();
+            }
+          }
+        },
+      );
     },
   );
 
@@ -170,9 +156,11 @@ describe("embedded compaction recovery authority", () => {
         );
 
         const after = fixture.loadEntry();
-        expect(after?.sessionId).toBe(successorId);
-        expect(after?.lifecycleRevision).toBe(before?.lifecycleRevision);
-        expect(after).toHaveProperty("activeWriterRunId", fixture.runId);
+        expect(after).toMatchObject({
+          sessionId: successorId,
+          lifecycleRevision: before?.lifecycleRevision,
+          activeWriterRunId: fixture.runId,
+        });
         expect(fixture.getSessionTarget()).toMatchObject({
           sessionId: successorId,
           threadId: "thread-hint",
@@ -201,7 +189,6 @@ describe("embedded compaction recovery authority", () => {
       });
     },
   );
-
   recoveryTest(
     "records successor target and tokens before an identity observer aborts recovery",
     { oversized: false, replyAdmission: true },
@@ -210,22 +197,17 @@ describe("embedded compaction recovery authority", () => {
         await import("../../sessions/session-lifecycle-events.js");
       const previousSessionId = fixture.loadEntry()?.sessionId;
       const successorId = randomUUID();
-      let atObserver:
-        | {
-            accepted: ReturnType<RecoveryFixture["getCommittedSuccessor"]>;
-            count: number;
-            tokensAfter: number | undefined;
-          }
-        | undefined;
+      const observe = () => ({
+        accepted: fixture.getCommittedSuccessor(),
+        count: fixture.recoveryState.autoCompactionCount,
+        tokensAfter: fixture.recoveryState.lastCompactionTokensAfter,
+      });
+      let atObserver: ReturnType<typeof observe> | undefined;
       const unsubscribe = onSessionIdentityMutation((mutation) => {
         if (mutation.kind !== "replace" || mutation.previous.sessionId !== previousSessionId) {
           return;
         }
-        atObserver = {
-          accepted: fixture.getCommittedSuccessor(),
-          count: fixture.recoveryState.autoCompactionCount,
-          tokensAfter: fixture.recoveryState.lastCompactionTokensAfter,
-        };
+        atObserver = observe();
         fixture.updates.mockClear();
         fixture.stop();
       });
@@ -303,8 +285,10 @@ describe("embedded compaction recovery authority", () => {
       expect.soft(outcome).toMatchObject({ action: "surface", kind: "context_overflow" });
       expect.soft(await fixture.snapshot()).toEqual(before);
       expect.soft(fixture.loadEntry()).toEqual(entryBefore);
-      expect.soft(fixture.recoveryState.autoCompactionCount).toBe(0);
-      expect.soft(fixture.recoveryState.lastCompactionTokensAfter).toBeUndefined();
+      expect.soft(fixture.recoveryState).toMatchObject({
+        autoCompactionCount: 0,
+        lastCompactionTokensAfter: undefined,
+      });
       expect(fixture.maintain).not.toHaveBeenCalled();
       expectStoppedBeforePublication(fixture);
     },
@@ -318,15 +302,7 @@ describe("embedded compaction recovery authority", () => {
         waitForCompactionAbort(abortSignal, () => queueMicrotask(fixture.stop)),
       );
 
-      const outcome = await fixture.recover("overflow").then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-
-      expect.soft(outcome).toEqual({ error: fixture.callerError });
-      if ("error" in outcome) {
-        expect.soft(outcome.error).toBe(fixture.callerError);
-      }
+      await expect.soft(fixture.recover("overflow")).rejects.toBe(fixture.callerError);
       expect.soft(await fixture.snapshot()).toEqual(before);
       expect(fixture.compact).toHaveBeenCalledOnce();
       expect(fixture.beforeHook).toHaveBeenCalledOnce();
@@ -358,48 +334,53 @@ describe("embedded compaction recovery authority", () => {
     },
   );
 
-  recoveryTest(
-    "retains and counts a committed compaction once when the caller stops during maintenance",
-    {},
-    async (fixture) => {
-      const before = await fixture.snapshot();
-      let committed: Snapshot | undefined;
-      fixture.maintain.mockImplementationOnce(async () => {
-        committed = await fixture.snapshot();
-        fixture.updates.mockClear();
-        fixture.stop();
-        return unchangedMaintenance();
+  it.each(["maintenance", "after-hook"] as const)(
+    "retains committed accounting but stops publication after an abort in %s",
+    async (phase) => {
+      await withRecoveryFixture({}, async (fixture) => {
+        const before = await fixture.snapshot();
+        let committed: Snapshot | undefined;
+        const abort = async () => {
+          if (phase === "maintenance") {
+            committed = await fixture.snapshot();
+          }
+          fixture.updates.mockClear();
+          fixture.stop();
+        };
+        if (phase === "maintenance") {
+          fixture.maintain.mockImplementationOnce(async () => {
+            await abort();
+            return unchangedMaintenance();
+          });
+        } else {
+          fixture.afterHook.mockImplementationOnce(abort);
+        }
+        await expect
+          .soft(
+            fixture.recover(
+              phase === "maintenance" ? "overflow" : "timeout",
+              phase === "maintenance",
+            ),
+          )
+          .rejects.toBe(fixture.callerError);
+        if (phase === "maintenance") {
+          expect(committed?.eventDigests).toHaveLength(before.eventDigests.length + 1);
+          expect(committed?.eventDigests.slice(0, before.eventDigests.length)).toEqual(
+            before.eventDigests,
+          );
+          expect(committed?.compactionIds).toHaveLength(1);
+          expect.soft(await fixture.snapshot()).toEqual(committed);
+        } else {
+          expect((await fixture.snapshot()).compactionIds).toHaveLength(1);
+          expect(fixture.afterHook).toHaveBeenCalledOnce();
+        }
+        expectCompactionAccounting(fixture);
+        expect(fixture.updates).not.toHaveBeenCalled();
+        fixture.expectNoContinuation();
+        if (phase === "maintenance") {
+          expect(fixture.afterHook).not.toHaveBeenCalled();
+        }
       });
-
-      await expect.soft(fixture.recover("overflow", true)).rejects.toBe(fixture.callerError);
-
-      expect(committed?.eventDigests).toHaveLength(before.eventDigests.length + 1);
-      expect(committed?.eventDigests.slice(0, before.eventDigests.length)).toEqual(
-        before.eventDigests,
-      );
-      expect(committed?.compactionIds).toHaveLength(1);
-      expect.soft(await fixture.snapshot()).toEqual(committed);
-      expectCompactionAccounting(fixture);
-      expectStoppedBeforePublication(fixture);
-    },
-  );
-
-  recoveryTest(
-    "retains timeout compaction accounting but stops publication and retry after an after-hook abort",
-    {},
-    async (fixture) => {
-      fixture.afterHook.mockImplementationOnce(async () => {
-        fixture.updates.mockClear();
-        fixture.stop();
-      });
-
-      await expect.soft(fixture.recover("timeout")).rejects.toBe(fixture.callerError);
-
-      expect((await fixture.snapshot()).compactionIds).toHaveLength(1);
-      expectCompactionAccounting(fixture);
-      expect(fixture.afterHook).toHaveBeenCalledOnce();
-      expect(fixture.updates).not.toHaveBeenCalled();
-      fixture.expectNoContinuation();
     },
   );
 

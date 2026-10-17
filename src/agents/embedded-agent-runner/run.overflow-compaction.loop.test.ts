@@ -176,8 +176,6 @@ function makeDispatchInput(
         maybeAnnounceFastModeAutoOff: vi.fn(),
         notifyExecutionPhase: vi.fn(),
         notifyRunProgress: vi.fn(),
-        notifyToolResult: vi.fn(),
-        notifyAgentEvent: vi.fn(),
       },
     },
     preparedRuntime: {
@@ -185,8 +183,6 @@ function makeDispatchInput(
       modelId: "gpt-5.6-luna",
       requestedModelId: "gpt-5.6-luna",
       nativeModelOwned: true,
-      authStorage: {},
-      modelRegistry: {},
       attemptAuthProfileStore: authProfileStore,
       resolveRunAttemptAuthProfileStore: () => authProfileStore,
       snapshot: () => runtime,
@@ -201,18 +197,13 @@ function makeDispatchInput(
         sessionKey: "agent:main:session-1",
       },
       activePrompt: { persisted: false, internal: false },
-      onUserMessagePersisted: vi.fn(),
       settleOwnedTranscriptProjection: vi.fn(),
-      suppressNextUserMessagePersistence: false,
     },
     terminalRetryState: { beforeFinalizeRevisionAttempts: 0 },
     replayState,
     startupStagesEmitted: false,
     bootstrapPromptWarningSignaturesSeen: [],
     resolveRuntimeFallbackReason: () => null,
-    observeToolOutcome: vi.fn(),
-    isTurnTainted: vi.fn(() => false),
-    allocateToolOutcomeOrdinal: vi.fn(() => 1),
     getPostCompactionAbortError: vi.fn(() => undefined),
     setPostCompactionAbortController: vi.fn(),
     clearPostCompactionAbortController: vi.fn(),
@@ -358,18 +349,20 @@ describe("embedded run retry dispatch", () => {
     );
 
     const input = makeDispatchInput(sessionManager, replayState);
-    const { dispatchedAttempt: result } = await prepareAndDispatchEmbeddedRunAttempt(input);
+    const {
+      dispatchedAttempt: { preparedAttempt: attempt },
+    } = await prepareAndDispatchEmbeddedRunAttempt(input);
 
-    expect(result.preparedAttempt.sessionManager).toBe(sessionManager);
-    expect(result.preparedAttempt.sessionTarget).toBeUndefined();
-    expect(result.preparedAttempt.contextEngineLogicalTurnLease).toBeUndefined();
-    expect(result.preparedAttempt.onContextEngineTurnCandidate).toBe(
+    expect(attempt.sessionManager).toBe(sessionManager);
+    expect(attempt.sessionTarget).toBeUndefined();
+    expect(attempt.contextEngineLogicalTurnLease).toBeUndefined();
+    expect(attempt.onContextEngineTurnCandidate).toBe(
       input.runInput.runParams.onContextEngineTurnCandidate,
     );
     expect(replayState).toEqual({ replayInvalid: true, hadPotentialSideEffects: true });
-    expect(result.preparedAttempt.initialReplayState).toBe(replayState);
+    expect(attempt.initialReplayState).toBe(replayState);
     expect(mocks.runAttempt).toHaveBeenCalledTimes(1);
-    expect(mocks.runAttempt.mock.calls[0]?.[0]).toEqual(result.preparedAttempt);
+    expect(mocks.runAttempt.mock.calls[0]?.[0]).toEqual(attempt);
     expect(mocks.runAttempt.mock.calls[0]?.[1]).toBeUndefined();
     expect(mocks.settleRequesterAfterSessionSpawns).not.toHaveBeenCalled();
   });
