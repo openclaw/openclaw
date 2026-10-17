@@ -1,7 +1,5 @@
-// Error output tests cover program-level error display and exit messaging.
 import { CommanderError, InvalidArgumentError, type Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { captureEnv } from "../../test-utils/env.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isConfigMachineOutput } from "../config-output-mode.js";
 import { createCronOutputCommand, isCronMachineOutput } from "../cron-cli/output-mode.js";
 import { isDevicesMachineOutput } from "../devices-output-mode.js";
@@ -33,6 +31,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   process.argv = originalArgv;
+  vi.unstubAllEnvs();
 });
 
 function makeProgram(args: readonly string[], positional = false) {
@@ -188,50 +187,42 @@ describe("formatCliParseErrorOutput", () => {
     );
   });
 
-  it.each([
-    {
-      name: "parse-only config",
-      args: ["config", "set", "gateway.port", "--json"],
-      root: "config",
-      child: "set",
-    },
-    {
-      name: "human skill card",
-      args: ["skills", "verify", "--card"],
-      root: "skills",
-      child: "verify",
-    },
-  ])("keeps $name parse failures on the human error path", async (testCase) => {
-    const program = makeProgram(testCase.args);
-    const root = program.command(testCase.root);
-    if (testCase.root === "skills") {
-      setCommandJsonMode(root, "output", ({ argv }) => isSkillsMachineOutput(argv));
-    }
-    const command = root.command(testCase.child).argument("<id>").option("--json");
-    if (testCase.root === "config") {
-      command.argument("<value>");
-      setCommandJsonMode(command, "parse-only", () => true);
-    } else if (testCase.root === "skills") {
-      command.option("--card");
-    }
-    command.action(() => {});
+  it.each(["config set gateway.port --json", "skills verify --card"])(
+    "keeps %s parse failures on the human error path",
+    async (args) => {
+      const [name, child] = args.split(" ");
+      const program = makeProgram(args.split(" "));
+      const root = program.command(name!);
+      if (name === "skills") {
+        setCommandJsonMode(root, "output", ({ argv }) => isSkillsMachineOutput(argv));
+      }
+      const command = root.command(child!).argument("<id>").option("--json");
+      if (name === "config") {
+        command.argument("<value>");
+        setCommandJsonMode(command, "parse-only", () => true);
+      } else if (name === "skills") {
+        command.option("--card");
+      }
+      command.action(() => {});
 
-    await parseFailure(program, (error) => {
-      expect(error).toBeInstanceOf(CommanderError);
-      expect(error).not.toBeInstanceOf(ExpectedCliError);
-      expect(isJsonOutputModeActive(process.argv)).toBe(false);
-    });
-  });
+      await parseFailure(program, (error) => {
+        expect(error).toBeInstanceOf(CommanderError);
+        expect(error).not.toBeInstanceOf(ExpectedCliError);
+        expect(isJsonOutputModeActive(process.argv)).toBe(false);
+      });
+    },
+  );
 
   it("uses the same structured root diagnostic as the human renderer", () => {
     const error = createCliUnknownCommandError("pairng", {
       argv: ["node", "openclaw", "pairng", "--json"],
     });
 
-    expect(error.message).toBe('OpenClaw does not know the command "pairng".');
-    expect(error.humanOutput).toBe(
-      'OpenClaw does not know the command "pairng".\nDid you mean this?\n  openclaw pairing\nTry: openclaw --help\nPlugin command? openclaw plugins list\nDocs: https://docs.openclaw.ai/cli\n',
-    );
+    expect(error).toMatchObject({
+      message: 'OpenClaw does not know the command "pairng".',
+      humanOutput:
+        'OpenClaw does not know the command "pairng".\nDid you mean this?\n  openclaw pairing\nTry: openclaw --help\nPlugin command? openclaw plugins list\nDocs: https://docs.openclaw.ai/cli\n',
+    });
   });
 
   it("strips Commander framing from structured nested diagnostics", () => {
@@ -242,7 +233,6 @@ describe("formatCliParseErrorOutput", () => {
     });
 
     expect(error.message).toBe('OpenClaw sessions has no command "lst".');
-    expect(error.message).not.toMatch(/^error:/i);
     expect(error.humanOutput).toContain("Did you mean this?\n  openclaw sessions list\n");
   });
 
@@ -257,17 +247,12 @@ describe("formatCliParseErrorOutput", () => {
     );
   });
 
-  it("reports an unmatched lazy subcommand and suggests a live child command", async () => {
-    const { error, output } = await parseLazyGroupError(["sessions", "lst"]);
-
-    expect(error.code).toBe("commander.unknownCommand");
-    expect(output).toBe(
-      'OpenClaw sessions has no command "lst".\nDid you mean this?\n  openclaw sessions list\nTry: openclaw sessions --help\nDocs: https://docs.openclaw.ai/cli\n',
-    );
-  });
-
-  it("reports an unmatched lazy subcommand before --help can hide it", async () => {
-    const { error, output, stdout } = await parseLazyGroupError(["sessions", "lst", "--help"]);
+  it.each([false, true])("reports an unmatched lazy subcommand with help=%s", async (help) => {
+    const { error, output, stdout } = await parseLazyGroupError([
+      "sessions",
+      "lst",
+      ...(help ? ["--help"] : []),
+    ]);
 
     expect(error.code).toBe("commander.unknownCommand");
     expect(error.exitCode).toBe(1);
@@ -298,17 +283,11 @@ describe("formatCliParseErrorOutput", () => {
   });
 
   it("preserves active profile context in command suggestions", () => {
-    const originalEnv = captureEnv(["OPENCLAW_PROFILE"]);
-    process.env.OPENCLAW_PROFILE = "work";
-    try {
-      const output = formatCliParseErrorOutput("error: unknown command 'doctr'\n", {
-        argv: ["node", "openclaw", "doctr"],
-      });
-
-      expect(output).toContain("Did you mean this?\n  openclaw --profile work doctor\n");
-    } finally {
-      originalEnv.restore();
-    }
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
+    const output = formatCliParseErrorOutput("error: unknown command 'doctr'\n", {
+      argv: ["node", "openclaw", "doctr"],
+    });
+    expect(output).toContain("Did you mean this?\n  openclaw --profile work doctor\n");
   });
 
   it("points unknown options at the active command help", () => {

@@ -29,6 +29,14 @@ import { registerStorageCommand } from "./register.storage.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+async function scratchDirectories(root: string) {
+  return (await fs.readdir(root)).filter((name) => name.startsWith("openclaw-backup-"));
+}
+
+async function expectRun(status: "ok" | "failed", fields: object = {}) {
+  expect((await readBackupRuns(process.env))[0]).toMatchObject({ status, ...fields });
+}
+
 function archiveConfig(destination: string) {
   return {
     storage: {
@@ -165,8 +173,7 @@ describe("offsite backup CLI", () => {
       expect(displaced).toBe(true);
       expect(await fs.readdir(fixture.namespaceDir)).toEqual(before);
       expect(await fs.readdir(fixture.scratchRoot)).toEqual([]);
-      expect((await readBackupRuns(process.env))[0]).toMatchObject({
-        status: "failed",
+      await expectRun("failed", {
         target: "archive",
         namespace: "test-host",
         error: expect.stringContaining("belongs to another OpenClaw installation"),
@@ -180,7 +187,7 @@ describe("offsite backup CLI", () => {
       expect(await fs.readdir(fixture.namespaceDir)).toEqual(
         expect.arrayContaining([...before, created.location!.key]),
       );
-      expect((await readBackupRuns(process.env))[0]).toMatchObject({ status: "ok" });
+      await expectRun("ok");
       expect(await fs.readdir(fixture.scratchRoot)).toEqual([]);
     });
   });
@@ -229,8 +236,7 @@ describe("offsite backup CLI", () => {
       expect(await fs.readdir(fixture.namespaceDir)).toEqual(
         expect.arrayContaining(expired.filter((key) => !deleted.includes(key))),
       );
-      expect((await readBackupRuns(process.env))[0]).toMatchObject({
-        status: "failed",
+      await expectRun("failed", {
         namespace: "test-host",
         error: expect.stringContaining("belongs to another OpenClaw installation"),
       });
@@ -265,11 +271,10 @@ describe("offsite backup CLI", () => {
       const unavailableMessage =
         "Storage directory is unavailable. Reconnect the disk and check the configured path; storage init requires an existing directory.";
       expect(errors.mock.calls.flat().join(" ")).toContain(unavailableMessage);
-      expect((await readBackupRuns(process.env))[0]).toMatchObject({
+      await expectRun("failed", {
         kind: "archive",
         target: "archive",
         namespace: "default-host",
-        status: "failed",
         error: unavailableMessage,
       });
       errors.mockClear();
@@ -280,13 +285,9 @@ describe("offsite backup CLI", () => {
       expect(errors.mock.calls.flat().join(" ")).toContain("openclaw storage init archive");
       await expect(fs.stat(localCopy)).rejects.toMatchObject({ code: "ENOENT" });
       expect(await fs.readdir(scratchRoot)).toEqual([]);
-      expect(
-        (await readBackupRuns(process.env))[0],
-        errors.mock.calls.flat().join("\n"),
-      ).toMatchObject({
+      await expectRun("failed", {
         kind: "archive",
         target: "archive",
-        status: "failed",
         error: expect.stringContaining("storage init archive"),
       });
 
@@ -327,8 +328,7 @@ describe("offsite backup CLI", () => {
       const collisionMessage =
         'Backup namespace "test-host" in archive belongs to another OpenClaw installation (test-host, device another-inst). Pass --namespace <name> to use a separate namespace, or --claim-namespace to take it over deliberately (for example after moving to new hardware).';
       expect(errors.mock.calls.flat().join(" ")).toContain(collisionMessage);
-      expect((await readBackupRuns(process.env))[0]).toMatchObject({
-        status: "failed",
+      await expectRun("failed", {
         target: "archive",
         namespace: "test-host",
         error: collisionMessage,
@@ -357,11 +357,11 @@ describe("offsite backup CLI", () => {
         code: "ENOENT",
       });
       expect(await fs.readdir(otherDir)).toEqual([oldKey]);
-      const stored = await fs.readFile(path.join(namespaceDir, created.location!.key));
-      expect(stored.subarray(0, 8).toString()).toBe("OCSTOR1\n");
-      expect(
-        (await fs.readFile(path.join(namespaceDir, "owner.json"))).subarray(0, 8).toString(),
-      ).toBe("OCSTOR1\n");
+      for (const key of [created.location!.key, "owner.json"]) {
+        expect((await fs.readFile(path.join(namespaceDir, key))).subarray(0, 8).toString()).toBe(
+          "OCSTOR1\n",
+        );
+      }
       expect(await json((await scoped.getObject("owner.json"))!)).toMatchObject({
         version: 1,
         deviceId: (await loadDeviceIdentityIfPresentAsync())!.deviceId,
@@ -423,50 +423,11 @@ describe("offsite backup CLI", () => {
     });
   });
 
-  it("creates, verifies, uploads and cleans scratch when TMPDIR is nested inside state", async () => {
+  it("creates and verifies nested-TMPDIR backups while reclaiming abandoned scratch and preserving active scratch", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
       const { destination, nestedTmp, create, from } = await prepareNestedTmp(state);
       await fs.writeFile(state.statePath("operator-note.txt"), "preserved state\n");
-
-      const created = await create("nested-tmp-host", "--no-include-workspace");
-
-      expect(created).toMatchObject({
-        verified: true,
-        localArchiveRetained: false,
-        location: {
-          name: "archive",
-          namespace: "nested-tmp-host",
-          key: expect.stringMatching(/\.tar\.gz$/),
-        },
-      });
-      expect(created.archivePath).toMatch(
-        /^storage:\/\/archive\/backups\/nested-tmp-host\/.+\.tar\.gz$/,
-      );
-      // Scratch is staged outside the state source; nested TMPDIR must not keep
-      // openclaw-backup-* scratch dirs (other os.tmpdir() consumers may leave unrelated entries).
-      expect(
-        (await fs.readdir(nestedTmp)).filter((name) => name.startsWith("openclaw-backup-")),
-      ).toEqual([]);
-      const namespaceDir = path.join(destination, "backups", "nested-tmp-host");
-      expect(await fs.readdir(namespaceDir)).toEqual(
-        expect.arrayContaining([created.location!.key, "owner.json"]),
-      );
-      const listed = await from("list", "nested-tmp-host");
-      expect(listed).toMatchObject({
-        backups: [{ key: created.location!.key, sizeBytes: created.location!.plaintextBytes }],
-      });
-      await expect(from("verify", "nested-tmp-host", "latest")).resolves.toMatchObject({
-        ok: true,
-      });
-    });
-  });
-
-  it("reclaims abandoned fallback-root scratch on the next nested-TMPDIR run while preserving active scratch", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-      const { nestedTmp, create } = await prepareNestedTmp(state);
-      // With TMPDIR nested inside state, offsite scratch falls back to the
-      // parent of the state source. Doctor scans TMPDIR and recorded archive
-      // parents only, so the next offsite run must maintain this root itself.
+      // Nested TMPDIR uses the state parent, outside Doctor's scanned roots.
       const fallbackRoot = path.dirname(state.stateDir);
 
       // A hard-killed earlier upload leaves its plaintext scratch archive behind
@@ -479,25 +440,37 @@ describe("offsite backup CLI", () => {
       abandoned.release();
       try {
         const created = await create("nested-tmp-host", "--no-include-workspace");
-        expect(created).toMatchObject({ verified: true, localArchiveRetained: false });
-
+        expect(created).toMatchObject({
+          verified: true,
+          localArchiveRetained: false,
+          location: {
+            name: "archive",
+            namespace: "nested-tmp-host",
+            key: expect.stringMatching(/\.tar\.gz$/),
+          },
+          archivePath: expect.stringMatching(
+            /^storage:\/\/archive\/backups\/nested-tmp-host\/.+\.tar\.gz$/,
+          ),
+        });
+        expect(await fs.readdir(path.join(destination, "backups", "nested-tmp-host"))).toEqual(
+          expect.arrayContaining([created.location!.key, "owner.json"]),
+        );
+        expect(await from("list", "nested-tmp-host")).toMatchObject({
+          backups: [{ key: created.location!.key, sizeBytes: created.location!.plaintextBytes }],
+        });
+        await expect(from("verify", "nested-tmp-host", "latest")).resolves.toMatchObject({
+          ok: true,
+        });
         await expect(fs.stat(abandoned.directory)).rejects.toMatchObject({ code: "ENOENT" });
         await expect(
           fs.readFile(path.join(active.directory, "archive.tar.gz"), "utf8"),
         ).resolves.toBe("synthetic archive");
-        // The run's own scratch is retired; only the active directory remains.
-        expect(
-          (await fs.readdir(fallbackRoot)).filter((name) => name.startsWith("openclaw-backup-")),
-        ).toEqual([path.basename(active.directory)]);
-        expect(
-          (await fs.readdir(nestedTmp)).filter((name) => name.startsWith("openclaw-backup-")),
-        ).toEqual([]);
+        expect(await scratchDirectories(fallbackRoot)).toEqual([path.basename(active.directory)]);
+        expect(await scratchDirectories(nestedTmp)).toEqual([]);
       } finally {
         await expect(finishBackupScratch(active, () => {})).resolves.toBeUndefined();
       }
-      expect(
-        (await fs.readdir(fallbackRoot)).filter((name) => name.startsWith("openclaw-backup-")),
-      ).toEqual([]);
+      expect(await scratchDirectories(fallbackRoot)).toEqual([]);
     });
   });
 

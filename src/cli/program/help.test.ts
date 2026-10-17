@@ -1,36 +1,21 @@
-// Help tests cover command help generation and inherited help options.
+import { stripVTControlCharacters } from "node:util";
 import { Command, CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ExitError } from "../../runtime.js";
-import { captureEnv } from "../../test-utils/env.js";
 import { configureProgramHelp, formatProgramHelpOutput } from "./help.js";
 import { OpenClawCommand } from "./openclaw-command.js";
+import { captureStdout } from "./program.test-helpers.js";
 
-const hasEmittedCliBannerMock = vi.hoisted(() => vi.fn(() => false));
 const formatCliBannerLineMock = vi.hoisted(() => vi.fn(() => "BANNER-LINE"));
-const formatDocsLinkMock = vi.hoisted(() =>
-  vi.fn((_path: string, full: string) => `https://${full}`),
-);
 const resolveCommitHashMock = vi.hoisted(() => vi.fn<() => string | null>(() => "abc1234"));
 
 vi.mock("../../../packages/terminal-core/src/links.js", () => ({
-  formatDocsLink: formatDocsLinkMock,
-}));
-
-vi.mock("../../../packages/terminal-core/src/theme.js", () => ({
-  isRich: () => false,
-  theme: {
-    heading: (s: string) => s,
-    muted: (s: string) => s,
-    option: (s: string) => s,
-    command: (s: string) => s,
-    error: (s: string) => s,
-  },
+  formatDocsLink: (_path: string, full: string) => `https://${full}`,
 }));
 
 vi.mock("../banner.js", () => ({
   formatCliBannerLine: formatCliBannerLineMock,
-  hasEmittedCliBanner: hasEmittedCliBannerMock,
+  hasEmittedCliBanner: () => false,
 }));
 
 vi.mock("../../infra/git-commit.js", () => ({
@@ -41,50 +26,19 @@ const testProgramContext = { programVersion: "9.9.9-test" };
 
 describe("configureProgramHelp", () => {
   let originalArgv: string[];
-  let originalEnv: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
     vi.clearAllMocks();
     originalArgv = [...process.argv];
-    originalEnv = captureEnv(["OPENCLAW_SUPPRESS_HELP_BANNER"]);
-    hasEmittedCliBannerMock.mockReturnValue(false);
     resolveCommitHashMock.mockReturnValue("abc1234");
-    delete process.env.OPENCLAW_SUPPRESS_HELP_BANNER;
+    vi.stubEnv("OPENCLAW_SUPPRESS_HELP_BANNER", undefined);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     process.argv = originalArgv;
-    originalEnv.restore();
+    vi.unstubAllEnvs();
   });
-
-  function makeProgramWithCommands(program = new Command()) {
-    program.command("models").description("models");
-    program.command("status").description("status");
-    return program;
-  }
-
-  function captureHelpOutput(program: Command): string {
-    let output = "";
-    vi.spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array) => {
-      output += String(chunk);
-      return true;
-    }) as typeof process.stdout.write);
-    program.outputHelp();
-    return output;
-  }
-
-  function expectVersionExit(params: { expectedVersion: string }) {
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
-      throw new Error(`exit:${code ?? ""}`);
-    }) as typeof process.exit);
-
-    const program = makeProgramWithCommands();
-    expect(() => configureProgramHelp(program, testProgramContext)).toThrow(new ExitError(0));
-    expect(logSpy).toHaveBeenCalledWith(params.expectedVersion);
-    expect(exitSpy).not.toHaveBeenCalled();
-  }
 
   async function parseHelp(argv: string[]) {
     process.argv = ["node", "openclaw", ...argv];
@@ -94,13 +48,14 @@ describe("configureProgramHelp", () => {
     configureProgramHelp(program, testProgramContext);
     program.configureOutput({
       writeOut: (value) => {
-        stdout += formatProgramHelpOutput(value);
+        stdout += stripVTControlCharacters(formatProgramHelpOutput(value));
       },
       writeErr: (value) => {
-        stderr += value;
+        stderr += stripVTControlCharacters(value);
       },
     });
-    makeProgramWithCommands(program);
+    program.command("models").description("models");
+    program.command("status").description("status");
     const plugins = program.command("plugins").description("Manage plugins");
     plugins
       .command("list")
@@ -120,8 +75,7 @@ describe("configureProgramHelp", () => {
     const helpCommand = await parseHelp(["help", "plugins"]);
 
     for (const result of [rootHelp, shortHelp, groupHelp, subcommandHelp, helpCommand]) {
-      expect(result.error.exitCode).toBe(0);
-      expect(result.stderr).toBe("");
+      expect(result).toMatchObject({ error: { exitCode: 0 }, stderr: "" });
     }
     expect(rootHelp.error.code).toBe("commander.helpDisplayed");
     expect(rootHelp.stdout).toContain("Hint: commands suffixed with * have subcommands");
@@ -140,12 +94,11 @@ describe("configureProgramHelp", () => {
 
   it("formats parse errors from the exact Commander command path", async () => {
     let stderr = "";
-    process.argv = ["node", "openclaw", "plugins", "--source", "list", "list", "--wat"];
     const program = new OpenClawCommand().enablePositionalOptions().exitOverride();
     configureProgramHelp(program, testProgramContext);
     program.configureOutput({
       writeErr: (value) => {
-        stderr += value;
+        stderr += stripVTControlCharacters(value);
       },
     });
     program
@@ -170,25 +123,29 @@ describe("configureProgramHelp", () => {
     expect(stderr).toContain("Did you mean this?\n  openclaw plugins list\n");
   });
 
-  it("suppresses banner formatting when parent default help requests it", () => {
+  it("suppresses banner formatting when parent default help requests it", async () => {
     process.argv = ["node", "openclaw", "channels"];
     process.env.OPENCLAW_SUPPRESS_HELP_BANNER = "1";
-    const program = makeProgramWithCommands();
+    const program = new Command();
     configureProgramHelp(program, testProgramContext);
 
-    const help = captureHelpOutput(program);
+    const help = await captureStdout(() => program.outputHelp());
     expect(help).not.toContain("BANNER-LINE");
     expect(formatCliBannerLineMock).not.toHaveBeenCalled();
   });
 
-  it("prints version and exits immediately when version flags are present", () => {
+  it.each([
+    ["abc1234", "OpenClaw 9.9.9-test (abc1234)"],
+    [null, "OpenClaw 9.9.9-test"],
+  ])("prints version with commit %s and exits immediately", (commit, expectedVersion) => {
     process.argv = ["node", "openclaw", "--version"];
-    expectVersionExit({ expectedVersion: "OpenClaw 9.9.9-test (abc1234)" });
-  });
-
-  it("prints version and exits immediately without commit metadata", () => {
-    process.argv = ["node", "openclaw", "--version"];
-    resolveCommitHashMock.mockReturnValue(null);
-    expectVersionExit({ expectedVersion: "OpenClaw 9.9.9-test" });
+    resolveCommitHashMock.mockReturnValue(commit);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("unexpected exit");
+    });
+    expect(() => configureProgramHelp(new Command(), testProgramContext)).toThrow(new ExitError(0));
+    expect(log).toHaveBeenCalledWith(expectedVersion);
+    expect(exit).not.toHaveBeenCalled();
   });
 });
