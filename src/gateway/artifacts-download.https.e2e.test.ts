@@ -69,7 +69,7 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
         },
       ];
       const timestamp = new Date().toISOString();
-      const events = [
+      const transcript = (firstBytes = binary) => [
         { type: "session", version: 3, id: sessionId, timestamp, cwd: state.workspaceDir },
         {
           type: "message",
@@ -78,7 +78,7 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
           timestamp,
           message: {
             role: "assistant",
-            content: fixtures.map((fixture) => ({
+            content: fixtures.map((fixture, index) => ({
               type: fixture.type,
               title: fixture.title,
               mimeType: fixture.mimeType,
@@ -91,12 +91,13 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
                       data: fixture.bytes.toString("base64"),
                     },
                   }
-                : { data: fixture.bytes.toString("base64") }),
+                : { data: (index === 0 ? firstBytes : fixture.bytes).toString("base64") }),
             })),
             __openclaw: { id: "inline-artifacts", runId },
           },
         },
       ];
+      const events = transcript();
       let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
       let dispatcher: Agent | undefined;
       const clients: GatewayClient[] = [];
@@ -148,6 +149,12 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
           };
           const client = await connect("reader", ["operator.read"]);
           const query = { sessionKey, runId, messageRole: "assistant" };
+          const downloadArtifact = (artifactId: string, transport?: "http") =>
+            client.request<ArtifactsDownloadResult>("artifacts.download", {
+              ...query,
+              artifactId,
+              ...(transport ? { transport } : {}),
+            });
           const listed = await client.request<ArtifactsListResult>("artifacts.list", query);
           expect(listed.artifacts).toHaveLength(fixtures.length);
           const request = async (
@@ -168,20 +175,13 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
             if (fixture.sizeBytes !== undefined) {
               expect(artifact!.sizeBytes).toBe(fixture.sizeBytes);
             }
-            const params = { ...query, artifactId: artifact!.id };
-            const inline = await client.request<ArtifactsDownloadResult>(
-              "artifacts.download",
-              params,
-            );
+            const inline = await downloadArtifact(artifact!.id);
             expect(inline.artifact.download.mode).toBe("bytes");
             expect(inline.encoding).toBe("base64");
             expect(inline.url).toBeUndefined();
             expect(Buffer.from(inline.data!, "base64")).toEqual(fixture.bytes);
 
-            const download = await client.request<ArtifactsDownloadResult>("artifacts.download", {
-              ...params,
-              transport: "http",
-            });
+            const download = await downloadArtifact(artifact!.id, "http");
             expect(download.artifact.download.mode).toBe("url");
             expect(download.data).toBeUndefined();
             expect(download.encoding).toBeUndefined();
@@ -204,6 +204,7 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
           }
 
           const download = downloads[0]!;
+          const ticket = () => downloadArtifact(download.artifact.id, "http");
           const url = download.url!;
           const mounted = await request(`/gateway${url}`);
           expect(mounted.status, "the artifact route works below the configured mount").toBe(200);
@@ -244,27 +245,10 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
           } finally {
             clock.mockRestore();
           }
-          const renewed = await client.request<ArtifactsDownloadResult>("artifacts.download", {
-            ...query,
-            artifactId: download.artifact.id,
-            transport: "http",
-          });
+          const renewed = await ticket();
           const replacement = Buffer.from(binary);
           replacement[0] = 255;
-          const replacedEvents = events.map((event) =>
-            event.message
-              ? {
-                  ...event,
-                  message: {
-                    ...event.message,
-                    content: event.message.content.map((block, index) =>
-                      index === 0 ? { ...block, data: replacement.toString("base64") } : block,
-                    ),
-                  },
-                }
-              : event,
-          );
-          await replaceTranscriptEvents(scope, replacedEvents);
+          await replaceTranscriptEvents(scope, transcript(replacement));
           const staleRequests: Array<[string, Parameters<typeof request>[1]]> = [
             ["GET", {}],
             ["HEAD", { method: "HEAD" }],
@@ -277,34 +261,20 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
               `${label} must reject replaced bytes under the same artifact ID`,
             ).toBe(404);
           }
-          const replaced = await client.request<ArtifactsDownloadResult>("artifacts.download", {
-            ...query,
-            artifactId: download.artifact.id,
-            transport: "http",
-          });
+          const replaced = await ticket();
           expect(replaced.artifact.id).toBe(download.artifact.id);
           const replacedBody = await request(replaced.url!);
           expect(replacedBody.status).toBe(200);
           expect(replacedBody.bytes).toEqual(replacement);
           await replaceTranscriptEvents(scope, events);
-          const beforeRemoval = await client.request<ArtifactsDownloadResult>(
-            "artifacts.download",
-            {
-              ...query,
-              artifactId: download.artifact.id,
-              transport: "http",
-            },
-          );
+          const beforeRemoval = await ticket();
           await replaceTranscriptEvents(scope, []);
           expect(
             (await request(beforeRemoval.url!)).status,
             "removing the artifact from its transcript revokes its download",
           ).toBe(404);
           await replaceTranscriptEvents(scope, events);
-          const beforeDisconnect = await client.request<ArtifactsDownloadResult>(
-            "artifacts.download",
-            { ...query, artifactId: download.artifact.id, transport: "http" },
-          );
+          const beforeDisconnect = await ticket();
           await client.stopAndWait();
           expect((await request(beforeDisconnect.url!)).status).toBe(404);
         },

@@ -17,6 +17,17 @@ type GraphNode = {
   };
 };
 
+const scoped = (...keys: string[]) => keys.map((key) => `agent:work:${key}`);
+const stored = (parentSessionKey: string): GraphNode => ({ stored: { parentSessionKey } });
+const registered = (
+  controllerSessionKey: string | null,
+  requesterSessionKey: string | null,
+): GraphNode => ({ registry: { controllerSessionKey, requesterSessionKey } });
+const audience = (source: string) => resolveApprovalSessionAudienceWithFallback(source, "work");
+async function expectAudience(source: string, ...keys: string[]) {
+  expect(await audience(source), source).toEqual(scoped(...keys));
+}
+
 let graph: Record<string, GraphNode> = {};
 const getRuntimeConfigMock = vi.fn(() => ({}) as object);
 const getLatestSubagentRunMock = vi.fn((sessionKey: string) => graph[sessionKey]?.registry);
@@ -76,9 +87,7 @@ describe("resolveApprovalSessionAudienceWithFallback", () => {
       agentId: "work",
       path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "work" }),
     };
-    expect(await resolveApprovalSessionAudienceWithFallback(sessionKey, "work")).toEqual([
-      sessionKey,
-    ]);
+    await expectAudience(sessionKey, "dashboard:incognito-child");
     expect(memorySessionActorOwners.read(location)).toBeUndefined();
     const owner = memorySessionActorOwners.get(location);
     const actor = await owner.acquire(
@@ -86,53 +95,32 @@ describe("resolveApprovalSessionAudienceWithFallback", () => {
       { assertCurrent() {}, assertReadable() {} },
     );
     const authority = { assertCurrent() {}, authorize() {} };
+    const mutate = async (operation: Parameters<NonNullable<typeof actor.storage>["mutate"]>[0]) =>
+      expect((await actor.storage!.mutate(operation, authority)).kind).toBe("committed");
     try {
-      expect(
-        (
-          await actor.storage!.mutate(
-            {
-              type: "session.entry.create",
-              input: {
-                entry: {
-                  sessionId: "private-child",
-                  updatedAt: 1,
-                  incognito: true,
-                  parentSessionKey: "parent",
-                },
-              },
-            },
-            authority,
-          )
-        ).kind,
-      ).toBe("committed");
-      graph = { "agent:work:parent": { stored: { parentSessionKey: "root" } } };
-      expect(await resolveApprovalSessionAudienceWithFallback(sessionKey, "work")).toEqual([
-        sessionKey,
-        "agent:work:parent",
-        "agent:work:root",
-      ]);
-      expect(
-        (
-          await actor.storage!.mutate(
-            {
-              type: "session.entry.patch",
-              input: { operation: { kind: "fields", patch: { parentSessionKey: "next-parent" } } },
-            },
-            authority,
-          )
-        ).kind,
-      ).toBe("committed");
-      expect(await resolveApprovalSessionAudienceWithFallback(sessionKey, "work")).toEqual([
-        sessionKey,
-        "agent:work:next-parent",
-      ]);
+      await mutate({
+        type: "session.entry.create",
+        input: {
+          entry: {
+            sessionId: "private-child",
+            updatedAt: 1,
+            incognito: true,
+            parentSessionKey: "parent",
+          },
+        },
+      });
+      graph = { "agent:work:parent": stored("root") };
+      await expectAudience(sessionKey, "dashboard:incognito-child", "parent", "root");
+      await mutate({
+        type: "session.entry.patch",
+        input: { operation: { kind: "fields", patch: { parentSessionKey: "next-parent" } } },
+      });
+      await expectAudience(sessionKey, "dashboard:incognito-child", "next-parent");
       prepareRegistryMock.mockImplementationOnce(async () => {
         memorySessionActorOwners.closeDatabase(location);
         return true;
       });
-      await expect(
-        resolveApprovalSessionAudienceWithFallback(sessionKey, "work"),
-      ).rejects.toThrow();
+      await expect(audience(sessionKey)).rejects.toThrow();
     } finally {
       await actor.release();
     }
@@ -140,61 +128,51 @@ describe("resolveApprovalSessionAudienceWithFallback", () => {
 
   it("canonicalizes and bounds the breadth-first audience using current lineage", async () => {
     const cases: { source: string; nodes: Record<string, GraphNode>; expected: string[] }[] = [
-      { source: " Child ", nodes: {}, expected: ["agent:work:child"] },
+      { source: " Child ", nodes: {}, expected: scoped("child") },
       {
         source: "child",
         nodes: {
           "agent:work:child": {
-            registry: { controllerSessionKey: "controller", requesterSessionKey: "requester" },
-            stored: { parentSessionKey: "stale-parent" },
+            ...registered("controller", "requester"),
+            ...stored("stale-parent"),
           },
-          "agent:work:controller": { stored: { parentSessionKey: "controller-root" } },
-          "agent:work:requester": { stored: { parentSessionKey: "requester-root" } },
+          "agent:work:controller": stored("controller-root"),
+          "agent:work:requester": stored("requester-root"),
         },
-        expected: [
-          "agent:work:child",
-          "agent:work:controller",
-          "agent:work:requester",
-          "agent:work:controller-root",
-          "agent:work:requester-root",
-        ],
+        expected: scoped("child", "controller", "requester", "controller-root", "requester-root"),
       },
       {
         source: "child",
         nodes: {
           "agent:work:child": {
-            registry: { controllerSessionKey: " ", requesterSessionKey: null },
+            ...registered(" ", null),
             stored: { parentSessionKey: "dashboard-parent", spawnedBy: "spawn-parent" },
           },
           "agent:work:dashboard-parent": { stored: { spawnedBy: "root" } },
         },
-        expected: ["agent:work:child", "agent:work:dashboard-parent", "agent:work:root"],
+        expected: scoped("child", "dashboard-parent", "root"),
       },
       {
         source: "agent:work:child",
         nodes: {
-          "agent:work:child": {
-            registry: { controllerSessionKey: "main", requesterSessionKey: "agent:ops:main" },
-          },
+          "agent:work:child": registered("main", "agent:ops:main"),
         },
         expected: ["agent:work:child", "agent:work:main", "agent:ops:main"],
       },
       {
         source: "child",
         nodes: {
-          "agent:work:child": {
-            registry: { controllerSessionKey: "parent", requesterSessionKey: "child" },
-          },
-          "agent:work:parent": { stored: { parentSessionKey: "child" } },
+          "agent:work:child": registered("parent", "child"),
+          "agent:work:parent": stored("child"),
         },
-        expected: ["agent:work:child", "agent:work:parent"],
+        expected: scoped("child", "parent"),
       },
       {
         source: "session-0",
         nodes: Object.fromEntries(
           Array.from({ length: 70 }, (_, index) => [
             `agent:work:session-${index}`,
-            { stored: { parentSessionKey: `session-${index + 1}` } },
+            stored(`session-${index + 1}`),
           ]),
         ),
         expected: Array.from({ length: 64 }, (_, index) => `agent:work:session-${index}`),
@@ -202,9 +180,7 @@ describe("resolveApprovalSessionAudienceWithFallback", () => {
     ];
     for (const { source, nodes, expected } of cases) {
       graph = nodes;
-      expect(await resolveApprovalSessionAudienceWithFallback(source, "work"), source).toEqual(
-        expected,
-      );
+      expect(await audience(source), source).toEqual(expected);
     }
   });
 
@@ -221,21 +197,17 @@ describe("resolveApprovalSessionAudienceWithFallback", () => {
     } else {
       getRuntimeConfigMock.mockImplementation(fail);
     }
-    expect(await resolveApprovalSessionAudienceWithFallback(source, "work")).toEqual([expected]);
+    expect(await audience(source)).toEqual([expected]);
   });
 
   it("retains live and stored ancestors when the optional registry query is unavailable", async () => {
     prepareRegistryMock.mockResolvedValue(false);
     graph = {
       "agent:work:child": { registry: { requesterSessionKey: "parent" } },
-      "agent:work:parent": { stored: { parentSessionKey: "root" } },
+      "agent:work:parent": stored("root"),
     };
 
-    expect(await resolveApprovalSessionAudienceWithFallback("child", "work")).toEqual([
-      "agent:work:child",
-      "agent:work:parent",
-      "agent:work:root",
-    ]);
+    await expectAudience("child", "child", "parent", "root");
     expect(buildLatestSubagentSessionListReadIndexMock).not.toHaveBeenCalled();
   });
 
@@ -249,9 +221,7 @@ describe("resolveApprovalSessionAudienceWithFallback", () => {
         return true;
       });
 
-    expect(await resolveApprovalSessionAudienceWithFallback("main", "work")).toEqual([
-      "agent:work:current",
-    ]);
+    await expectAudience("main", "current");
   });
 
   it.each([
@@ -260,7 +230,7 @@ describe("resolveApprovalSessionAudienceWithFallback", () => {
   ])("does not hide preparation failure: %s", async (error) => {
     prepareRegistryMock.mockRejectedValue(error);
 
-    await expect(resolveApprovalSessionAudienceWithFallback("child", "work")).rejects.toBe(error);
+    await expect(audience("child")).rejects.toBe(error);
     expect(loadSessionEntryMock).not.toHaveBeenCalled();
   });
 });
