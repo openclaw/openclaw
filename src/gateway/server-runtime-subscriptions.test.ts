@@ -146,18 +146,14 @@ vi.mock("./session-activity-summaries.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-activity-summaries.js")>();
   return {
     ...actual,
-    createSessionActivitySummaries: (
-      options: Parameters<typeof actual.createSessionActivitySummaries>[0],
-    ) => {
+    createSessionActivitySummaries: (options: ActivitySummaryOptions) => {
       observeActivitySummary(options);
       return actual.createSessionActivitySummaries(options);
     },
   };
 });
 
-vi.mock("../config/io.js", () => ({
-  getRuntimeConfig: () => runtimeConfigState.value,
-}));
+vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => runtimeConfigState.value }));
 
 vi.mock("../audit/audit-recorder.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../audit/audit-recorder.js")>();
@@ -448,10 +444,7 @@ describe("startGatewayEventSubscriptions", () => {
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const claimId = claimAgentRunContext(
       runId,
-      {
-        lifecycleGeneration,
-        sessionId: "session-1",
-      },
+      { lifecycleGeneration, sessionId: "session-1" },
       { exclusive: true, ownsContext: true, trackOwner: true },
     );
     if (!claimId) {
@@ -533,7 +526,7 @@ describe("startGatewayEventSubscriptions", () => {
 
   registerSubscriptionRegistrationTests(start);
 
-  it("drives a registered chat run through terminal persistence", async () => {
+  it("normalizes retryable lifecycle failures before persisting the final terminal", async () => {
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const { params, runId, registration, entry } = registeredRun("run-lifecycle-table", {
       lifecycleGeneration,
@@ -550,27 +543,12 @@ describe("startGatewayEventSubscriptions", () => {
     emit({ phase: "error", error: "retryable provider failure", endedAt: 2_000 });
     emit({ phase: "start", startedAt: 2_500 });
     expect(agentEventHandlerMocks.persistLifecycle).not.toHaveBeenCalled();
-
-    const terminalPersistence = createDeferred();
-    agentEventHandlerMocks.persistLifecycle.mockReturnValue(terminalPersistence.promise);
-
     emit({ phase: "end", endedAt: 3_000 });
-    const ownedPersistence = entry.projectSessionTerminalPersistence;
-
-    try {
-      expect(readLifecycleState(entry)).toEqual(
-        lifecycleState(false, true, 3_000, ownedPersistence, false),
-      );
-      expect(ownedPersistence).toBeInstanceOf(Promise);
-      terminalPersistence.resolve();
-      await waitForChatAbortTerminalPersistence(entry);
-      expect(entry.projectSessionTerminalPersisted).toBe(true);
-    } finally {
-      terminalPersistence.resolve();
-      await waitForChatAbortTerminalPersistence(entry);
-    }
+    expect(readLifecycleState(entry)).toEqual(
+      lifecycleState(false, true, 3_000, expect.any(Promise), false),
+    );
+    await waitForChatAbortTerminalPersistence(entry);
     expect(readLifecycleState(entry)).toEqual(lifecycleState(false, false, 3_000, undefined, true));
-
     registration.cleanup();
     expect(params.chatAbortControllers.has(runId)).toBe(false);
   });
@@ -613,11 +591,9 @@ describe("startGatewayEventSubscriptions", () => {
       let firstDrain: Promise<{ ok: true } | { ok: false; error: unknown }> | undefined;
       try {
         emit({ phase: "end", endedAt: 2_000 });
-        expect(entry).toMatchObject({
-          projectSessionTerminalPending: true,
-          projectSessionTerminalPersisted: false,
-          projectSessionTerminalPersistence: expect.any(Promise),
-        });
+        expect(readLifecycleState(entry)).toEqual(
+          lifecycleState(false, true, 2_000, expect.any(Promise), false),
+        );
         const first = observeSettlement(waitForChatAbortTerminalPersistence(entry));
         firstDrain = first.outcome;
         await awaitGateBeforeSettlement(
@@ -663,11 +639,9 @@ describe("startGatewayEventSubscriptions", () => {
         if (change === "newer write") {
           expect(readLifecycleState(entry)).toEqual(currentState);
         } else {
-          expect(entry).toMatchObject({
-            projectSessionTerminalPending: false,
-            projectSessionTerminalPersistence: undefined,
-            projectSessionTerminalPersisted: persisted,
-          });
+          expect(readLifecycleState(entry)).toEqual(
+            lifecycleState(false, false, 2_000, undefined, persisted),
+          );
           expect(
             await waitForChatAbortControllerRemoval({
               entries,

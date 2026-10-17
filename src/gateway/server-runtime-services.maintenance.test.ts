@@ -55,9 +55,7 @@ describe("post-ready maintenance scheduling", () => {
     let recovery: Promise<void> | undefined;
     const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
     vi.mocked(runGatewayPostReadyStartupMaintenance).mockClear();
-    test.schedule({
-      waitForPostReadyWork: () => ready.promise,
-    });
+    test.schedule({ waitForPostReadyWork: () => ready.promise });
     try {
       const pending = test.clock.advanceBy(1);
       await Promise.resolve();
@@ -87,9 +85,7 @@ describe("post-ready maintenance scheduling", () => {
     async () => {
       const test = createMaintenanceTest(true);
       const ready = createDeferredCore();
-      test.schedule({
-        waitForPostReadyWork: () => ready.promise,
-      });
+      test.schedule({ waitForPostReadyWork: () => ready.promise });
       const pending = test.clock.advanceBy(1);
       await Promise.resolve();
       expect(runtimeServiceMocks.warmGatewayDatabasePageCache).not.toHaveBeenCalled();
@@ -111,9 +107,7 @@ describe("post-ready maintenance scheduling", () => {
     const test = createMaintenanceTest();
 
     test.schedule({
-      startMaintenance: vi.fn(async () => {
-        throw new Error("timers unavailable");
-      }),
+      startMaintenance: () => Promise.reject(new Error("timers unavailable")),
     });
     await test.clock.advanceBy(1);
 
@@ -133,10 +127,7 @@ describe("post-ready maintenance scheduling", () => {
       return pendingMaintenance.promise;
     });
 
-    test.schedule({
-      delayMs: 25,
-      startMaintenance,
-    });
+    test.schedule({ delayMs: 25, startMaintenance });
 
     const pendingWake = test.clock.advanceBy(25);
     await started.promise;

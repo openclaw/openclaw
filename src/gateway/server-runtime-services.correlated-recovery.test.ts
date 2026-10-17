@@ -125,6 +125,11 @@ describe("registered correlated completion recovery custody", () => {
         return database;
       };
       const database = persist(state.stateDir);
+      const readChild = (source = database) => readSubagentRun(source, child.runId);
+      const queueStatus = () =>
+        getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, queueId, state.stateDir);
+      const restore = (mergeOnly = false) =>
+        restoreSubagentRunsFromDisk({ runs: subagentRuns, mergeOnly });
       const expectPendingReceipt = async (settlementOutcome: typeof outcome) => {
         expect(await loadPendingSessionDelivery(queueId, context)).toMatchObject({
           settlementOutcome,
@@ -139,15 +144,13 @@ describe("registered correlated completion recovery custody", () => {
             throw new Error("registry hydration read unavailable");
           });
         try {
-          await expect(
-            restoreSubagentRunsFromDisk({ runs: subagentRuns, mergeOnly: true }),
-          ).rejects.toThrow("registry hydration read unavailable");
+          await expect(restore(true)).rejects.toThrow("registry hydration read unavailable");
         } finally {
           unavailable.mockRestore();
         }
       }
       if (change !== "hydration pending") {
-        await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+        await restore();
         child = expectDefined(subagentRuns.get(child.runId), "restored completion owner");
       }
       const replacementRoot = state.path("replacement");
@@ -155,7 +158,7 @@ describe("registered correlated completion recovery custody", () => {
         change === "default" || change === "file" || change === "default after commit";
       const replacement = replacingSource ? persist(replacementRoot) : undefined;
       const before = structuredClone(child);
-      const replacementBefore = replacement && readSubagentRun(replacement, child.runId);
+      const replacementBefore = replacement && readChild(replacement);
       let cleanupRelease: Promise<void> | undefined;
       if (change === "cleanup released at receipt") {
         const failedCompletion = vi
@@ -273,9 +276,7 @@ describe("registered correlated completion recovery custody", () => {
         await clock.advanceBy(1_250);
         await services.stopDeliveryRecovery();
         expect(settled).toHaveBeenCalledTimes(2);
-        expect(
-          getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, queueId, state.stateDir),
-        ).toBe("completed");
+        expect(queueStatus()).toBe("completed");
         expect(resume).toHaveBeenCalledExactlyOnceWith(child.runId);
         expect(deliver).not.toHaveBeenCalled();
       };
@@ -287,34 +288,32 @@ describe("registered correlated completion recovery custody", () => {
         expect(deliver).not.toHaveBeenCalled();
         if (change === "hydration pending") {
           expect(subagentRuns.has(child.runId)).toBe(false);
-          expect(readSubagentRun(database, child.runId)?.delivery?.status).toBe("in_progress");
+          expect(readChild()?.delivery?.status).toBe("in_progress");
           await expectPendingReceipt("recovered");
           expect(resume).not.toHaveBeenCalled();
-          expect(await restoreSubagentRunsFromDisk({ runs: subagentRuns, mergeOnly: true })).toBe(
-            1,
-          );
+          expect(await restore(true)).toBe(1);
           await replaySettlement();
-          expect(readSubagentRun(database, child.runId)?.delivery?.status).toBe("delivered");
+          expect(readChild()?.delivery?.status).toBe("delivered");
         } else if (change === "default after commit") {
-          const committed = readSubagentRun(database, child.runId);
+          const committed = readChild();
           expect(committed?.delivery?.status).toBe("delivered");
           expect(resume).not.toHaveBeenCalled();
           await expectPendingReceipt("recovered");
           if (replacement) {
-            expect(readSubagentRun(replacement, child.runId)).toEqual(replacementBefore);
+            expect(readChild(replacement)).toEqual(replacementBefore);
           }
           database.db.exec(
             "CREATE TRIGGER reject_settlement_rewrite BEFORE UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'must reconcile committed delivery without rewriting'); END",
           );
           vi.unstubAllEnvs();
           // Reconstitute the live owner through canonical restoration, without a receipt closure.
-          expect(await restoreSubagentRunsFromDisk({ runs: subagentRuns })).toBe(1);
+          expect(await restore()).toBe(1);
           await replaySettlement();
-          expect(readSubagentRun(database, child.runId)).toEqual(committed);
+          expect(readChild()).toEqual(committed);
         } else if (replacingSource) {
           const target =
             change === "file" ? openOpenClawStateDatabase({ path: database.path }) : replacement!;
-          expect(readSubagentRun(target, child.runId)).toEqual(replacementBefore);
+          expect(readChild(target)).toEqual(replacementBefore);
           expect(subagentRuns.get(child.runId)).toBe(child);
           expect(child).toEqual(before);
           expect(resume).not.toHaveBeenCalled();
@@ -323,17 +322,15 @@ describe("registered correlated completion recovery custody", () => {
           );
           if (change === "default") {
             await expectPendingReceipt(outcome);
-            expect(readSubagentRun(database, child.runId)?.delivery?.status).toBe("in_progress");
+            expect(readChild()?.delivery?.status).toBe("in_progress");
           }
         } else {
-          expect(readSubagentRun(database, child.runId)?.delivery?.status).toBe(
+          expect(readChild()?.delivery?.status).toBe(
             outcome === "recovered" ? "delivered" : "suspended",
           );
-          expect(
-            getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, queueId, state.stateDir),
-          ).toBe(outcome === "recovered" ? "completed" : "failed");
+          expect(queueStatus()).toBe(outcome === "recovered" ? "completed" : "failed");
           if (change === "cleanup released at receipt") {
-            expect(readSubagentRun(database, child.runId)?.cleanupHandled).toBe(false);
+            expect(readChild()?.cleanupHandled).toBe(false);
             expect(subagentRuns.get(child.runId)?.delivery?.status).toBe("delivered");
           }
           if (change === "successor") {
