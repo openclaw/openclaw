@@ -99,6 +99,7 @@ type ShellLifecycle = Pick<ShellChromeEventState, "connect" | "disconnect">;
 
 type ShellLazySurfaceState = ShellKeyboardState &
   ShellLifecycle & {
+    elements: object;
     commandPaletteElement: TestOptionalCustomElement;
     lazyCustomElements: LazyCustomElementRequests;
     openPalette: () => void;
@@ -114,6 +115,7 @@ function roster(defaultId: string, agents: GatewayAgentRow[]): AgentsListResult 
 }
 
 type ShellChromeEventState = {
+  elements: object;
   runtime: { context: ApplicationContext };
   navDrawerOpen: boolean;
   handleShellNavDrawerToggle: (event: Event) => void;
@@ -154,7 +156,7 @@ function configureLazyPaletteShell(
     configurable: true,
     get: () => Promise.resolve(true),
   });
-  Object.defineProperty(shell, "commandPalette", {
+  Object.defineProperty(shell.elements, "commandPalette", {
     configurable: true,
     get: () =>
       customElements.get(element.tagName)
@@ -711,7 +713,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
         navigation: { snapshot: { navCollapsed: false }, update: vi.fn() },
       } as unknown as ApplicationContext,
     };
-    Object.defineProperty(shell, "commandPalette", {
+    Object.defineProperty(shell.elements, "commandPalette", {
       configurable: true,
       value: { isOpen: false, openPalette, togglePalette: vi.fn() },
     });

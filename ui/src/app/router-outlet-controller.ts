@@ -218,6 +218,7 @@ export function createRouterOutletPresentation<
     cancelNotFound();
     clearStartupRetry();
   }
+  // Synchronize the external router subscription and retry timers when their inputs change.
   createEffect(
     () => ({
       router: props.router,

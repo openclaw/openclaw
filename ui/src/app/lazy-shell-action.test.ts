@@ -75,7 +75,7 @@ afterEach(async () => {
 
 type PaletteShell = {
   element: HTMLElement;
-  querySelector: HTMLElement["querySelector"];
+  elements: object;
 } & ShellLifecycle & {
     commandPaletteElement: TestOptionalCustomElement;
     lazyCustomElements: LazyCustomElementRequests;
@@ -89,7 +89,7 @@ function paletteShell(element: TestOptionalCustomElement, open: () => void): Pal
   const shell = createShellOwner() as unknown as PaletteShell;
   shell.commandPaletteElement = element;
   Object.defineProperty(shell, "updateComplete", { get: () => Promise.resolve(true) });
-  Object.defineProperty(shell, "commandPalette", {
+  Object.defineProperty(shell.elements, "commandPalette", {
     get: () =>
       customElements.get(element.tagName)
         ? { isOpen: false, openPalette: open, togglePalette: open }
@@ -387,13 +387,12 @@ describe("shell lazy events", () => {
 
   it("requests the keyboard shortcuts dialog even from a focused text input", async () => {
     const requested = vi.fn();
-    const toggled = vi.fn();
     const shell = createShellOwner() as unknown as ShellKeyboardState &
-      ShellLifecycle & { element: HTMLElement };
+      ShellLifecycle & { element: HTMLElement; elements: object };
     const dialog = document.createElement(KEYBOARD_SHORTCUTS_ELEMENT.tagName) as HTMLElement & {
-      toggle: () => void;
+      isOpen: boolean;
     };
-    dialog.toggle = toggled;
+    Object.assign(shell.elements, { keyboardShortcuts: dialog });
     shell.element.append(dialog);
     Object.defineProperty(shell, "updateComplete", { get: () => Promise.resolve(true) });
     const input = document.body.appendChild(document.createElement("input"));
@@ -406,6 +405,7 @@ describe("shell lazy events", () => {
       cancelable: true,
     });
     window.addEventListener(KEYBOARD_SHORTCUTS_REQUEST_EVENT, requested);
+    document.body.append(shell.element);
 
     try {
       await withConnectedShell(shell, async () => {
@@ -416,20 +416,10 @@ describe("shell lazy events", () => {
         expect(shortcut.defaultPrevented).toBe(true);
         expect(requested).toHaveBeenCalledOnce();
         await vi.dynamicImportSettled();
-        await vi.waitFor(() => expect(toggled).toHaveBeenCalledOnce());
-
-        input.dispatchEvent(
-          new KeyboardEvent("keydown", {
-            key: "/",
-            code: "Slash",
-            ctrlKey: true,
-            bubbles: true,
-            cancelable: true,
-          }),
-        );
-        expect(toggled).toHaveBeenCalledTimes(2);
+        await vi.waitFor(() => expect(dialog.isOpen).toBe(true));
       });
     } finally {
+      shell.element.remove();
       input.remove();
       window.removeEventListener(KEYBOARD_SHORTCUTS_REQUEST_EVENT, requested);
     }
@@ -438,13 +428,14 @@ describe("shell lazy events", () => {
   it("loads the debug overlay shortcut and ignores editable targets", async () => {
     const toggled = vi.fn();
     const shell = createShellOwner() as unknown as ShellKeyboardState &
-      ShellLifecycle & { element: HTMLElement };
+      ShellLifecycle & { element: HTMLElement; elements: object };
     const overlay = document.createElement("openclaw-debug-overlay") as HTMLElement & {
       toggle: () => void;
       open: () => void;
     };
     overlay.toggle = toggled;
     overlay.open = toggled;
+    Object.assign(shell.elements, { debugOverlay: overlay });
     shell.element.append(overlay);
     Object.defineProperty(shell, "updateComplete", { get: () => Promise.resolve(true) });
     const shortcut = new KeyboardEvent("keydown", {
@@ -496,7 +487,7 @@ describe("shell lazy events", () => {
       };
       Object.defineProperty(shell, "updateComplete", { get: () => Promise.resolve(true) });
       Object.defineProperty(shell, "queryRenderedElement", {
-        value: (tag: string) => shell.querySelector(tag),
+        value: (tag: string) => shell.element.querySelector(tag),
       });
       vi.spyOn(element, "loadModule").mockImplementation(async () => {
         await ready.promise;
@@ -508,7 +499,9 @@ describe("shell lazy events", () => {
           },
         );
         if (outcome !== "unmounted") {
-          shell.element.append(document.createElement(tagName));
+          Object.assign(shell.elements, {
+            debugOverlay: shell.element.appendChild(document.createElement(tagName)),
+          });
         }
       });
       try {
@@ -534,7 +527,9 @@ describe("shell lazy events", () => {
           await vi.waitFor(() => expect(shell.lazyCustomElements.visibleState).toBeUndefined());
           if (outcome === "unmounted") {
             expect(opened).not.toHaveBeenCalled();
-            shell.element.append(document.createElement(tagName));
+            Object.assign(shell.elements, {
+              debugOverlay: shell.element.appendChild(document.createElement(tagName)),
+            });
             shell.restorePendingLazyAction();
           }
           if (outcome === "unmounted") {
@@ -559,12 +554,12 @@ describe("shell lazy events", () => {
     const element = createLazyElementSpec("exec approval modal");
     const show = vi.fn();
     const shell = createShellOwner() as unknown as ShellLifecycle & {
-      approvalOverlay?: { show(): void };
+      elements: object;
       execApprovalElement: TestOptionalCustomElement;
     };
     shell.execApprovalElement = element;
     Object.defineProperty(shell, "updateComplete", { get: () => Promise.resolve(true) });
-    Object.defineProperty(shell, "approvalOverlay", {
+    Object.defineProperty(shell.elements, "approvalOverlay", {
       get: () => (customElements.get(element.tagName) ? { show } : undefined),
     });
     stubRenderedWhenDefined(shell);

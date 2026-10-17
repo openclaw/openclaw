@@ -37,6 +37,7 @@ function mountLoader() {
   const { state, dispose: disposeOwner } = createRoot((dispose) => {
     const loading = new ShellCommandPaletteOwner(
       {
+        elements: {},
         commandPaletteElement: COMMAND_PALETTE_ELEMENT,
         lazyCustomElements: createLazyCustomElementRequests(),
         chatNavigationOptions: () => undefined,

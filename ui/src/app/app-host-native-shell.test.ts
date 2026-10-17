@@ -72,6 +72,7 @@ describe("OpenClaw native shell", () => {
     Object.assign(shell, { runtime: { context } });
     const drawer = document.createElement("nav");
     drawer.className = "shell-nav";
+    shell.navDrawerElement = drawer;
     const { tooltip, trigger } = createTooltip("Workspace options");
     Object.defineProperty(trigger, "checkVisibility", { value: () => true });
     drawer.append(tooltip);
@@ -409,6 +410,7 @@ describe("OpenClaw native shell", () => {
     const drawer = document.body.appendChild(document.createElement("nav"));
     drawer.className = "shell-nav";
     drawer.setAttribute("aria-modal", "true");
+    Object.assign(shell, { navDrawerElement: drawer });
     try {
       shell.handleDocumentKeydown(
         new KeyboardEvent("keydown", {
