@@ -35,20 +35,31 @@ describe("qualified session accessor projection", () => {
     await state.cleanup();
   });
 
+  function config(store = storePath): OpenClawConfig {
+    return { session: { store, scope: "global" }, agents: { entries: { main: {} } } };
+  }
+  function researchScope() {
+    return {
+      cfg: {
+        session: { store: path.join(tempDir, "{agentId}.json"), scope: "global" as const },
+        agents: { entries: { research: {} } },
+      },
+      agentId: "research",
+      sessionKey: "global",
+    };
+  }
+  const project = (scope: Parameters<typeof resolveSessionEntryAccessTarget>[0]) =>
+    resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
+  const setLabel = (label: string) => (entry: SessionEntry) => {
+    entry.label = label;
+  };
+
   async function captureSession(entry: SessionEntry) {
-    const cfg: OpenClawConfig = {
-      session: { store: storePath, scope: "global" },
-      agents: { entries: { main: {} } },
-    };
     const sessionKey = "global";
-    const physical = {
-      agentId: "main",
-      storePath,
-      sessionKey,
-    };
+    const physical = { agentId: "main", storePath, sessionKey };
     await replaceSessionEntry(physical, entry);
-    const scope = { cfg, sessionKey, agentId: "main" };
-    const target = await resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
+    const scope = { cfg: config(), sessionKey, agentId: "main" };
+    const target = await project(scope);
     return { physical, scope, target };
   }
 
@@ -85,9 +96,7 @@ describe("qualified session accessor projection", () => {
       await replaceSessionEntry(physical, { sessionId: "selected", updatedAt: 1, label: "before" });
       const scope = { cfg, agentId: "research", sessionKey: input };
       const legacy = resolveSessionEntryAccessTarget(scope);
-      const projected = await resolveSessionEntryAccessTarget(scope, {
-        keyFormat: "agent-qualified",
-      });
+      const projected = await project(scope);
       expect(projected).toMatchObject({
         agentId: "research",
         canonicalKey: logical,
@@ -101,8 +110,7 @@ describe("qualified session accessor projection", () => {
       const result = await updateResolvedSessionEntry(
         scope,
         (entry, context) => {
-          expect(context.canonicalKey).toBe(logical);
-          expect(context.storeKey).toBe(stored);
+          expect(context).toMatchObject({ canonicalKey: logical, storeKey: stored });
           entry.label = "after";
           return entry.sessionId;
         },
@@ -124,11 +132,7 @@ describe("qualified session accessor projection", () => {
   );
 
   it("refuses a qualified projection collision without changing legacy reads", async () => {
-    const sessionKey = "global";
-    const cfg: OpenClawConfig = {
-      session: { store: path.join(tempDir, "{agentId}.json"), scope: "global" },
-      agents: { entries: { research: {} } },
-    };
+    const scope = researchScope();
     const physical = { agentId: "research", storePath: path.join(tempDir, "research.json") };
     for (const { key, sessionId } of [
       { key: "global", sessionId: "raw" },
@@ -136,11 +140,8 @@ describe("qualified session accessor projection", () => {
     ]) {
       await replaceSessionEntry({ ...physical, sessionKey: key }, { sessionId, updatedAt: 1 });
     }
-    const scope = { cfg, sessionKey, agentId: "research" };
     expect(resolveSessionEntryAccessTarget(scope).entry?.sessionId).toBe("raw");
-    await expect(
-      resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" }),
-    ).rejects.toThrow("ambiguous stored identity");
+    await expect(project(scope)).rejects.toThrow("ambiguous stored identity");
     expect(
       listSessionEntriesCore(physical)
         .map((row) => row.entry.sessionId)
@@ -149,18 +150,14 @@ describe("qualified session accessor projection", () => {
   });
 
   it("does not select a qualified conversation when its old alias row is absent", async () => {
-    const cfg: OpenClawConfig = {
-      session: { store: path.join(tempDir, "{agentId}.json"), scope: "global" },
-      agents: { entries: { research: {} } },
-    };
+    const scope = researchScope();
     const physical = {
       agentId: "research",
       storePath: path.join(tempDir, "research.json"),
       sessionKey: "agent:research:global",
     };
     await replaceSessionEntry(physical, { sessionId: "literal", updatedAt: 1 });
-    const scope = { cfg, agentId: "research", sessionKey: "global" };
-    const target = await resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
+    const target = await project(scope);
     expect(target.entry).toBeUndefined();
     const update = vi.fn();
     await expect(updateResolvedSessionEntry(scope, update, { target })).resolves.toMatchObject({
@@ -190,17 +187,13 @@ describe("qualified session accessor projection", () => {
     };
     await replaceSessionEntry(physical, { sessionId: "research-global", updatedAt: 1 });
     const scope = { cfg, sessionKey: physical.sessionKey, agentId: "research" };
-    const target = await resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
-    expect(target.agentId).toBe("research");
-    expect(target.readSource?.agentId).toBe("ops");
-    expect(target.storeKeys).toEqual([physical.sessionKey]);
-    await updateResolvedSessionEntry(
-      scope,
-      (entry) => {
-        entry.label = "research only";
-      },
-      { target },
-    );
+    const target = await project(scope);
+    expect(target).toMatchObject({
+      agentId: "research",
+      readSource: { agentId: "ops" },
+      storeKeys: [physical.sessionKey],
+    });
+    await updateResolvedSessionEntry(scope, setLabel("research only"), { target });
     expect(loadSessionEntryReadOnly(physical)?.label).toBe("research only");
     expect(
       loadSessionEntryReadOnly({ agentId: "ops", storePath: shared, sessionKey: "global" })?.label,
@@ -224,9 +217,7 @@ describe("qualified session accessor projection", () => {
       fs.renameSync(target.storePath, previousPath);
       fs.copyFileSync(previousPath, target.storePath);
     }
-    const update = vi.fn((entry: SessionEntry) => {
-      entry.label = "must not write";
-    });
+    const update = vi.fn(setLabel("must not write"));
     await expect(updateResolvedSessionEntry(scope, update, { target })).rejects.toThrow(
       variant.error,
     );
@@ -237,7 +228,7 @@ describe("qualified session accessor projection", () => {
         sessionId: "same-session",
         lifecycleRevision: "same",
       });
-      const fresh = await resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
+      const fresh = await project(scope);
       expect(fresh.readSource?.databaseIdentity).not.toBe(target.readSource?.databaseIdentity);
     }
   });
@@ -292,10 +283,6 @@ describe("qualified session accessor projection", () => {
   });
 
   it("accepts reopening the same physical file while preserving raw list, ID and lineage addresses", async () => {
-    const cfg: OpenClawConfig = {
-      session: { store: storePath, scope: "global" },
-      agents: { entries: { main: {} } },
-    };
     const physical = { agentId: "main", storePath, sessionKey: "global" };
     await replaceSessionEntry(physical, {
       sessionId: "parent",
@@ -311,18 +298,12 @@ describe("qualified session accessor projection", () => {
         spawnedBy: "global",
       },
     );
-    const scope = { cfg, agentId: "main", sessionKey: "global" };
-    const target = await resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
+    const scope = { cfg: config(), agentId: "main", sessionKey: "global" };
+    const target = await project(scope);
     expect(target.readSource).toBeDefined();
     await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
-    await updateResolvedSessionEntry(
-      scope,
-      (entry) => {
-        entry.label = "same physical record";
-      },
-      { target },
-    );
-    const reopened = await resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
+    await updateResolvedSessionEntry(scope, setLabel("same physical record"), { target });
+    const reopened = await project(scope);
     expect(reopened.canonicalKey).toBe("agent:main:global");
     expect(reopened.readSource).toEqual(target.readSource);
     expect(loadSessionEntryByIdReadOnly({ ...physical, sessionId: "parent" })?.sessionKey).toBe(
@@ -383,15 +364,12 @@ describe("qualified session accessor projection", () => {
       { agentId: "main", storePath: siblingStorePath, sessionKey: "agent:main:other" },
       { sessionId: "other", updatedAt: 1 },
     );
-    const selected = await resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
-    const sibling = await resolveSessionEntryAccessTarget(
-      {
-        cfg: { session: { store: siblingStorePath } },
-        agentId: "main",
-        sessionKey: "agent:main:other",
-      },
-      { keyFormat: "agent-qualified" },
-    );
+    const selected = await project(scope);
+    const sibling = await project({
+      cfg: { session: { store: siblingStorePath } },
+      agentId: "main",
+      sessionKey: "agent:main:other",
+    });
     if (!sibling.readSource) {
       throw new Error("Expected captured sibling source");
     }
@@ -404,13 +382,7 @@ describe("qualified session accessor projection", () => {
       { agentId: "main", storePath: siblingStorePath, sessionKey },
       { sessionId: "later-duplicate", updatedAt: 2 },
     );
-    await updateResolvedSessionEntry(
-      scope,
-      (entry) => {
-        entry.label = "selected only";
-      },
-      { target },
-    );
+    await updateResolvedSessionEntry(scope, setLabel("selected only"), { target });
     expect(loadSessionEntryReadOnly({ agentId: "main", storePath, sessionKey })?.label).toBe(
       "selected only",
     );
