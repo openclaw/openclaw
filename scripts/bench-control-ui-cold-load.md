@@ -47,6 +47,8 @@ Every measured reload flushes the selected transcript through its cache owner an
 verifies both its persisted snapshot and the sidebar's saved view. Current v8
 persistence trims the transcript to its last 80 messages (whole sequence groups may
 extend that bound), strips replay metadata and retains authoritative pagination.
+The first warm transcript is reused across iterations, so streaming and live-event
+probes cannot change the next reload's cached workload.
 `snapshotSave` records database/projection versions, message count, sidebar shape
 and UTF-8 sizes. A missing cache or wrong saved view fails setup.
 
@@ -213,7 +215,8 @@ method-to-count inventory. Private capture text and profile preambles are never
 included in the report. The report preserves each run's shares/counts, prints
 median and IQR, and exits nonzero unless at least 15 of the top 20 unique live app
 locations fall within 0.5–2× live share and every method is within ±1 in every run.
-Missing functions count as zero; same-line aliases use their maximum inclusive
-time. Inspect matching locations across revisions: semantic names bridge line
+Functions absent from the analyzer's top-70 output are reported as not observed
+and fail the gate; absence is not a measured zero CPU share. Same-line aliases
+use their maximum inclusive time. Inspect matching locations across revisions: semantic names bridge line
 shifts only when unambiguous. A failed fidelity gate is a measurement limitation,
 not evidence that an application optimization is ineffective.

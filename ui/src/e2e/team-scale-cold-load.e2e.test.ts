@@ -6,6 +6,7 @@ import {
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createTeamScaleSidebarListOwner } from "../test-helpers/control-ui-sidebar-list-fixture.ts";
 import {
   createControlUiTeamScaleFixture,
   TEAM_SCALE_SELF_INSTANCE_ID,
@@ -15,6 +16,30 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Team-scale cold-load fixture" });
+
+async function readStoredTranscript(sessionKey: string) {
+  const open = indexedDB.open("openclaw-chat-snapshots");
+  const database = await new Promise<IDBDatabase>((resolve, reject) => {
+    open.addEventListener("success", () => resolve(open.result), { once: true });
+    open.addEventListener("error", () => reject(open.error), { once: true });
+  });
+  try {
+    const request = database.transaction("snapshots").objectStore("snapshots").getAll();
+    const records = await new Promise<
+      Array<{ sessionKey: string; snapshot: { messages: unknown[] } }>
+    >((resolve, reject) => {
+      request.addEventListener("success", () => resolve(request.result), { once: true });
+      request.addEventListener("error", () => reject(request.error), { once: true });
+    });
+    const record = records.find((entry) => entry.sessionKey.endsWith(`\u0000${sessionKey}`));
+    if (!record) {
+      throw new Error("Selected transcript was not persisted");
+    }
+    return record.snapshot;
+  } finally {
+    database.close();
+  }
+}
 
 suite.define(() => {
   const sandbox = useCanvasSandboxFixture();
@@ -59,7 +84,25 @@ suite.define(() => {
             entries: fixture.sidebarEntries,
           },
         );
-        const gateway = await installMockGateway(page, fixture.scenario);
+        const sessions = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
+        const gateway = await installMockGateway(page, fixture.scenario, {
+          requestHandlers: {
+            "sessions.list": (value) => {
+              const params = asRecord(value);
+              if (!params) {
+                throw new Error("sessions.list requires query parameters");
+              }
+              return sessions.list(params).result;
+            },
+            "cron.list": (value) => {
+              const params = asRecord(value);
+              if (!params) {
+                throw new Error("cron.list requires query parameters");
+              }
+              return fixture.listCronJobs(params);
+            },
+          },
+        });
         await page.goto(
           controlUiSessionUrl(suite.server.baseUrl, fixture.selectedSessionKey, "dashboard"),
         );
@@ -173,6 +216,32 @@ suite.define(() => {
         });
         expect(warm.messages).toBeLessThanOrEqual(80);
         expect(warm.messages).toBeGreaterThan(0);
+        const baseline = await page.evaluate(readStoredTranscript, fixture.selectedSessionKey);
+        const mutation = "Synthetic warm snapshot mutation";
+        await gateway.emitChatFinal({
+          sessionKey: fixture.selectedSessionKey,
+          runId: "team-scale-warm-reset",
+          text: mutation,
+        });
+        await page.waitForFunction(
+          ({ sessionKey, text }) => {
+            const pane = document.querySelector(".chat-pane-cache__pane--active");
+            const cache: Map<string, { snapshot: { messages: unknown[] } }> | undefined = pane
+              ? Reflect.get(pane, "chatMessagesBySession")
+              : undefined;
+            const entry = cache && [...cache].find(([key]) => key.endsWith(`\u0000${sessionKey}`));
+            return Boolean(entry && JSON.stringify(entry[1].snapshot.messages).includes(text));
+          },
+          { sessionKey: fixture.selectedSessionKey, text: mutation },
+        );
+        await page.evaluate(persistColdLoadWarmState, warmInput);
+        expect(
+          JSON.stringify(await page.evaluate(readStoredTranscript, fixture.selectedSessionKey)),
+        ).toContain(mutation);
+        await page.evaluate(persistColdLoadWarmState, { ...warmInput, snapshot: warm.snapshot });
+        expect(await page.evaluate(readStoredTranscript, fixture.selectedSessionKey)).toEqual(
+          baseline,
+        );
         await page.reload();
         await sidebar.locator('[data-navigation-view="online"][aria-pressed="true"]').waitFor();
         await sidebar.locator('[data-online-user-id="team-person-120"]').waitFor();
