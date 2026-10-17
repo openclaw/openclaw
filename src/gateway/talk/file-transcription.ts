@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { RealtimeTranscriptionSessionCallbacks } from "../../realtime-transcription/provider-types.js";
 import { resolveTalkSessionAgentId } from "../../talk/agent-target.js";
-import { mulawToPcmInto } from "../../talk/audio-codec.js";
+import { mulawChunksToPcmInto } from "../../talk/audio-codec.js";
 
 export type TalkFileTranscriptionConfig = {
   cfg: OpenClawConfig;
@@ -108,12 +108,7 @@ function encodeWav(chunks: readonly Buffer[], bytes: number): Buffer {
   wav.writeUInt16LE(16, 34);
   wav.write("data", 36);
   wav.writeUInt32LE(pcmBytes, 40);
-  let offset = 44;
-  for (const chunk of chunks) {
-    const end = offset + chunk.length * 2;
-    mulawToPcmInto(chunk, wav.subarray(offset, end));
-    offset = end;
-  }
+  mulawChunksToPcmInto(chunks, wav.subarray(44));
   return wav;
 }
 
