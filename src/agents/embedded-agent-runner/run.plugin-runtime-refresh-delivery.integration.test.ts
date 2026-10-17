@@ -101,6 +101,11 @@ installEmbeddedRunnerFastRunE2eMocks({
     return result;
   },
 });
+// The real attempt consumes prompt, transcript and model-handle defaults that
+// the fast runner mocks intentionally omit; keep those owners on the real path.
+vi.doUnmock("../runtime-plan/build.js");
+vi.doUnmock("../../plugins/provider-runtime.js");
+vi.doUnmock("../../plugins/provider-hook-runtime.js");
 vi.doMock("../provider-stream.js", async () => ({
   ...(await vi.importActual<typeof import("../provider-stream.js")>("../provider-stream.js")),
   registerProviderStreamForModel: () => providerStream,
@@ -159,7 +164,8 @@ vi.doMock("../tools/message-tool-execution.js", async () => {
     },
   };
 });
-vi.doMock("../../plugins/tools.js", () => ({
+vi.doMock("../../plugins/tools.js", async () => ({
+  ...(await vi.importActual<typeof import("../../plugins/tools.js")>("../../plugins/tools.js")),
   resolvePluginTools: () => [
     pluginToolWithExecute(
       "reload_runtime",
