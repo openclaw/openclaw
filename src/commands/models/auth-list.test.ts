@@ -1,14 +1,14 @@
-// Model auth-list tests cover provider auth listing and output formatting.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
+  createOAuthRefreshCredential,
 } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import type { OutputRuntimeEnv } from "../../runtime.js";
+import { createRuntimeEnv } from "../../test-utils/plugin-runtime-env.js";
 import { modelsAuthListCommand } from "./auth-list.js";
 import { listUnavailableAuthProfiles } from "./auth-unavailability.js";
 
@@ -46,23 +46,64 @@ vi.mock("./shared.js", () => ({
 
 const NOW = Date.parse("2026-08-30T00:00:00.000Z");
 
-function createRuntime(): OutputRuntimeEnv & { logs: string[]; jsonPayloads: unknown[] } {
+function createRuntime() {
   const logs: string[] = [];
   const jsonPayloads: unknown[] = [];
   return {
+    ...createRuntimeEnv(),
     logs,
     jsonPayloads,
     log: (...args: unknown[]) => {
       logs.push(args.map((value) => String(value)).join(" "));
     },
-    error: vi.fn(),
-    exit: vi.fn((code: number) => {
-      throw new Error(`exit ${code}`);
-    }),
-    writeStdout: vi.fn(),
     writeJson: (value: unknown) => {
       jsonPayloads.push(value);
     },
+  };
+}
+
+async function list(options: Parameters<typeof modelsAuthListCommand>[0] = {}) {
+  const runtime = createRuntime();
+  await modelsAuthListCommand(options, runtime);
+  return runtime;
+}
+
+async function listBoth() {
+  return { text: (await list()).logs, json: (await list({ json: true })).jsonPayloads[0] };
+}
+
+function expectProfiles(json: unknown, profiles: unknown[]) {
+  expect(json).toMatchObject({ profiles });
+}
+
+function setOAuthProfile(
+  id: string,
+  provider: string,
+  usage: NonNullable<AuthProfileStore["usageStats"]>[string],
+) {
+  mocks.ensureAuthProfileStore.mockReturnValue({
+    ...createAuthProfileStoreFixture({
+      [id]: createOAuthRefreshCredential({
+        provider,
+        access: "secret",
+        refresh: "secret",
+        expires: 1_900_000_000_000,
+      }),
+    }),
+    usageStats: { [id]: usage },
+  } satisfies AuthProfileStore);
+}
+
+function subscriptionBlock(
+  blockedUntil: number,
+  blockedSource: "wham" | "codex_rate_limits",
+  overrides: Partial<NonNullable<AuthProfileStore["usageStats"]>[string]> = {},
+) {
+  return {
+    blockedUntil,
+    blockedReason: "subscription_limit" as const,
+    blockedSource,
+    ...overrides,
   };
 }
 
@@ -83,44 +124,24 @@ describe("modelsAuthListCommand", () => {
   });
 
   it("shows the cooldown reason and re-authentication action in text and JSON", async () => {
-    mocks.ensureAuthProfileStore.mockReturnValue({
-      version: 1,
-      profiles: {
-        "anthropic:claude-cli": {
-          type: "oauth",
-          provider: "claude-cli",
-          access: "secret",
-          refresh: "secret",
-          expires: 1_900_000_000_000,
-        },
-      },
-      usageStats: {
-        "anthropic:claude-cli": {
-          cooldownUntil: 1_900_000_100_000,
-          cooldownReason: "session_expired",
-        },
-      },
-    } satisfies AuthProfileStore);
-
-    const textRuntime = createRuntime();
-    await modelsAuthListCommand({}, textRuntime);
-    expect(textRuntime.logs.at(-1)).toContain("cooldown:session_expired");
-    expect(textRuntime.logs.at(-1)).toContain(
+    setOAuthProfile("anthropic:claude-cli", "claude-cli", {
+      cooldownUntil: 1_900_000_100_000,
+      cooldownReason: "session_expired",
+    });
+    const { text, json } = await listBoth();
+    expect(text.at(-1)).toContain("cooldown:session_expired");
+    expect(text.at(-1)).toContain(
       "claude auth login && openclaw models auth login --provider anthropic --method cli",
     );
 
-    const jsonRuntime = createRuntime();
-    await modelsAuthListCommand({ json: true }, jsonRuntime);
-    expect(jsonRuntime.jsonPayloads[0]).toMatchObject({
-      profiles: [
-        expect.objectContaining({
-          id: "anthropic:claude-cli",
-          cooldownReason: "session_expired",
-          recoveryHint:
-            "Re-authenticate with `claude auth login && openclaw models auth login --provider anthropic --method cli --profile-id 'anthropic:claude-cli'`.",
-        }),
-      ],
-    });
+    expectProfiles(json, [
+      expect.objectContaining({
+        id: "anthropic:claude-cli",
+        cooldownReason: "session_expired",
+        recoveryHint:
+          "Re-authenticate with `claude auth login && openclaw models auth login --provider anthropic --method cli --profile-id 'anthropic:claude-cli'`.",
+      }),
+    ]);
   });
 
   it.each(["rate_limit", "overloaded", "auth", "auth_permanent", "billing"] as const)(
@@ -192,40 +213,19 @@ describe("modelsAuthListCommand", () => {
   );
 
   it("shows exact WHAM classification without hiding the canonical reason in JSON", async () => {
-    mocks.ensureAuthProfileStore.mockReturnValue({
-      version: 1,
-      profiles: {
-        "openai:expired": {
-          type: "oauth",
-          provider: "openai",
-          access: "secret",
-          refresh: "secret",
-          expires: 1_900_000_000_000,
-        },
-      },
-      usageStats: {
-        "openai:expired": {
-          cooldownUntil: 1_900_000_100_000,
-          cooldownReason: "auth",
-          cooldownClassification: "wham_token_expired",
-        },
-      },
-    } satisfies AuthProfileStore);
-
-    const textRuntime = createRuntime();
-    await modelsAuthListCommand({}, textRuntime);
-    expect(textRuntime.logs.at(-1)).toContain("cooldown:wham_token_expired");
-
-    const jsonRuntime = createRuntime();
-    await modelsAuthListCommand({ json: true }, jsonRuntime);
-    expect(jsonRuntime.jsonPayloads[0]).toMatchObject({
-      profiles: [
-        expect.objectContaining({
-          cooldownReason: "auth",
-          cooldownClassification: "wham_token_expired",
-        }),
-      ],
+    setOAuthProfile("openai:expired", "openai", {
+      cooldownUntil: 1_900_000_100_000,
+      cooldownReason: "auth",
+      cooldownClassification: "wham_token_expired",
     });
+    const { text, json } = await listBoth();
+    expect(text.at(-1)).toContain("cooldown:wham_token_expired");
+    expectProfiles(json, [
+      expect.objectContaining({
+        cooldownReason: "auth",
+        cooldownClassification: "wham_token_expired",
+      }),
+    ]);
   });
 
   it("projects only active subscription blocks in text and JSON", async () => {
@@ -241,131 +241,83 @@ describe("modelsAuthListCommand", () => {
         "openai:invalid": profile,
       },
       usageStats: {
-        "openai:profile-wide": {
-          blockedUntil: NOW + 60_000,
-          blockedReason: "subscription_limit",
-          blockedSource: "codex_rate_limits",
+        "openai:profile-wide": subscriptionBlock(NOW + 60_000, "codex_rate_limits", {
           blockedModel: "legacy-model-must-not-leak",
-        },
-        "openai:model-scoped": {
-          blockedUntil: NOW + 120_000,
-          blockedReason: "subscription_limit",
-          blockedSource: "wham",
+        }),
+        "openai:model-scoped": subscriptionBlock(NOW + 120_000, "wham", {
           blockedScope: "model",
           blockedModel: "gpt-5.5",
-        },
-        "openai:model-scope-without-model": {
-          blockedUntil: NOW + 180_000,
-          blockedReason: "subscription_limit",
-          blockedSource: "wham",
+        }),
+        "openai:model-scope-without-model": subscriptionBlock(NOW + 180_000, "wham", {
           blockedScope: "model",
-        },
-        "openai:expired": {
-          blockedUntil: NOW - 1,
-          blockedReason: "subscription_limit",
-          blockedSource: "codex_rate_limits",
+        }),
+        "openai:expired": subscriptionBlock(NOW - 1, "codex_rate_limits", {
           blockedScope: "model",
           blockedModel: "gpt-expired",
-        },
-        "openai:invalid": {
-          blockedUntil: 8_700_000_000_000_000,
-          blockedReason: "subscription_limit",
-          blockedSource: "wham",
+        }),
+        "openai:invalid": subscriptionBlock(8_700_000_000_000_000, "wham", {
           blockedScope: "model",
           blockedModel: "gpt-invalid",
-        },
+        }),
       },
     } satisfies AuthProfileStore);
 
-    const textRuntime = createRuntime();
-    await modelsAuthListCommand({}, textRuntime);
-    expect(textRuntime.logs.find((line) => line.includes("openai:profile-wide"))).toContain(
-      "blocked:subscription_limit via codex_rate_limits for profile until 2026-08-30T00:01:00.000Z",
-    );
-    expect(textRuntime.logs.find((line) => line.includes("openai:model-scoped"))).toContain(
-      "blocked:subscription_limit via wham for model gpt-5.5 until 2026-08-30T00:02:00.000Z",
-    );
-    expect(
-      textRuntime.logs.find((line) => line.includes("openai:model-scope-without-model")),
-    ).toContain("blocked:subscription_limit via wham for profile until 2026-08-30T00:03:00.000Z");
-    for (const id of ["openai:expired", "openai:invalid"]) {
-      expect(textRuntime.logs.find((line) => line.includes(id))).not.toContain("blocked:");
-    }
-
-    const jsonRuntime = createRuntime();
-    await modelsAuthListCommand({ json: true }, jsonRuntime);
+    const { text, json } = await listBoth();
     const profiles = (
-      jsonRuntime.jsonPayloads[0] as {
+      json as {
         profiles: Array<Record<string, unknown> & { id: string }>;
       }
     ).profiles;
     const byId = Object.fromEntries(profiles.map((entry) => [entry.id, entry]));
-    expect(byId["openai:model-scoped"]).toMatchObject({
-      blockedUntil: "2026-08-30T00:02:00.000Z",
-      blockedReason: "subscription_limit",
-      blockedSource: "wham",
-      blockedScope: "model",
-      blockedModel: "gpt-5.5",
-    });
-    expect(byId["openai:profile-wide"]).toMatchObject({
-      blockedUntil: "2026-08-30T00:01:00.000Z",
-      blockedReason: "subscription_limit",
-      blockedSource: "codex_rate_limits",
-      blockedScope: "profile",
-    });
-    expect(byId["openai:profile-wide"]).not.toHaveProperty("blockedModel");
-    expect(byId["openai:model-scope-without-model"]).toMatchObject({
-      blockedUntil: "2026-08-30T00:03:00.000Z",
-      blockedReason: "subscription_limit",
-      blockedSource: "wham",
-      blockedScope: "profile",
-    });
-    expect(byId["openai:model-scope-without-model"]).not.toHaveProperty("blockedModel");
+    function expectBlock(id: string, until: string, source: string, model?: string) {
+      const scope = model ? `model ${model}` : "profile";
+      expect(text.find((line) => line.includes(id))).toContain(
+        `blocked:subscription_limit via ${source} for ${scope} until ${until}`,
+      );
+      expect(byId[id]).toMatchObject({
+        blockedUntil: until,
+        blockedReason: "subscription_limit",
+        blockedSource: source,
+        blockedScope: model ? "model" : "profile",
+        ...(model ? { blockedModel: model } : {}),
+      });
+      if (!model) {
+        expect(byId[id]).not.toHaveProperty("blockedModel");
+      }
+    }
+    expectBlock("openai:profile-wide", "2026-08-30T00:01:00.000Z", "codex_rate_limits");
+    expectBlock("openai:model-scoped", "2026-08-30T00:02:00.000Z", "wham", "gpt-5.5");
+    expectBlock("openai:model-scope-without-model", "2026-08-30T00:03:00.000Z", "wham");
     for (const id of ["openai:expired", "openai:invalid"]) {
+      expect(text.find((line) => line.includes(id))).not.toContain("blocked:");
       const profileEntry = byId[id];
       expect(profileEntry).toBeDefined();
-      expect(profileEntry).not.toHaveProperty("blockedUntil");
-      expect(profileEntry).not.toHaveProperty("blockedReason");
-      expect(profileEntry).not.toHaveProperty("blockedSource");
-      expect(profileEntry).not.toHaveProperty("blockedScope");
-      expect(profileEntry).not.toHaveProperty("blockedModel");
+      for (const field of [
+        "blockedUntil",
+        "blockedReason",
+        "blockedSource",
+        "blockedScope",
+        "blockedModel",
+      ]) {
+        expect(profileEntry).not.toHaveProperty(field);
+      }
     }
-    expect(JSON.stringify(jsonRuntime.jsonPayloads[0])).not.toMatch(
-      /secret|legacy-model-must-not-leak/u,
-    );
+    expect(JSON.stringify(json)).not.toMatch(/secret|legacy-model-must-not-leak/u);
   });
 
   it("routes legacy Gemini CLI cooldowns to supported Google API-key setup", async () => {
-    mocks.ensureAuthProfileStore.mockReturnValue({
-      version: 1,
-      profiles: {
-        "google-gemini-cli:legacy": {
-          type: "oauth",
-          provider: "google-gemini-cli",
-          access: "secret",
-          refresh: "secret",
-          expires: 1_900_000_000_000,
-        },
-      },
-      usageStats: {
-        "google-gemini-cli:legacy": {
-          cooldownUntil: 1_900_000_100_000,
-          cooldownReason: "session_expired",
-        },
-      },
-    } satisfies AuthProfileStore);
-
-    const runtime = createRuntime();
-    await modelsAuthListCommand({ json: true }, runtime);
-
-    expect(runtime.jsonPayloads[0]).toMatchObject({
-      profiles: [
-        expect.objectContaining({
-          id: "google-gemini-cli:legacy",
-          recoveryHint: expect.stringContaining("--provider google`"),
-        }),
-      ],
+    setOAuthProfile("google-gemini-cli:legacy", "google-gemini-cli", {
+      cooldownUntil: 1_900_000_100_000,
+      cooldownReason: "session_expired",
     });
+    const runtime = await list({ json: true });
+
+    expectProfiles(runtime.jsonPayloads[0], [
+      expect.objectContaining({
+        id: "google-gemini-cli:legacy",
+        recoveryHint: expect.stringContaining("--provider google`"),
+      }),
+    ]);
     expect(JSON.stringify(runtime.jsonPayloads[0])).not.toContain("--provider google-gemini-cli");
   });
 

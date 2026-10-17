@@ -522,18 +522,15 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
-  it.each([[{ probeConcurrency: "2.5" }, "--probe-concurrency"]])(
-    "rejects invalid probe numeric option %j",
-    async (opts, label) => {
-      const localRuntime = createTestRuntime();
-      mocks.runAuthProbes.mockClear();
-      await expect(
-        modelsStatusCommand({ json: true, probe: true, ...opts }, localRuntime),
-      ).rejects.toThrow(label);
-      expect(mocks.runAuthProbes).not.toHaveBeenCalled();
-      expect(localRuntime.log).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects a non-integer probe concurrency", async () => {
+    const localRuntime = createTestRuntime();
+    mocks.runAuthProbes.mockClear();
+    await expect(
+      modelsStatusCommand({ json: true, probe: true, probeConcurrency: "2.5" }, localRuntime),
+    ).rejects.toThrow("--probe-concurrency");
+    expect(mocks.runAuthProbes).not.toHaveBeenCalled();
+    expect(localRuntime.log).not.toHaveBeenCalled();
+  });
 
   it("forwards probe numeric options", async () => {
     await jsonStatus({
