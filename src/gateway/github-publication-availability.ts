@@ -601,7 +601,7 @@ export async function readLocalGitHubPublicationWorktreeOwner(
 
 /** Discovery validates the same registered repository identity as publication, without GitHub I/O. */
 export async function prepareGitHubPublicationRepositoryIdentity(params: {
-  worktree: Pick<ManagedWorktreeRecord, "path" | "repoRoot" | "repoFingerprint">;
+  worktree: ManagedWorktreeRecord;
   assertCurrent: () => void;
 }) {
   const { worktree, assertCurrent } = params;
@@ -664,10 +664,10 @@ export async function hasSupportedGitHubPublicationTarget(
   const { repoRoot, repoFingerprint } = owner.worktree;
   const key = JSON.stringify([context.admission.identity.key, repoRoot, repoFingerprint]);
   const load = async () => {
-    // Options need only the registered repository's origin. Publication still
-    // validates the selected checkout; readers retain their own registry authority.
+    // Resolve through a checkout because the shared root can be bare. Readers
+    // share repository facts while retaining their own registry authority.
     const repository = await prepareGitHubPublicationRepositoryIdentity({
-      worktree: { path: repoRoot, repoRoot, repoFingerprint },
+      worktree: owner.worktree,
       assertCurrent: () => context.admission.assertCurrent(),
     });
     return isSupportedGitHubOrigin(repository.originUrl);
