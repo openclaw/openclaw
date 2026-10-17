@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import fsPromises from "node:fs/promises";
+import fsp from "node:fs/promises";
 import type http from "node:http";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -15,14 +15,14 @@ import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/install
 import { readPersistedInstalledPluginIndex } from "../../../plugins/installed-plugin-index-store.js";
 import {
   hasRetainedManagedNpmInstallMarker,
-  resolveRetainedManagedNpmInstallPackageInfo,
+  resolveRetainedManagedNpmInstallPackageInfo as managedPackage,
 } from "../../../plugins/managed-npm-retention.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import { createPluginCache, withPluginCache } from "../../../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
 import { seedInstalledPluginIndex } from "../../../plugins/test-helpers/installed-plugin-index.js";
 import {
-  packPlugins,
+  registryPackages,
   startStaticRegistry,
 } from "../../../plugins/test-helpers/npm-registry-fixtures.js";
 import * as processExecution from "../../../process/exec.js";
@@ -30,17 +30,17 @@ import { npmCommandArgs } from "../../../test-utils/npm-command.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { writePluginJson as writeJson } from "./missing-configured-plugin-install.fixtures.test-support.js";
 import {
-  configuredPluginInstallIssueToRepairEffect,
+  configuredPluginInstallIssueToRepairEffect as repairEffect,
   detectConfiguredPluginInstallHealthIssues,
   repairMissingConfiguredPluginInstalls,
 } from "./missing-configured-plugin-install.js";
 
 async function readFiles(root: string, files: string[]) {
-  return Promise.all(files.map((file) => fsPromises.readFile(path.join(root, file), "utf8")));
+  return Promise.all(files.map((file) => fsp.readFile(path.join(root, file), "utf8")));
 }
 
 async function readJson(root: string): Promise<unknown> {
-  return JSON.parse(await fsPromises.readFile(path.join(root, "package.json"), "utf8"));
+  return JSON.parse(await fsp.readFile(path.join(root, "package.json"), "utf8"));
 }
 
 async function install(params: Parameters<typeof installPluginFromNpmSpec>[0]) {
@@ -49,10 +49,6 @@ async function install(params: Parameters<typeof installPluginFromNpmSpec>[0]) {
     throw new Error(result.error);
   }
   return result;
-}
-
-function writeEntry(root: string, file = "index.js") {
-  fs.writeFileSync(path.join(root, file), "export default {};\n", "utf8");
 }
 
 describe("Doctor same-version required dependency repair", () => {
@@ -70,35 +66,27 @@ describe("Doctor same-version required dependency repair", () => {
   it.each(["repaired", "hollow-replacement", "killed-npm", "effect-refused"] as const)(
     "%s preserves the recorded generation and configuration through the real updater",
     { timeout: 180_000 },
-    async (scenario) => {
-      await withOpenClawTestState(
+    (scenario) =>
+      withOpenClawTestState(
         {
           label: `doctor-dependencies-${scenario}`,
           env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
         },
         async (state) => {
           const control = state.path("control");
-          await fsPromises.mkdir(control, { mode: 0o700 });
+          await fsp.mkdir(control, { mode: 0o700 });
           vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
           const packageName = `doctor-dependency-${crypto.randomUUID()}`;
           const dependency = "doctor-required-runtime";
-          const versions = await packPlugins(state.path("packages"), [
+          const packages = await registryPackages(state.path("packages"), [
             {
               packageName,
               dependencies: { [dependency]: "1.0.0" },
               indexJs: `export default { id: ${JSON.stringify(packageName)}, register() {} };\n`,
             },
-          ]);
-          const dependencyVersions = await packPlugins(state.path("dependencies"), [
             { packageName: dependency },
           ]);
-          const registry = await startStaticRegistry(
-            [
-              { packageName, latest: "1.0.0", versions },
-              { packageName: dependency, latest: "1.0.0", versions: dependencyVersions },
-            ],
-            servers,
-          );
+          const registry = await startStaticRegistry(packages, servers);
           vi.stubEnv("NPM_CONFIG_REGISTRY", registry);
           vi.stubEnv("npm_config_registry", registry);
           vi.stubEnv("NPM_CONFIG_CACHE", state.path("npm-cache"));
@@ -121,10 +109,9 @@ describe("Doctor same-version required dependency repair", () => {
               // Corrupt a same-version generation, not just the original legacy project.
               const installed = await install({ ...installParams, mode: "update" });
               expect(installed.targetDir).not.toBe(first.targetDir);
-              const packageInfo = resolveRetainedManagedNpmInstallPackageInfo(installed.targetDir)!;
-              await fsPromises.rm(path.join(packageInfo.projectRoot, "node_modules", dependency), {
-                recursive: true,
-              });
+              const packageInfo = managedPackage(installed.targetDir)!;
+              const dependencyDir = path.join(packageInfo.projectRoot, "node_modules", dependency);
+              await fsp.rm(dependencyDir, { recursive: true });
               const cfg: OpenClawConfig = {
                 plugins: { allow: [packageName], entries: { [packageName]: { enabled: true } } },
               };
@@ -137,27 +124,30 @@ describe("Doctor same-version required dependency repair", () => {
                   resolvedName: packageName,
                   resolvedVersion: "1.0.0",
                   resolvedSpec: `${packageName}@1.0.0`,
-                  integrity: versions[0]!.integrity,
+                  integrity: packages[0]!.versions[0]!.integrity,
                 },
               };
               await state.writeConfig(cfg);
               await seedInstalledPluginIndex(records, { config: cfg, env: process.env });
-              const indexBefore = await readPersistedInstalledPluginIndex();
               const projectInputs = ["package.json", "package-lock.json"];
               const payloadPaths = ["package.json", "openclaw.plugin.json", "dist/index.js"];
               const immutableSnapshot = async () => ({
-                config: await fsPromises.readFile(state.configPath, "utf8"),
+                config: await fsp.readFile(state.configPath, "utf8"),
                 project: await readFiles(packageInfo.projectRoot, projectInputs),
                 payload: await readFiles(installed.targetDir, payloadPaths),
+                ...(scenario === "repaired"
+                  ? {}
+                  : {
+                      index: await readPersistedInstalledPluginIndex(),
+                      projects: (await fsp.readdir(path.join(npmDir, "projects"))).toSorted(),
+                    }),
               });
               const immutableBefore = await immutableSnapshot();
-              const projectsBefore = (
-                await fsPromises.readdir(path.join(npmDir, "projects"))
-              ).toSorted();
-              const issues = await withPluginCache(createPluginCache(), () =>
-                detectConfiguredPluginInstallHealthIssues({ cfg }),
-              );
-              expect(issues).toContainEqual(
+              const health = () =>
+                withPluginCache(createPluginCache(), () =>
+                  detectConfiguredPluginInstallHealthIssues({ cfg }),
+                );
+              expect(await health()).toContainEqual(
                 expect.objectContaining({
                   kind: "missing-required-dependencies",
                   pluginId: packageName,
@@ -214,7 +204,7 @@ describe("Doctor same-version required dependency repair", () => {
                       if (!stageDir) {
                         throw new Error("Missing npm staging directory");
                       }
-                      await fsPromises.rm(path.join(stageDir, "node_modules", dependency), {
+                      await fsp.rm(path.join(stageDir, "node_modules", dependency), {
                         recursive: true,
                       });
                     }
@@ -223,28 +213,25 @@ describe("Doctor same-version required dependency repair", () => {
                 },
               );
               const refusal = new Error("Doctor cutover refused");
-              const beforePersistentEffect = vi.fn(async () => {
-                await Promise.resolve();
-                if (scenario === "effect-refused") {
-                  throw refusal;
-                }
-              });
               const repair = () =>
                 withPluginCache(createPluginCache(), () =>
                   repairMissingConfiguredPluginInstalls({
                     cfg,
                     timeoutMs: 120_000,
                     workTimeoutMs: null,
-                    beforePersistentEffect,
+                    beforePersistentEffect: async () => {
+                      await Promise.resolve();
+                      if (scenario === "effect-refused") {
+                        throw refusal;
+                      }
+                    },
                     onCapabilityConsent: async (review) => ({ reviewToken: review.reviewToken }),
                   }),
                 );
               if (scenario === "effect-refused") {
                 await expect(repair()).rejects.toBe(refusal);
-                expect(npmInstalls).toBe(0);
               } else {
                 const result = await repair();
-                expect(npmInstalls).toBe(1);
                 if (scenario === "repaired") {
                   expect(result.repairedPluginIds).toEqual([packageName]);
                   const next = result.records[packageName]!;
@@ -253,20 +240,14 @@ describe("Doctor same-version required dependency repair", () => {
                     version: "1.0.0",
                     integrity: records[packageName]!.integrity,
                   });
-                  const nextProject = resolveRetainedManagedNpmInstallPackageInfo(
-                    next.installPath!,
-                  )!;
+                  const nextProject = managedPackage(next.installPath!)!;
                   expect(
                     await readJson(path.join(nextProject.projectRoot, "node_modules", dependency)),
                   ).toMatchObject({ name: dependency });
                   expect((await readPersistedInstalledPluginIndex())?.installRecords).toEqual(
                     result.records,
                   );
-                  expect(
-                    await withPluginCache(createPluginCache(), () =>
-                      detectConfiguredPluginInstallHealthIssues({ cfg }),
-                    ),
-                  ).toEqual([]);
+                  expect(await health()).toEqual([]);
                 } else {
                   expect(result.failedPluginIds).toEqual([packageName]);
                   expect(result.records).toEqual(records);
@@ -275,34 +256,26 @@ describe("Doctor same-version required dependency repair", () => {
                   );
                 }
               }
+              expect(npmInstalls).toBe(scenario === "effect-refused" ? 0 : 1);
               expect(killedNpm).toBe(scenario === "killed-npm");
-              if (scenario !== "repaired") {
-                expect(await readPersistedInstalledPluginIndex()).toEqual(indexBefore);
-                expect(
-                  (await fsPromises.readdir(path.join(npmDir, "projects"))).toSorted(),
-                ).toEqual(projectsBefore);
-              }
               expect(hasRetainedManagedNpmInstallMarker(installed.targetDir)).toBe(
                 scenario === "repaired",
               );
               expect(await immutableSnapshot()).toEqual(immutableBefore);
-              await expect(
-                fsPromises.stat(path.join(packageInfo.projectRoot, "node_modules", dependency)),
-              ).rejects.toMatchObject({ code: "ENOENT" });
+              await expect(fsp.stat(dependencyDir)).rejects.toMatchObject({
+                code: "ENOENT",
+              });
             },
           );
         },
-      );
-    },
+      ),
   );
 });
 
 describe("configured plugin install health for explicit load paths", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  afterEach(() => {
-    clearPluginMetadataLifecycleCaches();
-  });
+  afterEach(clearPluginMetadataLifecycleCaches);
 
   async function createLoadPathFixture(
     id: "kilocode" | "opencode-go" | "gmail",
@@ -351,7 +324,8 @@ describe("configured plugin install health for explicit load paths", () => {
       await seedPath();
     } else {
       fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
-      writeEntry(pluginDir, bundled ? "index.js" : "dist/index.js");
+      const entry = bundled ? "index.js" : "dist/index.js";
+      fs.writeFileSync(path.join(pluginDir, entry), "export default {};\n", "utf8");
       writeJson(pluginDir, "package.json", {
         name: `@openclaw/${id}-provider`,
         version: bundled ? "2026.8.1" : "2026.7.1",
@@ -406,43 +380,49 @@ describe("configured plugin install health for explicit load paths", () => {
     expect(await loadInstalledPluginIndexInstallRecords({ env })).not.toHaveProperty("opencode-go");
   });
 
-  it("keeps an env-selected load-path provider despite a missing npm shadow", async () => {
-    const { rootDir, cfg, env } = await createLoadPathFixture("kilocode");
-    const records: Record<string, PluginInstallRecord> = {
-      kilocode: {
-        source: "npm",
-        spec: "@openclaw/kilocode-provider",
-        installPath: path.join(rootDir, "missing-npm-package"),
-      },
-    };
-    await seedInstalledPluginIndex(records, { config: cfg, env });
-    const snapshot = loadManifestMetadataSnapshot({ config: cfg, env });
-    expect(snapshot.plugins.map((plugin) => plugin.id)).toContain("kilocode");
-    expect(await detectConfiguredPluginInstallHealthIssues({ cfg, env })).toStrictEqual([]);
-    const repair = await repairMissingConfiguredPluginInstalls({ cfg, env });
-    expect(repair).toMatchObject({ changes: [], records, warnings: [] });
-    expect(await loadInstalledPluginIndexInstallRecords({ env })).toEqual(records);
-  });
-
-  it("keeps a configured Gmail Codex app bundle without package.json", async () => {
-    const { cfg, env, pluginDir } = await createLoadPathFixture("gmail");
-
-    const snapshot = loadManifestMetadataSnapshot({ config: cfg, env });
-    expect(snapshot.plugins).toContainEqual(
-      expect.objectContaining({
-        id: "gmail",
-        origin: "config",
-        rootDir: pluginDir,
-        bundleFormat: "codex",
-      }),
-    );
-    expect(await detectConfiguredPluginInstallHealthIssues({ cfg, env })).toStrictEqual([]);
-
-    const repair = await repairMissingConfiguredPluginInstalls({ cfg, env });
-    expect(repair).toMatchObject({ changes: [], warnings: [] });
-    expect(repair.records.gmail).toMatchObject({ source: "path", installPath: pluginDir });
-    expect(await loadInstalledPluginIndexInstallRecords({ env })).toHaveProperty("gmail");
-  });
+  it.each(["kilocode", "gmail", "opencode-go"] as const)(
+    "keeps available %s without reinstalling",
+    async (id) => {
+      const { rootDir, cfg, env, pluginDir } = await createLoadPathFixture(id, {
+        packaged: id === "opencode-go",
+      });
+      const records: Record<string, PluginInstallRecord> = {
+        kilocode: {
+          source: "npm",
+          spec: "@openclaw/kilocode-provider",
+          installPath: path.join(rootDir, "missing-npm-package"),
+        },
+      };
+      if (id === "kilocode") {
+        await seedInstalledPluginIndex(records, { config: cfg, env });
+      }
+      const snapshot = loadManifestMetadataSnapshot({ config: cfg, env });
+      if (id === "kilocode") {
+        expect(snapshot.plugins.map((plugin) => plugin.id)).toContain(id);
+      } else {
+        expect(snapshot.plugins).toContainEqual(
+          expect.objectContaining({
+            id,
+            origin: id === "gmail" ? "config" : "bundled",
+            ...(id === "gmail" ? { rootDir: pluginDir, bundleFormat: "codex" } : {}),
+          }),
+        );
+      }
+      expect(await detectConfiguredPluginInstallHealthIssues({ cfg, env })).toStrictEqual([]);
+      const repair = await repairMissingConfiguredPluginInstalls({ cfg, env });
+      expect(repair).toMatchObject({ changes: [], warnings: [] });
+      if (id === "kilocode") {
+        expect(repair).toMatchObject({ records });
+        expect(await loadInstalledPluginIndexInstallRecords({ env })).toEqual(records);
+      } else if (id === "gmail") {
+        expect(repair.records.gmail).toMatchObject({ source: "path", installPath: pluginDir });
+        expect(await loadInstalledPluginIndexInstallRecords({ env })).toHaveProperty("gmail");
+      } else {
+        expect(Object.keys(repair.records)).toStrictEqual([]);
+        expect(Object.getPrototypeOf(repair.records)).toBeNull();
+      }
+    },
+  );
 
   it("classifies a malformed Codex bundle manifest as repairable", async () => {
     const { cfg, env } = await createLoadPathFixture("gmail", { malformed: true });
@@ -451,31 +431,11 @@ describe("configured plugin install health for explicit load paths", () => {
     expect(issues).toEqual([
       expect.objectContaining({ kind: "missing-installed-payload", pluginId: "gmail" }),
     ]);
-    expect(
-      configuredPluginInstallIssueToRepairEffect(
-        expectDefined(issues[0], "configured plugin issue"),
-      ),
-    ).toEqual({
+    expect(repairEffect(expectDefined(issues[0], "configured plugin issue"))).toEqual({
       kind: "package",
       action: "would-reinstall-configured-plugin",
       target: "gmail",
       dryRunSafe: false,
     });
-  });
-
-  it("discovers packaged OpenCode Go before configured-plugin repair", async () => {
-    const { cfg, env } = await createLoadPathFixture("opencode-go", { packaged: true });
-    const snapshot = loadManifestMetadataSnapshot({ config: cfg, env });
-    expect(snapshot.plugins).toContainEqual(
-      expect.objectContaining({ id: "opencode-go", origin: "bundled" }),
-    );
-
-    const issues = await detectConfiguredPluginInstallHealthIssues({ cfg, env });
-    expect(issues).toStrictEqual([]);
-
-    const repair = await repairMissingConfiguredPluginInstalls({ cfg, env });
-    expect(repair).toMatchObject({ changes: [], warnings: [] });
-    expect(Object.keys(repair.records)).toStrictEqual([]);
-    expect(Object.getPrototypeOf(repair.records)).toBeNull();
   });
 });

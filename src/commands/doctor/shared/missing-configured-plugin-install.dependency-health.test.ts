@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import type { OpenClawConfig } from "../../../config/types.js";
+import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { resolveOpenClawPackageRootSync } from "../../../infra/openclaw-root.js";
 import type { PluginCapabilityConsentHandler } from "../../../plugins/capability-consent.js";
 import { requestDeferredPluginInstall } from "../../../plugins/install-transaction.js";
@@ -34,7 +35,14 @@ const {
 } = await import("./missing-configured-plugin-install.suite.test-support.js");
 
 const writeRecords = mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease;
-const doctor = await import("./missing-configured-plugin-install.js");
+const updater = mocks.updateNpmInstalledPlugins;
+const npmInstaller = mocks.installPluginFromNpmSpec;
+const {
+  configuredPluginInstallIssueToHealthFinding: healthFinding,
+  configuredPluginInstallIssueToRepairEffect: repairEffect,
+  detectConfiguredPluginInstallHealthIssues: detectHealth,
+  repairMissingPluginInstallsForIds: repairInstalls,
+} = await import("./missing-configured-plugin-install.js");
 
 function mockInstalledPlugins(records: unknown, plugins: unknown[]) {
   mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
@@ -42,13 +50,34 @@ function mockInstalledPlugins(records: unknown, plugins: unknown[]) {
 }
 
 function expectNoPackageEffects() {
-  expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
-  expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
-  expect(writeRecords).not.toHaveBeenCalled();
+  for (const effect of [updater, npmInstaller, writeRecords]) {
+    expect(effect).not.toHaveBeenCalled();
+  }
 }
 
-function readPayload(root: string, files: string[]) {
+function readPayload(root: string, files = ["package.json", "openclaw.plugin.json", "index.cjs"]) {
   return files.map((file) => fs.readFileSync(path.join(root, file), "utf8"));
+}
+
+function configuredPlugins(...pluginIds: string[]): OpenClawConfig {
+  return {
+    plugins: { entries: Object.fromEntries(pluginIds.map((id) => [id, { enabled: true }])) },
+  };
+}
+
+function expectPublished(records: unknown, cfg: OpenClawConfig, env = testEnv) {
+  expect(writeRecords).toHaveBeenCalledWith(records, expectedIndexWriteOptions(cfg, env));
+}
+
+function updateResult(
+  installs: Record<string, PluginInstallRecord>,
+  outcomes: { pluginId: string; status: string; message: string; code?: string }[],
+) {
+  return {
+    config: { plugins: { installs } },
+    changed: outcomes.some(({ status }) => status === "updated" || status === "unchanged"),
+    outcomes,
+  };
 }
 
 function createRuntime(root: string) {
@@ -101,11 +130,21 @@ function createDependencyInstall(
     },
   });
   const version = plugin.packageVersion ?? "1.0.0";
+  const markerPath = resolveRetainedManagedNpmInstallMarkerPath(rootDir);
   return {
     plugin,
     pluginId,
     rootDir,
-    markerPath: resolveRetainedManagedNpmInstallMarkerPath(rootDir),
+    markerPath,
+    readMarker: () => fs.readFileSync(markerPath, "utf8"),
+    isRetained: () => hasRetainedManagedNpmInstallMarker(rootDir),
+    retain: (retainedAt?: string) =>
+      markRetainedManagedNpmInstall({
+        packageDir: rootDir,
+        pluginId,
+        retainedAt,
+        reason: "existing-owner",
+      }),
     manifest: fs.readFileSync(path.join(rootDir, "package.json"), "utf8"),
     record: {
       source: "npm" as const,
@@ -144,14 +183,14 @@ it.each([
   const parent = tempDirs.make("openclaw-doctor-dependency-health-");
   const projectRoot = path.join(parent, "project");
   const rootDir = path.join(projectRoot, "node_modules", "dependency-plugin");
-  const packageName = "dependency-plugin";
   const pluginId = "dependency-plugin";
+  const packageName = pluginId;
   const { plugin } = createDependencyInstall(rootDir, pluginId, {
     packageName: scenario === "package-mismatch" ? "another-package" : packageName,
     packageOptionalDependencies: scenario === "optional" ? { "required-runtime": "2.0.0" } : {},
     origin: scenario === "bundled" ? "bundled" : "global",
   });
-  const cfg: OpenClawConfig = { plugins: { entries: { [pluginId]: { enabled: true } } } };
+  const cfg = configuredPlugins(pluginId);
   const record = {
     source: scenario === "path-source" ? "path" : "npm",
     spec:
@@ -166,8 +205,7 @@ it.each([
   };
   if (scenario === "different-root") {
     record.installPath = path.join(parent, "recorded-copy");
-    fs.mkdirSync(record.installPath);
-    createColdPluginFixture({ rootDir: record.installPath, pluginId, packageName });
+    createReplacement(record.installPath, pluginId, packageName);
   } else if (scenario === "symlink-root") {
     record.installPath = path.join(parent, "linked-copy");
     fs.symlinkSync(rootDir, record.installPath, "junction");
@@ -177,27 +215,18 @@ it.each([
     const availableDir = path.join(dependencyRoot, "node_modules", "required-runtime");
     createRuntime(availableDir);
   }
-  if (scenario === "unconfigured") {
-    cfg.plugins = {};
-  } else if (scenario === "disabled") {
-    cfg.plugins = { entries: { [pluginId]: { enabled: false } } };
-  } else if (scenario === "globally-disabled") {
-    cfg.plugins = { ...cfg.plugins, enabled: false };
-  } else if (scenario === "denylisted") {
-    cfg.plugins = { ...cfg.plugins, deny: [pluginId] };
-  } else if (scenario === "allowlist-excluded") {
-    cfg.plugins = { ...cfg.plugins, allow: ["different-plugin"] };
-  }
+  const policy = new Map<string, OpenClawConfig["plugins"]>([
+    ["unconfigured", {}],
+    ["disabled", { entries: { [pluginId]: { enabled: false } } }],
+    ["globally-disabled", { ...cfg.plugins, enabled: false }],
+    ["denylisted", { ...cfg.plugins, deny: [pluginId] }],
+    ["allowlist-excluded", { ...cfg.plugins, allow: ["different-plugin"] }],
+  ]).get(scenario);
+  cfg.plugins = policy ?? cfg.plugins;
   if (scenario === "bundled") {
     mockCurrentBundledPlugin(pluginId, packageName);
   }
   mockInstalledPlugins({ [pluginId]: record }, [plugin]);
-  const {
-    configuredPluginInstallIssueToHealthFinding,
-    configuredPluginInstallIssueToRepairEffect,
-    detectConfiguredPluginInstallHealthIssues,
-  } = doctor;
-
   const env =
     scenario === "deferred"
       ? {
@@ -207,9 +236,8 @@ it.each([
         }
       : testEnv;
   if (scenario === "unrequested") {
-    const { repairMissingPluginInstallsForIds } = doctor;
     const beforePersistentEffect = vi.fn();
-    const result = await repairMissingPluginInstallsForIds({
+    const result = await repairInstalls({
       cfg,
       env,
       pluginIds: [],
@@ -218,18 +246,13 @@ it.each([
     expect(result.changes).toEqual([]);
     expect(result.records).toEqual({ [pluginId]: record });
     expect(beforePersistentEffect).not.toHaveBeenCalled();
-    expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(updater).not.toHaveBeenCalled();
     expect(hasRetainedManagedNpmInstallMarker(rootDir)).toBe(false);
     return;
   }
-  const issues = await detectConfiguredPluginInstallHealthIssues({ cfg, env });
+  const issues = await detectHealth({ cfg, env });
 
-  if (
-    scenario === "missing" ||
-    scenario === "resolved-spec" ||
-    scenario === "symlink-root" ||
-    scenario === "ancestor"
-  ) {
+  if (["missing", "resolved-spec", "symlink-root", "ancestor"].includes(scenario)) {
     expect(issues).toEqual([
       {
         kind: "missing-required-dependencies",
@@ -241,27 +264,20 @@ it.each([
       },
     ]);
     const issue = expectDefined(issues[0], "dependency health issue");
-    expect(configuredPluginInstallIssueToHealthFinding(issue)).toMatchObject({
+    expect(healthFinding(issue)).toMatchObject({
       target: pluginId,
       source: "npm",
       message: expect.stringContaining("required-runtime"),
-      fixHint:
-        scenario === "resolved-spec"
-          ? "Run `openclaw plugins install npm:dependency-plugin@1.2.3 --force` to reinstall the configured plugin package."
-          : "Run `openclaw plugins install npm:dependency-plugin@1.0.0 --force` to reinstall the configured plugin package.",
+      fixHint: `Run \`openclaw plugins install npm:dependency-plugin@${scenario === "resolved-spec" ? "1.2.3" : "1.0.0"} --force\` to reinstall the configured plugin package.`,
     });
-    expect(configuredPluginInstallIssueToRepairEffect(issue)).toMatchObject({
+    expect(repairEffect(issue)).toMatchObject({
       kind: "package",
       action: "would-repair-configured-plugin-dependencies",
       dryRunSafe: false,
     });
   } else if (scenario === "deferred") {
     expect(issues).toEqual([
-      {
-        kind: "deferred-package-manager-repair",
-        pluginId,
-        installPath: record.installPath,
-      },
+      { kind: "deferred-package-manager-repair", pluginId, installPath: record.installPath },
     ]);
     const result = await repairConfiguredPlugins(cfg, env);
     expect(result.deferredRepairDetails).toEqual([expect.stringContaining(pluginId)]);
@@ -285,25 +301,21 @@ it.each(["managed", "flat"] as const)(
       resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url }),
       "running OpenClaw package root",
     );
-    const dependencies = { "required-runtime": "1.0.0", openclaw: "*" };
     const { plugin, record } = createDependencyInstall(rootDir, pluginId, {
-      packageDependencies: dependencies,
+      packageDependencies: { "required-runtime": "1.0.0", openclaw: "*" },
       packageOptionalDependencies: {},
     });
     const nodeModulesDir = path.join(rootDir, "node_modules");
-    const runtimeDir = path.join(nodeModulesDir, "required-runtime");
-    createRuntime(runtimeDir);
+    createRuntime(path.join(nodeModulesDir, "required-runtime"));
     fs.symlinkSync(hostRoot, path.join(nodeModulesDir, "openclaw"), "junction");
     const { auditOpenClawPeerDependencyLink } =
       await import("../../../plugins/plugin-peer-link.js");
     expect(await auditOpenClawPeerDependencyLink({ packageDir: rootDir })).toBeNull();
-    const cfg: OpenClawConfig = { plugins: { entries: { [pluginId]: { enabled: true } } } };
+    const cfg = configuredPlugins(pluginId);
     const records = { [pluginId]: record };
     mockInstalledPlugins(records, [plugin]);
-    const { detectConfiguredPluginInstallHealthIssues } = doctor;
-
     for (let pass = 0; pass < 2; pass++) {
-      expect(await detectConfiguredPluginInstallHealthIssues({ cfg, env: testEnv })).toEqual([]);
+      expect(await detectHealth({ cfg, env: testEnv })).toEqual([]);
       const result = await repairConfiguredPlugins(cfg, testEnv);
       expect(result.changes).toEqual([]);
       expect(result.repairedPluginIds).toBeUndefined();
@@ -315,7 +327,6 @@ it.each(["managed", "flat"] as const)(
   },
 );
 
-// Batch settlement below covers updater/persistence throws and failed preexisting owners.
 it.each([
   { outcome: "updated", preexisting: false, staleRuntime: false },
   { outcome: "unchanged", preexisting: false, staleRuntime: false },
@@ -338,18 +349,12 @@ it.each([
       packageName,
       packageVersion: version,
     });
-    const payloadFiles = ["package.json", "openclaw.plugin.json", "index.cjs"];
-    const originalPayload = readPayload(rootDir, payloadFiles);
-    const markerPath = resolveRetainedManagedNpmInstallMarkerPath(rootDir);
+    const originalPayload = readPayload(rootDir);
+    const { markerPath, readMarker, retain, isRetained } = fixture;
     if (preexisting) {
-      await markRetainedManagedNpmInstall({
-        packageDir: rootDir,
-        pluginId,
-        retainedAt: "2026-05-01T00:00:00.000Z",
-        reason: "existing-owner",
-      });
+      await retain("2026-05-01T00:00:00.000Z");
     }
-    const originalMarker = preexisting ? fs.readFileSync(markerPath, "utf8") : undefined;
+    const originalMarker = preexisting ? readMarker() : undefined;
     const record = {
       ...fixture.record,
       spec: staleRuntime ? packageName : `${packageName}@${version}`,
@@ -359,10 +364,7 @@ it.each([
     const replacementRecord = { ...record, installPath: path.join(parent, "replacement") };
     const records = { [pluginId]: record };
     const originalRecords = structuredClone(records);
-    const cfg: OpenClawConfig = {
-      update: { channel: "beta" },
-      plugins: { entries: { [pluginId]: { enabled: true } } },
-    };
+    const cfg: OpenClawConfig = { ...configuredPlugins(pluginId), update: { channel: "beta" } };
     mockInstalledPlugins(records, [fixture.plugin]);
     mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
       officialPluginEntry({ id: pluginId, npmSpec: record.spec }),
@@ -388,6 +390,14 @@ it.each([
     expect(mocks.resolveNpmSpecMetadata).not.toHaveBeenCalled();
     const failure = new Error(`dependency repair ${outcome}`);
     const cleanupFailure = new Error("retention cleanup failed");
+    const succeeded = outcome === "updated" || outcome === "unchanged";
+    const status = ["consent-error", "metadata-error", "cleanup-error"].includes(outcome)
+      ? "error"
+      : outcome;
+    const errorCode = new Map([
+      ["consent-error", PLUGIN_CAPABILITY_CONSENT_REQUIRED],
+      ["metadata-error", PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE],
+    ]).get(outcome);
     if (outcome === "cleanup-error") {
       refuseMarkerCleanup(markerPath, cleanupFailure);
     }
@@ -400,45 +410,31 @@ it.each([
       }
     });
     const onCapabilityConsent = vi.fn<PluginCapabilityConsentHandler>();
-    mocks.updateNpmInstalledPlugins.mockImplementation(
-      async (params: { config: OpenClawConfig }) => {
-        expect(hasRetainedManagedNpmInstallMarker(rootDir)).toBe(true);
-        const repairRecord = params.config.plugins?.installs?.[pluginId];
-        expect(repairRecord).toStrictEqual({
-          source: "npm",
-          spec: record.spec,
-          resolvedName: packageName,
-          integrity: record.integrity,
-          version,
-          installPath: rootDir,
-        });
-        const status = ["consent-error", "metadata-error", "cleanup-error"].includes(outcome)
-          ? "error"
-          : outcome;
-        if (status === "updated" || status === "unchanged") {
-          createReplacement(replacementRecord.installPath, pluginId, packageName);
-        }
-        return {
-          config: { plugins: { installs: { [pluginId]: replacementRecord } } },
-          changed: status === "updated" || status === "unchanged",
-          outcomes: [
-            {
-              pluginId,
-              status,
-              message: failure.message,
-              ...(outcome === "consent-error"
-                ? { code: PLUGIN_CAPABILITY_CONSENT_REQUIRED }
-                : outcome === "metadata-error"
-                  ? { code: PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE }
-                  : {}),
-            },
-          ],
-        };
-      },
-    );
-    const { repairMissingPluginInstallsForIds } = doctor;
+    updater.mockImplementation(async (params: { config: OpenClawConfig }) => {
+      expect(isRetained()).toBe(true);
+      const repairRecord = params.config.plugins?.installs?.[pluginId];
+      expect(repairRecord).toStrictEqual({
+        source: "npm",
+        spec: record.spec,
+        resolvedName: packageName,
+        integrity: record.integrity,
+        version,
+        installPath: rootDir,
+      });
+      if (succeeded) {
+        createReplacement(replacementRecord.installPath, pluginId, packageName);
+      }
+      return updateResult({ [pluginId]: replacementRecord }, [
+        {
+          pluginId,
+          status,
+          message: failure.message,
+          ...(errorCode ? { code: errorCode } : {}),
+        },
+      ]);
+    });
     const repair = () =>
-      repairMissingPluginInstallsForIds({
+      repairInstalls({
         cfg,
         pluginIds: [pluginId],
         env,
@@ -450,16 +446,13 @@ it.each([
       await expect(repair()).rejects.toBe(failure);
     } else {
       const result = await repair();
-      if (outcome === "updated" || outcome === "unchanged") {
+      if (succeeded) {
         expect(result).toMatchObject({
           repairedPluginIds: [pluginId],
           pluginInventoryChanged: true,
         });
         expect(result.records).toEqual({ [pluginId]: replacementRecord });
-        expect(writeRecords).toHaveBeenCalledWith(
-          result.records,
-          expectedIndexWriteOptions(cfg, env),
-        );
+        expectPublished(result.records, cfg, env);
       } else {
         expect(result.failedPluginIds).toEqual([pluginId]);
         expect(result.records).toEqual(records);
@@ -482,13 +475,13 @@ it.each([
         }
       }
     }
-    expect(readPayload(rootDir, payloadFiles)).toEqual(originalPayload);
+    expect(readPayload(rootDir)).toEqual(originalPayload);
     expect(records).toEqual(originalRecords);
-    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(npmInstaller).not.toHaveBeenCalled();
     if (outcome === "effect-refused") {
-      expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
+      expect(updater).not.toHaveBeenCalled();
     } else {
-      expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledWith(
+      expect(updater).toHaveBeenCalledWith(
         expect.objectContaining({
           pluginIds: [pluginId],
           skipDisabledPlugins: true,
@@ -497,14 +490,9 @@ it.each([
         }),
       );
     }
-    const retained =
-      preexisting ||
-      outcome === "updated" ||
-      outcome === "unchanged" ||
-      outcome === "cleanup-error";
-    expect(hasRetainedManagedNpmInstallMarker(rootDir)).toBe(retained);
+    expect(isRetained()).toBe(preexisting || succeeded || outcome === "cleanup-error");
     if (preexisting) {
-      expect(fs.readFileSync(markerPath, "utf8")).toBe(originalMarker);
+      expect(readMarker()).toBe(originalMarker);
     }
   },
 );
@@ -526,16 +514,10 @@ it.each([
   const first = expectDefined(fixtures[0], "first dependency fixture");
   const second = expectDefined(fixtures[1], "second dependency fixture");
   const existing = expectDefined(fixtures[2], "preexisting dependency fixture");
-  await markRetainedManagedNpmInstall({
-    packageDir: existing.rootDir,
-    pluginId: existing.pluginId,
-    reason: "existing-owner",
-  });
-  const existingMarker = fs.readFileSync(existing.markerPath, "utf8");
+  await existing.retain();
+  const existingMarker = existing.readMarker();
   const records = Object.fromEntries(fixtures.map((item) => [item.pluginId, item.record]));
-  const cfg: OpenClawConfig = {
-    plugins: { entries: Object.fromEntries(pluginIds.map((id) => [id, { enabled: true }])) },
-  };
+  const cfg = configuredPlugins(...pluginIds);
   mockInstalledPlugins(
     records,
     fixtures.map((fixture) => fixture.plugin),
@@ -562,7 +544,7 @@ it.each([
   let markerAtRefusal: string | undefined;
   const beforePersistentEffect = vi.fn(async () => {
     if (beforePersistentEffect.mock.calls.length === 2 && authorityRefused) {
-      markerAtRefusal = fs.readFileSync(first.markerPath, "utf8");
+      markerAtRefusal = first.readMarker();
       if (scenario === "second-effect-refused") {
         throw failure;
       }
@@ -570,31 +552,29 @@ it.each([
     }
   });
   const replacementRecord = { ...first.record, installPath: path.join(parent, "replacement") };
-  mocks.updateNpmInstalledPlugins.mockImplementation(async () => {
+  updater.mockImplementation(async () => {
     for (const fixture of fixtures) {
-      expect(hasRetainedManagedNpmInstallMarker(fixture.rootDir)).toBe(true);
+      expect(fixture.isRetained()).toBe(true);
     }
     if (scenario === "updater-throw" || scenario === "cleanup-throw") {
       throw failure;
     }
     createReplacement(replacementRecord.installPath, first.pluginId);
-    return {
-      config: { plugins: { installs: { ...records, [first.pluginId]: replacementRecord } } },
-      changed: true,
-      outcomes: fixtures.map(({ pluginId }) => ({
+    return updateResult(
+      { ...records, [first.pluginId]: replacementRecord },
+      fixtures.map(({ pluginId }) => ({
         pluginId,
         status: pluginId === first.pluginId ? "updated" : "error",
         message: `repair outcome for ${pluginId}`,
       })),
-    };
+    );
   });
   if (scenario === "persist-throw") {
     writeRecords.mockRejectedValueOnce(failure);
   }
-  const { repairMissingPluginInstallsForIds } = doctor;
   const repair = () => {
     const params = { cfg, pluginIds, env: testEnv, beforePersistentEffect };
-    return repairMissingPluginInstallsForIds(
+    return repairInstalls(
       scenario === "transaction-owner-refused"
         ? requestDeferredPluginInstall(params, [], () => {
             if (!transactionOwned) {
@@ -610,36 +590,33 @@ it.each([
     expect(result.repairedPluginIds).toEqual([first.pluginId]);
     expect(result.failedPluginIds).toEqual([second.pluginId, existing.pluginId]);
     expect(result.records).toEqual({ ...records, [first.pluginId]: replacementRecord });
-    expect(writeRecords).toHaveBeenCalledWith(
-      result.records,
-      expectedIndexWriteOptions(cfg, testEnv),
-    );
+    expectPublished(result.records, cfg);
   } else if (scenario === "cleanup-throw") {
     await expect(repair()).rejects.toMatchObject({ errors: [failure, cleanupFailure] });
   } else {
     await expect(repair()).rejects.toBe(failure);
   }
-  expect(hasRetainedManagedNpmInstallMarker(first.rootDir)).toBe(
+  expect(first.isRetained()).toBe(
     scenario === "mixed" || scenario === "cleanup-throw" || authorityRefused,
   );
   if (markerAtRefusal !== undefined) {
     // Compensation cannot delete persistent protection after the initiating authority closes.
-    expect(fs.readFileSync(first.markerPath, "utf8")).toBe(markerAtRefusal);
+    expect(first.readMarker()).toBe(markerAtRefusal);
   }
-  expect(hasRetainedManagedNpmInstallMarker(second.rootDir)).toBe(false);
-  expect(fs.readFileSync(existing.markerPath, "utf8")).toBe(existingMarker);
+  expect(second.isRetained()).toBe(false);
+  expect(existing.readMarker()).toBe(existingMarker);
   for (const fixture of fixtures) {
     expect(fs.readFileSync(path.join(fixture.rootDir, "package.json"), "utf8")).toBe(
       fixture.manifest,
     );
   }
   if (scenario === "partial-marker-write" || authorityRefused) {
-    expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(updater).not.toHaveBeenCalled();
   }
   if (scenario !== "mixed" && scenario !== "persist-throw") {
     expect(writeRecords).not.toHaveBeenCalled();
   }
-  expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+  expect(npmInstaller).not.toHaveBeenCalled();
 });
 
 it.each(["unchanged", "missing-index", "changed-records", "changed-policy", "refused"] as const)(
@@ -675,8 +652,7 @@ it.each(["unchanged", "missing-index", "changed-records", "changed-policy", "ref
         throw failure;
       }
     });
-    const { repairMissingPluginInstallsForIds } = doctor;
-    const pending = repairMissingPluginInstallsForIds({
+    const pending = repairInstalls({
       cfg,
       env,
       pluginIds: [],

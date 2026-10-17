@@ -5,12 +5,11 @@ import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
-import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync as readIndexRecords } from "../../../plugins/installed-plugin-index-records.js";
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import { detectPluginVersionDrift } from "../../../plugins/plugin-version-drift.js";
-import { invokePluginArtifactInstallMock } from "../../../plugins/test-helpers/install-fixtures.js";
 import { writePluginJson } from "./missing-configured-plugin-install.fixtures.test-support.js";
-import { repairMissingConfiguredPluginInstalls } from "./missing-configured-plugin-install.js";
+import { repairMissingConfiguredPluginInstalls as repairInstalls } from "./missing-configured-plugin-install.js";
 import {
   setupPluginInstallTestState,
   successfulInstall,
@@ -27,18 +26,10 @@ vi.mock("../../../infra/install-source-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../infra/install-source-utils.js")>()),
   resolveNpmSpecMetadata: mocks.resolveNpmSpecMetadata,
 }));
-vi.mock("../../../plugins/install.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../plugins/install.js")>();
-  return {
-    ...actual,
-    installPluginFromNpmSpec: (params: Parameters<typeof actual.installPluginFromNpmSpec>[0]) =>
-      invokePluginArtifactInstallMock<Awaited<ReturnType<typeof actual.installPluginFromNpmSpec>>>(
-        mocks.installPluginFromNpmSpec,
-        params,
-        { manifest: { providers: [], channels: [], channelConfigs: {}, providerAuthChoices: [] } },
-      ),
-  };
-});
+vi.mock("../../../plugins/install.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/install.js")>()),
+  installPluginFromNpmSpec: mocks.installPluginFromNpmSpec,
+}));
 vi.mock("../../../plugins/manifest-contract-eligibility.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../plugins/manifest-contract-eligibility.js")>()),
   loadManifestMetadataSnapshot: mocks.loadManifestMetadataSnapshot,
@@ -58,13 +49,20 @@ vi.mock("../../../plugins/update-capability-consent.js", () => ({
 const { testEnv, tempDirs } = setupPluginInstallTestState();
 const oldVersion = "2026.9.3";
 const coreVersion = "2026.9.5";
+const packageRuntime = { extensions: ["./index.js"] };
+const defaultPackages: Record<string, string> = {
+  discord: "@openclaw/discord",
+  exa: "@openclaw/exa-plugin",
+  community: "@example/community",
+};
+const registryUnavailable = {
+  ok: false,
+  category: "metadata-env",
+  error: "ECONNREFUSED registry unreachable",
+};
 
 function writePackage(root: string, name: string, version: string) {
-  writePluginJson(root, "package.json", {
-    name,
-    version,
-    openclaw: { extensions: ["./index.js"] },
-  });
+  writePluginJson(root, "package.json", { name, version, openclaw: packageRuntime });
 }
 
 function npmTarget(spec: string) {
@@ -76,15 +74,7 @@ function npmTarget(spec: string) {
 function createDriftedInstalls({
   hostVersion = coreVersion,
   installedVersion = oldVersion,
-  packages = [
-    ["discord", "@openclaw/discord"],
-    ["exa", "@openclaw/exa-plugin"],
-    ["community", "@example/community"],
-  ],
-}: {
-  hostVersion?: string;
-  installedVersion?: string;
-  packages?: [string, string][];
+  packages = defaultPackages,
 } = {}) {
   const stateDir = tempDirs.make("openclaw-doctor-plugin-version-drift-");
   const env = {
@@ -93,16 +83,13 @@ function createDriftedInstalls({
     OPENCLAW_COMPATIBILITY_HOST_VERSION: hostVersion,
   };
   const records: Record<string, PluginInstallRecord> = {};
-  for (const [pluginId, packageName] of packages) {
-    const installPath = path.join(stateDir, "extensions", pluginId);
+  for (const [id, packageName] of Object.entries(packages)) {
+    const installPath = path.join(stateDir, "extensions", id);
     fs.mkdirSync(installPath, { recursive: true });
     writePackage(installPath, packageName, installedVersion);
     fs.writeFileSync(path.join(installPath, "index.js"), "export default function register() {}\n");
-    writePluginJson(installPath, "openclaw.plugin.json", {
-      id: pluginId,
-      configSchema: { type: "object" },
-    });
-    records[pluginId] = {
+    writePluginJson(installPath, "openclaw.plugin.json", { id, configSchema: { type: "object" } });
+    records[id] = {
       source: "npm",
       spec: `${packageName}@${installedVersion}`,
       resolvedName: packageName,
@@ -135,46 +122,25 @@ function createDriftedInstalls({
       const { name, version } = npmTarget(spec);
       const targetDir = expectDefined(records[expectedPluginId]?.installPath, "fixture path");
       writePackage(targetDir, name, version);
-      return successfulInstall({
-        pluginId: expectedPluginId,
-        npmSpec: name,
-        version,
-        targetDir,
-      });
+      return successfulInstall({ pluginId: expectedPluginId, npmSpec: name, version, targetDir });
     },
   );
-  return {
-    cfg,
-    env,
-    records,
-    repair: async (
-      options: Partial<Parameters<typeof repairMissingConfiguredPluginInstalls>[0]> = {},
-    ) => {
-      const result = await repairMissingConfiguredPluginInstalls({
-        cfg,
-        env,
-        baselineRecords: records,
-        repairVersionDrift: true,
-        ...options,
-      });
-      expect(await readPersistedInstalledPluginIndexInstallRecordsAsync({ env })).toEqual(
-        result.records,
-      );
-      return result;
-    },
+  const repair = async (options: Partial<Parameters<typeof repairInstalls>[0]> = {}) => {
+    const result = await repairInstalls({
+      cfg,
+      env,
+      baselineRecords: records,
+      repairVersionDrift: true,
+      ...options,
+    });
+    expect(await readIndexRecords({ env })).toEqual(result.records);
+    return result;
   };
-}
-
-function driftIds(
-  cfg: OpenClawConfig,
-  records: Record<string, PluginInstallRecord>,
-  hostVersion = coreVersion,
-) {
-  return detectPluginVersionDrift({
-    config: cfg,
-    gatewayVersion: hostVersion,
-    installRecords: records,
-  }).drifts.map(({ pluginId }) => pluginId);
+  const driftIds = (installRecords = records, gatewayVersion = coreVersion) =>
+    detectPluginVersionDrift({ config: cfg, gatewayVersion, installRecords }).drifts.map(
+      ({ pluginId }) => pluginId,
+    );
+  return { cfg, env, records, repair, driftIds };
 }
 
 beforeEach(() => {
@@ -189,14 +155,10 @@ it.each([true, false])(
   "converges the app-owned post-core cohort or reports pending repair (available=%s)",
   async (available) => {
     const { cfg, env, records } = createDriftedInstalls({
-      packages: [["discord", "@openclaw/discord"]],
+      packages: { discord: "@openclaw/discord" },
     });
     if (!available) {
-      mocks.resolveNpmSpecMetadata.mockResolvedValue({
-        ok: false,
-        category: "metadata-env",
-        error: "ECONNREFUSED registry unreachable",
-      });
+      mocks.resolveNpmSpecMetadata.mockResolvedValue(registryUnavailable);
     }
     const result = await runPostCorePluginConvergence({
       cfg,
@@ -241,7 +203,7 @@ it.each([
     const { cfg, records, repair } = createDriftedInstalls({
       hostVersion,
       installedVersion,
-      packages: [[pluginId, packageName]],
+      packages: { [pluginId]: packageName },
     });
     cfg.update = { channel };
     const record = expectDefined(records[pluginId], "plugin install");
@@ -249,13 +211,9 @@ it.each([
     if (incomplete) {
       fs.unlinkSync(path.join(expectDefined(record.installPath, "fixture path"), "package.json"));
     }
-    const result = await repair(
-      incomplete
-        ? {
-            onCapabilityConsent: async ({ reviewToken }) => ({ reviewToken }),
-          }
-        : {},
-    );
+    const result = await repair({
+      onCapabilityConsent: incomplete ? async ({ reviewToken }) => ({ reviewToken }) : undefined,
+    });
     expect(result.records[pluginId]).toMatchObject({
       spec,
       version: expectedVersion,
@@ -274,15 +232,15 @@ it.each([false, true])(
   "converges the official cohort (registry unavailable=%s)",
   async (unavailable) => {
     const hostVersion = unavailable ? coreVersion : "2026.9.5-beta.2";
-    const { cfg, records, repair } = createDriftedInstalls({ hostVersion });
+    const { records, repair, driftIds } = createDriftedInstalls({ hostVersion });
     if (unavailable) {
       mocks.resolveNpmSpecMetadata.mockImplementation(async ({ spec }: { spec: string }) =>
         spec.startsWith("@openclaw/discord")
-          ? { ok: false, category: "metadata-env", error: "ECONNREFUSED registry unreachable" }
+          ? registryUnavailable
           : { ok: true, metadata: npmTarget(spec) },
       );
     } else {
-      expect(driftIds(cfg, records)).toEqual(["discord", "exa"]);
+      expect(driftIds()).toEqual(["discord", "exa"]);
     }
     const onWarning = vi.fn();
     const result = await repair({ onWarning });
@@ -305,25 +263,22 @@ it.each([false, true])(
       ...(unavailable ? [] : [`@openclaw/discord@${hostVersion}`]),
       `@openclaw/exa-plugin@${hostVersion}`,
     ]);
-    expect(driftIds(cfg, result.records, hostVersion)).toEqual(unavailable ? ["discord"] : []);
+    expect(driftIds(result.records, hostVersion)).toEqual(unavailable ? ["discord"] : []);
   },
 );
 
 it.each(["core swap", "legacy id"])("retains installs for %s", async (reason) => {
   const { env, records, repair } = createDriftedInstalls(
-    reason === "legacy id" ? { packages: [["fish-audio", "@openclaw/fish-audio-speech"]] } : {},
+    reason === "legacy id" ? { packages: { "fish-audio": "@openclaw/fish-audio-speech" } } : {},
   );
 
-  const result = await repair({
-    env:
-      reason === "core swap"
-        ? {
-            ...env,
-            OPENCLAW_UPDATE_IN_PROGRESS: "1",
-            OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
-          }
-        : env,
-  });
+  if (reason === "core swap") {
+    Object.assign(env, {
+      OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
+    });
+  }
+  const result = await repair();
 
   expect(result.records).toEqual(records);
   expect(result.warnings).toEqual(
@@ -332,10 +287,8 @@ it.each(["core swap", "legacy id"])("retains installs for %s", async (reason) =>
       : [],
   );
   expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
-  if (reason !== "legacy id") {
-    expect(mocks.resolveNpmSpecMetadata).not.toHaveBeenCalled();
-  }
   if (reason === "core swap") {
+    expect(mocks.resolveNpmSpecMetadata).not.toHaveBeenCalled();
     expect(result.repairedPluginIds ?? []).toEqual([]);
   }
 });

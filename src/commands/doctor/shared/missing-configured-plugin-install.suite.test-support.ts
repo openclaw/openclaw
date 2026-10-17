@@ -6,7 +6,7 @@ import { resolveRegistryUpdateChannel } from "../../../infra/update-channels.js"
 import { resolveClawHubInstallSpecsForUpdateChannel } from "../../../plugins/install-channel-specs.js";
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
-import { expectObjectFields } from "../../../test-utils/mock-call-assertions.js";
+import { mockCall } from "../../../test-utils/mock-call-assertions.js";
 import { VERSION } from "../../../version.js";
 import type { openaiPolicySurface } from "./missing-configured-plugin-install.fixtures.test-support.js";
 import {
@@ -16,6 +16,7 @@ import {
   setupPluginInstallTestState,
   successfulInstall,
 } from "./missing-configured-plugin-install.test-helpers.js";
+export { expectObjectFields as expectRecordFields } from "../../../test-utils/mock-call-assertions.js";
 
 export function expectedNpmInstallSpec(spec: string): string {
   return resolveRegistryUpdateChannel({ currentVersion: VERSION }) === "beta"
@@ -46,21 +47,8 @@ export function mockNpmRegistryTags(tags: { beta?: string; latest: string }): vo
   });
 }
 
-export function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  expectObjectFields(actual, expected);
-  return actual;
-}
-
 export function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected mock call ${callIndex}`);
-  }
-  return call[argIndex];
+  return mockCall(mock, callIndex)[argIndex];
 }
 
 export function expectedIndexWriteOptions(config: unknown, env: NodeJS.ProcessEnv) {
@@ -77,15 +65,9 @@ export function expectedIndexWriteOptions(config: unknown, env: NodeJS.ProcessEn
   };
 }
 
-export const mocks = vi.hoisted(() => ({
-  installPluginFromClawHub: vi.fn(),
-  installPluginFromNpmSpec: vi.fn(),
-  listChannelPluginCatalogEntries: vi.fn(),
+const catalogMocks = vi.hoisted(() => ({
   listOfficialExternalChannelEnvVars: vi.fn(() => []),
   listOfficialExternalPluginCatalogEntries: vi.fn(),
-  loadPluginManifestRegistryCore: vi.fn(),
-  loadInstalledPluginIndexInstallRecords: vi.fn(),
-  loadPluginMetadataSnapshot: vi.fn(),
   getOfficialExternalPluginCatalogManifest: vi.fn(
     (entry: { openclaw?: unknown }) => entry.openclaw,
   ),
@@ -100,7 +82,8 @@ export const mocks = vi.hoisted(() => ({
   resolveOfficialExternalProviderPluginIds: vi.fn(),
   resolveOfficialExternalProviderPluginIdsForEnv: vi.fn(),
   resolveOfficialExternalWebProviderContractPluginIdsForEnv: vi.fn(),
-  resolveDirectBundledProviderPolicySurface: vi.fn<typeof openaiPolicySurface>(),
+}));
+const installPathMocks = vi.hoisted(() => ({
   resolveDefaultPluginExtensionsDir: vi.fn(() => "/tmp/openclaw-plugins"),
   resolveDefaultPluginNpmDir: vi.fn(() => "/tmp/openclaw-npm"),
   resolvePluginNpmProjectsDir: vi.fn((npmDir = "/tmp/openclaw-npm") =>
@@ -120,6 +103,17 @@ export const mocks = vi.hoisted(() => ({
     (pluginId: string, extensionsDir = "/tmp/openclaw-plugins") => `${extensionsDir}/${pluginId}`,
   ),
   validatePluginId: vi.fn(() => null),
+}));
+export const mocks = vi.hoisted(() => ({
+  ...catalogMocks,
+  ...installPathMocks,
+  installPluginFromClawHub: vi.fn(),
+  installPluginFromNpmSpec: vi.fn(),
+  listChannelPluginCatalogEntries: vi.fn(),
+  loadPluginManifestRegistryCore: vi.fn(),
+  loadInstalledPluginIndexInstallRecords: vi.fn(),
+  loadPluginMetadataSnapshot: vi.fn(),
+  resolveDirectBundledProviderPolicySurface: vi.fn<typeof openaiPolicySurface>(),
   resolveProviderInstallCatalogEntries: vi.fn(),
   resolveNpmSpecMetadata: vi.fn(),
   updateNpmInstalledPlugins: vi.fn(),
@@ -162,15 +156,12 @@ export async function repairConfiguredPlugins(
 }
 
 export async function useRealInstallIndexWrites() {
-  const actual = await vi.importActual<
-    typeof import("../../../plugins/installed-plugin-index-records.js")
-  >("../../../plugins/installed-plugin-index-records.js");
+  const { writePersistedInstalledPluginIndexInstallRecordsWithLease: write } =
+    await vi.importActual<typeof import("../../../plugins/installed-plugin-index-records.js")>(
+      "../../../plugins/installed-plugin-index-records.js",
+    );
   mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease.mockImplementation(
-    (records, options) =>
-      actual.writePersistedInstalledPluginIndexInstallRecordsWithLease(records, {
-        ...options,
-        candidates: [],
-      }),
+    (records, options) => write(records, { ...options, candidates: [] }),
   );
 }
 
@@ -193,10 +184,7 @@ export function mockBrokenBraveInstall(
   installDir: string,
   recordOverrides: Record<string, unknown>,
 ): Record<string, Record<string, unknown>> {
-  const records = installedRecords("brave", {
-    installPath: installDir,
-    ...recordOverrides,
-  });
+  const records = installedRecords("brave", { installPath: installDir, ...recordOverrides });
   mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
   mocks.loadPluginMetadataSnapshot.mockReturnValue(brokenPluginSnapshot("brave", installDir));
   mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
@@ -265,27 +253,17 @@ vi.mock("../../../plugins/manifest-registry.js", async (importOriginal) => {
       params: Parameters<typeof actual.loadPluginManifestRegistryCore>[0],
     ) => {
       // Staged consent inspects real artifact manifests, not the synthetic bundled inventory.
-      if (
-        params?.candidates !== undefined ||
+      return params?.candidates !== undefined ||
         params?.discovery !== undefined ||
         !params?.installRecords ||
         Object.keys(params.installRecords).length > 0
-      ) {
-        return actual.loadPluginManifestRegistryCore(params);
-      }
-      return mocks.loadPluginManifestRegistryCore(params);
+        ? actual.loadPluginManifestRegistryCore(params)
+        : mocks.loadPluginManifestRegistryCore(params);
     },
   };
 });
 
-vi.mock("../../../plugins/install-paths.js", () => ({
-  resolveDefaultPluginExtensionsDir: mocks.resolveDefaultPluginExtensionsDir,
-  resolveDefaultPluginNpmDir: mocks.resolveDefaultPluginNpmDir,
-  resolvePluginNpmProjectsDir: mocks.resolvePluginNpmProjectsDir,
-  resolvePluginNpmPackageDir: mocks.resolvePluginNpmPackageDir,
-  resolvePluginInstallDir: mocks.resolvePluginInstallDir,
-  validatePluginId: mocks.validatePluginId,
-}));
+vi.mock("../../../plugins/install-paths.js", () => installPathMocks);
 
 vi.mock("../../../plugins/install.js", () => ({
   installPluginFromNpmSpec: mocks.installPluginFromNpmSpec,
@@ -319,19 +297,7 @@ vi.mock("../../../plugins/official-external-plugin-catalog.js", async (importOri
   ...(await importOriginal<
     typeof import("../../../plugins/official-external-plugin-catalog.js")
   >()),
-  getOfficialExternalPluginCatalogManifest: mocks.getOfficialExternalPluginCatalogManifest,
-  listOfficialExternalChannelEnvVars: mocks.listOfficialExternalChannelEnvVars,
-  listOfficialExternalPluginCatalogEntries: mocks.listOfficialExternalPluginCatalogEntries,
-  resolveOfficialExternalPluginId: mocks.resolveOfficialExternalPluginId,
-  resolveOfficialExternalPluginInstall: mocks.resolveOfficialExternalPluginInstall,
-  resolveOfficialExternalPluginLabel: mocks.resolveOfficialExternalPluginLabel,
-  resolveOfficialExternalProviderContractPluginIds:
-    mocks.resolveOfficialExternalProviderContractPluginIds,
-  resolveOfficialExternalProviderPluginIds: mocks.resolveOfficialExternalProviderPluginIds,
-  resolveOfficialExternalProviderPluginIdsForEnv:
-    mocks.resolveOfficialExternalProviderPluginIdsForEnv,
-  resolveOfficialExternalWebProviderContractPluginIdsForEnv:
-    mocks.resolveOfficialExternalWebProviderContractPluginIdsForEnv,
+  ...catalogMocks,
 }));
 
 vi.mock("../../../plugins/provider-install-catalog.js", () => ({
@@ -348,19 +314,11 @@ vi.mock("../../../plugins/provider-policy-surface.js", async (importOriginal) =>
   };
 });
 
-vi.mock("../../../plugins/doctor-contract-registry.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../plugins/doctor-contract-registry.js")>();
-  return {
-    ...actual,
-    // Plugin-owned compatibility discovery has its own coverage. Keep this
-    // install-repair suite focused and avoid scanning every source plugin.
-    applyPluginDoctorCompatibilityMigrations: (cfg: OpenClawConfig) => ({
-      config: cfg,
-      changes: [],
-    }),
-  };
-});
+vi.mock("../../../plugins/doctor-contract-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/doctor-contract-registry.js")>()),
+  // Compatibility discovery has its own suite; avoid scanning every source plugin here.
+  applyPluginDoctorCompatibilityMigrations: (config: OpenClawConfig) => ({ config, changes: [] }),
+}));
 
 vi.mock("../../../plugins/update.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../plugins/update.js")>()),
@@ -368,11 +326,8 @@ vi.mock("../../../plugins/update.js", async (importOriginal) => ({
 }));
 
 export function setupPluginInstallSuite() {
-  beforeAll(async () => {
-    // The doctor module owns a broad install/catalog graph. Its cold import is
-    // suite setup; individual cases measure detection and repair behavior.
-    await import("./missing-configured-plugin-install.js");
-  });
+  // Cold imports belong to suite setup, outside individual case budgets.
+  beforeAll(() => import("./missing-configured-plugin-install.js"));
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -402,10 +357,7 @@ export function setupPluginInstallSuite() {
     mocks.resolveOfficialExternalProviderPluginIds.mockImplementation(
       ({ providerIds }: { providerIds: ReadonlySet<string> }) =>
         catalogPluginIds(providerIds, (entry) =>
-          entry.openclaw?.providers?.flatMap((provider) => [
-            provider.id,
-            ...(provider.aliases ?? []),
-          ]),
+          entry.openclaw?.providers?.flatMap(({ id, aliases = [] }) => [id, ...aliases]),
         ),
     );
     mocks.installPluginFromClawHub.mockResolvedValue({
@@ -422,14 +374,9 @@ export function setupPluginInstallSuite() {
         version: "1.2.3",
         integrity: "sha256-clawhub",
         resolvedAt: "2026-05-01T00:00:00.000Z",
-        clawpackSha256: "0".repeat(64),
-        clawpackSpecVersion: 1,
-        clawpackManifestSha256: "1".repeat(64),
-        clawpackSize: 1234,
       },
     });
-    mocks.installPluginFromNpmSpec.mockReset();
-    mocks.installPluginFromNpmSpec.mockResolvedValue(
+    mocks.installPluginFromNpmSpec.mockReset().mockResolvedValue(
       successfulInstall({
         pluginId: "matrix",
         npmSpec: "@openclaw/plugin-matrix",
