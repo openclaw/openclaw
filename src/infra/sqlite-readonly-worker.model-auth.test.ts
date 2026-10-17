@@ -70,6 +70,34 @@ function fixtureStore(key: string): AuthProfileStore {
   };
 }
 
+const runtimeReadOptions = {
+  readOnly: true,
+  allowKeychainPrompt: false,
+  externalCli: { mode: "none" as const },
+};
+const readStore = (agentDir: string) =>
+  loadAuthProfileStoreForRuntimeAsync(agentDir, runtimeReadOptions);
+const persistShared = (state: OpenClawTestState, store: AuthProfileStore) =>
+  persistAuthProfileBatch({
+    stateDir: state.stateDir,
+    profiles: [{ profileId: PROFILE_ID, credential: store.profiles[PROFILE_ID]! }],
+  });
+
+function readBarrier() {
+  const entered = createDeferredCore();
+  const resume = createDeferredCore();
+  return {
+    entered,
+    resume,
+    async pause<T>(value: Promise<T>): Promise<T> {
+      const result = await value;
+      entered.resolve();
+      await resume.promise;
+      return result;
+    },
+  };
+}
+
 function personalAccountFixture() {
   const key = randomUUID();
   const owner = ensureProfileForEmail(`personal-${key}@example.test`);
@@ -128,11 +156,9 @@ describe("model resolution auth row snapshots", () => {
       expect(redact()).toBe(credential.key);
 
       const store = await loadAuthProfileStoreForRuntimeAsync(state.agentDir(), {
+        ...runtimeReadOptions,
         profileId: authProfileId,
         inheritedAuthDir: state.agentDir(),
-        readOnly: true,
-        allowKeychainPrompt: false,
-        externalCli: { mode: "none" },
       });
 
       expect(store.profiles[authProfileId]).toMatchObject(credential);
@@ -165,15 +191,7 @@ describe("model resolution auth row snapshots", () => {
 
   it("evicts a shared handle after row corruption", async () => {
     await withOpenClawTestState({ label: "model-auth-query-corruption" }, async (state) => {
-      await persistAuthProfileBatch({
-        stateDir: state.stateDir,
-        profiles: [
-          {
-            profileId: PROFILE_ID,
-            credential: fixtureStore("fixture-original").profiles[PROFILE_ID]!,
-          },
-        ],
-      });
+      await persistShared(state, fixtureStore("fixture-original"));
       const context = captureOpenClawStateWorkerContext();
       const database = openOpenClawStateDatabase({ path: context.admission.databasePath });
       const db = requireNativeSqliteDatabase(database.db);
@@ -242,10 +260,7 @@ describe("model resolution auth row snapshots", () => {
         await withOpenClawTestState({ label: "model-auth-wal-publication" }, async (state) => {
           const store = fixtureStore("fixture-original");
           if (shared) {
-            await persistAuthProfileBatch({
-              stateDir: state.stateDir,
-              profiles: [{ profileId: PROFILE_ID, credential: store.profiles[PROFILE_ID]! }],
-            });
+            await persistShared(state, store);
           } else {
             await state.writeAuthProfiles(store);
           }
@@ -335,17 +350,10 @@ describe("model resolution auth row snapshots", () => {
         if (cached) {
           expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
         }
-        const entered = createDeferredCore();
-        const resume = createDeferredCore();
+        const { entered, resume, pause } = readBarrier();
         const prepare = sqliteRead.prepareAgentAuthProfileRowsRead;
         const sharedOwnership = authPathResolve.resolveSharedAuthStoreOwnershipAsync;
         const databasePath = resolveAuthProfileDatabasePath(state.agentDir());
-        const pause = async <T>(value: Promise<T>): Promise<T> => {
-          const result = await value;
-          entered.resolve();
-          await resume.promise;
-          return result;
-        };
         const read = cached
           ? vi
               .spyOn(authPathResolve, "resolveSharedAuthStoreOwnershipAsync")
@@ -401,10 +409,7 @@ describe("model resolution auth row snapshots", () => {
       { label: "model-auth-empty-external-publication" },
       async (state) => {
         const store = fixtureStore("fixture-original");
-        await persistAuthProfileBatch({
-          stateDir: state.stateDir,
-          profiles: [{ profileId: PROFILE_ID, credential: store.profiles[PROFILE_ID]! }],
-        });
+        await persistShared(state, store);
         for (const agentDir of [undefined, state.agentDir()]) {
           setRuntimeAuthProfileStoreSnapshot(
             overlayRuntimeExternalOAuthProfiles(
@@ -421,8 +426,7 @@ describe("model resolution auth row snapshots", () => {
         const revision = getRuntimeAuthProfileStoreMetadataRevision(state.agentDir());
         const databasePath = resolveAuthProfileDatabasePath(state.agentDir());
         const rowsRevision = getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(databasePath);
-        const entered = createDeferredCore();
-        const resume = createDeferredCore();
+        const { entered, resume, pause } = readBarrier();
         const prepare = sqliteRead.prepareAgentAuthProfileRowsRead;
         let capturedModelRead = false;
         const read = vi
@@ -435,12 +439,7 @@ describe("model resolution auth row snapshots", () => {
             capturedModelRead = true;
             return {
               ...reader,
-              read: async () => {
-                const rows = await reader.read();
-                entered.resolve();
-                await resume.promise;
-                return rows;
-              },
+              read: () => pause(reader.read()),
             };
           });
         const loading = modelResolver(state)();
@@ -527,11 +526,7 @@ describe("model resolution auth row snapshots", () => {
                 `${PROVIDER}:added:api_key`,
               );
             }
-            const current = await loadAuthProfileStoreForRuntimeAsync(state.agentDir(), {
-              readOnly: true,
-              allowKeychainPrompt: false,
-              externalCli: { mode: "none" },
-            });
+            const current = await readStore(state.agentDir());
             expect(current.profiles).toEqual(rotated.profiles);
             expect.soft(reads()).toHaveLength(2);
           } finally {
@@ -554,11 +549,7 @@ describe("model resolution auth row snapshots", () => {
 
       await withAuthProfileStoreAgentDir(state.agentDir("incognito"), state.stateDir, async () => {
         expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
-        const isolated = await loadAuthProfileStoreForRuntimeAsync(state.agentDir(), {
-          readOnly: true,
-          allowKeychainPrompt: false,
-          externalCli: { mode: "none" },
-        });
+        const isolated = await readStore(state.agentDir());
         expect(isolated.profiles[PROFILE_ID]).toEqual({
           type: "api_key",
           provider: PROVIDER,
@@ -567,11 +558,7 @@ describe("model resolution auth row snapshots", () => {
       });
 
       expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
-      const main = await loadAuthProfileStoreForRuntimeAsync(state.agentDir(), {
-        readOnly: true,
-        allowKeychainPrompt: false,
-        externalCli: { mode: "none" },
-      });
+      const main = await readStore(state.agentDir());
       expect(main.profiles[PROFILE_ID]).toEqual(fixtureStore("fixture-main").profiles[PROFILE_ID]);
     });
   });

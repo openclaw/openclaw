@@ -120,6 +120,20 @@ function fixture() {
   owned.push(value);
   return value;
 }
+
+function expectCustody(native: ReturnType<typeof fixture>["native"]) {
+  expect(native.close).not.toHaveBeenCalled();
+  expect(operations.copy).not.toHaveBeenCalled();
+  expect(operations.remove).not.toHaveBeenCalled();
+}
+
+function expectReconciled(directory: string, launch: SqliteNativeSessionLaunch) {
+  expect(operations.copy).toHaveBeenCalledWith(
+    directory,
+    { mode: "staging-reconcile" },
+    { env: launch.env, cwd: launch.cwd, deadlineOwnedByCaller: false },
+  );
+}
 afterEach(async () => {
   for (const entry of owned.splice(0)) {
     try {
@@ -170,11 +184,7 @@ it("projects an accepted allocation before closing its child after target port l
     { type: "retire", directory: "/fixture/allocated-before-reply" },
   ]);
   expect(native.close).toHaveBeenCalledOnce();
-  expect(operations.copy).toHaveBeenCalledWith(
-    "/fixture/allocated-before-reply",
-    { mode: "staging-reconcile" },
-    { env: launch.env, cwd: launch.cwd, deadlineOwnedByCaller: false },
-  );
+  expectReconciled("/fixture/allocated-before-reply", launch);
   expect(operations.remove).toHaveBeenCalledWith("/fixture/allocated-before-reply", {
     force: true,
     recursive: true,
@@ -195,9 +205,7 @@ it("retains creator custody behind a host reader fence and retries cleanup on th
   });
   try {
     await expect(resource.close()).rejects.toThrow("active reader");
-    expect(native.close).not.toHaveBeenCalled();
-    expect(operations.copy).not.toHaveBeenCalled();
-    expect(operations.remove).not.toHaveBeenCalled();
+    expectCustody(native);
     expect(inventory).toEqual(new Set(["/fixture/fenced"]));
   } finally {
     readerActive = false;
@@ -205,11 +213,7 @@ it("retains creator custody behind a host reader fence and retries cleanup on th
   }
   expect(operations.session).toHaveBeenCalledOnce();
   expect(native.close).toHaveBeenCalledOnce();
-  expect(operations.copy).toHaveBeenCalledWith(
-    "/fixture/fenced",
-    { mode: "staging-reconcile" },
-    { env: launch.env, cwd: launch.cwd, deadlineOwnedByCaller: false },
-  );
+  expectReconciled("/fixture/fenced", launch);
   expect(operations.remove).toHaveBeenCalledOnce();
 });
 
@@ -224,9 +228,7 @@ it("refuses cleanup after losing its host fence port without releasing creator c
   hostPort.close();
   await disconnected;
   await expect(resource.close()).rejects.toThrow(cleanup.expectedFailure);
-  expect(native.close).not.toHaveBeenCalled();
-  expect(operations.copy).not.toHaveBeenCalled();
-  expect(operations.remove).not.toHaveBeenCalled();
+  expectCustody(native);
 });
 
 it("closes the real native session after a refused allocation", async () => {
@@ -334,14 +336,10 @@ it("joins a cancelled copy without aborting another copy or the token session", 
   );
   const rejected = expect(first).rejects.toBe(reason);
   let settled = false;
-  void first.then(
-    () => {
-      settled = true;
-    },
-    () => {
-      settled = true;
-    },
-  );
+  const markSettled = () => {
+    settled = true;
+  };
+  void first.then(markSettled, markSettled);
   try {
     await entered.promise;
     controller.abort(reason);
@@ -416,11 +414,7 @@ it("rejects lost-port RPCs without declaring child death and joins outstanding w
   const copy = client.runOnce(
     "/fixture/source",
     { mode: "sync" },
-    {
-      env: launch.env,
-      cwd: launch.cwd,
-      deadlineOwnedByCaller: false,
-    },
+    { env: launch.env, cwd: launch.cwd, deadlineOwnedByCaller: false },
   );
   const rejected = expect(copy).rejects.toThrow("child cleanup is not acknowledged");
   await entered.promise;

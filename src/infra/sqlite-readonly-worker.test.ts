@@ -91,9 +91,13 @@ function createDatabase(paddingBytes: number | null): string {
 async function readSnapshotVersion(source: string) {
   const stagingRoot = tempDirs.make("openclaw-scoped-snapshot-");
   const location = await runSqliteReadOnlyWorker(source, { mode: "sync", stagingRoot });
+  return readQueries(location, "PRAGMA user_version")[0]?.user_version;
+}
+
+function readQueries(location: string, ...queries: string[]) {
   const snapshot = new (requireNodeSqlite().DatabaseSync)(location, { readOnly: true });
   try {
-    return snapshot.prepare("PRAGMA user_version").get()?.user_version;
+    return queries.map((sql) => snapshot.prepare(sql).get());
   } finally {
     snapshot.close();
   }
@@ -157,17 +161,13 @@ describe("scoped SQLite read-only children", () => {
           } else {
             const prepared = await prepareSqliteReadOnlyLocation(source);
             try {
-              const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
-              try {
-                expect(snapshot.prepare("PRAGMA user_version").get()).toEqual({
-                  user_version: index + 1,
-                });
-                expect(
-                  snapshot.prepare("SELECT length(data) AS length FROM padding").get(),
-                ).toEqual({ length: 1024 * 1024 });
-              } finally {
-                snapshot.close();
-              }
+              expect(
+                readQueries(
+                  prepared.location,
+                  "PRAGMA user_version",
+                  "SELECT length(data) AS length FROM padding",
+                ),
+              ).toEqual([{ user_version: index + 1 }, { length: 1024 * 1024 }]);
             } finally {
               expect(await prepared.cleanupAsync()).toBe(true);
             }
@@ -380,12 +380,7 @@ it.each(
     if (typeof location !== "string") {
       throw new Error("Snapshot worker did not return its absolute location");
     }
-    const reader = new DatabaseSync(location, { readOnly: true });
-    try {
-      witness = reader.prepare("SELECT value FROM witness").get();
-    } finally {
-      reader.close();
-    }
+    [witness] = readQueries(location, "SELECT value FROM witness");
   } finally {
     cwd.mockRestore();
     fs.chmodSync(inaccessibleCwd, 0o700);

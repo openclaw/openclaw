@@ -171,6 +171,7 @@ describe("SQLite read-only worker cancellation", () => {
     { preserveSourceArtifacts: true, stop: "abort" },
     { preserveSourceArtifacts: true, stop: "scope-close" },
     { preserveSourceArtifacts: true, stop: "invalid-response" },
+    { preserveSourceArtifacts: false, stop: "abort" },
     { preserveSourceArtifacts: false, stop: "invalid-response" },
     { preserveSourceArtifacts: false, stop: "signal-exit" },
   ] as const)(
@@ -224,8 +225,17 @@ describe("SQLite read-only worker cancellation", () => {
           void operation.catch(() => {});
           await withinTest(fixtureReadyBeforeSettlement(ready, operation), signal);
           if (stop === "abort") {
+            const child = inspectionChild(preserveSourceArtifacts ? "session" : "async");
+            expect(child).toBeDefined();
+            const closed = new Promise<void>((resolve) => {
+              child.once("close", () => resolve());
+            });
+            expect(fs.existsSync(path.join(fs.readFileSync(ready, "utf8"), "partial.sqlite"))).toBe(
+              true,
+            );
             controller.abort(reason);
             await expect(operation).rejects.toBe(reason);
+            await closed;
           } else if (stop === "signal-exit") {
             await waitForSignalExitBarriers();
             await expect(operation).rejects.toThrow(/snapshot owner stopped|SIGKILL/);
@@ -262,59 +272,6 @@ describe("SQLite read-only worker cancellation", () => {
     ).rejects.toBe(reason);
     expect(processMocks.execFile).not.toHaveBeenCalled();
     expect(fs.readdirSync(cacheRoot)).toEqual([]);
-  });
-
-  it("joins a killed child before rejecting and removes its unpublished partial snapshot", async ({
-    signal,
-  }) => {
-    const fixture = tempDirs.make("openclaw-readonly-held-worker-");
-    const worker = path.join(fixture, "worker.mjs");
-    const ready = path.join(fixture, "ready");
-    fs.writeFileSync(
-      worker,
-      `import fs from 'node:fs'; import path from 'node:path';
-         ${fixtureReceiptClientSource(receipts.endpoint)}
-         ${reclaimFixture}
-         fs.writeFileSync(path.join(process.argv[5], 'partial.sqlite'), 'private partial snapshot');
-         fs.writeFileSync(${JSON.stringify(ready)}, process.argv[5]);
-         sendReceipt(${JSON.stringify(ready)}, "ready");
-         process.on('SIGTERM', () => {});
-         setTimeout(() => process.exit(2), 5000);`,
-    );
-    vi.spyOn(workerUrls, "resolveRuntimeWorkerUrl").mockReturnValue(pathToFileURL(worker));
-    const controller = new AbortController();
-    const reason = new Error("startup stopped");
-    const operation = prepareSqliteReadOnlyLocation(path.join(fixture, "unused.sqlite"), {
-      signal: controller.signal,
-    });
-    void operation.catch(() => {});
-    let childClosed: Promise<void> | undefined;
-    try {
-      await withinTest(fixtureReadyBeforeSettlement(ready, operation), signal);
-      const callIndex = processMocks.execFile.mock.calls.findIndex(([, args]) =>
-        isWorkerMode(args, "async"),
-      );
-      const child = processMocks.execFile.mock.results[callIndex]?.value;
-      expect(child).toBeDefined();
-      childClosed = new Promise<void>((resolve) => {
-        child.once("close", () => resolve());
-      });
-      const argv = processMocks.execFile.mock.calls[callIndex]?.[1];
-      if (!Array.isArray(argv)) {
-        throw new Error("worker arguments missing");
-      }
-      const stagingRoot = argv.at(-1)!;
-      expect(fs.existsSync(path.join(stagingRoot, "partial.sqlite"))).toBe(true);
-      controller.abort(reason);
-      await expect(operation).rejects.toBe(reason);
-      expect(child.signalCode).toBe("SIGKILL");
-      await childClosed;
-      expect(fs.existsSync(stagingRoot)).toBe(false);
-      expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
-    } finally {
-      controller.abort(reason);
-      await Promise.allSettled([operation, childClosed]);
-    }
   });
 
   it("reports failed owned cleanup and keeps it retryable", async () => {

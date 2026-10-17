@@ -19,6 +19,7 @@ import * as sqliteRuntime from "./bun-sqlite-library.js";
 import { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } from "./diagnostic-events.js";
 import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
 import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
+import type { SqliteReadOnlyOperationCommand } from "./sqlite-readonly-operation-types.js";
 import { createSqliteReadOnlyWorkerPool } from "./sqlite-readonly-worker-pool.js";
 import {
   captureSqliteReadOnlyWorkerLaunch,
@@ -72,6 +73,67 @@ function read(signal?: AbortSignal) {
   );
 }
 
+const readOptions = () => ({ source: "canonical" as const, expectedIdentity, env });
+const beginCommand = () => ({
+  type: "pageCache.begin" as const,
+  input: { kind: "agent" as const, maxBytes: 1024, now: Date.now() },
+});
+
+function pauseTransfer(processChild: ChildProcess) {
+  const emit = processChild.emit.bind(processChild);
+  let paused = createDeferredCore<() => boolean>();
+  let pause = true;
+  const receiving = vi.spyOn(processChild, "emit").mockImplementation((event, ...args) => {
+    const message: unknown = args[0];
+    if (
+      event === "message" &&
+      pause &&
+      isRecord(message) &&
+      isRecord(message.result) &&
+      message.result.type === "start"
+    ) {
+      pause = false;
+      paused.resolve(() => emit(event, ...args));
+      return true;
+    }
+    return emit(event, ...args);
+  });
+  return {
+    receiving,
+    get ready() {
+      return paused.promise;
+    },
+    reset() {
+      paused = createDeferredCore<() => boolean>();
+      pause = true;
+    },
+  };
+}
+
+function failingClosePool() {
+  const sessions: Array<ReturnType<typeof createScopedSqliteReadOnlyWorker>> = [];
+  const closeMocks: Array<MockInstance<() => Promise<void>>> = [];
+  const failure = new Error("fixture native cleanup is unconfirmed");
+  const pool = createSqliteReadOnlyWorkerPool((launch) => {
+    const session = createScopedSqliteReadOnlyWorker(launch);
+    sessions.push(session);
+    closeMocks.push(vi.spyOn(session, "close").mockRejectedValue(failure));
+    return session;
+  });
+  const launch = captureSqliteReadOnlyWorkerLaunch(env, "canonical");
+  return {
+    closeMocks,
+    run: (command: SqliteReadOnlyOperationCommand = readCommand()) =>
+      pool.run(source, { ...readOptions(), mode: "operation", command }, launch),
+    async close() {
+      for (const close of closeMocks) {
+        close.mockRestore();
+      }
+      await Promise.all(sessions.map((session) => session.close()));
+    },
+  };
+}
+
 beforeAll(async () => {
   const root = tempDirs.make("openclaw-readonly-operations-");
   source = path.join(root, "openclaw-agent.sqlite");
@@ -118,24 +180,7 @@ it("preserves off-thread reads, queued inputs, and cancellation ownership", asyn
   let now = 0;
   const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
   const send = vi.spyOn(child, "send");
-  const emit = child.emit.bind(child);
-  let paused = createDeferredCore<() => boolean>();
-  let pauseNextStart = true;
-  const receiving = vi.spyOn(child, "emit").mockImplementation((event, ...args) => {
-    const message: unknown = args[0];
-    if (
-      event === "message" &&
-      pauseNextStart &&
-      isRecord(message) &&
-      isRecord(message.result) &&
-      message.result.type === "start"
-    ) {
-      pauseNextStart = false;
-      paused.resolve(() => emit(event, ...args));
-      return true;
-    }
-    return emit(event, ...args);
-  });
+  const transfer = pauseTransfer(child);
   const queuedAbort = new AbortController();
   const activeAbort = new AbortController();
   const pending: Promise<unknown>[] = [];
@@ -143,7 +188,7 @@ it("preserves off-thread reads, queued inputs, and cancellation ownership", asyn
     const first = read();
     pending.push(first);
     const release = await withinTest(
-      awaitGateBeforeSettlement(paused.promise, first, "Read settled before its transfer started"),
+      awaitGateBeforeSettlement(transfer.ready, first, "Read settled before its transfer started"),
       signal,
     );
     now = 10;
@@ -208,14 +253,13 @@ it("preserves off-thread reads, queued inputs, and cancellation ownership", asyn
       selected: new Set(["main"]),
     });
 
-    paused = createDeferredCore<() => boolean>();
-    pauseNextStart = true;
+    transfer.reset();
     const active = read(activeAbort.signal);
     pending.push(active);
     const activeFailure = new Error("active ownership read cancelled");
     const rejectedActive = expect(active).rejects.toBe(activeFailure);
     await withinTest(
-      awaitGateBeforeSettlement(paused.promise, active, "Read settled before cancellation"),
+      awaitGateBeforeSettlement(transfer.ready, active, "Read settled before cancellation"),
       signal,
     );
     now = 35;
@@ -244,7 +288,7 @@ it("preserves off-thread reads, queued inputs, and cancellation ownership", asyn
     clock.mockRestore();
     queuedAbort.abort();
     activeAbort.abort();
-    receiving.mockRestore();
+    transfer.receiving.mockRestore();
     send.mockRestore();
     await scope.close();
     await Promise.allSettled(pending);
@@ -295,44 +339,18 @@ it("reuses workers across closed scopes without carrying database or inspection 
 
 it("closes a queued scope without waiting for an unrelated active transfer", async ({ signal }) => {
   const command = readCommand();
-  const options = { source: "canonical" as const, expectedIdentity, env };
+  const options = readOptions();
   await runSqliteReadOnlyOperation(source, command, options);
   const activeChild = vi.mocked(spawn).mock.results.at(-1)?.value;
-  const emit = activeChild.emit.bind(activeChild);
-  const paused = createDeferredCore<() => boolean>();
-  let pause = true;
-  const receiving = vi.spyOn(activeChild, "emit").mockImplementation((event, ...args) => {
-    const message: unknown = args[0];
-    if (
-      event === "message" &&
-      pause &&
-      isRecord(message) &&
-      isRecord(message.result) &&
-      message.result.type === "start"
-    ) {
-      pause = false;
-      paused.resolve(() => emit(event, ...args));
-      return true;
-    }
-    return emit(event, ...args);
-  });
+  const transfer = pauseTransfer(activeChild);
   const firstScope = createSqliteReadOnlyWorkerScope();
   const secondScope = createSqliteReadOnlyWorkerScope();
   const active = firstScope.run(() => runSqliteReadOnlyOperation(source, command, options));
   const release = await withinTest(
-    awaitGateBeforeSettlement(paused.promise, active, "Active read did not reach transfer"),
+    awaitGateBeforeSettlement(transfer.ready, active, "Active read did not reach transfer"),
     signal,
   );
-  const queued = secondScope.run(() =>
-    runSqliteReadOnlyOperation(
-      source,
-      {
-        type: "pageCache.begin",
-        input: { kind: "agent", maxBytes: 1024, now: Date.now() },
-      },
-      options,
-    ),
-  );
+  const queued = secondScope.run(() => runSqliteReadOnlyOperation(source, beginCommand(), options));
   const rejected = expect(queued).rejects.toThrow("scope closed");
   let closed = false;
   const closing = secondScope.close().then(() => {
@@ -345,7 +363,7 @@ it("closes a queued scope without waiting for an unrelated active transfer", asy
     expect(activeChild.exitCode).toBeNull();
   } finally {
     release();
-    receiving.mockRestore();
+    transfer.receiving.mockRestore();
     await Promise.allSettled([active, queued, closing]);
     await firstScope.close();
   }
@@ -390,29 +408,10 @@ it("quarantines failed cleanup without poisoning healthy capacity or launching a
   const capabilities = vi.spyOn(sqliteRuntime, "getSqliteRuntimeCapabilities").mockReturnValue({
     ...unqualified,
   });
-  const sessions: Array<ReturnType<typeof createScopedSqliteReadOnlyWorker>> = [];
-  const closeMocks: Array<MockInstance<() => Promise<void>>> = [];
-  const failure = new Error("fixture native cleanup is unconfirmed");
-  const readPool = createSqliteReadOnlyWorkerPool((launch) => {
-    const session = createScopedSqliteReadOnlyWorker(launch);
-    sessions.push(session);
-    closeMocks.push(vi.spyOn(session, "close").mockRejectedValue(failure));
-    return session;
-  });
-  const launch = captureSqliteReadOnlyWorkerLaunch(env, "canonical");
+  const pool = failingClosePool();
+  const { closeMocks } = pool;
   const start = vi.mocked(spawn).mock.calls.length;
-  const readOwner = () =>
-    readPool.run(
-      source,
-      {
-        mode: "operation",
-        source: "canonical",
-        expectedIdentity,
-        env,
-        command: readCommand(),
-      },
-      launch,
-    );
+  const readOwner = () => pool.run();
   try {
     for (let index = 0; index < 4; index++) {
       await expect(readOwner()).rejects.toThrow("SQLite read and child cleanup failed");
@@ -434,58 +433,21 @@ it("quarantines failed cleanup without poisoning healthy capacity or launching a
     }
   } finally {
     capabilities.mockRestore();
-    for (const close of closeMocks) {
-      close.mockRestore();
-    }
-    await Promise.all(sessions.map((session) => session.close()));
+    await pool.close();
   }
 });
 
 it.skipIf(process.platform !== "linux")(
   "wakes capacity waiters when leased native cleanup fails",
   async () => {
-    const sessions: Array<ReturnType<typeof createScopedSqliteReadOnlyWorker>> = [];
-    const closeMocks: Array<MockInstance<() => Promise<void>>> = [];
-    const failure = new Error("fixture leased cleanup is unconfirmed");
-    const readPool = createSqliteReadOnlyWorkerPool((launch) => {
-      const session = createScopedSqliteReadOnlyWorker(launch);
-      sessions.push(session);
-      closeMocks.push(vi.spyOn(session, "close").mockRejectedValue(failure));
-      return session;
-    });
-    const launch = captureSqliteReadOnlyWorkerLaunch(env, "canonical");
+    const pool = failingClosePool();
     const warmers = Array.from({ length: 4 }, () => createSqliteReadOnlyWorkerScope());
     const start = vi.mocked(spawn).mock.calls.length;
     try {
       for (const request of warmers) {
-        await request.run(() =>
-          readPool.run(
-            source,
-            {
-              mode: "operation",
-              source: "canonical",
-              expectedIdentity,
-              env,
-              command: {
-                type: "pageCache.begin",
-                input: { kind: "agent", maxBytes: 1024, now: Date.now() },
-              },
-            },
-            launch,
-          ),
-        );
+        await request.run(() => pool.run(beginCommand()));
       }
-      const waiting = readPool.run(
-        source,
-        {
-          mode: "operation",
-          source: "canonical",
-          expectedIdentity,
-          env,
-          command: readCommand(),
-        },
-        launch,
-      );
+      const waiting = pool.run();
       const rejected = expect(waiting).rejects.toThrow("capacity is held by unconfirmed cleanup");
       for (const request of warmers) {
         await expect(request.close()).rejects.toThrow("scope cleanup failed");
@@ -493,10 +455,7 @@ it.skipIf(process.platform !== "linux")(
       await rejected;
       expect(vi.mocked(spawn).mock.calls.length - start).toBe(4);
     } finally {
-      for (const close of closeMocks) {
-        close.mockRestore();
-      }
-      await Promise.all(sessions.map((session) => session.close()));
+      await pool.close();
       await Promise.allSettled(warmers.map((request) => request.close()));
     }
   },
@@ -509,13 +468,7 @@ it.skipIf(process.platform !== "linux")(
     const first = createSqliteReadOnlyWorkerScope();
     const second = createSqliteReadOnlyWorkerScope();
     const begin = (request: typeof first) =>
-      request.run(() =>
-        runSqliteReadOnlyOperation(
-          source,
-          { type: "pageCache.begin", input: { kind: "agent", maxBytes: 1024, now: Date.now() } },
-          { source: "canonical", expectedIdentity, env },
-        ),
-      );
+      request.run(() => runSqliteReadOnlyOperation(source, beginCommand(), readOptions()));
     try {
       expect((await begin(first)).complete).toBe(false);
       const firstChild: ChildProcess = vi.mocked(spawn).mock.results.at(-1)?.value;
@@ -530,15 +483,7 @@ it.skipIf(process.platform !== "linux")(
         });
       }
       const progress = await first.run(() =>
-        runSqliteReadOnlyOperation(
-          source,
-          { type: "pageCache.step", input: null },
-          {
-            source: "canonical",
-            expectedIdentity,
-            env,
-          },
-        ),
+        runSqliteReadOnlyOperation(source, { type: "pageCache.step", input: null }, readOptions()),
       );
       expect(typeof progress.complete).toBe("boolean");
       expect(firstChild.exitCode).toBeNull();
@@ -566,24 +511,10 @@ it.skipIf(process.platform !== "linux")(
     try {
       await Promise.all(
         warmers.map((request) =>
-          request.run(() =>
-            runSqliteReadOnlyOperation(
-              source,
-              {
-                type: "pageCache.begin",
-                input: { kind: "agent", maxBytes: 1024, now: Date.now() },
-              },
-              { source: "canonical", expectedIdentity, env },
-            ),
-          ),
+          request.run(() => runSqliteReadOnlyOperation(source, beginCommand(), readOptions())),
         ),
       );
-      const readOwner = () =>
-        runSqliteReadOnlyOperation(source, readCommand(), {
-          source: "canonical",
-          expectedIdentity,
-          env,
-        });
+      const readOwner = () => runSqliteReadOnlyOperation(source, readCommand(), readOptions());
       let settled = false;
       const queued = waiting.run(readOwner).then((rows) => {
         settled = true;
@@ -611,13 +542,7 @@ it.skipIf(process.platform !== "linux")(
     const second = createSpawnBrokerHost();
     const readerScope = createSqliteReadOnlyWorkerScope();
     const readOwner = () =>
-      readerScope.run(() =>
-        runSqliteReadOnlyOperation(source, readCommand(), {
-          source: "canonical",
-          expectedIdentity,
-          env,
-        }),
-      );
+      readerScope.run(() => runSqliteReadOnlyOperation(source, readCommand(), readOptions()));
     const firstSpawn = vi.spyOn(first, "spawn");
     const secondSpawn = vi.spyOn(second, "spawn");
     try {

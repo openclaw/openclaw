@@ -34,12 +34,9 @@ async function expectWorkerFailure(
   error: unknown,
   message: string,
   contention = false,
-  options?: {
-    mode: "sync" | "async" | "staging-create" | "staging-create-legacy";
-    allocationRefused: boolean;
-  },
+  mode: "sync" | "async" | "staging-create" | "staging-create-legacy" = "async",
+  allocationRefused = false,
 ): Promise<void> {
-  const mode = options?.mode ?? "async";
   process.argv = [
     process.execPath,
     "sqlite-readonly-location.worker.ts",
@@ -48,26 +45,20 @@ async function expectWorkerFailure(
     "/synthetic/database.sqlite",
   ];
   const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
-  if (mode === "staging-create" || mode === "staging-create-legacy") {
-    createToken.mockImplementationOnce(() => {
-      throw error;
-    });
-  } else if (mode === "sync") {
-    prepareCopy.mockImplementationOnce(() => {
-      throw error;
-    });
-  } else {
+  if (mode === "async") {
     prepare.mockRejectedValueOnce(error);
+  } else {
+    const producer = mode === "sync" ? prepareCopy : createToken;
+    producer.mockImplementationOnce(() => {
+      throw error;
+    });
   }
   await import("./sqlite-readonly-location.worker.js");
   await vi.dynamicImportSettled();
   const prefix =
     (contention ? "Retryable SQLite inspection contention: " : "") +
-    (options?.allocationRefused ? "SQLite snapshot directory creation refused: " : "");
-  const stdout = JSON.stringify({
-    ok: false,
-    message: `${prefix}${message}`,
-  });
+    (allocationRefused ? "SQLite snapshot directory creation refused: " : "");
+  const stdout = JSON.stringify({ ok: false, message: `${prefix}${message}` });
   expect(write).toHaveBeenCalledExactlyOnceWith(stdout);
   expect(process.exitCode).toBe(1);
   const { readSqliteReadOnlyWorkerValue, SqliteReadOnlyInspectionContentionError } =
@@ -81,10 +72,11 @@ async function expectWorkerFailure(
   expect(received).toBeInstanceOf(Error);
   expect(received instanceof SqliteReadOnlyInspectionContentionError).toBe(contention);
   const { isPrivateDirectoryCreationRefused } = await import("./private-directory-creation.js");
-  expect(isPrivateDirectoryCreationRefused(received)).toBe(
-    contention && options?.allocationRefused === true,
-  );
+  expect(isPrivateDirectoryCreationRefused(received)).toBe(contention && allocationRefused);
 }
+
+const codedError = (message: string, fields: { code?: string; errcode?: number }) =>
+  Object.assign(new Error(message), fields);
 
 it.each<{
   name: string;
@@ -106,7 +98,7 @@ it.each<{
     refused: true,
     contention: true,
     allocationRefused: mode === "staging-create-legacy",
-    error: () => Object.assign(new Error("parent token admission failed"), { errcode }),
+    error: () => codedError("parent token admission failed", { errcode }),
     message: `parent token admission failed (errcode=${errcode})`,
   })),
   {
@@ -114,13 +106,13 @@ it.each<{
     mode: "staging-create",
     refused: true,
     allocationRefused: true,
-    error: () => Object.assign(new Error("parent admission refused"), { code: "EACCES" }),
+    error: () => codedError("parent admission refused", { code: "EACCES" }),
     message: "parent admission refused (code=EACCES)",
   },
   {
     name: "ordinary allocation failure",
     mode: "staging-create",
-    error: () => Object.assign(new Error("allocation failed"), { code: "ENOENT" }),
+    error: () => codedError("allocation failed", { code: "ENOENT" }),
     message: "allocation failed (code=ENOENT)",
   },
   {
@@ -166,12 +158,12 @@ it.each<{
   },
   {
     name: "unsafe code token",
-    error: () => Object.assign(new Error("failure"), { code: "EIO\n", errcode: 11 }),
+    error: () => codedError("failure", { code: "EIO\n", errcode: 11 }),
     message: "failure (errcode=11)",
   },
   ...[-1, 1.5, 2 ** 31].map((errcode) => ({
     name: `out-of-contract errcode ${errcode}`,
-    error: () => Object.assign(new Error("failure"), { code: "EIO", errcode }),
+    error: () => codedError("failure", { code: "EIO", errcode }),
     message: "failure (code=EIO)",
   })),
 ])(
@@ -190,7 +182,7 @@ it.each<{
         await import("./private-directory-creation.js");
       markPrivateDirectoryCreationRefused(failure);
     }
-    await expectWorkerFailure(failure, message, contention, { mode, allocationRefused });
+    await expectWorkerFailure(failure, message, contention, mode, allocationRefused);
   },
 );
 

@@ -73,6 +73,15 @@ beforeEach(() => {
   });
 });
 
+function prepare(assertCurrent = () => {}, signal?: AbortSignal) {
+  return prepareSqliteReadOnlyLocationFromOwnedDatabase(database, assertCurrent, signal, "async");
+}
+
+function expectOwnership(exists: boolean) {
+  expect(fs.existsSync(directory)).toBe(exists);
+  expect(database.isOpen).toBe(true);
+}
+
 it.each(["sync", "async"] as const)(
   "joins %s cleanup before releasing private bytes",
   async (mode) => {
@@ -91,12 +100,7 @@ it.each(["sync", "async"] as const)(
       expect(mocks.retireSync).toHaveBeenCalledOnce();
       expect(mocks.retire).not.toHaveBeenCalled();
     } else {
-      const prepared = await prepareSqliteReadOnlyLocationFromOwnedDatabase(
-        database,
-        () => {},
-        undefined,
-        mode,
-      );
+      const prepared = await prepare();
       let finished = false;
       const closing = prepared.cleanupAsync().then((removed) => {
         finished = true;
@@ -114,8 +118,7 @@ it.each(["sync", "async"] as const)(
       }
       expect(mocks.retireSync).not.toHaveBeenCalled();
     }
-    expect(fs.existsSync(directory)).toBe(false);
-    expect(database.isOpen).toBe(true);
+    expectOwnership(false);
   },
 );
 
@@ -127,20 +130,14 @@ it("retains original and unpublished cleanup failures until the snapshot registr
   mocks.retireSync.mockImplementationOnce(() => {
     throw cleanup;
   });
-  const failure = await prepareSqliteReadOnlyLocationFromOwnedDatabase(
-    database,
-    () => {},
-    undefined,
-    "async",
-  ).catch((error: unknown) => error);
+  const failure = await prepare().catch((error: unknown) => error);
   expect(failure).toBeInstanceOf(AggregateError);
   expect(failure).toMatchObject({
     message: expect.stringContaining("native backup failed"),
     errors: [original, cleanup],
     cause: original,
   });
-  expect(fs.existsSync(directory)).toBe(true);
-  expect(database.isOpen).toBe(true);
+  expectOwnership(true);
   await cleanupSnapshotOperations();
   expect(fs.existsSync(directory)).toBe(false);
   expect(mocks.retire).toHaveBeenCalledTimes(2);
@@ -182,12 +179,7 @@ it.each(["allocation", "backup", "cancelled allocation"] as const)(
         return result;
       });
     }
-    const result = prepareSqliteReadOnlyLocationFromOwnedDatabase(
-      database,
-      assertCurrent,
-      controller.signal,
-      "async",
-    );
+    const result = prepare(assertCurrent, controller.signal);
     const rejected = expect(result).rejects.toBe(failure);
     try {
       if (phase === "cancelled allocation") {
@@ -200,7 +192,6 @@ it.each(["allocation", "backup", "cancelled allocation"] as const)(
       await rejected;
     }
     expect(mocks.backup).toHaveBeenCalledTimes(phase === "backup" ? 1 : 0);
-    expect(fs.existsSync(directory)).toBe(false);
-    expect(database.isOpen).toBe(true);
+    expectOwnership(false);
   },
 );
