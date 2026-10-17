@@ -3,7 +3,6 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HelloOk } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import { installPrivateUpdateHandoffStore } from "../../../test/helpers/private-update-handoff-store.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
@@ -30,6 +29,7 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { createGatewayHostLifecycle } from "../gateway-cli/host-lifecycle.js";
 import { withGatewayMaintenanceDrain } from "./update-command-service-drain.js";
+import { gatewayHello, nativeResult } from "./update-command-service-fixtures.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   call: vi.fn(),
@@ -98,18 +98,6 @@ let beforeDispatch: (() => void) | undefined;
 let beforeHandoffDispatch: (() => void) | undefined;
 let assertProtection: () => void;
 const assertCurrent = () => {};
-
-function hello(): HelloOk {
-  return {
-    type: "hello-ok",
-    protocol: 3,
-    server: { version: "fixture", connId: "fixture", bootId },
-    features: { methods: [], events: [] },
-    snapshot: { presence: [], health: {}, stateVersion: { presence: 0, health: 0 }, uptimeMs: 0 },
-    auth: { role: "operator", scopes: ["operator.admin"] },
-    policy: { maxPayload: 1_000_000, maxBufferedBytes: 1_000_000, tickIntervalMs: 60_000 },
-  };
-}
 
 function params(request: CallGatewayCliOptions): Record<string, unknown> {
   if (!isRecord(request.params)) {
@@ -206,12 +194,11 @@ beforeEach(() => {
   };
   mocks.location.mockImplementation(async () => ({ kind: "command", command }));
   mocks.command.mockImplementation(async () => command);
-  mocks.systemctl.mockImplementation(async () => ({
-    code: 0,
-    termination: "exit",
-    stderr: "",
-    stdout: `Id=${descriptor.service.unit}\nLoadState=loaded\nActiveState=${alive ? "active" : "inactive"}\nSubState=${alive ? "running" : "dead"}\nMainPID=${alive ? pid : 0}\nControlGroup=${controlGroup}\nTasksCurrent=${alive ? 1 : 0}\nJob=0\nKillMode=control-group\nTimeoutStopUSec=330s\nDynamicUser=no\nRootDirectory=\nRootImage=\n`,
-  }));
+  mocks.systemctl.mockImplementation(async () =>
+    nativeResult(
+      `Id=${descriptor.service.unit}\nLoadState=loaded\nActiveState=${alive ? "active" : "inactive"}\nSubState=${alive ? "running" : "dead"}\nMainPID=${alive ? pid : 0}\nControlGroup=${controlGroup}\nTasksCurrent=${alive ? 1 : 0}\nJob=0\nKillMode=control-group\nTimeoutStopUSec=330s\nDynamicUser=no\nRootDirectory=\nRootImage=\n`,
+    ),
+  );
   const readFile = fs.readFileSync;
   vi.spyOn(fs, "readFileSync").mockImplementation((file, ...args) => {
     if (String(file) === `/proc/${pid}/stat`) {
@@ -243,7 +230,7 @@ beforeEach(() => {
     return readlink(file, ...args);
   });
   mocks.call.mockImplementation(async (request: CallGatewayCliOptions) => {
-    request.onHelloOk?.(hello());
+    request.onHelloOk?.(gatewayHello(bootId));
     if (request.method === "gateway.suspend.handoff") {
       await Promise.resolve();
       beforeHandoffDispatch?.();
@@ -278,13 +265,6 @@ beforeEach(() => {
       }
       events.push(`prepared:${result.status}`);
       return result;
-    }
-    if (request.method === "gateway.suspend.status") {
-      const input = params(request);
-      if (typeof input.suspensionId !== "string") {
-        throw new Error("Missing fixture suspension ID");
-      }
-      return getGatewaySuspendStatus(input.suspensionId, input.includeLifecycle === true);
     }
     if (request.method === "gateway.suspend.handoff") {
       const input = params(request);
@@ -467,10 +447,7 @@ describe.skipIf(process.platform !== "linux")(
             bootId = "replacement-boot";
           }
         };
-        const outcome = await stopWithLiveDrain().then(
-          () => null,
-          (error: unknown) => error,
-        );
+        const outcome = await stopWithLiveDrain().catch((error: unknown) => error);
         expect(events).toContain("native:inspected");
         expect(events.filter((event) => event === "effect:StopUnit")).toEqual([]);
         expect(outcome).toBeInstanceOf(Error);
@@ -526,10 +503,7 @@ describe.skipIf(process.platform !== "linux")(
       beforeDispatch = () => {
         processTicks++;
       };
-      const outcome = await stopWithLiveDrain().then(
-        () => null,
-        (error: unknown) => error,
-      );
+      const outcome = await stopWithLiveDrain().catch((error: unknown) => error);
       expect(events).toContain("host:committed");
       expect(events.filter((event) => event === "effect:StopUnit")).toEqual([]);
       expect(outcome).toBeInstanceOf(Error);

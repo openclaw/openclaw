@@ -20,6 +20,11 @@ import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js"
 import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
+import {
+  maintenanceDefaults,
+  commandResult,
+  writeHandoffMeta,
+} from "./update-command-service-fixtures.test-support.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 
 vi.mock("node:fs", async (importOriginal) => ({
@@ -58,6 +63,17 @@ function handoffService(home: string, overrides: Partial<GatewayService> = {}, p
     isLoaded: async () => true,
     ...overrides,
   });
+}
+
+function replaceExecutorIdentity(home: string, root: string, identity: string) {
+  const db = nodeSqlite.openNodeSqliteDatabase(path.join(home, "managed-update-handoffs.sqlite"));
+  try {
+    db.prepare(
+      "UPDATE managed_update_handoffs SET payload_json = json_set(payload_json, '$.executor.startIdentity', ?) WHERE install_root = ?",
+    ).run(identity, root);
+  } finally {
+    db.close();
+  }
 }
 
 const servingAncestorMaintenanceCases = [
@@ -127,30 +143,22 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
       const inherited = external || unresolved;
       const reparented = "membership" in scenario;
       const gatewayPid = external || reparented ? 2 : process.ppid;
-      vi.spyOn(schtasksExec, "execSchtasks").mockResolvedValue({
-        code: 0,
-        stdout: "<Task><Settings><Enabled>false</Enabled></Settings></Task>",
-        stderr: "",
-      });
+      vi.spyOn(schtasksExec, "execSchtasks").mockResolvedValue(
+        commandResult("<Task><Settings><Enabled>false</Enabled></Settings></Task>"),
+      );
       const root = await fs.realpath(process.cwd());
       const packageRoot = splitRoot ? path.join(home, "package-B") : root;
       if (splitRoot) {
         await fs.mkdir(packageRoot);
       }
-      const metaPath = path.join(home, "handoff-meta.json");
       const runId = randomUUID();
       vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(home);
       createUpdateRun({ runId, trigger: "cli" }, { env: process.env });
-      await fs.writeFile(
-        metaPath,
-        JSON.stringify({
-          version: 1,
-          meta: {
-            root: identity === "different root" ? home : packageRoot,
-            runId: identity === "different run" ? randomUUID() : runId,
-            handoffId: "owned-handoff",
-          },
-        }),
+      const metaPath = await writeHandoffMeta(
+        home,
+        identity === "different root" ? home : packageRoot,
+        identity === "different run" ? randomUUID() : runId,
+        "owned-handoff",
       );
       const store = createManagedHandoffLeaseStore();
       if (identity !== "missing lease") {
@@ -165,16 +173,7 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
         if (identity === "parent lease") {
           expect(store.bind(claim.lease, process.ppid)).not.toBeNull();
         } else if (identity === "stale start identity") {
-          const db = nodeSqlite.openNodeSqliteDatabase(
-            path.join(home, "managed-update-handoffs.sqlite"),
-          );
-          try {
-            db.prepare(
-              "UPDATE managed_update_handoffs SET payload_json = json_set(payload_json, '$.executor.startIdentity', 'stale') WHERE install_root = ?",
-            ).run(packageRoot);
-          } finally {
-            db.close();
-          }
+          replaceExecutorIdentity(home, packageRoot, "stale");
         }
       }
       // Create the real lease on the host filesystem before simulating its service manager.
@@ -291,22 +290,13 @@ it
   "rechecks the managed handoff identity immediately before stopping the %s Gateway",
   (platform) =>
     withServiceHome(async (home) => {
-      vi.spyOn(schtasksExec, "execSchtasks").mockResolvedValue({
-        code: 0,
-        stdout: "<Task><Settings><Enabled>false</Enabled></Settings></Task>",
-        stderr: "",
-      });
+      vi.spyOn(schtasksExec, "execSchtasks").mockResolvedValue(
+        commandResult("<Task><Settings><Enabled>false</Enabled></Settings></Task>"),
+      );
       const root = await fs.realpath(process.cwd());
-      const metaPath = path.join(home, "handoff-meta.json");
       const runId = randomUUID();
       createUpdateRun({ runId, trigger: "cli" }, { env: process.env });
-      await fs.writeFile(
-        metaPath,
-        JSON.stringify({
-          version: 1,
-          meta: { root, runId, handoffId: "owned-handoff" },
-        }),
-      );
+      const metaPath = await writeHandoffMeta(home, root, runId, "owned-handoff");
       const store = createManagedHandoffLeaseStore();
       const claim = store.acquire(root, "owned-handoff", { kind: "update" });
       if (claim.kind !== "acquired") {
@@ -320,16 +310,7 @@ it
           readRuntime: async () => {
             runtimeReads += 1;
             if (runtimeReads === 2) {
-              const db = nodeSqlite.openNodeSqliteDatabase(
-                path.join(home, "managed-update-handoffs.sqlite"),
-              );
-              try {
-                db.prepare(
-                  "UPDATE managed_update_handoffs SET payload_json = json_set(payload_json, '$.executor.startIdentity', 'replaced') WHERE install_root = ?",
-                ).run(root);
-              } finally {
-                db.close();
-              }
+              replaceExecutorIdentity(home, root, "replaced");
             }
             return {
               status: "running",
@@ -351,10 +332,8 @@ it
             const { recordPhase } = createUpdateCommandExecutionGuards({ run: updateRun }, root);
             await expect(
               maybeStopManagedServiceBeforeMutableUpdate({
+                ...maintenanceDefaults,
                 root,
-                updateInstallKind: "package",
-                shouldRestart: true,
-                jsonMode: true,
                 phase: "prepare",
                 updateRun,
                 recordPhase,
@@ -387,10 +366,8 @@ it.runIf(process.platform === "linux" || process.platform === "darwin")(
       mocks.service.mockReturnValue(service);
       await expect(
         maybeStopManagedServiceBeforeMutableUpdate({
+          ...maintenanceDefaults,
           root,
-          updateInstallKind: "package",
-          shouldRestart: true,
-          jsonMode: true,
           phase: "prepare",
         }),
       ).rejects.toMatchObject({
@@ -424,10 +401,8 @@ it
       });
       mocks.service.mockReturnValue(service);
       const outcome = await maybeStopManagedServiceBeforeMutableUpdate({
+        ...maintenanceDefaults,
         root,
-        updateInstallKind: "package",
-        shouldRestart: true,
-        jsonMode: true,
         phase,
         handoffFromGateway: async () => false,
       });

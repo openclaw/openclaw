@@ -36,6 +36,11 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import {
+  gatewayCommand,
+  nativeResult,
+  writeHandoffMeta,
+} from "./update-command-service-fixtures.test-support.js";
 
 const { mocks, withServiceHome } =
   await import("./update-command-service-maintenance.test-support.js");
@@ -94,7 +99,6 @@ it
     try {
       await once(child.stdout!, "data");
       const gatewayPid = child.pid!;
-      const metaPath = path.join(home, "handoff-meta.json");
       const store = createManagedHandoffLeaseStore({
         databasePath: resolveManagedUpdateLeaseDatabasePath(),
         serviceManagerEnv: process.env,
@@ -104,13 +108,7 @@ it
         throw new Error("fixture could not acquire its handoff lease");
       }
       createUpdateRun({ runId, trigger: "cli" }, { env: process.env });
-      await fs.writeFile(
-        metaPath,
-        JSON.stringify({
-          version: 1,
-          meta: { root: callerRoot, runId, handoffId: claim.lease.owner },
-        }),
-      );
+      const metaPath = await writeHandoffMeta(home, callerRoot, runId, claim.lease.owner);
       if (scenario === "unrecorded helper") {
         expect(store.release(claim.lease)).toBe(true);
       }
@@ -157,7 +155,7 @@ it
         plist,
         buildLaunchAgentPlist({
           label,
-          programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
+          programArguments: gatewayCommand(home, root).programArguments,
           stdoutPath: path.join(home, "stdout.log"),
           stderrPath: path.join(home, "stderr.log"),
           environment: effectiveEnv,
@@ -218,10 +216,10 @@ it
       vi.spyOn(launchdExec, "execLaunchctl").mockImplementation(async (args) => {
         nativeCalls.push(args);
         if (args[0] === "print-disabled") {
-          return { code: 0, termination: "exit", stdout: `"${label}" => enabled`, stderr: "" };
+          return nativeResult(`"${label}" => enabled`);
         }
         if (args[0] === "print" && args[1]?.startsWith("system/")) {
-          return { code: 113, termination: "exit", stdout: "", stderr: "Could not find service" };
+          return nativeResult("", 113, "Could not find service");
         }
         if (args[0] === "print") {
           inspections += 1;
@@ -229,19 +227,14 @@ it
             expect(store.release(claim.lease)).toBe(true);
           }
           return loaded
-            ? {
-                code: 0,
-                termination: "exit",
-                stdout: `${args[1]} = {\n\tstate = running\n\tpid = ${gatewayPid}\n}`,
-                stderr: "",
-              }
-            : { code: 113, termination: "exit", stdout: "", stderr: "Could not find service" };
+            ? nativeResult(`${args[1]} = {\n\tstate = running\n\tpid = ${gatewayPid}\n}`)
+            : nativeResult("", 113, "Could not find service");
         }
         if (args[0] === "disable") {
           if (scenario === "revoked after disable") {
             expect(store.release(claim.lease)).toBe(true);
           }
-          return { code: 0, termination: "exit", stdout: "", stderr: "" };
+          return nativeResult();
         }
         expect(args[0]).toBe("bootout");
         if (retainedService) {
@@ -258,7 +251,7 @@ it
         await stopChildProcess(child, 5000);
         await closed;
         loaded = false;
-        return { code: 0, termination: "exit", stdout: "", stderr: "" };
+        return nativeResult();
       });
       await withEnvAsync(
         {

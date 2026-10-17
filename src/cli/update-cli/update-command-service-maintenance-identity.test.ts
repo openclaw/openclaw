@@ -6,7 +6,11 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import * as ancestry from "../../infra/restart-stale-pids.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
-import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
+import { gatewayCommand } from "./update-command-service-fixtures.test-support.js";
+import {
+  maybeStopManagedServiceBeforeMutableUpdate,
+  type PreManagedServiceStop,
+} from "./update-command-service-maintenance.js";
 
 const { mocks, withServiceHome, fixtureGatewayPid } =
   await import("./update-command-service-maintenance.test-support.js");
@@ -26,6 +30,10 @@ const params = {
   jsonMode: true,
   phase: "inspect" as const,
 };
+const ownedIdentity = { serviceManagerUid: 2001, serviceUpdateVerdict: { kind: "owned" } };
+const inspect = () => maybeStopManagedServiceBeforeMutableUpdate(params);
+const prepare = (expectedService: PreManagedServiceStop) =>
+  maybeStopManagedServiceBeforeMutableUpdate({ ...params, phase: "prepare", expectedService });
 
 async function withEffectiveUid<T>(uid: number, run: () => Promise<T>): Promise<T> {
   const existingGeteuid = Object.getOwnPropertyDescriptor(process, "geteuid");
@@ -52,10 +60,7 @@ function mockService(
   const service = createMockGatewayService({
     readCommand: async (env) => {
       seenRoutes?.push(env.DBUS_SESSION_BUS_ADDRESS);
-      return {
-        programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
-        environment: { HOME: home },
-      };
+      return gatewayCommand(home);
     },
     readRuntime: async () => ({
       status: "running",
@@ -76,17 +81,10 @@ it.each([
   withServiceHome(async (home) => {
     let managerUid: number | undefined = 2001;
     const { stop } = mockService(home, () => managerUid);
-    const before = await maybeStopManagedServiceBeforeMutableUpdate(params);
-    expect(before.serviceUpdateVerdict?.kind).toBe("owned");
-    expect(before).toMatchObject({ serviceManagerUid: 2001 });
+    const before = await inspect();
+    expect(before).toMatchObject(ownedIdentity);
     managerUid = scenario.uid;
-    await expect(
-      maybeStopManagedServiceBeforeMutableUpdate({
-        ...params,
-        phase: "prepare",
-        expectedService: before,
-      }),
-    ).rejects.toThrow(/ownership|manager identity/);
+    await expect(prepare(before)).rejects.toThrow(/ownership|manager identity/);
     expect(stop).not.toHaveBeenCalled();
   }),
 );
@@ -95,11 +93,8 @@ it("retains the inspected systemd manager route during preparation", () =>
   withServiceHome(async (home) => {
     const seenRoutes: Array<string | undefined> = [];
     const { stop } = mockService(home, () => 2001, seenRoutes);
-    const before = await maybeStopManagedServiceBeforeMutableUpdate(params);
-    expect(before).toMatchObject({
-      serviceManagerUid: 2001,
-      serviceUpdateVerdict: { kind: "owned" },
-    });
+    const before = await inspect();
+    expect(before).toMatchObject(ownedIdentity);
     const admittedRoute = "unix:path=/run/user/2001/bus";
     before.serviceEnv = {
       ...before.serviceEnv,
@@ -107,17 +102,7 @@ it("retains the inspected systemd manager route during preparation", () =>
     };
     const readsBeforePreparation = seenRoutes.length;
 
-    await expect(
-      maybeStopManagedServiceBeforeMutableUpdate({
-        ...params,
-        phase: "prepare",
-        expectedService: before,
-      }),
-    ).resolves.toMatchObject({
-      stopped: true,
-      serviceManagerUid: 2001,
-      serviceUpdateVerdict: { kind: "owned" },
-    });
+    await expect(prepare(before)).resolves.toMatchObject({ stopped: true, ...ownedIdentity });
 
     expect(stop).toHaveBeenCalledOnce();
     expect(new Set(seenRoutes.slice(readsBeforePreparation))).toEqual(new Set([admittedRoute]));
@@ -130,17 +115,10 @@ it("names both installations when the admitted Gateway command moves to another 
     await fs.writeFile(path.join(otherRoot, "package.json"), '{"name":"openclaw"}');
     await fs.writeFile(path.join(otherRoot, "openclaw.mjs"), "");
     const service = mockService(home, () => 2001);
-    const before = await maybeStopManagedServiceBeforeMutableUpdate(params);
+    const before = await inspect();
     expect(before.serviceUpdateVerdict?.kind).toBe("owned");
-    service.readCommand = async () => ({
-      programArguments: [process.execPath, path.join(otherRoot, "openclaw.mjs"), "gateway"],
-      environment: { HOME: home },
-    });
-    const failure = await maybeStopManagedServiceBeforeMutableUpdate({
-      ...params,
-      phase: "prepare",
-      expectedService: before,
-    }).catch((error: unknown) => error);
+    service.readCommand = async () => gatewayCommand(home, otherRoot);
+    const failure = await prepare(before).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(Error);
     if (!(failure instanceof Error)) {
       throw new Error("Expected installation ownership refusal");
@@ -170,14 +148,7 @@ it("loads a collected systemd unit from a shipped stopped handoff", () =>
           if (collected) {
             loadUids.push(options?.loadForInspection?.managerUid);
           }
-          return {
-            programArguments: [
-              process.execPath,
-              path.join(process.cwd(), "openclaw.mjs"),
-              "gateway",
-            ],
-            environment: { HOME: home },
-          };
+          return gatewayCommand(home);
         },
         readRuntime: async (_env, options) => {
           if (collected) {
@@ -193,12 +164,8 @@ it("loads a collected systemd unit from a shipped stopped handoff", () =>
       });
       mocks.service.mockReturnValue(service);
 
-      const before = await maybeStopManagedServiceBeforeMutableUpdate(params);
-      expect(before).toMatchObject({
-        stopped: false,
-        serviceManagerUid: managerUid,
-        serviceUpdateVerdict: { kind: "owned" },
-      });
+      const before = await inspect();
+      expect(before).toMatchObject({ stopped: false, ...ownedIdentity });
       before.stopped = true;
       before.stoppedAtMs = Date.now();
       before.serviceManagerUid = undefined;
@@ -210,11 +177,7 @@ it("loads a collected systemd unit from a shipped stopped handoff", () =>
           expectedService: before,
           assertCurrent: () => {},
         }),
-      ).resolves.toMatchObject({
-        stopped: false,
-        serviceManagerUid: managerUid,
-        serviceUpdateVerdict: { kind: "owned" },
-      });
+      ).resolves.toMatchObject({ stopped: false, ...ownedIdentity });
       expect(loadUids).not.toHaveLength(0);
       expect(new Set(loadUids)).toEqual(new Set([managerUid]));
     }),
