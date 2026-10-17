@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
+import * as usageQuery from "../../../../src/shared/usage-query.js";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createRecordedCostUsage } from "./test-helpers/recorded-cost.test-support.ts";
@@ -9,6 +10,7 @@ import {
   buildAggregatesFromSessions,
   projectUsageData,
   createUsageProps,
+  createUsageOverview,
   usageSession,
 } from "./view.test-support.ts";
 import { renderUsage } from "./view.tsx";
@@ -81,6 +83,51 @@ function averageCostSummary(container: ParentNode) {
 }
 
 describe("renderUsage", () => {
+  it("parses each draft once for chips, suggestions, and every filter", () => {
+    const base = createUsageProps();
+    const [filters, setFilters] = createSignal({ ...base.filters, queryDraft: "provider:OpenAI" });
+    const [display, setDisplay] = createSignal(base.display);
+    const parse = vi.spyOn(usageQuery, "extractQueryTerms");
+    try {
+      const container = mountUsage({
+        ...base,
+        data: {
+          ...base.data,
+          overview: createUsageOverview({
+            filterOptions: {
+              agent: [],
+              channel: ["slack"],
+              provider: ["OpenAI"],
+              model: ["synthetic-model"],
+              tool: ["read"],
+            },
+          }),
+        },
+        get filters() {
+          return filters();
+        },
+        get display() {
+          return display();
+        },
+      });
+      expect(container.querySelectorAll(".usage-filter-select")).toHaveLength(4);
+      expect(textAt(container, ".usage-query-suggestion")).toBe("provider:OpenAI");
+      expect(parse).toHaveBeenCalledExactlyOnceWith("provider:OpenAI");
+
+      setDisplay((current) => ({ ...current, chartMode: "cost" }));
+      flush();
+      expect(parse).toHaveBeenCalledTimes(1);
+
+      setFilters((current) => ({ ...current, queryDraft: "channel:slack" }));
+      flush();
+      expect(textAt(container, ".usage-query-suggestion")).toBe("channel:slack");
+      expect(parse).toHaveBeenCalledTimes(2);
+      expect(parse).toHaveBeenLastCalledWith("channel:slack");
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
   it.each(["session", "day"] as const)(
     "restores the range warning after clearing a known-zero %s filter",
     (filter) => {
