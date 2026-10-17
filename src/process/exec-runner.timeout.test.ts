@@ -33,29 +33,21 @@ function createCommand() {
   const output = { stdout: "", stderr: "" };
   child.stdout.on("data", (chunk: Buffer) => (output.stdout += chunk.toString()));
   child.stderr.on("data", (chunk: Buffer) => (output.stderr += chunk.toString()));
-  const completion = createDeferredCore<{
-    exitCode: number | undefined;
-    signal: NodeJS.Signals | undefined;
-    failed: boolean;
-    isTerminated: boolean;
-    stdout: Buffer;
-    stderr: Buffer;
-  }>();
+  const snapshot = () => ({
+    exitCode: child.exitCode ?? undefined,
+    signal: child.signalCode ?? undefined,
+    failed: child.exitCode !== 0,
+    isTerminated: child.signalCode !== null,
+    stdout: Buffer.from(output.stdout),
+    stderr: Buffer.from(output.stderr),
+  });
+  const completion = createDeferredCore<ReturnType<typeof snapshot>>();
   const emitExit = (code: number | null, signal: NodeJS.Signals | null = null) => {
     child.exitCode = code;
     child.signalCode = signal;
     child.emit("exit", code, signal);
   };
-  const settle = () => {
-    completion.resolve({
-      exitCode: child.exitCode ?? undefined,
-      signal: child.signalCode ?? undefined,
-      failed: child.exitCode !== 0,
-      isTerminated: child.signalCode !== null,
-      stdout: Buffer.from(output.stdout),
-      stderr: Buffer.from(output.stderr),
-    });
-  };
+  const settle = () => completion.resolve(snapshot());
   const exit = (code: number | null, signal: NodeJS.Signals | null = null) => {
     emitExit(code, signal);
     settle();
@@ -89,95 +81,119 @@ describe("command deadline event ordering", () => {
     vi.useRealTimers();
   });
 
-  it.each(["complete", "idle", "cancel"] as const)(
-    "keeps checkout progress alive beyond five minutes and settles on %s",
-    async (outcome) => {
-      const command = createCommand();
-      const abort = new AbortController();
-      const result = materializeManagedWorktree(
-        { destination: "/fixture", commit: "HEAD" },
-        { timeoutMs: 300_000, signal: abort.signal, killProcessTree: true },
-      );
-      await vi.advanceTimersByTimeAsync(240_000);
+  it.each([
+    ["complete", "exit"],
+    ["idle", "no-output-timeout"],
+    ["cancel", "signal"],
+    ["absolute", "timeout"],
+  ] as const)("checkout progress honors %s completion", async (outcome, termination) => {
+    const command = createCommand();
+    const abort = new AbortController();
+    const absolute = outcome === "absolute";
+    const result = materializeManagedWorktree(
+      {
+        destination: "/fixture",
+        commit: "HEAD",
+        ...(absolute ? { executionTimeoutMs: 600_000 } : {}),
+      },
+      absolute
+        ? { killProcessTree: true }
+        : { timeoutMs: 300_000, signal: abort.signal, killProcessTree: true },
+    );
+    await vi.advanceTimersByTimeAsync(absolute ? 540_000 : 240_000);
+    if (!absolute) {
       command.child.stderr.emit("data", Buffer.from("Updating files: 20%\r"));
       await vi.advanceTimersByTimeAsync(240_000);
-      command.child.stderr.emit("data", Buffer.from("Updating files: 40%\r"));
+    }
+    if (absolute) {
       expect(command.kill).not.toHaveBeenCalled();
-      if (outcome === "complete") {
-        command.exit(0);
-      } else if (outcome === "cancel") {
-        abort.abort();
-      } else {
-        await vi.advanceTimersByTimeAsync(300_001);
-      }
-      await vi.runAllTimersAsync();
-      await expect(result).resolves.toMatchObject({
-        termination:
-          outcome === "complete" ? "exit" : outcome === "cancel" ? "signal" : "no-output-timeout",
-        killed: outcome !== "complete",
-      });
-      expect(spawnMock.mock.calls[0]?.[0]).toEqual(
-        expect.arrayContaining(["read-tree", "--verbose", "-u", "HEAD"]),
-      );
-    },
-  );
-
-  it("preserves the provisioning owner's absolute checkout deadline despite progress", async () => {
-    const command = createCommand();
-    const result = materializeManagedWorktree(
-      { destination: "/fixture", commit: "HEAD", executionTimeoutMs: 600_000 },
-      { killProcessTree: true },
-    );
-    await vi.advanceTimersByTimeAsync(540_000);
+    }
+    command.child.stderr.emit("data", Buffer.from("Updating files: 40%\r"));
     expect(command.kill).not.toHaveBeenCalled();
-    command.child.stderr.emit("data", Buffer.from("Updating files: 20%\r"));
-    await vi.advanceTimersByTimeAsync(60_001);
+    if (outcome === "complete") {
+      command.exit(0);
+    } else if (outcome === "cancel") {
+      abort.abort();
+    } else {
+      await vi.advanceTimersByTimeAsync(absolute ? 60_001 : 300_001);
+    }
     await vi.runAllTimersAsync();
-    await expect(result).resolves.toMatchObject({ termination: "timeout", killed: true });
-    expect(command.kill).toHaveBeenCalledOnce();
+    await expect(result).resolves.toMatchObject({
+      termination,
+      killed: outcome !== "complete",
+    });
+    if (absolute) {
+      expect(command.kill).toHaveBeenCalledOnce();
+    }
+    expect(spawnMock.mock.calls[0]?.[0]).toEqual(
+      expect.arrayContaining(["read-tree", "--verbose", "-u", "HEAD"]),
+    );
   });
 
   it.each([
-    { runner: "command", deadline: "timeoutMs", refresh: false },
-    { runner: "command", deadline: "noOutputTimeoutMs", refresh: false },
-    { runner: "command", deadline: "noOutputTimeoutMs", refresh: true },
-    { runner: "exec", deadline: "timeoutMs", refresh: false },
-  ] as const)(
-    "preserves $runner success behind $deadline (refresh=$refresh)",
-    async ({ runner, deadline, refresh }) => {
-      const command = createCommand();
-      const result =
-        runner === "exec"
-          ? runExec(process.execPath, ["--version"], { timeoutMs: 20, logOutput: false })
-          : runCommandWithTimeout([process.execPath, "--version"], { [deadline]: 20 });
-      // Exit/output may already be pending when Node delivers the deadline callback.
+    { runner: "command", deadline: "timeoutMs", timing: "pending" },
+    { runner: "command", deadline: "noOutputTimeoutMs", timing: "pending" },
+    { runner: "command", deadline: "noOutputTimeoutMs", timing: "refresh" },
+    { runner: "exec", deadline: "timeoutMs", timing: "pending" },
+    { runner: "command", deadline: "timeoutMs", timing: "before deadline" },
+    { runner: "tree", deadline: "timeoutMs", timing: "before deadline" },
+    { runner: "exec", deadline: "timeoutMs", timing: "before deadline" },
+  ] as const)("$runner success: $deadline, $timing exit", async ({ runner, deadline, timing }) => {
+    const command = createCommand();
+    const earlyExit = timing === "before deadline";
+    const args = earlyExit ? [] : ["--version"];
+    const result =
+      runner === "exec"
+        ? runExec(process.execPath, args, { timeoutMs: 20, logOutput: false })
+        : runCommandWithTimeout([process.execPath, ...args], {
+            [deadline]: 20,
+            ...(earlyExit ? { killProcessTree: runner === "tree" } : {}),
+          });
+    if (earlyExit) {
+      command.emitExit(0);
+      await vi.advanceTimersByTimeAsync(21);
+      command.child.stdout.end("complete");
+      command.child.stderr.end();
+      await vi.advanceTimersByTimeAsync(101);
+      command.settle();
+      await expect(result).resolves.toMatchObject({
+        stdout: "complete",
+        ...(runner !== "exec" ? { code: 0, termination: "exit" } : {}),
+      });
+    } else {
+      // Pending exit/output must beat a delivered deadline; idle output refreshes its budget.
       vi.advanceTimersByTime(20);
       command.child.stdout.emit("data", Buffer.from("version\n"));
       command.child.stderr.emit("data", Buffer.from("diagnostic\n"));
-      if (refresh) {
+      if (timing === "refresh") {
         await vi.advanceTimersByTimeAsync(19);
         expect(command.kill).not.toHaveBeenCalled();
       }
       command.exit(0);
       await vi.runAllTimersAsync();
+      const output = { stdout: "version\n", stderr: "diagnostic\n" };
       if (runner === "exec") {
-        await expect(result).resolves.toEqual({ stdout: "version\n", stderr: "diagnostic\n" });
+        await expect(result).resolves.toEqual(output);
       } else {
         await expect(result).resolves.toMatchObject({
+          ...output,
           code: 0,
           termination: "exit",
-          stdout: "version\n",
-          stderr: "diagnostic\n",
           killed: false,
         });
       }
-      expect(command.kill).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["timeoutMs", "noOutputTimeoutMs", "exec"] as const)(
-    "terminates running work after %s",
-    async (deadline) => {
+    }
+    expect(command.kill).not.toHaveBeenCalled();
+  });
+  it.each([
+    { deadline: "timeoutMs", stream: undefined },
+    { deadline: "noOutputTimeoutMs", stream: undefined },
+    { deadline: "exec", stream: undefined },
+    { deadline: "timeoutMs", stream: "stdout" },
+    { deadline: "noOutputTimeoutMs", stream: "stderr" },
+  ] as const)(
+    "$deadline terminates running work or held $stream EOF",
+    async ({ deadline, stream }) => {
       const command = createCommand();
       if (deadline === "exec") {
         command.kill.mockImplementation(() => {
@@ -188,72 +204,35 @@ describe("command deadline event ordering", () => {
       const result =
         deadline === "exec"
           ? runExec(process.execPath, [], { timeoutMs: 20, logOutput: false })
-          : runCommandWithTimeout([process.execPath], { [deadline]: 20 });
+          : runCommandWithTimeout([process.execPath], {
+              [deadline]: 20,
+              ...(stream ? { killProcessTree: true } : {}),
+            });
       const assertion =
         deadline === "exec"
           ? expect(result).rejects.toMatchObject({ timedOut: true, exitCode: 0 })
           : expect(result).resolves.toMatchObject({
               code: 124,
               termination: deadline === "timeoutMs" ? "timeout" : "no-output-timeout",
-              signal: "SIGTERM",
-              killed: true,
+              ...(!stream ? { signal: "SIGTERM", killed: true } : {}),
             });
-      await vi.runAllTimersAsync();
+      let pipeStillOpen: boolean | undefined;
+      if (stream) {
+        command.emitExit(0);
+        command.child[stream === "stdout" ? "stderr" : "stdout"].end();
+        await vi.advanceTimersByTimeAsync(21);
+        await vi.advanceTimersByTimeAsync(100);
+        pipeStillOpen = !command.child[stream].destroyed;
+        expect(command.kill).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        command.settle();
+      } else {
+        await vi.runAllTimersAsync();
+      }
       await assertion;
-      expect(command.kill).toHaveBeenCalledOnce();
-    },
-  );
-
-  it.each(["command", "tree", "exec"] as const)(
-    "preserves %s success when exit precedes the deadline decision and EOF follows it",
-    async (runner) => {
-      const command = createCommand();
-      const result =
-        runner === "exec"
-          ? runExec(process.execPath, [], { timeoutMs: 20, logOutput: false })
-          : runCommandWithTimeout([process.execPath], {
-              timeoutMs: 20,
-              killProcessTree: runner === "tree",
-            });
-      command.emitExit(0);
-      await vi.advanceTimersByTimeAsync(21);
-      command.child.stdout?.end("complete");
-      command.child.stderr?.end();
-      await vi.advanceTimersByTimeAsync(101);
-      command.settle();
-
-      await expect(result).resolves.toMatchObject({
-        stdout: "complete",
-        ...(runner !== "exec" ? { code: 0, termination: "exit" } : {}),
-      });
-      expect(command.kill).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    { deadline: "timeoutMs", stream: "stdout" },
-    { deadline: "noOutputTimeoutMs", stream: "stderr" },
-  ] as const)(
-    "times out owned $stream held past the bounded EOF grace after $deadline",
-    async ({ deadline, stream }) => {
-      const command = createCommand();
-      const result = runCommandWithTimeout([process.execPath], {
-        [deadline]: 20,
-        killProcessTree: true,
-      });
-      command.emitExit(0);
-      command.child[stream === "stdout" ? "stderr" : "stdout"].end();
-      await vi.advanceTimersByTimeAsync(21);
-      await vi.advanceTimersByTimeAsync(100);
-      const pipeStillOpen = !command.child[stream].destroyed;
-      expect(command.kill).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      command.settle();
-      await expect(result).resolves.toMatchObject({
-        code: 124,
-        termination: deadline === "timeoutMs" ? "timeout" : "no-output-timeout",
-      });
-      expect(pipeStillOpen).toBe(true);
+      if (stream) {
+        expect(pipeStillOpen).toBe(true);
+      }
       expect(command.kill).toHaveBeenCalledOnce();
     },
   );
