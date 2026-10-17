@@ -32,6 +32,7 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
+import { prepareCliHistoryCompactionBoundary } from "../cli-runner/history-boundary.js";
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
 import type { AgentHarnessCompactionSourceAuthority } from "../harness/host-source-authority.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
@@ -360,6 +361,7 @@ export async function executeQueuedContextEngineCompaction(input: {
       // Queued callers keep result-based failures; recovery rejects cancellation.
       let result: Awaited<ReturnType<typeof contextEngine.compact>>;
       let committedCompaction: CompactionAccountingReceipt | undefined;
+      let commitCliHistoryCompaction: (() => Promise<void>) | undefined;
       try {
         const compactionSessionTarget = projectQueuedCompactionSessionTarget(params);
         const ownedCompactor: Pick<ContextEngine, "compact" | "info"> = {
@@ -393,9 +395,13 @@ export async function executeQueuedContextEngineCompaction(input: {
               host.withCompactionPersistence,
               host.withCompactionPersistenceAsync,
             );
-            return withOwnedSessionTranscriptWrites(writeContext, () =>
-              contextEngine.compact(backendParams),
-            ).finally(clearClaim);
+            return withOwnedSessionTranscriptWrites(writeContext, async () => {
+              commitCliHistoryCompaction = await prepareCliHistoryCompactionBoundary(
+                runtimeTarget,
+                writeContext.assertCommitAllowed,
+              );
+              return contextEngine.compact(backendParams);
+            }).finally(clearClaim);
           },
         };
         result = await compactContextEngineWithSafetyTimeout(
@@ -476,6 +482,9 @@ export async function executeQueuedContextEngineCompaction(input: {
         // Completion survives cancellation; a proposed successor's token snapshot
         // belongs to that identity only after the host accepts it.
         tokensAfter = sameTarget ? result.result?.tokensAfter : undefined;
+        if (!sameTarget) {
+          commitCliHistoryCompaction = undefined;
+        }
         try {
           successor = await acceptCompactionSuccessor({
             config: params.config,
@@ -564,6 +573,9 @@ export async function executeQueuedContextEngineCompaction(input: {
               await host.onHostCompactionTranscriptSettled?.(hostCommit);
             }
           }
+        }
+        if (result.ok && result.compacted && canContinue()) {
+          await commitCliHistoryCompaction?.();
         }
         if (engineOwnsCompaction && result.ok && result.compacted && canContinue()) {
           await runPostCompactionSideEffects({

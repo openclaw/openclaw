@@ -31,7 +31,10 @@ import { persistCliSessionBindingResult } from "../cli-session-store.js";
 import { claimAgentSessionWriter } from "../embedded-agent-runner/run/session-bootstrap.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../sessions/session-manager.js";
 import { persistCliAssistantTranscript } from "./cli-run-transcript.js";
-import { prepareCliHistoryBoundary } from "./history-boundary.js";
+import {
+  prepareCliHistoryBoundary,
+  prepareCliHistoryCompactionBoundary,
+} from "./history-boundary.js";
 import { buildCliSessionHistoryPrompt, loadCliSessionPromptContext } from "./session-history.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -316,7 +319,11 @@ describe("CLI transcript account boundary", () => {
       if (!retained) {
         throw new Error("Missing retained turn");
       }
+      const commit = await prepareCliHistoryCompactionBoundary(f.target, () => {});
+      await manager.appendThinkingLevelChange("off");
+      await manager.appendCustomEntryAsync("model-snapshot", { provider: "summary-fixture" });
       await manager.appendCompactionAsync("Compacted account summary", retained, 1000);
+      await commit?.();
       await f.run("epoch-a", async (allowed, params) => {
         const prompt = await history(allowed, params);
         if (foreignTail) {

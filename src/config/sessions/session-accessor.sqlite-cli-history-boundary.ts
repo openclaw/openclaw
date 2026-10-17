@@ -2,7 +2,6 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   getCliHistoryWriter,
   advanceCliHistoryBoundary,
-  reanchorCliHistoryBoundaryAfterCompaction,
   type CliHistoryWriterFacts,
 } from "./cli-history-boundary.js";
 import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
@@ -15,7 +14,6 @@ export function advanceCliHistoryBoundaryInTransaction(
   database: OpenClawAgentDatabase,
   scope: ResolvedTranscriptScope,
   seq: number,
-  compaction: boolean,
 ): void {
   const writer = getCliHistoryWriter({ ...scope, storePath: database.path });
   if (writer) {
@@ -26,26 +24,6 @@ export function advanceCliHistoryBoundaryInTransaction(
       writer,
       writer.assertCurrent,
     );
-  }
-  if (compaction) {
-    const entry = readSessionEntryRow(database, scope.sessionKey)?.entry;
-    if (entry) {
-      const generation = readTranscriptGenerationInTransaction(database, scope.sessionId);
-      const boundary = reanchorCliHistoryBoundaryAfterCompaction(
-        entry,
-        scope.sessionId,
-        generation ?? null,
-        seq,
-      );
-      if (boundary !== entry.cliHistoryBoundary) {
-        writeSessionEntry(
-          database,
-          scope.sessionKey,
-          { ...entry, cliHistoryBoundary: boundary },
-          { previousEntry: entry },
-        );
-      }
-    }
   }
 }
 

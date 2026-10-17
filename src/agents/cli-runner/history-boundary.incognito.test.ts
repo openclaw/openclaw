@@ -9,7 +9,10 @@ import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { sessionTranscriptHasContent } from "../command/attempt-execution.helpers.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { persistCliRunBlock } from "./cli-run-transcript.js";
-import { prepareCliHistoryBoundary } from "./history-boundary.js";
+import {
+  prepareCliHistoryBoundary,
+  prepareCliHistoryCompactionBoundary,
+} from "./history-boundary.js";
 import {
   hasCliSessionTranscript,
   loadCliSessionHistoryMessages,
@@ -123,7 +126,10 @@ it("prepares private CLI history and refuses an unattributed append at execution
       const manager = await SessionManager.openAsync(target);
       const retained = manager.getLeafId();
       assert(retained);
+      const commit = await prepareCliHistoryCompactionBoundary(target, () => {});
+      await manager.appendThinkingLevelChange("off");
       await manager.appendCompactionAsync("Private CLI summary", retained, 1000);
+      await commit?.();
       await writer.assertReadable();
       const compacted = JSON.stringify(
         (await loadCliSessionPromptContext({ sessionTarget: target })).reseedMessages,

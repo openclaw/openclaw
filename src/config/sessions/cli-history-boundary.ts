@@ -99,23 +99,3 @@ export function advanceCliHistoryBoundary(
   }
   return { ...entry, cliHistoryBoundary: { ...boundary, generation, maxSeq: range.last } };
 }
-
-/** A summary preserves account ownership only when its entire source was covered. */
-export function reanchorCliHistoryBoundaryAfterCompaction(
-  entry: InternalSessionEntry,
-  sessionId: string,
-  generation: string | null,
-  seq: number,
-): CliHistoryBoundary | undefined {
-  const boundary = entry.cliHistoryBoundary;
-  if (
-    !isKnownCliHistoryBoundary(boundary) ||
-    entry.sessionId !== sessionId ||
-    boundary.sessionId !== sessionId ||
-    boundary.generation !== generation ||
-    boundary.maxSeq !== seq - 1
-  ) {
-    return boundary;
-  }
-  return { ...boundary, maxSeq: seq };
-}

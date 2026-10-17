@@ -2,11 +2,7 @@ import { randomUUID } from "node:crypto";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
-import {
-  advanceCliHistoryBoundary,
-  getCliHistoryWriter,
-  reanchorCliHistoryBoundaryAfterCompaction,
-} from "./cli-history-boundary.js";
+import { advanceCliHistoryBoundary, getCliHistoryWriter } from "./cli-history-boundary.js";
 import type { TranscriptEventAppendOptions } from "./session-accessor.sqlite-contract.js";
 import { pruneSessionActorMemoryReactions } from "./session-actor-memory-reactions.js";
 import type { SessionActorMemoryState } from "./session-actor-memory-state.js";
@@ -141,18 +137,6 @@ export function createSessionActorMemoryEvents(options: {
       if (next) {
         writer.assertCurrent();
         state.hot.entry = next;
-      }
-    }
-    if (isRecord(event) && event.type === "compaction") {
-      const entry = requireEntry();
-      const boundary = reanchorCliHistoryBoundaryAfterCompaction(
-        entry,
-        entry.sessionId,
-        generation,
-        rawSeq,
-      );
-      if (boundary !== entry.cliHistoryBoundary) {
-        state.hot.entry = { ...entry, cliHistoryBoundary: boundary };
       }
     }
     if (isRecord(event) && typeof event.id === "string" && event.type === "message") {
