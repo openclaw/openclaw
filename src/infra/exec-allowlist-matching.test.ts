@@ -2,13 +2,22 @@
 import { describe, expect, it } from "vitest";
 import { matchAllowlist, type ExecAllowlistEntry } from "./exec-approvals.js";
 
-describe("exec allowlist matching", () => {
-  const baseResolution = {
+function executable(
+  rawExecutable: string,
+  resolvedPath = rawExecutable,
+  resolvedRealPath?: string,
+) {
+  return {
     kind: "executable" as const,
-    rawExecutable: "rg",
-    resolvedPath: "/opt/homebrew/bin/rg",
-    executableName: "rg",
+    rawExecutable,
+    resolvedPath,
+    ...(resolvedRealPath ? { resolvedRealPath } : {}),
+    executableName: rawExecutable.split("/").at(-1) ?? rawExecutable,
   };
+}
+
+describe("exec allowlist matching", () => {
+  const baseResolution = executable("rg", "/opt/homebrew/bin/rg");
 
   it("handles wildcard and path matching semantics", () => {
     const cases: Array<{ entries: ExecAllowlistEntry[]; expectedPattern: string | null }> = [
@@ -30,18 +39,8 @@ describe("exec allowlist matching", () => {
   });
 
   it("does not let bare command-name patterns match path-selected executables", () => {
-    const relativeResolution = {
-      kind: "executable" as const,
-      rawExecutable: "./rg",
-      resolvedPath: "/tmp/openclaw-workspace/rg",
-      executableName: "rg",
-    };
-    const absoluteResolution = {
-      kind: "executable" as const,
-      rawExecutable: "/tmp/openclaw-workspace/rg",
-      resolvedPath: "/tmp/openclaw-workspace/rg",
-      executableName: "rg",
-    };
+    const relativeResolution = executable("./rg", "/tmp/openclaw-workspace/rg");
+    const absoluteResolution = executable("/tmp/openclaw-workspace/rg");
 
     expect(matchAllowlist([{ pattern: "rg" }], relativeResolution)).toBeNull();
     expect(matchAllowlist([{ pattern: "rg" }], absoluteResolution)).toBeNull();
@@ -55,13 +54,7 @@ describe("exec allowlist matching", () => {
   });
 
   describe("argPattern path matches", () => {
-    const resolution = {
-      kind: "executable" as const,
-      rawExecutable: "python3",
-      resolvedPath: "/usr/bin/python3",
-      resolvedRealPath: "/usr/bin/python3",
-      executableName: "python3",
-    };
+    const resolution = executable("python3", "/usr/bin/python3", "/usr/bin/python3");
 
     it("ignores legacy generated path-only allow-always entries", () => {
       const legacyGenerated = { pattern: "/usr/bin/python3", source: "allow-always" as const };
@@ -73,10 +66,7 @@ describe("exec allowlist matching", () => {
 
     it("does not discard redirect-shaped direct argv literals", () => {
       const restricted = { pattern: "/usr/bin/python3", argPattern: "^a\\.py$" };
-      const explicit = {
-        pattern: "/usr/bin/python3",
-        argPattern: "^a\\.py 2>/dev/null$",
-      };
+      const explicit = { pattern: "/usr/bin/python3", argPattern: "^a\\.py 2>/dev/null$" };
       const argv = ["python3", "a.py", "2>/dev/null"];
 
       expect(matchAllowlist([restricted], resolution, argv)).toBeNull();
@@ -124,15 +114,7 @@ describe("exec allowlist matching", () => {
   });
 
   it("matches bare wildcard patterns against arbitrary resolved executables", () => {
-    const cases = [
-      baseResolution,
-      {
-        kind: "executable" as const,
-        rawExecutable: "python3",
-        resolvedPath: "/usr/bin/python3",
-        executableName: "python3",
-      },
-    ] as const;
+    const cases = [baseResolution, executable("python3", "/usr/bin/python3")] as const;
     for (const resolution of cases) {
       expect(matchAllowlist([{ pattern: "*" }], resolution)?.pattern).toBe("*");
     }
@@ -142,20 +124,10 @@ describe("exec allowlist matching", () => {
     "rejects wildcard path matches that escape through dot segments",
     () => {
       expect(
-        matchAllowlist([{ pattern: "/usr/bin/**" }], {
-          kind: "executable",
-          rawExecutable: "/usr/bin/../../bin/sh",
-          resolvedPath: "/usr/bin/../../bin/sh",
-          executableName: "sh",
-        }),
+        matchAllowlist([{ pattern: "/usr/bin/**" }], executable("/usr/bin/../../bin/sh")),
       ).toBeNull();
       expect(
-        matchAllowlist([{ pattern: "/usr/bin/**" }], {
-          kind: "executable",
-          rawExecutable: "/usr/bin/sub/../env",
-          resolvedPath: "/usr/bin/sub/../env",
-          executableName: "env",
-        })?.pattern,
+        matchAllowlist([{ pattern: "/usr/bin/**" }], executable("/usr/bin/sub/../env"))?.pattern,
       ).toBe("/usr/bin/**");
     },
   );
@@ -163,33 +135,15 @@ describe("exec allowlist matching", () => {
   it("matches absolute paths containing regex metacharacters literally", () => {
     const plusPathCases = ["/usr/bin/g++", "/usr/bin/clang++"] as const;
     for (const candidatePath of plusPathCases) {
-      const match = matchAllowlist([{ pattern: candidatePath }], {
-        kind: "executable",
-        rawExecutable: candidatePath,
-        resolvedPath: candidatePath,
-        executableName: candidatePath.split("/").at(-1) ?? candidatePath,
-      });
+      const match = matchAllowlist([{ pattern: candidatePath }], executable(candidatePath));
       expect(match?.pattern).toBe(candidatePath);
     }
 
     const literalCases = [
-      {
-        pattern: "/usr/bin/*++",
-        resolution: {
-          kind: "executable",
-          rawExecutable: "/usr/bin/g++",
-          resolvedPath: "/usr/bin/g++",
-          executableName: "g++",
-        },
-      },
+      { pattern: "/usr/bin/*++", resolution: executable("/usr/bin/g++") },
       {
         pattern: "/opt/builds/tool[1](stable)",
-        resolution: {
-          kind: "executable",
-          rawExecutable: "/opt/builds/tool[1](stable)",
-          resolvedPath: "/opt/builds/tool[1](stable)",
-          executableName: "tool[1](stable)",
-        },
+        resolution: executable("/opt/builds/tool[1](stable)"),
       },
     ] as const;
     for (const { pattern, resolution } of literalCases) {
@@ -198,13 +152,11 @@ describe("exec allowlist matching", () => {
   });
 
   it("matches path-shaped allowlist entries against the executable trust realpath", () => {
-    const resolution = {
-      kind: "executable" as const,
-      rawExecutable: "rg",
-      resolvedPath: "/opt/homebrew/bin/rg",
-      resolvedRealPath: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
-      executableName: "rg",
-    };
+    const resolution = executable(
+      "rg",
+      "/opt/homebrew/bin/rg",
+      "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+    );
 
     expect(
       matchAllowlist([{ pattern: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg" }], resolution)

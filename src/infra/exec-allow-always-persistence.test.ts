@@ -18,29 +18,59 @@ function plannedSegments(plan: Awaited<ReturnType<typeof planShellAuthorization>
     : [];
 }
 
+async function decideCommand(
+  command: string,
+  options: Pick<Parameters<typeof planShellAuthorization>[0], "cwd" | "env"> = {},
+) {
+  const plan = await planShellAuthorization({ command, ...options });
+  return resolveAllowAlwaysPersistenceDecision({
+    segments: plannedSegments(plan),
+    commandText: command,
+    platform: process.platform,
+    authorizationPlan: plan,
+    ...options,
+  });
+}
+
+function expectOneShot(
+  decision: ReturnType<typeof resolveAllowAlwaysPersistenceDecision>,
+  reason = "no-reusable-pattern",
+) {
+  expect(decision).toEqual({ kind: "one-shot", reasons: expect.arrayContaining([reason]) });
+}
+
 function createPersistenceFixture(binaries: string[]) {
   const dir = makeExecApprovalsTempDir();
   for (const executable of binaries) {
     makeExecutable(dir, executable);
   }
   const env = makePathEnv(dir);
-  return {
-    dir,
-    decide: async (command: string) => {
-      const plan = await planShellAuthorization({ command, cwd: dir, env });
-      return resolveAllowAlwaysPersistenceDecision({
-        segments: plannedSegments(plan),
-        commandText: command,
-        cwd: dir,
-        env,
-        platform: process.platform,
-        authorizationPlan: plan,
-      });
-    },
-  };
+  return { dir, decide: (command: string) => decideCommand(command, { cwd: dir, env }) };
 }
 
 describe("resolveAllowAlwaysPersistenceDecision", () => {
+  it.each([
+    { binaries: ["pnpm", "tsx"], command: "pnpm -C ./package exec -- tsx ./run.ts" },
+    { binaries: ["pnpm", "tsx"], command: "pnpm dlx --allow-build=tsx tsx ./run.ts" },
+    {
+      binaries: ["pnpm", "npm", "sh", "echo"],
+      command: "pnpm exec -- npm x sh -c 'echo warmup-ok'",
+    },
+    { binaries: ["yarn", "sh", "echo"], command: "yarn sh -c 'echo warmup-ok'" },
+    {
+      binaries: ["env", "nice", "pnpm", "sh", "echo"],
+      command: "nice pnpm exec sh -c 'echo warmup-ok'",
+    },
+    {
+      binaries: ["env", "pnpm"],
+      command: `env -- pnpm exec --shell-mode "sh -c 'echo warmup-ok'"`,
+    },
+    { binaries: ["npx"], command: `npx --call "sh -c 'echo warmup-ok'"` },
+  ])("keeps $command one-shot", async ({ binaries, command }) => {
+    const { decide } = createPersistenceFixture(binaries);
+    expectOneShot(await decide(command));
+  });
+
   it("chooses reusable patterns for allow-always planner candidates", async () => {
     const { dir, decide } = createPersistenceFixture([]);
     const gitPath = makeExecutable(dir, "git");
@@ -51,30 +81,6 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
       kind: "patterns",
       commandText: "git status",
       patterns: [expect.objectContaining({ pattern: gitPath })],
-    });
-  });
-
-  it("keeps pnpm cwd exec approvals one-shot", async () => {
-    const { decide } = createPersistenceFixture(["pnpm", "tsx"]);
-    const command = "pnpm -C ./package exec -- tsx ./run.ts";
-
-    const decision = await decide(command);
-
-    expect(decision).toEqual({
-      kind: "one-shot",
-      reasons: expect.arrayContaining(["no-reusable-pattern"]),
-    });
-  });
-
-  it("keeps pnpm dlx allow-build approvals one-shot", async () => {
-    const { decide } = createPersistenceFixture(["pnpm", "tsx"]);
-    const command = "pnpm dlx --allow-build=tsx tsx ./run.ts";
-
-    const decision = await decide(command);
-
-    expect(decision).toEqual({
-      kind: "one-shot",
-      reasons: expect.arrayContaining(["no-reusable-pattern"]),
     });
   });
 
@@ -109,91 +115,12 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     },
   );
 
-  it("keeps chained package-manager shell carriers one-shot", async () => {
-    const { decide } = createPersistenceFixture(["pnpm", "npm", "sh", "echo"]);
-    const command = "pnpm exec -- npm x sh -c 'echo warmup-ok'";
-
-    const decision = await decide(command);
-
-    expect(decision).toEqual({
-      kind: "one-shot",
-      reasons: expect.arrayContaining(["no-reusable-pattern"]),
-    });
-  });
-
-  it.each(["yarn sh -c 'echo warmup-ok'"])(
-    "keeps yarn script or bin fallback carriers one-shot: %s",
-    async (command) => {
-      const { decide } = createPersistenceFixture(["yarn", "sh", "echo"]);
-
-      const decision = await decide(command);
-
-      expect(decision).toEqual({
-        kind: "one-shot",
-        reasons: expect.arrayContaining(["no-reusable-pattern"]),
-      });
-    },
-  );
-
-  it.each(["nice"])(
-    "keeps dispatch-wrapped package-manager shell carriers one-shot: %s",
-    async (wrapper) => {
-      const { decide } = createPersistenceFixture(["env", "nice", "pnpm", "sh", "echo"]);
-      const command = `${wrapper} pnpm exec sh -c 'echo warmup-ok'`;
-
-      const decision = await decide(command);
-
-      expect(decision).toEqual({
-        kind: "one-shot",
-        reasons: expect.arrayContaining(["no-reusable-pattern"]),
-      });
-    },
-  );
-
-  it.each([{ flag: "--shell-mode", wrapper: "env --" }])(
-    "keeps pnpm shell-mode exec approvals one-shot: $wrapper pnpm exec $flag",
-    async ({ flag, wrapper }) => {
-      const { decide } = createPersistenceFixture(["env", "pnpm"]);
-      const command = `${wrapper} pnpm exec ${flag} "sh -c 'echo warmup-ok'"`.trim();
-
-      const decision = await decide(command);
-
-      expect(decision).toEqual({
-        kind: "one-shot",
-        reasons: expect.arrayContaining(["no-reusable-pattern"]),
-      });
-    },
-  );
-
-  it("keeps package-manager shell-call modes one-shot", async () => {
-    const { decide } = createPersistenceFixture(["npx"]);
-    const command = "npx --call \"sh -c 'echo warmup-ok'\"";
-
-    const decision = await decide(command);
-
-    expect(decision).toEqual({
-      kind: "one-shot",
-      reasons: expect.arrayContaining(["no-reusable-pattern"]),
-    });
-  });
-
   it("keeps shell wrappers without reusable patterns one-shot", async () => {
     const cwd = makeExecApprovalsTempDir();
     const command = "sh -c './scripts/run.sh'";
-    const plan = await planShellAuthorization({ command, cwd });
+    const decision = await decideCommand(command, { cwd });
 
-    const decision = resolveAllowAlwaysPersistenceDecision({
-      segments: plannedSegments(plan),
-      commandText: command,
-      cwd,
-      platform: process.platform,
-      authorizationPlan: plan,
-    });
-
-    expect(decision).toEqual({
-      kind: "one-shot",
-      reasons: expect.arrayContaining(["no-reusable-pattern"]),
-    });
+    expectOneShot(decision);
     expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence: decision })).toEqual([
       "allow-once",
       "deny",
@@ -202,19 +129,9 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
 
   it("keeps shell wrappers without approved cwd one-shot", async () => {
     const command = "sh -c './scripts/run.sh'";
-    const plan = await planShellAuthorization({ command });
+    const decision = await decideCommand(command);
 
-    const decision = resolveAllowAlwaysPersistenceDecision({
-      segments: plannedSegments(plan),
-      commandText: command,
-      platform: process.platform,
-      authorizationPlan: plan,
-    });
-
-    expect(decision).toEqual({
-      kind: "one-shot",
-      reasons: expect.arrayContaining(["no-reusable-pattern"]),
-    });
+    expectOneShot(decision);
     expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence: decision })).toEqual([
       "allow-once",
       "deny",
@@ -224,19 +141,9 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   it.each(["bash --login -c 'echo ok'", "bash -i -c 'echo ok'"])(
     "keeps startup shell wrappers one-shot: %s",
     async (command) => {
-      const plan = await planShellAuthorization({ command });
+      const decision = await decideCommand(command);
 
-      const decision = resolveAllowAlwaysPersistenceDecision({
-        segments: plannedSegments(plan),
-        commandText: command,
-        platform: process.platform,
-        authorizationPlan: plan,
-      });
-
-      expect(decision).toEqual({
-        kind: "one-shot",
-        reasons: expect.arrayContaining(["no-reusable-pattern"]),
-      });
+      expectOneShot(decision);
       expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence: decision })).toEqual([
         "allow-once",
         "deny",
@@ -249,19 +156,9 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     { command: 'sh -c "$SCRIPT"', reason: "runtime-payload" },
     { command: "sh -c '$0 \"$@\"' xargs echo SAFE", reason: "runtime-payload" },
   ] as const)("keeps $command allow-always approvals one-shot", async ({ command, reason }) => {
-    const plan = await planShellAuthorization({ command });
+    const decision = await decideCommand(command);
 
-    const decision = resolveAllowAlwaysPersistenceDecision({
-      segments: plannedSegments(plan),
-      commandText: command,
-      platform: process.platform,
-      authorizationPlan: plan,
-    });
-
-    expect(decision).toEqual({
-      kind: "one-shot",
-      reasons: expect.arrayContaining([reason]),
-    });
+    expectOneShot(decision, reason);
     expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence: decision })).toEqual([
       "allow-once",
       "deny",
@@ -291,10 +188,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
       authorizationPlan: plan,
     });
 
-    expect(decision).toEqual({
-      kind: "one-shot",
-      reasons: expect.arrayContaining(["unplanned"]),
-    });
+    expectOneShot(decision, "unplanned");
   });
 
   it("keeps pipeline shell execution one-shot when a segment cannot be persisted", async () => {
@@ -309,10 +203,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
       authorizationPlan: plan,
     });
 
-    expect(decision).toEqual({
-      kind: "one-shot",
-      reasons: expect.arrayContaining(["no-reusable-pattern"]),
-    });
+    expectOneShot(decision);
     expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence: decision })).toEqual([
       "allow-once",
       "deny",
