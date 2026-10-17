@@ -1,21 +1,24 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import type {
   ChannelMessageSendAttemptContext,
   ChannelMessageSendTextContext,
 } from "../../channels/message/types.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import { resolveDeliveryQueueMediaDir } from "../../config/paths.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.kernel.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
-import { installQueueTestPlugin, matrixDeliveryResult } from "./deliver.custody.test-support.js";
+import {
+  installQueueTestPlugin,
+  createDeliveryBarrier,
+  useDeliveryCleanup,
+  matrixDeliveryResult,
+  useOutboundFixture,
+} from "./deliver.custody.test-support.js";
 import {
   boundedCronCompletionRetention,
   drainMatrixReconnect,
@@ -32,13 +35,13 @@ import {
   markDeliveryPlatformSendAttemptStarted,
 } from "./delivery-queue-storage.js";
 import {
-  installDeliveryQueueTmpDirHooks,
   loadPendingDeliveries,
   readQueuedEntry,
   setQueuedEntryState,
 } from "./delivery-queue.test-helpers.js";
 
-let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
+const outbound = useOutboundFixture();
+const deliverOutboundPayloads = outbound.deliver;
 const destination = {
   cfg: {},
   channel: "matrix",
@@ -46,107 +49,80 @@ const destination = {
   queuePolicy: "required",
 } as const;
 
-function installHeldAdapter(
-  reconciliation = false,
-  renderPresentation?: ChannelOutboundAdapter["renderPresentation"],
-) {
-  const prepared = createDeferred();
-  const releasePreparation = createDeferred();
-  const providerEntered = createDeferred();
-  const releaseProvider = createDeferred();
-  const releaseResource = vi.fn();
-  const resource = { release: releaseResource };
-  const beforeSendAttempt = vi.fn(async (ctx: ChannelMessageSendAttemptContext) => {
-    prepared.resolve();
-    await releasePreparation.promise;
-    if (ctx.kind === "media") {
-      expect(fs.readFileSync(ctx.mediaUrl, "utf8")).toBe("retained attachment");
-    }
-    return resource;
-  });
-  let failProvider = false;
-  const send = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
-    await ctx.onPlatformSendDispatch?.();
-    providerEntered.resolve();
-    await releaseProvider.promise;
-    if (failProvider) {
-      throw new Error("provider disconnected after dispatch");
-    }
-    return matrixDeliveryResult("accepted-message");
-  });
-  const afterSendFailure = vi.fn(({ attemptToken }: { attemptToken?: unknown }) => {
-    if (attemptToken === resource) {
-      releaseResource();
-    }
-  });
-  installQueueTestPlugin({
-    outbound: {
-      ...matrixOutboundForQueueTest,
-      ...(renderPresentation
-        ? { presentationCapabilities: { supported: true }, renderPresentation }
-        : {}),
-    },
-    message: {
-      id: "matrix",
-      durableFinal: {
-        capabilities: {
-          text: true,
-          media: true,
-          ...(reconciliation ? { reconcileUnknownSend: true } : {}),
-        },
-        ...(reconciliation
-          ? {
-              automaticUnknownSendReconciliation: true,
-              reconcileUnknownSendKinds: { text: true, media: true },
-              reconcileUnknownSend: () => ({ status: "not_sent" as const }),
-            }
+describe("queued cancellation during adapter preparation", () => {
+  let stateDir: string;
+  const { release: releases, pending, audit } = useDeliveryCleanup(() => vi.useRealTimers());
+  function adapterFixture(
+    reconciliation = false,
+    renderPresentation?: ChannelOutboundAdapter["renderPresentation"],
+  ) {
+    const preparation = createDeliveryBarrier();
+    const provider = createDeliveryBarrier();
+    const releaseResource = vi.fn();
+    const resource = { release: releaseResource };
+    const beforeSendAttempt = vi.fn(async (ctx: ChannelMessageSendAttemptContext) => {
+      await preparation.hold();
+      if (ctx.kind === "media") {
+        expect(fs.readFileSync(ctx.mediaUrl, "utf8")).toBe("retained attachment");
+      }
+      return resource;
+    });
+    let failProvider = false;
+    const send = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
+      await ctx.onPlatformSendDispatch?.();
+      await provider.hold();
+      if (failProvider) {
+        throw new Error("provider disconnected after dispatch");
+      }
+      return matrixDeliveryResult("accepted-message");
+    });
+    const afterSendFailure = vi.fn(({ attemptToken }: { attemptToken?: unknown }) => {
+      if (attemptToken === resource) {
+        releaseResource();
+      }
+    });
+    installQueueTestPlugin({
+      outbound: {
+        ...matrixOutboundForQueueTest,
+        ...(renderPresentation
+          ? { presentationCapabilities: { supported: true }, renderPresentation }
           : {}),
       },
-      send: {
-        lifecycle: {
-          beforeSendAttempt,
-          afterSendFailure,
+      message: {
+        id: "matrix",
+        durableFinal: {
+          capabilities: { text: true, media: true, reconcileUnknownSend: reconciliation },
+          automaticUnknownSendReconciliation: reconciliation,
+          reconcileUnknownSendKinds: reconciliation ? { text: true, media: true } : undefined,
+          reconcileUnknownSend: reconciliation ? () => ({ status: "not_sent" }) : undefined,
         },
-        text: send,
-        media: send,
+        send: { lifecycle: { beforeSendAttempt, afterSendFailure }, text: send, media: send },
       },
-    },
-  });
-  return {
-    prepared: prepared.promise,
-    releasePreparation: releasePreparation.resolve,
-    providerEntered: providerEntered.promise,
-    releaseProvider: releaseProvider.resolve,
-    failProvider: () => {
-      failProvider = true;
-    },
-    send,
-    beforeSendAttempt,
-    afterSendFailure,
-    releaseResource,
-  };
-}
-
-describe("queued cancellation during adapter preparation", () => {
-  const fixtures = installDeliveryQueueTmpDirHooks();
-  let stateDir: string;
-  const releases: Array<() => void> = [];
-  const pending: Promise<unknown>[] = [];
-  const subscriptions: Array<() => void> = [];
-  function adapterFixture(...args: Parameters<typeof installHeldAdapter>) {
-    const adapter = installHeldAdapter(...args);
-    releases.push(() => {
-      adapter.releasePreparation();
-      adapter.releaseProvider();
     });
-    return adapter;
+    releases.push(() => {
+      preparation.release();
+      provider.release();
+    });
+    return {
+      prepared: preparation.entered,
+      releasePreparation: preparation.release,
+      providerEntered: provider.entered,
+      releaseProvider: provider.release,
+      failProvider: () => {
+        failProvider = true;
+      },
+      send,
+      beforeSendAttempt,
+      afterSendFailure,
+      releaseResource,
+    };
   }
   function createCaller() {
     const caller = new AbortController();
     releases.push(() => caller.abort());
     return caller;
   }
-  function send(params: Partial<Parameters<typeof deliverOutboundPayloads>[0]> = {}) {
+  function dispatch(params: Partial<Parameters<typeof deliverOutboundPayloads>[0]> = {}) {
     const delivery = deliverOutboundPayloads({
       ...destination,
       payloads: [{ text: "question" }],
@@ -155,40 +131,18 @@ describe("queued cancellation during adapter preparation", () => {
     pending.push(delivery.catch(() => undefined));
     return delivery;
   }
-  function audit(terminalOnly = false) {
-    const outcomes: string[] = [];
-    subscriptions.push(
-      onTrustedMessageAuditEvent((event) => {
-        if (!terminalOnly || event.action === "message.outbound.finished") {
-          outcomes.push(event.outcome);
-        }
-      }),
-    );
-    return outcomes;
+  function start(params: Partial<Parameters<typeof deliverOutboundPayloads>[0]> = {}) {
+    const id = createDeferred<string>();
+    const operation = dispatch({
+      onDeliveryIntent: ({ id: value }) => id.resolve(value),
+      ...params,
+    });
+    return { queueId: id.promise, outcome: operation.catch((error: unknown) => error) };
   }
   const recover = () => drainMatrixReconnect({ stateDir, deliver: deliverOutboundPayloads });
   const pendingDeliveries = () => loadPendingDeliveries(stateDir);
   beforeEach(() => {
-    stateDir = fixtures.tmpDir();
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  });
-
-  beforeAll(async () => {
-    ({ deliverOutboundPayloads } = await import("./deliver.js"));
-  });
-
-  afterEach(async () => {
-    releases
-      .splice(0)
-      .toReversed()
-      .forEach((release) => release());
-    await Promise.allSettled(pending.splice(0));
-    subscriptions.splice(0).forEach((unsubscribe) => unsubscribe());
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-    vi.unstubAllEnvs();
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(createEmptyPluginRegistry());
+    stateDir = outbound.tmpDir();
   });
 
   it.each([
@@ -205,17 +159,14 @@ describe("queued cancellation during adapter preparation", () => {
           throw new Error("message caller retired");
         }
       };
-      const delivery = send({
+      const delivery = dispatch({
         payloads: [{ text: "caller-bound message" }],
         bestEffort,
         assertDirectAdapterHandoff: assertCurrent,
         onPlatformSendDispatch: async () => assertCurrent(),
         onPayloadDeliveryOutcome,
       });
-      const outcome = delivery.then(
-        (results) => ({ results }),
-        (error: unknown) => ({ error }),
-      );
+      const outcome = delivery.catch((error: unknown) => error);
 
       await adapter.prepared;
       expect(await pendingDeliveries()).toHaveLength(1);
@@ -224,7 +175,7 @@ describe("queued cancellation during adapter preparation", () => {
       adapter.releaseProvider();
       const settled = await outcome;
       const rejection = { message: expect.stringContaining("message caller retired") };
-      expect(settled).toMatchObject(bestEffort ? { results: [] } : { error: rejection });
+      expect(settled).toMatchObject(bestEffort ? [] : rejection);
       expect(onPayloadDeliveryOutcome).toHaveBeenCalledWith(
         expect.objectContaining({
           status: "failed",
@@ -264,7 +215,7 @@ describe("queued cancellation during adapter preparation", () => {
       return matrixDeliveryResult("recovered-valid-message");
     });
     expect(
-      await send({
+      await dispatch({
         payloads: [{ text: "invalid payload" }, { text: "valid payload" }],
         bestEffort: true,
         assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
@@ -294,7 +245,7 @@ describe("queued cancellation during adapter preparation", () => {
     const terminals = audit(true);
 
     expect(
-      await send({
+      await dispatch({
         payloads: [{ text: "possibly delivered" }, { text: "must not dispatch" }],
         bestEffort: true,
         assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
@@ -314,12 +265,10 @@ describe("queued cancellation during adapter preparation", () => {
     async (stage) => {
       const caller = createCaller();
       const assertCurrent = () => caller.signal.throwIfAborted();
-      const entered = createDeferred();
-      const release = createDeferred();
-      releases.push(release.resolve);
+      const gate = createDeliveryBarrier();
+      releases.push(gate.release);
       const rejectPreparation = vi.fn(async (assertHandoff?: () => void) => {
-        entered.resolve();
-        await release.promise;
+        await gate.hold();
         assertHandoff?.();
         throw new Error("asynchronous preparation rejected");
       });
@@ -342,25 +291,19 @@ describe("queued cancellation during adapter preparation", () => {
       }
       adapter.releasePreparation();
       adapter.releaseProvider();
-      const delivery = send({
-        payloads: [
-          {
-            text: "question",
-            ...(stage === "presentation"
-              ? { presentation: { blocks: [{ type: "text" as const, text: "question" }] } }
-              : {}),
-          },
-        ],
+      const presentation = { blocks: [{ type: "text" as const, text: "question" }] };
+      const delivery = dispatch({
+        payloads: [{ text: "question", ...(stage === "presentation" ? { presentation } : {}) }],
         assertDirectAdapterHandoff: assertCurrent,
         onDeliveryIntent,
       });
       const outcome = delivery.catch((error: unknown) => error);
 
-      await Promise.race([entered.promise, outcome]);
+      await Promise.race([gate.entered, outcome]);
       expect(rejectPreparation).toHaveBeenCalledOnce();
       expect(await pendingDeliveries()).toHaveLength(1);
       caller.abort(new Error("message caller retired"));
-      release.resolve();
+      gate.release();
       expect(await outcome).toMatchObject({
         message: expect.stringContaining("message caller retired"),
         queueCustody: "released",
@@ -378,7 +321,6 @@ describe("queued cancellation during adapter preparation", () => {
       const adapter = adapterFixture();
       const controller = createCaller();
       const events = audit();
-      const queueIdReady = createDeferred<string>();
       const stableId = "cron-direct-delivery:v1:cancelled-preparation";
       const artifact = media
         ? path.join(resolveDeliveryQueueMediaDir(stateDir), `${randomUUID()}.txt`)
@@ -397,9 +339,8 @@ describe("queued cancellation during adapter preparation", () => {
           stateDir,
         );
       }
-      const outcome = send({
+      const { outcome, queueId: queueIdPromise } = start({
         abortSignal: controller.signal,
-        onDeliveryIntent: ({ id }) => queueIdReady.resolve(id),
         ...(media
           ? {
               deliveryIntentId: stableId,
@@ -407,8 +348,8 @@ describe("queued cancellation during adapter preparation", () => {
               completionRetention: boundedCronCompletionRetention,
             }
           : {}),
-      }).catch((error: unknown) => error);
-      const queueId = await queueIdReady.promise;
+      });
+      const queueId = await queueIdPromise;
       await adapter.prepared;
       controller.abort(new Error("question ended"));
       expect(await pendingDeliveries()).toHaveLength(1);
@@ -448,14 +389,9 @@ describe("queued cancellation during adapter preparation", () => {
   it("does not retire a replacement producer while old preparation is held", async () => {
     const adapter = adapterFixture();
     const controller = createCaller();
-    const queueIdReady = createDeferred<string>();
-    const delivery = send({
-      abortSignal: controller.signal,
-      onDeliveryIntent: ({ id }) => queueIdReady.resolve(id),
-    });
-    const outcome = delivery.catch((error: unknown) => error);
+    const { outcome, queueId: queueIdPromise } = start({ abortSignal: controller.signal });
 
-    const queueId = await queueIdReady.promise;
+    const queueId = await queueIdPromise;
     await adapter.prepared;
     const replacementClaim = randomUUID();
     setQueuedEntryState(stateDir, queueId, {
@@ -510,8 +446,7 @@ describe("queued cancellation during adapter preparation", () => {
       const controller = createCaller();
       const assertCurrent =
         authority === "assertion" ? () => controller.signal.throwIfAborted() : undefined;
-      const queueIdReady = createDeferred<string>();
-      const delivery = send({
+      const { outcome, queueId: queueIdPromise } = start({
         payloads:
           result === "partial"
             ? [{ text: "accepted part" }, { text: "rejected part" }]
@@ -520,14 +455,8 @@ describe("queued cancellation during adapter preparation", () => {
         abortSignal: authority === "signal" ? controller.signal : undefined,
         assertDirectAdapterHandoff: assertCurrent,
         onPlatformSendDispatch: assertCurrent ? async () => assertCurrent() : undefined,
-        onDeliveryIntent: ({ id }) => queueIdReady.resolve(id),
       });
-      const outcome = delivery.then(
-        (results) => ({ results }),
-        (error: unknown) => ({ error }),
-      );
-
-      const queueId = await queueIdReady.promise;
+      const queueId = await queueIdPromise;
       await adapter.prepared;
       adapter.releasePreparation();
       await adapter.providerEntered;
@@ -541,7 +470,7 @@ describe("queued cancellation during adapter preparation", () => {
       const settled = await outcome;
       expect(adapter.send).toHaveBeenCalledOnce();
       if (result === "sent" || result === "partial") {
-        expect(settled).toMatchObject({ results: [{ messageId: "accepted-message" }] });
+        expect(settled).toMatchObject([{ messageId: "accepted-message" }]);
         if (result === "sent") {
           expect(await pendingDeliveries()).toEqual([]);
         } else {
@@ -551,9 +480,7 @@ describe("queued cancellation during adapter preparation", () => {
           expect(adapter.send).toHaveBeenCalledOnce();
         }
       } else {
-        expect(settled).toMatchObject(
-          bestEffort ? { results: [] } : { error: { queueCustody: "held" } },
-        );
+        expect(settled).toMatchObject(bestEffort ? [] : { queueCustody: "held" });
         expect(readQueuedEntry(stateDir, queueId).recoveryState).toBe("unknown_after_send");
       }
     },

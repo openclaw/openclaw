@@ -1,8 +1,9 @@
+import assert from "node:assert/strict";
 import { expect, it, vi, type Mock } from "vitest";
 import {
-  getReplyPayloadMetadata,
-  isReplyPayloadSessionWriterDeliveryAuthorized,
-  setReplyPayloadMetadata,
+  getReplyPayloadMetadata as metadataOf,
+  isReplyPayloadSessionWriterDeliveryAuthorized as authorized,
+  setReplyPayloadMetadata as withMetadata,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
@@ -51,19 +52,16 @@ function prepare(
 
 function acceptedEntry(batch: Awaited<ReturnType<typeof prepareOutboundPayloadBatch>>) {
   const [entry] = batch.entries;
-  expect(entry?.status).toBe("accepted");
-  if (!entry || entry.status !== "accepted") {
-    throw new Error("expected accepted payload");
-  }
+  assert(entry?.status === "accepted", "expected accepted payload");
   return entry;
 }
 
 // Keep registration in deliver.test.ts so its hoisted queue/hooks and per-case registry reset apply.
 export function registerOutboundPreparationMetadataTests({
-  matrixChunkConfig,
-  matrixOutboundForTest,
-  setTestOutbound,
-  hookMocks,
+  matrixChunkConfig: cfg,
+  matrixOutboundForTest: outbound,
+  setTestOutbound: install,
+  hookMocks: { runner },
 }: PreparationFixture) {
   it.each(["raw", "structured"] as const)(
     "keeps %s preparation metadata semantics through channel and awaited hook transforms",
@@ -74,7 +72,7 @@ export function registerOutboundPreparationMetadataTests({
         lifecycleRevision: "revision-original",
         sessionId: "session-original",
       };
-      const sourcePayload = setReplyPayloadMetadata(
+      const sourcePayload = withMetadata(
         { text: "original", mediaUrl: "https://example.com/attachment.png" },
         {
           assistantMessageIndex: 4,
@@ -87,13 +85,11 @@ export function registerOutboundPreparationMetadataTests({
           },
         },
       );
-      expect(isReplyPayloadSessionWriterDeliveryAuthorized(sourcePayload, currentWriter)).toBe(
-        true,
-      );
-      setTestOutbound({
-        ...matrixOutboundForTest,
+      expect(authorized(sourcePayload, currentWriter)).toBe(true);
+      install({
+        ...outbound,
         normalizePayload: ({ payload }) =>
-          setReplyPayloadMetadata(
+          withMetadata(
             {
               ...payload,
               text: payload.channelData?.normalized ? payload.text : " ",
@@ -103,14 +99,14 @@ export function registerOutboundPreparationMetadataTests({
           ),
         normalizePayloadBatch: ({ payloads }) => payloads.map(({ payload }) => ({ ...payload })),
       });
-      hookMocks.runner.hasHooks.mockImplementation((name) => name === "message_sending");
-      hookMocks.runner.runMessageSending.mockImplementationOnce(async () => {
+      runner.hasHooks.mockImplementation((name) => name === "message_sending");
+      runner.runMessageSending.mockImplementationOnce(async () => {
         await Promise.resolve();
         currentWriter = { ...currentWriter, activeWriterRunId: "run-replacement" };
         return { content: "after modifier" };
       });
       const params = {
-        cfg: matrixChunkConfig,
+        cfg,
         channel: "matrix" as const,
         to: "!room:example",
         payloads: [sourcePayload],
@@ -118,14 +114,12 @@ export function registerOutboundPreparationMetadataTests({
       };
       const entry = acceptedEntry(await prepare(operation, params));
       expect(entry.payload.text).toBe("after modifier");
-      const metadata = getReplyPayloadMetadata(entry.payload);
+      const metadata = metadataOf(entry.payload);
       expect(metadata).toHaveProperty("assistantMessageIndex", undefined);
-      expect(getReplyPayloadMetadata(sourcePayload)?.assistantMessageIndex).toBe(4);
+      expect(metadataOf(sourcePayload)?.assistantMessageIndex).toBe(4);
       if (operation === "structured") {
         expect(metadata?.finalDeliveryCapture).toBe(capture);
-        expect(isReplyPayloadSessionWriterDeliveryAuthorized(entry.payload, currentWriter)).toBe(
-          false,
-        );
+        expect(authorized(entry.payload, currentWriter)).toBe(false);
       } else {
         expect(metadata?.finalDeliveryCapture).toBeUndefined();
         expect(metadata?.sessionWriterDeliveryAuthority).toBeUndefined();
@@ -135,8 +129,8 @@ export function registerOutboundPreparationMetadataTests({
 }
 
 export function registerOutboundImageProjectionTests({
-  setTestOutbound,
-  hookMocks,
+  setTestOutbound: install,
+  hookMocks: { runner: mocked },
 }: ImageProjectionFixture) {
   async function imageFixture(
     hooks: Pick<PluginHookHandlerMap, "reply_payload_sending" | "message_sending">,
@@ -145,20 +139,18 @@ export function registerOutboundImageProjectionTests({
     const { telegramOutbound } = await loadBundledPluginFacade<{
       telegramOutbound: ChannelOutboundAdapter;
     }>({ pluginId: "telegram", artifactBasename: "api.js" });
-    setTestOutbound({ ...telegramOutbound, ...overrides }, "telegram");
+    install({ ...telegramOutbound, ...overrides }, "telegram");
     const registry = createEmptyPluginRegistry();
     for (const hookName of ["reply_payload_sending", "message_sending"] as const) {
       addTestHook({ registry, pluginId: "image-presentation", hookName, handler: hooks[hookName] });
     }
     const runner = createHookRunner(registry);
-    hookMocks.runner.hasHooks.mockImplementation(
+    mocked.hasHooks.mockImplementation(
       (name) =>
         (name === "reply_payload_sending" || name === "message_sending") && runner.hasHooks(name),
     );
-    hookMocks.runner.runReplyPayloadSending.mockImplementation(
-      runner.runReplyPayloadSending.bind(runner),
-    );
-    hookMocks.runner.runMessageSending.mockImplementation(runner.runMessageSending.bind(runner));
+    mocked.runReplyPayloadSending.mockImplementation(runner.runReplyPayloadSending.bind(runner));
+    mocked.runMessageSending.mockImplementation(runner.runMessageSending.bind(runner));
     return (operation: "raw" | "structured", payloads: ReplyPayload[]) =>
       prepare(operation, {
         cfg: {},

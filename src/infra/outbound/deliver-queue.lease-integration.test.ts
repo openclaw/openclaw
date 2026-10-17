@@ -1,14 +1,16 @@
 import { setImmediate } from "node:timers/promises";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ChannelMessageSendTextContext } from "../../channels/message/types.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
-import { installQueueTestPlugin, matrixDeliveryResult } from "./deliver.custody.test-support.js";
+import {
+  installQueueTestPlugin,
+  matrixDeliveryResult,
+  useOutboundFixture,
+} from "./deliver.custody.test-support.js";
 import {
   boundedCronCompletionRetention,
   drainMatrixReconnect,
@@ -18,13 +20,10 @@ import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js"
 import * as platformLease from "./delivery-queue-platform-lease.js";
 import type { DeliverFn } from "./delivery-queue-recovery.js";
 import { claimDeliveryPlatformSendAttempt, enqueueDeliveryOnce } from "./delivery-queue-storage.js";
-import {
-  installDeliveryQueueTmpDirHooks,
-  readQueuedEntry,
-  setQueuedEntryState,
-} from "./delivery-queue.test-helpers.js";
+import { readQueuedEntry, setQueuedEntryState } from "./delivery-queue.test-helpers.js";
 
-let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
+const outbound = useOutboundFixture();
+const deliverOutboundPayloads = outbound.deliver;
 
 function useLeaseHeartbeatTimers() {
   // Worker leases use the real clock; only drive the host heartbeat scheduler.
@@ -51,7 +50,6 @@ async function startBlockedDelivery(params: {
   requiresProducerClaim?: boolean;
   phase?: "preparation" | "presentation" | "provider";
 }) {
-  process.env.OPENCLAW_STATE_DIR = params.tmpDir;
   const phase = params.phase ?? "preparation";
   const entered = createDeferred();
   const release = createDeferred();
@@ -141,7 +139,7 @@ async function startBlockedDelivery(params: {
 }
 
 describe("delivery producer lease integration", () => {
-  const fixtures = installDeliveryQueueTmpDirHooks();
+  const fixtures = outbound;
   let tmpDir: string;
   let active: Awaited<ReturnType<typeof startBlockedDelivery>> | undefined;
   beforeEach(() => {
@@ -155,18 +153,11 @@ describe("delivery producer lease integration", () => {
   const queuedStatus = (id: string) =>
     getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir);
 
-  beforeAll(async () => {
-    ({ deliverOutboundPayloads } = await import("./deliver.js"));
-  });
-
   afterEach(async () => {
     active?.release();
     await active?.delivery.catch(() => undefined);
     active = undefined;
-    vi.restoreAllMocks();
     vi.useRealTimers();
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   it("retains fresh delivery ownership before provider I/O after a scheduling stall", async () => {
@@ -306,7 +297,6 @@ describe("delivery producer lease integration", () => {
   );
 
   it("settles one exact Matrix send without restart replay", async () => {
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
     const deliveryIntentId = "cron-direct-delivery:v1:exact-completion";
     const messageId = "exact-message";
     const reconcileUnknownSend = vi.fn();

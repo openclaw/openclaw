@@ -1,30 +1,24 @@
-import { afterEach, beforeAll, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { expect, it, vi } from "vitest";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
-import { installQueueTestPlugin } from "./deliver.custody.test-support.js";
+import {
+  createDeliveryBarrier,
+  installQueueTestPlugin,
+  useOutboundRuntime,
+} from "./deliver.custody.test-support.js";
 import { drainMatrixReconnect } from "./deliver.queue-integration.test-support.js";
 import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import { enqueueDeliveryOnce, loadPendingDelivery } from "./delivery-queue-storage.js";
 import { createRecoveryLog } from "./delivery-queue.test-helpers.js";
 
-let deliver: typeof import("./deliver.js").deliverOutboundPayloadsInternal;
+const { internal: deliver } = useOutboundRuntime();
 type DeliveryOptions = Partial<Parameters<typeof deliver>[0]>;
 const queueStatus = (id: string) =>
   getDeliveryQueueEntryStatus("outbound-session-generation-v1", id);
-beforeAll(async () => {
-  ({ deliverOutboundPayloadsInternal: deliver } = await import("./deliver.js"));
-});
-afterEach(() => {
-  resetPluginRuntimeStateForTest();
-  setActivePluginRegistry(createEmptyPluginRegistry());
-});
 
 function fixture() {
   const database = openOpenClawAgentDatabase({ agentId: "main" });
@@ -62,31 +56,12 @@ function fixture() {
   return { generation, update, send, dispatch, queued };
 }
 
-function barrier() {
-  const entered = createDeferred();
-  const released = createDeferred();
-  return {
-    hold: async () => {
-      entered.resolve();
-      await released.promise;
-    },
-    release: () => released.resolve(),
-    wait: (operation: Promise<unknown>) =>
-      Promise.race([
-        entered.promise,
-        operation.then(() => {
-          throw new Error("Operation settled before the barrier");
-        }),
-      ]),
-  };
-}
-
 it.each(["original", "reset"])(
   "rechecks %s generation after awaited dispatch preparation",
   async (revision) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { update, send, dispatch, queued } = fixture();
-      const gate = barrier();
+      const gate = createDeliveryBarrier();
       send.mockResolvedValue({ messageId: "result" });
       const operation = dispatch("accepted result", {
         ...queued,
@@ -120,7 +95,7 @@ it.each(["original", "reset"])(
 it("retains a completed result through temporary lifecycle unavailability", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
     const { generation, update, send, dispatch, queued } = fixture();
-    const gate = barrier();
+    const gate = createDeliveryBarrier();
     const mutation = runExclusiveSessionLifecycleMutation("reset", {
       scope: generation.storePath,
       identities: [generation.sessionKey, generation.sessionId],
@@ -187,8 +162,10 @@ it("replays every same-generation result and terminalizes only revoked unsent re
         },
         id,
       );
-    await enqueue("sessions-send:first");
-    await enqueue("sessions-send:second");
+    const ids = ["sessions-send:first", "sessions-send:second"];
+    for (const id of ids) {
+      await enqueue(id);
+    }
     update("original");
     const replay = () =>
       recoverPendingDeliveries({
@@ -197,12 +174,8 @@ it("replays every same-generation result and terminalizes only revoked unsent re
         deliver: (params) => deliver({ ...params, deps: { matrix: send } }),
       });
     await replay();
-    expect(send.mock.calls.map((call) => call[1])).toEqual([
-      "sessions-send:first",
-      "sessions-send:second",
-    ]);
-    expect(await loadPendingDelivery("sessions-send:first")).toBeNull();
-    expect(await loadPendingDelivery("sessions-send:second")).toBeNull();
+    expect(send.mock.calls.map((call) => call[1])).toEqual(ids);
+    expect(await Promise.all(ids.map((id) => loadPendingDelivery(id)))).toEqual([null, null]);
     await enqueue("sessions-send:revoked");
     update("reset");
     await replay();

@@ -1,53 +1,52 @@
 import {
   createQuestionReactionTargetStore,
-  questionGatewayRuntime,
+  questionGatewayRuntime as runtime,
 } from "openclaw/plugin-sdk/question-gateway-runtime";
-import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import type { Question } from "../../../packages/gateway-protocol/src/index.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import { QuestionManager } from "../../gateway/question-manager.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   handleQuestionChannelRequested,
   handleQuestionChannelResolved,
 } from "../question-channel-runtime.js";
-import { installQueueTestPlugin } from "./deliver.custody.test-support.js";
+import {
+  createDeliveryBarrier,
+  installQueueTestPlugin,
+  useOutboundFixture,
+} from "./deliver.custody.test-support.js";
 import {
   drainMatrixReconnect,
   matrixOutboundForQueueTest,
 } from "./deliver.queue-integration.test-support.js";
 import type { DeliverFn } from "./delivery-queue-recovery.js";
 import { enqueueDeliveryOnce } from "./delivery-queue-storage.js";
-import {
-  installDeliveryQueueTmpDirHooks,
-  loadPendingDeliveries,
-} from "./delivery-queue.test-helpers.js";
+import { loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
 
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
-let deliver: typeof import("./deliver-queue.js").runOutboundDeliveryInternal;
+const outbound = useOutboundFixture();
+const deliver = outbound.run;
 let manager: QuestionManager;
 let adapter: ReturnType<typeof installQuestionAdapter>;
 
 const questionId = "ask_0123456789abcdef0123456789abcdef";
-const questions: Question[] = [
-  {
-    questionId: "target",
-    header: "Target",
-    question: "Deploy where?",
-    options: [{ label: "Staging" }, { label: "Production" }],
-  },
-];
 const payload = { text: "Deploy where?", channelData: { askUser: { questionId } } };
+const sendMatrix = vi.fn(async () => ({ messageId: "message-b" }));
+let sendOptions: Partial<Parameters<typeof deliver>[0]>;
 
 function request(timeoutMs: number): void {
   handleQuestionChannelRequested(
     manager.request({
       id: questionId,
-      questions,
+      questions: [
+        {
+          questionId: "target",
+          header: "Target",
+          question: "Deploy where?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+        },
+      ],
       timeoutMs,
       onResolved: handleQuestionChannelResolved,
     }),
@@ -65,17 +64,15 @@ async function expireAndReuse(reuseAfterMs = 15_000): Promise<void> {
 
 function installQuestionAdapter() {
   const finalized = vi.fn<(messageId: string, statusLine: string) => void>();
-  const resolveReaction = vi.fn<typeof questionGatewayRuntime.resolveReaction>(async (params) => {
-    if (params.optionValue === undefined) {
-      throw new Error("Reaction did not carry its rendered option value");
-    }
-    manager.resolve(
-      params.questionId,
-      { answers: { target: [params.optionValue] } },
-      params.senderId ?? undefined,
-    );
-    return { status: "answered", questionId: "target", optionValue: params.optionValue };
-  });
+  const resolveReaction = vi.fn<typeof runtime.resolveReaction>(
+    async ({ optionValue, questionId: id, senderId }) => {
+      if (optionValue === undefined) {
+        throw new Error("Reaction did not carry its rendered option value");
+      }
+      manager.resolve(id, { answers: { target: [optionValue] } }, senderId ?? undefined);
+      return { status: "answered", questionId: "target", optionValue };
+    },
+  );
   const reactions = createQuestionReactionTargetStore({
     channel: "matrix",
     channelDisplayName: "Matrix",
@@ -84,12 +81,12 @@ function installQuestionAdapter() {
   });
   const afterDeliverPayload = vi.fn<NonNullable<ChannelOutboundAdapter["afterDeliverPayload"]>>(
     async ({ payload: deliveredPayload, results }) => {
-      const id = questionGatewayRuntime.readAskUserQuestionId(deliveredPayload);
+      const id = runtime.readAskUserQuestionId(deliveredPayload);
       const messageId = results[0]?.messageId;
       if (!id || !messageId) {
         throw new Error("Question delivery did not carry its payload and native message identity");
       }
-      questionGatewayRuntime.registerChannelDelivery({
+      runtime.registerChannelDelivery({
         questionId: id,
         deliveryId: `matrix:${messageId}`,
         finalize: (statusLine) => finalized(messageId, statusLine),
@@ -119,6 +116,14 @@ const destination = {
   queuePolicy: "required",
 } as const;
 const unavailable = "Unavailable: request a new question.";
+const send = (deliveryIntentId?: string) =>
+  deliver({
+    ...destination,
+    payloads: [payload],
+    deps: { matrix: sendMatrix },
+    ...sendOptions,
+    ...(sendOptions.reusePendingDeliveryIntent ? { deliveryIntentId } : {}),
+  });
 
 async function assertStaleReaction(
   messageId: string,
@@ -152,26 +157,18 @@ async function assertFreshReaction(previousMessageId: string, statusLine: string
   ]);
 }
 
-const fixtures = installDeliveryQueueTmpDirHooks();
-
-beforeAll(async () => {
-  ({ runOutboundDeliveryInternal: deliver } = await import("./deliver-queue.js"));
-});
-
 beforeEach(() => {
-  vi.stubEnv("OPENCLAW_STATE_DIR", fixtures.tmpDir());
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   scheduler = createTestGatewayScheduler("fake-timers");
   manager = new QuestionManager(scheduler);
   adapter = installQuestionAdapter();
+  sendMatrix.mockReset().mockResolvedValue({ messageId: "message-b" });
+  sendOptions = {};
 });
 
 afterEach(async () => {
   manager.close();
   await drainGlobalSingletonLifecycleState("restart");
-  resetPluginRuntimeStateForTest();
-  setActivePluginRegistry(createEmptyPluginRegistry());
-  vi.unstubAllEnvs();
   vi.useRealTimers();
 });
 
@@ -181,39 +178,29 @@ it.each([
 ] as const)(
   "keeps old reactions inert for a held %s send after %s",
   async (_delivery, _retention, reuseAfterMs, skipQueue, statusLine) => {
-    const sendEntered = createDeferredCore();
-    const releaseSend = createDeferredCore();
-    const sendMatrix = vi
-      .fn(async () => ({ messageId: "message-b" }))
-      .mockImplementationOnce(async () => {
-        sendEntered.resolve();
-        await releaseSend.promise;
-        return { messageId: "message-a" };
-      });
-    const send = () =>
-      deliver({
-        ...destination,
-        payloads: [payload],
-        deps: { matrix: sendMatrix },
-        skipQueue,
-      });
+    const gate = createDeliveryBarrier();
+    sendOptions = { skipQueue };
+    sendMatrix.mockImplementationOnce(async () => {
+      await gate.hold();
+      return { messageId: "message-a" };
+    });
     let firstSend: ReturnType<typeof send> | undefined;
     try {
       request(50);
       firstSend = send();
-      await sendEntered.promise;
-      expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(skipQueue ? 0 : 1);
+      await gate.entered;
+      expect(await loadPendingDeliveries(outbound.tmpDir())).toHaveLength(skipQueue ? 0 : 1);
       await expireAndReuse(reuseAfterMs);
-      releaseSend.resolve();
+      gate.release();
       await expect(firstSend).resolves.toMatchObject([{ messageId: "message-a" }]);
 
       await assertStaleReaction("message-a", statusLine);
       await expect(send()).resolves.toMatchObject([{ messageId: "message-b" }]);
       expect(adapter.finalized).toHaveBeenCalledOnce();
       await assertFreshReaction("message-a", statusLine);
-      expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(0);
+      expect(await loadPendingDeliveries(outbound.tmpDir())).toHaveLength(0);
     } finally {
-      releaseSend.resolve();
+      gate.release();
       await Promise.allSettled([firstSend]);
     }
   },
@@ -231,22 +218,17 @@ it.each(["recovered id-only payload", "restored stable-intent custody"])(
       ? { ...payload, text: "Replacement deployment question" }
       : payload;
     const oldMessageId = stableIntent ? "retried-message-a" : "recovered-message-a";
-    const sendMatrix = vi
-      .fn(async () => ({ messageId: "message-b" }))
-      .mockResolvedValueOnce({ messageId: oldMessageId });
-    const send = (deliveryIntentId?: string) =>
-      deliver({
-        ...destination,
-        payloads: [newPayload],
-        deps: { matrix: sendMatrix },
-        ...(stableIntent ? { deliveryIntentId, reusePendingDeliveryIntent: true } : {}),
-      });
+    sendMatrix.mockResolvedValueOnce({ messageId: oldMessageId });
+    sendOptions = {
+      payloads: [newPayload],
+      ...(stableIntent ? { reusePendingDeliveryIntent: true } : {}),
+    };
     request(50);
     await expect(
       enqueueDeliveryOnce(
         { ...destination, payloads: [oldPayload] },
         deliveryId,
-        fixtures.tmpDir(),
+        outbound.tmpDir(),
       ),
     ).resolves.toEqual({ id: deliveryId, created: true });
     await expireAndReuse();
@@ -261,13 +243,13 @@ it.each(["recovered id-only payload", "restored stable-intent custody"])(
       const recover = vi.fn<DeliverFn>(async (params) =>
         deliver({ ...params, deps: { matrix: sendMatrix } }),
       );
-      await drainMatrixReconnect({ deliver: recover, stateDir: fixtures.tmpDir() });
+      await drainMatrixReconnect({ deliver: recover, stateDir: outbound.tmpDir() });
       expect(recover).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ deliveryQueueId: deliveryId, skipQueue: true }),
       );
       expect(sendMatrix).toHaveBeenCalledOnce();
     }
-    expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(0);
+    expect(await loadPendingDeliveries(outbound.tmpDir())).toHaveLength(0);
     await assertStaleReaction(oldMessageId, unavailable, true);
     await expect(send("question-generation-fresh-intent")).resolves.toMatchObject([
       { messageId: "message-b" },
@@ -281,6 +263,6 @@ it.each(["recovered id-only payload", "restored stable-intent custody"])(
       );
     }
     await assertFreshReaction(oldMessageId, unavailable);
-    expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(0);
+    expect(await loadPendingDeliveries(outbound.tmpDir())).toHaveLength(0);
   },
 );
