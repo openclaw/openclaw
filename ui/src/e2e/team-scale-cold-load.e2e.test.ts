@@ -21,7 +21,9 @@ async function readStoredTranscript(sessionKey: string) {
   const open = indexedDB.open("openclaw-chat-snapshots");
   const database = await new Promise<IDBDatabase>((resolve, reject) => {
     open.addEventListener("success", () => resolve(open.result), { once: true });
-    open.addEventListener("error", () => reject(open.error), { once: true });
+    open.addEventListener("error", () => reject(open.error ?? new Error("Snapshot open failed")), {
+      once: true,
+    });
   });
   try {
     const request = database.transaction("snapshots").objectStore("snapshots").getAll();
@@ -29,7 +31,11 @@ async function readStoredTranscript(sessionKey: string) {
       Array<{ sessionKey: string; snapshot: { messages: unknown[] } }>
     >((resolve, reject) => {
       request.addEventListener("success", () => resolve(request.result), { once: true });
-      request.addEventListener("error", () => reject(request.error), { once: true });
+      request.addEventListener(
+        "error",
+        () => reject(request.error ?? new Error("Snapshot read failed")),
+        { once: true },
+      );
     });
     const record = records.find((entry) => entry.sessionKey.endsWith(`\u0000${sessionKey}`));
     if (!record) {
