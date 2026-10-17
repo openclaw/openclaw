@@ -41,7 +41,6 @@ import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { sessionActivitySummaryHandlers } from "./server-methods/session-activity-summary.js";
 import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
-import type { RespondFn } from "./server-methods/types.js";
 import {
   createSessionActivitySummaries,
   type SessionActivitySummaryService,
@@ -85,18 +84,22 @@ describe("Activity recap lifecycle with the canonical session store", () => {
   let cfg: OpenClawConfig;
   let service: SessionActivitySummaryService;
   let residentProjection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
+  const ownedProjections: NonNullable<typeof residentProjection>[] = [];
   const complete = vi.fn(async (_params: Parameters<typeof defaultCompleteModel>[0]) =>
     result("Completed the requested work."),
   );
   const prepare = vi.fn(async () => prepared);
   const changed = vi.fn();
-  const read = () => loadSessionEntryReadOnly(scope);
-  const view = () =>
+  const releasePending: (() => void)[] = [];
+  const settlePending: Promise<unknown>[] = [];
+  const read = (session = scope) => loadSessionEntryReadOnly(session);
+  const view = (session = scope) =>
     projectSessionActivitySummary({
-      ...target,
+      key: session.sessionKey,
+      agentId: session.agentId,
       cfg,
-      entry: read(),
-      watermark: readSessionTranscriptWatermark(scope),
+      entry: read(session),
+      watermark: readSessionTranscriptWatermark(session),
     });
   const createService = (prepareModel: typeof defaultPrepareModel = prepare) =>
     createSessionActivitySummaries({
@@ -111,11 +114,19 @@ describe("Activity recap lifecycle with the canonical session store", () => {
   const holdCompletion = () => {
     const completion = createDeferred<ReturnType<typeof result>>();
     const started = createDeferred();
+    releasePending.push(() => completion.resolve(result("Released during cleanup.")));
     complete.mockImplementationOnce(() => {
       started.resolve();
       return withinTest(completion.promise, testSignal);
     });
-    return { completion, started };
+    return {
+      completion,
+      started,
+      start: async (requested = target) => {
+        await ensureRecap(requested);
+        await withinTest(started.promise, testSignal);
+      },
+    };
   };
 
   const describedRecap = (state: string, text: string) => ({
@@ -135,18 +146,56 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     });
   };
 
-  const awaitPublication = async (
-    start: () => unknown,
-    ready = () => view()?.state === "current",
+  const transcript = (
+    turns: Parameters<typeof persistSessionTranscriptTurn>[1]["messages"],
+    session = scope,
+  ) => persistSessionTranscriptTurn(session, { messages: turns, touchSessionEntry: false });
+  const currentStore = () =>
+    resolveSessionStorePathCore(cfg.session?.store, { agentId: scope.agentId });
+  const list = (store: Record<string, SessionEntry>, extra = {}) =>
+    listSessionFixture({
+      cfg,
+      storePath: currentStore(),
+      store,
+      opts: { includeActivitySummary: true },
+      ...extra,
+    });
+  const rpc = (
+    method: "sessions.describe" | "sessions.activitySummary.ensure",
+    context: ReturnType<typeof createDirectChatContext>,
   ) => {
+    const respond = vi.fn();
+    const handler =
+      method === "sessions.describe"
+        ? sessionByKeyReadHandlers[method]!
+        : sessionActivitySummaryHandlers[method]!;
+    return {
+      respond,
+      invoke: (params: Record<string, unknown>) =>
+        handler({
+          req: { type: "req", id: "recap", method, params },
+          params,
+          context,
+          client: null,
+          respond,
+          isWebchatConnect: () => false,
+        }),
+    };
+  };
+
+  const publication = (ready = () => view()?.state === "current") => {
     const published = createDeferred();
     changed.mockImplementation(() => {
       if (ready()) {
         published.resolve();
       }
     });
-    await start();
     return withinTest(published.promise, testSignal);
+  };
+  const awaitPublication = async (start: () => unknown, ready?: () => boolean) => {
+    const published = publication(ready);
+    await start();
+    return published;
   };
 
   const ensureRecap = async (requested: Parameters<SessionActivitySummaryService["ensure"]>[0]) =>
@@ -158,8 +207,16 @@ describe("Activity recap lifecycle with the canonical session store", () => {
         storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: requested.agentId }),
       }),
     );
+  const initialRecap = async (count = 2) => {
+    await messages(count);
+    await awaitPublication(() => ensureRecap(target));
+    expect(view()?.state).toBe("current");
+  };
+  const expectProgress = (state: string, calls: number) =>
+    expect({ state: view()?.state, calls: complete.mock.calls.length }).toEqual({ state, calls });
 
   beforeEach(async ({ signal }) => {
+    releasePending.length = settlePending.length = 0;
     testSignal = signal;
     cfg = { agents: { defaults: { utilityModel: "test/utility" } } };
     testState = await createActivityRecapSessionFixture(cfg);
@@ -169,11 +226,18 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     service = createService();
   });
   afterEach(async () => {
+    for (const release of releasePending) {
+      release();
+    }
+    await Promise.allSettled(settlePending);
     archiveMaterializationHook.beforeMaterialize = undefined;
     clearAgentRunContext("recap-context-run");
     await service.dispose();
     residentProjection?.dispose();
     residentProjection = undefined;
+    for (const projection of ownedProjections.splice(0)) {
+      projection.dispose();
+    }
     await testState.cleanup();
     clearRuntimeConfigSnapshot();
   });
@@ -228,8 +292,8 @@ describe("Activity recap lifecycle with the canonical session store", () => {
 
   it("backfills chronological chunks cumulatively and shares the durable result across viewers and restart", async () => {
     await messages(70);
-    await persistSessionTranscriptTurn(scope, {
-      messages: Array.from({ length: 129 }, (_, offset) => ({
+    await transcript(
+      Array.from({ length: 129 }, (_, offset) => ({
         eventId: `message-${70 + offset}`,
         parentId: `message-${69 + offset}`,
         message:
@@ -237,17 +301,13 @@ describe("Activity recap lifecycle with the canonical session store", () => {
             ? {
                 role: "assistant",
                 content: [
-                  {
-                    type: "text",
-                    text: "Old progress",
-                    textSignature: '{"v":1,"phase":"commentary"}',
-                  },
-                  {
-                    type: "text",
-                    text: "Shipped the fix. Waiting for review.",
-                    textSignature: '{"v":1,"phase":"final_answer"}',
-                  },
-                ],
+                  ["Old progress", "commentary"],
+                  ["Shipped the fix. Waiting for review.", "final_answer"],
+                ].map(([text, phase]) => ({
+                  type: "text",
+                  text,
+                  textSignature: JSON.stringify({ v: 1, phase }),
+                })),
               }
             : {
                 role: offset % 2 ? "toolResult" : "assistant",
@@ -257,8 +317,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
                     : [{ type: "toolCall", name: "internal_tool", arguments: {} }],
               },
       })),
-      touchSessionEntry: false,
-    });
+    );
     const originalActivity = read()?.updatedAt;
     complete.mockImplementation(async () =>
       result(`Recap through batch ${complete.mock.calls.length}.`),
@@ -289,111 +348,84 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     expect(complete).toHaveBeenCalledTimes(3);
     const first = complete.mock.calls[0]?.[0];
     const second = complete.mock.calls[1]?.[0];
-    expect(first).toMatchObject({ model: "utility", provider: "test" });
-    expect(first?.purpose).toBe("session-activity-summary");
-    expect(JSON.parse(first!.prompt).messages[0]).toContain("Outcome 0");
-    expect(JSON.parse(first!.prompt).messages.at(-1)).toContain("Outcome 63");
-    expect(JSON.parse(second!.prompt)).toMatchObject({ previousRecap: "Recap through batch 1." });
-    expect(JSON.parse(second!.prompt).messages.at(-1)).toContain("Outcome 69");
+    expect(first).toMatchObject({
+      model: "utility",
+      provider: "test",
+      purpose: "session-activity-summary",
+    });
+    const [firstPrompt, secondPrompt] = [first, second].map((request) =>
+      JSON.parse(request!.prompt),
+    );
+    expect(firstPrompt.messages[0]).toContain("Outcome 0");
+    expect(firstPrompt.messages.at(-1)).toContain("Outcome 63");
+    expect(secondPrompt).toMatchObject({ previousRecap: "Recap through batch 1." });
+    expect(secondPrompt.messages.at(-1)).toContain("Outcome 69");
     expect(JSON.parse(complete.mock.calls[2]![0].prompt).messages).toEqual([
       "assistant: Shipped the fix. Waiting for review.",
     ]);
     expect(complete.mock.calls.map(([request]) => request.prompt).join("\n")).not.toMatch(
       /Internal tool log dump|internal_tool|Old progress/,
     );
-    expect(read()?.activitySummary).toMatchObject({
-      coveredMessages: 199,
-      totalMessages: 199,
-      version: 1,
+    expect(read()).toMatchObject({
+      activitySummary: { coveredMessages: 199, totalMessages: 199, version: 1 },
+      updatedAt: originalActivity,
     });
-    expect(read()?.updatedAt).toBe(originalActivity);
     await service.dispose();
     service = createService();
     await awaitPublication(() => ensureRecap(target));
-    expect(view()?.state).toBe("current");
-    expect(complete).toHaveBeenCalledTimes(3);
+    expectProgress("current", 3);
   });
 
   it("keeps describe non-current while the newer first-turn recap is queued or held", async () => {
-    await messages(1);
     complete.mockResolvedValueOnce(result("Only the request is recorded."));
-    await awaitPublication(() => ensureRecap(target));
-    expect(view()?.state).toBe("current");
+    await initialRecap(1);
     const previousWatermark = readSessionTranscriptWatermark(scope);
     const projection = await createSessionRowProjection({ cfg, getConfig: () => cfg });
+    ownedProjections.push(projection);
     const context = bindSessionRowProjection(
       createDirectChatContext({ getRuntimeConfig: () => cfg }),
       () => projection,
     );
-    const describeSession = async () => {
-      const responses: Parameters<RespondFn>[] = [];
-      await sessionByKeyReadHandlers["sessions.describe"]!({
-        req: { type: "req", id: "recap-readiness", method: "sessions.describe", params: target },
-        params: target,
-        client: null,
-        context,
-        respond: (...response) => responses.push(response),
-        isWebchatConnect: () => false,
-      });
-      expect(responses).toHaveLength(1);
-      expect(responses[0]?.[0]).toBe(true);
-      return responses[0]?.[1];
+    const { respond, invoke } = rpc("sessions.describe", context);
+    const describeSession = async (state: string, text: string) => {
+      respond.mockClear();
+      await invoke(target);
+      expect(respond).toHaveBeenCalledTimes(1);
+      expect(respond.mock.calls[0]?.[0]).toBe(true);
+      expect(respond.mock.calls[0]?.[1]).toMatchObject(describedRecap(state, text));
     };
-    const completion = createDeferred<ReturnType<typeof result>>();
-    try {
-      // Prime the real resident projection with the older, valid current summary.
-      expect(await describeSession()).toMatchObject(
-        describedRecap("current", "Only the request is recorded."),
-      );
-      expect(read()?.activitySummary).toMatchObject({
-        ...previousWatermark,
-        coveredMessages: 1,
-        totalMessages: 1,
-      });
-      complete.mockImplementationOnce(() => completion.promise);
-      await messages(1, 1);
-      const latestWatermark = readSessionTranscriptWatermark(scope);
-      expect(latestWatermark.maxSeq).not.toBe(previousWatermark.maxSeq);
-      service.handleTranscript({ target: { ...scope }, lifecycleRevision: "lifecycle-1" });
-      const updating = describedRecap("updating", "Only the request is recorded.");
-      expect(await describeSession()).toMatchObject(updating);
+    const { completion, started } = holdCompletion();
+    const previousSummary = { ...previousWatermark, coveredMessages: 1, totalMessages: 1 };
+    await describeSession("current", "Only the request is recorded.");
+    expect(read()?.activitySummary).toMatchObject(previousSummary);
+    await messages(1, 1);
+    const latestWatermark = readSessionTranscriptWatermark(scope);
+    expect(latestWatermark.maxSeq).not.toBe(previousWatermark.maxSeq);
+    service.handleTranscript({ target: { ...scope }, lifecycleRevision: "lifecycle-1" });
+    await describeSession("updating", "Only the request is recorded.");
 
-      terminal(service);
-      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
-      // No model result can commit while this exact completion is held.
-      expect(await describeSession()).toMatchObject(updating);
-      expect(read()?.activitySummary).toMatchObject({
-        ...previousWatermark,
-        coveredMessages: 1,
-        totalMessages: 1,
-      });
+    terminal(service);
+    await withinTest(started.promise, testSignal);
+    expect(complete).toHaveBeenCalledTimes(2);
+    await describeSession("updating", "Only the request is recorded.");
+    expect(read()?.activitySummary).toMatchObject(previousSummary);
 
-      const published = createDeferred<ReturnType<typeof view>>();
-      changed.mockImplementationOnce(() => published.resolve(view()));
-      completion.resolve(result("Completed the first turn."));
-      expect(await published.promise).toMatchObject({
-        state: "current",
-        text: "Completed the first turn.",
-      });
-      expect(await describeSession()).toMatchObject(
-        describedRecap("current", "Completed the first turn."),
-      );
-      expect(read()?.activitySummary).toMatchObject({
-        ...latestWatermark,
-        sessionId: scope.sessionId,
-        lifecycleRevision: "lifecycle-1",
-        coveredMessages: 2,
-        totalMessages: 2,
-      });
-      expect(complete).toHaveBeenCalledTimes(2);
-    } finally {
-      completion.resolve(result("Completed the first turn."));
-      try {
-        await service.dispose();
-      } finally {
-        projection.dispose();
-      }
-    }
+    const published = createDeferred<ReturnType<typeof view>>();
+    changed.mockImplementationOnce(() => published.resolve(view()));
+    completion.resolve(result("Completed the first turn."));
+    expect(await published.promise).toMatchObject({
+      state: "current",
+      text: "Completed the first turn.",
+    });
+    await describeSession("current", "Completed the first turn.");
+    expect(read()?.activitySummary).toMatchObject({
+      ...latestWatermark,
+      sessionId: scope.sessionId,
+      lifecycleRevision: "lifecycle-1",
+      coveredMessages: 2,
+      totalMessages: 2,
+    });
+    expect(complete).toHaveBeenCalledTimes(2);
   });
 
   it("releases unrelated entry snapshots while recap preparation remains pending", async () => {
@@ -404,17 +436,15 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     await messages(2);
     const preparation = createDeferred<typeof prepared>();
     const preparationStarted = createDeferred();
+    releasePending.push(() => preparation.resolve(prepared));
     prepare.mockImplementationOnce(() => {
       preparationStarted.resolve();
       return withinTest(preparation.promise, testSignal);
     });
-    try {
-      await service.ensure(target, { ...read()!, skillsSnapshot: new SavedSkillSnapshot() });
-      await withinTest(preparationStarted.promise, testSignal);
-      expect(queryObjects(SavedSkillSnapshot)).toBe(0);
-    } finally {
-      await awaitPublication(() => preparation.resolve(prepared));
-    }
+    await service.ensure(target, { ...read()!, skillsSnapshot: new SavedSkillSnapshot() });
+    await withinTest(preparationStarted.promise, testSignal);
+    expect(queryObjects(SavedSkillSnapshot)).toBe(0);
+    await awaitPublication(() => preparation.resolve(prepared));
     expect(read()?.activitySummary).toMatchObject({
       text: "Completed the requested work.",
       coveredMessages: 2,
@@ -426,11 +456,10 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     const prompt = "Saved recap prompt marker. ".repeat(40_000);
     await patchSessionEntryCore(scope, () => ({ skillsSnapshot: { prompt, skills: [] } }));
     const before = read()!;
-    const { completion, started } = holdCompletion();
+    const { completion, start } = holdCompletion();
     residentProjection = await createSessionRowProjection({ cfg, getConfig: () => cfg });
     await residentProjection.ensureMaterialized();
-    await ensureRecap(target);
-    await withinTest(started.promise, testSignal);
+    await start();
     expect(complete).toHaveBeenCalledTimes(1);
     const queries = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
     const parse = vi.spyOn(JSON, "parse");
@@ -512,13 +541,11 @@ describe("Activity recap lifecycle with the canonical session store", () => {
         reason: "archive",
       }),
     );
-    expect(view()?.state).toBe("current");
-    expect(complete).toHaveBeenCalledTimes(1);
+    expectProgress("current", 1);
     await messages(2, 2);
     notifyTranscriptFromTurn();
     expect(queryObjects(CompletedTurnContext)).toBe(0);
-    expect(view()?.state).toBe("updating");
-    expect(complete).toHaveBeenCalledTimes(1);
+    expectProgress("updating", 1);
     await awaitPublication(() => terminal(service));
     expect(read()?.activitySummary?.coveredMessages).toBe(4);
     expect(complete).toHaveBeenCalledTimes(2);
@@ -530,10 +557,9 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     "rejects a delayed completion after session %s",
     async (kind) => {
       await messages(2);
-      const completion = createDeferred<ReturnType<typeof result>>();
-      complete.mockImplementation(() => completion.promise);
-      await ensureRecap(target);
-      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(1));
+      const { completion, start } = holdCompletion();
+      await start();
+      expect(complete).toHaveBeenCalledTimes(1);
       if (kind === "delete") {
         await deleteSessionEntryLifecycle({
           agentId: "main",
@@ -563,15 +589,15 @@ describe("Activity recap lifecycle with the canonical session store", () => {
           category: "Work",
         }));
       }
-      const completion = createDeferred<ReturnType<typeof result>>();
-      complete.mockImplementationOnce(() => completion.promise);
-      await ensureRecap(target);
-      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(1));
+      const { completion, start } = holdCompletion();
+      await start();
+      expect(complete).toHaveBeenCalledTimes(1);
 
       const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
       const before = read()!;
       const releaseWriter = createDeferred();
       const writerScope = { agentId: scope.agentId, path: database.path };
+      releasePending.push(releaseWriter.resolve);
       const blocker = runExclusiveSqliteSessionWrite(
         writerScope,
         async () => {
@@ -593,90 +619,73 @@ describe("Activity recap lifecycle with the canonical session store", () => {
         },
         "session-entry.patch",
       );
-      try {
-        completion.resolve(result("Outdated recap must not be stored."));
-        await vi.waitFor(() =>
-          expect(SQLITE_SESSION_WRITER_QUEUES.get(database.path)?.pending.length).toBeGreaterThan(
-            0,
-          ),
-        );
-        const beforeSettlement = changed.mock.calls.length;
-        await awaitPublication(releaseWriter.resolve, () => true);
-        await blocker;
-        expect(changed.mock.calls.length).toBeGreaterThan(beforeSettlement);
-        expect(read()?.activitySummary).toBeUndefined();
-        expect(view()?.state).not.toBe("current");
-        expect(complete).toHaveBeenCalledTimes(1);
-        if (change === "utility-model" || change === "initialization") {
-          if (change === "initialization") {
-            await patchSessionEntryCore(scope, () => ({ initializationPending: undefined }));
-          }
-          await awaitPublication(() => ensureRecap(target));
-          expect(view()?.state).toBe("current");
-          expect(complete).toHaveBeenCalledTimes(2);
+      settlePending.push(blocker);
+      completion.resolve(result("Outdated recap must not be stored."));
+      await vi.waitFor(() =>
+        expect(SQLITE_SESSION_WRITER_QUEUES.get(database.path)?.pending.length).toBeGreaterThan(0),
+      );
+      const beforeSettlement = changed.mock.calls.length;
+      await awaitPublication(releaseWriter.resolve, () => true);
+      await blocker;
+      expect(changed.mock.calls.length).toBeGreaterThan(beforeSettlement);
+      expect(read()?.activitySummary).toBeUndefined();
+      expect(view()?.state).not.toBe("current");
+      expect(complete).toHaveBeenCalledTimes(1);
+      if (change === "utility-model" || change === "initialization") {
+        if (change === "initialization") {
+          await patchSessionEntryCore(scope, () => ({ initializationPending: undefined }));
         }
-      } finally {
-        completion.resolve(result("Outdated recap must not be stored."));
-        releaseWriter.resolve();
-        await blocker;
+        await awaitPublication(() => ensureRecap(target));
+        expect(view()?.state).toBe("current");
+        expect(complete).toHaveBeenCalledTimes(2);
       }
     },
   );
 
   it("keeps a delayed recap from invalidating deletion while its archive is prepared", async () => {
-    await messages(2);
-    await awaitPublication(() => ensureRecap(target));
-    expect(view()?.state).toBe("current");
+    await initialRecap();
     await messages(2, 2);
-    const { completion, started } = holdCompletion();
-    try {
-      await ensureRecap(target);
-      await withinTest(started.promise, testSignal);
-      expect(complete).toHaveBeenCalledTimes(2);
+    const { completion, start } = holdCompletion();
+    await start();
+    expect(complete).toHaveBeenCalledTimes(2);
 
-      const materializationStarted = createDeferred();
-      const materializationReleased = createDeferred();
-      archiveMaterializationHook.beforeMaterialize = async () => {
-        materializationStarted.resolve();
-        await materializationReleased.promise;
-      };
-      const storePath = resolveSessionStorePathCore(cfg.session?.store, {
-        agentId: target.agentId,
-      });
-      const capturedEntry = read();
-      const deletion = runExclusiveSessionLifecycleMutation("delete", {
-        scope: storePath,
-        identities: [target.key, scope.sessionId],
-        run: () =>
-          deleteSessionEntryLifecycle({
-            agentId: target.agentId,
-            archiveTranscript: true,
-            expectedEntry: capturedEntry,
-            storePath,
-            target: { canonicalKey: target.key, storeKeys: [target.key] },
-          }),
-      });
-      let entryDuringDeletion: ReturnType<typeof read>;
-      try {
-        await materializationStarted.promise;
-        await awaitPublication(
-          () => completion.resolve(result("This later recap must not interrupt deletion.")),
-          () => view()?.state !== "updating",
-        );
-        expect(view()?.state).not.toBe("updating");
-        entryDuringDeletion = read();
-      } finally {
-        completion.resolve(result("This later recap must not interrupt deletion."));
-        materializationReleased.resolve();
-        await deletion;
-      }
-      expect(entryDuringDeletion).toEqual(capturedEntry);
-      await expect(deletion).resolves.toMatchObject({ deleted: true });
-      await service.dispose();
-      expect(read()).toBeUndefined();
-    } finally {
-      completion.resolve(result("This later recap must not interrupt deletion."));
-    }
+    const materializationStarted = createDeferred();
+    const materializationReleased = createDeferred();
+    releasePending.push(materializationReleased.resolve);
+    archiveMaterializationHook.beforeMaterialize = async () => {
+      materializationStarted.resolve();
+      await materializationReleased.promise;
+    };
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, {
+      agentId: target.agentId,
+    });
+    const capturedEntry = read();
+    const deletion = runExclusiveSessionLifecycleMutation("delete", {
+      scope: storePath,
+      identities: [target.key, scope.sessionId],
+      run: () =>
+        deleteSessionEntryLifecycle({
+          agentId: target.agentId,
+          archiveTranscript: true,
+          expectedEntry: capturedEntry,
+          storePath,
+          target: { canonicalKey: target.key, storeKeys: [target.key] },
+        }),
+    });
+    settlePending.push(deletion);
+    await materializationStarted.promise;
+    await awaitPublication(
+      () => completion.resolve(result("This later recap must not interrupt deletion.")),
+      () => view()?.state !== "updating",
+    );
+    expect(view()?.state).not.toBe("updating");
+    const entryDuringDeletion = read();
+    materializationReleased.resolve();
+    await deletion;
+    expect(entryDuringDeletion).toEqual(capturedEntry);
+    await expect(deletion).resolves.toMatchObject({ deleted: true });
+    await service.dispose();
+    expect(read()).toBeUndefined();
   });
 
   it("does not let timeout release a preparation slot or dispatch a late model request", async () => {
@@ -750,19 +759,16 @@ describe("Activity recap lifecycle with the canonical session store", () => {
   });
 
   it("enqueues visible conversations through the registered RPC handler and rejects an invalid batch before model work", async () => {
-    const conversations = [
-      { key: target.key, sessionId: scope.sessionId, entry: {} },
-      {
-        key: "agent:main:dashboard:spawned",
-        sessionId: "spawned-dashboard",
-        entry: { spawnedBy: "agent:main:main" },
-      },
-      {
-        key: "agent:main:grouped-child",
-        sessionId: "spawned-grouped",
-        entry: { spawnedBy: "agent:main:main", category: "Work" },
-      },
-    ].map(({ key, sessionId, entry }) => ({
+    const cases: [string, string, Partial<SessionEntry>][] = [
+      [target.key, scope.sessionId, {}],
+      ["agent:main:dashboard:spawned", "spawned-dashboard", { spawnedBy: "agent:main:main" }],
+      [
+        "agent:main:grouped-child",
+        "spawned-grouped",
+        { spawnedBy: "agent:main:main", category: "Work" },
+      ],
+    ];
+    const conversations = cases.map(([key, sessionId, entry]) => ({
       target: { key, agentId: "main" },
       scope: { sessionKey: key, agentId: "main", sessionId },
       entry,
@@ -770,40 +776,12 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     for (const conversation of conversations) {
       await seedConversation(conversation.scope, "Check the build.", conversation.entry, "request");
     }
-    const published = createDeferred();
-    changed.mockImplementation(() => {
-      if (
-        conversations.every(({ target: row, scope: session }) => {
-          const entry = loadSessionEntryReadOnly(session);
-          return (
-            projectSessionActivitySummary({
-              ...row,
-              cfg,
-              entry,
-              watermark: readSessionTranscriptWatermark(session),
-            })?.state === "current"
-          );
-        })
-      ) {
-        published.resolve();
-      }
-    });
     cfg.gateway = { controlUi: { sessionObserver: false } };
     const context = createDirectChatContext({
       getRuntimeConfig: () => cfg,
       sessionActivitySummaries: service,
     });
-    const respond = vi.fn();
-    const handler = sessionActivitySummaryHandlers["sessions.activitySummary.ensure"]!;
-    const invoke = (params: Record<string, unknown>) =>
-      handler({
-        req: { type: "req", id: "1", method: "sessions.activitySummary.ensure", params },
-        params,
-        context,
-        client: null,
-        respond,
-        isWebchatConnect: () => false,
-      });
+    const { respond, invoke } = rpc("sessions.activitySummary.ensure", context);
     await invoke({
       sessions: [conversations[1]!.target, { key: "agent:main:missing", agentId: "main" }],
     });
@@ -813,6 +791,9 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
     expect(prepare).not.toHaveBeenCalled();
+    const published = publication(() =>
+      conversations.every(({ scope: session }) => view(session)?.state === "current"),
+    );
     await invoke({ sessions: conversations.map((conversation) => conversation.target) });
     expect(respond).toHaveBeenLastCalledWith(true, {
       sessions: conversations.map((conversation) => ({
@@ -820,9 +801,9 @@ describe("Activity recap lifecycle with the canonical session store", () => {
         activitySummary: { state: "updating", canEnsure: true },
       })),
     });
-    await published.promise;
+    await published;
     for (const conversation of conversations) {
-      expect(loadSessionEntryReadOnly(conversation.scope)).toMatchObject({
+      expect(read(conversation.scope)).toMatchObject({
         ...conversation.entry,
         activitySummary: { text: "Completed the requested work.", coveredMessages: 1 },
       });
@@ -860,9 +841,11 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     const before = read()?.updatedAt;
     await awaitPublication(() => ensureRecap(target));
     expect(view()?.state).toBe("current");
-    expect(read()?.activitySummary?.coveredMessages).toBe(2);
-    expect(read()?.updatedAt).toBe(before);
-    expect(read()?.archivedAt).toBe(1);
+    expect(read()).toMatchObject({
+      activitySummary: { coveredMessages: 2 },
+      updatedAt: before,
+      archivedAt: 1,
+    });
     expect((await getSessionColdStorageStatus(maintenance))[0]?.coldTranscripts).toBe(0);
   });
 
@@ -870,36 +853,20 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     const aliasTarget = { key: "agent:main:main", agentId: "main" };
     const aliasScope = { sessionKey: aliasTarget.key, agentId: "main", sessionId: "alias-session" };
     await seedConversation(aliasScope, "Prepare deployment", {}, "alias-request");
-    const completion = createDeferred<ReturnType<typeof result>>();
-    complete.mockImplementationOnce(() => completion.promise);
-    service.handleTranscript({
-      sessionKey: "main",
-      agentId: "main",
-      sessionId: aliasScope.sessionId,
-    });
-    await ensureRecap(aliasTarget);
-    await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(1));
-    const row = await listSessionFixture({
-      cfg,
-      storePath: openOpenClawAgentDatabase({ agentId: "main" }).path,
-      store: { main: loadSessionEntryReadOnly(aliasScope)! },
-      fixtureAgentId: "main",
-      opts: { includeActivitySummary: true },
-    });
+    const { completion, start } = holdCompletion();
+    const aliasEvent = { sessionKey: "main", agentId: "main", sessionId: aliasScope.sessionId };
+    service.handleTranscript(aliasEvent);
+    await start(aliasTarget);
+    expect(complete).toHaveBeenCalledTimes(1);
+    const row = await list({ main: read(aliasScope)! }, { fixtureAgentId: "main" });
     expect(row.sessions[0]?.activitySummary?.state).toBe("updating");
     await awaitPublication(
       () => completion.resolve(result("Prepared the deployment.")),
-      () =>
-        projectSessionActivitySummary({
-          ...aliasTarget,
-          cfg,
-          entry: loadSessionEntryReadOnly(aliasScope),
-          watermark: readSessionTranscriptWatermark(aliasScope),
-        })?.state === "current",
+      () => view(aliasScope)?.state === "current",
     );
-    expect(loadSessionEntryReadOnly(aliasScope)?.activitySummary).toBeDefined();
-    await persistSessionTranscriptTurn(aliasScope, {
-      messages: [
+    expect(read(aliasScope)?.activitySummary).toBeDefined();
+    await transcript(
+      [
         {
           eventId: "alias-outcome",
           parentId: "alias-request",
@@ -909,22 +876,14 @@ describe("Activity recap lifecycle with the canonical session store", () => {
           },
         },
       ],
-      touchSessionEntry: false,
-    });
+      aliasScope,
+    );
     const before = changed.mock.calls.length;
     for (let index = 0; index < 10; index += 1) {
-      service.handleTranscript({
-        sessionKey: "main",
-        agentId: "main",
-        sessionId: aliasScope.sessionId,
-      });
+      service.handleTranscript(aliasEvent);
     }
     expect(changed.mock.calls.length - before).toBe(1);
-    registerAgentRunContext("recap-context-run", {
-      sessionKey: "main",
-      agentId: "main",
-      sessionId: aliasScope.sessionId,
-    });
+    registerAgentRunContext("recap-context-run", aliasEvent);
     service.handleEvent({
       runId: "recap-context-run",
       seq: 1,
@@ -945,25 +904,17 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     );
     expect(entry).toMatchObject({ initializationPending: true });
     expect(entry).not.toHaveProperty("sessionId");
-    const listed = await listSessionFixture({
-      cfg,
-      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: scope.agentId }),
-      store: { [key]: entry! },
-      opts: { includeActivitySummary: true },
-    });
+    const listed = await list({ [key]: entry! });
     expect(listed.sessions[0]?.activitySummary).toEqual({ state: "unavailable" });
   });
 
   it("readmits a relocated store and fences a delayed result from its previous owner", async () => {
-    await messages(2);
-    await awaitPublication(() => ensureRecap(target));
-    expect(view()?.state).toBe("current");
+    await initialRecap();
     await messages(1, 2);
-    const oldCompletion = createDeferred<ReturnType<typeof result>>();
-    complete.mockImplementationOnce(() => oldCompletion.promise);
+    const { completion: oldCompletion, start } = holdCompletion();
     complete.mockImplementationOnce(async () => result("Recap from the relocated store."));
-    await ensureRecap(target);
-    await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
+    await start();
+    expect(complete).toHaveBeenCalledTimes(2);
     const relocatedDirectory = testState.path("relocated");
     await mkdir(relocatedDirectory);
     const relocatedPath = testState.path("relocated", "openclaw-agent.sqlite");
@@ -972,38 +923,27 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     await backup(requireNativeSqliteDatabase(originalDatabase.db), relocatedPath);
     cfg = { ...cfg, session: { store: relocatedPath } };
     const relocatedScope = { ...scope, storePath: relocatedPath };
-    try {
-      const relocatedEntry = loadSessionEntryReadOnly(relocatedScope)!;
-      expect(relocatedEntry.sessionId).toBe(scope.sessionId);
-      expect(relocatedEntry.lifecycleRevision).toBe(
-        loadSessionEntryReadOnly(originalScope)?.lifecycleRevision,
-      );
-      const projected = projectSessionActivitySummary({
-        ...target,
-        cfg,
-        entry: relocatedEntry,
-        watermark: readSessionTranscriptWatermark(relocatedScope),
-      });
-      expect.soft(projected?.state).toBe("stale");
-      await awaitPublication(
-        () => ensureRecap(target),
-        () => loadSessionEntryReadOnly(relocatedScope)?.activitySummary?.coveredMessages === 3,
-      );
-      expect(loadSessionEntryReadOnly(relocatedScope)?.activitySummary?.coveredMessages).toBe(3);
-      expect(loadSessionEntryReadOnly(relocatedScope)?.activitySummary?.text).toBe(
-        "Recap from the relocated store.",
-      );
-      expect(complete.mock.calls[1]![0].abortSignal?.aborted).toBe(true);
-    } finally {
-      oldCompletion.resolve(result("Outdated store result."));
-    }
+    const relocatedEntry = read(relocatedScope)!;
+    expect(relocatedEntry).toMatchObject({
+      sessionId: scope.sessionId,
+      lifecycleRevision: read(originalScope)?.lifecycleRevision,
+    });
+    expect.soft(view(relocatedScope)?.state).toBe("stale");
+    await awaitPublication(
+      () => ensureRecap(target),
+      () => read(relocatedScope)?.activitySummary?.coveredMessages === 3,
+    );
+    expect(read(relocatedScope)?.activitySummary).toMatchObject({
+      coveredMessages: 3,
+      text: "Recap from the relocated store.",
+    });
+    expect(complete.mock.calls[1]![0].abortSignal?.aborted).toBe(true);
+    oldCompletion.resolve(result("Outdated store result."));
     await service.dispose();
-    expect(loadSessionEntryReadOnly(relocatedScope)?.activitySummary?.text).toBe(
-      "Recap from the relocated store.",
-    );
-    expect(loadSessionEntryReadOnly(originalScope)?.activitySummary?.coveredMessages).toBe(2);
-    expect(loadSessionEntryReadOnly(originalScope)?.activitySummary?.text).toBe(
-      "Completed the requested work.",
-    );
+    expect(read(relocatedScope)?.activitySummary?.text).toBe("Recap from the relocated store.");
+    expect(read(originalScope)?.activitySummary).toMatchObject({
+      coveredMessages: 2,
+      text: "Completed the requested work.",
+    });
   });
 });
