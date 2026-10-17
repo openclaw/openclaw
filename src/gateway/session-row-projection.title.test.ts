@@ -19,8 +19,8 @@ it("samples title pending from the exact live owner without rematerializing stor
     const target = { storePath: record.storeTarget.storePath, sessionKey: key, sessionId: "title" };
     const generation = createDeferredCore<boolean>();
     const snapshot = () => projection.snapshot({ agentId: "main", key }).row;
-    const before = projection.materializedCount;
     expect(snapshot()?.titlePending).toBe(false);
+    const before = projection.materializedCount;
     const request = sessionTitleRequests.run(target, () => generation.promise);
     try {
       expect(snapshot()?.titlePending).toBe(true);

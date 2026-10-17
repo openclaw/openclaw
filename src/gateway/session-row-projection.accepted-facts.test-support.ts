@@ -117,7 +117,7 @@ export async function withAcceptedSuffix(
       const query = { agentId: "main", key: keys[1]! };
       const previous = await withReadySessionRows(
         projection,
-        () => [query],
+        () => keys.map((key) => ({ agentId: "main", key })),
         (read) => read.describe(query)!,
       );
       const count = projection.materializedCount;

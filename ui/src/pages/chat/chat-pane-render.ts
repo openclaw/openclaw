@@ -470,6 +470,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       modelCatalog: state.chatModelCatalog,
       modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
       queue: state.chatQueue,
+      getQueue: () => state.chatQueue,
       realtimeTalkActive: state.realtimeTalk.snapshot.realtimeTalkActive,
       realtimeTalkStatus: state.realtimeTalk.snapshot.realtimeTalkStatus,
       realtimeTalkDetail: state.realtimeTalk.snapshot.realtimeTalkDetail,

@@ -20,6 +20,7 @@ import type {
   ChannelIngressClaimSelection,
   ChannelIngressClaimSnapshot,
   ChannelIngressListInput,
+  ChannelIngressQueueClaim,
   ChannelIngressQueuePruneOptions,
   ChannelIngressRow,
   ChannelIngressScope,
@@ -154,8 +155,36 @@ export function enqueueChannelIngressInDatabase(
       laneKey?: string;
     }>;
     now: number;
+    idleClaimOwnerId?: string;
   },
-): Array<{ accepted: boolean; row: ChannelIngressRow }> {
+  transitionNow: () => number = Date.now,
+): Array<{
+  accepted: boolean;
+  row: ChannelIngressRow;
+  freshClaim?: ChannelIngressQueueClaim<unknown>["claim"];
+}> {
+  // One writer transaction arbitrates the idle shortcut against persisted backlog.
+  // Existing pending rows (including delayed retries) and peer claims keep FIFO.
+  const claimOwnerId = input.events.length === 1 ? input.idleClaimOwnerId : undefined;
+  const claimAt = claimOwnerId ? transitionNow() : undefined;
+  const freshClaim =
+    claimOwnerId !== undefined &&
+    claimAt !== undefined &&
+    !executeSqliteQueryTakeFirstSync(
+      db,
+      getQueue(db)
+        .selectFrom("channel_ingress_events")
+        .select("event_id")
+        .where("queue_name", "=", input.queueName)
+        .where("status", "in", ["pending", "claimed"])
+        .limit(1),
+    )
+      ? {
+          token: randomUUID(),
+          ownerId: claimOwnerId,
+          claimedAt: claimAt,
+        }
+      : undefined;
   // Keep the first payload for duplicate IDs within the adapter batch, just as
   // ordered individual admissions did. Bound each statement's parameter count.
   const firstById = new Map<string, (typeof input.events)[number]>();
@@ -179,12 +208,15 @@ export function enqueueChannelIngressInDatabase(
             event_id: event.id,
             channel_id: input.channelId,
             account_id: input.accountId,
-            status: "pending",
+            status: freshClaim ? "claimed" : "pending",
+            claim_token: freshClaim?.token ?? null,
+            claim_owner: freshClaim?.ownerId ?? null,
+            claimed_at: freshClaim?.claimedAt ?? null,
             lane_key: event.laneKey ?? null,
             payload_json: event.payloadJson,
             metadata_json: event.metadataJson,
             received_at: event.receivedAt,
-            updated_at: input.now,
+            updated_at: freshClaim?.claimedAt ?? input.now,
             attempts: 0,
           })),
         )
@@ -222,7 +254,8 @@ export function enqueueChannelIngressInDatabase(
     if (!row) {
       throw new Error(`Failed to read channel ingress event ${input.queueName}/${event.id}`);
     }
-    return { accepted: accepted.delete(event.id), row };
+    const inserted = accepted.delete(event.id);
+    return { accepted: inserted, row, freshClaim: inserted ? freshClaim : undefined };
   });
 }
 

@@ -185,7 +185,7 @@ export function buildChatItems(
   );
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
   const hiddenHistoryKeys = new Set<string>();
-  const persistedCanvasIdentities = new Set<string>();
+  const canvasIdentities = new Set<string>();
   const normalizedHistory = history.map(safeNormalizeMessage);
   const permissionInMessage = (message: unknown) =>
     extractToolCardsCached(message).some((card) =>
@@ -290,10 +290,12 @@ export function buildChatItems(
 
     const isToolResult = normalized.role.toLowerCase() === "toolresult";
     const persistedCanvasSource = isToolResult ? extractChatMessagePreview(msg) : null;
+    let duplicatePersistedCanvas = false;
     if (persistedCanvasSource) {
       const identity = canvasPreviewBaseIdentity(msg, persistedCanvasSource);
       if (identity) {
-        persistedCanvasIdentities.add(identity);
+        duplicatePersistedCanvas = canvasIdentities.has(identity);
+        canvasIdentities.add(identity);
       }
     }
     const matchingCanvas =
@@ -312,6 +314,7 @@ export function buildChatItems(
     }
     const renderPersistedPreview =
       persistedCanvasSource != null &&
+      !duplicatePersistedCanvas &&
       !matchingCanvas &&
       (!searchFiltering || canvasTurns[i]!.lastMatchingAssistantIndex > i);
     if (persistedCanvasSource && renderPersistedPreview) {
@@ -392,8 +395,11 @@ export function buildChatItems(
       continue;
     }
     const baseIdentity = canvasPreviewBaseIdentity(projection.item.message, preview);
-    if (baseIdentity && persistedCanvasIdentities.has(baseIdentity)) {
-      continue;
+    if (baseIdentity) {
+      if (canvasIdentities.has(baseIdentity)) {
+        continue;
+      }
+      canvasIdentities.add(baseIdentity);
     }
     const canvasBounds = boundToPendingInputs(
       resolveRunBounds(

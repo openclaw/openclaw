@@ -14,6 +14,8 @@ import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { ApplicationProvider, useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
+import { projectSource } from "../../lib/reactive/projection.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
@@ -24,6 +26,7 @@ import {
   renderChatComposerNotices as ChatComposerNoticesView,
   renderChatTopbarNotices as ChatTopbarNotices,
 } from "./chat-view-notices.tsx";
+import { subscribeAsyncQuestionState } from "./components/chat-async-question.ts";
 import { ChatCommentController } from "./components/chat-comment-controller.ts";
 import {
   ComposerQuestionDock,
@@ -40,7 +43,6 @@ import { ChatSwarmProgress } from "./components/chat-swarm-progress.solid.tsx";
 import { ChatTaskSuggestionTray } from "./components/chat-task-suggestions.tsx";
 import {
   getTranscriptState,
-  closeTranscriptSearch,
   toggleTranscriptSearch,
 } from "./components/chat-thread-interactions.ts";
 import { ChatThread } from "./components/chat-thread-view.tsx";
@@ -283,17 +285,24 @@ function ChatContent(input: { props: ChatProps }) {
         line,
       }),
   });
-  const frame = createMemo(() => createChatViewFrame(input.props));
   const [presentationRevision, setPresentationRevision] = createSignal(0, { ownedWrite: true });
   createEffect(
-    () => input.props.presented,
-    (binding) => {
-      if (typeof binding !== "object") {
-        return undefined;
-      }
+    () =>
+      new Set(
+        [input.props.presented, input.props.transcriptVisible].flatMap((binding) =>
+          typeof binding === "object" ? [binding.owner] : [],
+        ),
+      ),
+    (owners) => {
       const notify = () => setPresentationRevision((value) => value + 1);
-      binding.owner.addEventListener(PRESENTATION_CHANGED_EVENT, notify);
-      return () => binding.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, notify);
+      for (const owner of owners) {
+        owner.addEventListener(PRESENTATION_CHANGED_EVENT, notify);
+      }
+      return () => {
+        for (const owner of owners) {
+          owner.removeEventListener(PRESENTATION_CHANGED_EVENT, notify);
+        }
+      };
     },
   );
   const presented = () => {
@@ -301,6 +310,27 @@ function ChatContent(input: { props: ChatProps }) {
     const binding = input.props.presented;
     return typeof binding === "object" ? binding.isPresented() : (binding ?? true);
   };
+  const paneId = createMemo(() => input.props.paneId);
+  const questions = createMemo(() =>
+    projectSource(getTranscriptState(paneId()), {
+      read: (state) => state.asyncQuestionRevision,
+      subscribe: subscribeAsyncQuestionState,
+      equality: "revision",
+    }),
+  );
+  const questionRevision = createParkedProjection(
+    () => questions().read(),
+    () => {
+      presentationRevision();
+      const visible = input.props.transcriptVisible ?? true;
+      return typeof visible === "object" ? visible.isPresented() : visible;
+    },
+    paneId,
+  );
+  const frame = createMemo(() => {
+    questionRevision();
+    return createChatViewFrame(input.props);
+  });
   const viewProps = () => ({
     props: input.props,
     frame: frame(),
@@ -372,7 +402,7 @@ function ChatContent(input: { props: ChatProps }) {
         }
         if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.transcriptSearch, event)) {
           event.preventDefault();
-          toggleTranscriptSearch(input.props.paneId, frame().requestUpdate, event);
+          toggleTranscriptSearch(input.props.paneId, event);
         }
       }}
     >
@@ -401,17 +431,7 @@ function ChatContent(input: { props: ChatProps }) {
                     prop:presented={presented()}
                   />
                 </Show>
-                <TranscriptSearch
-                  revision={frame()}
-                  state={getTranscriptState(input.props.paneId)}
-                  requestUpdate={frame().requestUpdate}
-                  onClose={() =>
-                    closeTranscriptSearch(
-                      getTranscriptState(input.props.paneId),
-                      frame().requestUpdate,
-                    )
-                  }
-                />
+                <TranscriptSearch search={getTranscriptState(input.props.paneId).search} />
                 <div class="chat-main__conversation-frame">
                   <div
                     class="chat-main__conversation"

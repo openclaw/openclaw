@@ -1,21 +1,15 @@
 import { Show, createMemo } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import "../../../components/tooltip.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { projectOwner } from "../../../lib/reactive/projection.ts";
+import "../../../components/tooltip.ts";
+import type { TranscriptSearchState } from "./chat-transcript-search-state.ts";
 
-export function TranscriptSearch(props: {
-  state: { searchOpen: boolean; searchQuery: string; searchFocusPending: boolean };
-  revision?: unknown;
-  requestUpdate: () => void;
-  onClose: () => void;
-}) {
-  const state = () => {
-    void props.revision;
-    return props.state;
-  };
-  const query = createMemo(() => state().searchQuery);
+export function TranscriptSearch(props: { search: TranscriptSearchState }) {
+  const source = createMemo(() => projectOwner(props.search, (owner) => owner.snapshot, Object.is));
+  const query = createMemo(() => source().read().query);
   return (
-    <Show when={state().searchOpen}>
+    <Show when={source().read().open}>
       <div
         class="agent-chat__search-bar"
         onKeyDown={(event) => {
@@ -29,7 +23,7 @@ export function TranscriptSearch(props: {
           }
           event.preventDefault();
           event.stopPropagation();
-          props.onClose();
+          props.search.close();
         }}
       >
         <Icon name="search" />
@@ -38,27 +32,14 @@ export function TranscriptSearch(props: {
           placeholder={t("chat.thread.searchPlaceholder")}
           aria-label={t("chat.thread.search")}
           value={query()}
-          ref={(element) => {
-            if (!state().searchFocusPending) {
-              return;
-            }
-            state().searchFocusPending = false;
-            queueMicrotask(() => {
-              if (element.isConnected) {
-                element.focus({ preventScroll: true });
-              }
-            });
-          }}
-          onInput={(event) => {
-            state().searchQuery = event.currentTarget.value;
-            props.requestUpdate();
-          }}
+          ref={(element) => props.search.focusInput(element)}
+          onInput={(event) => props.search.setQuery(event.currentTarget.value)}
         />
         <openclaw-tooltip prop:content={t("chat.thread.closeSearch")}>
           <button
             class="btn btn--ghost"
             aria-label={t("chat.thread.closeSearch")}
-            onClick={() => props.onClose()}
+            onClick={() => props.search.close()}
           >
             <Icon name="x" />
           </button>
