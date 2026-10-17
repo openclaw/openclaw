@@ -100,25 +100,17 @@ describe("event session routing", () => {
     );
   });
 
-  it("does not route multi-owner or wildcard direct sessions to main", () => {
-    const baseCfg: OpenClawConfig = {
-      ...singleOwnerConfig,
-      channels: { telegram: { allowFrom: ["123", "456"] } },
-    };
-
-    expect(
-      resolveMainScopedEventSessionKey({
-        cfg: baseCfg,
-        sessionKey: "agent:main:telegram:default:direct:123",
-      }),
-    ).toBeNull();
-    expect(
-      resolveMainScopedEventSessionKey({
-        cfg: { ...baseCfg, channels: { telegram: { allowFrom: ["*"] } } },
-        sessionKey: "agent:main:telegram:default:direct:123",
-      }),
-    ).toBeNull();
-  });
+  it.each([{ allowFrom: ["123", "456"] }, { allowFrom: ["*"] }])(
+    "does not route allowlist $allowFrom to main",
+    ({ allowFrom }) => {
+      expect(
+        resolveMainScopedEventSessionKey({
+          cfg: { ...singleOwnerConfig, channels: { telegram: { allowFrom } } },
+          sessionKey: "agent:main:telegram:default:direct:123",
+        }),
+      ).toBeNull();
+    },
+  );
 
   it("preserves route-binding direct session overrides under global dmScope=main", () => {
     const sessionKey = telegramSessionKey;

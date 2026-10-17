@@ -39,21 +39,10 @@ let ExecApprovalChannelRuntimeTerminalStartError: typeof import("./exec-approval
 
 type GatewayEventClientParams = { onEvent?: (evt: { event: string; payload: unknown }) => void };
 
-function firstMockCall(
-  mock: { mock: { calls: Array<readonly unknown[]> } },
-  label: string,
-): readonly unknown[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
-}
-
 function lastGatewayEventClientParams(): GatewayEventClientParams | undefined {
-  return firstMockCall(mockCreateOperatorApprovalsGatewayClient, "operator approvals client")[0] as
-    | GatewayEventClientParams
-    | undefined;
+  const call = mockCreateOperatorApprovalsGatewayClient.mock.calls[0];
+  expect(call, "operator approvals client call").toBeDefined();
+  return call?.[0] as GatewayEventClientParams | undefined;
 }
 
 function emitPluginApprovalRequested(clientParams = lastGatewayEventClientParams()) {
@@ -63,8 +52,8 @@ function emitPluginApprovalRequested(clientParams = lastGatewayEventClientParams
   });
 }
 
-function createExecReplayRequest(id = "abc"): ExecApprovalRequest {
-  return { id, request: { command: "echo abc" }, createdAtMs: 1000, expiresAtMs: 2000 };
+function createExecReplayRequest(id = "abc", command = "echo abc"): ExecApprovalRequest {
+  return { id, request: { command }, createdAtMs: 1000, expiresAtMs: 2000 };
 }
 
 function createPluginReplayRequest(id = "plugin:abc"): PluginApprovalRequest {
@@ -80,60 +69,32 @@ function mockReplayLists(params: {
   exec?: ExecApprovalRequest[];
   plugin?: PluginApprovalRequest[];
 }) {
-  mockGatewayClientRequests.mockImplementation(async (method: string) => {
-    if (method === "exec.approval.list") {
-      return params.exec ?? [];
-    }
-    if (method === "plugin.approval.list") {
-      return params.plugin ?? [];
-    }
-    return { ok: true };
-  });
+  const lists = new Map<string, ApprovalRequestInput[]>([
+    ["exec.approval.list", params.exec ?? []],
+    ["plugin.approval.list", params.plugin ?? []],
+  ]);
+  mockGatewayClientRequests.mockImplementation(async (method) => lists.get(method) ?? { ok: true });
 }
 
-function expectStartGatewayClientCall(preauthHandshakeTimeoutMs?: number) {
-  expect(mockStartGatewayClientWhenEventLoopReady).toHaveBeenCalledTimes(1);
-  const [client, options] = firstMockCall(
-    mockStartGatewayClientWhenEventLoopReady,
-    "gateway client start readiness",
+function expectStartGatewayClientCall() {
+  expect(mockStartGatewayClientWhenEventLoopReady).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ start: expect.any(Function) }),
+    { clientOptions: { preauthHandshakeTimeoutMs: undefined } },
   );
-  expect(typeof (client as { start?: unknown } | undefined)?.start).toBe("function");
-  expect(options).toEqual({ clientOptions: { preauthHandshakeTimeoutMs } });
 }
 
-function expectFinalizedExpired(
-  finalizedExpired: ReturnType<typeof vi.fn>,
-  params: { id: string; entries: Array<{ id: string }> },
-) {
-  expect(finalizedExpired).toHaveBeenCalledTimes(1);
-  expect(finalizedExpired).toHaveBeenCalledWith(
+function expectFinalized(mock: ReturnType<typeof vi.fn>, id: string, decision?: string) {
+  expect(mock).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({
-      request: expect.objectContaining({ id: params.id }),
-      entries: params.entries,
+      request: expect.objectContaining({ id }),
+      entries: [{ id }],
+      ...(decision ? { resolved: expect.objectContaining({ id, decision }) } : {}),
     }),
   );
 }
 
-function expectFinalizedResolved(
-  finalizedResolved: ReturnType<typeof vi.fn>,
-  params: { id: string; decision: string; entries: Array<{ id: string }> },
-) {
-  expect(finalizedResolved).toHaveBeenCalledTimes(1);
-  expect(finalizedResolved).toHaveBeenCalledWith(
-    expect.objectContaining({
-      request: expect.objectContaining({ id: params.id }),
-      resolved: expect.objectContaining({ id: params.id, decision: params.decision }),
-      entries: params.entries,
-    }),
-  );
-}
-
-function expectDeliveredRequestId(deliverRequested: ReturnType<typeof vi.fn>, id: string) {
-  expect(
-    deliverRequested.mock.calls.some(
-      ([request]) => (request as { id?: unknown } | undefined)?.id === id,
-    ),
-  ).toBe(true);
+function clientWithStart(start: () => void) {
+  return { start, stop: mockGatewayClientStops, request: mockGatewayClientRequests };
 }
 
 beforeEach(() => {
@@ -149,16 +110,12 @@ beforeEach(() => {
   });
   loggerMocks.debug.mockReset();
   loggerMocks.error.mockReset();
-  mockCreateOperatorApprovalsGatewayClient.mockReset().mockImplementation(async (params) => ({
-    start: () => {
+  mockCreateOperatorApprovalsGatewayClient.mockReset().mockImplementation(async (params) =>
+    clientWithStart(() => {
       mockGatewayClientStarts();
-      queueMicrotask(() => {
-        params.onHelloOk?.({ type: "hello-ok" } as never);
-      });
-    },
-    stop: mockGatewayClientStops,
-    request: mockGatewayClientRequests,
-  }));
+      queueMicrotask(() => params.onHelloOk?.({ type: "hello-ok" } as never));
+    }),
+  );
 });
 
 afterEach(() => {
@@ -235,23 +192,16 @@ describe("createExecApprovalChannelRuntime", () => {
     });
 
     await runtime.handleRequested(createExecReplayRequest("abc"));
-    await runtime.handleRequested({
-      ...createExecReplayRequest("xyz"),
-      request: { command: "echo xyz" },
-    });
+    await runtime.handleRequested(createExecReplayRequest("xyz", "echo xyz"));
 
     await runtime.handleExpired("abc");
 
-    expectFinalizedExpired(finalizedExpired, { id: "abc", entries: [{ id: "abc" }] });
+    expectFinalized(finalizedExpired, "abc");
     expect(finalizedResolved).not.toHaveBeenCalled();
 
     await runtime.handleResolved({ id: "xyz", decision: "allow-once", ts: 1500 });
 
-    expectFinalizedResolved(finalizedResolved, {
-      id: "xyz",
-      decision: "allow-once",
-      entries: [{ id: "xyz" }],
-    });
+    expectFinalized(finalizedResolved, "xyz", "allow-once");
   });
 
   it("finalizes approvals that resolve while delivery is still in flight", async () => {
@@ -269,11 +219,7 @@ describe("createExecApprovalChannelRuntime", () => {
     pendingDelivery.resolve([{ id: "plugin:abc" }]);
     await requestPromise;
 
-    expectFinalizedResolved(finalizeResolved, {
-      id: "plugin:abc",
-      decision: "allow-once",
-      entries: [{ id: "plugin:abc" }],
-    });
+    expectFinalized(finalizeResolved, "plugin:abc", "allow-once");
   });
 
   it("routes a system-agent expiry event through expiry finalization", async () => {
@@ -287,7 +233,7 @@ describe("createExecApprovalChannelRuntime", () => {
     });
 
     await runtime.handleRequested({
-      id: "system-agent:expired",
+      ...createExecReplayRequest("system-agent:expired"),
       request: {
         title: "OpenClaw change",
         description: "restart the Gateway",
@@ -296,8 +242,6 @@ describe("createExecApprovalChannelRuntime", () => {
         allowedDecisions: ["allow-once", "deny"],
         sessionId: "session-1",
       },
-      createdAtMs: 1000,
-      expiresAtMs: 2000,
     });
     await runtime.handleResolved({
       id: "system-agent:expired",
@@ -416,17 +360,13 @@ describe("createExecApprovalChannelRuntime", () => {
     const authError = Object.assign(new Error("gateway token mismatch"), {
       details: { code: "AUTH_TOKEN_MISMATCH", canRetryWithDeviceToken: true },
     });
-    mockCreateOperatorApprovalsGatewayClient.mockImplementationOnce(async (params) => ({
-      start: () => {
+    mockCreateOperatorApprovalsGatewayClient.mockImplementationOnce(async (params) =>
+      clientWithStart(() => {
         mockGatewayClientStarts();
         params.onConnectError?.(authError);
-        queueMicrotask(() => {
-          params.onHelloOk?.({ type: "hello-ok" } as never);
-        });
-      },
-      stop: mockGatewayClientStops,
-      request: mockGatewayClientRequests,
-    }));
+        queueMicrotask(() => params.onHelloOk?.({ type: "hello-ok" } as never));
+      }),
+    );
     const runtime = createRuntime();
 
     await expect(runtime.start()).resolves.toBeUndefined();
@@ -439,8 +379,8 @@ describe("createExecApprovalChannelRuntime", () => {
     const authError = Object.assign(new Error("pairing required"), {
       details: { code: "PAIRING_REQUIRED" },
     });
-    mockCreateOperatorApprovalsGatewayClient.mockImplementationOnce(async (params) => ({
-      start: () => {
+    mockCreateOperatorApprovalsGatewayClient.mockImplementationOnce(async (params) =>
+      clientWithStart(() => {
         mockGatewayClientStarts();
         params.onConnectError?.(authError);
         params.onReconnectPaused?.({
@@ -449,19 +389,13 @@ describe("createExecApprovalChannelRuntime", () => {
           detailCode: "PAIRING_REQUIRED",
         });
         params.onClose?.(1008, "pairing required");
-      },
-      stop: mockGatewayClientStops,
-      request: mockGatewayClientRequests,
-    }));
+      }),
+    );
     const runtime = createRuntime();
 
-    let caught: unknown;
-    await runtime.start().catch((error: unknown) => {
-      caught = error;
-    });
-
-    expect(caught).toBeInstanceOf(ExecApprovalChannelRuntimeTerminalStartError);
-    expect((caught as { detailCode?: string }).detailCode).toBe("PAIRING_REQUIRED");
+    const startup = runtime.start();
+    await expect(startup).rejects.toBeInstanceOf(ExecApprovalChannelRuntimeTerminalStartError);
+    await expect(startup).rejects.toMatchObject({ detailCode: "PAIRING_REQUIRED" });
 
     expect(mockGatewayClientStarts).toHaveBeenCalledTimes(1);
     expect(mockGatewayClientStops).toHaveBeenCalledTimes(1);
@@ -479,11 +413,7 @@ describe("createExecApprovalChannelRuntime", () => {
     const startPromise = runtime.start();
     await clientCreationStarted.promise;
     const stopPromise = runtime.stop();
-    pendingClient.resolve({
-      start: mockGatewayClientStarts,
-      stop: mockGatewayClientStops,
-      request: mockGatewayClientRequests as GatewayClient["request"],
-    } as unknown as GatewayClient);
+    pendingClient.resolve(clientWithStart(mockGatewayClientStarts) as unknown as GatewayClient);
     await startPromise;
     await stopPromise;
 
@@ -492,24 +422,6 @@ describe("createExecApprovalChannelRuntime", () => {
     await expect(runtime.request("exec.approval.resolve", { id: "abc" })).rejects.toThrow(
       "gateway client not connected",
     );
-  });
-
-  it("logs async request handling failures from gateway events", async () => {
-    const runtime = createRuntime<PluginApprovalRequest, PluginApprovalResolved>({
-      eventKinds: ["plugin"],
-      deliverRequested: async () => {
-        throw new Error("deliver failed");
-      },
-    });
-
-    await runtime.start();
-    emitPluginApprovalRequested();
-
-    await vi.waitFor(() => {
-      expect(loggerMocks.error).toHaveBeenCalledWith(
-        "error handling approval request: deliver failed",
-      );
-    });
   });
 
   it("subscribes to plugin approval events when requested", async () => {
@@ -526,63 +438,41 @@ describe("createExecApprovalChannelRuntime", () => {
     expect(clientParams?.onEvent).toBeTypeOf("function");
 
     emitPluginApprovalRequested(clientParams);
-    await vi.waitFor(() => {
-      expectDeliveredRequestId(deliverRequested, "plugin:abc");
-    });
+    await vi.waitFor(() =>
+      expect(deliverRequested).toHaveBeenCalledWith(expect.objectContaining({ id: "plugin:abc" })),
+    );
 
     clientParams?.onEvent?.({
       event: "plugin.approval.resolved",
       payload: { id: "plugin:abc", decision: "allow-once", ts: 1500 },
     });
-    await vi.waitFor(() => {
-      expectFinalizedResolved(finalizeResolved, {
-        id: "plugin:abc",
-        decision: "allow-once",
-        entries: [{ id: "plugin:abc" }],
+    await vi.waitFor(() => expectFinalized(finalizeResolved, "plugin:abc", "allow-once"));
+  });
+
+  it.each(["complete", "in-flight"] as const)(
+    "deduplicates live events with %s replay delivery",
+    async (phase) => {
+      mockReplayLists({ plugin: [createPluginReplayRequest()] });
+      const delivery = phase === "in-flight" ? createDeferred<Array<{ id: string }>>() : undefined;
+      const deliverRequested = vi.fn(
+        async (request: PluginApprovalRequest) => delivery?.promise ?? [{ id: request.id }],
+      );
+      const runtime = createRuntime<PluginApprovalRequest, PluginApprovalResolved>({
+        ...(delivery ? { nowMs: () => 1000 } : {}),
+        eventKinds: ["plugin"],
+        deliverRequested,
       });
-    });
-  });
-
-  it("ignores live duplicate approval events after replay", async () => {
-    mockReplayLists({ plugin: [createPluginReplayRequest()] });
-    const deliverRequested = vi.fn(async (request) => [{ id: request.id }]);
-    const runtime = createRuntime<PluginApprovalRequest, PluginApprovalResolved>({
-      eventKinds: ["plugin"],
-      deliverRequested,
-    });
-
-    await runtime.start();
-    await vi.waitFor(() => {
+      await runtime.start();
+      await vi.waitFor(() => expect(deliverRequested).toHaveBeenCalledTimes(1));
+      emitPluginApprovalRequested();
+      await Promise.resolve();
       expect(deliverRequested).toHaveBeenCalledTimes(1);
-    });
-    emitPluginApprovalRequested();
-    await Promise.resolve();
-
-    expect(deliverRequested).toHaveBeenCalledTimes(1);
-  });
-
-  it("ignores live duplicate approval events while replay delivery is still in flight", async () => {
-    mockReplayLists({ plugin: [createPluginReplayRequest()] });
-    const pendingDelivery = createDeferred<Array<{ id: string }>>();
-    const deliverRequested = vi.fn(async () => pendingDelivery.promise);
-    const runtime = createRuntime<PluginApprovalRequest, PluginApprovalResolved>({
-      nowMs: () => 1000,
-      eventKinds: ["plugin"],
-      deliverRequested,
-    });
-
-    await runtime.start();
-    await vi.waitFor(() => {
-      expect(deliverRequested).toHaveBeenCalledTimes(1);
-    });
-
-    emitPluginApprovalRequested();
-    await Promise.resolve();
-    expect(deliverRequested).toHaveBeenCalledTimes(1);
-
-    pendingDelivery.resolve([{ id: "plugin:abc" }]);
-    await runtime.stop();
-  });
+      if (delivery) {
+        delivery.resolve([{ id: "plugin:abc" }]);
+        await runtime.stop();
+      }
+    },
+  );
 
   it("does not replay approvals after stop wins once hello is already complete", async () => {
     const replayDeferred = createDeferred<ExecApprovalRequest[]>();
@@ -596,9 +486,9 @@ describe("createExecApprovalChannelRuntime", () => {
     const runtime = createRuntime({ deliverRequested });
 
     const startPromise = runtime.start();
-    await vi.waitFor(() => {
-      expect(mockGatewayClientRequests).toHaveBeenCalledWith("exec.approval.list", {});
-    });
+    await vi.waitFor(() =>
+      expect(mockGatewayClientRequests).toHaveBeenCalledWith("exec.approval.list", {}),
+    );
 
     const stopPromise = runtime.stop();
     replayDeferred.resolve([createExecReplayRequest()]);
@@ -619,9 +509,7 @@ describe("createExecApprovalChannelRuntime", () => {
     const runtime = createRuntime({ nowMs: () => 1000, deliverRequested, onStopped });
 
     await runtime.start();
-    await vi.waitFor(() => {
-      expect(deliverRequested).toHaveBeenCalledTimes(1);
-    });
+    await vi.waitFor(() => expect(deliverRequested).toHaveBeenCalledTimes(1));
 
     let stopResolved = false;
     const stopPromise = runtime.stop().then(() => {
@@ -639,20 +527,23 @@ describe("createExecApprovalChannelRuntime", () => {
     expect(loggerMocks.error).not.toHaveBeenCalled();
   });
 
-  it("logs replay delivery failures without failing startup", async () => {
-    mockReplayLists({ exec: [createExecReplayRequest()] });
-    const runtime = createRuntime({
+  it.each([
+    { source: "live", message: "error handling approval request: deliver failed" },
+    { source: "replay", message: "error replaying pending approvals: deliver failed" },
+  ])("logs $source delivery failures without failing startup", async ({ source, message }) => {
+    if (source === "replay") {
+      mockReplayLists({ exec: [createExecReplayRequest()] });
+    }
+    const runtime = createRuntime<ExecApprovalRequest | PluginApprovalRequest>({
+      eventKinds: source === "live" ? ["plugin"] : ["exec"],
       deliverRequested: async () => {
         throw new Error("deliver failed");
       },
     });
-
     await expect(runtime.start()).resolves.toBeUndefined();
-
-    await vi.waitFor(() => {
-      expect(loggerMocks.error).toHaveBeenCalledWith(
-        "error replaying pending approvals: deliver failed",
-      );
-    });
+    if (source === "live") {
+      emitPluginApprovalRequested();
+    }
+    await vi.waitFor(() => expect(loggerMocks.error).toHaveBeenCalledWith(message));
   });
 });

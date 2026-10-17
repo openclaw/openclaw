@@ -71,49 +71,19 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     expectOneShot(await decide(command));
   });
 
-  it("chooses reusable patterns for allow-always planner candidates", async () => {
-    const { dir, decide } = createPersistenceFixture([]);
-    const gitPath = makeExecutable(dir, "git");
-
-    const decision = await decide("git status");
-
-    expect(decision).toEqual({
-      kind: "patterns",
-      commandText: "git status",
-      patterns: [expect.objectContaining({ pattern: gitPath })],
-    });
-  });
-
-  it("persists chained package-manager exec approvals against the final inner executable", async () => {
-    const { dir, decide } = createPersistenceFixture(["pnpm", "npm"]);
-    const tsxPath = makeExecutable(dir, "tsx");
-    const command = "pnpm exec -- npm x -- tsx ./run.ts";
-
-    const decision = await decide(command);
-
-    expect(decision).toEqual({
+  it.each([
+    { binaries: [], executable: "git", command: "git status" },
+    { binaries: ["pnpm", "npm"], executable: "tsx", command: "pnpm exec -- npm x -- tsx ./run.ts" },
+    { binaries: ["yarn"], executable: "tsx", command: "yarn dlx tsx ./run.ts" },
+  ])("persists $command against $executable", async ({ binaries, executable, command }) => {
+    const { dir, decide } = createPersistenceFixture(binaries);
+    const executablePath = makeExecutable(dir, executable);
+    expect(await decide(command)).toEqual({
       kind: "patterns",
       commandText: command,
-      patterns: [expect.objectContaining({ pattern: tsxPath })],
+      patterns: [expect.objectContaining({ pattern: executablePath })],
     });
   });
-
-  it.each(["dlx"])(
-    "persists yarn %s approvals against the inner executable",
-    async (subcommand) => {
-      const { dir, decide } = createPersistenceFixture(["yarn"]);
-      const tsxPath = makeExecutable(dir, "tsx");
-      const command = `yarn ${subcommand} tsx ./run.ts`;
-
-      const decision = await decide(command);
-
-      expect(decision).toEqual({
-        kind: "patterns",
-        commandText: command,
-        patterns: [expect.objectContaining({ pattern: tsxPath })],
-      });
-    },
-  );
 
   it("keeps shell wrappers without reusable patterns one-shot", async () => {
     const cwd = makeExecApprovalsTempDir();

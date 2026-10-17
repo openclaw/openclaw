@@ -20,14 +20,14 @@ describe("exec allowlist matching", () => {
   const baseResolution = executable("rg", "/opt/homebrew/bin/rg");
 
   it("handles wildcard and path matching semantics", () => {
-    const cases: Array<{ entries: ExecAllowlistEntry[]; expectedPattern: string | null }> = [
-      { entries: [{ pattern: "RG" }], expectedPattern: null },
-      { entries: [{ pattern: "not-rg" }], expectedPattern: null },
-      { entries: [{ pattern: "/opt/**/rg" }], expectedPattern: "/opt/**/rg" },
-      { entries: [{ pattern: "/opt/*/rg" }], expectedPattern: null },
-    ];
-    for (const { entries, expectedPattern } of cases) {
-      const match = matchAllowlist(entries, baseResolution);
+    const cases = [
+      ["RG", null],
+      ["not-rg", null],
+      ["/opt/**/rg", "/opt/**/rg"],
+      ["/opt/*/rg", null],
+    ] as const;
+    for (const [pattern, expectedPattern] of cases) {
+      const match = matchAllowlist([{ pattern }], baseResolution);
       expect(match?.pattern ?? null).toBe(expectedPattern);
     }
   });
@@ -74,16 +74,10 @@ describe("exec allowlist matching", () => {
     });
 
     it.each(["win32"])("requires argv before matching argPattern entries on %s", (platform) => {
-      const restrictedEntries: ExecAllowlistEntry[] = [
-        { pattern: "/usr/bin/python3", argPattern: "^a\\.py$" },
-      ];
-      const mixedEntries: ExecAllowlistEntry[] = [
-        { pattern: "/usr/bin/python3", argPattern: "^a\\.py$" },
-        { pattern: "/usr/bin/python3" },
-      ];
-
-      expect(matchAllowlist(restrictedEntries, resolution, undefined, platform)).toBeNull();
-      expect(matchAllowlist(mixedEntries, resolution, undefined, platform)).toBe(mixedEntries[1]);
+      const restricted = { pattern: "/usr/bin/python3", argPattern: "^a\\.py$" };
+      const manual = { pattern: "/usr/bin/python3" };
+      expect(matchAllowlist([restricted], resolution, undefined, platform)).toBeNull();
+      expect(matchAllowlist([restricted, manual], resolution, undefined, platform)).toBe(manual);
     });
 
     it("handles invalid regex gracefully", () => {
