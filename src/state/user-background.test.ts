@@ -28,7 +28,7 @@ import {
 import { getUserPreferences, setUserPreferences } from "./user-preferences.test-support.js";
 import { linkCanonicalUserProfileEmail as linkEmail } from "./user-profile-writes.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
-import { useUserStateFixture } from "./user-state.test-support.js";
+import { fillUserPreferences, useUserStateFixture } from "./user-state.test-support.js";
 
 vi.mock("./user-background-image.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./user-background-image.js")>()),
@@ -43,24 +43,6 @@ const preferenceConflict = { ok: false, error: { code: "conflict" } };
 const invalidBackground = { ok: false, error: { code: "invalid-value", key: "ui.background" } };
 const absent = { status: "ok", asset: null, preference: null };
 
-function pauseDecoding() {
-  const decoding = createDeferred<typeof normalized>();
-  const started = createDeferred();
-  vi.mocked(normalizeUserBackgroundImage).mockImplementationOnce(() => {
-    started.resolve();
-    return decoding.promise;
-  });
-  return {
-    finish: () => decoding.resolve(normalized),
-    started: (pending: Promise<UsersBackgroundResult>) =>
-      Promise.race([
-        started.promise,
-        pending.then(() => {
-          throw new Error("Upload finished before decoding");
-        }),
-      ]),
-  };
-}
 function setup() {
   const options = stateOptions();
   const first = ensureProfileForEmail("first@example.test", options);
@@ -104,21 +86,15 @@ describe("private profile backgrounds", () => {
     const { db, read, upload, image, remove } = setup();
     await read();
     const native = vi.spyOn(db, "prepare");
-    try {
-      const uploaded = snapshot(await upload());
-      expect(await read()).toEqual(uploaded);
-      expect((await image(uploaded.asset!.assetId)).image).toEqual(
-        new Uint8Array(normalized.image),
-      );
-      const head = await image(uploaded.asset!.assetId, undefined, false);
-      expect(head).toMatchObject({ image: undefined, byteLength: normalized.image.byteLength });
-      expect(head.isCurrent()).toBe(true);
-      expect((await remove(expected(uploaded))).status).toBe("ok");
-      expect(head.isCurrent()).toBe(false);
-      expect(native).not.toHaveBeenCalled();
-    } finally {
-      native.mockRestore();
-    }
+    const uploaded = snapshot(await upload());
+    expect(await read()).toEqual(uploaded);
+    expect((await image(uploaded.asset!.assetId)).image).toEqual(new Uint8Array(normalized.image));
+    const head = await image(uploaded.asset!.assetId, undefined, false);
+    expect(head).toMatchObject({ image: undefined, byteLength: normalized.image.byteLength });
+    expect(head.isCurrent()).toBe(true);
+    expect((await remove(expected(uploaded))).status).toBe("ok");
+    expect(head.isCurrent()).toBe(false);
+    expect(native).not.toHaveBeenCalled();
   });
 
   it("retains one private image while hidden, replaces atomically, and removes selection coherently", async () => {
@@ -279,22 +255,38 @@ describe("private profile backgrounds", () => {
     expect((await remove(expected(current))).status).toBe("ok");
   });
 
-  it("refuses an in-flight upload when only presentation changes", async () => {
-    const { first, setBackground, read, upload } = setup();
-    const initial = snapshot(await upload());
-    const decoding = pauseDecoding();
-    const pending = upload(expected(initial), "delayed");
-    await decoding.started(pending);
-    const fullBleed = { ...initial.preference!, presentation: "full-bleed" as const };
-    const saved = setBackground(first, fullBleed, initial.preference);
-    decoding.finish();
-    expect(await pending).toEqual(conflict);
-    expect(saved.ok).toBe(true);
-    expect(await read()).toStrictEqual({
-      ...initial,
-      preference: fullBleed,
-    });
-  });
+  it.each(["presentation", "profile merge"] as const)(
+    "rejects an upload when %s changes during decoding",
+    async (change) => {
+      const { options, first, second, setBackground, read, upload } = setup();
+      const initial = change === "presentation" ? snapshot(await upload()) : undefined;
+      const decoding = createDeferred<typeof normalized>();
+      const started = createDeferred();
+      vi.mocked(normalizeUserBackgroundImage).mockImplementationOnce(() => {
+        started.resolve();
+        return decoding.promise;
+      });
+      const pending = upload(initial ? expected(initial) : empty, "delayed");
+      await Promise.race([
+        started.promise,
+        pending.then(() => {
+          throw new Error("Upload finished before decoding");
+        }),
+      ]);
+      const fullBleed = initial && { ...initial.preference!, presentation: "full-bleed" as const };
+      const saved = fullBleed
+        ? setBackground(first, fullBleed, initial!.preference)
+        : await linkEmail("first@example.test", second, options);
+      decoding.resolve(normalized);
+      expect(await pending).toEqual(conflict);
+      if (initial) {
+        expect(saved).toMatchObject({ ok: true });
+        expect(await read()).toStrictEqual({ ...initial, preference: fullBleed });
+      } else {
+        expect(snapshot(await getUserBackground(second, options)).asset).toBeNull();
+      }
+    },
+  );
 
   it("rejects invalid presentation in generic preference values and comparison snapshots", async () => {
     const { first, setBackground, read } = setup();
@@ -320,30 +312,9 @@ describe("private profile backgrounds", () => {
     expect(getUserPreferences(second, ["ui.background"], options)).toEqual({});
   });
 
-  it("rechecks preferences and profile liveness after decoding, without retargeting a merged profile", async () => {
-    const { options, second, upload } = setup();
-    const decoding = pauseDecoding();
-    const pending = upload(empty, "delayed");
-    await decoding.started(pending);
-    await linkEmail("first@example.test", second, options);
-    decoding.finish();
-    expect(await pending).toEqual(conflict);
-    expect(snapshot(await getUserBackground(second, options)).asset).toBeNull();
-  });
-
   it("rolls back the image if the preference quota rejects its selection", async () => {
     const { options, first, db, upload, read } = setup();
-    for (let batch = 0; batch < 4; batch++) {
-      expect(
-        setUserPreferences(
-          first,
-          Object.fromEntries(
-            Array.from({ length: 32 }, (_, index) => ["existing-" + (batch * 32 + index), true]),
-          ),
-          options,
-        ).ok,
-      ).toBe(true);
-    }
+    fillUserPreferences(options, first, 128, "existing");
     await expect(upload()).rejects.toThrow("profile-key-limit");
     expect(await read()).toEqual(absent);
     expect(db.prepare("SELECT COUNT(*) AS count FROM user_background_images").get()?.count).toBe(0);

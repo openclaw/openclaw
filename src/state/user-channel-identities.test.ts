@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
@@ -63,8 +63,21 @@ const stateOptions = useUserStateFixture("openclaw-channel-identities-", () => {
     release();
   }
 });
-async function retainCatalog(options: ReturnType<typeof stateOptions>) {
+let options: ReturnType<typeof stateOptions>;
+beforeEach(() => {
+  options = stateOptions();
+});
+async function retainCatalog() {
   releases.push((await prepareUserProfileCatalog(options)).release);
+}
+const prepareRole = (profileId: string, includeProfile = false) =>
+  prepareUserProfileRoleAuthority(profileId, { ...options, includeProfile });
+const setRole = (profileId: string, role: "admin" | "member", assertCurrent?: () => void) =>
+  setCanonicalUserProfileRole(profileId, role, { ...options, assertCurrent });
+function requireCurrent(current: boolean | undefined, message: string) {
+  if (!current) {
+    throw new Error(message);
+  }
 }
 
 function expectCurrent(expected: boolean, ...guards: ({ isCurrent(): boolean } | undefined)[]) {
@@ -78,16 +91,15 @@ const identity: UserChannelIdentity = {
 it.each(["email binding", "stale role reply"] as const)(
   "keeps revoked authority retired after an ABA change to %s",
   async (change) => {
-    const options = stateOptions();
     const source = ensureProfileForEmail("source@example.test", options);
     if (change === "stale role reply") {
-      await setCanonicalUserProfileRole(source.id, "admin", options);
+      await setRole(source.id, "admin");
     } else {
       await linkCanonicalUserProfileEmail("retained@example.test", source.id, options);
     }
     await changeCanonicalUserChannelIdentity("link", source.id, identity, options);
     const selection = await prepareUserProfileSelectionAuthority(source.id, options);
-    const admin = await prepareUserProfileRoleAuthority(source.id, options);
+    const admin = await prepareRole(source.id);
     const rolePolicy = await prepareUserProfileRolePolicyAuthority(source.id, options);
     const channel = await prepareUserChannelIdentityAuthority(identity, options);
     expectCurrent(true, selection, admin, rolePolicy, channel);
@@ -96,7 +108,7 @@ it.each(["email binding", "stale role reply"] as const)(
     if (change === "stale role reply") {
       vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementationOnce(
         async (...args) => {
-          await setCanonicalUserProfileRole(source.id, "member", options);
+          await setRole(source.id, "member");
           const reply = await execute(...args);
           expect(reply).toMatchObject({
             type: "userProfiles.catalog",
@@ -104,7 +116,7 @@ it.each(["email binding", "stale role reply"] as const)(
               [source.id, expect.objectContaining({ role: "member" })],
             ]),
           });
-          await setCanonicalUserProfileRole(source.id, "admin", options);
+          await setRole(source.id, "admin");
           return reply;
         },
       );
@@ -114,20 +126,15 @@ it.each(["email binding", "stale role reply"] as const)(
       await linkCanonicalUserProfileEmail("source@example.test", target.id, options);
       await linkCanonicalUserProfileEmail("source@example.test", source.id, options);
     }
-    const prepared = await prepareUserProfileRoleAuthority(source.id, {
-      ...options,
-      includeProfile: true,
-    });
+    const prepared = await prepareRole(source.id, true);
     if (change === "stale role reply") {
-      expect(prepared?.role).toBe("admin");
-      expect(prepared?.listItem).toMatchObject({
-        id: source.id,
+      expect(prepared).toMatchObject({
         role: "admin",
-        emails: ["source@example.test"],
+        listItem: { id: source.id, role: "admin", emails: ["source@example.test"] },
       });
     }
     expect(prepared?.isCurrent()).toBe(true);
-    await retainCatalog(options);
+    await retainCatalog();
     expect(readResidentUserProfileIdentity(source.id, options)?.profileId).toBe(source.id);
     expectCurrent(false, admin, rolePolicy, channel);
     expectCurrent(true, selection);
@@ -136,7 +143,6 @@ it.each(["email binding", "stale role reply"] as const)(
 );
 
 it("does not create state or identity tables while resolving absent links", async () => {
-  const options = stateOptions();
   expect(await prepareUserChannelIdentityAuthority(identity, options)).toBeUndefined();
   expect(await prepareUserProfileRolePolicyAuthority("absent", options)).toBeUndefined();
   expect(await listCanonicalUserChannelIdentities("absent", options)).toEqual([]);
@@ -151,28 +157,27 @@ it("does not create state or identity tables while resolving absent links", asyn
 });
 
 it("serves profile authority from committed catalog facts without another worker read", async () => {
-  const options = stateOptions();
   const source = ensureProfileForEmail("source@example.test", options);
   const target = ensureProfileForEmail("target@example.test", options);
-  await setCanonicalUserProfileRole(source.id, "admin", options);
-  await retainCatalog(options);
+  await setRole(source.id, "admin");
+  await retainCatalog();
   const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-  const original = await prepareUserProfileRoleAuthority(source.id, {
-    ...options,
-    includeProfile: true,
+  const original = await prepareRole(source.id, true);
+  expect(original).toMatchObject({
+    profileId: source.id,
+    role: "admin",
+    listItem: { emails: ["source@example.test"] },
   });
-  expect(original).toMatchObject({ profileId: source.id, role: "admin" });
-  expect(original?.listItem?.emails).toEqual(["source@example.test"]);
   const aliases = await prepareCurrentUserProfileAliases(source.id, options);
   expect(aliases.aliases).toEqual(new Set([source.id]));
   expect(original?.isCurrent()).toBe(true);
   expect(reads).not.toHaveBeenCalled();
 
-  await setCanonicalUserProfileRole(source.id, "member", options);
+  await setRole(source.id, "member");
   await setCanonicalUserProfileDisplayName(source.id, "Current name", options);
   expect(original?.isCurrent()).toBe(false);
   reads.mockClear();
-  const current = await prepareUserProfileRoleAuthority(source.id, options);
+  const current = await prepareRole(source.id);
   expect(current).toMatchObject({
     profileId: source.id,
     role: "member",
@@ -185,10 +190,7 @@ it("serves profile authority from committed catalog facts without another worker
   expect(current?.isCurrent()).toBe(false);
   expect(() => aliases.assertCurrent()).toThrow();
   reads.mockClear();
-  const merged = await prepareUserProfileRoleAuthority(source.id, {
-    ...options,
-    includeProfile: true,
-  });
+  const merged = await prepareRole(source.id, true);
   expect(merged).toMatchObject({
     profileId: target.id,
     aliases: [target.id, source.id],
@@ -203,7 +205,6 @@ it("serves profile authority from committed catalog facts without another worker
 });
 
 it("releases an expired commit fence before retrying a channel identity change", async () => {
-  const options = stateOptions();
   const profile = ensureProfileForEmail("owner@example.test", options);
   linkUserChannelIdentity(profile.id, identity, options);
   const context = captureOpenClawStateWorkerContext(options);
@@ -243,7 +244,6 @@ it("releases an expired commit fence before retrying a channel identity change",
 });
 
 it("revokes the exact prepared binding before worker commit acknowledgement", async () => {
-  const options = stateOptions();
   const otherOptions = stateOptions();
   const ada = ensureProfileForEmail("ada@example.test", options);
   const grace = ensureProfileForEmail("grace@example.test", options);
@@ -253,7 +253,7 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
   const prepared = await prepareUserChannelIdentityAuthority(identity, options);
   expect(prepared?.linked.profileId).toBe(ada.id);
   const { db } = openOpenClawStateDatabase(options);
-  await retainCatalog(options);
+  await retainCatalog();
   const queries = vi.spyOn(db, "prepare");
   expect(prepared?.isCurrent()).toBe(true);
   expect(queries).not.toHaveBeenCalled();
@@ -294,7 +294,7 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
   setUserProfileRole(ada.id, "admin", options);
   expect(renewed?.isCurrent()).toBe(false);
 
-  const admin = await prepareUserProfileRoleAuthority(ada.id, options);
+  const admin = await prepareRole(ada.id);
   const rolePolicy = await prepareUserProfileRolePolicyAuthority(ada.id, options);
   const selectedSource = await prepareUserProfileSelectionAuthority(ada.id, options);
   const selectedTarget = await prepareUserProfileSelectionAuthority(grace.id, options);
@@ -305,7 +305,7 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
   let actorCurrent = true;
   let rejectedBeforeAdmission = false;
   let rollbackGranted = false;
-  let pendingRole: ReturnType<typeof prepareUserProfileRoleAuthority> | undefined;
+  let pendingRole: ReturnType<typeof prepareRole> | undefined;
   let pendingSelection: ReturnType<typeof prepareUserProfileSelectionAuthority> | undefined;
   const mutationAdmissionSpy = probe.admission(operationAdmission, (request, grant, admit) => {
     if (request.stage === "commit" && mutation === "reject") {
@@ -320,7 +320,7 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
         expectCurrent(false, admin, rolePolicy);
         expect(selectedSource?.isCurrent()).toBe(true);
         expect(queries).not.toHaveBeenCalled();
-        pendingRole = prepareUserProfileRoleAuthority(ada.id, options);
+        pendingRole = prepareRole(ada.id);
         void pendingRole.catch(() => undefined);
       } else if (request.stage === "commit" && mutation === "merge") {
         queries.mockClear();
@@ -335,14 +335,9 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
   });
   try {
     await expect(
-      setCanonicalUserProfileRole(ada.id, "member", {
-        ...options,
-        assertCurrent: () => {
-          if (!admin?.isCurrent()) {
-            throw new Error("Administrative authority was revoked");
-          }
-        },
-      }),
+      setRole(ada.id, "member", () =>
+        requireCurrent(admin?.isCurrent(), "Administrative authority was revoked"),
+      ),
     ).resolves.toMatchObject({ id: ada.id, role: "member" });
     expectCurrent(false, admin, rolePolicy);
     expect(await prepareUserProfileRolePolicyAuthority(ada.id, options)).toMatchObject({
@@ -356,17 +351,10 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
     setUserProfileRole(ada.id, "admin", options);
     mutation = "reject";
     await expect(
-      setCanonicalUserProfileRole(ada.id, "member", {
-        ...options,
-        assertCurrent: () => {
-          if (!actorCurrent) {
-            throw new Error("Original actor was revoked");
-          }
-        },
-      }),
+      setRole(ada.id, "member", () => requireCurrent(actorCurrent, "Original actor was revoked")),
     ).rejects.toThrow("Original actor was revoked");
     expect(rejectedBeforeAdmission).toBe(true);
-    expect((await prepareUserProfileRoleAuthority(ada.id, options))?.role).toBe("admin");
+    expect((await prepareRole(ada.id))?.role).toBe("admin");
 
     mutation = "rollback";
     const beforeRollback = getUserProfileDisplay(ada.id, options);
@@ -383,16 +371,14 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
         `);
     }, options);
     try {
-      await expect(setCanonicalUserProfileRole(ada.id, "member", options)).rejects.toThrow(
-        /FOREIGN KEY constraint failed/i,
-      );
+      await expect(setRole(ada.id, "member")).rejects.toThrow(/FOREIGN KEY constraint failed/i);
       expect(rollbackGranted).toBe(true);
       expect(resolveUserChannelIdentity(identity, options)?.role).toBe("admin");
       queries.mockClear();
       expect(readResidentUserProfileIdentity(ada.id, options)?.role).toBe("admin");
       expect(getUserProfileDisplay(ada.id, options)).toEqual(beforeRollback);
       expect(queries).not.toHaveBeenCalled();
-      const afterRollback = await prepareUserProfileRoleAuthority(ada.id, options);
+      const afterRollback = await prepareRole(ada.id);
       expect(afterRollback?.role).toBe("admin");
       expect(afterRollback?.isCurrent()).toBe(true);
     } finally {
@@ -403,7 +389,7 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
       }, options);
     }
     mutation = "recover";
-    await expect(setCanonicalUserProfileRole(ada.id, "member", options)).resolves.toMatchObject({
+    await expect(setRole(ada.id, "member")).resolves.toMatchObject({
       id: ada.id,
       role: "member",
     });
@@ -433,7 +419,6 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
 it.each([false, true])(
   "commits account-scoped links and refuses conflicting assignments (merged=%s)",
   async (merged) => {
-    const options = stateOptions();
     const ada = ensureProfileForEmail("ada@example.test", options);
     const grace = ensureProfileForEmail("grace@example.test", options);
     const intruder = ensureProfileForEmail("intruder@example.test", options);
@@ -499,16 +484,19 @@ it.each([false, true])(
 );
 
 it("reads current roles and only canonical login identities, including the current verified GitHub login", () => {
-  const options = stateOptions();
+  const sync = (accountId: number, login: string, byEmail = true) =>
+    syncGitHubIdentity(
+      {
+        identity: { accountId, login },
+        authenticationAlias: byEmail
+          ? { kind: "email", email: "ada@example.test" }
+          : { kind: "github-login", login },
+      },
+      options,
+    );
   const passkey = ensureProfileForTailscaleIdentity({ login: "ada@passkey" }, options);
   linkEmail("ada@example.test", passkey.id, options);
-  const profile = syncGitHubIdentity(
-    {
-      identity: { accountId: 123, login: "old-login" },
-      authenticationAlias: { kind: "email", email: "ada@example.test" },
-    },
-    options,
-  );
+  const profile = sync(123, "old-login");
   linkUserChannelIdentity(profile.id, identity, options);
   setUserProfileRole(profile.id, "admin", options);
   const { db } = openOpenClawStateDatabase(options);
@@ -524,30 +512,22 @@ it("reads current roles and only canonical login identities, including the curre
     db,
     userProfilesDb(db)
       .insertInto("user_profile_identities")
-      .values([
-        {
+      .values(
+        (
+          [
+            ["123", "retired-login"],
+            ["456", null],
+          ] as const
+        ).map(([subject, canonical_login]) => ({
           provider: "github-attribution",
-          subject: "123",
+          subject,
           profile_id: profile.id,
-          canonical_login: "retired-login",
+          canonical_login,
           created_at: 1,
-        },
-        {
-          provider: "github-attribution",
-          subject: "456",
-          profile_id: profile.id,
-          canonical_login: null,
-          created_at: 1,
-        },
-      ]),
+        })),
+      ),
   );
-  syncGitHubIdentity(
-    {
-      identity: { accountId: 123, login: "new-login" },
-      authenticationAlias: { kind: "github-login", login: "new-login" },
-    },
-    options,
-  );
+  sync(123, "new-login", false);
   expect(resolveUserChannelIdentity(identity, options)).toMatchObject({
     profileId: profile.id,
     role: "admin",
@@ -557,13 +537,7 @@ it("reads current roles and only canonical login identities, including the curre
   });
   setUserProfileRole(profile.id, "member", options);
   expect(resolveUserChannelIdentity(identity, options)?.role).toBe("member");
-  syncGitHubIdentity(
-    {
-      identity: { accountId: 789, login: "new-person" },
-      authenticationAlias: { kind: "email", email: "ada@example.test" },
-    },
-    options,
-  );
+  sync(789, "new-person");
   expect(resolveUserChannelIdentity(identity, options)).toMatchObject({
     profileId: profile.id,
     role: "member",
@@ -573,7 +547,6 @@ it("reads current roles and only canonical login identities, including the curre
 });
 
 it("rejects the shared owner and malformed identities without linking a person", async () => {
-  const options = stateOptions();
   const owner = ensureGatewayOwnerProfile("Owner", options);
   const profile = ensureProfileForEmail("ada@example.test", options);
   expect(() => linkUserChannelIdentity(owner.id, identity, options)).toThrow("shared owner");

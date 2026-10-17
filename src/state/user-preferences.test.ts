@@ -12,7 +12,7 @@ import {
 import { ensureUserPreferencesSchema, mergeUserPreferences } from "./user-preferences.store.js";
 import { getUserPreferences, setUserPreferences } from "./user-preferences.test-support.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
-import { useUserStateFixture } from "./user-state.test-support.js";
+import { fillUserPreferences, useUserStateFixture } from "./user-state.test-support.js";
 
 const stateOptions = useUserStateFixture("openclaw-user-prefs-");
 
@@ -24,17 +24,8 @@ function preferences(options = stateOptions(), profileId = "profile-a") {
     get: (keys?: string[]) => getUserPreferences(profileId, keys, options),
     set: (entries: Record<string, unknown>, expectedEntries?: Record<string, unknown>) =>
       setUserPreferences(profileId, entries, { ...options, expectedEntries }),
-    fill: (count: number, prefix = "key") => {
-      for (let start = 0; start < count; start += 32) {
-        const entries = Object.fromEntries(
-          Array.from({ length: Math.min(32, count - start) }, (_, i) => [
-            `${prefix}-${start + i}`,
-            true,
-          ]),
-        );
-        expect(setUserPreferences(profileId, entries, options)).toEqual(success);
-      }
-    },
+    fill: (count: number, prefix?: string) =>
+      fillUserPreferences(options, profileId, count, prefix),
   };
 }
 

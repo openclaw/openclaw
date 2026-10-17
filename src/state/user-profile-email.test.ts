@@ -1,20 +1,20 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
+import type { SqliteWorkerOperationSettlement as Settlement } from "../infra/sqlite-worker-operation-settlement.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  closeOpenClawStateDatabaseByPathAsync,
+  closeOpenClawStateDatabaseByPathAsync as closeDatabase,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 import { ensureProfileIdForEmail } from "./user-profile-email.js";
 import { readUserProfileVersion } from "./user-profile-events.js";
 import { readUserProfileEmailBindings } from "./user-profile-identity.read.js";
 import {
-  prepareUserProfileIdentity,
+  prepareUserProfileIdentity as prepareIdentity,
   readResidentUserProfileId,
   prepareUserProfileCatalog,
 } from "./user-profile-list.js";
-import { linkCanonicalUserProfileEmail } from "./user-profile-writes.js";
+import { linkCanonicalUserProfileEmail as linkCanonicalEmail } from "./user-profile-writes.js";
 import { linkEmail } from "./user-profile-writes.worker.js";
 import { ensureProfileForEmail, ensureProfileForTailscaleIdentity } from "./user-profiles.js";
 
@@ -22,7 +22,7 @@ const delivery = vi.hoisted(() => ({
   afterResult: undefined as (() => void) | undefined,
   heldSettlement: undefined as
     | {
-        observed: (settlement: SqliteWorkerOperationSettlement) => void;
+        observed: (settlement: Settlement) => void;
         resume: Promise<void>;
       }
     | undefined,
@@ -75,6 +75,7 @@ afterEach(() => {
 });
 
 const notFound = "user profile not found";
+const resultLost = "synthetic profile result loss";
 function bindingId(profileId: string, email: string) {
   const binding = readUserProfileEmailBindings(openOpenClawStateDatabase().db, profileId).find(
     (entry) => entry.email === email,
@@ -87,91 +88,89 @@ function bindingId(profileId: string, email: string) {
 
 it.each(["lost during close", "after alias reassignment"] as const)(
   "publishes current email bindings when the creation reply arrives %s",
-  async (reply) => {
-    await withOpenClawTestState({ layout: "state-only" }, async () => {
+  (reply) =>
+    withOpenClawTestState({ layout: "state-only" }, async () => {
+      const email = "new@example.test";
       const pathname = openOpenClawStateDatabase().path;
       const existing = ensureProfileForEmail("existing@example.test");
-      const retained = await prepareUserProfileIdentity(existing.id);
+      const retained = await prepareIdentity(existing.id);
       const release = (await prepareUserProfileCatalog()).release;
-      let closing: ReturnType<typeof closeOpenClawStateDatabaseByPathAsync> | undefined;
+      let closing: ReturnType<typeof closeDatabase> | undefined;
       let originalBinding: string | null | undefined;
+      let releaseCurrent: (() => void) | undefined;
       try {
         const before = readUserProfileVersion();
         delivery.afterResult = () => {
           if (reply === "lost during close") {
-            closing = closeOpenClawStateDatabaseByPathAsync(pathname);
-            throw new Error("synthetic profile result loss");
+            closing = closeDatabase(pathname);
+            throw new Error(resultLost);
           }
-          const created = ensureProfileForEmail("new@example.test");
-          originalBinding = bindingId(created.id, "new@example.test");
+          const created = ensureProfileForEmail(email);
+          originalBinding = bindingId(created.id, email);
           linkEmail("retained@example.test", created.id);
-          linkEmail("new@example.test", existing.id);
-          linkEmail("new@example.test", created.id);
+          linkEmail(email, existing.id);
+          linkEmail(email, created.id);
         };
         let profileId: string;
         if (reply === "lost during close") {
-          await expect(ensureProfileIdForEmail("new@example.test")).rejects.toThrow(
-            "synthetic profile result loss",
-          );
+          await expect(ensureProfileIdForEmail(email)).rejects.toThrow(resultLost);
           await closing;
-          profileId = ensureProfileForEmail("new@example.test").id;
+          profileId = ensureProfileForEmail(email).id;
           expect(readResidentUserProfileId(profileId)).toBe(profileId);
           expect(readUserProfileVersion()).toBe(before + 1);
         } else {
-          profileId = await ensureProfileIdForEmail("new@example.test");
+          profileId = await ensureProfileIdForEmail(email);
           expect(originalBinding).toEqual(expect.any(String));
         }
-        const current = await prepareUserProfileIdentity(profileId);
-        try {
-          if (reply === "lost during close") {
-            expect(current.emailBindingIds).toEqual([expect.any(String)]);
-          } else {
-            expect(current.emailBindingIds).toHaveLength(2);
-            expect(current.emailBindingIds).not.toContain(originalBinding);
-            expect(() => current.readCurrentFacts([originalBinding!])).toThrow(notFound);
-          }
-          expect(() => current.readCurrentFacts(current.emailBindingIds)).not.toThrow();
-        } finally {
-          current.release();
+        const current = await prepareIdentity(profileId);
+        releaseCurrent = current.release;
+        if (reply === "lost during close") {
+          expect(current.emailBindingIds).toEqual([expect.any(String)]);
+        } else {
+          expect(current.emailBindingIds).toHaveLength(2);
+          expect(current.emailBindingIds).not.toContain(originalBinding);
+          expect(() => current.readCurrentFacts([originalBinding!])).toThrow(notFound);
         }
+        expect(() => current.readCurrentFacts(current.emailBindingIds)).not.toThrow();
       } finally {
+        releaseCurrent?.();
         await closing;
         release();
         retained.release();
       }
-    });
-  },
+    }),
 );
 
 it.each(["native supersession", "accepted precursor"] as const)(
   "publishes the latest binding and canonical profile after %s",
-  async (order) => {
-    await withOpenClawTestState({ layout: "state-only" }, async () => {
+  (order) =>
+    withOpenClawTestState({ layout: "state-only" }, async () => {
       const email = "moving@example.test";
+      const sourceEmail = "source-retained@example.test";
+      const targetEmail = "target-retained@example.test";
       const source = ensureProfileForEmail(email);
-      linkEmail("source-retained@example.test", source.id);
+      linkEmail(sourceEmail, source.id);
       const target =
         order === "native supersession"
-          ? ensureProfileForEmail("target-retained@example.test")
+          ? ensureProfileForEmail(targetEmail)
           : ensureProfileForTailscaleIdentity({ login: "target@github" });
-      const sourceReader = await prepareUserProfileIdentity(source.id);
-      const targetReader = await prepareUserProfileIdentity(target.id);
-      const held: Array<{
-        release: () => void;
-        result: ReturnType<typeof linkCanonicalUserProfileEmail>;
-      }> = [];
+      const sourceReader = await prepareIdentity(source.id);
+      const targetReader = await prepareIdentity(target.id);
+      const held: Array<() => Promise<void>> = [];
       const holdLink = async (profileId: string) => {
-        const settled = createDeferredCore<SqliteWorkerOperationSettlement>();
+        const settled = createDeferredCore<Settlement>();
         const publication = createDeferredCore();
         delivery.heldSettlement = { observed: settled.resolve, resume: publication.promise };
-        const result = linkCanonicalUserProfileEmail(email, profileId);
+        const result = linkCanonicalEmail(email, profileId);
         delivery.heldSettlement = undefined;
-        const pending = { release: publication.resolve, result };
-        held.push(pending);
+        held.push(async () => {
+          publication.resolve();
+          await result;
+        });
         await expect(
           Promise.race([settled.promise, result.then(() => undefined)]),
         ).resolves.toMatchObject({ kind: "completed" });
-        return pending;
+        return { release: publication.resolve, result };
       };
       try {
         const initialBindingId = bindingId(source.id, email);
@@ -197,24 +196,17 @@ it.each(["native supersession", "accepted precursor"] as const)(
         if (order === "accepted precursor") {
           expect(() => targetReader.readCurrentFacts()).toThrow(notFound);
         } else {
-          expect(targetReader.readCurrentFacts(targetBindings).profile.emails).toEqual([
-            email,
-            "target-retained@example.test",
-          ]);
-          expect(sourceReader.readCurrentFacts().profile.emails).toEqual([
-            "source-retained@example.test",
-          ]);
+          expect([
+            targetReader.readCurrentFacts(targetBindings).profile.emails,
+            sourceReader.readCurrentFacts().profile.emails,
+          ]).toEqual([[email, targetEmail], [sourceEmail]]);
         }
         expect(native).not.toHaveBeenCalled();
       } finally {
         delivery.heldSettlement = undefined;
-        for (const pending of held) {
-          pending.release();
-        }
-        await Promise.allSettled(held.map((pending) => pending.result));
+        await Promise.allSettled(held.map((release) => release()));
         sourceReader.release();
         targetReader.release();
       }
-    });
-  },
+    }),
 );
