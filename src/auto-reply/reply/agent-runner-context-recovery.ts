@@ -7,6 +7,8 @@ import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import type { ModelRef } from "../../agents/model-ref-shared.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
+import { formatCliCommand } from "../../cli/command-format.js";
+import { quoteCliArg } from "../../cli/quote-cli-arg.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { FollowupRun } from "./queue.js";
 
@@ -116,14 +118,32 @@ function resolveHeartbeatBleedHint(params: {
 export function buildContextOverflowRecoveryText(params: {
   cfg: FollowupRun["run"]["config"];
   agentId?: string;
+  sessionKey?: string;
   primaryProvider?: string;
   primaryModel?: string;
   runtimeProvider?: string;
   runtimeModel?: string;
   activeSessionEntry?: SessionEntry;
 }): string {
+  // Retrying or /compact repeats the LLM compaction that just failed, so the
+  // session-preserving fallback is mechanical trimming through the Gateway.
   const prefix =
-    "⚠️ Auto-compaction could not recover this turn. I kept this conversation mapped to the current session. Please try again, use /compact, or use /new to start a fresh session.";
+    "⚠️ Auto-compaction could not recover this turn. I kept this conversation mapped to the current session. Use /new to start a fresh session.";
+  // quoteCliArg leaves ordinary keys bare, so they paste into cmd.exe, PowerShell, and POSIX shells.
+  const sessionKeyArg = params.sessionKey ? quoteCliArg(params.sessionKey) : "<session-key>";
+  const agentArg = params.agentId ? ` --agent ${quoteCliArg(params.agentId)}` : "";
+  const compactCommand = (keyArg: string) =>
+    `\`${formatCliCommand(`openclaw sessions compact ${keyArg}${agentArg} --max-lines 200`)}\``;
+  // cmd.exe keeps single quotes as key characters; inside double quotes it leaves
+  // ! and $ (Matrix keys) literal while delayed expansion is off, its default.
+  const commandPromptForm =
+    params.sessionKey && sessionKeyArg !== params.sessionKey
+      ? ` (macOS, Linux, or PowerShell) or ${compactCommand(`"${params.sessionKey}"`)} (Windows Command Prompt)`
+      : "";
+  const trimHint =
+    "\n\nTo keep this session instead, an operator can trim its transcript. Trimming permanently deletes older history and keeps no backup, so run " +
+    `\`${formatCliCommand("openclaw backup create")}\` first if that history matters, then ` +
+    `${compactCommand(sessionKeyArg)}${commandPromptForm}.`;
   const explicitRuntimeMatchesSession =
     !params.runtimeProvider ||
     !params.runtimeModel ||
@@ -133,8 +153,6 @@ export function buildContextOverflowRecoveryText(params: {
     ? resolveHeartbeatBleedHint(params)
     : undefined;
   return (
-    prefix +
-    (heartbeatBleedHint ??
-      "\n\nTry starting a fresh session or using a model with a larger context window.")
+    prefix + (heartbeatBleedHint ?? "\n\nTry a model with a larger context window.") + trimHint
   );
 }
