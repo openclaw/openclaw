@@ -18,27 +18,37 @@ function fixture() {
   const attachment = new AbortController();
   const session = new AbortController();
   const qualification = new AbortController();
-  const release = vi.fn();
   const assertActor = () => actor.signal.throwIfAborted();
-  const close = vi.fn(async () => {});
-  const touch = vi.fn(async () => {});
-  const connect = vi.fn(
-    async (assertCurrent?: () => void, touchAttachment?: () => Promise<void>) => {
+  const f = {
+    binding,
+    session,
+    release: vi.fn(),
+    close: vi.fn(async () => {}),
+    touch: vi.fn(async () => {}),
+    connect: vi.fn(async (assertCurrent?: () => void, touchAttachment?: () => Promise<void>) => {
       assertCurrent?.();
       await touchAttachment?.();
       assertCurrent?.();
       return new PassThrough();
+    }),
+    broadcast: vi.fn(),
+    revokeActor: () => actor.abort(new Error("actor revoked")),
+    resetSession: () => session.abort(new Error("session reset")),
+    replaceAttachment: () => attachment.abort(new Error("attachment replaced")),
+    unqualify: () => {
+      dedicated = false;
+      qualification.abort();
     },
-  );
+  };
   const environments = {
     captureSessionAttachment: vi.fn(() => ({
       binding,
       assertCurrent: () => attachment.signal.throwIfAborted(),
-      touch,
+      touch: f.touch,
     })),
     get: () => ({ ...binding, leaseId: "lease-one", nodeDeviceId: "node-one", sharedHost: false }),
     getDedicatedNodeLeaseSignal: () => (dedicated ? qualification.signal : undefined),
-    openNodePortal: vi.fn(async () => ({ connect, close })),
+    openNodePortal: vi.fn(async () => ({ connect: f.connect, close: f.close })),
   };
   const service = createGatewayPortalService({ httpBindHosts: ["127.0.0.1"], httpServers: [] });
   const open = vi.spyOn(service, "open");
@@ -50,10 +60,9 @@ function fixture() {
     retainSession: () => ({
       signal: session.signal,
       assertCurrent: () => session.signal.throwIfAborted(),
-      release,
+      release: f.release,
     }),
   };
-  const broadcast = vi.fn();
   const invoke = async (
     action: "open" | "list" | "close",
     params: Record<string, unknown> = {},
@@ -63,42 +72,33 @@ function fixture() {
     await portalHandlers[`portal.session.${action}`]!({
       params: { sessionKey: binding.sessionKey, environmentId: binding.environmentId, ...params },
       respond,
-      context: { workerEnvironmentService: environments, portalService: service, broadcast },
+      context: {
+        workerEnvironmentService: environments,
+        portalService: service,
+        broadcast: f.broadcast,
+      },
       ...(admitted ? { sessionAccessAuthority: access } : {}),
       sessionMutationCommitGuard: assertActor,
     } as never);
     return respond.mock.calls[0];
   };
   return {
-    binding,
+    ...f,
     service,
     open,
     environments,
-    session,
-    release,
-    close,
-    connect,
-    touch,
     invoke,
-    broadcast,
-    revokeActor: () => actor.abort(new Error("actor revoked")),
-    resetSession: () => session.abort(new Error("session reset")),
-    replaceAttachment: () => attachment.abort(new Error("attachment replaced")),
-    unqualify: () => {
-      dedicated = false;
-      qualification.abort();
-    },
   };
 }
 
 describe("session-scoped attached worker portals", () => {
   it.each([
-    { kind: "worker", retirement: "session reset" },
-    { kind: "worker", retirement: "lost attestation" },
-    { kind: "local", retirement: "session reset" },
+    { kind: "worker", retire: "resetSession" },
+    { kind: "worker", retire: "unqualify" },
+    { kind: "local", retire: "resetSession" },
   ] as const)(
-    "keeps a global $kind portal and its credentials separate through $retirement",
-    async ({ kind, retirement }) => {
+    "keeps a global $kind portal and its credentials separate through $retire",
+    async ({ kind, retire }) => {
       const f = fixture();
       const closeGlobal = vi.fn();
       const global = await f.service.open({
@@ -117,7 +117,6 @@ describe("session-scoped attached worker portals", () => {
       });
       expect((await f.invoke("open", { port: 3000 }))?.[0]).toBe(true);
       const scoped = f.service.list().find((portal) => portal.id !== global.id)!;
-      expect(scoped).toBeDefined();
       expect(scoped.url).not.toBe(global.url);
       expect((await f.invoke("list"))?.[1]).toEqual({ portals: [scoped] });
       expect((await f.invoke("close", { id: global.id }))?.[0]).toBe(false);
@@ -136,11 +135,7 @@ describe("session-scoped attached worker portals", () => {
       // Reuse releases only the unused new carrier, leaving both original resources owned.
       expect(f.close).toHaveBeenCalledOnce();
       expect(closeGlobal).not.toHaveBeenCalled();
-      if (retirement === "session reset") {
-        f.session.abort();
-      } else {
-        f.unqualify();
-      }
+      f[retire]();
       expect(f.service.list()).toEqual([global]);
       await f.service.close(scoped.id);
       expect(f.close).toHaveBeenCalledTimes(2);
@@ -158,7 +153,6 @@ describe("session-scoped attached worker portals", () => {
     f.binding.generation++;
     await f.invoke("open", { port: 3000 });
     const next = f.service.list().find((portal) => portal.id !== first.id)!;
-    expect(next).toBeDefined();
     expect(next.url).not.toBe(first.url);
     expect((await f.invoke("list"))?.[1]).toEqual({ portals: [next] });
     // Environment teardown still finds every scoped prefix and the legacy worker suffix.

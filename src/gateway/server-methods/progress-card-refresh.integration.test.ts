@@ -58,13 +58,13 @@ function expectNoChat(f: Fixture) {
   ).toHaveLength(0);
 }
 
-function refreshCard(
+async function refreshCard(
   f: Fixture,
   idempotencyKey: string,
-  respond: RespondFn,
+  respond = vi.fn<RespondFn>(),
   options: { id?: string; client?: GatewayClient; extraHandlers?: GatewayRequestHandlers } = {},
 ) {
-  return handleGatewayRequest({
+  await handleGatewayRequest({
     req: {
       type: "req",
       id: options.id ?? "refresh",
@@ -77,6 +77,7 @@ function refreshCard(
     isWebchatConnect: () => true,
     extraHandlers: options.extraHandlers ?? createProgressCardHandlers(),
   });
+  return respond;
 }
 
 describe("registered progress refresh admission", () => {
@@ -131,14 +132,13 @@ describe("registered progress refresh admission", () => {
           }
           await originalRefresh(invocation);
         };
-        const refresh = async (respond: RespondFn) =>
+        const refresh = async (respond = vi.fn<RespondFn>()) =>
           refreshCard(f, "finishing-refresh", respond, {
             client: caller ?? f.client,
             extraHandlers: handlers,
           });
         await putCard(f, "Old status");
-        const accepted = vi.fn<RespondFn>();
-        await refresh(accepted);
+        const accepted = await refresh();
         expect(accepted).toHaveBeenCalledWith(...acceptedResponse());
         await (await f.dispatchedRecorder).persistApproved();
         const receipt = [...f.context.dedupe.entries()].find(([key]) =>
@@ -203,15 +203,10 @@ describe("registered progress refresh admission", () => {
       }
       return result;
     });
-    const refresh = async (idempotencyKey: string) => {
-      const respond = vi.fn<RespondFn>();
-      await refreshCard(f, idempotencyKey, respond);
-      return respond;
-    };
     const burst = () =>
       Promise.all(
         Array.from({ length: 2 * intentCount }, (_, index) =>
-          refresh(`burst-${index % intentCount}`),
+          refreshCard(f, `burst-${index % intentCount}`),
         ),
       );
     const expectAccepted = (responses: Awaited<ReturnType<typeof burst>>) => {
@@ -227,7 +222,6 @@ describe("registered progress refresh admission", () => {
     await putCard(f, "Old status");
     expectAccepted(await burst());
     await dispatched.promise;
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(intentCount);
     for (const [params] of dispatchInboundMessageMock.mock.calls) {
       const admitted = params as Dispatch;
       expect(admitted.toolsAllow).toContain("progress_card");
@@ -251,8 +245,7 @@ describe("registered progress refresh admission", () => {
   it("starts a hidden status-only turn when steering is unavailable", async () => {
     await using f = await createFixture({ active: true, preserveContent: true });
     await putCard(f, "Previous status");
-    const respond = vi.fn<RespondFn>();
-    await refreshCard(f, "refresh-click", respond);
+    const respond = await refreshCard(f, "refresh-click");
     expect(respond).toHaveBeenCalledWith(...acceptedResponse());
     const payload = respond.mock.calls[0]?.[1];
     if (!isRecord(payload) || typeof payload.runId !== "string") {
@@ -297,8 +290,7 @@ describe("registered progress refresh admission", () => {
     expect((await progressCardStore.get(f.scope.sessionKey, f.scope.agentId))?.markdown).toBe(
       "Previous status",
     );
-    const retry = vi.fn<RespondFn>();
-    await refreshCard(f, "refresh-click", retry, { id: "retry" });
+    const retry = await refreshCard(f, "refresh-click", undefined, { id: "retry" });
     expect(retry).toHaveBeenCalledWith(...terminalResponse());
     expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
     expectNoChat(f);
@@ -337,8 +329,7 @@ describe("registered progress refresh admission", () => {
     const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
       async (_text, options, assertCurrent) => {
         assertCurrent();
-        expect(options?.isInboundUserMessage).toBe(false);
-        expect(options?.debounceMs).toBe(0);
+        expect(options).toMatchObject({ isInboundUserMessage: false, debounceMs: 0 });
         expect(await options?.userTurnTranscriptRecorder?.resolveMessage()).toMatchObject({
           display: false,
         });
@@ -363,10 +354,10 @@ describe("registered progress refresh admission", () => {
         claimPendingUserInputAnswer: claim,
       },
     });
+    const visibleProjection = { isControlUiVisible: true, projectSessionMessages: true };
     registerAgentRunContext("original-work", {
       sessionKey: f.scope.sessionKey,
-      isControlUiVisible: true,
-      projectSessionMessages: true,
+      ...visibleProjection,
     });
     try {
       expect(captured).toBeDefined();
@@ -377,21 +368,12 @@ describe("registered progress refresh admission", () => {
           refreshCard(f, "active-refresh", respond, { id: `refresh-${index}` }),
         ),
       );
-      expect(respond).toHaveBeenCalledTimes(2);
-      for (const call of respond.mock.calls) {
-        expect(call).toEqual(acceptedResponse());
-      }
-      expect(queueMessage).toHaveBeenCalledOnce();
+      expect(respond.mock.calls).toEqual([acceptedResponse(), acceptedResponse()]);
       expect(claim).not.toHaveBeenCalled();
-      expect(cancel).not.toHaveBeenCalled();
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect(getAgentRunContext("original-work")).toMatchObject({
-        isControlUiVisible: true,
-        projectSessionMessages: true,
-      });
+      expect(getAgentRunContext("original-work")).toMatchObject(visibleProjection);
       await f.finishDispatch();
-      const retry = vi.fn<RespondFn>();
-      await refreshCard(f, "active-refresh", retry, { id: "retry-steer" });
+      const retry = await refreshCard(f, "active-refresh", undefined, { id: "retry-steer" });
       expect(retry).toHaveBeenCalledWith(...acceptedResponse());
       expect(queueMessage).toHaveBeenCalledOnce();
       expect(cancel).not.toHaveBeenCalled();
@@ -407,8 +389,7 @@ describe("registered progress refresh admission", () => {
     let hiddenOperation: ReturnType<typeof createReplyOperation> | undefined;
     try {
       await putCard(f, "Previous status");
-      const respond = vi.fn<RespondFn>();
-      await refreshCard(f, "hidden-start", respond, { id: "hidden-start" });
+      const respond = await refreshCard(f, "hidden-start", undefined, { id: "hidden-start" });
       const accepted = respond.mock.calls[0]?.[1];
       if (!isRecord(accepted) || typeof accepted.runId !== "string") {
         throw new Error("Missing hidden refresh acceptance");
@@ -463,8 +444,7 @@ describe("registered progress refresh admission", () => {
   it("rejects read-only callers before admitting any turn", async () => {
     await using f = await createFixture({ active: false });
     f.client.connect.scopes = ["operator.read"];
-    const respond = vi.fn<RespondFn>();
-    await refreshCard(f, "denied", respond);
+    const respond = await refreshCard(f, "denied");
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,

@@ -102,8 +102,7 @@ async function query(
   const result = request(params, options);
   await result.run;
   const [ok, payload, error] = result.respond.mock.calls[0] ?? [];
-  expect(ok).toBe(true);
-  expect(error).toBeUndefined();
+  expect([ok, error]).toEqual([true, undefined]);
   if (!validateResult(payload)) {
     throw new Error(JSON.stringify(validateResult.errors));
   }
@@ -149,13 +148,9 @@ describe("presence.query", () => {
     expect(JSON.stringify(result)).not.toMatch(/private-session|203\.0\.113\.2|watchedSessions/);
     expect(result.people.every((person) => person.devices === undefined)).toBe(true);
     const detailed = await query({ include: ["devices"] });
-    const instanceIds = detailed.people.flatMap(
-      (person) =>
-        person.devices
-          ?.filter((device) => device.id.startsWith("instance:"))
-          .map((device) => device.id) ?? [],
-    );
-    expect(new Set(instanceIds).size).toBe(2);
+    expect(
+      detailed.people.flatMap((person) => person.devices?.map((device) => device.id) ?? []),
+    ).toEqual(["device:tab-b", "instance:profile:alex:collision", "instance:raw:alex:collision"]);
     expect(await query({ limit: 1 })).toMatchObject({
       totalPeople: 2,
       truncated: true,
@@ -246,17 +241,19 @@ describe("presence.query", () => {
     const person = async (
       name: string,
       expected: object,
-      options?: Parameters<typeof request>[1],
-    ) => expect(await query({ action: "person", person: name }, options)).toMatchObject(expected);
+      client: GatewayClient | null = caller(),
+    ) =>
+      expect(await query({ action: "person", person: name }, { client })).toMatchObject(expected);
     await person("alex", { status: "ok", people: [{ id: "profile:alex" }] });
     await person("ALEX", { status: "ambiguous", totalPeople: 2 });
     await person("nobody", { status: "not-found", people: [] });
-    await person("me", { status: "identity-unavailable" }, { client: null });
+    await person("me", { status: "identity-unavailable" }, null);
     await person(
       "me",
       { status: "identity-unavailable" },
       {
-        client: { ...caller(), internal: { operatorRoleActor: { kind: "system" } } },
+        ...caller(),
+        internal: { operatorRoleActor: { kind: "system" } },
       },
     );
   });
@@ -281,13 +278,7 @@ describe("presence.query", () => {
     mocks.lookup.mockResolvedValue({
       ok: true,
       payload: {
-        results: [
-          {
-            ip: "203.0.113.2",
-            status: "found",
-            city: "Vienna",
-          },
-        ],
+        results: [{ ip: "203.0.113.2", status: "found", city: "Vienna" }],
       },
     });
     const result = await query({ include: ["location"] });

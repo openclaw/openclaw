@@ -143,6 +143,7 @@ describe("session Portal authority through worker dispatch", () => {
     const qualification = environments.getDedicatedNodeLeaseSignal(environmentId)!;
     expect(qualification.aborted).toBe(false);
     const portals = createGatewayPortalService({ httpBindHosts: ["127.0.0.1"], httpServers: [] });
+    onTestFinished(() => portals.closeAll());
     const open = vi.spyOn(portals, "open");
     const policy = policyFixture(writer.id, config);
     const { context } = policy;
@@ -156,65 +157,58 @@ describe("session Portal authority through worker dispatch", () => {
       const respond = await policy.invoke(profileId, "operator.sessions.write", environmentId);
       return respond.mock.calls[0];
     };
-    try {
-      expect((await invoke(unrelated.id))?.[0]).toBe(false);
-      expect(open).not.toHaveBeenCalled();
-      expect(transport.invoke).not.toHaveBeenCalled();
-      expect((await invoke(writer.id))?.[0]).toBe(true);
-      const target = open.mock.calls[0]?.[0].target;
-      if (target?.kind !== "worker") {
-        throw new Error("missing worker preview");
-      }
-      const invoked = createDeferred();
-      const originalInvoke = transport.invoke.getMockImplementation()!;
-      transport.invoke.mockImplementation((request) => {
-        invoked.resolve();
-        return originalInvoke(request);
-      });
-      support.testState.nowMs += 100;
-      const connection = target.connect();
-      await invoked.promise;
-      const stream = broker.attachNext();
-      expect(await connection).toBe(stream);
-      expect(store.getSessionAttachmentRecord(identity.sessionId)?.lastUsedAtMs).toBe(
-        support.testState.nowMs,
-      );
-      const discovering = createDeferred();
-      const discover = createDeferred();
-      vi.spyOn(transport.transport, "getCurrentNode").mockImplementationOnce(async () => {
-        discovering.resolve();
-        await discover.promise;
-        return proof;
-      });
-      const pending = target.connect().then(
-        () => false,
-        () => true,
-      );
-      await discovering.promise;
-      const persisting = createDeferred();
-      const persist = createDeferred();
-      const originalPersist = store.reconcileSharedHost.bind(store);
-      vi.spyOn(store, "reconcileSharedHost").mockImplementationOnce(async (input) => {
-        persisting.resolve();
-        await persist.promise;
-        return originalPersist(input);
-      });
-      sharedHost = undefined;
-      const reconciliation = environments.reconcileOnce(environmentId);
-      try {
-        await persisting.promise;
-        expect(qualification.aborted).toBe(true);
-        expect(portals.list()).toEqual([]);
-      } finally {
-        discover.resolve();
-        persist.resolve();
-        await reconciliation;
-      }
-      expect(await pending).toBe(true);
-      expect(transport.invoke).toHaveBeenCalledOnce();
-      expect(stream.destroyed).toBe(true);
-    } finally {
-      await portals.closeAll();
+    expect((await invoke(unrelated.id))?.[0]).toBe(false);
+    expect(open).not.toHaveBeenCalled();
+    expect(transport.invoke).not.toHaveBeenCalled();
+    expect((await invoke(writer.id))?.[0]).toBe(true);
+    const target = open.mock.calls[0]?.[0].target;
+    if (target?.kind !== "worker") {
+      throw new Error("missing worker preview");
     }
+    const invoked = createDeferred();
+    const originalInvoke = transport.invoke.getMockImplementation()!;
+    transport.invoke.mockImplementation((request) => {
+      invoked.resolve();
+      return originalInvoke(request);
+    });
+    support.testState.nowMs += 100;
+    const connection = target.connect();
+    await invoked.promise;
+    const stream = broker.attachNext();
+    expect(await connection).toBe(stream);
+    expect(store.getSessionAttachmentRecord(identity.sessionId)?.lastUsedAtMs).toBe(
+      support.testState.nowMs,
+    );
+    const discovering = createDeferred();
+    const discover = createDeferred();
+    vi.spyOn(transport.transport, "getCurrentNode").mockImplementationOnce(async () => {
+      discovering.resolve();
+      await discover.promise;
+      return proof;
+    });
+    const pending = expect(target.connect()).rejects.toThrow();
+    await discovering.promise;
+    const persisting = createDeferred();
+    const persist = createDeferred();
+    const originalPersist = store.reconcileSharedHost.bind(store);
+    vi.spyOn(store, "reconcileSharedHost").mockImplementationOnce(async (input) => {
+      persisting.resolve();
+      await persist.promise;
+      return originalPersist(input);
+    });
+    sharedHost = undefined;
+    const reconciliation = environments.reconcileOnce(environmentId);
+    try {
+      await persisting.promise;
+      expect(qualification.aborted).toBe(true);
+      expect(portals.list()).toEqual([]);
+    } finally {
+      discover.resolve();
+      persist.resolve();
+      await reconciliation;
+    }
+    await pending;
+    expect(transport.invoke).toHaveBeenCalledOnce();
+    expect(stream.destroyed).toBe(true);
   });
 });

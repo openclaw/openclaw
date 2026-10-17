@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgressCard } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  createSettledExecution,
+  createTurn,
+} from "../../auto-reply/reply/followup-delivery.test-helpers.js";
 import { createFollowupRunner } from "../../auto-reply/reply/followup-runner.js";
 import type { AdmittedFollowupTurn } from "../../auto-reply/reply/followup-turn-admission.js";
 import type { FollowupExecutionResult } from "../../auto-reply/reply/followup-turn-execution.js";
@@ -82,27 +86,6 @@ afterEach(async () => {
   await vi.advanceTimersByTimeAsync(0);
   vi.useRealTimers();
 });
-
-function settledExecution(runId: string): FollowupExecutionResult {
-  return {
-    commentaryPayloadsEnabled: false,
-    execution: {
-      runId,
-      outcome: {
-        kind: "settled",
-        status: "ok",
-        result: { payloads: [], meta: { durationMs: 0 } },
-        resolved: { provider: "test", model: "test" },
-        fallback: { exhausted: false, attempts: [] },
-        autoCompactionCount: 0,
-      },
-    },
-    runStartedAt: Date.now(),
-    sessionCtx: {},
-    pendingToolTasks: new Set(),
-    progress: { drain: async () => {} },
-  };
-}
 
 function fixture(options: { parkSteer?: boolean } = {}) {
   const sessionKey = `agent:work:queued-refresh-` + randomUUID();
@@ -263,7 +246,7 @@ function holdQueuedExecution(f: ReturnType<typeof fixture>) {
     await admitFollowupRunLifecycle(queued);
     return {
       kind: "admitted",
-      turn: {
+      turn: createTurn({
         runId: randomUUID(),
         queued,
         operation: createReplyOperation({
@@ -271,11 +254,8 @@ function holdQueuedExecution(f: ReturnType<typeof fixture>) {
           sessionId: "session",
           resetTriggered: false,
         }),
-        config: {},
         session: { kind: "detached", current: () => undefined, publish: () => {}, adopt: () => {} },
-        sendPolicy: "allow",
-        preflightCompactionApplied: false,
-      },
+      }),
     };
   });
   mocks.execute.mockImplementation(async ({ turn }) => {
@@ -292,7 +272,18 @@ function holdQueuedExecution(f: ReturnType<typeof fixture>) {
     });
     entered.resolve(turn);
     await releaseExecution.promise;
-    return settledExecution(turn.runId);
+    const execution = createSettledExecution();
+    execution.runId = turn.runId;
+    execution.outcome.resolved = { provider: "test", model: "test" };
+    execution.outcome.result.meta = { durationMs: 0 };
+    return {
+      commentaryPayloadsEnabled: false,
+      execution,
+      runStartedAt: Date.now(),
+      sessionCtx: {},
+      pendingToolTasks: new Set(),
+      progress: { drain: async () => {} },
+    } satisfies FollowupExecutionResult;
   });
   const runner = async (run: FollowupRun) => {
     try {
