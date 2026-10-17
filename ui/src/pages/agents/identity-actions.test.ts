@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -26,9 +27,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function host(): Parameters<typeof resetIdentityDraft>[0] {
+function host(
+  draft: Partial<Parameters<typeof resetIdentityDraft>[0]["identityDraft"]> = {},
+): Parameters<typeof resetIdentityDraft>[0] {
   return {
-    identityDraft: { name: null, emoji: null, avatar: null },
+    identityDraft: { name: null, emoji: null, avatar: null, ...draft },
     identitySaving: false,
     identityError: null,
   };
@@ -42,26 +45,37 @@ function saveOptions(
     host: state,
     expectedClient,
     agentId: "main",
-    agents: {} as ApplicationContext["agents"],
-    agentIdentity: {} as ApplicationContext["agentIdentity"],
+    agents: {
+      refreshList: vi.fn(async () => undefined),
+    } as unknown as ApplicationContext["agents"],
+    agentIdentity: {
+      invalidate: vi.fn(),
+      ensure: vi.fn(async () => undefined),
+    } as unknown as ApplicationContext["agentIdentity"],
     canDispatch: () => true,
     isCurrent: () => true,
     onSaved: vi.fn(),
   };
 }
 
+function uploadsConfig(uploadsEnabled: boolean) {
+  const base = createApplicationConfigCapability({ resourceBasePath: "" });
+  return { ...base, current: { ...base.current, uploadsEnabled } };
+}
+
+function pendingAvatar() {
+  const pending = createDeferred<avatarImage.AvatarDataUrlResult>();
+  fileToAvatarDataUrlMock.mockReturnValueOnce(pending.promise);
+  return pending;
+}
+
 describe("agent identity actions", () => {
   it("keeps an accepted generated avatar when an older upload finishes", async () => {
     const state = host();
-    let resolveUpload!: (value: avatarImage.AvatarDataUrlResult) => void;
-    fileToAvatarDataUrlMock.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveUpload = resolve;
-      }),
-    );
+    const upload = pendingAvatar();
     selectIdentityAvatar(state, new File(["image"], "avatar.png", { type: "image/png" }));
     setIdentityAvatar(state, "data:image/webp;base64,YXZhdGFy");
-    resolveUpload({ ok: true, dataUrl: "data:image/png;base64,b2xk" });
+    upload.resolve({ ok: true, dataUrl: "data:image/png;base64,b2xk" });
     await Promise.resolve();
     expect(state.identityDraft.avatar).toBe("data:image/webp;base64,YXZhdGFy");
   });
@@ -80,33 +94,25 @@ describe("agent identity actions", () => {
   });
 
   it("rejects disabled avatar reads and results finishing after policy changes", async () => {
-    const base = createApplicationConfigCapability({ resourceBasePath: "" });
-    const config = { ...base, current: { ...base.current, uploadsEnabled: false } };
+    const config = uploadsConfig(false);
     const state = host();
     selectIdentityAvatar(state, {} as File, config);
     expect(fileToAvatarDataUrlMock).not.toHaveBeenCalled();
     expect(state.identityError).toBe(uploadsDisabledMessage());
 
     config.current.uploadsEnabled = true;
-    let resolveAvatar!: (value: avatarImage.AvatarDataUrlResult) => void;
-    fileToAvatarDataUrlMock.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveAvatar = resolve;
-      }),
-    );
+    const upload = pendingAvatar();
     selectIdentityAvatar(state, {} as File, config);
     config.current.uploadsEnabled = false;
-    resolveAvatar({ ok: true, dataUrl: "data:image/png;base64,aA==" });
+    upload.resolve({ ok: true, dataUrl: "data:image/png;base64,aA==" });
     await Promise.resolve();
     expect(state.identityDraft.avatar).toBeNull();
     expect(state.identityError).toBe(uploadsDisabledMessage());
   });
 
   it("does not dispatch an already selected avatar after uploads are disabled", async () => {
-    const base = createApplicationConfigCapability({ resourceBasePath: "" });
-    const config = { ...base, current: { ...base.current, uploadsEnabled: false } };
-    const state = host();
-    state.identityDraft.avatar = "data:image/png;base64,aA==";
+    const config = uploadsConfig(false);
+    const state = host({ avatar: "data:image/png;base64,aA==" });
     const runExternalMutation = vi.fn();
     await saveIdentityDraft({
       ...saveOptions(state),
@@ -117,8 +123,7 @@ describe("agent identity actions", () => {
     expect(state.identityError).toBe(uploadsDisabledMessage());
   });
   it("keeps unsupported blank edits visible without sending an update", async () => {
-    const state = host();
-    state.identityDraft.name = "  ";
+    const state = host({ name: "  " });
     const runExternalMutation = vi.fn();
     await saveIdentityDraft({
       ...saveOptions(state),
@@ -130,17 +135,12 @@ describe("agent identity actions", () => {
   });
 
   it("drops an avatar decode that completes after the selected agent resets", async () => {
-    let resolveAvatar!: (value: avatarImage.AvatarDataUrlResult) => void;
-    fileToAvatarDataUrlMock.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveAvatar = resolve;
-      }),
-    );
+    const upload = pendingAvatar();
     const state = host();
 
     selectIdentityAvatar(state, {} as File);
     resetIdentityDraft(state);
-    resolveAvatar({ ok: true, dataUrl: "data:image/png;base64,stale" });
+    upload.resolve({ ok: true, dataUrl: "data:image/png;base64,stale" });
     await Promise.resolve();
 
     expect(state.identityDraft.avatar).toBeNull();
@@ -205,20 +205,10 @@ describe("agent identity actions", () => {
     await runtimeConfig.ensureLoaded();
     order.length = 0;
     runtimeConfig.patchForm(["pending"], true);
-    const state = host();
-    state.identityDraft.name = "Agent Smith";
-    const agents = {
-      refreshList: vi.fn(async () => undefined),
-    } as unknown as ApplicationContext["agents"];
-    const agentIdentity = {
-      invalidate: vi.fn(),
-      ensure: vi.fn(async () => undefined),
-    } as unknown as ApplicationContext["agentIdentity"];
+    const state = host({ name: "Agent Smith" });
 
     await saveIdentityDraft({
       ...saveOptions(state, client),
-      agents,
-      agentIdentity,
       runtimeConfig,
     });
 
@@ -235,8 +225,7 @@ describe("agent identity actions", () => {
     const expectedClient = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const request = vi.fn();
     const client = { request } as unknown as GatewayBrowserClient;
-    const state = host();
-    state.identityDraft.name = "Agent Smith";
+    const state = host({ name: "Agent Smith" });
     const runtimeConfig = {
       runExternalMutation: vi.fn(async (task, options) => {
         if (changed === "Access") {
@@ -274,8 +263,7 @@ describe("agent identity actions", () => {
   });
 
   it("clears a committed identity draft while surfacing a config refresh warning", async () => {
-    const state = host();
-    state.identityDraft.name = "Agent Smith";
+    const state = host({ name: "Agent Smith" });
     const runExternalMutation = vi.fn(async () => ({
       ok: true as const,
       value: {},
@@ -284,13 +272,6 @@ describe("agent identity actions", () => {
 
     await saveIdentityDraft({
       ...saveOptions(state),
-      agents: {
-        refreshList: vi.fn(async () => undefined),
-      } as unknown as ApplicationContext["agents"],
-      agentIdentity: {
-        invalidate: vi.fn(),
-        ensure: vi.fn(async () => undefined),
-      } as unknown as ApplicationContext["agentIdentity"],
       runtimeConfig: { runExternalMutation } as unknown as ApplicationContext["runtimeConfig"],
     });
 
@@ -300,29 +281,18 @@ describe("agent identity actions", () => {
   });
 
   it("preserves edits made while an autosave is in flight", async () => {
-    const state = host();
-    state.identityDraft.name = "First name";
-    let release!: () => void;
-    const pending = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const state = host({ name: "First name" });
+    const pending = createDeferred();
     const runExternalMutation = vi.fn(async () => {
-      await pending;
+      await pending.promise;
       return { ok: true as const, value: {}, refresh: { ok: true as const } };
     });
     const saving = saveIdentityDraft({
       ...saveOptions(state),
-      agents: {
-        refreshList: vi.fn(async () => undefined),
-      } as unknown as ApplicationContext["agents"],
-      agentIdentity: {
-        invalidate: vi.fn(),
-        ensure: vi.fn(async () => undefined),
-      } as unknown as ApplicationContext["agentIdentity"],
       runtimeConfig: { runExternalMutation } as unknown as ApplicationContext["runtimeConfig"],
     });
     setIdentityDraftField(state, "name", "Second name");
-    release();
+    pending.resolve();
     await saving;
 
     expect(state.identityDraft.name).toBe("Second name");

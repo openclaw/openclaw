@@ -101,6 +101,15 @@ function cronListResponse(
   };
 }
 
+function pendingCronRequest(job: CronJob, pendingJobs: Promise<CronJobsListResult>) {
+  return vi.fn((method: string, params?: { limit?: number }) => {
+    if (method === "cron.status") {
+      return Promise.resolve({ enabled: true, jobs: 1, nextWakeAtMs: null });
+    }
+    return params?.limit === 50 ? pendingJobs : Promise.resolve(cronListResponse([job]));
+  });
+}
+
 describe("AgentsPage gateway lifecycle", () => {
   it("retires visible-session effective tools across a same-client reconnect", async () => {
     const staleResult = deferred<ToolsEffectiveResult>();
@@ -648,15 +657,7 @@ describe("AgentsPage gateway lifecycle", () => {
   it("keeps an in-flight scoped cron request attached to a same-client gateway snapshot", async () => {
     const job = cronJob("same-client-job", "main");
     const pendingJobs = deferred<CronJobsListResult>();
-    const request = vi.fn((method: string, params?: { limit?: number }) => {
-      if (method === "cron.status") {
-        return Promise.resolve({ enabled: true, jobs: 1, nextWakeAtMs: null });
-      }
-      if (params?.limit === 50) {
-        return pendingJobs.promise;
-      }
-      return Promise.resolve(cronListResponse([job]));
-    });
+    const request = pendingCronRequest(job, pendingJobs.promise);
     const client = { request } as unknown as GatewayBrowserClient;
     const { page, currentGateway } = mountPage(client, "cron");
 
@@ -680,15 +681,7 @@ describe("AgentsPage gateway lifecycle", () => {
   it("immediately publishes cron loading and ignores a second refresh while the first is pending", async () => {
     const job = cronJob("double-refresh-job", "main");
     const pendingJobs = deferred<CronJobsListResult>();
-    const request = vi.fn((method: string, params?: { limit?: number }) => {
-      if (method === "cron.status") {
-        return Promise.resolve({ enabled: true, jobs: 1, nextWakeAtMs: null });
-      }
-      if (params?.limit === 50) {
-        return pendingJobs.promise;
-      }
-      return Promise.resolve(cronListResponse([job]));
-    });
+    const request = pendingCronRequest(job, pendingJobs.promise);
     const client = { request } as unknown as GatewayBrowserClient;
     const { page } = mountPage(client, "cron");
     expect(page.read().cron.loading).toBe(true);

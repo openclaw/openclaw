@@ -91,9 +91,10 @@ it.each([
   const connected = { ...snapshot(client), hello: gatewayHelloForMethods(["agents.files.set"]) };
   const currentGateway = gateway(connected);
   const selection = settingsSelection(roster);
+  const baseAgents = agentsCapability(async () => fileList("main"));
   const agents = {
-    ...agentsCapability(async () => fileList("main")),
-    state: { ...agentsCapability(async () => fileList("main")).state, agentsList: roster },
+    ...baseAgents,
+    state: { ...baseAgents.state, agentsList: roster },
     files: () => ({ list: null, loading: false, error: null }),
     ensureFiles: vi.fn(async (agentId: string) => fileList(agentId)),
     recordFile: vi.fn(),
@@ -116,38 +117,27 @@ it.each([
   const mounted = mountSolid(Agents, page.read());
   const { container } = mounted;
   const paint = () => mounted.update(page.read());
-  const textarea = () => {
+  const files = () => page.read().agentFiles;
+  const editorState = () => files().agentFileEditors["AGENTS.md"];
+  const element = <T extends HTMLElement>(selector: string): T => {
     paint();
-    const input = container.querySelector<HTMLTextAreaElement>(".agent-file-textarea");
-    expect(input).not.toBeNull();
-    return input!;
+    const target = container.querySelector<T>(selector);
+    expect(target).not.toBeNull();
+    return target!;
   };
+  const textarea = () => element<HTMLTextAreaElement>(".agent-file-textarea");
   const settle = async () => {
     await vi.waitFor(() => {
-      expect(
-        page.read().agentFiles.agentFileEditors[page.read().agentFiles.agentFileActive ?? ""]
-          ?.content,
-      ).toBeDefined();
-      expect(page.read().agentFiles.agentFilesList?.agentId).toBe(selection.state.selectedId);
-      expect(page.read().agentFiles.agentFilesLoading).toBe(false);
+      expect(files().agentFileEditors[files().agentFileActive ?? ""]?.content).toBeDefined();
+      expect(files().agentFilesList?.agentId).toBe(selection.state.selectedId);
+      expect(files().agentFilesLoading).toBe(false);
       paint();
       expect(container.querySelector(".agent-file-textarea")).not.toBeNull();
     });
   };
-  const tab = (name: string) => {
-    paint();
-    const target = container.querySelector<HTMLButtonElement>(
-      `.agent-file-tabs [role="tab"][data-tab-value="${name}"]`,
-    );
-    expect(target).not.toBeNull();
-    target!.click();
-  };
-  const save = () => {
-    paint();
-    const button = container.querySelector<HTMLButtonElement>(".agent-file-actions .primary");
-    expect(button).not.toBeNull();
-    return button!;
-  };
+  const tab = (name: string) =>
+    element<HTMLButtonElement>(`.agent-file-tabs [role="tab"][data-tab-value="${name}"]`).click();
+  const save = () => element<HTMLButtonElement>(".agent-file-actions .primary");
   try {
     await settle();
     expect(textarea().value).toBe(mainContent);
@@ -212,7 +202,7 @@ it.each([
       expect(save().disabled).toBe(true);
     }
     if (transition === "external update" || transition === "missing file") {
-      expect(page.read().agentFiles.agentFileEditors["AGENTS.md"]?.content).toBe("changed on disk");
+      expect(editorState()?.content).toBe("changed on disk");
       save().click();
       await vi.waitFor(() => {
         paint();
@@ -238,9 +228,7 @@ it.each([
       next.value = "next edit";
       next.dispatchEvent(new Event("input", { bubbles: true }));
       save().click();
-      await vi.waitFor(() =>
-        expect(page.read().agentFiles.agentFileEditors["AGENTS.md"]?.content).toBe("next edit"),
-      );
+      await vi.waitFor(() => expect(editorState()?.content).toBe("next edit"));
       expect(save().disabled).toBe(true);
       expect(request).toHaveBeenLastCalledWith("agents.files.set", {
         agentId: "main",

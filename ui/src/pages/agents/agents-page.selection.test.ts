@@ -24,6 +24,34 @@ import {
 
 const files = (agentId: string, workspace: string) => ({ agentId, workspace, files: [] });
 
+function selectionFrom(source: Parameters<typeof createAgentSelectionCapability>[1]) {
+  return createAgentSelectionCapability(
+    {
+      connection: { gatewayUrl: "ws://settings.test" },
+      snapshot: { assistantAgentId: "main" },
+      subscribe: () => () => undefined,
+    },
+    source,
+    undefined,
+    undefined,
+    { requireConfiguredAgent: true },
+  );
+}
+
+function queuedIdentityWrite(client: GatewayBrowserClient, error: string) {
+  const admission = deferred();
+  const runExternalMutation = vi.fn<ApplicationContext["runtimeConfig"]["runExternalMutation"]>(
+    async (task, options) => {
+      await admission.promise;
+      if (!options?.canDispatch?.()) {
+        return { ok: false, reason: "rejected", error };
+      }
+      return { ok: true, value: await task(client), refresh: { ok: true } };
+    },
+  );
+  return { admission, runExternalMutation };
+}
+
 describe("AgentsPage routing", () => {
   const roster: AgentsListResult = {
     ...agentsList,
@@ -74,17 +102,7 @@ describe("AgentsPage routing", () => {
         return () => listeners.delete(listener);
       },
     };
-    const selection = createAgentSelectionCapability(
-      {
-        connection: { gatewayUrl: "ws://settings.test" },
-        snapshot: { assistantAgentId: "main" },
-        subscribe: () => () => undefined,
-      },
-      rosterSource,
-      undefined,
-      undefined,
-      { requireConfiguredAgent: true },
-    );
+    const selection = selectionFrom(rosterSource);
     const currentGateway = gateway(snapshot(null, false));
     const context: ApplicationContext = {
       ...pageContext(
@@ -135,17 +153,7 @@ describe("AgentsPage routing", () => {
         return () => listeners.delete(listener);
       },
     };
-    const selection = createAgentSelectionCapability(
-      {
-        connection: { gatewayUrl: "ws://settings.test" },
-        snapshot: { assistantAgentId: "main" },
-        subscribe: () => () => undefined,
-      },
-      rosterSource,
-      undefined,
-      undefined,
-      { requireConfiguredAgent: true },
-    );
+    const selection = selectionFrom(rosterSource);
     const currentGateway = gateway(snapshot(null, false));
     const context: ApplicationContext = {
       ...pageContext(
@@ -196,17 +204,7 @@ describe("AgentsPage routing", () => {
         listeners.add(notify);
         return () => listeners.delete(notify);
       };
-      const selection = createAgentSelectionCapability(
-        {
-          connection: { gatewayUrl: "ws://settings.test" },
-          snapshot: { assistantAgentId: "main" },
-          subscribe: () => () => undefined,
-        },
-        agents,
-        undefined,
-        undefined,
-        { requireConfiguredAgent: true },
-      );
+      const selection = selectionFrom(agents);
       const baseContext = pageContext(currentGateway, agents);
       const context: ApplicationContext = {
         ...baseContext,
@@ -347,17 +345,7 @@ describe("AgentsPage routing", () => {
         listeners.add(notify);
         return () => listeners.delete(notify);
       };
-      const selection = createAgentSelectionCapability(
-        {
-          connection: { gatewayUrl: "ws://settings.test" },
-          snapshot: { assistantAgentId: "main" },
-          subscribe: () => () => undefined,
-        },
-        agents,
-        undefined,
-        undefined,
-        { requireConfiguredAgent: true },
-      );
+      const selection = selectionFrom(agents);
       const context: ApplicationContext = {
         ...pageContext(currentGateway, agents),
         settingsAgentSelection: selection,
@@ -470,21 +458,12 @@ describe("AgentsPage routing", () => {
   );
 
   it("does not dispatch a queued identity write after the Settings target changes", async () => {
-    const admission = deferred();
     const request = vi.fn();
     const client = { request } as unknown as GatewayBrowserClient;
     const currentGateway = gateway(snapshot(client));
     const selection = settingsSelection(roster, "main");
     const agents = agentsCapability(async () => files("main", "main"));
-    const runExternalMutation = vi.fn<ApplicationContext["runtimeConfig"]["runExternalMutation"]>(
-      async (task, options) => {
-        await admission.promise;
-        if (!options?.canDispatch?.()) {
-          return { ok: false, reason: "rejected", error: "Target changed." };
-        }
-        return { ok: true, value: await task(client), refresh: { ok: true } };
-      },
-    );
+    const { admission, runExternalMutation } = queuedIdentityWrite(client, "Target changed.");
     const context: ApplicationContext = {
       ...pageContext(currentGateway, agents),
       settingsAgentSelection: selection,
@@ -508,20 +487,11 @@ describe("AgentsPage routing", () => {
   });
 
   it("does not dispatch a queued identity write after operator access is revoked", async () => {
-    const admission = deferred();
     const request = vi.fn();
     const client = { request } as unknown as GatewayBrowserClient;
     const currentGateway = gateway(snapshot(client));
     const agents = agentsCapability(async () => files("main", "main"));
-    const runExternalMutation = vi.fn<ApplicationContext["runtimeConfig"]["runExternalMutation"]>(
-      async (task, options) => {
-        await admission.promise;
-        if (!options?.canDispatch?.()) {
-          return { ok: false, reason: "rejected", error: "Access changed." };
-        }
-        return { ok: true, value: await task(client), refresh: { ok: true } };
-      },
-    );
+    const { admission, runExternalMutation } = queuedIdentityWrite(client, "Access changed.");
     const context: ApplicationContext = {
       ...pageContext(currentGateway, agents),
       runtimeConfig: { subscribe: () => () => undefined, runExternalMutation },
