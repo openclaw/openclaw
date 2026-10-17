@@ -1,9 +1,6 @@
 import { For, Show, untrack } from "solid-js";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import { HubTabs } from "../../components/solid/hub-tabs.tsx";
+import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import {
-  LearnMoreLink,
   SettingsEmpty,
   SettingsPage,
   SettingsRow,
@@ -88,34 +85,23 @@ export function WorktreesView(props: { model: WorktreesModel }) {
 
   return (
     <>
-      <ShellLayoutBoundary traits={{ hubHeader: true }}>
-        <section class="content-header content-header--stacked content-header--settings content-header--page hub-page-header hub-page-header--stacked sessions-hub-header">
-          <div class="hub-page-header__title">
-            <h1 class="page-title">{titleForRoute("worktrees", t)}</h1>
-            <div class="page-subtitle">
-              {subtitleForRoute("worktrees", t)} <LearnMoreLink url={WORKTREES_DOCS_URL} />
-            </div>
-          </div>
-          <div class="hub-page-header__tabs">
-            <HubTabs<"sessions" | "worktrees">
-              id="sessions"
-              active="worktrees"
-              tabs={[
-                { value: "sessions", label: t("tabs.sessions") },
-                { value: "worktrees", label: t("tabs.worktrees") },
-              ]}
-              ariaLabel={t("sessionsPage.hubTablistLabel")}
-              panelId="sessions-hub-panel"
-              onSelect={(value) => {
-                if (value === "sessions") {
-                  model.context.navigate("sessions");
-                }
-              }}
-            />
-          </div>
-          <div class="hub-page-header__actions" />
-        </section>
-      </ShellLayoutBoundary>
+      <HubPageHeader<"sessions" | "worktrees">
+        id="sessions"
+        active="worktrees"
+        tabs={[
+          { value: "sessions", label: t("tabs.sessions") },
+          { value: "worktrees", label: t("tabs.worktrees") },
+        ]}
+        ariaLabel={t("sessionsPage.hubTablistLabel")}
+        panelId="sessions-hub-panel"
+        docsUrl={WORKTREES_DOCS_URL}
+        class="sessions-hub-header"
+        onSelect={(value) => {
+          if (value === "sessions") {
+            model.context.navigate("sessions");
+          }
+        }}
+      />
       <SettingsWorkspace id="sessions-hub-panel">
         <SettingsPage wide>
           <Show when={!view().operatorAccess.canAdmin}>

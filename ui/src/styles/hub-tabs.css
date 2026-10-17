@@ -205,4 +205,8 @@
   .content-header.hub-page-header--stacked .hub-page-header__actions {
     justify-self: end;
   }
+
+  .content-header.hub-page-header--stacked .page-title {
+    font-size: 22px;
+  }
 }
