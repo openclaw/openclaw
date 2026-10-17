@@ -422,6 +422,15 @@ function expectCoderStore(runAuth: { mock: { calls: unknown[][] } }) {
   });
 }
 
+function expectRefresh(agentId = "main") {
+  expect(mocks.callGateway).toHaveBeenCalledWith(
+    expect.objectContaining({
+      method: "models.authRefresh",
+      params: { operation: "login", agentId },
+    }),
+  );
+}
+
 it.each([
   { profileId: undefined, expectedIds: ["openai:first", "openai:second"] },
   { profileId: "openai:first", expectedIds: ["openai:first"] },
@@ -535,11 +544,7 @@ it.each([
     await expect(loginFlow()).resolves.toMatchObject({ authRefresh: outcome });
 
     expect(mocks.persistProviderAuthProfilesAfterLogin).toHaveBeenCalledOnce();
-    expect(mocks.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: { operation: "login", agentId: "main" },
-      }),
-    );
+    expectRefresh();
     expect(runtime.error).toHaveBeenCalledWith(
       `Warning: Model auth changes were saved, but the ${target} Gateway could not refresh them. Run \`openclaw gateway restart\` to apply the saved changes.`,
     );
@@ -700,11 +705,7 @@ it("routes OAuth login and refresh to the explicit agent", async () => {
   );
   expect(mocks.resolveAgentDir).toHaveBeenCalledWith(originalConfig, "coder");
   expectCoderStore(runProviderAuth);
-  expect(mocks.callGateway).toHaveBeenCalledWith(
-    expect.objectContaining({
-      params: { operation: "login", agentId: "coder" },
-    }),
-  );
+  expectRefresh("coder");
 });
 
 it("refreshes saved credentials before presenting provider notes", async () => {
@@ -719,12 +720,7 @@ it("refreshes saved credentials before presenting provider notes", async () => {
     notes: ["Provider sign-in details"],
   });
   await expect(loginCommand()).rejects.toThrow("note delivery failed");
-  expect(mocks.callGateway).toHaveBeenCalledWith(
-    expect.objectContaining({
-      method: "models.authRefresh",
-      params: { operation: "login", agentId: "main" },
-    }),
-  );
+  expectRefresh();
 });
 
 it("does not persist credentials returned after app-owned cancellation", async () => {
@@ -1056,11 +1052,7 @@ it("writes pasted API keys to the requested agent store", async () => {
   expect(runtime.error).toHaveBeenCalledWith(
     expect.stringContaining("Gateway has not confirmed applying the provider settings"),
   );
-  expect(mocks.callGateway).toHaveBeenCalledWith(
-    expect.objectContaining({
-      params: { operation: "login", agentId: "coder" },
-    }),
-  );
+  expectRefresh("coder");
 });
 
 it("rejects token material pasted into the OpenAI Codex API-key command", async () => {

@@ -180,32 +180,25 @@ it.each([
     );
   } else {
     const updateConfig = configWriter.updateConfig;
-    vi.spyOn(configWriter, "updateConfig").mockImplementation(
-      (mutator, selectModels, beforeCommit, writeOptions) =>
-        updateConfig(
-          async (...args) => {
-            const next = await mutator(...args);
-            complete();
-            return next;
-          },
-          selectModels,
-          beforeCommit,
-          writeOptions,
-        ),
+    vi.spyOn(configWriter, "updateConfig").mockImplementation((mutator, ...options) =>
+      updateConfig(
+        async (...args) => {
+          const next = await mutator(...args);
+          complete();
+          return next;
+        },
+        ...options,
+      ),
     );
   }
   const error = `Requester revoked after ${stage}`;
-  const result = save(
-    stage === "credential commit" ? "synthetic-after" : "synthetic-before",
-    "sample:manual",
-    {
-      assertCurrent: () => {
-        if (revoked) {
-          throw new Error(error);
-        }
-      },
-    },
-  );
+  const assertCurrent = () => {
+    if (revoked) {
+      throw new Error(error);
+    }
+  };
+  const nextKey = stage === "credential commit" ? "synthetic-after" : "synthetic-before";
+  const result = save(nextKey, "sample:manual", { assertCurrent });
   if (revoke) {
     await expect(result).rejects.toThrow(error);
     expect(configBytes()).toBe(beforeConfig);
@@ -409,20 +402,26 @@ it("deleting the selected account preserves the model and releases existing and 
   });
   await seedKey(removedId, "removed", "writer");
   const scope = sessionScope("writer", "agent:writer:chat");
-  await replaceSessionEntry(scope, {
+  const retainedSession = {
     sessionId: "existing-chat",
     updatedAt: 1,
     modelOverride: "astra",
+    modelOverrideSource: "user" as const,
+  };
+  const retainedFallback = {
+    source: "agent-patch" as const,
+    ts: 3,
+    prevModel: "luna",
+    prevProvider: "sample",
+  };
+  await replaceSessionEntry(scope, {
+    ...retainedSession,
     providerOverride: "sample",
-    modelOverrideSource: "user",
     authProfileOverride: removedId,
     authProfileOverrideSource: "user",
     authProfileOverrideCompactionCount: 2,
     modelFallback: {
-      source: "agent-patch",
-      ts: 3,
-      prevModel: "luna",
-      prevProvider: "sample",
+      ...retainedFallback,
       prevAuthProfileOverride: removedId,
       prevAuthProfileOverrideSource: "user",
       prevAuthProfileOverrideCompactionCount: 1,
@@ -433,23 +432,13 @@ it("deleting the selected account preserves the model and releases existing and 
   expect(cfg.agents?.entries?.writer?.model).toBe("sample/astra");
   expect(ensureAuthProfileStoreWithoutExternalProfiles(agentDir("writer")).profiles).toEqual({});
   const existing = readSession(scope);
-  expect(existing).toMatchObject({
-    sessionId: "existing-chat",
-    updatedAt: 1,
-    modelOverride: "astra",
-    modelOverrideSource: "user",
-  });
+  expect(existing).toMatchObject(retainedSession);
   expect([
     existing?.authProfileOverride,
     existing?.authProfileOverrideSource,
     existing?.authProfileOverrideCompactionCount,
   ]).toEqual([undefined, undefined, undefined]);
-  expect(existing?.modelFallback).toMatchObject({
-    source: "agent-patch",
-    ts: 3,
-    prevModel: "luna",
-    prevProvider: "sample",
-  });
+  expect(existing?.modelFallback).toMatchObject(retainedFallback);
   expect(existing?.modelFallback?.prevAuthProfileOverride).toBeUndefined();
   await seedKey(replacementId, "replacement", "writer");
   const freshScope = { ...scope, sessionKey: "agent:writer:new" };
@@ -477,16 +466,19 @@ it("deleting the selected account preserves the model and releases existing and 
 
 it("releases a shared default without changing another agent's independent same-ID account", async () => {
   const profileId = "sample:shared";
+  const fallbacks = ["sample/luna@sample:backup"];
+  const selectedModels = (suffix = "") => ({
+    model: { primary: `sample/astra${suffix}`, fallbacks },
+    utilityModel: `sample/luna${suffix}`,
+  });
+  const boundModels = selectedModels(`@${profileId}`);
   await seedKey(profileId, "shared");
   await seedKey(profileId, "independent", "reader");
   writeConfig({
     plugins: { allow: [] },
     agents: {
       ownership: "explicit",
-      defaults: {
-        model: { primary: `sample/astra@${profileId}`, fallbacks: ["sample/luna@sample:backup"] },
-        utilityModel: `sample/luna@${profileId}`,
-      },
+      defaults: boundModels,
       entries: { main: {}, reader: {} },
     },
   });
@@ -503,18 +495,12 @@ it("releases a shared default without changing another agent's independent same-
   expect({
     model: cfg.agents?.defaults?.model,
     utilityModel: cfg.agents?.defaults?.utilityModel,
-  }).toEqual({
-    model: { primary: "sample/astra", fallbacks: ["sample/luna@sample:backup"] },
-    utilityModel: "sample/luna",
-  });
+  }).toEqual(selectedModels());
   expect({
     model: cfg.agents?.entries?.reader?.model,
     utilityModel: cfg.agents?.entries?.reader?.utilityModel,
-  }).toEqual({
-    model: { primary: `sample/astra@${profileId}`, fallbacks: ["sample/luna@sample:backup"] },
-    utilityModel: `sample/luna@${profileId}`,
-  });
-  expect(resolveAgentModelFallbacksOverride(cfg, "reader")).toEqual(["sample/luna@sample:backup"]);
+  }).toEqual(boundModels);
+  expect(resolveAgentModelFallbacksOverride(cfg, "reader")).toEqual(fallbacks);
   expect(savedProfile(profileId, "reader")).toMatchObject({ key: "independent" });
   expect(readSession(sessionScope("main"))?.authProfileOverride).toBeUndefined();
   expect(readSession(sessionScope("reader"))?.authProfileOverride).toBe(profileId);
@@ -530,69 +516,51 @@ it("preserves an externally managed key and its binding when removing inline key
   expect((await readProvider())?.apiKey).toBe("sample:external");
 });
 
-it.each<{
-  name: string;
-  owner?: string;
-  profileId?: string;
-  credential: AuthProfileCredential;
-  config?: OpenClawConfig;
-  error: string;
-}>([
-  {
-    name: "another agent's override",
-    owner: "reader",
-    credential: keyCredential("kept-local"),
-    config: boundConfig("old-inline"),
-    error: "An agent already overrides this shared key",
-  },
-  {
-    name: "the configured agent-local binding",
-    owner: "writer",
-    profileId: "sample:local",
-    credential: { ...keyCredential("kept-local"), copyToAgents: false },
-    config: boundConfig("sample:local"),
-    error: "An agent already overrides this shared key",
-  },
-  {
-    name: "another provider's key",
-    owner: "writer",
-    credential: keyCredential("kept", "other"),
-    error: "belongs to another sign-in",
-  },
-  {
-    name: "a token sign-in",
-    owner: "writer",
-    credential: { type: "token", provider: "sample", token: "kept" },
-    error: "belongs to another sign-in",
-  },
-  ...["sample:external", "sample:manual"].map((profileId) => ({
-    name: `external reference ${profileId}`,
-    profileId,
-    credential: {
-      ...externalCredential("SAMPLE_API_KEY"),
-      copyToAgents: false,
-    },
-    config: boundConfig(profileId === "sample:external" ? profileId : undefined),
-    error: "uses an external secret reference",
-  })),
-])(
-  "preserves $name when key replacement is refused",
-  async ({
-    owner,
-    profileId = "sample:manual",
-    credential,
-    config = { plugins: { allow: [] } },
-    error,
-  }) => {
-    await replaceCredential(profileId, credential, owner);
-    writeConfig(config);
-    const before = configBytes();
-    await expect(save()).rejects.toThrow(error);
-    expect(configBytes()).toBe(before);
-    expect(savedProfile(profileId, owner ?? null)).toEqual(credential);
-    expect((await readConfig()).models).toEqual(config.models);
-  },
-);
+it.each([
+  "other-agent override",
+  "local override",
+  "other provider",
+  "token",
+  "bound secret",
+  "default secret",
+])("preserves %s when key replacement is refused", async (kind) => {
+  const external = kind.endsWith("secret");
+  const override = kind.endsWith("override");
+  const profileId =
+    kind === "local override"
+      ? "sample:local"
+      : kind === "bound secret"
+        ? "sample:external"
+        : "sample:manual";
+  const owner = external ? undefined : kind === "other-agent override" ? "reader" : "writer";
+  const credential: AuthProfileCredential = external
+    ? { ...externalCredential("SAMPLE_API_KEY"), copyToAgents: false }
+    : kind === "token"
+      ? { type: "token", provider: "sample", token: "kept" }
+      : kind === "other provider"
+        ? keyCredential("kept", "other")
+        : {
+            ...keyCredential("kept-local"),
+            ...(kind === "local override" ? { copyToAgents: false } : {}),
+          };
+  const config: OpenClawConfig = external
+    ? boundConfig(kind === "bound secret" ? profileId : undefined)
+    : override
+      ? boundConfig(kind === "local override" ? profileId : "old-inline")
+      : { plugins: { allow: [] } };
+  const error = external
+    ? "uses an external secret reference"
+    : override
+      ? "An agent already overrides this shared key"
+      : "belongs to another sign-in";
+  await replaceCredential(profileId, credential, owner);
+  writeConfig(config);
+  const before = configBytes();
+  await expect(save()).rejects.toThrow(error);
+  expect(configBytes()).toBe(before);
+  expect(savedProfile(profileId, owner ?? null)).toEqual(credential);
+  expect((await readConfig()).models).toEqual(config.models);
+});
 
 it("reports saved key material separately from failed config application and redacts it", async () => {
   vi.spyOn(configWriter, "updateConfig").mockRejectedValueOnce(new Error("config write failed"));

@@ -44,6 +44,9 @@ it.each(["after presentation", "during pending response", "during browser failur
   "%s preserves current login authority and saves only an allowed completion once",
   (scenario) =>
     withOpenClawTestState({ label: "minimax-chat-login", applyEnv: true }, async (state) => {
+      const allowed = scenario === "allowed";
+      const browserFailure = scenario === "during browser failure";
+      const pending = scenario === "during pending response";
       const registry = createEmptyPluginRegistry();
       setActivePluginRegistry(registry);
       const registryOwner = createPluginRegistryOwner(registry, state.workspaceDir);
@@ -82,10 +85,10 @@ it.each(["after presentation", "during pending response", "during browser failur
           }),
         ).toMatchObject({ senderIsOwner: false, isAuthorizedSender: false });
       };
-      const dispatch = (command: string, cfg = current) => {
+      const dispatch = (command: string) => {
         const params = buildCommandTestParams(
           command,
-          cfg,
+          current,
           {
             Provider: "slack",
             Surface: "slack",
@@ -108,17 +111,15 @@ it.each(["after presentation", "during pending response", "during browser failur
           getProviderLoginConfig: () => current,
           onBlockReply: async ({ text }) => {
             messages.push(text ?? "");
-            if (text?.includes("https://account.minimax.io/verify")) {
-              if (
-                scenario === "during browser failure" ||
-                (scenario === "allowed" && text.startsWith("Sign in with MiniMax"))
-              ) {
-                if (scenario === "during browser failure") {
-                  revoke();
-                }
-                browserFailures += 1;
-                throw new Error("Browser presentation failed");
+            if (
+              text?.includes("https://account.minimax.io/verify") &&
+              (browserFailure || (allowed && text.startsWith("Sign in with MiniMax")))
+            ) {
+              if (browserFailure) {
+                revoke();
               }
+              browserFailures += 1;
+              throw new Error("Browser presentation failed");
             }
           },
         };
@@ -150,8 +151,8 @@ it.each(["after presentation", "during pending response", "during browser failur
         }
         tokenRequests.push(revoked);
         firstPoll.resolve();
-        if (tokenRequests.length === 1 && scenario !== "allowed") {
-          if (scenario === "during pending response") {
+        if (tokenRequests.length === 1 && !allowed) {
+          if (pending) {
             await pendingResponse.promise;
           }
           return Response.json({ status: "pending" });
@@ -170,7 +171,7 @@ it.each(["after presentation", "during pending response", "during browser failur
       try {
         await state.writeConfig(initial);
         login = dispatch("/login minimax-global-oauth");
-        if (scenario === "after presentation" || scenario === "during pending response") {
+        if (!allowed && !browserFailure) {
           await Promise.race([
             firstPoll.promise,
             login.then(() => {
@@ -178,7 +179,7 @@ it.each(["after presentation", "during pending response", "during browser failur
             }),
           ]);
           expect(messages.some((text) => text.includes("LOGIN-CODE"))).toBe(true);
-          if (scenario === "after presentation") {
+          if (!pending) {
             // Let the immediate pending response drain before changing policy during poll sleep.
             await nextEventLoopTurn();
           }
@@ -186,29 +187,26 @@ it.each(["after presentation", "during pending response", "during browser failur
           pendingResponse.resolve();
         }
         const result = await login;
-        expect(browserFailures).toBe(
-          scenario === "during browser failure" || scenario === "allowed" ? 1 : 0,
-        );
         expect(result.shouldContinue).toBe(false);
         expect(fetchMock.mock.calls[0]?.[0]).toBe("https://account.minimax.io/oauth2/device/code");
         const profiles = Object.values(loadAuthProfileStore().profiles).filter(
           (credential) => credential.provider === "minimax-portal",
         );
-        if (scenario === "allowed") {
+        expect({ browserFailures, tokenRequests, tokensIssued, revoked, profiles }).toEqual({
+          browserFailures: browserFailure || allowed ? 1 : 0,
+          tokenRequests: browserFailure ? [] : [false],
+          tokensIssued: allowed ? 1 : 0,
+          revoked: !allowed,
+          profiles: allowed ? [expect.objectContaining({ type: "oauth" })] : [],
+        });
+        expect(save).toHaveBeenCalledTimes(allowed ? 1 : 0);
+        expect(result.reply?.text).toMatch(
+          allowed ? /credentials are saved|login complete/ : /MiniMax login did not complete/,
+        );
+        if (allowed) {
           expect(messages.some((text) => text.includes("LOGIN-CODE"))).toBe(true);
-          expect(tokenRequests).toEqual([false]);
-          expect(tokensIssued).toBe(1);
-          expect(save).toHaveBeenCalledOnce();
-          expect(profiles).toEqual([expect.objectContaining({ type: "oauth" })]);
-          expect(result.reply?.text).toMatch(/credentials are saved|login complete/);
         } else {
-          expect(revoked).toBe(true);
           expect((await dispatch("/login")).reply?.text).toContain("Only an OpenClaw owner");
-          expect(tokenRequests).toEqual(scenario === "during browser failure" ? [] : [false]);
-          expect(tokensIssued).toBe(0);
-          expect(save).not.toHaveBeenCalled();
-          expect(profiles).toEqual([]);
-          expect(result.reply?.text).toContain("MiniMax login did not complete");
         }
       } finally {
         pendingResponse.resolve();
