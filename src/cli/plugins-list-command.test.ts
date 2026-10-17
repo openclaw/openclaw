@@ -60,6 +60,7 @@ function mockHumanListModules(importedModules: string[] = []): void {
       resolvePluginSourceRoots: vi.fn(),
     };
   });
+  // mock-isolation: these cases assert the rows the command builds; table layout and borders are not under test.
   vi.doMock("../../packages/terminal-core/src/table.js", () => {
     importedModules.push("table");
     return {
@@ -67,6 +68,7 @@ function mockHumanListModules(importedModules: string[] = []): void {
       renderTable: vi.fn(() => ""),
     };
   });
+  // mock-isolation: identity styling keeps row assertions readable; terminal color output is not under test.
   vi.doMock("../../packages/terminal-core/src/theme.js", () => {
     importedModules.push("theme");
     return {
