@@ -118,18 +118,18 @@ describe("agent run session target", () => {
   });
 
   it("finds an agent-scoped row by id in an ownerless explicit fleet", async () => {
-    const storePath = path.join(tempDir, "ownerless", "sessions.json");
+    const ownerlessStorePath = path.join(tempDir, "ownerless", "sessions.json");
     const sessionId = "research-session";
     const sessionKey = "agent:research:work";
     await seedSessionEntry(
-      { agentId: "research", sessionKey, storePath },
+      { agentId: "research", sessionKey, storePath: ownerlessStorePath },
       { sessionId, updatedAt: 1 },
     );
 
     await expect(
       resolveAgentRunSessionTarget({
         config: {
-          session: { store: storePath },
+          session: { store: ownerlessStorePath },
           agents: {
             ownership: "explicit",
             entries: { ops: {}, research: {} },
@@ -137,7 +137,12 @@ describe("agent run session target", () => {
         },
         sessionId,
       }),
-    ).resolves.toMatchObject({ agentId: "research", sessionId, sessionKey, storePath });
+    ).resolves.toMatchObject({
+      agentId: "research",
+      sessionId,
+      sessionKey,
+      storePath: ownerlessStorePath,
+    });
   });
 
   it("uses the active runtime store when compatibility projection omits config", async () => {
