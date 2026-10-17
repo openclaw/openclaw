@@ -103,9 +103,13 @@ function projectionFixture(env: NodeJS.ProcessEnv) {
       ...(partial ? {} : { ftsRows: prepared.ftsRows }),
     });
   };
-  const publish = (prepared: PreparedSessionTranscriptProjection, partial = false) => {
-    claim(prepared);
-    install(prepared, partial);
+  const publish = (
+    prepared: PreparedSessionTranscriptProjection,
+    partial = false,
+    run: (action: () => void) => void = (action) => action(),
+  ) => {
+    run(() => claim(prepared));
+    run(() => install(prepared, partial));
   };
   const finalize = (prepared: PreparedSessionTranscriptProjection) =>
     finalizeProjection(db(), prepared, -1);
@@ -114,19 +118,7 @@ function projectionFixture(env: NodeJS.ProcessEnv) {
     expectedEventJson: JSON.stringify(entries[2]),
     event: { ...entries[2], message: { ...entries[2].message, excludeFromContext } },
   });
-  return {
-    scope,
-    db,
-    rewrite,
-    write,
-    plan,
-    publish,
-    finalize,
-    claim,
-    install,
-    indexState,
-    unclassify,
-  };
+  return { scope, db, rewrite, write, plan, publish, finalize, indexState, unclassify };
 }
 
 function projectionRows(db: DatabaseSync) {
@@ -167,14 +159,15 @@ async function prepareDirtyProjection(env: NodeJS.ProcessEnv, label: string) {
   const plan = f.plan();
   return {
     ...f,
-    database: { db },
     plan,
-    publish: () => {
-      f.write(() => f.claim(plan));
-      f.write(() => f.install(plan));
-    },
+    // Catch-up fixtures deliberately claim and install in separate transactions.
+    publish: () => f.publish(plan, false, f.write),
     finalize: () => f.write(() => f.finalize(plan)),
     status: f.indexState,
+    append: (
+      database: Parameters<typeof appendEvent>[0],
+      event: Parameters<typeof appendEvent>[2],
+    ) => appendEvent(database, f.scope, event, { scheduleProjectionReconcile: false }),
   };
 }
 
@@ -338,11 +331,9 @@ it.each(["invalid-leaf", "oversized"])("keeps an unsafe $0 catch-up unpublished"
       });
     } else {
       fixture.write((database) => {
-        appendEvent(
+        fixture.append(
           database,
-          fixture.scope,
           messageEvent("oversized-tail", "root", "assistant", "x".repeat(257 * 1024)),
-          { scheduleProjectionReconcile: false },
         );
       });
     }
@@ -359,16 +350,14 @@ it.each(["append", "reset", "branch", "generation", "claim"])(
       if (label === "append") {
         fixture.write((database) => {
           for (let index = 0; index < 10; index++) {
-            appendEvent(
+            fixture.append(
               database,
-              fixture.scope,
               messageEvent(
                 `racing-append-${index}`,
                 index === 0 ? "root" : `racing-append-${index - 1}`,
                 "assistant",
                 `arrived after preparation ${index}`,
               ),
-              { scheduleProjectionReconcile: false },
             );
           }
         });
@@ -385,13 +374,11 @@ it.each(["append", "reset", "branch", "generation", "claim"])(
         } else if (label === "generation") {
           rotateTranscriptGenerationInTransaction(database, fixture.scope.sessionId);
         } else if (label !== "append") {
-          appendEvent(
+          fixture.append(
             database,
-            fixture.scope,
             label === "reset"
               ? { type: "reset", id: "racing-reset", parentId: "root", firstKeptEntryId: "root" }
               : messageEvent("racing-branch", null, "assistant", "branch"),
-            { scheduleProjectionReconcile: false },
           );
         }
         expect(finalizeProjection(database.db, fixture.plan, claimId)).toBe(label === "append");

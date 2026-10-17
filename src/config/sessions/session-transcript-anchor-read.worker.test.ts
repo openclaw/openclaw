@@ -191,9 +191,7 @@ it("settles callback-owned tail reads while independent history waits on the wri
       { entryIds: ["question"], afterSeq: 1, includeMessagesForRunId: "answer-run" },
       undefined,
       (facts) => {
-        expect(facts.anchors).toEqual(
-          expect.arrayContaining([expect.objectContaining({ entryId: "question" })]),
-        );
+        expect(facts.anchors).toContainEqual(expect.objectContaining({ entryId: "question" }));
         expect(facts.tail?.entries).toContainEqual(
           expect.objectContaining({ entryId: "answer", runId: "answer-run" }),
         );
@@ -262,6 +260,7 @@ it("reads active anchors and raw tail facts without caller SQL, including cold d
     await replaceTranscriptEvents(scope, events);
     await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
     const absentPath = state.statePath("absent.sqlite");
+    const absentScope = { ...scope, storePath: absentPath };
     const hostSql = observeHostDataSql();
     try {
       const result = await readAnchors(scope, {
@@ -306,17 +305,11 @@ it("reads active anchors and raw tail facts without caller SQL, including cold d
       await expect(
         readAnchors({ ...scope, sessionId: "missing" }, { entryIds: ["question"] }),
       ).resolves.toEqual({ anchors: [] });
-      await expect(
-        readAnchor({
-          ...scope,
-          storePath: absentPath,
-          entryId: "question",
-        }),
-      ).resolves.toBeUndefined();
+      await expect(readAnchor({ ...absentScope, entryId: "question" })).resolves.toBeUndefined();
       const consumeInitial = vi.fn();
       await expect(
         readAnchors(
-          { ...scope, storePath: absentPath },
+          absentScope,
           { entryIds: [], replayValidation: { allowInitial: true } },
           undefined,
           consumeInitial,
