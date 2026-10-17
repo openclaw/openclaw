@@ -130,6 +130,37 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     run(() => db.close());
   });
 
+  it("rejects mutation hints in read snapshots without settling a sibling writer", () => {
+    const writer = open();
+    const reader = open();
+    run(() => writer.exec("CREATE TABLE snapshot_entries (merge integer)"));
+    const before = readSqliteDatabaseScopedWriteToken(writer, "entry");
+    let pending: string | undefined;
+    run(() =>
+      writer.runTransaction(() =>
+        withSqliteDatabaseWriteScope(writer, ["entry"], () => {
+          writer.prepare("INSERT INTO snapshot_entries VALUES (?)").run(7);
+          pending = readSqliteDatabasePendingScopedWriteToken(writer, "entry");
+          expect(pending).not.toBe(before);
+          expect(() =>
+            reader.runTransaction(
+              () => reader.query("SELECT merge FROM snapshot_entries"),
+              undefined,
+              true,
+            ),
+          ).toThrow("PostgreSQL read snapshot cannot execute a mutation");
+          expect(readSqliteDatabaseScopedWriteToken(writer, "entry")).toBe(before);
+          expect(readSqliteDatabasePendingScopedWriteToken(writer, "entry")).toBe(pending);
+        }),
+      ),
+    );
+    expect(readSqliteDatabaseScopedWriteToken(writer, "entry")).toBe(pending);
+    expect(run(() => reader.query("SELECT * FROM snapshot_entries").rows)).toEqual([{ merge: 7 }]);
+    run(() => writer.exec("DROP TABLE snapshot_entries"));
+    run(() => reader.close());
+    run(() => writer.close());
+  });
+
   it("preserves certified CTE write scopes but fences SELECT INTO across scopes", () => {
     const db = open();
     run(() => db.exec("CREATE TABLE cte_entries (id integer)"));

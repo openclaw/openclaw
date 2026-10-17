@@ -51,6 +51,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   private failure: Error | undefined;
   private requestId = 0;
   private outcomeUnknown = true;
+  private readOnlyTransaction = false;
   // Read handles can share an anchor, but only its writing handle may settle the receipt.
   private pendingWrite = false;
   private readonly mainThread = threadId === 0;
@@ -244,7 +245,10 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       { operation: "query", sql, parameters },
       !wasTransaction || /^\s*COMMIT\b/i.test(sql),
     );
+    const readOnly = this.readOnlyTransaction;
     this.isTransaction = result.inTransaction;
+    this.readOnlyTransaction =
+      this.isTransaction && (readOnly || /^\s*BEGIN\b[^;]*\bREAD\s+ONLY\b/i.test(sql));
     if (/^\s*(?:COMMIT|ROLLBACK)\s*;?\s*$/i.test(sql)) {
       if (/^\s*COMMIT\b/i.test(sql) && result.command !== "COMMIT") {
         this.finishWrite();
@@ -257,6 +261,10 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
         : (result.mutation ?? hintedMutation);
     const mutated = mutation !== undefined;
     if (mutated) {
+      if (readOnly || this.readOnlyTransaction) {
+        // A snapshot must never publish another handle's pending receipt on the shared anchor.
+        throw new Error("PostgreSQL read snapshot cannot execute a mutation");
+      }
       // Like SQLite's mutation witness, rollback does not rewind local cache invalidation.
       this.mutationRevision++;
       // Typed DML borrows its owner's scopes; schema and raw writes fence every reader.
