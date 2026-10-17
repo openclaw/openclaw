@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readConfigFileSnapshotForWrite, registerConfigWriteListener } from "../config/config.js";
 import { createConfigIO } from "../config/io.js";
@@ -25,14 +25,11 @@ import type {
 } from "../transcripts/provider-types.js";
 import { readTranscriptLibraryStatus } from "../transcripts/status.js";
 import { TranscriptsStore, transcriptSessionSelector } from "../transcripts/store.js";
-import {
-  type GatewayConfigReloadTransactionOwnership,
-  type GatewayReloadPlan,
-  startGatewayConfigReloader,
-} from "./config-reload.js";
+import { startGatewayConfigReloader } from "./config-reload.js";
 import { commitGatewayConfigWrite } from "./server-methods/config-write-flow.js";
 
 const tempDirs = createTempDirTracker();
+type ReloadOptions = Parameters<typeof startGatewayConfigReloader>[0];
 afterEach(async () => {
   resetConfigRuntimeState();
   await closeOpenClawStateDatabaseAsync();
@@ -126,69 +123,47 @@ it.for([false, true])(
           expect(snapshot.valid).toBe(true);
           let current = snapshot.config;
           setRuntimeConfigSnapshot(current, current);
-          let service = createTranscriptsAutoStartService({
-            stateDir,
-            config: current,
-            agentId: "notes",
-            logger,
-          });
+          const createService = (config: OpenClawConfig) =>
+            createTranscriptsAutoStartService({ stateDir, config, agentId: "notes", logger });
+          let service = createService(current);
           let startupSettled = Promise.resolve();
           const application = createDeferred();
           const startAndWaitForProvider = async () => {
             signal.throwIfAborted();
             const entered = createDeferred<TranscriptStartRequest>();
-            const aborted = () =>
-              entered.reject(
-                new Error("Transcript fixture start aborted", { cause: signal.reason }),
-              );
             providerEntered = entered;
-            signal.addEventListener("abort", aborted, { once: true });
             try {
               startupSettled = service.start().settled;
-              const request = await entered.promise;
+              const request = await withinTest(entered.promise, signal);
               if (!pending) {
                 await startupSettled;
               }
               return request;
             } finally {
-              signal.removeEventListener("abort", aborted);
               providerEntered = undefined;
             }
           };
-          const restart = vi.fn(async (_plan: GatewayReloadPlan, next: OpenClawConfig) => {
+          const restart = vi.fn<ReloadOptions["onRestart"]>(async (_plan, next) => {
             application.resolve();
             current = next;
             await service.stop();
-            service = createTranscriptsAutoStartService({
-              stateDir,
-              config: next,
-              agentId: "notes",
-              logger,
-            });
+            service = createService(next);
             service.start();
           });
-          const commit = vi.fn(
-            async (
-              plan: GatewayReloadPlan,
-              next: OpenClawConfig,
-              ownership: GatewayConfigReloadTransactionOwnership,
-            ) => {
+          const commit = vi.fn<ReloadOptions["onNoopConfigCommit"]>(
+            async (plan, next, ownership) => {
               ownership.markRuntimeCommitted(next, plan);
               setRuntimeConfigSnapshot(next, next);
               current = next;
             },
           );
           const applied = vi.fn(() => application.resolve());
-          const hotReload = vi.fn(
-            async (
-              plan: GatewayReloadPlan,
-              next: OpenClawConfig,
-              ownership: GatewayConfigReloadTransactionOwnership,
-            ) => {
+          const hotReload = vi.fn<ReloadOptions["onHotReload"]>(
+            async (plan, next, ownership, source) => {
               await service.stop(new Set(), next);
-              await commit(plan, next, ownership);
+              await commit(plan, next, ownership, source);
               service.start(next);
-              return "applied" as const;
+              return "applied";
             },
           );
           const reloader = startGatewayConfigReloader({
@@ -268,12 +243,7 @@ it.for([false, true])(
             };
             for (let capture = 0; capture < 2; capture++) {
               await service.stop();
-              service = createTranscriptsAutoStartService({
-                stateDir,
-                config: generated,
-                agentId: "notes",
-                logger,
-              });
+              service = createService(generated);
               await startAndWaitForProvider();
               await startupSettled;
               expect(

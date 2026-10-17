@@ -5,6 +5,7 @@ import path from "node:path";
 import { finished } from "node:stream/promises";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
+import type { GatewayOperatorRolesConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginGatewayAccessPolicy } from "../plugins/gateway-access-policy.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -77,6 +78,58 @@ let entry: {
   visibility?: "draft" | "shared";
 };
 const sessionKey = "agent:main:dashboard:media";
+const readScopes = ["operator.read"];
+const viewerRole = { sessions: { others: "view" }, agents: "*", scopes: readScopes } as const;
+
+async function image(name = "image.png", root = project, contents: string | Buffer = PNG) {
+  const source = path.join(root, name);
+  await fs.mkdir(path.dirname(source), { recursive: true });
+  await fs.writeFile(source, contents);
+  return source;
+}
+
+async function namedReader(
+  email: string,
+  definitions: GatewayOperatorRolesConfig["definitions"] = { viewer: viewerRole },
+  hasCurrentClientAuthority?: () => boolean,
+) {
+  cfg.gateway = { roles: { default: "viewer", definitions } };
+  const profile = ensureProfileForEmail(email);
+  const catalog = await prepareUserProfileCatalog();
+  onTestFinished(catalog.release);
+  state.auth.mockResolvedValue({
+    authMethod: "trusted-proxy",
+    operatorScopes: readScopes,
+    ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
+    ...resolveHttpProfile(profile.id, cfg),
+  });
+  return profile;
+}
+
+async function placementStore() {
+  const { createWorkerSessionPlacementStore } =
+    await import("./worker-environments/placement-store.js");
+  const placements = createWorkerSessionPlacementStore();
+  state.placements.mockImplementation((ids: readonly string[]) => placements.getMany(ids));
+  state.placementsAsync.mockImplementation((ids: readonly string[]) =>
+    placements.getManyAsync(ids),
+  );
+  return placements;
+}
+
+function onOpen(
+  source: string,
+  run: (file: Awaited<ReturnType<typeof fs.open>>) => void | Promise<void>,
+) {
+  const open = fs.open;
+  return vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+    const file = await open(filePath, flags, mode);
+    if (filePath === source) {
+      await run(file);
+    }
+    return file;
+  });
+}
 
 beforeEach(async () => {
   state.placements.mockReset().mockReturnValue(new Map());
@@ -195,15 +248,9 @@ describe("assistant image session policy", () => {
   it.each(["metadata", "bytes"] as const)(
     "rechecks the execution directory after asynchronous relative %s preparation",
     async (operation) => {
-      const source = path.join(project, "image.png");
-      await fs.writeFile(source, PNG);
-      const openFile = fs.open;
-      vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
-        const file = await openFile(filePath, flags, mode);
-        if (filePath === source) {
-          entry.spawnedCwd = path.join(project, "another-directory");
-        }
-        return file;
+      const source = await image();
+      onOpen(source, () => {
+        entry.spawnedCwd = path.join(project, "another-directory");
       });
       const denied = await request("image.png", { bytes: operation === "bytes" });
       expect(denied.res.statusCode).toBe(404);
@@ -214,18 +261,15 @@ describe("assistant image session policy", () => {
   it("uses configured protection when there is no explicit session mode", async () => {
     delete entry.permissionMode;
     cfg.tools = { fs: { workspaceOnly: false } };
-    const source = path.join(temp, "outside.png");
-    await fs.writeFile(source, PNG);
+    const source = await image("outside.png", temp);
     expect((await request(source)).payload).toMatchObject({ available: true });
     cfg.tools.fs!.workspaceOnly = true;
     expect((await request(source)).payload).toMatchObject({ available: false, canAllow: true });
   });
 
   it("offers an explicit exact-image grant and renews it without granting siblings", async () => {
-    const source = path.join(temp, "outside.png");
-    const sibling = path.join(temp, "sibling.png");
-    await fs.writeFile(source, PNG);
-    await fs.writeFile(sibling, PNG);
+    const source = await image("outside.png", temp);
+    const sibling = await image("sibling.png", temp);
     expect((await request(source)).payload).toMatchObject({
       available: false,
       code: "outside-allowed-folders",
@@ -244,8 +288,7 @@ describe("assistant image session policy", () => {
   });
 
   it("does not let a reader grant outside access or renew an administrator's allowance", async () => {
-    const source = path.join(temp, "outside.png");
-    await fs.writeFile(source, PNG);
+    const source = await image("outside.png", temp);
     const allowed = (await request(source, { allow: true })).payload!;
     state.auth.mockResolvedValue({ authMethod: "device-token", operatorScopes: ["operator.read"] });
     expect((await request(source)).payload).not.toHaveProperty("canAllow", true);
@@ -256,8 +299,7 @@ describe("assistant image session policy", () => {
   });
 
   it("rejects a replaced file and a replaced session when replaying an exact-image ticket", async () => {
-    const source = path.join(temp, "outside.png");
-    await fs.writeFile(source, PNG);
+    const source = await image("outside.png", temp);
     const ticket = String((await request(source, { allow: true })).payload!.mediaTicket);
     await fs.rename(source, `${source}.old`);
     await fs.writeFile(source, PNG);
@@ -273,8 +315,7 @@ describe("assistant image session policy", () => {
   });
 
   it("does not grant an outside text file or a symlink escape under a protected project", async () => {
-    const source = path.join(temp, "outside.png");
-    await fs.writeFile(source, "not an image");
+    const source = await image("outside.png", temp, "not an image");
     expect((await request(source, { allow: true })).payload).toMatchObject({ available: false });
     await fs.writeFile(source, PNG);
     const link = path.join(project, "link.png");
@@ -286,8 +327,7 @@ describe("assistant image session policy", () => {
     "does not interpret %s session paths as Gateway-local image paths",
     async (owner) => {
       entry[owner] = "remote-workspace";
-      const source = path.join(project, "image.png");
-      await fs.writeFile(source, PNG);
+      const source = await image();
       expect((await request(source)).payload).toMatchObject({
         available: false,
         code: "blocked-local-file",
@@ -297,8 +337,7 @@ describe("assistant image session policy", () => {
   it("keeps device-folder Full Access off Gateway-local image paths", async () => {
     entry.permissionMode = "full";
     entry.deviceFolder = { deviceId: "paired-device", path: project };
-    const source = path.join(project, "image.png");
-    await fs.writeFile(source, PNG);
+    const source = await image();
     for (const options of [{}, { allow: true }]) {
       expect((await request(source, options)).payload).toMatchObject({
         available: false,
@@ -309,9 +348,7 @@ describe("assistant image session policy", () => {
 
   it("keeps repository Full Access and Allow from exposing the configured Gateway workspace", async () => {
     entry.permissionMode = "full";
-    const source = path.join(temp, "agent", "unrelated.png");
-    await fs.mkdir(path.dirname(source));
-    await fs.writeFile(source, PNG);
+    const source = await image("unrelated.png", path.join(temp, "agent"));
     const ticket = String((await request(source)).payload!.mediaTicket);
     entry.repositoryWorkspaceId = "repository-workspace";
     delete entry.spawnedCwd;
@@ -324,15 +361,12 @@ describe("assistant image session policy", () => {
     expect((await request(source, { bytes: true, ticket })).res.statusCode).toBe(404);
   });
   it("keeps protected project images separate from the unrelated configured agent workspace", async () => {
-    const source = path.join(temp, "agent", "unrelated.png");
-    await fs.mkdir(path.dirname(source));
-    await fs.writeFile(source, PNG);
+    const source = await image("unrelated.png", path.join(temp, "agent"));
     expect((await request(source)).payload).toMatchObject({ available: false, canAllow: true });
   });
 
   it("rechecks full-to-workspace changes for existing byte tickets and metadata renewal", async () => {
-    const source = path.join(temp, "outside.png");
-    await fs.writeFile(source, PNG);
+    const source = await image("outside.png", temp);
     entry.permissionMode = "full";
     const ticket = String((await request(source)).payload!.mediaTicket);
     entry.permissionMode = "workspace";
@@ -365,8 +399,7 @@ describe("assistant image session policy", () => {
   });
 
   it("denies incognito images to a named profile while preserving administrator access", async () => {
-    const source = path.join(project, "private.png");
-    await fs.writeFile(source, PNG);
+    const source = await image("private.png");
     entry.incognito = true;
     state.auth.mockResolvedValue({
       authMethod: "trusted-proxy",
@@ -386,8 +419,7 @@ describe("assistant image session policy", () => {
   it("keeps unscoped readers on the default static roots even when a query selects a full-access agent", async () => {
     cfg.tools = { fs: { workspaceOnly: false } };
     cfg.agents!.entries!.other = { workspace: project };
-    const source = path.join(project, "private.png");
-    await fs.writeFile(source, PNG);
+    const source = await image("private.png");
     state.auth.mockResolvedValue({ authMethod: "device-token", operatorScopes: ["operator.read"] });
     expect((await request(source, { unscoped: true, agentId: "other" })).payload).toMatchObject({
       available: false,
@@ -404,8 +436,7 @@ describe("assistant image session policy", () => {
       storePath: path.join(temp, "other-sessions.json"),
       entry,
     }));
-    const source = path.join(project, "image.png");
-    await fs.writeFile(source, PNG);
+    const source = await image();
     expect(
       (await request(source, { sessionKey: "agent:other:dashboard:media", omitAgent: true }))
         .payload,
@@ -413,8 +444,7 @@ describe("assistant image session policy", () => {
   });
 
   it("does not accept GET consent or move an allowed image ticket to another session", async () => {
-    const source = path.join(temp, "outside.png");
-    await fs.writeFile(source, PNG);
+    const source = await image("outside.png", temp);
     expect((await request(source, { allow: true, method: "GET" })).payload).toMatchObject({
       available: false,
     });
@@ -463,30 +493,11 @@ describe("assistant image session policy", () => {
     stageActivePluginRegistry(registry, null, "default");
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(temp, "profile-state") }, async () => {
-        cfg.gateway = {
-          roles: {
-            default: "viewer",
-            definitions: {
-              viewer: {
-                sessions: { others: "view" },
-                agents: "*",
-                scopes: ["operator.read"],
-                accessPolicyPlugin: pluginId,
-              },
-            },
-          },
-        };
-        const profile = ensureProfileForEmail("media-alias@example.test");
         const canonical = ensureProfileForEmail("media-canonical@example.test");
-        const catalog = await prepareUserProfileCatalog();
-        onTestFinished(catalog.release);
-        state.auth.mockResolvedValue({
-          authMethod: "trusted-proxy",
-          operatorScopes: ["operator.read"],
-          ...resolveHttpProfile(profile.id, cfg),
+        const profile = await namedReader("media-alias@example.test", {
+          viewer: { ...viewerRole, accessPolicyPlugin: pluginId },
         });
-        const source = path.join(project, "shared.png");
-        await fs.writeFile(source, PNG);
+        const source = await image("shared.png");
         const metadata = await request(source);
         expect(metadata.payload).toMatchObject({ available: true });
         const ticket = String(metadata.payload!.mediaTicket);
@@ -505,25 +516,11 @@ describe("assistant image session policy", () => {
     "revalidates a named reader's saved media ticket after %s withdrawal",
     async (change) => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(temp, "profile-state") }, async () => {
-        cfg.gateway = {
-          roles: {
-            default: "viewer",
-            definitions: {
-              viewer: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
-              denied: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
-            },
-          },
-        };
-        const profile = ensureProfileForEmail("media-reader@example.test");
-        const catalog = await prepareUserProfileCatalog();
-        onTestFinished(catalog.release);
-        state.auth.mockResolvedValue({
-          authMethod: "trusted-proxy",
-          operatorScopes: ["operator.read"],
-          ...resolveHttpProfile(profile.id, cfg),
+        const profile = await namedReader("media-reader@example.test", {
+          viewer: viewerRole,
+          denied: { ...viewerRole, sessions: { others: "none" } },
         });
-        const source = path.join(project, "shared.png");
-        await fs.writeFile(source, PNG);
+        const source = await image("shared.png");
         const metadata = await request(source);
         expect(metadata.payload).toMatchObject({ available: true });
         const ticket = String(metadata.payload!.mediaTicket);
@@ -531,11 +528,7 @@ describe("assistant image session policy", () => {
           setUserProfileRole(profile.id, "denied");
           invalidateOperatorRolePolicy(profile.id);
         } else {
-          cfg.gateway!.roles!.definitions.viewer = {
-            sessions: { others: "none" },
-            agents: "*",
-            scopes: ["operator.read"],
-          };
+          cfg.gateway!.roles!.definitions.viewer = { ...viewerRole, sessions: { others: "none" } };
         }
         await fs.rename(source, `${source}.old`);
         await fs.writeFile(source, PNG);
@@ -554,38 +547,16 @@ describe("assistant image session policy", () => {
     "revalidates $authority reader access after asynchronous $operation file preparation",
     async ({ operation, authority }) => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(temp, "profile-state") }, async () => {
-        cfg.gateway = {
-          roles: {
-            default: "viewer",
-            definitions: {
-              viewer: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
-            },
-          },
-        };
-        const profile = ensureProfileForEmail("yielding-media-reader@example.test");
-        const catalog = await prepareUserProfileCatalog();
-        onTestFinished(catalog.release);
         let current = true;
-        state.auth.mockResolvedValue({
-          authMethod: "trusted-proxy",
-          operatorScopes: ["operator.read"],
-          hasCurrentClientAuthority: () => current,
-          ...resolveHttpProfile(profile.id, cfg),
-        });
-        const source = path.join(project, "shared.png");
-        await fs.writeFile(source, PNG);
+        await namedReader("yielding-media-reader@example.test", undefined, () => current);
+        const source = await image("shared.png");
         const ticket = String((await request(source)).payload!.mediaTicket);
-        const openFile = fs.open;
-        const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
-          const file = await openFile(filePath, flags, mode);
-          if (filePath === source) {
-            if (authority === "session") {
-              entry.visibility = "draft";
-            } else {
-              current = false;
-            }
+        const openSpy = onOpen(source, () => {
+          if (authority === "session") {
+            entry.visibility = "draft";
+          } else {
+            current = false;
           }
-          return file;
         });
         try {
           const denied = await request(source, {
@@ -605,25 +576,14 @@ describe("assistant image session policy", () => {
     "withdraws Gateway-local media after cloud dispatch during %s preparation",
     async (operation) => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(temp, "placement-state") }, async () => {
-        const { createWorkerSessionPlacementStore } =
-          await import("./worker-environments/placement-store.js");
-        const placements = createWorkerSessionPlacementStore();
-        state.placements.mockImplementation((sessionIds: readonly string[]) =>
-          placements.getMany(sessionIds),
-        );
-        state.placementsAsync.mockImplementation((sessionIds: readonly string[]) =>
-          placements.getManyAsync(sessionIds),
-        );
+        const placements = await placementStore();
         entry.permissionMode = "full";
-        const source = path.join(temp, "gateway-only.png");
-        await fs.writeFile(source, PNG);
+        const source = await image("gateway-only.png", temp);
         const ticket = String((await request(source)).payload!.mediaTicket);
-        const openFile = fs.open;
         let dispatched = false;
         let preparedFile: Awaited<ReturnType<typeof fs.open>> | undefined;
-        const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
-          const file = await openFile(filePath, flags, mode);
-          if (filePath === source && !dispatched) {
+        const openSpy = onOpen(source, async (file) => {
+          if (!dispatched) {
             preparedFile = file;
             dispatched = true;
             // Dispatch admission already withdraws Gateway-local access; activation needs an
@@ -635,7 +595,6 @@ describe("assistant image session policy", () => {
               executionMode: "worker-turn",
             });
           }
-          return file;
         });
         try {
           const denied = await request(source, { ticket, bytes: operation === "bytes" });
@@ -655,35 +614,26 @@ describe("assistant image session policy", () => {
 
   it("withdraws Gateway-local media after placement database replacement during byte preparation", async () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(temp, "placement-state") }, async () => {
-      const { createWorkerSessionPlacementStore } =
-        await import("./worker-environments/placement-store.js");
-      const placements = createWorkerSessionPlacementStore();
-      state.placements.mockImplementation((sessionIds: readonly string[]) =>
-        placements.getMany(sessionIds),
-      );
-      state.placementsAsync.mockImplementation((sessionIds: readonly string[]) =>
-        placements.getManyAsync(sessionIds),
-      );
+      await placementStore();
       entry.permissionMode = "full";
-      const source = path.join(temp, "gateway-only.png");
-      await fs.writeFile(source, PNG);
+      const source = await image("gateway-only.png", temp);
       const metadata = await request(source);
       expect(metadata.res.statusCode).toBe(200);
       expect(metadata.payload?.mediaTicket).toEqual(expect.any(String));
       const ticket = String(metadata.payload!.mediaTicket);
       const databasePath = resolveOpenClawStateSqlitePath();
       const original = await fs.stat(databasePath);
-      const openFile = fs.open;
       let replaced = false;
       let replacementError: unknown;
       let preparedFile: Awaited<ReturnType<typeof fs.open>> | undefined;
-      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
-        const file = await openFile(filePath, flags, mode);
-        if (filePath === source && !preparedFile) {
+      const openSpy = onOpen(source, async (file) => {
+        if (!preparedFile) {
           preparedFile = file;
           try {
             await closeOpenClawStateDatabaseByPathAsync(databasePath);
             await fs.rename(databasePath, `${databasePath}.retired`);
+            const { createWorkerSessionPlacementStore } =
+              await import("./worker-environments/placement-store.js");
             const replacement = createWorkerSessionPlacementStore();
             expect(await replacement.getManyAsync([entry.sessionId])).toEqual(new Map());
             expect((await fs.stat(databasePath)).ino).not.toBe(original.ino);
@@ -693,7 +643,6 @@ describe("assistant image session policy", () => {
             replacementError = error;
           }
         }
-        return file;
       });
       try {
         const denied = await request(source, { ticket, bytes: true });

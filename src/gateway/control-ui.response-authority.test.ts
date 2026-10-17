@@ -60,21 +60,33 @@ function createAvatarConfig(workspace: string, avatar: string): OpenClawConfig {
   };
 }
 
+const tokenAuth: ResolvedGatewayAuth = {
+  mode: "token",
+  token: "admitted-token",
+  allowTailscale: false,
+};
+
+function httpResponse(
+  url: string,
+  headers: Record<string, string> = { authorization: "Bearer admitted-token" },
+) {
+  const req = new IncomingMessage(new Socket());
+  Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1" });
+  Object.assign(req, { method: "GET", url, headers });
+  const res = new ServerResponse(req);
+  return { req, res };
+}
+
 describe("Control UI response authority", () => {
   it("briefly caches an authenticated missing agent avatar", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const config = createAvatarConfig(state.workspaceDir, "missing.png");
       setRuntimeConfigSnapshot(config);
-      const req = new IncomingMessage(new Socket());
-      Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1" });
-      req.method = "GET";
-      req.url = "/avatar/main";
-      req.headers = { authorization: "Bearer admitted-token" };
-      const res = new ServerResponse(req);
+      const { req, res } = httpResponse("/avatar/main");
       const handled = await handleControlUiAvatarRequest(req, res, {
         config,
         cfg: config,
-        auth: { mode: "token", token: "admitted-token", allowTailscale: false },
+        auth: tokenAuth,
       });
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(404);
@@ -142,16 +154,11 @@ describe("Control UI response authority", () => {
         await release.promise;
         return "private-branch";
       });
-      const req = new IncomingMessage(new Socket());
-      Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1" });
-      req.method = "GET";
-      req.url = CONTROL_UI_BOOTSTRAP_CONFIG_PATH;
-      req.headers = {
+      const { req, res } = httpResponse(CONTROL_UI_BOOTSTRAP_CONFIG_PATH, {
         "x-visitor-email": "visitor@example.test",
         "x-forwarded-for": "203.0.113.10",
         "x-openclaw-scopes": "operator.read",
-      };
-      const res = new ServerResponse(req);
+      });
       const end = vi.spyOn(res, "end");
       const catalog = await prepareUserProfileCatalog();
       const pending = handleControlUiHttpRequest(req, res, {
@@ -230,17 +237,10 @@ describe("Control UI response authority", () => {
           return prepared;
         });
       }
-      let auth: ResolvedGatewayAuth = {
-        mode: "token",
-        token: "admitted-token",
-        allowTailscale: false,
-      };
-      const req = new IncomingMessage(new Socket());
-      Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1" });
-      req.method = "GET";
-      req.url = kind === "bootstrap" ? CONTROL_UI_BOOTSTRAP_CONFIG_PATH : "/avatar/main";
-      req.headers = { authorization: "Bearer admitted-token" };
-      const res = new ServerResponse(req);
+      let auth = tokenAuth;
+      const { req, res } = httpResponse(
+        kind === "bootstrap" ? CONTROL_UI_BOOTSTRAP_CONFIG_PATH : "/avatar/main",
+      );
       const end = vi.spyOn(res, "end");
       const setHeader = vi.spyOn(res, "setHeader");
       const handler =
@@ -306,95 +306,56 @@ describe("saved message attachment response authority", () => {
   let config: OpenClawConfig;
 
   async function seed(commentSource = source) {
+    function message(id: string, parentId: string | null, body: Record<string, unknown>) {
+      return { type: "message", id, parentId, message: body };
+    }
     await replaceTranscriptEvents(scope, [
       { type: "session", version: 3, id: scope.sessionId },
-      {
-        type: "message",
-        id: "comment",
-        parentId: null,
-        message: {
-          role: "user",
-          content: "Please check the selected text.",
-          __openclaw: {
-            media: [
-              { url: commentSource, fileName: "selection-comment.txt", contentType: "text/plain" },
-            ],
-          },
-        },
-      },
-      {
-        type: "message",
-        id: "ordinary",
-        parentId: "comment",
-        message: {
-          role: "assistant",
-          content: [
-            {
-              type: "attachment",
-              attachment: {
-                kind: "document",
-                label: "notes.txt",
-                url: ordinary,
-                mimeType: "text/plain",
-              },
-            },
+      message("comment", null, {
+        role: "user",
+        content: "Please check the selected text.",
+        __openclaw: {
+          media: [
+            { url: commentSource, fileName: "selection-comment.txt", contentType: "text/plain" },
           ],
         },
-      },
-      {
-        type: "message",
-        id: "legacy-media",
-        parentId: "ordinary",
-        message: {
-          role: "assistant",
-          content: `Saved report\nMEDIA:${path.join(state.workspaceDir, "report.txt")}`,
-        },
-      },
-      {
-        type: "message",
-        id: "user-directive",
-        parentId: "legacy-media",
-        message: {
-          role: "user",
-          content: `MEDIA:${path.join(state.workspaceDir, "report.txt")}`,
-        },
-      },
-      {
-        type: "message",
-        id: "text-only",
-        parentId: "user-directive",
-        message: {
-          role: "user",
-          content: source,
-        },
-      },
-      {
-        type: "message",
-        id: "hidden",
-        parentId: "text-only",
-        message: {
-          role: "user",
-          content: "Internal coordination",
-          idempotencyKey: "coordination:user",
-          provenance: {
-            kind: "inter_session",
-            sourceTool: "sessions_send",
-            sourceRole: "subagent",
+      }),
+      message("ordinary", "comment", {
+        role: "assistant",
+        content: [
+          {
+            type: "attachment",
+            attachment: {
+              kind: "document",
+              label: "notes.txt",
+              url: ordinary,
+              mimeType: "text/plain",
+            },
           },
-          __openclaw: { media: [{ url: source }] },
-        },
-      },
-      {
-        type: "message",
-        id: "cron-forwarded",
-        parentId: "hidden",
-        message: {
-          role: "user",
-          content: "Scheduled report",
-          provenance: cronProvenance,
-          __openclaw: { media: [{ url: source, contentType: "text/plain" }] },
-        },
-      },
+        ],
+      }),
+      message("legacy-media", "ordinary", {
+        role: "assistant",
+        content: `Saved report\nMEDIA:${path.join(state.workspaceDir, "report.txt")}`,
+      }),
+      message("user-directive", "legacy-media", {
+        role: "user",
+        content: `MEDIA:${path.join(state.workspaceDir, "report.txt")}`,
+      }),
+      message("text-only", "user-directive", { role: "user", content: source }),
+      message("hidden", "text-only", {
+        role: "user",
+        content: "Internal coordination",
+        idempotencyKey: "coordination:user",
+        provenance: { kind: "inter_session", sourceTool: "sessions_send", sourceRole: "subagent" },
+        __openclaw: { media: [{ url: source }] },
+      }),
+      message("cron-forwarded", "hidden", {
+        role: "user",
+        content: "Scheduled report",
+        provenance: cronProvenance,
+        __openclaw: { media: [{ url: source, contentType: "text/plain" }] },
+      }),
     ]);
   }
 

@@ -22,6 +22,33 @@ vi.mock("../media/ffmpeg-exec.js", async (importOriginal) => ({
   runFfprobe,
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const transcodeMetadata = { available: true, playback: "transcode", durationMs: 1000 };
+function audioProbe(duration: string, codec = "mp3") {
+  return JSON.stringify({
+    format: { duration },
+    streams: [{ index: 0, codec_type: "audio", codec_name: codec }],
+  });
+}
+async function abandon(requests: ReturnType<typeof startMediaRequest>[]) {
+  const closed = Promise.all(requests.map(({ res }) => once(res, "close")));
+  for (const { res } of requests) {
+    res.destroy();
+  }
+  await closed;
+}
+function observeOpenedFiles(
+  onOpen?: (opened: fsSafe.OpenResult, files: fsSafe.OpenResult[]) => void,
+) {
+  const files: fsSafe.OpenResult[] = [];
+  const openFile = fsSafe.openLocalFileSafely;
+  vi.spyOn(fsSafe, "openLocalFileSafely").mockImplementation(async (params) => {
+    const opened = await openFile(params);
+    files.push(opened);
+    onOpen?.(opened, files);
+    return opened;
+  });
+  return files;
+}
 beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => {
   clearRuntimeConfigSnapshot();
@@ -58,9 +85,8 @@ async function expectPlaybackResponses(
 ) {
   for (const request of requests) {
     expect(await readMetadataResponse(request)).toMatchObject({
-      available: true,
+      ...transcodeMetadata,
       playback: playbackMode,
-      durationMs: 1000,
     });
   }
 }
@@ -77,10 +103,7 @@ function blockPlaybackProbes(codecName = "pcm_s16le") {
     }
     await gate.promise;
     active--;
-    return JSON.stringify({
-      format: { duration: "1" },
-      streams: [{ index: 0, codec_type: "audio", codec_name: codecName }],
-    });
+    return audioProbe("1", codecName);
   });
   return {
     started: started.promise,
@@ -138,13 +161,8 @@ function observeMetadataRequests() {
 }
 
 it("shares audio metadata probes, retries failures, and reinspects replacements", async () => {
-  const probe = (duration: string) =>
-    JSON.stringify({
-      format: { duration },
-      streams: [{ index: 0, codec_type: "audio", codec_name: "mp3" }],
-    });
   runFfprobe.mockRejectedValueOnce(new Error("ffprobe unavailable"));
-  runFfprobe.mockResolvedValue(probe("2.345"));
+  runFfprobe.mockResolvedValue(audioProbe("2.345"));
   const root = tempDirs.make("ui-media-audio-meta-", resolvePreferredOpenClawTmpDir());
   const filePath = path.join(root, "voice.mp3");
   const contents = Buffer.from("ID3audio-fixture");
@@ -170,7 +188,7 @@ it("shares audio metadata probes, retries failures, and reinspects replacements"
   await fs.writeFile(replacement, contents);
   await fs.utimes(replacement, original.atime, original.mtime);
   await fs.rename(replacement, filePath);
-  runFfprobe.mockResolvedValue(probe("4.567"));
+  runFfprobe.mockResolvedValue(audioProbe("4.567"));
   expect(await readMetadata(filePath)).toMatchObject({ available: true, durationMs: 4567 });
   expect(runFfprobe).toHaveBeenCalledTimes(3);
   expect(runFfprobe).toHaveBeenCalledWith(expect.any(Array), {
@@ -182,13 +200,7 @@ it("retains exotic playback metadata while distinct files fill the inspection sl
   await using batch = await createBlockedMedia(3);
   const { paths, requests, probes } = batch;
   const queuedPath = paths[2]!;
-  const openedFiles: fsSafe.OpenResult[] = [];
-  const openFile = fsSafe.openLocalFileSafely;
-  vi.spyOn(fsSafe, "openLocalFileSafely").mockImplementation(async (params) => {
-    const opened = await openFile(params);
-    openedFiles.push(opened);
-    return opened;
-  });
+  const openedFiles = observeOpenedFiles();
   await batch.occupySlots();
   const observed = observeMetadataRequests();
   requests.push(startMediaRequest(paths[2]!), startMediaRequest(paths[2]!));
@@ -200,10 +212,8 @@ it("retains exotic playback metadata while distinct files fill the inspection sl
   probes.release();
   for (const metadata of await Promise.all(requests.map(readMetadataResponse))) {
     expect(metadata).toMatchObject({
-      available: true,
+      ...transcodeMetadata,
       mimeType: "audio/x-caf",
-      playback: "transcode",
-      durationMs: 1000,
     });
   }
   expect(runFfprobe).toHaveBeenCalledTimes(3);
@@ -221,11 +231,7 @@ it.each(["overflow", "abandoned"] as const)(
     requests.push(...queued);
     await observed(32);
     if (queue === "abandoned") {
-      const closed = Promise.all(queued.map(({ res }) => once(res, "close")));
-      for (const { res } of queued) {
-        res.destroy();
-      }
-      await closed;
+      await abandon(queued);
       await Promise.all(queued.map(({ handled }) => handled));
     } else {
       requests.push(startMediaRequest(paths[2]!));
@@ -247,14 +253,10 @@ it.each(["overflow", "abandoned"] as const)(
         reason: expect.stringMatching(/busy/i),
       });
       for (const entry of metadata.slice(0, -1)) {
-        expect(entry).toMatchObject({ available: true, playback: "transcode", durationMs: 1000 });
+        expect(entry).toMatchObject(transcodeMetadata);
       }
       expect(runFfprobe).toHaveBeenCalledTimes(34);
-      expect(await readMetadata(paths[34]!)).toMatchObject({
-        available: true,
-        playback: "transcode",
-        durationMs: 1000,
-      });
+      expect(await readMetadata(paths[34]!)).toMatchObject(transcodeMetadata);
       expect(runFfprobe).toHaveBeenCalledTimes(35);
     }
   },
@@ -294,11 +296,7 @@ it.each(["meta", "playback"] as const)(
     requests.push(later);
     live.push(later);
     await observed(metadata ? 4 : 1);
-    const closed = Promise.all(retired.map(({ res }) => once(res, "close")));
-    for (const { res } of retired) {
-      res.destroy();
-    }
-    await closed;
+    await abandon(retired);
     probes.release();
     await expectPlaybackResponses(live, metadata ? "transcode" : "native");
     await Promise.all(retired.map(({ handled }) => handled));
@@ -329,19 +327,14 @@ it.each(["while queued", "during safe-open"] as const)(
           : authorized;
       },
     );
-    const openedFiles: fsSafe.OpenResult[] = [];
-    const openFile = fsSafe.openLocalFileSafely;
     let revokeDuringOpen: (() => void) | undefined;
-    vi.spyOn(fsSafe, "openLocalFileSafely").mockImplementation(async (params) => {
-      const opened = await openFile(params);
-      openedFiles.push(opened);
+    const openedFiles = observeOpenedFiles((opened, files) => {
       if (
         opened.realPath === realPaths[3] &&
-        openedFiles.filter((entry) => entry.realPath === realPaths[3]).length === 2
+        files.filter((entry) => entry.realPath === realPaths[3]).length === 2
       ) {
         revokeDuringOpen?.();
       }
-      return opened;
     });
     await batch.occupySlots();
     const observed = observeMetadataRequests();
