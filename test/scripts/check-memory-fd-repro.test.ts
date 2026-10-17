@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createServer, type Server } from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it } from "vitest";
@@ -345,6 +344,22 @@ async function listen(server: Server): Promise<number> {
   return address.port;
 }
 
+function classifyResult(result: unknown) {
+  return classifyMemorySearchInvokeResponse({
+    httpOk: true,
+    status: 200,
+    bodyText: JSON.stringify({ ok: true, result }),
+  });
+}
+
+function ready(tail: string, chunk: string, limit = 64, readySeen = false) {
+  return updateGatewayReadyOutputState({ tail, readySeen }, chunk, limit);
+}
+
+function expectJoined(journal: ReturnType<typeof runGatewayOwnershipFixture>["journal"]) {
+  expect(journal).toMatchObject({ closed: true, alive: false });
+}
+
 describe("check-memory-fd-repro", () => {
   it("rejects loose numeric environment limits before generating files", () => {
     expect(
@@ -486,59 +501,46 @@ describe("check-memory-fd-repro", () => {
       });
     } finally {
       await new Promise<void>((resolve) => {
-        server.close(() => {
-          resolve();
-        });
+        server.close(() => resolve());
       });
     }
   });
 
   it("writes an offline FTS-only memory search config for repro indexing", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-fd-config-"));
-    try {
-      const homeDir = path.join(root, "home");
-      const workspaceDir = path.join(root, "workspace");
-      const configPath = writeConfig({
-        homeDir,
-        workspaceDir,
-        port: 12345,
-        token: "test-token",
-      });
-      const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-      const memorySearch = config.memory.search;
+    const root = tempDirs.make("openclaw-memory-fd-config-");
+    const homeDir = path.join(root, "home");
+    const workspaceDir = path.join(root, "workspace");
+    const configPath = writeConfig({
+      homeDir,
+      workspaceDir,
+      port: 12345,
+      token: "test-token",
+    });
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    const memorySearch = config.memory.search;
 
-      expect(validateConfigObject(config)).toMatchObject({ ok: true });
-      expect(memorySearch.store).toEqual({ vector: { enabled: false } });
-      expect(memorySearch).toMatchObject({
-        provider: "none",
-        model: "",
-      });
-      expect(memorySearch).not.toHaveProperty("sync");
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+    expect(validateConfigObject(config)).toMatchObject({ ok: true });
+    expect(memorySearch).toMatchObject({
+      provider: "none",
+      model: "",
+    });
+    expect(memorySearch.store).toEqual({ vector: { enabled: false } });
+    expect(memorySearch).not.toHaveProperty("sync");
   });
 
   it("rejects disabled memory_search tool payloads", () => {
-    const result = classifyMemorySearchInvokeResponse({
-      httpOk: true,
-      status: 200,
-      bodyText: JSON.stringify({
-        ok: true,
-        result: {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                results: [],
-                disabled: true,
-                unavailable: true,
-                error: 'No API key found for provider "openai".',
-              }),
-            },
-          ],
+    const result = classifyResult({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            results: [],
+            disabled: true,
+            unavailable: true,
+            error: 'No API key found for provider "openai".',
+          }),
         },
-      }),
+      ],
     });
 
     expect(result).toMatchObject({
@@ -551,13 +553,7 @@ describe("check-memory-fd-repro", () => {
   });
 
   it("rejects gateway success envelopes without memory_search details", () => {
-    const result = classifyMemorySearchInvokeResponse({
-      httpOk: true,
-      status: 200,
-      bodyText: JSON.stringify({ ok: true, result: { content: [] } }),
-    });
-
-    expect(result).toMatchObject({
+    expect(classifyResult({ content: [] })).toMatchObject({
       ok: false,
       error: "memory_search result payload missing or invalid",
     });
@@ -567,12 +563,8 @@ describe("check-memory-fd-repro", () => {
     { exitCode: null, signalCode: "SIGTERM" },
     { exitCode: 0, signalCode: null },
   ])("rejects readiness for an exited child (%j)", async (exitState) => {
-    const child = {
-      ...exitState,
-    };
-
     await expect(
-      waitForGatewayReady({ child, port: 9, logPath: "gateway.log", timeoutMs: 10_000 }),
+      waitForGatewayReady({ child: exitState, port: 9, logPath: "gateway.log", timeoutMs: 10_000 }),
     ).rejects.toThrow("gateway exited before ready");
   });
 
@@ -609,8 +601,7 @@ describe("check-memory-fd-repro", () => {
         expect(result.stderr).not.toContain("Unhandled 'error' event");
         expect(journal.samples).toEqual([{ pid: OWNED_PID, alive: true }]);
         expect(journal.signals).toEqual([[-OWNED_PID, "SIGTERM"]]);
-        expect(journal.closed).toBe(true);
-        expect(journal.alive).toBe(false);
+        expectJoined(journal);
         expect(journal.events).toEqual(["close", "cleanup"]);
         expect(journal.rootExists).toBe(false);
         expect(summary).toBeUndefined();
@@ -640,8 +631,7 @@ describe("check-memory-fd-repro", () => {
           Array.from({ length: count }, () => ({ pid: OWNED_PID, alive: true })),
         );
         expect(journal.signals).toEqual([[-OWNED_PID, "SIGTERM"]]);
-        expect(journal.closed).toBe(true);
-        expect(journal.alive).toBe(false);
+        expectJoined(journal);
         expect(journal.rootExists).toBe(false);
         expect(journal.events.indexOf("close")).toBeLessThan(journal.events.indexOf("cleanup"));
         expect(summary).toBeUndefined();
@@ -703,7 +693,7 @@ describe("check-memory-fd-repro", () => {
   });
 
   it("bounds gateway readiness output while keeping newest logs", () => {
-    const first = updateGatewayReadyOutputState({ tail: "abc", readySeen: false }, "def", 8);
+    const first = ready("abc", "def", 8);
     expect(first).toEqual({ tail: "abcdef", readySeen: false });
 
     const second = updateGatewayReadyOutputState(first, "ghijkl", 8);
@@ -719,11 +709,7 @@ describe("check-memory-fd-repro", () => {
   });
 
   it("keeps readiness after a coalesced noisy chunk truncates the marker", () => {
-    const state = updateGatewayReadyOutputState(
-      { tail: "", readySeen: false },
-      `[gateway] ready\n${"x".repeat(10_000)}`,
-      64,
-    );
+    const state = ready("", `[gateway] ready\n${"x".repeat(10_000)}`);
 
     expect(state.readySeen).toBe(true);
     expect(state.tail).toHaveLength(64);
@@ -731,21 +717,11 @@ describe("check-memory-fd-repro", () => {
   });
 
   it("recognizes readiness split across the existing tail and new chunk", () => {
-    const state = updateGatewayReadyOutputState(
-      { tail: "[gateway] rea", readySeen: false },
-      "dy\n",
-      64,
-    );
-
-    expect(state.readySeen).toBe(true);
-    expect(state.tail).toBe("[gateway] ready\n");
+    expect(ready("[gateway] rea", "dy\n")).toEqual({ readySeen: true, tail: "[gateway] ready\n" });
   });
 
   it("preserves previous readiness once seen", () => {
-    const state = updateGatewayReadyOutputState({ tail: "old", readySeen: true }, "new output", 8);
-
-    expect(state.readySeen).toBe(true);
-    expect(state.tail).toBe("w output");
+    expect(ready("old", "new output", 8, true)).toEqual({ readySeen: true, tail: "w output" });
   });
 
   describe.skipIf(process.platform === "win32")("completed measurement finalization", () => {
@@ -754,8 +730,7 @@ describe("check-memory-fd-repro", () => {
       (scenario) => {
         const { result, journal, summary } = runGatewayOwnershipFixture(scenario);
         expect(result.status, result.stderr).toBe(1);
-        expect(journal.closed).toBe(true);
-        expect(journal.alive).toBe(false);
+        expectJoined(journal);
         expect(journal.samples).toHaveLength(3);
         expect(journal.events).toEqual(["close", "cleanup", "summary"]);
         expect(summary).toMatchObject({
@@ -778,8 +753,7 @@ describe("check-memory-fd-repro", () => {
         "completed-threshold-cleanup-report-error",
       );
       expect(result.status, result.stderr).toBe(1);
-      expect(journal.closed).toBe(true);
-      expect(journal.alive).toBe(false);
+      expectJoined(journal);
       expect(journal.samples).toHaveLength(3);
       expect(journal.events).toEqual(["close", "cleanup", "summary"]);
       expect(journal.attemptedSummary?.passed).toBe(false);

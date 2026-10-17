@@ -53,41 +53,37 @@ function withPackedPackage(
 ): void {
   const root = mkdtempSync(join(tmpdir(), "openclaw-control-ui-package-inventory-"));
   const packageRoot = join(root, "package");
+  const write = (file: string, content: string) => writeFixtureFile(packageRoot, file, content);
   try {
     mkdirSync(packageRoot, { recursive: true });
-    const version = "2026.7.2";
-    writeFixtureFile(
-      packageRoot,
+    write(
       "package.json",
       JSON.stringify({
         name: "openclaw",
-        version,
+        version: "2026.7.2",
         type: "module",
-        ...(options.postinstall === false
-          ? {}
-          : {
-              scripts: { postinstall: "node scripts/postinstall-bundled-plugins.mjs" },
-            }),
+        scripts:
+          options.postinstall === false
+            ? undefined
+            : { postinstall: "node scripts/postinstall-bundled-plugins.mjs" },
       }),
     );
-    writeFixtureFile(
-      packageRoot,
+    write(
       "dist/postinstall-inventory.json",
       JSON.stringify([...new Set([...inventory, CODE_MODE_WORKER_PATH])]),
     );
-    writeFixtureFile(packageRoot, "dist/index.js", "export {};\n");
-    writeFixtureFile(packageRoot, CODE_MODE_WORKER_PATH, "export {};\n");
-    writeFixtureFile(
-      packageRoot,
+    write("dist/index.js", "export {};\n");
+    write(CODE_MODE_WORKER_PATH, "export {};\n");
+    write(
       CONTROL_UI_INDEX,
       '<!doctype html><script type="module" src="./assets/app.js"></script>\n',
     );
     for (const assetPath of CONTROL_UI_ASSETS) {
-      writeFixtureFile(packageRoot, assetPath, "export {};\n");
+      write(assetPath, "export {};\n");
     }
-    writeFixtureFile(packageRoot, ".openclaw-lifecycle-pending", "pending\n");
+    write(".openclaw-lifecycle-pending", "pending\n");
     for (const relativePath of WORKSPACE_TEMPLATE_PACK_PATHS) {
-      writeFixtureFile(packageRoot, relativePath, `# ${relativePath}\n`);
+      write(relativePath, `# ${relativePath}\n`);
     }
     for (const relativePath of [
       "scripts/postinstall-bundled-plugins.mjs",

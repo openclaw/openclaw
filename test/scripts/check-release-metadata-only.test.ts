@@ -101,78 +101,51 @@ describe("check-release-metadata-only", () => {
       return spawnSync(spec.command, spec.args, { ...spec.options, encoding: "utf8" });
     };
     const manifestPath = path.join(root, "apps/android/version.json");
-    mkdirSync(path.dirname(manifestPath), { recursive: true });
-    writeFileSync(manifestPath, '{\n  "version": "2026.8.1"\n}\n');
-    execFileSync("git", ["init", "-q"], { cwd: root });
-    execFileSync("git", ["add", "package.json", "apps/android/version.json"], { cwd: root });
-    execFileSync(
-      "git",
-      [
+    const git = (...args: string[]) =>
+      execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+    const commit = (message: string) =>
+      git(
         "-c",
         "user.name=OpenClaw Test",
         "-c",
         "user.email=test@openclaw.invalid",
         "commit",
         "-qm",
-        "baseline",
-      ],
-      { cwd: root },
-    );
+        message,
+      );
+    const compareHead = (head = "HEAD") =>
+      runMetadata(["--base", head, "--head", head, "--", "apps/android/version.json"]);
+    mkdirSync(path.dirname(manifestPath), { recursive: true });
+    writeFileSync(manifestPath, '{\n  "version": "2026.8.1"\n}\n');
+    git("init", "-q");
+    git("add", "package.json", "apps/android/version.json");
+    commit("baseline");
 
     writeFileSync(manifestPath, '{\n  "version": "2026.8.2"\n}\n');
-    const accepted = runMetadata([
-      "--base",
-      "HEAD",
-      "--head",
-      "HEAD",
-      "--",
-      "apps/android/version.json",
-    ]);
+    const accepted = compareHead();
     expect(accepted.status, accepted.stderr).toBe(0);
     expect(accepted.stderr).toContain("[release-metadata] ok (1 files)");
 
-    execFileSync("git", ["add", "apps/android/version.json"], { cwd: root });
+    git("add", "apps/android/version.json");
     writeFileSync(manifestPath, '{\n  "version": "2026.8.2",\n  "channel": "stable"\n}\n');
     const staged = runMetadata(["--staged"]);
     expect(staged.status, staged.stderr).toBe(0);
-    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-    const pinned = runMetadata(["--base", head, "--head", head, "--", "apps/android/version.json"]);
+    const head = git("rev-parse", "HEAD");
+    const pinned = compareHead(head);
     expect(pinned.status, pinned.stderr).toBe(0);
-    const rejected = runMetadata([
-      "--base",
-      "HEAD",
-      "--head",
-      "HEAD",
-      "--",
-      "apps/android/version.json",
-    ]);
+    const rejected = compareHead();
     expect(rejected.status).toBe(1);
     expect(rejected.stderr).toContain(
       "apps/android/version.json: changed outside recognized version/build literals",
     );
 
     // Incoming metadata may legitimately differ from the feature branch's HEAD.
-    execFileSync("git", ["add", "apps/android/version.json"], { cwd: root });
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=OpenClaw Test",
-        "-c",
-        "user.email=test@openclaw.invalid",
-        "commit",
-        "-qm",
-        "incoming metadata",
-      ],
-      { cwd: root },
-    );
-    const incoming = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: root,
-      encoding: "utf8",
-    }).trim();
-    execFileSync("git", ["switch", "--detach", head], { cwd: root });
+    git("add", "apps/android/version.json");
+    commit("incoming metadata");
+    const incoming = git("rev-parse", "HEAD");
+    git("switch", "--detach", head);
     writeFileSync(manifestPath, '{\n  "version": "2026.8.3",\n  "channel": "stable"\n}\n');
-    execFileSync("git", ["add", "apps/android/version.json"], { cwd: root });
+    git("add", "apps/android/version.json");
     const based = runMetadata(["--staged", "--base", incoming]);
     expect(based.status, based.stderr).toBe(0);
     expect(based.stderr).toContain("[release-metadata] ok (1 files)");
@@ -195,32 +168,25 @@ if (process.argv.includes("diff")) {
     );
     chmodSync(gitPath, 0o755);
 
-    const result = spawnSync(process.execPath, scriptArgs, {
-      cwd: path.resolve(import.meta.dirname, "../.."),
-      env: {
-        ...process.env,
-        OPENCLAW_RELEASE_METADATA_GIT_TIMEOUT_MS: "500",
-        PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}`,
-      },
-      encoding: "utf8",
-      timeout: 5_000,
-    });
+    const run = (timeout: string) =>
+      spawnSync(process.execPath, scriptArgs, {
+        cwd: path.resolve(import.meta.dirname, "../.."),
+        env: {
+          ...process.env,
+          OPENCLAW_RELEASE_METADATA_GIT_TIMEOUT_MS: timeout,
+          PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        },
+        encoding: "utf8",
+        timeout: 5_000,
+      });
+    const result = run("500");
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
       "release metadata guard: git diff --name-only --diff-filter=ACMR origin/main...HEAD timed out after 500ms.",
     );
 
-    const fractionalResult = spawnSync(process.execPath, scriptArgs, {
-      cwd: path.resolve(import.meta.dirname, "../.."),
-      env: {
-        ...process.env,
-        OPENCLAW_RELEASE_METADATA_GIT_TIMEOUT_MS: "0.5",
-        PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}`,
-      },
-      encoding: "utf8",
-      timeout: 5_000,
-    });
+    const fractionalResult = run("0.5");
 
     expect(fractionalResult.status).toBe(1);
     expect(fractionalResult.stderr).toContain("timed out after 1ms.");
