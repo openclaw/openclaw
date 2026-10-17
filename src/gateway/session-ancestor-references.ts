@@ -1,5 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { SessionAncestorRef } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+import type {
+  SessionAncestorRef,
+  SessionRow,
+} from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import {
   SESSION_ROW_DELTA_MAX_ENTRIES,
   sessionRowIdentity,
@@ -12,17 +15,16 @@ import {
   type SessionRowDeltaFields,
   type createSessionRowDeltaDiffer,
 } from "./session-row-delta-fields.js";
-import { serializeSessionRow } from "./session-row-presentation.js";
-import type { GatewaySessionRow } from "./session-utils.types.js";
+import { serializeSessionRow } from "./session-row-serialization.js";
 
 const MAX_ROWS = 128;
 const MAX_CONTENT_CHARS = 128 * 1024;
 const MAX_VECTOR_BYTES = 2 * 1024 * 1024;
 
 type DeliveredRow = { version: number; fields: SessionRowDeltaFields; bytes: number };
-const encodedRowBytes = new WeakMap<GatewaySessionRow, number>();
+const encodedRowBytes = new WeakMap<SessionRow, number>();
 
-function rowByteLength(row: GatewaySessionRow): number {
+function rowByteLength(row: SessionRow): number {
   let bytes = encodedRowBytes.get(row);
   if (bytes === undefined) {
     bytes = Buffer.byteLength(serializeSessionRow(row));
@@ -33,9 +35,9 @@ function rowByteLength(row: GatewaySessionRow): number {
 
 type DeliveredAncestor = { key: string; content: string; chars: number; revision: string };
 const preparedAncestors = new WeakMap<
-  GatewaySessionRow,
+  SessionRow,
   {
-    row: GatewaySessionRow;
+    row: SessionRow;
     identity: string;
     content: string;
     chars: number;
@@ -43,7 +45,7 @@ const preparedAncestors = new WeakMap<
 >();
 
 /** Prepare immutable viewer content once, before consulting connection delivery history. */
-export function prepareSessionAncestor(row: GatewaySessionRow) {
+export function prepareSessionAncestor(row: SessionRow) {
   const cached = preparedAncestors.get(row);
   if (cached) {
     return cached;
@@ -103,7 +105,7 @@ export class ConnectionSessionRows {
     }
   }
 
-  prepareRows(rows: GatewaySessionRow[], diff: ReturnType<typeof createSessionRowDeltaDiffer>) {
+  prepareRows(rows: SessionRow[], diff: ReturnType<typeof createSessionRowDeltaDiffer>) {
     const updates = new Map<string, DeliveredRow | undefined>();
     let count = this.#wireRows.size;
     let bytes = this.#wireBytes;
@@ -193,7 +195,7 @@ export class ConnectionSessionRows {
   }
 
   prepare(rows: ReturnType<typeof prepareSessionAncestor>[], revision = randomUUID()) {
-    const ancestorSessions: GatewaySessionRow[] = [];
+    const ancestorSessions: SessionRow[] = [];
     const ancestorSessionRefs: SessionAncestorRef[] = [];
     const deliveryKeys: string[] = [];
     let updates: Map<string, DeliveredAncestor | undefined> | undefined;

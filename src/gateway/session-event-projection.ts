@@ -5,6 +5,7 @@ import {
   GATEWAY_CLIENT_IDS,
   hasGatewayClientCap,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import type { SessionRow } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import type { PrepareSessionEventProjection } from "./server-broadcast-types.js";
@@ -12,13 +13,13 @@ import { prepareSessionAncestor } from "./session-ancestor-references.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { createSessionRowDeltaDiffer } from "./session-row-delta-fields.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
-import { prepareSessionRowPublication, serializeSessionRow } from "./session-row-presentation.js";
+import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
-import type { GatewaySessionRow } from "./session-utils.types.js";
+import { serializeSessionRow } from "./session-row-serialization.js";
 
 type ProjectedPayload = Record<string, unknown> & {
-  session: GatewaySessionRow;
-  ancestorSessions?: GatewaySessionRow[];
+  session: SessionRow;
+  ancestorSessions?: SessionRow[];
 };
 
 /** Bind prepared rows without exposing their implementation to transport contracts. */
