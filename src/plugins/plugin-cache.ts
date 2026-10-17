@@ -248,6 +248,10 @@ export function getPluginCache(): PluginCache {
 
 export function withPluginCache<T>(cache: PluginCache, run: () => T): T {
   const current = getPluginExecutionFrame();
+  if (current?.cacheScope?.cache === cache) {
+    // Re-entering the innermost cache would only duplicate it in the scope chain.
+    return run();
+  }
   return runWithPluginExecutionFrame(
     createPluginExecutionFrame(
       { ...current, cacheScope: { cache, parent: current?.cacheScope } },

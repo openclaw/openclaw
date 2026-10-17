@@ -321,8 +321,15 @@ if (isMainThread) {
       const kind = body.input.kind;
       const request = body.input.request?.kind;
       if (typeof kind === 'string' && /^[a-z-]{1,80}$/.test(kind) && (taskCounts.has(kind) || taskCounts.size < 128)) {
-        const label = kind === 'history-page' && typeof request === 'string' && /^[a-z-]{1,80}$/.test(request)
-          ? kind + ':' + request : kind;
+        const input = body.input;
+        const label = kind === 'session-exact-entries'
+          ? [kind, input.projection ?? 'full', input.selection?.kind ?? 'keys',
+              input.snapshotFields?.length === 0 ? 'metadata' : 'snapshots',
+              input.transcript ? 'transcript' : 'entry',
+              input.includeMembers ? 'members' : 'no-members',
+              input.includeAuthorization ? 'authorization' : 'no-authorization'].join(':')
+          : kind === 'history-page' && typeof request === 'string' && /^[a-z-]{1,80}$/.test(request)
+            ? kind + ':' + request : kind;
         taskCounts.set(label, (taskCounts.get(label) ?? 0) + 1);
       }
     }

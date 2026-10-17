@@ -2131,7 +2131,6 @@ src/logging/diagnostic-session-recovery-coordinator.ts	1
 src/logging/diagnostic-stability-bundle.ts	3
 src/logging/diagnostic-stability.ts	2
 src/logging/diagnostic-support-redaction.ts	1
-src/logging/diagnostic.ts	1
 src/logging/json-console-line.ts	2
 src/logging/levels.ts	2
 src/logging/logger.ts	7

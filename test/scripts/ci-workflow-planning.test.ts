@@ -97,6 +97,30 @@ function successfulNativeSetup() {
 }
 
 describe("PostgreSQL conformance selection", () => {
+  it("runs both shards independently under the existing aggregate gate", () => {
+    const workflow = readCiWorkflow();
+    const job = workflow.jobs["postgres-conformance"];
+    expect(job.strategy).toEqual({
+      "fail-fast": false,
+      "max-parallel": 2,
+      matrix: { shard: ["infra", "integrations"] },
+    });
+    expect(job["timeout-minutes"]).toBe(30);
+    expect(
+      evaluateWorkflowExpression(job["runs-on"], {
+        eventName: "pull_request",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+      }),
+    ).toBe("ubuntu-24.04");
+    expect(
+      job.steps.find((step: WorkflowStep) => step.name === "Run PostgreSQL conformance").run,
+    ).toBe(
+      "node scripts/test-database-conformance.mjs --engine postgres --connection postgresql://postgres@127.0.0.1:5432/postgres --shard ${{ matrix.shard }}",
+    );
+    expect(workflow.jobs["ci-gate"].needs).toContain("postgres-conformance");
+  });
+
   it.each<[string[] | null, boolean, Partial<Parameters<typeof runCiManifestFixture>[0]>?]>([
     [["extensions/workboard/README.md", "src/utils/absolute-deadline.test.ts"], false],
     [["extensions/workboard/README.md", "extensions/workboard/src/store.ts"], true],

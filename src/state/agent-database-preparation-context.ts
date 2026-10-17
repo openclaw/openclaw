@@ -14,7 +14,7 @@ export function withAgentDatabasePreparationContext<T>(
   resolveOwner: () => AgentDatabasePreparation | undefined,
   run: () => T,
 ): T {
-  return preparation.run(resolveOwner, run);
+  return preparation.getStore() === resolveOwner ? run() : preparation.run(resolveOwner, run);
 }
 
 export function waitForAgentDatabasePreparation(

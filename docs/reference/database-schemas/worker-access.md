@@ -6208,7 +6208,10 @@ are unchanged.
 
 GitHub publication preparation and per-turn tool availability read the selected
 live worktree through the existing worktree reader and shared-state worker. They
-refresh discovery on identity, configuration, and workspace-binding changes;
+create discovery work only when a turn requests a session's publication hint,
+not while hydrating the session roster. A cold hint is unavailable until that
+asynchronous preparation finishes. Requested sessions refresh discovery on
+identity, configuration, and workspace-binding changes;
 otherwise a read refreshes facts older than one minute instead of polling idle
 sessions. The first read after expiry retains the availability hint but retires
 credentials until asynchronous preparation finishes, so an expired token cannot
