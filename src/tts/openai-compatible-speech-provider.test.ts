@@ -121,26 +121,10 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
   );
 
   it.each([
-    [
-      {
-        speakerVoice: " cedar ",
-        speakerVoiceId: "canonical-id",
-        voice: "legacy",
-        voiceId: "legacy-id",
-      },
-      "cedar",
-    ],
-    [{ speakerVoice: " ", speakerVoiceId: " canonical-id ", voice: "legacy" }, "canonical-id"],
-    [
-      {
-        speakerVoice: " ",
-        speakerVoiceId: " ",
-        voice: " legacy ",
-        voiceId: "legacy-id",
-      },
-      "legacy",
-    ],
-    [{ speakerVoice: " ", speakerVoiceId: " ", voice: " ", voiceId: " legacy-id " }, "legacy-id"],
+    [{ speakerVoice: " a ", speakerVoiceId: "b", voice: "c", voiceId: "d" }, "a"],
+    [{ speakerVoice: " ", speakerVoiceId: " b ", voice: "c" }, "b"],
+    [{ speakerVoice: " ", speakerVoiceId: " ", voice: " c ", voiceId: "d" }, "c"],
+    [{ speakerVoice: " ", speakerVoiceId: " ", voice: " ", voiceId: " d " }, "d"],
     [{}, "alloy"],
   ] as const)(
     "preserves %j as %s through direct, normalized, runtime, and Talk synthesis",
@@ -301,28 +285,26 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
       provider: { order: ["openai"] },
     });
     expect(result.audioBuffer).toStrictEqual(Buffer.from([4, 5, 6]));
-    expect(result.outputFormat).toBe("opus");
-    expect(result.fileExtension).toBe(".opus");
-    expect(result.voiceCompatible).toBe(true);
+    expect(result).toMatchObject({
+      outputFormat: "opus",
+      fileExtension: ".opus",
+      voiceCompatible: true,
+    });
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    {
-      name: "JSON success bodies",
-      response: () =>
-        new Response(JSON.stringify({ error: "not audio" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-    },
-    {
-      name: "empty successful bodies",
-      response: () => new Response(new Uint8Array(), { status: 200 }),
-    },
-  ])("rejects $name as malformed audio", async ({ response }) => {
+  it.each(["JSON", "empty"])("rejects %s successful bodies as malformed audio", async (kind) => {
     const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({ response: response(), release });
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(
+        kind === "JSON" ? JSON.stringify({ error: "not audio" }) : new Uint8Array(),
+        {
+          status: 200,
+          ...(kind === "JSON" ? { headers: { "content-type": "application/json" } } : {}),
+        },
+      ),
+      release,
+    });
     vi.stubEnv("DEMO_API_KEY", "sk-env");
     const provider = createOpenAiCompatibleSpeechProvider(demoOptions);
 

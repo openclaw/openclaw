@@ -20,7 +20,6 @@ function modelConfig(
 ): OpenClawConfig {
   return { agents: { defaults: { voiceModel } }, tts: { enabled: true, ...tts } };
 }
-
 function streamResult(release?: () => Promise<void>) {
   return {
     audioStream: new ReadableStream<Uint8Array>({ start: (controller) => controller.close() }),
@@ -35,10 +34,7 @@ describe("TTS runtime voice model and streaming behavior", () => {
   afterEach(resetTtsRuntime);
 
   it("caps oversized voice model TTS timeouts before synthesis", async () => {
-    installSpeechProviders([
-      createMockSpeechProvider("mock", { autoSelectOrder: 1, models: ["mock-tts"] }),
-    ]);
-
+    installSpeechProviders([createMockSpeechProvider("mock", { models: ["mock-tts"] })]);
     const result = await synthesizeSpeech({
       text: "Use capped explicit timeout.",
       cfg: modelConfig(
@@ -47,254 +43,180 @@ describe("TTS runtime voice model and streaming behavior", () => {
       ),
       disableFallback: true,
     });
-
     expect(result.success).toBe(true);
-    const request = requireFirstSynthesisRequest("voice model capped timeout request");
-    expect(request.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(requireFirstSynthesisRequest("capped timeout").timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
-  it("uses agents.defaults.voiceModel as the default speech provider and model", async () => {
-    installSpeechProviders([
-      createMockSpeechProvider("mock", { autoSelectOrder: 1 }),
-      createMockSpeechProvider("openai", {
-        autoSelectOrder: 10,
-        models: ["gpt-4o-mini-tts"],
-        resolveConfig: ({ rawConfig }) => {
-          const providers = requireRecord(rawConfig.providers, "raw provider configs");
-          return {
-            model: "provider-default-model",
-            modelId: "provider-default-model",
-            ...requireRecord(providers.openai, "raw openai provider config"),
-          };
-        },
+  it.each([
+    ["voiceModel default", "openai", undefined, "gpt-4o-mini-tts"],
+    ["explicit model alias", "openrouter", "explicit-model", "default-model"],
+  ] as const)("uses %s ahead of provider defaults", async (_name, id, explicit, model) => {
+    const selected = createMockSpeechProvider(id, {
+      autoSelectOrder: 10,
+      models: explicit ? [explicit, model] : [model],
+      resolveConfig: ({ rawConfig }) => ({
+        ...(explicit ? {} : { model: "provider-default-model", modelId: "provider-default-model" }),
+        ...requireRecord(requireRecord(rawConfig.providers, "providers")[id], "provider config"),
       }),
-    ]);
-
+    });
+    installSpeechProviders(explicit ? [selected] : [createMockSpeechProvider(), selected]);
     const result = await synthesizeSpeech({
-      text: "Use configured voice model.",
+      text: "Use the configured voice model.",
       cfg: modelConfig(
-        { primary: "openai/gpt-4o-mini-tts", timeoutMs: 12_345 },
-        { prefsPath: "/tmp/openclaw-speech-core-voice-model-default-test.json" },
-      ),
-      disableFallback: true,
-    });
-
-    expect(result).toMatchObject({
-      success: true,
-      provider: "openai",
-      providerModel: "gpt-4o-mini-tts",
-    });
-    const request = requireFirstSynthesisRequest("voice model synthesis request");
-    expect(request.providerConfig).toMatchObject({
-      model: "gpt-4o-mini-tts",
-      modelId: "gpt-4o-mini-tts",
-    });
-    expect(request.timeoutMs).toBe(12_345);
-  });
-
-  it("keeps explicit provider model aliases ahead of voiceModel defaults", async () => {
-    installSpeechProviders([
-      createMockSpeechProvider("openrouter", {
-        models: ["explicit-model", "default-model"],
-        resolveConfig: ({ rawConfig }) => {
-          const providers = requireRecord(rawConfig.providers, "raw provider configs");
-          return requireRecord(providers.openrouter, "raw openrouter provider config");
-        },
-      }),
-    ]);
-
-    const result = await synthesizeSpeech({
-      text: "Prefer explicit model alias.",
-      cfg: modelConfig(
-        { primary: "openrouter/default-model" },
+        { primary: id + "/" + model, ...(explicit ? {} : { timeoutMs: 12_345 }) },
         {
-          provider: "openrouter",
-          prefsPath: "/tmp/openclaw-speech-core-explicit-model-alias-test.json",
-          providers: { openrouter: { modelId: "explicit-model" } },
+          prefsPath: "/tmp/openclaw-speech-model-" + id + ".json",
+          ...(explicit ? { provider: id, providers: { [id]: { modelId: explicit } } } : {}),
         },
       ),
       disableFallback: true,
     });
-
     expect(result.success).toBe(true);
-    const request = requireFirstSynthesisRequest("explicit model alias synthesis request");
+    const request = requireFirstSynthesisRequest("model selection");
     const providerConfig = requireRecord(request.providerConfig, "provider config");
-    expect(providerConfig).toMatchObject({
-      modelId: "explicit-model",
-    });
-    expect(providerConfig.model).toBeUndefined();
+    expect(providerConfig).toMatchObject({ modelId: explicit ?? model });
+    if (explicit) {
+      expect(providerConfig.model).toBeUndefined();
+    } else {
+      expect(result).toMatchObject({ provider: id, providerModel: model });
+      expect(providerConfig.model).toBe(model);
+      expect(request.timeoutMs).toBe(12_345);
+    }
   });
 
-  it("tries voiceModel fallbacks before auto-selected speech providers", async () => {
-    installSpeechProviders([
-      createMockSpeechProvider("mock", { autoSelectOrder: 1 }),
-      createMockSpeechProvider("openai", {
-        autoSelectOrder: 10,
-        models: ["gpt-4o-mini-tts"],
-        isConfigured: () => false,
-      }),
-      createMockSpeechProvider("elevenlabs", {
-        autoSelectOrder: 99,
-        models: ["eleven_multilingual_v2"],
-      }),
-    ]);
-
-    const result = await synthesizeSpeech({
-      text: "Use configured voice model fallback.",
-      cfg: modelConfig(
-        {
-          primary: "openai/gpt-4o-mini-tts",
-          fallbacks: ["elevenlabs/eleven_multilingual_v2"],
-        },
-        { prefsPath: "/tmp/openclaw-speech-core-voice-model-fallback-test.json" },
-      ),
-    });
-
-    expect(result).toMatchObject({
-      success: true,
-      provider: "elevenlabs",
-      fallbackFrom: "openai",
-      providerModel: "eleven_multilingual_v2",
-    });
-  });
-
-  it("tries same-provider voiceModel fallbacks as separate model attempts", async () => {
-    const synthesize = vi.fn(async (request: SpeechSynthesisRequest) => {
-      if (request.providerConfig.model === "bad-tts") {
-        throw new Error("unavailable model");
+  it.each([false, true])(
+    "tries voiceModel fallbacks before auto selection (same provider: %s)",
+    async (same) => {
+      const synthesize = vi.fn(async (request: SpeechSynthesisRequest) => {
+        if (request.providerConfig.model === "bad-tts") {
+          throw new Error("unavailable model");
+        }
+        return {
+          audioBuffer: Buffer.from("voice"),
+          fileExtension: ".ogg",
+          outputFormat: "ogg",
+          voiceCompatible: request.target === "voice-note",
+        };
+      });
+      const primary = same ? "bad-tts" : "gpt-4o-mini-tts";
+      const fallbackId = same ? "openai" : "elevenlabs";
+      const fallbackModel = same ? "good-tts" : "eleven_multilingual_v2";
+      installSpeechProviders(
+        same
+          ? [
+              createMockSpeechProvider("openai", {
+                autoSelectOrder: 10,
+                models: [primary, fallbackModel],
+                synthesize,
+              }),
+            ]
+          : [
+              createMockSpeechProvider(),
+              createMockSpeechProvider("openai", {
+                autoSelectOrder: 10,
+                models: [primary],
+                isConfigured: () => false,
+              }),
+              createMockSpeechProvider(fallbackId, {
+                autoSelectOrder: 99,
+                models: [fallbackModel],
+              }),
+            ],
+      );
+      const result = await synthesizeSpeech({
+        text: "Use the configured fallback model.",
+        cfg: modelConfig(
+          { primary: "openai/" + primary, fallbacks: [fallbackId + "/" + fallbackModel] },
+          { prefsPath: "/tmp/openclaw-speech-model-fallback-" + same + ".json" },
+        ),
+      });
+      expect(result).toMatchObject({
+        success: true,
+        provider: fallbackId,
+        providerModel: fallbackModel,
+      });
+      if (same) {
+        expect(result.attemptedProviders).toEqual(["openai", "openai"]);
+        expect(synthesize.mock.calls.map(([request]) => request.providerConfig.model)).toEqual([
+          "bad-tts",
+          "good-tts",
+        ]);
+      } else {
+        expect(result.fallbackFrom).toBe("openai");
       }
-      return {
-        audioBuffer: Buffer.from("voice"),
-        fileExtension: ".ogg",
-        outputFormat: "ogg",
-        voiceCompatible: request.target === "voice-note",
+    },
+  );
+
+  it.each([false, true])(
+    "falls back from a non-streaming provider or timeout (timeout: %s)",
+    async (timeout) => {
+      const release = vi.fn(async () => {});
+      const fallback = vi.fn(async () => streamResult(timeout ? undefined : release));
+      const primary = timeout ? "primary" : "buffered";
+      const fallbackId = timeout ? "fallback" : "streaming";
+      const timedOut = async () => {
+        // This is the real transport error shape, not AbortError.
+        const error = new Error("request timed out");
+        error.name = "TimeoutError";
+        throw error;
       };
-    });
-    installSpeechProviders([
-      createMockSpeechProvider("openai", {
-        autoSelectOrder: 10,
-        models: ["bad-tts", "good-tts"],
-        synthesize,
-      }),
-    ]);
-
-    const result = await synthesizeSpeech({
-      text: "Use same-provider fallback model.",
-      cfg: modelConfig(
-        { primary: "openai/bad-tts", fallbacks: ["openai/good-tts"] },
-        {
-          prefsPath: "/tmp/openclaw-speech-core-same-provider-voice-model-fallback-test.json",
+      installSpeechProviders([
+        createMockSpeechProvider(primary, {
+          autoSelectOrder: 1,
+          ...(timeout ? { streamSynthesize: timedOut } : {}),
+        }),
+        createMockSpeechProvider(fallbackId, { autoSelectOrder: 2, streamSynthesize: fallback }),
+      ]);
+      const result = await textToSpeechStream({
+        text: "## Keep [streaming Markdown](https://example.com) raw!!!!!",
+        cfg: {
+          tts: {
+            enabled: true,
+            provider: primary,
+            prefsPath: "/tmp/openclaw-speech-stream-" + timeout + ".json",
+          },
         },
-      ),
-    });
-
-    expect(result.success).toBe(true);
-    expect(result.provider).toBe("openai");
-    expect(result.providerModel).toBe("good-tts");
-    expect(result.attemptedProviders).toEqual(["openai", "openai"]);
-    expect(synthesize.mock.calls.map(([request]) => request.providerConfig.model)).toEqual([
-      "bad-tts",
-      "good-tts",
-    ]);
-  });
-
-  it("skips non-streaming providers before using a streaming fallback", async () => {
-    const release = vi.fn(async () => {});
-    const streamSynthesize = vi.fn(async () => streamResult(release));
-    installSpeechProviders([
-      createMockSpeechProvider("buffered", { autoSelectOrder: 1 }),
-      createMockSpeechProvider("streaming", {
-        autoSelectOrder: 2,
-        streamSynthesize,
-      }),
-    ]);
-
-    const result = await textToSpeechStream({
-      text: "Use streaming fallback.",
-      cfg: {
-        tts: {
-          enabled: true,
-          provider: "buffered",
-          prefsPath: "/tmp/openclaw-speech-core-streaming-fallback-test.json",
-        },
-      } as OpenClawConfig,
-    });
-
-    expect(result.success).toBe(true);
-    expect(result.provider).toBe("streaming");
-    expect(result.fallbackFrom).toBe("buffered");
-    expect(result.attemptedProviders).toEqual(["buffered", "streaming"]);
-    expect(result.outputFormat).toBe("pcm");
-    expect(result.fileExtension).toBe(".pcm");
-    expect(result.target).toBe("audio-file");
-    await result.release?.();
-    expect(release).toHaveBeenCalledOnce();
-    const skippedAttempt = requireAttempt(result.attempts, 0);
-    expect(skippedAttempt).toMatchObject({
-      provider: "buffered",
-      outcome: "skipped",
-      reasonCode: "unsupported_for_streaming",
-      personaBinding: "none",
-      error: "buffered does not support streaming TTS",
-    });
-    expect(skippedAttempt).not.toHaveProperty("latencyMs");
-    expect(requireAttempt(result.attempts, 1)).toMatchObject({
-      provider: "streaming",
-      outcome: "success",
-      reasonCode: "success",
-    });
-    expect(streamSynthesize).toHaveBeenCalledOnce();
-  });
-
-  it("classifies streaming timeouts before falling back with normalized speech text", async () => {
-    // Real transport timeouts arrive as "TimeoutError" (fetch-timeout.ts), not
-    // AbortError; the classifier must catch the shape providers actually throw.
-    const timeoutStreamSynthesize = vi.fn(async () => {
-      const error = new Error("request timed out");
-      error.name = "TimeoutError";
-      throw error;
-    });
-    const fallbackStreamSynthesize = vi.fn(async () => streamResult());
-    installSpeechProviders([
-      createMockSpeechProvider("primary", {
-        autoSelectOrder: 1,
-        streamSynthesize: timeoutStreamSynthesize,
-      }),
-      createMockSpeechProvider("fallback", {
-        autoSelectOrder: 2,
-        streamSynthesize: fallbackStreamSynthesize,
-      }),
-    ]);
-    const text = "## Keep [streaming Markdown](https://example.com) raw!!!!!";
-
-    const result = await textToSpeechStream({
-      text,
-      cfg: {
-        tts: {
-          enabled: true,
-          provider: "primary",
-          prefsPath: "/tmp/openclaw-speech-core-streaming-timeout-test.json",
-        },
-      } as OpenClawConfig,
-    });
-
-    expect(result.success).toBe(true);
-    expect(result.provider).toBe("fallback");
-    expect(result.fallbackFrom).toBe("primary");
-    expect(requireAttempt(result.attempts, 0)).toMatchObject({
-      provider: "primary",
-      outcome: "failed",
-      reasonCode: "timeout",
-      error: "primary: request timed out",
-    });
-    expect(requireAttempt(result.attempts, 1)).toMatchObject({
-      provider: "fallback",
-      outcome: "success",
-      reasonCode: "success",
-    });
-    expect(fallbackStreamSynthesize).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Keep streaming Markdown raw!" }),
-    );
-    await result.release?.();
-  });
+      });
+      expect(result).toMatchObject({ success: true, provider: fallbackId, fallbackFrom: primary });
+      expect(requireAttempt(result.attempts, 0)).toMatchObject(
+        timeout
+          ? {
+              provider: primary,
+              outcome: "failed",
+              reasonCode: "timeout",
+              error: "primary: request timed out",
+            }
+          : {
+              provider: primary,
+              outcome: "skipped",
+              reasonCode: "unsupported_for_streaming",
+              personaBinding: "none",
+              error: "buffered does not support streaming TTS",
+            },
+      );
+      expect(requireAttempt(result.attempts, 1)).toMatchObject({
+        provider: fallbackId,
+        outcome: "success",
+        reasonCode: "success",
+      });
+      if (timeout) {
+        expect(fallback).toHaveBeenCalledWith(
+          expect.objectContaining({ text: "Keep streaming Markdown raw!" }),
+        );
+      } else {
+        expect(result).toMatchObject({
+          attemptedProviders: ["buffered", "streaming"],
+          outputFormat: "pcm",
+          fileExtension: ".pcm",
+          target: "audio-file",
+        });
+        expect(requireAttempt(result.attempts, 0)).not.toHaveProperty("latencyMs");
+        expect(fallback).toHaveBeenCalledOnce();
+      }
+      await result.release?.();
+      if (!timeout) {
+        expect(release).toHaveBeenCalledOnce();
+      }
+    },
+  );
 });

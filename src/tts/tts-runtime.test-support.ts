@@ -14,35 +14,36 @@ import type {
   SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
 import { expect, vi } from "vitest";
+import { createRequireRecord } from "../../test/helpers/record.js";
 import { CODE_HEAVY_SPOKEN_FALLBACK as CODE_HEAVY_SPOKEN_FALLBACK_CORE } from "./speech-text.js";
 import type { TtsAudioPersistence } from "./tts-synthesis.js";
 
 type MockSpeechSynthesisResult = Awaited<ReturnType<SpeechProviderPlugin["synthesize"]>>;
 
-const synthesizeMock = vi.hoisted(() =>
-  vi.fn(async (request: SpeechSynthesisRequest): Promise<MockSpeechSynthesisResult> => ({
-    audioBuffer: Buffer.from("voice"),
-    fileExtension: ".ogg",
-    outputFormat: "ogg",
-    voiceCompatible: request.target === "voice-note",
-  })),
-);
-const prepareSynthesisMock = vi.hoisted(() =>
-  vi.fn(async (_ctx: SpeechProviderPrepareSynthesisContext) => undefined),
-);
-
-const listSpeechProvidersMock = vi.hoisted(() =>
-  vi.fn<(cfg?: OpenClawConfig) => SpeechProviderPlugin[]>(),
-);
-const getSpeechProviderMock = vi.hoisted(() =>
-  vi.fn<(providerId: string, cfg?: OpenClawConfig) => SpeechProviderPlugin | null | undefined>(),
-);
-const transcodeAudioBufferMock = vi.hoisted(() =>
-  // Keep the real return union so individual cases can enable transcoding.
-  vi.fn<() => ReturnType<typeof import("../media/media-services.js").transcodeAudioBuffer>>(
-    async () => ({ ok: false, reason: "platform-unsupported" }),
+const {
+  synthesizeMock,
+  prepareSynthesisMock,
+  listSpeechProvidersMock,
+  getSpeechProviderMock,
+  transcodeAudioBufferMock,
+} = vi.hoisted(() => ({
+  synthesizeMock: vi.fn(
+    async (request: SpeechSynthesisRequest): Promise<MockSpeechSynthesisResult> => ({
+      audioBuffer: Buffer.from("voice"),
+      fileExtension: ".ogg",
+      outputFormat: "ogg",
+      voiceCompatible: request.target === "voice-note",
+    }),
   ),
-);
+  prepareSynthesisMock: vi.fn(async (_ctx: SpeechProviderPrepareSynthesisContext) => undefined),
+  listSpeechProvidersMock: vi.fn<(cfg?: OpenClawConfig) => SpeechProviderPlugin[]>(),
+  getSpeechProviderMock:
+    vi.fn<(providerId: string, cfg?: OpenClawConfig) => SpeechProviderPlugin | null | undefined>(),
+  // Keep the real return union so individual cases can enable transcoding.
+  transcodeAudioBufferMock: vi.fn<
+    () => ReturnType<typeof import("../media/media-services.js").transcodeAudioBuffer>
+  >(async () => ({ ok: false, reason: "platform-unsupported" })),
+}));
 
 vi.mock("../media/media-services.js", () => ({
   transcodeAudioBuffer: transcodeAudioBufferMock,
@@ -72,24 +73,12 @@ vi.mock("../channels/plugins/tts-capabilities.js", () => ({
 vi.mock("./provider-registry.js", async () => {
   const actual =
     await vi.importActual<typeof import("./provider-registry.js")>("./provider-registry.js");
-  const mockProvider: SpeechProviderPlugin = {
-    id: "mock",
-    label: "Mock",
-    autoSelectOrder: 1,
-    isConfigured: () => true,
-    prepareSynthesis: prepareSynthesisMock,
-    synthesize: synthesizeMock,
-  };
-  listSpeechProvidersMock.mockImplementation(() => [mockProvider]);
-  getSpeechProviderMock.mockImplementation((providerId: string) =>
-    providerId === "mock" ? mockProvider : null,
-  );
+  installSpeechProviders([createMockSpeechProvider("mock", { label: "Mock" })]);
+  const normalizeId = (id: string | undefined) => id?.trim().toLowerCase() || undefined;
   return {
     ...actual,
-    canonicalizeSpeechProviderId: (providerId: string | undefined) =>
-      providerId?.trim().toLowerCase() || undefined,
-    normalizeSpeechProviderId: (providerId: string | undefined) =>
-      providerId?.trim().toLowerCase() || undefined,
+    canonicalizeSpeechProviderId: normalizeId,
+    normalizeSpeechProviderId: normalizeId,
     getSpeechProvider: getSpeechProviderMock,
     listSpeechProviders: listSpeechProvidersMock,
   };
@@ -108,10 +97,7 @@ vi.mock("../plugins/capability-provider-runtime.js", async () => {
     preparePluginCapabilityProviderLookup: ({
       providerId,
       cfg,
-    }: {
-      providerId: string;
-      cfg?: OpenClawConfig;
-    }) => ({
+    }: Parameters<typeof actual.preparePluginCapabilityProviderLookup>[0]) => ({
       load: undefined,
       resolve: () => getSpeechProviderMock(providerId, cfg) ?? undefined,
     }),
@@ -231,22 +217,12 @@ export function prefsPathFor(prefsName: string): string {
   return path.join(PREFS_TMP_DIR, `${prefsName}.json`);
 }
 
-export function createTtsConfig(prefsName: string): OpenClawConfig {
+export function createTtsConfig(prefsName: string, overrides: TtsConfig = {}): OpenClawConfig {
   setTtsMachinePrefsPathResolver(() => prefsPathFor(prefsName));
-  return {
-    tts: {
-      enabled: true,
-      provider: "mock",
-    },
-  };
+  return { tts: { enabled: true, provider: "mock", ...overrides } };
 }
 
-export function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+export const requireRecord = createRequireRecord("record", "expected-label-record");
 
 export function requireFirstCallParam(calls: ReadonlyArray<readonly unknown[]>, label: string) {
   const call = calls[0];

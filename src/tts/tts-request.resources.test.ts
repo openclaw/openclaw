@@ -34,13 +34,6 @@ function createNativeSpeechFixture(
 ) {
   const dir = makePluginLoaderTempDir();
   const key = `__openclaw_speech_resources_${path.basename(dir)}`;
-  const configStarted = createDeferredCore();
-  const prepareStarted = createDeferredCore();
-  const prepareResume = createDeferredCore();
-  const synthesizeStarted = createDeferredCore();
-  const synthesizeResume = createDeferredCore();
-  const tailStarted = createDeferredCore();
-  const tailResume = createDeferredCore();
   const connections: Array<{
     databasePath: string;
     database: DatabaseSync;
@@ -51,16 +44,16 @@ function createNativeSpeechFixture(
   const tails: Promise<void>[] = [];
   const state = {
     connections,
-    configStarted,
-    prepareStarted,
-    prepareResume,
-    synthesizeStarted,
-    synthesizeResume,
+    configStarted: createDeferredCore(),
+    prepareStarted: createDeferredCore(),
+    prepareResume: createDeferredCore(),
+    synthesizeStarted: createDeferredCore(),
+    synthesizeResume: createDeferredCore(),
     pcm,
     callbacks,
     dir,
-    tailStarted,
-    tailResume,
+    tailStarted: createDeferredCore(),
+    tailResume: createDeferredCore(),
     trackAsyncWork,
     tails,
   };
@@ -138,13 +131,19 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   };
   const prefsPath = path.join(dir, "prefs.json");
   fs.writeFileSync(prefsPath, "{}");
+  const resume = () => {
+    state.prepareResume.resolve();
+    state.synthesizeResume.resolve();
+    state.tailResume.resolve();
+  };
   return {
     id,
     plugin,
     cfg,
     prefsPath,
     state,
-    run: () => synthesize({ text: "native speech", cfg, prefsPath, timeoutMs: 12345 }),
+    run: (options: Partial<Parameters<typeof synthesize>[0]> = {}) =>
+      synthesize({ text: "native speech", cfg, prefsPath, timeoutMs: 12345, ...options }),
     withEnvironment: (run: () => Promise<void>) =>
       withEnvAsync(
         {
@@ -154,15 +153,9 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         },
         run,
       ),
-    resume() {
-      prepareResume.resolve();
-      synthesizeResume.resolve();
-      tailResume.resolve();
-    },
+    resume,
     cleanup() {
-      prepareResume.resolve();
-      synthesizeResume.resolve();
-      tailResume.resolve();
+      resume();
       for (const { database } of connections) {
         if (database.isOpen) {
           database.close();
@@ -339,10 +332,9 @@ describe.each([
       JSON.stringify({ tts: { provider: "preference-voice-alias" } }),
     );
     await withFixtures(fixtures, async () => {
-      const result = await synthesize({
-        text: "override with configured fallback",
+      const result = await catalog.run({
+        timeoutMs: undefined,
         cfg: combineConfig(catalog, [override, preferred]),
-        prefsPath: catalog.prefsPath,
         overrides: { provider: "override-voice-alias" },
       });
       expect(result.success).toBe(true);
@@ -360,19 +352,14 @@ describe.each([
     override.resume();
     await withFixtures([catalog, override], async () => {
       const cfg = combineConfig(catalog, [override]);
-      const first = await synthesize({
-        text: "explicit override",
+      const first = await catalog.run({
+        timeoutMs: undefined,
         cfg,
-        prefsPath: catalog.prefsPath,
         overrides: { provider: "override-voice-alias" },
       });
       expect(first.success).toBe(true);
       expect(first.provider).toBe("override-voice");
-      const second = await synthesize({
-        text: "configured provider only",
-        cfg,
-        prefsPath: catalog.prefsPath,
-      });
+      const second = await catalog.run({ cfg, timeoutMs: undefined });
       expect(second.success).toBe(false);
       expect(second.attemptedProviders).toEqual(["catalog-voice"]);
       expect(override.state.connections.flatMap((entry) => entry.requests).length).toBe(1);
@@ -397,13 +384,7 @@ describe.each([
           tts: { ...base.tts, providers: { [primary.id]: {}, [fallback.id]: {} } },
         };
         setRuntimeConfigSnapshot(runtimeOwned ? cfg : { ...cfg });
-        const pending = settle(
-          synthesize({
-            text: "refresh during fallback",
-            cfg,
-            prefsPath: primary.prefsPath,
-          }),
-        );
+        const pending = settle(primary.run({ cfg, timeoutMs: undefined }));
         try {
           await waitForHook(primary.state.synthesizeStarted.promise, pending);
           setRuntimeConfigSnapshot({

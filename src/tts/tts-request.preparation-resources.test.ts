@@ -171,128 +171,110 @@ async function withInspection(
 
 describe("async speech preparation resources", () => {
   it("reuses registrations and preserves opaque overrides for synthesis after inspection retirement", async () => {
-    await withInspection(async (fixture, inspection) => {
+    await withInspection(async ({ state, host, prepare, runtime, id }, inspection) => {
       const prepared = await withPluginRuntimeRegistryScope(inspection.registry, async () => {
-        const first = await fixture.prepare();
+        const first = await prepare();
         for (let index = 0; index < 3; index++) {
-          const next = await fixture.prepare();
+          const next = await prepare();
           expect(
-            next.directives.overrides.providerOverrides?.[fixture.id]?.voiceSettings ===
-              first.directives.overrides.providerOverrides?.[fixture.id]?.voiceSettings,
+            next.directives.overrides.providerOverrides?.[id]?.voiceSettings ===
+              first.directives.overrides.providerOverrides?.[id]?.voiceSettings,
           ).toBe(true);
         }
-        const synthesis = await fixture.runtime.tts.textToSpeechTelephony({
+        const synthesis = await runtime.tts.textToSpeechTelephony({
           cfg: first.cfg,
           text: first.directives.cleanedText,
           overrides: first.directives.overrides,
         });
         expect(synthesis.success).toBe(true);
         // Ordinary dispatch must restore the handle inside its exact owning plugin.
-        expect(fixture.state.receivedOverrides[0] === fixture.state.connections[0]?.opaque).toBe(
-          true,
-        );
+        expect(state.receivedOverrides[0] === state.connections[0]?.opaque).toBe(true);
         return first;
       });
-      expect(fixture.state.connections.length).toBe(1);
+      expect(state.connections.length).toBe(1);
       await inspection.release();
-      expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
-      expect(
-        prepared.directives.overrides.providerOverrides?.[fixture.id]?.voiceSettings,
-      ).toHaveProperty("voiceId", "voice-42");
-      const result = await fixture.runtime.tts.textToSpeechTelephony({
+      expect(state.connections[0]?.database.isOpen).toBe(true);
+      expect(prepared.directives.overrides.providerOverrides?.[id]?.voiceSettings).toHaveProperty(
+        "voiceId",
+        "voice-42",
+      );
+      const result = await runtime.tts.textToSpeechTelephony({
         cfg: prepared.cfg,
         text: prepared.directives.cleanedText,
         overrides: prepared.directives.overrides,
       });
       expect(result.success).toBe(true);
-      expect(fixture.state.consumedVoices).toEqual(["voice-42", "voice-42"]);
-      await fixture.host.close();
-      expect(fixture.state.connections.every((entry) => !entry.database.isOpen)).toBe(true);
-      expect(fixture.state.connections.every((entry) => entry.disposals === 1)).toBe(true);
+      expect(state.consumedVoices).toEqual(["voice-42", "voice-42"]);
+      await host.close();
+      expect(state.connections.every((entry) => !entry.database.isOpen)).toBe(true);
+      expect(state.connections.every((entry) => entry.disposals === 1)).toBe(true);
     });
   });
 
   it("retains the selected source before provider metadata can retire its inspection", async () => {
-    await withInspection(async (fixture, inspection) => {
+    await withInspection(async ({ state, host, prepare }, inspection) => {
       let retirement: Promise<void> | undefined;
-      fixture.state.callbacks.onMetadata = () => {
+      state.callbacks.onMetadata = () => {
         retirement ??= inspection.release();
       };
-      const prepared = await withPluginRuntimeRegistryScope(inspection.registry, fixture.prepare);
+      const prepared = await withPluginRuntimeRegistryScope(inspection.registry, prepare);
       await retirement;
       expect(prepared.directives.hasDirective).toBe(true);
-      expect(fixture.state.connections[0]?.opaque.voiceId).toBe("voice-42");
-      await fixture.host.close();
-      expect(fixture.state.connections[0]?.disposals).toBe(1);
+      expect(state.connections[0]?.opaque.voiceId).toBe("voice-42");
+      await host.close();
+      expect(state.connections[0]?.disposals).toBe(1);
     });
   });
 
-  it("owns failed projection cleanup until asynchronous disposal finishes", async () => {
-    await withInspection(async (fixture, inspection) => {
-      const disposeResume = createDeferredCore();
-      let retirement: Promise<void> | undefined;
-      fixture.state.callbacks.onDispose = () => disposeResume.promise;
-      fixture.state.callbacks.onProjection = () => {
-        retirement ??= inspection.release();
-        throw new Error("speech directive projection failed");
-      };
-      try {
-        await expect(
-          withPluginRuntimeRegistryScope(inspection.registry, fixture.prepare),
-        ).rejects.toThrow("speech directive projection failed");
-        let closed = false;
-        const closing = fixture.host.close().then(() => {
-          closed = true;
-        });
-        await nextTurn();
-        expect(closed).toBe(false);
-        disposeResume.resolve();
-        await closing;
-        expect(fixture.state.connections[0]?.disposals).toBe(1);
-      } finally {
-        disposeResume.resolve();
-        await retirement;
-      }
-    });
-  });
-
-  it.each([false, true])(
-    "joins directive tails before closing resources (projection fails: %s)",
-    async (fails) => {
-      await withInspection(async (fixture, inspection) => {
+  it.each(["dispose", "tail", "tail-failure"])(
+    "joins pending %s work before closing resources",
+    async (mode) => {
+      await withInspection(async ({ state, host, prepare }, inspection) => {
+        const disposeResume = createDeferredCore();
         let retirement: Promise<void> | undefined;
-        fixture.state.callbacks.trackTail = true;
+        const fails = mode !== "tail";
+        if (mode === "dispose") {
+          state.callbacks.onDispose = () => disposeResume.promise;
+        } else {
+          state.callbacks.trackTail = true;
+        }
         if (fails) {
-          fixture.state.callbacks.onProjection = () => {
+          state.callbacks.onProjection = () => {
             retirement ??= inspection.release();
             throw new Error("speech directive projection failed");
           };
         }
         try {
-          const preparation = withPluginRuntimeRegistryScope(inspection.registry, fixture.prepare);
+          const preparation = withPluginRuntimeRegistryScope(inspection.registry, prepare);
           if (fails) {
             await expect(preparation).rejects.toThrow("speech directive projection failed");
-            await nextTurn();
-            expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
+            if (mode === "tail-failure") {
+              await nextTurn();
+              expect(state.connections[0]?.database.isOpen).toBe(true);
+            }
           } else {
             await preparation;
-            expect(fixture.state.tails.length).toBe(1);
+            expect(state.tails.length).toBe(1);
             await inspection.release();
           }
           let closed = false;
-          const closing = fixture.host.close().then(() => {
+          const closing = host.close().then(() => {
             closed = true;
           });
           await nextTurn();
           expect(closed).toBe(false);
-          expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
-          fixture.state.tailResume.resolve();
-          await Promise.all(fixture.state.tails);
+          if (mode !== "dispose") {
+            expect(state.connections[0]?.database.isOpen).toBe(true);
+          }
+          disposeResume.resolve();
+          state.tailResume.resolve();
+          await Promise.all(state.tails);
           await closing;
-          expect(fixture.state.connections[0]?.disposals).toBe(1);
+          expect(state.connections[0]?.disposals).toBe(1);
         } finally {
-          fixture.state.tailResume.resolve();
-          await Promise.allSettled(fixture.state.tails);
+          disposeResume.resolve();
+          state.tailResume.resolve();
+          await Promise.allSettled(state.tails);
           await retirement;
         }
       });
@@ -300,48 +282,47 @@ describe("async speech preparation resources", () => {
   );
 
   it("rejects projection when its SDK host closes during preparation", async () => {
-    await withInspection(async (fixture, inspection) => {
+    await withInspection(async ({ state, host, prepare }, inspection) => {
       let closing: Promise<void> | undefined;
-      fixture.state.callbacks.onProjection = () => {
-        closing ??= fixture.host.close();
+      state.callbacks.onProjection = () => {
+        closing ??= host.close();
       };
-      await expect(
-        withPluginRuntimeRegistryScope(inspection.registry, fixture.prepare),
-      ).rejects.toThrow("Plugin SDK resource host is closed");
+      await expect(withPluginRuntimeRegistryScope(inspection.registry, prepare)).rejects.toThrow(
+        "Plugin SDK resource host is closed",
+      );
       await closing;
       await inspection.release();
-      expect(fixture.state.connections[0]?.disposals).toBe(1);
+      expect(state.connections[0]?.disposals).toBe(1);
     });
   });
 
   it.each(["active", "cold"] as const)(
     "preserves %s raw registration lifetime and cache reuse",
     async (mode) => {
-      const fixture = createPreparationFixture();
-      await fixture.runTest(async () => {
-        const registry =
-          mode === "active" ? loadPluginRegistryHandle({ config: fixture.cfg }) : undefined;
+      const { state, host, prepare, cfg, runTest } = createPreparationFixture();
+      await runTest(async () => {
+        const registry = mode === "active" ? loadPluginRegistryHandle({ config: cfg }) : undefined;
         for (let index = 0; index < 4; index++) {
-          const result = await withPluginRuntimeRegistryScope(registry, fixture.prepare);
+          const result = await withPluginRuntimeRegistryScope(registry, prepare);
           expect(result.directives.hasDirective).toBe(true);
         }
-        expect(fixture.state.connections.length).toBe(1);
-        await fixture.host.close();
-        expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
-        expect(fixture.state.connections[0]?.disposals).toBe(0);
+        expect(state.connections.length).toBe(1);
+        await host.close();
+        expect(state.connections[0]?.database.isOpen).toBe(true);
+        expect(state.connections[0]?.disposals).toBe(0);
       });
-      expect(fixture.state.connections[0]?.cleanups).toBe(1);
+      expect(state.connections[0]?.cleanups).toBe(1);
     },
   );
 
   it("rejects new preparation after the SDK host closes", async () => {
-    const fixture = createPreparationFixture();
-    await fixture.runTest(async () => {
-      await fixture.host.close();
-      await expect(fixture.prepare().then(() => undefined)).rejects.toThrow(
+    const { state, host, prepare, runTest } = createPreparationFixture();
+    await runTest(async () => {
+      await host.close();
+      await expect(prepare().then(() => undefined)).rejects.toThrow(
         "Plugin SDK resource host is closed",
       );
-      expect(fixture.state.connections.length).toBe(0);
+      expect(state.connections.length).toBe(0);
     });
   });
 });

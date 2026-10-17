@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTtsTool } from "../agents/tools/tts-tool.js";
 import { handleTtsCommands } from "../auto-reply/reply/commands-tts.js";
 import type { HandleCommandsParams } from "../auto-reply/reply/commands-types.js";
-import { parseInlineSessionDirectives } from "../auto-reply/reply/directive-handling.parse.js";
+import { buildCommandTestParams } from "../auto-reply/reply/commands.test-harness.js";
 import { resolveChannelTtsVoiceDelivery } from "../channels/plugins/tts-capabilities.js";
 import type { ChannelTtsVoiceDeliveryCapabilities } from "../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -94,37 +94,29 @@ function installFixture(voice: ChannelTtsVoiceDeliveryCapabilities, compatible =
 }
 
 function commandParams(): HandleCommandsParams {
-  const body = `/tts audio ${SPOKEN}`;
-  return {
+  const params = buildCommandTestParams(
+    "/tts audio " + SPOKEN,
     cfg,
-    ctx: {},
-    agentId: "main",
-    command: {
-      surface: CHANNEL,
-      channel: CHANNEL,
-      senderId: "synthetic-owner",
-      ownerList: ["synthetic-owner"],
-      senderIsOwner: true,
-      isAuthorizedSender: true,
-      rawBodyNormalized: body,
-      commandBodyNormalized: body,
-    },
-    directives: parseInlineSessionDirectives(""),
-    elevated: { enabled: false, allowed: false, failures: [] },
-    sessionKey: "agent:main:tts-metadata-proof",
-    workspaceDir: state.workspaceDir,
-    defaultGroupActivation: () => "always",
-    resolvedVerboseLevel: "off",
-    resolvedReasoningLevel: "off",
-    resolveDefaultThinkingLevel: async () => undefined,
-    provider: PROVIDER,
-    model: "synthetic",
-    contextTokens: 4096,
-    isGroup: false,
+    { Provider: CHANNEL, Surface: CHANNEL },
+    { workspaceDir: state.workspaceDir },
+  );
+  params.command = {
+    ...params.command,
+    isAuthorizedSender: true,
+    senderIsOwner: true,
+    senderId: "synthetic-owner",
+    ownerList: ["synthetic-owner"],
   };
+  return params;
 }
 
-async function assertStoredAudio(filePath: unknown): Promise<string> {
+const fileDelivery: ChannelTtsVoiceDeliveryCapabilities = {
+  synthesisTarget: "audio-file",
+  audioFileFormats: ["mp3", "caf", "audio/mpeg", "audio/x-caf"],
+  preferAudioFileFormat: "caf",
+};
+
+async function assertStoredAudio(filePath: unknown): Promise<void> {
   if (typeof filePath !== "string") {
     throw new Error("Expected an actual persisted audio path");
   }
@@ -134,7 +126,6 @@ async function assertStoredAudio(filePath: unknown): Promise<string> {
   expect(await detectMime({ buffer, filePath })).toBe("audio/ogg");
   // The canonical media store preserves the supplied audio/ogg header extension.
   expect(path.extname(filePath)).toBe(".ogg");
-  return filePath;
 }
 
 async function observeEntries(expectedVoice: boolean): Promise<void> {
@@ -196,32 +187,24 @@ describe("TTS real synthesis owner to public output entries", () => {
     await state.cleanup();
   });
 
-  it("keeps incompatible audio-file output nonvoice despite provider compatibility", async () => {
-    installFixture({
-      synthesisTarget: "audio-file",
-      audioFileFormats: ["mp3", "caf", "audio/mpeg", "audio/x-caf"],
-      preferAudioFileFormat: "caf",
-    });
-    await observeEntries(false);
-    expect(requests.every((entry) => entry.target === "audio-file")).toBe(true);
-    expect(converter.requests).toHaveLength(4);
-  });
-
-  it("retains the opposite-polarity decision for a channel that transcodes voice output", async () => {
-    installFixture({ synthesisTarget: "voice-note", transcodesAudio: true }, false);
-    await observeEntries(true);
-    expect(requests.every((entry) => entry.target === "voice-note")).toBe(true);
-    expect(converter.requests).toHaveLength(0);
-  });
+  it.each([false, true])(
+    "preserves all entry-point delivery decisions (voice: %s)",
+    async (voice) => {
+      installFixture(
+        voice ? { synthesisTarget: "voice-note", transcodesAudio: true } : fileDelivery,
+        !voice,
+      );
+      await observeEntries(voice);
+      expect(requests.map((request) => request.target)).toEqual(
+        Array(4).fill(voice ? "voice-note" : "audio-file"),
+      );
+      expect(converter.requests).toHaveLength(voice ? 0 : 4);
+    },
+  );
 
   it("preserves a separate explicit automatic-payload voice request", async () => {
-    installFixture({
-      synthesisTarget: "audio-file",
-      audioFileFormats: ["mp3", "caf"],
-      preferAudioFileFormat: "caf",
-    });
-    const core = await textToSpeech({ text: SPOKEN, cfg, channel: CHANNEL, disableFallback: true });
-    expect(core).toMatchObject({ success: true, audioAsVoice: false, voiceCompatible: true });
+    // The audio-file row above is the negative control for this explicit request.
+    installFixture(fileDelivery);
     const automatic = await maybeApplyTtsToPayload({
       payload: { text: SPOKEN, audioAsVoice: true },
       cfg,
