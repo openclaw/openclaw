@@ -1,4 +1,3 @@
-// Gateway Client tests cover websocket opening-handshake timeout behavior.
 import http from "node:http";
 import net from "node:net";
 import type { AddressInfo } from "node:net";
@@ -14,10 +13,36 @@ describe("GatewayClient websocket opening handshakeTimeout", () => {
   const servers: net.Server[] = [];
   const sockets: net.Socket[] = [];
   const clients: GatewayClient[] = [];
+  const websocketServers: WebSocketServer[] = [];
+
+  function websocketServer(server: http.Server) {
+    const wss = new WebSocketServer({ server });
+    websocketServers.push(wss);
+    return wss;
+  }
+
+  function connectError(port: number) {
+    const error = createDeferred<Error>();
+    const client = new GatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      onConnectError: error.resolve,
+    });
+    clients.push(client);
+    client.start();
+    return error.promise;
+  }
 
   afterEach(async () => {
     for (const client of clients.splice(0)) {
-      client.stop();
+      await client.stopAndWait();
+    }
+    for (const wss of websocketServers.splice(0)) {
+      for (const socket of wss.clients) {
+        socket.terminate();
+      }
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
     }
     for (const socket of sockets.splice(0)) {
       socket.destroy();
@@ -51,7 +76,7 @@ describe("GatewayClient websocket opening handshakeTimeout", () => {
     "negotiates catalog input with a compatible Gateway: %j",
     async ({ advertised, modelCatalog }) => {
       const server = http.createServer();
-      const wss = new WebSocketServer({ server });
+      const wss = websocketServer(server);
       const port = await listen(server);
       const connected = createDeferred();
       const received = createDeferred<{ id: string; params: unknown }>();
@@ -93,34 +118,24 @@ describe("GatewayClient websocket opening handshakeTimeout", () => {
         onConnectError: connected.reject,
       });
       clients.push(client);
-      try {
-        client.start();
-        await connected.promise;
-        const frame = await received.promise;
-        if (advertised) {
-          expect(frame.params).toMatchObject({
-            modelCatalog,
-            caps: ["model-catalog-snapshot"],
-          });
-        } else {
-          expect(frame.params).not.toHaveProperty("modelCatalog");
-          expect(frame.params).toMatchObject({ caps: [] });
-        }
-      } finally {
-        await client.stopAndWait();
-        for (const socket of wss.clients) {
-          socket.terminate();
-        }
-        await new Promise<void>((resolve) => {
-          wss.close(() => resolve());
+      client.start();
+      await connected.promise;
+      const frame = await received.promise;
+      if (advertised) {
+        expect(frame.params).toMatchObject({
+          modelCatalog,
+          caps: ["model-catalog-snapshot"],
         });
+      } else {
+        expect(frame.params).not.toHaveProperty("modelCatalog");
+        expect(frame.params).toMatchObject({ caps: [] });
       }
     },
   );
 
   it("keeps a hello received during WebSocket closing in the pre-hello failure path", async () => {
     const server = http.createServer();
-    const wss = new WebSocketServer({ server });
+    const wss = websocketServer(server);
     const port = await listen(server);
     const onHelloOk = vi.fn();
     const onConnectError = vi.fn();
@@ -167,28 +182,18 @@ describe("GatewayClient websocket opening handshakeTimeout", () => {
         });
       });
     });
-    try {
-      client.start();
-      await Promise.all([lateFramesWritten.promise, closed.promise]);
-      expect(onEvent).not.toHaveBeenCalled();
-      expect(onHelloOk).not.toHaveBeenCalled();
-      expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
-        new Error("gateway closed (1012): node manifest changed"),
-      );
-      expect(onClose).toHaveBeenCalledExactlyOnceWith(
-        1012,
-        "node manifest changed",
-        expect.objectContaining({ phase: "pre-hello", connectRequestSent: true }),
-      );
-    } finally {
-      await client.stopAndWait();
-      for (const socket of wss.clients) {
-        socket.terminate();
-      }
-      await new Promise<void>((resolve) => {
-        wss.close(() => resolve());
-      });
-    }
+    client.start();
+    await Promise.all([lateFramesWritten.promise, closed.promise]);
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(onHelloOk).not.toHaveBeenCalled();
+    expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
+      new Error("gateway closed (1012): node manifest changed"),
+    );
+    expect(onClose).toHaveBeenCalledExactlyOnceWith(
+      1012,
+      "node manifest changed",
+      expect.objectContaining({ phase: "pre-hello", connectRequestSent: true }),
+    );
   });
 
   it.each([
@@ -212,14 +217,7 @@ describe("GatewayClient websocket opening handshakeTimeout", () => {
       res.end(body);
     });
     const port = await listen(server);
-    const error = await new Promise<Error>((resolve) => {
-      const client = new GatewayClient({
-        url: `ws://127.0.0.1:${port}`,
-        onConnectError: resolve,
-      });
-      clients.push(client);
-      client.start();
-    });
+    const error = await connectError(port);
 
     expect(error).toMatchObject({
       details: {
@@ -240,14 +238,7 @@ describe("GatewayClient websocket opening handshakeTimeout", () => {
       res.write(`${"x".repeat(3_000)}${omittedTail}`);
     });
     const port = await listen(server);
-    const error = await new Promise<Error>((resolve) => {
-      const client = new GatewayClient({
-        url: `ws://127.0.0.1:${port}`,
-        onConnectError: resolve,
-      });
-      clients.push(client);
-      client.start();
-    });
+    const error = await connectError(port);
 
     expect(error.message).toHaveLength(
       "gateway rejected websocket upgrade (HTTP 503): ".length + 2 * 1024,

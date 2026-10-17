@@ -1,5 +1,5 @@
-import { createServer } from "node:net";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayClient, GatewayClientRequestTimeoutError } from "./client.js";
 import {
   GatewayProtocolRequestTimeoutError,
@@ -8,32 +8,6 @@ import {
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "./timeouts.js";
 import { rawDataToString } from "./websocket-data.js";
 import { WebSocket, WebSocketServer } from "./websocket.test-support.js";
-
-async function getFreePort(): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const server = createServer();
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as { port: number }).port;
-      server.close((err) => (err ? reject(err) : resolve(port)));
-    });
-  });
-}
-
-function createOpenGatewayClient(requestTimeoutMs: number): {
-  client: GatewayClient;
-  send: ReturnType<typeof vi.fn>;
-} {
-  const client = new GatewayClient({
-    requestTimeoutMs,
-  });
-  const send = vi.fn();
-  installSyntheticSocket(client, send, vi.fn());
-  return { client, send };
-}
-
-function hasPendingRequests(client: GatewayClient): boolean {
-  return protocolHarness(client).hasPendingRequests;
-}
 
 test("decodes every ws raw-data shape", () => {
   expect(rawDataToString(Buffer.from("buffer"))).toBe("buffer");
@@ -74,11 +48,7 @@ function installSyntheticSocket(
   };
 }
 
-function createWatchedGatewayClient(): {
-  client: GatewayClient;
-  close: ReturnType<typeof vi.fn>;
-  send: ReturnType<typeof vi.fn>;
-} {
+function createWatchedGatewayClient(tickIntervalMs = 5) {
   const client = new GatewayClient({
     requestTimeoutMs: 100,
     tickWatchMinIntervalMs: 5,
@@ -88,7 +58,7 @@ function createWatchedGatewayClient(): {
   const send = vi.fn();
   installSyntheticSocket(client, send, close);
   Object.assign(client as unknown as { tickIntervalMs: number; lastTick: number }, {
-    tickIntervalMs: 5,
+    tickIntervalMs,
     lastTick: Date.now(),
   });
   (client as unknown as { startTickWatch: () => void }).startTickWatch();
@@ -111,6 +81,23 @@ async function stopSyntheticClient(client: GatewayClient): Promise<void> {
 describe("GatewayClient", () => {
   let wss: WebSocketServer | null = null;
 
+  async function startServer() {
+    const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    wss = server;
+    await new Promise<void>((resolve) => {
+      server.once("listening", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("websocket address unavailable");
+    }
+    return {
+      server,
+      url: `ws://127.0.0.1:${address.port}`,
+      origin: `http://127.0.0.1:${address.port}`,
+    };
+  }
+
   beforeEach(() => {
     vi.spyOn(Math, "random").mockReturnValue(0);
   });
@@ -131,19 +118,18 @@ describe("GatewayClient", () => {
   });
 
   test("sends the configured websocket origin", async () => {
-    const port = await getFreePort();
-    wss = new WebSocketServer({ port, host: "127.0.0.1" });
+    const { server, url, origin } = await startServer();
     const receivedOrigin = new Promise<string | undefined>((resolve) => {
-      wss?.once("connection", (_socket, request) => resolve(request.headers.origin));
+      server.once("connection", (_socket, request) => resolve(request.headers.origin));
     });
     const client = new GatewayClient({
-      url: `ws://127.0.0.1:${port}`,
-      origin: `http://127.0.0.1:${port}`,
+      url,
+      origin,
       connectChallengeTimeoutMs: 0,
     });
     client.start();
 
-    await expect(receivedOrigin).resolves.toBe(`http://127.0.0.1:${port}`);
+    await expect(receivedOrigin).resolves.toBe(origin);
     client.stop();
   });
 
@@ -172,7 +158,7 @@ describe("GatewayClient", () => {
     const close = vi.fn();
     installSyntheticSocket(client, vi.fn(), close);
 
-    client.updateNodeManifest({
+    const manifest = {
       caps: ["canvas", "system"],
       commands: ["canvas.present", "system.run"],
       workerRuns: {
@@ -180,30 +166,15 @@ describe("GatewayClient", () => {
         openclawVersion: "2026.8.12",
         protocolFeatures: ["worker-heartbeat-v1"],
       },
-    });
+    };
+    client.updateNodeManifest(structuredClone(manifest));
 
     expect(close).toHaveBeenCalledWith(1012, "node manifest changed");
-    expect((client as unknown as { opts: Record<string, unknown> }).opts).toMatchObject({
-      caps: ["canvas", "system"],
-      commands: ["canvas.present", "system.run"],
-      workerRuns: {
-        bundleHash: "a".repeat(64),
-        openclawVersion: "2026.8.12",
-        protocolFeatures: ["worker-heartbeat-v1"],
-      },
-    });
+    expect((client as unknown as { opts: Record<string, unknown> }).opts).toMatchObject(manifest);
   });
 
   test("rejects an unbounded request, reconnects, and does not replay it", async () => {
-    const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-    wss = server;
-    await new Promise<void>((resolve) => {
-      server.once("listening", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("websocket server address unavailable");
-    }
+    const { server, url } = await startServer();
 
     let connectionCount = 0;
     const methodsByConnection = new Map<number, string[]>();
@@ -231,20 +202,9 @@ describe("GatewayClient", () => {
               payload: {
                 type: "hello-ok",
                 protocol: 4,
-                server: { version: "watchdog-test", connId: `c${connectionNumber}` },
-                features: { methods: ["chat.send", "status"], events: ["tick"] },
-                snapshot: {
-                  presence: [],
-                  health: {},
-                  stateVersion: { presence: 1, health: 1 },
-                  uptimeMs: 1,
-                },
+                snapshot: {},
                 auth: { role: "operator", scopes: ["operator.admin"] },
-                policy: {
-                  maxPayload: 512 * 1024,
-                  maxBufferedBytes: 1024 * 1024,
-                  tickIntervalMs: 20,
-                },
+                policy: { tickIntervalMs: 20 },
               },
             }),
           );
@@ -263,40 +223,29 @@ describe("GatewayClient", () => {
       });
     });
 
-    const firstHelloResolvers: Array<() => void> = [];
-    const secondHelloResolvers: Array<() => void> = [];
-    const firstHello = new Promise<void>((resolve) => {
-      firstHelloResolvers.push(resolve);
-    });
-    const secondHello = new Promise<void>((resolve) => {
-      secondHelloResolvers.push(resolve);
-    });
-    const resolveFirstHello = firstHelloResolvers.at(0);
-    const resolveSecondHello = secondHelloResolvers.at(0);
-    if (!resolveFirstHello || !resolveSecondHello) {
-      throw new Error("hello promises did not initialize their resolvers");
-    }
+    const firstHello = createDeferred();
+    const secondHello = createDeferred();
     const closeEvents: Array<{ code: number; reason: string }> = [];
     let helloCount = 0;
     const client = new GatewayClient({
-      url: `ws://127.0.0.1:${address.port}`,
+      url,
       tickWatchMinIntervalMs: 5,
       onHelloOk: () => {
         helloCount += 1;
         if (helloCount === 1) {
           // Keep the real reconnect lifecycle fast without changing production defaults.
           protocolHarness(client).reconnectSupervisor.reset(10);
-          resolveFirstHello();
+          firstHello.resolve();
           return;
         }
-        resolveSecondHello();
+        secondHello.resolve();
       },
       onClose: (code, reason) => closeEvents.push({ code, reason }),
     });
 
     try {
       client.start();
-      await firstHello;
+      await firstHello.promise;
 
       const stalledRequest = client.request(
         "chat.send",
@@ -308,7 +257,7 @@ describe("GatewayClient", () => {
       void stalledRequest.catch(() => {});
 
       await expect(stalledRequest).rejects.toThrow("gateway closed (4000): tick timeout");
-      await secondHello;
+      await secondHello.promise;
       await expect(client.request("status")).resolves.toEqual({ status: "ok" });
 
       expect(closeEvents[0]).toEqual({ code: 4000, reason: "tick timeout" });
@@ -394,31 +343,16 @@ describe("GatewayClient", () => {
   test("clamps oversized tick watchdog intervals before scheduling", () => {
     vi.useFakeTimers();
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
-    const client = new GatewayClient({
-      tickWatchMinIntervalMs: 5,
-    });
-    Object.assign(client as unknown as { ws: unknown; tickIntervalMs: number; lastTick: number }, {
-      ws: {
-        readyState: WebSocket.OPEN,
-        send: vi.fn(),
-        close: vi.fn(),
-      },
-      tickIntervalMs: Number.MAX_SAFE_INTEGER,
-      lastTick: Date.now(),
-    });
-
-    (
-      client as unknown as {
-        startTickWatch: () => void;
-      }
-    ).startTickWatch();
+    const { client } = createWatchedGatewayClient(Number.MAX_SAFE_INTEGER);
 
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
     client.stop();
   });
 
   test("aborts in-flight requests from caller AbortSignal", async () => {
-    const { client, send } = createOpenGatewayClient(25);
+    const client = new GatewayClient({ requestTimeoutMs: 25 });
+    const send = vi.fn();
+    installSyntheticSocket(client, send, vi.fn());
 
     const controller = new AbortController();
     const requestPromise = client.request("status", undefined, {
@@ -426,12 +360,12 @@ describe("GatewayClient", () => {
       timeoutMs: null,
     });
     expect(send).toHaveBeenCalledTimes(1);
-    expect(hasPendingRequests(client)).toBe(true);
+    expect(protocolHarness(client).hasPendingRequests).toBe(true);
 
     controller.abort();
 
     await expect(requestPromise).rejects.toThrow("gateway request aborted for status");
-    expect(hasPendingRequests(client)).toBe(false);
+    expect(protocolHarness(client).hasPendingRequests).toBe(false);
   });
 
   test("clamps oversized stopAndWait timeouts before scheduling", async () => {

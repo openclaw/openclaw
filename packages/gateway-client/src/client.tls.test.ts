@@ -13,7 +13,7 @@ import { installGlobalProxy, type ProxylineHandle } from "@openclaw/proxyline";
 import { afterEach, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
-import { GatewayClient, type GatewayClientCloseInfo } from "./client.js";
+import { GatewayClient, type GatewayClientCloseInfo, type GatewayClientOptions } from "./client.js";
 import { resolveGatewayWebSocketTransport } from "./websocket-transport.js";
 import { WebSocketServer } from "./websocket.test-support.js";
 
@@ -24,6 +24,14 @@ const sockets = new Set<Socket>();
 let socketDrain = createDeferred();
 const clients: GatewayClient[] = [];
 let proxy: ProxylineHandle | undefined;
+
+function startClient(options: GatewayClientOptions) {
+  const failed = createDeferred<Error>();
+  const client = new GatewayClient({ onConnectError: failed.resolve, ...options });
+  clients.push(client);
+  client.start();
+  return { client, failed: failed.promise };
+}
 
 function trackSocket(socket: Socket) {
   if (sockets.size === 0) {
@@ -144,7 +152,7 @@ it.each([
   });
   const port = await listen(server);
   const tunnels = managed ? await startProxy(port) : undefined;
-  const client = new GatewayClient({
+  const { client } = startClient({
     url: `wss://fixture:synthetic-password@127.0.0.1:${port}`,
     tlsFingerprint: pin,
     deviceIdentity: null,
@@ -155,8 +163,6 @@ it.each([
     onConnectError: outcome.resolve,
     onClose: (_code, _reason, info) => closed.resolve(info),
   });
-  clients.push(client);
-  client.start();
   const result = await outcome.promise;
   await client.stopAndWait();
   await waitForSocketDrain();
@@ -192,19 +198,15 @@ it.each(["timeout", "cancel"])("cleans up a stalled TLS handshake on %s", async 
     socket.on("data", () => accepted.resolve());
   });
   const port = await listen(server);
-  const failed = createDeferred<Error>();
-  const client = new GatewayClient({
+  const { client, failed } = startClient({
     url: `wss://127.0.0.1:${port}`,
     tlsFingerprint: fingerprint,
     deviceIdentity: null,
     preauthHandshakeTimeoutMs: 100,
-    onConnectError: failed.resolve,
   });
-  clients.push(client);
-  client.start();
   await accepted.promise;
   if (action === "timeout") {
-    await expect(failed.promise).resolves.toMatchObject({
+    await expect(failed).resolves.toMatchObject({
       message: "Opening handshake has timed out",
       code: "ETIMEDOUT",
     });
@@ -214,18 +216,12 @@ it.each(["timeout", "cancel"])("cleans up a stalled TLS handshake on %s", async 
 });
 
 it("rejects non-empty edge auth headers before a plaintext WebSocket dial", async () => {
-  let resolveConnectError: (error: Error) => void = () => {};
-  const connectError = new Promise<Error>((resolve) => {
-    resolveConnectError = resolve;
-  });
-  const client = new GatewayClient({
+  const { client, failed } = startClient({
     url: "ws://127.0.0.1:18789",
     edgeAuthHeaders: { "X-Edge-Auth": "test-secret" },
-    onConnectError: resolveConnectError,
   });
-  client.start();
 
-  await expect(connectError).resolves.toMatchObject({
+  await expect(failed).resolves.toMatchObject({
     message: "edge auth headers require a wss:// Gateway URL",
   });
   client.stop();
@@ -249,19 +245,13 @@ it("does not follow an edge redirect and redacts its Location URL", async () => 
     );
   });
   const edgePort = await listen(edgeHttpsServer);
-  let resolveConnectError: (error: Error) => void = () => {};
-  const connectError = new Promise<Error>((resolve) => {
-    resolveConnectError = resolve;
-  });
-  const client = new GatewayClient({
+  const { client, failed } = startClient({
     url: `wss://127.0.0.1:${edgePort}`,
     edgeAuthHeaders: { "X-Edge-Auth": "test-secret" },
     tlsFingerprint: fingerprint,
-    onConnectError: resolveConnectError,
   });
-  client.start();
 
-  await expect(connectError).resolves.toMatchObject({
+  await expect(failed).resolves.toMatchObject({
     details: {
       reason: "websocket-upgrade-rejected",
       httpStatus: 302,

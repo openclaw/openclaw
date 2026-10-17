@@ -55,6 +55,7 @@ vi.mock("./websocket.js", () => ({ WebSocket: MockWebSocket }));
 let GatewayClient: typeof GatewayClientInstance;
 const clients: GatewayClientInstance[] = [];
 const releaseStorage: Array<() => void> = [];
+type ClearToken = NonNullable<GatewayClientHostDeps["clearDeviceAuthToken"]>;
 
 function storageGate() {
   const deferred = createDeferred();
@@ -235,13 +236,11 @@ describe("GatewayClient host token storage", () => {
   it("keeps a newer token after observing an empty cache", async () => {
     let cached: DeviceAuthTokenRecord | null = null;
     const newer = { token: "synthetic-newer-token", scopes: ["operator.read"] };
-    const clearDeviceAuthToken = vi.fn<NonNullable<GatewayClientHostDeps["clearDeviceAuthToken"]>>(
-      (params) => {
-        if (params.expectedToken === undefined || params.expectedToken === cached?.token) {
-          cached = null;
-        }
-      },
-    );
+    const clearDeviceAuthToken = vi.fn<ClearToken>((params) => {
+      if (params.expectedToken === undefined || params.expectedToken === cached?.token) {
+        cached = null;
+      }
+    });
     const { client, socket } = connect({
       loadDeviceAuthToken: () => Promise.resolve(cached),
       clearDeviceAuthToken,
@@ -264,14 +263,12 @@ describe("GatewayClient host token storage", () => {
     const permitStore = storageGate();
     let cached: DeviceAuthTokenRecord | null = initial;
     const newer = { token: "synthetic-newer-token", scopes: ["operator.read"] };
-    const clearDeviceAuthToken = vi.fn<NonNullable<GatewayClientHostDeps["clearDeviceAuthToken"]>>(
-      (params) => {
-        params.assertCurrent?.();
-        if (params.expectedToken === undefined || params.expectedToken === cached?.token) {
-          cached = null;
-        }
-      },
-    );
+    const clearDeviceAuthToken = vi.fn<ClearToken>((params) => {
+      params.assertCurrent?.();
+      if (params.expectedToken === undefined || params.expectedToken === cached?.token) {
+        cached = null;
+      }
+    });
     const { socket, onHelloOk } = connect(
       {
         loadDeviceAuthToken: () => cached,
@@ -386,9 +383,7 @@ describe("GatewayClient host token storage", () => {
 
   it("preserves rejection and cleanup while the peer is already closing", async () => {
     const cleared = storageGate();
-    const clearDeviceAuthToken = vi.fn<NonNullable<GatewayClientHostDeps["clearDeviceAuthToken"]>>(
-      () => cleared.promise,
-    );
+    const clearDeviceAuthToken = vi.fn<ClearToken>(() => cleared.promise);
     const { socket, onConnectError, onClose, onReconnectPaused } = connect({
       clearDeviceAuthToken,
     });
@@ -426,9 +421,7 @@ describe("GatewayClient host token storage", () => {
   it("finishes close cleanup before loading credentials for the replacement connection", async () => {
     const cleared = storageGate();
     const loadDeviceAuthToken = vi.fn(() => storedToken);
-    const clearDeviceAuthToken = vi.fn<NonNullable<GatewayClientHostDeps["clearDeviceAuthToken"]>>(
-      () => cleared.promise,
-    );
+    const clearDeviceAuthToken = vi.fn<ClearToken>(() => cleared.promise);
     const { socket } = connect({ loadDeviceAuthToken, clearDeviceAuthToken });
     socket.close(1008, "device token mismatch");
     const cleanup = clearDeviceAuthToken.mock.calls[0]?.[0];

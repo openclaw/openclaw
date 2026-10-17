@@ -2,12 +2,16 @@ import assert from "node:assert/strict";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayProtocolClientOptions } from "./protocol-client-contract.js";
 import {
-  GatewayProtocolClient,
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
   type GatewayProtocolRequestTiming,
   type GatewayProtocolSocketHandlers,
 } from "./protocol-client.js";
+import {
+  createProtocolHarness,
+  receive,
+  stopProtocolClients,
+} from "./protocol-client.test-support.js";
 import { isGatewayProtocolResponseError } from "./protocol-request.js";
 
 type RequestFrame = {
@@ -21,50 +25,19 @@ type RequestConnection = {
   close: (code?: number, reason?: string) => void;
 };
 
-function createRequestHarness(options?: {
-  createRequestId?: () => string;
-  requestTimeoutMs?: number;
-  onRequestTiming?: (this: unknown, timing: GatewayProtocolRequestTiming) => void;
-  onCallbackError?: (label: string, error: unknown) => void;
-  send?: (frame: RequestFrame) => void;
-  nowMs?: () => number;
-  createRequestError?: GatewayProtocolClientOptions<unknown>["createRequestError"];
-}) {
-  const connections: RequestConnection[] = [];
-  let nextRequestId = 0;
-  const client = new GatewayProtocolClient<Record<string, never>>({
-    createSocket: (handlers) => {
-      let open = true;
-      const frames: RequestFrame[] = [];
-      const close = (code = 1000, reason = "") => {
-        open = false;
-        handlers.close(code, reason);
-      };
-      connections.push({ handlers, frames, close });
-      return {
-        isOpen: () => open,
-        send: (data) => {
-          const frame = JSON.parse(data) as RequestFrame;
-          frames.push(frame);
-          options?.send?.(frame);
-        },
-        close,
-      };
-    },
-    createRequestId: options?.createRequestId ?? (() => `request-${++nextRequestId}`),
-    createRequestError: options?.createRequestError,
-    buildConnectPlan: () => ({}),
-    buildConnectParams: (plan) => plan,
-    resolveClose: () => ({ retry: false, notify: false }),
-    handshake: { mode: "require-challenge", timeoutMs: 100 },
-    reconnect: { initialMs: 10, multiplier: 2, maxMs: 100 },
-    requestTimeoutMs: options?.requestTimeoutMs,
-    onRequestTiming: options?.onRequestTiming,
-    onCallbackError: options?.onCallbackError,
-    nowMs: options?.nowMs,
-  });
+function createRequestHarness(
+  options?: Partial<GatewayProtocolClientOptions<Record<string, never>>> & {
+    send?: (frame: RequestFrame) => void;
+  },
+) {
+  const { client, connections } = createProtocolHarness(
+    { ...options, resolveClose: () => ({ retry: false, notify: false }) },
+    { send: options?.send },
+  );
   client.start();
-  return { client, connections };
+  const connection = connections[0];
+  assert(connection);
+  return { client, connections, connection };
 }
 
 function latestFrame(connection: RequestConnection): RequestFrame {
@@ -74,17 +47,20 @@ function latestFrame(connection: RequestConnection): RequestFrame {
 }
 
 function respond(connection: RequestConnection, id: string, payload: unknown, ok = true): void {
-  connection.handlers.message(
-    JSON.stringify({
-      type: "res",
-      id,
-      ok,
-      ...(ok ? { payload } : { error: payload }),
-    }),
-  );
+  receive(connection, {
+    type: "res",
+    id,
+    ok,
+    ...(ok ? { payload } : { error: payload }),
+  });
 }
 
-function refuseBootstrapRead(connection: RequestConnection, id = latestFrame(connection).id): void {
+function refuseBootstrapRead(
+  connection: RequestConnection,
+  id = latestFrame(connection).id,
+  retryAfterMs = 60_000,
+  reason = "gateway-suspending",
+): void {
   respond(
     connection,
     id,
@@ -92,14 +68,19 @@ function refuseBootstrapRead(connection: RequestConnection, id = latestFrame(con
       code: "UNAVAILABLE",
       message: "suspended",
       retryable: true,
-      retryAfterMs: 60_000,
-      details: { reason: "gateway-suspending" },
+      retryAfterMs,
+      details: { reason },
     },
     false,
   );
 }
 
+function notify(connection: RequestConnection, phase: string): void {
+  receive(connection, { type: "event", event: "gateway.suspension", payload: { phase } });
+}
+
 afterEach(() => {
+  stopProtocolClients();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -139,10 +120,8 @@ describe("GatewayProtocolClient requests", () => {
         });
         const connection = harness.connections[0];
         assert(connection);
-        const notify = (phase: string) =>
-          connection.handlers.message(
-            JSON.stringify({ type: "event", event: "gateway.suspension", payload: { phase } }),
-          );
+        const announce = (phase: string) =>
+          receive(connection, { type: "event", event: "gateway.suspension", payload: { phase } });
         let pending = false;
         const poll = () => {
           if (pending) {
@@ -168,7 +147,7 @@ describe("GatewayProtocolClient requests", () => {
           );
         };
         poll();
-        return { ...harness, notify, timer: setInterval(poll, 1_000) };
+        return { ...harness, announce, timer: setInterval(poll, 1_000) };
       });
       try {
         await vi.advanceTimersByTimeAsync(29_999);
@@ -177,8 +156,8 @@ describe("GatewayProtocolClient requests", () => {
         }
         await vi.advanceTimersByTimeAsync(1);
         suspended = false;
-        for (const { notify } of clients) {
-          notify("accepting");
+        for (const { announce } of clients) {
+          announce("accepting");
         }
         await vi.advanceTimersByTimeAsync(0);
         expect(refused).toBeLessThanOrEqual(40);
@@ -195,22 +174,9 @@ describe("GatewayProtocolClient requests", () => {
   it("probes one parked bootstrap read with jitter and releases the rest after restart rollback", async () => {
     vi.useFakeTimers();
     vi.spyOn(Math, "random").mockReturnValue(0.5);
-    const { client, connections } = createRequestHarness();
-    const connection = connections[0];
-    assert(connection);
+    const { client, connection } = createRequestHarness();
     const first = client.request("sessions.subscribe", {});
-    respond(
-      connection,
-      latestFrame(connection).id,
-      {
-        code: "UNAVAILABLE",
-        message: "restarting",
-        retryable: true,
-        retryAfterMs: 10_000,
-        details: { reason: "gateway-restarting" },
-      },
-      false,
-    );
+    refuseBootstrapRead(connection, latestFrame(connection).id, 10_000, "gateway-restarting");
     const second = client.request("sessions.groups.list", {});
     await vi.advanceTimersByTimeAsync(65_999);
     expect(connection.frames).toHaveLength(1);
@@ -228,16 +194,12 @@ describe("GatewayProtocolClient requests", () => {
 
   it("holds bootstrap reads after shutdown and retires them before reconnect", async () => {
     vi.useFakeTimers();
-    const { client, connections } = createRequestHarness();
-    const connection = connections[0];
-    assert(connection);
-    connection.handlers.message(
-      JSON.stringify({
-        type: "event",
-        event: "shutdown",
-        payload: { restartExpectedMs: 1_500 },
-      }),
-    );
+    const { client, connection, connections } = createRequestHarness();
+    receive(connection, {
+      type: "event",
+      event: "shutdown",
+      payload: { restartExpectedMs: 1_500 },
+    });
     const outcome = client.request("question.list", {}).catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(600_000);
     expect(connection.frames).toHaveLength(0);
@@ -256,30 +218,20 @@ describe("GatewayProtocolClient requests", () => {
     "replaces refusal probes with an announced %s pause despite late refusals",
     async (phase) => {
       vi.useFakeTimers();
-      const { client, connections } = createRequestHarness();
-      const connection = connections[0];
-      assert(connection);
+      const { client, connection } = createRequestHarness();
       const identity = client.request("agent.identity.get", {});
       const identityFrame = latestFrame(connection);
       const groups = client.request("sessions.groups.list", {});
       refuseBootstrapRead(connection, identityFrame.id);
-      const notify = (nextPhase: string) =>
-        connection.handlers.message(
-          JSON.stringify({
-            type: "event",
-            event: "gateway.suspension",
-            payload: { phase: nextPhase },
-          }),
-        );
       await vi.advanceTimersByTimeAsync(500);
-      notify(phase);
+      notify(connection, phase);
       refuseBootstrapRead(connection);
       await vi.advanceTimersByTimeAsync(600_000);
       expect(connection.frames.map((frame) => frame.method)).toEqual([
         "agent.identity.get",
         "sessions.groups.list",
       ]);
-      notify("accepting");
+      notify(connection, "accepting");
       expect(connection.frames.map((frame) => frame.method)).toEqual([
         "agent.identity.get",
         "sessions.groups.list",
@@ -296,9 +248,7 @@ describe("GatewayProtocolClient requests", () => {
 
   it("does not renew an expired empty pause before the next bootstrap probe", async () => {
     vi.useFakeTimers();
-    const { client, connections } = createRequestHarness({ requestTimeoutMs: 30_000 });
-    const connection = connections[0];
-    assert(connection);
+    const { client, connection } = createRequestHarness({ requestTimeoutMs: 30_000 });
     const expired = client.request("agent.identity.get", {}).catch((error: unknown) => error);
     refuseBootstrapRead(connection);
     await vi.advanceTimersByTimeAsync(61_000);
@@ -322,9 +272,7 @@ describe("GatewayProtocolClient requests", () => {
     async (reason) => {
       vi.useFakeTimers();
       vi.spyOn(Math, "random").mockReturnValue(0);
-      const { client, connections } = createRequestHarness();
-      const connection = connections[0];
-      assert(connection);
+      const { client, connection } = createRequestHarness();
       const identity = client.request("agent.identity.get", {});
       const groups = client.request("sessions.groups.list", {});
       const [identityFrame, groupsFrame] = connection.frames;
@@ -358,9 +306,7 @@ describe("GatewayProtocolClient requests", () => {
 
   it("keeps the pause when a probe fails authorization before admission", async () => {
     vi.useFakeTimers();
-    const { client, connections } = createRequestHarness();
-    const connection = connections[0];
-    assert(connection);
+    const { client, connection } = createRequestHarness();
     const question = client.request("question.list", {}).catch((error: unknown) => error);
     refuseBootstrapRead(connection);
     const groups = client.request("sessions.groups.list", {});
@@ -390,9 +336,7 @@ describe("GatewayProtocolClient requests", () => {
 
   it("does not send queued probes while their shared signal is aborting", async () => {
     vi.useFakeTimers();
-    const { client, connections } = createRequestHarness();
-    const connection = connections[0];
-    assert(connection);
+    const { client, connection } = createRequestHarness();
     const controller = new AbortController();
     const question = client
       .request("question.list", {}, { signal: controller.signal })
@@ -418,22 +362,9 @@ describe("GatewayProtocolClient requests", () => {
   it("does not send queued probes whose deadlines are already due", async () => {
     vi.useFakeTimers();
     vi.spyOn(Math, "random").mockReturnValue(0);
-    const { client, connections } = createRequestHarness({ requestTimeoutMs: 70_000 });
-    const connection = connections[0];
-    assert(connection);
+    const { client, connection } = createRequestHarness({ requestTimeoutMs: 70_000 });
     const identity = client.request("agent.identity.get", {}).catch((error: unknown) => error);
-    respond(
-      connection,
-      latestFrame(connection).id,
-      {
-        code: "UNAVAILABLE",
-        message: "restarting",
-        retryable: true,
-        retryAfterMs: 1_000,
-        details: { reason: "gateway-restarting" },
-      },
-      false,
-    );
+    refuseBootstrapRead(connection, latestFrame(connection).id, 1_000, "gateway-restarting");
     const queued = ["sessions.groups.list", "sessions.list"].map((method) =>
       client.request(method, {}).catch((error: unknown) => error),
     );
@@ -449,29 +380,19 @@ describe("GatewayProtocolClient requests", () => {
 
   it("does not let an older probe release a newer admission pause", async () => {
     vi.useFakeTimers();
-    const { client, connections } = createRequestHarness();
-    const connection = connections[0];
-    assert(connection);
-    const notify = (phase: string) =>
-      connection.handlers.message(
-        JSON.stringify({
-          type: "event",
-          event: "gateway.suspension",
-          payload: { phase },
-        }),
-      );
+    const { client, connection } = createRequestHarness();
     const identity = client.request("agent.identity.get", {});
     refuseBootstrapRead(connection);
     const groups = client.request("sessions.groups.list", {});
     const list = client.request("sessions.list", {});
     await vi.advanceTimersByTimeAsync(60_000);
     expect(connection.frames).toHaveLength(2);
-    notify("draining");
+    notify(connection, "draining");
     respond(connection, latestFrame(connection).id, { agentId: "main" });
     await identity;
     await vi.advanceTimersByTimeAsync(600_000);
     expect(connection.frames).toHaveLength(2);
-    notify("accepting");
+    notify(connection, "accepting");
     expect(connection.frames.map((frame) => frame.method)).toEqual([
       "agent.identity.get",
       "agent.identity.get",
@@ -488,12 +409,8 @@ describe("GatewayProtocolClient requests", () => {
 
   it("seeds the identity wait from hello and keeps writes synchronous", async () => {
     vi.useFakeTimers();
-    const { client, connections } = createRequestHarness();
-    const connection = connections[0];
-    assert(connection);
-    connection.handlers.message(
-      JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "test" } }),
-    );
+    const { client, connection } = createRequestHarness();
+    receive(connection, { type: "event", event: "connect.challenge", payload: { nonce: "test" } });
     respond(connection, latestFrame(connection).id, {
       snapshot: { suspension: { phase: "prepared" } },
     });
@@ -525,13 +442,7 @@ describe("GatewayProtocolClient requests", () => {
     await control;
     await vi.advanceTimersByTimeAsync(600_000);
     expect(connection.frames).toHaveLength(3);
-    connection.handlers.message(
-      JSON.stringify({
-        type: "event",
-        event: "gateway.suspension",
-        payload: { phase: "accepting" },
-      }),
-    );
+    notify(connection, "accepting");
     expect(latestFrame(connection).method).toBe("agent.identity.get");
     respond(connection, latestFrame(connection).id, { agentId: "main" });
     await expect(identity).resolves.toEqual({ agentId: "main" });
@@ -542,16 +453,8 @@ describe("GatewayProtocolClient requests", () => {
     "retires a parked identity on %s without sending it after resume",
     async (retirement) => {
       vi.useFakeTimers();
-      const { client, connections } = createRequestHarness();
-      const connection = connections[0];
-      assert(connection);
-      connection.handlers.message(
-        JSON.stringify({
-          type: "event",
-          event: "gateway.suspension",
-          payload: { phase: "draining" },
-        }),
-      );
+      const { client, connection, connections } = createRequestHarness();
+      notify(connection, "draining");
       const controller = new AbortController();
       const request = client.request(
         "agent.identity.get",
@@ -573,13 +476,7 @@ describe("GatewayProtocolClient requests", () => {
         expect(await outcome).toMatchObject({ message: "gateway closed (1012): restart" });
         client.start();
       }
-      connection.handlers.message(
-        JSON.stringify({
-          type: "event",
-          event: "gateway.suspension",
-          payload: { phase: "accepting" },
-        }),
-      );
+      notify(connection, "accepting");
       await vi.advanceTimersByTimeAsync(60_000);
       expect(connection.frames).toHaveLength(0);
       expect(client.hasPendingRequests).toBe(false);
@@ -594,23 +491,10 @@ describe("GatewayProtocolClient requests", () => {
 
   it("honors retry-after without resetting the original identity deadline", async () => {
     vi.useFakeTimers();
-    const { client, connections } = createRequestHarness();
-    const connection = connections[0];
-    assert(connection);
+    const { client, connection } = createRequestHarness();
     const request = client.request("agent.identity.get", {}, { timeoutMs: 1_500 });
     const outcome = request.catch((error: unknown) => error);
-    respond(
-      connection,
-      latestFrame(connection).id,
-      {
-        code: "UNAVAILABLE",
-        message: "suspended",
-        retryable: true,
-        retryAfterMs: 1_000,
-        details: { reason: "gateway-suspending" },
-      },
-      false,
-    );
+    refuseBootstrapRead(connection, latestFrame(connection).id, 1_000);
     await vi.advanceTimersByTimeAsync(999);
     expect(connection.frames).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1);
@@ -624,7 +508,7 @@ describe("GatewayProtocolClient requests", () => {
   it("retains correlated negative payloads from a custom error factory", async () => {
     const created: GatewayProtocolRequestError[] = [];
     const generatedIds = ["same-id:1", "same-id"];
-    const { client, connections } = createRequestHarness({
+    const { client, connection } = createRequestHarness({
       createRequestId: () => generatedIds.shift() ?? "same-id",
       createRequestError: (fields) => {
         const error = new GatewayProtocolRequestError(fields);
@@ -633,54 +517,46 @@ describe("GatewayProtocolClient requests", () => {
         return error;
       },
     });
-    try {
-      const connection = connections[0];
-      assert(connection);
-      const onAccepted = vi.fn();
-      const first = client.request("first", {}, { expectFinal: true, onAccepted });
-      const second = client.request("second", {}, { expectFinal: true });
-      const [firstFrame, secondFrame] = connection.frames;
-      if (!firstFrame || !secondFrame) {
-        throw new Error("expected concurrent request frames");
-      }
-      expect(firstFrame.id).not.toBe(secondFrame.id);
-      const fields = {
-        code: "UNAVAILABLE",
-        message: "failed",
-        details: { reason: "busy" },
-        retryable: true,
-        retryAfterMs: 250,
-      };
-      for (const [frame, payload] of [
-        [secondFrame, { runId: "second-run", privateResult: "not-for-logs" }],
-        [firstFrame, { runId: "first-run", status: "accepted" }],
-      ] as const) {
-        connection.handlers.message(
-          JSON.stringify({ type: "res", id: frame.id, ok: false, payload, error: fields }),
-        );
-      }
-      const errors = await Promise.all([
-        first.catch((error: unknown) => error),
-        second.catch((error: unknown) => error),
-      ]);
-      for (const [index, error] of errors.entries()) {
-        expect(error).toBeInstanceOf(GatewayProtocolRequestError);
-        expect(isGatewayProtocolResponseError(error)).toBe(true);
-        expect(error).toMatchObject({
-          ...fields,
-          gatewayCode: fields.code,
-          name: "CustomRequestError",
-          responsePayload: { runId: index === 0 ? "first-run" : "second-run" },
-        });
-        expect(JSON.stringify(error)).not.toContain('"responsePayload":');
-        expect(JSON.stringify(error)).not.toContain("not-for-logs");
-      }
-      expect(created.map((error, index) => error === errors[1 - index])).toEqual([true, true]);
-      expect(onAccepted).not.toHaveBeenCalled();
-      expect(client.hasPendingRequests).toBe(false);
-    } finally {
-      client.stop();
+    const onAccepted = vi.fn();
+    const first = client.request("first", {}, { expectFinal: true, onAccepted });
+    const second = client.request("second", {}, { expectFinal: true });
+    const [firstFrame, secondFrame] = connection.frames;
+    if (!firstFrame || !secondFrame) {
+      throw new Error("expected concurrent request frames");
     }
+    expect(firstFrame.id).not.toBe(secondFrame.id);
+    const fields = {
+      code: "UNAVAILABLE",
+      message: "failed",
+      details: { reason: "busy" },
+      retryable: true,
+      retryAfterMs: 250,
+    };
+    for (const [frame, payload] of [
+      [secondFrame, { runId: "second-run", privateResult: "not-for-logs" }],
+      [firstFrame, { runId: "first-run", status: "accepted" }],
+    ] as const) {
+      receive(connection, { type: "res", id: frame.id, ok: false, payload, error: fields });
+    }
+    const errors = await Promise.all([
+      first.catch((error: unknown) => error),
+      second.catch((error: unknown) => error),
+    ]);
+    for (const [index, error] of errors.entries()) {
+      expect(error).toBeInstanceOf(GatewayProtocolRequestError);
+      expect(isGatewayProtocolResponseError(error)).toBe(true);
+      expect(error).toMatchObject({
+        ...fields,
+        gatewayCode: fields.code,
+        name: "CustomRequestError",
+        responsePayload: { runId: index === 0 ? "first-run" : "second-run" },
+      });
+      expect(JSON.stringify(error)).not.toContain('"responsePayload":');
+      expect(JSON.stringify(error)).not.toContain("not-for-logs");
+    }
+    expect(created.map((error, index) => error === errors[1 - index])).toEqual([true, true]);
+    expect(onAccepted).not.toHaveBeenCalled();
+    expect(client.hasPendingRequests).toBe(false);
   });
 
   it("reports typed deadlines before and after the send boundary", async () => {
@@ -729,7 +605,7 @@ describe("GatewayProtocolClient requests", () => {
   it("retires aborted and send-failed IDs before a replacement request", async () => {
     const controller = new AbortController();
     let sendCalls = 0;
-    const { client, connections } = createRequestHarness({
+    const { client, connection } = createRequestHarness({
       createRequestId: () => "same-id",
       send: () => {
         sendCalls += 1;
@@ -738,8 +614,6 @@ describe("GatewayProtocolClient requests", () => {
         }
       },
     });
-    const connection = connections[0];
-    assert(connection);
     const aborted = client.request("aborted", {}, { timeoutMs: null, signal: controller.signal });
     controller.abort();
     await expect(aborted).rejects.toThrow("gateway request aborted for aborted");
@@ -762,9 +636,7 @@ describe("GatewayProtocolClient requests", () => {
   it("ignores late accepted and final replies after a timeout collision", async () => {
     vi.useFakeTimers();
     const onAccepted = vi.fn();
-    const { client, connections } = createRequestHarness({ createRequestId: () => "same-id" });
-    const connection = connections[0];
-    assert(connection);
+    const { client, connection } = createRequestHarness({ createRequestId: () => "same-id" });
     const retired = client.request("agent", {}, { timeoutMs: 5, expectFinal: true, onAccepted });
     const retiredOutcome = retired.catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(5);
@@ -817,13 +689,11 @@ describe("GatewayProtocolClient requests", () => {
     const onCallbackError = vi.fn<(label: string, error: unknown) => void>((label) => {
       trace.push(`error:${label}`);
     });
-    const { client, connections } = createRequestHarness({
+    const { client, connection } = createRequestHarness({
       nowMs: () => nowMs,
       onRequestTiming,
       onCallbackError,
     });
-    const connection = connections[0];
-    assert(connection);
     const request = client.request(
       "agent",
       {},
