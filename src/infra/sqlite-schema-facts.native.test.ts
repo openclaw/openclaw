@@ -960,11 +960,12 @@ describe("native SQLite schema snapshots and callbacks", () => {
   );
 
   it.each([
-    { read: "SELECT id FROM original", version: 1 },
-    { read: "SELECT 1", version: 2 },
-    { read: "PRAGMA busy_timeout", version: 2 },
-    { read: "PRAGMA query_only", version: 2 },
-  ])("qualifies managed snapshots after read=$read", ({ read, version }) => {
+    { read: "SELECT id FROM original", version: 1, followup: "none" },
+    { read: "SELECT 1", version: 2, followup: "none" },
+    { read: "PRAGMA busy_timeout", version: 2, followup: "none" },
+    { read: "PRAGMA query_only", version: 2, followup: "none" },
+    { read: "SELECT id FROM original", version: 1, followup: "pinned" },
+  ])("qualifies read=$read, followup=$followup", ({ read, version, followup }) => {
     const filename = path.join(tempDirs.make("openclaw-schema-managed-snapshot-"), "state.sqlite");
     const reader = openDatabase(undefined, true, filename);
     reader.exec("PRAGMA journal_mode=WAL");
@@ -973,6 +974,11 @@ describe("native SQLite schema snapshots and callbacks", () => {
     runSqliteReadOperationSync(reader, () => {
       reader.prepare(read).all();
       writer.exec("CREATE TABLE committed_sibling (id); PRAGMA user_version=2");
+      if (followup === "pinned") {
+        runSqliteSchemaReadSnapshotSync(reader, () =>
+          reader.prepare("SELECT id FROM original").all(),
+        );
+      }
       const observation = observeSqliteReadSql(StatementSync.prototype);
       try {
         const qualified = getAdmittedSqliteSchemaFacts(reader);

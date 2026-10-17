@@ -330,7 +330,7 @@ function trackSchemaChanges(
     }
     return {
       stepped: () => {
-        if (snapshot && database.isTransaction) {
+        if (snapshot && owner.facts && database.isTransaction) {
           owner.transactionCatalogBound = true;
         }
       },
