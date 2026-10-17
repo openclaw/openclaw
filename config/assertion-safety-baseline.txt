@@ -2188,7 +2188,7 @@ src/node-host/invoke-agent-cli-claude-params.ts	1
 src/node-host/invoke-agent-cli-claude.ts	1
 src/node-host/invoke-payload.ts	3
 src/node-host/invoke.ts	1
-src/node-host/mcp.ts	2
+src/node-host/mcp.ts	1
 src/node-host/node-worker-transfer-client.ts	1
 src/node-host/node-worker-transfer-http.ts	1
 src/node-host/node-worker-tree-control.ts	2

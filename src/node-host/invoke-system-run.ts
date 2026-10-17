@@ -32,7 +32,6 @@ import {
   EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING,
   formatExecAutoReviewAssessment,
   resolveExecAutoReviewDecision,
-  type ExecAutoReviewer,
 } from "../infra/exec-auto-review.js";
 import {
   requestExecHostViaSocket,
@@ -153,9 +152,6 @@ type HandleSystemRunInvokeOptions = {
   sendNodeEvent?: (event: string, payload: ExecEventPayload) => Promise<void>;
   sendInvokeResult: (result: SystemRunInvokeResult) => Promise<void>;
   preferMacAppExecHost: boolean;
-  getRuntimeConfig?: () => OpenClawConfig;
-  autoReviewer?: ExecAutoReviewer;
-  commitExecAuthorization?: typeof commitExecAuthorizationLocked;
 };
 
 async function sendSystemRunCompleted(
@@ -341,7 +337,7 @@ async function evaluateSystemRunPolicyPhase(
   opts: HandleSystemRunInvokeOptions,
   parsed: SystemRunParsePhase,
 ) {
-  const cfg = opts.getRuntimeConfig?.() ?? (await import("../config/config.js")).getRuntimeConfig();
+  const cfg = (await import("../config/config.js")).getRuntimeConfig();
   const effectivePolicy = await resolveEffectiveSystemRunExecPolicy({
     cfg,
     agentId: parsed.agentId,
@@ -522,13 +518,13 @@ async function evaluateSystemRunPolicyPhase(
       autoReviewEligibility.eligible &&
       policy.eventReason !== "security=deny";
     if (canAutoReviewApprovalMiss) {
-      const reviewer =
-        opts.autoReviewer ??
-        (await import("../agents/exec-auto-reviewer.js")).createModelExecAutoReviewer({
-          cfg,
-          agentId: parsed.agentId,
-          reviewer: agentExec?.reviewer ?? globalExec?.reviewer,
-        });
+      const reviewer = (
+        await import("../agents/exec-auto-reviewer.js")
+      ).createModelExecAutoReviewer({
+        cfg,
+        agentId: parsed.agentId,
+        reviewer: agentExec?.reviewer ?? globalExec?.reviewer,
+      });
       const decision = await resolveExecAutoReviewDecision(reviewer, {
         command: parsed.commandText,
         argv: autoReviewArgv,
@@ -830,9 +826,7 @@ async function executeSystemRunPhase(
 
   let assertCommittedAuthorization: () => void;
   try {
-    assertCommittedAuthorization = await (
-      opts.commitExecAuthorization ?? commitExecAuthorizationLocked
-    )({
+    assertCommittedAuthorization = await commitExecAuthorizationLocked({
       agentId: phase.agentId,
       matches: phase.allowlistMatches,
       command: phase.commandText,
