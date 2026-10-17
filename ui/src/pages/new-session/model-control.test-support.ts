@@ -100,7 +100,7 @@ export function renderControl(
     thinkingDefault: "medium",
   },
 ) {
-  const props = {
+  const props: Parameters<typeof NewSessionModelControlView>[0] = {
     control,
     options: {
       ...(agent ? { agent } : {}),
