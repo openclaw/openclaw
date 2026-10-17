@@ -169,8 +169,10 @@ it.each([
             );
             response.end("data: [DONE]\n\n");
           })
-          .catch((error: Error) => {
-            response.destroy(error);
+          .catch((error: unknown) => {
+            response.destroy(
+              error instanceof Error ? error : new Error("Model fixture failed", { cause: error }),
+            );
           });
       });
       await new Promise<void>((resolve) => {
