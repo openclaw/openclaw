@@ -145,7 +145,7 @@ export async function streamAgentResponse(
   runtime?: AgentCoreStreamRuntimeDeps,
 ): Promise<{
   message: AssistantMessage;
-  executedIds: Set<string>;
+  admittedToolCallCount: number;
   batches: ExecutedToolCallBatch[];
   continuationRequired: boolean;
 }> {
@@ -197,7 +197,7 @@ export async function streamAgentResponse(
     }
     return projected.slice(llmMessages.length);
   });
-  const executedIds = new Set<string>();
+  let admittedToolCallCount = 0;
   const batches: ExecutedToolCallBatch[] = [];
   let executions = Promise.resolve();
   let admissions = Promise.resolve();
@@ -229,17 +229,13 @@ export async function streamAgentResponse(
     }
     const calls = message.content.filter(
       (item): item is AgentToolCall =>
-        item.type === "toolCall" &&
-        !executedIds.has(item.id) &&
-        (message.stopReason === "toolUse" || item.async === true),
+        item.type === "toolCall" && (message.stopReason === "toolUse" || item.async === true),
     );
     if (calls.length === 0) {
       return;
     }
-    const hasUnobservedAsyncToolResults = executedIds.size > 0;
-    for (const call of calls) {
-      executedIds.add(call.id);
-    }
+    const hasUnobservedAsyncToolResults = admittedToolCallCount > 0;
+    admittedToolCallCount += calls.length;
     const previousExecutions = executions;
     const previousAdmission = admissions;
     // SAFETY: Promise construction assigns the admission release synchronously.
@@ -374,7 +370,6 @@ export async function streamAgentResponse(
                 if (
                   event.type === "toolcall_end" &&
                   event.toolCall.async &&
-                  !executedIds.has(event.toolCall.id) &&
                   message.content
                     .slice(committedContentCount, event.contentIndex)
                     .every((item) => item.type !== "toolCall" || item.async === true)
@@ -464,7 +459,7 @@ export async function streamAgentResponse(
             ),
           );
           await commitFragment(finalMessage);
-          if (executedIds.size > 0) {
+          if (admittedToolCallCount > 0) {
             enqueueTools(finalMessage);
           }
           await executions;
@@ -472,7 +467,7 @@ export async function streamAgentResponse(
             throw executionFailure.error;
           }
           const continuationRequired = await steering.finish();
-          return { message: finalMessage, executedIds, batches, continuationRequired };
+          return { message: finalMessage, admittedToolCallCount, batches, continuationRequired };
         }
       },
       runtime,
