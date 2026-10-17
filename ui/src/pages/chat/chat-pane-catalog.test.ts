@@ -31,6 +31,7 @@ function createCatalogContinuationPane(request: ReturnType<typeof vi.fn>) {
   const client = { request } as unknown as GatewayBrowserClient;
   const sessions = {} as SessionCapability;
   const { pane, state } = createTestChatPane({ client, sessions });
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
   const key = {
     catalogId: "codex",
     hostId: "gateway:local",
@@ -52,6 +53,7 @@ function createCatalogContinuationPane(request: ReturnType<typeof vi.fn>) {
     canArchive: true,
   };
   pane.onPaneSessionChange = vi.fn();
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   return { client, key, pane, sessions, sourceSessionKey, state };
 }
 
@@ -65,7 +67,9 @@ describe("catalog transcript cache", () => {
       { catalogId: "fixture", hostId: "gateway:local", threadId: "history" },
       "main",
     );
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
     pane.sessionKey = state.sessionKey = sessionKey;
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
     const now = Date.now();
     pane.receiveQuestionEvent({
       event: "question.requested",
@@ -197,7 +201,9 @@ describe("chat pane catalog session lifecycle", () => {
       .mockResolvedValueOnce(transcript);
     const client = { request } as unknown as GatewayBrowserClient;
     const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
     pane.sessionKey = buildCatalogSessionKey(key, "main");
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
 
     await pane.loadCatalogSession(key, false);
 
@@ -257,9 +263,11 @@ describe("chat pane catalog session lifecycle", () => {
       .mockImplementationOnce(() => read.promise);
     const client = { request } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
     pane.sessionKey = buildCatalogSessionKey(key, "main");
     state.sessionKey = pane.sessionKey;
     state.assistantAgentId = "main";
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
 
     const pending = pane.loadCatalogSession(key, false);
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
@@ -339,9 +347,11 @@ describe("chat pane catalog session lifecycle", () => {
     } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
     const key = { catalogId: "claude", hostId: "gateway:local", threadId: "thread-1" };
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
     state.sessionKey = buildCatalogSessionKey(key, "main");
     pane.sessionKey = state.sessionKey;
     pane.history.catalogCursor = scenario.initialCursor;
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
     if (scenario.seenCursor) {
       pane.olderCursorsSeen.add(scenario.seenCursor);
     }

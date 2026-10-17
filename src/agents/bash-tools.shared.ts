@@ -1,7 +1,3 @@
-/**
- * Shared helpers for bash exec/process tools.
- * Owns output slicing, environment coercion, and compact session labels.
- */
 import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
 import { sliceUtf16Safe } from "../utils.js";
 import type { SandboxBackendHandle } from "./sandbox/backend-handle.types.js";
@@ -25,7 +21,6 @@ export type BashSandboxConfig = {
   finalizeExec?: SandboxBackendHandle["finalizeExec"];
 };
 
-/** Builds the environment passed into sandboxed exec calls. */
 export function buildSandboxEnv(params: {
   defaultPath: string;
   paramsEnv?: Record<string, string>;
@@ -98,7 +93,6 @@ export function truncateMiddle(str: string, max: number) {
   return `${sliceUtf16Safe(str, 0, half)}...${sliceUtf16Safe(str, -half)}`;
 }
 
-/** Returns a line-based log slice plus original line/character counts. */
 export function sliceLogLines(
   text: string,
   offset?: number,

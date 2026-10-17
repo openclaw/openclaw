@@ -140,6 +140,7 @@ type ChatAbortHost = ChatAbortRunState &
   ChatInputHistoryState & {
     pendingAbort?: PendingChatAbort | null;
     chatReplyTarget?: ChatReplyTarget | null;
+    composerDraftChanged?: () => void;
     sessions?: Partial<Pick<SessionCapability, "deletionState">>;
   };
 
@@ -379,6 +380,7 @@ export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptio
     host.chatMentions = [];
     host.chatReplyTarget = null;
     resetChatInputHistoryNavigation(host);
+    host.composerDraftChanged?.();
   }
   if (pendingAbort) {
     host.pendingAbort = pendingAbort;

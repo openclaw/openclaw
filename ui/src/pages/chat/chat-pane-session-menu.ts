@@ -533,7 +533,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     header.renameSession = { key, sessionId, label };
     this.headerRenameInitialValue = resolveSessionRenameValue(row);
     header.renameValue = this.headerRenameInitialValue;
-    void this.updateComplete.then(() => {
+    void this.awaitDomCommit().then(() => {
       // The native pane transfers focus into the independently rendered header.
       const input = this.element.querySelector<HTMLInputElement>(".chat-pane__session-title-input");
       input?.focus();

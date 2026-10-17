@@ -11,6 +11,7 @@ import {
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionGitHubPublicationPublished } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
@@ -677,23 +678,103 @@ describe("session PR actions through the agent tool and registered Gateway metho
       headRef: first.branch,
       baseRef: "main",
     };
-    await local.git("checkout", "main");
-    await fs.writeFile(path.join(local.cwd, "artifact.txt"), "upstream change\n");
-    await fs.writeFile(path.join(local.cwd, "upstream.txt"), "unrelated upstream file\n");
-    await local.git("add", "-A");
-    await local.git("commit", "-m", "Advance selected base");
-    let baseCommit = await local.git("rev-parse", "HEAD");
-    await local.git("checkout", first.branch);
+    const { runCommandBuffered } =
+      await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
+    const upstream = path.join(path.dirname(local.cwd), "upstream");
+    await local.git("clone", "--no-local", "--branch", "main", local.cwd, upstream);
+    await fs.writeFile(path.join(upstream, "artifact.txt"), "upstream change\n");
+    await fs.writeFile(path.join(upstream, ".gitignore"), ".env.local\n.guest-cache\n");
+    await local.git("-C", upstream, "add", "-A");
+    await local.git("-C", upstream, "commit", "-m", "Advance selected base");
+    let baseCommit = await local.git("-C", upstream, "rev-parse", "HEAD");
+    const ancestorCommit = await local.git(
+      "-C",
+      upstream,
+      "merge-base",
+      first.headCommit,
+      baseCommit,
+    );
+    const ancestorBlob = await local.git(
+      "-C",
+      upstream,
+      "rev-parse",
+      `${ancestorCommit}:artifact.txt`,
+    );
+    // Criss-cross tips have two merge bases; merging those bases needs their older blob too.
+    await local.git("-C", upstream, "checkout", "-b", "feature", first.headCommit);
+    await local.git("-C", upstream, "merge", "--no-edit", "-s", "ours", baseCommit);
+    const featureMerge = await local.git("-C", upstream, "rev-parse", "HEAD");
+    await local.git("-C", upstream, "checkout", "main");
+    await local.git("-C", upstream, "merge", "--no-edit", "-s", "ours", first.headCommit);
+    await fs.writeFile(path.join(upstream, "upstream.txt"), "unrelated upstream file\n");
+    await local.git("-C", upstream, "add", "upstream.txt");
+    await local.git("-C", upstream, "commit", "-m", "Advance selected contents");
+    baseCommit = await local.git("-C", upstream, "rev-parse", "HEAD");
+    const partialBase = baseCommit;
+    const missingBlob = await local.git("-C", upstream, "rev-parse", "HEAD:upstream.txt");
+    const upstreamUrl = pathToFileURL(upstream).href;
+    await local.git("-C", upstream, "config", "uploadpack.allowFilter", "true");
+    await local.git("config", "remote.fixture.url", upstreamUrl);
+    await local.git("config", "remote.fixture.promisor", "true");
+    await local.git("fetch", "--filter=blob:none", "--no-write-fetch-head", "fixture", baseCommit);
+    await local.git(
+      "fetch",
+      "--filter=blob:none",
+      "--no-write-fetch-head",
+      "fixture",
+      featureMerge,
+    );
+    await local.git("update-ref", `refs/heads/${first.branch}`, featureMerge);
+    await local.git("update-ref", "refs/heads/main", baseCommit);
+    expect((await local.git("merge-base", "--all", "HEAD", baseCommit)).split("\n")).toHaveLength(
+      2,
+    );
+    await local.git("config", "remote.fixture.url", path.join(upstream, "unavailable-promisor"));
+    const missingContents = (commit = partialBase) =>
+      local.git(
+        "rev-list",
+        "--objects",
+        "--missing=print",
+        "--no-object-names",
+        "--max-count=1",
+        commit,
+      );
+    expect(await missingContents()).toContain(`?${missingBlob}`);
+    let rejectContentFetch = true;
+    let contentFetches = 0;
+    let commitFetches = 0;
+    let cancelAfterScan: AbortController | undefined;
     await fs.writeFile(path.join(local.cwd, ".env.local"), "host-private-fixture");
     const transport = mocks.runCommand.getMockImplementation()!;
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
       if (argv.some((arg) => arg.startsWith("repos/openclaw/openclaw/git/ref/heads/"))) {
         return commandResult(JSON.stringify({ ref: "refs/heads/main", sha: baseCommit }));
       }
+      if (argv.includes("fetch") && (argv.includes(partialBase) || argv.includes("--stdin"))) {
+        expect(argv).toContain("https://github.com/openclaw/openclaw.git");
+        expect(argv).toContain("credential.helper=!gh auth git-credential");
+        if (argv.includes("--stdin")) {
+          contentFetches++;
+          if (rejectContentFetch) {
+            return commandResult("", 1);
+          }
+        } else {
+          commitFetches++;
+        }
+        return await runCommandBuffered(
+          argv.map((arg) =>
+            arg === "https://github.com/openclaw/openclaw.git" ? upstreamUrl : arg,
+          ),
+          { ...options, cwd: local.cwd, timeoutMs: 10_000 },
+        );
+      }
       if (argv.includes("state=all")) {
         return commandResult(JSON.stringify([pr]));
       }
       const result = await transport(argv, options);
+      if (argv.includes("--missing=print")) {
+        cancelAfterScan?.abort(new Error("refresh cancelled after object discovery"));
+      }
       if (argv.includes("push")) {
         pr.headSha = await local.git("rev-parse", "HEAD");
       }
@@ -713,8 +794,6 @@ describe("session PR actions through the agent tool and registered Gateway metho
     await fs.writeFile(path.join(projection, ".guest-cache"), "saved ignored guest work\n");
     await fs.mkdir(path.join(projection, "empty-guest-directory"));
     await fs.appendFile(path.join(projection, ".git/config"), "\n[credential]\nhelper = !false\n");
-    const { runCommandBuffered } =
-      await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
     const reviewTransferBytes: number[] = [];
     const sandbox = createSandboxTestContext({
       overrides: {
@@ -768,6 +847,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
     const invoke = async (
       args: Record<string, unknown>,
       prepared: typeof sandbox | null = sandbox,
+      signal?: AbortSignal,
     ) => {
       const callGateway: InProcessGatewayCaller = async <T>(
         method: string,
@@ -783,6 +863,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
           }),
           isWebchatConnect: () => false,
           respond,
+          signal,
         });
         expect(respond).toHaveBeenCalledOnce();
         const [ok, result, error] = respond.mock.calls[0]!;
@@ -797,6 +878,40 @@ describe("session PR actions through the agent tool and registered Gateway metho
       );
       return result.details;
     };
+    // Snapshot preparation can pack a second copy; retain every other object in one promisor pack.
+    const hostObjects = path.join(local.cwd, ".git", "objects");
+    const hostPackDirectory = path.join(hostObjects, "pack");
+    const hostPacks = (await fs.readdir(hostPackDirectory)).filter((file) =>
+      file.endsWith(".pack"),
+    );
+    const retainedHostObjects = (
+      await local.git("cat-file", "--batch-all-objects", "--batch-check=%(objectname)")
+    )
+      .split("\n")
+      .filter((object) => object !== ancestorBlob);
+    const partialHostPack = await runCommandBuffered(
+      ["git", "pack-objects", "--stdout", "--no-reuse-delta", "--window=0"],
+      { cwd: local.cwd, input: `${retainedHostObjects.join("\n")}\n`, timeoutMs: 10_000 },
+    );
+    expect(partialHostPack.code).toBe(0);
+    const importedHostPack = await runCommandBuffered(
+      ["git", "index-pack", "--stdin", "--promisor"],
+      { cwd: local.cwd, input: partialHostPack.stdout, timeoutMs: 10_000 },
+    );
+    expect(importedHostPack.code).toBe(0);
+    const hostPackHash = importedHostPack.stdout.toString().trim().split(/\s+/u).at(-1);
+    for (const pack of hostPacks) {
+      if (pack === `pack-${hostPackHash}.pack`) {
+        continue;
+      }
+      for (const extension of ["pack", "idx", "rev", "promisor", "bitmap"]) {
+        await fs.rm(path.join(hostPackDirectory, pack.replace(/\.pack$/u, `.${extension}`)), {
+          force: true,
+        });
+      }
+    }
+    await fs.rm(path.join(hostObjects, ancestorBlob.slice(0, 2), ancestorBlob.slice(2)));
+    expect(await missingContents(ancestorCommit)).toContain(`?${ancestorBlob}`);
     const beforeAdmission = await local.git("rev-parse", "HEAD");
     await expect(invoke({ action: "refresh_base" }, null)).rejects.toThrow("sandboxed agent");
     await expect(
@@ -804,6 +919,27 @@ describe("session PR actions through the agent tool and registered Gateway metho
     ).rejects.toThrow("read-only");
     expect(await local.git("rev-parse", "HEAD")).toBe(beforeAdmission);
     expect(await fs.readFile(path.join(local.cwd, "artifact.txt"), "utf8")).toBe("accepted\n");
+    await expect(invoke({ action: "refresh_base" })).rejects.toThrow(
+      "base contents could not be fetched",
+    );
+    expect(contentFetches).toBe(1);
+    expect(await missingContents()).toContain(`?${missingBlob}`);
+    expect(await local.git("rev-parse", "HEAD")).toBe(beforeAdmission);
+    expect(await fs.readFile(path.join(projection, "artifact.txt"), "utf8")).toBe(
+      "guest saved change\n",
+    );
+    expect(await fs.readFile(path.join(projection, "guest.txt"), "utf8")).toBe(
+      "saved independent work\n",
+    );
+    cancelAfterScan = new AbortController();
+    await expect(
+      invoke({ action: "refresh_base" }, sandbox, cancelAfterScan.signal),
+    ).rejects.toThrow();
+    expect(cancelAfterScan.signal.aborted).toBe(true);
+    expect(contentFetches).toBe(1);
+    expect(await missingContents()).toContain(`?${missingBlob}`);
+    cancelAfterScan = undefined;
+    rejectContentFetch = false;
     const stage = workerWorkspaceResultStaging.stageWorkerWorkspaceResult;
     let stagedRefresh = "";
     const stageInterruption = vi
@@ -933,10 +1069,12 @@ describe("session PR actions through the agent tool and registered Gateway metho
     await expect(fs.stat(path.join(projection, ".env.local"))).rejects.toMatchObject({
       code: "ENOENT",
     });
+    const fetchesBeforePendingRetry = commitFetches;
     expect(await invoke({ action: "refresh_base" })).toMatchObject({
       status: "conflicts",
       baseCommit,
     });
+    expect(commitFetches).toBe(fetchesBeforePendingRetry);
     await expect(
       withLocalWorkspaceProjection(owner, async (state) =>
         state.prepareArchive(await local.git("rev-parse", "HEAD")),
@@ -1029,12 +1167,12 @@ describe("session PR actions through the agent tool and registered Gateway metho
     // selected source, including omitted blobs that are not delta bases.
     const packDirectory = path.join(projection, ".git", "objects", "pack");
     const packs = (await fs.readdir(packDirectory)).filter((file) => file.endsWith(".pack"));
-    const missingBlob = await guestGit("rev-parse", `${baseCommit}:later-upstream.txt`);
+    const missingDonorBlob = await guestGit("rev-parse", `${baseCommit}:later-upstream.txt`);
     const retainedObjects = (
       await guestGit("rev-list", "--objects", "--no-object-names", `${baseCommit}^{tree}`)
     )
       .split("\n")
-      .filter((object) => object !== missingBlob);
+      .filter((object) => object !== missingDonorBlob);
     const incompletePack = await runCommandBuffered(
       ["git", "pack-objects", "--stdout", "--no-reuse-delta", "--window=0"],
       {
@@ -1073,7 +1211,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
             await fs.rm(path.join(packDirectory, pack));
             await fs.rm(path.join(packDirectory, index));
           }
-          const absent = await runCommandBuffered(["git", "cat-file", "-e", missingBlob], {
+          const absent = await runCommandBuffered(["git", "cat-file", "-e", missingDonorBlob], {
             cwd: projection,
             timeoutMs: 10_000,
           });
@@ -1122,6 +1260,9 @@ describe("session PR actions through the agent tool and registered Gateway metho
       "upstream before interrupted import",
     );
     expect(await guestGit("rev-parse", "HEAD")).toBe(guestHead);
+    expect(contentFetches).toBe(3);
+    expect(await missingContents(ancestorCommit)).not.toContain("?");
+    expect(await missingContents()).not.toContain("?");
     const transfersBeforeRevocation = reviewTransferBytes.length;
     let revokedAfterProbe = false;
     const revokeDuringProbe = vi

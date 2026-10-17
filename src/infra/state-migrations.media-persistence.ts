@@ -116,6 +116,7 @@ async function migrateAgentDatabase(params: {
   maintenance: OpenClawStateLeaseContext;
   preparedArchives?: ReadonlySet<string>;
   migratedFromVersion?: number;
+  integrityCheck?: "quick" | "full";
 }) {
   if (agentEngineInput()) {
     return inspectPostgresMediaPersistence(params);
@@ -127,6 +128,7 @@ async function migrateAgentDatabase(params: {
     agentId: params.agentId,
     path: params.pathname,
     env: params.env,
+    integrityCheck: params.integrityCheck,
     // Register with the admitted handle; registering after close revokes its proof.
     register: true,
     onMigrationWarning: (warning: string) => schemaWarnings.push(warning),
@@ -294,9 +296,9 @@ async function migrateAgentDatabase(params: {
     assertMediaSchemaMigration();
     const schemaMode = userVersion < OPENCLAW_AGENT_SCHEMA_VERSION ? "legacy" : "current";
     const schemaSql = getOpenClawAgentMigrationSchema(userVersion);
-    // Remove after 2026-10-12: drop the v15-to-v16 media cutover once schema 16 is the support floor.
     if (userVersion === PREVIOUS_MEDIA_SCHEMA_VERSION) {
       repairCanonicalSqliteIndexes(database, params.pathname, schemaSql, {
+        integrity: { check: params.integrityCheck ?? "quick" },
         validateAfterRepair: () =>
           assertOpenClawAgentSchemaContains(database, params.pathname, schemaSql, schemaMode),
       });
@@ -490,6 +492,7 @@ export async function migrateLegacyMediaPersistence(
   params: {
     configuredAgentDatabaseTargets?: readonly { agentId: string; path: string }[];
     preparedDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
+    integrityCheck?: "quick" | "full";
     onPreparedRepairTargets?: (targets: readonly AgentDatabaseMigrationTarget[]) => void;
     hooks?: {
       beforeArchiveReplace?: (archivePath: string) => void;
@@ -591,6 +594,7 @@ export async function migrateLegacyMediaPersistence(
               canonicalArchivePaths,
               pathname,
               maintenance,
+              integrityCheck: params.integrityCheck,
               preparedArchives: preparedDiscovery.preparedTranscriptArchives,
               migratedFromVersion: preparedDiscovery.versionMigrations?.find(
                 (migration) => migration.path === pathname,

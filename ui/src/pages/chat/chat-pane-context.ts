@@ -40,7 +40,6 @@ import { syncSelectedSessionMessageSubscription } from "./chat-history-subscript
 import { applyChatAgentsList, resumePendingChatHistoryLoad } from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
 import { resolvePlacementComposer } from "./chat-pane-placement.ts";
-import { chatSessionPresentationKey } from "./chat-pane-session-presentation.ts";
 import { applySelectedSessionProjection, dismissChatError } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue-reconnect.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
@@ -53,7 +52,6 @@ import {
   refreshPageChat,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
-import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { releaseChatMediaResourceOwner } from "./components/chat-message-media.ts";
 import { retireSessionWorkspaceCheckout } from "./components/chat-session-workspace.ts";
@@ -109,7 +107,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     };
   }
 
-  private sessionPresentationKey: string | undefined;
   private pairingPresentationOwner?: ReturnType<typeof gatewayPresentationScope>;
   private gatewayConnectionLifecycle?: ReturnType<typeof createGatewayConnectionLifecycle>;
   private outboxRecoveryReady = false;
@@ -154,7 +151,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       retireChatPairingQr(this.state);
       retireCachedPairingQr(this.state.chatMessagesBySession);
     }
-    this.sessionPresentationKey = undefined;
     this.pairingPresentationOwner = undefined;
     this.headerPresentation.continueInTerminalDialog = null;
     this.gatewayConnectionLifecycle?.dispose();
@@ -316,17 +312,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       void resumeStoredChatOutboxes(state);
       return;
     }
-    const presentation = chatSessionPresentationKey(
-      state,
-      stateValue,
-      selectedSession,
-      this.context.overlays?.snapshot?.approvalQueue,
-    );
-    const presentationChanged = presentation !== this.sessionPresentationKey;
-    this.sessionPresentationKey = presentation;
-    if (this.presented && presentationChanged) {
-      requestChatPageUpdate(state, "animation-frame");
-    }
     // First canonical idle and changed run/branch identity can release a queue.
     // Re-decoding an unchanged row after foreign activity is not new delivery intent.
     if (
@@ -390,8 +375,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (!state) {
       return;
     }
-    // Upload controls read the live config capability; refresh every policy publication.
-    this.chatState.requestBackgroundUpdate();
     state.terminalAvailable =
       config.terminalEnabled &&
       state.connected &&
@@ -518,6 +501,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.hello = snapshot.hello;
     state.selfUser = snapshot.selfUser ?? null;
     state.assistantAgentId = assistantAgentId;
+    this.refreshBoardSubscriptions();
     const routeSessionKey = this.sessionKey.trim();
     const catalogRouteKey = parseCatalogSessionKey(routeSessionKey);
     if (
@@ -653,8 +637,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         }
         if (agentsList) {
           applyChatAgentsList(state, agentsList, startupClient);
+          this.refreshBoardSubscriptions();
         }
-        this.chatState.requestBackgroundUpdate();
       };
       this.connectedClient = startupClient;
       const questionClient = canUseQuestionPrompts(snapshot) ? startupClient : null;
@@ -690,12 +674,12 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         selectedChatSessionRow(state),
       );
     }
-    // Hello precedes recovery readiness. Wake parked outboxes on that publication;
+    // Hello precedes recovery readiness. Wake draft restoration and parked outboxes;
     // the shared admission check still holds any recovered initial turn.
     if (resumeOutboxes && !catalogRouteKey) {
+      this.chatState.composerPersistence.persistChangedState();
       void resumeStoredChatOutboxes(state);
     }
     this.reconcileWaitingApprovalSnapshot();
-    this.chatState.requestBackgroundUpdate();
   }
 }

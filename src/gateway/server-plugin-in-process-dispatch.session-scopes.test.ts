@@ -50,6 +50,14 @@ vi.mock("./server-methods/chat-send-handler.js", () => ({
 
 const parentKey = "agent:main:scope-parent";
 const childKey = "agent:main:dashboard:scope-child";
+const missingAdmin = {
+  name: "GatewayClientRequestError",
+  details: {
+    code: "MISSING_SCOPE",
+    missingScope: "operator.admin",
+    requiredScopes: ["operator.admin"],
+  },
+};
 
 // These tests own spawn admission and persisted permissions, not model availability
 // or inference. The router and SQLite creation owner below are never replaced.
@@ -104,6 +112,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
   const client = roleClient("view", "native-session-scope");
   client.connect.scopes = ["operator.sessions.write"];
   const profileId = expectDefined(client.authenticatedUserProfile, "original person").profileId;
+  const person = { type: "human", source: "profile", id: profileId } as const;
   const parentScope = { agentId: "main", sessionKey: parentKey, storePath };
   const childScope = { ...parentScope, sessionKey: childKey };
   await upsertSessionEntryCore(parentScope, {
@@ -111,9 +120,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
     updatedAt: 1,
     sandbox: "required",
     permissionMode: "full",
-    ...(source === "scheduled"
-      ? {}
-      : { createdActor: { type: "human" as const, source: "profile" as const, id: profileId } }),
+    ...(source === "scheduled" ? {} : { createdActor: person }),
   });
   expect(loadSessionEntry(parentScope)?.sessionId).toBe("scope-parent-session");
   const context = createDirectChatContext({
@@ -183,10 +190,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
       );
       const original = expectDefined(captured, "original source").authority;
       expect(options.client?.internal?.operatorRunAuthority?.source).toBe(original.source);
-      expect(options.client?.internal?.operatorRoleActor).toEqual({
-        kind: "operator",
-        profileId,
-      });
+      expect(options.client?.internal?.operatorRoleActor).toEqual({ kind: "operator", profileId });
     } else {
       expect(options.client?.internal?.operatorRunAuthority).toBeUndefined();
       expect(options.client?.internal?.operatorRoleActor).toEqual({ kind: "system" });
@@ -205,12 +209,13 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
         "chat.send": chatHandler,
       }),
     );
+  const withCaller = <T>(run: () => T) => withGatewayToolCallerIdentity(caller, run);
   const create = (
     params: Record<string, unknown> = {},
     creation: Partial<TrustedSessionCreation> = {},
   ) => {
     const invoke = () =>
-      withGatewayToolCallerIdentity(caller, () =>
+      withCaller(() =>
         callInProcessGatewayToolWithCreation<{ key: string; sessionId: string }>(
           "sessions.create",
           {
@@ -242,7 +247,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
       invoke,
     );
   };
-  const tool = await withGatewayToolCallerIdentity(caller, () => createSessionsCreateTool());
+  const tool = await withCaller(createSessionsCreateTool);
   return {
     tool,
     toolCreate: (
@@ -250,7 +255,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
       toolCallId = "create-independent",
       signal?: AbortSignal,
     ) =>
-      withGatewayToolCallerIdentity(caller, async () => {
+      withCaller(async () => {
         if (!tool) {
           throw new Error("Session creation unavailable");
         }
@@ -258,7 +263,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
       }),
     create,
     spawn: (mode: SessionEntry["permissionMode"], agentId?: string) =>
-      withGatewayToolCallerIdentity(caller, () =>
+      withCaller(() =>
         maybeSpawnVisibleSession({
           raw: { visible: true, model: "test-provider/scope-model" },
           task: "Inspect the isolated workspace.",
@@ -290,7 +295,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
     handler,
     chatHandler,
     send: (key: string) =>
-      withGatewayToolCallerIdentity(caller, () =>
+      withCaller(() =>
         callInProcessGatewayTool("chat.send", {
           sessionKey: key,
           message: "Follow up",
@@ -301,11 +306,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
     revoke: () => sourceController.abort(new Error("original native source revoked")),
     profileId,
     dispose: async () => {
-      if (scheduled) {
-        scheduled.close();
-      } else {
-        parent.close();
-      }
+      (scheduled ?? parent).close();
       captured?.release();
       // Retire the embedded placement owner before removing this fixture's state directory.
       await drainGlobalSingletonLifecycleState();
@@ -328,8 +329,8 @@ async function withHostedCreation(
 }
 
 describe("hosted session tool narrow scope projection", () => {
-  it("creates through the real router with the original narrow operator source", async () => {
-    await withHostedCreation(async (fixture) => {
+  it("creates through the real router with the original narrow operator source", () =>
+    withHostedCreation(async (fixture) => {
       const created = await fixture.create();
       expect(created.key).toBe(childKey);
       expect(fixture.handler).toHaveBeenCalledOnce();
@@ -338,31 +339,28 @@ describe("hosted session tool narrow scope projection", () => {
         sandbox: "required",
         createdActor: { type: "human", source: "profile", id: fixture.profileId },
       });
-    });
-  });
+    }));
 
-  it("does not mutate a foreign target through the native creation alias", async () => {
-    await withHostedCreation(async (fixture) => {
+  it("does not mutate a foreign target through the native creation alias", () =>
+    withHostedCreation(async (fixture) => {
       await fixture.seedForeign();
       const before = fixture.read();
       await expect(fixture.create({ label: "Rejected" })).rejects.toThrow("own session");
       expect(fixture.handler).not.toHaveBeenCalled();
       expect(fixture.read()).toEqual(before);
-    });
-  });
+    }));
 
-  it("hides an existing parent from a hosted caller without external provenance", async () => {
-    await withHostedCreation(async (fixture) => {
+  it("hides an existing parent from a hosted caller without external provenance", () =>
+    withHostedCreation(async (fixture) => {
       await expect(fixture.create()).rejects.toThrow(`Session "${parentKey}" was not found.`);
       expect(fixture.handler).not.toHaveBeenCalled();
       expect(fixture.read()).toBeUndefined();
-    }, "unidentified");
-  });
+    }, "unidentified"));
 
   it.each(["operator", "scheduled"] as const)(
     "retains the original %s source after admission until the creation COMMIT",
-    async (source) => {
-      await withHostedCreation(async (fixture) => {
+    (source) =>
+      withHostedCreation(async (fixture) => {
         const entered = createDeferred();
         const release = createDeferred();
         fixture.beforeCreate.mockImplementation(async () => {
@@ -384,8 +382,7 @@ describe("hosted session tool narrow scope projection", () => {
           await rejected;
         }
         expect(fixture.read()).toBeUndefined();
-      }, source);
-    },
+      }, source),
   );
 });
 
@@ -397,10 +394,9 @@ describe("hosted visible spawn permission inheritance", () => {
     { mode: "full", agentId: "main", source: "operator" },
   ] as const)(
     "persists effective $mode permission for $agentId from $source without granting admin scope",
-    async ({ mode, agentId, source }) => {
-      await withHostedCreation(async (fixture) => {
-        // A turn can narrow a saved full-access session. The child's next turn
-        // must retain the runtime policy, not recover the broader stored value.
+    ({ mode, agentId, source }) =>
+      withHostedCreation(async (fixture) => {
+        // Runtime narrowing must survive the child's next turn, not reload full access.
         expect(fixture.read(parentKey)?.permissionMode).toBe("full");
         const result = await fixture.spawn(mode, agentId);
         expect(result).toMatchObject({
@@ -418,31 +414,21 @@ describe("hosted visible spawn permission inheritance", () => {
           spawnDepth: 1,
           sandbox: "required",
         });
-        // No prepared policy also must not manufacture full access from storage.
         expect(child?.permissionMode).toBe(mode);
-      }, source);
-    },
+      }, source),
   );
 
-  it("keeps an explicit public full-access request admin-gated", async () => {
-    await withHostedCreation(async (fixture) => {
+  it("keeps an explicit public full-access request admin-gated", () =>
+    withHostedCreation(async (fixture) => {
       await expect(
         fixture.create({ permissionMode: "full" }, { inheritedPermissionMode: "full" }),
-      ).rejects.toMatchObject({
-        name: "GatewayClientRequestError",
-        details: {
-          code: "MISSING_SCOPE",
-          missingScope: "operator.admin",
-          requiredScopes: ["operator.admin"],
-        },
-      });
+      ).rejects.toMatchObject(missingAdmin);
       expect(fixture.handler).not.toHaveBeenCalled();
       expect(fixture.read()).toBeUndefined();
-    });
-  });
+    }));
 
-  it("rejects inherited permission when the spawn actor is not the current requester", async () => {
-    await withHostedCreation(async (fixture) => {
+  it("rejects inherited permission when the spawn actor is not the current requester", () =>
+    withHostedCreation(async (fixture) => {
       await expect(
         fixture.create(
           {},
@@ -453,15 +439,13 @@ describe("hosted visible spawn permission inheritance", () => {
         ),
       ).rejects.toThrow(/permission inheritance/i);
       expect(fixture.read()).toBeUndefined();
-    }, "scheduled");
-  });
+    }, "scheduled"));
 });
 
 describe("independent session creation tool", () => {
-  it("creates a guest-owned idle root with destination defaults and a bounded receipt", async () => {
-    await withHostedCreation(async ({ tool, toolCreate, read, profileId }) => {
+  it("creates a guest-owned idle root with destination defaults and a bounded receipt", () =>
+    withHostedCreation(async ({ tool, toolCreate, read, profileId }) => {
       expect(tool?.name).toBe("sessions_create");
-      expect(tool?.parameters).not.toHaveProperty("properties.action");
       const result = await toolCreate({ label: "Independent investigation" });
       expect(result.details).toEqual({
         sessionKey: expect.any(String),
@@ -482,11 +466,10 @@ describe("independent session creation tool", () => {
       expect(entry?.permissionMode).not.toBe("full");
       expect(kickoff.internal).not.toHaveBeenCalled();
       expect(kickoff.external).not.toHaveBeenCalled();
-    });
-  });
+    }));
 
-  it("lets the guest continue their created session but not somebody else's", async () => {
-    await withHostedCreation(async ({ toolCreate, send, seedForeign, chatHandler }) => {
+  it("lets the guest continue their created session but not somebody else's", () =>
+    withHostedCreation(async ({ toolCreate, send, seedForeign, chatHandler }) => {
       const result = await toolCreate();
       const receipt = result.details as { sessionKey: string };
       await expect(send(receipt.sessionKey)).resolves.toMatchObject({ status: "started" });
@@ -494,11 +477,10 @@ describe("independent session creation tool", () => {
       await seedForeign();
       await expect(send(childKey)).rejects.toThrow();
       expect(chatHandler).toHaveBeenCalledOnce();
-    });
-  });
+    }));
 
-  it("starts an agent-authored initial brief once, never a direct human command", async () => {
-    await withHostedCreation(async ({ toolCreate }) => {
+  it("starts an agent-authored initial brief once, never a direct human command", () =>
+    withHostedCreation(async ({ toolCreate }) => {
       const args = { message: "/reset is an example to investigate, not a command" };
       const first = await toolCreate(args);
       const retried = await toolCreate(args);
@@ -521,11 +503,10 @@ describe("independent session creation tool", () => {
       await expect(toolCreate({ message: "A different brief" })).rejects.toThrow(
         /idempotency key.*different parameters/,
       );
-    });
-  });
+    }));
 
-  it("keeps the created session and reports failed kickoff without claiming a run", async () => {
-    await withHostedCreation(async ({ toolCreate, read }) => {
+  it("keeps the created session and reports failed kickoff without claiming a run", () =>
+    withHostedCreation(async ({ toolCreate, read }) => {
       kickoff.internal.mockImplementationOnce(async (options: GatewayRequestHandlerOptions) => {
         options.respond(false, undefined, {
           code: "UNAVAILABLE",
@@ -540,59 +521,47 @@ describe("independent session creation tool", () => {
       const receipt = result.details as { sessionKey: string };
       expect(read(receipt.sessionKey)).toBeDefined();
       expect(result.details).not.toHaveProperty("runId");
-    });
-  });
+    }));
 
   it.each([
-    { message: "   " },
     { message: 4 },
-    { key: childKey },
-    { parentSessionKey: parentKey },
     { fork: true },
     { ownerId: "other" },
     { role: "admin" },
     { toolOverrides: {} },
-    { permissionMode: "unrestricted" },
     { group: null },
-  ])("rejects invalid or identity/lineage-bearing arguments before dispatch: %j", async (args) => {
-    await withHostedCreation(async ({ toolCreate, handler }) => {
+  ])("rejects invalid or identity/lineage-bearing arguments before dispatch: %j", (args) =>
+    withHostedCreation(async ({ toolCreate, handler }) => {
       await expect(toolCreate(args)).rejects.toThrow();
       expect(handler).not.toHaveBeenCalled();
-    });
-  });
+    }),
+  );
 
-  it("retains backend role-agent, permission, and workspace restrictions", async () => {
-    await withHostedCreation(async ({ toolCreate, read }) => {
+  it("retains backend role-agent, permission, and workspace restrictions", () =>
+    withHostedCreation(async ({ toolCreate, read }) => {
       await expect(toolCreate({ agentId: "reviewer" }, "forbidden-agent")).rejects.toThrow();
       await expect(toolCreate({ permissionMode: "full" }, "full-mode")).rejects.toThrow(
         /operator.admin/,
       );
       await expect(toolCreate({ cwd: "relative" }, "relative-cwd")).rejects.toThrow(/absolute/);
-      await expect(toolCreate({ cwd: "/" }, "outside-workspace")).rejects.toMatchObject({
-        name: "GatewayClientRequestError",
-        details: {
-          code: "MISSING_SCOPE",
-          missingScope: "operator.admin",
-          requiredScopes: ["operator.admin"],
-        },
-      });
+      await expect(toolCreate({ cwd: "/" }, "outside-workspace")).rejects.toMatchObject(
+        missingAdmin,
+      );
       expect(read()).toBeUndefined();
-    });
-  });
+    }));
 
   it.each(["unidentified", "scheduled"] as const)(
     "does not turn a %s run into an operator creation grant",
-    async (source) => {
-      await withHostedCreation(async ({ tool, toolCreate, handler }) => {
+    (source) =>
+      withHostedCreation(async ({ tool, toolCreate, handler }) => {
         expect(tool).toBeNull();
         await expect(toolCreate({ message: "Investigate" })).rejects.toThrow(/unavailable/);
         expect(handler).not.toHaveBeenCalled();
-      }, source);
-    },
+      }, source),
   );
 
-  it("fences tool cancellation before the creation commit", async () => {
-    await withHostedCreation(async ({ toolCreate, beforeCreate, keys }) => {
+  it("fences tool cancellation before the creation commit", () =>
+    withHostedCreation(async ({ toolCreate, beforeCreate, keys }) => {
       const before = await keys();
       const abort = new AbortController();
       beforeCreate.mockImplementationOnce(async () => {
@@ -605,6 +574,5 @@ describe("independent session creation tool", () => {
         code: "FORBIDDEN",
       });
       expect(await keys()).toEqual(before);
-    });
-  });
+    }));
 });

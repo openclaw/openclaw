@@ -140,11 +140,7 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   sessionSnapshotStore?: SessionSnapshotStore;
   chatState: Pick<
     ReturnType<typeof createChatState<ChatPageHost>>,
-    | "attach"
-    | "composerDraft"
-    | "composerPersistence"
-    | "createRenderLifecycle"
-    | "requestBackgroundUpdate"
+    "attach" | "composerDraft" | "composerPersistence" | "createRenderLifecycle"
   >;
   context: ApplicationContext;
   state: ChatPageHost;
@@ -532,7 +528,6 @@ export function createTestChatPane(params: {
   });
   pane.context = context;
   const renderLifecycle = pane.chatState.createRenderLifecycle();
-  const requestUpdate = vi.spyOn(renderLifecycle, "invalidate");
   const chatMessagesBySession: ChatMessageCache = new Map();
   const state: ChatPageHost = Object.assign(
     createPageState(
@@ -600,7 +595,6 @@ export function createTestChatPane(params: {
   return {
     pane,
     sessions: context.sessions,
-    requestUpdate,
     state,
     emitGatewayEvent: (event: string, payload: unknown) => {
       const emit = (
@@ -666,7 +660,7 @@ class RenderTestChatPane extends ChatPaneRuntime {
     this.context = context;
     this.state = createPageState(
       context,
-      { afterCommit: () => () => {}, invalidate: () => {} },
+      { afterCommit: () => () => {} },
       {
         sessionKey: this.sessionKey,
         dispatchEvent: (event) => this.element.dispatchEvent(event),

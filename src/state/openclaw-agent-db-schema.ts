@@ -127,10 +127,8 @@ import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
-import {
-  resolveSchemaMigrationBackupTables,
-  resolveSchemaMigrationIntegrityCheck,
-} from "./schema-migration-backup-scope.js";
+import { resolveSchemaMigrationIntegrityCheck } from "./schema-migration-backup-scope.js";
+import { resolveSchemaMigrationIntegrityTables } from "./schema-migration-integrity-tables.js";
 
 const agentDbLog = createSubsystemLogger("state/agent-db");
 
@@ -245,7 +243,7 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
   ) {
     // Publish a fresh empty database's owner before another local caller resolves its store.
     // Yielding first leaves an occupied, unowned file that custom selectors must avoid.
-    assertSqliteIntegrity(database, pathname);
+    assertSqliteIntegrity(database, pathname, integrityCheck ? integrity : undefined);
   } else {
     // Pending migrations cannot inherit an earlier runtime verification.
     yield* sqliteIntegrityCheckSteps(database, pathname, diagnostics, integrity);
@@ -435,7 +433,7 @@ function ensureAgentSchema(
           identityMigration,
           assertMigration,
           schemaMigration
-            ? resolveSchemaMigrationBackupTables({
+            ? resolveSchemaMigrationIntegrityTables({
                 kind: "agent",
                 foundVersion: previousVersion,
                 supportedVersion: targetVersion,

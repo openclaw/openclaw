@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { loadSettings, saveSettings } from "../../app/settings.ts";
 import { createChatPageStateContext } from "./chat-page.test-support.ts";
 import { createPageState } from "./chat-state-page.ts";
@@ -11,7 +11,7 @@ it.each(["minimize", "close-resource", "explicit-desktop"])(
     saveSettings({ ...savedSettings, sidebarSessionLayouts: {} });
     try {
       const context = createChatPageStateContext();
-      const renderLifecycle = { invalidate: vi.fn(), afterCommit: () => () => {} };
+      const renderLifecycle = { afterCommit: () => () => {} };
       const host = {
         dispatchEvent: () => true,
         getBoundingClientRect: () => new DOMRect(0, 0, 1440, 900),
@@ -74,7 +74,7 @@ it.each(["minimize", "close-resource", "explicit-desktop"])(
 it("owns attachment views in Files without replacing Detail content", () => {
   const state = createPageState(
     createChatPageStateContext(),
-    { invalidate: vi.fn(), afterCommit: () => () => {} },
+    { afterCommit: () => () => {} },
     {
       dispatchEvent: () => true,
       getBoundingClientRect: () => new DOMRect(0, 0, 1_440, 0),

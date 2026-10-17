@@ -124,15 +124,15 @@ it.each([false, true])("claims only its source's live stream (closed: %s)", asyn
 
 it.each(["acquire", "activate"] as const)("refreshes idle cleanup after %s", async (method) => {
   vi.useFakeTimers();
-  registry = createDesktopSessionRegistry({ lingerMs: 25 });
+  registry = createDesktopSessionRegistry();
   const params = request({ teardown });
   await registry[method](params);
-  await vi.advanceTimersByTimeAsync(20);
+  await vi.advanceTimersByTimeAsync(48_000);
   await registry[method](params);
-  await vi.advanceTimersByTimeAsync(20);
+  await vi.advanceTimersByTimeAsync(48_000);
   expect(teardown).not.toHaveBeenCalled();
 
-  await vi.advanceTimersByTimeAsync(5);
+  await vi.advanceTimersByTimeAsync(12_000);
   expect(teardown).toHaveBeenCalled();
 });
 
@@ -275,17 +275,17 @@ it("retains failed resource disposal for a later cleanup retry", async () => {
 
 it("does not linger-stop a reservation when another observer disconnects", async () => {
   vi.useFakeTimers();
-  registry = createDesktopSessionRegistry({ lingerMs: 25 });
+  registry = createDesktopSessionRegistry();
   await registry.activate(request({ teardown }));
   const observer = observe(registry);
   const pending = createPendingStream(registry);
   expect(pending.reserve()).toBe(true);
   expect(observer).toBeDefined();
   observer?.release();
-  await vi.advanceTimersByTimeAsync(100);
+  await vi.advanceTimersByTimeAsync(240_000);
   expect(teardown).not.toHaveBeenCalled();
 
   await pending.stop();
-  await vi.advanceTimersByTimeAsync(25);
+  await vi.advanceTimersByTimeAsync(60_000);
   expect(teardown).toHaveBeenCalled();
 });

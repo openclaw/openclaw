@@ -8,6 +8,7 @@ export type UpdateCanaryCommand = {
 export function buildUpdateCanaryCommands(params: {
   continuationEntry: string;
   migrationPolicy?: "rehearse" | "startup-only";
+  fullIntegrityCheck?: boolean;
 }): UpdateCanaryCommand[] {
   const runtime: UpdateCanaryCommand = {
     phase: "runtime",
@@ -24,7 +25,13 @@ export function buildUpdateCanaryCommands(params: {
     {
       phase: "doctor",
       name: "candidate-doctor",
-      args: ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
+      args: [
+        "doctor",
+        "--fix",
+        "--non-interactive",
+        "--no-workspace-suggestions",
+        ...(params.fullIntegrityCheck ? ["--full-integrity-check"] : []),
+      ],
     },
     {
       phase: "lint",

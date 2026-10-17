@@ -149,7 +149,9 @@ export function PickerContent<Option extends PickerOption>(props: {
     },
   });
   onSettled(() => overlay.bindSurface(surface));
-  const menu = useMenuMachine(overlay, direction, commit, undefined, {
+  // The menu refreshes direction on accepted open; closed pickers need no style read.
+  const menuDirection: typeof direction = () => (overlay.open ? direction() : "ltr");
+  const menu = useMenuMachine(overlay, menuDirection, commit, undefined, {
     ids: { content: contentId, trigger: () => untrack(triggerId) },
     surface: "listbox",
     focus: "retain",
@@ -184,10 +186,11 @@ export function PickerContent<Option extends PickerOption>(props: {
         Boolean(props.params.searchable && (props.params.groupBy || options().length > 8)),
     );
     queueMicrotask(() => {
-      if (
-        !props.host.isConnected ||
-        !overlay.request(true, focus ? (last ? "last" : "first") : "none")
-      ) {
+      if (!props.host.isConnected) {
+        return;
+      }
+      updateAnchor(props.params.placement, props.params.variant);
+      if (!overlay.request(true, focus ? (last ? "last" : "first") : "none")) {
         return;
       }
       if (initialKey) {
@@ -217,7 +220,8 @@ export function PickerContent<Option extends PickerOption>(props: {
     if (!editing || event.key.startsWith("Arrow")) {
       setKeyboard(true);
     }
-    const forward = direction() === "rtl" ? "ArrowLeft" : "ArrowRight";
+    const forward =
+      props.params.variant === "submenu" && direction() === "rtl" ? "ArrowLeft" : "ArrowRight";
     if (!overlay.open) {
       const printable = event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
       if (
@@ -296,7 +300,11 @@ export function PickerContent<Option extends PickerOption>(props: {
   );
   createEffect(
     () => [props.params.placement, props.params.variant] as const,
-    ([placement, variant]) => updateAnchor(placement, variant),
+    ([placement, variant]) => {
+      if (overlay.open) {
+        updateAnchor(placement, variant);
+      }
+    },
   );
   createEffect(
     () => [opened(), active(), query(), rows()] as const,
@@ -315,7 +323,6 @@ export function PickerContent<Option extends PickerOption>(props: {
     overlay.setParent(findOverlayParent(trigger));
     if (!props.params.sheet) {
       anchor = createOverlayAnchor(surface);
-      updateAnchor(props.params.placement, props.params.variant);
     }
     const stop = overlay.subscribe((next) => {
       setOpened(next);

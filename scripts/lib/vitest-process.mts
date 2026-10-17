@@ -67,11 +67,9 @@ export function spawnOwnedVitestProcess(spec: {
     tempRoot = tempDirs.make("oc-vt-", containingRoot);
     owner = createVitestResourceOwner(tempRoot);
     const childEnv: NodeJS.ProcessEnv = { ...env, TMPDIR: tempRoot, TMP: tempRoot, TEMP: tempRoot };
-    if (mode !== "tooling") {
-      // The tooling shim avoids the shared tsx cache. Test children have this owned
-      // temp namespace, so source subprocesses can reuse transforms until cleanup.
-      delete childEnv.TSX_DISABLE_CACHE;
-    }
+    // TSX queues unawaited disk writes during synchronous imports, exhausting
+    // descriptors on deep graphs. Keep its in-memory cache and Vitest's own cache.
+    childEnv.TSX_DISABLE_CACHE = "1";
     if (mode !== "tooling" && !(policy.live && policy.allowRealHome)) {
       const nativeHome = path.join(tempRoot, "home");
       fs.mkdirSync(nativeHome);

@@ -804,22 +804,25 @@ async function runIsolatedCompletionOwned(
         usage: result.assistant.usage,
       };
     };
-    const result = await withPluginRuntimeGenerationScope(lease.snapshot, run);
-    assertCurrent();
-    if (!result.text && input.outputTextPolicy !== "strict-visible") {
-      throw new IsolatedCompletionError(
-        "output-rejected",
-        "Isolated completion returned empty output.",
-      );
-    }
-    emitIsolatedCompletionUsage({
-      config: lease.snapshot.config,
-      agentId,
-      agentDir: lease.snapshot.agentDir,
-      purpose: input.purpose,
-      result,
+    return await withPluginRuntimeGenerationScope(lease.snapshot, async () => {
+      const result = await run();
+      assertCurrent();
+      if (!result.text && input.outputTextPolicy !== "strict-visible") {
+        throw new IsolatedCompletionError(
+          "output-rejected",
+          "Isolated completion returned empty output.",
+        );
+      }
+      // Usage pricing must share the completion's prepared metadata instead of rediscovering it.
+      emitIsolatedCompletionUsage({
+        config: lease.snapshot.config,
+        agentId,
+        agentDir: lease.snapshot.agentDir,
+        purpose: input.purpose,
+        result,
+      });
+      return result;
     });
-    return result;
   } finally {
     closed = true;
   }

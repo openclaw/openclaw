@@ -325,6 +325,7 @@ it.each(["session", "connection"])(
 );
 
 it("waits for raw history settlement and coalesces custody events into one fresh read", async () => {
+  const replacementStarted = createDeferred();
   const reads: Array<{
     pending: ReturnType<typeof createDeferred<ChatHistoryResult>>;
     signal?: AbortSignal;
@@ -338,6 +339,9 @@ it("waits for raw history settlement and coalesces custody events into one fresh
     }
     const pending = createDeferred<ChatHistoryResult>();
     reads.push({ pending, signal: options?.signal, params });
+    if (reads.length === 2) {
+      replacementStarted.resolve();
+    }
     return pending.promise;
   });
   const initial = loadChatHistory(host, { deferBranches: true });
@@ -372,12 +376,12 @@ it("waits for raw history settlement and coalesces custody events into one fresh
       { id: "new-custody", sendRunId: "new-run", text: "new", createdAt: 3, sendAttempts: 1 },
     ];
     reads[0]!.pending.resolve(response("Stale history"));
-    await initial;
-    await vi.waitFor(() => expect(reads).toHaveLength(2));
+    await replacementStarted.promise;
+    expect(reads).toHaveLength(2);
     expect(host.chatMessages).toEqual([]);
     expect(reads[1]?.params).toMatchObject({ inputRunIds: ["new-run"] });
     reads[1]!.pending.resolve(response("Fresh history"));
-    await fresh;
+    await Promise.all([initial, fresh]);
     expect(host.chatMessages).toEqual([{ role: "assistant", content: "Fresh history" }]);
   } finally {
     for (const read of reads) {

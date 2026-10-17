@@ -774,7 +774,7 @@ describe("openclaw state database", () => {
       } else {
         const error = new Error(reason);
         error.name = "SqliteIntegrityError";
-        expect(recordOpenClawStateDatabaseOpenFailure(databasePath, error, generation)).toBe(true);
+        recordOpenClawStateDatabaseOpenFailure(databasePath, error);
       }
 
       expect(() => repairOpenClawStateDatabaseReadabilityForDoctor(options)).toThrow(reason);
@@ -2316,7 +2316,7 @@ describe("openclaw state database", () => {
   });
 
   it.each([false, true])(
-    "repairs current-schema index corruption (recorded failure: %s)",
+    "repairs current-schema index corruption with explicit FULL or recorded failure (%s)",
     (recordedFailure) => {
       const stateDir = createTempStateDir();
       const databasePath = materializeCurrentStateDatabase(stateDir);
@@ -2333,7 +2333,12 @@ describe("openclaw state database", () => {
         ).toThrow(/integrity_check failed.*missing from index unsafe_index_records_value/iu);
         expect(checkpointCallback).not.toHaveBeenCalled();
       }
-      expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      expect(
+        repairOpenClawStateDatabaseSchema({
+          ...options,
+          integrityCheck: recordedFailure ? undefined : "full",
+        }),
+      ).toEqual({
         changes: [
           expect.stringContaining("Saved pre-repair SQLite backup:"),
           expect.stringContaining(

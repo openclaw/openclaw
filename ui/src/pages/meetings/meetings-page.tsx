@@ -12,6 +12,7 @@ import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { isArchiveAccessDeniedError } from "../../lib/gateway-errors.ts";
+import { createPageRequest } from "../../lib/page-request.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -35,43 +36,33 @@ type OperationState = { kind: "idle" | "loading" | "done" | "error"; message?: s
 // Requests stay synchronous; the revision only publishes their presentation state.
 function createArchiveRead(run: (signal: AbortSignal) => Promise<void>) {
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  let abort: AbortController | null = null;
   let error: unknown = null;
   const publish = () => setRevision((value) => value + 1);
+  const request = createPageRequest(publish, {
+    task: (_: void, { signal }) => run(signal),
+    onComplete: () => {},
+    onError: (cause) => {
+      error = cause;
+    },
+  });
   const cancel = () => {
-    abort?.abort();
-    abort = null;
     error = null;
-    publish();
+    request.reset();
   };
   onCleanup(cancel);
   return {
     get pending() {
       revision();
-      return abort !== null;
+      return request.pending;
     },
     get error() {
       revision();
       return error;
     },
     abort: cancel,
-    async run() {
-      cancel();
-      const current = new AbortController();
-      abort = current;
-      publish();
-      try {
-        await run(current.signal);
-      } catch (cause) {
-        if (abort === current && !current.signal.aborted) {
-          error = cause;
-        }
-      } finally {
-        if (abort === current) {
-          abort = null;
-          publish();
-        }
-      }
+    run() {
+      error = null;
+      return request.run();
     },
   };
 }

@@ -97,27 +97,15 @@ function successfulNativeSetup() {
 }
 
 describe("PostgreSQL conformance selection", () => {
-  it("runs both shards independently under the existing aggregate gate", () => {
+  it("runs three balanced shards independently under the existing aggregate gate", () => {
     const workflow = readCiWorkflow();
     const job = workflow.jobs["postgres-conformance"];
     expect(job.strategy).toEqual({
       "fail-fast": false,
-      "max-parallel": 2,
-      matrix: { shard: ["infra", "integrations"] },
+      "max-parallel": 3,
+      matrix: { shard: ["1/3", "2/3", "3/3"] },
     });
-    for (const [shard, timeout] of [
-      ["infra", 60],
-      ["integrations", 30],
-    ] as const) {
-      expect(
-        evaluateWorkflowExpression(job["timeout-minutes"], {
-          eventName: "pull_request",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-          matrix: { shard },
-        }),
-      ).toBe(timeout);
-    }
+    expect(job["timeout-minutes"]).toBe(30);
     expect(
       evaluateWorkflowExpression(job["runs-on"], {
         eventName: "pull_request",
@@ -151,6 +139,8 @@ describe("PostgreSQL conformance selection", () => {
     [["src/config/zod-schema.database.ts"], true],
     [["scripts/test-database-conformance.mjs"], true],
     [["scripts/test-database-conformance-preload.mjs"], true],
+    [["scripts/lib/weighted-test-shards.mts"], true],
+    [["config/postgres-conformance-timings.json"], true],
     [["src/infra/unrelated.ts"], false],
     [["docs/help/testing/suites.md"], false],
     [null, false, { scopeEnv: { OPENCLAW_CI_DOCS_ONLY: "true" } }],
@@ -3152,7 +3142,7 @@ describe("ci workflow guards", () => {
       });
     }
 
-    it("counts both PostgreSQL conformance shards in hosted admission", () => {
+    it("counts all three PostgreSQL conformance shards in hosted admission", () => {
       const result = manifestWithHostedNodeRows(0, {
         eventName: "pull_request",
         changedPaths: ["src/infra/database-engine/open.ts"],
@@ -3166,7 +3156,7 @@ describe("ci workflow guards", () => {
         },
         { eventName: "pull_request" },
       );
-      expect(rows.filter((name) => name === "postgres-conformance")).toHaveLength(2);
+      expect(rows.filter((name) => name === "postgres-conformance")).toHaveLength(3);
       expect(Number(result.outputs.hybrid_hosted_base_rows)).toBe(rows.length);
     });
 

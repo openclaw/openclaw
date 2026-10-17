@@ -1,4 +1,3 @@
-import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { sessionChangeAffectsStoredRow } from "../../sessions/session-row-facts.js";
@@ -40,6 +39,7 @@ import {
   sameSessionActorTranscriptVersion,
   type SessionActorTranscriptReplica,
 } from "./session-actor-transcript-replica.js";
+import { isSessionEntryPublicationSourceCurrent } from "./session-entry-publication-source.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
@@ -125,8 +125,7 @@ export function ensureReplicaSubscription(): void {
       };
       if (
         !pool.cells.has(sessionActorReplicaTargetKey(target)) &&
-        created.source.writeToken ===
-          readSqliteDatabaseWriteTokenForPath(target.database.nativeLocation)
+        isSessionEntryPublicationSourceCurrent(created.source)
       ) {
         // Creation already owns the complete entry; its first reader need not fetch it again.
         retainSessionActorEntryFacts(
@@ -217,7 +216,15 @@ export function ensureReplicaSubscription(): void {
       if (
         prepared &&
         source.identity === database.physicalIdentity &&
-        prepared.source.writeToken === readSqliteDatabaseWriteTokenForPath(database.nativeLocation)
+        isSessionEntryPublicationSourceCurrent(prepared.source) &&
+        (!prepared.source.admission ||
+          !prepared.actorPostimage ||
+          (prepared.actorPostimage.writeToken !== undefined &&
+            prepared.actorPostimage.writeToken ===
+              scopedWriteToken(
+                { database, sessionKey },
+                prepared.actorPostimage.dependencySessionIds,
+              )))
       ) {
         if (prepared.actorPostimage) {
           retainSnapshot(cell, prepared.actorPostimage, prepared.source.incarnation);

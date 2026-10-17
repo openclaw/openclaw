@@ -146,10 +146,14 @@ class SkillWorkshopPageState {
         this.selectFirst();
       }
     } catch (error) {
-      this.error = formatUiError(error);
+      if (this.scope === scope) {
+        this.error = formatUiError(error);
+      }
     } finally {
-      this.loading = false;
-      this.changed();
+      if (this.scope === scope) {
+        this.loading = false;
+        this.changed();
+      }
     }
   }
 
