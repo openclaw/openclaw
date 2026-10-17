@@ -6,6 +6,7 @@ import {
   callPersonalPublicationRpc,
   createPersonalPublicationFixture,
   personalPublicationAccount,
+  personalPublicationRequest,
 } from "./github-personal-publication.test-support.js";
 import { readPersonalGitHubPublicationAsync } from "./github-publication-store-async.js";
 import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
@@ -17,7 +18,6 @@ import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
   persistClaimPublicationWorkspace,
-  root,
 } from "./github-publication.test-support.js";
 import {
   REQUEST,
@@ -34,7 +34,10 @@ const rejection = (idempotencyKey: string) => ({
   idempotencyKey,
 });
 
-async function sharedAdmission(surface: "local" | "deferred" | "claim") {
+async function sharedAdmission(
+  surface: "local" | "deferred" | "claim",
+  environmentId = "publication-worker",
+) {
   if (surface !== "local") {
     await persistClaimPublicationWorkspace();
   }
@@ -44,68 +47,59 @@ async function sharedAdmission(surface: "local" | "deferred" | "claim") {
   const coordinator = createTestGitHubPublicationCoordinator({ placements });
   const sessionId = surface === "local" ? SESSION_ID : REQUEST.sessionId;
   const sessionKey = surface === "local" ? SESSION_KEY : REQUEST.sessionKey;
+  const claimTurn = (claimId: string, runId: string) =>
+    placements.claimTurn({
+      sessionId,
+      sessionKey,
+      agentId: "main",
+      claimId,
+      runId,
+      owner: { kind: "worker", environmentId, ownerEpoch: 2 },
+    });
   if (surface !== "local") {
     seedAttachedPlacementEnvironment(database, {
-      environmentId: "publication-worker",
+      environmentId,
       sessionId,
       ownerEpoch: 2,
     });
-    await seedActivePlacement(placements, { environmentId: "publication-worker", ownerEpoch: 2 });
+    await seedActivePlacement(placements, { environmentId, ownerEpoch: 2 });
   }
   const claim =
-    surface === "claim"
-      ? await placements.claimTurn({
-          sessionId,
-          sessionKey,
-          agentId: "main",
-          claimId: "publication-claim",
-          runId: "publication-run",
-          owner: { kind: "worker", environmentId: "publication-worker", ownerEpoch: 2 },
-        })
-      : undefined;
+    surface === "claim" ? await claimTurn("publication-claim", "publication-run") : undefined;
   const key = `selected-${surface}`;
+  const request = { sessionKey, agentId: "main", idempotencyKey: key };
+  const requestClaim = (turn: Awaited<ReturnType<typeof claimTurn>>, idempotencyKey: string) =>
+    coordinator.requestForClaimV2({ ...request, claim: turn, idempotencyKey });
   return {
     db,
     key,
-    read: () => readGitHubPublicationRequest(db, { sessionId, idempotencyKey: key }),
+    placements,
+    claimTurn,
+    requestClaim,
+    read: (idempotencyKey = key) => readGitHubPublicationRequest(db, { sessionId, idempotencyKey }),
     request: (expected = obsolete) =>
       claim
         ? coordinator.requestForClaimV2({
+            ...request,
             claim,
-            sessionKey,
-            agentId: "main",
-            idempotencyKey: key,
             expectedPublisher: expected,
           })
         : coordinator.requestForSessionV2({
-            sessionKey,
-            agentId: "main",
-            idempotencyKey: key,
+            ...request,
             selection: { source: "shared", expected },
           }),
   };
 }
 
-async function claimFixture(environmentId: string) {
-  await persistClaimPublicationWorkspace();
-  const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-  const placements = createWorkerSessionPlacementStore({ database });
-  seedAttachedPlacementEnvironment(database, {
-    environmentId,
-    sessionId: REQUEST.sessionId,
-    ownerEpoch: 2,
+function holdIdentity(identity: unknown) {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  mocks.prepareIdentity.mockImplementationOnce(async () => {
+    entered.resolve();
+    await release.promise;
+    return identity;
   });
-  const active = await seedActivePlacement(placements, { environmentId, ownerEpoch: 2 });
-  const claimTurn = (claimId: string, runId: string) =>
-    placements.claimTurn({
-      sessionId: active.sessionId,
-      sessionKey: active.sessionKey,
-      agentId: active.agentId,
-      claimId,
-      runId,
-      owner: { kind: "worker", environmentId, ownerEpoch: 2 },
-    });
-  return { database, placements, claimTurn };
+  return { entered, release };
 }
 
 describe("GitHub publication selection admission", () => {
@@ -113,29 +107,18 @@ describe("GitHub publication selection admission", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("rejects a stale turn claim after awaited identity verification", async () => {
-    const { database, placements, claimTurn } = await claimFixture("environment-1");
+    const { read, placements, requestClaim, claimTurn } = await sharedAdmission(
+      "deferred",
+      "environment-1",
+    );
     const claim = await claimTurn("claim-1", "run-1");
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    mocks.prepareIdentity.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-      return {
-        source: "system-configured",
-        profileId: "ghp_11111111111111111111111111111111",
-        account: { accountId: 42, login: "roboclaw-bot", avatarUrl: null },
-        env: {},
-      };
+    const { entered, release } = holdIdentity({
+      source: "system-configured",
+      profileId: "ghp_11111111111111111111111111111111",
+      account: { accountId: 42, login: "roboclaw-bot", avatarUrl: null },
+      env: {},
     });
-    const coordinator = createTestGitHubPublicationCoordinator({ placements });
-    const pending = coordinator
-      .requestForClaimV2({
-        claim,
-        sessionKey: REQUEST.sessionKey,
-        agentId: REQUEST.agentId,
-        idempotencyKey: "publish-stale",
-      })
-      .catch((error: unknown) => error);
+    const pending = requestClaim(claim, "publish-stale").catch((error: unknown) => error);
     let result: unknown;
     try {
       await Promise.race([
@@ -154,36 +137,23 @@ describe("GitHub publication selection admission", () => {
     expect(result).toMatchObject({
       message: "GitHub publication lost the live session turn claim after verification.",
     });
-    expect(
-      readGitHubPublicationRequest(database.db, {
-        sessionId: REQUEST.sessionId,
-        idempotencyKey: "publish-stale",
-      }),
-    ).toBeUndefined();
+    expect(read("publish-stale")).toBeUndefined();
     expect(commands).toEqual([]);
   });
 
   it("rejects reuse of a worker publication idempotency key by a later turn", async () => {
-    const { placements, claimTurn } = await claimFixture("environment-idempotency");
+    const { placements, requestClaim, claimTurn } = await sharedAdmission(
+      "deferred",
+      "environment-idempotency",
+    );
     const firstClaim = await claimTurn("claim-first", "run-first");
-    const coordinator = createTestGitHubPublicationCoordinator({ placements });
-    await coordinator.requestForClaimV2({
-      claim: firstClaim,
-      sessionKey: REQUEST.sessionKey,
-      agentId: REQUEST.agentId,
-      idempotencyKey: "reused-worker-call",
-    });
+    await requestClaim(firstClaim, "reused-worker-call");
     await placements.releaseTurn(firstClaim);
     const secondClaim = await claimTurn("claim-second", "run-second");
 
-    await expect(
-      coordinator.requestForClaimV2({
-        claim: secondClaim,
-        sessionKey: REQUEST.sessionKey,
-        agentId: REQUEST.agentId,
-        idempotencyKey: "reused-worker-call",
-      }),
-    ).rejects.toThrow("idempotency key was reused");
+    await expect(requestClaim(secondClaim, "reused-worker-call")).rejects.toThrow(
+      "idempotency key was reused",
+    );
   });
 
   it.each([
@@ -272,14 +242,7 @@ describe("GitHub publication selection admission", () => {
     "observes a same-key %s admission committed while identity preparation awaits",
     async (surface) => {
       const fixture = await sharedAdmission(surface);
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const identity = await mocks.prepareIdentity();
-      mocks.prepareIdentity.mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
-        return identity;
-      });
+      const { entered, release } = holdIdentity(await mocks.prepareIdentity());
       const stale = fixture.request().catch((caught: unknown) => caught);
       await entered.promise;
       let admitted;
@@ -298,14 +261,7 @@ describe("GitHub publication selection admission", () => {
 
   it("does not make a key-wide promise when another invocation is still preparing", async () => {
     const fixture = await sharedAdmission("local");
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const identity = await mocks.prepareIdentity();
-    mocks.prepareIdentity.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-      return identity;
-    });
+    const { entered, release } = holdIdentity(await mocks.prepareIdentity());
     const pending = fixture.request(publisher);
     await entered.promise;
     let error: unknown;
@@ -340,15 +296,7 @@ describe("GitHub publication selection admission", () => {
   it("returns exact personal pre-insert rejection details when selection changes during snapshot capture", async () => {
     const fixture = await createPersonalPublicationFixture();
     const key = "personal-rejected-snapshot";
-    const request = {
-      sessionKey: SESSION_KEY,
-      idempotencyKey: key,
-      selection: {
-        source: "personal",
-        generation: fixture.generation,
-        account: personalPublicationAccount,
-      },
-    };
+    const request = personalPublicationRequest(fixture, key);
     const rotate = () =>
       updateUserGitHubConnection(
         fixture.owner,
@@ -379,15 +327,11 @@ describe("GitHub publication selection admission", () => {
     const fixture = await createPersonalPublicationFixture();
     fixture.runtime.verifiedAccount = { ...personalPublicationAccount, login: "renamed-account" };
     const key = "accepted-personal-pre-claim";
-    const response = await callPersonalPublicationRpc(fixture, "sessions.github.publish", {
-      sessionKey: SESSION_KEY,
-      idempotencyKey: key,
-      selection: {
-        source: "personal",
-        generation: fixture.generation,
-        account: personalPublicationAccount,
-      },
-    });
+    const response = await callPersonalPublicationRpc(
+      fixture,
+      "sessions.github.publish",
+      personalPublicationRequest(fixture, key),
+    );
     expect(response[0]).toBe(false);
     expect(response[2]).not.toHaveProperty("details");
     const row = await readPersonalGitHubPublicationAsync(fixture.owner, {

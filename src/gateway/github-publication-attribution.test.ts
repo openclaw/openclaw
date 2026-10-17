@@ -37,21 +37,33 @@ vi.mock("./worker-environments/session-repository-checkpoints.js", () => ({
   withSessionRepositoryCheckpoint: (...args: unknown[]) => checkpoint(...args),
 }));
 
-async function prepareRealPublicationCredit() {
-  const person = syncGitHubIdentity({
-    identity: { accountId: 7, login: "alice" },
-    authenticationAlias: { kind: "email", email: "alice@example.test" },
+function createPerson(accountId: number, login: string) {
+  return syncGitHubIdentity({
+    identity: { accountId, login },
+    authenticationAlias: { kind: "email", email: `${login}@example.test` },
   });
+}
+
+function participate(id: string, sessionKey = SESSION_KEY, promptedAt = 1) {
   recordSessionParticipant(
-    { agentId: "main", sessionKey: SESSION_KEY },
-    { identity: { type: "profile", id: person.id }, promptedAt: 1, sessionAgentId: "main" },
+    { agentId: "main", sessionKey },
+    { identity: { type: "profile", id }, promptedAt, sessionAgentId: "main" },
   );
+}
+
+async function useRealAttribution() {
   const { prepareGitCoauthorAttribution, resolveGitCoauthorAttribution } = await vi.importActual<
     typeof import("../agents/git-coauthor-attribution.js")
   >("../agents/git-coauthor-attribution.js");
   mocks.prepareAttribution.mockImplementation(prepareGitCoauthorAttribution);
   mocks.attribution.mockImplementation(resolveGitCoauthorAttribution);
-  return person;
+}
+
+async function prepareRealPublicationCredit() {
+  const alice = createPerson(7, "alice");
+  participate(alice.id);
+  await useRealAttribution();
+  return alice;
 }
 
 describe("Gateway GitHub publication attribution", () => {
@@ -62,12 +74,9 @@ describe("Gateway GitHub publication attribution", () => {
     await prepareRealPublicationCredit();
     const trailer = "Co-authored-by: alice <7+alice@users.noreply.github.com>";
     const coordinator = createGitHubPublicationCoordinator();
-    const result = await coordinator.requestForSessionV2({
-      agentId: "main",
-      sessionKey: SESSION_KEY,
-      idempotencyKey: "credit-in-title",
-      title: trailer,
-    });
+    const result = await coordinator.requestForSessionV2(
+      publicationRequest("credit-in-title", { title: trailer }),
+    );
 
     expect(result.status).toBe("published");
     const message = commandCalls.find(({ argv }) => argv.includes("commit-tree"))?.input;
@@ -126,6 +135,17 @@ describe("Gateway GitHub publication attribution", () => {
         return result;
       });
       if (boundary !== "preparation") {
+        type RecordEffect = NonNullable<
+          Parameters<typeof publicationExecutor.executeGitHubPublication>[0]["recordEffect"]
+        >;
+        const revokeAfter =
+          (record: RecordEffect): RecordEffect =>
+          async (effect, observed) => {
+            await record(effect, observed);
+            if (effect === boundary && observed === undefined) {
+              optOut();
+            }
+          };
         if (surface === "local") {
           const execute = publicationExecutor.executeGitHubPublication;
           const intercepted = vi
@@ -133,12 +153,9 @@ describe("Gateway GitHub publication attribution", () => {
             .mockImplementation((params) =>
               execute({
                 ...params,
-                recordEffect: async (effect, observed) => {
-                  await params.recordEffect?.(effect, observed);
-                  if (effect === boundary && observed === undefined) {
-                    optOut();
-                  }
-                },
+                recordEffect: revokeAfter((effect, observed) =>
+                  params.recordEffect?.(effect, observed),
+                ),
               }),
             );
           onTestFinished(() => intercepted.mockRestore());
@@ -151,12 +168,9 @@ describe("Gateway GitHub publication attribution", () => {
                 ...params,
                 execution: {
                   ...params.execution,
-                  recordEffect: async (effect, observed) => {
-                    await params.execution.recordEffect(effect, observed);
-                    if (effect === boundary && observed === undefined) {
-                      optOut();
-                    }
-                  },
+                  recordEffect: revokeAfter((effect, observed) =>
+                    params.execution.recordEffect(effect, observed),
+                  ),
                 },
               }),
             );
@@ -164,11 +178,9 @@ describe("Gateway GitHub publication attribution", () => {
         }
       }
       const coordinator = repository?.coordinator ?? createGitHubPublicationCoordinator();
-      const result = await coordinator.requestForSessionV2({
-        agentId: "main",
-        sessionKey: SESSION_KEY,
-        idempotencyKey: `opt-out-${surface}-${boundary}`,
-      });
+      const result = await coordinator.requestForSessionV2(
+        publicationRequest(`opt-out-${surface}-${boundary}`),
+      );
 
       expect(optedOut).toBe(true);
       expect(result).toMatchObject({
@@ -234,16 +246,11 @@ describe("Gateway GitHub publication attribution", () => {
         }
         return await transport(argv, options);
       });
-      const request = {
-        agentId: "main",
-        sessionKey: SESSION_KEY,
-        idempotencyKey: "unpushed-credit-recovery",
-      };
+      const request = publicationRequest("unpushed-credit-recovery");
       const interrupted = await repository.coordinator.requestForSessionV2(request);
       expect(interrupted.status).toBe("requested");
       expect(readRepositoryGitHubPublication(interrupted.requestId)?.head_commit).toBeTruthy();
-      expect(repository.runtime.head).toBeNull();
-      expect(repository.runtime.effects).toEqual([]);
+      expect(repository.runtime).toMatchObject({ head: null, effects: [] });
 
       if (credit === "revoked") {
         expect(setUserPreferences(person.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: false }).ok).toBe(
@@ -258,8 +265,7 @@ describe("Gateway GitHub publication attribution", () => {
         code: "identity_changed",
         nextAction: expect.stringMatching(/credit/i),
       });
-      expect(repository.runtime.head).toBeNull();
-      expect(repository.runtime.effects).toEqual([]);
+      expect(repository.runtime).toMatchObject({ head: null, effects: [] });
       expect(mocks.runCommand.mock.calls.some(([argv]) => argv.includes("graphql"))).toBe(false);
     },
   );
@@ -269,28 +275,14 @@ describe("Gateway GitHub publication attribution", () => {
       gateway: { publicOrigin: "https://team.example", controlUi: { basePath: "/control" } },
     };
     mocks.getConfigSnapshot.mockReturnValue({ config, sourceConfig: config });
-    const { prepareGitCoauthorAttribution, resolveGitCoauthorAttribution } = await vi.importActual<
-      typeof import("../agents/git-coauthor-attribution.js")
-    >("../agents/git-coauthor-attribution.js");
-    mocks.prepareAttribution.mockImplementation(prepareGitCoauthorAttribution);
-    mocks.attribution.mockImplementation(resolveGitCoauthorAttribution);
+    await useRealAttribution();
     const people = [
-      { accountId: 7, login: "alice" },
+      createPerson(7, "alice"),
       // Grace contributed earlier in the source session; session-level credit follows delegation.
-      { accountId: 9, login: "grace" },
-      { accountId: 11, login: "opted-out" },
-    ].map((identity) =>
-      syncGitHubIdentity({
-        identity,
-        authenticationAlias: { kind: "email", email: `${identity.login}@example.test` },
-      }),
-    );
-    for (const person of people) {
-      recordSessionParticipant(
-        { agentId: "main", sessionKey: SESSION_KEY },
-        { identity: { type: "profile", id: person.id }, promptedAt: 1, sessionAgentId: "main" },
-      );
-    }
+      createPerson(9, "grace"),
+      createPerson(11, "opted-out"),
+    ];
+    people.forEach(({ id }) => participate(id));
     const childKey = "agent:main:subagent:delegated-publication";
     const child = await createInitialSubagentSession({
       cfg: config,
@@ -311,18 +303,7 @@ describe("Gateway GitHub publication attribution", () => {
       collect: false,
     });
     expect(child.status).toBe("ok");
-    const laterContributor = syncGitHubIdentity({
-      identity: { accountId: 13, login: "later-contributor" },
-      authenticationAlias: { kind: "email", email: "later-contributor@example.test" },
-    });
-    recordSessionParticipant(
-      { agentId: "main", sessionKey: SESSION_KEY },
-      {
-        identity: { type: "profile", id: laterContributor.id },
-        promptedAt: 3,
-        sessionAgentId: "main",
-      },
-    );
+    participate(createPerson(13, "later-contributor").id, SESSION_KEY, 3);
     const worktree = {
       id: "delegated-worktree",
       name: "delegated-publication",
@@ -349,10 +330,7 @@ describe("Gateway GitHub publication attribution", () => {
       { agentId: "main", sessionKey: childKey },
       { worktree: { id: worktree.id, branch: BRANCH, repoRoot: "/repo" } },
     );
-    recordSessionParticipant(
-      { agentId: "main", sessionKey: childKey },
-      { identity: { type: "profile", id: people[0]!.id }, promptedAt: 2, sessionAgentId: "main" },
-    );
+    participate(people[0]!.id, childKey, 2);
     setUserPreferences(people[2]!.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: false });
     const { loadGatewaySessionEntryReadOnlyInWorker } = await vi.importActual<
       typeof import("./session-utils-store-worker.js")

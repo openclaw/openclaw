@@ -262,6 +262,28 @@ export const OLD_HEAD = "b".repeat(40);
 export const NEW_HEAD = "c".repeat(40);
 export const WORKSPACE_TREE = "d".repeat(40);
 
+function publicationWorktree(ownerId = SESSION_KEY) {
+  return {
+    id: "worktree-1",
+    repoRoot: "/repo",
+    repoFingerprint: "fingerprint-1",
+    path: "/repo/worktree",
+    branch: BRANCH,
+    baseRef: "origin/main",
+    ownerKind: "session" as const,
+    ownerId,
+  };
+}
+
+function registryPublicationWorktree(worktree = publicationWorktree()) {
+  return {
+    ...worktree,
+    name: "publication",
+    createdAt: Date.now(),
+    lastActiveAt: Date.now(),
+  };
+}
+
 export function publicationRequest(
   idempotencyKey: string,
   overrides: Partial<
@@ -432,12 +454,7 @@ export async function persistPublicationTestSession(sessionKey = SESSION_KEY) {
   if (!realWorktree && original(sessionKey).entry.worktree) {
     const worktree = mocks.findWorktree("session", sessionKey);
     await deleteRegistryWorktree(process.env, worktree.id);
-    await insertRegistryWorktree(process.env, {
-      ...worktree,
-      name: "publication",
-      createdAt: Date.now(),
-      lastActiveAt: Date.now(),
-    });
+    await insertRegistryWorktree(process.env, registryPublicationWorktree(worktree));
   }
   const storePath = resolveSessionStorePathCore(currentGitHubPublicationConfig().session?.store, {
     agentId: "main",
@@ -492,6 +509,11 @@ export function installGitHubPublicationTestHarness(
   );
   beforeEach(async () => {
     mocks.persistedSessionKeys.clear();
+    for (const mock of Object.values(mocks)) {
+      if (vi.isMockFunction(mock)) {
+        mock.mockReset();
+      }
+    }
     root = tempDirs.make("openclaw-publication-");
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     realWorktree = harnessOptions.realWorktree ?? false;
@@ -512,67 +534,46 @@ export function installGitHubPublicationTestHarness(
     const syntheticIndex = path.join(root, "synthetic-index");
     await fs.writeFile(syntheticIndex, "synthetic Git transport index");
     if (!realWorktree) {
-      await insertRegistryWorktree(process.env, {
-        id: "worktree-1",
-        name: "publication",
-        repoRoot: "/repo",
-        repoFingerprint: "fingerprint-1",
-        path: "/repo/worktree",
-        branch: BRANCH,
-        baseRef: "origin/main",
-        ownerKind: "session",
-        ownerId: SESSION_KEY,
-        createdAt: Date.now(),
-        lastActiveAt: Date.now(),
-      });
+      await insertRegistryWorktree(process.env, registryPublicationWorktree());
     }
     commands = [];
     commandCalls = [];
-    mocks.updateIndex
-      .mockReset()
-      .mockImplementation(
-        async (params: {
-          cwd: string;
-          sourceIndexTree: string;
-          workspaceTree: string;
-          run: (argv: string[], options?: { cwd?: string }) => Promise<string>;
-          updateRef?: () => Promise<void>;
-        }) => {
-          const currentIndexTree = await params.run(
-            [
-              "git",
-              "-c",
-              `core.hooksPath=${os.devNull}`,
-              "-c",
-              "core.fsmonitor=false",
-              "write-tree",
-            ],
-            { cwd: params.cwd },
+    mocks.updateIndex.mockImplementation(
+      async (params: {
+        cwd: string;
+        sourceIndexTree: string;
+        workspaceTree: string;
+        run: (argv: string[], options?: { cwd?: string }) => Promise<string>;
+        updateRef?: () => Promise<void>;
+      }) => {
+        const currentIndexTree = await params.run(
+          ["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", "write-tree"],
+          { cwd: params.cwd },
+        );
+        if (
+          currentIndexTree !== params.sourceIndexTree &&
+          currentIndexTree !== params.workspaceTree
+        ) {
+          throw new Error(
+            "GitHub publication workspace index changed after its accepted snapshot.",
           );
-          if (
-            currentIndexTree !== params.sourceIndexTree &&
-            currentIndexTree !== params.workspaceTree
-          ) {
-            throw new Error(
-              "GitHub publication workspace index changed after its accepted snapshot.",
-            );
-          }
-          await params.updateRef?.();
-        },
-      );
-    mocks.attribution.mockReset().mockReturnValue({
+        }
+        await params.updateRef?.();
+      },
+    );
+    mocks.attribution.mockReturnValue({
       trailers: ["Co-authored-by: alice <7+alice@users.noreply.github.com>"],
       logins: ["alice"],
       prompt: "",
     });
-    mocks.prepareAttribution.mockReset().mockImplementation(async (...args) => ({
+    mocks.prepareAttribution.mockImplementation(async (...args) => ({
       attribution: await mocks.attribution(...args),
       isCurrent: () => true,
     }));
-    mocks.getConfigSnapshot.mockReset().mockReturnValue(null);
-    mocks.refreshIdentity.mockReset().mockResolvedValue(undefined);
-    mocks.matchesIdentity.mockReset().mockReturnValue(true);
-    mocks.prepareIdentity.mockReset().mockResolvedValue({
+    mocks.getConfigSnapshot.mockReturnValue(null);
+    mocks.refreshIdentity.mockResolvedValue(undefined);
+    mocks.matchesIdentity.mockReturnValue(true);
+    mocks.prepareIdentity.mockResolvedValue({
       source: "system-configured",
       profileId: "ghp_11111111111111111111111111111111",
       account: { accountId: 42, login: "roboclaw-bot", avatarUrl: null },
@@ -582,29 +583,20 @@ export function installGitHubPublicationTestHarness(
         GITHUB_TOKEN: undefined,
       },
     });
-    mocks.findWorktree.mockReset().mockImplementation((_ownerKind, ownerId: string) => ({
-      id: "worktree-1",
-      repoRoot: "/repo",
-      repoFingerprint: "fingerprint-1",
-      path: "/repo/worktree",
-      branch: BRANCH,
-      baseRef: "origin/main",
-      ownerKind: "session",
-      ownerId,
-    }));
-    mocks.readWorktree
-      .mockReset()
-      .mockImplementation(async (_context: unknown, kind: string, id: string) =>
-        mocks.findWorktree(kind, id),
-      );
-    mocks.findWorktreeById.mockReset().mockReturnValue(undefined);
-    mocks.resolveRepository.mockReset().mockResolvedValue({
+    mocks.findWorktree.mockImplementation((_ownerKind, ownerId: string) =>
+      publicationWorktree(ownerId),
+    );
+    mocks.readWorktree.mockImplementation(async (_context: unknown, kind: string, id: string) =>
+      mocks.findWorktree(kind, id),
+    );
+    mocks.findWorktreeById.mockReturnValue(undefined);
+    mocks.resolveRepository.mockResolvedValue({
       checkoutRoot: "/repo/worktree",
       repoRoot: "/repo",
       originUrl: "git@github.com:openclaw/openclaw.git",
       fingerprint: "fingerprint-1",
     });
-    mocks.loadSession.mockReset().mockImplementation((sessionKey: string) => ({
+    mocks.loadSession.mockImplementation((sessionKey: string) => ({
       canonicalKey: sessionKey,
       agentId: "main",
       storePath: "/state/sessions.json",
@@ -631,90 +623,86 @@ export function installGitHubPublicationTestHarness(
       "git rev-parse --verify --end-of-options origin/main^{commit}": [`${BASE_HEAD}\n`],
     };
     let remotePublished = false;
-    mocks.runCommand
-      .mockReset()
-      .mockImplementation(async (argv: string[], options?: { input?: string }) => {
-        commands.push(argv);
-        commandCalls.push({ argv, input: options?.input });
-        const command = argv.join(" ");
-        if (replies[command]) {
-          return commandResult(...replies[command]);
-        }
+    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+      commands.push(argv);
+      commandCalls.push({ argv, input: options?.input });
+      const command = argv.join(" ");
+      if (replies[command]) {
+        return commandResult(...replies[command]);
+      }
 
-        if (
-          command.startsWith(
-            "gh api --hostname github.com repos/openclaw/openclaw --jq {fork, default_branch, parent:",
-          )
-        ) {
-          return commandResult('{"fork":false,"default_branch":"main"}\n');
-        }
-        const baseRefPrefix = "gh api --hostname github.com repos/openclaw/openclaw/git/ref/heads/";
-        if (command.startsWith(baseRefPrefix)) {
-          const branch = command.slice(baseRefPrefix.length).split(" --jq", 1)[0];
-          return commandResult(JSON.stringify({ ref: `refs/heads/${branch}`, sha: BASE_HEAD }));
-        }
+      if (
+        command.startsWith(
+          "gh api --hostname github.com repos/openclaw/openclaw --jq {fork, default_branch, parent:",
+        )
+      ) {
+        return commandResult('{"fork":false,"default_branch":"main"}\n');
+      }
+      const baseRefPrefix = "gh api --hostname github.com repos/openclaw/openclaw/git/ref/heads/";
+      if (command.startsWith(baseRefPrefix)) {
+        const branch = command.slice(baseRefPrefix.length).split(" --jq", 1)[0];
+        return commandResult(JSON.stringify({ ref: `refs/heads/${branch}`, sha: BASE_HEAD }));
+      }
 
-        if (argv.includes("--includes") && argv.includes("--get-regexp")) {
-          return commandResult("", 1);
-        }
-        if (command.startsWith("git ls-tree -r -z --full-tree ")) {
-          return commandResult();
-        }
-        if (argv.includes("rev-parse") && argv.includes("--git-path") && argv.at(-1) === "index") {
-          return commandResult(syntheticIndex);
-        }
-
-        if (
-          argv[0] === "git" &&
-          argv[1] === "config" &&
-          (argv.includes("--global") || argv.includes("--system")) &&
-          argv.includes("core.attributesFile")
-        ) {
-          return commandResult("", 1);
-        }
-        if (command.endsWith("write-tree")) {
-          return commandResult(`${WORKSPACE_TREE}\n`);
-        }
-
-        if (command.startsWith("git commit-tree ")) {
-          return commandResult(`${NEW_HEAD}\n`);
-        }
-
-        if (
-          command.startsWith(
-            "git -c credential.helper= -c credential.helper=!gh auth git-credential ls-remote",
-          )
-        ) {
-          return commandResult(remotePublished ? `${NEW_HEAD}\trefs/heads/${BRANCH}\n` : "");
-        }
-        if (argv.includes("push")) {
-          remotePublished = true;
-          return commandResult();
-        }
-        if (command.includes(" repos/openclaw/openclaw/pulls ") && command.includes("state=all")) {
-          return commandResult("[]\n");
-        }
-        if (
-          command ===
-          "gh api --hostname github.com --method POST repos/openclaw/openclaw/pulls --input -"
-        ) {
-          return commandResult('{"html_url":"https://github.com/openclaw/openclaw/pull/125200"}\n');
-        }
+      if (argv.includes("--includes") && argv.includes("--get-regexp")) {
+        return commandResult("", 1);
+      }
+      if (command.startsWith("git ls-tree -r -z --full-tree ")) {
         return commandResult();
-      });
+      }
+      if (argv.includes("rev-parse") && argv.includes("--git-path") && argv.at(-1) === "index") {
+        return commandResult(syntheticIndex);
+      }
+
+      if (
+        argv[0] === "git" &&
+        argv[1] === "config" &&
+        (argv.includes("--global") || argv.includes("--system")) &&
+        argv.includes("core.attributesFile")
+      ) {
+        return commandResult("", 1);
+      }
+      if (command.endsWith("write-tree")) {
+        return commandResult(`${WORKSPACE_TREE}\n`);
+      }
+
+      if (command.startsWith("git commit-tree ")) {
+        return commandResult(`${NEW_HEAD}\n`);
+      }
+
+      if (
+        command.startsWith(
+          "git -c credential.helper= -c credential.helper=!gh auth git-credential ls-remote",
+        )
+      ) {
+        return commandResult(remotePublished ? `${NEW_HEAD}\trefs/heads/${BRANCH}\n` : "");
+      }
+      if (argv.includes("push")) {
+        remotePublished = true;
+        return commandResult();
+      }
+      if (command.includes(" repos/openclaw/openclaw/pulls ") && command.includes("state=all")) {
+        return commandResult("[]\n");
+      }
+      if (
+        command ===
+        "gh api --hostname github.com --method POST repos/openclaw/openclaw/pulls --input -"
+      ) {
+        return commandResult('{"html_url":"https://github.com/openclaw/openclaw/pull/125200"}\n');
+      }
+      return commandResult();
+    });
     // Source-policy selection reads canonical session custody, including the
     // creation-time sandbox required by authenticated requester fixtures.
     setRuntimeConfigSnapshot({
       agents: { entries: { main: { workspace: "/repo/worktree" } } },
     });
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: SESSION_KEY },
-      { ...mocks.loadSession(SESSION_KEY).entry, updatedAt: Date.now() },
-    );
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: REQUEST.sessionKey },
-      { ...mocks.loadSession(REQUEST.sessionKey).entry, updatedAt: Date.now() },
-    );
+    for (const sessionKey of [SESSION_KEY, REQUEST.sessionKey]) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        { ...mocks.loadSession(sessionKey).entry, updatedAt: Date.now() },
+      );
+    }
     // Custody remains persisted for policy reads; release its writer lease so
     // receipt-only tests can observe a genuinely cold shared database.
     await closeOpenClawAgentDatabasesAsync();
