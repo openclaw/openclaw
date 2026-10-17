@@ -250,7 +250,9 @@ or protocol-version change.
   and `sessions.changed`. Exec tool results and updates retain their bounded
   text in `content`, omitting the redundant `details.aggregated` output when text
   content is present. Results with no text content retain bounded aggregated
-  output. Stored transcripts and internal tool-result callbacks keep the full
+  output. Live `dispatch_action` results omit the raw target-result and tool
+  mirrors from `details`, keeping the existing bounded display content and
+  other details. Stored transcripts and internal tool-result callbacks keep the full
   output; recipient subscription and native delivery rules are unchanged.
 - `session.narration`: bounded assistant-text snapshots for subscriptions with
   narration intent, paced and settled as described above.
