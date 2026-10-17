@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { OpenClawStateDatabaseAsyncResource } from "./openclaw-state-db-async-lifecycle.js";
 
-export const leaseMocks = vi.hoisted(() => ({
+const leaseMocks = vi.hoisted(() => ({
   registerResource: vi.fn<(resource: OpenClawStateDatabaseAsyncResource) => () => void>(),
   isWriteContention: vi.fn<(_error: unknown) => boolean>(() => false),
   forbidden: vi.fn(() => {
     throw new Error("Controlled lease test reached native storage, identity lookup, or transport");
   }),
 }));
+export { leaseMocks };
 // mock-isolation: Track resource ownership without opening a native database cache.
 vi.mock("./openclaw-state-db-cache.js", () => ({
   registerOpenClawStateDatabaseAsyncResource: leaseMocks.registerResource,

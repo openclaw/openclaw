@@ -71,7 +71,7 @@ it.each([
   [floatingNpm, undefined, "floating-without-integrity", [...floating, ...missingIntegrity]],
 ] as const)(
   "describes npm pin %j with %s",
-  (npm, expectedIntegrity, pinState, warnings, defaultChoice) => {
+  (npm, expectedIntegrity, pinState, warnings, defaultChoice?: "npm") => {
     const install = { npmSpec: npm.spec, expectedIntegrity, defaultChoice };
     expect(describePluginInstallSource(install)).toEqual({
       ...(defaultChoice ? { defaultChoice } : {}),

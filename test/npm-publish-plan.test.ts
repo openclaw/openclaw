@@ -384,7 +384,7 @@ describe("resolvePublishedNpmVersionRoute", () => {
       "2026.8.1-beta.1",
     ],
     ["complete stable", "2026.7.1", { latest: "2026.7.1", beta: "2026.7.1" }, "npm-readback"],
-  ] as const)("routes %s selectors", (_label, version, distTags, route, currentBeta) => {
+  ] as const)("routes %s selectors", (_label, version, distTags, route, currentBeta?: string) => {
     expect(
       resolvePublishedNpmVersionRoute({
         packageVersion: version,
@@ -425,30 +425,33 @@ describe("resolvePublishedNpmVersionRoute", () => {
     ],
     ["unpublished behind lagging selector", { latest: "2026.9.5" }, false],
     ["unpublished missing selector", {}, false],
-  ] as const)("decides publication for %s", (_label, distTags, published, supersededBy, error) => {
-    const version = "2026.9.6";
-    const publishPlan = resolveNpmPublishPlan(version);
-    const decide = () =>
-      resolveNpmVersionPublicationDecision({
-        packageVersion: version,
-        publishPlan: published ? { ...publishPlan, mirrorDistTags: ["beta"] } : publishPlan,
-        distTags,
-        published,
+  ] as const)(
+    "decides publication for %s",
+    (_label, distTags, published, supersededBy?: string | null, error?: string) => {
+      const version = "2026.9.6";
+      const publishPlan = resolveNpmPublishPlan(version);
+      const decide = () =>
+        resolveNpmVersionPublicationDecision({
+          packageVersion: version,
+          publishPlan: published ? { ...publishPlan, mirrorDistTags: ["beta"] } : publishPlan,
+          distTags,
+          published,
+        });
+      if (error) {
+        expect(decide).toThrow(error);
+        return;
+      }
+      expect(decide()).toEqual({
+        route: published ? "npm-readback" : null,
+        supersededBy: supersededBy ?? null,
       });
-    if (error) {
-      expect(decide).toThrow(error);
-      return;
-    }
-    expect(decide()).toEqual({
-      route: published ? "npm-readback" : null,
-      supersededBy: supersededBy ?? null,
-    });
-    if (published) {
-      expect(
-        resolvePublishedNpmVersionRoute({ packageVersion: version, publishPlan, distTags }),
-      ).toBe("npm-readback");
-    }
-  });
+      if (published) {
+        expect(
+          resolvePublishedNpmVersionRoute({ packageVersion: version, publishPlan, distTags }),
+        ).toBe("npm-readback");
+      }
+    },
+  );
 });
 
 describe("shouldRequireNpmDistTagMirrorAuth", () => {

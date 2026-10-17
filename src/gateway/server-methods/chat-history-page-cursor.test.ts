@@ -112,7 +112,8 @@ it("walks both sides of a byte-limited anchor without gaps and rejects replaced 
       seen.push(...page.ids);
     }
     const expectedIds = Array.from({ length: 13 }, (_, index) => `message-${index}`);
-    const compareIds = (a: string, b: string) => a.localeCompare(b);
+    const compareIds = (a: string | undefined, b: string | undefined) =>
+      String(a).localeCompare(String(b));
     expect(seen.toSorted(compareIds)).toEqual(expectedIds.toSorted(compareIds));
     expect(await loadTranscriptEvents(scope)).toEqual(before);
 
