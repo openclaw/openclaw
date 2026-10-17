@@ -17,7 +17,8 @@ import type {
 const readDocument = vi.hoisted(() => vi.fn());
 vi.mock("../../canvas/documents.js", () => ({ readCanvasDocumentHtmlSource: readDocument }));
 
-function createHarness(method = "canvas.document.view") {
+function createHarness(method = "canvas.document.view", provisioning = false) {
+  const sandbox = createDeferred<number>();
   const client = {
     connect: { role: "operator", scopes: ["operator.read"] },
     connId: "viewer",
@@ -25,8 +26,8 @@ function createHarness(method = "canvas.document.view") {
   const methodRegistry = createGatewayMethodRegistry([]);
   const context = {
     getRuntimeConfig: () => ({}),
-    getMcpAppSandboxPort: () => 18790,
-    ensureSandboxHostPort: vi.fn(async () => 18790),
+    getMcpAppSandboxPort: () => (provisioning ? undefined : 18790),
+    ensureSandboxHostPort: vi.fn(() => (provisioning ? sandbox.promise : Promise.resolve(18790))),
     isConnectionActive: () => true,
     getGatewayMethodRegistry: () => methodRegistry,
   } as unknown as GatewayRequestContext;
@@ -49,27 +50,11 @@ function createHarness(method = "canvas.document.view") {
     });
     return respond;
   };
-  return { client, context, invoke };
+  return { client, context, invoke, sandbox };
 }
 
 function expectFailure(respond: ReturnType<typeof vi.fn>, code = "UNAVAILABLE") {
   expect(respond.mock.calls[0]).toEqual([false, undefined, expect.objectContaining({ code })]);
-}
-
-function expectHostedHtml(respond: ReturnType<typeof vi.fn>, html: string) {
-  expect(respond.mock.calls).toEqual([
-    [
-      true,
-      {
-        html,
-        sandboxUrl: expect.stringMatching(/^\/mcp-app-sandbox\?csp=/),
-        sandboxPort: 18790,
-        sandboxOrigin: "https://sandbox.example",
-      },
-    ],
-  ]);
-  const url = new URL(respond.mock.calls[0]![1].sandboxUrl, "https://sandbox.example");
-  return decodeSandboxHostCsp(url.searchParams.get("csp"));
 }
 
 const hostingDisabled = () => ({
@@ -82,32 +67,51 @@ beforeEach(() => {
 });
 afterEach(() => resetGatewayWorkAdmission());
 
-describe("canvas.document.view", () => {
-  it("returns only the hosted document and isolated sandbox metadata", async () => {
-    const { context, invoke } = createHarness();
+it.each(["view", "preview"])(
+  "canvas.document.%s returns unchanged HTML and isolated sandbox metadata",
+  async (method) => {
+    const { context, invoke } = createHarness(`canvas.document.${method}`);
+    const origin = `https://sandbox.example${method === "preview" ? "/preview" : ""}`;
     context.getRuntimeConfig = () => ({
-      mcp: { apps: { sandboxOrigin: "https://sandbox.example" } },
+      mcp: { apps: { sandboxOrigin: origin } },
     });
-    const policy = expectHostedHtml(await invoke(), "<p>Widget</p>");
-    expect(policy).toMatchObject({
-      blockDescendantFrames: true,
-      resourceDomains: expect.arrayContaining([
-        "https://cdn.jsdelivr.net",
-        "https://fonts.googleapis.com",
-        "https://fonts.gstatic.com",
-      ]),
+    const html =
+      method === "view"
+        ? "<p>Widget</p>"
+        : "\uFEFF<!doctype html>\r\n<p>café 漢字 🦀</p><script>window.example = true;</script>\n";
+    const respond = await invoke(method === "view" ? { docId: "cv_widget" } : { html });
+    expect(respond).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(true, {
+      html,
+      sandboxUrl: expect.stringMatching(/^\/mcp-app-sandbox\?csp=/),
+      sandboxPort: 18790,
+      sandboxOrigin: "https://sandbox.example",
     });
-    expect(policy?.connectDomains).toBeUndefined();
+    const url = new URL(respond.mock.calls[0]![1].sandboxUrl, origin);
+    const policy = decodeSandboxHostCsp(url.searchParams.get("csp"));
+    if (method === "view") {
+      expect(policy).toMatchObject({
+        blockDescendantFrames: true,
+        resourceDomains: expect.arrayContaining([
+          "https://cdn.jsdelivr.net",
+          "https://fonts.googleapis.com",
+          "https://fonts.gstatic.com",
+        ]),
+      });
+      expect(policy?.connectDomains).toBeUndefined();
+    } else {
+      expect(policy).toEqual({ blockDescendantFrames: true });
+      expect(readDocument).not.toHaveBeenCalled();
+    }
     expect(context.ensureSandboxHostPort).not.toHaveBeenCalled();
-  });
+  },
+);
 
+describe("canvas.document.view", () => {
   it("starts sandbox provisioning while the document read is pending", async () => {
-    const { context, invoke } = createHarness();
+    const { context, invoke, sandbox } = createHarness("canvas.document.view", true);
     const document = createDeferred<{ html: string; cspSandbox: "scripts" }>();
-    const sandbox = createDeferred<number>();
     readDocument.mockReturnValue(document.promise);
-    context.getMcpAppSandboxPort = () => undefined;
-    vi.mocked(context.ensureSandboxHostPort!).mockReturnValue(sandbox.promise);
     const pending = invoke();
     expect(readDocument).toHaveBeenCalledWith("cv_widget", { maxBytes: 10 * 1024 * 1024 });
     expect(context.ensureSandboxHostPort).toHaveBeenCalledOnce();
@@ -115,15 +119,6 @@ describe("canvas.document.view", () => {
     document.resolve({ html: "<p>Widget</p>", cspSandbox: "scripts" });
     expect((await pending).mock.calls[0]?.[0]).toBe(true);
   });
-
-  it.each([{}, { docId: "../private" }, { docId: "." }, { docId: "cv_widget", html: "injected" }])(
-    "rejects invalid document identifiers and extra source fields: %j",
-    async (params) => {
-      const { invoke } = createHarness();
-      expectFailure(await invoke(params), "INVALID_REQUEST");
-      expect(readDocument).not.toHaveBeenCalled();
-    },
-  );
 
   it("honors Canvas hosting disablement before reading content", async () => {
     const { context, invoke } = createHarness();
@@ -159,21 +154,11 @@ describe("canvas.document.view", () => {
 });
 
 describe("canvas.document.preview", () => {
-  const createPreviewHarness = () => createHarness("canvas.document.preview");
+  const createPreviewHarness = (provisioning = false) =>
+    createHarness("canvas.document.preview", provisioning);
 
   afterEach(() => {
     expect(readDocument).not.toHaveBeenCalled();
-  });
-
-  it("returns unchanged caller HTML with only default-policy isolated sandbox metadata", async () => {
-    const { context, invoke } = createPreviewHarness();
-    context.getRuntimeConfig = () => ({
-      mcp: { apps: { sandboxOrigin: "https://sandbox.example/preview" } },
-    });
-    const html =
-      "\uFEFF<!doctype html>\r\n<p>café 漢字 🦀</p><script>window.example = true;</script>\n";
-    expect(expectHostedHtml(await invoke({ html }), html)).toEqual({ blockDescendantFrames: true });
-    expect(context.ensureSandboxHostPort).not.toHaveBeenCalled();
   });
 
   it("registers as an advertised read-only Canvas method", () => {
@@ -203,28 +188,11 @@ describe("canvas.document.preview", () => {
   it.each(["a".repeat(2 * 1024 * 1024 + 1), "🦀".repeat(512 * 1024) + "a"])(
     "rejects oversized ASCII/multibyte bytes before provisioning (case %#)",
     async (html) => {
-      const { context, invoke } = createPreviewHarness();
-      context.getMcpAppSandboxPort = () => undefined;
+      const { context, invoke } = createPreviewHarness(true);
       expectFailure(await invoke({ html }), "INVALID_REQUEST");
       expect(context.ensureSandboxHostPort).not.toHaveBeenCalled();
     },
   );
-
-  it.each([
-    {},
-    { html: 1 },
-    { html: null },
-    { html: [] },
-    { docId: "cv_widget" },
-    { html: "<p>Preview</p>", docId: "cv_widget" },
-    { html: "<p>Preview</p>", path: "/private/document.html" },
-    { html: "<p>Preview</p>", csp: { connectDomains: ["https://example.com"] } },
-  ])("rejects invalid params without granting document or policy selection: %j", async (params) => {
-    const { context, invoke } = createPreviewHarness();
-    context.getMcpAppSandboxPort = () => undefined;
-    expectFailure(await invoke(params), "INVALID_REQUEST");
-    expect(context.ensureSandboxHostPort).not.toHaveBeenCalled();
-  });
 
   const retiredBoundaries = [
     "gateway",
@@ -241,10 +209,7 @@ describe("canvas.document.preview", () => {
     "rejects a retired %s before and after provisioning",
     async (boundary) => {
       for (const when of ["before", "after"] as const) {
-        const { client, context, invoke } = createPreviewHarness();
-        const sandbox = createDeferred<number>();
-        context.getMcpAppSandboxPort = () => undefined;
-        vi.mocked(context.ensureSandboxHostPort!).mockReturnValue(sandbox.promise);
+        const { client, context, invoke, sandbox } = createPreviewHarness(true);
         const controller = new AbortController();
         const guard = new AbortController();
         let currentContext: GatewayRequestContext | undefined = context;
@@ -301,8 +266,7 @@ describe("canvas.document.preview", () => {
   );
 
   it("reports unavailable or failed listeners without exposing server details", async () => {
-    const { context, invoke } = createPreviewHarness();
-    context.getMcpAppSandboxPort = () => undefined;
+    const { context, invoke } = createPreviewHarness(true);
     vi.mocked(context.ensureSandboxHostPort!).mockRejectedValue(new Error("/private/sandbox-host"));
     const failed = await invoke();
     expectFailure(failed);
@@ -310,4 +274,29 @@ describe("canvas.document.preview", () => {
     context.ensureSandboxHostPort = undefined;
     expectFailure(await invoke({ html: "" }));
   });
+});
+
+const invalidParams: Record<string, Record<string, unknown>[]> = {
+  view: [{}, { docId: "../private" }, { docId: "." }, { docId: "cv_widget", html: "injected" }],
+  preview: [
+    {},
+    { html: 1 },
+    { html: null },
+    { html: [] },
+    { docId: "cv_widget" },
+    { html: "<p>Preview</p>", docId: "cv_widget" },
+    { html: "<p>Preview</p>", path: "/private/document.html" },
+    { html: "<p>Preview</p>", csp: { connectDomains: ["https://example.com"] } },
+  ],
+};
+describe.each(Object.entries(invalidParams))("canvas.document.%s", (method, cases) => {
+  it.each(cases)(
+    "rejects invalid identifiers and caller-selected source or policy: %j",
+    async (params) => {
+      const { context, invoke } = createHarness(`canvas.document.${method}`, true);
+      expectFailure(await invoke(params), "INVALID_REQUEST");
+      expect(context.ensureSandboxHostPort).not.toHaveBeenCalled();
+      expect(readDocument).not.toHaveBeenCalled();
+    },
+  );
 });

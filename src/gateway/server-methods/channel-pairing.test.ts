@@ -13,12 +13,8 @@ const mocks = vi.hoisted(() => ({
   notify: vi.fn(),
 }));
 
-vi.mock("../../channels/plugins/index.js", () => ({
-  listChannelPlugins: mocks.listPlugins,
-}));
-vi.mock("../../channels/plugins/pairing.js", () => ({
-  notifyPairingApproved: mocks.notify,
-}));
+vi.mock("../../channels/plugins/index.js", () => ({ listChannelPlugins: mocks.listPlugins }));
+vi.mock("../../channels/plugins/pairing.js", () => ({ notifyPairingApproved: mocks.notify }));
 vi.mock("../../commands/doctor-command-owner.js", () => ({
   hasConfiguredCommandOwners: mocks.hasOwners,
 }));
@@ -40,11 +36,10 @@ vi.mock("./local-state-owner.js", () => ({
 
 import { channelPairingHandlers } from "./channel-pairing.js";
 
-const notifyApproval = vi.fn(async () => undefined);
 const pairingPlugin = {
   id: "whatsapp",
   meta: { label: "WhatsApp" },
-  pairing: { idLabel: "Phone number", notifyApproval },
+  pairing: { idLabel: "Phone number", notifyApproval: vi.fn(async () => undefined) },
   config: {
     listAccountIds: () => ["personal", "public", "unconfigured"],
     resolveAccount: (_cfg: unknown, accountId: string) => ({
@@ -94,21 +89,8 @@ function approved(id = senderId, meta?: Record<string, string>) {
 function expectError(respond: ReturnType<typeof vi.fn>, error: Record<string, unknown>) {
   expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
 }
-function expectApproval(
-  respond: ReturnType<typeof vi.fn>,
-  notification: string,
-  commandOwnerBootstrap: string,
-) {
-  expect(respond).toHaveBeenCalledWith(
-    true,
-    {
-      requestId: target.requestId,
-      senderId,
-      notification,
-      commandOwnerBootstrap,
-    },
-    undefined,
-  );
+function expectSuccess(respond: ReturnType<typeof vi.fn>, result: object) {
+  expect(respond).toHaveBeenCalledWith(true, result, undefined);
 }
 
 async function invoke(
@@ -211,74 +193,66 @@ describe("channel DM pairing gateway handlers", () => {
 
       const respond = await invoke("channels.pairing.list", {});
 
-      expect(mocks.listRequests).toHaveBeenCalledTimes(1);
-      expect(mocks.listRequests).toHaveBeenCalledWith("whatsapp", process.env, "personal");
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          accounts: [publicAccount],
-          requests: [
-            {
-              requestId: "opaque-request-id",
-              ...publicAccount,
-              senderId,
-              senderLabel: "Phone number",
-              metadata: { name: "Alice" },
-              createdAt: timestamp,
-              lastSeenAt: "2026-07-20T10:05:00.000Z",
-              expiresAt: "2026-07-20T11:00:00.000Z",
-            },
-          ],
-          commandOwnerConfigured: false,
-          limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
-        },
-        undefined,
-      );
+      expect(mocks.listRequests.mock.calls).toEqual([["whatsapp", process.env, "personal"]]);
+      expectSuccess(respond, {
+        accounts: [publicAccount],
+        requests: [
+          {
+            requestId: "opaque-request-id",
+            ...publicAccount,
+            senderId,
+            senderLabel: "Phone number",
+            metadata: { name: "Alice" },
+            createdAt: timestamp,
+            lastSeenAt: "2026-07-20T10:05:00.000Z",
+            expiresAt: "2026-07-20T11:00:00.000Z",
+          },
+        ],
+        commandOwnerConfigured: false,
+        limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+      });
       expect(JSON.stringify(respond.mock.calls)).not.toContain("SECRET12");
     },
   );
 
-  it("approves access even when the optional notification fails", async () => {
-    const id = `workspace:personal:user:${senderId}`;
-    mocks.approve.mockResolvedValue(approved(id, { accountId: "personal", senderId }));
-    mocks.notify.mockRejectedValue(new Error("offline"));
-
-    const respond = await invoke("channels.pairing.approve", {
-      ...target,
-      notify: true,
-      bootstrapCommandOwner: true,
-    });
-
-    expect(mocks.approve).toHaveBeenCalledWith({
-      ...target,
-      pairingAdapter: pairingPlugin.pairing,
-    });
-    expect(mocks.bootstrapOwner).toHaveBeenCalledWith({
-      channel: "whatsapp",
-      id,
-    });
-    expect(mocks.notify).toHaveBeenCalledWith({
-      channelId: "whatsapp",
-      accountId: "personal",
-      id,
-      cfg: expect.any(Object),
-      pairingAdapter: pairingPlugin.pairing,
-      meta: { accountId: "personal", senderId },
-    });
-    expectApproval(respond, "failed", "configured");
-  });
-
-  it("reports command-owner setup failure without rolling back DM approval", async () => {
-    mocks.approve.mockResolvedValue(approved());
-    mocks.bootstrapOwner.mockRejectedValue(new Error("config write failed"));
-
-    const respond = await invoke("channels.pairing.approve", {
-      ...target,
-      bootstrapCommandOwner: true,
-    });
-
-    expectApproval(respond, "not-requested", "unavailable");
-  });
+  it.each(["notification", "command-owner"])(
+    "keeps DM approval after %s failure",
+    async (failure) => {
+      const notify = failure === "notification";
+      const id = notify ? `workspace:personal:user:${senderId}` : senderId;
+      const meta = { accountId: "personal", senderId };
+      mocks.approve.mockResolvedValue(approved(id, notify ? meta : undefined));
+      (notify ? mocks.notify : mocks.bootstrapOwner).mockRejectedValue(
+        new Error("optional step failed"),
+      );
+      const respond = await invoke("channels.pairing.approve", {
+        ...target,
+        ...(notify ? { notify: true } : {}),
+        bootstrapCommandOwner: true,
+      });
+      expect(mocks.approve).toHaveBeenCalledWith({
+        ...target,
+        pairingAdapter: pairingPlugin.pairing,
+      });
+      expect(mocks.bootstrapOwner).toHaveBeenCalledWith({ channel: "whatsapp", id });
+      if (notify) {
+        expect(mocks.notify).toHaveBeenCalledWith({
+          channelId: "whatsapp",
+          accountId: "personal",
+          id,
+          cfg: expect.any(Object),
+          pairingAdapter: pairingPlugin.pairing,
+          meta,
+        });
+      }
+      expectSuccess(respond, {
+        requestId: target.requestId,
+        senderId,
+        notification: notify ? "failed" : "not-requested",
+        commandOwnerBootstrap: notify ? "configured" : "unavailable",
+      });
+    },
+  );
 
   it("dismisses a request without approving the sender", async () => {
     mocks.dismiss.mockResolvedValue(approved());
@@ -287,10 +261,6 @@ describe("channel DM pairing gateway handlers", () => {
 
     expect(mocks.dismiss).toHaveBeenCalledWith(target);
     expect(mocks.approve).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { requestId: "opaque-request-id", senderId },
-      undefined,
-    );
+    expectSuccess(respond, { requestId: "opaque-request-id", senderId });
   });
 });
