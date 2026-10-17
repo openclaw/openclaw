@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
@@ -57,6 +58,24 @@ describe("voice-call diagnostic stream ownership", () => {
   function text() {
     return Buffer.concat(output).toString("utf8");
   }
+
+  it.skipIf(process.platform === "win32").each(["latency", "tail"])(
+    "rejects a FIFO for %s without treating it as an empty log",
+    async (subcommand) => {
+      const fifo = path.join(workspace.dir, "diagnostics.pipe");
+      execFileSync("mkfifo", [fifo]);
+      // Keep a writer present so a regressed blocking open cannot hang the test worker.
+      const writer = fs.openSync(fifo, fs.constants.O_RDWR | fs.constants.O_NONBLOCK);
+      try {
+        await expect(command(subcommand, "--file", fifo)).rejects.toThrow(
+          "Voice-call log must be a regular file.",
+        );
+      } finally {
+        fs.closeSync(writer);
+      }
+      expect(fs.lstatSync(fifo).isFIFO()).toBe(true);
+    },
+  );
 
   it("preserves requested latency history beyond one megabyte without reading the whole file", async () => {
     const records = [120, 240, 360].map((latency) =>
