@@ -41,6 +41,14 @@ import * as cpuRuntime from "./memory/manager-cpu-worker-runtime.js";
 import { readMemoryForgetTombstonesForTest } from "./test-helpers.js";
 
 describe("memory forget source removal", () => {
+  const forget = (
+    selectors: Omit<Parameters<typeof forgetMemoryEntries>[0], "cfg" | "agentId">,
+    agentId = "main",
+  ) => forgetMemoryEntries({ cfg: fixture.cfg, agentId, ...selectors });
+  const tombstones = () => readMemoryForgetTombstonesForTest({ agentId: "main" });
+  const origins = (filter: Omit<Parameters<typeof listMemoryEntryOrigins>[0], "agentId"> = {}) =>
+    listMemoryEntryOrigins({ agentId: "main", ...filter });
+  const readText = (file: string) => fs.readFile(file, "utf8");
   let fixture: Awaited<ReturnType<typeof createMemoryForgetFixture>>;
 
   beforeEach(async () => {
@@ -52,6 +60,21 @@ describe("memory forget source removal", () => {
     await fixture.cleanup();
     clearRuntimeConfigSnapshot();
   });
+
+  function pauseFilePlanning() {
+    const planning = createDeferred<void>();
+    const resume = createDeferred<void>();
+    const list = storage.listMemoryFiles;
+    const planningSpy = vi
+      .spyOn(storage, "listMemoryFiles")
+      .mockImplementationOnce(async (...args) => {
+        const files = await list(...args);
+        planning.resolve();
+        await resume.promise;
+        return files;
+      });
+    return { planning, resume, planningSpy };
+  }
 
   function indexSelection() {
     return {
@@ -183,7 +206,7 @@ describe("memory forget source removal", () => {
                 entryKeys: ["candidate"],
                 retainedEntryKeys: new Set(),
               })
-            : listMemoryEntryOrigins({ agentId: "main" });
+            : origins();
         await expect(reading()).rejects.toThrow(
           failure === "missing required table"
             ? /missing table memory_index_chunks; run openclaw doctor --fix to repair it/
@@ -229,22 +252,8 @@ describe("memory forget source removal", () => {
       );
       const otherWorkspace = path.join(fixture.stateDir, "other-workspace");
       await fs.mkdir(otherWorkspace);
-      const planning = createDeferred<void>();
-      const resume = createDeferred<void>();
-      const list = storage.listMemoryFiles;
-      const planningSpy = vi
-        .spyOn(storage, "listMemoryFiles")
-        .mockImplementationOnce(async (...args) => {
-          const files = await list(...args);
-          planning.resolve();
-          await resume.promise;
-          return files;
-        });
-      const forgetting = forgetMemoryEntries({
-        cfg: fixture.cfg,
-        agentId: "main",
-        sessionIds: ["target"],
-      });
+      const { planning, resume, planningSpy } = pauseFilePlanning();
+      const forgetting = forget({ sessionIds: ["target"] });
       void forgetting.catch(() => undefined);
       try {
         await Promise.race([
@@ -261,9 +270,7 @@ describe("memory forget source removal", () => {
               entryKeys: [selected.entryKey],
               retainedEntryKeys: new Set(),
             });
-            expect(
-              await listMemoryEntryOrigins({ agentId: "main", entryKeys: [selected.entryKey] }),
-            ).toEqual([]);
+            expect(await origins({ entryKeys: [selected.entryKey] })).toEqual([]);
           } else {
             await recordMemoryEntryOrigins({
               agentId: "main",
@@ -277,11 +284,9 @@ describe("memory forget source removal", () => {
           entryKeys: report.entryKeys,
           mixedLineageEntryKeys: report.mixedLineageEntryKeys,
           untargetableEntryKeys: report.untargetableEntryKeys,
-          memory: await fs.readFile(memoryPath, "utf8"),
-          origins: await listMemoryEntryOrigins({ agentId: "main" }),
-          tombstones: readMemoryForgetTombstonesForTest({ agentId: "main" }).map(
-            ({ sessionId }) => sessionId,
-          ),
+          memory: await readText(memoryPath),
+          origins: await origins(),
+          tombstones: tombstones().map(({ sessionId }) => sessionId),
         };
         expect(durable).toEqual({
           entryKeys: [selected.entryKey],
@@ -357,19 +362,15 @@ describe("memory forget source removal", () => {
         }
         return await open(...args);
       });
-    const forgetting = forgetMemoryEntries({
-      cfg: fixture.cfg,
-      agentId: "main",
-      sessionIds: ["target"],
-    });
+    const forgetting = forget({ sessionIds: ["target"] });
     const settled = forgetting.then(
       (value) => ({ ok: true as const, value }),
       (error: unknown) => ({ ok: false as const, error }),
     );
     const readDurable = async (database: DatabaseSync) => ({
-      memory: await fs.readFile(memoryPath, "utf8"),
-      origins: await listMemoryEntryOrigins({ agentId: "main" }),
-      tombstones: readMemoryForgetTombstonesForTest({ agentId: "main" }),
+      memory: await readText(memoryPath),
+      origins: await origins(),
+      tombstones: tombstones(),
       chunks: database.prepare("SELECT id, text FROM memory_index_chunks ORDER BY id").all(),
       vectors: database.prepare("SELECT id FROM memory_index_chunks_vec ORDER BY id").all(),
       revision: database.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get(),
@@ -416,7 +417,6 @@ describe("memory forget source removal", () => {
 
   it("forgets 32 sessions with bounded writes and preserves other sources", async () => {
     const sessionCount = 32;
-    const { cfg } = fixture;
     const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     const insertSource = db.prepare(
       "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, 1, 1)",
@@ -442,12 +442,7 @@ describe("memory forget source removal", () => {
     const survivors = db
       .prepare("SELECT * FROM memory_index_sources WHERE hash != 'remove' ORDER BY id")
       .all();
-    const preview = await forgetMemoryEntries({
-      cfg,
-      agentId: "main",
-      sessionIds,
-      dryRun: true,
-    });
+    const preview = await forget({ sessionIds, dryRun: true });
     expect(preview.artifacts.indexSources).toBe(32);
     expect(db.prepare("SELECT count(*) AS count FROM memory_index_sources").get()).toEqual({
       count: 34,
@@ -455,16 +450,16 @@ describe("memory forget source removal", () => {
     const reportPath = path.join(fixture.stateDir, "forget-native-counts.jsonl");
     const restore = observeMemoryForgetWorker(db, { reportPath });
     try {
-      const result = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds });
+      const result = await forget({ sessionIds });
       expect(result).toEqual({ ...preview, dryRun: false });
       expect(db.prepare("SELECT * FROM memory_index_sources ORDER BY id").all()).toEqual(survivors);
       expect(db.prepare("SELECT id FROM memory_index_chunks").all()).toEqual([]);
-      expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toMatchObject(
+      expect(tombstones()).toMatchObject(
         sessionIds.toSorted().map((sessionId) => ({ sessionId, reason: "forgotten" })),
       );
       let sourceDeletes = 0;
       let tombstoneInserts = 0;
-      const reports = (await fs.readFile(reportPath, "utf8")).trim().split("\n");
+      const reports = (await readText(reportPath)).trim().split("\n");
       for (const report of reports) {
         const counts: unknown = JSON.parse(report);
         if (
@@ -489,7 +484,6 @@ describe("memory forget source removal", () => {
     }
   });
   it("keeps the index intact when batched admission fails", async () => {
-    const { cfg } = fixture;
     const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     const sessionIds = Array.from({ length: 130 }, (_, index) => `target-${index}`);
     db.prepare(`INSERT INTO memory_index_sources (path, source, hash, mtime, size)
@@ -511,10 +505,8 @@ describe("memory forget source removal", () => {
       },
     });
     try {
-      await expect(forgetMemoryEntries({ cfg, agentId: "main", sessionIds })).rejects.toThrow(
-        "synthetic admission failure",
-      );
-      expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toEqual([]);
+      await expect(forget({ sessionIds })).rejects.toThrow("synthetic admission failure");
+      expect(tombstones()).toEqual([]);
       expect(db.prepare("SELECT * FROM memory_index_sources").all()).toEqual(sources);
       expect(db.prepare("SELECT * FROM memory_index_chunks").all()).toEqual(chunks);
       expect(db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get()).toEqual(
@@ -523,10 +515,10 @@ describe("memory forget source removal", () => {
     } finally {
       restore();
     }
-    const result = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds });
+    const result = await forget({ sessionIds });
     expect(result.artifacts.indexSources).toBe(1);
     expect(result.artifacts.indexChunks).toBe(1);
-    expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toHaveLength(130);
+    expect(tombstones()).toHaveLength(130);
     expect(db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
     expect(db.prepare("SELECT * FROM memory_index_chunks").all()).toEqual([]);
   });
@@ -562,22 +554,8 @@ describe("memory forget source removal", () => {
           ],
         });
       });
-    const planning = createDeferred<void>();
-    const resume = createDeferred<void>();
-    const list = storage.listMemoryFiles;
-    const planningSpy = vi
-      .spyOn(storage, "listMemoryFiles")
-      .mockImplementationOnce(async (...args) => {
-        const files = await list(...args);
-        planning.resolve();
-        await resume.promise;
-        return files;
-      });
-    const forgetting = forgetMemoryEntries({
-      cfg: fixture.cfg,
-      agentId: "main",
-      sessionIds: ["target"],
-    });
+    const { planning, resume, planningSpy } = pauseFilePlanning();
+    const forgetting = forget({ sessionIds: ["target"] });
     void forgetting.catch(() => undefined);
     try {
       await Promise.race([
@@ -587,19 +565,15 @@ describe("memory forget source removal", () => {
         }),
       ]);
       await publishOrigin();
-      expect(await listMemoryEntryOrigins({ agentId: "main" })).toMatchObject([
-        { entryKey: "late-lineage", sessionId: "target" },
-      ]);
+      expect(await origins()).toMatchObject([{ entryKey: "late-lineage", sessionId: "target" }]);
       resume.resolve();
       const report = await forgetting;
       const durable = {
         entryKeys: report.entryKeys,
-        memory: await fs.readFile(memoryPath, "utf8"),
+        memory: await readText(memoryPath),
         index: db.prepare("SELECT id FROM memory_index_chunks").all(),
-        origins: await listMemoryEntryOrigins({ agentId: "main" }),
-        targetTombstoned: readMemoryForgetTombstonesForTest({ agentId: "main" }).some(
-          ({ sessionId }) => sessionId === "target",
-        ),
+        origins: await origins(),
+        targetTombstoned: tombstones().some(({ sessionId }) => sessionId === "target"),
       };
       expect(durable).toEqual({
         entryKeys: ["late-lineage"],
@@ -615,7 +589,6 @@ describe("memory forget source removal", () => {
     }
   });
   it("does not infer hook or participant facts for an archived-only session", async () => {
-    const { cfg } = fixture;
     await seedMemoryForgetSession("archived", "gmail");
     const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     db.prepare(
@@ -623,16 +596,9 @@ describe("memory forget source removal", () => {
          (session_key, identity_namespace, actor_id, contribution_count, first_prompted_at, last_prompted_at)
        VALUES (?, '{"type":"profile"}', 'participant', 1, 1, 1)`,
     ).run("agent:main:archived");
-    expect(
-      (
-        await forgetMemoryEntries({
-          cfg,
-          agentId: "main",
-          participants: ["participant"],
-          dryRun: true,
-        })
-      ).sessionIds,
-    ).toEqual(["archived"]);
+    expect((await forget({ participants: ["participant"], dryRun: true })).sessionIds).toEqual([
+      "archived",
+    ]);
     await appendSessionTranscriptMessageByIdentity({
       agentId: "main",
       sessionId: "archived",
@@ -647,11 +613,11 @@ describe("memory forget source removal", () => {
     });
 
     for (const selectors of [{ hookSources: ["gmail"] }, { participants: ["participant"] }]) {
-      const report = await forgetMemoryEntries({ cfg, agentId: "main", ...selectors });
+      const report = await forget({ ...selectors });
       expect(report.sessionIds).toEqual([]);
       expect(report.sessionResolutions).toEqual([]);
     }
-    expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toEqual([]);
+    expect(tombstones()).toEqual([]);
   });
   it("previews and forgets selected chunks before optional provenance exists", async () => {
     await seedMemoryForgetSession("target");

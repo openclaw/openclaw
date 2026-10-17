@@ -36,6 +36,20 @@ import { readPhaseSignalStore, writePhaseSignalStore } from "./short-term-promot
 import { readMemoryForgetTombstonesForTest } from "./test-helpers.js";
 
 describe("memory forget", () => {
+  const forget = (dryRun = false) =>
+    forgetMemoryEntries({ cfg, agentId: "main", hookSources: ["gmail"], dryRun });
+  const tombstones = () => readMemoryForgetTombstonesForTest({ agentId: "main" });
+  const origins = (filter: Omit<Parameters<typeof listMemoryEntryOrigins>[0], "agentId"> = {}) =>
+    listMemoryEntryOrigins({ agentId: "main", ...filter });
+  const makeOrigin = (entryKey: string, sessionId: string) => ({
+    entryKey,
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    originClass: "owner" as const,
+    observedAt: 1_000,
+  });
+  const readText = (file: string) => fs.readFile(file, "utf8");
   let fixture: Awaited<ReturnType<typeof createMemoryForgetFixture>>;
   let stateDir: string;
   let workspaceDir: string;
@@ -67,30 +81,9 @@ describe("memory forget", () => {
       await recordMemoryEntryOrigins({
         agentId: "main",
         origins: [
-          {
-            entryKey: "mixed-entry",
-            agentId: "main",
-            sessionId: "target",
-            sessionKey: "agent:main:target",
-            originClass: "owner",
-            observedAt: 1_000,
-          },
-          {
-            entryKey: "mixed-entry",
-            agentId: "main",
-            sessionId: "survivor",
-            sessionKey: "agent:main:survivor",
-            originClass: "owner",
-            observedAt: 1_000,
-          },
-          {
-            entryKey: "clean-entry",
-            agentId: "main",
-            sessionId: "survivor",
-            sessionKey: "agent:main:survivor",
-            originClass: "owner",
-            observedAt: 1_000,
-          },
+          makeOrigin("mixed-entry", "target"),
+          makeOrigin("mixed-entry", "survivor"),
+          makeOrigin("clean-entry", "survivor"),
         ],
       });
       const memoryContent = [
@@ -226,42 +219,26 @@ describe("memory forget", () => {
           .get(narrativeSessionId),
       ).toBeUndefined();
       const indexedFiles = [
-        { path: "MEMORY.md", source: "memory", originClass: "owner" },
-        {
-          path: `memory/.dreams/session-corpus/2026-08-26.${corpusExtension}`,
-          source: "memory",
-          originClass: "owner",
-        },
-        {
-          path: "sessions/main/target.jsonl.reset.2026-08-25T10-00-00.000Z.zst",
-          source: "sessions",
-          originClass: "owner",
-        },
-        {
-          path: `sessions/main/${narrativeArchiveName}`,
-          source: "sessions",
-          originClass: "owner",
-          sessionKind: "unknown",
-          text: "violet",
-        },
-        {
-          path: "sessions/main/survivor.jsonl.deleted.2026-08-25T10-00-00.000Z.zst",
-          source: "sessions",
-          originClass: "owner",
-        },
-      ];
-      for (const [index, file] of indexedFiles.entries()) {
+        ["MEMORY.md", "memory"],
+        [`memory/.dreams/session-corpus/2026-08-26.${corpusExtension}`, "memory"],
+        ["sessions/main/target.jsonl.reset.2026-08-25T10-00-00.000Z.zst", "sessions"],
+        [`sessions/main/${narrativeArchiveName}`, "sessions", "unknown", "violet"],
+        ["sessions/main/survivor.jsonl.deleted.2026-08-25T10-00-00.000Z.zst", "sessions"],
+      ] as const;
+      for (const [
+        index,
+        [filePath, source, sessionKind = "interactive", text = "erase"],
+      ] of indexedFiles.entries()) {
         const chunkId = `chunk-${index}`;
         const hash = `hash-${index}`;
-        const text = file.text ?? "erase";
         db.prepare(
           `INSERT INTO memory_index_chunks (
           id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
         ) VALUES (?, ?, ?, 1, 1, ?, 'test', ?, ?, 1)`,
-        ).run(chunkId, file.path, file.source, hash, text, encodeMemoryEmbedding([1, 0]));
+        ).run(chunkId, filePath, source, hash, text, encodeMemoryEmbedding([1, 0]));
         db.prepare(
           "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, 1, 1)",
-        ).run(file.path, file.source, hash);
+        ).run(filePath, source, hash);
         db.prepare("INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)").run(
           chunkId,
           new Float32Array([1, 0]),
@@ -275,21 +252,14 @@ describe("memory forget", () => {
           `INSERT INTO memory_index_chunk_provenance
           (chunk_id, origin_class, session_kind, observed_at)
          VALUES (?, ?, ?, 1)`,
-        ).run(chunkId, file.originClass, file.sessionKind ?? "interactive");
+        ).run(chunkId, "owner", sessionKind);
       }
       db.exec("DROP TABLE IF EXISTS memory_session_tombstones");
-      const revisionBefore = (
-        db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get() as {
-          revision: number;
-        }
-      ).revision;
+      const revision = () =>
+        db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get()?.revision;
+      const revisionBefore = revision();
 
-      const preview = await forgetMemoryEntries({
-        cfg,
-        agentId: "main",
-        hookSources: ["gmail"],
-        dryRun: true,
-      });
+      const preview = await forget(true);
       expect(preview).toMatchObject({
         dryRun: true,
         sessionIds: ["target"],
@@ -313,19 +283,13 @@ describe("memory forget", () => {
           originRows: 2,
         },
       });
-      expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(memoryContent);
+      expect(await readText(path.join(workspaceDir, "MEMORY.md"))).toBe(memoryContent);
       expect(
         db
           .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
           .get("memory_session_tombstones"),
       ).toBeUndefined();
-      expect(
-        (
-          db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get() as {
-            revision: number;
-          }
-        ).revision,
-      ).toBe(revisionBefore);
+      expect(revision()).toBe(revisionBefore);
 
       if (failure !== "none") {
         const failureMessage = `synthetic ${failure} storage failure`;
@@ -342,9 +306,7 @@ describe("memory forget", () => {
             return await open(...args);
           });
           try {
-            await expect(
-              forgetMemoryEntries({ cfg, agentId: "main", hookSources: ["gmail"] }),
-            ).rejects.toThrow(failureMessage);
+            await expect(forget()).rejects.toThrow(failureMessage);
           } finally {
             fault.mockRestore();
           }
@@ -370,9 +332,7 @@ describe("memory forget", () => {
                   trigger: { event: trigger, message: failureMessage, action: "ABORT" },
                 });
           try {
-            await expect(
-              forgetMemoryEntries({ cfg, agentId: "main", hookSources: ["gmail"] }),
-            ).rejects.toMatchObject(
+            await expect(forget()).rejects.toMatchObject(
               failure === "backup"
                 ? { cause: { message: failureMessage } }
                 : { message: failureMessage },
@@ -381,16 +341,9 @@ describe("memory forget", () => {
             restore();
           }
         }
-        expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toMatchObject([
-          { sessionId: "target", reason: "forgotten" },
-        ]);
+        expect(tombstones()).toMatchObject([{ sessionId: "target", reason: "forgotten" }]);
       }
-      const retryPreview = await forgetMemoryEntries({
-        cfg,
-        agentId: "main",
-        hookSources: ["gmail"],
-        dryRun: true,
-      });
+      const retryPreview = await forget(true);
       const observed =
         failure === "none" && corpusExtension === "txt" ? observePublishedSql(db) : undefined;
       const suppliedCalls: ReturnType<ReturnType<typeof observePublishedSql>["calls"]> = [];
@@ -423,7 +376,7 @@ describe("memory forget", () => {
           }).toEqual({ lineage: 1, planning: 1, mutations: 2 });
           observed.clear();
         }
-        report = await forgetMemoryEntries({ cfg, agentId: "main", hookSources: ["gmail"] });
+        report = await forget();
       } finally {
         if (observed) {
           try {
@@ -434,20 +387,18 @@ describe("memory forget", () => {
         }
       }
       expect(report).toEqual({ ...retryPreview, dryRun: false });
-      const survivingMemory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8");
+      const survivingMemory = await readText(path.join(workspaceDir, "MEMORY.md"));
       expect(survivingMemory).toContain("Curated operator fact.");
       expect(survivingMemory).toContain("Keep the clean fact.");
       expect(survivingMemory).toContain("Preserve an untargetable legacy fact.");
       expect(survivingMemory).not.toContain("mixed secret");
       expect(survivingMemory).not.toContain("old-lineage");
-      expect(await fs.readFile(lightDiaryPath, "utf8")).toBe(
+      expect(await readText(lightDiaryPath)).toBe(
         "# Light Dream\n- Candidate: Keep an unrelated memory.\n",
       );
-      expect(await fs.readFile(rootDiaryPath, "utf8")).toBe("# Dream Diary\n");
-      expect(await fs.readFile(path.join(workspaceDir, "USER.md"), "utf8")).toContain("Curated");
-      expect(await fs.readFile(mixedCorpusPath, "utf8")).toBe(
-        "[main/sessions/main/survivor#L1] keep\n",
-      );
+      expect(await readText(rootDiaryPath)).toBe("# Dream Diary\n");
+      expect(await readText(path.join(workspaceDir, "USER.md"))).toContain("Curated");
+      expect(await readText(mixedCorpusPath)).toBe("[main/sessions/main/survivor#L1] keep\n");
       await expect(fs.stat(removedCorpusPath)).rejects.toMatchObject({ code: "ENOENT" });
       for (const table of [
         "memory_index_chunks",
@@ -455,37 +406,22 @@ describe("memory forget", () => {
         "memory_index_chunks_vec",
         "memory_index_chunk_provenance",
       ]) {
-        expect(
-          (db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count,
-        ).toBe(1);
+        expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count: 1 });
       }
-      expect(
-        (
-          db.prepare("SELECT COUNT(*) AS count FROM memory_embedding_cache").get() as {
-            count: number;
-          }
-        ).count,
-      ).toBe(0);
-      expect(
-        (db.prepare("SELECT path FROM memory_index_sources").all() as Array<{ path: string }>).map(
-          (row) => row.path,
-        ),
-      ).toEqual(["MEMORY.md", "sessions/main/survivor.jsonl.deleted.2026-08-25T10-00-00.000Z.zst"]);
+      expect(db.prepare("SELECT COUNT(*) AS count FROM memory_embedding_cache").get()).toEqual({
+        count: 0,
+      });
+      expect(db.prepare("SELECT path FROM memory_index_sources").all()).toEqual([
+        { path: "MEMORY.md" },
+        { path: "sessions/main/survivor.jsonl.deleted.2026-08-25T10-00-00.000Z.zst" },
+      ]);
       expect(
         db
           .prepare("SELECT id FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?")
           .all("violet"),
       ).toEqual([]);
-      expect(await fs.readFile(transcriptPath, "utf8")).toBe(
-        "source transcript survives deletion\n",
-      );
-      expect(
-        (
-          db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get() as {
-            revision: number;
-          }
-        ).revision,
-      ).toBeGreaterThan(revisionBefore);
+      expect(await readText(transcriptPath)).toBe("source transcript survives deletion\n");
+      expect(revision()).toBeGreaterThan(revisionBefore);
       expect(
         (
           await readMemoryCoreWorkspaceEntries({
@@ -509,11 +445,9 @@ describe("memory forget", () => {
       expect(backups[0]?.value.contentHash).toBe(
         createHash("sha256").update(backups[0]!.value.content).digest("hex"),
       );
-      expect(
-        (await listMemoryEntryOrigins({ agentId: "main" })).map((origin) => origin.entryKey),
-      ).toEqual(["clean-entry"]);
-      const tombstones = readMemoryForgetTombstonesForTest({ agentId: "main" });
-      expect(tombstones).toEqual([
+      expect((await origins()).map((origin) => origin.entryKey)).toEqual(["clean-entry"]);
+      const savedTombstones = tombstones();
+      expect(savedTombstones).toEqual([
         {
           agentId: "main",
           sessionId: "target",
@@ -522,10 +456,10 @@ describe("memory forget", () => {
         },
       ]);
 
-      const repeated = await forgetMemoryEntries({ cfg, agentId: "main", hookSources: ["gmail"] });
+      const repeated = await forget();
       expect(repeated.sessionIds).toEqual(["target"]);
       expect(Object.values(repeated.artifacts).every((count) => count === 0)).toBe(true);
-      expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toEqual(tombstones);
+      expect(tombstones()).toEqual(savedTombstones);
       if (observed) {
         expect({
           lineage: suppliedCalls.filter(({ sql }) => isLineageRead(sql)),

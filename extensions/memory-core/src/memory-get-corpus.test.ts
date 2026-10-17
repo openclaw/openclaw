@@ -40,6 +40,17 @@ beforeEach(() => {
 
 type MemoryCase = MemoryReadResult | Error;
 type WikiCase = null | Error | typeof wikiHit;
+const unavailable = (corpus: string, error = `${corpus} unavailable`) => ({
+  corpus,
+  outcome: "unavailable",
+  error,
+});
+const register = (
+  id: string,
+  get: NonNullable<Parameters<typeof registerMemoryCorpusSupplement>[1]["get"]>,
+) => registerMemoryCorpusSupplement(id, { search: async () => [], get });
+const read = (corpus: "all" | "wiki", signal?: AbortSignal) =>
+  createMemoryGetToolOrThrow().execute("call_get", { path: lookup, corpus }, signal);
 
 function prepareCase(memory: MemoryCase, wiki: WikiCase) {
   setMemoryReadFileImpl(async () => {
@@ -54,7 +65,7 @@ function prepareCase(memory: MemoryCase, wiki: WikiCase) {
     }
     return wiki;
   });
-  registerMemoryCorpusSupplement("memory-wiki", { search: async () => [], get });
+  register("memory-wiki", get);
   return get;
 }
 
@@ -90,10 +101,7 @@ describe("memory_get corpus outcomes", () => {
       wiki: null,
       expected: {
         ...memoryMiss,
-        corpora: [
-          { corpus: "memory", outcome: "unavailable", error: "memory unavailable" },
-          { corpus: "wiki", outcome: "ok" },
-        ],
+        corpora: [unavailable("memory"), { corpus: "wiki", outcome: "ok" }],
         warning: "Memory corpus unavailable: memory unavailable",
         error: "memory unavailable",
       },
@@ -106,10 +114,7 @@ describe("memory_get corpus outcomes", () => {
         path: lookup,
         text: "",
         status: "error",
-        corpora: [
-          { corpus: "memory", outcome: "unavailable", error: "memory unavailable" },
-          { corpus: "wiki", outcome: "unavailable", error: "wiki unavailable" },
-        ],
+        corpora: [unavailable("memory"), unavailable("wiki")],
         warning:
           "Memory corpus unavailable: memory unavailable Wiki corpus unavailable: wiki unavailable",
         error: "memory unavailable; wiki unavailable",
@@ -118,105 +123,73 @@ describe("memory_get corpus outcomes", () => {
   ])("$name", async ({ memory, wiki, expected }) => {
     const get = prepareCase(memory, wiki);
 
-    const result = await createMemoryGetToolOrThrow().execute("call_get_all", {
-      path: lookup,
-      corpus: "all",
-    });
+    const result = await read("all");
 
     expect(result.details).toEqual(expected);
     expect(get).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    {
-      name: "unavailable corpus",
-      wiki: new Error("wiki unavailable"),
-      expected: {
-        path: lookup,
-        text: "",
-        corpora: [{ corpus: "wiki", outcome: "unavailable", error: "wiki unavailable" }],
-        warning: "Wiki corpus unavailable: wiki unavailable",
-        error: "wiki unavailable",
-      },
-    },
-  ])("reports a wiki-only $name", async ({ wiki, expected }) => {
-    prepareCase(memoryMiss, wiki);
-    const result = await createMemoryGetToolOrThrow().execute("call_get_wiki", {
+  it("reports a wiki-only unavailable corpus", async () => {
+    prepareCase(memoryMiss, new Error("wiki unavailable"));
+    expect((await read("wiki")).details).toEqual({
       path: lookup,
-      corpus: "wiki",
+      text: "",
+      corpora: [unavailable("wiki")],
+      warning: "Wiki corpus unavailable: wiki unavailable",
+      error: "wiki unavailable",
     });
-    expect(result.details).toEqual(expected);
   });
 
   it("uses deterministic surviving wiki content when another supplement fails", async () => {
-    registerMemoryCorpusSupplement("z-wiki", {
-      search: async () => [],
-      get: async () => ({ ...wikiHit, content: "Zeta entry" }),
+    register("z-wiki", async () => ({ ...wikiHit, content: "Zeta entry" }));
+    register("m-broken", async () => {
+      throw new Error("broken wiki");
     });
-    registerMemoryCorpusSupplement("m-broken", {
-      search: async () => [],
-      get: async () => {
-        throw new Error("broken wiki");
-      },
-    });
-    registerMemoryCorpusSupplement("a-wiki", { search: async () => [], get: async () => wikiHit });
-
-    const result = await createMemoryGetToolOrThrow().execute("call_get_wiki_partial", {
-      path: lookup,
-      corpus: "wiki",
-    });
+    register("a-wiki", async () => wikiHit);
+    const result = await read("wiki");
 
     expect(result.details).toEqual({
       ...wikiPayload,
-      corpora: [{ corpus: "wiki", outcome: "unavailable", error: "broken wiki" }],
+      corpora: [unavailable("wiki", "broken wiki")],
       warning: "Wiki corpus unavailable: broken wiki",
       error: "broken wiki",
     });
   });
 
-  it.each(["all"] as const)(
-    "forwards effective agent context to corpus=%s supplements",
-    async (corpus) => {
-      const get = vi.fn(async () => wikiHit);
-      registerMemoryCorpusSupplement("memory-wiki", { search: async () => [], get });
-      const config = asOpenClawConfig({
-        agents: { entries: { "marketing-agent": {} } },
-      });
-      const tool = createMemoryGetTool({
-        config,
-        agentId: " Marketing Agent ",
-        agentSessionKey: "agent:marketing-agent:main",
-        sandboxed: true,
-      });
-      if (!tool) {
-        throw new Error("expected memory_get tool");
-      }
+  it("forwards effective agent context to corpus=all supplements", async () => {
+    const get = vi.fn(async () => wikiHit);
+    register("memory-wiki", get);
+    const config = asOpenClawConfig({
+      agents: { entries: { "marketing-agent": {} } },
+    });
+    const tool = createMemoryGetTool({
+      config,
+      agentId: " Marketing Agent ",
+      agentSessionKey: "agent:marketing-agent:main",
+      sandboxed: true,
+    });
+    if (!tool) {
+      throw new Error("expected memory_get tool");
+    }
 
-      await tool.execute(`call_get_${corpus}`, { path: lookup, from: 2, lines: 4, corpus });
+    await tool.execute("call_get_all", { path: lookup, from: 2, lines: 4, corpus: "all" });
 
-      expect(get).toHaveBeenCalledWith({
-        lookup,
-        fromLine: 2,
-        lineCount: 4,
-        agentId: "marketing-agent",
-        agentSessionKey: "agent:marketing-agent:main",
-        sandboxed: true,
-      });
-    },
-  );
+    expect(get).toHaveBeenCalledWith({
+      lookup,
+      fromLine: 2,
+      lineCount: 4,
+      agentId: "marketing-agent",
+      agentSessionKey: "agent:marketing-agent:main",
+      sandboxed: true,
+    });
+  });
 
   it("settles a hanging supplement at the shared deadline and keeps memory", async () => {
     vi.useFakeTimers();
-    registerMemoryCorpusSupplement("memory-wiki", {
-      search: async () => [],
-      get: async () => await new Promise<never>(() => {}),
-    });
+    register("memory-wiki", async () => await new Promise<never>(() => {}));
     setMemoryReadFileImpl(async () => memoryHit);
 
-    const pending = createMemoryGetToolOrThrow().execute("call_get_deadline", {
-      path: lookup,
-      corpus: "all",
-    });
+    const pending = read("all");
     await vi.advanceTimersByTimeAsync(30_000);
 
     await expect(pending).resolves.toMatchObject({
@@ -224,27 +197,16 @@ describe("memory_get corpus outcomes", () => {
         ...memoryHit,
         corpora: [
           { corpus: "memory", outcome: "ok" },
-          {
-            corpus: "wiki",
-            outcome: "unavailable",
-            error: "memory_get timed out after 30s",
-          },
+          unavailable("wiki", "memory_get timed out after 30s"),
         ],
       },
     });
   });
 
   it("cancels a hanging exact supplement read", async () => {
-    registerMemoryCorpusSupplement("memory-wiki", {
-      search: async () => [],
-      get: async () => await new Promise<never>(() => {}),
-    });
+    register("memory-wiki", async () => await new Promise<never>(() => {}));
     const controller = new AbortController();
-    const pending = createMemoryGetToolOrThrow().execute(
-      "call_get_abort",
-      { path: lookup, corpus: "all" },
-      controller.signal,
-    );
+    const pending = read("all", controller.signal);
     controller.abort(new Error("cancelled"));
     await expect(pending).rejects.toThrow("cancelled");
   });

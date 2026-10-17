@@ -1,18 +1,13 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
-  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -23,43 +18,39 @@ import {
 import { failMemoryEntryOriginWrites } from "./memory-entry-origins-fault.test-support.js";
 import { listMemoryEntryOrigins, recordMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
+import { createMemoryForgetFixture } from "./memory-forget.test-helpers.js";
 import {
   applyShortTermPromotions,
   rankShortTermPromotionCandidates,
   readShortTermRecallEntries,
   recordShortTermRecalls,
 } from "./short-term-promotion.js";
-import { configureMemoryCoreDreamingStateForTests } from "./test-helpers.js";
 
 describe("memory forget", () => {
-  let stateDir: string;
+  const forget = (
+    selectors: Omit<Parameters<typeof forgetMemoryEntries>[0], "cfg" | "agentId">,
+    agentId = "main",
+  ) => forgetMemoryEntries({ cfg, agentId, ...selectors });
+  const origins = (agentId: string, entryKey: string) =>
+    listMemoryEntryOrigins({ agentId, entryKeys: [entryKey] });
+  const readBackups = () =>
+    readMemoryCoreWorkspaceEntries<{ content: string }>({
+      namespace: DREAMING_MEMORY_BACKUP_NAMESPACE,
+      workspaceDir,
+    });
+  const readText = (file: string) => fs.readFile(file, "utf8");
+  let fixture: Awaited<ReturnType<typeof createMemoryForgetFixture>>;
   let workspaceDir: string;
   let cfg: OpenClawConfig;
 
   beforeEach(async () => {
-    stateDir = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-forget-")),
-    );
-    workspaceDir = path.join(stateDir, "workspace");
-    await fs.mkdir(workspaceDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    await configureMemoryCoreDreamingStateForTests();
-    cfg = {
-      agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } },
-    } as OpenClawConfig;
-    setRuntimeConfigSnapshot(cfg);
+    fixture = await createMemoryForgetFixture();
+    ({ workspaceDir, cfg } = fixture);
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    resetPluginStateStoreForTests();
-    clearRuntimeConfigSnapshot();
-    vi.unstubAllEnvs();
-    await fs.rm(stateDir, { recursive: true, force: true });
+    await fixture.cleanup();
   });
 
   async function seedSession(sessionId: string): Promise<void> {
@@ -257,16 +248,12 @@ describe("memory forget", () => {
         const applied = await application;
         expect(applied.applied).toBe(1);
         expect(memoryRenameCalls).toBe(2);
-        const memory = await fs.readFile(memoryPath, "utf8");
+        const memory = await readText(memoryPath);
         expect(memory).toContain("openclaw-memory-promotion:retired-entry");
         expect(memory).toContain(`openclaw-memory-promotion:${promoted!.key}`);
-        expect(
-          await listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] }),
-        ).toEqual([]);
-        await forgetMemoryEntries({ cfg, agentId: "gamma", sessionIds: ["private-session"] });
-        expect(await fs.readFile(memoryPath, "utf8")).toContain(
-          `openclaw-memory-promotion:${promoted!.key}`,
-        );
+        expect(await origins("gamma", promoted!.key)).toEqual([]);
+        await forget({ sessionIds: ["private-session"] }, "gamma");
+        expect(await readText(memoryPath)).toContain(`openclaw-memory-promotion:${promoted!.key}`);
         return;
       }
       if (fileFailure !== "none") {
@@ -280,57 +267,43 @@ describe("memory forget", () => {
         expect(failed).toMatchObject({
           message: fileError.message,
           name: fileError.name,
+          code: "EPERM",
           cause: fileError,
         });
-        expect(failed).toMatchObject({ code: "EPERM", cause: { errno: -1 } });
+        expect(failed).toMatchObject({ cause: { errno: -1 } });
         expect(fileFaultInjected).toBe(true);
         expect(memoryRenameCalls).toBe(1);
         const published = fileFailure.startsWith("close") || fileFailure === "rename-published";
         expect(renamed).toBe(published);
         if (published) {
-          expect(await fs.readFile(memoryPath, "utf8")).toContain(
+          expect(await readText(memoryPath)).toContain(
             `openclaw-memory-promotion:${promoted!.key}`,
           );
         } else {
-          expect(await fs.readFile(memoryPath, "utf8")).toBe(
+          expect(await readText(memoryPath)).toBe(
             fileFailure === "rename-changed" ? externalMemory : previousMemory,
           );
         }
         expect(
           (await readShortTermRecallEntries({ workspaceDir, nowMs }))[0]?.promotedAt,
         ).toBeUndefined();
-        expect(
-          (
-            await readMemoryCoreWorkspaceEntries<{ content: string }>({
-              namespace: DREAMING_MEMORY_BACKUP_NAMESPACE,
-              workspaceDir,
-            })
-          ).map(({ value }) => value.content),
-        ).toEqual([previousMemory]);
-        expect(
-          await listMemoryEntryOrigins({ agentId: "gamma", entryKeys: ["retired-entry"] }),
-        ).toHaveLength(1);
-        expect(
-          await listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] }),
-        ).toMatchObject([{ entryKey: promoted!.key, sessionId: "private-session" }]);
-        const report = await forgetMemoryEntries({
-          cfg,
-          agentId: "gamma",
-          sessionIds: ["private-session"],
-        });
+        expect((await readBackups()).map(({ value }) => value.content)).toEqual([previousMemory]);
+        expect(await origins("gamma", "retired-entry")).toHaveLength(1);
+        expect(await origins("gamma", promoted!.key)).toMatchObject([
+          { entryKey: promoted!.key, sessionId: "private-session" },
+        ]);
+        const report = await forget({ sessionIds: ["private-session"] }, "gamma");
         expect(report.entryKeys).toContain(promoted!.key);
-        expect(await fs.readFile(memoryPath, "utf8")).not.toContain(
+        expect(await readText(memoryPath)).not.toContain(
           `openclaw-memory-promotion:${promoted!.key}`,
         );
-        expect(
-          await listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] }),
-        ).toEqual([]);
+        expect(await origins("gamma", promoted!.key)).toEqual([]);
         return;
       }
       if (failOrigins) {
         try {
           await expect(application).rejects.toThrow("injected origin write failure");
-          await expect(fs.readFile(memoryPath, "utf8")).resolves.toBe(previousMemory);
+          await expect(readText(memoryPath)).resolves.toBe(previousMemory);
           expect(
             (await readShortTermRecallEntries({ workspaceDir, nowMs }))[0]?.promotedAt,
           ).toBeUndefined();
@@ -342,14 +315,9 @@ describe("memory forget", () => {
       const applied = await application;
 
       expect(applied.applied).toBe(1);
-      expect(
-        await listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] }),
-      ).toMatchObject([{ entryKey: promoted!.key, sessionId: "private-session" }]);
-      const readBackups = () =>
-        readMemoryCoreWorkspaceEntries<{ content: string }>({
-          namespace: DREAMING_MEMORY_BACKUP_NAMESPACE,
-          workspaceDir,
-        });
+      expect(await origins("gamma", promoted!.key)).toMatchObject([
+        { entryKey: promoted!.key, sessionId: "private-session" },
+      ]);
       expect((await readBackups()).map(({ value }) => value.content)).toEqual([
         expect.stringContaining(priorEntry),
       ]);
@@ -359,35 +327,27 @@ describe("memory forget", () => {
           .get(),
       ).toBeUndefined();
 
-      expect(await fs.readFile(diaryPath, "utf8")).toContain(snippet);
+      expect(await readText(diaryPath)).toContain(snippet);
       await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       resetPluginStateStoreForTests();
-      const report = await forgetMemoryEntries({
-        cfg,
-        agentId: "gamma",
-        sessionIds: ["private-session"],
-      });
+      const report = await forget({ sessionIds: ["private-session"] }, "gamma");
       expect(report).toMatchObject({
         entryKeys: expect.arrayContaining([promoted!.key]),
         artifacts: { memoryEntries: 3, backups: 1 },
       });
-      expect(await fs.readFile(memoryPath, "utf8")).not.toContain(snippet);
+      expect(await readText(memoryPath)).not.toContain(snippet);
       expect((await readBackups()).every(({ value }) => !value.content.includes(priorEntry))).toBe(
         true,
       );
       expect(await listMemoryEntryOrigins({ agentId: "gamma" })).toEqual([]);
-      const diary = await fs.readFile(diaryPath, "utf8");
+      const diary = await readText(diaryPath);
       expect.soft(diary).not.toContain(priorEntry);
       expect.soft(diary).not.toContain(snippet);
       expect(diary).toContain("Keep this unrelated diary entry.");
       expect(report.refusals).toEqual([]);
-      const repeated = await forgetMemoryEntries({
-        cfg,
-        agentId: "gamma",
-        sessionIds: ["private-session"],
-      });
+      const repeated = await forget({ sessionIds: ["private-session"] }, "gamma");
       expect(Object.values(repeated.artifacts).every((count) => count === 0)).toBe(true);
     },
   );
@@ -413,23 +373,13 @@ describe("memory forget", () => {
       const historical =
         "# Dream Diary\n## Memory Consolidation History\n- Highlights:\n  - `+ <!-- openclaw-memory-promotion:historical -->`\n  - `+ Untraceable historical fact.`\n";
       await fs.writeFile(diaryPath, historical);
-      const preview = await forgetMemoryEntries({
-        cfg,
-        agentId: "main",
-        sessionIds: ["target"],
-        dryRun: true,
-      });
+      const preview = await forget({ sessionIds: ["target"], dryRun: true });
       expect(preview.refusals).toEqual([expect.stringContaining("review them manually")]);
       expect(preview.artifacts.memoryFiles).toBe(0);
-      const report = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"] });
+      const report = await forget({ sessionIds: ["target"] });
       expect(report.refusals).toEqual(preview.refusals);
-      expect(await fs.readFile(diaryPath, "utf8")).toBe(historical);
-      const repeated = await forgetMemoryEntries({
-        cfg,
-        agentId: "main",
-        sessionIds: ["target"],
-        dryRun: true,
-      });
+      expect(await readText(diaryPath)).toBe(historical);
+      const repeated = await forget({ sessionIds: ["target"], dryRun: true });
       expect(repeated.refusals).toEqual(preview.refusals);
     },
   );
@@ -443,8 +393,8 @@ describe("memory forget", () => {
       "  - `+ Keep this unrelated historical fact.`\n<!-- openclaw-memory-promotion:unrelated -->\n- Unrelated adjacent marked entry.";
     const heading = "## Memory Consolidation History\n";
     await fs.writeFile(diaryPath, `${heading}${selected}\n${survivor}\n`);
-    const report = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"] });
-    expect(await fs.readFile(diaryPath, "utf8")).toBe(`${heading}${survivor}\n`);
+    const report = await forget({ sessionIds: ["target"] });
+    expect(await readText(diaryPath)).toBe(`${heading}${survivor}\n`);
     expect(report.refusals).toEqual([expect.stringContaining("review them manually")]);
   });
 
@@ -509,21 +459,17 @@ describe("memory forget", () => {
     });
     expect(promoted.appended).toBe(1);
     expect(promoted.compactedDates).toEqual(["2026-08-24"]);
-    const promotedMemory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8");
+    const promotedMemory = await readText(path.join(workspaceDir, "MEMORY.md"));
     expect(promotedMemory).toContain(`<!-- openclaw-memory-promotion:${candidateKey} -->`);
     expect(promotedMemory).toContain(snippet);
 
-    const report = await forgetMemoryEntries({
-      cfg,
-      agentId: "main",
-      sessionIds: ["target"],
-    });
+    const report = await forget({ sessionIds: ["target"] });
 
     expect(report).toMatchObject({
       entryKeys: [candidateKey],
       artifacts: { memoryFiles: 1, memoryEntries: 1, shortTermEntries: 1, originRows: 1 },
     });
-    const survivingMemory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8");
+    const survivingMemory = await readText(path.join(workspaceDir, "MEMORY.md"));
     expect(survivingMemory).toContain("Curated operator fact.");
     expect(survivingMemory).not.toContain(snippet);
     expect(survivingMemory).not.toContain(candidateKey);

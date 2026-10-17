@@ -5,49 +5,47 @@ import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { listSessionTranscriptCorpusEntriesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  closeOpenClawStateDatabaseForTest,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { forgetMemoryEntries } from "./memory-forget.js";
-import {
-  configureMemoryCoreDreamingStateForTests,
-  createMemoryCoreTestHarness,
-} from "./test-helpers.js";
+import { createMemoryForgetFixture } from "./memory-forget.test-helpers.js";
 
 describe("memory forget curated writes", () => {
-  const { createTempWorkspace } = createMemoryCoreTestHarness();
+  const forget = (dryRun = false) =>
+    forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"], dryRun });
+  const readText = (file: string) => fs.readFile(file, "utf8");
+  let fixture: Awaited<ReturnType<typeof createMemoryForgetFixture>>;
   let stateDir: string;
   let workspaceDir: string;
   let cfg: OpenClawConfig;
 
   beforeEach(async () => {
-    stateDir = await fs.realpath(await createTempWorkspace("memory-forget-curated-writes-"));
-    workspaceDir = path.join(stateDir, "workspace");
-    await fs.mkdir(workspaceDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    await configureMemoryCoreDreamingStateForTests();
-    cfg = {
-      agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } },
-    } as OpenClawConfig;
-    setRuntimeConfigSnapshot(cfg);
+    fixture = await createMemoryForgetFixture("memory-forget-curated-writes-");
+    ({ stateDir, workspaceDir, cfg } = fixture);
   });
 
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    resetPluginStateStoreForTests();
-    clearRuntimeConfigSnapshot();
-    vi.unstubAllEnvs();
+  afterEach(async () => {
+    await fixture.cleanup();
   });
+
+  const toolCall = (id: string, name: string, args: unknown) => ({
+    type: "toolCall",
+    id,
+    name,
+    arguments: args,
+  });
+
+  const append = (
+    sessionId: string,
+    message: Parameters<typeof appendSessionTranscriptMessageByIdentity>[0]["message"],
+  ) =>
+    appendSessionTranscriptMessageByIdentity({
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
+      message,
+    });
 
   async function seedSession(sessionId: string): Promise<void> {
     await upsertSessionEntry({
@@ -72,42 +70,21 @@ describe("memory forget curated writes", () => {
       path: "MEMORY.md",
       content: curatedContent,
     });
-    await appendSessionTranscriptMessageByIdentity({
-      agentId: "main",
-      sessionId: "target",
-      sessionKey: "agent:main:target",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "observed-write",
-            name: "write",
-            arguments: { path: "MEMORY.md" },
-          },
-        ],
-      },
+    await append("target", {
+      role: "assistant",
+      content: [toolCall("observed-write", "write", { path: "MEMORY.md" })],
     });
 
-    const preview = await forgetMemoryEntries({
-      cfg,
-      agentId: "main",
-      sessionIds: ["target"],
-      dryRun: true,
-    });
+    const preview = await forget(true);
     expect(preview.curatedWrites).toEqual([
       { relativePath: "MEMORY.md", observedAt: expect.any(Number) },
     ]);
-    expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(curatedContent);
+    expect(await readText(path.join(workspaceDir, "MEMORY.md"))).toBe(curatedContent);
 
-    const report = await forgetMemoryEntries({
-      cfg,
-      agentId: "main",
-      sessionIds: ["target"],
-    });
+    const report = await forget();
     expect(report).toEqual({ ...preview, dryRun: false });
     expect(report.artifacts.memoryFiles).toBe(0);
-    expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(curatedContent);
+    expect(await readText(path.join(workspaceDir, "MEMORY.md"))).toBe(curatedContent);
   });
 
   it("reports harness memory writes from selected live and archived transcripts without observer state", async () => {
@@ -129,53 +106,33 @@ describe("memory forget curated writes", () => {
       "+Not a memory file.",
       "*** End Patch",
     ].join("\n");
-    await appendSessionTranscriptMessageByIdentity({
-      agentId: "main",
-      sessionId: "target",
-      sessionKey: "agent:main:target",
-      message: {
-        role: "assistant",
-        timestamp: observedAt,
-        content: [
-          { type: "toolCall", id: "patch", name: "apply_patch", arguments: { input: patchInput } },
-          { type: "toolCall", id: "profile", name: "write", arguments: { path: "USER.md" } },
-          {
-            type: "toolCall",
-            id: "nested",
-            name: "edit",
-            input: { file_path: path.join(workspaceDir, "memory", "profile.md") },
-          },
-          {
-            type: "toolCall",
-            id: "structured",
-            name: "apply_patch",
-            arguments: { changes: [{ path: "memory/structured.md" }, { path: "README.md" }] },
-          },
-          { type: "toolCall", id: "ordinary", name: "write", arguments: { path: "README.md" } },
-          { type: "toolCall", id: "escaping", name: "edit", arguments: { path: "../MEMORY.md" } },
-          { type: "toolCall", id: "malformed", name: "apply_patch", arguments: { input: 42 } },
-          { type: "toolCall", id: "read-only", name: "read", arguments: { path: "MEMORY.md" } },
-          { type: "toolCall", id: "missing", name: "write", arguments: null },
-          null,
-        ],
-      },
+    await append("target", {
+      role: "assistant",
+      timestamp: observedAt,
+      content: [
+        toolCall("patch", "apply_patch", { input: patchInput }),
+        toolCall("profile", "write", { path: "USER.md" }),
+        {
+          type: "toolCall",
+          id: "nested",
+          name: "edit",
+          input: { file_path: path.join(workspaceDir, "memory", "profile.md") },
+        },
+        toolCall("structured", "apply_patch", {
+          changes: [{ path: "memory/structured.md" }, { path: "README.md" }],
+        }),
+        toolCall("ordinary", "write", { path: "README.md" }),
+        toolCall("escaping", "edit", { path: "../MEMORY.md" }),
+        toolCall("malformed", "apply_patch", { input: 42 }),
+        toolCall("read-only", "read", { path: "MEMORY.md" }),
+        toolCall("missing", "write", null),
+        null,
+      ],
     });
-    await appendSessionTranscriptMessageByIdentity({
-      agentId: "main",
-      sessionId: "survivor",
-      sessionKey: "agent:main:survivor",
-      message: {
-        role: "assistant",
-        timestamp: observedAt + 1,
-        content: [
-          {
-            type: "toolCall",
-            id: "unselected",
-            name: "write",
-            arguments: { path: "memory/keep.md" },
-          },
-        ],
-      },
+    await append("survivor", {
+      role: "assistant",
+      timestamp: observedAt + 1,
+      content: [toolCall("unselected", "write", { path: "memory/keep.md" })],
     });
     const archiveDir = path.join(stateDir, "agents", "main", "sessions");
     await fs.mkdir(archiveDir, { recursive: true });
@@ -206,12 +163,7 @@ describe("memory forget curated writes", () => {
     );
     expect(await listMemoryArtifactProvenance({ workspaceDir })).toEqual([]);
 
-    const preview = await forgetMemoryEntries({
-      cfg,
-      agentId: "main",
-      sessionIds: ["target"],
-      dryRun: true,
-    });
+    const preview = await forget(true);
 
     expect(preview.curatedWrites).toEqual([
       { relativePath: "MEMORY.md", observedAt },
@@ -220,11 +172,11 @@ describe("memory forget curated writes", () => {
       { relativePath: "memory/structured.md", observedAt },
       { relativePath: "USER.md", observedAt },
     ]);
-    expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(memoryContent);
+    expect(await readText(path.join(workspaceDir, "MEMORY.md"))).toBe(memoryContent);
 
-    const report = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"] });
+    const report = await forget();
     expect(report).toEqual({ ...preview, dryRun: false });
     expect(report.artifacts.memoryFiles).toBe(0);
-    expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(memoryContent);
+    expect(await readText(path.join(workspaceDir, "MEMORY.md"))).toBe(memoryContent);
   });
 });
