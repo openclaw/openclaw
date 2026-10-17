@@ -1,5 +1,8 @@
 import path from "node:path";
 import type { Command } from "commander";
+import { normalizeMediaProviderId } from "../../../packages/media-understanding-common/src/provider-id.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveConfiguredMediaEntryCapabilities } from "../../media-understanding/entry-capabilities.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText } from "./output.js";
@@ -13,6 +16,34 @@ type MediaUnderstandingOptions = {
   prompt?: string;
   json: boolean;
 };
+
+function pinMediaModel(
+  cfg: OpenClawConfig,
+  kind: "audio" | "video",
+  pinned: { provider: string; model: string },
+): OpenClawConfig {
+  const provider = normalizeMediaProviderId(pinned.provider);
+  const sameProvider = (cfg.tools?.media?.models ?? []).filter(
+    (entry) =>
+      entry.type !== "cli" &&
+      !entry.command &&
+      normalizeMediaProviderId(entry.provider ?? "") === provider &&
+      (resolveConfiguredMediaEntryCapabilities(entry)?.includes(kind) ?? true),
+  );
+  const configured =
+    sameProvider.find((entry) => entry.model?.trim() === pinned.model) ??
+    sameProvider.find((entry) => !entry.model?.trim());
+  return {
+    ...cfg,
+    tools: {
+      ...cfg.tools,
+      media: {
+        ...cfg.tools?.media,
+        models: [{ ...configured, ...pinned, capabilities: [kind] }],
+      },
+    },
+  };
+}
 
 export function registerMediaUnderstandingCommand(parent: Command, kind: "audio" | "video") {
   const audio = kind === "audio";
@@ -46,7 +77,14 @@ export function registerMediaUnderstandingCommand(parent: Command, kind: "audio"
           ...(audio ? {} : { surface: "infer video describe" }),
         });
         const activeModel = requireProviderModelOverride(opts.model);
-        const input = { filePath: path.resolve(file), cfg, agentId, agentDir, activeModel };
+        const runCfg = activeModel ? pinMediaModel(cfg, kind, activeModel) : cfg;
+        const input = {
+          filePath: path.resolve(file),
+          cfg: runCfg,
+          agentId,
+          agentDir,
+          activeModel,
+        };
         const result = audio
           ? await transcribeAudioFile({
               ...input,
