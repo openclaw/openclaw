@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -7,12 +8,15 @@ import { loadPersistedAuthProfileStoreAtDatabasePath } from "../agents/auth-prof
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
 import { assertAgentHarnessRunAdmission } from "../agents/embedded-agent-runner/run/session-bootstrap.js";
 import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
+import {
+  createTestConfigFileStore,
+  createThrowingTestRuntime,
+} from "../commands/test-runtime-config-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { summarizeMigrationItems } from "../plugin-sdk/migration.js";
 import type {
   MigrationApplyResult,
   MigrationConfigRuntime,
-  MigrationItem,
   MigrationPlan,
   MigrationProviderContext,
   MigrationProviderPlugin,
@@ -21,11 +25,11 @@ import {
   listOpenClawRegisteredAgentDatabases,
   registerOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db-registry.js";
+import { captureEnv } from "../test-utils/env.js";
 import { WizardNavigationError, type WizardPrompter, type WizardSelectParams } from "./prompts.js";
 
 const mocks = vi.hoisted(() => ({
   canonicalMutateConfigFile: vi.fn(),
-  currentConfig: undefined as { value: Record<string, unknown> } | undefined,
   provider: undefined as MigrationProviderPlugin | undefined,
   verify: vi.fn(),
   runEmbedded: vi.fn<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>(),
@@ -56,7 +60,8 @@ const { offerLiveModelVerification } = await vi.importActual<
 >("./setup.inference-verification.js");
 
 const tempRoots = createTempDirTracker();
-let previousStateDir: string | undefined;
+let environment: ReturnType<typeof captureEnv>;
+let fixture: Awaited<ReturnType<typeof createImportFixture>>;
 
 function prompter(): WizardPrompter {
   return createWizardPrompter({ confirm: vi.fn(async () => true) }, { defaultSelect: "claude" });
@@ -76,9 +81,7 @@ async function mutateConfig(
   ctx: MigrationProviderContext,
   mutate: (draft: OpenClawConfig) => void,
 ) {
-  if (!ctx.configRuntime) {
-    throw new Error("missing config runtime");
-  }
+  assert(ctx.configRuntime, "missing config runtime");
   await ctx.configRuntime.mutateConfigFile({
     base: "runtime",
     afterWrite: { mode: "none", reason: "migration test" },
@@ -94,7 +97,6 @@ async function expectUnpromoted(root: string, currentConfig: { value: Record<str
 function provider(params: {
   source: string;
   mutateDuringApply?: (ctx: MigrationProviderContext) => Promise<void>;
-  importModel?: boolean;
   deferred?: boolean;
   retrySafeDeferred?: boolean;
   deferredItemIds?: string[];
@@ -111,9 +113,7 @@ function provider(params: {
       : {}),
     async plan(ctx) {
       const workspace = ctx.config.agents?.defaults?.workspace;
-      if (!workspace) {
-        throw new Error("missing workspace");
-      }
+      assert(workspace, "missing workspace");
       const items: MigrationPlan["items"] = [
         {
           id: "workspace:memory",
@@ -145,32 +145,20 @@ function provider(params: {
       };
     },
     async apply(ctx, plan): Promise<MigrationApplyResult> {
-      if (!plan) {
-        throw new Error("missing plan");
-      }
-      const items: MigrationItem[] = [];
-      for (const item of plan.items) {
-        let applied = item;
+      assert(plan, "missing plan");
+      const items = plan.items.map((item) => ({ ...item }));
+      for (const item of items) {
         if (item.status === "planned" && item.id === "workspace:memory") {
           await fs.mkdir(path.dirname(item.target!), { recursive: true });
           await fs.copyFile(item.source!, item.target!);
-          applied = { ...item, status: "migrated" };
+          item.status = "migrated";
         } else if (item.status === "planned" && item.applyPhase === "after-promotion") {
           const status = (await params.onDeferredApply?.(item.id, ctx)) ?? "error";
-          applied = {
-            ...item,
-            status,
-            ...(status === "error" ? { reason: "activation failed" } : {}),
-          };
+          item.status = status;
+          if (status === "error") {
+            item.reason = "activation failed";
+          }
         }
-        items.push(applied);
-      }
-      if (params.importModel) {
-        await mutateConfig(ctx, (draft) => {
-          draft.agents ??= {};
-          draft.agents.defaults ??= {};
-          draft.agents.defaults.model = { primary: "openai/gpt-5.6-sol" };
-        });
       }
       await params.mutateDuringApply?.(ctx);
       return {
@@ -188,7 +176,6 @@ async function createImportFixture() {
   const source = path.join(root, "source-memory.md");
   await fs.writeFile(source, "remember this\n", "utf8");
   const currentConfig: { value: OpenClawConfig } = { value: {} };
-  mocks.currentConfig = currentConfig;
   process.env.OPENCLAW_STATE_DIR = path.join(root, "openclaw-state");
   mocks.provider = provider({ source });
   return {
@@ -207,13 +194,7 @@ async function createImportFixture() {
         baseConfig: {},
         detections: [],
         prompter: interactivePrompter ?? prompter(),
-        runtime: {
-          log: vi.fn(),
-          error: vi.fn(),
-          exit: (code): never => {
-            throw new Error(`exit ${code}`);
-          },
-        },
+        runtime: createThrowingTestRuntime(),
         allowProviderBack: interactivePrompter !== undefined,
         readConfigFile: async () => structuredClone(currentConfig.value),
         commitConfigFile: async (config) => (currentConfig.value = structuredClone(config)),
@@ -235,28 +216,20 @@ async function readImportReport(root: string): Promise<{
   return { report: await read("report.json"), journal: await read("onboarding-promotion.json") };
 }
 
-beforeEach(() => {
-  previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  mocks.currentConfig = undefined;
+beforeEach(async () => {
+  environment = captureEnv(["OPENCLAW_STATE_DIR"]);
+  fixture = await createImportFixture();
   mocks.canonicalMutateConfigFile.mockReset();
+  const configFiles = createTestConfigFileStore();
   mocks.canonicalMutateConfigFile.mockImplementation(
     async (mutation: Parameters<MigrationConfigRuntime["mutateConfigFile"]>[0]) => {
-      if (!mocks.currentConfig) {
-        throw new Error("missing current config fixture");
-      }
-      const draft = structuredClone(mocks.currentConfig.value);
-      const result = await mutation.mutate(draft, {
-        snapshot: {} as never,
-        previousHash: "fixture-hash",
-      });
-      mocks.currentConfig.value = structuredClone(draft);
+      const draft = structuredClone(fixture.currentConfig.value);
+      const baseline = configFiles.write(draft);
+      const result = await mutation.mutate(draft, baseline);
+      fixture.currentConfig.value = structuredClone(draft);
       return {
-        nextConfig: draft,
+        ...configFiles.write(draft),
         result,
-        path: "<canonical-config-runtime>",
-        previousHash: "fixture-hash",
-        snapshot: {} as never,
-        persistedHash: "fixture-next-hash",
         afterWrite: mutation.afterWrite,
         followUp: { mode: "none", reason: "fixture", requiresRestart: false },
       };
@@ -264,11 +237,6 @@ beforeEach(() => {
   );
   mocks.runEmbedded.mockReset();
   mocks.verify.mockReset();
-  mocks.verify.mockResolvedValue({
-    config: {},
-    verified: true,
-    modelRef: "openai/gpt-5.6-sol",
-  });
 });
 
 afterEach(async () => {
@@ -280,16 +248,11 @@ afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   mocks.provider = undefined;
-  if (previousStateDir === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = previousStateDir;
-  }
+  environment.restore();
   tempRoots.cleanup();
 });
 
 it("returns before migration side effects when the source picker goes back", async () => {
-  const fixture = await createImportFixture();
   const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
     expect(params.navigation).toMatchObject({ canGoBack: true });
     throw new WizardNavigationError("back");
@@ -299,7 +262,6 @@ it("returns before migration side effects when the source picker goes back", asy
 });
 
 it("rejects deferred activation from providers without a retry-safe contract", async () => {
-  const fixture = await createImportFixture();
   fixture.install({ deferred: true, retrySafeDeferred: false });
   await expect(fixture.run()).rejects.toThrow("does not declare retry-safe deferred apply");
   await fixture.unpromoted();
@@ -308,7 +270,6 @@ it("rejects deferred activation from providers without a retry-safe contract", a
 it.each([true, false])(
   "verifies a pre-roster import without durable session admission (provider succeeds: %s)",
   async (providerSucceeds) => {
-    const fixture = await createImportFixture();
     const { root, source, currentConfig } = fixture;
     const credential = {
       type: "api_key",
@@ -316,8 +277,12 @@ it.each([true, false])(
       key: "synthetic-import-key",
     } as const;
     fixture.install({
-      importModel: true,
       mutateDuringApply: async (ctx) => {
+        await mutateConfig(ctx, (draft) => {
+          draft.agents ??= {};
+          draft.agents.defaults ??= {};
+          draft.agents.defaults.model = { primary: "openai/gpt-5.6-sol" };
+        });
         expect(
           await updateAuthProfileStoreWithLock({
             agentDir: path.join(ctx.stateDir, "agents", "main", "agent"),
@@ -400,7 +365,6 @@ it.each([true, false])(
 it.each(["source", "target"] as const)(
   "aborts promotion when the %s changes during apply",
   async (changed) => {
-    const fixture = await createImportFixture();
     const externalFile = path.join(fixture.root, "workspace", "external.txt");
     fixture.install({
       mutateDuringApply: async () => {
@@ -421,7 +385,6 @@ it.each(["source", "target"] as const)(
 );
 
 it("promotes while the live runtime state database changes during staged apply", async () => {
-  const fixture = await createImportFixture();
   const { root, currentConfig } = fixture;
   const stateDir = path.join(root, "openclaw-state");
   const liveEnv = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -449,33 +412,21 @@ it("promotes while the live runtime state database changes during staged apply",
   );
 });
 
-it("routes deferred config writes through the canonical runtime", async () => {
-  const fixture = await createImportFixture();
-  fixture.install({
-    deferred: true,
-    onDeferredApply: async (_itemId, ctx) => {
-      await mutateConfig(ctx, (draft) => {
-        draft.gateway = { ...draft.gateway, port: 23456 };
-      });
-      return "migrated";
-    },
-  });
-  await fixture.run();
-  expect(mocks.canonicalMutateConfigFile).toHaveBeenCalledOnce();
-  expect(fixture.currentConfig.value).toMatchObject({ gateway: { port: 23456 } });
-});
-
-it("retries only deferred items that did not already activate", async () => {
-  const fixture = await createImportFixture();
+it("routes deferred writes through the canonical runtime and retries only failed activations", async () => {
   const { root } = fixture;
   const activationCalls: string[] = [];
   const installDeferred = (retry: boolean) =>
     fixture.install({
       deferred: true,
       deferredItemIds: ["plugin:calendar", "plugin:drive"],
-      onDeferredApply: async (itemId) => {
+      onDeferredApply: async (itemId, ctx) => {
         activationCalls.push(itemId);
         expect(await fixture.memory()).toBe("remember this\n");
+        if (itemId === "plugin:calendar") {
+          await mutateConfig(ctx, (draft) => {
+            draft.gateway = { ...draft.gateway, port: 23456 };
+          });
+        }
         return retry || itemId === "plugin:calendar" ? "migrated" : "error";
       },
     });
@@ -486,6 +437,8 @@ it("retries only deferred items that did not already activate", async () => {
     kind: "no-imported-inference",
   });
   expect(activationCalls).toEqual(["plugin:calendar", "plugin:drive"]);
+  expect(mocks.canonicalMutateConfigFile).toHaveBeenCalledOnce();
+  expect(fixture.currentConfig.value).toMatchObject({ gateway: { port: 23456 } });
   const initialReport = (await readImportReport(root)).report;
   expect(initialReport.items.filter((item) => item.id === "plugin:drive")).toMatchObject([
     { status: "warning" },
@@ -499,6 +452,7 @@ it("retries only deferred items that did not already activate", async () => {
     kind: "no-imported-inference",
   });
   expect(plan).toHaveBeenCalledOnce();
+  expect(mocks.canonicalMutateConfigFile).toHaveBeenCalledOnce();
   expect(activationCalls).toEqual(["plugin:calendar", "plugin:drive", "plugin:drive"]);
   expect(await fixture.memory()).toBe("remember this\n");
   const { report, journal } = await readImportReport(root);

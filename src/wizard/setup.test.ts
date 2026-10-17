@@ -42,113 +42,78 @@ type ListSetupMigrationOptions =
 type RunSetupMigrationImport = typeof import("./setup.migration-import.js").runSetupMigrationImport;
 type RunSearchSetupFlow = typeof import("../flows/search-setup.js").runSearchSetupFlow;
 
-const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
-const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn(async () => "skip"));
-const applyAuthChoice = vi.hoisted(() =>
-  vi.fn<ApplyAuthChoice>(async (args) => ({ config: args.config })),
-);
-const prepareAuthChoice = vi.hoisted(() =>
-  vi.fn<PrepareAuthChoice>(async (args) => ({
-    ...(await applyAuthChoice(args)),
-    authProfiles: [],
-    persistAuthProfiles: async () => {},
-  })),
-);
-const resolveProviderOnboardAuthFlags = vi.hoisted(() =>
-  vi.fn<ResolveProviderOnboardAuthFlags>(() => []),
-);
-const resolveProviderPluginChoice = vi.hoisted(() =>
-  vi.fn<ResolveProviderPluginChoice>(() => null),
-);
-const resolvePluginProviders = vi.hoisted(() =>
-  vi.fn<typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginProviders>(
-    () => [],
-  ),
-);
-const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn(async () => {}));
-
-const promptDefaultModel = vi.hoisted(() => vi.fn<PromptDefaultModel>(async () => ({})));
-
-const configureGatewayForSetup = vi.hoisted(() =>
-  vi.fn<ConfigureGatewayForSetup>(async (args) => ({
-    nextConfig: args.nextConfig,
-    settings: {
-      port: args.quickstartGateway.port,
-      bind: "loopback",
-      authMode: "token",
-      gatewayToken: "test-token",
-    },
-  })),
-);
-const finalizeSetupWizard = vi.hoisted(() =>
-  vi.fn<typeof import("./setup.finalize.js").finalizeSetupWizard>(async () => ({
-    launchedTui: false,
-  })),
-);
-
-const detectSetupMigrationSources = vi.hoisted(() =>
-  vi.fn(async () => ({ detections: [], providerDescriptors: [] })),
-);
-const listSetupMigrationOptions = vi.hoisted(() =>
-  vi.fn<ListSetupMigrationOptions>(async () => []),
-);
-const runSetupMigrationImport = vi.hoisted(() =>
-  vi.fn<RunSetupMigrationImport>(async () => ({ kind: "no-imported-inference" })),
-);
-const runSetupMemoryImportStep = vi.hoisted(() => vi.fn(async () => {}));
-const runMemorySetupFlow = vi.hoisted(() =>
-  vi.fn<typeof import("../flows/memory-setup.js").runMemorySetupFlow>(async (config) => config),
-);
-const verifySetupInferenceConfig = vi.hoisted(() =>
-  vi.fn<VerifySetupInferenceConfig>(async () => ({
-    ok: true,
-    modelRef: "openai/gpt-5.5",
-    latencyMs: 250,
-  })),
-);
-
-const setupChannels = vi.hoisted(() =>
-  vi.fn<typeof import("../flows/channel-setup.js").setupChannels>(async (cfg) => cfg),
-);
-
-const runSearchSetupFlow = vi.hoisted(() =>
-  vi.fn<RunSearchSetupFlow>(async (config) => ({ outcome: "completed", config })),
-);
-const promptRemoteGatewayConfig = vi.hoisted(() =>
-  vi.fn<typeof import("../commands/onboard-remote.js").promptRemoteGatewayConfig>(
-    async (cfg) => cfg,
-  ),
-);
-const validateGatewayWebSocketUrl = vi.hoisted(() =>
-  vi.fn<(value: string) => string | undefined>(() => undefined),
-);
-
-const ensureWorkspaceAndSessions = vi.hoisted(() => vi.fn(async () => {}));
-const ensureOnboardingConfig = vi.hoisted(() =>
-  vi.fn(async ({ config, baseConfig }: { config: OpenClawConfig; baseConfig: OpenClawConfig }) => ({
-    config,
-    configBase: baseConfig,
-    agentId: "main",
-    bootstrapPending: true,
-  })),
-);
-const replaceConfigFile = vi.hoisted(() =>
-  vi.fn(async (params: { nextConfig: OpenClawConfig }) => ({ nextConfig: params.nextConfig })),
-);
-const resolveGatewayPort = vi.hoisted(() =>
-  vi.fn((_cfg?: unknown, env?: NodeJS.ProcessEnv) => {
-    const raw = env?.OPENCLAW_GATEWAY_PORT ?? process.env.OPENCLAW_GATEWAY_PORT;
-    const port = raw ? Number.parseInt(raw, 10) : Number.NaN;
-    return Number.isFinite(port) && port > 0 ? port : 18789;
-  }),
-);
-const readConfigFileSnapshot = vi.hoisted(() =>
-  vi.fn<typeof import("../config/io.js").readConfigFileSnapshot>(),
-);
-const probeGatewayReachable = vi.hoisted(() => vi.fn(async () => ({ ok: false })));
-const buildPluginCompatibilitySnapshotNotices = vi.hoisted(() =>
-  vi.fn((): PluginCompatibilityNotice[] => []),
-);
+const m = vi.hoisted(() => {
+  const applyAuth = vi.fn<ApplyAuthChoice>(async (args) => ({ config: args.config }));
+  return {
+    authStore: vi.fn(() => ({ profiles: {} })),
+    promptAuth: vi.fn(async () => "skip"),
+    applyAuth,
+    prepareAuth: vi.fn<PrepareAuthChoice>(async (args) => ({
+      ...(await applyAuth(args)),
+      authProfiles: [],
+      persistAuthProfiles: async () => {},
+    })),
+    authFlags: vi.fn<ResolveProviderOnboardAuthFlags>(() => []),
+    providerChoice: vi.fn<ResolveProviderPluginChoice>(() => null),
+    providers: vi.fn<
+      typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginProviders
+    >(() => []),
+    warnModel: vi.fn(async () => {}),
+    pickModel: vi.fn<PromptDefaultModel>(async () => ({})),
+    gateway: vi.fn<ConfigureGatewayForSetup>(async (args) => ({
+      nextConfig: args.nextConfig,
+      settings: {
+        port: args.quickstartGateway.port,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "test-token",
+      },
+    })),
+    finalize: vi.fn<typeof import("./setup.finalize.js").finalizeSetupWizard>(async () => ({
+      launchedTui: false,
+    })),
+    migrationSources: vi.fn(async () => ({ detections: [], providerDescriptors: [] })),
+    migrationOptions: vi.fn<ListSetupMigrationOptions>(async () => []),
+    importMigration: vi.fn<RunSetupMigrationImport>(async () => ({
+      kind: "no-imported-inference",
+    })),
+    importMemory: vi.fn(async () => {}),
+    memory: vi.fn<typeof import("../flows/memory-setup.js").runMemorySetupFlow>(
+      async (config) => config,
+    ),
+    verify: vi.fn<VerifySetupInferenceConfig>(async () => ({
+      ok: true,
+      modelRef: "openai/gpt-5.5",
+      latencyMs: 250,
+    })),
+    channels: vi.fn<typeof import("../flows/channel-setup.js").setupChannels>(async (cfg) => cfg),
+    search: vi.fn<RunSearchSetupFlow>(async (config) => ({ outcome: "completed", config })),
+    remote: vi.fn<typeof import("../commands/onboard-remote.js").promptRemoteGatewayConfig>(
+      async (cfg) => cfg,
+    ),
+    validateRemote: vi.fn<(value: string) => string | undefined>(() => undefined),
+    workspace: vi.fn(async () => {}),
+    onboarding: vi.fn(
+      async ({ config, baseConfig }: { config: OpenClawConfig; baseConfig: OpenClawConfig }) => ({
+        config,
+        configBase: baseConfig,
+        agentId: "main",
+        bootstrapPending: true,
+      }),
+    ),
+    writeConfig: vi.fn(async (params: { nextConfig: OpenClawConfig }) => ({
+      nextConfig: params.nextConfig,
+    })),
+    port: vi.fn((_cfg?: unknown, env?: NodeJS.ProcessEnv) => {
+      const raw = env?.OPENCLAW_GATEWAY_PORT ?? process.env.OPENCLAW_GATEWAY_PORT;
+      const port = raw ? Number.parseInt(raw, 10) : Number.NaN;
+      return Number.isFinite(port) && port > 0 ? port : 18789;
+    }),
+    readConfig: vi.fn<typeof import("../config/io.js").readConfigFileSnapshot>(),
+    probe: vi.fn(async () => ({ ok: false })),
+    compat: vi.fn((): PluginCompatibilityNotice[] => []),
+  };
+});
 
 function providerFlag(
   optionKey: ReturnType<ResolveProviderOnboardAuthFlags>[number]["optionKey"],
@@ -176,7 +141,7 @@ function storedRemote(
 }
 
 function remotePromptCalls() {
-  return promptRemoteGatewayConfig.mock.calls.map(([config, prompter, options]) => ({
+  return m.remote.mock.calls.map(([config, prompter, options]) => ({
     remote: config.gateway?.remote,
     prompter,
     options,
@@ -188,8 +153,8 @@ function modelConfig(primary: string): OpenClawConfig {
 }
 
 function prepareMockAuthProfilesIn(agentDir: string): void {
-  prepareAuthChoice.mockImplementation(async (args) => {
-    const result = await applyAuthChoice(args);
+  m.prepareAuth.mockImplementation(async (args) => {
+    const result = await m.applyAuth(args);
     const apiKey = result.config.models?.providers?.openai?.apiKey;
     if (typeof apiKey !== "string") {
       return {
@@ -218,64 +183,77 @@ function queueCredentialVerification(
     error: "fixture credential rejected",
   },
 ) {
-  verifySetupInferenceConfig.mockImplementationOnce(async ({ config }) => {
+  m.verify.mockImplementationOnce(async ({ config }) => {
     expectSavedSetupCredential(config, agentDir, key);
-    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(m.writeConfig).not.toHaveBeenCalled();
     return result;
   });
 }
 
 function verifiedConfig(index: number): OpenClawConfig {
-  return expectDefined(verifySetupInferenceConfig.mock.calls[index]?.[0], "verification call")
-    .config;
+  return expectDefined(m.verify.mock.calls[index]?.[0], "verification call").config;
 }
 
 function persistedWizardConfigs(): OpenClawConfig[] {
-  return replaceConfigFile.mock.calls.map(([params]) => params.nextConfig);
+  return m.writeConfig.mock.calls.map(([params]) => params.nextConfig);
 }
 
 function expectPartialCall(mock: unknown, shape: object) {
   expect(mock).toHaveBeenCalledWith(expect.objectContaining(shape));
 }
 
+function expectCalls(count: number, ...mocks: unknown[]) {
+  for (const mock of mocks) {
+    expect(mock).toHaveBeenCalledTimes(count);
+  }
+}
+
 vi.mock("../flows/channel-setup.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../flows/channel-setup.js")>()),
-  setupChannels,
+  setupChannels: m.channels,
 }));
 
-vi.mock("../flows/search-setup.js", () => ({ runSearchSetupFlow }));
+vi.mock("../flows/search-setup.js", () => ({ runSearchSetupFlow: m.search }));
 // mock-isolation: Wizard orchestration must not probe real embedding providers or credentials.
-vi.mock("../flows/memory-setup.js", () => ({ runMemorySetupFlow }));
+vi.mock("../flows/memory-setup.js", () => ({ runMemorySetupFlow: m.memory }));
 
 vi.mock("../commands/onboard-remote.js", () => ({
-  promptRemoteGatewayConfig,
-  validateGatewayWebSocketUrl,
+  promptRemoteGatewayConfig: m.remote,
+  validateGatewayWebSocketUrl: m.validateRemote,
 }));
 
 vi.mock("../agents/auth-profiles.js", async () => {
   const persistence = await import("../agents/auth-profiles/upsert-with-lock.js");
-  return { ensureAuthProfileStore, persistAuthProfileBatch: persistence.persistAuthProfileBatch };
+  return {
+    ensureAuthProfileStore: m.authStore,
+    persistAuthProfileBatch: persistence.persistAuthProfileBatch,
+  };
 });
 
-vi.mock("../agents/auth-profiles.runtime.js", () => ({ ensureAuthProfileStore }));
+vi.mock("../agents/auth-profiles.runtime.js", () => ({ ensureAuthProfileStore: m.authStore }));
 
 vi.mock("../commands/auth-choice-prompt.js", () => ({
   isKeepCurrentAuthChoice: (value: unknown) => value === "__keep-current",
-  promptAuthChoiceGrouped,
+  promptAuthChoiceGrouped: m.promptAuth,
 }));
 
-vi.mock("../commands/auth-choice.apply.js", () => ({ applyAuthChoice, prepareAuthChoice }));
+vi.mock("../commands/auth-choice.apply.js", () => ({
+  applyAuthChoice: m.applyAuth,
+  prepareAuthChoice: m.prepareAuth,
+}));
 
 vi.mock("../plugins/provider-auth-choice-preference.js", () => ({
   resolvePreferredProviderForAuthChoice: async () => "demo-provider",
 }));
 
-vi.mock("../commands/auth-choice.model-check.js", () => ({ warnIfModelConfigLooksOff }));
+vi.mock("../commands/auth-choice.model-check.js", () => ({
+  warnIfModelConfigLooksOff: m.warnModel,
+}));
 
 vi.mock("../plugins/provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoice: () => undefined,
   resolveManifestProviderAuthChoices: () => [],
-  resolveProviderOnboardAuthFlags,
+  resolveProviderOnboardAuthFlags: m.authFlags,
 }));
 
 vi.mock("../plugins/setup-registry.js", () => ({
@@ -291,35 +269,35 @@ vi.mock("../plugins/setup-registry.js", () => ({
 }));
 
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
-  resolveProviderPluginChoice,
-  resolvePluginProviders,
+  resolveProviderPluginChoice: m.providerChoice,
+  resolvePluginProviders: m.providers,
 }));
 
-vi.mock("../flows/model-picker.js", () => ({ promptDefaultModel }));
+vi.mock("../flows/model-picker.js", () => ({ promptDefaultModel: m.pickModel }));
 
 vi.mock("./setup.migration-import.js", () => ({
-  detectSetupMigrationSources,
-  listSetupMigrationOptions,
-  runSetupMigrationImport,
+  detectSetupMigrationSources: m.migrationSources,
+  listSetupMigrationOptions: m.migrationOptions,
+  runSetupMigrationImport: m.importMigration,
 }));
 
-vi.mock("./setup.memory-import.js", () => ({ runSetupMemoryImportStep }));
+vi.mock("./setup.memory-import.js", () => ({ runSetupMemoryImportStep: m.importMemory }));
 
-vi.mock("../system-agent/setup-inference.js", () => ({ verifySetupInferenceConfig }));
+vi.mock("../system-agent/setup-inference.js", () => ({ verifySetupInferenceConfig: m.verify }));
 
 vi.mock("../config/config.js", async (importActual) => {
   const actual = await importActual<typeof import("../config/config.js")>();
   return {
     ...actual,
     DEFAULT_GATEWAY_PORT: 18789,
-    createConfigIO: () => ({ readConfigFileSnapshot }),
-    readConfigFileSnapshot,
-    resolveGatewayPort,
-    replaceConfigFile,
+    createConfigIO: () => ({ readConfigFileSnapshot: m.readConfig }),
+    readConfigFileSnapshot: m.readConfig,
+    resolveGatewayPort: m.port,
+    replaceConfigFile: m.writeConfig,
     transformConfigFileWithRetry: async (
       params: Parameters<typeof actual.transformConfigFileWithRetry>[0],
     ) => {
-      const snapshot = await readConfigFileSnapshot();
+      const snapshot = await m.readConfig();
       const previousHash = snapshot.hash ?? null;
       const config = params.base === "runtime" ? snapshot.runtimeConfig : snapshot.sourceConfig;
       const transformed = await params.transform(
@@ -344,13 +322,13 @@ vi.mock("../config/config.js", async (importActual) => {
 vi.mock("./setup.shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./setup.shared.js")>()),
   readSetupConfigAuthority: async () => ({
-    snapshot: await readConfigFileSnapshot(),
+    snapshot: await m.readConfig(),
     assertCurrent: () => {},
   }),
 }));
 // mock-isolation: Keep roster/database creation and session migration outside these in-memory fixtures.
 vi.mock("../commands/onboard-agent.js", () => ({
-  ensureOnboardingAgent: ensureOnboardingConfig,
+  ensureOnboardingAgent: m.onboarding,
   validateFirstOnboardingAgentName: (value: string | undefined) =>
     value?.trim() ? undefined : "Agent name is required.",
 }));
@@ -358,22 +336,22 @@ vi.mock("../commands/onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "/tmp/openclaw-workspace",
   applyWizardMetadata: (cfg: unknown) => cfg,
   summarizeExistingConfig: () => "summary",
-  ensureWorkspaceAndSessions,
+  ensureWorkspaceAndSessions: m.workspace,
   printWizardHeader: vi.fn(),
-  probeGatewayReachable,
+  probeGatewayReachable: m.probe,
 }));
 
 vi.mock("../plugins/status.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/status.js")>()),
-  buildPluginCompatibilitySnapshotNotices,
+  buildPluginCompatibilitySnapshotNotices: m.compat,
 }));
 
 // mock-isolation: Keep process-global channel registry state outside wizard orchestration fixtures.
 vi.mock("../channels/plugins/index.js", () => ({ listChannelPlugins: () => [] }));
 
-vi.mock("./setup.gateway-config.js", () => ({ configureGatewayForSetup }));
+vi.mock("./setup.gateway-config.js", () => ({ configureGatewayForSetup: m.gateway }));
 
-vi.mock("./setup.finalize.js", () => ({ finalizeSetupWizard }));
+vi.mock("./setup.finalize.js", () => ({ finalizeSetupWizard: m.finalize }));
 
 function createRuntime(opts?: { throwsOnExit?: boolean }): RuntimeEnv {
   return {
@@ -412,26 +390,19 @@ const defaultSetupOptions = {
   skipUi: true,
 } satisfies Parameters<typeof runSetupWizard>[0];
 
-async function runWizard(
-  options: Parameters<typeof runSetupWizard>[0] = {},
-  runtime = createRuntime(),
-  prompter = buildWizardPrompter(),
-) {
-  await runSetupWizard({ ...defaultSetupOptions, ...options }, runtime, prompter);
-  return { runtime, prompter };
+let runtime: RuntimeEnv;
+let prompter: WizardPrompter;
+
+function runWizard(options: Parameters<typeof runSetupWizard>[0] = {}) {
+  return runSetupWizard({ ...defaultSetupOptions, ...options }, runtime, prompter);
 }
 
-async function runRemoteWizard(
-  options: Parameters<typeof runSetupWizard>[0],
-  runtime = createRuntime(),
-  prompter = buildWizardPrompter(),
-) {
-  await runSetupWizard(
+function runRemoteWizard(options: Parameters<typeof runSetupWizard>[0]) {
+  return runSetupWizard(
     { acceptRisk: true, flow: "advanced", mode: "remote", ...options },
     runtime,
     prompter,
   );
-  return { runtime, prompter };
 }
 
 describe("runSetupWizard", () => {
@@ -474,17 +445,17 @@ describe("runSetupWizard", () => {
 
   function readExistingModel() {
     const existingConfig = modelConfig("anthropic/sonnet-4.6");
-    readConfigFileSnapshot.mockImplementation(async () =>
+    m.readConfig.mockImplementation(async () =>
       configSnapshot(persistedWizardConfigs().at(-1) ?? existingConfig),
     );
   }
 
   function readConfig(config: OpenClawConfig, imported = false) {
     if (imported) {
-      readConfigFileSnapshot.mockResolvedValueOnce(configSnapshot({}, false));
-      readConfigFileSnapshot.mockResolvedValue(configSnapshot(config));
+      m.readConfig.mockResolvedValueOnce(configSnapshot({}, false));
+      m.readConfig.mockResolvedValue(configSnapshot(config));
     } else {
-      readConfigFileSnapshot.mockResolvedValueOnce(configSnapshot(config));
+      m.readConfig.mockResolvedValueOnce(configSnapshot(config));
     }
   }
 
@@ -492,20 +463,23 @@ describe("runSetupWizard", () => {
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", undefined);
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", undefined);
     vi.resetAllMocks();
+    runtime = createRuntime();
+    prompter = buildWizardPrompter();
     committedConfigFiles.clear();
     let authoredConfig: OpenClawConfig | undefined;
-    readConfigFileSnapshot.mockImplementation(async () =>
+    m.readConfig.mockImplementation(async () =>
       configSnapshot(authoredConfig ?? {}, authoredConfig !== undefined),
     );
-    replaceConfigFile.mockImplementation(async (params) => {
+    m.writeConfig.mockImplementation(async (params) => {
       authoredConfig = structuredClone(params.nextConfig);
       return { nextConfig: params.nextConfig };
     });
   });
 
   it("exits successfully after the auto-launched TUI returns", async () => {
-    finalizeSetupWizard.mockResolvedValueOnce({ launchedTui: true });
-    await expect(runWizard({}, createRuntime({ throwsOnExit: true }))).rejects.toThrow("exit:0");
+    m.finalize.mockResolvedValueOnce({ launchedTui: true });
+    runtime = createRuntime({ throwsOnExit: true });
+    await expect(runWizard()).rejects.toThrow("exit:0");
   });
 
   const configuredRemoteProbeArgs = {
@@ -525,11 +499,11 @@ describe("runSetupWizard", () => {
     if (remoteKey === "password") {
       vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "ambient-gateway-token");
     }
-    const { runtime } = await runRemoteWizard({
+    await runRemoteWizard({
       remoteUrl: " wss://flag.example.com:18789 ",
       [optionKey]: ` ${remoteCredential} `,
     });
-    expect(probeGatewayReachable).toHaveBeenCalledWith({
+    expect(m.probe).toHaveBeenCalledWith({
       ...configuredRemoteProbeArgs,
       configuredRemote: false,
       url: "wss://flag.example.com:18789",
@@ -545,7 +519,7 @@ describe("runSetupWizard", () => {
       prompter: expect.any(Object),
       options: { secretInputMode: undefined, remoteOriginUrl: "wss://stored.example.com:18789" },
     });
-    expect(promptRemoteGatewayConfig.mock.calls[0]?.[2]).toStrictEqual({
+    expect(m.remote.mock.calls[0]?.[2]).toStrictEqual({
       secretInputMode: undefined,
       remoteOriginUrl: "wss://stored.example.com:18789",
     });
@@ -560,7 +534,7 @@ describe("runSetupWizard", () => {
     readConfig({ gateway: { remote } });
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "ambient-password"); // pragma: allowlist secret
     await runRemoteWizard({ remoteUrl: "wss://flag.example.com:18789" });
-    expect(probeGatewayReachable).toHaveBeenCalledWith({
+    expect(m.probe).toHaveBeenCalledWith({
       ...configuredRemoteProbeArgs,
       configuredRemote: false,
       url: "wss://flag.example.com:18789",
@@ -580,19 +554,17 @@ describe("runSetupWizard", () => {
 
   it("does not probe an invalid CLI remote URL with its token", async () => {
     const remoteToken = "REDACTED";
-    validateGatewayWebSocketUrl.mockReturnValueOnce("Use wss:// for public gateways");
+    m.validateRemote.mockReturnValueOnce("Use wss:// for public gateways");
     await runRemoteWizard({ remoteUrl: "ws://public.example", remoteToken });
-    expect(validateGatewayWebSocketUrl).toHaveBeenCalledWith("ws://public.example");
-    expect(probeGatewayReachable).not.toHaveBeenCalledWith(
+    expect(m.validateRemote).toHaveBeenCalledWith("ws://public.example");
+    expect(m.probe).not.toHaveBeenCalledWith(
       expect.objectContaining({ url: "ws://public.example" }),
     );
   });
 
   it("leaves feature-stat telemetry unset during non-interactive wizard setup", async () => {
-    const { prompter } = await runWizard(
-      { nonInteractive: true },
-      createRuntime({ throwsOnExit: true }),
-    );
+    runtime = createRuntime({ throwsOnExit: true });
+    await runWizard({ nonInteractive: true });
     expect(persistedWizardConfigs().at(-1)?.telemetry).toBeUndefined();
     expect(prompter.select).not.toHaveBeenCalledWith(
       expect.objectContaining({ message: "Help make OpenClaw better?" }),
@@ -602,17 +574,17 @@ describe("runSetupWizard", () => {
   it.each(["target-change", "back"] as const)(
     "returns to setup mode after import %s",
     async (result) => {
-      listSetupMigrationOptions.mockResolvedValueOnce([
+      m.migrationOptions.mockResolvedValueOnce([
         { providerId: "hermes", label: "Import from Hermes" },
       ]);
       if (result === "target-change") {
-        runSetupMigrationImport.mockRejectedValueOnce(
+        m.importMigration.mockRejectedValueOnce(
           new SetupMigrationTargetChangedError(
             "Migration target changed before promotion. Review it and retry.",
           ),
         );
       } else {
-        runSetupMigrationImport.mockResolvedValueOnce({ kind: "back" });
+        m.importMigration.mockResolvedValueOnce({ kind: "back" });
       }
       const setupChoices: Array<"import" | "quickstart"> = ["import", "quickstart"];
       const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
@@ -626,35 +598,33 @@ describe("runSetupWizard", () => {
         }
         return "__skip__";
       });
-      const prompter = buildWizardPrompter({
+      prompter = buildWizardPrompter({
         select: select as unknown as WizardPrompter["select"],
       });
-      await runWizard({ flow: undefined }, createRuntime(), prompter);
+      await runWizard({ flow: undefined });
       expect(select.mock.calls.filter(([params]) => params.message === "Setup mode")).toHaveLength(
         2,
       );
-      expect(detectSetupMigrationSources).toHaveBeenCalledOnce();
-      expect(runSetupMigrationImport).toHaveBeenCalledOnce();
+      expectCalls(1, m.migrationSources, m.importMigration);
       if (result === "target-change") {
         expect(prompter.note).toHaveBeenCalledWith(
           expect.stringContaining("Migration target changed before promotion"),
           "Existing config detected",
         );
       }
-      expect(finalizeSetupWizard).toHaveBeenCalledOnce();
+      expect(m.finalize).toHaveBeenCalledOnce();
     },
   );
 
   it("continues onboarding after a recovered promotion", async () => {
     const acknowledgePromotion = vi.fn(async () => {});
-    runSetupMigrationImport.mockResolvedValueOnce({
+    m.importMigration.mockResolvedValueOnce({
       kind: "no-imported-inference",
       acknowledgePromotion,
     });
     await runWizard({ importFrom: "hermes" });
-    expect(finalizeSetupWizard).toHaveBeenCalledOnce();
-    expect(acknowledgePromotion).toHaveBeenCalledOnce();
-    expect(runSetupMemoryImportStep).not.toHaveBeenCalled();
+    expectCalls(1, m.finalize, acknowledgePromotion);
+    expect(m.importMemory).not.toHaveBeenCalled();
   });
 
   it("rejects an agent name when the import supplies an authored roster", async () => {
@@ -669,46 +639,38 @@ describe("runSetupWizard", () => {
       pluginValidation: "skip",
     }).readConfigFileSnapshot();
     expect(importedSnapshot.valid).toBe(true);
-    readConfigFileSnapshot
+    m.readConfig
       .mockResolvedValueOnce(configSnapshot({}, false))
       .mockResolvedValue(importedSnapshot);
-    const runtime = createRuntime();
-    const prompter = buildWizardPrompter({ text: vi.fn(async () => "robby") });
-    await runWizard(
-      { importFrom: "hermes", agentName: "robby", workspace: workspaceDir },
-      runtime,
-      prompter,
-    );
-    expect(runSetupMigrationImport).toHaveBeenCalledOnce();
+    prompter = buildWizardPrompter({ text: vi.fn(async () => "robby") });
+    await runWizard({ importFrom: "hermes", agentName: "robby", workspace: workspaceDir });
+    expect(m.importMigration).toHaveBeenCalledOnce();
     expect(runtime.error).toHaveBeenCalledWith(
       "--agent-name cannot be combined with an import that supplies an agent roster. Remove --agent-name or choose an import without agents.",
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(ensureOnboardingConfig).not.toHaveBeenCalled();
+    expect(m.onboarding).not.toHaveBeenCalled();
     expect(prompter.text).not.toHaveBeenCalledWith(
       expect.objectContaining({ message: "What should we call your first agent?" }),
     );
   });
 
   it("does not reuse imported verification after changing the model", async () => {
-    runSetupMigrationImport.mockResolvedValueOnce({
+    m.importMigration.mockResolvedValueOnce({
       kind: "verified-inference",
       modelRef: "openai/gpt-5.6-sol",
     });
     readConfig(modelConfig("anthropic/claude-sonnet-4-6"), true);
-    await runWizard(
-      { importFrom: "hermes", authChoice: "demo-provider" },
-      createRuntime(),
-      buildWizardPrompter({ confirm: vi.fn(async () => false) }),
-    );
-    expect(applyAuthChoice).toHaveBeenCalledOnce();
-    expect(verifySetupInferenceConfig).not.toHaveBeenCalled();
+    prompter = buildWizardPrompter({ confirm: vi.fn(async () => false) });
+    await runWizard({ importFrom: "hermes", authChoice: "demo-provider" });
+    expect(m.applyAuth).toHaveBeenCalledOnce();
+    expect(m.verify).not.toHaveBeenCalled();
   });
 
   it("treats --import-source alone as import intent instead of prompting for a setup mode", async () => {
-    const { prompter } = await runWizard({ importSource: "~/.hermes", flow: undefined });
-    expect(runSetupMigrationImport).toHaveBeenCalledOnce();
-    expectPartialCall(runSetupMigrationImport, {
+    await runWizard({ importSource: "~/.hermes", flow: undefined });
+    expect(m.importMigration).toHaveBeenCalledOnce();
+    expectPartialCall(m.importMigration, {
       opts: expect.objectContaining({ importSource: "~/.hermes" }),
     });
     expect(prompter.select).toHaveBeenCalledOnce();
@@ -719,7 +681,7 @@ describe("runSetupWizard", () => {
   });
 
   it("fails fast if the auth choice prompt returns nothing", async () => {
-    promptAuthChoiceGrouped.mockImplementationOnce(async () => undefined as never);
+    m.promptAuth.mockImplementationOnce(async () => undefined as never);
     await expect(runWizard({ authChoice: undefined })).rejects.toThrow("auth choice is required");
   });
 
@@ -738,12 +700,11 @@ describe("runSetupWizard", () => {
       };
       readConfig(config, !accepted);
       const confirm = vi.fn(async () => accepted);
-      const prompter = buildWizardPrompter({ confirm });
-      await runWizard(
-        { workspace: requestedWorkspace, ...(!accepted ? { importFrom: "hermes" } : {}) },
-        createRuntime(),
-        prompter,
-      );
+      prompter = buildWizardPrompter({ confirm });
+      await runWizard({
+        workspace: requestedWorkspace,
+        ...(!accepted ? { importFrom: "hermes" } : {}),
+      });
       expectPartialCall(confirm, {
         message: expect.stringContaining("Move the existing agent fleet"),
         initialValue: false,
@@ -752,7 +713,7 @@ describe("runSetupWizard", () => {
       expect(final?.defaults?.workspace).toBe(accepted ? requestedWorkspace : currentWorkspace);
       if (accepted) {
         expect(vi.mocked(prompter.note).mock.calls.flat().join("\n")).toContain(currentWorkspace);
-        expect(ensureWorkspaceAndSessions).toHaveBeenCalledWith(
+        expect(m.workspace).toHaveBeenCalledWith(
           requestedWorkspace,
           expect.anything(),
           expect.any(Object),
@@ -766,7 +727,7 @@ describe("runSetupWizard", () => {
 
   it("continues onboarding when search-provider installation fails", async () => {
     const config: OpenClawConfig = { agents: { defaults: { workspace: "/tmp/workspace" } } };
-    runSearchSetupFlow.mockResolvedValueOnce({
+    m.search.mockResolvedValueOnce({
       outcome: "install-failed",
       config,
       providerId: "brave",
@@ -774,8 +735,7 @@ describe("runSetupWizard", () => {
     });
     readConfig(config);
     await runWizard({ skipSearch: undefined });
-    expect(runSearchSetupFlow).toHaveBeenCalledOnce();
-    expect(finalizeSetupWizard).toHaveBeenCalledOnce();
+    expectCalls(1, m.search, m.finalize);
   });
 
   it("persists the optional memory choice before classic setup finalization", async () => {
@@ -803,29 +763,29 @@ describe("runSetupWizard", () => {
     const hook = vi.fn();
     const isConfiguredWrite = (value: OpenClawConfig) =>
       value.channels?.matrix?.accounts?.ops?.enabled === true;
-    setupChannels.mockImplementationOnce(async (_cfg, _runtime, _prompter, options) => {
+    m.channels.mockImplementationOnce(async (_cfg, _runtime, _prompter, options) => {
       options?.onPostWriteHook?.({ channel: "matrix", accountId: "ops", run: hook });
       return configured;
     });
     readConfig(beforeConfig);
     await runWizard({ skipChannels: undefined });
-    const configuredWriteIndex = replaceConfigFile.mock.calls.findIndex(([params]) =>
+    const configuredWriteIndex = m.writeConfig.mock.calls.findIndex(([params]) =>
       isConfiguredWrite(params.nextConfig),
     );
     expect(configuredWriteIndex).toBeGreaterThanOrEqual(0);
-    expect(replaceConfigFile.mock.invocationCallOrder[configuredWriteIndex]).toBeLessThan(
+    expect(m.writeConfig.mock.invocationCallOrder[configuredWriteIndex]).toBeLessThan(
       hook.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     expect(hook).toHaveBeenCalledWith({ cfg: configured, runtime: expect.any(Object) });
     expect(hook.mock.invocationCallOrder[0]).toBeLessThan(
-      finalizeSetupWizard.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      m.finalize.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
   });
 
   it("honors a provider-required picker while keeping existing model settings", async () => {
     const modelSelection = { promptWhenAuthChoiceProvided: true, allowKeepCurrent: false };
-    promptDefaultModel.mockResolvedValueOnce({ model: "ollama/llama3" });
-    resolveProviderPluginChoice.mockReturnValue({
+    m.pickModel.mockResolvedValueOnce({ model: "ollama/llama3" });
+    m.providerChoice.mockReturnValue({
       provider: { id: "ollama", label: "ollama", auth: [], wizard: { setup: { modelSelection } } },
       method: {
         id: "local",
@@ -836,48 +796,45 @@ describe("runSetupWizard", () => {
       wizard: { modelSelection },
     });
     readExistingModel();
-    await runWizard(
-      { authChoice: "ollama", flow: undefined },
-      createRuntime(),
-      buildWizardPrompter({}, { defaultSelect: "keep-model" }),
-    );
-    expectPartialCall(promptDefaultModel, { allowKeep: false });
-    expect(prepareAuthChoice).toHaveBeenCalledOnce();
+    prompter = buildWizardPrompter({}, { defaultSelect: "keep-model" });
+    await runWizard({ authChoice: "ollama", flow: undefined });
+    expectPartialCall(m.pickModel, { allowKeep: false });
+    expect(m.prepareAuth).toHaveBeenCalledOnce();
     expect(persistedWizardConfigs().at(-1)?.agents?.defaults?.model).toEqual({
       primary: "ollama/llama3",
     });
   });
 
   it("infers an API-key flag while preserving an existing default model", async () => {
-    resolvePluginProviders.mockReturnValueOnce([
+    m.providers.mockReturnValueOnce([
       { id: "", label: "Empty", auth: [] },
       { id: "demo-provider", label: "Demo", auth: [], wizard: { setup: {} } },
     ]);
-    resolveProviderOnboardAuthFlags.mockReturnValue([
+    m.authFlags.mockReturnValue([
       providerFlag("nvidiaApiKey", "nvidia-api-key", "--nvidia-api-key"),
     ]);
     readExistingModel();
-    await runWizard(
-      { nvidiaApiKey: "provider-credential-fixture", flow: undefined, authChoice: undefined },
-      createRuntime(),
-      buildWizardPrompter({}, { defaultSelect: "keep-model" }),
-    );
-    expectPartialCall(prepareAuthChoice, {
+    prompter = buildWizardPrompter({}, { defaultSelect: "keep-model" });
+    await runWizard({
+      nvidiaApiKey: "provider-credential-fixture",
+      flow: undefined,
+      authChoice: undefined,
+    });
+    expectPartialCall(m.prepareAuth, {
       authChoice: "nvidia-api-key",
       opts: expect.objectContaining({ nvidiaApiKey: "provider-credential-fixture" }),
     });
     expect(persistedWizardConfigs().at(-1)?.agents?.defaults?.model).toEqual({
       primary: "anthropic/sonnet-4.6",
     });
-    expect(promptDefaultModel).not.toHaveBeenCalled();
+    expect(m.pickModel).not.toHaveBeenCalled();
   });
 
   it("rejects ambiguous provider credential flags before writing local setup state", async () => {
-    resolveProviderOnboardAuthFlags.mockReturnValue([
+    m.authFlags.mockReturnValue([
       providerFlag("nvidiaApiKey", "nvidia-api-key", "--nvidia-api-key"),
       providerFlag("githubCopilotToken", "github-copilot", "--github-copilot-token"),
     ]);
-    const runtime = createRuntime();
     await runSetupWizard(
       {
         acceptRisk: true,
@@ -886,24 +843,22 @@ describe("runSetupWizard", () => {
         githubCopilotToken: "copilot-credential-fixture",
       },
       runtime,
-      buildWizardPrompter(),
+      prompter,
     );
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("Multiple provider credential flags"),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(prepareAuthChoice).not.toHaveBeenCalled();
-    expect(ensureOnboardingConfig).not.toHaveBeenCalled();
-    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expectCalls(0, m.prepareAuth, m.onboarding, m.writeConfig);
   });
 
   it("re-prompts for auth when applyAuthChoice requests retry selection", async () => {
-    promptAuthChoiceGrouped.mockReset();
-    promptAuthChoiceGrouped
+    m.promptAuth.mockReset();
+    m.promptAuth
       .mockResolvedValueOnce("demo-provider-one")
       .mockResolvedValueOnce("demo-provider-two");
-    applyAuthChoice.mockReset();
-    applyAuthChoice
+    m.applyAuth.mockReset();
+    m.applyAuth
       .mockImplementationOnce(async (args) => ({
         config: {
           ...args.config,
@@ -927,9 +882,8 @@ describe("runSetupWizard", () => {
         },
       }));
     await runWizard({ authChoice: undefined });
-    expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
-    expect(applyAuthChoice).toHaveBeenCalledTimes(2);
-    const retry = applyAuthChoice.mock.calls[1]?.[0];
+    expectCalls(2, m.promptAuth, m.applyAuth);
+    const retry = m.applyAuth.mock.calls[1]?.[0];
     expect(retry?.authChoice).toBe("demo-provider-two");
     expect(retry?.config.plugins?.entries).toEqual({ "demo-provider-plugin": { enabled: true } });
     expect(retry?.config.agents?.entries).toEqual({ main: {} });
@@ -937,7 +891,7 @@ describe("runSetupWizard", () => {
   });
 
   it("shows plugin compatibility notices for an existing valid config", async () => {
-    buildPluginCompatibilitySnapshotNotices.mockReturnValue([
+    m.compat.mockReturnValue([
       {
         pluginId: "legacy-plugin",
         code: "hook-only",
@@ -947,9 +901,8 @@ describe("runSetupWizard", () => {
       },
     ]);
     readConfig({ gateway: {} });
-    const {
-      prompter: { note, select },
-    } = await runWizard();
+    await runWizard();
+    const { note, select } = prompter;
     expect(vi.mocked(note).mock.calls.map((call) => call[1])).toEqual(
       expect.arrayContaining(["Plugin compatibility", "Existing config detected"]),
     );
@@ -970,7 +923,7 @@ describe("runSetupWizard", () => {
       },
     });
     await runWizard({ mode: "local" });
-    expectPartialCall(probeGatewayReachable, {
+    expectPartialCall(m.probe, {
       url: "ws://127.0.0.1:18789",
       password: "gateway-ref-password",
     });
@@ -993,7 +946,7 @@ describe("runSetupWizard", () => {
     "uses explicit $flow gateway options without exposing the password",
     async ({ flow, port, token, password }) => {
       if (flow === "quickstart") {
-        readConfigFileSnapshot.mockResolvedValueOnce(
+        m.readConfig.mockResolvedValueOnce(
           configSnapshot({
             agents: { entries: { main: {} } },
             gateway: {
@@ -1004,32 +957,30 @@ describe("runSetupWizard", () => {
             },
           }),
         );
-        configureGatewayForSetup.mockImplementationOnce(
-          async ({ nextConfig, quickstartGateway: gateway }) => ({
-            nextConfig: {
-              ...nextConfig,
-              gateway: {
-                ...nextConfig.gateway,
-                port: gateway.port,
-                bind: gateway.bind,
-                auth: {
-                  ...nextConfig.gateway?.auth,
-                  mode: gateway.authMode,
-                  password: gateway.password,
-                },
-                tailscale: { ...nextConfig.gateway?.tailscale, mode: gateway.tailscaleMode },
-              },
-            },
-            settings: {
+        m.gateway.mockImplementationOnce(async ({ nextConfig, quickstartGateway: gateway }) => ({
+          nextConfig: {
+            ...nextConfig,
+            gateway: {
+              ...nextConfig.gateway,
               port: gateway.port,
               bind: gateway.bind,
-              authMode: gateway.authMode,
-              gatewayToken: undefined,
+              auth: {
+                ...nextConfig.gateway?.auth,
+                mode: gateway.authMode,
+                password: gateway.password,
+              },
+              tailscale: { ...nextConfig.gateway?.tailscale, mode: gateway.tailscaleMode },
             },
-          }),
-        );
+          },
+          settings: {
+            port: gateway.port,
+            bind: gateway.bind,
+            authMode: gateway.authMode,
+            gatewayToken: undefined,
+          },
+        }));
       }
-      const { runtime, prompter } = await runWizard({
+      await runWizard({
         flow,
         mode: "local",
         gatewayPort: port,
@@ -1039,16 +990,14 @@ describe("runSetupWizard", () => {
         ...(flow === "advanced" ? { gatewayToken: token, tailscale: "off" } : {}),
       });
       const quickstartGateway = { port, bind: "lan", authMode: "password", password };
-      expect(configureGatewayForSetup.mock.calls[0]?.[0].quickstartGateway).toMatchObject(
-        quickstartGateway,
-      );
+      expect(m.gateway.mock.calls[0]?.[0].quickstartGateway).toMatchObject(quickstartGateway);
       if (flow === "advanced") {
-        expectPartialCall(probeGatewayReachable, {
+        expectPartialCall(m.probe, {
           url: `ws://127.0.0.1:${port}`,
           token,
           password,
         });
-        expect(configureGatewayForSetup.mock.calls[0]?.[0]).toMatchObject({
+        expect(m.gateway.mock.calls[0]?.[0]).toMatchObject({
           quickstartGateway: { ...quickstartGateway, token, tailscaleMode: "off" },
         });
       } else {
@@ -1093,14 +1042,12 @@ describe("runSetupWizard", () => {
       }
       prepareMockAuthProfilesIn(agentDir);
       for (const key of keys) {
-        applyAuthChoice.mockResolvedValueOnce({ config: modelConfigWithApiKey(key, agentDir) });
+        m.applyAuth.mockResolvedValueOnce({ config: modelConfigWithApiKey(key, agentDir) });
       }
-      promptAuthChoiceGrouped.mockResolvedValue("demo-provider");
+      m.promptAuth.mockResolvedValue("demo-provider");
       queueCredentialVerification(agentDir, keys[0]);
       if (keep) {
-        promptAuthChoiceGrouped
-          .mockResolvedValueOnce("demo-provider")
-          .mockResolvedValueOnce("__keep-current");
+        m.promptAuth.mockResolvedValueOnce("demo-provider").mockResolvedValueOnce("__keep-current");
         queueCredentialVerification(agentDir, keys[1], {
           ok: false,
           status: "timeout",
@@ -1114,7 +1061,7 @@ describe("runSetupWizard", () => {
       } else {
         keys.slice(1).forEach((key) => queueCredentialVerification(agentDir, key));
       }
-      const prompter = buildWizardPrompter(
+      prompter = buildWizardPrompter(
         {
           confirm: vi.fn(async () => true),
           ...(keep
@@ -1124,10 +1071,10 @@ describe("runSetupWizard", () => {
         { selectValues: ["fix", "fix", "continue"] },
       );
       try {
-        await runWizard({ authChoice: "demo-provider" }, createRuntime(), prompter);
-        expect(applyAuthChoice).toHaveBeenCalledTimes(keys.length);
-        expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
-        expect(verifySetupInferenceConfig).toHaveBeenCalledTimes(3);
+        await runWizard({ authChoice: "demo-provider" });
+        expect(m.applyAuth).toHaveBeenCalledTimes(keys.length);
+        expect(m.promptAuth).toHaveBeenCalledTimes(2);
+        expect(m.verify).toHaveBeenCalledTimes(3);
         const selected = expectSavedSetupCredential(
           verifiedConfig(2),
           agentDir,
@@ -1143,8 +1090,8 @@ describe("runSetupWizard", () => {
           expect(Object.keys(readAuthProfileStoreForTest(agentDir).profiles)).toHaveLength(2);
         } else {
           expect(
-            expectDefined(applyAuthChoice.mock.calls[2]?.[0], "expected call").config.models
-              ?.providers?.openai?.apiKey,
+            expectDefined(m.applyAuth.mock.calls[2]?.[0], "expected call").config.models?.providers
+              ?.openai?.apiKey,
           ).toBe(keys[0]);
           expect(prompter.select).toHaveBeenCalledTimes(4);
           expect(
