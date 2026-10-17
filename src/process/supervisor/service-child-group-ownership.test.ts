@@ -9,9 +9,9 @@ const { census, definitelyDead, directory, readStat, darwinCommand, nativeDarwin
     readStat: vi.fn(),
     darwinCommand: vi.fn(),
   }));
-vi.mock("./darwin-bun-process-census.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./darwin-bun-process-census.js")>()),
-  readDarwinBunProcessCensus: nativeDarwinCensus,
+vi.mock("../darwin-process-inspection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../darwin-process-inspection.js")>()),
+  readDarwinProcessCensus: nativeDarwinCensus,
 }));
 vi.mock("node:child_process", () => ({ spawnSync: census, execFile: vi.fn() }));
 vi.mock("node:fs", () => ({ readdirSync: directory, readFileSync: readStat }));
@@ -22,7 +22,6 @@ import {
 } from "./service-child-group-ownership.js";
 
 const owner = process.pid;
-const bunDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
 const getuidDescriptor = Object.getOwnPropertyDescriptor(process, "getuid");
 let rows: Map<number, string | Error>;
 let commands: Map<number, string | Error>;
@@ -32,7 +31,6 @@ function stat(pid: number, group: number, state = "S", name = "worker", ppid = 1
 }
 
 beforeEach(() => {
-  Object.defineProperty(process.versions, "bun", { configurable: true, value: undefined });
   Object.defineProperty(process, "getuid", { configurable: true, value: () => 1000 });
   census.mockReset().mockReturnValue({ error: new Error("ps is unavailable") });
   definitelyDead.mockReset().mockReturnValue(false);
@@ -56,11 +54,6 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.restoreAllMocks();
-  if (bunDescriptor) {
-    Object.defineProperty(process.versions, "bun", bunDescriptor);
-  } else {
-    Reflect.deleteProperty(process.versions, "bun");
-  }
   if (getuidDescriptor) {
     Object.defineProperty(process, "getuid", getuidDescriptor);
   } else {
@@ -118,45 +111,40 @@ it("does not report an empty Linux group after its existing census budget expire
 });
 
 it.each([
-  ["live", { status: 0, stdout: `${owner} ${owner} S\n${owner + 2} ${owner} D\n` }, true],
-  ["zombie", { status: 0, stdout: `${owner} ${owner} S\n${owner + 2} ${owner} Z+\n` }, false],
-  ["ps failure", { status: 1, stdout: "" }, undefined],
-  ["malformed census", { status: 0, stdout: "malformed census" }, undefined],
-  ["missing owner", { status: 0, stdout: "" }, undefined],
-  ["wrong group", { status: 0, stdout: `${owner} ${owner + 1} S\n` }, undefined],
   [
-    "inspector only",
-    {
-      status: 0,
-      stdout: `${owner} ${owner} S\n${owner + 1} ${owner} R\n${owner + 2} ${owner + 2} S\n`,
-    },
-    false,
-  ],
-  [
-    "inspector and member",
-    {
-      status: 0,
-      stdout: `${owner} ${owner} S\n${owner + 1} ${owner} R\n${owner + 2} ${owner} S\n`,
-    },
+    "live",
+    [
+      { pid: owner, pgid: owner, state: "S" },
+      { pid: owner + 2, pgid: owner, state: "R" },
+    ],
     true,
   ],
-] as const)(
-  "observes Darwin ownership excluding only the inspector: %s",
-  (_name, result, expected) => {
-    mockProcessPlatform("darwin");
-    census.mockReturnValue({
-      pid: owner + 1,
-      ...result,
-      stdout: result.stdout
-        .split("\n")
-        .map((row) => row.replace(/^(\d+) (\d+) (\S+)$/, "$1 $2 $3 1 501"))
-        .join("\n"),
-    });
-    expect(hasLiveOwnedProcessGroupMembers()).toBe(expected);
-    expect(directory).not.toHaveBeenCalled();
-    expect(readStat).not.toHaveBeenCalled();
-  },
-);
+  [
+    "zombie",
+    [
+      { pid: owner, pgid: owner, state: "S" },
+      { pid: owner + 2, pgid: owner, state: "Z" },
+    ],
+    false,
+  ],
+  ["missing owner", [], undefined],
+  ["wrong group", [{ pid: owner, pgid: owner + 1, state: "S" }], undefined],
+] as const)("observes Darwin ownership: %s", (_name, members, expected) => {
+  mockProcessPlatform("darwin");
+  nativeDarwinCensus.mockReturnValue(members);
+  expect(hasLiveOwnedProcessGroupMembers()).toBe(expected);
+  expect(directory).not.toHaveBeenCalled();
+  expect(readStat).not.toHaveBeenCalled();
+  expect(census).not.toHaveBeenCalled();
+});
+
+it("keeps failed Darwin census indeterminate", () => {
+  mockProcessPlatform("darwin");
+  nativeDarwinCensus.mockImplementation(() => {
+    throw new Error("census unavailable");
+  });
+  expect(hasLiveOwnedProcessGroupMembers()).toBeUndefined();
+});
 
 it("preserves Linux command argument boundaries and process ancestry in command mode", () => {
   const argv = ["node", "/app with spaces/openclaw.mjs", "doctor", "--profile", "two words"];
@@ -167,32 +155,28 @@ it("preserves Linux command argument boundaries and process ancestry in command 
   ]);
 });
 
-it("joins Darwin numeric ancestry to exact native command facts", () => {
+it("joins Darwin ancestry and relative ownership to exact native command facts", () => {
   mockProcessPlatform("darwin");
   const argv = ["node", "/app with spaces/openclaw.mjs", "doctor"];
-  const foreign = { argvUnavailable: true, executable: "/sbin/launchd", uid: 0 };
-  census.mockReturnValue({
-    pid: owner + 3,
-    status: 0,
-    stdout: `${owner} ${owner} S 1 501\n1 1 S 0 0\n2 2 S 0 -2\n${owner + 1} ${owner} S 1 501\n${owner + 3} ${owner} R ${owner} 501\n`,
-  });
-  darwinCommand.mockImplementation((pid: number, uid: number) =>
+  nativeDarwinCensus.mockReturnValue([
+    { pid: owner, pgid: owner, ppid: 1, state: "S", owner: "same" },
+    { pid: 1, pgid: 1, ppid: 0, state: "S", owner: "different" },
+    { pid: owner + 1, pgid: owner, ppid: 1, state: "S", owner: "same" },
+  ]);
+  darwinCommand.mockImplementation((pid: number) =>
     pid === owner
       ? { argv }
       : pid === 1
-        ? foreign
-        : pid === 2
-          ? { argvUnavailable: true, uid }
-          : undefined,
+        ? { argvUnavailable: true, owner: "different" }
+        : undefined,
   );
-  expect([...readProcessGroupMembers(1_000, { readDarwinCommand: darwinCommand })]).toEqual([
-    { pid: owner, pgid: owner, state: "S", command: { ppid: 1, argv, uid: 501 } },
-    { pid: 1, pgid: 1, state: "S", command: { ppid: 0, ...foreign } },
+  expect([...readProcessGroupMembers(1000, { readDarwinCommand: darwinCommand })]).toEqual([
+    { pid: owner, pgid: owner, state: "S", command: { ppid: 1, argv, owner: "same" } },
     {
-      pid: 2,
-      pgid: 2,
+      pid: 1,
+      pgid: 1,
       state: "S",
-      command: { ppid: 0, uid: 4_294_967_294, argvUnavailable: true },
+      command: { ppid: 0, argvUnavailable: true, owner: "different" },
     },
   ]);
 });
@@ -226,56 +210,26 @@ it.each([1000, 2000, undefined])(
   },
 );
 
-it("does not turn native Darwin inspection failures into an empty census", () => {
+it("does not turn native Darwin command failures into an empty census", () => {
   mockProcessPlatform("darwin");
-  census.mockReturnValue({
-    status: 0,
-    stdout: `${owner} ${owner} S 1 501\n`,
-  });
+  nativeDarwinCensus.mockReturnValue([
+    { pid: owner, ppid: 1, pgid: owner, state: "S", owner: "same" },
+  ]);
   darwinCommand.mockImplementation(() => {
     throw new Error("native process inspection unavailable");
   });
-  expect(() => [...readProcessGroupMembers(1_000, { readDarwinCommand: darwinCommand })]).toThrow(
+  expect(() => [...readProcessGroupMembers(1000, { readDarwinCommand: darwinCommand })]).toThrow(
     "native process inspection unavailable",
   );
 });
 
-it("uses the native census in Darwin Bun when sandboxed ps cannot execute", () => {
+it("does not request Darwin arguments for zombies", () => {
   mockProcessPlatform("darwin");
-  Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
   nativeDarwinCensus.mockReturnValue([
-    { pid: owner, ppid: 1, pgid: owner, state: "R", uid: 501 },
-    { pid: owner + 1, ppid: owner, pgid: owner, state: "Z", uid: 501 },
+    { pid: owner, ppid: 1, pgid: owner, state: "Z", owner: "same" },
   ]);
-  expect(hasLiveOwnedProcessGroupMembers()).toBe(false);
-  darwinCommand.mockReturnValue({ argv: ["openclaw", "doctor"] });
   expect([...readProcessGroupMembers(1000, { readDarwinCommand: darwinCommand })]).toEqual([
-    {
-      pid: owner,
-      pgid: owner,
-      state: "R",
-      command: { ppid: 1, argv: ["openclaw", "doctor"], uid: 501 },
-    },
-    {
-      pid: owner + 1,
-      pgid: owner,
-      state: "Z",
-      command: { ppid: owner, argv: [], uid: 501 },
-    },
-  ]);
-  expect(census).not.toHaveBeenCalled();
-  expect(darwinCommand).toHaveBeenCalledExactlyOnceWith(owner, 501);
-});
-
-it("does not request Node Darwin arguments for kernel tasks or zombie states with flags", () => {
-  mockProcessPlatform("darwin");
-  census.mockReturnValue({
-    status: 0,
-    stdout: `0 0 R 0 0\n${owner} ${owner} Z+ 1 501\n`,
-  });
-  expect([...readProcessGroupMembers(1000, { readDarwinCommand: darwinCommand })]).toEqual([
-    { pid: 0, pgid: 0, state: "R", command: { ppid: 0, argv: [], uid: 0 } },
-    { pid: owner, pgid: owner, state: "Z+", command: { ppid: 1, argv: [], uid: 501 } },
+    { pid: owner, pgid: owner, state: "Z", command: { ppid: 1, argv: [], owner: "same" } },
   ]);
   expect(darwinCommand).not.toHaveBeenCalled();
 });
