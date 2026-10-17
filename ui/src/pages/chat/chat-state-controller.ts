@@ -11,10 +11,11 @@ import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
-import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
+import { cancelChatStreamRenderFrame, publishChatRunState } from "./chat-state-render.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
@@ -99,6 +100,7 @@ export function createChatState<TState extends ChatPageHost>(
   let disposed = false;
   let renderLifecycleScope: ChatRenderLifecycleScope | undefined;
   let backgroundRenderFrame: number | undefined;
+  let releaseRunPublication: (() => void) | undefined;
 
   const api = {
     composerPersistence,
@@ -194,6 +196,7 @@ export function createChatState<TState extends ChatPageHost>(
     },
 
     attach(state: TState) {
+      releaseRunPublication?.();
       if (stateValue && stateValue !== state) {
         privateDraftReview?.controller.abort();
         disposeSelectedSessionMessageSubscription(stateValue);
@@ -218,6 +221,8 @@ export function createChatState<TState extends ChatPageHost>(
       state.canRestoreComposer = () => stateValue === state && composerPersistence.active;
       previousChatLoading = state.chatLoading;
       previousChatStream = state.chatStream;
+      // Publication also owns persistence and activity/retention effects in parked panes.
+      releaseRunPublication = chatRunPresentation(state).subscribe(publishStateEffects);
       const renderLifecycle = state.renderLifecycle;
       state.requestUpdate = () => renderLifecycle.invalidate();
       // Queue transitions synchronously update pane retention and shell activity,
@@ -324,12 +329,9 @@ export function createChatState<TState extends ChatPageHost>(
       // A render consumes both deferred producers before their next frame.
       cancelBackgroundRender();
       const state = stateValue;
-      // Owner projections can publish transcript changes without a page redraw request.
-      captureRenderLifecycleChanges();
       if (state?.chatStreamRenderFrame != null) {
         cancelChatStreamRenderFrame(state);
-        composerPersistence.persistChangedState();
-        onStateChange?.();
+        publishChatRunState(state);
       }
       // Field projections can schedule a frame without a page-wide invalidation.
       captureRenderLifecycleChanges();
@@ -484,15 +486,11 @@ export function createChatState<TState extends ChatPageHost>(
     }
   }
 
-  function requestUpdateForScope(scope: ChatRenderLifecycleScope, background = false): boolean {
-    if (!isRenderLifecycleScopeActive(scope)) {
-      return false;
-    }
+  function publishStateEffects(): void {
     if (privateDraftReview && !privateDraftReview.isCurrent()) {
       privateDraftReview.controller.abort();
     }
     composerPersistence.persistChangedState();
-    captureRenderLifecycleChanges();
     // Legacy restore writers still signal through the page owner. Ordinary
     // stream updates must not invalidate the independent composer projection.
     // Explicit mutation hooks above also cover changes within retained arrays.
@@ -508,6 +506,14 @@ export function createChatState<TState extends ChatPageHost>(
       publishComposerDraft();
     }
     onStateChange?.();
+  }
+
+  function requestUpdateForScope(scope: ChatRenderLifecycleScope, background = false): boolean {
+    if (!isRenderLifecycleScopeActive(scope)) {
+      return false;
+    }
+    publishStateEffects();
+    captureRenderLifecycleChanges();
     notifyRenderLifecycleForTest(renderer, "invalidate");
     // Only background producers opt in. Draft persistence and scroll ownership
     // are captured above, and transcript changes still commit before paint.
@@ -635,6 +641,8 @@ export function createChatState<TState extends ChatPageHost>(
   }
 
   function stopChatEffects() {
+    releaseRunPublication?.();
+    releaseRunPublication = undefined;
     privateDraftReview?.controller.abort();
     while (cleanups.length > 0) {
       cleanups.pop()?.();

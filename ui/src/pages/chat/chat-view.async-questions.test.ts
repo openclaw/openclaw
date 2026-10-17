@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -12,6 +14,7 @@ import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
+import { createChatViewFrame } from "./chat-view-frame.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createChatProps, disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
@@ -53,7 +56,8 @@ afterEach(() => {
 it.each([false, true])(
   "keeps the edited docked answer current when later work completes=%s",
   async (laterWork) => {
-    const submit = vi.fn(async () => true);
+    const pending = createDeferred<boolean>();
+    const submit = vi.fn(() => pending.promise);
     const question = laterWork
       ? {
           ...audience,
@@ -68,7 +72,7 @@ it.each([false, true])(
       sessionKey: "agent:main:main",
       messages: [question],
       onAsyncQuestionSubmit: submit,
-      onRequestUpdate: () => renderChatPropsInto(container, props),
+      onRequestUpdate: vi.fn(),
     });
     renderChatPropsInto(container, props);
     await vi.waitFor(() =>
@@ -97,12 +101,27 @@ it.each([false, true])(
         undefined,
       ),
     );
+    const owner = new EventTarget();
+    let visible = false;
+    props.transcriptVisible = { owner, isPresented: () => visible };
+    renderChatPropsInto(container, props);
+    pending.resolve(true);
+    await waitForSolid(() =>
+      expect(getTranscriptState(props.paneId).asyncQuestionDrafts.get("audience")?.status).toBe(
+        "submitted",
+      ),
+    );
+    flush();
+    expect(container.querySelector(".agent-chat__question-dock")).not.toBeNull();
+    visible = true;
+    owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
     await vi.waitFor(() =>
       expect(container.querySelector(".agent-chat__question-dock")).toBeNull(),
     );
     expect(container.querySelector(".chat-question-summary")?.textContent).toContain(
       "New contributors",
     );
+    expect(props.onRequestUpdate).not.toHaveBeenCalled();
   },
 );
 
@@ -121,7 +140,7 @@ it("selects a reopened historical question ahead of another pending request", as
     sessionKey: "agent:main:main",
     messages: [old],
     onAsyncQuestionSubmit: vi.fn(async () => true),
-    onRequestUpdate: () => renderChatPropsInto(container, props),
+    onRequestUpdate: vi.fn(),
   });
   const draw = () => renderChatPropsInto(container, props);
   draw();
@@ -146,6 +165,37 @@ it("selects a reopened historical question ahead of another pending request", as
     ),
   );
   expect(container.querySelector<HTMLInputElement>(".chat-question-panel__other")?.value).toBe("");
+});
+
+it("reads confirmed discard from the outbox before the next queue frame arrives", () => {
+  const row: ChatQueueItem = {
+    id: "discarded-answer",
+    asyncQuestionItemId: "audience",
+    text: "> Which audience?\n\nEngineers",
+    createdAt: 1,
+    sendState: "failed",
+  };
+  let queue = [row];
+  const props = {
+    ...createChatProps({
+      messages: [
+        { ...audience, runId: "question-run" },
+        terminal("question-run"),
+        terminal("later-run"),
+      ],
+      queue,
+      onAsyncQuestionSubmit: vi.fn(async () => true),
+    }),
+    getQueue: () => queue,
+  };
+  const before = createChatViewFrame(props);
+  expect(before.asyncQuestions.pending).toEqual([]);
+  queue = [];
+  before.asyncQuestions.discard(row);
+  const after = createChatViewFrame(props);
+  expect(after.asyncQuestions.pending.map((question) => question.itemId)).toEqual(["audience"]);
+  expect(after.asyncQuestions.delivery.size).toBe(0);
+  expect(props.onAsyncQuestionSubmit).not.toHaveBeenCalled();
 });
 
 it("refreshes a mounted question summary when a canonical answer appears or is replaced", async () => {

@@ -6,7 +6,7 @@ import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
-import { requestChatPageUpdate } from "./chat-state-render.ts";
+import { publishChatRunState } from "./chat-state-render.ts";
 import { handleChatScrollTakeover } from "./scroll.ts";
 
 const disposals: Array<() => void> = [];
@@ -131,7 +131,7 @@ describe("transcript arrival scroll ownership", () => {
     const { controller, requestUpdate, state } = setup();
     const follow = vi.spyOn(state, "chatScrollToEnd");
     state.chatStream = "A response arrived before the property commit.";
-    requestChatPageUpdate(state, "animation-frame");
+    publishChatRunState(state, "animation-frame");
     controller.prepareRender();
     controller.commitRender();
     vi.advanceTimersToNextFrame();
