@@ -45,7 +45,7 @@ import {
 import { getSlashCommands, shouldSubmitExactArgumentCompletion } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
-import { editorTheme, tuiTheme as theme } from "./theme/theme.js";
+import { editorTheme, tuiTheme as theme, themeWarnings } from "./theme/theme.js";
 import { createTuiAuthChildOwner } from "./tui-auth-child.js";
 import { createTuiAutocompleteProvider } from "./tui-autocomplete.js";
 import type { TuiBackend } from "./tui-backend.js";
@@ -751,7 +751,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
         }
       : undefined,
   );
-  const connectionNotices: string[] = [];
+  const connectionNotices: string[] = [...themeWarnings];
   const addConnectionNotice = (text: string) => {
     connectionNotices.push(text);
     if (connectionNotices.length > 12) {

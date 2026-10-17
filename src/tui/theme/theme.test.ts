@@ -1,9 +1,12 @@
 // TUI theme tests cover theme defaults and environment-driven variants.
 
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import chalk from "chalk";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../../test-utils/temp-dir.js";
 
 const originalChalkLevel = chalk.level;
 chalk.level = 3;
@@ -26,6 +29,7 @@ afterEach(() => {
 type ThemeEnvOverrides = {
   OPENCLAW_THEME?: string | undefined;
   COLORFGBG?: string | undefined;
+  OPENCLAW_CONFIG_PATH?: string | undefined;
 };
 
 type ThemeModule = typeof import("./theme.js");
@@ -76,6 +80,9 @@ async function importThemeWithEnv(env: ThemeEnvOverrides) {
   }
   if (Object.hasOwn(env, "COLORFGBG")) {
     vi.stubEnv("COLORFGBG", env.COLORFGBG);
+  }
+  if (Object.hasOwn(env, "OPENCLAW_CONFIG_PATH")) {
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", env.OPENCLAW_CONFIG_PATH);
   }
   const mod = await importFreshModule<ThemeModule>(
     import.meta.url,
@@ -149,6 +156,87 @@ describe("light background detection", () => {
     const darkMod = await importThemeWithEnv({ OPENCLAW_THEME: "dark" });
     expect(lightMod.tuiTheme.assistantText("hello")).toBe("hello");
     expect(darkMod.tuiTheme.assistantText("hello")).toBe("hello");
+  });
+});
+
+describe("named themes", () => {
+  async function importNamedTheme(dir: string, theme: string | undefined, background?: string) {
+    if (theme !== undefined) {
+      await fs.mkdir(path.join(dir, "themes"), { recursive: true });
+      await fs.writeFile(path.join(dir, "themes", "night.json"), theme);
+    }
+    return importThemeWithEnv({
+      OPENCLAW_THEME: "night",
+      COLORFGBG: background,
+      OPENCLAW_CONFIG_PATH: path.join(dir, "openclaw.json"),
+    });
+  }
+
+  it("overrides only the listed colors on top of the chosen base palette", async () => {
+    await withTempDir("openclaw-tui-theme-", async (dir) => {
+      const dark = await importThemeWithEnv({ OPENCLAW_THEME: "dark" });
+      const mod = await importNamedTheme(
+        dir,
+        JSON.stringify({ base: "dark", colors: { accent: "#82aaff", userBg: "#2f334d" } }),
+        "0;15",
+      );
+      expect(mod.themeWarnings).toEqual([]);
+      expect(mod.lightPalette).toEqual({
+        ...dark.lightPalette,
+        accent: "#82AAFF",
+        userBg: "#2F334D",
+      });
+    });
+  });
+
+  it("keeps base colors for invalid entries and reports one notice per kind", async () => {
+    await withTempDir("openclaw-tui-theme-", async (dir) => {
+      const mod = await importNamedTheme(
+        dir,
+        JSON.stringify({
+          name: "Night",
+          base: "dim",
+          colours: {},
+          colors: { accent: "blue", glow: "#000000", link: "#65bcff", shine: "#ffffff", dim: 1 },
+        }),
+      );
+      expect(mod.lightPalette.accent).toBe("#F6C453");
+      expect(mod.lightPalette.link).toBe("#65BCFF");
+      expect(mod.themeWarnings).toEqual([
+        'theme "night": unknown keys ignored: colours',
+        'theme "night": base must be "dark" or "light"',
+        'theme "night": unknown colors ignored: glow, shine',
+        'theme "night": colors must be #RRGGBB hex strings: accent, dim',
+      ]);
+    });
+  });
+
+  it("lists at most five names in a notice", async () => {
+    await withTempDir("openclaw-tui-theme-", async (dir) => {
+      const colors = Object.fromEntries(
+        Array.from({ length: 7 }, (_, index) => [`extra${index + 1}`, "#000000"]),
+      );
+      const mod = await importNamedTheme(dir, JSON.stringify({ colors }));
+      expect(mod.themeWarnings).toEqual([
+        'theme "night": unknown colors ignored: extra1, extra2, extra3, extra4, extra5 and 2 more',
+      ]);
+    });
+  });
+
+  it("falls back to the detected palette when the theme file cannot be used", async () => {
+    await withTempDir("openclaw-tui-theme-", async (dir) => {
+      const light = await importThemeWithEnv({ OPENCLAW_THEME: "light" });
+      const missing = await importNamedTheme(dir, undefined, "0;15");
+      expect(missing.lightPalette).toEqual(light.lightPalette);
+      expect(missing.themeWarnings).toEqual([
+        `theme "night": ${path.join(dir, "themes", "night.json")} not found; using the built-in palette`,
+      ]);
+
+      const malformed = await importNamedTheme(dir, "{ not json", "0;15");
+      expect(malformed.lightPalette).toEqual(light.lightPalette);
+      expect(malformed.themeWarnings).toHaveLength(1);
+      expect(malformed.themeWarnings[0]).toContain("cannot load");
+    });
   });
 });
 

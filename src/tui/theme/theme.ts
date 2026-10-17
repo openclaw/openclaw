@@ -1,11 +1,16 @@
+import fs from "node:fs";
+import path from "node:path";
 import type {
   EditorTheme,
   MarkdownTheme,
   SelectListTheme,
   SettingsListTheme,
 } from "@earendil-works/pi-tui";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import chalk from "chalk";
+import { resolveConfigPath } from "../../config/paths.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import type { SearchableSelectListTheme } from "../components/searchable-select-list.js";
 
 const DARK_TEXT = "#E8E3D5";
@@ -70,31 +75,146 @@ function isLightBackground(): boolean {
   return false;
 }
 
-const lightMode = isLightBackground();
-
-const color = (dark: string, light: string) => (lightMode ? light : dark);
-const palette = {
-  text: color("#E8E3D5", "#1E1E1E"),
-  dim: color("#7B7F87", "#5B6472"),
-  accent: color("#F6C453", "#B45309"),
-  accentSoft: color("#F2A65A", "#C2410C"),
-  border: color("#3C414B", "#5B6472"),
-  userBg: color("#2B2F36", "#F3F0E8"),
-  userText: color("#F3EEE0", "#1E1E1E"),
-  systemText: color("#9BA3B2", "#4B5563"),
-  toolPendingBg: color("#1F2A2F", "#EFF6FF"),
-  toolSuccessBg: color("#1E2D23", "#ECFDF5"),
-  toolErrorBg: color("#2F1F1F", "#FEF2F2"),
-  toolTitle: color("#F6C453", "#B45309"),
-  toolOutput: color("#E1DACB", "#374151"),
-  quote: color("#8CC8FF", "#1D4ED8"),
-  quoteBorder: color("#3B4D6B", "#2563EB"),
-  code: color("#F0C987", "#92400E"),
-  codeBorder: color("#343A45", "#92400E"),
-  link: color("#7DD3A5", "#047857"),
-  error: color("#F97066", "#DC2626"),
-  success: color("#7DD3A5", "#047857"),
+const DARK_PALETTE = {
+  text: DARK_TEXT,
+  dim: "#7B7F87",
+  accent: "#F6C453",
+  accentSoft: "#F2A65A",
+  border: "#3C414B",
+  userBg: "#2B2F36",
+  userText: "#F3EEE0",
+  systemText: "#9BA3B2",
+  toolPendingBg: "#1F2A2F",
+  toolSuccessBg: "#1E2D23",
+  toolErrorBg: "#2F1F1F",
+  toolTitle: "#F6C453",
+  toolOutput: "#E1DACB",
+  quote: "#8CC8FF",
+  quoteBorder: "#3B4D6B",
+  code: "#F0C987",
+  codeBorder: "#343A45",
+  link: "#7DD3A5",
+  error: "#F97066",
+  success: "#7DD3A5",
 };
+
+type Palette = typeof DARK_PALETTE;
+
+const LIGHT_PALETTE: Palette = {
+  text: LIGHT_TEXT,
+  dim: "#5B6472",
+  accent: "#B45309",
+  accentSoft: "#C2410C",
+  border: "#5B6472",
+  userBg: "#F3F0E8",
+  userText: "#1E1E1E",
+  systemText: "#4B5563",
+  toolPendingBg: "#EFF6FF",
+  toolSuccessBg: "#ECFDF5",
+  toolErrorBg: "#FEF2F2",
+  toolTitle: "#B45309",
+  toolOutput: "#374151",
+  quote: "#1D4ED8",
+  quoteBorder: "#2563EB",
+  code: "#92400E",
+  codeBorder: "#92400E",
+  link: "#047857",
+  error: "#DC2626",
+  success: "#047857",
+};
+
+const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+const THEME_NAME = /^[\w.-]+$/;
+const THEME_KEYS = new Set(["$schema", "name", "base", "colors"]);
+const MAX_LISTED_KEYS = 5;
+
+function listKeys(keys: string[]): string {
+  const listed = keys.slice(0, MAX_LISTED_KEYS).join(", ");
+  const more = keys.length - MAX_LISTED_KEYS;
+  return more > 0 ? `${listed} and ${more} more` : listed;
+}
+
+function isPaletteKey(key: string): key is keyof Palette {
+  return Object.hasOwn(DARK_PALETTE, key);
+}
+
+// A bad theme file must never block TUI startup.
+function loadNamedTheme(name: string, detected: Palette): { palette: Palette; warnings: string[] } {
+  const label = `theme "${name}"`;
+  const fallback = (reason: string) => ({
+    palette: detected,
+    warnings: [`${label}: ${reason}; using the built-in palette`],
+  });
+  if (!THEME_NAME.test(name)) {
+    return fallback("names may only contain letters, digits, '.', '_' and '-'");
+  }
+  const file = path.join(path.dirname(resolveConfigPath()), "themes", `${name}.json`);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (err) {
+    return fallback(
+      isRecord(err) && err.code === "ENOENT"
+        ? `${file} not found`
+        : `cannot load ${file}: ${formatErrorMessage(err)}`,
+    );
+  }
+  if (!isRecord(parsed)) {
+    return fallback(`${file} must contain a JSON object`);
+  }
+
+  const warnings: string[] = [];
+  const unknownKeys = Object.keys(parsed).filter((key) => !THEME_KEYS.has(key));
+  if (unknownKeys.length > 0) {
+    warnings.push(`${label}: unknown keys ignored: ${listKeys(unknownKeys)}`);
+  }
+  let palette = detected;
+  if (parsed.base === "dark" || parsed.base === "light") {
+    palette = parsed.base === "light" ? LIGHT_PALETTE : DARK_PALETTE;
+  } else if (parsed.base !== undefined) {
+    warnings.push(`${label}: base must be "dark" or "light"`);
+  }
+  palette = { ...palette };
+  const colors = parsed.colors ?? {};
+  if (!isRecord(colors)) {
+    warnings.push(`${label}: colors must be an object`);
+    return { palette, warnings };
+  }
+  // One notice per kind of problem: each notice is re-shown whenever history reloads.
+  const unknownColors: string[] = [];
+  const invalidColors: string[] = [];
+  for (const [key, value] of Object.entries(colors)) {
+    if (!isPaletteKey(key)) {
+      unknownColors.push(key);
+    } else if (typeof value !== "string" || !HEX_COLOR.test(value)) {
+      invalidColors.push(key);
+    } else {
+      palette[key] = value;
+    }
+  }
+  if (unknownColors.length > 0) {
+    warnings.push(`${label}: unknown colors ignored: ${listKeys(unknownColors)}`);
+  }
+  if (invalidColors.length > 0) {
+    warnings.push(`${label}: colors must be #RRGGBB hex strings: ${listKeys(invalidColors)}`);
+  }
+  return { palette, warnings };
+}
+
+function resolvePalette(): { palette: Palette; warnings: string[] } {
+  const detected = isLightBackground() ? LIGHT_PALETTE : DARK_PALETTE;
+  const name = process.env.OPENCLAW_THEME?.trim();
+  const builtIn = normalizeOptionalLowercaseString(name);
+  if (!name || builtIn === "light" || builtIn === "dark") {
+    return { palette: detected, warnings: [] };
+  }
+  return loadNamedTheme(name, detected);
+}
+
+const resolved = resolvePalette();
+const palette = resolved.palette;
+
+export const themeWarnings: readonly string[] = resolved.warnings;
 
 const fg = (hex: string) => (text: string) => chalk.hex(hex)(text);
 const bg = (hex: string) => (text: string) => chalk.bgHex(hex)(text);

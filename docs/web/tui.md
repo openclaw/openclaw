@@ -313,6 +313,44 @@ disabled by default inside tmux and GNU Screen. Sixel is not supported.
 - The TUI keeps assistant body text in your terminal's default foreground so dark and light terminals both stay readable.
 - If your terminal uses a light background and auto-detection is wrong, set `OPENCLAW_THEME=light` before starting `openclaw tui`.
 - To force the original dark palette instead, set `OPENCLAW_THEME=dark`.
+- To use your own colors, set `OPENCLAW_THEME` to a theme name. The TUI reads `themes/<name>.json` from the directory that holds your `openclaw.json` (for example `~/.openclaw/themes/night.json`).
+
+A theme file lists only the colors it changes. Every other color comes from the `base` palette (`dark` or `light`), or from the auto-detected palette when `base` is omitted:
+
+```json
+{
+  "base": "dark",
+  "colors": {
+    "accent": "#82AAFF",
+    "accentSoft": "#C099FF",
+    "userBg": "#2F334D",
+    "link": "#65BCFF"
+  }
+}
+```
+
+Colors are `#RRGGBB` hex strings. Assistant body text always uses your terminal's default foreground. A theme can set these colors:
+
+| Color                                           | Used for                                                                        |
+| ----------------------------------------------- | ------------------------------------------------------------------------------- |
+| `text`                                          | Text in search boxes, question prompts, and settings lists                      |
+| `dim`                                           | Hints, the status line, descriptions, and tool arguments                        |
+| `accent`                                        | The header, Markdown headings, the busy spinner, and selected items             |
+| `accentSoft`                                    | The waiting message, Markdown list bullets, search prompts, and selected values |
+| `border`                                        | The input box border and Markdown horizontal rules                              |
+| `userBg`, `userText`                            | Background and text of your messages                                            |
+| `systemText`                                    | System notices and settings descriptions                                        |
+| `toolPendingBg`, `toolSuccessBg`, `toolErrorBg` | Tool card backgrounds while running, after success, and after failure           |
+| `toolTitle`, `toolOutput`                       | Tool card titles and output                                                     |
+| `quote`, `quoteBorder`                          | Block quote text and the bar beside it                                          |
+| `code`, `codeBorder`                            | Inline code and code blocks, and the lines around code blocks                   |
+| `link`                                          | Link text                                                                       |
+| `error`                                         | Error messages in question prompts and `/btw` replies                           |
+| `success`                                       | Accepted, but no TUI element uses it yet                                        |
+
+A theme file may also have a `name` for your own reference. The TUI ignores any other top-level key.
+
+The TUI reads the theme once at startup. If the file is missing or unreadable, the TUI uses the built-in palette. An unknown color name or an invalid value keeps that color's built-in value. After the session history loads, the TUI reports problems as system notices in the chat log, one notice per kind of problem.
 
 ## History + streaming
 

@@ -150,7 +150,7 @@ Installed third-party plugins may declare additional credential variables in the
 | `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS` | Allow trusted private-DNS `ws://` connections as a break-glass override.                     |
 | `OPENCLAW_ALLOW_MULTI_GATEWAY`       | Allow multiple Gateway processes while preserving per-state ownership locks.                 |
 | `OPENCLAW_SKIP_CHANNELS`             | Start the Gateway without channel transports for troubleshooting.                            |
-| `OPENCLAW_THEME`                     | Force the TUI palette to `light` or `dark`.                                                  |
+| `OPENCLAW_THEME`                     | Force the TUI palette to `light` or `dark`, or name a custom TUI theme file.                 |
 
 ### Filesystem observation
 
@@ -323,6 +323,7 @@ to apply context-specific rules.
 
 - `OPENCLAW_THEME=light`: force the light TUI palette when your terminal has a light background.
 - `OPENCLAW_THEME=dark`: force the dark TUI palette.
+- `OPENCLAW_THEME=<name>`: load TUI colors from `themes/<name>.json` next to `openclaw.json`. See [TUI terminal colors](/web/tui#terminal-colors).
 - `COLORFGBG`: if your terminal exports it, OpenClaw uses the background color hint to auto-pick the TUI palette.
 
 ## Env var substitution in config
