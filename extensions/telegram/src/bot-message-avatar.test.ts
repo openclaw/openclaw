@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createTelegramDirectAvatarResolver } from "./bot-message-avatar.js";
+import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
 import type { TelegramContext } from "./bot/types.js";
 
@@ -13,11 +14,13 @@ const photo = { ...file, width: 160, height: 160 };
 type Context = Pick<TelegramContext, "message" | "me">;
 function context(id = 1000000001, overrides: Partial<Context["message"]> = {}): Context {
   return {
+    me: telegramBotInfoForTest,
     message: {
       message_id: 1,
       date: 0,
       chat: { id, type: "private", first_name: "Riley" },
       from: { id, is_bot: false, first_name: "Riley" },
+      text: "hello",
       ...overrides,
     },
   };

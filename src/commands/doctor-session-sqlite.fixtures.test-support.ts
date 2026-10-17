@@ -25,6 +25,7 @@ import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferre
 import { runDoctorSessionSqlite, type DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
 import { containsObjects } from "./doctor-session-sqlite.publication-spies.test-support.js";
 import {
+  canonicalTestPath,
   importLegacyStore,
   readMigrationManifest,
   requireMigrationManifestPath,
@@ -45,10 +46,15 @@ export function migrationManifest(report: DoctorSessionSqliteReport) {
 }
 
 export function archivedSource(report: DoctorSessionSqliteReport, sourcePath: string) {
+  // The source has moved, but its directory still resolves temporary-root aliases.
+  const canonicalSource = path.join(
+    canonicalTestPath(path.dirname(sourcePath)),
+    path.basename(sourcePath),
+  );
   return expectDefined(
     migrationManifest(report)
       .targets.flatMap((target) => target.completedMoves)
-      .find((move) => move.sourcePath === sourcePath),
+      .find((move) => move.sourcePath === canonicalSource),
     "archived source",
   );
 }

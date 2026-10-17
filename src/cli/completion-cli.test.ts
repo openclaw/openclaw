@@ -49,7 +49,7 @@ function runZshScript(script: string, timeout?: number): string | undefined {
   const result = runZsh(script, { timeout });
   if (result.error) {
     if ("code" in result.error && result.error.code === "ENOENT") {
-      return;
+      return undefined;
     }
     throw result.error;
   }
