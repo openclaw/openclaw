@@ -17,7 +17,7 @@ describe("system-presence", () => {
     vi.useRealTimers();
   });
 
-  function connect(deviceId: string, fields: Parameters<typeof upsertPresence>[1]) {
+  function connectDevice(deviceId: string, fields: Parameters<typeof upsertPresence>[1]) {
     upsertPresence(deviceId, { deviceId, reason: "connect", ...fields });
   }
 
@@ -44,13 +44,13 @@ describe("system-presence", () => {
   it("merges roles and scopes for the same device", () => {
     const deviceId = randomUUID();
 
-    connect(deviceId, {
+    connectDevice(deviceId, {
       host: "openclaw",
       roles: ["operator"],
       scopes: ["operator.admin"],
     });
 
-    connect(deviceId, { roles: ["node"], scopes: ["system.run"] });
+    connectDevice(deviceId, { roles: ["node"], scopes: ["system.run"] });
 
     const entry = listSystemPresence().find((e) => e.deviceId === deviceId);
     expect(entry).toMatchObject({
@@ -218,7 +218,7 @@ describe("system-presence", () => {
   it("expires stale peers after five minutes while keeping the gateway", () => {
     vi.useFakeTimers();
     const deviceId = randomUUID();
-    connect(deviceId, { host: "stale-host", mode: "ui" });
+    connectDevice(deviceId, { host: "stale-host", mode: "ui" });
 
     expect(listSystemPresence().map((entry) => entry.deviceId)).toContain(deviceId);
 
