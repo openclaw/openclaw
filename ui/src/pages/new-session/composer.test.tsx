@@ -12,7 +12,7 @@ import {
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
-import { createNewSessionComposerTextarea } from "./composer-controller.ts";
+import { createNewSessionComposerTextarea } from "./composer-textarea.ts";
 import {
   composerContext,
   renderComposer,

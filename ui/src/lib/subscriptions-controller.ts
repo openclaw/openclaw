@@ -10,11 +10,7 @@ type SourceEntry<T> = {
   frame: number | undefined;
 };
 
-/**
- * Owns subscriptions whose sources can arrive or change after connection.
- * Source identity is checked before every render and all cleanup follows the
- * host lifecycle, so consumers do not need connected/updated retry loops.
- */
+/** Adapts dynamic subscriptions to the sidebar host until it adopts Solid lifetimes. */
 export class SubscriptionsController implements SolidController {
   private readonly entries: SourceEntry<unknown>[] = [];
   private connected = false;
@@ -163,11 +159,8 @@ export class SubscriptionsController implements SolidController {
     entry.source = undefined;
     const cleanup = entry.cleanup;
     entry.cleanup = undefined;
-    if (!cleanup) {
-      return;
-    }
     try {
-      cleanup();
+      cleanup?.();
     } catch (error) {
       console.error("[openclaw] subscription cleanup failed", error);
     }
