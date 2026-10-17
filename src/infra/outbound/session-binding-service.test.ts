@@ -4,6 +4,8 @@ import {
   type ConversationBindingInspection,
 } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeStore } from "../../plugin-sdk/runtime-store.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -15,6 +17,7 @@ import {
   getSessionBindingService,
   isSessionBindingError,
   registerSessionBindingAdapter,
+  registerSessionBindingAdapterV2,
   unregisterSessionBindingAdapter,
   type SessionBindingAdapter,
   type SessionBindingBindInput,
@@ -166,6 +169,113 @@ describe("session binding service", () => {
       process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
     await tempDirs.cleanup();
+  });
+
+  it.each(["unbind", "bind"] as const)(
+    "runs %s in the registering plugin instance",
+    async (operation) => {
+      const runtime = createPluginRuntimeStore<{ ready: true }>({
+        key: "session-binding-owner-test",
+        errorMessage: "Fake channel runtime not initialized",
+      });
+      const channelInstance = new PluginInstance("fake-channel");
+      const callerInstance = new PluginInstance("other-plugin");
+      const ref = conversation("adapter-chat");
+      const input = bindInput(ref, { targetSessionKey: "agent:main:bound" });
+      const record = createRecord(input);
+
+      try {
+        channelInstance.run(() => {
+          runtime.setRuntime({ ready: true });
+          registerSessionBindingAdapterV2({
+            ...adapter({
+              bind: async (next) => {
+                runtime.getRuntime();
+                return createRecord(next);
+              },
+              unbind: async () => {
+                runtime.getRuntime();
+                return [record];
+              },
+              listBySession: () => [record],
+              resolveByConversation: () => record,
+            }),
+            version: 2,
+            assertCurrent: () => {},
+            capabilities: { placements: ["current"] },
+            listBySessionAsync: async () => [record],
+            resolveByConversationAsync: async () => record,
+            inspectByConversationAsync: async () => record,
+            inspectByConversationsAsync: async (refs) => ({
+              bindings: refs.map(() => record),
+              assertCurrent: () => {},
+            }),
+            touchAsync: async () => {},
+          });
+        });
+
+        const result =
+          operation === "unbind"
+            ? callerInstance.run(() =>
+                service.unbind({
+                  bindingId: record.bindingId,
+                  scope: ref,
+                  reason: "manual",
+                }),
+              )
+            : callerInstance.run(() => service.bind(input));
+        await expect(result).resolves.toEqual(operation === "unbind" ? [record] : record);
+      } finally {
+        await callerInstance.dispose();
+        await channelInstance.dispose();
+      }
+    },
+  );
+
+  it("unregisters an instance-bound adapter by its original object", async () => {
+    const channelInstance = new PluginInstance("fake-channel");
+    const owner = adapter();
+
+    try {
+      channelInstance.run(() => registerSessionBindingAdapter(owner));
+      expect(service.getCapabilities(owner)).toMatchObject({ adapterAvailable: true });
+
+      unregister(owner);
+
+      expect(service.getCapabilities(owner)).toEqual(unavailableCapabilities);
+    } finally {
+      await channelInstance.dispose();
+    }
+  });
+
+  it("runs adapters registered outside a plugin instance in the caller plugin instance", async () => {
+    const runtime = createPluginRuntimeStore<{ owner: string }>({
+      key: "outside-instance-session-binding-adapter-test",
+      errorMessage: "Outside-instance adapter runtime not initialized",
+    });
+    const callerInstance = new PluginInstance("caller-plugin");
+    let observedOwner: string | undefined;
+    const scope = conversation("adapter-chat");
+    register({
+      unbind: async () => {
+        observedOwner = runtime.getRuntime().owner;
+        return [];
+      },
+    });
+
+    try {
+      await callerInstance.run(async () => {
+        runtime.setRuntime({ owner: "caller-plugin" });
+        await service.unbind({
+          bindingId: "binding-1",
+          scope,
+          reason: "manual",
+        });
+      });
+      expect(observedOwner).toBe("caller-plugin");
+    } finally {
+      await callerInstance.dispose();
+    }
   });
 
   it.each([false, true])(
