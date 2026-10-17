@@ -42,6 +42,21 @@ describe("formatPluginLine", () => {
     expect(output).toContain("bundle capabilities: skills, mcpServers");
   });
 
+  it("sanitizes manifest display metadata in verbose output", () => {
+    const output = formatPluginLine(
+      createPluginRecord({
+        id: "evil",
+        name: "Evil \u001B[31mRED\u0007",
+        version: "1.0.0\u001B[1m",
+      }),
+    );
+
+    expect(output).toContain("Evil RED");
+    expect(output).toContain("version: 1.0.0");
+    expect(output).not.toContain("\u001B");
+    expect(output).not.toContain("\u0007");
+  });
+
   it("sanitizes activation reasons in verbose output", () => {
     const output = formatPluginLine(
       createPluginRecord({

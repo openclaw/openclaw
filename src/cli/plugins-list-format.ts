@@ -21,7 +21,7 @@ export function formatPluginStatus(
 }
 
 export function formatPluginLine(plugin: PluginRecord): string {
-  const name = theme.command(plugin.name || plugin.id);
+  const name = theme.command(sanitizeTerminalText(plugin.name || plugin.id));
   const idSuffix = plugin.name && plugin.name !== plugin.id ? theme.muted(` (${plugin.id})`) : "";
   const format = plugin.format ?? "openclaw";
 
@@ -38,7 +38,7 @@ export function formatPluginLine(plugin: PluginRecord): string {
     parts.push(`  bundle capabilities: ${plugin.bundleCapabilities.join(", ")}`);
   }
   if (plugin.version) {
-    parts.push(`  version: ${plugin.version}`);
+    parts.push(`  version: ${sanitizeTerminalText(plugin.version)}`);
   }
   for (const [label, value] of [
     ["activated", plugin.activated],
