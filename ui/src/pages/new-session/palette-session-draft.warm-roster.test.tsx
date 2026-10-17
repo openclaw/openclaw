@@ -21,7 +21,7 @@ class WarmRosterHost {
   readonly querySelector = this.element.querySelector.bind(this.element);
   readonly querySelectorAll = this.element.querySelectorAll.bind(this.element);
   private publish = () => {};
-  readonly requestUpdate = () => this.publish();
+  private readonly onDraftChange = () => this.publish();
   private readonly unmount: () => void;
   readonly placementReady = createDeferred();
   readonly context: ApplicationContext;
@@ -29,7 +29,7 @@ class WarmRosterHost {
     this.element,
     () => ({ context: this.context, open: true }),
     {
-      changed: this.requestUpdate,
+      changed: this.onDraftChange,
       updateComplete: () => this.updateComplete,
       onClose: () => undefined,
     },
@@ -59,9 +59,9 @@ class WarmRosterHost {
             context.agentIdentity,
             context.sessions,
             context.config,
-          ].map((source) => source.subscribe(this.requestUpdate));
+          ].map((source) => source.subscribe(this.onDraftChange));
           this.draft.connect();
-          this.requestUpdate();
+          this.onDraftChange();
           return () => {
             this.publish = () => {};
             stops.forEach((stop) => stop());
