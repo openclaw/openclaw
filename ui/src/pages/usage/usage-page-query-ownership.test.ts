@@ -6,6 +6,9 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import {
+  createUsagePageFixture,
+  settleUsageTimers,
+  textOf,
   cacheSnapshot,
   cleanupUsagePageTest,
   contextWithClient,
@@ -118,8 +121,7 @@ describe("Usage query failure ownership", () => {
         );
 
         oldReply.resolve(original);
-        await vi.advanceTimersByTimeAsync(0);
-        await page.updateComplete;
+        await settleUsageTimers(page);
         expect.soft(page.textContent).not.toContain("Old query row");
         await vi.advanceTimersByTimeAsync(400);
         const query = request.mock.calls.findLast(([method]) => method === "sessions.usage")?.[1];
@@ -149,8 +151,7 @@ describe("Usage query failure ownership", () => {
             },
           ],
         });
-        await vi.advanceTimersByTimeAsync(0);
-        await page.updateComplete;
+        await settleUsageTimers(page);
         expect(page.textContent).toContain("New query row");
         expect(page.textContent).not.toContain("Old query row");
         expect(refreshButton(page).disabled).toBe(false);
@@ -161,8 +162,7 @@ describe("Usage query failure ownership", () => {
           phase = "initial";
           select.value = "";
           select.dispatchEvent(new Event("change", { bubbles: true }));
-          await vi.advanceTimersByTimeAsync(0);
-          await page.updateComplete;
+          await settleUsageTimers(page);
           expect(
             request.mock.calls.findLast(([method]) => method === "sessions.usage")?.[1],
           ).not.toHaveProperty("creatorKey");
@@ -217,12 +217,12 @@ describe("Usage query failure ownership", () => {
         }
         throw new Error(`Unexpected Usage request: ${method}`);
       });
-      const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
+      const { page } = await createUsagePageFixture(request);
       await preloadUsage(page);
       expect(page.textContent).toContain("Original query row");
       expect(page.textContent).toContain("QA Provider Plan");
-      expect(page.querySelector(".cost-window-card--range")?.textContent).toContain("$1");
-      const originalRange = page.querySelector(".cost-window-range-label")?.textContent?.trim();
+      expect(textOf(page, ".cost-window-card--range")).toContain("$1");
+      const originalRange = textOf(page, ".cost-window-range-label")?.trim();
       const originalValue = page
         .querySelector(".cost-window-card--range .cost-window-card__value")
         ?.textContent?.trim();
@@ -239,11 +239,8 @@ describe("Usage query failure ownership", () => {
       } else {
         refreshButton(page).click();
       }
-      await vi.advanceTimersByTimeAsync(400);
-      await page.updateComplete;
-      expect(page.querySelector(".usage-callout.danger")?.textContent).toContain(
-        "QA usage temporarily unavailable",
-      );
+      await settleUsageTimers(page, 400);
+      expect(textOf(page, ".usage-callout.danger")).toContain("QA usage temporarily unavailable");
       expect(refreshButton(page).disabled).toBe(false);
       expect(page.textContent).toContain("QA Provider Plan");
       const query = request.mock.calls.findLast(([method]) => method === "sessions.usage")?.[1];
@@ -252,7 +249,7 @@ describe("Usage query failure ownership", () => {
           ? { startDate: "2026-07-01", endDate: "2026-07-01" }
           : { startDate: "2026-07-09", endDate: "2026-08-07" },
       );
-      const failedRange = page.querySelector(".cost-window-range-label")?.textContent?.trim();
+      const failedRange = textOf(page, ".cost-window-range-label")?.trim();
       const failedValue = page
         .querySelector(".cost-window-card--range .cost-window-card__value")
         ?.textContent?.trim();
@@ -268,14 +265,13 @@ describe("Usage query failure ownership", () => {
 
       phase = "recovered";
       refreshButton(page).click();
-      await vi.advanceTimersByTimeAsync(0);
-      await page.updateComplete;
+      await settleUsageTimers(page);
       expect(page.querySelector(".usage-callout.danger")).toBeNull();
       expect(page.textContent).toContain("Recovered query row");
-      expect(page.querySelector(".cost-window-card--range")?.textContent).toContain("$1");
+      expect(textOf(page, ".cost-window-card--range")).toContain("$1");
       expect(page.textContent).toContain("QA Provider Plan");
       if (change === "dates") {
-        const recoveredRange = page.querySelector(".cost-window-range-label")?.textContent?.trim();
+        const recoveredRange = textOf(page, ".cost-window-range-label")?.trim();
         expect(recoveredRange).toBeTruthy();
         expect(recoveredRange).not.toBe(originalRange);
       }

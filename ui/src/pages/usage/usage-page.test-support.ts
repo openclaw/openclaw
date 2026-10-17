@@ -1,5 +1,6 @@
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { expect, vi } from "vitest";
+import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import { buildUsageOverview } from "../../../../src/shared/usage-overview.js";
 import type { UsageOverviewOptions } from "../../../../src/shared/usage-types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -30,6 +31,32 @@ export type TestUsagePage = Pick<
 };
 
 const pageCleanups = new Set<() => void>();
+
+export async function createUsagePageFixture(
+  request: (...args: never[]) => unknown,
+  renderView = true,
+) {
+  const client = { request } as unknown as GatewayBrowserClient;
+  const context = contextWithClient(client);
+  const page = await createPage(client, renderView, context);
+  return { client, context, page };
+}
+
+export async function settleUsageTimers(page: TestUsagePage, milliseconds = 0) {
+  await vi.advanceTimersByTimeAsync(milliseconds);
+  await page.updateComplete;
+}
+
+export function usageCalls<T extends readonly unknown[]>(
+  request: { mock: { calls: T[] } },
+  method = "sessions.usage",
+) {
+  return request.mock.calls.filter(([name]) => name === method);
+}
+
+export function textOf(root: Pick<ParentNode, "querySelector">, selector: string) {
+  return root.querySelector(selector)?.textContent;
+}
 
 type UsagePublicationFixture = {
   agentId?: string;
@@ -327,17 +354,11 @@ export function cacheSnapshot(status: "fresh" | "partial" | "stale" | "refreshin
     staleFiles: status === "stale" ? 1 : 0,
   };
   const totals = {
+    ...createEmptyCostUsageTotals(),
     input: 100,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
     totalTokens: 100,
     totalCost: 1,
     inputCost: 1,
-    outputCost: 0,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
-    missingCostEntries: 0,
   };
   return {
     result: {

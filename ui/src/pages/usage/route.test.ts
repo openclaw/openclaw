@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { createRouter } from "@openclaw/uirouter";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import {
@@ -14,17 +15,11 @@ import type { UsageRouteData } from "./types.ts";
 
 const usageMethods = ["sessions.usage", "usage.status"];
 const totals = {
+  ...createEmptyCostUsageTotals(),
   input: 100,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
   totalTokens: 100,
   totalCost: 1,
   inputCost: 1,
-  outputCost: 0,
-  cacheReadCost: 0,
-  cacheWriteCost: 0,
-  missingCostEntries: 0,
 };
 const payload = {
   updatedAt: 1,

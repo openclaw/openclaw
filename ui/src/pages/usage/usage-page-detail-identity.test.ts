@@ -3,13 +3,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
+  createUsagePageFixture,
+  usageCalls,
+  textOf,
   cacheSnapshot,
   cleanupUsagePageTest,
-  contextWithClient,
   contextWeight,
-  createPage,
   focusDocument,
   preloadUsage,
   refreshButton,
@@ -81,9 +81,7 @@ describe("UsagePage detail identity", () => {
         }
         return { providers: [] };
       });
-      const client = { request } as unknown as GatewayBrowserClient;
-      const context = contextWithClient(client);
-      const page = await createPage(client, true, context);
+      const { context, page } = await createUsagePageFixture(request);
       await preloadUsage(page);
       page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
       await vi.waitFor(() => expect(page.querySelectorAll(".session-log-entry")).toHaveLength(3));
@@ -114,9 +112,7 @@ describe("UsagePage detail identity", () => {
           )
           .toEqual(series.map((_, index) => `${sessionId} reply ${index + 1}`));
         expect.soft(page.querySelector(".timeseries-summary__range")).toBeNull();
-        expect
-          .soft(page.querySelector(".session-logs-header-count")?.textContent)
-          .not.toContain("timeline filtered");
+        expect.soft(textOf(page, ".session-logs-header-count")).not.toContain("timeline filtered");
       } finally {
         drag.end();
       }
@@ -163,9 +159,7 @@ describe("UsagePage detail identity", () => {
         }
         return { providers: [] };
       });
-      const client = { request } as unknown as GatewayBrowserClient;
-      const context = contextWithClient(client);
-      const page = await createPage(client, true, context);
+      const { context, page } = await createUsagePageFixture(request);
       await preloadUsage(page);
       page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
       await vi.waitFor(() => expect(page.textContent).toContain("Original turn"));
@@ -190,9 +184,7 @@ describe("UsagePage detail identity", () => {
         await vi.waitFor(() => expect(page.read().data.loading).toBe(false));
       }
       await vi.waitFor(() =>
-        expect(page.querySelector(".session-bar-selection")?.textContent).toContain(
-          "Replacement session",
-        ),
+        expect(textOf(page, ".session-bar-selection")).toContain("Replacement session"),
       );
       expect.soft(page.usageSelectedSessions).toEqual(["global"]);
       expect.soft(page.read().detail.timeSeries).toBeNull();
@@ -266,16 +258,14 @@ describe("UsagePage detail identity", () => {
         }
         return { providers: [] };
       });
-      const client = { request } as unknown as GatewayBrowserClient;
-      const context = contextWithClient(client);
-      const page = await createPage(client, true, context);
+      const { context, page } = await createUsagePageFixture(request);
       await preloadUsage(page);
       page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
       await vi.waitFor(() => expect(page.textContent).toContain("Retained turn"));
       dragTimelineRange(page).end();
       await page.updateComplete;
       expect(page.querySelectorAll(".session-log-entry")).toHaveLength(2);
-      const range = page.querySelector(".timeseries-summary__range")?.textContent;
+      const range = textOf(page, ".timeseries-summary__range");
       const timeSeries = page.read().detail.timeSeries;
       const logs = page.read().detail.sessionLogs;
       label = "Refreshed summary";
@@ -287,29 +277,23 @@ describe("UsagePage detail identity", () => {
         context.publishUsage({ usageUpdatedAt: 1 });
         await vi.waitFor(() => expect(page.read().data.loading).toBe(false));
       }
-      await vi.waitFor(() =>
-        expect(page.querySelector(".session-bar-selection")?.textContent).toContain(label),
-      );
+      await vi.waitFor(() => expect(textOf(page, ".session-bar-selection")).toContain(label));
       await vi.waitFor(() => expect(page.read().detail.timeSeriesLoading).toBe(false));
       await page.updateComplete;
-      expect(page.querySelector(".session-bar-selection")?.textContent).toContain(label);
+      expect(textOf(page, ".session-bar-selection")).toContain(label);
       await vi.waitFor(() =>
         expect(page.read().data.selectedSession?.usage?.totalTokens).toBe(350),
       );
-      expect(page.querySelector(".session-detail-stats strong")?.textContent).toBe("200");
+      expect(textOf(page, ".session-detail-stats strong")).toBe("200");
       expect(page.usageSelectedSessions).toEqual(["global"]);
       expect(page.read().detail.timeSeries).toEqual(timeSeries);
       expect(page.read().detail.sessionLogs).toEqual(logs);
       expect(page.querySelectorAll(".session-log-entry")).toHaveLength(2);
-      expect(page.querySelector(".timeseries-summary__range")?.textContent).toBe(range);
-      const summaryReads = request.mock.calls.filter(
-        ([method]) => method === "sessions.usage",
-      ).length;
+      expect(textOf(page, ".timeseries-summary__range")).toBe(range);
+      const summaryReads = usageCalls(request).length;
       context.publishUsage({ usageUpdatedAt: 2 });
       await vi.waitFor(() => expect(page.read().data.loading).toBe(false));
-      expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(
-        summaryReads + 1,
-      );
+      expect(usageCalls(request)).toHaveLength(summaryReads + 1);
       for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
         expect(
           request.mock.calls.filter(([name]) => name === method),
@@ -321,7 +305,7 @@ describe("UsagePage detail identity", () => {
         .click();
       await page.updateComplete;
       expect(page.querySelector(".session-detail-indicator")).toBeNull();
-      expect(page.querySelector(".session-detail-stats strong")?.textContent).toBe("350");
+      expect(textOf(page, ".session-detail-stats strong")).toBe("350");
     },
   );
   it.each([
@@ -354,9 +338,7 @@ describe("UsagePage detail identity", () => {
         }
         return { providers: [], logs: [], points: [] };
       });
-      const client = { request } as unknown as GatewayBrowserClient;
-      const context = contextWithClient(client);
-      const page = await createPage(client, true, context);
+      const { page } = await createUsagePageFixture(request);
       await preloadUsage(page);
       page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
       await vi.waitFor(() => expect(page.read().detail.context.loading).toBe(false));
@@ -366,9 +348,7 @@ describe("UsagePage detail identity", () => {
         expect
           .soft(page.read().detail.context.status.error)
           .toBe("These context details are out of date. Refresh usage and try again.");
-        expect
-          .soft(page.querySelector(".context-details-panel")?.textContent)
-          .not.toContain(report);
+        expect.soft(textOf(page, ".context-details-panel")).not.toContain(report);
       } else {
         expect(page.read().detail.context.weight).toEqual(contextWeight(report));
         expect(page.read().detail.context.status.error).toBeNull();

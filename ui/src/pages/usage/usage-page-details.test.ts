@@ -2,18 +2,19 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { SessionsUsageResult } from "../../api/types.ts";
 import * as downloads from "../../lib/download.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { selectUsageExport } from "./export-menu.test-support.ts";
 import type { UsageSessionEntry, UsageRouteData } from "./types.ts";
 import {
+  createUsagePageFixture,
+  usageCalls,
+  textOf,
   cacheSnapshot,
   cleanupUsagePageTest,
-  contextWithClient,
   contextWeight,
-  createPage,
   createPendingUsageRouteData,
   focusDocument,
   preloadUsage,
@@ -45,7 +46,7 @@ describe("UsagePage detail requests", () => {
           }
         : { providers: [], points: [], logs: [] },
     );
-    const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
+    const { page } = await createUsagePageFixture(request);
     await preloadUsage(page);
     const settle = async () => {
       await waitForFast(() => expect(page.usageLoading).toBe(false));
@@ -71,16 +72,12 @@ describe("UsagePage detail requests", () => {
     await changePage("Next");
     compare("Comparison 51");
     await settle();
-    expect(page.querySelector(".session-bars .session-bar-title")?.textContent).toBe(
-      "Comparison 51",
-    );
+    expect(textOf(page, ".session-bars .session-bar-title")).toBe("Comparison 51");
     compare("Comparison 53", true);
     await settle();
     expect(comparisons()).toEqual(["Comparison 51", "Comparison 52", "Comparison 53"]);
     await changePage("Previous");
-    expect(page.querySelector(".session-bars .session-bar-title")?.textContent).toBe(
-      "Comparison 1",
-    );
+    expect(textOf(page, ".session-bars .session-bar-title")).toBe("Comparison 1");
     expect(comparisons()).toEqual(["Comparison 51", "Comparison 52", "Comparison 53"]);
 
     revision++;
@@ -89,9 +86,7 @@ describe("UsagePage detail requests", () => {
     );
     refreshButton(page).click();
     await settle();
-    expect(page.querySelector(".session-bars--selected .session-bar-value")?.textContent).toBe(
-      "350",
-    );
+    expect(textOf(page, ".session-bars--selected .session-bar-value")).toBe("350");
 
     revision++;
     sessions = sessions.filter((session) => session.label !== "Comparison 52");
@@ -106,7 +101,7 @@ describe("UsagePage detail requests", () => {
       )!
       .click();
     await settle();
-    expect(page.querySelector(".session-detail-title")?.textContent).toContain("Comparison 53");
+    expect(textOf(page, ".session-detail-title")).toContain("Comparison 53");
 
     const input = page.querySelector<HTMLInputElement>(".usage-query-input")!;
     input.value = "label:missing";
@@ -152,7 +147,7 @@ describe("UsagePage detail requests", () => {
         }
         return { providers: [], points: [] };
       });
-      const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
+      const { page } = await createUsagePageFixture(request);
       await preloadUsage(page);
       page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
       await waitForFast(() => expect(page.textContent).toContain(`${agentId} turn`));
@@ -200,7 +195,7 @@ describe("UsagePage detail requests", () => {
       }
       return params?.selectedSessions ? pending : { ...snapshot.result, sessions };
     });
-    const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
+    const { page } = await createUsagePageFixture(request);
     await preloadUsage(page);
     page.querySelector<HTMLButtonElement>('.session-bar-selection[aria-label="First"]')!.click();
     await page.updateComplete;
@@ -210,7 +205,7 @@ describe("UsagePage detail requests", () => {
       expect(page.read().detail.context.status.error).toContain("out of date"),
     );
     expect(page.usageSelectedSessions).toEqual(["agent:main:Second"]);
-    expect(page.querySelector(".session-detail-title")?.textContent).toContain("Second");
+    expect(textOf(page, ".session-detail-title")).toContain("Second");
     expect(page.textContent).not.toContain("Wrong identity");
   });
 
@@ -253,9 +248,7 @@ describe("UsagePage detail requests", () => {
             })),
           };
     });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const context = contextWithClient(client);
-    const page = await createPage(client, true, context);
+    const { context, page } = await createUsagePageFixture(request);
     await preloadUsage(page);
     context.setGatewaySnapshot({ suspensionPhase: "draining" });
     page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
@@ -266,7 +259,7 @@ describe("UsagePage detail requests", () => {
     await page.updateComplete;
     expect(page.querySelector(".usage-detail-error--timeline")).toBeNull();
     expect(page.querySelector(".usage-detail-error--conversation")).toBeNull();
-    expect(page.querySelector(".session-logs-compact")?.textContent).toContain("Loading");
+    expect(textOf(page, ".session-logs-compact")).toContain("Loading");
 
     unavailable = false;
     context.setGatewaySnapshot({ suspensionPhase: "accepting" });
@@ -295,9 +288,7 @@ describe("UsagePage detail requests", () => {
         ? { logs: [{ timestamp: 1, role: "user", content: "Recovered after late rejection" }] }
         : { points: [{ timestamp: 1 }] };
     });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const context = contextWithClient(client);
-    const page = await createPage(client, false, context);
+    const { context, page } = await createUsagePageFixture(request, false);
     page
       .read()
       .callbacks.details.onSelectSession("agent:main:detail", false, ["agent:main:detail"]);
@@ -344,9 +335,7 @@ describe("UsagePage detail requests", () => {
       }
       return params.key === "agent:main:first" ? first.promise : second.promise;
     });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const context = contextWithClient(client);
-    const page = await createPage(client, false, context);
+    const { context, page } = await createUsagePageFixture(request, false);
     page
       .read()
       .callbacks.details.onSelectSession("agent:main:first", false, [
@@ -390,9 +379,7 @@ describe("UsagePage detail requests", () => {
         ? { logs: [{ timestamp: 1, role: "user", content: "Recovered" }] }
         : { points: [{ timestamp: 1 }] };
     });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const context = contextWithClient(client);
-    const page = await createPage(client, false, context);
+    const { context, page } = await createUsagePageFixture(request, false);
     page
       .read()
       .callbacks.details.onSelectSession("agent:main:detail", false, ["agent:main:detail"]);
@@ -444,9 +431,7 @@ describe("UsagePage detail requests", () => {
         return { providers: [], logs: [], points: [] };
       },
     );
-    const client = { request } as unknown as GatewayBrowserClient;
-    const context = contextWithClient(client);
-    const page = await createPage(client, true, context);
+    const { context, page } = await createUsagePageFixture(request);
     await preloadUsage(page);
     const initial = request.mock.calls.find(([method]) => method === "sessions.usage")!;
     expect(initial[1]).toMatchObject({ includeContextWeight: false });
@@ -456,9 +441,7 @@ describe("UsagePage detail requests", () => {
       page.querySelectorAll<HTMLButtonElement>(".session-bar-selection")[index]!.click();
     };
     selectSession(0);
-    await waitForFast(() =>
-      expect(page.querySelector(".context-details-panel")?.textContent).toContain("Loading"),
-    );
+    await waitForFast(() => expect(textOf(page, ".context-details-panel")).toContain("Loading"));
     const firstContext = request.mock.calls.find(
       ([method, params]) => method === "sessions.usage" && params?.key === keys[0],
     )!;
@@ -483,16 +466,10 @@ describe("UsagePage detail requests", () => {
     });
     second.reject(new Error("context unavailable"));
     await waitForFast(() =>
-      expect(page.querySelector(".usage-detail-error--context")?.textContent).toContain(
-        "context unavailable",
-      ),
+      expect(textOf(page, ".usage-detail-error--context")).toContain("context unavailable"),
     );
-    expect(page.querySelector(".context-details-panel")?.textContent).not.toContain(
-      "stale-context",
-    );
-    expect(page.querySelector(".context-details-panel")?.textContent).not.toContain(
-      "No context data",
-    );
+    expect(textOf(page, ".context-details-panel")).not.toContain("stale-context");
+    expect(textOf(page, ".context-details-panel")).not.toContain("No context data");
 
     request.mockImplementation(async (method, params) =>
       method === "sessions.usage" && params?.key === keys[1]
@@ -510,26 +487,18 @@ describe("UsagePage detail requests", () => {
     context.setGatewaySnapshot({ suspensionPhase: "draining" });
     context.setGatewaySnapshot({ suspensionPhase: "accepting" });
     await waitForFast(() =>
-      expect(page.querySelector(".context-details-panel")?.textContent).toContain(
-        "selected-context",
-      ),
+      expect(textOf(page, ".context-details-panel")).toContain("selected-context"),
     );
     expect(page.querySelector(".usage-detail-error--context")).toBeNull();
     expect(
       request.mock.calls.filter(([method, params]) => method === "sessions.usage" && !params?.key),
     ).toHaveLength(3);
-    const contextCalls = request.mock.calls.filter(
-      ([method]) => method === "sessions.usage",
-    ).length;
+    const contextCalls = usageCalls(request).length;
     selectSession(2);
     await waitForFast(() =>
-      expect(page.querySelector(".context-details-panel")?.textContent).toContain(
-        "No context data",
-      ),
+      expect(textOf(page, ".context-details-panel")).toContain("No context data"),
     );
-    expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(
-      contextCalls + 2,
-    );
+    expect(usageCalls(request)).toHaveLength(contextCalls + 2);
   });
 
   it("refreshes selected details and clears context when its report disappears", async () => {
@@ -586,38 +555,32 @@ describe("UsagePage detail requests", () => {
       }
       return { providers: [] };
     });
-    const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
+    const { page } = await createUsagePageFixture(request);
     await preloadUsage(page);
     page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
-    await waitForFast(() =>
-      expect(page.querySelector(".context-details-panel")?.textContent).toContain(report),
-    );
-    expect(page.querySelector(".timeseries-summary")?.textContent).toContain("200");
-    expect(page.querySelector(".session-log-content")?.textContent).toBe("2 completed turns");
+    await waitForFast(() => expect(textOf(page, ".context-details-panel")).toContain(report));
+    expect(textOf(page, ".timeseries-summary")).toContain("200");
+    expect(textOf(page, ".session-log-content")).toBe("2 completed turns");
 
     turns = 3;
     report = "refreshed-context";
     refreshButton(page).click();
-    await waitForFast(() =>
-      expect(page.querySelector(".context-details-panel")?.textContent).toContain(report),
-    );
-    expect(page.querySelector(".session-detail-stats")?.textContent).toContain("300");
-    expect.soft(page.querySelector(".timeseries-summary")?.textContent).toContain("300");
-    expect.soft(page.querySelector(".session-log-content")?.textContent).toBe("3 completed turns");
+    await waitForFast(() => expect(textOf(page, ".context-details-panel")).toContain(report));
+    expect(textOf(page, ".session-detail-stats")).toContain("300");
+    expect.soft(textOf(page, ".timeseries-summary")).toContain("300");
+    expect.soft(textOf(page, ".session-log-content")).toBe("3 completed turns");
     const contextRequests = request.mock.calls.filter(
       ([method, params]) => method === "sessions.usage" && params?.key,
     ).length;
     available = false;
     refreshButton(page).click();
     await waitForFast(() =>
-      expect(page.querySelector(".context-details-panel")?.textContent).toContain(
-        "No context data",
-      ),
+      expect(textOf(page, ".context-details-panel")).toContain("No context data"),
     );
     expect(
       request.mock.calls.filter(([method, params]) => method === "sessions.usage" && params?.key),
     ).toHaveLength(contextRequests + 1);
-    expect(page.querySelector(".context-details-panel")?.textContent).not.toContain(report);
+    expect(textOf(page, ".context-details-panel")).not.toContain(report);
   });
 
   it("exports every matching canonical row with context and cancels when scope changes", async () => {
@@ -639,7 +602,7 @@ describe("UsagePage detail requests", () => {
       return { providers: [] };
     });
     const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
-    const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
+    const { page } = await createUsagePageFixture(request);
     await preloadUsage(page);
     const query = page.querySelector<HTMLInputElement>(".usage-query-input")!;
     query.value = "label:Included";
@@ -701,7 +664,7 @@ describe("UsagePage detail requests", () => {
       }
       return cacheSnapshot("fresh").result;
     });
-    const page = await createPage({ request } as unknown as GatewayBrowserClient);
+    const { page } = await createUsagePageFixture(request, false);
     const gateway = page.context.gateway;
     page.routeData = {
       ...createPendingUsageRouteData(gateway, "2026-05-14"),
@@ -720,7 +683,7 @@ describe("UsagePage detail requests", () => {
       await vi.advanceTimersByTimeAsync(5_000 * 2 ** attempt);
     }
 
-    expect(request.mock.calls.filter(([method]) => method === "usage.status")).toHaveLength(3);
+    expect(usageCalls(request, "usage.status")).toHaveLength(3);
     expect(page.providerUsageStalled).toBe(true);
 
     rejectProviderUsage = false;

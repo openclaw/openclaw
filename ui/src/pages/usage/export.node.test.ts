@@ -4,12 +4,41 @@ import { buildUsageOverview } from "../../../../src/shared/usage-overview.js";
 import type { SessionUsageEntry, SessionsUsageResult } from "../../../../src/shared/usage-types.js";
 import * as downloads from "../../lib/download.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
+import type { SessionUsageQuery } from "../../lib/sessions/usage.ts";
 import * as toasts from "../../lib/toast.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createUsageExportRequest } from "./export.ts";
 
 afterEach(() => vi.restoreAllMocks());
+
+function setupExport(
+  request: Parameters<typeof createTestGatewayClient>[0],
+  query: () => Partial<SessionUsageQuery> = () => ({}),
+) {
+  const { gateway } = createApplicationGateway();
+  Object.assign(gateway.snapshot, { client: createTestGatewayClient(request), phase: "connected" });
+  const binding = new GatewayPageBinding(() => {}, { getGateway: () => gateway });
+  binding.connect();
+  const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
+  const toast = vi.spyOn(toasts, "showToast").mockReturnValue(true);
+  const exporter = createUsageExportRequest(
+    () => {},
+    binding,
+    () => ({
+      startDate: "2026-10-01",
+      endDate: "2026-10-01",
+      scope: "instance",
+      timeZone: "utc",
+      ...query(),
+    }),
+  );
+  return { binding, download, toast, exporter };
+}
+
+function exportTotals() {
+  return { ...createEmptyCostUsageTotals(), input: 100, totalTokens: 100, totalCost: 0.5 };
+}
 
 it.each([
   { format: "json", status: "partial" },
@@ -18,12 +47,7 @@ it.each([
 ] as const)(
   "refuses $status $format exports and allows a complete retry",
   async ({ format, status }) => {
-    const totals = {
-      ...createEmptyCostUsageTotals(),
-      input: 100,
-      totalTokens: 100,
-      totalCost: 0.5,
-    };
+    const totals = exportTotals();
     const result: SessionsUsageResult = {
       updatedAt: 1,
       startDate: "2026-10-01",
@@ -46,25 +70,7 @@ it.each([
       cacheStatus: { status, cachedFiles: 1, pendingFiles: 1, staleFiles: 0 },
     };
     const request = vi.fn(async () => result);
-    const { gateway } = createApplicationGateway();
-    Object.assign(gateway.snapshot, {
-      client: createTestGatewayClient(request),
-      phase: "connected",
-    });
-    const binding = new GatewayPageBinding(() => {}, { getGateway: () => gateway });
-    binding.connect();
-    const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
-    const toast = vi.spyOn(toasts, "showToast").mockReturnValue(true);
-    const exporter = createUsageExportRequest(
-      () => {},
-      binding,
-      () => ({
-        startDate: "2026-10-01",
-        endDate: "2026-10-01",
-        scope: "instance",
-        timeZone: "utc",
-      }),
-    );
+    const { binding, download, toast, exporter } = setupExport(request);
     try {
       await exporter.run(format);
       expect(request).toHaveBeenCalledOnce();
@@ -91,12 +97,7 @@ it.each([
 it.each(["json", "sessions-csv", "daily-csv"] as const)(
   "exports a complete selected session despite an incomplete roster: %s",
   async (format) => {
-    const totals = {
-      ...createEmptyCostUsageTotals(),
-      input: 100,
-      totalTokens: 100,
-      totalCost: 0.5,
-    };
+    const totals = exportTotals();
     const selected: SessionUsageEntry = {
       key: "agent:main:known",
       updatedAt: 1,
@@ -137,27 +138,10 @@ it.each(["json", "sessions-csv", "daily-csv"] as const)(
       endDate: "2026-10-01",
       cacheStatus: { status: "partial", cachedFiles: 1, pendingFiles: 51, staleFiles: 0 },
     }));
-    const { gateway } = createApplicationGateway();
-    Object.assign(gateway.snapshot, {
-      client: createTestGatewayClient(request),
-      phase: "connected",
-    });
-    const binding = new GatewayPageBinding(() => {}, { getGateway: () => gateway });
-    binding.connect();
-    const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
-    const toast = vi.spyOn(toasts, "showToast").mockReturnValue(true);
-    const exporter = createUsageExportRequest(
-      () => {},
-      binding,
-      () => ({
-        startDate: "2026-10-01",
-        endDate: "2026-10-01",
-        scope: "instance",
-        timeZone: "utc",
-        selectedSessions,
-        query,
-      }),
-    );
+    const { binding, download, toast, exporter } = setupExport(request, () => ({
+      selectedSessions,
+      query,
+    }));
     try {
       await exporter.run(format);
       expect(download).toHaveBeenCalledOnce();

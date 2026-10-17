@@ -1,5 +1,6 @@
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
+import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createRecordedCostUsage } from "./test-helpers/recorded-cost.test-support.ts";
@@ -11,6 +12,22 @@ import {
   usageSession,
 } from "./view.test-support.ts";
 import { renderUsage } from "./view.tsx";
+
+function mountUsage(props: UsageProps, container = document.createElement("div")) {
+  mountSolid(() => renderUsage(props), { container });
+  flush();
+  return container;
+}
+
+function mountFixture(
+  data: Partial<UsageProps["data"]>,
+  filters: Partial<UsageProps["filters"]> = {},
+) {
+  const base = createUsageProps();
+  return mountUsage(
+    createUsageProps({ data: { ...base.data, ...data }, filters: { ...base.filters, ...filters } }),
+  );
+}
 
 function insightCard(container: ParentNode, title: string): Element | undefined {
   return Array.from(container.querySelectorAll(".usage-insight-card")).find(
@@ -51,20 +68,18 @@ describe("renderUsage", () => {
       const clearedFilters = { ...props.filters };
       const container = document.createElement("div");
       const [currentFilters, setFilters] = createSignal(props.filters);
-      mountSolid(
-        () =>
-          renderUsage({
-            ...props,
-            get filters() {
-              return currentFilters();
-            },
-            get data() {
-              return { ...props.data, ...projectUsageData(fixture.sessions, currentFilters()) };
-            },
-          }),
-        { container },
+      mountUsage(
+        {
+          ...props,
+          get filters() {
+            return currentFilters();
+          },
+          get data() {
+            return { ...props.data, ...projectUsageData(fixture.sessions, currentFilters()) };
+          },
+        },
+        container,
       );
-      flush();
       for (const { filters, missing, value } of [
         { filters: clearedFilters, missing: true, value: "$0.03" },
         { filters: { ...clearedFilters, ...selected }, missing: false, value: "$0.00" },
@@ -83,14 +98,7 @@ describe("renderUsage", () => {
   );
 
   it("surfaces a provider-usage failure instead of hiding the panel", () => {
-    const container = document.createElement("div");
-    const base = createUsageProps();
-    mountSolid(
-      () =>
-        renderUsage(createUsageProps({ data: { ...base.data, providerUsageUnavailable: true } })),
-      { container },
-    );
-    flush();
+    const container = mountFixture({ providerUsageUnavailable: true });
 
     expect(container.textContent).toContain(
       "Provider usage is unavailable; the last request failed. Refresh to retry.",
@@ -98,27 +106,11 @@ describe("renderUsage", () => {
   });
 
   it("does not fall back to global insights when a query matches no sessions", () => {
-    const container = document.createElement("div");
     const sessions = [usageSession("agent:main:main", "main", "openai")];
-
-    mountSolid(
-      () =>
-        renderUsage(
-          createUsageProps({
-            data: {
-              ...createUsageProps().data,
-              ...projectUsageData(sessions, { query: "missing-session" }),
-            },
-            filters: {
-              ...createUsageProps().filters,
-              query: "missing-session",
-              queryDraft: "missing-session",
-            },
-          }),
-        ),
-      { container },
-    );
-    flush();
+    const container = mountFixture(projectUsageData(sessions, { query: "missing-session" }), {
+      query: "missing-session",
+      queryDraft: "missing-session",
+    });
 
     const providers = insightCard(container, "Top Providers");
     expect(providers?.textContent).toContain("No provider data");
@@ -126,7 +118,6 @@ describe("renderUsage", () => {
   });
 
   it("keeps selected session labels on UTF-16 boundaries", () => {
-    const container = document.createElement("div");
     const label = `${"a".repeat(19)}🚀${"b".repeat(28)}🚀tail`;
     const session = {
       key: "agent:main:emoji",
@@ -134,34 +125,13 @@ describe("renderUsage", () => {
       agentId: "main",
       updatedAt: Date.now(),
       usage: {
+        ...createEmptyCostUsageTotals(),
         input: 1,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
         totalTokens: 1,
-        totalCost: 0,
-        inputCost: 0,
-        outputCost: 0,
-        cacheReadCost: 0,
-        cacheWriteCost: 0,
-        missingCostEntries: 0,
       },
     } satisfies UsageProps["data"]["sessions"][number];
 
-    mountSolid(
-      () =>
-        renderUsage(
-          createUsageProps({
-            data: { ...createUsageProps().data, sessions: [session] },
-            filters: {
-              ...createUsageProps().filters,
-              selectedSessions: [session.key],
-            },
-          }),
-        ),
-      { container },
-    );
-    flush();
+    const container = mountFixture({ sessions: [session] }, { selectedSessions: [session.key] });
 
     expect(container.querySelector(".filter-chip-label")?.textContent).toContain(
       `${"a".repeat(19)}…`,
@@ -182,22 +152,20 @@ describe("renderUsage", () => {
     );
     const container = document.body.appendChild(document.createElement("div"));
     try {
-      mountSolid(
-        () =>
-          renderUsage({
-            ...base,
-            get filters() {
-              return filters();
-            },
-            data: { ...base.data, ...projectUsageData(sessions) },
-            callbacks: {
-              ...base.callbacks,
-              filters: { ...base.callbacks.filters, onQueryDraftChange },
-            },
-          }),
-        { container },
+      mountUsage(
+        {
+          ...base,
+          get filters() {
+            return filters();
+          },
+          data: { ...base.data, ...projectUsageData(sessions) },
+          callbacks: {
+            ...base.callbacks,
+            filters: { ...base.callbacks.filters, onQueryDraftChange },
+          },
+        },
+        container,
       );
-      flush();
       const first = [...container.querySelectorAll(".usage-filter-option")].find(
         (item) => item.getAttribute("aria-label") === "clear",
       )!;
@@ -233,35 +201,29 @@ describe("renderUsage", () => {
   it("updates the existing breakdown when mode and totals change", () => {
     const base = createUsageProps();
     const initial: UsageTotals = {
+      ...createEmptyCostUsageTotals(),
       input: 100,
       output: 20,
-      cacheRead: 0,
-      cacheWrite: 0,
       totalTokens: 120,
       inputCost: 0.8,
       outputCost: 0.2,
-      cacheReadCost: 0,
-      cacheWriteCost: 0,
       totalCost: 1,
-      missingCostEntries: 0,
     };
     const [data, setData] = createSignal({ ...base.data, totals: initial });
     const [display, setDisplay] = createSignal(base.display);
     const container = document.createElement("div");
-    mountSolid(
-      () =>
-        renderUsage({
-          ...base,
-          get data() {
-            return data();
-          },
-          get display() {
-            return display();
-          },
-        }),
-      { container },
+    mountUsage(
+      {
+        ...base,
+        get data() {
+          return data();
+        },
+        get display() {
+          return display();
+        },
+      },
+      container,
     );
-    flush();
     const breakdown = container.querySelector(".cost-breakdown")!;
     expect(breakdown.querySelector(".cost-breakdown-total")?.textContent).toContain("120");
     setDisplay((current) => ({ ...current, chartMode: "cost" }));
@@ -299,20 +261,18 @@ describe("renderUsage", () => {
 
     const [data, setData] = createSignal(props.data);
     const [display, setDisplay] = createSignal(props.display);
-    mountSolid(
-      () =>
-        renderUsage({
-          ...props,
-          get data() {
-            return data();
-          },
-          get display() {
-            return display();
-          },
-        }),
-      { container },
+    mountUsage(
+      {
+        ...props,
+        get data() {
+          return data();
+        },
+        get display() {
+          return display();
+        },
+      },
+      container,
     );
-    flush();
     expect(chartModeButton("Tokens")?.getAttribute("aria-pressed")).toBe("true");
     expect(chartModeButton("Cost")?.getAttribute("aria-pressed")).toBe("false");
     expect(values()).toEqual(["first", "second"]);
@@ -352,28 +312,16 @@ describe("renderUsage", () => {
   });
 
   it("keeps available provider usage visible when refresh stalls", () => {
-    const container = document.createElement("div");
-
-    mountSolid(
-      () =>
-        renderUsage(
-          createUsageProps({
-            data: {
-              ...createUsageProps().data,
-              providerUsage: [
-                {
-                  provider: "openai",
-                  displayName: "OpenAI",
-                  windows: [{ label: "Weekly", usedPercent: 25 }],
-                },
-              ],
-              providerUsageStalled: true,
-            },
-          }),
-        ),
-      { container },
-    );
-    flush();
+    const container = mountFixture({
+      providerUsage: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [{ label: "Weekly", usedPercent: 25 }],
+        },
+      ],
+      providerUsageStalled: true,
+    });
 
     expect(container.querySelector(".usage-callout")?.textContent).toContain(
       "Provider usage did not finish loading",
@@ -384,45 +332,33 @@ describe("renderUsage", () => {
   });
 
   it("renders provider plans, quotas, and billing independently of session usage", () => {
-    const container = document.createElement("div");
-
-    mountSolid(
-      () =>
-        renderUsage(
-          createUsageProps({
-            data: {
-              ...createUsageProps().data,
-              providerUsage: [
-                {
-                  provider: "openrouter",
-                  displayName: "OpenRouter",
-                  plan: "Production",
-                  windows: [{ label: "API key budget", usedPercent: 25 }],
-                  billing: [
-                    {
-                      type: "balance",
-                      label: "Account balance",
-                      amount: 64.5,
-                      unit: "USD",
-                    },
-                    {
-                      type: "budget",
-                      label: "API key budget",
-                      used: 5,
-                      limit: 20,
-                      unit: "USD",
-                    },
-                    { type: "budget", used: 12.5, limit: 20, unit: " jPy " },
-                    { type: "budget", used: 1.5, limit: 3, unit: " Credits " },
-                  ],
-                },
-              ],
+    const container = mountFixture({
+      providerUsage: [
+        {
+          provider: "openrouter",
+          displayName: "OpenRouter",
+          plan: "Production",
+          windows: [{ label: "API key budget", usedPercent: 25 }],
+          billing: [
+            {
+              type: "balance",
+              label: "Account balance",
+              amount: 64.5,
+              unit: "USD",
             },
-          }),
-        ),
-      { container },
-    );
-    flush();
+            {
+              type: "budget",
+              label: "API key budget",
+              used: 5,
+              limit: 20,
+              unit: "USD",
+            },
+            { type: "budget", used: 12.5, limit: 20, unit: " jPy " },
+            { type: "budget", used: 1.5, limit: 3, unit: " Credits " },
+          ],
+        },
+      ],
+    });
 
     const card = container.querySelector(".provider-usage-card");
     expect(card?.textContent).toContain("OpenRouter");
@@ -439,105 +375,75 @@ describe("renderUsage", () => {
   });
 
   it("keeps complete insights and history beyond the visible page", () => {
-    const container = document.createElement("div");
-    const base = createUsageProps();
     const totals: UsageTotals = {
+      ...createEmptyCostUsageTotals(),
       input: 1_000,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
       totalTokens: 1_000,
       totalCost: 10,
       inputCost: 10,
-      outputCost: 0,
-      cacheReadCost: 0,
-      cacheWriteCost: 0,
       missingCostEntries: 1,
     };
-    const visibleDay = {
-      ...totals,
-      missingCostEntries: 0,
-      date: "2026-05-14",
+    const visibleUsage = {
+      ...createEmptyCostUsageTotals(),
       input: 10,
       totalTokens: 10,
       totalCost: 0.1,
       inputCost: 0.1,
     };
+    const visibleDay = { ...visibleUsage, date: "2026-05-14" };
 
-    mountSolid(
-      () =>
-        renderUsage(
-          createUsageProps({
-            data: {
-              ...base.data,
-              totals,
-              costDaily: [
-                {
-                  ...totals,
-                  date: "2026-05-01",
-                  input: 990,
-                  totalTokens: 990,
-                  totalCost: 9.9,
-                  inputCost: 9.9,
-                },
-                visibleDay,
-              ],
-              aggregates: {
-                messages: {
-                  total: 100,
-                  user: 50,
-                  assistant: 50,
-                  toolCalls: 0,
-                  toolResults: 0,
-                  errors: 0,
-                },
-                tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-                byModel: [],
-                byProvider: [],
-                byAgent: [],
-                byChannel: [],
-                daily: [],
+    const container = mountFixture(
+      {
+        totals,
+        costDaily: [
+          {
+            ...totals,
+            date: "2026-05-01",
+            input: 990,
+            totalTokens: 990,
+            totalCost: 9.9,
+            inputCost: 9.9,
+          },
+          visibleDay,
+        ],
+        aggregates: {
+          messages: {
+            total: 100,
+            user: 50,
+            assistant: 50,
+            toolCalls: 0,
+            toolResults: 0,
+            errors: 0,
+          },
+          tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
+          byModel: [],
+          byProvider: [],
+          byAgent: [],
+          byChannel: [],
+          daily: [],
+        },
+        sessions: [
+          {
+            key: "agent:main:visible",
+            agentId: "main",
+            updatedAt: Date.UTC(2026, 4, 14, 12),
+            usage: {
+              ...visibleUsage,
+              dailyBreakdown: [{ ...visibleDay, tokens: 10, cost: 0.1 }],
+              messageCounts: {
+                total: 2,
+                user: 1,
+                assistant: 1,
+                toolCalls: 0,
+                toolResults: 0,
+                errors: 0,
               },
-              sessions: [
-                {
-                  key: "agent:main:visible",
-                  agentId: "main",
-                  updatedAt: Date.UTC(2026, 4, 14, 12),
-                  usage: {
-                    input: 10,
-                    output: 0,
-                    cacheRead: 0,
-                    cacheWrite: 0,
-                    totalTokens: 10,
-                    totalCost: 0.1,
-                    inputCost: 0.1,
-                    outputCost: 0,
-                    cacheReadCost: 0,
-                    cacheWriteCost: 0,
-                    missingCostEntries: 0,
-                    dailyBreakdown: [{ ...visibleDay, tokens: 10, cost: 0.1 }],
-                    messageCounts: {
-                      total: 2,
-                      user: 1,
-                      assistant: 1,
-                      toolCalls: 0,
-                      toolResults: 0,
-                      errors: 0,
-                    },
-                  },
-                },
-              ],
             },
-            filters: {
-              ...base.filters,
-              startDate: "2026-05-01",
-              endDate: "2026-05-14",
-            },
-          }),
-        ),
-      { container },
+          },
+        ],
+      },
+      { startDate: "2026-05-01", endDate: "2026-05-14" },
     );
-    flush();
 
     const messagesValue = container.querySelector(
       ".usage-overview-card .usage-summary-card--hero .usage-summary-value",
@@ -561,48 +467,12 @@ describe("renderUsage", () => {
   });
 
   it("shows the empty state for an all-zero successful response", () => {
-    const zeroTotals = {
-      totalTokens: 0,
-      totalCost: 0,
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      missingCostEntries: 0,
-    };
-    const container = document.createElement("div");
-    mountSolid(
-      () =>
-        renderUsage(
-          createUsageProps({
-            data: {
-              ...createUsageProps().data,
-              // The gateway always returns a totals object, even with no usage.
-              totals: zeroTotals as UsageProps["data"]["totals"],
-            },
-          }),
-        ),
-      { container },
-    );
-    flush();
+    const container = mountFixture({ totals: createEmptyCostUsageTotals() });
     expect(container.querySelector(".usage-empty-state")).not.toBeNull();
   });
 
   it("does not render the empty state under an error callout", () => {
-    const container = document.createElement("div");
-    mountSolid(
-      () =>
-        renderUsage(
-          createUsageProps({
-            data: {
-              ...createUsageProps().data,
-              error: "usage failed",
-            },
-          }),
-        ),
-      { container },
-    );
-    flush();
+    const container = mountFixture({ error: "usage failed" });
     expect(container.querySelector(".usage-callout")).not.toBeNull();
     expect(container.querySelector(".usage-empty-state")).toBeNull();
   });
