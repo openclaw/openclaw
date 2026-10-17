@@ -592,6 +592,7 @@ export function createChatPageState(
     });
   }
 
+  // MCP teardown discovers retained native pane hosts across their component boundary.
   function render() {
     if (pendingCreate()) {
       return mcpAppUnmountGate.render(
