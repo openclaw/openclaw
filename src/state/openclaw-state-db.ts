@@ -130,7 +130,9 @@ function repairDoctorStateDatabase(
   scope: "doctor" | "indexes" | "readability" | "version",
 ): { changes: string[]; warnings: string[] } {
   if (isStatePostgres()) {
-    requireNativeDatabaseFile("postgres", "repair");
+    // The engine owner admits PostgreSQL's catalog; SQLite file repairs do not apply.
+    openOpenClawStateDatabase(options);
+    return { changes: [], warnings: [] };
   }
   const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
@@ -185,7 +187,8 @@ export async function prepareOpenClawStateDatabaseSchema(
   warnings: string[];
 }> {
   if (isStatePostgres()) {
-    requireNativeDatabaseFile("postgres", "repair");
+    openOpenClawStateDatabase(options);
+    return { changes: [], warnings: [] };
   }
   const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
