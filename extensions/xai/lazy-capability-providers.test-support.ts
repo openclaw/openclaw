@@ -16,7 +16,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => {
   throw new Error("Lazy capability metadata must not load the broad agent runtime");
 });
 
-export const runtimeMocks = vi.hoisted(() => ({
+const runtimeMocks = vi.hoisted(() => ({
   generateImage: vi.fn(),
   transcribeAudio: vi.fn(),
   generateVideo: vi.fn(),
@@ -47,6 +47,8 @@ export const runtimeMocks = vi.hoisted(() => ({
   buildVoiceProvider: vi.fn(),
   createVoiceBridge: vi.fn<(request: RealtimeVoiceBridgeCreateRequest) => RealtimeVoiceBridge>(),
 }));
+
+export { runtimeMocks };
 
 vi.mock("./image-generation-provider.js", () => ({
   buildXaiImageGenerationProvider: runtimeMocks.buildImageProvider,

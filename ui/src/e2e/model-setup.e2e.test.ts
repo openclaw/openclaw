@@ -265,6 +265,7 @@ suite.define(() => {
               label: "Ollama",
               hint: "Run open models locally",
               website: "https://ollama.com/download",
+              icon: "https://cdn.simpleicons.org/ollama",
             },
           ],
         });

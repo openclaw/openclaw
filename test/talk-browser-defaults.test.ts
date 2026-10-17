@@ -29,7 +29,8 @@ const mocks = vi.hoisted(() => ({
     mocks.providers.find((provider) => provider.id === id || provider.aliases?.includes(id ?? "")),
 }));
 
-vi.mock("../src/talk/provider-registry.js", () => ({
+vi.mock("../src/talk/provider-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/talk/provider-registry.js")>()),
   canonicalizeRealtimeVoiceProviderId: (id: string | undefined) => {
     const normalized = id?.trim().toLowerCase();
     return mocks.findProvider(normalized)?.id ?? normalized;

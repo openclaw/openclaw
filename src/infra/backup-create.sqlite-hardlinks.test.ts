@@ -127,9 +127,13 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
       expect(archive.verified).toBe(true);
       expect(
         archive.warnings
-          ?.map((warning) => [path.basename(warning), /opaque/iu.test(warning)])
-          .toSorted(),
-      ).toEqual(names.map((name) => [name, true]).toSorted());
+          ?.map<[string, boolean]>((warning) => [path.basename(warning), /opaque/iu.test(warning)])
+          .toSorted(([left], [right]) => left.localeCompare(right)),
+      ).toEqual(
+        names
+          .map<[string, boolean]>((name) => [name, true])
+          .toSorted(([left], [right]) => left.localeCompare(right)),
+      );
       const restored = await restoreBackup(state, archive);
       const asset = expectDefined(
         archive.assets.find((candidate) => candidate.kind === "state"),

@@ -152,7 +152,7 @@ async function rejectedReader(change: string, native: boolean) {
             produced = {
               key: Object.keys(env).find((key) => key.toUpperCase() === ownedKey),
               value: env[originalKey],
-              base: createConfigRuntimeEnvBase(cfg, env)[ownedKey],
+              base: createConfigRuntimeEnvBase({ env: cfg.env }, env)[ownedKey],
             };
             env[native ? addedKey.toLowerCase() : addedKey] = "new-owner";
             delete env[native ? deletedKey.toLowerCase() : deletedKey];
@@ -167,7 +167,7 @@ async function rejectedReader(change: string, native: boolean) {
         produced: { key: ownedKey, value, base: undefined },
       });
       const expected = expectedOwned(change, lower);
-      const base = createConfigRuntimeEnvBase(cfg, env);
+      const base = createConfigRuntimeEnvBase({ env: cfg.env }, env);
       expect([env[ownedKey], env[originalKey], base[ownedKey]]).toEqual([
         expected,
         expected,
@@ -416,7 +416,7 @@ describe("snapshot source authority", () => {
             if (dotenv) {
               current = !revoked;
               await checkRead(io.readConfigFileSnapshot());
-              return;
+              return undefined;
             }
             return (await io.readConfigFileSnapshotForWrite()).snapshot;
           },

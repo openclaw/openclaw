@@ -567,8 +567,10 @@ describe("context-engine turn outbox", () => {
       return { status: "committed" as const };
     });
     const { database, lease, warn, drain, enqueue } = outboxFixture(commitTurn);
-    const payload = createPayload(database.path, "session-a:retry");
-    payload.runtimeContext = { ...runtimeContext };
+    const payload = {
+      ...createPayload(database.path, "session-a:retry"),
+      runtimeContext: { ...runtimeContext },
+    };
     enqueueContextEngineTurnCommit({ database, engineId: "test", payload });
     const { degradeBeforeStart } = lease;
     await drain();

@@ -32,7 +32,8 @@ const { auth, http } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
   resolveApiKeyForProvider: auth,
 }));
 
@@ -41,6 +42,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
     "openclaw/plugin-sdk/provider-http",
   );
   return {
+    ...actual,
     ...http,
     readProviderJsonResponse: actual.readProviderJsonResponse,
   };

@@ -74,7 +74,11 @@ async function createRealtimeSttServer(params?: {
     wss.handleUpgrade(request, socket, head, (ws) => {
       ws.send(JSON.stringify(params?.initialEvent ?? { type: "transcript.created" }));
       ws.on("message", (data, isBinary) => {
-        const buffer = Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data);
+        const buffer = Array.isArray(data)
+          ? Buffer.concat(data)
+          : data instanceof ArrayBuffer
+            ? Buffer.from(data)
+            : data;
         if (isBinary) {
           binaryFrames.push(buffer);
           const events = params?.transcriptionEvents ?? [

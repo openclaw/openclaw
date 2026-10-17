@@ -116,11 +116,15 @@ describe("backup traversal", () => {
       };
       if (operation === "lstat") {
         // Keep the same race reproducible on both filesystem APIs used by the writers.
-        vi.spyOn(fsSync, "lstat").mockImplementation(beforeCall(fsSync.lstat, remove));
-        vi.spyOn(fs, "lstat").mockImplementation(beforeCall(fs.lstat, remove));
+        const syncLstat = beforeCall(fsSync.lstat, remove);
+        const lstat = beforeCall(fs.lstat, remove);
+        vi.spyOn(fsSync, "lstat").mockImplementation(syncLstat);
+        vi.spyOn(fs, "lstat").mockImplementation(lstat);
       } else {
-        vi.spyOn(fsSync, "open").mockImplementation(beforeCall(fsSync.open, remove));
-        vi.spyOn(fs, "open").mockImplementation(beforeCall(fs.open, remove));
+        const syncOpen = beforeCall(fsSync.open, remove);
+        const open = beforeCall(fs.open, remove);
+        vi.spyOn(fsSync, "open").mockImplementation(syncOpen);
+        vi.spyOn(fs, "open").mockImplementation(open);
       }
       const runtime = createTestRuntime();
       const result = await createVerifiedBackup(state, { includeWorkspace: true }, runtime);
