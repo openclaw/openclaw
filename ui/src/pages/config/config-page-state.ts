@@ -45,6 +45,7 @@ import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { modelSettingPrimary, readModelSetting } from "../../lib/model-setting.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import {
   canReadSystemInfo,
@@ -136,6 +137,11 @@ export function createConfigPage(
   route: () => { pageId: ConfigPageId; routeData: ConfigRouteData | null },
   host: () => HTMLElement,
 ) {
+  const applicationConfig = projectOwner(context.config, (owner) => owner.current);
+  const webPush = projectOwner(context.webPush, (owner) => owner.snapshot);
+  const notifications = context.nativeNotifications
+    ? projectOwner(context.nativeNotifications, (owner) => owner.snapshot)
+    : null;
   // Imperative owner notifications can arrive while a descendant is rendering.
   const [revision, publish] = createSignal(0, { ownedWrite: true });
   const invalidate = () => publish((value) => value + 1);
@@ -996,7 +1002,7 @@ export function createConfigPage(
       onCameraRefresh: () => void refreshMediaDevices("camera", true),
       onCameraSelect: (deviceId) => void selectCamera(deviceId),
       gatewayUrl: context.gateway.connection.gatewayUrl,
-      assistantName: context.config.current.assistantIdentity.name,
+      assistantName: applicationConfig.read().assistantIdentity.name,
       configPath: configState.configSnapshot?.path ?? null,
       navRootLabel: pageId === "advanced" ? undefined : titleForRoute(pageId),
       showSectionDocs: pageId !== "communications",
@@ -1005,11 +1011,11 @@ export function createConfigPage(
       excludeSections,
       includeVirtualSections: pageId === "appearance" || pageId === "notifications",
       settingsLayout: pageId === "advanced" ? "accordion" : undefined,
-      nativeNotifications: context.nativeNotifications?.snapshot,
+      nativeNotifications: notifications?.read(),
       onNativeNotificationsRequestPermission: () =>
         context.nativeNotifications?.requestPermission(),
       onNativeNotificationsSendTest: () => context.nativeNotifications?.sendTest(),
-      webPush: context.webPush.snapshot,
+      webPush: webPush.read(),
       onWebPushSubscribe: () => void context.webPush.run({ kind: "enable" }),
       onWebPushUnsubscribe: () => void context.webPush.run({ kind: "disable" }),
       onWebPushTest: () => void context.webPush.run({ kind: "test" }),
@@ -1019,19 +1025,6 @@ export function createConfigPage(
         void context.webPush.run({ kind: "set", scope: "device", preferences }),
     } satisfies ConfigProps;
   }
-  const sources = [
-    context.gateway,
-    context.runtimeConfig,
-    context.settingsAgentSelection,
-    context.agentSelection,
-    context.agents,
-    context.agentIdentity,
-    context.config,
-    context.overlays,
-    context.webPush,
-    context.nativeDeviceSettings,
-    context.nativeNotifications,
-  ];
   const refresh = () => {
     synchronize();
     invalidate();
@@ -1041,7 +1034,16 @@ export function createConfigPage(
   // Scroll the requested settings section after its DOM has committed.
   createEffect(revision, () => afterCommit());
   onSettled(() => {
-    const subscriptions = sources.flatMap((source) => (source ? [source.subscribe(refresh)] : []));
+    // These notifications admit requests and retire connection-scoped work synchronously.
+    const subscriptions = [
+      context.gateway,
+      context.runtimeConfig,
+      context.settingsAgentSelection,
+      context.agentSelection,
+      context.agents,
+      context.agentIdentity,
+      context.overlays,
+    ].map((source) => source.subscribe(refresh));
     // Server selection intent can change while the stored preferences stay equal.
     subscriptions.push(context.theme.subscribe(refresh), subscribeLobsterdex(refresh));
     connected = true;
@@ -1059,9 +1061,7 @@ export function createConfigPage(
     });
     synchronize();
     return () => {
-      for (const stop of subscriptions) {
-        stop();
-      }
+      subscriptions.forEach((stop) => stop());
       connected = false;
       customThemeImportOwner.retireImport();
       retireMediaPermissionRequests();

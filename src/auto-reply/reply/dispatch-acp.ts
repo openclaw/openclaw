@@ -316,7 +316,6 @@ export async function tryDispatchAcpReplyCore(
     accountId: effectiveDispatchAccountId,
   });
 
-  const acpDispatchStartedAt = Date.now();
   const finishAttempt = (
     finalQueued: boolean,
     error?: AcpRuntimeError,
@@ -326,10 +325,6 @@ export async function tryDispatchAcpReplyCore(
     const suppressionReason = hasQueuedDelivery
       ? undefined
       : delivery.getDeliverySuppressionReason();
-    const acpStats = acpManager.getObservabilitySnapshot();
-    logVerbose(
-      `acp-dispatch: session=${sessionKey} outcome=${error ? `error code=${error.code}` : "ok"} latencyMs=${Date.now() - acpDispatchStartedAt} queueDepth=${acpStats.turns.queueDepth} activeRuntimes=${acpStats.runtimeCache.activeSessions}`,
-    );
     params.recordProcessed("completed", {
       reason: error
         ? `acp_error:${normalizeLowercaseStringOrEmpty(error.code)}`

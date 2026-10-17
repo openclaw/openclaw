@@ -33,7 +33,7 @@ let gateway: ReturnType<typeof createStore>["gateway"];
 let current: ReturnType<typeof createStore>["current"];
 
 function presence(user: AuthenticatedUser) {
-  return { presence: [{ instanceId: current().instanceId, user }] };
+  return { presence: [{ ts: 0, instanceId: current().instanceId, user }] };
 }
 function publishPresence(user: AuthenticatedUser) {
   current().opts.onEvent?.(createGatewayEvent("presence", presence(user)));

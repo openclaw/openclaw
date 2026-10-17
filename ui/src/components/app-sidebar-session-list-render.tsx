@@ -179,7 +179,7 @@ function renderSessionCatalog(params: {
       onCatalogMenuTriggerRendered={(key, element) =>
         host().sidebarMenus.catalogMenu.retargetTrigger(key, element)
       }
-      isMenuOpen={(key) => host().sidebarMenus.catalogMenu.isOpenFor(key)}
+      isMenuOpen={(key) => host().sidebarMenus.catalogMenuView.isOpenFor(key)}
     />
   );
 }

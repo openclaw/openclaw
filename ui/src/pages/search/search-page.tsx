@@ -126,6 +126,7 @@ export function SearchPage() {
       void load();
     }
   }
+  // Invalidate admitted tests and reads before config or selection changes can settle them.
   const stopRuntime = runtimeView.subscribe(syncRuntime);
   const stopSelection = selectionProjection.subscribe(syncAgent);
   onCleanup(() => {

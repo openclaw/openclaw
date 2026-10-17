@@ -356,7 +356,9 @@ function installColdLoadProbes(
     },
   };
   // The init script precedes application modules, including their host→owner maps.
-  window.WeakMap = RegistrationWeakMap;
+  if (input.ownerProbes !== false) {
+    window.WeakMap = RegistrationWeakMap;
+  }
   window.addEventListener(
     "pagehide",
     () => {
@@ -526,6 +528,10 @@ function installColdLoadProbes(
     startLive() {
       liveStartedAt = performance.now();
       liveRpcOffset = rpcs.length;
+      if (input.ownerProbes === false) {
+        eventStream.startLive(liveStartedAt);
+        return;
+      }
       frameProbe.install();
       const sidebar = document.querySelector("openclaw-app-sidebar");
       sidebarRegistration.restore();
@@ -615,7 +621,8 @@ function installColdLoadProbes(
         ),
         stacks: Object.fromEntries(liveStacks),
         sidebarInvalidations: Object.fromEntries(liveOrigins),
-        solidChat: chatProbe.read(),
+        ownerProbes: input.ownerProbes !== false,
+        solidChat: input.ownerProbes === false ? null : chatProbe.read(),
         solidSidebar: solidSidebarOwner
           ? {
               measurement: "owner-invalidations-and-projection-lifecycle-passes",

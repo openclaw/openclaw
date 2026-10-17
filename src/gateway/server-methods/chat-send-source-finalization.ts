@@ -462,7 +462,7 @@ async function finalizeChatSendAgentReplyPayloads(
       }
       if (params.publishMessage) {
         authorityTransferred = params.publishMessage(message, deliveryAuthorized, release);
-      } else {
+      } else if (message) {
         broadcastChatFinal({
           terminalEntry: params.terminalEntry,
           context,

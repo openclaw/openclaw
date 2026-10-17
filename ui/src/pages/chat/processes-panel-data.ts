@@ -39,6 +39,7 @@ export class ProcessesPanelData {
     private readonly changed: () => void,
   ) {
     this.unsubscribe = context.gateway.subscribe(() => this.reconcile());
+    // This synchronous polling owner binds document visibility until dispose().
     this.visibilityDocument?.addEventListener("visibilitychange", this.visibilityChanged);
   }
 

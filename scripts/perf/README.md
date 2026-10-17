@@ -249,6 +249,26 @@ admission, handler, first-response and queue-wait histograms; these are cumulati
 since exporter startup and do not cover requests before its subscription. Each
 revision needs a fresh fixture and the same driver options.
 
+Add `--transcript-reads --clients 50 --seconds 120` to exercise a cold session
+memory index during the reconnect wave. Setup leaves memory search disabled;
+immediately before restart the driver enables sessions-only FTS memory with
+`provider: "none"`. The first reconnecting client invokes the real `memory_search`
+tool once to open its default manager while all clients poll `chat.history` for
+the same interrupted session and `workboard.cards.list` for their seeded cards.
+No embedding service is used. The history target is a small interrupted turn;
+the seeded corpus supplies the large session inventory and transcript volume.
+This is a cold-index restart, not a fully indexed steady-state comparison.
+
+The private preload counts main-isolate native task submissions across all
+workers, grouped by the bounded input kind and history request kind. It
+retains no transcript content, paths, session identifiers, or call stacks. The
+first 120-second deadline is checked at submission, so a delayed IPC snapshot
+does not count later work. `nativeTaskInputs`, `transcriptQueueMetrics`,
+`firstTwoMinutesMainElu`, and per-RPC p95 fields provide the comparison. Native
+submission counts include work before the diagnostics exporter starts; queue
+metrics do not. Record the kind breakdown and verify memory catch-up actually
+ran before attributing an improvement to it. Use a fresh fixture for each revision.
+
 ## Sandbox measurements
 
 Follow the current host policy. On Team, use only a task-owned

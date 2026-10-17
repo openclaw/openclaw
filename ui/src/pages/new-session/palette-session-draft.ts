@@ -1,5 +1,6 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import { closeMenusWithin } from "../../components/solid/menu.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
@@ -18,7 +19,6 @@ import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 import { NewSessionDraft } from "./draft-controller.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
-import { closeSessionMenus } from "./new-session-runtime.ts";
 import { PaletteSessionPreferences } from "./palette-session-preferences.ts";
 import type { PaletteSessionPreference } from "./preferences.ts";
 import { captureSessionNoticeOwner, openSessionNoticeTarget } from "./session-notice-owner.ts";
@@ -226,7 +226,7 @@ export class PaletteSessionDraft {
           closeTransientUi: () => {
             this.draft?.browser.close();
             this.closeSettings?.();
-            closeSessionMenus(this.element);
+            closeMenusWithin(this.element);
           },
           onInvalidate: () => this.connectMachine.close(),
           onRecoveryReady: (url, scope) => this.bindOwner(url, scope),
@@ -265,7 +265,7 @@ export class PaletteSessionDraft {
     this.closeSettings?.();
     this.draft?.browser.close();
     this.connectMachine.close();
-    closeSessionMenus(this.element);
+    closeMenusWithin(this.element);
   }
 
   async submit(): Promise<void> {

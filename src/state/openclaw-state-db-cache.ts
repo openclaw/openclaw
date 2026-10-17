@@ -18,10 +18,6 @@ import {
   type SqliteFileGeneration,
 } from "../infra/sqlite-file-generation.js";
 import {
-  confirmSqliteFileIntegrity,
-  type SqliteIntegrityConfirmation,
-} from "../infra/sqlite-integrity.js";
-import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
 } from "../infra/sqlite-lifecycle-errors.js";
@@ -387,7 +383,7 @@ function closeStaleCachedOpenClawStateDatabase(database: OpenClawStateDatabase):
   );
 }
 
-/** Latch background verification damage so later opens fail without rescanning. */
+/** Latch integrity refusals so later opens fail without rescanning. */
 export function recordOpenClawStateDatabaseOpenFailure(
   pathname: string,
   error: Error,
@@ -768,13 +764,4 @@ function retainSqliteDatabaseRemovalExclusion(
     // own probe must close so removal can proceed when no peer remains.
     close();
   }
-}
-
-/** Reconfirm an advisory worker failure on the live owner connection. */
-export async function confirmCachedOpenClawStateDatabaseIntegrity(
-  pathname: string,
-): Promise<SqliteIntegrityConfirmation> {
-  const resolvedPath = resolveDatabasePath({ path: pathname });
-  await closeOpenClawStateDatabaseByPathAsync(resolvedPath);
-  return confirmSqliteFileIntegrity(resolvedPath, resolvedPath);
 }

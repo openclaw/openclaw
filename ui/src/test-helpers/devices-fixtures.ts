@@ -34,7 +34,7 @@ export function createOfflineDeviceNode(nowMs = Date.now()) {
       diskAvailableBytes: Math.round(1.2 * 1024 ** 4),
       updatedAtMs: nowMs - 27 * 86_400_000,
     },
-  };
+  } satisfies DevicesProps["nodes"][number];
 }
 
 export const deviceDesktopEnvironments: EnvironmentSummary[] = [

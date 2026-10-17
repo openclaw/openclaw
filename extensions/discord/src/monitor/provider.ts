@@ -296,7 +296,12 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
               agentId: session.agentId,
               storedState: session.acp?.state,
               lastActivityAt: session.acp?.lastActivityAt,
-              providerSessionRuntime: discordProviderSessionRuntime,
+              providerSessionRuntime: {
+                getAcpSessionManager: discordProviderSessionRuntime.getAcpSessionManager,
+                isAcpRuntimeError: discordProviderSessionRuntime.isAcpRuntimeError,
+                rethrowIncognitoSessionError:
+                  discordProviderSessionRuntime.rethrowIncognitoSessionError,
+              },
             });
             if (probe.status === "uncertain") {
               uncertainProbeKeys.add(`${sessionKey}${probe.reason ? ` (${probe.reason})` : ""}`);

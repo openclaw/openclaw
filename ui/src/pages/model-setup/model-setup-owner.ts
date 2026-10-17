@@ -7,9 +7,8 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { t } from "../../i18n/index.ts";
-import { i18n } from "../../i18n/lib/translate.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
 import { createModelProviderLogin } from "../model-providers/login-controller.ts";
@@ -729,6 +728,7 @@ export function createModelSetup(
     () => state,
   );
   const view = () => {
+    i18nRevision();
     projection.read();
     return viewProps();
   };
@@ -756,13 +756,11 @@ export function createModelSetup(
       notify();
     });
     const stopFirstRun = firstRun.subscribe(notify);
-    const stopLocale = i18n.subscribe(notify);
     synchronizeGateway(context.gateway.snapshot);
     notify();
     return () => {
       stopGateway();
       stopFirstRun();
-      stopLocale();
     };
   });
   onCleanup(() => {

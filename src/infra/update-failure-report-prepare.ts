@@ -10,6 +10,7 @@ import {
   redactPublicSupportVersion,
   redactSupportDiagnosticLine,
   redactSupportString,
+  type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
 import {
   classifyUpdateOutcome,
@@ -73,10 +74,7 @@ export type UpdateFailureReportInput = {
   target?: string;
 };
 
-type UpdateFailureReportContext = {
-  env: NodeJS.ProcessEnv;
-  stateDir: string;
-};
+type UpdateFailureReportContext = SupportRedactionContext;
 
 function redactDiagnosticLines(value: string): string {
   // An unquoted final path component and trailing prose are grammatically

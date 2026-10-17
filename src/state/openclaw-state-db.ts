@@ -39,7 +39,6 @@ import {
 } from "./openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
-  confirmCachedOpenClawStateDatabaseIntegrity,
   openClawStateDatabaseCache as stateDbCache,
   recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db-cache.js";
@@ -709,10 +708,3 @@ export {
   isOpenClawStateDatabaseOpen,
   closeOpenClawStateDatabaseForTest,
 } from "./openclaw-state-db-cache.js";
-
-export async function confirmOpenClawStateDatabaseIntegrity(pathname: string) {
-  if (isStatePostgres()) {
-    requireNativeDatabaseFile("postgres", "integrity");
-  }
-  return confirmCachedOpenClawStateDatabaseIntegrity(pathname);
-}
