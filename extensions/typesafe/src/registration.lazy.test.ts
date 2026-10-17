@@ -3,6 +3,8 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { RuntimeConfig } from "./config.js";
+import { resolveRuntimeConfig } from "./credentials.js";
+import { legacyWireFixture } from "./prepared.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
   getPreparedPluginSecretInput: () => ({ revision: 1 }),
@@ -31,8 +33,12 @@ async function register() {
         current: () => ({ plugins: { entries: { typesafe: { config } } } }),
       },
     },
-    registerDecisionProvider: (registered: DecisionProviderV1) => {
-      provider = registered;
+    registerDecisionProvider: (
+      registered: Parameters<OpenClawPluginApi["registerDecisionProvider"]>[0],
+    ) => {
+      provider = legacyWireFixture(registered, () =>
+        resolveRuntimeConfig({ plugins: { entries: { typesafe: { config } } } }),
+      );
     },
   } as unknown as OpenClawPluginApi);
   expect(provider).toBeDefined();
@@ -83,18 +89,13 @@ it.each(["abort", "deadline", "config", "credentials"] as const)(
     }
     if (change === "abort") {
       await expect(outcome).rejects.toThrow("caller closed");
-    } else if (change === "config") {
-      await expect(outcome).resolves.toMatchObject({ status: "ok" });
-      expect(evaluate.mock.lastCall?.[1]).toMatchObject({ baseUrl: "http://127.0.0.1:5678" });
     } else {
       await expect(outcome).resolves.toEqual({
         status: "unavailable",
         reason: change === "deadline" ? "transport" : "credentials-unavailable",
       });
     }
-    if (change !== "config") {
-      expect(evaluate).not.toHaveBeenCalled();
-    }
+    expect(evaluate).not.toHaveBeenCalled();
   },
 );
 

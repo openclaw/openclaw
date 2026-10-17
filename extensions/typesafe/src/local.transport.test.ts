@@ -8,6 +8,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import plugin from "../index.js";
 import { evaluate } from "./client.js";
 import { runtimeConfig } from "./config.js";
+import { resolveRuntimeConfig } from "./credentials.js";
+import { legacyWireFixture } from "./prepared.test-support.js";
 import type { EvaluationInput } from "./schema.js";
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
@@ -76,10 +78,16 @@ function registeredProvider(endpoint?: string) {
   } as unknown as OpenClawPluginApi);
   const provider = registerDecisionProvider.mock.calls[0]?.[0];
   assert(provider);
-  if (provider.contractVersion !== 1) {
+  if (provider.contractVersion !== 2) {
     throw new Error("TypeSafe fixture registered an unexpected decision contract");
   }
-  return provider;
+  return legacyWireFixture(provider, () =>
+    resolveRuntimeConfig({
+      plugins: {
+        entries: { typesafe: { config: { baseUrl: endpoint, apiKey: "hosted-materialized" } } },
+      },
+    }),
+  );
 }
 
 it("refuses to send the local Kev selection to hosted inference through registered handlers", async () => {

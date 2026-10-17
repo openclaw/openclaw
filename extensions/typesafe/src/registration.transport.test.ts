@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import type { DecisionBatch } from "openclaw/plugin-sdk/decisions";
+import { DecisionContractError, type DecisionBatch } from "openclaw/plugin-sdk/decisions";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveProviderHttpRequestConfigWithOriginTrust } from "openclaw/plugin-sdk/provider-http";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "../index.js";
+import { resolveRuntimeConfig } from "./credentials.js";
+import { legacyWireFixture } from "./prepared.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
   getPreparedPluginSecretInput: vi.fn(),
@@ -47,10 +49,12 @@ function registeredProvider(config: Record<string, unknown> = {}) {
   } as unknown as OpenClawPluginApi);
   const provider = registerDecisionProvider.mock.calls[0]?.[0];
   assert(provider);
-  if (provider.contractVersion !== 1) {
+  if (provider.contractVersion !== 2) {
     throw new Error("TypeSafe fixture registered an unexpected decision contract");
   }
-  return provider;
+  return legacyWireFixture(provider, () =>
+    resolveRuntimeConfig({ plugins: { entries: { typesafe: { config } } } }),
+  );
 }
 
 const context = (signal = new AbortController().signal) => ({
@@ -427,7 +431,7 @@ it.each(["inherited array serializer", "hidden serializer", "getter", "hidden ar
         },
         context(),
       ),
-    ).resolves.toEqual({ status: "unavailable", reason: "unsupported-input" });
+    ).rejects.toThrow(DecisionContractError);
     expect(hook).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
   },

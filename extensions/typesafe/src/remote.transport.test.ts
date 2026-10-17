@@ -18,6 +18,8 @@ import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undi
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import plugin from "../index.js";
 import type { ModelProviderConfig } from "./config.js";
+import { resolveRuntimeConfig } from "./credentials.js";
+import { legacyWireFixture } from "./prepared.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/secret-input-runtime")>()),
@@ -205,10 +207,14 @@ function provider(source: ModelProviderConfig | (() => ModelProviderConfig)) {
   } as unknown as OpenClawPluginApi);
   const registered = registerDecisionProvider.mock.calls[0]?.[0];
   assert(registered);
-  if (registered.contractVersion !== 1) {
+  if (registered.contractVersion !== 2) {
     throw new Error("TypeSafe fixture registered an unexpected decision contract");
   }
-  return registered;
+  return legacyWireFixture(registered, () =>
+    resolveRuntimeConfig({
+      models: { providers: { typesafe: typeof source === "function" ? source() : source } },
+    }),
+  );
 }
 const context = () => ({
   model: "nemotron-deciffusion",
