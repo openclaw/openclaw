@@ -94,6 +94,31 @@ function prepare(
   });
 }
 
+async function admitSkillSession(root: string, patch: Partial<InternalSessionEntry> = {}) {
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  const scope = { agentId: "main", sessionKey: "agent:main:exec-preparation" };
+  await upsertSessionEntryCore(scope, { sessionId: "skill-exec", updatedAt: 1, ...patch });
+  const { databaseClaim } = await loadSessionEntryForAdmission(scope);
+  if (!("kind" in databaseClaim) || !databaseClaim.reader) {
+    await databaseClaim.release();
+    throw new Error("Expected the admitted skill session reader");
+  }
+  return { scope, databaseClaim, reader: databaseClaim.reader };
+}
+
+function preparationGate() {
+  const entered = createDeferredCore();
+  const resume = createDeferredCore();
+  return {
+    entered,
+    resume,
+    wait: async () => {
+      entered.resolve();
+      await resume.promise;
+    },
+  };
+}
+
 const config: OpenClawConfig = {
   tools: { exec: { host: "node", node: "build-node", mode: "full" } },
 };
@@ -173,13 +198,7 @@ it("prepares current sandbox and approval skill eligibility without caller-threa
   const approvals = vi.spyOn(approvalStore, "loadExecApprovalsReadOnlyAsync");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   setRuntimeConfigSnapshot(executionConfig);
-  const scope = { agentId: "main", sessionKey: "agent:main:exec-preparation" };
-  await upsertSessionEntryCore(scope, { sessionId: "skill-exec", updatedAt: 1 });
-  const { databaseClaim } = await loadSessionEntryForAdmission(scope);
-  if (!("kind" in databaseClaim) || !databaseClaim.reader) {
-    await databaseClaim.release();
-    throw new Error("Expected the admitted skill session reader");
-  }
+  const { databaseClaim, reader } = await admitSkillSession(root);
   const standalone = vi.spyOn(sessionReaders, "withSessionEntriesFromStoreInWorker");
   try {
     for (const [security, sandboxMode, canExec, approvalReads] of [
@@ -195,7 +214,7 @@ it("prepares current sandbox and approval skill eligibility without caller-threa
       );
       approvals.mockClear();
       const calls = observeMainThreadSql();
-      const pending = prepare(root, executionConfig, undefined, databaseClaim.reader);
+      const pending = prepare(root, executionConfig, undefined, reader);
       vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-foreign-skill-exec-"));
       await pending;
       expect(approvals).toHaveBeenCalledTimes(approvalReads);
@@ -244,11 +263,7 @@ it("refreshes skills without overwriting other session fields", async () => {
     vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockImplementationOnce(async () => {
       entered.resolve();
       await resume.promise;
-      return {
-        snapshot: skillsSnapshot,
-        shouldRefresh: true,
-        snapshotVersion: 0,
-      };
+      return { snapshot: skillsSnapshot, shouldRefresh: true, snapshotVersion: 0 };
     });
     const pending = ensureSkillSnapshot({
       ...scope,
@@ -272,11 +287,7 @@ it("refreshes skills without overwriting other session fields", async () => {
       expect(result).toMatchObject({
         systemSent: true,
         skillsSnapshot,
-        sessionEntry: {
-          updatedAt: expect.any(Number),
-          systemSent: true,
-          skillsSnapshot,
-        },
+        sessionEntry: { updatedAt: expect.any(Number), systemSent: true, skillsSnapshot },
       });
       expect(result.sessionEntry).not.toHaveProperty("pinnedAt");
       expect(handle.getCurrent()).toEqual(result.sessionEntry);
@@ -292,21 +303,13 @@ it("refuses policy preparation when its admitted reader closes during the approv
   const root = tempDirs.make("openclaw-skill-reader-retired-");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   setRuntimeConfigSnapshot(config);
-  const scope = { agentId: "main", sessionKey: "agent:main:exec-preparation" };
-  await upsertSessionEntryCore(scope, { sessionId: "skill-exec", updatedAt: 1 });
-  const { databaseClaim } = await loadSessionEntryForAdmission(scope);
-  if (!("kind" in databaseClaim) || !databaseClaim.reader) {
-    await databaseClaim.release();
-    throw new Error("Expected the admitted skill session reader");
-  }
-  const entered = createDeferredCore();
-  const resume = createDeferredCore();
+  const { databaseClaim, reader } = await admitSkillSession(root);
+  const { entered, resume, wait } = preparationGate();
   vi.spyOn(approvalStore, "loadExecApprovalsReadOnlyAsync").mockImplementationOnce(async () => {
-    entered.resolve();
-    await resume.promise;
+    await wait();
     return { version: 1, defaults: { security: "full" } };
   });
-  const pending = prepare(root, config, undefined, databaseClaim.reader);
+  const pending = prepare(root, config, undefined, reader);
   try {
     await awaitGateBeforeSettlement(entered.promise, pending, "approval read did not start");
     await databaseClaim.release();
@@ -329,23 +332,9 @@ it.each(["approvals", "skills"] as const)(
     };
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     setRuntimeConfigSnapshot(executionConfig);
-    const scope = { agentId: "main", sessionKey: "agent:main:exec-preparation" };
-    await upsertSessionEntryCore(scope, {
-      sessionId: "skill-exec",
-      updatedAt: 1,
-      sandboxMode: "off",
-    });
-    const { databaseClaim } = await loadSessionEntryForAdmission(scope);
-    if (!("kind" in databaseClaim) || !databaseClaim.reader) {
-      await databaseClaim.release();
-      throw new Error("Expected the admitted skill session reader");
-    }
-    const entered = createDeferredCore();
-    const resume = createDeferredCore();
-    const wait = async () => {
-      entered.resolve();
-      await resume.promise;
-    };
+    const { scope, databaseClaim, reader } = await admitSkillSession(root, { sandboxMode: "off" });
+    const { entered, resume, wait } = preparationGate();
+
     vi.spyOn(approvalStore, "loadExecApprovalsReadOnlyAsync").mockImplementationOnce(async () => {
       if (phase === "approvals") {
         await wait();
@@ -358,7 +347,7 @@ it.each(["approvals", "skills"] as const)(
       }
       return { snapshot: { prompt: "", skills: [] }, shouldRefresh: false, snapshotVersion: 0 };
     });
-    const pending = prepare(root, executionConfig, undefined, databaseClaim.reader);
+    const pending = prepare(root, executionConfig, undefined, reader);
     try {
       await awaitGateBeforeSettlement(entered.promise, pending, "policy wait did not start");
       await upsertSessionEntryCore(scope, { sandboxMode: undefined });
@@ -376,13 +365,8 @@ it.each(["approvals", "skills"] as const)(
   async (phase) => {
     const root = tempDirs.make("openclaw-skill-retired-");
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    const entered = createDeferredCore();
-    const resume = createDeferredCore();
+    const { entered, resume, wait } = preparationGate();
     const controller = new AbortController();
-    const wait = async () => {
-      entered.resolve();
-      await resume.promise;
-    };
     if (phase === "approvals") {
       vi.spyOn(approvalStore, "loadExecApprovalsReadOnlyAsync").mockImplementationOnce(async () => {
         await wait();
@@ -391,11 +375,7 @@ it.each(["approvals", "skills"] as const)(
     } else {
       vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockImplementationOnce(async () => {
         await wait();
-        return {
-          snapshot: { prompt: "", skills: [] },
-          shouldRefresh: false,
-          snapshotVersion: 0,
-        };
+        return { snapshot: { prompt: "", skills: [] }, shouldRefresh: false, snapshotVersion: 0 };
       });
     }
     const pending = prepare(root, config, () => controller.signal.throwIfAborted());
@@ -529,27 +509,17 @@ describe("completed compaction accounting", () => {
 
   it("records and clears byte-compaction progress with authoritative accounting", async () => {
     await withAccountingFixture(async (fixture) => {
-      const latch = {
-        activeBytes: 60_000,
-        sessionId: fixture.entry.sessionId,
-        maxBytes: 50_000,
-      };
+      const latch = { activeBytes: 60_000, sessionId: fixture.entry.sessionId, maxBytes: 50_000 };
 
       expect(
-        await incrementCompactionCount({
-          ...fixture.params,
-          transcriptByteCompactionLatch: latch,
-        }),
+        await incrementCompactionCount({ ...fixture.params, transcriptByteCompactionLatch: latch }),
       ).toBe(1);
       expect(fixture.read()?.transcriptByteCompactionLatch).toEqual(latch);
 
       expect(await incrementCompactionCount(fixture.params)).toBe(2);
       expect(fixture.read()?.transcriptByteCompactionLatch).toEqual(latch);
 
-      await incrementCompactionCount({
-        ...fixture.params,
-        transcriptByteCompactionLatch: null,
-      });
+      await incrementCompactionCount({ ...fixture.params, transcriptByteCompactionLatch: null });
       expect(fixture.read()?.transcriptByteCompactionLatch).toBeUndefined();
     });
   });
@@ -581,10 +551,7 @@ describe("completed compaction accounting", () => {
       await fixture.remove();
 
       expect(
-        await incrementCompactionCount({
-          ...fixture.params,
-          expectedSession: undefined,
-        }),
+        await incrementCompactionCount({ ...fixture.params, expectedSession: undefined }),
       ).toBeUndefined();
       expect(fixture.read()).toBeUndefined();
     });
