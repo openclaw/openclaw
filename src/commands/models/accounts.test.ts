@@ -80,20 +80,6 @@ type Request = {
   socket: WebSocket;
 };
 
-function expectRequests(requests: Request[], expected: Array<[string, Record<string, unknown>]>) {
-  expect(requests.map(({ method, params }) => [method, params])).toEqual(expected);
-}
-
-function printed(output: ReturnType<typeof runtime>) {
-  return JSON.stringify([
-    output.log.mock.calls,
-    output.error.mock.calls,
-    output.writeJson.mock.calls,
-  ]);
-}
-
-const connectParams = { profileId: PROFILE_ID, connectId: "operation-one" };
-
 async function withGateway(
   respond: (request: Request) => unknown,
   run: (gateway: {
@@ -273,9 +259,9 @@ describe("personal model account CLI over an identified Gateway connection", () 
       ({ method }) => (method === "users.listModelAccounts" ? page : undefined),
       async ({ port, url, requests, connections }) => {
         await modelsAccountsListCommand({ port, cursor: "previous-account", json: true }, output);
-        expectRequests(requests, [
-          ["users.self", {}],
-          ["users.listModelAccounts", { cursor: "previous-account" }],
+        expect(requests.map(({ method, params }) => ({ method, params }))).toEqual([
+          { method: "users.self", params: {} },
+          { method: "users.listModelAccounts", params: { cursor: "previous-account" } },
         ]);
         expectJsonOutput(output, page);
         expectPersonalContext(output, url);
@@ -360,9 +346,11 @@ describe("personal model account CLI over an identified Gateway connection", () 
         (request) => (request.method === method ? { links: connected.links } : undefined),
         async ({ port, url, requests, connections }) => {
           await run(port, output);
-          expectRequests(requests, [
-            ["users.self", {}],
-            [method, params],
+          expect(
+            requests.map(({ method: rpc, params: args }) => ({ method: rpc, params: args })),
+          ).toEqual([
+            { method: "users.self", params: {} },
+            { method, params },
           ]);
           expect(connections).toHaveLength(1);
           expectPersonalContext(output, url);
@@ -435,16 +423,35 @@ describe("personal model account CLI over an identified Gateway connection", () 
           return answers === 0 ? invalidKey : apiKey;
         });
         await modelsAccountsLoginCommand({ port, json: true }, output);
-        expectRequests(requests, [
-          ["users.self", {}],
-          ["users.authConnect.catalog", { profileId: PROFILE_ID }],
-          [
-            "users.authConnect.start",
-            { profileId: PROFILE_ID, provider: "xai", method: "api-key" },
-          ],
-          ["users.authConnect.status", connectParams],
-          ["users.authConnect.answer", { ...connectParams, stepId: "api-key", value: invalidKey }],
-          ["users.authConnect.answer", { ...connectParams, stepId: "api-key", value: apiKey }],
+        expect(requests.map(({ method, params }) => ({ method, params }))).toEqual([
+          { method: "users.self", params: {} },
+          { method: "users.authConnect.catalog", params: { profileId: PROFILE_ID } },
+          {
+            method: "users.authConnect.start",
+            params: { profileId: PROFILE_ID, provider: "xai", method: "api-key" },
+          },
+          {
+            method: "users.authConnect.status",
+            params: { profileId: PROFILE_ID, connectId: "operation-one" },
+          },
+          {
+            method: "users.authConnect.answer",
+            params: {
+              profileId: PROFILE_ID,
+              connectId: "operation-one",
+              stepId: "api-key",
+              value: invalidKey,
+            },
+          },
+          {
+            method: "users.authConnect.answer",
+            params: {
+              profileId: PROFILE_ID,
+              connectId: "operation-one",
+              stepId: "api-key",
+              value: apiKey,
+            },
+          },
         ]);
         expect(connections).toHaveLength(1);
         expect(mocks.autocomplete).toHaveBeenCalledTimes(2);
@@ -478,8 +485,13 @@ describe("personal model account CLI over an identified Gateway connection", () 
           authProfileId: ACCOUNT_ID,
           links: [],
         });
-        expect(printed(output)).not.toContain(apiKey);
-        expect(printed(output)).not.toContain(invalidKey);
+        const printed = JSON.stringify([
+          output.log.mock.calls,
+          output.error.mock.calls,
+          output.writeJson.mock.calls,
+        ]);
+        expect(printed).not.toContain(apiKey);
+        expect(printed).not.toContain(invalidKey);
       },
     );
   });
@@ -586,7 +598,8 @@ describe("personal model account CLI over an identified Gateway connection", () 
               .map(({ params }) => params),
           ).toEqual([
             {
-              ...connectParams,
+              profileId: PROFILE_ID,
+              connectId: "operation-one",
               stepId: inputStepId,
               value: redirectInput,
             },
@@ -609,7 +622,13 @@ describe("personal model account CLI over an identified Gateway connection", () 
             provider: "openai",
             ...connected,
           });
-          expect(printed(output)).not.toContain("synthetic-private-code");
+          expect(
+            JSON.stringify([
+              output.log.mock.calls,
+              output.error.mock.calls,
+              output.writeJson.mock.calls,
+            ]),
+          ).not.toContain("synthetic-private-code");
         },
       );
     } finally {
@@ -680,7 +699,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
           modelsAccountsLoginCommand({ port, provider: "openai" }, output),
         ).rejects.toMatchObject({ code: 130 });
         const request = await received.promise;
-        expect(request.params).toEqual(connectParams);
+        expect(request.params).toEqual({ profileId: PROFILE_ID, connectId: "operation-one" });
         expect(request.socket.readyState).toBe(WebSocket.OPEN);
         expect(output.log).not.toHaveBeenCalled();
         acknowledged.resolve({ status: "cancelled" });
@@ -723,7 +742,10 @@ describe("personal model account CLI over an identified Gateway connection", () 
           "users.authConnect.start",
           "users.authConnect.cancel",
         ]);
-        expect(requests.at(-1)?.params).toEqual(connectParams);
+        expect(requests.at(-1)?.params).toEqual({
+          profileId: PROFILE_ID,
+          connectId: "operation-one",
+        });
         expect(connections).toHaveLength(1);
         expect(mocks.password).not.toHaveBeenCalled();
         expect(mocks.openUrl).not.toHaveBeenCalled();
