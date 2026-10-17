@@ -347,6 +347,16 @@ describe("ordinary source reply across deferred plugin refresh", () => {
             : undefined;
         let details: Record<string, unknown> | undefined;
         if (previous) {
+          const assistant = providerContext.messages.findLast(
+            (message) =>
+              message.role === "assistant" &&
+              message.content.some((part) => part.type === "toolCall" && part.id === previous.id),
+          );
+          expect(assistant).toMatchObject({
+            content: expect.arrayContaining([
+              expect.objectContaining({ type: "toolCall", id: previous.id, name: previous.name }),
+            ]),
+          });
           expect(last).toMatchObject({ toolName: previous.name, isError: false });
           expect(controlText).toBeTypeOf("string");
           details = asOptionalRecord(JSON.parse(controlText ?? ""));
@@ -394,7 +404,7 @@ describe("ordinary source reply across deferred plugin refresh", () => {
                 : undefined,
           }),
         );
-        const toolCallId = `call-${generation}-${providerStream.mock.calls.length}`;
+        const toolCallId = `call_${generation}_${providerStream.mock.calls.length}`;
         if (call) {
           previousCall = { id: toolCallId, name: call.name, generation };
         }
