@@ -150,7 +150,7 @@ function isStaleForActiveSession(
   const incomingUpdatedAt = incoming.updatedAt ?? 0;
   return (
     (existing.updatedAt ?? 0) >= incomingUpdatedAt ||
-    (existing.startedAt !== undefined && existing.startedAt >= incomingUpdatedAt)
+    (typeof existing.startedAt === "number" && existing.startedAt >= incomingUpdatedAt)
   );
 }
 
