@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { ConfigAuditRecord } from "../../../config/io.audit.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -83,16 +84,24 @@ function writeRecord(
   };
 }
 
+function repair(
+  config = corruptedConfig(),
+  overrides: Partial<Parameters<typeof repairGeneratedModelMetadataCorruption>[0]> = {},
+) {
+  return repairGeneratedModelMetadataCorruption({
+    config,
+    authoredRoot: structuredClone(config),
+    configPath,
+    currentHash: "current",
+    auditRecords: [writeRecord()],
+    ...overrides,
+  });
+}
+
 describe("repairGeneratedModelMetadataCorruption", () => {
   it("removes only the audit-proven generic fallback quartet", () => {
     const config = corruptedConfig();
-    const result = repairGeneratedModelMetadataCorruption({
-      config,
-      authoredRoot: structuredClone(config),
-      configPath,
-      currentHash: "current",
-      auditRecords: [writeRecord()],
-    });
+    const result = repair(config);
 
     const model = result.config.models?.providers?.openai?.models[0];
     expect(model).toMatchObject({
@@ -127,13 +136,7 @@ describe("repairGeneratedModelMetadataCorruption", () => {
     },
   ])("warns without changing an exact fingerprint with $name", ({ auditRecords }) => {
     const config = corruptedConfig();
-    const result = repairGeneratedModelMetadataCorruption({
-      config,
-      authoredRoot: structuredClone(config),
-      configPath,
-      currentHash: "current",
-      auditRecords,
-    });
+    const result = repair(config, { auditRecords });
 
     expect(result.config).toEqual(config);
     expect(result.changes).toEqual([]);
@@ -142,55 +145,28 @@ describe("repairGeneratedModelMetadataCorruption", () => {
 
   it("does not diagnose a partial fallback tuple as historical corruption", () => {
     const config = corruptedConfig();
-    const model = config.models?.providers?.openai?.models[0];
-    if (!model) {
-      throw new Error("missing model fixture");
-    }
+    const model = expectDefined(config.models?.providers?.openai?.models[0], "model fixture");
     Reflect.deleteProperty(model, "cost");
-    const result = repairGeneratedModelMetadataCorruption({
-      config,
-      authoredRoot: structuredClone(config),
-      configPath,
-      currentHash: "current",
-      auditRecords: [writeRecord()],
-    });
+    const result = repair(config);
 
     expect(result).toEqual({ config, changes: [], warnings: [] });
   });
 
   it("does not diagnose a custom model absent from the shipped catalog", () => {
     const config = corruptedConfig();
-    const model = config.models?.providers?.openai?.models[0];
-    if (!model) {
-      throw new Error("missing model fixture");
-    }
+    const model = expectDefined(config.models?.providers?.openai?.models[0], "model fixture");
     model.id = "custom-sol";
-    const result = repairGeneratedModelMetadataCorruption({
-      config,
-      authoredRoot: structuredClone(config),
-      configPath,
-      currentHash: "current",
-      auditRecords: [writeRecord()],
-    });
+    const result = repair(config);
 
     expect(result).toEqual({ config, changes: [], warnings: [] });
   });
 
   it("preserves an audit-matched override on a custom route", () => {
     const config = corruptedConfig();
-    const provider = config.models?.providers?.openai;
-    if (!provider) {
-      throw new Error("missing provider fixture");
-    }
+    const provider = expectDefined(config.models?.providers?.openai, "provider fixture");
     provider.api = "openai-responses";
     provider.baseUrl = "https://proxy.example.test/v1";
-    const result = repairGeneratedModelMetadataCorruption({
-      config,
-      authoredRoot: structuredClone(config),
-      configPath,
-      currentHash: "current",
-      auditRecords: [writeRecord()],
-    });
+    const result = repair(config);
 
     expect(result.config).toEqual(config);
     expect(result.changes).toEqual([]);
@@ -199,12 +175,8 @@ describe("repairGeneratedModelMetadataCorruption", () => {
 
   it("does not rewrite metadata that is not directly authored in the root config", () => {
     const config = corruptedConfig();
-    const result = repairGeneratedModelMetadataCorruption({
-      config,
+    const result = repair(config, {
       authoredRoot: { models: { $include: "models.json" } },
-      configPath,
-      currentHash: "current",
-      auditRecords: [writeRecord()],
     });
 
     expect(result.config).toEqual(config);

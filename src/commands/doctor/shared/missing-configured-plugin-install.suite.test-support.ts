@@ -1,4 +1,3 @@
-// Missing configured plugin install tests cover doctor diagnostics for absent plugin installs.
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
@@ -15,6 +14,7 @@ import {
   installedRecords,
   officialWebSearchPluginEntry,
   setupPluginInstallTestState,
+  successfulInstall,
 } from "./missing-configured-plugin-install.test-helpers.js";
 
 function expectedNpmInstallSpec(spec: string): string {
@@ -231,6 +231,41 @@ function mockBrokenBraveInstall(
   return records;
 }
 
+type TestCatalogEntry = {
+  id?: string;
+  openclaw?: {
+    plugin?: { id?: string };
+    contracts?: Record<string, unknown>;
+    providers?: Array<{ id?: string; aliases?: string[] }>;
+  };
+};
+
+function catalogPluginIds(
+  providerIds: ReadonlySet<string>,
+  ownedIds: (entry: TestCatalogEntry) => unknown,
+) {
+  const configured = new Set([...providerIds].map((id) => id.trim().toLowerCase()));
+  const entries = mocks.listOfficialExternalPluginCatalogEntries.getMockImplementation()?.();
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  return entries.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return [];
+    }
+    const candidate = entry as TestCatalogEntry;
+    const id = candidate.openclaw?.plugin?.id ?? candidate.id;
+    const providers = ownedIds(candidate);
+    return id &&
+      Array.isArray(providers) &&
+      providers.some(
+        (provider) => typeof provider === "string" && configured.has(provider.trim().toLowerCase()),
+      )
+      ? [id]
+      : [];
+  });
+}
+
 vi.mock("../../../channels/plugins/catalog.js", () => ({
   listRawChannelPluginCatalogEntries: mocks.listChannelPluginCatalogEntries,
 }));
@@ -377,14 +412,8 @@ export function setupPluginInstallSuite() {
       onBeforePluginArtifactCommit: async () => {},
       applyAcceptedSurface: (_pluginId, record) => record,
     });
-    mocks.loadPluginMetadataSnapshot.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
-    mocks.loadPluginManifestRegistryCore.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({ plugins: [], diagnostics: [] });
+    mocks.loadPluginManifestRegistryCore.mockReturnValue({ plugins: [], diagnostics: [] });
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
     mocks.listChannelPluginCatalogEntries.mockReturnValue([]);
     mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([]);
@@ -394,73 +423,17 @@ export function setupPluginInstallSuite() {
     mocks.resolveOfficialExternalProviderPluginIdsForEnv.mockReturnValue([]);
     mocks.resolveOfficialExternalWebProviderContractPluginIdsForEnv.mockReturnValue([]);
     mocks.resolveOfficialExternalProviderContractPluginIds.mockImplementation(
-      ({ contract, providerIds }: { contract: string; providerIds: ReadonlySet<string> }) => {
-        const configuredProviderIds = new Set(
-          [...providerIds].map((providerId) => providerId.trim().toLowerCase()),
-        );
-        const entries = mocks.listOfficialExternalPluginCatalogEntries.getMockImplementation()?.();
-        if (!Array.isArray(entries)) {
-          return [];
-        }
-        return entries.flatMap((entry) => {
-          if (!entry || typeof entry !== "object") {
-            return [];
-          }
-          const candidate = entry as {
-            id?: string;
-            openclaw?: {
-              plugin?: { id?: string };
-              contracts?: Record<string, unknown>;
-            };
-          };
-          const pluginId = candidate.openclaw?.plugin?.id ?? candidate.id;
-          const ownedProviderIds = candidate.openclaw?.contracts?.[contract];
-          if (
-            !pluginId ||
-            !Array.isArray(ownedProviderIds) ||
-            !ownedProviderIds.some(
-              (providerId) =>
-                typeof providerId === "string" &&
-                configuredProviderIds.has(providerId.trim().toLowerCase()),
-            )
-          ) {
-            return [];
-          }
-          return [pluginId];
-        });
-      },
+      ({ contract, providerIds }: { contract: string; providerIds: ReadonlySet<string> }) =>
+        catalogPluginIds(providerIds, (entry) => entry.openclaw?.contracts?.[contract]),
     );
     mocks.resolveOfficialExternalProviderPluginIds.mockImplementation(
-      ({ providerIds }: { providerIds: ReadonlySet<string> }) => {
-        const configuredProviderIds = new Set(
-          [...providerIds].map((providerId) => providerId.trim().toLowerCase()),
-        );
-        const entries = mocks.listOfficialExternalPluginCatalogEntries.getMockImplementation()?.();
-        if (!Array.isArray(entries)) {
-          return [];
-        }
-        return entries.flatMap((entry) => {
-          if (!entry || typeof entry !== "object") {
-            return [];
-          }
-          const candidate = entry as {
-            id?: string;
-            openclaw?: {
-              plugin?: { id?: string };
-              providers?: Array<{ id?: string; aliases?: string[] }>;
-            };
-          };
-          const pluginId = candidate.openclaw?.plugin?.id ?? candidate.id;
-          const ownsConfiguredProvider = candidate.openclaw?.providers?.some((provider) =>
-            [provider.id, ...(provider.aliases ?? [])].some(
-              (providerId) =>
-                typeof providerId === "string" &&
-                configuredProviderIds.has(providerId.trim().toLowerCase()),
-            ),
-          );
-          return pluginId && ownsConfiguredProvider ? [pluginId] : [];
-        });
-      },
+      ({ providerIds }: { providerIds: ReadonlySet<string> }) =>
+        catalogPluginIds(providerIds, (entry) =>
+          entry.openclaw?.providers?.flatMap((provider) => [
+            provider.id,
+            ...(provider.aliases ?? []),
+          ]),
+        ),
     );
     mocks.installPluginFromClawHub.mockResolvedValue({
       ok: true,
@@ -483,19 +456,14 @@ export function setupPluginInstallSuite() {
       },
     });
     mocks.installPluginFromNpmSpec.mockReset();
-    mocks.installPluginFromNpmSpec.mockResolvedValue({
-      ok: true,
-      pluginId: "matrix",
-      targetDir: "/tmp/openclaw-plugins/matrix",
-      version: "1.2.3",
-      npmResolution: {
-        name: "@openclaw/plugin-matrix",
+    mocks.installPluginFromNpmSpec.mockResolvedValue(
+      successfulInstall({
+        pluginId: "matrix",
+        npmSpec: "@openclaw/plugin-matrix",
         version: "1.2.3",
-        resolvedSpec: "@openclaw/plugin-matrix@1.2.3",
-        integrity: "sha512-test",
-        resolvedAt: "2026-05-01T00:00:00.000Z",
-      },
-    });
+        resolution: { integrity: "sha512-test" },
+      }),
+    );
   });
 
   afterEach(() => vi.restoreAllMocks());

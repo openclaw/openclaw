@@ -1,16 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { withIsolatedTestHome } from "../../../../test/test-env.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import type { BundledProviderPolicySurface } from "../../../plugins/provider-policy-surface.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../../../state/openclaw-state-db-cache.js";
-import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { VERSION } from "../../../version.js";
+import { setupPluginInstallTestState } from "./missing-configured-plugin-install.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   installPluginFromClawHub: vi.fn(),
@@ -99,18 +96,11 @@ vi.mock("../../../plugins/provider-policy-surface.js", async (importOriginal) =>
       : null,
 }));
 
-const testHome = withIsolatedTestHome({ mode: "hermetic" });
+const { testEnv: isolatedEnv, tempDirs } = setupPluginInstallTestState();
 const testEnv: NodeJS.ProcessEnv = {
-  HOME: testHome.tempHome,
-  OPENCLAW_HOME: testHome.tempHome,
-  OPENCLAW_STATE_DIR: path.join(testHome.tempHome, ".openclaw"),
+  ...isolatedEnv,
   OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.9.4",
 };
-afterAll(async () => {
-  await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(testEnv));
-  testHome.cleanup();
-});
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("configured plugin cohort availability", () => {
   beforeEach(() => {

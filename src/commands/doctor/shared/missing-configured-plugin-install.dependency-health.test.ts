@@ -31,6 +31,24 @@ const {
   setupPluginInstallSuite,
 } = await import("./missing-configured-plugin-install.suite.test-support.js");
 
+const writeRecords = mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease;
+const doctor = await import("./missing-configured-plugin-install.js");
+
+function mockInstalledPlugins(records: unknown, plugins: unknown[]) {
+  mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+  mocks.loadPluginMetadataSnapshot.mockReturnValue({ plugins, diagnostics: [] });
+}
+
+function expectNoPackageEffects() {
+  expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
+  expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+  expect(writeRecords).not.toHaveBeenCalled();
+}
+
+function readPayload(root: string, files: string[]) {
+  return files.map((file) => fs.readFileSync(path.join(root, file), "utf8"));
+}
+
 function createDependencyPlugin(
   rootDir: string,
   pluginId: string,
@@ -149,13 +167,12 @@ describe("configured npm dependency health and repair authority", () => {
       if (scenario === "bundled") {
         mockCurrentBundledPlugin(pluginId, packageName);
       }
-      mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({ [pluginId]: record });
-      mocks.loadPluginMetadataSnapshot.mockReturnValue({ plugins: [plugin], diagnostics: [] });
+      mockInstalledPlugins({ [pluginId]: record }, [plugin]);
       const {
         configuredPluginInstallIssueToHealthFinding,
         configuredPluginInstallIssueToRepairEffect,
         detectConfiguredPluginInstallHealthIssues,
-      } = await import("./missing-configured-plugin-install.js");
+      } = doctor;
 
       const env =
         scenario === "deferred"
@@ -166,8 +183,7 @@ describe("configured npm dependency health and repair authority", () => {
             }
           : testEnv;
       if (scenario === "unrequested") {
-        const { repairMissingPluginInstallsForIds } =
-          await import("./missing-configured-plugin-install.js");
+        const { repairMissingPluginInstallsForIds } = doctor;
         const beforePersistentEffect = vi.fn();
         const result = await repairMissingPluginInstallsForIds({
           cfg,
@@ -229,11 +245,7 @@ describe("configured npm dependency health and repair authority", () => {
       } else {
         expect(issues).toEqual([]);
       }
-      expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
-      expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
-      expect(
-        mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease,
-      ).not.toHaveBeenCalled();
+      expectNoPackageEffects();
     },
   );
 
@@ -275,10 +287,8 @@ describe("configured npm dependency health and repair authority", () => {
           installPath: rootDir,
         },
       };
-      mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-      mocks.loadPluginMetadataSnapshot.mockReturnValue({ plugins: [plugin], diagnostics: [] });
-      const { detectConfiguredPluginInstallHealthIssues } =
-        await import("./missing-configured-plugin-install.js");
+      mockInstalledPlugins(records, [plugin]);
+      const { detectConfiguredPluginInstallHealthIssues } = doctor;
 
       for (let pass = 0; pass < 2; pass++) {
         expect(await detectConfiguredPluginInstallHealthIssues({ cfg, env: testEnv })).toEqual([]);
@@ -290,11 +300,7 @@ describe("configured npm dependency health and repair authority", () => {
       expect(fs.realpathSync(path.join(nodeModulesDir, "openclaw"))).toBe(
         fs.realpathSync(hostRoot),
       );
-      expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
-      expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
-      expect(
-        mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease,
-      ).not.toHaveBeenCalled();
+      expectNoPackageEffects();
       expect(hasRetainedManagedNpmInstallMarker(rootDir)).toBe(false);
     },
   );
@@ -323,9 +329,7 @@ describe("configured npm dependency health and repair authority", () => {
         packageVersion: version,
       });
       const payloadFiles = ["package.json", "openclaw.plugin.json", "index.cjs"];
-      const originalPayload = payloadFiles.map((file) =>
-        fs.readFileSync(path.join(rootDir, file), "utf8"),
-      );
+      const originalPayload = readPayload(rootDir, payloadFiles);
       const markerPath = resolveRetainedManagedNpmInstallMarkerPath(rootDir);
       if (preexisting) {
         await markRetainedManagedNpmInstall({
@@ -353,8 +357,7 @@ describe("configured npm dependency health and repair authority", () => {
         update: { channel: "beta" },
         plugins: { entries: { [pluginId]: { enabled: true } } },
       };
-      mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-      mocks.loadPluginMetadataSnapshot.mockReturnValue({ plugins: [plugin], diagnostics: [] });
+      mockInstalledPlugins(records, [plugin]);
       mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
         officialPluginEntry({ id: pluginId, npmSpec: record.spec }),
       ]);
@@ -440,8 +443,7 @@ describe("configured npm dependency health and repair authority", () => {
           };
         },
       );
-      const { repairMissingPluginInstallsForIds } =
-        await import("./missing-configured-plugin-install.js");
+      const { repairMissingPluginInstallsForIds } = doctor;
       const repair = () =>
         repairMissingPluginInstallsForIds({
           cfg,
@@ -456,12 +458,15 @@ describe("configured npm dependency health and repair authority", () => {
       } else {
         const result = await repair();
         if (outcome === "updated" || outcome === "unchanged") {
-          expect(result.repairedPluginIds).toEqual([pluginId]);
-          expect(result.pluginInventoryChanged).toBe(true);
+          expect(result).toMatchObject({
+            repairedPluginIds: [pluginId],
+            pluginInventoryChanged: true,
+          });
           expect(result.records).toEqual({ [pluginId]: replacementRecord });
-          expect(
-            mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease,
-          ).toHaveBeenCalledWith(result.records, expectedIndexWriteOptions(cfg, env));
+          expect(writeRecords).toHaveBeenCalledWith(
+            result.records,
+            expectedIndexWriteOptions(cfg, env),
+          );
         } else {
           expect(result.failedPluginIds).toEqual([pluginId]);
           expect(result.records).toEqual(records);
@@ -469,9 +474,7 @@ describe("configured npm dependency health and repair authority", () => {
           if (outcome === "cleanup-error") {
             expect(result.warnings).toContainEqual(expect.stringContaining(cleanupFailure.message));
           }
-          expect(
-            mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease,
-          ).not.toHaveBeenCalled();
+          expect(writeRecords).not.toHaveBeenCalled();
           if (outcome === "consent-error") {
             expect(result.outcomes).toContainEqual(
               expect.objectContaining({
@@ -486,9 +489,7 @@ describe("configured npm dependency health and repair authority", () => {
           }
         }
       }
-      expect(payloadFiles.map((file) => fs.readFileSync(path.join(rootDir, file), "utf8"))).toEqual(
-        originalPayload,
-      );
+      expect(readPayload(rootDir, payloadFiles)).toEqual(originalPayload);
       expect(records).toEqual(originalRecords);
       expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
       if (outcome === "effect-refused") {
@@ -558,11 +559,10 @@ describe("configured npm dependency health and repair authority", () => {
     const cfg: OpenClawConfig = {
       plugins: { entries: Object.fromEntries(pluginIds.map((id) => [id, { enabled: true }])) },
     };
-    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-    mocks.loadPluginMetadataSnapshot.mockReturnValue({
-      plugins: fixtures.map((fixture) => fixture.plugin),
-      diagnostics: [],
-    });
+    mockInstalledPlugins(
+      records,
+      fixtures.map((fixture) => fixture.plugin),
+    );
     const failure = new Error(`multiple dependency repair ${scenario}`);
     const cleanupFailure = new Error("first dependency marker cleanup failed");
     if (scenario === "partial-marker-write") {
@@ -620,12 +620,9 @@ describe("configured npm dependency health and repair authority", () => {
       };
     });
     if (scenario === "persist-throw") {
-      mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease.mockRejectedValueOnce(
-        failure,
-      );
+      writeRecords.mockRejectedValueOnce(failure);
     }
-    const { repairMissingPluginInstallsForIds } =
-      await import("./missing-configured-plugin-install.js");
+    const { repairMissingPluginInstallsForIds } = doctor;
     const repair = () => {
       const params = { cfg, pluginIds, env: testEnv, beforePersistentEffect };
       return repairMissingPluginInstallsForIds(
@@ -644,7 +641,7 @@ describe("configured npm dependency health and repair authority", () => {
       expect(result.repairedPluginIds).toEqual([first.pluginId]);
       expect(result.failedPluginIds).toEqual([second.pluginId, existing.pluginId]);
       expect(result.records).toEqual({ ...records, [first.pluginId]: replacementRecord });
-      expect(mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease).toHaveBeenCalledWith(
+      expect(writeRecords).toHaveBeenCalledWith(
         result.records,
         expectedIndexWriteOptions(cfg, testEnv),
       );
@@ -678,9 +675,7 @@ describe("configured npm dependency health and repair authority", () => {
       expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
     }
     if (scenario !== "mixed" && scenario !== "persist-throw") {
-      expect(
-        mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease,
-      ).not.toHaveBeenCalled();
+      expect(writeRecords).not.toHaveBeenCalled();
     }
     expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
   });
@@ -724,8 +719,7 @@ describe("configured npm dependency health and repair authority", () => {
           throw failure;
         }
       });
-      const { repairMissingPluginInstallsForIds } =
-        await import("./missing-configured-plugin-install.js");
+      const { repairMissingPluginInstallsForIds } = doctor;
       const pending = repairMissingPluginInstallsForIds({
         cfg,
         env,
@@ -740,16 +734,12 @@ describe("configured npm dependency health and repair authority", () => {
         await entry;
         expect(returned).toBe(false);
         expect(await readPersistedInstalledPluginIndex({ env })).toEqual(before);
-        expect(
-          mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease,
-        ).not.toHaveBeenCalled();
+        expect(writeRecords).not.toHaveBeenCalled();
         release();
       }
       if (scenario === "refused") {
         await expect(pending).rejects.toBe(failure);
-        expect(
-          mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease,
-        ).not.toHaveBeenCalled();
+        expect(writeRecords).not.toHaveBeenCalled();
         expect(await readPersistedInstalledPluginIndex({ env })).toEqual(before);
         return;
       }

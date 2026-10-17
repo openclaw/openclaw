@@ -58,6 +58,17 @@ const { testEnv, tempDirs } = setupPluginInstallTestState();
 const oldVersion = "2026.9.3";
 const coreVersion = "2026.9.5";
 
+function writePackage(root: string, name: string, version: string) {
+  fs.writeFileSync(
+    path.join(root, "package.json"),
+    JSON.stringify({
+      name,
+      version,
+      openclaw: { extensions: ["./index.js"] },
+    }),
+  );
+}
+
 function createDriftedInstalls({
   hostVersion = coreVersion,
   installedVersion = oldVersion,
@@ -81,14 +92,7 @@ function createDriftedInstalls({
   for (const [pluginId, packageName] of packages) {
     const installPath = path.join(stateDir, "extensions", pluginId);
     fs.mkdirSync(installPath, { recursive: true });
-    fs.writeFileSync(
-      path.join(installPath, "package.json"),
-      JSON.stringify({
-        name: packageName,
-        version: installedVersion,
-        openclaw: { extensions: ["./index.js"] },
-      }),
-    );
+    writePackage(installPath, packageName, installedVersion);
     fs.writeFileSync(path.join(installPath, "index.js"), "export default function register() {}\n");
     fs.writeFileSync(
       path.join(installPath, "openclaw.plugin.json"),
@@ -133,15 +137,7 @@ function createDriftedInstalls({
         records[expectedPluginId],
         "installed plugin fixture",
       ).installPath;
-      const manifestPath = path.join(expectDefined(targetDir, "fixture path"), "package.json");
-      fs.writeFileSync(
-        manifestPath,
-        JSON.stringify({
-          name: parsed.name,
-          version,
-          openclaw: { extensions: ["./index.js"] },
-        }),
-      );
+      writePackage(expectDefined(targetDir, "fixture path"), parsed.name, version);
       return successfulInstall({
         pluginId: expectedPluginId,
         npmSpec: parsed.name,

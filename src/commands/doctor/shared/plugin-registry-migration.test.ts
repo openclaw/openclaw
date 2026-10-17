@@ -1,7 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-// Plugin registry migration tests cover doctor repair of persisted plugin registry state.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "../../../plugins/discovery.js";
 import { writePersistedInstalledPluginIndex } from "../../../plugins/installed-plugin-index-store-write.js";
@@ -17,7 +15,6 @@ import {
 import * as stateDbReadOnly from "../../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../../test-utils/database-cleanup.js";
-import { expectObjectFields } from "../../../test-utils/mock-call-assertions.js";
 import { migratePluginRegistryForDoctor } from "./plugin-registry-migration.js";
 const tempDirs: string[] = [];
 
@@ -28,15 +25,6 @@ afterEach(async () => {
 
 function makeTempDir() {
   return makeTrackedTempDir("openclaw-plugin-registry-migration", tempDirs);
-}
-
-function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return {
-    OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-    OPENCLAW_VERSION: "2026.4.25",
-    VITEST: "true",
-    ...overrides,
-  };
 }
 
 function createCandidate(rootDir: string): PluginCandidate {
@@ -77,7 +65,6 @@ function createCurrentIndex(): InstalledPluginIndex {
   };
 }
 
-const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
 function requireMigratedIndex(
   result: Awaited<ReturnType<typeof migratePluginRegistryForDoctor>>,
 ): InstalledPluginIndex {
@@ -87,12 +74,27 @@ function requireMigratedIndex(
   return result.current;
 }
 
-function requirePlugin(index: InstalledPluginIndex | null | undefined, pluginId: string) {
-  const plugin = index?.plugins.find((entry) => entry.pluginId === pluginId);
-  if (!plugin) {
-    throw new Error(`Expected plugin record for ${pluginId}`);
-  }
-  return plugin;
+function migrate(
+  stateDir: string,
+  options: Parameters<typeof migratePluginRegistryForDoctor>[0] = {},
+) {
+  return migratePluginRegistryForDoctor({
+    stateDir,
+    env: { OPENCLAW_BUNDLED_PLUGINS_DIR: undefined, OPENCLAW_VERSION: "2026.4.25", VITEST: "true" },
+    ...options,
+  });
+}
+
+function readRow(stateDir: string) {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) =>
+      db
+        .prepare(
+          "SELECT value_json, updated_at_ms FROM config_machine_state WHERE state_key = 'plugins.installedIndex'",
+        )
+        .get(),
+    { env: { OPENCLAW_STATE_DIR: stateDir } },
+  );
 }
 
 function insertStalePersistedIndexRow(stateDir: string, installRecordsJson = "{}") {
@@ -101,16 +103,12 @@ function insertStalePersistedIndexRow(stateDir: string, installRecordsJson = "{}
       const valueJson = JSON.stringify({
         revision: 123,
         index: {
-          version: 1,
+          ...createCurrentIndex(),
           warning: null,
-          hostContractVersion: "2026.4.25",
-          compatRegistryVersion: "compat-v1",
           migrationVersion: 0,
           policyHash: "stale-policy",
           generatedAtMs: 123,
           installRecords: JSON.parse(installRecordsJson) as unknown,
-          plugins: [],
-          diagnostics: [],
         },
       });
       db.prepare(
@@ -138,35 +136,13 @@ describe("doctor plugin registry migration", () => {
       throw error;
     });
     const readConfig = vi.fn(() => ({}));
-    await expect
-      .soft(
-        migratePluginRegistryForDoctor({
-          stateDir,
-          readConfig,
-          candidates: [],
-          env: hermeticEnv(),
-        }),
-      )
-      .rejects.toBe(error);
+    await expect.soft(migrate(stateDir, { readConfig, candidates: [] })).rejects.toBe(error);
     expect.soft(readConfig).not.toHaveBeenCalled();
     expect(readSpy).toHaveBeenCalledOnce();
     readSpy.mockRestore();
-    const row = runOpenClawStateWriteTransaction(
-      ({ db }) =>
-        db
-          .prepare(
-            "SELECT value_json, updated_at_ms FROM config_machine_state WHERE state_key = 'plugins.installedIndex'",
-          )
-          .get(),
-      { env: { OPENCLAW_STATE_DIR: stateDir } },
-    );
+    const row = readRow(stateDir);
     expect(row).toMatchObject({ updated_at_ms: 123 });
-    const restored = await migratePluginRegistryForDoctor({
-      stateDir,
-      readConfig,
-      candidates: [],
-      env: hermeticEnv(),
-    });
+    const restored = await migrate(stateDir, { readConfig, candidates: [] });
     expect(requireMigratedIndex(restored).installRecords).toEqual(records);
   });
 
@@ -176,18 +152,11 @@ describe("doctor plugin registry migration", () => {
     await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
     const readConfig = vi.fn(async () => ({}));
 
-    const result = await migratePluginRegistryForDoctor({
-      stateDir,
-      readConfig,
-      env: hermeticEnv(),
-    });
-    expectObjectFields(requireRecord(result, "migration result"), {
+    const result = await migrate(stateDir, { readConfig });
+    expect(result).toMatchObject({
       status: "skip-existing",
       migrated: false,
-    });
-    expectObjectFields(requireRecord(result.preflight, "migration preflight"), {
-      action: "skip-existing",
-      filePath,
+      preflight: { action: "skip-existing", filePath },
     });
     expect(readConfig).not.toHaveBeenCalled();
   });
@@ -197,27 +166,11 @@ describe("doctor plugin registry migration", () => {
     const installRecordsJson = '{"__proto__":{"source":"bogus"}}';
     insertStalePersistedIndexRow(stateDir, installRecordsJson);
 
-    await expect(
-      migratePluginRegistryForDoctor({
-        stateDir,
-        readConfig: async () => ({}),
-        env: hermeticEnv(),
-      }),
-    ).rejects.toThrow(
+    await expect(migrate(stateDir, { readConfig: async () => ({}) })).rejects.toThrow(
       "delete only the config_machine_state row with state_key='plugins.installedIndex'",
     );
 
-    const row = runOpenClawStateWriteTransaction(
-      ({ db }) =>
-        db
-          .prepare(
-            `SELECT value_json, updated_at_ms
-               FROM config_machine_state
-              WHERE state_key = 'plugins.installedIndex'`,
-          )
-          .get() as { value_json: string; updated_at_ms: number | bigint },
-      { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
-    );
+    const row = readRow(stateDir) as { value_json: string; updated_at_ms: number | bigint };
     expect(row.updated_at_ms).toBe(123);
     const persistedValue = JSON.parse(row.value_json) as {
       index: { migrationVersion: number; installRecords: unknown };
@@ -232,17 +185,12 @@ describe("doctor plugin registry migration", () => {
     const stateDir = makeTempDir();
     const readConfig = vi.fn(async () => ({}));
 
-    const result = await migratePluginRegistryForDoctor({
-      stateDir,
-      dryRun: true,
-      readConfig,
-      env: hermeticEnv(),
-    });
-    expectObjectFields(requireRecord(result, "migration result"), {
+    const result = await migrate(stateDir, { dryRun: true, readConfig });
+    expect(result).toMatchObject({
       status: "dry-run",
       migrated: false,
+      preflight: { action: "initialize" },
     });
-    expect(result.preflight.action).toBe("initialize");
     expect(readConfig).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(stateDir, "plugins", "installs.json"))).toBe(false);
   });
@@ -253,24 +201,23 @@ describe("doctor plugin registry migration", () => {
     fs.mkdirSync(pluginDir, { recursive: true });
     const candidate = createCandidate(pluginDir);
 
-    const result = await migratePluginRegistryForDoctor({
-      stateDir,
-      candidates: [candidate],
-      config: {},
-      env: hermeticEnv(),
-    });
-    expectObjectFields(requireRecord(result, "migration result"), {
+    const result = await migrate(stateDir, { candidates: [candidate], config: {} });
+    expect(result).toMatchObject({
       status: "migrated",
       migrated: true,
+      preflight: { action: "initialize" },
     });
-    expect(result.preflight.action).toBe("initialize");
     const current = requireMigratedIndex(result);
-    expect(current.refreshReason).toBe("migration");
-    expect(current.migrationVersion).toBe(1);
-    expect(requirePlugin(current, "demo").pluginId).toBe("demo");
+    expect(current).toMatchObject({
+      refreshReason: "migration",
+      migrationVersion: 1,
+      plugins: expect.arrayContaining([expect.objectContaining({ pluginId: "demo" })]),
+    });
 
     const persisted = await readPersistedInstalledPluginIndex({ stateDir });
-    expect(persisted?.refreshReason).toBe("migration");
-    expect(requirePlugin(persisted, "demo").pluginId).toBe("demo");
+    expect(persisted).toMatchObject({
+      refreshReason: "migration",
+      plugins: expect.arrayContaining([expect.objectContaining({ pluginId: "demo" })]),
+    });
   });
 });

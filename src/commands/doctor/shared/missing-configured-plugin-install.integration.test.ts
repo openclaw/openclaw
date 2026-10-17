@@ -34,6 +34,18 @@ import {
   repairMissingConfiguredPluginInstalls,
 } from "./missing-configured-plugin-install.js";
 
+async function readFiles(root: string, files: string[]) {
+  return Promise.all(files.map((file) => fsPromises.readFile(path.join(root, file), "utf8")));
+}
+
+function writeJson(root: string, file: string, value: unknown) {
+  fs.writeFileSync(path.join(root, file), JSON.stringify(value), "utf8");
+}
+
+function writeEntry(root: string, file = "index.js") {
+  fs.writeFileSync(path.join(root, file), "export default {};\n", "utf8");
+}
+
 describe("Doctor same-version required dependency repair", () => {
   const servers: http.Server[] = [];
   afterEach(async () => {
@@ -133,17 +145,9 @@ describe("Doctor same-version required dependency repair", () => {
               const configBefore = await fsPromises.readFile(state.configPath, "utf8");
               const indexBefore = await readPersistedInstalledPluginIndex();
               const projectInputs = ["package.json", "package-lock.json"];
-              const projectInputsBefore = await Promise.all(
-                projectInputs.map((file) =>
-                  fsPromises.readFile(path.join(packageInfo.projectRoot, file), "utf8"),
-                ),
-              );
+              const projectInputsBefore = await readFiles(packageInfo.projectRoot, projectInputs);
               const payloadPaths = ["package.json", "openclaw.plugin.json", "dist/index.js"];
-              const payloadBefore = await Promise.all(
-                payloadPaths.map((file) =>
-                  fsPromises.readFile(path.join(installed.targetDir, file), "utf8"),
-                ),
-              );
+              const payloadBefore = await readFiles(installed.targetDir, payloadPaths);
               const projectsBefore = (
                 await fsPromises.readdir(path.join(npmDir, "projects"))
               ).toSorted();
@@ -292,20 +296,10 @@ describe("Doctor same-version required dependency repair", () => {
                 scenario === "repaired",
               );
               expect(await fsPromises.readFile(state.configPath, "utf8")).toBe(configBefore);
-              expect(
-                await Promise.all(
-                  projectInputs.map((file) =>
-                    fsPromises.readFile(path.join(packageInfo.projectRoot, file), "utf8"),
-                  ),
-                ),
-              ).toEqual(projectInputsBefore);
-              expect(
-                await Promise.all(
-                  payloadPaths.map((file) =>
-                    fsPromises.readFile(path.join(installed.targetDir, file), "utf8"),
-                  ),
-                ),
-              ).toEqual(payloadBefore);
+              expect(await readFiles(packageInfo.projectRoot, projectInputs)).toEqual(
+                projectInputsBefore,
+              );
+              expect(await readFiles(installed.targetDir, payloadPaths)).toEqual(payloadBefore);
               await expect(
                 fsPromises.stat(path.join(packageInfo.projectRoot, "node_modules", dependency)),
               ).rejects.toMatchObject({ code: "ENOENT" });
@@ -326,26 +320,18 @@ describe("configured plugin install health for explicit load paths", () => {
 
   function writeProviderPlugin(rootDir: string): void {
     fs.mkdirSync(path.join(rootDir, "dist"), { recursive: true });
-    fs.writeFileSync(path.join(rootDir, "dist", "index.js"), "export default {};\n", "utf8");
-    fs.writeFileSync(
-      path.join(rootDir, "package.json"),
-      JSON.stringify({
-        name: "@openclaw/kilocode-provider",
-        version: "2026.7.1",
-        openclaw: { extensions: ["./index.ts"], runtimeExtensions: ["./dist/index.js"] },
-      }),
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(rootDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "kilocode",
-        enabledByDefault: true,
-        providers: ["kilocode"],
-        configSchema: { type: "object", properties: {} },
-      }),
-      "utf8",
-    );
+    writeEntry(rootDir, "dist/index.js");
+    writeJson(rootDir, "package.json", {
+      name: "@openclaw/kilocode-provider",
+      version: "2026.7.1",
+      openclaw: { extensions: ["./index.ts"], runtimeExtensions: ["./dist/index.js"] },
+    });
+    writeJson(rootDir, "openclaw.plugin.json", {
+      id: "kilocode",
+      enabledByDefault: true,
+      providers: ["kilocode"],
+      configSchema: { type: "object", properties: {} },
+    });
   }
 
   async function writePathInstallRecord(params: {
@@ -377,11 +363,7 @@ describe("configured plugin install health for explicit load paths", () => {
         : "{not-json",
       "utf8",
     );
-    fs.writeFileSync(
-      path.join(pluginDir, ".app.json"),
-      JSON.stringify({ apps: { gmail: { id: "connector_test" } } }),
-      "utf8",
-    );
+    writeJson(pluginDir, ".app.json", { apps: { gmail: { id: "connector_test" } } });
     const cfg: OpenClawConfig = {
       plugins: { load: { paths: [pluginDir] }, entries: { gmail: { enabled: true } } },
     };
@@ -398,36 +380,28 @@ describe("configured plugin install health for explicit load paths", () => {
   function writeBundledOpenCodeGoPlugin(bundledPluginsDir: string): void {
     const pluginDir = path.join(bundledPluginsDir, "opencode-go");
     fs.mkdirSync(pluginDir, { recursive: true });
-    fs.writeFileSync(path.join(pluginDir, "index.js"), "export default {};\n", "utf8");
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({
-        name: "@openclaw/opencode-go-provider",
-        version: "2026.8.1",
-        openclaw: {
-          extensions: ["./index.js"],
-          install: {
-            clawhubSpec: "clawhub:@openclaw/opencode-go-provider",
-            npmSpec: "@openclaw/opencode-go-provider",
-            defaultChoice: "npm",
-          },
-          build: { openclawVersion: "2026.8.1" },
-          release: { publishToClawHub: true, publishToNpm: true },
+    writeEntry(pluginDir);
+    writeJson(pluginDir, "package.json", {
+      name: "@openclaw/opencode-go-provider",
+      version: "2026.8.1",
+      openclaw: {
+        extensions: ["./index.js"],
+        install: {
+          clawhubSpec: "clawhub:@openclaw/opencode-go-provider",
+          npmSpec: "@openclaw/opencode-go-provider",
+          defaultChoice: "npm",
         },
-      }),
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "opencode-go",
-        activation: { onStartup: false },
-        enabledByDefault: true,
-        providers: ["opencode-go"],
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-      }),
-      "utf8",
-    );
+        build: { openclawVersion: "2026.8.1" },
+        release: { publishToClawHub: true, publishToNpm: true },
+      },
+    });
+    writeJson(pluginDir, "openclaw.plugin.json", {
+      id: "opencode-go",
+      activation: { onStartup: false },
+      enabledByDefault: true,
+      providers: ["opencode-go"],
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    });
   }
 
   function createProviderFixture() {
@@ -468,15 +442,11 @@ describe("configured plugin install health for explicit load paths", () => {
     await writePathInstallRecord({ cfg, env, pluginId: "opencode-go", installPath: stalePath });
 
     const snapshot = loadManifestMetadataSnapshot({ config: cfg, env });
-    expect(snapshot.plugins).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "opencode-go", origin: "bundled", rootDir: pluginDir }),
-      ]),
+    expect(snapshot.plugins).toContainEqual(
+      expect.objectContaining({ id: "opencode-go", origin: "bundled", rootDir: pluginDir }),
     );
-    expect(snapshot.discovery?.candidates).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ rootDir: pluginDir, origin: "bundled", configSelected: true }),
-      ]),
+    expect(snapshot.discovery?.candidates).toContainEqual(
+      expect.objectContaining({ rootDir: pluginDir, origin: "bundled", configSelected: true }),
     );
     expect(await detectConfiguredPluginInstallHealthIssues({ cfg, env })).toStrictEqual([]);
 
@@ -507,15 +477,13 @@ describe("configured plugin install health for explicit load paths", () => {
     const { cfg, env, pluginDir } = await createConfiguredCodexBundleFixture("valid");
 
     const snapshot = loadManifestMetadataSnapshot({ config: cfg, env });
-    expect(snapshot.plugins).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "gmail",
-          origin: "config",
-          rootDir: pluginDir,
-          bundleFormat: "codex",
-        }),
-      ]),
+    expect(snapshot.plugins).toContainEqual(
+      expect.objectContaining({
+        id: "gmail",
+        origin: "config",
+        rootDir: pluginDir,
+        bundleFormat: "codex",
+      }),
     );
     expect(await detectConfiguredPluginInstallHealthIssues({ cfg, env })).toStrictEqual([]);
 
@@ -575,8 +543,8 @@ describe("configured plugin install health for explicit load paths", () => {
       VITEST: "true",
     };
     const snapshot = loadManifestMetadataSnapshot({ config: cfg, env });
-    expect(snapshot.plugins).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: "opencode-go", origin: "bundled" })]),
+    expect(snapshot.plugins).toContainEqual(
+      expect.objectContaining({ id: "opencode-go", origin: "bundled" }),
     );
 
     const issues = await detectConfiguredPluginInstallHealthIssues({ cfg, env });
