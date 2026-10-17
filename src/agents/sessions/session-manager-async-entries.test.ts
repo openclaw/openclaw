@@ -70,32 +70,17 @@ function refuseHostWrites() {
 }
 
 function entryCases(manager: SessionManager, seed: string) {
-  return [
-    { type: "custom", append: () => manager.appendCustomEntryAsync("plugin-state", { count: 1 }) },
-    { type: "session_info", append: () => manager.appendSessionInfoAsync("  Name\ncontinued  ") },
-    {
-      type: "custom_message",
-      append: () =>
-        manager.appendCustomMessageEntryAsync("notice", "Visible custom entry", true, {
-          source: "fixture",
-        }),
-    },
-    { type: "reset", append: () => manager.appendResetBoundaryAsync("reset", seed) },
-    {
-      type: "compaction",
-      append: () =>
-        manager.appendCompactionAsync(
-          "Summary",
-          seed,
-          120,
-          { source: "fixture" },
-          true,
-          undefined,
-          20,
-        ),
-    },
-    { type: "label", append: () => manager.appendLabelChangeAsync(seed, "bookmark") },
-  ];
+  const data = () => ({ source: "fixture" });
+  return Object.entries({
+    custom: () => manager.appendCustomEntryAsync("plugin-state", { count: 1 }),
+    session_info: () => manager.appendSessionInfoAsync("  Name\ncontinued  "),
+    custom_message: () =>
+      manager.appendCustomMessageEntryAsync("notice", "Visible custom entry", true, data()),
+    reset: () => manager.appendResetBoundaryAsync("reset", seed),
+    compaction: () =>
+      manager.appendCompactionAsync("Summary", seed, 120, data(), true, undefined, 20),
+    label: () => manager.appendLabelChangeAsync(seed, "bookmark"),
+  }).map(([type, append]) => ({ type, append }));
 }
 
 it("commits every awaited entry family in call order with stable ids, ancestry, and reopened state", async () => {
@@ -136,16 +121,14 @@ it("commits every awaited entry family in call order with stable ids, ancestry, 
 it("awaits leaf, branch, raw persistence, and static transcript operations without host writes", async () => {
   await withFixture("navigation", async ({ target, manager, seed, reopen }) => {
     const tail = await manager.appendCustomEntryAsync("tail", { retained: true });
-    const leaf = await manager.appendLeafControlAsync({
+    const selectedLeaf = {
       targetId: seed,
       appendParentId: tail,
-      appendMode: "side",
-    });
-    expect(leaf).toMatchObject({
+      appendMode: "side" as const,
+    };
+    expect(await manager.appendLeafControlAsync(selectedLeaf)).toMatchObject({
+      ...selectedLeaf,
       type: "leaf",
-      targetId: seed,
-      appendParentId: tail,
-      appendMode: "side",
     });
     const leafReopened = await reopen();
     expect(navigation(leafReopened)).toEqual({ leaf: seed, parent: tail, mode: "side" });
@@ -155,9 +138,9 @@ it("awaits leaf, branch, raw persistence, and static transcript operations witho
       "committed newer user id",
     );
     const beforeStaleLeaf = await loadTranscriptEvents(target);
-    await expect(
-      manager.appendLeafControlAsync({ targetId: seed, appendParentId: tail, appendMode: "side" }),
-    ).rejects.toThrow("SQLite transcript changed");
+    await expect(manager.appendLeafControlAsync(selectedLeaf)).rejects.toThrow(
+      "SQLite transcript changed",
+    );
     expect(navigation(manager)).toMatchObject({ leaf: seed, parent: tail });
     expect(await loadTranscriptEvents(target)).toEqual(beforeStaleLeaf);
     await manager.reloadPersistedTranscriptAsync();

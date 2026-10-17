@@ -16,6 +16,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { createBasicAskUserArgs } from "../embedded-agent-subscribe.handlers.tools.ask-user.test-support.js";
 import { installSessionToolResultGuard } from "../session-tool-result-guard.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { createAskUserTool } from "../tools/ask-user-tool.js";
@@ -49,16 +50,8 @@ for (const outcome of ["timeout", "answer"] as const) {
         persistAgentSessionMessage(manager, message, { invalidateSerializedPrefixCache: false });
       const userId = await persist({ role: "user", content: "Which target?", timestamp: 1 });
       assert(userId);
-      const args = {
-        questions: [
-          {
-            id: "target",
-            header: "Target",
-            question: "Which target?",
-            options: [{ label: "Staging" }, { label: "Production" }],
-          },
-        ],
-      };
+      const args = createBasicAskUserArgs();
+      args.questions[0]!.question = "Which target?";
       const call = makeAgentAssistantMessage({
         content: [{ type: "toolCall", id: "ask", name: "ask_user", arguments: args }],
         stopReason: "toolUse",
@@ -72,31 +65,23 @@ for (const outcome of ["timeout", "answer"] as const) {
       const questions = new QuestionManager(scheduler);
       const waiting = createDeferredCore();
       let questionId = "";
-      type GatewayCall = Extract<
-        NonNullable<Parameters<typeof createAskUserTool>[0]["gatewayCall"]>,
-        (...args: never[]) => unknown
-      >;
-      const gatewayCall = (async (
-        method: string,
-        _options: unknown,
-        params: Record<string, unknown>,
-      ) => {
-        if (method === "question.request") {
-          expect(params.timeoutMs).toBe(900_000);
-          questionId = questions.request(params as Parameters<QuestionManager["request"]>[0]).id;
-          return { id: questionId };
-        }
-        if (method === "question.waitAnswer") {
-          const answer = questions.waitAnswer(questionId);
-          waiting.resolve();
-          return answer;
-        }
-        throw new Error(`Unexpected question method: ${method}`);
-      }) as GatewayCall;
-      const pending = createAskUserTool({ sessionKey: target.sessionKey, gatewayCall }).execute(
-        "ask",
-        args,
-      );
+      const pending = createAskUserTool({
+        sessionKey: target.sessionKey,
+        gatewayCall: async (method, _options, params) => {
+          if (method === "question.request") {
+            const request = params as Parameters<QuestionManager["request"]>[0];
+            expect(request.timeoutMs).toBe(900_000);
+            questionId = questions.request(request).id;
+            return { id: questionId };
+          }
+          if (method === "question.waitAnswer") {
+            const answer = questions.waitAnswer(questionId);
+            waiting.resolve();
+            return answer;
+          }
+          throw new Error(`Unexpected question method: ${method}`);
+        },
+      }).execute("ask", args);
       const rewriteReady = createDeferredCore();
       const releaseRewrite = createDeferredCore();
       const withWorker = metadataRuntime.withSessionMetadataWorker;

@@ -168,9 +168,7 @@ describe("SessionManager.open", () => {
     await expect(manager.appendModelChange("", "")).rejects.toThrow(
       "Invalid session transcript entry",
     );
-    expect(manager.getEntries()).toEqual(entriesBefore);
-    expect(manager.getLeafId()).toBeNull();
-    expect(manager.getAppendParentId()).toBeNull();
+    expect(appendState(manager)).toEqual([entriesBefore, null, null]);
   });
 
   it("uses the selected logical leaf immediately after a side append control", () => {
@@ -484,13 +482,9 @@ describe("SessionManager stale-parent rebase", () => {
       },
       { id, parentId: "status-assistant", message: continuation },
     ]);
-    expect(manager.buildSessionContext().messages).toEqual([
-      makeUserMessage("base", 1),
-      continuation,
-    ]);
-    expect(SessionManager.open(target, dir).buildSessionContext()).toEqual(
-      manager.buildSessionContext(),
-    );
+    const context = manager.buildSessionContext();
+    expect(context.messages).toEqual([makeUserMessage("base", 1), continuation]);
+    expect(SessionManager.open(target, dir).buildSessionContext()).toEqual(context);
   });
 
   it.each([
@@ -607,11 +601,8 @@ describe("SessionManager stale-parent rebase", () => {
     await persist("concurrent-tail", rebaseAssistant("concurrent"), 2, "base");
     const id = manager.appendMessage(makeUserMessage("side", 3));
     expect(await events()).toContainEqual(expect.objectContaining({ id, parentId: "base" }));
-    expect(manager.getEntries()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "concurrent-tail" }),
-        expect.objectContaining({ id }),
-      ]),
+    expect(manager.getEntries().map((entry) => entry.id)).toEqual(
+      expect.arrayContaining(["concurrent-tail", id]),
     );
     expect(() => manager.prepareTranscriptRewrite()).not.toThrow();
   });

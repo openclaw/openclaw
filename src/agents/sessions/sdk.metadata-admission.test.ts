@@ -70,6 +70,26 @@ function captureOutcome<T>(pending: Promise<T>) {
   );
 }
 
+function rejection<T>(outcome: Awaited<ReturnType<typeof captureOutcome<T>>>) {
+  expect(outcome.status).toBe("rejected");
+  if (outcome.status !== "rejected") {
+    throw new Error("Expected SDK initialization to reject");
+  }
+  return outcome.error;
+}
+
+function modelRegistry(models: (typeof testModel)[], key: string) {
+  const auth = AuthStorage.inMemory();
+  auth.setRuntimeApiKey(testModel.provider, key);
+  const registry = ModelRegistry.inMemory(auth);
+  registry.registerProvider(testModel.provider, {
+    api: testModel.api,
+    baseUrl: testModel.baseUrl,
+    models,
+  });
+  return registry;
+}
+
 it("restores prepared session context without waiting for an unrelated database writer", async () => {
   await withOpenClawTestState({ label: "sdk-restored-admission" }, async (state) => {
     const target = sessionTarget(state.agentDir("main"), "restored");
@@ -168,28 +188,14 @@ it.each(["model", "thinking", "context loading"] as const)(
                 manager.setSessionTarget(replacement);
                 return context;
               });
-      const model = {
-        ...testModel,
-        id: "sdk-metadata-fixture",
-        reasoning: true,
-        contextWindow: 32_768,
-        maxTokens: 8_192,
-      };
-      const authStorage = AuthStorage.inMemory();
-      authStorage.setRuntimeApiKey(model.provider, "synthetic-sdk-key");
-      const modelRegistry = ModelRegistry.inMemory(authStorage);
-      modelRegistry.registerProvider(model.provider, {
-        api: model.api,
-        baseUrl: model.baseUrl,
-        models: [model],
-      });
+      const model = { ...testModel, id: "sdk-metadata-fixture", reasoning: true };
       expect(getOwnedSessionTranscriptWriterFence()).toBeUndefined();
 
       const outcome = await captureOutcome(
         createSdk(manager, state.workspaceDir, {
           model,
           thinkingLevel: "high",
-          modelRegistry,
+          modelRegistry: modelRegistry([model], "synthetic-sdk-key"),
           settingsManager: SettingsManager.inMemory({
             compaction: { enabled: false },
             retry: { enabled: false },
@@ -198,34 +204,28 @@ it.each(["model", "thinking", "context loading"] as const)(
       );
       try {
         expect(intercepted).toHaveBeenCalledOnce();
+        expect.soft(await loadTranscriptEvents(replacement)).toEqual(replacementBefore);
+        const error = rejection(outcome);
         if (after === "context loading") {
           expect(await loadTranscriptEvents(original)).toEqual(originalBefore);
-          expect.soft(await loadTranscriptEvents(replacement)).toEqual(replacementBefore);
-          expect.soft(outcome.status).toBe("rejected");
-          if (outcome.status === "rejected") {
-            expect(outcome.error).toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
-            expect(outcome.error).not.toBeInstanceOf(SessionMetadataCommittedError);
-            expect(hasModelFallbackStop(outcome.error)).toBe(false);
-          }
+          expect(error).toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
+          expect(error).not.toBeInstanceOf(SessionMetadataCommittedError);
+          expect(hasModelFallbackStop(error)).toBe(false);
           return;
         }
         expect(completed.entry).toBeDefined();
         expect(completed.records).toHaveLength(after === "model" ? 2 : 3);
         expect(await loadTranscriptEvents(original)).toEqual(completed.records);
-        expect.soft(await loadTranscriptEvents(replacement)).toEqual(replacementBefore);
-        expect.soft(outcome.status).toBe("rejected");
-        if (outcome.status === "rejected") {
-          expect(outcome.error).toBeInstanceOf(SessionMetadataCommittedError);
-          expect(outcome.error).toMatchObject({
-            committedEntry: completed.entry,
-            committedTarget: original,
-            committedVersion: {
-              generation: completed.watermark?.generation,
-              rawSeq: completed.watermark?.maxSeq,
-            },
-          });
-          expect(hasModelFallbackStop(outcome.error)).toBe(true);
-        }
+        expect(error).toBeInstanceOf(SessionMetadataCommittedError);
+        expect(error).toMatchObject({
+          committedEntry: completed.entry,
+          committedTarget: original,
+          committedVersion: {
+            generation: completed.watermark?.generation,
+            rawSeq: completed.watermark?.maxSeq,
+          },
+        });
+        expect(hasModelFallbackStop(error)).toBe(true);
       } finally {
         intercepted.mockRestore();
         if (outcome.status === "fulfilled") {
@@ -290,10 +290,7 @@ it.each([
         }
         const outcome = await pending;
         if (timing === "during") {
-          expect(outcome.status).toBe("rejected");
-          if (outcome.status === "rejected") {
-            expect(String(outcome.error)).toContain("changed during initial context read");
-          }
+          expect(String(rejection(outcome))).toContain("changed during initial context read");
           expect(manager.getLeafId()).toBe(selection === "branch" ? firstId : null);
           expect(await loadTranscriptEvents(target)).toEqual(before);
         } else {
@@ -527,27 +524,14 @@ it.each(["SDK initialization", "model transition"] as const)(
         process.chdir(firstDir);
         const manager = SessionManager.open(relativeTarget, firstDir);
         const capturedTarget = manager.getSessionTarget();
-        const reasoningModel = {
-          ...testModel,
-          id: "cwd-reasoning",
-          reasoning: true,
-          contextWindow: 32_768,
-          maxTokens: 8_192,
-        };
+        const reasoningModel = { ...testModel, id: "cwd-reasoning", reasoning: true };
         const plainModel = { ...reasoningModel, id: "cwd-plain", reasoning: false };
-        const authStorage = AuthStorage.inMemory();
-        authStorage.setRuntimeApiKey(testModel.provider, "synthetic-cwd-key");
-        const modelRegistry = ModelRegistry.inMemory(authStorage);
-        modelRegistry.registerProvider(testModel.provider, {
-          api: testModel.api,
-          baseUrl: testModel.baseUrl,
-          models: [reasoningModel, plainModel],
-        });
+        const registry = modelRegistry([reasoningModel, plainModel], "synthetic-cwd-key");
         const create = () =>
           createSdk(manager, firstDir, {
             model: reasoningModel,
             thinkingLevel: "high",
-            modelRegistry,
+            modelRegistry: registry,
             settingsManager: SettingsManager.inMemory({ defaultThinkingLevel: "high" }),
           });
         if (operation === "model transition") {
