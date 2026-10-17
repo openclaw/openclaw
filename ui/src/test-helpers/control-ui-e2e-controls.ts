@@ -10,15 +10,16 @@ let mockRequestBindingSequence = 0;
 
 export async function installMockGatewayScript(
   page: Page,
-  initScript: string,
+  script: string,
   handlers?: Record<string, (params: unknown) => unknown>,
 ): Promise<void> {
+  let content = script;
   if (handlers) {
     const binding = `__openclawMockRequest${++mockRequestBindingSequence}`;
     await page.exposeBinding(binding, (_source, method: string, params: unknown) =>
       handlers[method]!(params),
     );
-    initScript += `;for (const method of ${JSON.stringify(Object.keys(handlers))}) {
+    content += `;for (const method of ${JSON.stringify(Object.keys(handlers))}) {
       window.openclawControlUiE2eGateway.setRequestHandler(method, ({ params, respond }) => {
         window[${JSON.stringify(binding)}](method, params).then(respond, (error) => respond({
           __mockError: { code: "MOCK_REQUEST_HANDLER_FAILED", message: String(error) }
@@ -26,7 +27,7 @@ export async function installMockGatewayScript(
       });
     }`;
   }
-  await page.addInitScript({ content: initScript });
+  await page.addInitScript({ content });
 }
 
 export function createMockGatewayControls(
