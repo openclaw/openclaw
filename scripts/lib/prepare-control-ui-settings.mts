@@ -10,15 +10,21 @@ export async function prepareControlUiSettings(repoRoot: string): Promise<void> 
     return;
   }
   const scripts = path.resolve(import.meta.dirname, "..");
-  await promisify(execFile)(
-    process.execPath,
-    [
-      "--import",
-      pathToFileURL(path.join(scripts, "tsx.mjs")).href,
-      path.join(scripts, "build-plugin-control-ui.mts"),
-      "--prepare-settings",
-      repoRoot,
-    ],
-    { cwd: repoRoot, maxBuffer: 1024 * 1024 },
+  // Vite bundles this helper; share the launcher's live ownership module, not a bundled copy.
+  const {
+    distArtifactEntryArgs,
+    withDistArtifactOwnership,
+  }: typeof import("./dist-artifact-ownership.mts") = await import(
+    pathToFileURL(path.join(scripts, "lib/dist-artifact-ownership.mts")).href
+  );
+  await withDistArtifactOwnership(repoRoot, () =>
+    promisify(execFile)(
+      process.execPath,
+      distArtifactEntryArgs(path.join(scripts, "build-plugin-control-ui.mts"), [
+        "--prepare-settings",
+        repoRoot,
+      ]),
+      { cwd: repoRoot, maxBuffer: 1024 * 1024 },
+    ),
   );
 }
