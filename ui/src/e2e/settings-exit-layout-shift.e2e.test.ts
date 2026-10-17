@@ -29,11 +29,18 @@ suite.define(() => {
               pathname: "/settings/model-providers",
               routeId: "model-providers",
             });
+            const topbarGeometry = () =>
+              page.evaluate(() =>
+                [".topbar-nav-toggle", ".topbar-search", ".header-new-session"].map((selector) => {
+                  const rect = document.querySelector(selector)?.getBoundingClientRect();
+                  return rect && [rect.x, rect.y, rect.width, rect.height];
+                }),
+              );
+            const settingsTopbar = await topbarGeometry();
             await page.evaluate(() => {
               const shifts: unknown[] = [];
-              Reflect.set(window, "__layoutShifts", shifts);
-              new PerformanceObserver((list) => {
-                for (const entry of list.getEntries()) {
+              const record = (entries: PerformanceEntryList) => {
+                for (const entry of entries) {
                   const shift = entry as PerformanceEntry & {
                     value: number;
                     sources?: { node?: Node | null }[];
@@ -47,7 +54,13 @@ suite.define(() => {
                     ),
                   });
                 }
-              }).observe({ type: "layout-shift" });
+              };
+              const observer = new PerformanceObserver((list) => record(list.getEntries()));
+              observer.observe({ type: "layout-shift" });
+              Reflect.set(window, "__drainLayoutShifts", () => {
+                record(observer.takeRecords());
+                return shifts;
+              });
             });
             await page.evaluate((pathname) => {
               history.pushState(null, "", pathname);
@@ -57,15 +70,16 @@ suite.define(() => {
             const shifts = await page.evaluate(
               () =>
                 new Promise((resolve) => {
-                  // Layout-shift entries arrive after the frame that paints them.
+                  // Layout-shift entries are queued once the frame that paints them ends.
                   requestAnimationFrame(() =>
                     requestAnimationFrame(() =>
-                      setTimeout(() => resolve(Reflect.get(window, "__layoutShifts")), 100),
+                      resolve(Reflect.get(window, "__drainLayoutShifts")()),
                     ),
                   );
                 }),
             );
             expect(shifts).toEqual([]);
+            expect(await topbarGeometry()).toEqual(settingsTopbar);
           },
         ),
     );
