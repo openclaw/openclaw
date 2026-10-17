@@ -88,18 +88,14 @@ function seedTab(rows: Record<string, Omit<StoredComposerSession, "updatedAt">>)
   });
 }
 
-async function writeDraft(name: string, revision = 10) {
-  expect(
-    await drafts.writeDurableComposerDraft(
-      scope(name),
-      {
-        revision,
-        text: "",
-        attachments: [{ blob: new Blob(["attachment"]), mimeType: "text/plain" }],
-      },
-      { expectedRevision: 0, writeId: name },
-    ),
-  ).toMatchObject({ status: "persisted" });
+const attachments = [{ blob: new Blob(["attachment"]), mimeType: "text/plain" }];
+async function writeDraft(name: string) {
+  const result = await drafts.writeDurableComposerDraft(
+    scope(name),
+    { revision: 10, text: "", attachments },
+    { expectedRevision: 0, writeId: name },
+  );
+  expect(result).toMatchObject({ status: "persisted" });
 }
 
 beforeEach(() => {

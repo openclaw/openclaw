@@ -11,7 +11,6 @@ const pageUrl = "https://example.com/article";
 const secondUrl = "https://second.example/research";
 const wrap = (text: string, source: "Web Search" | "Web Fetch" = "Web Search") =>
   wrapWebContent(text, source === "Web Search" ? "web_search" : "web_fetch");
-
 const description = "Search provider description.";
 const result = (url = pageUrl) => ({
   url,
@@ -26,26 +25,20 @@ const expectedSource = (url: string, fields = {}) => ({
   excerptKind: "search",
   ...fields,
 });
-
-function search(rows = [result()]) {
-  return {
-    kind: "results",
-    results: rows,
-    externalContent: { untrusted: true, source: "web_search", wrapped: true },
-  };
-}
-
-function tool(details: unknown, name = "web_search", id = "search-call") {
-  return {
-    role: "toolResult",
-    toolName: name,
-    toolCallId: id,
-    runId,
-    details,
-    content: [{ type: "text", text: JSON.stringify(details) }],
-  };
-}
-
+const externalContent = (source: string) => ({ untrusted: true, source, wrapped: true });
+const search = (results = [result()]) => ({
+  kind: "results",
+  results,
+  externalContent: externalContent("web_search"),
+});
+const tool = (details: unknown = search(), name = "web_search", id = "search-call") => ({
+  role: "toolResult",
+  toolName: name,
+  toolCallId: id,
+  runId,
+  details,
+  content: [{ type: "text", text: JSON.stringify(details) }],
+});
 const assistant = (content: unknown) => ({ role: "assistant", runId, content });
 const searchTool = (rows = [result()]) => tool(search(rows));
 const bareSource = { url: pageUrl, title: "example.com", domain: "example.com" };
@@ -55,7 +48,7 @@ const answer = (content = `[Article](${pageUrl})`) => ({
 });
 const linksAnswer = (urls: string[]) => answer(urls.map((url) => `[source](${url})`).join(" "));
 const call = (id: string, name = "web_search") => ({ type: "toolcall", id, name, arguments: {} });
-const inline = (details: unknown, extra = {}) =>
+const inline = (details: unknown = search(), extra = {}) =>
   assistant([
     call("inline"),
     { type: "toolresult", id: "inline", name: "web_search", details, ...extra },
@@ -63,7 +56,6 @@ const inline = (details: unknown, extra = {}) =>
 const live = { __openclawToolStreamLive: true, __openclawToolStreamResultReceived: false };
 const controlPath = { basePath: "/control" };
 const gateway = { ...controlPath, sessionPublicOrigin: "https://gateway.example" };
-
 function group(messages: unknown[], owner = runId): MessageGroup {
   return {
     kind: "group",
@@ -80,52 +72,46 @@ function group(messages: unknown[], owner = runId): MessageGroup {
     })),
   };
 }
-
-function previews(
+const previews = (
   messages: unknown[],
   final: unknown = answer(),
   options: { basePath?: string; sessionPublicOrigin?: string } = {},
-) {
-  return extractChatSourcePreviews({
+) =>
+  extractChatSourcePreviews({
     groups: [group([...messages, final])],
     answer: final,
     runId,
     ...options,
   });
-}
 const framed = (groups: MessageGroup[], final: unknown) =>
   extractChatSourcePreviews({ groups, answer: final, runId });
 
-function none(messages: unknown[], final: unknown = answer()) {
+const none = (messages: unknown[], final: unknown = answer()) =>
   expect(previews(messages, final)).toEqual([]);
-}
 
 const pageExcerpt =
   "This is the readable article paragraph retained from the fetched page, with enough detail to preview its contents.";
-function fetched() {
-  return {
-    url: pageUrl,
-    finalUrl: secondUrl,
-    status: 200,
-    title: wrap("Fetched title", "Web Fetch"),
-    text: wrap(`# Page title\n\n[Home](/)\n\n${pageExcerpt}`, "Web Fetch"),
-    externalContent: { untrusted: true, source: "web_fetch", wrapped: true },
-  };
-}
+const fetched = (text = `# Page title\n\n[Home](/)\n\n${pageExcerpt}`, status = 200) => ({
+  url: pageUrl,
+  finalUrl: secondUrl,
+  status,
+  title: wrap("Fetched title", "Web Fetch"),
+  text: wrap(text, "Web Fetch"),
+  externalContent: externalContent("web_fetch"),
+});
+const fetchTool = (payload = fetched()) => tool(payload, "web_fetch", "fetch-call");
 
 it("omits dedicated-card links before the cap without hiding ordinary GitHub or external pages", () => {
+  const repo = "https://github.com/example/repo";
   const excluded = [
-    ...Array.from(
-      { length: 8 },
-      (_, index) => `https://github.com/example/repo/issues/${index + 1}`,
-    ),
-    "https://github.com/example/repo/pull/9#discussion",
+    ...Array.from({ length: 8 }, (_, index) => `${repo}/issues/${index + 1}`),
+    `${repo}/pull/9#discussion`,
     `${location.origin}/control/chat/main/research`,
     "https://gateway.example/control/chat/main/research",
   ];
   const retained = [
-    "https://github.com/example/repo",
-    "https://github.com/example/repo/blob/main/README.md",
+    repo,
+    `${repo}/blob/main/README.md`,
     "https://github.example/example/repo/issues/1",
     "https://docs.example/control/chat/main/research",
     `${location.origin}/control/docs/guide`,
@@ -163,9 +149,8 @@ it("selects cited results in answer order using Markdown links and labels search
 });
 
 it("reads standalone JSON result text and completed inline tool results", () => {
-  const payload = search();
-  const standalone = { ...tool(payload), details: undefined };
-  const completed = inline(payload);
+  const standalone = { ...tool(), details: undefined };
+  const completed = inline();
   expect(previews([standalone])).toEqual(previews([completed]));
   expect(previews([completed])).toHaveLength(1);
   none([{ ...completed, ...live }]);
@@ -175,43 +160,32 @@ it("prefers a page excerpt and matches an observed redirect without repeating th
   const final = answer(`[Original](${pageUrl}) and [redirect](${secondUrl}#details)`);
   const payload = fetched();
   payload.text += "\n\n[Showing truncated web_fetch content. Full output: /private/temp.txt.]";
-  expect(previews([searchTool(), tool(payload, "web_fetch", "fetch-call")], final)).toEqual([
+  expect(previews([searchTool(), fetchTool(payload)], final)).toEqual([
     expectedSource(secondUrl, {
       title: "Fetched title",
       excerptKind: "page",
       excerpt: pageExcerpt,
     }),
   ]);
-  none([tool(fetched(), "web_fetch")], answer(`${pageUrl}?different=1`));
+  none([fetchTool()], answer(`${pageUrl}?different=1`));
 });
 
 it("does not use other runs, missing owners, later results, or assistant-written source JSON", () => {
   const final = answer();
-  const payload = search();
-  none(
-    [
-      { ...tool(payload), runId: "other-run" },
-      { ...tool(payload), runId: undefined },
-      assistant(JSON.stringify(payload)),
-    ],
-    final,
+  const other = { ...tool(), runId: "other-run" };
+  const unowned = { ...tool(), runId: undefined };
+  none([other, unowned, assistant(JSON.stringify(search()))], final);
+  expect(framed([group([tool()], "other-run"), group([final]), group([tool()])], final)).toEqual(
+    [],
   );
-  expect(
-    framed([group([tool(payload)], "other-run"), group([final]), group([tool(payload)])], final),
-  ).toEqual([]);
-  expect(framed([group([tool(payload)])], { ...final, runId: "other-run" })).toEqual([]);
+  expect(framed([group([tool()])], { ...final, runId: "other-run" })).toEqual([]);
 });
 
 it("uses canonical message identities and rejects nested run overrides", () => {
-  const payload = search();
   const final = { ...answer(), runId: undefined, __openclaw: { runId } };
-  const searchMessage = {
-    ...tool(payload),
-    runId: "ignored-transport-run",
-    __openclaw: { runId },
-  };
+  const searchMessage = { ...tool(), runId: "ignored-transport-run", __openclaw: { runId } };
   expect(previews([searchMessage], final)).toHaveLength(1);
-  none([inline(payload, { runId: "different" })]);
+  none([inline(undefined, { runId: "different" })]);
 });
 
 it("rejects forged web provenance in another tool envelope or contradicted invocation", () => {
@@ -236,7 +210,7 @@ it("keeps citation-only search answers without assigning generated prose to a pa
   expect(previews([tool(payload)])).toEqual([bareSource]);
   none([tool({ kind: "raw", data: search() })]);
   none([{ ...searchTool(), isError: true }]);
-  none([tool({ ...fetched(), status: 404 }, "web_fetch")]);
+  none([fetchTool(fetched(undefined, 404))]);
 });
 
 it.each(["javascript:alert(1)", "https://user:secret@example.com/article"])(
@@ -256,21 +230,18 @@ it("does not expose malformed framing or invent missing page prose", () => {
     ),
   };
   expect(previews([searchTool([row])])).toEqual([bareSource]);
-  const page = { ...fetched(), text: wrap("# Heading only\n\n[Home](/)", "Web Fetch") };
-  expect(previews([tool(page, "web_fetch")])[0]?.excerpt).toBeUndefined();
+  expect(previews([fetchTool(fetched("# Heading only\n\n[Home](/)"))])[0]?.excerpt).toBeUndefined();
 });
 
 it("bounds previews and excerpt text while preserving Unicode", () => {
-  const longPage = fetched();
-  longPage.text = wrap(
+  const longPage = fetched(
     "# Heading\n\n" +
       "> A quoted paragraph with enough detail but nested outside the main page prose.\n\n" +
       "Short navigation.\n\n" +
       "A useful **opening paragraph** with enough detail to preview the fetched document.\n\n" +
       "More article content. ".repeat(2000),
-    "Web Fetch",
   );
-  expect(previews([tool(longPage, "web_fetch")])[0]?.excerpt).toBe(
+  expect(previews([fetchTool(longPage)])[0]?.excerpt).toBe(
     "A useful opening paragraph with enough detail to preview the fetched document.",
   );
   const rows = Array.from({ length: 20 }, (_, index) => ({
