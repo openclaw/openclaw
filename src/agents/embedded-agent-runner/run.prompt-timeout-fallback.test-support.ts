@@ -26,6 +26,86 @@ import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harnes
 let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
+function runPrompt(runId: string, overrides: Partial<Parameters<typeof runEmbeddedAgent>[0]> = {}) {
+  return runEmbeddedAgent({
+    ...createOverflowRunParams(state),
+    provider: "openai",
+    model: "gpt-5.4",
+    runId,
+    ...overrides,
+  });
+}
+
+async function fallbackConfig() {
+  const config = createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-opus-4-6"]);
+  const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+  setRuntimeConfigSnapshot(config);
+  return config;
+}
+
+function promptFailure(message = "LLM request timed out.") {
+  return makeAttemptResult({
+    assistantTexts: [],
+    terminal: { kind: "failed", source: "prompt", error: new Error(message) },
+  });
+}
+
+function completedAttempt(text?: string) {
+  const assistant = {
+    role: "assistant" as const,
+    provider: "openai",
+    model: "gpt-5.4",
+    stopReason: "stop" as const,
+    content: text ? [{ type: "text", text }] : [],
+  };
+  return makeAttemptResult({
+    assistantTexts: text ? [text] : [],
+    lastAssistant: assistant as never,
+    currentAttemptAssistant: assistant as never,
+    currentAttemptCompletedAssistant: assistant as never,
+  });
+}
+function settledWriteTimeout(prompt: string, aborted = false) {
+  const toolUseAssistant = {
+    role: "assistant" as const,
+    stopReason: "toolUse" as const,
+    provider: "openai",
+    model: "gpt-5.4",
+    content: [
+      {
+        type: "toolCall",
+        id: "tool_write",
+        name: "write",
+        arguments: { path: "note.txt", content: "done" },
+      },
+    ],
+  };
+  const abortedAssistant = {
+    role: "assistant" as const,
+    stopReason: "aborted" as const,
+    provider: "openai",
+    model: "gpt-5.4",
+    content: [],
+  };
+  return makeAttemptResult({
+    assistantTexts: [],
+    terminal: { kind: "timeout", phase: "prompt", source: "idle", ...(aborted ? { aborted } : {}) },
+    toolMetas: [
+      { ...(aborted ? { toolCallId: "tool_write" } : {}), toolName: "write", replaySafe: false },
+    ],
+    itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+    messagesSnapshot: [
+      { role: "user", content: [{ type: "text", text: prompt }] },
+      toolUseAssistant,
+      { role: "toolResult", toolCallId: "tool_write", toolName: "write", isError: false },
+      abortedAssistant,
+    ] as never,
+    lastAssistant: abortedAssistant as never,
+    currentAttemptAssistant: abortedAssistant as never,
+    currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+  });
+}
+
 describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
   beforeAll(async () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
@@ -55,32 +135,19 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
       mockedClassifyFailoverReason.mockReturnValue(reason);
       mockedRunEmbeddedAttempt
         .mockResolvedValueOnce(
-          makeAttemptResult({
-            assistantTexts: [],
-            terminal: {
-              kind: "failed",
-              source: "prompt",
-              error: new Error(
-                reason === "timeout"
-                  ? "LLM request timed out."
-                  : reason === "server_error"
-                    ? "HTTP 520: controlled provider server error"
-                    : "overloaded",
-              ),
-            },
-          }),
+          promptFailure(
+            reason === "timeout"
+              ? "LLM request timed out."
+              : reason === "server_error"
+                ? "HTTP 520: controlled provider server error"
+                : "overloaded",
+          ),
         )
         .mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["Completion received."] }));
 
-      const config = createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-opus-4-6"]);
-      const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
-      setRuntimeConfigSnapshot(config);
-      await runEmbeddedAgent({
-        ...createOverflowRunParams(state),
-        provider: "openai",
-        model: "gpt-5.4",
+      const config = await fallbackConfig();
+      await runPrompt("run-completion-transient-retry", {
         agentHarnessRuntimeOverride: harness,
-        runId: "run-completion-transient-retry",
         inputProvenance: { kind: "inter_session", sourceTool },
         config,
       });
@@ -251,11 +318,7 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(
         makeAttemptResult({ assistantTexts: ["Completion received."] }),
       );
-      await runEmbeddedAgent({
-        ...createOverflowRunParams(state),
-        provider: "openai",
-        model: "gpt-5.4",
-        runId: "run-completion-model-fallback",
+      await runPrompt("run-completion-model-fallback", {
         inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
         modelRoutingProvenance: {
           stage: "fallback",
@@ -285,23 +348,10 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
     async (restriction) => {
       mockedClassifyFailoverReason.mockReturnValue("timeout");
       mockedRunEmbeddedAttempt
-        .mockResolvedValueOnce(
-          makeAttemptResult({
-            assistantTexts: [],
-            terminal: {
-              kind: "failed",
-              source: "prompt",
-              error: new Error("LLM request timed out."),
-            },
-          }),
-        )
+        .mockResolvedValueOnce(promptFailure())
         .mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["Completion received."] }));
-      await runEmbeddedAgent({
-        ...createOverflowRunParams(state),
-        provider: "openai",
-        model: "gpt-5.4",
+      await runPrompt("run-restricted-completion-retry", {
         agentHarnessRuntimeOverride: "openclaw",
-        runId: "run-restricted-completion-retry",
         inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
         ...restriction,
       });
@@ -319,27 +369,8 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
     // The transient retry owner continues the same model first; a timeout that
     // persists past the retry budget hands off to the configured fallback.
     mockedClassifyFailoverReason.mockReturnValue("timeout");
-    mockedRunEmbeddedAttempt.mockResolvedValue(
-      makeAttemptResult({
-        assistantTexts: [],
-        terminal: {
-          kind: "failed",
-          source: "prompt",
-          error: new Error("LLM request timed out."),
-        },
-      }),
-    );
-
-    const config = createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-opus-4-6"]);
-    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
-    setRuntimeConfigSnapshot(config);
-    const promise = runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      provider: "openai",
-      model: "gpt-5.4",
-      runId: "run-prompt-timeout-fallback",
-      config,
-    });
+    mockedRunEmbeddedAttempt.mockResolvedValue(promptFailure());
+    const promise = runPrompt("run-prompt-timeout-fallback", { config: await fallbackConfig() });
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
     await expect(promise).rejects.toThrow("LLM request timed out.");
@@ -350,89 +381,19 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
   it.each(["openclaw", "codex"] as const)(
     "recovers an idle timeout after a settled write under the %s harness without replaying the prompt",
     async (harness) => {
-      const toolUseAssistant = {
-        role: "assistant" as const,
-        stopReason: "toolUse" as const,
-        provider: "openai",
-        model: "gpt-5.4",
-        content: [
-          {
-            type: "toolCall",
-            id: "tool_write",
-            name: "write",
-            arguments: { path: "note.txt", content: "done" },
-          },
-        ],
-      };
-      const abortedAssistant = {
-        role: "assistant" as const,
-        stopReason: "aborted" as const,
-        provider: "openai",
-        model: "gpt-5.4",
-        content: [],
-      };
-      const finalAssistant = {
-        role: "assistant" as const,
-        stopReason: "stop" as const,
-        provider: "openai",
-        model: "gpt-5.4",
-        content: [{ type: "text", text: "The note was written once and verified." }],
-      };
+      const prompt = "Write note.txt, then read it to verify its contents.";
       mockedClassifyFailoverReason.mockReturnValue("timeout");
       mockedRunEmbeddedAttempt
-        .mockResolvedValueOnce(
-          makeAttemptResult({
-            assistantTexts: [],
-            terminal: { kind: "timeout", phase: "prompt", source: "idle", aborted: true },
-            toolMetas: [{ toolCallId: "tool_write", toolName: "write", replaySafe: false }],
-            itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-            messagesSnapshot: [
-              {
-                role: "user",
-                content: [
-                  { type: "text", text: "Write note.txt, then read it to verify its contents." },
-                ],
-              },
-              toolUseAssistant,
-              {
-                role: "toolResult",
-                toolCallId: "tool_write",
-                toolName: "write",
-                isError: false,
-              },
-              abortedAssistant,
-            ] as never,
-            lastAssistant: abortedAssistant as never,
-            currentAttemptAssistant: abortedAssistant as never,
-            currentAttemptReplayMetadata: {
-              hadPotentialSideEffects: true,
-              replaySafe: false,
-            },
-          }),
-        )
-        .mockResolvedValueOnce(
-          makeAttemptResult({
-            assistantTexts: ["The note was written once and verified."],
-            lastAssistant: finalAssistant as never,
-            currentAttemptAssistant: finalAssistant as never,
-            currentAttemptCompletedAssistant: finalAssistant as never,
-          }),
-        );
+        .mockResolvedValueOnce(settledWriteTimeout(prompt, true))
+        .mockResolvedValueOnce(completedAttempt("The note was written once and verified."));
       mockedBuildEmbeddedRunPayloads.mockImplementation(({ assistantTexts }) =>
         assistantTexts.map((text) => ({ text })),
       );
 
-      const config = createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-opus-4-6"]);
-      const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
-      setRuntimeConfigSnapshot(config);
-      const result = await runEmbeddedAgent({
-        ...createOverflowRunParams(state),
-        provider: "openai",
-        model: "gpt-5.4",
+      const result = await runPrompt("run-post-tool-idle-continuation", {
         agentHarnessRuntimeOverride: harness,
-        prompt: "Write note.txt, then read it to verify its contents.",
-        runId: "run-post-tool-idle-continuation",
-        config,
+        prompt,
+        config: await fallbackConfig(),
       });
 
       expect(result.payloads).toEqual([{ text: "The note was written once and verified." }]);
@@ -460,79 +421,12 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
   );
 
   it("reports the idle timeout when settled-write finalization produces no answer", async () => {
-    const toolUseAssistant = {
-      role: "assistant" as const,
-      stopReason: "toolUse" as const,
-      provider: "openai",
-      model: "gpt-5.4",
-      content: [
-        {
-          type: "toolCall",
-          id: "tool_write",
-          name: "write",
-          arguments: { path: "note.txt", content: "done" },
-        },
-      ],
-    };
-    const abortedAssistant = {
-      role: "assistant" as const,
-      stopReason: "aborted" as const,
-      provider: "openai",
-      model: "gpt-5.4",
-      content: [],
-    };
-    const emptyAssistant = {
-      role: "assistant" as const,
-      stopReason: "stop" as const,
-      provider: "openai",
-      model: "gpt-5.4",
-      content: [],
-    };
     mockedClassifyFailoverReason.mockReturnValue("timeout");
     mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(
-        makeAttemptResult({
-          assistantTexts: [],
-          terminal: { kind: "timeout", phase: "prompt", source: "idle" },
-          toolMetas: [{ toolName: "write", replaySafe: false }],
-          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-          messagesSnapshot: [
-            { role: "user", content: [{ type: "text", text: "Write note.txt" }] },
-            toolUseAssistant,
-            {
-              role: "toolResult",
-              toolCallId: "tool_write",
-              toolName: "write",
-              isError: false,
-            },
-            abortedAssistant,
-          ] as never,
-          lastAssistant: abortedAssistant as never,
-          currentAttemptAssistant: abortedAssistant as never,
-          currentAttemptReplayMetadata: {
-            hadPotentialSideEffects: true,
-            replaySafe: false,
-          },
-        }),
-      )
-      .mockResolvedValue(
-        makeAttemptResult({
-          assistantTexts: [],
-          lastAssistant: emptyAssistant as never,
-          currentAttemptAssistant: emptyAssistant as never,
-          currentAttemptCompletedAssistant: emptyAssistant as never,
-        }),
-      );
-
-    const config = createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-opus-4-6"]);
-    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
-    setRuntimeConfigSnapshot(config);
-    const result = await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      provider: "openai",
-      model: "gpt-5.4",
-      runId: "run-post-tool-idle-finalization-empty",
-      config,
+      .mockResolvedValueOnce(settledWriteTimeout("Write note.txt"))
+      .mockResolvedValue(completedAttempt());
+    const result = await runPrompt("run-post-tool-idle-finalization-empty", {
+      config: await fallbackConfig(),
     });
 
     // Initial attempt plus both tool-free finalization attempts; no replay, no fallback model.

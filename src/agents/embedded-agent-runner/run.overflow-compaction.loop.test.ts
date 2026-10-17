@@ -104,8 +104,8 @@ vi.mock("../subagents/registry/subagent-registry.js", () => ({
 let admittedRunContext: AdmittedRunContext;
 
 function makeDispatchInput(
-  sessionManager: object,
-  replayState: EmbeddedRunReplayState,
+  sessionManager: object = {},
+  replayState: EmbeddedRunReplayState = createEmbeddedRunReplayState(),
 ): Parameters<typeof prepareAndDispatchEmbeddedRunAttempt>[0] {
   const workspaceDir = tempDirs.make("openclaw-retry-dispatch-");
   const params = {
@@ -220,7 +220,7 @@ function makeDispatchInput(
 }
 
 async function dispatchExecSession(execSession: ExecSessionDefaults) {
-  const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+  const input = makeDispatchInput();
   input.preparedRuntime.snapshot().pluginHarnessOwnsTransport = false;
   input.runInput.runParams.execSession = execSession;
   input.runInput.runParams.toolsAllow = ["exec", "process"];
@@ -230,6 +230,15 @@ async function dispatchExecSession(execSession: ExecSessionDefaults) {
 
   const { dispatchedAttempt } = await prepareAndDispatchEmbeddedRunAttempt(input);
   return dispatchedAttempt;
+}
+
+function capCase(
+  contextTokens: number | undefined,
+  expectedBudget: number | undefined,
+  nativeModelOwned = true,
+  sessionKey = "agent:main:session-1",
+) {
+  return { contextTokens, expectedBudget, nativeModelOwned, sessionKey };
 }
 
 describe("embedded run retry dispatch", () => {
@@ -284,7 +293,7 @@ describe("embedded run retry dispatch", () => {
     const flush = createDeferred();
     const afterTurnError = new Error("after-turn cleanup failed");
     const onContextAccountingEvent = vi.fn();
-    const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+    const input = makeDispatchInput();
     input.preparedRuntime.snapshot().agentHarness.id = "openclaw";
     input.preparedRuntime.snapshot().pluginHarnessOwnsTransport = false;
     Object.assign(input.runInput.runParams, { onContextAccountingEvent });
@@ -366,40 +375,15 @@ describe("embedded run retry dispatch", () => {
   });
 
   it.each([
-    {
-      contextTokens: 40_000,
-      expectedBudget: 40_000,
-      nativeModelOwned: true,
-      sessionKey: "agent:main:session-1",
-    },
-    {
-      contextTokens: undefined,
-      expectedBudget: undefined,
-      nativeModelOwned: true,
-      sessionKey: "agent:main:session-1",
-    },
-    {
-      contextTokens: 2_000_000,
-      expectedBudget: 1_050_000,
-      nativeModelOwned: true,
-      sessionKey: "agent:main:session-1",
-    },
-    {
-      contextTokens: 40_000,
-      expectedBudget: 40_000,
-      nativeModelOwned: false,
-      sessionKey: "agent:main:session-1",
-    },
-    {
-      contextTokens: 40_000,
-      expectedBudget: 40_000,
-      nativeModelOwned: true,
-      sessionKey: "agent:main:subagent:child",
-    },
+    capCase(40_000, 40_000),
+    capCase(undefined, undefined),
+    capCase(2_000_000, 1_050_000),
+    capCase(40_000, 40_000, false),
+    capCase(40_000, 40_000, true, "agent:main:subagent:child"),
   ])(
     "forwards cap $contextTokens to Codex start/resume (native catalog: $nativeModelOwned, $sessionKey)",
     async ({ contextTokens, expectedBudget, nativeModelOwned, sessionKey }) => {
-      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+      const input = makeDispatchInput();
       input.runInput.resolvedSessionKey = sessionKey;
       const { runParams, provider, modelId } = input.runInput;
       runParams.config = {
@@ -474,7 +458,7 @@ describe("embedded run retry dispatch", () => {
         admittedRunContext = await admission.admit("plugin-harness", "dispatch-test");
       }
       bindGatewayContextResolver(admittedRunContext, () => gateway);
-      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+      const input = makeDispatchInput();
       input.preparedRuntime.snapshot().agentHarness.id = "openclaw";
       input.preparedRuntime.snapshot().pluginHarnessOwnsTransport = false;
       input.sessionPromptState.activePrompt.internal = continuation;
@@ -492,7 +476,7 @@ describe("embedded run retry dispatch", () => {
   it("reads the adopted session fact and retains identity help when publication is unavailable", async () => {
     const gateway = {} as GatewayRequestContext;
     bindGatewayContextResolver(admittedRunContext, () => gateway);
-    const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+    const input = makeDispatchInput();
     await prepareAndDispatchEmbeddedRunAttempt(input);
     const sessionTarget = {
       agentId: "main",
@@ -523,7 +507,7 @@ describe("embedded run retry dispatch", () => {
 
   it("retains accepted spawns for the logical owner after a late post-compaction abort", async () => {
     const postCompactionAbortError = new Error("post-compaction loop detected");
-    const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+    const input = makeDispatchInput();
     input.getPostCompactionAbortError = vi.fn(() => postCompactionAbortError);
     const acceptedSessionSpawns = [
       {

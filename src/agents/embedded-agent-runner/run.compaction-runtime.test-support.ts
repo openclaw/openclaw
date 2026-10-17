@@ -2,8 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { expect, vi } from "vitest";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import type { ContextEngine } from "../../context-engine/types.js";
-import type { ToolResultMessage } from "../../llm/types.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -74,21 +74,14 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     sessionKey: `agent:main:${sessionId}`,
     storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
   };
-  const toolResult: ToolResultMessage = {
-    role: "toolResult",
-    toolCallId: "fixture-call",
-    toolName: "read",
-    content: [
-      {
-        type: "text",
-        text:
-          options.toolResultText ??
-          (options.oversized === false ? "small output" : "fixture output ".repeat(1_800)),
-      },
-    ],
-    isError: false,
-    timestamp: 5,
-  };
+  const toolResult = makeTextToolResult(
+    "fixture-call",
+    "read",
+    options.toolResultText ??
+      (options.oversized === false ? "small output" : "fixture output ".repeat(1_800)),
+    false,
+    5,
+  );
   const recentUser = makeAgentUserMessage({ content: "Read the fixture output", timestamp: 3 });
   const messages = [
     makeAgentUserMessage({ content: "Earlier topic", timestamp: 1 }),
@@ -250,23 +243,12 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       await (
         await openWriter()
       ).appendCompactionAsync("Summary of earlier topic", firstKeptEntryId, 4_097);
-      return {
-        ok: true,
-        compacted: true,
-        result: {
-          summary: "Summary of earlier topic",
-          firstKeptEntryId,
-          tokensBefore: 4_097,
-          tokensAfter: 3_000,
-        },
-      };
+      return recoveryCompaction({ summary: "Summary of earlier topic", firstKeptEntryId });
     };
     const compact = vi.fn<ContextEngine["compact"]>(async () => commitCompaction());
-    const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () => ({
-      changed: false,
-      rewrittenEntries: 0,
-      bytesFreed: 0,
-    }));
+    const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () =>
+      unchangedMaintenance(),
+    );
     const contextEngine: ContextEngine = {
       info: { id: "fixture-engine", name: "Fixture engine", ownsCompaction: true },
       ingest: async () => {
@@ -487,6 +469,20 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     await dispose();
     throw error;
   }
+}
+
+export function recoveryCompaction(
+  result: Partial<NonNullable<Awaited<ReturnType<ContextEngine["compact"]>>["result"]>> = {},
+) {
+  return {
+    ok: true,
+    compacted: true,
+    result: { summary: "successor context", tokensBefore: 4_097, tokensAfter: 3_000, ...result },
+  };
+}
+
+export function unchangedMaintenance() {
+  return { changed: false, rewrittenEntries: 0, bytesFreed: 0 };
 }
 
 export async function withRecoveryFixture(

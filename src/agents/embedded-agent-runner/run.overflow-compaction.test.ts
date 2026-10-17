@@ -64,6 +64,14 @@ const baseRunParams = {
   runId: "run-1",
 } satisfies PreparedEmbeddedRunInput["runParams"];
 
+const recoveryRequest = {
+  tokenBudget: 200_000,
+  trigger: "overflow",
+  diagId: "diag-1",
+  attempt: 1,
+  maxAttempts: 3,
+} satisfies Parameters<typeof compactEmbeddedRunForRecovery>[1];
+
 function makeAttempt(overrides: Partial<EmbeddedRunAttemptResult> = {}): EmbeddedRunAttemptResult {
   return {
     terminal: { kind: "failed", source: "prompt", error: new Error("context overflow") },
@@ -173,12 +181,13 @@ function makeRecoveryInput(
 
 describe("compactEmbeddedRunForRecovery", () => {
   beforeEach(() => {
+    const completionSelection = { provider: "openai", modelId: "gpt-5.5", agentDir: "/tmp/main" };
     compactRuntimeMocks.compactEmbeddedAgentSessionOnDemand.mockReset();
     completionMocks.acquireSimpleCompletionModelForAgent.mockReset();
     completionMocks.completeWithPreparedSimpleCompletionModel.mockReset();
     completionMocks.resolveSimpleCompletionSelectionForAgent.mockReset();
     completionMocks.acquireSimpleCompletionModelForAgent.mockResolvedValue({
-      selection: { provider: "openai", modelId: "gpt-5.5", agentDir: "/tmp/main" },
+      selection: completionSelection,
       model: {
         provider: "openai",
         id: "gpt-5.5",
@@ -198,11 +207,7 @@ describe("compactEmbeddedRunForRecovery", () => {
       content: [{ type: "text", text: "done" }],
       usage: { input: 1, output: 1, total: 2 },
     });
-    completionMocks.resolveSimpleCompletionSelectionForAgent.mockReturnValue({
-      provider: "openai",
-      modelId: "gpt-5.5",
-      agentDir: "/tmp/main",
-    });
+    completionMocks.resolveSimpleCompletionSelectionForAgent.mockReturnValue(completionSelection);
   });
 
   it("carries locked model, auth, fallback, cache, and overflow facts into compaction", async () => {
@@ -246,11 +251,7 @@ describe("compactEmbeddedRunForRecovery", () => {
         },
       }),
       {
-        tokenBudget: 200_000,
-        trigger: "overflow",
-        diagId: "diag-1",
-        attempt: 1,
-        maxAttempts: 3,
+        ...recoveryRequest,
         currentTokenCount: 277_403,
       },
     );
@@ -303,11 +304,9 @@ describe("compactEmbeddedRunForRecovery", () => {
             contextEngine,
           }),
           {
-            tokenBudget: 200_000,
+            ...recoveryRequest,
             trigger,
             diagId: `diag-${trigger}`,
-            attempt: 1,
-            maxAttempts: 3,
           },
         );
         const assertion = expect(pending).resolves.toMatchObject({
@@ -346,11 +345,8 @@ describe("compactEmbeddedRunForRecovery", () => {
           resolvedSessionKey: "legacy-session",
         }),
         {
-          tokenBudget: 200_000,
-          trigger: "overflow",
+          ...recoveryRequest,
           diagId: "diag-unbound",
-          attempt: 1,
-          maxAttempts: 3,
         },
       ),
     ).resolves.toMatchObject({
@@ -416,11 +412,9 @@ describe("compactEmbeddedRunForRecovery", () => {
         contextEngine: makeContextEngine(compact, false),
       });
       const recovery = {
+        ...recoveryRequest,
         tokenBudget: 100,
-        trigger: "overflow" as const,
         diagId: "ordered-commit",
-        attempt: 1,
-        maxAttempts: 3,
       };
       const pending = compactEmbeddedRunForRecovery(input, recovery);
       if (outcome === "cancelled") {

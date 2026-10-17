@@ -8,6 +8,8 @@ import type { ContextEngineRuntimeContext } from "../../context-engine/types.js"
 import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
 import {
   type RecoveryFixture,
+  recoveryCompaction,
+  unchangedMaintenance,
   waitForCompactionAbort,
   withRecoveryFixture,
 } from "./run.compaction-runtime.test-support.js";
@@ -156,17 +158,11 @@ describe("embedded compaction recovery authority", () => {
           // the real durable row and retain its private admitted-writer facts.
           expect(sessionTarget).not.toHaveProperty("expectedWriterRunId");
           expect(fixture.loadEntry()?.sessionId).toBe(before?.sessionId);
-          return {
-            ok: true,
-            compacted: true,
-            result: {
-              summary: "Engine-owned successor context",
-              tokensBefore: 4_097,
-              tokensAfter: 3_000,
-              sessionId: successorId,
-              sessionTarget: { ...sessionTarget, sessionId: successorId, threadId: "thread-hint" },
-            },
-          };
+          return recoveryCompaction({
+            summary: "Engine-owned successor context",
+            sessionId: successorId,
+            sessionTarget: { ...sessionTarget, sessionId: successorId, threadId: "thread-hint" },
+          });
         });
 
         await expect(fixture.recover(kind)).resolves.toEqual(
@@ -233,16 +229,7 @@ describe("embedded compaction recovery authority", () => {
         fixture.updates.mockClear();
         fixture.stop();
       });
-      fixture.compact.mockResolvedValueOnce({
-        ok: true,
-        compacted: true,
-        result: {
-          summary: "successor context",
-          tokensBefore: 4_097,
-          tokensAfter: 3_000,
-          sessionId: successorId,
-        },
-      });
+      fixture.compact.mockResolvedValueOnce(recoveryCompaction({ sessionId: successorId }));
       try {
         await expect(fixture.recover("overflow")).rejects.toBe(fixture.callerError);
         expect(atObserver).toMatchObject({
@@ -271,11 +258,9 @@ describe("embedded compaction recovery authority", () => {
       const before = await fixture.snapshot();
       const entryBefore = fixture.loadEntry();
       let rewriteError: unknown;
-      fixture.compact.mockResolvedValueOnce({
-        ok: true,
-        compacted: true,
-        result: { summary: "engine-owned context", tokensBefore: 4_097, tokensAfter: 3_000 },
-      });
+      fixture.compact.mockResolvedValueOnce(
+        recoveryCompaction({ summary: "engine-owned context" }),
+      );
       fixture.maintain.mockImplementationOnce(async ({ runtimeContext }) => {
         try {
           await runtimeContext?.rewriteTranscriptEntries?.({
@@ -284,7 +269,7 @@ describe("embedded compaction recovery authority", () => {
         } catch (error) {
           rewriteError = error;
         }
-        return { changed: false, rewrittenEntries: 0, bytesFreed: 0 };
+        return unchangedMaintenance();
       });
       fixture.updates.mockClear();
 
@@ -383,7 +368,7 @@ describe("embedded compaction recovery authority", () => {
         committed = await fixture.snapshot();
         fixture.updates.mockClear();
         fixture.stop();
-        return { changed: false, rewrittenEntries: 0, bytesFreed: 0 };
+        return unchangedMaintenance();
       });
 
       await expect.soft(fixture.recover("overflow", true)).rejects.toBe(fixture.callerError);
@@ -574,7 +559,7 @@ describe("embedded compaction recovery authority", () => {
         let retainedRewrite: ContextEngineRuntimeContext["rewriteTranscriptEntries"];
         fixture.maintain.mockImplementationOnce(async ({ runtimeContext }) => {
           retainedRewrite = runtimeContext?.rewriteTranscriptEntries;
-          return { changed: false, rewrittenEntries: 0, bytesFreed: 0 };
+          return unchangedMaintenance();
         });
         await expect(fixture.recover("overflow")).resolves.toEqual({ action: "retry" });
         if (!retainedRewrite) {
