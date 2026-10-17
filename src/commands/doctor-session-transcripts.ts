@@ -176,6 +176,7 @@ export async function noteSessionTranscriptHealth(options?: {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   shouldRepair?: boolean;
+  integrityCheck?: "quick" | "full";
   postSessionPluginMigration?: PreparedPostSessionPluginMigration;
   postSessionPluginMigrationPlanBound?: boolean;
   onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
@@ -253,6 +254,7 @@ export async function noteSessionTranscriptHealth(options?: {
     const acpKeyReport = await repairAcpSessionMetaKeysForDoctor({
       ...rowRepairParams,
       authority: maintenanceAuthority,
+      integrityCheck: params.integrityCheck,
     });
     const titleReport = await repairLegacySessionTitles({
       ...rowRepairParams,

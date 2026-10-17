@@ -32,12 +32,12 @@ export function resolveSchemaMigrationBackupTables(
   return [...tables].toSorted();
 }
 
-/** Backup format does not select integrity coverage; same-version repair retains full verification. */
+/** Backup format does not select integrity coverage, including same-version repair. */
 export function resolveSchemaMigrationIntegrityCheck(
   migration: SchemaMigration,
   check: "quick" | "full" = "quick",
 ): SqliteIntegrityCheckOptions {
-  if (check === "full" || migration.foundVersion >= migration.supportedVersion) {
+  if (check === "full") {
     return { check: "full" };
   }
   return { check, tables: resolveSchemaMigrationIntegrityTables(migration) };

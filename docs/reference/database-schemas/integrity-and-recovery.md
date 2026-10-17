@@ -140,9 +140,9 @@ next full verification catches it. The seven-day admission interval bounds
 reuse of old full-verification evidence. The checksum protects the small seal
 against incomplete writes; it is not a hash of the database contents.
 
-Doctor, including `openclaw doctor --fix`, explicit copied-file verification,
-backup verification, and compaction retain their full checks regardless of any
-seal. Migration and repair owners validate before mutation, verify their
+Doctor migrations and repairs use the integrity policy below regardless of any
+seal. Explicit copied-file verification, backup verification, Doctor recovery,
+and compaction retain their full checks. Migration and repair owners validate before mutation, verify their
 changes, and publish new admitted facts only after successful settlement. They
 cannot reuse a seal for a changed schema. Backup and restore publish independent
 SQLite files; their new physical identities require fresh admission even if an
@@ -169,7 +169,7 @@ under its own version's behavior.
 | Startup with a matching, recent clean-close seal       | Match checksum, schema identity, file metadata, and empty journals; reuse admitted facts without startup or post-ready scans                                                               |
 | Startup without a reusable seal                        | Run the normal full format, schema, canonical-index, integrity, and foreign-key validation                                                                                                 |
 | Same-process reopen or new worker                      | Reuse live file-bound facts or a matching seal; retain current ownership and durable quarantine-row checks                                                                                 |
-| Before a pending migration                             | Run whole-database quick integrity, full integrity of affected tables, and existing foreign-key, role, schema, and index checks; `--full-integrity-check` requests full database integrity |
+| Before a migration or ordinary same-version repair     | Run whole-database quick integrity, full integrity of affected tables, and existing foreign-key, role, schema, and index checks; `--full-integrity-check` requests full database integrity |
 | After a migration or repair                            | Verify changes and publish committed facts through the existing owner                                                                                                                      |
 | Explicit verification, Doctor recovery, and compaction | Retain full checks before accepting or rewriting the database; ordinary Doctor migrations use the migration policy above                                                                   |
 
@@ -177,7 +177,8 @@ The migration default does not compare every untouched index with its table.
 An index/table mismatch outside the declared migration scope therefore needs
 `--full-integrity-check` to be detected. Structural corruption still refuses
 migration through the whole-database quick check, and a quick result never
-publishes full-verification facts. See
+publishes full-verification facts. Recorded corruption still requires full
+verification before its quarantine is cleared. See
 [migration integrity checks](/install/updating#migration-integrity-checks).
 
 Canonical index repair checks each rebuilt table and its indexes once after

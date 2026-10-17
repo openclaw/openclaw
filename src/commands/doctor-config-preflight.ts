@@ -105,6 +105,7 @@ async function runDoctorConfigPreflightOperation(
     measure: measurePreflightStep,
     runWithPluginMetadataSnapshot: (scope, run) => pluginMetadata.run(scope, run),
     doctorOnlyStateMigrations: options.doctorOnlyStateMigrations === true,
+    integrityCheck: options.integrityCheck,
   });
   await using pluginMetadata = createDoctorPluginMetadataSnapshotScope({
     getBaseSnapshot: () => configSnapshotRead?.pluginMetadataSnapshot,

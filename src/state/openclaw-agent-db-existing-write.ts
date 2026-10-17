@@ -30,6 +30,8 @@ export function withExistingAgentLeaseWrite<T>(
     {
       operationLabel: "agent.database.maintenance.admission",
       schemaSql: existingAgentLeaseSchema,
+      // Draining a migration lease needs its owned tables, not every shared-state index.
+      integrityCheck: "quick",
       // Maintenance must drain published lease schemas before first-use provenance is added.
       schemaCompatibility: { allowedMissingColumns: ["agent_database_leases.provenance"] },
     },

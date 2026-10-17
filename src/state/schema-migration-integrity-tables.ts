@@ -174,21 +174,26 @@ export function resolveSchemaMigrationIntegrityTables(
   migration: SchemaMigration,
 ): readonly string[] {
   const tables = new Set(["schema_meta"]);
+  if (migration.foundVersion === migration.supportedVersion) {
+    for (const table of SCHEMA_MIGRATION_HISTORICAL_REPAIR_TABLES[migration.kind]) {
+      tables.add(table);
+    }
+  }
   for (let version = migration.foundVersion + 1; version <= migration.supportedVersion; version++) {
     for (const table of migrationTables[migration.kind][version] ?? []) {
       tables.add(table);
     }
   }
   if (migration.kind === "agent") {
+    for (const { tableName } of STARTUP_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
+      tables.add(tableName);
+    }
     if (migration.foundVersion < 20) {
       tables.add("board_widgets");
       tables.add("memory_index_sources");
       tables.add("memory_index_paths_fts");
     }
     if (migration.foundVersion < 25) {
-      for (const { tableName } of STARTUP_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
-        tables.add(tableName);
-      }
       for (const table of SCHEMA_MIGRATION_HISTORICAL_REPAIR_TABLES.agent) {
         tables.add(table);
       }
