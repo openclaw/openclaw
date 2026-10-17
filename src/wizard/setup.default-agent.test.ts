@@ -168,11 +168,13 @@ describe("runSetupWizard default-agent ownership", () => {
       snapshot: await mocks.readSnapshot(),
       assertCurrent: () => {},
     }));
-    mocks.modelAuth.mockImplementation(async ({ config }: { config: OpenClawConfig }) => ({
-      config,
-      authProfiles: [],
-      persistAuthProfiles: async () => {},
-    }));
+    mocks.modelAuth
+      .mockReset()
+      .mockImplementation(async ({ config }: { config: OpenClawConfig }) => ({
+        config,
+        authProfiles: [],
+        persistAuthProfiles: async () => {},
+      }));
     const config = {
       wizard: { securityAcknowledgedAt: "2026-07-01T00:00:00.000Z" },
       agents: {
@@ -227,6 +229,7 @@ describe("runSetupWizard default-agent ownership", () => {
       const { readSetupConfigAuthority } =
         await vi.importActual<typeof import("./setup.shared.js")>("./setup.shared.js");
       mocks.readAuthority.mockImplementation(readSetupConfigAuthority);
+      let endpointReplaced = false;
       vi.mocked(prompter.select).mockImplementationOnce(async () => {
         await state.writeConfig({
           ...config,
@@ -236,6 +239,7 @@ describe("runSetupWizard default-agent ownership", () => {
             },
           },
         });
+        endpointReplaced = true;
         return false;
       });
       const sendCredentialRequest = vi.fn();
@@ -247,9 +251,10 @@ describe("runSetupWizard default-agent ownership", () => {
         },
       );
 
-      await expect(runWizard({ authChoice: "litellm-api-key" })).rejects.toBeInstanceOf(
-        ConfigMutationConflictError,
-      );
+      await expect(
+        runWizard({ authChoice: "litellm-api-key", workspace: state.workspaceDir }),
+      ).rejects.toBeInstanceOf(ConfigMutationConflictError);
+      expect(endpointReplaced).toBe(true);
       expect(sendCredentialRequest).not.toHaveBeenCalled();
       expect(mocks.writeConfig).not.toHaveBeenCalled();
     });

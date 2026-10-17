@@ -389,7 +389,7 @@ describe("runSetupModelAuthStep", () => {
           })
           .mockResolvedValueOnce("skip");
         const sendCredentialRequest = vi.fn();
-        applyAuthChoice.mockImplementationOnce(async ({ assertCurrent }) => {
+        applyAuthChoice.mockReset().mockImplementationOnce(async ({ assertCurrent }) => {
           if (phase === "preparation") {
             await replaceConfig();
           }
