@@ -1,44 +1,30 @@
 import { describe, expect, it } from "vitest";
 import {
-  WORKER_PROTOCOL_FEATURES,
   WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
-  WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_INFERENCE_MAX_CONTEXT_MESSAGES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { testWorkerDescriptor } from "../node-host/node-worker-supervisor.test-support.js";
 import type { WorkerGitHubLaunchBinding, WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { buildWorkerConnectParams, parseWorkerLaunchDescriptor } from "./launch-descriptor.js";
 
+const githubIdentity: WorkerGitHubLaunchBinding = {
+  token: "worker-github-token",
+  login: "worker-bot",
+  branch: "session/worker-1",
+};
+
 function launchDescriptor(): WorkerLaunchDescriptor {
+  const plan = testWorkerDescriptor("/tmp/openclaw-worker/workspace", "Inspect the workspace.");
   return {
-    version: 4,
+    ...plan,
     connectionEndpoint: { kind: "unix", socketPath: "/tmp/openclaw-worker/gateway.sock" },
-    admission: {
-      environmentId: "environment-1",
-      credential: ["worker", "fixture", "value"].join("-"),
-      sessionId: "session-1",
-      ownerEpoch: 3,
-      rpcSetVersion: WORKER_RPC_SET_VERSION,
-      handshake: {
-        bundleHash: "a".repeat(64),
-        openclawVersion: "2026.7.12",
-        protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
-      },
-    },
     assignment: {
-      agentId: "agent-1",
-      operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
-      agentRuntimeIdentityToken: "signed-runtime-token",
-      runId: "run-1",
-      turnId: "turn-1",
-      prompt: "Inspect the workspace.",
-      suppressPromptTranscript: false,
-      workspaceDir: "/tmp/openclaw-worker/workspace",
+      ...plan.assignment,
       permissionMode: "workspace",
-      workerContainmentRoot: "/tmp/openclaw-worker/workspace",
-      modelRef: { provider: "provider-1", model: "model-1" },
+      workerContainmentRoot: plan.assignment.workspaceDir,
       inferenceOptions: { reasoning: "medium", maxTokens: 512 },
       initialMessages: [
         {
@@ -140,16 +126,11 @@ describe("worker launch descriptor", () => {
 
   it("round-trips turn-bound GitHub identity without adding it to worker admission", () => {
     const descriptor = launchDescriptor();
-    const identity = {
-      token: "worker-github-token",
-      login: "worker-bot",
-      branch: "session/worker-1",
-    };
     for (const github of [
       undefined,
-      identity,
+      githubIdentity,
       {
-        ...identity,
+        ...githubIdentity,
         remoteUrl: "https://github.com/openclaw/openclaw.git",
         gitAuthor: { name: "Worker Bot", email: "worker@example.test" },
       },
@@ -163,7 +144,7 @@ describe("worker launch descriptor", () => {
       const connectParams = buildWorkerConnectParams(parsed);
       expect(connectParams).toMatchObject({
         role: "worker",
-        client: { id: "openclaw-worker", mode: "worker", version: "2026.7.12" },
+        client: { id: "openclaw-worker", mode: "worker", version: "2026.8.1" },
         admission: { ...descriptor.admission, runId: descriptor.assignment.runId },
       });
       expect(connectParams).not.toHaveProperty("github");
@@ -174,11 +155,7 @@ describe("worker launch descriptor", () => {
   });
 
   it("rejects malformed or open GitHub launch bindings", () => {
-    const github: WorkerGitHubLaunchBinding = {
-      token: "worker-github-token",
-      login: "worker-bot",
-      branch: "session/worker-1",
-    };
+    const github = githubIdentity;
     const withBinding = (overrides: Record<string, unknown>) =>
       Object.assign({}, github, overrides);
     const invalidBindings: unknown[] = [

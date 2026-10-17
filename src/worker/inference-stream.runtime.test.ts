@@ -2,15 +2,7 @@ import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../packages/gateway-protocol/src/client-info.js";
-import {
-  WORKER_PROTOCOL_FEATURES,
-  WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
-  WORKER_RPC_SET_VERSION,
-} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
   type WorkerInferenceContext,
@@ -19,8 +11,11 @@ import {
   type WorkerInferenceStartParams,
   type WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
-import type { Usage } from "../llm/types.js";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
+import type { Usage, AssistantMessage } from "../llm/types.js";
+import { testWorkerDescriptor } from "../node-host/node-worker-supervisor.test-support.js";
 import { createWorkerInferenceStreamAdapter } from "./inference-stream.runtime.js";
+import { buildWorkerConnectParams } from "./launch-descriptor.js";
 import { createWorkerImageHistory } from "./replay-images.test-support.js";
 import { fitWorkerReplayImages } from "./replay-message-window.js";
 import {
@@ -51,34 +46,26 @@ function createClient() {
   const client = new WorkerInferenceProxyClient(
     createWorkerConnection({
       endpoint: { kind: "unix", socketPath: "/tmp/worker-inference-size-test.sock" },
-      connectParams: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: {
-          id: GATEWAY_CLIENT_IDS.WORKER,
-          mode: GATEWAY_CLIENT_MODES.WORKER,
-          version: "test",
-          platform: process.platform,
-        },
-        role: "worker",
-        admission: {
-          environmentId: "environment-1",
-          credential: "fixture-credential",
-          ownerEpoch: 1,
-          rpcSetVersion: WORKER_RPC_SET_VERSION,
-          handshake: {
-            bundleHash: "a".repeat(64),
-            openclawVersion: "test",
-            protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
-          },
-          sessionId: "session-1",
-          runId: "run-1",
-        },
-      },
+      connectParams: buildWorkerConnectParams(testWorkerDescriptor("/tmp/worker-inference")),
     }),
   );
   clients.push(client);
   return client;
+}
+
+function done(content: AssistantMessage["content"], stopReason: "stop" | "toolUse" = "stop") {
+  return {
+    type: "done",
+    message: makeAgentAssistantMessage({
+      content,
+      stopReason,
+      usage,
+      timestamp: 1,
+      api: "openai-responses",
+      provider: modelRef.provider,
+      model: modelRef.model,
+    }),
+  } satisfies WorkerInferenceTerminalOutcome;
 }
 
 function createAdapterFixture(
@@ -98,19 +85,7 @@ function createAdapterFixture(
     events.forEach((event, index) =>
       handlers?.onEvent?.({ ...request, seq: index + (gap ? 2 : 1), event }),
     );
-    return {
-      type: "done",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Done." }],
-        api: "openai-responses",
-        provider: "test",
-        model: "test-model",
-        stopReason: "stop",
-        usage,
-        timestamp: 1,
-      },
-    };
+    return done([{ type: "text", text: "Done." }]);
   });
   const options = {
     client,
@@ -317,46 +292,43 @@ it.each([false, true])(
   },
 );
 
-it.each([true])(
-  "fits observed screenshot history without changing durable messages (user image: %s)",
-  async (userImage) => {
-    const messages = createWorkerImageHistory(userImage);
-    const originalContents = messages.map((message) => message.content);
-    const current = messages.find(
-      (message) => message.role === "toolResult" && message.toolCallId === "image-0",
-    );
-    const image = current?.content.find((part) => part.type === "image");
-    if (image?.type !== "image") {
-      throw new Error("Missing current computer image");
-    }
-    const computerContextEpoch = {
-      value: 0,
-      frameToolCallId: "image-0",
-      frameImageIdentity: createHash("sha256")
-        .update(JSON.stringify([image.mimeType, image.data]))
-        .digest("hex"),
-    };
-    const fixture = createAdapterFixture(computerContextEpoch);
-    await fixture.stream({ messages }).result();
-    const [request] = expectDefined(fixture.start.mock.calls[0], "inference start");
-    const bytes = inferenceFrameBytes(request);
-    expect(bytes).toBeLessThanOrEqual(WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES);
-    expect(request?.context.messages).toHaveLength(messages.length);
-    expect(request?.context.messages[2]).toEqual(current);
-    expect(request?.context.messages.at(-1)).toEqual(messages.at(-1));
-    for (const [index, message] of messages.entries()) {
-      expect(message.content).toBe(originalContents[index]);
-      if (message.role === "assistant") {
-        expect(request?.context.messages[index]).toEqual(message);
-      } else {
-        for (const part of message.content.filter((block) => block.type === "text")) {
-          expect(request?.context.messages[index]?.content).toContainEqual(part);
-        }
+it("fits observed screenshot history without changing durable messages", async () => {
+  const messages = createWorkerImageHistory(true);
+  const originalContents = messages.map((message) => message.content);
+  const current = messages.find(
+    (message) => message.role === "toolResult" && message.toolCallId === "image-0",
+  );
+  const image = current?.content.find((part) => part.type === "image");
+  if (image?.type !== "image") {
+    throw new Error("Missing current computer image");
+  }
+  const computerContextEpoch = {
+    value: 0,
+    frameToolCallId: "image-0",
+    frameImageIdentity: createHash("sha256")
+      .update(JSON.stringify([image.mimeType, image.data]))
+      .digest("hex"),
+  };
+  const fixture = createAdapterFixture(computerContextEpoch);
+  await fixture.stream({ messages }).result();
+  const [request] = expectDefined(fixture.start.mock.calls[0], "inference start");
+  const bytes = inferenceFrameBytes(request);
+  expect(bytes).toBeLessThanOrEqual(WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES);
+  expect(request?.context.messages).toHaveLength(messages.length);
+  expect(request?.context.messages[2]).toEqual(current);
+  expect(request?.context.messages.at(-1)).toEqual(messages.at(-1));
+  for (const [index, message] of messages.entries()) {
+    expect(message.content).toBe(originalContents[index]);
+    if (message.role === "assistant") {
+      expect(request?.context.messages[index]).toEqual(message);
+    } else {
+      for (const part of message.content.filter((block) => block.type === "text")) {
+        expect(request?.context.messages[index]?.content).toContainEqual(part);
       }
     }
-    expect(computerContextEpoch.value).toBe(0);
-  },
-);
+  }
+  expect(computerContextEpoch.value).toBe(0);
+});
 
 it("invalidates computer coordinates when the final model context lacks their screenshot", async () => {
   const computerContextEpoch = {
@@ -433,19 +405,10 @@ it("delays worker tool argument previews while preserving exact terminal argumen
         setImmediate(resolve);
       });
     }
-    return {
-      type: "done",
-      message: {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call-1", name: "write", arguments: terminalArguments }],
-        api: "openai-responses",
-        provider: modelRef.provider,
-        model: modelRef.model,
-        stopReason: "toolUse",
-        usage,
-        timestamp: 1,
-      },
-    } satisfies WorkerInferenceTerminalOutcome;
+    return done(
+      [{ type: "toolCall", id: "call-1", name: "write", arguments: terminalArguments }],
+      "toolUse",
+    );
   };
   const fixture = createAdapterFixture();
   fixture.start.mockImplementation(start);

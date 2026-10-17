@@ -53,19 +53,7 @@ describe("prepareWorkerGitHubEnvironment", () => {
 
   async function commit(directory: string, message: string) {
     await git(directory, "add", ".");
-    await git(
-      directory,
-      "-c",
-      "user.name=Worker Fixture",
-      "-c",
-      "user.email=worker@openclaw.invalid",
-      "commit",
-      "--quiet",
-      "--no-gpg-sign",
-      "--allow-empty",
-      "-m",
-      message,
-    );
+    await git(directory, "commit", "--quiet", "--no-gpg-sign", "--allow-empty", "-m", message);
     return (await git(directory, "rev-parse", "HEAD")).trim();
   }
 
@@ -104,6 +92,8 @@ describe("prepareWorkerGitHubEnvironment", () => {
     await git(root, "init", "--quiet", "--bare", "origin.git");
     // The binding rewrites origin to the verified GitHub URL; route it to the local bare repo.
     await git(root, "config", "--global", `url.${origin}.insteadOf`, remoteUrl);
+    await git(root, "config", "--global", "user.name", binding.gitAuthor.name);
+    await git(root, "config", "--global", "user.email", binding.gitAuthor.email);
     await git(cwd, "init", "--quiet", `--initial-branch=${binding.branch}`);
     initialHead = await commit(cwd, "Initial commit");
     await git(cwd, "remote", "add", "origin", origin);

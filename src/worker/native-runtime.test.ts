@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdir, realpath, rename, symlink, unlink, writeFile } from "node:fs/promises";
 import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import path from "node:path";
+import { text } from "node:stream/consumers";
 import { fileURLToPath } from "node:url";
 import { getDefaultAiTransportHost, type Context } from "@openclaw/ai";
 import { registerSessionResourceCleanup } from "@openclaw/ai/internal/runtime";
@@ -70,7 +71,10 @@ function trackedEnv(reads: PropertyKey[], value?: string): NodeJS.ProcessEnv {
   );
 }
 
-function configFor(workspace: string, baseUrl = "http://127.0.0.1:1/v1"): NativeRuntimeConfig {
+function configFor(
+  workspace = tempDirs.make("native-runtime-"),
+  baseUrl = "http://127.0.0.1:1/v1",
+): NativeRuntimeConfig {
   return {
     models: [
       {
@@ -88,7 +92,7 @@ function configFor(workspace: string, baseUrl = "http://127.0.0.1:1/v1"): Native
   };
 }
 async function start(
-  config: NativeRuntimeConfig,
+  config = configFor(),
   env: NodeJS.ProcessEnv = { NATIVE_TEST_KEY: "fixture-key" },
 ) {
   const credential = env.NATIVE_TEST_KEY!;
@@ -105,13 +109,9 @@ async function providerServer() {
     [];
   const server = createServer((request, response) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
       requests.push({
         headers: request.headers,
-        body: JSON.parse(Buffer.concat(chunks).toString()),
+        body: JSON.parse(await text(request)),
         url: request.url,
       });
       response.writeHead(200, { "content-type": "text/event-stream" });
@@ -177,7 +177,7 @@ async function probe(scenario: string, config: NativeRuntimeConfig, env: NodeJS.
 
 describe("native runtime startup authority", () => {
   it("guards every configured header value", async () => {
-    const config = configFor(tempDirs.make("native-custom-header-"));
+    const config = configFor();
     config.models[0]!.headers = {
       "x-route": "synthetic-route",
       "x-session": "synthetic-custom-auth",
@@ -189,14 +189,13 @@ describe("native runtime startup authority", () => {
       expect(() => resolved.assertProtocolSafe({ text: "synthetic-custom-auth" })).toThrow(
         "Native credential appeared",
       );
-      expect(resolved.hasCredentialPrefix("ordinaryz")).toBe(false);
-      expect(resolved.hasCredentialPrefix("synthetic-custom-")).toBe(true);
-      expect(resolved.hasCredentialPrefix("a")).toBe(true);
-      expect(resolved.hasCredentialPrefix("abcdefg")).toBe(true);
+      expect(
+        ["ordinaryz", "synthetic-custom-", "a", "abcdefg"].map(resolved.hasCredentialPrefix),
+      ).toEqual([false, true, true, true]);
     });
   });
   it("filters HTTP-normalized representations of startup credential values", async () => {
-    const config = configFor(tempDirs.make("native-http-secret-"));
+    const config = configFor();
     config.models[0]!.headers = { "x-api-key": "  synthetic-header-secret  " };
     const runtime = await start(config, { NATIVE_TEST_KEY: "synthetic-http-secret  " });
     await runtime.withTurn(turn, async (resolved) => {
@@ -218,7 +217,7 @@ describe("native runtime startup authority", () => {
     });
   });
   it("preserves and freezes explicit local pricing and thinking mappings", async () => {
-    const config = configFor(tempDirs.make("native-model-metadata-"));
+    const config = configFor();
     const cost = { input: 2, output: 4, cacheRead: 1, cacheWrite: 3 };
     const thinkingLevelMap = { xhigh: "xhigh", max: "max", low: null };
     const input = { ...config, models: [{ ...config.models[0]!, cost, thinkingLevelMap }] };
@@ -234,7 +233,7 @@ describe("native runtime startup authority", () => {
     });
   });
   it("settles only its own provider session resources on success and failure", async () => {
-    const runtime = await start(configFor(tempDirs.make("native-resource-owner-")));
+    const runtime = await start();
     const cleaned: Array<string | undefined> = [];
     const unregister = registerSessionResourceCleanup((id) => cleaned.push(id));
     try {
@@ -349,49 +348,41 @@ describe("native runtime startup authority", () => {
     expect(NativeRuntimeConfigSchema.safeParse({ ...config, gatewayConfig: {} }).success).toBe(
       false,
     );
-    expect(
-      NativeRuntimeConfigSchema.safeParse({
+    const modelOverrides = [
+      { apiKey: "inline-key" },
+      { baseUrl: "https://user:password@example.com" },
+      { baseUrl: "https://example.com/{ENV}" },
+      { baseUrl: "file:///tmp/model" },
+    ];
+    for (const override of modelOverrides) {
+      const input = {
         ...config,
-        models: [{ ...config.models[0], apiKey: "inline-key" }],
-      }).success,
-    ).toBe(false);
-    for (const baseUrl of [
-      "https://user:password@example.com",
-      "https://example.com/{ENV}",
-      "file:///tmp/model",
-    ]) {
-      expect(
-        NativeRuntimeConfigSchema.safeParse({
-          ...config,
-          models: [{ ...config.models[0], baseUrl }],
-        }).success,
-      ).toBe(false);
+        models: [{ ...config.models[0], ...override }],
+      };
+      expect(NativeRuntimeConfigSchema.safeParse(input).success).toBe(false);
     }
   });
 
   it("rejects duplicate models and unavailable or ambient APIs", async () => {
-    const workspace = tempDirs.make("native-runtime-");
-    const config = configFor(workspace);
+    const config = configFor();
     await expect(
       createNativeRuntime(
         { ...config, models: [...config.models, ...config.models] },
         { "openai/local-model": "test" },
       ),
     ).rejects.toThrow("Duplicate");
-    for (const api of ["unregistered-api", "azure-openai-responses"]) {
+    for (const [api, credential, error] of [
+      ["unregistered-api", "test", /Unsupported|ambient-configured/],
+      ["azure-openai-responses", "test", /Unsupported|ambient-configured/],
+      ["google-vertex", "gcp-vertex-credentials", /ambient ADC/],
+    ] as const) {
       await expect(
         createNativeRuntime(
           { ...config, models: [{ ...config.models[0]!, api }] },
-          { "openai/local-model": "test" },
+          { "openai/local-model": credential },
         ),
-      ).rejects.toThrow(/Unsupported|ambient-configured/);
+      ).rejects.toThrow(error);
     }
-    await expect(
-      createNativeRuntime(
-        { ...config, models: [{ ...config.models[0]!, api: "google-vertex" }] },
-        { "openai/local-model": "gcp-vertex-credentials" },
-      ),
-    ).rejects.toThrow("ambient ADC");
   });
 
   it("rejects files and nonexistent workspace directories", async () => {
@@ -403,8 +394,7 @@ describe("native runtime startup authority", () => {
   });
 
   it("enforces the exact workspace while allowing every configured node model", async () => {
-    const workspace = tempDirs.make("native-runtime-");
-    const config = configFor(workspace);
+    const config = configFor();
     config.models.push({ ...config.models[0]!, id: "other-model" });
     const runtime = await start(config);
     const callback = vi.fn(async () => {});
@@ -486,7 +476,7 @@ describe("native runtime startup authority", () => {
   });
 
   it("rechecks close after asynchronous admission and honors cancellation before I/O", async () => {
-    const runtime = await start(configFor(tempDirs.make("native-runtime-")));
+    const runtime = await start();
     await runtime.withTurn(turn, async (resolved) => {
       const controller = new AbortController();
       controller.abort(new Error("cancelled fixture"));
@@ -502,7 +492,7 @@ describe("native runtime startup authority", () => {
   });
 
   it("revokes escaped stream functions after completion, failure, and runtime close", async () => {
-    const runtime = await start(configFor(tempDirs.make("native-runtime-")));
+    const runtime = await start();
     const saved = await runtime.withTurn(turn, async (resolved) => resolved);
     await expect(saved.streamFn(saved.model, context)).rejects.toThrow("turn is closed");
     let failed: NativeRuntimeResolved | undefined;

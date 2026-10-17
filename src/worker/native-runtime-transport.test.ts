@@ -39,7 +39,7 @@ const jwt = [
   ).toString("base64url"),
   "synthetic",
 ].join(".");
-const observed: { path: string; custom: boolean; authenticated: boolean }[] = [];
+const observed: boolean[] = [];
 let sinkHits = 0;
 let forwardedSensitiveHeaders = 0;
 let wrongNameOrigin: string;
@@ -155,15 +155,13 @@ beforeAll(async () => {
     providerHits++;
     res.writeHead(200, { "content-type": "text/event-stream" });
     res.end(
-      "data: " +
-        JSON.stringify({
-          id: "fixture",
-          object: "chat.completion.chunk",
-          created: 1,
-          model: "fixture-model",
-          choices: [{ index: 0, delta: { content: "qualified" }, finish_reason: "stop" }],
-        }) +
-        "\n\ndata: [DONE]\n\n",
+      `data: ${JSON.stringify({
+        id: "fixture",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "fixture-model",
+        choices: [{ index: 0, delta: { content: "qualified" }, finish_reason: "stop" }],
+      })}\n\ndata: [DONE]\n\n`,
     );
   });
   httpOrigin = await listen((req, res) => {
@@ -173,15 +171,13 @@ beforeAll(async () => {
   });
   const handle: RequestListener = (req, res) => {
     const p = req.url ?? "";
-    observed.push({
-      path: p,
-      custom: req.headers["x-worker-session"] === sensitiveHeader,
-      authenticated:
-        req.headers.authorization === "Bearer " + opaque ||
-        req.headers.authorization === "Bearer " + jwt ||
-        req.headers["x-api-key"] === opaque ||
-        req.headers["x-goog-api-key"] === opaque,
-    });
+    observed.push(
+      req.headers["x-worker-session"] === sensitiveHeader &&
+        (req.headers.authorization === "Bearer " + opaque ||
+          req.headers.authorization === "Bearer " + jwt ||
+          req.headers["x-api-key"] === opaque ||
+          req.headers["x-goog-api-key"] === opaque),
+    );
     if (p.startsWith("/success/")) {
       // Synthetic custodian owns this provider key in the parent; only opaque auth and CA
       // enter the compiled runtime child. This is not an OS workload-isolation claim.
@@ -261,7 +257,6 @@ it("rejects an untrusted certificate before auth reaches the endpoint", async ()
   await expectRejectedBeforeRequest(untrusted, tlsOrigin + "/observe");
 });
 it("binds real built-in SDK requests to their endpoint without forwarding auth on redirects", async () => {
-  const results = [];
   for (const api of apis) {
     const prior = observed.length;
     await run(trusted, api, tlsOrigin + "/observe/" + api);
@@ -269,22 +264,11 @@ it("binds real built-in SDK requests to their endpoint without forwarding auth o
       observed.length,
       api + " must reach the TLS fixture through its real SDK",
     ).toBeGreaterThan(prior);
-    expect(
-      observed.slice(prior).every((r) => r.custom && r.authenticated),
-      api,
-    ).toBe(true);
-    const before = sinkHits;
-    const beforeHeaders = forwardedSensitiveHeaders;
+    expect(observed.slice(prior).every(Boolean), api).toBe(true);
+    const before = { sinkHits, forwardedSensitiveHeaders };
     await run(trusted, api, tlsOrigin + "/redirect/" + api);
-    results.push({
-      api,
-      redirectRecipientRequests: sinkHits - before,
-      forwardedSensitiveHeaders: forwardedSensitiveHeaders - beforeHeaders,
-    });
+    expect({ sinkHits, forwardedSensitiveHeaders }, api).toEqual(before);
   }
-  expect(results).toEqual(
-    apis.map((api) => ({ api, redirectRecipientRequests: 0, forwardedSensitiveHeaders: 0 })),
-  );
 });
 it("rejects even a same-origin redirect instead of replaying sensitive headers", async () => {
   const prior = sinkHits;

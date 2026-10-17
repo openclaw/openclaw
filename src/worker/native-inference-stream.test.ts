@@ -1,40 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { AssistantMessage, AssistantMessageEvent, Model, ToolCall } from "../llm/types.js";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
+import type { AssistantMessage, AssistantMessageEvent, ToolCall } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { createNativeInferenceStreamGuard } from "./native-inference-stream.js";
 import type { NativeRuntimeResolved } from "./native-runtime.js";
 const secret = "synthetic-sensitive-value";
-const model: Model = {
+const model = makeProviderModelFixture({
   provider: "test",
   id: "test",
-  name: "test",
   api: "openai-completions",
   baseUrl: "http://127.0.0.1:1",
-  reasoning: false,
-  input: ["text"],
-  contextWindow: 8192,
-  maxTokens: 1024,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-};
+});
 function message(content: AssistantMessage["content"]): AssistantMessage {
-  return {
-    role: "assistant",
+  return makeAgentAssistantMessage({
     content,
     api: model.api,
     provider: model.provider,
     model: model.id,
-    stopReason: "stop",
     timestamp: 1,
-    usage: {
-      input: 1,
-      output: 1,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 2,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-  };
+  });
 }
 function native(credential = secret): NativeRuntimeResolved {
   return {
@@ -152,22 +138,20 @@ describe("worker native inference output owner", () => {
       expectBlocked(result, prefix);
     },
   );
-  it.each([generatedOwners[2]!])(
-    "preserves legitimate prefix divergence in %s",
-    async (_field, makeMessage) => {
-      const source = createAssistantMessageEventStream();
-      const events: AssistantMessageEvent[] = [
-        { type: "start", partial: makeMessage(secret.slice(0, 12)) },
-        { type: "done", reason: "stop", message: makeMessage(secret.slice(0, 12) + "ordinary") },
-      ];
-      for (const event of events) {
-        source.push(event);
-      }
-      const result = await finish(source);
-      expect(result.events).toEqual(events);
-      expect(result.message).toEqual(makeMessage(secret.slice(0, 12) + "ordinary"));
-    },
-  );
+  it("preserves legitimate prefix divergence in nested arguments", async () => {
+    const makeMessage = generatedOwners[2]![1];
+    const source = createAssistantMessageEventStream();
+    const events: AssistantMessageEvent[] = [
+      { type: "start", partial: makeMessage(secret.slice(0, 12)) },
+      { type: "done", reason: "stop", message: makeMessage(secret.slice(0, 12) + "ordinary") },
+    ];
+    for (const event of events) {
+      source.push(event);
+    }
+    const result = await finish(source);
+    expect(result.events).toEqual(events);
+    expect(result.message).toEqual(makeMessage(secret.slice(0, 12) + "ordinary"));
+  });
   it("guards an authoritative result without a terminal event", async () => {
     const source = createAssistantMessageEventStream();
     source.push({ type: "start", partial: message([]) });
@@ -187,14 +171,18 @@ describe("worker native inference output owner", () => {
     const result = await finish(source);
     expectBlocked(result, secret.slice(0, 12), secret.slice(12));
   });
-  it("guards a credential split across an argument key and value", async () => {
+  it.each([
+    ["argument key and value", (prefix: string, suffix: string) => tool({ [prefix]: suffix })],
+    [
+      "tool-call metadata",
+      (prefix: string, suffix: string) => tool({ value: "ordinary" }, { id: prefix, name: suffix }),
+    ],
+  ] as const)("guards a credential split across %s", async (_field, makeCall) => {
     const source = createAssistantMessageEventStream();
-    const prefix = secret.slice(0, 7);
-    const suffix = secret.slice(7);
-    const final = message([tool({ [prefix]: suffix })]);
-    source.push({ type: "done", reason: "toolUse", message: final });
-    const result = await finish(source);
-    expectBlocked(result, prefix, suffix);
+    const prefix = secret.slice(0, 7),
+      suffix = secret.slice(7);
+    source.push({ type: "done", reason: "toolUse", message: message([makeCall(prefix, suffix)]) });
+    expectBlocked(await finish(source), prefix, suffix);
   });
   it("guards a decoded tool preview split across an argument key and value", async () => {
     const source = createAssistantMessageEventStream();
@@ -208,15 +196,6 @@ describe("worker native inference output owner", () => {
     const result = await collect(createNativeInferenceStreamGuard(native())(() => source));
     expect(result.message.stopReason).toBe("error");
     expect(result.events.filter((event) => event.type === "toolcall_delta")).toEqual([]);
-  });
-  it("guards a credential split across tool-call metadata fields", async () => {
-    const source = createAssistantMessageEventStream();
-    const prefix = secret.slice(0, 7);
-    const suffix = secret.slice(7);
-    const final = message([tool({ value: "ordinary" }, { id: prefix, name: suffix })]);
-    source.push({ type: "done", reason: "toolUse", message: final });
-    const result = await finish(source);
-    expectBlocked(result, prefix, suffix);
   });
   it("checks the authoritative result before exposing the terminal event", async () => {
     const source = createAssistantMessageEventStream();
