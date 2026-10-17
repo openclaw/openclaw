@@ -1,5 +1,3 @@
-// Session delete worktree lifecycle tests protect exact-generation cleanup and
-// same-key successor admission.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, onTestFinished, test, vi } from "vitest";
@@ -50,8 +48,15 @@ const { createSessionStoreDir, createArchiveWorktreeFixture, initializeRemoteBac
   setupGatewaySessionsWorktreeTestHarness();
 type Worktree = { id: string; path: string; branch: string };
 
-async function createDeletionFixture(prefix: string) {
-  const state = await createOpenClawTestState({ layout: "state-only", prefix });
+function worktreeEntry({ id, path: cwd, branch, repoRoot }: Worktree & { repoRoot: string }) {
+  return { spawnedCwd: cwd, worktree: { id, branch, repoRoot } };
+}
+
+async function createDeletionFixture() {
+  const state = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-delete-worktree-",
+  });
   const workspace = await initializeRemoteBackedGitWorkspace(state.root);
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
@@ -96,6 +101,17 @@ function expectPreserved(
   });
 }
 
+async function expectWorktreePresent(worktree: Worktree, present: boolean) {
+  expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toEqual(
+    present ? undefined : expect.any(Number),
+  );
+  if (present) {
+    await fs.access(worktree.path);
+  } else {
+    await expect(fs.access(worktree.path)).rejects.toThrow();
+  }
+}
+
 test.each(["restore-failed", "placement-changed"] as const)(
   "inbound admission restores the archived worktree before opening its session (failure=%s)",
   async (failure) => {
@@ -105,10 +121,7 @@ test.each(["restore-failed", "placement-changed"] as const)(
     await managedWorktrees.remove({ id: worktree.id, reason: "session-archive" });
     await patchSessionEntryCore(
       { storePath, sessionKey: key },
-      (entry) => ({
-        ...entry!,
-        archivedAt: 1,
-      }),
+      (entry) => ({ ...entry!, archivedAt: 1 }),
       { skipMaintenance: true },
     );
     const [
@@ -207,15 +220,14 @@ test.each(["restore-failed", "placement-changed"] as const)(
           generation: 2,
           environmentId: null,
         });
-        expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBe(1);
         await expect(fs.readFile(path.join(worktree.path, "draft.txt"), "utf8")).resolves.toBe(
           "inbound restore keeps work\n",
         );
       } else {
         await expect(admission).rejects.toThrow(/worktree/i);
-        expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBe(1);
         await expect(fs.access(worktree.path)).rejects.toThrow();
       }
+      expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBe(1);
       await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(
         transcript,
       );
@@ -302,9 +314,7 @@ test("sessions.create only allocates worktrees for lifecycle-manageable agent ow
 });
 
 test("sessions.delete snapshots dirty work before admitting same-key successor worktree creation", async () => {
-  const { workspace, storePath, cleanup } = await createDeletionFixture(
-    "openclaw-delete-worktree-successor-",
-  );
+  const { workspace, storePath, cleanup } = await createDeletionFixture();
   const key = "agent:main:dashboard:delete-worktree-successor";
   // Creation revalidates admitted profile authority before allocating the worktree.
   const creatorProfileId = ensureProfileForEmail("delete-worktree-successor@example.test").id;
@@ -331,10 +341,13 @@ test("sessions.delete snapshots dirty work before admitting same-key successor w
   const { promise: removalStarted, resolve: markRemovalStarted } = createDeferredCore();
   const removeSpy = vi.spyOn(ManagedWorktreeService.prototype, "remove");
   try {
-    const predecessor = await directSessionReq<{
-      sessionId: string;
-      worktree: Worktree;
-    }>("sessions.create", { key, agentId: "main", worktree: true }, { client: adminClient });
+    const create = () =>
+      directSessionReq<{ sessionId: string; worktree: Worktree }>(
+        "sessions.create",
+        { key, agentId: "main", worktree: true },
+        { client: adminClient },
+      );
+    const predecessor = await create();
     expect(predecessor.ok, JSON.stringify(predecessor)).toBe(true);
     const predecessorSessionId = predecessor.payload!.sessionId;
     const predecessorWorktree = predecessor.payload!.worktree;
@@ -359,15 +372,10 @@ test("sessions.delete snapshots dirty work before admitting same-key successor w
     });
     await removalStarted;
     let successorSettled = false;
-    const successorPromise = directSessionReq<{
-      sessionId: string;
-      worktree: Worktree;
-    }>("sessions.create", { key, agentId: "main", worktree: true }, { client: adminClient }).then(
-      (result) => {
-        successorSettled = true;
-        return result;
-      },
-    );
+    const successorPromise = create().then((result) => {
+      successorSettled = true;
+      return result;
+    });
     await Promise.resolve();
     expect(successorSettled).toBe(false);
 
@@ -427,121 +435,88 @@ test("sessions.delete snapshots dirty work before admitting same-key successor w
 });
 
 test.each([
-  {
-    failure: () => new WorktreeSnapshotError("simulated snapshot failure"),
-    name: "snapshot failure",
-    reason: "snapshot-failed",
-    finalized: false,
-  },
-  {
-    failure: () => new WorktreeRemovalContentionError("finalized", "removed concurrently"),
-    name: "concurrently finalized removal",
-    reason: undefined,
-    finalized: true,
-  },
-])("sessions.delete reports preserved worktree truth after $name", async (scenario) => {
-  const { storePath, cleanup } = await createDeletionFixture("openclaw-delete-worktree-preserved-");
-  const key = "agent:main:dashboard:delete-worktree-preserved";
+  ["sessions.delete", "snapshot-failed"],
+  ["sessions.delete", "finalized"],
+  ["sessions.delete", "busy"],
+  ["sessions.delete", "owner-mismatch"],
+  ["sessions.reset", "removed"],
+  ["sessions.reset", "busy"],
+] as const)("%s reports worktree truth after %s", async (method, outcome) => {
+  const { workspace, storePath, cleanup } = await createDeletionFixture();
+  const incognito = method === "sessions.reset";
+  let key = "agent:main:dashboard:delete-worktree-preserved";
   const originalRemove = captureMethodCall("remove")(ManagedWorktreeService.prototype);
   let worktreeId: string | undefined;
+  let runLease: Awaited<ReturnType<typeof acquireWorktreeRunLease>> | undefined;
   const removeSpy = vi.spyOn(ManagedWorktreeService.prototype, "remove");
   try {
-    const worktree = await createSessionWorktree(key);
+    const incognitoSession = incognito
+      ? await createIncognitoSessionWithWorktree(workspace)
+      : undefined;
+    key = incognitoSession?.key ?? key;
+    const worktree =
+      incognitoSession?.worktree ??
+      (outcome === "owner-mismatch"
+        ? await managedWorktrees.create({
+            repoRoot: workspace,
+            ownerKind: "manual",
+            ownerId: "foreign-owner",
+            name: "foreign-owner",
+          })
+        : await createSessionWorktree(key));
     worktreeId = worktree.id;
-    removeSpy.mockImplementation(async function (this: ManagedWorktreeService, params) {
-      if (params.id === worktree.id && params.reason === "session-delete") {
-        if (scenario.finalized) {
-          await originalRemove(this, params);
+    if (outcome === "owner-mismatch") {
+      await writeSessionStore({
+        entries: {
+          [key]: sessionStoreEntry(
+            "session-owner-mismatch",
+            worktreeEntry({ ...worktree, repoRoot: workspace }),
+          ),
+        },
+      });
+      removeSpy.mockClear();
+    } else if (outcome === "busy") {
+      runLease = await acquireWorktreeRunLease(worktree.id);
+    } else if (outcome === "snapshot-failed" || outcome === "finalized") {
+      removeSpy.mockImplementation(async function (this: ManagedWorktreeService, params) {
+        if (params.id === worktree.id && params.reason === "session-delete") {
+          if (outcome === "finalized") {
+            await originalRemove(this, params);
+            throw new WorktreeRemovalContentionError("finalized", "removed concurrently");
+          }
+          throw new WorktreeSnapshotError("simulated snapshot failure");
         }
-        throw scenario.failure();
-      }
-      return await originalRemove(this, params);
+        return await originalRemove(this, params);
+      });
+    }
+
+    const deleted = await directSessionReq<SessionsDeleteResult>(method, {
+      key,
+      ...(outcome === "owner-mismatch" ? { deleteTranscript: false } : {}),
     });
 
-    const deleted = await directSessionReq<SessionsDeleteResult>("sessions.delete", { key });
-
-    if (scenario.reason) {
-      expectPreserved(deleted, worktree, scenario.reason);
+    const preserved = outcome !== "finalized" && outcome !== "removed";
+    if (preserved) {
+      expectPreserved(deleted, worktree, outcome);
     } else {
       expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
       expect(deleted.payload).not.toHaveProperty("worktreePreserved");
     }
-    expect(loadSessionEntry({ sessionKey: key, storePath })).toBeUndefined();
-    if (scenario.finalized) {
-      expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toEqual(expect.any(Number));
-      await expect(fs.access(worktree.path)).rejects.toThrow();
-    } else {
-      expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toBeUndefined();
-      await fs.access(worktree.path);
+    expect(
+      loadSessionEntry({ sessionKey: key, ...(incognito ? { agentId: "main" } : { storePath }) }),
+    ).toBeUndefined();
+    await expectWorktreePresent(worktree, preserved);
+    if (outcome === "owner-mismatch") {
+      expect(removeSpy).not.toHaveBeenCalled();
+      expect(getRegistryWorktree(process.env, worktree.id)).toMatchObject({
+        ownerKind: "manual",
+        ownerId: "foreign-owner",
+      });
     }
   } finally {
     removeSpy.mockRestore();
-    await cleanup(worktreeId);
-  }
-});
-
-test("sessions.delete reports a busy preserved worktree while a live run lease exists", async () => {
-  const { cleanup } = await createDeletionFixture("openclaw-delete-worktree-busy-");
-  const key = "agent:main:dashboard:delete-worktree-busy";
-  let worktreeId: string | undefined;
-  let runLease: Awaited<ReturnType<typeof acquireWorktreeRunLease>> | undefined;
-  try {
-    const worktree = await createSessionWorktree(key);
-    worktreeId = worktree.id;
-    runLease = await acquireWorktreeRunLease(worktree.id);
-
-    const deleted = await directSessionReq<SessionsDeleteResult>("sessions.delete", { key });
-
-    expectPreserved(deleted, worktree, "busy");
-    expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toBeUndefined();
-    await fs.access(worktree.path);
-  } finally {
     await runLease?.release();
     await cleanup(worktreeId);
-  }
-});
-
-test("sessions.delete preserves an entry-bound worktree owned by another principal", async () => {
-  const { workspace, cleanup } = await createDeletionFixture(
-    "openclaw-delete-worktree-owner-mismatch-",
-  );
-  const key = "agent:main:dashboard:delete-worktree-owner-mismatch";
-  const foreignWorktree = await managedWorktrees.create({
-    repoRoot: workspace,
-    ownerKind: "manual",
-    ownerId: "foreign-owner",
-    name: "foreign-owner",
-  });
-  await writeSessionStore({
-    entries: {
-      [key]: sessionStoreEntry("session-owner-mismatch", {
-        spawnedCwd: foreignWorktree.path,
-        worktree: {
-          id: foreignWorktree.id,
-          branch: foreignWorktree.branch,
-          repoRoot: foreignWorktree.repoRoot,
-        },
-      }),
-    },
-  });
-  const removeSpy = vi.spyOn(ManagedWorktreeService.prototype, "remove");
-  try {
-    const deleted = await directSessionReq<SessionsDeleteResult>("sessions.delete", {
-      key,
-      deleteTranscript: false,
-    });
-
-    expectPreserved(deleted, foreignWorktree, "owner-mismatch");
-    expect(removeSpy).not.toHaveBeenCalled();
-    expect(getRegistryWorktree(process.env, foreignWorktree.id)).toMatchObject({
-      ownerKind: "manual",
-      ownerId: "foreign-owner",
-    });
-    expect(getRegistryWorktree(process.env, foreignWorktree.id)?.removedAt).toBeUndefined();
-    await fs.access(foreignWorktree.path);
-  } finally {
-    removeSpy.mockRestore();
-    await cleanup(foreignWorktree.id);
   }
 });
 
@@ -563,49 +538,8 @@ async function createIncognitoSessionWithWorktree(workspace: string) {
       sessionKey: key,
       storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
     },
-    (entry) => ({
-      ...entry!,
-      spawnedCwd: worktree.path,
-      worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
-    }),
+    (entry) => ({ ...entry!, ...worktreeEntry(worktree) }),
   );
   expect(loadSessionEntry({ agentId: "main", sessionKey: key })?.worktree?.id).toBe(worktree.id);
   return { key, worktree };
 }
-
-test.each([false, true])(
-  "sessions.reset cleans up an Incognito worktree (busy=%s)",
-  async (busy) => {
-    const { workspace, cleanup } = await createDeletionFixture(
-      "openclaw-incognito-reset-worktree-busy-",
-    );
-    let worktreeId: string | undefined;
-    let runLease: Awaited<ReturnType<typeof acquireWorktreeRunLease>> | undefined;
-    try {
-      const { key, worktree } = await createIncognitoSessionWithWorktree(workspace);
-      worktreeId = worktree.id;
-      if (busy) {
-        runLease = await acquireWorktreeRunLease(worktree.id);
-      }
-
-      const reset = await directSessionReq<SessionsDeleteResult>("sessions.reset", { key });
-
-      expect(loadSessionEntry({ agentId: "main", sessionKey: key })).toBeUndefined();
-      if (busy) {
-        expectPreserved(reset, worktree, "busy");
-        expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toBeUndefined();
-        await fs.access(worktree.path);
-      } else {
-        expect(reset).toMatchObject({ ok: true, payload: { deleted: true } });
-        expect(reset.payload).not.toHaveProperty("worktreePreserved");
-        expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toEqual(
-          expect.any(Number),
-        );
-        await expect(fs.access(worktree.path)).rejects.toThrow();
-      }
-    } finally {
-      await runLease?.release();
-      await cleanup(worktreeId);
-    }
-  },
-);

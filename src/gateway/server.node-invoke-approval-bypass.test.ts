@@ -1,5 +1,3 @@
-// Node invoke approval-bypass tests protect signed node identity checks so
-// unpaired or spoofed devices cannot receive forwarded invoke requests.
 import crypto from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 import type { WebSocket } from "ws";
@@ -19,10 +17,7 @@ import {
   rpcReq,
   startServerWithClient,
 } from "./test-helpers.js";
-import {
-  acknowledgeNodeInvokeRequestForTest,
-  getConnectedNodeIdForTest,
-} from "./test-helpers.node-invoke.js";
+import { acknowledgeNodeInvokeRequestForTest } from "./test-helpers.node-invoke.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -131,34 +126,21 @@ async function requestAllowOnceApproval(
   return approvalId;
 }
 
-function approvedSystemRunParams(
+function invokeApprovedRun(
+  ws: WebSocket,
+  nodeId: string,
   runId: string,
   extra: Record<string, unknown> = {},
   rawCommand = "echo hi",
-): Record<string, unknown> {
-  return {
+) {
+  return invokeNode(ws, nodeId, "system.run", {
     command: rawCommand.split(" "),
     rawCommand,
     runId,
     approved: true,
     approvalDecision: "allow-once",
     ...extra,
-  };
-}
-
-function approvedChatSystemRunParams(
-  context: ChatApprovalContext,
-  runId: string,
-  extra: Record<string, unknown> = {},
-): Record<string, unknown> {
-  return approvedSystemRunParams(
-    runId,
-    {
-      ...context,
-      ...extra,
-    },
-    "echo chat",
-  );
+  });
 }
 
 type ChatApprovalContext = {
@@ -214,9 +196,7 @@ describe("node.invoke approval bypass", () => {
     started.ws.close();
   });
 
-  afterAll(async () => {
-    await server.close();
-  });
+  afterAll(() => server.close());
 
   const approveAllPendingPairings = async () => {
     const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
@@ -261,10 +241,7 @@ describe("node.invoke approval bypass", () => {
     };
 
     let { ws, res } = await connectOnce();
-    const message =
-      res && typeof res === "object" && "error" in res
-        ? ((res as { error?: { message?: string } }).error?.message ?? "")
-        : "";
+    const message = res.error?.message ?? "";
     if (!res.ok && message.includes("pairing required")) {
       ws.close();
       await approveAllPendingPairings();
@@ -360,16 +337,11 @@ describe("node.invoke approval bypass", () => {
     const ws = await connectOperator(["operator.write"]);
     const cases = [
       {
-        name: "rawCommand mismatch",
         command: "system.run",
-        params: {
-          command: ["uname", "-a"],
-          rawCommand: "echo hi",
-        },
+        params: { command: ["uname", "-a"], rawCommand: "echo hi" },
         expectedError: "rawCommand does not match command",
       },
       {
-        name: "approval flags without runId",
         command: "system.run",
         params: {
           command: ["echo", "hi"],
@@ -380,7 +352,6 @@ describe("node.invoke approval bypass", () => {
         expectedError: "params.runId",
       },
       {
-        name: "forbidden execApprovals tool",
         command: "system.execApprovals.set",
         params: { file: { version: 1, agents: {} }, baseHash: "nope" },
         expectedError: "exec.approvals.node",
@@ -389,8 +360,8 @@ describe("node.invoke approval bypass", () => {
 
     for (const testCase of cases) {
       const res = await invokeNode(ws, nodeId, testCase.command, testCase.params);
-      expect(res.ok, testCase.name).toBe(false);
-      expect(res.error?.message ?? "", testCase.name).toContain(testCase.expectedError);
+      expect(res.ok, testCase.expectedError).toBe(false);
+      expect(res.error?.message ?? "", testCase.expectedError).toContain(testCase.expectedError);
       await expectNoForwardedInvoke(() => capture.count() > 0);
     }
   });
@@ -450,9 +421,7 @@ describe("node.invoke approval bypass", () => {
   });
 
   test("binds approvals to decision/device and blocks cross-device replay", async () => {
-    const invokeCapture = createInvokeParamCapture();
-    await connectLinuxNode(invokeCapture.onInvoke);
-
+    const { capture: invokeCapture, nodeId } = await connectObservedNode();
     const wsApprover = await connectOperator(["operator.write", "operator.approvals"]);
     const wsCaller = await connectOperator(["operator.write"]);
     const wsOtherDevice = await connectOperator(
@@ -460,43 +429,28 @@ describe("node.invoke approval bypass", () => {
       loadDeviceIdentity(`operator-${crypto.randomUUID()}`).identityPath,
     );
 
-    const nodeId = await getConnectedNodeIdForTest(wsApprover);
-
     const approvalId = await requestAllowOnceApproval(wsApprover, "echo hi", nodeId);
     // Separate caller connection simulates per-call clients.
-    const invoke = await invokeNode(
-      wsCaller,
-      nodeId,
-      "system.run",
-      approvedSystemRunParams(approvalId, {
-        approvalDecision: "allow-always",
-        injected: "nope",
-      }),
-    );
+    const invoke = await invokeApprovedRun(wsCaller, nodeId, approvalId, {
+      approvalDecision: "allow-always",
+      injected: "nope",
+    });
     expect(invoke.ok, JSON.stringify(invoke.error)).toBe(true);
     expectForwardedApprovedParams(invokeCapture, "injected");
 
     const replayApprovalId = await requestAllowOnceApproval(wsApprover, "echo hi", nodeId);
     const invokeCountBeforeReplay = invokeCapture.count();
-    const replay = await invokeNode(
-      wsOtherDevice,
-      nodeId,
-      "system.run",
-      approvedSystemRunParams(replayApprovalId),
-    );
+    const replay = await invokeApprovedRun(wsOtherDevice, nodeId, replayApprovalId);
     expect(replay.ok).toBe(false);
     expect(replay.error?.message ?? "").toContain("not valid for this device");
     await expectNoForwardedInvoke(() => invokeCapture.count() > invokeCountBeforeReplay);
   });
 
   test("bridges no-device chat approvals across backend reconnects only for the same turn source", async () => {
-    const invokeCapture = createInvokeParamCapture();
-    await connectLinuxNode(invokeCapture.onInvoke);
-
+    const { capture: invokeCapture, nodeId } = await connectObservedNode();
     const wsRequest = await connectTrustedBackend(["operator.write", "operator.approvals"]);
     const wsReplay = await connectTrustedBackend(["operator.write", "operator.approvals"]);
 
-    const nodeId = await getConnectedNodeIdForTest(wsRequest);
     const context: ChatApprovalContext = {
       agentId: "main",
       sessionKey: "agent:main:telegram:direct:12345",
@@ -507,12 +461,7 @@ describe("node.invoke approval bypass", () => {
     };
 
     const approvalId = await requestAllowOnceApproval(wsRequest, "echo chat", nodeId, context);
-    const invoke = await invokeNode(
-      wsReplay,
-      nodeId,
-      "system.run",
-      approvedChatSystemRunParams(context, approvalId),
-    );
+    const invoke = await invokeApprovedRun(wsReplay, nodeId, approvalId, context, "echo chat");
     expect(invoke.ok).toBe(true);
     expectForwardedApprovedParams(invokeCapture, "turnSourceTo");
 
@@ -523,13 +472,15 @@ describe("node.invoke approval bypass", () => {
       context,
     );
     const invokeCountBeforeMismatch = invokeCapture.count();
-    const mismatch = await invokeNode(
+    const mismatch = await invokeApprovedRun(
       wsReplay,
       nodeId,
-      "system.run",
-      approvedChatSystemRunParams(context, mismatchApprovalId, {
+      mismatchApprovalId,
+      {
+        ...context,
         turnSourceTo: "telegram:67890",
-      }),
+      },
+      "echo chat",
     );
     expect(mismatch.ok).toBe(false);
     expect(mismatch.error?.message ?? "").toContain("not valid for this client");
@@ -537,49 +488,29 @@ describe("node.invoke approval bypass", () => {
   });
 
   test("blocks cross-node replay on same device", async () => {
-    const invokeCounts = new Map<string, number>();
-    const onInvoke = (payload: unknown) => {
-      const obj = payload as { nodeId?: unknown };
-      const nodeId = typeof obj?.nodeId === "string" ? obj.nodeId : "";
-      if (!nodeId) {
-        return;
-      }
-      invokeCounts.set(nodeId, (invokeCounts.get(nodeId) ?? 0) + 1);
-    };
-    await connectLinuxNode(onInvoke, createDeviceIdentity());
-    await connectLinuxNode(onInvoke, createDeviceIdentity());
+    const approvedNode = await connectObservedNode();
+    const replayNode = await connectObservedNode();
 
     const wsApprover = await connectOperator(["operator.write", "operator.approvals"]);
     const wsCaller = await connectOperator(["operator.write"]);
 
     await expect
-      .poll(async () => (await getConnectedNodeIds(wsApprover)).length, {
+      .poll(() => getConnectedNodeIds(wsApprover), {
         timeout: 3_000,
         interval: 50,
       })
-      .toBeGreaterThanOrEqual(2);
-    const connectedNodeIds = await getConnectedNodeIds(wsApprover);
-    const approvedNodeId = requireValue(connectedNodeIds[0], "approved node id");
-    const replayNodeId = requireValue(
-      connectedNodeIds.find((id) => id !== approvedNodeId),
-      "replay node id",
-    );
+      .toEqual(expect.arrayContaining([approvedNode.nodeId, replayNode.nodeId]));
 
-    const approvalId = await requestAllowOnceApproval(wsApprover, "echo hi", approvedNodeId);
-    const beforeReplayApprovedNode = invokeCounts.get(approvedNodeId) ?? 0;
-    const beforeReplayOtherNode = invokeCounts.get(replayNodeId) ?? 0;
-    const replay = await invokeNode(
-      wsCaller,
-      replayNodeId,
-      "system.run",
-      approvedSystemRunParams(approvalId),
-    );
+    const approvalId = await requestAllowOnceApproval(wsApprover, "echo hi", approvedNode.nodeId);
+    const beforeReplayApprovedNode = approvedNode.capture.count();
+    const beforeReplayOtherNode = replayNode.capture.count();
+    const replay = await invokeApprovedRun(wsCaller, replayNode.nodeId, approvalId);
     expect(replay.ok).toBe(false);
     expect(replay.error?.message ?? "").toContain("not valid for this node");
     await expectNoForwardedInvoke(
       () =>
-        (invokeCounts.get(approvedNodeId) ?? 0) > beforeReplayApprovedNode ||
-        (invokeCounts.get(replayNodeId) ?? 0) > beforeReplayOtherNode,
+        approvedNode.capture.count() > beforeReplayApprovedNode ||
+        replayNode.capture.count() > beforeReplayOtherNode,
     );
   });
 });

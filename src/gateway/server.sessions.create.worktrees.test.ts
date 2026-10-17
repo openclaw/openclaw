@@ -18,7 +18,6 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { soloClient } from "./server-methods/sessions-sharing.test-support.js";
 import {
@@ -102,19 +101,9 @@ test("sessions.create fences the first workspace write behind its diff baseline"
       await fs.writeFile(path.join(workspace, "first-turn.txt"), "written by first turn\n");
     })();
   });
-  const client = {
-    client: {
-      connect: {
-        scopes: ["operator.admin", "operator.write"],
-        client: {
-          id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-          version: "dev",
-          platform: "web",
-          mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-        },
-      },
-    } as never,
-  };
+  const client = { client: soloClient() };
+  client.client.connect.scopes = ["operator.admin", "operator.write"];
+  Object.assign(client.client.connect.client, { version: "dev", platform: "web" });
 
   try {
     const created = await directSessionReq(
@@ -250,10 +239,7 @@ test.each([
     const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
     const disk = fsSync.statfsSync(root);
     const diskSpace = vi.spyOn(fsSync, "statfsSync").mockReturnValue({
-      type: disk.type,
-      files: disk.files,
-      frsize: disk.frsize,
-      ffree: disk.ffree,
+      ...disk,
       bsize: 4096,
       blocks: 1024 ** 4 / 4096,
       bavail: (100 * 1024 ** 3) / 4096,
@@ -540,13 +526,9 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
 
   try {
     mockPreparedRuntime();
-    const created = await rpcReq<{
-      entry?: { permissionMode?: string; sessionRoot?: string; spawnedCwd?: string };
-      key?: string;
-      runId?: string;
-      runStarted?: boolean;
-      sessionId?: string;
-    }>(ws, "sessions.create", {
+    const created = await rpcReq<
+      Omit<CreatedWorktreeSession, "worktree"> & { runId?: string; runStarted?: boolean }
+    >(ws, "sessions.create", {
       agentId: "roboclaw",
       cwd: requestedCwd,
       permissionMode: "full",
@@ -554,12 +536,10 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
     });
 
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    expect(created.payload?.entry).toMatchObject({
-      spawnedCwd: requestedCwd,
-      sessionRoot: requestedCwd,
-      permissionMode: "full",
+    expect(created.payload).toMatchObject({
+      entry: { spawnedCwd: requestedCwd, sessionRoot: requestedCwd, permissionMode: "full" },
+      runStarted: true,
     });
-    expect(created.payload?.runStarted).toBe(true);
     const sessionKey = requireNonEmptyString(created.payload?.key, "roboclaw session key");
     const sessionId = requireNonEmptyString(created.payload?.sessionId, "roboclaw session id");
     await expect(
