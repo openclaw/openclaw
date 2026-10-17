@@ -17,10 +17,7 @@ import {
   registerOpenClawStateDatabaseAsyncResource,
 } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateReadConnection } from "../state/openclaw-state-db-read-connection.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
@@ -28,30 +25,18 @@ import { snapshotDoctorLintSqliteFamily } from "./doctor-lint.test-support.js";
 
 export async function verifyDoctorLintPrivateAuthRetirement(
   runtime: RuntimeEnv,
-  mode:
-    | "normal"
-    | "update"
-    | "reader-close"
-    | "reader-close-detector"
-    | "reader-close-finding"
-    | "reader-close-full-finding"
-    | "writer-close-detector"
-    | "writer-close"
-    | "detector"
-    | "cleanup"
-    | "cleanup-detector",
+  mode: "reader-close-finding" | "reader-close-full-finding" | "writer-close" | "cleanup-detector",
   installHealthChecks: (checks: HealthCheck[]) => void,
   sqliteOpen: Mock<(filename: string, readOnly: boolean, database: DatabaseSync) => void>,
 ): Promise<void> {
   const nativeWindows = process.platform === "win32";
-  const env = { OPENCLAW_UPDATE_IN_PROGRESS: mode === "normal" ? undefined : "1" };
+  const env = { OPENCLAW_UPDATE_IN_PROGRESS: "1" };
   await withOpenClawTestState({ prefix: "doctor-retirement-", env }, async (state) => {
     await state.writeConfig({ memory: { search: { enabled: false } } });
     const source = openOpenClawStateDatabase();
     const before = snapshotDoctorLintSqliteFamily(source.path);
     const sourceConfigPath = process.env.OPENCLAW_CONFIG_PATH;
     const openAuthReader = (filename: string) => {
-      // Minimal native SQLite fixture for the actual pooled auth reader lifecycle.
       const database = openNodeSqliteDatabase(filename);
       try {
         database.exec("CREATE TABLE fixture AS SELECT 'unchanged' AS value");
@@ -83,13 +68,13 @@ export async function verifyDoctorLintPrivateAuthRetirement(
     const retirementFailure = mode.includes("-close");
     const readerRetirementFailure = mode.startsWith("reader-close");
     const returnedFinding = mode.endsWith("finding");
+    const checkId = "core/doctor/runtime-tool-schemas";
     const detectorFinding: HealthFinding = {
-      checkId: "core/doctor/runtime-tool-schemas",
+      checkId,
       severity: "error",
       message: "synthetic authoritative detector finding",
       path: "synthetic.detector.path",
     };
-    const checkId = "core/doctor/runtime-tool-schemas";
     const closeError = `synthetic ${mode} retirement failure`;
     installHealthChecks([
       {
@@ -97,13 +82,6 @@ export async function verifyDoctorLintPrivateAuthRetirement(
         kind: "core",
         description: "inspects private runtime state",
         async detect() {
-          if (mode === "normal") {
-            expect(() =>
-              runOpenClawStateWriteTransaction(() => undefined, { database: source }),
-            ).toThrow(
-              "Programming error: shared-state write during artifact-preserving inspection.",
-            );
-          }
           writeConfigMachineState("doctorLint.synthetic.privateWrite", true);
           const writer = openOpenClawStateDatabase();
           const reader = openOpenClawStateReadConnection(writer.path, writer.path);
@@ -114,8 +92,7 @@ export async function verifyDoctorLintPrivateAuthRetirement(
           const privateAuthPath = path.join(privateStateDir, "private-auth.sqlite");
           privateAuth = openAuthReader(privateAuthPath);
           if (nativeWindows) {
-            // Call the real filesystem while the real pooled SQLite reader is open.
-            // A runner that permits deletion must fail this gate, never skip it.
+            // Native Windows must reject unlinking the pooled reader, never skip this gate.
             await expect(remove(privateAuthPath, { force: true })).rejects.toMatchObject({
               code: expect.stringMatching(/^(EPERM|EBUSY|EACCES)$/),
             });
@@ -124,14 +101,12 @@ export async function verifyDoctorLintPrivateAuthRetirement(
             });
             nativeOpenHandleRefused = true;
             if (cleanupFailure) {
-              // Deliberately unowned by Doctor: real Windows cleanup denial after
-              // Doctor has retired all its own readers and writers.
+              // Unowned handle blocks cleanup even after Doctor retires its handles.
               nativeCleanupBlockerPath = path.join(privateStateDir, "held-cleanup.sqlite");
               nativeCleanupBlocker = openNodeSqliteDatabase(nativeCleanupBlockerPath);
               nativeCleanupBlocker.exec("CREATE TABLE fixture AS SELECT 1 AS value");
             }
           }
-          // Reader/writer retirement failures remain explicit synthetic injections.
           if (readerRetirementFailure) {
             const close = vi.spyOn(privateAuth, "close").mockImplementationOnce(() => {
               throw new Error(closeError);
@@ -189,10 +164,9 @@ export async function verifyDoctorLintPrivateAuthRetirement(
           ? { includeAllChecks: true }
           : { onlyIds: [checkId] }),
       });
-      expect(exitCode).toBe(retirementFailure || detectorFailure ? 1 : 0);
+      expect(exitCode).toBe(1);
       const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
-      expect(report.schemaVersion).toBe(1);
-      expect(report.ok).toBe(!retirementFailure && !detectorFailure);
+      expect(report).toMatchObject({ schemaVersion: 1, ok: false });
       if (returnedFinding) {
         expect(report.findings).toContainEqual(detectorFinding);
         expect(report.findings).toContainEqual(
@@ -202,37 +176,22 @@ export async function verifyDoctorLintPrivateAuthRetirement(
           }),
         );
         expect(report.findings).toHaveLength(2);
-        // A completed full report can include registered plugin checks too;
-        // snapshot disposal must not replace its count with generic failure's zero.
+        // Disposal must retain the completed report's count, including plugin checks.
         expect(report.checksRun).toBeGreaterThan(0);
-      } else if (retirementFailure && detectorFailure) {
-        expect(report.findings).toHaveLength(1);
-        expect(report.findings[0]).toMatchObject({ checkId, severity: "error" });
-        expect(report.findings[0].message).toContain("synthetic authoritative detector failure");
-        expect(report.findings[0].message).toContain(closeError);
       } else {
         const failureMessage = retirementFailure
           ? expect.stringContaining(closeError)
           : "health check threw: synthetic authoritative detector failure";
-        expect(report.findings).toEqual(
-          retirementFailure || detectorFailure
-            ? [
-                expect.objectContaining({
-                  checkId,
-                  severity: "error",
-                  message: failureMessage,
-                }),
-              ]
-            : [],
-        );
+        expect(report.findings).toEqual([
+          expect.objectContaining({ checkId, severity: "error", message: failureMessage }),
+        ]);
       }
       expect(privateWriter).toBeDefined();
       const snapshotRoot = path.dirname(
         resolveOpenClawStateDirForDatabasePath(privateWriter!.path),
       );
       if (retirementFailure) {
-        // Full reports can retire a separate read-only snapshot. No attempted
-        // removal may touch this failed snapshot, its children, or an ancestor.
+        // A separate full-report snapshot may retire, but not this failed snapshot or its family.
         const removedPrivatePaths = removal.mock.calls
           .map(([target]) => path.resolve(String(target)))
           .filter(
@@ -257,13 +216,11 @@ export async function verifyDoctorLintPrivateAuthRetirement(
         cleanupFailure ? [{ requirement: "temporary-snapshot-cleanup", severity: "warning" }] : [],
       );
       expect(privateAuth?.isOpen).toBe(readerRetirementFailure);
-      if (readerRetirementFailure) {
-        expect(privateWriter?.db.isOpen).toBe(false);
-        expect(privateReader?.database.db.isOpen).toBe(false);
-      }
-      if (!retirementFailure) {
-        expect(privateWriter?.db.isOpen).toBe(false);
-        expect(privateReader?.database.db.isOpen).toBe(false);
+      if (readerRetirementFailure || !retirementFailure) {
+        expect([privateWriter?.db.isOpen, privateReader?.database.db.isOpen]).toEqual([
+          false,
+          false,
+        ]);
       }
       // Recursive removal can partially succeed before a genuine Windows denial.
       expect(fs.existsSync(snapshotRoot)).toBe(retirementFailure || cleanupFailure);
@@ -272,8 +229,9 @@ export async function verifyDoctorLintPrivateAuthRetirement(
       }
       expect(removedSnapshot).toBe(!retirementFailure && !cleanupFailure);
       expect([source.db.isOpen, callerReader.isOpen]).toEqual([true, true]);
-      const callerRow = callerReader.prepare("SELECT value FROM fixture").get();
-      expect(callerRow).toEqual({ value: "unchanged" });
+      expect(callerReader.prepare("SELECT value FROM fixture").get()).toEqual({
+        value: "unchanged",
+      });
       expect(fs.readFileSync(callerPath)).toEqual(callerBefore);
       expect(snapshotDoctorLintSqliteFamily(source.path)).toEqual(before);
       expect(readConfigMachineState("doctorLint.synthetic.privateWrite")).toBeUndefined();

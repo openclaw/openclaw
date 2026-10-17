@@ -45,35 +45,36 @@ const removedWindow =
   "Removed models.providers.ollama.contextWindow after baking it into explicit model entries.";
 const preservedPrimary =
   "Preserved the implicit primary model in agents.defaults.model.primary (ollama/llama3.3).";
+const pinChange = (numCtx: number) =>
+  `Set models.providers.ollama.models[0].params.num_ctx to ${numCtx} for native Ollama compatibility.`;
+function expectStable(
+  result: ReturnType<typeof normalizeCompatibilityConfigValues>,
+  migrate = normalizeCompatibilityConfigValues,
+) {
+  const expected = structuredClone(result.config);
+  const repeated = migrate(result.config);
+  expect(repeated.config).toEqual(expected);
+  expect(repeated.changes).toEqual([]);
+}
 
 describe("Ollama context-budget Doctor migrations", () => {
   useDoctorLegacyConfigFixture();
 
   it.each([
-    { label: "provider output budget", provider: { maxTokens: 8192 }, model: {} },
-    {
-      label: "explicit provider num_ctx",
-      provider: { maxTokens: 8192, params: { num_ctx: 16_384 } },
-      model: {},
-    },
-    {
-      label: "explicit model num_ctx",
-      provider: { maxTokens: 8192 },
-      model: { params: { num_ctx: 16_384 } },
-    },
-  ])("preserves current Ollama contextTokens with $label", ({ provider, model }) => {
+    ["provider output budget", {}, {}],
+    ["explicit provider num_ctx", { params: { num_ctx: 16_384 } }, {}],
+    ["explicit model num_ctx", {}, { params: { num_ctx: 16_384 } }],
+  ] as const)("preserves current Ollama contextTokens with %s", (_label, provider, model) => {
     const input = ollamaConfig(
       [ollamaModel({ contextWindow: 262_144, contextTokens: 32_768, ...model })],
-      provider,
+      { maxTokens: 8192, ...provider },
       "localOllama",
     );
     const expected = structuredClone(input);
     const result = normalizeCompatibilityConfigValues(input);
     expect(result.config).toEqual(expected);
     expect(result.changes).toEqual([]);
-    const repeated = normalizeCompatibilityConfigValues(result.config);
-    expect(repeated.config).toEqual(expected);
-    expect(repeated.changes).toEqual([]);
+    expectStable(result);
   });
 
   it.each(["ollama", "openai-completions"] as const)(
@@ -114,9 +115,7 @@ describe("Ollama context-budget Doctor migrations", () => {
       expect(provider?.models?.[1]?.params).toEqual({ num_ctx: 65_536 });
       expect(provider?.models?.[2]?.params).toEqual({ num_ctx: 8192 });
       expect(provider?.models?.[3]?.params).toEqual({ temperature: 0.1 });
-      const repeated = normalizeCompatibilityConfigValues(result.config);
-      expect(repeated.config).toEqual(result.config);
-      expect(repeated.changes).toEqual([]);
+      expectStable(result);
     },
   );
 
@@ -134,9 +133,7 @@ describe("Ollama context-budget Doctor migrations", () => {
     expect(provider?.params).toBeUndefined();
     expect(provider?.models?.[0]).toMatchObject({ contextTokens: 32_768, contextWindow: 262_144 });
     expect(provider?.models?.[0]?.params).toBeUndefined();
-    const repeated = migrateContextBudgetThenNormalize(result.config);
-    expect(repeated.config).toEqual(result.config);
-    expect(repeated.changes).toEqual([]);
+    expectStable(result, migrateContextBudgetThenNormalize);
   });
 
   it.each([
@@ -179,45 +176,25 @@ describe("Ollama context-budget Doctor migrations", () => {
     {
       label: "inherited window",
       models: [ollamaModel({ contextWindow: undefined, maxTokens: 4096 })],
-      params: undefined,
       expected: [{ num_ctx: 65536 }],
-      changes: [
-        bakedWindow,
-        removedWindow,
-        preservedPrimary,
-        "Set models.providers.ollama.models[0].params.num_ctx to 65536 for native Ollama compatibility.",
-      ],
-      warnings: [],
+      changes: [bakedWindow, removedWindow, preservedPrimary, pinChange(65536)],
     },
     {
       label: "explicit model window",
       models: [ollamaModel({ contextWindow: 32768 })],
-      params: undefined,
       expected: [{ num_ctx: 32768 }],
-      changes: [
-        removedWindow,
-        preservedPrimary,
-        "Set models.providers.ollama.models[0].params.num_ctx to 32768 for native Ollama compatibility.",
-      ],
-      warnings: [],
+      changes: [removedWindow, preservedPrimary, pinChange(32768)],
     },
     {
       label: "existing provider pin",
       models: [ollamaModel({ contextWindow: undefined, maxTokens: undefined })],
       params: { num_ctx: 32768 },
       expected: [{ num_ctx: 65536 }],
-      changes: [
-        bakedWindow,
-        removedWindow,
-        preservedPrimary,
-        "Set models.providers.ollama.models[0].params.num_ctx to 65536 for native Ollama compatibility.",
-      ],
-      warnings: [],
+      changes: [bakedWindow, removedWindow, preservedPrimary, pinChange(65536)],
     },
     {
       label: "no explicit models",
       models: [],
-      params: undefined,
       expected: [],
       changes: ["Removed models.providers.ollama.contextWindow."],
       warnings: [
@@ -226,7 +203,7 @@ describe("Ollama context-budget Doctor migrations", () => {
     },
   ])(
     "migrates retired provider contextWindow with $label",
-    ({ models, params, expected, changes, warnings }) => {
+    ({ models, params, expected, changes, warnings = [] }) => {
       const expectedProviderParams = structuredClone(params);
       const res = migrateContextBudgetThenNormalize(
         ollamaConfig(models, { contextWindow: 65536, params }),
@@ -244,16 +221,10 @@ describe("Ollama context-budget Doctor migrations", () => {
   );
 
   it("keeps native Ollama params prototype-safe while setting num_ctx", () => {
-    const providerParams: Record<string, unknown> = { temperature: 0.2 };
-    Object.defineProperty(providerParams, "__proto__", {
-      enumerable: true,
-      value: { think: "high" },
-    });
-    const modelParams: Record<string, unknown> = { top_p: 0.9 };
-    Object.defineProperty(modelParams, "__proto__", {
-      enumerable: true,
-      value: { keep_alive: "forever" },
-    });
+    const ownProto = (params: Record<string, unknown>, value: Record<string, unknown>) =>
+      Object.defineProperty(params, "__proto__", { enumerable: true, value });
+    const providerParams = ownProto({ temperature: 0.2 }, { think: "high" });
+    const modelParams = ownProto({ top_p: 0.9 }, { keep_alive: "forever" });
     const res = migrateContextBudgetThenNormalize(
       ollamaConfig([ollamaModel({ contextWindow: 32768, params: modelParams })], {
         contextWindow: 65536,
