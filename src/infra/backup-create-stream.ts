@@ -168,10 +168,11 @@ export async function writeArchiveStreamToFile(params: {
     if (!idleTimeoutError && signal.aborted && err instanceof Error && isAbortError(err)) {
       // Capture the last observed activity before cleanup; never modify the
       // shared abort reason or let late producer callbacks rewrite the failure.
-      failure = createAbortError(`${err.message} (${describeProgress()})`, { cause: err });
+      const abortError = createAbortError(`${err.message} (${describeProgress()})`, { cause: err });
       if ("code" in err && (typeof err.code === "string" || typeof err.code === "number")) {
-        Object.assign(failure, { code: err.code });
+        Object.assign(abortError, { code: err.code });
       }
+      failure = abortError;
     }
     archiveWriteStream.destroy();
     // A synchronous producer failure can precede open. Join descriptor closure
