@@ -135,6 +135,9 @@ describe("AppSidebar gateway footer subtitle", () => {
     });
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    sidebar.connected = true;
+    sidebar.gatewayStatus = { kind: "connected" };
+    await sidebar.updateComplete;
 
     expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
       "Identity and app menu for Owner: git@e8cbc62 · 4h ago",
@@ -174,7 +177,7 @@ describe("AppSidebar gateway footer subtitle", () => {
     ).not.toContain("git@e8cbc62");
   });
 
-  it("shows one suspended subtitle without delivery counts", async () => {
+  it("shows nonhealthy state as the avatar dot and leaves announcing to the shell", async () => {
     const label = "Suspended";
     setNativeGatewayTestState(twoGateways);
     const gateway = createGateway({} as GatewayBrowserClient);
@@ -183,42 +186,41 @@ describe("AppSidebar gateway footer subtitle", () => {
     await sidebar.updateComplete;
 
     const footer = sidebar.querySelector(".sidebar-footer-bar");
-    expect(footer?.querySelectorAll(".gateway-status__label")).toHaveLength(1);
-    expect(footer?.querySelector(".gateway-status__label")?.textContent).toBe(label);
-    expect(footer?.querySelector("button [role=status]")).toBeNull();
-    expect(footer?.querySelector("[role=status]")?.textContent).toContain(label);
-    expect(footer?.querySelector("[role=status]")?.textContent).not.toContain("in outbox");
-    expect(footer?.textContent).not.toContain("Offline");
-    expect(footer?.querySelector(".gateway-status__outbox")).toBeNull();
+    const card = footer?.querySelector(".sidebar-identity-card");
+    // The shell chip owns the written label; the footer keeps the dot and accessible name.
+    expect(footer?.querySelector(".gateway-status__label")).toBeNull();
+    expect(card?.getAttribute("data-connection-status")).toBe("suspended");
+    expect(card?.querySelector(".sidebar-identity-card__status")).not.toBeNull();
+    expect(card?.getAttribute("aria-label")).toBe(`Identity and app menu for Owner: ${label}`);
+    expect(footer?.querySelector(":scope > [role=status]")).toBeNull();
     expect(footer?.querySelector(".sidebar-identity-card__name")?.textContent).toBe("Owner");
-    expect(footer?.querySelector(".sidebar-identity-card__gateway")).toBeNull();
-    expect(footer?.querySelector('[role="status"]')?.getAttribute("aria-live")).toBe("polite");
-    expect(footer?.querySelector("button button")).toBeNull();
+    expect(footer?.querySelector(".sidebar-identity-card__gateway")?.textContent).toContain(
+      "Local Gateway",
+    );
   });
 
-  it("keeps gateway identity after reconnect and redacts connection diagnostics", async () => {
+  it("returns to the healthy dot and gateway identity after reconnect", async () => {
     setNativeGatewayTestState(twoGateways);
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
     sidebar.connectionStatus = "reconnecting";
-    sidebar.lastError = "connection refused?token=footer-secret";
     await sidebar.updateComplete;
-    const tooltip = sidebar.querySelector<HTMLElement & { content?: string }>(
-      ".gateway-status-tooltip",
-    );
-    expect(tooltip?.content).toBe("connection refused?[redacted-credential]");
+    const card = () => sidebar.querySelector(".sidebar-identity-card");
+    expect(card()?.getAttribute("data-connection-status")).toBe("reconnecting");
 
     sidebar.connectionStatus = null;
+    sidebar.connected = true;
+    sidebar.gatewayStatus = { kind: "connected" };
+    sidebar.connectionRecovery = true;
     await sidebar.updateComplete;
-    expect(sidebar.querySelector(".gateway-status__label")).toBeNull();
-    expect(sidebar.querySelector(".gateway-status__outbox")).toBeNull();
-    expect(sidebar.querySelector(".sidebar-identity-card__gateway")?.textContent).toContain(
-      "Local Gateway",
+    expect(card()?.getAttribute("data-connection-status")).toBe("connected");
+    expect(card()?.getAttribute("aria-label")).toBe("Identity and app menu for Owner: Connected");
+
+    sidebar.connectionRecovery = false;
+    await sidebar.updateComplete;
+    expect(card()?.getAttribute("aria-label")).toBe(
+      "Identity and app menu for Owner: Local Gateway, primary",
     );
-    const connectedTooltip = sidebar.querySelector<HTMLElement & { content?: string }>(
-      ".gateway-status-tooltip",
-    );
-    expect(connectedTooltip).toBeNull();
     sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card")?.click();
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-identity-menu__outbox")).toBeNull();

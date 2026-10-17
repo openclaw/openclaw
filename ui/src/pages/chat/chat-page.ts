@@ -35,6 +35,7 @@ defineSolidBridge<ChatPageProps>(
     properties: {
       data: { default: undefined!, attribute: false },
       navDrawerOpen: { default: false, attribute: false },
+      gatewayStatus: { default: null, attribute: false },
       presented: { default: true, type: Boolean },
       context: { default: undefined, attribute: false },
     },

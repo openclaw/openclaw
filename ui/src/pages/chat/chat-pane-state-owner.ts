@@ -20,6 +20,7 @@ import {
   type QuestionPrompt,
 } from "../../app/question-prompt.ts";
 import type { PresencePayload } from "../../app/user-profile.ts";
+import type { GatewayStatusProps } from "../../components/gateway-status.ts";
 import type { MarkdownRenderOptions } from "../../components/markdown-render-options.ts";
 import type { SessionPanelToggleSlot } from "../../components/session-panel-toggle-buffer.ts";
 import type {
@@ -332,6 +333,7 @@ export abstract class ChatPaneStateOwner {
   narrow = false;
   mergedChrome = false;
   navDrawerOpen = false;
+  gatewayStatus: GatewayStatusProps | null = null;
   onboarding = false;
   onOpenSplitView?: () => void;
   onSplitDown?: (paneId: string) => void;

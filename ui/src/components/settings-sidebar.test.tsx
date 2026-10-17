@@ -568,7 +568,7 @@ describe("settings sidebar search", () => {
   });
 
   it.each(["sidebar", "embed-list", "embed-page"] as const)(
-    "keeps connection recovery separate from delivery in %s",
+    "preserves save feedback in web settings and native connection recovery in %s",
     async (presentation) => {
       const onRetryConnect = vi.fn();
       const renderSidebar = (
@@ -582,6 +582,10 @@ describe("settings sidebar search", () => {
             basePath: "",
             activeRouteId: "appearance",
             connectionStatus,
+            footerStatus:
+              presentation === "sidebar" && connectionStatus
+                ? { kind: connectionStatus, lastError, queuedCount: 2, onRetry: onRetryConnect }
+                : null,
             lastError,
             gatewayVersion: "1.0.0",
             searchQuery: "",
@@ -611,19 +615,36 @@ describe("settings sidebar search", () => {
       const suspended = container.querySelector(".gateway-status--suspended");
       expect(suspended?.textContent).toContain(t("connection.suspended"));
       expect(suspended?.textContent).not.toContain("in outbox");
-      expect(container.querySelector("button.gateway-status")).toBeNull();
-      expect(container.querySelector("openclaw-settings-save-indicator")).toBeNull();
+      expect(container.querySelector(".gateway-status__retry")).toBeNull();
+      expect(container.querySelector("openclaw-settings-save-indicator") !== null).toBe(
+        presentation === "sidebar",
+      );
+      if (presentation === "sidebar") {
+        expect(container.querySelector(".sidebar-shell__footer")?.textContent).toContain(
+          "2 queued",
+        );
+        expect(suspended?.hasAttribute("role")).toBe(false);
+        expect(container.querySelector(".settings-save-indicator")?.textContent).toContain(
+          t("configView.autoSaveSaving"),
+        );
+      }
 
       renderSidebar("offline", "connection refused?token=settings-secret");
-      expect(container.querySelector("openclaw-settings-save-indicator")).toBeNull();
-      const button = container.querySelector<HTMLButtonElement>("button.gateway-status");
+      expect(container.querySelector("openclaw-settings-save-indicator") !== null).toBe(
+        presentation === "sidebar",
+      );
+      const button = container.querySelector<HTMLButtonElement>(".gateway-status__retry");
       expect(button?.hasAttribute("title")).toBe(false);
       expect(
         (button?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
           ?.content,
       ).toBe("connection refused?[redacted-credential]");
       expect(button?.textContent).not.toContain("in outbox");
-      expect(button?.getAttribute("aria-label")).toBe("Disconnected — Retry now");
+      expect(button?.getAttribute("aria-label")).toBe(
+        presentation === "sidebar"
+          ? "Disconnected · 2 queued — Retry now"
+          : "Disconnected — Retry now",
+      );
       button?.click();
       expect(onRetryConnect).toHaveBeenCalledOnce();
 
@@ -631,7 +652,7 @@ describe("settings sidebar search", () => {
       const restarting = container.querySelector(".gateway-status--restarting");
       expect(restarting?.textContent).toContain(t("connection.restarting"));
       expect(restarting?.textContent).not.toContain("in outbox");
-      expect(container.querySelector("button.gateway-status")).toBeNull();
+      expect(container.querySelector(".gateway-status__retry")).toBeNull();
     },
   );
 });

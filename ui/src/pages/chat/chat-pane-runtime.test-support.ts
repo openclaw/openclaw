@@ -98,6 +98,7 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
     "narrow",
     "mergedChrome",
     "navDrawerOpen",
+    "gatewayStatus",
     "onboarding",
     "onOpenSplitView",
     "onSplitDown",

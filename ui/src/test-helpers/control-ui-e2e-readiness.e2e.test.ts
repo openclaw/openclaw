@@ -122,8 +122,10 @@ suite.define(() => {
         await page.locator("openclaw-terminal-panel .tp-host canvas").waitFor();
         if (offline) {
           await gateway.setOnline(false);
-          // The rail exposes status on the visible profile control, not its clipped text.
-          await page.getByRole("button", { name: /Reconnecting…/ }).waitFor();
+          await page
+            .locator(".sidebar-shell__footer .gateway-status")
+            .getByRole("button", { name: /Reconnecting…/ })
+            .waitFor();
         }
         expect(requests).toEqual([]);
 

@@ -2535,6 +2535,7 @@ export const en: TranslationMap & {
     suspending: "Suspending…",
     suspended: "Suspended",
     retryNow: "Retry now",
+    queued: "{count} queued",
     actionsUnavailable: "Actions are unavailable while the Gateway reconnects.",
     settingsChangesUnavailable:
       "Changes to settings are disabled while the Gateway is reconnecting.",

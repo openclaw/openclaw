@@ -114,6 +114,31 @@ describe("chat pane header", () => {
     expect(container.querySelector(".chat-pane__palette-open")).toBeNull();
   });
 
+  it.each(["openclaw", null])(
+    "replaces the mobile workspace line with connection status for %s",
+    (workspaceLabel) => {
+      const retry = vi.fn();
+      const { container, update } = mountHeader({ mergedChrome: true, workspaceLabel });
+      const title = container.querySelector(".chat-pane__session-title");
+      const drawer = container.querySelector<HTMLButtonElement>(".chat-pane__nav-toggle")!;
+      update({ gatewayStatus: { kind: "offline", queuedCount: 2, onRetry: retry } });
+      const line = container.querySelector(".mobile-connection-status")!;
+      expect(line.textContent).toBe("Disconnected · 2 queued");
+      expect(line.querySelector('[role="status"]')).toBeNull();
+      expect(container.querySelector(".chat-pane__workspace-chip")).toBeNull();
+      expect(container.querySelector(".chat-pane__session-title")).toBe(title);
+      expect(drawer.dataset.connectionStatus).toBe("offline");
+      line.querySelector<HTMLButtonElement>("button")!.click();
+      expect(retry).toHaveBeenCalledOnce();
+      update({ gatewayStatus: { kind: "connected" } });
+      expect(container.querySelector(".mobile-connection-status")).toBeNull();
+      expect(container.querySelector(".chat-pane__workspace-chip") !== null).toBe(
+        Boolean(workspaceLabel),
+      );
+      expect(drawer.dataset.connectionStatus).toBe("connected");
+    },
+  );
+
   it("keeps only Share, Layout, and overflow at rest and moves layout actions into the menu", async () => {
     const onClosePane = vi.fn();
     const onSplitDown = vi.fn();

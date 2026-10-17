@@ -589,6 +589,7 @@ export class ShellOwner
     const chatPage = this.routeOutlet?.querySelector<ChatPage>("openclaw-chat-page");
     if (chatPage) {
       chatPage.navDrawerOpen = this.navDrawerOpen && !this.onboardingMode;
+      chatPage.gatewayStatus = this.mobileGatewayStatus;
     }
     const context = this.context;
     if (!context) {

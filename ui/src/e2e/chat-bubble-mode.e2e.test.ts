@@ -147,10 +147,11 @@ suite.define(() => {
       await browserExpect(chat).toContainText("This conversation keeps its own view.");
       await browserExpect(chat).not.toHaveClass(/chat--bubbles/);
       await page.setViewportSize({ width: 390, height: 844 });
+      // Closed menus reconcile their parked presentation on open.
+      const otherToggle = await openBubbleMenu();
       await browserExpect(
         page.locator("openclaw-chat-header-session-menu > .chat-header-session-menu"),
       ).toHaveClass(/chat-header-session-menu--compact/);
-      const otherToggle = await openBubbleMenu();
       await browserExpect(otherToggle).toHaveAttribute("aria-checked", "false");
       await otherToggle.click();
       await browserExpect(otherToggle).toHaveAttribute("aria-checked", "true");
