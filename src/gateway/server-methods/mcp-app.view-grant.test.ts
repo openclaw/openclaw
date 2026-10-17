@@ -48,6 +48,7 @@ import { createTestRuntimeSecretsActivator } from "../server-startup-config.test
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import { mcpAppHandlers } from "./mcp-app.js";
 import { createPluginApprovalHandlers } from "./plugin-approval.js";
+import { expectRpcError } from "./rpc-response.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -289,6 +290,10 @@ async function approvedCall(
   return event;
 }
 
+function expectDenied(respond: unknown, message: string) {
+  expectRpcError(respond, { message: expect.stringContaining(message) });
+}
+
 beforeAll(async () => {
   state = await createOpenClawTestState({ label: "mcp-app-view-grants" });
   aux = createGatewayAuxHandlers({
@@ -440,11 +445,7 @@ describe.each<Path>(["model-created", "extension-runtime"])(
         }
         if (reason !== "replaced") {
           const failed = await call(viewId);
-          expect(failed).toHaveBeenCalledWith(
-            false,
-            undefined,
-            expect.objectContaining({ message: expect.stringContaining("view expired") }),
-          );
+          expectDenied(failed, "view expired");
           expect(runtime.callTool).toHaveBeenCalledOnce();
         }
         await openView(path, { viewId });
@@ -462,11 +463,7 @@ describe.each<Path>(["model-created", "extension-runtime"])(
       const pending = call(viewId);
       const denied = await promptFor(pending);
       await decide(denied, "deny");
-      expect(await pending).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("denied") }),
-      );
+      expectDenied(await pending, "denied");
       await approvedCall(viewId, "allow-once");
       expect(approvals).toHaveLength(3);
       expect(runtime.callTool).toHaveBeenCalledTimes(2);
@@ -478,15 +475,10 @@ describe.each<Path>(["model-created", "extension-runtime"])(
       await approvedCall(shared, "allow-once", "search", "bob");
       const bound = await openView(path, { requesterId: "alice" });
       await approvedCall(bound, "allow-always");
-      expect(await call(bound, "search", { requesterId: "bob" })).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("not authorized") }),
-      );
-      expect(await call(shared, "search", { sessionKey: "agent:main:other" })).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("not authorized") }),
+      expectDenied(await call(bound, "search", { requesterId: "bob" }), "not authorized");
+      expectDenied(
+        await call(shared, "search", { sessionKey: "agent:main:other" }),
+        "not authorized",
       );
       expect(approvals).toHaveLength(3);
       expect(runtime.callTool).toHaveBeenCalledTimes(3);
@@ -506,22 +498,14 @@ describe.each<Path>(["model-created", "extension-runtime"])(
         return committed;
       });
       await decide(event, "allow-always");
-      expect(await pending).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("denied") }),
-      );
+      expectDenied(await pending, "denied");
       expect(runtime.callTool).not.toHaveBeenCalled();
       entry.toolOverrides = undefined;
       await approvedCall(viewId, "allow-always");
       mocks.policy.mockImplementation(() => {
         throw new Error("Current tool policy revoked");
       });
-      expect(await call(viewId)).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: "Current tool policy revoked" }),
-      );
+      expectRpcError(await call(viewId), { message: "Current tool policy revoked" });
       expect(runtime.callTool).toHaveBeenCalledOnce();
     });
 
@@ -620,11 +604,7 @@ it("revalidates a cached App grant after HTTP transport preparation before writi
     expect(toolCalls).toBe(2);
     expect(approvals).toHaveLength(1);
     const beforeDenied = posts;
-    expect(await call(viewId, "search", { requesterId: "bob" })).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("not authorized") }),
-    );
+    expectDenied(await call(viewId, "search", { requesterId: "bob" }), "not authorized");
     expect(posts).toBe(beforeDenied);
 
     mocks.lookup.mockImplementationOnce(async () => {
@@ -643,11 +623,7 @@ it("revalidates a cached App grant after HTTP transport preparation before writi
     const response = await revoked;
     expect(posts).toBe(beforeDenied);
     expect(toolCalls).toBe(2);
-    expect(response).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("denied") }),
-    );
+    expectDenied(response, "denied");
   } finally {
     resume.resolve();
     await Promise.allSettled(pendingCalls);

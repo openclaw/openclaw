@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MemoryProviderHandle } from "../../plugins/memory-provider-types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
+import { expectRpcError, expectRpcResult } from "./rpc-response.test-support.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -25,7 +26,6 @@ import { memorySearchHandlers } from "./memory-search.js";
 const config: OpenClawConfig = { agents: { entries: { main: {} } } };
 const reference = { providerId: "records", id: "claim:42", revision: "r3" };
 
-// A token-authenticated CLI connection: operator.read, no user profile or run authority.
 function operatorClient(): NonNullable<GatewayRequestHandlerOptions["client"]> {
   return {
     connId: "cli-connection",
@@ -39,7 +39,6 @@ function operatorClient(): NonNullable<GatewayRequestHandlerOptions["client"]> {
   } as NonNullable<GatewayRequestHandlerOptions["client"]>;
 }
 
-// An in-process agent-tool caller acting for an admitted run.
 function syntheticClient(): NonNullable<GatewayRequestHandlerOptions["client"]> {
   return { ...operatorClient(), internal: { syntheticClient: true } } as NonNullable<
     GatewayRequestHandlerOptions["client"]
@@ -61,7 +60,6 @@ function request(
   };
 }
 
-// Keep the test on the registered handler surface and fail clearly if registration changes.
 async function invoke(method: string, options: GatewayRequestHandlerOptions): Promise<void> {
   const handler = memorySearchHandlers[method];
   if (!handler) {
@@ -70,7 +68,6 @@ async function invoke(method: string, options: GatewayRequestHandlerOptions): Pr
   await handler(options);
 }
 
-// Keep concrete mock types while checking the full provider contract.
 function createProvider() {
   return {
     capabilities: {
@@ -123,36 +120,31 @@ describe("provider-neutral memory RPC", () => {
       cursor: undefined,
       sources: ["memory"],
     });
-    expect(search.respond).toHaveBeenCalledWith(
-      true,
-      {
-        version: 2,
-        agentId: "main",
-        providerId: "records",
-        hits: [{ reference, excerpt: "A record, not a workspace file" }],
-        coverage: "partial",
-        nextCursor: "page2",
-      },
-      undefined,
-    );
+    expectRpcResult(search.respond, {
+      version: 2,
+      agentId: "main",
+      providerId: "records",
+      hits: [{ reference, excerpt: "A record, not a workspace file" }],
+      coverage: "partial",
+      nextCursor: "page2",
+    });
     const get = request("memory.get", { reference, from: 2, lines: 10 });
     await invoke("memory.get", get);
     expect(provider.get).toHaveBeenCalledWith({ reference, from: 2, lines: 10 });
-    expect(get.respond).toHaveBeenCalledWith(
-      true,
+    expectRpcResult(
+      get.respond,
       expect.objectContaining({ status: "ok", reference, text: "Record body" }),
-      undefined,
     );
     const health = request("memory.status", {});
     await invoke("memory.status", health);
-    expect(health.respond).toHaveBeenCalledWith(
-      true,
-      { version: 2, agentId: "main", providerId: "records", status: "ready" },
-      undefined,
-    );
+    expectRpcResult(health.respond, {
+      version: 2,
+      agentId: "main",
+      providerId: "records",
+      status: "ready",
+    });
     expect(mocks.legacy).not.toHaveBeenCalled();
     expect(provider.close).toHaveBeenCalledTimes(3);
-    // A connected operator reads with its connection scopes, not admitted run authority.
     expect(mocks.capture).not.toHaveBeenCalled();
     expect(mocks.acquire).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -175,11 +167,7 @@ describe("provider-neutral memory RPC", () => {
   ])("rejects invalid %s input before provider admission", async (method, params) => {
     const options = request(method, params);
     await invoke(method, options);
-    expect(options.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expectRpcError(options.respond, { code: "INVALID_REQUEST" });
     expect(mocks.acquire).not.toHaveBeenCalled();
   });
 
@@ -210,11 +198,7 @@ describe("provider-neutral memory RPC", () => {
       });
       pending.resolve({ status: "ready" });
       await result;
-      expect(options.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: "operator revoked" }),
-      );
+      expectRpcError(options.respond, { message: "operator revoked" });
       expect(provider.close).toHaveBeenCalledOnce();
       expect(release).toHaveBeenCalledOnce();
     },
@@ -228,22 +212,14 @@ describe("provider-neutral memory RPC", () => {
     const denied = request("memory.status", {}, caller === null ? null : syntheticClient());
     await invoke("memory.status", denied);
     expect(mocks.acquire).not.toHaveBeenCalled();
-    expect(denied.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
+    expectRpcError(denied.respond, { code: "UNAVAILABLE" });
   });
 
   it("does not retry a provider denial via legacy", async () => {
     mocks.acquire.mockRejectedValueOnce(new Error("provider denied"));
     const deniedProvider = request("memory.search", { version: 2, query: "record" });
     await invoke("memory.search", deniedProvider);
-    expect(deniedProvider.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: "provider denied" }),
-    );
+    expectRpcError(deniedProvider.respond, { message: "provider denied" });
     expect(mocks.legacy).not.toHaveBeenCalled();
   });
 });

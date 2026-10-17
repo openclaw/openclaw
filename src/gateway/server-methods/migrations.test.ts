@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-// Gateway migration tests cover agent scoping, fresh plans, and exact item selection.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
@@ -49,7 +48,7 @@ function createConfig() {
         research: { workspace: "/tmp/workspace-research" },
       },
     },
-  } as never;
+  };
 }
 
 let config = createConfig();
@@ -134,29 +133,51 @@ function invoke(method: keyof typeof migrationsHandlers, params: Record<string, 
 }
 
 function firstCall(respond: ReturnType<typeof vi.fn>): RespondCall {
-  const call = respond.mock.calls[0] as RespondCall | undefined;
-  if (!call) {
-    throw new Error("expected gateway response");
-  }
-  return call;
+  return expectDefined(respond.mock.calls[0], "expected gateway response") as RespondCall;
 }
 
 async function loadPlanFingerprint(overwrite = false): Promise<string> {
-  const request = invoke("migrations.memory.plan", {
+  const [ok, rawResult] = await response("migrations.memory.plan", {
     agentId: "research",
     ...(overwrite ? { overwrite: true } : {}),
   });
-  await request.run();
-  const [ok, rawResult] = firstCall(request.respond);
   expect(ok).toBe(true);
-  const result = rawResult as {
-    providers: Array<{ planFingerprint?: string }>;
-  };
-  const fingerprint = result.providers[0]?.planFingerprint;
+  const fingerprint = (rawResult as { providers: Array<{ planFingerprint?: string }> }).providers[0]
+    ?.planFingerprint;
   if (!fingerprint) {
     throw new Error("expected memory plan fingerprint");
   }
   return fingerprint;
+}
+
+function applyParams(planFingerprint: string, overrides: Record<string, unknown> = {}) {
+  return {
+    agentId: "research",
+    providerId: "codex",
+    planFingerprint,
+    itemIds: ["memory:one"],
+    ...overrides,
+  };
+}
+
+async function response(
+  method: keyof typeof migrationsHandlers,
+  params: Record<string, unknown> = { agentId: "research" },
+) {
+  const request = invoke(method, params);
+  await request.run();
+  return firstCall(request.respond);
+}
+
+async function expectRejectedApply(planFingerprint: string, message: string, overrides = {}) {
+  const [ok, , error] = await response(
+    "migrations.memory.apply",
+    applyParams(planFingerprint, overrides),
+  );
+  expect(ok).toBe(false);
+  expect(error?.message).toContain(message);
+  expect(mocks.runMigrationApply).not.toHaveBeenCalled();
+  return error;
 }
 
 describe("memory migration gateway handlers", () => {
@@ -170,24 +191,19 @@ describe("memory migration gateway handlers", () => {
   });
 
   it("returns memory-only plans for the selected agent", async () => {
-    const request = invoke("migrations.memory.plan", { agentId: "research" });
-
-    await request.run();
-
-    const [ok, rawResult] = firstCall(request.respond);
+    const [ok, rawResult] = await response("migrations.memory.plan");
     expect(ok).toBe(true);
-    const result = rawResult as {
-      agentId: string;
-      workspace: string;
-      providers: Array<{ items: Array<{ id: string }>; summary: { total: number } }>;
-    };
-    expect(result.agentId).toBe("research");
-    expect(result.workspace).toBe("/tmp/workspace-research");
-    expect(result.providers[0]?.items.map((item) => item.id)).toEqual(["memory:one"]);
-    expect(result.providers[0]?.summary.total).toBe(1);
-    expect(
-      (result.providers[0] as { planFingerprint?: string } | undefined)?.planFingerprint,
-    ).toMatch(/^[a-f0-9]{64}$/u);
+    expect(rawResult).toMatchObject({
+      agentId: "research",
+      workspace: "/tmp/workspace-research",
+      providers: [
+        {
+          items: [{ id: "memory:one" }],
+          summary: { total: 1 },
+          planFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        },
+      ],
+    });
   });
 
   it("reports oversized provider plans instead of returning an unusable selection", async () => {
@@ -199,35 +215,21 @@ describe("memory migration gateway handlers", () => {
     oversized.summary.total = oversized.items.length;
     oversized.summary.planned = oversized.items.length;
     mocks.providers = [provider(oversized)];
-    const request = invoke("migrations.memory.plan", { agentId: "research" });
-
-    await request.run();
-
-    const [, rawResult] = firstCall(request.respond);
-    const result = rawResult as {
-      providers: Array<{ error?: string; items: unknown[] }>;
-    };
-    expect(result.providers[0]?.error).toContain("maximum is 2000");
-    expect(result.providers[0]?.items).toEqual([]);
+    const [, rawResult] = await response("migrations.memory.plan");
+    expect(rawResult).toMatchObject({
+      providers: [{ error: expect.stringContaining("maximum is 2000"), items: [] }],
+    });
   });
 
   it("rejects an unknown destination agent", async () => {
-    const request = invoke("migrations.memory.plan", { agentId: "missing" });
-
-    await request.run();
-
-    const [ok, , error] = firstCall(request.respond);
+    const [ok, , error] = await response("migrations.memory.plan", { agentId: "missing" });
     expect(ok).toBe(false);
     expect(error?.code).toBe(ErrorCodes.INVALID_REQUEST);
     expect(error?.message).toContain("unknown agent id");
   });
 
   it("rejects a malformed destination agent before normalization", async () => {
-    const request = invoke("migrations.memory.plan", { agentId: "research!!!" });
-
-    await request.run();
-
-    const [ok, , error] = firstCall(request.respond);
+    const [ok, , error] = await response("migrations.memory.plan", { agentId: "research!!!" });
     expect(ok).toBe(false);
     expect(error?.code).toBe(ErrorCodes.INVALID_REQUEST);
     expect(error?.message).toContain("invalid agent id");
@@ -236,19 +238,7 @@ describe("memory migration gateway handlers", () => {
   it("rejects apply when source bytes changed after preview", async () => {
     const planFingerprint = await loadPlanFingerprint();
     await fs.writeFile(path.join(sourceRoot, "MEMORY.md"), "changed memory", "utf8");
-    const request = invoke("migrations.memory.apply", {
-      agentId: "research",
-      providerId: "codex",
-      planFingerprint,
-      itemIds: ["memory:one"],
-    });
-
-    await request.run();
-
-    const [ok, , error] = firstCall(request.respond);
-    expect(ok).toBe(false);
-    expect(error?.message).toContain("plan changed");
-    expect(mocks.runMigrationApply).not.toHaveBeenCalled();
+    await expectRejectedApply(planFingerprint, "plan changed");
   });
 
   it("binds conflict source bytes when replacement is enabled", async () => {
@@ -259,31 +249,14 @@ describe("memory migration gateway handlers", () => {
     mocks.providers = [provider(plan)];
     const planFingerprint = await loadPlanFingerprint(true);
     await fs.writeFile(path.join(sourceRoot, "MEMORY.md"), "changed memory", "utf8");
-    const request = invoke("migrations.memory.apply", {
-      agentId: "research",
-      providerId: "codex",
-      planFingerprint,
-      itemIds: ["memory:one"],
-      overwrite: true,
-    });
-
-    await request.run();
-
-    const [ok, , error] = firstCall(request.respond);
-    expect(ok).toBe(false);
-    expect(error?.message).toContain("plan changed");
-    expect(mocks.runMigrationApply).not.toHaveBeenCalled();
+    await expectRejectedApply(planFingerprint, "plan changed", { overwrite: true });
   });
 
   it("reports unsupported actionable memory operations during planning", async () => {
     const plan = memoryPlan();
     plan.items[0]!.action = "append";
     mocks.providers = [provider(plan)];
-    const request = invoke("migrations.memory.plan", { agentId: "research" });
-
-    await request.run();
-
-    const [ok, rawResult] = firstCall(request.respond);
+    const [ok, rawResult] = await response("migrations.memory.plan");
     expect(ok).toBe(true);
     expect(rawResult).toMatchObject({
       providers: [{ found: false, error: expect.stringContaining("only supports copy actions") }],
@@ -295,19 +268,7 @@ describe("memory migration gateway handlers", () => {
     mocks.providers = [provider(plan)];
     const planFingerprint = await loadPlanFingerprint();
     plan.items[0]!.action = "append";
-    const request = invoke("migrations.memory.apply", {
-      agentId: "research",
-      providerId: "codex",
-      planFingerprint,
-      itemIds: ["memory:one"],
-    });
-
-    await request.run();
-
-    const [ok, , error] = firstCall(request.respond);
-    expect(ok).toBe(false);
-    expect(error?.message).toContain("only supports copy actions");
-    expect(mocks.runMigrationApply).not.toHaveBeenCalled();
+    await expectRejectedApply(planFingerprint, "only supports copy actions");
   });
 
   it.each([
@@ -319,37 +280,15 @@ describe("memory migration gateway handlers", () => {
     mocks.providers = [provider(plan)];
     const planFingerprint = await loadPlanFingerprint();
     mutatePlan(plan);
-    const request = invoke("migrations.memory.apply", {
-      agentId: "research",
-      providerId: "codex",
-      planFingerprint,
-      itemIds: ["memory:one"],
-    });
-
-    await request.run();
-
-    const [ok, , error] = firstCall(request.respond);
-    expect(ok).toBe(false);
-    expect(error?.message).toContain("plan changed");
-    expect(mocks.runMigrationApply).not.toHaveBeenCalled();
+    await expectRejectedApply(planFingerprint, "plan changed");
   });
 
   it("rejects stale item ids from a freshly rebuilt apply plan", async () => {
     const planFingerprint = await loadPlanFingerprint();
-    const request = invoke("migrations.memory.apply", {
-      agentId: "research",
-      providerId: "codex",
-      planFingerprint,
+    const error = await expectRejectedApply(planFingerprint, "refresh the plan", {
       itemIds: ["memory:stale"],
     });
-
-    await request.run();
-
-    const [ok, , error] = firstCall(request.respond);
-    expect(ok).toBe(false);
     expect(error?.code).toBe(ErrorCodes.INVALID_REQUEST);
-    expect(error?.message).toContain("refresh the plan");
-    expect(mocks.runMigrationApply).not.toHaveBeenCalled();
   });
 
   it("applies only the exact selected ids from the fresh plan", async () => {
@@ -390,10 +329,7 @@ describe("memory migration gateway handlers", () => {
     const planFingerprint = await loadPlanFingerprint();
     const params = {
       idempotencyKey: "memory-import-retry",
-      agentId: "research",
-      providerId: "codex",
-      planFingerprint,
-      itemIds: ["memory:one"],
+      ...applyParams(planFingerprint),
     };
     const first = invoke("migrations.memory.apply", params);
     await first.run();
@@ -422,10 +358,7 @@ describe("memory migration gateway handlers", () => {
     const planFingerprint = await loadPlanFingerprint();
     const params = {
       idempotencyKey: "memory-import-in-flight",
-      agentId: "research",
-      providerId: "codex",
-      planFingerprint,
-      itemIds: ["memory:one"],
+      ...applyParams(planFingerprint),
     };
     const first = invoke("migrations.memory.apply", params);
     const firstRun = first.run();
@@ -495,16 +428,7 @@ describe("memory migration gateway handlers", () => {
     applied.summary = { ...applied.summary, total: 1, planned: 0, errors: 1 };
     mocks.runMigrationApply.mockResolvedValue(applied);
     const planFingerprint = await loadPlanFingerprint();
-    const request = invoke("migrations.memory.apply", {
-      agentId: "research",
-      providerId: "codex",
-      planFingerprint,
-      itemIds: ["memory:one"],
-    });
-
-    await request.run();
-
-    const [ok, rawResult] = firstCall(request.respond);
+    const [ok, rawResult] = await response("migrations.memory.apply", applyParams(planFingerprint));
     expect(ok).toBe(true);
     expect(rawResult).toMatchObject({
       reportDir: "/tmp/migration-report",
@@ -515,27 +439,8 @@ describe("memory migration gateway handlers", () => {
 
   it("rejects apply when the selected agent workspace changed after preview", async () => {
     const planFingerprint = await loadPlanFingerprint();
-    const mutableConfig = config as {
-      agents: { entries: Record<string, { workspace?: string }> };
-    };
-    const research = mutableConfig.agents.entries.research;
-    if (!research) {
-      throw new Error("expected research agent");
-    }
-    research.workspace = "/tmp/workspace-research-moved";
-
-    const request = invoke("migrations.memory.apply", {
-      agentId: "research",
-      providerId: "codex",
-      planFingerprint,
-      itemIds: ["memory:one"],
-    });
-    await request.run();
-
-    const [ok, , error] = firstCall(request.respond);
-    expect(ok).toBe(false);
+    config.agents.entries.research.workspace = "/tmp/workspace-research-moved";
+    const error = await expectRejectedApply(planFingerprint, "plan changed");
     expect(error?.code).toBe(ErrorCodes.INVALID_REQUEST);
-    expect(error?.message).toContain("plan changed");
-    expect(mocks.runMigrationApply).not.toHaveBeenCalled();
   });
 });

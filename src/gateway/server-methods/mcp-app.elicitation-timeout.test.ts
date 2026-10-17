@@ -8,6 +8,7 @@ import { createSessionMcpRuntime } from "../../agents/agent-bundle-mcp-runtime.j
 import type { McpAppViewLease } from "../../agents/mcp-ui-resource.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { mcpAppHandlers } from "./mcp-app.js";
+import { expectRpcError } from "./rpc-response.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({ transport: vi.fn(), view: vi.fn(), question: vi.fn() }));
@@ -163,6 +164,10 @@ function invoke() {
   return { respond, pending };
 }
 
+function expectTimeout(respond: unknown) {
+  expectRpcError(respond, { message: expect.stringContaining("-32001: Request timed out") });
+}
+
 describe("MCP tool human-input timeouts", () => {
   it("dispatches the registered app call after approval and keeps its human question alive", async () => {
     const approvalStarted = createDeferred();
@@ -201,13 +206,7 @@ describe("MCP tool human-input timeouts", () => {
     await toolStarted.promise;
     await vi.advanceTimersByTimeAsync(requestTimeoutMs);
     await call.pending;
-    expect(call.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("-32001: Request timed out"),
-      }),
-    );
+    expectTimeout(call.respond);
   });
 
   it("bounds repeated human questions by one allowance for the whole tool call", async () => {
@@ -236,12 +235,6 @@ describe("MCP tool human-input timeouts", () => {
     expect(call.respond).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     await call.pending;
-    expect(call.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("-32001: Request timed out"),
-      }),
-    );
+    expectTimeout(call.respond);
   });
 });
