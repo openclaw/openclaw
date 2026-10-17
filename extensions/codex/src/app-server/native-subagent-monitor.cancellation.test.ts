@@ -9,7 +9,7 @@ import {
   protectCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { CodexAppServerRpcError } from "./client.js";
-import type { ParentOwner } from "./native-subagent-monitor-types.js";
+import type { NativeDescendantCancellation, ParentOwner } from "./native-subagent-monitor-types.js";
 import {
   CodexNativeSubagentMonitor,
   childTurnCompletedNotification,
@@ -18,6 +18,7 @@ import {
   createNativeModelSourceFixture,
   createRuntime,
   directSpawnItem,
+  itemNotification,
   nativeHistoryOwner,
   notifyChildStarted,
   threadRead,
@@ -28,22 +29,18 @@ const parentThreadId = "parent-thread";
 const sessionKey = "agent:main:native-stop";
 // The Gateway supplies selection; this fixture proves the native owner's custody propagation.
 const requestCustody: NonNullable<ParentOwner["requestCustody"]> = Object.freeze({});
-const requester = {
-  parentThreadId,
-  agentId: "main",
-  sessionKey,
-  sessionId: "physical-1",
-  lifecycleRevision: "revision-1",
-  requesterTurnRunId: "parent-run",
-  acceptsRequest: (custody: ParentOwner["requestCustody"]) => custody === requestCustody,
-  assertCurrent: () => {},
-};
 const cancelledRequester = {
   agentId: "main",
   sessionKey,
   sessionId: "physical-1",
   lifecycleRevision: "revision-1",
   requesterTurnRunId: "parent-run",
+};
+const requester = {
+  ...cancelledRequester,
+  parentThreadId,
+  acceptsRequest: (custody: ParentOwner["requestCustody"]) => custody === requestCustody,
+  assertCurrent: () => {},
 };
 const noCancellation = { killed: 0, cancelledRequesters: [] };
 const registration = {
@@ -69,14 +66,35 @@ async function spawnChild(
   childThreadId = "child-thread",
   turnId = "parent-turn",
 ) {
-  await client.notify({
-    method: "item/completed",
-    params: {
-      threadId: parentThreadId,
-      turnId,
-      item: directSpawnItem("v1", parentThreadId, childThreadId),
-    },
-  });
+  await client.notify(
+    itemNotification(directSpawnItem("v1", parentThreadId, childThreadId), turnId),
+  );
+}
+
+type Monitor = InstanceType<typeof CodexNativeSubagentMonitor>;
+function cancelDescendants(
+  monitor: Monitor,
+  overrides: Partial<NativeDescendantCancellation> = {},
+) {
+  return monitor.withDescendantCancellation({ ...requester, ...overrides }, (cancel) => cancel());
+}
+function startStop(monitor: Monitor, overrides: Partial<NativeDescendantCancellation> = {}) {
+  const state = { accepted: createDeferred<void>(), returned: false };
+  const stop = monitor
+    .withDescendantCancellation({ ...requester, ...overrides }, (cancel) => {
+      const result = cancel();
+      state.accepted.resolve();
+      return result;
+    })
+    .then((result) => {
+      state.returned = true;
+      return result;
+    });
+  return { stop, state };
+}
+function expectUntouched(f: Awaited<ReturnType<typeof nativeChild>>) {
+  expect(f.interruptBudgets).toEqual([]);
+  expect(f.releaseChild).not.toHaveBeenCalled();
 }
 
 async function nativeChild(startChild = true, keepParent = false, attributed = true) {
@@ -145,7 +163,6 @@ async function nativeChild(startChild = true, keepParent = false, attributed = t
     client,
     runtime,
     monitor,
-    parentOwnership,
     releaseChild,
     claimDirectChild,
     interruptBudgets,
@@ -173,14 +190,10 @@ it.each([true, false])(
       }
       return original(method, params, options);
     });
-    const stop = f.monitor.withDescendantCancellation(
-      {
-        ...requester,
-        requesterTurnRunId: undefined,
-        acceptsRequest: (custody) => selected && custody === requestCustody,
-      },
-      (cancel) => cancel(),
-    );
+    const stop = cancelDescendants(f.monitor, {
+      requesterTurnRunId: undefined,
+      acceptsRequest: (custody) => selected && custody === requestCustody,
+    });
     await vi.advanceTimersByTimeAsync(5_000);
     expect(await stop).toEqual({
       killed: selected ? 1 : 0,
@@ -206,20 +219,9 @@ it.each(["interrupted", "preturn", "natural success"] as const)(
     let monotonicNow = 100;
     const clock = vi.spyOn(performance, "now").mockImplementation(() => monotonicNow);
     onTestFinished(() => clock.mockRestore());
-    let returned = false;
-    const accepted = createDeferred<void>();
-    const stop = f.monitor
-      .withDescendantCancellation(requester, (cancel) => {
-        const result = cancel();
-        accepted.resolve();
-        return result;
-      })
-      .then((result) => {
-        returned = true;
-        return result;
-      });
+    const { stop, state } = startStop(f.monitor);
     try {
-      await awaitGateBeforeSettlement(accepted.promise, stop, "Stop was not accepted");
+      await awaitGateBeforeSettlement(state.accepted.promise, stop, "Stop was not accepted");
       if (ending === "preturn") {
         expect(f.interruptBudgets).toEqual([]);
         monotonicNow += 1_000;
@@ -227,7 +229,7 @@ it.each(["interrupted", "preturn", "natural success"] as const)(
       }
       await awaitGateBeforeSettlement(f.interrupted, stop, "Stop skipped native interruption");
       expect(f.interruptBudgets).toEqual([ending === "preturn" ? 4_000 : 5_000]);
-      expect(returned).toBe(false);
+      expect(state.returned).toBe(false);
       expect(f.releaseChild).not.toHaveBeenCalled();
       const completion = f.client.notify(
         childTurnCompletedNotification({
@@ -236,7 +238,7 @@ it.each(["interrupted", "preturn", "natural success"] as const)(
       );
       if (ending === "natural success") {
         await awaitGateBeforeSettlement(historyEntered.promise, stop, "Stop skipped real history");
-        expect(returned).toBe(false);
+        expect(state.returned).toBe(false);
         // The interrupt budget does not bound post-terminal history/delivery work.
         monotonicNow += 6_000;
         releaseHistory.resolve();
@@ -277,21 +279,10 @@ it("joins selected pending custody while admitting a different request during se
   onTestFinished(() => monitor.dispose());
   const pending = monitor.registerParent(registration);
   const rejected = expect(pending).rejects.toThrow("cancelled");
-  let settled = false;
-  const entered = createDeferred<void>();
-  const stop = monitor
-    .withDescendantCancellation({ ...requester, requesterTurnRunId: undefined }, (cancel) => {
-      const result = cancel();
-      entered.resolve();
-      return result;
-    })
-    .then((result) => {
-      settled = true;
-      return result;
-    });
+  const { stop, state } = startStop(monitor, { requesterTurnRunId: undefined });
   try {
-    await awaitGateBeforeSettlement(entered.promise, stop, "Pending owner was not reserved");
-    expect(settled).toBe(false);
+    await awaitGateBeforeSettlement(state.accepted.promise, stop, "Pending owner was not reserved");
+    expect(state.returned).toBe(false);
     await expect(monitor.registerParent(registration)).rejects.toThrow("still settling");
     const sibling = monitor.registerParent({
       ...registration,
@@ -318,13 +309,12 @@ it("keeps a sibling request and refuses a stale physical generation before Stop 
   ).rejects.toThrow("generation changed");
   expect(consume).not.toHaveBeenCalled();
   expect(
-    await f.monitor.withDescendantCancellation(
-      { ...requester, requesterTurnRunId: "different-request", acceptsRequest: () => false },
-      (cancel) => cancel(),
-    ),
+    await cancelDescendants(f.monitor, {
+      requesterTurnRunId: "different-request",
+      acceptsRequest: () => false,
+    }),
   ).toEqual(noCancellation);
-  expect(f.interruptBudgets).toEqual([]);
-  expect(f.releaseChild).not.toHaveBeenCalled();
+  expectUntouched(f);
 });
 
 it("leaves an unselected detached child running during session-wide Stop", async () => {
@@ -334,13 +324,12 @@ it("leaves an unselected detached child running during session-wide Stop", async
   );
   try {
     expect(
-      await f.monitor.withDescendantCancellation(
-        { ...requester, requesterTurnRunId: undefined, acceptsRequest: () => false },
-        (cancel) => cancel(),
-      ),
+      await cancelDescendants(f.monitor, {
+        requesterTurnRunId: undefined,
+        acceptsRequest: () => false,
+      }),
     ).toEqual(noCancellation);
-    expect(f.interruptBudgets).toEqual([]);
-    expect(f.releaseChild).not.toHaveBeenCalled();
+    expectUntouched(f);
   } finally {
     f.client.close();
     if (f.interruptBudgets.length) {
@@ -351,10 +340,7 @@ it("leaves an unselected detached child running during session-wide Stop", async
 
 it("fences selected late admissions while preserving another request during session Stop", async () => {
   const f = await nativeChild(true, true);
-  const stop = f.monitor.withDescendantCancellation(
-    { ...requester, requesterTurnRunId: undefined },
-    (cancel) => cancel(),
-  );
+  const stop = cancelDescendants(f.monitor, { requesterTurnRunId: undefined });
   try {
     await awaitGateBeforeSettlement(f.interrupted, stop, "Stop skipped the selected child");
     const siblingRelease = vi.fn();
@@ -391,17 +377,10 @@ it("fences selected late admissions while preserving another request during sess
 
 it("does not authorize an ownerless child from its saved session or run identity", async () => {
   const f = await nativeChild(true, false, false);
-  expect(await f.monitor.withDescendantCancellation(requester, (cancel) => cancel())).toEqual(
+  expect(await cancelDescendants(f.monitor)).toEqual(noCancellation);
+  expectUntouched(f);
+  expect(await cancelDescendants(f.monitor, { requesterTurnRunId: undefined })).toEqual(
     noCancellation,
   );
-  expect(f.interruptBudgets).toEqual([]);
-  expect(f.releaseChild).not.toHaveBeenCalled();
-  expect(
-    await f.monitor.withDescendantCancellation(
-      { ...requester, requesterTurnRunId: undefined },
-      (cancel) => cancel(),
-    ),
-  ).toEqual(noCancellation);
-  expect(f.interruptBudgets).toEqual([]);
-  expect(f.releaseChild).not.toHaveBeenCalled();
+  expectUntouched(f);
 });

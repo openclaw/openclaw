@@ -11,237 +11,203 @@ import { toCodexDynamicToolProtocolResponse } from "./dynamic-tool-execution.js"
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import type { JsonObject } from "./protocol.js";
 
-function createContractTool(overrides: Partial<AnyAgentTool>): AnyAgentTool {
-  return {
-    name: "exec",
+const callId = "call-contract";
+const hookContext = { runId: "run-contract" };
+const context = { ...hookContext, toolCallId: callId };
+const frame = { threadId: "thread-1", turnId: "turn-1", callId, namespace: null };
+
+function toolFixture(
+  result: ReturnType<typeof textToolResult> | Error,
+  hookOptions: Parameters<typeof installOpenClawOwnedToolHooks>[0] = {},
+  {
+    name = "exec",
+    providedContext = hookContext,
+    wrapped = false,
+    middleware: middlewareHandler,
+  }: {
+    name?: string;
+    providedContext?: Parameters<typeof createCodexDynamicToolBridge>[0]["hookContext"];
+    wrapped?: boolean;
+    middleware?: Parameters<typeof installCodexToolResultMiddleware>[0];
+  } = {},
+) {
+  const hooks = installOpenClawOwnedToolHooks(hookOptions);
+  const middleware = middlewareHandler && installCodexToolResultMiddleware(middlewareHandler);
+  const execute = vi.fn(async () => {
+    if (result instanceof Error) {
+      throw result;
+    }
+    return result;
+  });
+  const tool = {
+    name,
     description: "Run a command.",
     parameters: { type: "object", properties: {}, additionalProperties: true },
-    execute: vi.fn(),
-    ...overrides,
+    execute,
   } as unknown as AnyAgentTool;
-}
-
-function createBridge(
-  tool: AnyAgentTool,
-  hookContext: Parameters<typeof createCodexDynamicToolBridge>[0]["hookContext"],
-) {
-  return createCodexDynamicToolBridge({
-    tools: [tool],
+  const bridge = createCodexDynamicToolBridge({
+    tools: [wrapped ? wrapToolWithBeforeToolCallHook(tool, providedContext) : tool],
     signal: new AbortController().signal,
-    hookContext,
+    hookContext: providedContext,
   });
+  const invoke = async (args: JsonObject) =>
+    toCodexDynamicToolProtocolResponse(
+      await bridge.handleToolCall({ ...frame, tool: name, arguments: args }),
+    );
+  return { hooks, execute, bridge, invoke, middleware };
 }
-
-function toolCall(tool: string, callId: string, args: JsonObject) {
-  return { threadId: "thread-1", turnId: "turn-1", callId, namespace: null, tool, arguments: args };
-}
-
-function expectExecuteCall(execute: unknown, callId: string, params: Record<string, unknown>) {
+function expectExecuteCall(execute: unknown, params: Record<string, unknown>) {
   expect(execute).toHaveBeenNthCalledWith(1, callId, params, expect.any(AbortSignal), undefined);
 }
-
 async function expectAfterToolCall(
   hooks: ReturnType<typeof installOpenClawOwnedToolHooks>,
   event: Record<string, unknown>,
-  context: Record<string, unknown>,
+  expectedContext: Record<string, unknown> = context,
 ) {
   await vi.waitFor(() =>
     expect(hooks.afterToolCall).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining(event),
-      expect.objectContaining(context),
+      expect.objectContaining({ toolCallId: callId, ...event }),
+      expect.objectContaining(expectedContext),
     ),
   );
 }
-
 function expectResponse(
-  result: Parameters<typeof toCodexDynamicToolProtocolResponse>[0],
+  result: ReturnType<typeof toCodexDynamicToolProtocolResponse>,
   success: boolean,
   text: string,
 ) {
-  expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
-    success,
-    contentItems: [{ type: "inputText", text }],
-  });
+  expect(result).toEqual({ success, contentItems: [{ type: "inputText", text }] });
 }
 
 describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", () => {
-  afterEach(() => {
-    resetOpenClawOwnedToolHooks();
-  });
+  afterEach(resetOpenClawOwnedToolHooks);
 
   it("wraps dynamic tools with hooks and runs result middleware before the after hook", async () => {
     const mergedParams = { command: "status", mode: "safe" };
-    const hooks = installOpenClawOwnedToolHooks({ adjustedParams: { mode: "safe" } });
-    const middleware = installCodexToolResultMiddleware((event) => {
-      expect(event).toMatchObject({ toolName: "exec", toolCallId: "call-middleware" });
-      expect({
-        args: event.args,
-        content: event.result.content,
-        details: event.result.details,
-      }).toEqual({
-        args: mergedParams,
-        content: [{ type: "text", text: "raw output" }],
-        details: { stage: "execute" },
-      });
-      return textToolResult("compacted output", { stage: "middleware" });
-    });
-    const execute = vi.fn(async () => textToolResult("raw output", { stage: "execute" }));
-    const bridge = createBridge(createContractTool({ execute }), {
-      agentId: "agent-1",
-      sessionId: "session-1",
-      sessionKey: "agent:agent-1:session-1",
-      runId: "run-middleware",
-    });
-    const result = await bridge.handleToolCall(
-      toolCall("exec", "call-middleware", { command: "status" }),
-    );
-    const context = {
-      agentId: "agent-1",
-      sessionId: "session-1",
-      sessionKey: "agent:agent-1:session-1",
-      runId: "run-middleware",
-      toolCallId: "call-middleware",
-    };
 
+    const agentContext = {
+      ...hookContext,
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:agent-1:session-1",
+    };
+    const { hooks, execute, invoke, middleware } = toolFixture(
+      textToolResult("raw output", { stage: "execute" }),
+      { adjustedParams: { mode: "safe" } },
+      {
+        providedContext: agentContext,
+        middleware: (event) => {
+          expect(event).toMatchObject({ toolName: "exec", toolCallId: callId });
+          expect(event.args).toEqual(mergedParams);
+          expect(event.result.content).toEqual([{ type: "text", text: "raw output" }]);
+          expect(event.result.details).toEqual({ stage: "execute" });
+          return textToolResult("compacted output", { stage: "middleware" });
+        },
+      },
+    );
+    const result = await invoke({ command: "status" });
+    const expectedContext = { ...agentContext, toolCallId: callId };
     expectResponse(result, true, "compacted output");
     expect(hooks.beforeToolCall).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
         toolName: "exec",
-        toolCallId: "call-middleware",
-        runId: "run-middleware",
+        toolCallId: callId,
+        runId: hookContext.runId,
         params: { command: "status" },
       }),
-      expect.objectContaining(context),
+      expect.objectContaining(expectedContext),
     );
-    expectExecuteCall(execute, "call-middleware", mergedParams);
-    expect(middleware.middleware).toHaveBeenCalledTimes(1);
+    expectExecuteCall(execute, mergedParams);
+    expect(middleware?.middleware).toHaveBeenCalledTimes(1);
     await expectAfterToolCall(
       hooks,
       {
         toolName: "exec",
-        toolCallId: "call-middleware",
         params: mergedParams,
         result: expect.objectContaining(
           textToolResult("compacted output", { stage: "middleware" }),
         ),
       },
-      context,
+      expectedContext,
     );
   });
 
   it("fails closed when before_tool_call blocks a dynamic tool", async () => {
-    const hooks = installOpenClawOwnedToolHooks({ blockReason: "blocked by policy" });
-    const execute = vi.fn(async () => textToolResult("should not run"));
-    const bridge = createBridge(createContractTool({ name: "message", execute }), {
-      runId: "run-blocked",
-    });
+    const { hooks, execute, bridge, invoke } = toolFixture(
+      textToolResult("should not run"),
+      { blockReason: "blocked by policy" },
+      { name: "message" },
+    );
     const params = { action: "send", text: "blocked", provider: "telegram", to: "chat-1" };
-    const result = await bridge.handleToolCall(toolCall("message", "call-blocked", params));
-
-    expectResponse(result, false, "blocked by policy");
+    expectResponse(await invoke(params), false, "blocked by policy");
     expect(execute).not.toHaveBeenCalled();
     expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
-    await expectAfterToolCall(
-      hooks,
-      {
-        toolName: "message",
-        toolCallId: "call-blocked",
-        params,
-        result: expect.objectContaining({
-          content: [{ type: "text", text: "blocked by policy" }],
-          details: {
-            status: "blocked",
-            deniedReason: "plugin-before-tool-call",
-            reason: "blocked by policy",
-          },
-        }),
-      },
-      { runId: "run-blocked", toolCallId: "call-blocked" },
-    );
+    await expectAfterToolCall(hooks, {
+      toolName: "message",
+      params,
+      result: expect.objectContaining({
+        content: [{ type: "text", text: "blocked by policy" }],
+        details: {
+          status: "blocked",
+          deniedReason: "plugin-before-tool-call",
+          reason: "blocked by policy",
+        },
+      }),
+    });
   });
 
   it("reports dynamic tool execution errors through after_tool_call", async () => {
-    const hooks = installOpenClawOwnedToolHooks({ adjustedParams: { timeoutSec: 1 } });
-    const mergedParams = { command: "false", timeoutSec: 1 };
-    const execute = vi.fn(async () => {
-      throw new Error("tool failed");
+    const { hooks, execute, invoke } = toolFixture(new Error("tool failed"), {
+      adjustedParams: { timeoutSec: 1 },
     });
-    const bridge = createBridge(createContractTool({ execute }), { runId: "run-error" });
-    const result = await bridge.handleToolCall(
-      toolCall("exec", "call-error", { command: "false" }),
-    );
-
-    expectResponse(result, false, "tool failed");
-    expectExecuteCall(execute, "call-error", mergedParams);
-    await expectAfterToolCall(
-      hooks,
-      { toolName: "exec", toolCallId: "call-error", params: mergedParams, error: "tool failed" },
-      { runId: "run-error", toolCallId: "call-error" },
-    );
+    const mergedParams = { command: "false", timeoutSec: 1 };
+    expectResponse(await invoke({ command: "false" }), false, "tool failed");
+    expectExecuteCall(execute, mergedParams);
+    await expectAfterToolCall(hooks, {
+      toolName: "exec",
+      params: mergedParams,
+      error: "tool failed",
+    });
   });
 
   it("records successful Codex messaging text, media, and target telemetry", async () => {
-    const hooks = installOpenClawOwnedToolHooks();
-    const execute = vi.fn(async () => textToolResult("Sent.", { messageId: "message-1" }));
-    const bridge = createBridge(createContractTool({ name: "message", execute }), {
-      runId: "run-message",
-    });
-    const result = await bridge.handleToolCall(
-      toolCall("message", "call-message", {
-        action: "send",
-        text: "hello from Codex",
-        mediaUrl: "/tmp/codex-reply.png",
-        provider: "telegram",
-        to: "chat-1",
-        threadId: "thread-ts-1",
-      }),
+    const { hooks, bridge, invoke } = toolFixture(
+      textToolResult("Sent.", { messageId: "message-1" }),
+      {},
+      { name: "message" },
     );
-
-    expectResponse(result, true, "Sent.");
+    const target = {
+      provider: "telegram",
+      to: "chat-1",
+      threadId: "thread-ts-1",
+      text: "hello from Codex",
+    };
+    const mediaUrl = "/tmp/codex-reply.png";
+    expectResponse(await invoke({ ...target, action: "send", mediaUrl }), true, "Sent.");
     expect(bridge.telemetry).toMatchObject({
       didSendViaMessagingTool: true,
-      messagingToolSentTexts: ["hello from Codex"],
-      messagingToolSentMediaUrls: ["/tmp/codex-reply.png"],
+      messagingToolSentTexts: [target.text],
+      messagingToolSentMediaUrls: [mediaUrl],
     });
     expect(bridge.telemetry.messagingToolSentTargets).toEqual([
-      {
-        tool: "message",
-        provider: "telegram",
-        to: "chat-1",
-        threadId: "thread-ts-1",
-        text: "hello from Codex",
-        mediaUrls: ["/tmp/codex-reply.png"],
-      },
+      { tool: "message", ...target, mediaUrls: [mediaUrl] },
     ]);
-    await expectAfterToolCall(
-      hooks,
-      {
-        toolName: "message",
-        toolCallId: "call-message",
-        params: expect.objectContaining({
-          text: "hello from Codex",
-          mediaUrl: "/tmp/codex-reply.png",
-        }),
-      },
-      { runId: "run-message", toolCallId: "call-message" },
-    );
+    await expectAfterToolCall(hooks, {
+      toolName: "message",
+      params: expect.objectContaining({ text: target.text, mediaUrl }),
+    });
   });
 
   it("does not double-wrap dynamic tools that already have before_tool_call", async () => {
-    const hooks = installOpenClawOwnedToolHooks({ adjustedParams: { mode: "safe" } });
-    const execute = vi.fn(async () => textToolResult("done"));
-    const tool = wrapToolWithBeforeToolCallHook(createContractTool({ execute }), {
-      runId: "run-wrapped",
-    });
-    const bridge = createBridge(tool, { runId: "run-wrapped" });
-    const result = await bridge.handleToolCall(
-      toolCall("exec", "call-wrapped", { command: "pwd" }),
+    const { hooks, execute, invoke } = toolFixture(
+      textToolResult("done"),
+      { adjustedParams: { mode: "safe" } },
+      { wrapped: true },
     );
-
-    expectResponse(result, true, "done");
+    expectResponse(await invoke({ command: "pwd" }), true, "done");
     expect(hooks.beforeToolCall).toHaveBeenCalledTimes(1);
-    expectExecuteCall(execute, "call-wrapped", { command: "pwd", mode: "safe" });
+    expectExecuteCall(execute, { command: "pwd", mode: "safe" });
   });
 });

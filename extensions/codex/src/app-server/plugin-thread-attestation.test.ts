@@ -9,44 +9,42 @@ import type { v2 } from "./protocol.js";
 import { createClientHarness } from "./test-support.js";
 import { createCodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
 
-describe("Codex thread tool-surface admission", () => {
-  it.each(["current", "superseded", "aborted"] as const)(
-    "skips durable admission for an empty unrestricted surface (%s)",
-    async (state) => {
-      const h = createClientHarness();
-      const failure = new Error("attempt is no longer current");
-      const controller = new AbortController();
-      const withCurrent = vi.fn(async (consume: () => void) => consume());
-      const assertCurrent = vi.fn(() => {
-        if (state === "superseded") {
-          throw failure;
-        }
-      });
-      if (state === "aborted") {
-        controller.abort(failure);
+it.each(["current", "superseded", "aborted"] as const)(
+  "skips durable admission for an empty unrestricted surface (%s)",
+  async (state) => {
+    const h = createClientHarness();
+    const failure = new Error("attempt is no longer current");
+    const controller = new AbortController();
+    const withCurrent = vi.fn(async (consume: () => void) => consume());
+    const assertCurrent = vi.fn(() => {
+      if (state === "superseded") {
+        throw failure;
       }
-      onTestFinished(() => h.client.close());
-      const attestation = attestCodexThreadToolSurface({
-        client: h.client,
-        threadId: "thread-empty",
-        appIds: [],
-        restrictedToolSurface: false,
-        lifecycleTiming: createCodexThreadLifecycleTimingTracker(),
-        signal: controller.signal,
-        assertCurrent,
-        withCurrent,
-      });
-      if (state === "current") {
-        await expect(attestation).resolves.toBeUndefined();
-        expect(assertCurrent).toHaveBeenCalledOnce();
-      } else {
-        await expect(attestation).rejects.toBe(failure);
-      }
-      expect(withCurrent).not.toHaveBeenCalled();
-      expect(h.writes).toHaveLength(0);
-    },
-  );
-});
+    });
+    if (state === "aborted") {
+      controller.abort(failure);
+    }
+    onTestFinished(() => h.client.close());
+    const attestation = attestCodexThreadToolSurface({
+      client: h.client,
+      threadId: "thread-empty",
+      appIds: [],
+      restrictedToolSurface: false,
+      lifecycleTiming: createCodexThreadLifecycleTimingTracker(),
+      signal: controller.signal,
+      assertCurrent,
+      withCurrent,
+    });
+    if (state === "current") {
+      await expect(attestation).resolves.toBeUndefined();
+      expect(assertCurrent).toHaveBeenCalledOnce();
+    } else {
+      await expect(attestation).rejects.toBe(failure);
+    }
+    expect(withCurrent).not.toHaveBeenCalled();
+    expect(h.writes).toHaveLength(0);
+  },
+);
 
 function checkApps(
   request: ReturnType<typeof vi.fn>,
@@ -95,82 +93,65 @@ describe("Codex thread app availability", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("preserves snapshot request failures and their cause", async () => {
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-    const cause = new Error("app inventory offline");
-    const request = vi.fn(async () => {
-      throw cause;
-    });
-    await expect(checkApps(request, ["plugin-app"], "thread-unavailable")).rejects.toMatchObject({
-      name: "CodexPluginThreadAppAttestationError",
-      cause,
-    });
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it.each(["resolve", "reject"])(
-    "preserves cancellation when discovery will %s",
+  it.each(["failure", "abort-resolve", "abort-reject"])(
+    "preserves the discovery cause for %s",
     async (outcome) => {
       const abort = new AbortController();
-      const cause = new Error("turn cancelled");
+      const cause = new Error("app inventory interrupted");
       const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
       const request = vi.fn(async () => {
-        abort.abort(cause);
-        if (outcome === "reject") {
+        if (outcome !== "failure") {
+          abort.abort(cause);
+        }
+        if (outcome !== "abort-resolve") {
           throw cause;
         }
         return installedApps([]);
       });
-      await expect(
-        checkApps(request, ["plugin-app"], "thread-cancelled", abort.signal),
-      ).rejects.toBe(cause);
+      const result = checkApps(request, ["plugin-app"], "thread-unavailable", abort.signal);
+      if (outcome === "failure") {
+        await expect(result).rejects.toMatchObject({
+          name: "CodexPluginThreadAppAttestationError",
+          cause,
+        });
+      } else {
+        await expect(result).rejects.toBe(cause);
+      }
       expect(warn).not.toHaveBeenCalled();
     },
   );
 });
 
-describe("unattested Codex plugin thread cleanup", () => {
-  it.each([
-    { ephemeral: false, method: "thread/delete" },
-    { ephemeral: true, method: "thread/unsubscribe" },
-  ])("cleans up an unattested thread with $method", async ({ ephemeral, method }) => {
-    const request = vi.fn(async () => ({}));
+it.each([
+  { ephemeral: false, failDelete: false, result: true, methods: ["thread/delete"] },
+  { ephemeral: true, failDelete: false, result: true, methods: ["thread/unsubscribe"] },
+  {
+    ephemeral: false,
+    failDelete: true,
+    result: false,
+    methods: ["thread/delete", "thread/unsubscribe"],
+  },
+])(
+  "cleans up ephemeral=$ephemeral, failed deletion=$failDelete",
+  async ({ ephemeral, failDelete, result, methods }) => {
+    const request = vi.fn(async (method: string) => {
+      if (failDelete && method === "thread/delete") {
+        throw new Error("thread deletion unavailable");
+      }
+      return {};
+    });
     await expect(
       discardUnattestedCodexPluginThread({
         client: { request } as never,
         threadId: "thread-cleanup",
         ephemeral,
       }),
-    ).resolves.toBe(true);
-    expect(request).toHaveBeenCalledExactlyOnceWith(
-      method,
-      { threadId: "thread-cleanup" },
-      { timeoutMs: 5_000 },
+    ).resolves.toBe(result);
+    expect(request.mock.calls).toEqual(
+      methods.map((method) => [method, { threadId: "thread-cleanup" }, { timeoutMs: 5_000 }]),
     );
-  });
-
-  it("does not treat unsubscribe as proof that a persistent thread was deleted", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/delete") {
-        throw new Error("thread deletion unavailable");
-      }
-      return {};
-    });
-
-    await expect(
-      discardUnattestedCodexPluginThread({
-        client: { request } as never,
-        threadId: "thread-persistent",
-        ephemeral: false,
-      }),
-    ).resolves.toBe(false);
-
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "thread/delete",
-      "thread/unsubscribe",
-    ]);
-  });
-});
+  },
+);
 
 function installedApps(
   appIds: string[],
