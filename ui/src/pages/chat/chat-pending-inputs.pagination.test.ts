@@ -61,7 +61,7 @@ function queueTexts(host: ChatState, messages?: unknown[]) {
   );
 }
 
-function queuedInput(id: string, acceptedAt: number, messageId?: string) {
+function queuedInput(id: string, acceptedAt: number, messageId?: string, content = id) {
   return {
     ...input,
     id,
@@ -69,13 +69,32 @@ function queuedInput(id: string, acceptedAt: number, messageId?: string) {
     acceptedAt,
     state: "queued",
     queued: true,
-    message: { role: "user", content: id, ...(messageId ? { __openclaw: { id: messageId } } : {}) },
+    message: { role: "user", content, ...(messageId ? { __openclaw: { id: messageId } } : {}) },
   } satisfies ChatPendingInputsPage["items"][number];
 }
+function browserInput(id: string, overrides: Partial<ChatQueueItem> = {}): ChatQueueItem {
+  return {
+    id,
+    text: id,
+    createdAt: 100,
+    sendRunId: id,
+    sendState: "waiting-reconnect",
+    ...overrides,
+  };
+}
+function admitBrowserInput(host: ChatState, item: ChatQueueItem) {
+  expect(
+    admitQueuedMessageForSession(host, captureChatOutboxAdmission(host, sessionKey), item),
+  ).toBe(true);
+}
 
-it.each(["empty-queue", "complete-page", "partial-page-receipts"] as const)(
+it.each([
+  ["empty-queue", 0, []],
+  ["complete-page", 1, ["replacement"]],
+  ["partial-page-receipts", 2, ["retained", "replacement"]],
+] as const)(
   "retires consumed server queue chips outside the transcript window using %s",
-  async (source) => {
+  async (source, queuedCount, expected) => {
     const consumed = queuedInput("consumed", 1);
     const retained = queuedInput("retained", 2);
     const replacement = queuedInput("replacement", 3);
@@ -98,20 +117,14 @@ it.each(["empty-queue", "complete-page", "partial-page-receipts"] as const)(
     // A partial page alone cannot retire either previously observed input.
     pendingInputs = { items: [], total: 21, nextBefore: 21, queuedCount: 2 };
     await loadChatHistory(host);
-    expect(queueTexts(host, host.chatMessages)).toEqual([
-      consumed.message.content,
-      retained.message.content,
-    ]);
+    expect(queueTexts(host, host.chatMessages)).toEqual(["consumed", "retained"]);
 
-    pendingInputs =
-      source === "empty-queue"
-        ? { items: [], total: 21, nextBefore: 21, queuedCount: 0 }
-        : {
-            items: [replacement],
-            total: source === "complete-page" ? 1 : 21,
-            queuedCount: source === "complete-page" ? 1 : 2,
-            ...(source === "partial-page-receipts" ? { nextBefore: 21 } : {}),
-          };
+    pendingInputs = {
+      items: queuedCount ? [replacement] : [],
+      total: queuedCount === 1 ? 1 : 21,
+      queuedCount,
+      ...(queuedCount === 1 ? {} : { nextBefore: 21 }),
+    };
     // Complete queue snapshots stand alone; partial pages need exact receipts
     // because ordinary consumption deletes its custody record.
     inputReceipts =
@@ -120,28 +133,14 @@ it.each(["empty-queue", "complete-page", "partial-page-receipts"] as const)(
         : undefined;
     await loadChatHistory(host);
 
-    expect(queueTexts(host, host.chatMessages)).toEqual(
-      source === "empty-queue"
-        ? []
-        : source === "complete-page"
-          ? [replacement.message.content]
-          : [retained.message.content, replacement.message.content],
-    );
+    expect(queueTexts(host, host.chatMessages)).toEqual(expected);
     expect(readChatInputRunIds(host)).not.toContain(consumed.runId);
     expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
   },
 );
 
 it("refreshes every live queued input across receipt batches without reordering the shelf", async () => {
-  const inputs = Array.from({ length: 51 }, (_, index) => ({
-    ...input,
-    id: `queued-${index}`,
-    runId: `queued-${index}`,
-    acceptedAt: index,
-    state: "queued" as const,
-    queued: true as const,
-    message: { role: "user", content: `Queued message ${index}` },
-  }));
+  const inputs = Array.from({ length: 51 }, (_, index) => queuedInput(`queued-${index}`, index));
   const host = historyHost(
     (params: { inputRunIds?: string[] }) => ({
       sessionId,
@@ -154,14 +153,11 @@ it("refreshes every live queued input across receipt batches without reordering 
       ),
     }),
     [
-      {
-        id: "browser-input",
-        text: "Unconfirmed browser input",
+      browserInput("browser-input", {
         createdAt: 99,
-        sendRunId: "browser-input",
         sendAttempts: 1,
         sendState: "unconfirmed",
-      },
+      }),
     ],
   );
   for (let offset = 0; offset < inputs.length; offset += 20) {
@@ -255,22 +251,14 @@ it.each([
     const newest = {
       ...queuedInput("latest-input", 100, "pending:latest-input"),
       runId: "latest-run",
-      message: {
-        role: "user",
-        content: "Newest retained input",
-        timestamp: 100,
-        __openclaw: { id: "pending:latest-input" },
-      },
     };
     const latestPage: ChatPendingInputsPage = { items: [newest], total: 21, nextBefore: 21 };
     const refreshedLatestPage: ChatPendingInputsPage = {
       ...latestPage,
       items: [
         {
-          ...newest,
-          id: "newer-input",
+          ...queuedInput("newer-input", 100, undefined, "New queued input"),
           runId: "newer-run",
-          message: { role: "user", content: "New queued input" },
         },
       ],
     };
@@ -278,12 +266,6 @@ it.each([
     const refreshedOlderPage: ChatPendingInputsPage = {
       items: [{ ...input, state: "cancelled" }],
       total: 21,
-    };
-    const sessionInfo = {
-      key: sessionKey,
-      sessionId,
-      hasActiveRun: true,
-      status: "running",
     };
     const cache: ChatMessageCache = new Map();
     let olderReads = 0;
@@ -317,23 +299,13 @@ it.each([
         ...(delivery === "delta" ? { deltaCursor: "previous" } : {}),
       },
     );
-    const consumedSource: ChatQueueItem = {
-      id: "consumed-source",
-      sendRunId: "consumed-source",
+    const consumedSource = browserInput("consumed-source", {
       sessionKey,
       sessionId,
-      text: "Locally retained until consumption",
       createdAt: 101,
       sendAttempts: 1,
-      sendState: "waiting-reconnect",
-    };
-    expect(
-      admitQueuedMessageForSession(
-        host,
-        captureChatOutboxAdmission(host, sessionKey),
-        consumedSource,
-      ),
-    ).toBe(true);
+    });
+    admitBrowserInput(host, consumedSource);
     const outbox = expectDefined(listStoredChatOutboxes(host)[0], "retained input outbox");
     expect(
       await retireDeliveredQueuedUserTurn(host, consumedSource.sendRunId, outbox, {
@@ -362,7 +334,7 @@ it.each([
       ...(delivery === "delta"
         ? { kind: "delta", deltaCursor: "next", messages: [] }
         : { sessionId, messages: [canonical] }),
-      sessionInfo,
+      sessionInfo: { key: sessionKey, sessionId, hasActiveRun: true, status: "running" },
       pendingInputs: refreshedLatestPage,
       inputReceipts: [
         { runId: "consumed-source", state: "consumed", consumedByEventId: "aggregate" },
@@ -387,12 +359,7 @@ it.each([
     expect(listStoredChatOutboxes(host)).toEqual([]);
     expect(host).toMatchObject({ chatRunId: "active-run", chatStream: "Live output" });
     expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
-    const container = renderChatView({
-      historyState: host,
-      sessionKey,
-      messages: host.chatMessages,
-      queue: host.chatQueue,
-    });
+    const container = queueView(host, host.chatMessages);
     expect(container.querySelector(".chat-queue__text")?.textContent).toBe("New queued input");
     expect(readChatInputRunIds(host)).toContain("newer-run");
     expect(readChatInputRunIds(host)).not.toContain("latest-run");
@@ -418,17 +385,15 @@ it.each(["refresh-first", "latest-first"])(
           : refresh.promise
         : latest.promise,
     );
-    expect(
-      admitQueuedMessageForSession(host, captureChatOutboxAdmission(host, sessionKey), {
-        id: "retained-source",
-        sendRunId: input.runId,
+    admitBrowserInput(
+      host,
+      browserInput("retained-source", {
         sessionKey,
         sessionId,
+        sendRunId: input.runId,
         text: "Retained payload",
-        createdAt: 100,
-        sendState: "waiting-reconnect",
       }),
-    ).toBe(true);
+    );
     applyChatPendingInputs(host, page);
     await loadChatPendingInputs(host, 2);
 

@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 // @vitest-environment node
@@ -48,7 +48,11 @@ const paused: GatewaySessionRow = {
 function reviewFree(snapshotAt: number) {
   return { ...paused, providerReview: undefined, updatedAt: snapshotAt, snapshotAt };
 }
-function queuedInput(id: string, sendRunId: string, text: string): ChatQueueItem {
+function queuedInput(
+  id: string,
+  sendRunId = `unsent-${id}`,
+  text = `Retained ${id} input`,
+): ChatQueueItem {
   return {
     id,
     sendRunId,
@@ -69,8 +73,8 @@ function admitInput(
 
 async function createReviewHost(
   request: ReturnType<typeof makeRequestMock>,
-  initialRow: GatewaySessionRow,
-  chatMessage: string,
+  initialRow: GatewaySessionRow = paused,
+  chatMessage = "",
 ) {
   const client = createTestGatewayClient(request);
   const { gateway, emitEvent } = createGatewayHarness(client);
@@ -103,16 +107,22 @@ async function createReviewHost(
 function heldInput(id: string) {
   return expect.objectContaining({ id, text: `Retained ${id} input`, sendState: "held" });
 }
-function deliveryIdentity(item: ReturnType<typeof makeChatHost>["chatQueue"][number] | undefined) {
+function heldDelivery(sendRunId: string | undefined, item?: ChatQueueItem) {
   return {
-    id: item?.id,
-    text: item?.text,
-    createdAt: item?.createdAt,
-    sessionKey: item?.sessionKey,
+    sendState: "held",
+    sendAttempts: 1,
+    sendRunId,
+    ...(item && {
+      id: item.id,
+      text: item.text,
+      createdAt: item.createdAt,
+      sessionKey: item.sessionKey,
+    }),
   };
 }
-function heldDelivery(sendRunId: string | undefined) {
-  return { sendState: "held", sendAttempts: 1, sendRunId };
+async function reconcileQueue(host: ReturnType<typeof makeChatHost>) {
+  await loadChatHistory(host, { deferBranches: true });
+  await flushChatQueueForEvent(host);
 }
 
 it.each([
@@ -136,15 +146,9 @@ it.each([
     sessionsResult: sessionsResult(rows, 1),
     sessions: {
       state: {
+        ...makeChatHost().sessions.state,
         result: sessionsResult([fallback], 1),
         agentId: "main",
-        modelOverrides: {},
-        loading: false,
-        error: null,
-        deletedSessions: [],
-        groups: [],
-        groupSettings: [],
-        sectionOrder: [],
       },
     },
   };
@@ -161,14 +165,12 @@ it("holds composer and queued inputs across the provider pause and only retries 
     "chat.send": { runId: "accepted-input", status: "started" },
   });
   const { host, publish } = await createReviewHost(request, row, "Keep this draft");
-  const outbox = { sessionKey: paused.key, agentId: "main" };
   for (const id of ["first", "second"]) {
-    const admission = {
-      ...captureChatOutboxAdmission(host, outbox.sessionKey, outbox.agentId),
-      scope: outbox,
+    admitInput(host, queuedInput(id), {
+      ...captureChatOutboxAdmission(host, paused.key, "main"),
+      scope: { sessionKey: paused.key, agentId: "main" },
       awaitingDefaults: false,
-    };
-    admitInput(host, queuedInput(id, `unsent-${id}`, `Retained ${id} input`), admission);
+    });
   }
   await handleSendChat(host);
   await flushChatQueueForEvent(host);
@@ -196,7 +198,7 @@ it("holds composer and queued inputs across the provider pause and only retries 
 
 it("keeps provider review receipts through partial events and rejects a stale read after authoritative clearing", async () => {
   const request = makeRequestMock({ "sessions.list": sessionsResult([paused], 10) });
-  const { sessions, publish } = await createReviewHost(request, paused, "");
+  const { sessions, publish } = await createReviewHost(request);
   const readBeforeClear = sessions.captureReconcile();
   const publishPartial = (snapshotAt: number, extra: Partial<GatewaySessionRow>) =>
     publish({
@@ -224,27 +226,25 @@ it("keeps a paused queue input held when its earlier settings wait finishes afte
   });
   const item = queuedInput("settings-delayed-input", "not-dispatched", "Keep this queued input");
   admitInput(host, item);
-  const stop = subscribeChatOutboxQueue(host, () => {
-    if (host.chatQueue[0]?.sendState === "waiting-model") {
-      waiting.resolve();
-    }
+  onTestFinished(
+    subscribeChatOutboxQueue(host, () => {
+      if (host.chatQueue[0]?.sendState === "waiting-model") {
+        waiting.resolve();
+      }
+    }),
+  );
+  const delivery = deliverChatQueueItem(host, item, { pendingSettings: settings.promise });
+  await waiting.promise;
+  holdProviderReviewQueuedInputs(host);
+  settings.resolve(true);
+  await delivery;
+  await flushChatQueueForEvent(host);
+  expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
+  expect(host.chatQueue[0]).toMatchObject({
+    text: item.text,
+    sendState: "held",
+    sendRunId: item.sendRunId,
   });
-  try {
-    const delivery = deliverChatQueueItem(host, item, { pendingSettings: settings.promise });
-    await waiting.promise;
-    holdProviderReviewQueuedInputs(host);
-    settings.resolve(true);
-    await delivery;
-    await flushChatQueueForEvent(host);
-    expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
-    expect(host.chatQueue[0]).toMatchObject({
-      text: item.text,
-      sendState: "held",
-      sendRunId: item.sendRunId,
-    });
-  } finally {
-    stop();
-  }
 });
 
 it.each(["lost-ack", "accepted-unconsumed"] as const)(
@@ -304,15 +304,11 @@ it.each(["lost-ack", "accepted-unconsumed"] as const)(
     publish(row);
     expect(chatProviderReviewRow(host)?.providerReview).toEqual(paused.providerReview);
     await flushChatQueueForEvent(host);
-    expect(host.chatQueue[0]).toMatchObject({
-      ...deliveryIdentity(attempted),
-      ...heldDelivery(attemptedRunId),
-    });
+    expect(host.chatQueue[0]).toMatchObject(heldDelivery(attemptedRunId, attempted));
 
     row = reviewFree(11);
     publish(row, true);
-    await loadChatHistory(host, { deferBranches: true });
-    await flushChatQueueForEvent(host);
+    await reconcileQueue(host);
     expect(attempts).toBe(1);
     reloadChatDocumentStorage([]);
     const reloaded = makeChatHost({
@@ -323,8 +319,7 @@ it.each(["lost-ack", "accepted-unconsumed"] as const)(
     });
     expect(restoreChatComposerState(reloaded)).toBe(true);
     expect(reloaded.chatQueue[0]).toMatchObject(heldDelivery(attemptedRunId));
-    await loadChatHistory(reloaded, { deferBranches: true });
-    await flushChatQueueForEvent(reloaded);
+    await reconcileQueue(reloaded);
     expect(attempts).toBe(1);
     expect(reloaded.chatQueue[0]).toMatchObject({
       ...heldDelivery(attemptedRunId),
@@ -363,8 +358,7 @@ it.each(["consumed", "pending", "disconnected"] as const)(
     host.sessions.reconcile(paused);
     expect(holdProviderReviewQueuedInputs(host)).toBe(true);
     expect(host.chatQueue[0]).toMatchObject({
-      ...deliveryIdentity(inFlight),
-      ...heldDelivery(inFlight?.sendRunId),
+      ...heldDelivery(inFlight?.sendRunId, inFlight),
       sendError: expect.any(String),
     });
     const continued = reviewFree(11);
