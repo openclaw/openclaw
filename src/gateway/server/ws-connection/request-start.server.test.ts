@@ -446,8 +446,11 @@ describe("authenticated operator request starts", () => {
       sharedBytes,
       deflateRawSync(sharedBytes, { level: 1, finishFlush: zlibConstants.Z_SYNC_FLUSH }),
     );
-    registry.gatewayHandlers["test.echo"] = async ({ req, respond }) => {
-      respond(true, { echoed: (req.params as { text: string }).text });
+    registry.gatewayHandlers["test.echo"] = async ({ req, respond, acceptsDeflatedSegments }) => {
+      respond(true, {
+        echoed: (req.params as { text: string }).text,
+        acceptsDeflatedSegments: acceptsDeflatedSegments === true,
+      });
     };
     registry.gatewayHandlers["test.segments"] = async ({ respond }) => {
       respond(true, { messages: new SerializedJsonArray(sharedBytes) });
@@ -496,6 +499,32 @@ describe("authenticated operator request starts", () => {
       const localClosed = once(local, "close");
       local.close();
       await localClosed;
+      for (const perMessageDeflate of [false, {}]) {
+        const peer = new WebSocket(`ws://127.0.0.1:${portClaim.port}`, {
+          perMessageDeflate,
+          headers: { "x-forwarded-for": "198.51.100.10" },
+        });
+        try {
+          trackConnectChallengeNonce(peer);
+          await once(peer, "open");
+          await connectOk(peer, { token, prePairDevice: true });
+          const response = onceMessage(peer, (value) => value.id === "capability");
+          peer.send(
+            JSON.stringify({
+              type: "req",
+              id: "capability",
+              method: "test.echo",
+              params: { text: "capability" },
+            }),
+          );
+          await expect(response).resolves.toMatchObject({
+            ok: true,
+            payload: { acceptsDeflatedSegments: perMessageDeflate !== false },
+          });
+        } finally {
+          peer.terminate();
+        }
+      }
       // Peers may cap the server window; its inflater rejects farther back-references.
       const socket = new WebSocket(`ws://127.0.0.1:${portClaim.port}`, {
         perMessageDeflate: { serverMaxWindowBits: 10 },
@@ -522,7 +551,10 @@ describe("authenticated operator request starts", () => {
         }>(socket, (value) => value.type === "res" && value.id === id);
         const before = stream.bytesWritten;
         send();
-        await expect(response).resolves.toMatchObject({ ok: true, payload: { echoed: text } });
+        await expect(response).resolves.toMatchObject({
+          ok: true,
+          payload: { echoed: text, acceptsDeflatedSegments: false },
+        });
         return stream.bytesWritten - before;
       };
       const request = (id: string, text: string) =>

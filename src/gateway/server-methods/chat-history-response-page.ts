@@ -311,7 +311,7 @@ export function encodeChatHistoryResponsePage(
     anchor: undefined,
     // Own an exact ArrayBuffer so worker transfer never clones a pooled Buffer.
     encodedMessagesDeflate:
-      messages.byteLength >= 4 * 1024
+      params.deflateResponse && messages.byteLength >= 4 * 1024
         ? new Uint8Array(
             deflateRawSync(messages, { level: 1, finishFlush: zlibConstants.Z_SYNC_FLUSH }),
           )

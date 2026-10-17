@@ -654,7 +654,7 @@ it("shares queued equivalent pages but starts a fresh read after dispatch", asyn
   ]);
 });
 
-it.each(["rpc limit", "rpc store", "http cursor"] as const)(
+it.each(["rpc limit", "rpc store", "rpc deflate", "http cursor"] as const)(
   "keeps distinct %s selectors separate in coalescing and byte admission",
   async (selector) => {
     const makeRequest = (different: boolean): SessionHistoryWorkerRequest =>
@@ -672,7 +672,9 @@ it.each(["rpc limit", "rpc store", "http cursor"] as const)(
             different
               ? selector === "rpc limit"
                 ? { max: 2 }
-                : { storePath: "/tmp/another-history-worker-fixture/sessions.json" }
+                : selector === "rpc deflate"
+                  ? { deflateResponse: true }
+                  : { storePath: "/tmp/another-history-worker-fixture/sessions.json" }
               : {},
           );
     const first = readSessionHistoryPageInWorker(makeRequest(false));

@@ -160,7 +160,7 @@ it.for([
         const reply = await worker.read({
           kind: "history-page",
           database: { agentId, path },
-          request: { kind: "rpc", params: { ...params, encodeResponse } },
+          request: { kind: "rpc", params: { ...params, encodeResponse, deflateResponse: true } },
           target: {
             transcript: {
               agentId,

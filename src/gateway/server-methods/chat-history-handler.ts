@@ -73,6 +73,7 @@ export async function handleChatHistoryRequest({
   sessionMutationAuthorization,
   retainedTranscript,
   acceptsSerializedJson,
+  acceptsDeflatedSegments,
   req,
 }: GatewayRequestHandlerOptions & {
   method: ChatHistoryMethod;
@@ -240,6 +241,8 @@ export async function handleChatHistoryRequest({
         : [],
     );
     let historyPage: Awaited<ReturnType<typeof readChatHistoryPage>>;
+    // Internal adapters may inspect message objects before responding.
+    const encodeResponse = acceptsSerializedJson && method === req.method;
     try {
       historyPage =
         deltaCursor !== undefined
@@ -249,8 +252,8 @@ export async function handleChatHistoryRequest({
               () =>
                 readChatHistoryPage(
                   {
-                    // Internal adapters may inspect message objects before responding.
-                    encodeResponse: acceptsSerializedJson && method === req.method,
+                    encodeResponse,
+                    deflateResponse: encodeResponse && acceptsDeflatedSegments,
                     includePluginSteering,
                     entry: historyEntry,
                     provider: resolvedSessionModel.provider,

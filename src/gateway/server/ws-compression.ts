@@ -146,17 +146,19 @@ function isPerMessageDeflateCodec(value: unknown): value is PerMessageDeflateCod
  * compression and shared segment reuse. ws's streams need a threadpool round trip, and so a
  * busy event-loop turn, per call and per 16 KiB of output while the socket
  * stops parsing or sending; inline level-1 zlib costs about 3 ms per MiB
- * deflated and less inflated. Returns false when the peer negotiated
+ * deflated and less inflated. Returns undefined when the peer negotiated
  * compression but the ws extension no longer has the expected shape; ws then
  * keeps its slower path.
  */
-export function installGatewayDeflateCodec(socket: WebSocket): boolean {
+export function installGatewayDeflateCodec(
+  socket: WebSocket,
+): { acceptsDeflatedSegments: boolean } | undefined {
   // SAFETY: ws owns the negotiated extension; validate its shape before replacing methods.
   const codec = (socket as WebSocket & { _extensions?: Record<string, unknown> })["_extensions"]?.[
     "permessage-deflate"
   ];
   if (codec === undefined) {
-    return true;
+    return { acceptsDeflatedSegments: false };
   }
   const receiver = gatewayReceiver(socket);
   if (
@@ -165,7 +167,7 @@ export function installGatewayDeflateCodec(socket: WebSocket): boolean {
     codec.params.client_no_context_takeover !== true ||
     codec.params.server_no_context_takeover !== true
   ) {
-    return false;
+    return undefined;
   }
   const streamDecompress = codec.decompress.bind(codec);
   const streamCompress = codec.compress.bind(codec);
@@ -254,7 +256,8 @@ export function installGatewayDeflateCodec(socket: WebSocket): boolean {
         }
         let piece = windows.get(windowBits);
         if (!piece) {
-          piece = compressPiece(bytes);
+          // Copy out of the shared deflater's output chunk so the memo retains only its bytes.
+          piece = Buffer.from(compressPiece(bytes));
           windows.set(windowBits, piece);
         }
         pieces.push(piece);
@@ -268,5 +271,5 @@ export function installGatewayDeflateCodec(socket: WebSocket): boolean {
     // Z_SYNC_FLUSH ends with the empty block that permessage-deflate strips.
     process.nextTick(callback, null, output.subarray(0, -TRAILER.length));
   };
-  return true;
+  return { acceptsDeflatedSegments: windowBits === zlibConstants.Z_DEFAULT_WINDOWBITS };
 }
