@@ -119,6 +119,32 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("surfaces provider-wide assistant model_not_found when no fallback is configured", () => {
+    expect(
+      resolveAssistantDecision({
+        fallbackConfigured: false,
+        failoverFailure: true,
+        failoverReason: "model_not_found",
+        errorMessage: "404 model not found",
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "model_not_found",
+    });
+  });
+
+  it("keeps profile rotation when model_not_found is not proven provider-wide", () => {
+    expect(
+      resolveAssistantDecision({
+        failoverFailure: true,
+        failoverReason: "model_not_found",
+      }),
+    ).toEqual({
+      action: "rotate_profile",
+      reason: "model_not_found",
+    });
+  });
+
   it("does not model-fallback prompt failures after an external abort", () => {
     expect(
       resolveRunFailoverDecision({
