@@ -190,8 +190,9 @@ suite.define(() => {
 
     const openChip = chips.first();
     await pollAttr(openChip, "data-state").toBe("open");
-    await pollText(openChip.locator(".chat-pr__number")).toBe("openclaw/openclaw#103469");
-    await pollText(openChip.locator(".chat-pr__repo")).toBe(
+    await pollText(openChip.locator(".chat-pr__repo")).toBe("openclaw/openclaw");
+    await pollText(openChip.locator(".chat-pr__number")).toBe("#103469");
+    await pollText(openChip.locator(".chat-pr__title")).toBe(
       "fix(macos): tighten the link-browser tab header",
     );
     expect(await openChip.locator(".chat-pr__identity").getAttribute("title")).toContain(
@@ -252,9 +253,15 @@ suite.define(() => {
       await page.screenshot({ path: path.join(stackingProofDir, "after-pr-discovery.png") });
     }
 
-    await mergedChip.locator(".chat-pr__dismiss").click();
+    await mergedChip.locator(".chat-pr__actions-trigger").click();
+    await page
+      .getByRole("menuitem", {
+        name: "Dismiss pull request openclaw/openclaw#103438",
+        exact: true,
+      })
+      .click();
     await pollCount(chips).toBe(2);
-    await pollText(chips.first().locator(".chat-pr__number")).toBe("openclaw/openclaw#103469");
+    await pollText(chips.first().locator(".chat-pr__number")).toBe("#103469");
   });
 
   it.each([
@@ -326,7 +333,7 @@ suite.define(() => {
         }
         for (const chip of await chips.all()) {
           await chip.locator(".chat-pr__link").click({ trial: true });
-          await chip.locator(".chat-pr__dismiss").click({ trial: true });
+          await chip.locator(".chat-pr__actions-trigger").click({ trial: true });
         }
       }
     },
