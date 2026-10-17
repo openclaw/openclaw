@@ -46,6 +46,7 @@ import {
 import { removeAgentIntegrityMetadataForTest } from "./openclaw-agent-db.test-support.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { AgentDatabaseExecutionLifetime } from "./openclaw-agent-execution-authority.js";
+import type { AgentDatabaseExecutionScope } from "./openclaw-agent-execution-contract.js";
 import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
 import {
   captureOpenClawAgentDatabaseExecution,
@@ -200,7 +201,14 @@ it.for(["revoked", "aborted"] as const)(
         throw refused;
       }
     });
-    const initiatingOperation = vi.fn(async () => "opened");
+    const initialize = (scope: AgentDatabaseExecutionScope, sessionId: string) =>
+      scope.execute({
+        type: "session.transcript.initialize",
+        input: { sessionKey: `agent:main:${sessionId}`, sessionId },
+      });
+    const initiatingOperation = vi.fn((scope: AgentDatabaseExecutionScope) =>
+      initialize(scope, "initiator"),
+    );
     const initiating =
       cancellation === "aborted"
         ? initiator.prepare(initiatingSource, controller.signal)
@@ -227,7 +235,7 @@ it.for(["revoked", "aborted"] as const)(
             ...createNativeSource(() => registry.assertCurrent()),
             onRegistryChange: registry.followRegistration,
           },
-          async () => "opened",
+          (scope) => initialize(scope, `peer-${index}`),
         );
       });
       void Promise.allSettled(peers);
@@ -238,8 +246,20 @@ it.for(["revoked", "aborted"] as const)(
     }
     try {
       expect(await Promise.allSettled(peers)).toEqual([
-        { status: "fulfilled", value: "opened" },
-        { status: "fulfilled", value: "opened" },
+        {
+          status: "fulfilled",
+          value: expect.objectContaining({
+            kind: "session-transcript-initialized",
+            sessionKey: "agent:main:peer-0",
+          }),
+        },
+        {
+          status: "fulfilled",
+          value: expect.objectContaining({
+            kind: "session-transcript-initialized",
+            sessionKey: "agent:main:peer-1",
+          }),
+        },
       ]);
       await expect(initiating).rejects.toBe(refused);
       expect(initiatingOperation).not.toHaveBeenCalled();
@@ -251,6 +271,15 @@ it.for(["revoked", "aborted"] as const)(
       await Promise.all(borrowers.map((borrower) => borrower.release()));
     }
     await closeOpenClawAgentDatabasesAsync();
+    using persisted = openNodeSqliteDatabase(database.path, { readOnly: true });
+    expect(
+      persisted
+        .prepare("SELECT session_key, current_session_id FROM session_nodes ORDER BY session_key")
+        .all(),
+    ).toEqual([
+      { session_key: "agent:main:peer-0", current_session_id: "peer-0" },
+      { session_key: "agent:main:peer-1", current_session_id: "peer-1" },
+    ]);
     const reopened = createNativeGeneration(
       database.agentId,
       database.path,
