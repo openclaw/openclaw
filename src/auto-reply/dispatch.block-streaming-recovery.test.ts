@@ -27,6 +27,35 @@ const finalMediaUrl = "https://example.test/final.png";
 const mediaCaption = "Here is the generated image.";
 const fallbackText = "The backup produced a second answer.";
 
+function completion(delta: Record<string, unknown>, finish_reason?: string) {
+  return `data: ${JSON.stringify({ id: "completion-fixture", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason }] })}\n\n`;
+}
+
+function fixtureProvider(
+  baseUrl: string,
+  id: string,
+  api: "openai-responses" | "openai-completions",
+  apiKey: string,
+) {
+  return {
+    baseUrl,
+    apiKey,
+    api,
+    request: { allowPrivateNetwork: true },
+    models: [
+      {
+        id,
+        name: id === "answer" ? "Answer" : "Backup",
+        reasoning: false,
+        input: ["text" as const],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 4096,
+      },
+    ],
+  };
+}
+
 it.for([
   "rejected",
   "deferred-rejection",
@@ -140,46 +169,27 @@ it.for([
         }
         if (directMedia && requests.length === 1) {
           response.end(
-            `data: ${JSON.stringify({
-              id: "completion-fixture",
-              object: "chat.completion.chunk",
-              choices: [
-                {
-                  index: 0,
-                  delta: {
-                    role: "assistant",
-                    tool_calls: [
-                      {
-                        index: 0,
-                        id: "media-call",
-                        type: "function",
-                        function: { name: "fixture_media", arguments: "{}" },
-                      },
-                    ],
+            completion(
+              {
+                role: "assistant",
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "media-call",
+                    type: "function",
+                    function: { name: "fixture_media", arguments: "{}" },
                   },
-                  finish_reason: "tool_calls",
-                },
-              ],
-            })}\n\ndata: [DONE]\n\n`,
+                ],
+              },
+              "tool_calls",
+            ) + "data: [DONE]\n\n",
           );
           return;
         }
         for (const text of [responseText.slice(0, 180), responseText.slice(180)]) {
-          response.write(
-            `data: ${JSON.stringify({
-              id: "completion-fixture",
-              object: "chat.completion.chunk",
-              choices: [{ index: 0, delta: { role: "assistant", content: text } }],
-            })}\n\n`,
-          );
+          response.write(completion({ role: "assistant", content: text }));
         }
-        response.end(
-          `data: ${JSON.stringify({
-            id: "completion-fixture",
-            object: "chat.completion.chunk",
-            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-          })}\n\ndata: [DONE]\n\n`,
-        );
+        response.end(completion({}, "stop") + "data: [DONE]\n\n");
       };
       if (directMedia || fallback) {
         const chunks: string[] = [];
@@ -237,6 +247,7 @@ it.for([
       if (!address || typeof address === "string") {
         throw new Error("fixture server did not bind");
       }
+      const baseUrl = `http://127.0.0.1:${address.port}/v1`;
       const cfg = {
         agents: {
           ownership: "explicit",
@@ -263,42 +274,20 @@ it.for([
         models: {
           mode: "replace",
           providers: {
-            fixture: {
-              baseUrl: `http://127.0.0.1:${address.port}/v1`,
-              apiKey: "synthetic-test-key",
-              api: fallback ? "openai-responses" : "openai-completions",
-              request: { allowPrivateNetwork: true },
-              models: [
-                {
-                  id: "answer",
-                  name: "Answer",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128000,
-                  maxTokens: 4096,
-                },
-              ],
-            },
+            fixture: fixtureProvider(
+              baseUrl,
+              "answer",
+              fallback ? "openai-responses" : "openai-completions",
+              "synthetic-test-key",
+            ),
             ...(fallback
               ? {
-                  "fixture-backup": {
-                    baseUrl: `http://127.0.0.1:${address.port}/v1`,
-                    apiKey: "synthetic-backup-key",
-                    api: "openai-responses" as const,
-                    request: { allowPrivateNetwork: true },
-                    models: [
-                      {
-                        id: "backup",
-                        name: "Backup",
-                        reasoning: false,
-                        input: ["text" as const],
-                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                        contextWindow: 128000,
-                        maxTokens: 4096,
-                      },
-                    ],
-                  },
+                  "fixture-backup": fixtureProvider(
+                    baseUrl,
+                    "backup",
+                    "openai-responses",
+                    "synthetic-backup-key",
+                  ),
                 }
               : {}),
           },
