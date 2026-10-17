@@ -11,6 +11,12 @@ import {
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
+const required = { "required-runtime": "1.0.0" };
+
+function dependencyStatus(rootDir: string, dependencyRootDir?: string) {
+  return buildPluginDependencyStatus({ rootDir, dependencyRootDir, dependencies: required });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   cleanupTrackedTempDirs(tempDirs);
@@ -72,10 +78,7 @@ describe("plugin dependency health", () => {
         fs.writeFileSync(manifest, payload === "empty-manifest" ? "" : "{");
       }
     }
-    const status = buildPluginDependencyStatus({
-      rootDir,
-      dependencies: { "required-runtime": "1.0.0" },
-    });
+    const status = dependencyStatus(rootDir);
     expect(status.installed).toBe(false);
     expect(status.requiredInstalled).toBe(false);
     expect(status.missing).toEqual(["required-runtime"]);
@@ -126,7 +129,7 @@ describe("plugin dependency health", () => {
       const params = {
         rootDir,
         dependencyRootDir: projectRoot,
-        dependencies: { "required-runtime": "1.0.0" },
+        dependencies: required,
         optionalDependencies: { "optional-runtime": "1.0.0" },
       };
       const installed = ["nested", "hoisted", "inside-symlink"].includes(layout);
@@ -161,11 +164,7 @@ describe("plugin dependency health", () => {
         fs.unlinkSync(manifest);
         fs.symlinkSync(target, manifest);
       }
-      const status = buildPluginDependencyStatus({
-        rootDir,
-        dependencyRootDir: projectRoot,
-        dependencies: { "required-runtime": "1.0.0" },
-      });
+      const status = dependencyStatus(rootDir, projectRoot);
       expect(status.requiredInstalled).toBe(layout === "hardlink" || layout === "inside-link");
     },
   );
@@ -178,10 +177,7 @@ describe("plugin dependency health", () => {
     const dependencyDir = writeDependency(rootDir, "required-runtime");
     const manifest = JSON.stringify({ name: "required-runtime", version: "1.0.0" });
     fs.writeFileSync(path.join(dependencyDir, "package.json"), manifest.padEnd(bytes, " "));
-    const status = buildPluginDependencyStatus({
-      rootDir,
-      dependencies: { "required-runtime": "1.0.0" },
-    });
+    const status = dependencyStatus(rootDir);
     expect(status.requiredInstalled).toBe(installed);
   });
 
@@ -202,10 +198,7 @@ describe("plugin dependency health", () => {
             ? createPluginRoot()
             : path.join(parent, "different-project"),
       };
-      const status = buildPluginDependencyStatus({
-        ...params,
-        dependencies: { "required-runtime": "1.0.0" },
-      });
+      const status = dependencyStatus(params.rootDir, params.dependencyRootDir);
       expect(status.requiredInstalled).toBe(installed);
       expect(status.missing).toEqual(installed ? [] : ["required-runtime"]);
       if (installed) {

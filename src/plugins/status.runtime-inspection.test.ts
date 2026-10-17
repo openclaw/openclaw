@@ -110,7 +110,13 @@ describe("plugin runtime inspection", () => {
         expect(signal?.aborted).toBe(false);
         const activeConnection = connections[0];
         const readActive = () => activeConnection?.database.prepare("SELECT 42 AS value").get();
-        expect(readActive()).toEqual({ value: 42 });
+        const expectActive = () => {
+          expect(readActive()).toEqual({ value: 42 });
+          expect(getActivePluginRegistry()).toBe(active);
+          expect(capturePluginRegistryLifecycleEpoch(active)).toBe(epoch);
+          expect(signal?.aborted).toBe(false);
+        };
+        expectActive();
         let replied = false;
         process.exitCode = 7;
         command = withPluginRuntimeRegistryScope(active, () =>
@@ -127,10 +133,7 @@ describe("plugin runtime inspection", () => {
         expect(replied).toBe(false);
         expect(output).toEqual([]);
         expect(process.exitCode).toBe(7);
-        expect(readActive()).toEqual({ value: 42 });
-        expect(getActivePluginRegistry()).toBe(active);
-        expect(capturePluginRegistryLifecycleEpoch(active)).toBe(epoch);
-        expect(signal?.aborted).toBe(false);
+        expectActive();
         finish.resolve();
         await command;
         expect(output).toHaveLength(1);
@@ -145,10 +148,7 @@ describe("plugin runtime inspection", () => {
         expect(inspection?.disposals).toBe(1);
         expect(activeConnection?.disposals).toBe(0);
         expect(connections.map((connection) => connection.cleanups)).toEqual([0, 0]);
-        expect(readActive()).toEqual({ value: 42 });
-        expect(getActivePluginRegistry()).toBe(active);
-        expect(capturePluginRegistryLifecycleEpoch(active)).toBe(epoch);
-        expect(signal?.aborted).toBe(false);
+        expectActive();
       });
     } finally {
       finish.resolve();
@@ -360,93 +360,83 @@ describe("plugin runtime inspection", () => {
     });
   });
 
-  it.each([true])(
-    "uses replaced package metadata while preserving its old snapshot (requires config: %s)",
-    async (requiresConfig) => {
-      const stateDir = makePluginLoaderTempDir();
-      const configPath = path.join(stateDir, "openclaw.json");
-      const pluginId = "same-path-candidate";
-      const pluginDir = path.join(stateDir, "extensions", pluginId);
-      const writeVersion = (version: "1.0.0" | "2.0.0") => {
-        fs.mkdirSync(pluginDir, { recursive: true });
-        writeJson(pluginDir, "package.json", {
-          name: pluginId,
-          version,
-          openclaw: { extensions: ["./index.cjs"] },
-        });
-        writeJson(pluginDir, "openclaw.plugin.json", {
-          id: pluginId,
-          version,
-          kind: version === "1.0.0" ? "context-engine" : ["context-engine", "memory"],
-          configSchema:
-            version === "2.0.0" && requiresConfig
-              ? { type: "object", properties: { token: { type: "string" } }, required: ["token"] }
-              : { type: "object" },
-        });
-        fs.writeFileSync(
-          path.join(pluginDir, "index.cjs"),
-          "module.exports = { register() {} };\n",
-        );
-      };
-      const persistVersion = (
-        version: string,
-        { snapshot, writeOptions }: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>,
-      ) =>
-        persistPluginInstall({
-          snapshot: {
-            config: snapshot.sourceConfig,
-            baseHash: snapshot.hash ?? undefined,
-            writeOptions: selectInstallMutationWriteOptions(writeOptions),
-          },
-          pluginId,
-          install: { source: "path", installPath: pluginDir, version },
-        });
-
-      await withEnvAsync(stateEnv(stateDir), async () => {
-        useNoBundledPlugins();
-        await writeConfigFile({});
-        writeVersion("1.0.0");
-        await withPluginLifecycleLease({}, async () => {
-          await persistVersion("1.0.0", await readConfigFileSnapshotForWrite());
-        });
-        const before = await withPluginLifecycleLease({}, async () => {
-          const prepared = await readConfigFileSnapshotForWrite();
-          const retainedSnapshot = loadPluginMetadataSnapshot({
-            allowCurrent: false,
-            config: prepared.snapshot.sourceConfig,
-          });
-          expect(prepared.snapshot.sourceConfig.plugins?.slots?.contextEngine).toBe(pluginId);
-
-          // The installer replaces this path after the operation has inspected v1.
-          writeVersion("2.0.0");
-          await persistVersion("2.0.0", prepared);
-          return retainedSnapshot;
-        });
-        const persisted = JSON.parse(fs.readFileSync(configPath, "utf8"));
-        expect(persisted.plugins.entries[pluginId].enabled).toBe(!requiresConfig);
-        if (requiresConfig) {
-          expect(persisted.plugins.slots?.memory).toBeUndefined();
-        } else {
-          expect(persisted.plugins.slots).toEqual({ contextEngine: pluginId, memory: pluginId });
-        }
-        const index = await readPersistedInstalledPluginIndex();
-        expect(index?.installRecords[pluginId]).toMatchObject({
-          installPath: pluginDir,
-          version: "2.0.0",
-        });
-        expect(index?.plugins.find((plugin) => plugin.pluginId === pluginId)).toMatchObject({
-          packageVersion: "2.0.0",
-          enabled: !requiresConfig,
-          startup: { memory: true },
-        });
-        expect(before.byPluginId.get(pluginId)).toMatchObject({
-          version: "1.0.0",
-          kind: "context-engine",
-        });
-        expect(before.byPluginId.get(pluginId)?.configSchema).toEqual({ type: "object" });
+  it("uses replaced package metadata while preserving its old snapshot when config is required", async () => {
+    const stateDir = makePluginLoaderTempDir();
+    const configPath = path.join(stateDir, "openclaw.json");
+    const pluginId = "same-path-candidate";
+    const pluginDir = path.join(stateDir, "extensions", pluginId);
+    const writeVersion = (version: "1.0.0" | "2.0.0") => {
+      fs.mkdirSync(pluginDir, { recursive: true });
+      writeJson(pluginDir, "package.json", {
+        name: pluginId,
+        version,
+        openclaw: { extensions: ["./index.cjs"] },
       });
-    },
-  );
+      writeJson(pluginDir, "openclaw.plugin.json", {
+        id: pluginId,
+        version,
+        kind: version === "1.0.0" ? "context-engine" : ["context-engine", "memory"],
+        configSchema:
+          version === "2.0.0"
+            ? { type: "object", properties: { token: { type: "string" } }, required: ["token"] }
+            : { type: "object" },
+      });
+      fs.writeFileSync(path.join(pluginDir, "index.cjs"), "module.exports = { register() {} };\n");
+    };
+    const persistVersion = (
+      version: string,
+      { snapshot, writeOptions }: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>,
+    ) =>
+      persistPluginInstall({
+        snapshot: {
+          config: snapshot.sourceConfig,
+          baseHash: snapshot.hash ?? undefined,
+          writeOptions: selectInstallMutationWriteOptions(writeOptions),
+        },
+        pluginId,
+        install: { source: "path", installPath: pluginDir, version },
+      });
+
+    await withEnvAsync(stateEnv(stateDir), async () => {
+      useNoBundledPlugins();
+      await writeConfigFile({});
+      writeVersion("1.0.0");
+      await withPluginLifecycleLease({}, async () => {
+        await persistVersion("1.0.0", await readConfigFileSnapshotForWrite());
+      });
+      const before = await withPluginLifecycleLease({}, async () => {
+        const prepared = await readConfigFileSnapshotForWrite();
+        const retainedSnapshot = loadPluginMetadataSnapshot({
+          allowCurrent: false,
+          config: prepared.snapshot.sourceConfig,
+        });
+        expect(prepared.snapshot.sourceConfig.plugins?.slots?.contextEngine).toBe(pluginId);
+
+        // The installer replaces this path after the operation has inspected v1.
+        writeVersion("2.0.0");
+        await persistVersion("2.0.0", prepared);
+        return retainedSnapshot;
+      });
+      const persisted = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      expect(persisted.plugins.entries[pluginId].enabled).toBe(false);
+      expect(persisted.plugins.slots?.memory).toBeUndefined();
+      const index = await readPersistedInstalledPluginIndex();
+      expect(index?.installRecords[pluginId]).toMatchObject({
+        installPath: pluginDir,
+        version: "2.0.0",
+      });
+      expect(index?.plugins.find((plugin) => plugin.pluginId === pluginId)).toMatchObject({
+        packageVersion: "2.0.0",
+        enabled: false,
+        startup: { memory: true },
+      });
+      expect(before.byPluginId.get(pluginId)).toMatchObject({
+        version: "1.0.0",
+        kind: "context-engine",
+      });
+      expect(before.byPluginId.get(pluginId)?.configSchema).toEqual({ type: "object" });
+    });
+  });
 
   it.each(["during-import", "between-entries"] as const)(
     "rechecks install authority when it closes %s",

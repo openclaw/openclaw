@@ -26,6 +26,63 @@ import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(clearPluginMetadataLifecycleCaches);
 
+function healthEnv(root: string, stateDir = path.join(root, "state")) {
+  return {
+    ...createColdPluginHermeticEnv(root),
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
+  };
+}
+
+function enabledConfig(...ids: string[]) {
+  return { plugins: { entries: Object.fromEntries(ids.map((id) => [id, { enabled: true }])) } };
+}
+
+function writeJson(file: string, value: unknown) {
+  fs.writeFileSync(file, JSON.stringify(value));
+}
+
+function patchPackage(root: string, patch: Record<string, unknown>) {
+  const file = path.join(root, "package.json");
+  writeJson(file, { ...JSON.parse(fs.readFileSync(file, "utf8")), ...patch });
+}
+
+function writePackage(root: string, name: string, version = "1.0.0") {
+  fs.mkdirSync(root, { recursive: true });
+  writeJson(path.join(root, "package.json"), { name, version });
+}
+
+function runtimeRegistry(
+  id: string,
+  rootDir: string,
+  origin = "global",
+): PluginDependencyHealthRegistry {
+  return {
+    plugins: [
+      {
+        id,
+        source: path.join(rootDir, "dist/index.js"),
+        rootDir,
+        enabled: true,
+        status: "loaded",
+        origin,
+      },
+    ],
+    diagnostics: [],
+  };
+}
+
+function projectEmptyIndex(params: Parameters<typeof loadInstalledPluginIndex>[0]) {
+  const index = loadInstalledPluginIndex(params);
+  const metadata = loadPluginMetadataSnapshot({ ...params, index });
+  const report = projectPluginInstallHealth(
+    { plugins: [], diagnostics: [...index.diagnostics] },
+    { ...params, metadata },
+  );
+  return { index, report };
+}
+
 function createProjectionFixture(
   params: { metadataOrigin?: "bundled" | "global"; requiredDependency?: boolean } = {},
 ) {
@@ -35,20 +92,10 @@ function createProjectionFixture(
   const packageName = "@fixture/projection";
   const packageDir = writeManagedNpmPlugin({ stateDir, pluginId, packageName, version: "1.0.0" });
   if (params.requiredDependency) {
-    const packageJsonPath = path.join(packageDir, "package.json");
-    const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-    fs.writeFileSync(
-      packageJsonPath,
-      JSON.stringify({ ...manifest, dependencies: { "required-runtime": "1.0.0" } }),
-    );
+    patchPackage(packageDir, { dependencies: { "required-runtime": "1.0.0" } });
   }
-  const config = { plugins: { entries: { [pluginId]: { enabled: true } } } };
-  const env = {
-    ...createColdPluginHermeticEnv(root),
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
-  };
+  const config = enabledConfig(pluginId);
+  const env = healthEnv(root, stateDir);
   const index = loadInstalledPluginIndex({
     config,
     env,
@@ -81,18 +128,10 @@ describe("plugin inventory install health", () => {
       fs.chmodSync(pluginPath, 0o777);
       try {
         const config = {
-          plugins: {
-            load: { paths: [pluginPath] },
-            entries: { [pluginId]: { enabled: true } },
-          },
+          plugins: { ...enabledConfig(pluginId).plugins, load: { paths: [pluginPath] } },
         };
-        const env = {
-          ...createColdPluginHermeticEnv(root),
-          OPENCLAW_STATE_DIR: path.join(root, "state"),
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
-        };
-        const index = loadInstalledPluginIndex({
+        const env = healthEnv(root);
+        const { index, report } = projectEmptyIndex({
           config,
           env,
           installRecords: {
@@ -106,11 +145,6 @@ describe("plugin inventory install health", () => {
             level: "warn",
             message: expect.stringContaining("blocked plugin candidate: world-writable path"),
           }),
-        );
-        const metadata = loadPluginMetadataSnapshot({ config, env, index });
-        const report = projectPluginInstallHealth(
-          { plugins: [], diagnostics: [...index.diagnostics] },
-          { metadata, config, env },
         );
         expect(report.diagnostics).toEqual(index.diagnostics);
         expect(fs.existsSync(fixture.runtimeMarker)).toBe(false);
@@ -126,27 +160,17 @@ describe("plugin inventory install health", () => {
       const root = tempDirs.make("missing-linked-plugin-health-");
       const pluginId = "missing-linked-fixture";
       const pluginPath = path.join(root, "local plugin");
-      const config = { plugins: { entries: { [pluginId]: { enabled: true } } } };
-      const env = {
-        ...createColdPluginHermeticEnv(root),
-        OPENCLAW_STATE_DIR: path.join(root, "state"),
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
-      };
+      const config = enabledConfig(pluginId);
+      const env = healthEnv(root);
       const installRecord: PluginInstallRecord = {
         source: "path",
         ...(recordedPath === "unrecorded" ? {} : { [recordedPath]: pluginPath }),
       };
-      const index = loadInstalledPluginIndex({
+      const { report } = projectEmptyIndex({
         config,
         env,
         installRecords: { [pluginId]: installRecord },
       });
-      const metadata = loadPluginMetadataSnapshot({ config, env, index });
-      const report = projectPluginInstallHealth(
-        { plugins: [], diagnostics: [...index.diagnostics] },
-        { metadata, config, env },
-      );
       const diagnostic = report.diagnostics.find((entry) => entry.code === "plugin-verification");
       expect(diagnostic).toMatchObject({ pluginId, level: "error" });
       expect(diagnostic?.message).not.toContain(`openclaw plugins install ${pluginId} --force`);
@@ -180,23 +204,20 @@ describe("plugin inventory install health", () => {
       : writeManagedNpmPlugin({ stateDir, packageName, pluginId, version: "1.0.0" });
     if (bundle) {
       fs.mkdirSync(path.join(packageDir, ".claude-plugin"), { recursive: true });
-      fs.writeFileSync(
-        path.join(packageDir, ".claude-plugin", "plugin.json"),
-        JSON.stringify({ name: pluginId, version: "1.0.0" }),
-      );
+      writeJson(path.join(packageDir, ".claude-plugin/plugin.json"), {
+        name: pluginId,
+        version: "1.0.0",
+      });
     } else {
       if (clawhub) {
         fs.mkdirSync(packageDir, { recursive: true });
         createColdPluginFixture({ rootDir: packageDir, pluginId, packageName });
       }
-      fs.writeFileSync(
-        path.join(packageDir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: pluginId,
-          providers: ["fixture-provider"],
-          configSchema: { type: "object" },
-        }),
-      );
+      writeJson(path.join(packageDir, "openclaw.plugin.json"), {
+        id: pluginId,
+        providers: ["fixture-provider"],
+        configSchema: { type: "object" },
+      });
     }
     const projectRoot = resolvePluginNpmProjectDir({
       npmDir: path.join(stateDir, "npm"),
@@ -215,24 +236,12 @@ describe("plugin inventory install health", () => {
           path.join(packageDir, `dist/${entry}.js`),
         );
       }
-      const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-      fs.writeFileSync(
-        packageJsonPath,
-        JSON.stringify({
-          ...manifest,
-          openclaw: { extensions: ["./dist/first.js", "./dist/second.js"] },
-        }),
-      );
+      patchPackage(packageDir, {
+        openclaw: { extensions: ["./dist/first.js", "./dist/second.js"] },
+      });
     }
-    const config = {
-      plugins: { entries: Object.fromEntries(pluginIds.map((id) => [id, { enabled: true }])) },
-    };
-    const env = {
-      ...createColdPluginHermeticEnv(root),
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
-    };
+    const config = enabledConfig(...pluginIds);
+    const env = healthEnv(root, stateDir);
     const record: PluginInstallRecord = clawhub
       ? {
           source: "clawhub",
@@ -270,22 +279,13 @@ describe("plugin inventory install health", () => {
     } else if (scenario === "missing-project-package-json") {
       fs.rmSync(path.join(projectRoot, "package.json"));
     } else if (!healthy || host) {
-      const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-      fs.writeFileSync(
-        packageJsonPath,
-        JSON.stringify({
-          ...manifest,
-          dependencies: host ? { openclaw: "*" } : { "missing-runtime": "1.0.0" },
-        }),
-      );
+      patchPackage(packageDir, {
+        dependencies: host ? { openclaw: "*" } : { "missing-runtime": "1.0.0" },
+      });
     }
     if (scenario === "ancestor-dependency" || scenario === "outside-dependency") {
       const dependency = path.join(stateDir, "npm", "node_modules", "missing-runtime");
-      fs.mkdirSync(dependency, { recursive: true });
-      fs.writeFileSync(
-        path.join(dependency, "package.json"),
-        JSON.stringify({ name: "missing-runtime", version: "1.0.0" }),
-      );
+      writePackage(dependency, "missing-runtime");
       if (scenario === "outside-dependency") {
         fs.mkdirSync(path.join(packageDir, "node_modules"), { recursive: true });
         fs.symlinkSync(
@@ -303,11 +303,7 @@ describe("plugin inventory install health", () => {
       fs.symlinkSync(hostRoot, path.join(packageDir, "node_modules", "openclaw"), "junction");
     } else if (hoistedHost) {
       const dependency = path.join(path.dirname(packageDir), "node_modules", "openclaw");
-      fs.mkdirSync(dependency, { recursive: true });
-      fs.writeFileSync(
-        path.join(dependency, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.7.1" }),
-      );
+      writePackage(dependency, "openclaw", "2026.7.1");
     }
     clearPluginMetadataLifecycleCaches();
     const status = buildPluginRegistrySnapshotReport({ config, env });
@@ -364,19 +360,7 @@ describe("plugin inventory install health", () => {
     ({ metadataOrigin, runtimeOrigin, consent }) => {
       const fixture = createProjectionFixture({ metadataOrigin });
       expect(fixture.metadata.byPluginId.get(fixture.pluginId)?.origin).toBe(metadataOrigin);
-      const registry: PluginDependencyHealthRegistry = {
-        plugins: [
-          {
-            id: fixture.pluginId,
-            source: path.join(fixture.packageDir, "dist/index.js"),
-            rootDir: fixture.packageDir,
-            enabled: true,
-            status: "loaded",
-            origin: runtimeOrigin,
-          },
-        ],
-        diagnostics: [],
-      };
+      const registry = runtimeRegistry(fixture.pluginId, fixture.packageDir, runtimeOrigin);
       const report = projectPluginInstallHealth(registry, fixture);
 
       expect(
@@ -388,54 +372,33 @@ describe("plugin inventory install health", () => {
     },
   );
 
-  it.each([true])(
-    "rechecks a different runtime root after caching installed dependency health: %s",
-    (initiallyHealthy) => {
-      const fixture = createProjectionFixture({ requiredDependency: true });
-      const projectRoot = resolvePluginNpmProjectDir({
-        npmDir: path.join(fixture.env.OPENCLAW_STATE_DIR, "npm"),
-        packageName: "@fixture/projection",
+  it("rechecks a different runtime root after caching installed dependency health", () => {
+    const fixture = createProjectionFixture({ requiredDependency: true });
+    const projectRoot = resolvePluginNpmProjectDir({
+      npmDir: path.join(fixture.env.OPENCLAW_STATE_DIR, "npm"),
+      packageName: "@fixture/projection",
+    });
+    const runtimeRoot = path.join(projectRoot, "alternate-runtime");
+    fs.mkdirSync(runtimeRoot);
+    writePackage(
+      path.join(fixture.packageDir, "node_modules/required-runtime"),
+      "required-runtime",
+    );
+
+    for (const { rootDir, healthy } of [
+      { rootDir: fixture.packageDir, healthy: true },
+      { rootDir: runtimeRoot, healthy: false },
+    ]) {
+      const registry = runtimeRegistry(fixture.pluginId, rootDir);
+      const report = projectPluginInstallHealth(registry, fixture);
+
+      expect(report.plugins[0]?.dependencyStatus).toMatchObject({
+        requiredInstalled: healthy,
+        missing: healthy ? [] : ["required-runtime"],
       });
-      const runtimeRoot = path.join(projectRoot, "alternate-runtime");
-      fs.mkdirSync(runtimeRoot);
-      const dependency = path.join(
-        initiallyHealthy ? fixture.packageDir : runtimeRoot,
-        "node_modules",
-        "required-runtime",
-      );
-      fs.mkdirSync(dependency, { recursive: true });
-      fs.writeFileSync(
-        path.join(dependency, "package.json"),
-        JSON.stringify({ name: "required-runtime", version: "1.0.0" }),
-      );
-
-      for (const { rootDir, healthy } of [
-        { rootDir: fixture.packageDir, healthy: initiallyHealthy },
-        { rootDir: runtimeRoot, healthy: !initiallyHealthy },
-      ]) {
-        const registry: PluginDependencyHealthRegistry = {
-          plugins: [
-            {
-              id: fixture.pluginId,
-              source: path.join(rootDir, "dist/index.js"),
-              rootDir,
-              enabled: true,
-              status: "loaded",
-              origin: "global",
-            },
-          ],
-          diagnostics: [],
-        };
-        const report = projectPluginInstallHealth(registry, fixture);
-
-        expect(report.plugins[0]?.dependencyStatus).toMatchObject({
-          requiredInstalled: healthy,
-          missing: healthy ? [] : ["required-runtime"],
-        });
-        expect(report.plugins[0]?.status).toBe(healthy ? "loaded" : "error");
-      }
-    },
-  );
+      expect(report.plugins[0]?.status).toBe(healthy ? "loaded" : "error");
+    }
+  });
 });
 
 function makeTempDir() {
