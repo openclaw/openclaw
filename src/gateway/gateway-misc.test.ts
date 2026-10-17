@@ -1,3 +1,5 @@
+// Gateway miscellaneous tests cover shared utility edges around control UI,
+// proxy state, node command policy, and server helper behavior.
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs/promises";
 import { beforeAll, beforeEach, describe, expect, it, test, vi } from "vitest";
@@ -16,7 +18,6 @@ import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   resolveNodeCommandAllowlist,
 } from "./node-command-policy.js";
-import type { GatewayPluginEventScope } from "./server-broadcast-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createChatRunState, createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_CLOSE_GRACE_MS } from "./server-constants.js";
@@ -28,6 +29,8 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 
 const wsMockState = vi.hoisted(() => ({
   last: null as {
+    url: unknown;
+    opts: unknown;
     noProxyDuringConstruction: unknown;
     httpProxyDuringConstruction: unknown;
     httpsProxyDuringConstruction: unknown;
@@ -41,8 +44,10 @@ vi.mock("../../packages/gateway-client/src/websocket.js", () => ({
     close = vi.fn();
     send = vi.fn();
 
-    constructor() {
+    constructor(url: unknown, opts: unknown) {
       wsMockState.last = {
+        url,
+        opts,
         noProxyDuringConstruction: process.env["NO_PROXY"],
         httpProxyDuringConstruction: process.env["HTTP_PROXY"],
         httpsProxyDuringConstruction: process.env["HTTPS_PROXY"],
@@ -66,6 +71,26 @@ describe("GatewayClient", () => {
     delete process.env["HTTPS_PROXY"];
   });
 
+  function startGatewayClient(params: { url: string; tlsFingerprint?: string }) {
+    const client = new GatewayClient({ ...params, deviceIdentity: null });
+    client.start();
+    return wsMockState.last;
+  }
+
+  function setCorporateNoProxy() {
+    process.env["NO_PROXY"] = "corp.example.com";
+    process.env["no_proxy"] = "corp.example.com";
+  }
+
+  function setGatewayOnlyProxyEnv() {
+    process.env["HTTP_PROXY"] = "http://127.0.0.1:3128";
+    process.env["HTTPS_PROXY"] = "http://127.0.0.1:3128";
+  }
+
+  function registerGatewayOnlyProxy() {
+    return registerActiveManagedProxyUrl(new URL("http://127.0.0.1:3128"), "gateway-only");
+  }
+
   test("uses the admitted pairing identity for shared-auth connect failures", async () => {
     const source = await fs.readFile(
       new URL("./server/ws-connection/connect-session.ts", import.meta.url),
@@ -77,31 +102,37 @@ describe("GatewayClient", () => {
   });
 
   test("scopes IPv6 loopback bypass during Gateway-only proxy mode connection setup", () => {
-    process.env["NO_PROXY"] = process.env["no_proxy"] = "corp.example.com";
-    process.env["HTTP_PROXY"] = process.env["HTTPS_PROXY"] = "http://127.0.0.1:3128";
-    const registration = registerActiveManagedProxyUrl(
-      new URL("http://127.0.0.1:3128"),
-      "gateway-only",
-    );
+    setCorporateNoProxy();
+    setGatewayOnlyProxyEnv();
+    const registration = registerGatewayOnlyProxy();
 
     try {
-      new GatewayClient({ url: "ws://[::1]:18789", deviceIdentity: null }).start();
-      expect(wsMockState.last).toMatchObject({
-        noProxyDuringConstruction: "corp.example.com",
-        httpProxyDuringConstruction: "http://127.0.0.1:3128",
-        httpsProxyDuringConstruction: "http://127.0.0.1:3128",
-      });
-      expect(process.env).toMatchObject({
-        NO_PROXY: "corp.example.com",
-        no_proxy: "corp.example.com",
-        HTTP_PROXY: "http://127.0.0.1:3128",
-        HTTPS_PROXY: "http://127.0.0.1:3128",
-      });
+      const last = startGatewayClient({ url: "ws://[::1]:18789" }) as {
+        noProxyDuringConstruction: unknown;
+        httpProxyDuringConstruction: unknown;
+        httpsProxyDuringConstruction: unknown;
+      } | null;
+
+      expect(last?.noProxyDuringConstruction).toBe("corp.example.com");
+      expect(last?.httpProxyDuringConstruction).toBe("http://127.0.0.1:3128");
+      expect(last?.httpsProxyDuringConstruction).toBe("http://127.0.0.1:3128");
+      expect(process.env["NO_PROXY"]).toBe("corp.example.com");
+      expect(process.env["no_proxy"]).toBe("corp.example.com");
+      expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
+      expect(process.env["HTTPS_PROXY"]).toBe("http://127.0.0.1:3128");
     } finally {
       stopActiveManagedProxyRegistration(registration);
     }
   });
 });
+
+type TestSocket = {
+  readyState: number;
+  bufferedAmount: number;
+  send: (payload: string) => void;
+  close: (code: number, reason: string) => void;
+  terminate: () => void;
+};
 
 type EventFrame = {
   type: "event";
@@ -110,7 +141,9 @@ type EventFrame = {
   seq?: number;
 };
 
-function makeRecordingSocket() {
+type RecordingSocket = TestSocket & { sent: EventFrame[] };
+
+function makeRecordingSocket(): RecordingSocket {
   const sent: EventFrame[] = [];
   return Object.assign(new EventEmitter(), {
     readyState: 1,
@@ -124,11 +157,9 @@ function makeRecordingSocket() {
   });
 }
 
-type RecordingSocket = ReturnType<typeof makeRecordingSocket>;
-
 function makeGatewayWsClient(
   connId: string,
-  socket: RecordingSocket,
+  socket: TestSocket,
   connect: GatewayWsClient["connect"],
 ): GatewayWsClient {
   return {
@@ -139,7 +170,7 @@ function makeGatewayWsClient(
   };
 }
 
-function makeOperatorWsClient(connId: string, socket: RecordingSocket, scopes: string[]) {
+function makeOperatorWsClient(connId: string, socket: TestSocket, scopes: string[]) {
   return makeGatewayWsClient(connId, socket, {
     role: "operator",
     scopes,
@@ -147,51 +178,60 @@ function makeOperatorWsClient(connId: string, socket: RecordingSocket, scopes: s
 }
 
 function makeOperatorWsClients(
-  entries: Array<{ connId: string; socket: RecordingSocket; scopes: string[] }>,
+  entries: Array<{ connId: string; socket: TestSocket; scopes: string[] }>,
 ) {
   return new GatewayClientRegistry(
     entries.map(({ connId, socket, scopes }) => makeOperatorWsClient(connId, socket, scopes)),
   );
 }
 
+function makeReadPairClients(
+  first: { connId: string; socket: TestSocket; scopes: string[] },
+  readSocket: TestSocket,
+) {
+  return makeOperatorWsClients([
+    first,
+    { connId: "c-read", socket: readSocket, scopes: ["operator.read"] },
+  ]);
+}
+
+function makeScopedBroadcastClients() {
+  const pairingSocket = makeRecordingSocket();
+  const nodeSocket = makeRecordingSocket();
+  const readSocket = makeRecordingSocket();
+  const talkSocket = makeRecordingSocket();
+  const writeSocket = makeRecordingSocket();
+  const adminSocket = makeRecordingSocket();
+  const clients = new GatewayClientRegistry([
+    makeOperatorWsClient("c-pairing", pairingSocket, ["operator.pairing"]),
+    makeGatewayWsClient("c-node", nodeSocket, {
+      role: "node",
+      scopes: ["operator.read"],
+    } as GatewayWsClient["connect"]),
+    makeOperatorWsClient("c-read", readSocket, ["operator.read"]),
+    makeOperatorWsClient("c-talk", talkSocket, ["operator.talk"]),
+    makeOperatorWsClient("c-write", writeSocket, ["operator.write"]),
+    makeOperatorWsClient("c-admin", adminSocket, ["operator.admin"]),
+  ]);
+
+  return { pairingSocket, nodeSocket, readSocket, talkSocket, writeSocket, adminSocket, clients };
+}
+
 function makeScopedBroadcastContext() {
-  const sockets = {
-    pairing: makeRecordingSocket(),
-    node: makeRecordingSocket(),
-    read: makeRecordingSocket(),
-    talk: makeRecordingSocket(),
-    write: makeRecordingSocket(),
-    admin: makeRecordingSocket(),
-    questions: makeRecordingSocket(),
-  };
-  const clients = new GatewayClientRegistry(
-    Object.entries(sockets).map(([scope, socket]) =>
-      scope === "node"
-        ? makeGatewayWsClient("c-node", socket, {
-            role: "node",
-            scopes: ["operator.read"],
-          } as GatewayWsClient["connect"])
-        : makeOperatorWsClient(`c-${scope}`, socket, [`operator.${scope}`]),
-    ),
-  );
-  return {
-    sockets,
-    ...createGatewayBroadcaster({
-      clients,
-      preparePresenceProjection: (presence) => () => presence,
-    }),
-  };
+  const scoped = makeScopedBroadcastClients();
+  const broadcaster = createGatewayBroadcaster({
+    clients: scoped.clients,
+    preparePresenceProjection: (presence) => () => presence,
+  });
+  return { ...scoped, ...broadcaster };
 }
 
 function sentEvents(socket: RecordingSocket) {
   return socket.sent.map((frame) => frame.event);
 }
 
-function expectSentEvents(events: string[], ...sockets: RecordingSocket[]) {
-  for (const socket of sockets) {
-    expect(socket.send).toHaveBeenCalledTimes(events.length);
-    expect(sentEvents(socket)).toEqual(events);
-  }
+function expectSentEvents(socket: RecordingSocket, events: string[]) {
+  expect(sentEvents(socket)).toEqual(events);
 }
 
 function sentEventSeq(socket: RecordingSocket) {
@@ -206,7 +246,28 @@ function chatSideResultPayload() {
   return { sessionKey: "agent:main:main", text: "tool output" };
 }
 
+function broadcastChatClassEvents(
+  broadcast: ReturnType<typeof createGatewayBroadcaster>["broadcast"],
+) {
+  broadcast("chat", chatPayload());
+  broadcast("agent", { type: "status", sessionKey: "agent:main:main" });
+  broadcast("chat.send_timing", { phase: "dispatch-started", runId: "run-1" });
+  broadcast("chat.side_result", chatSideResultPayload());
+}
+
 describe("gateway broadcaster", () => {
+  it("exposes current buffered bytes for a targeted connection", () => {
+    const socket = makeRecordingSocket();
+    socket.bufferedAmount = 1234;
+    const client = makeOperatorWsClient("c-admin", socket, ["operator.admin"]);
+    const clients = new GatewayClientRegistry([client]);
+    const { getBufferedAmount } = createGatewayBroadcaster({ clients });
+
+    expect(getBufferedAmount("c-admin")).toBe(1234);
+    clients.delete(client);
+    expect(getBufferedAmount("c-admin")).toBeUndefined();
+  });
+
   it("closes a slow authoritative-session subscriber while delivering to healthy clients", () => {
     vi.useFakeTimers();
     const slowSocket = makeRecordingSocket();
@@ -363,56 +424,73 @@ describe("gateway broadcaster", () => {
     expect(adminSocket.send).toHaveBeenCalledTimes(3);
   });
 
-  it.each<{
-    name: string;
-    events: Record<string, unknown>;
-    allowed: string[];
-    scope?: GatewayPluginEventScope;
-  }>([
-    {
-      name: "requires operator.read for chat-class broadcast events",
-      events: {
-        chat: chatPayload(),
-        agent: { type: "status", sessionKey: "agent:main:main" },
-        "chat.send_timing": { phase: "dispatch-started", runId: "run-1" },
-        "chat.side_result": chatSideResultPayload(),
-      },
-      allowed: ["read", "write", "admin"],
-    },
-    {
-      name: "requires operator.questions for question broadcasts",
-      events: {
-        "question.requested": { id: "question-1" },
-        "question.resolved": { id: "question-1", status: "expired" },
-      },
-      allowed: ["questions", "admin"],
-    },
-    {
-      name: "allows plugin.* broadcast events for operator.write and operator.admin",
-      events: {
-        "plugin.myplugin.custom": { data: "test" },
-        "plugin.otherplugin.state": { state: "updated" },
-      },
-      allowed: ["write", "admin"],
-    },
-    {
-      name: "honors explicit read scope for plugin lifecycle events",
-      events: { "plugin.workboard.changed": { revision: 1 } },
-      allowed: ["read", "write", "admin"],
-      scope: "operator.read",
-    },
-  ])("$name", ({ events, allowed, scope }) => {
-    const { sockets, broadcast, broadcastPluginEvent } = makeScopedBroadcastContext();
-    for (const [event, payload] of Object.entries(events)) {
-      if (scope) {
-        broadcastPluginEvent(event, payload, scope);
-      } else {
-        broadcast(event, payload);
-      }
-    }
-    for (const [role, socket] of Object.entries(sockets)) {
-      expectSentEvents(allowed.includes(role) ? Object.keys(events) : [], socket);
-    }
+  it("requires operator.read for chat-class broadcast events", () => {
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
+      makeScopedBroadcastContext();
+
+    broadcastChatClassEvents(broadcast);
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expect(readSocket.send).toHaveBeenCalledTimes(4);
+    expect(writeSocket.send).toHaveBeenCalledTimes(4);
+    expect(adminSocket.send).toHaveBeenCalledTimes(4);
+    const expectedEvents = ["chat", "agent", "chat.send_timing", "chat.side_result"];
+    expectSentEvents(readSocket, expectedEvents);
+    expectSentEvents(writeSocket, expectedEvents);
+    expectSentEvents(adminSocket, expectedEvents);
+  });
+
+  it("requires operator.questions for question broadcasts", () => {
+    const questionSocket = makeRecordingSocket();
+    const readSocket = makeRecordingSocket();
+    const clients = new GatewayClientRegistry([
+      makeOperatorWsClient("c-questions", questionSocket, ["operator.questions"]),
+      makeOperatorWsClient("c-read", readSocket, ["operator.read"]),
+    ]);
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("question.requested", { id: "question-1" });
+    broadcast("question.resolved", { id: "question-1", status: "expired" });
+
+    expect(questionSocket.send).toHaveBeenCalledTimes(2);
+    expect(readSocket.send).not.toHaveBeenCalled();
+  });
+
+  it("allows plugin.* broadcast events for operator.write and operator.admin", () => {
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
+      makeScopedBroadcastContext();
+
+    broadcast("plugin.myplugin.custom", { data: "test" });
+    broadcast("plugin.otherplugin.state", { state: "updated" });
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expect(readSocket.send).not.toHaveBeenCalled();
+    expect(writeSocket.send).toHaveBeenCalledTimes(2);
+    expect(adminSocket.send).toHaveBeenCalledTimes(2);
+    const expectedEvents = ["plugin.myplugin.custom", "plugin.otherplugin.state"];
+    expectSentEvents(writeSocket, expectedEvents);
+    expectSentEvents(adminSocket, expectedEvents);
+  });
+
+  it("honors explicit read scope for plugin lifecycle events", () => {
+    const {
+      pairingSocket,
+      nodeSocket,
+      readSocket,
+      writeSocket,
+      adminSocket,
+      broadcastPluginEvent,
+    } = makeScopedBroadcastContext();
+
+    broadcastPluginEvent("plugin.workboard.changed", { revision: 1 }, "operator.read");
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expectSentEvents(readSocket, ["plugin.workboard.changed"]);
+    expectSentEvents(writeSocket, ["plugin.workboard.changed"]);
+    expectSentEvents(adminSocket, ["plugin.workboard.changed"]);
   });
 
   it("rejects invalid or reserved plugin event broadcasts", () => {
@@ -435,7 +513,15 @@ describe("gateway broadcaster", () => {
   });
 
   it("defaults unknown events to deny and classifies remaining gateway broadcast events", () => {
-    const { sockets: s, broadcast } = makeScopedBroadcastContext();
+    const {
+      pairingSocket,
+      nodeSocket,
+      readSocket,
+      talkSocket,
+      writeSocket,
+      adminSocket,
+      broadcast,
+    } = makeScopedBroadcastContext();
 
     broadcast("cron", { jobId: "job-1" });
     broadcast("talk.mode", { enabled: true });
@@ -455,20 +541,33 @@ describe("gateway broadcaster", () => {
     });
     broadcast("unknown.future.event", { hidden: true });
 
-    const publicEvents = ["heartbeat", "health", "tick", "shutdown", "update.available"];
-    expectSentEvents(publicEvents, s.pairing, s.node);
-    expectSentEvents(
-      [
-        "cron",
-        "voicewake.changed",
-        "voicewake.routing.changed",
-        publicEvents[0]!,
-        "presence",
-        ...publicEvents.slice(1),
-      ],
-      s.read,
-    );
-    expectSentEvents(["talk.mode", ...publicEvents], s.talk);
+    expectSentEvents(pairingSocket, [
+      "heartbeat",
+      "health",
+      "tick",
+      "shutdown",
+      "update.available",
+    ]);
+    expectSentEvents(nodeSocket, ["heartbeat", "health", "tick", "shutdown", "update.available"]);
+    expectSentEvents(readSocket, [
+      "cron",
+      "voicewake.changed",
+      "voicewake.routing.changed",
+      "heartbeat",
+      "presence",
+      "health",
+      "tick",
+      "shutdown",
+      "update.available",
+    ]);
+    expectSentEvents(talkSocket, [
+      "talk.mode",
+      "heartbeat",
+      "health",
+      "tick",
+      "shutdown",
+      "update.available",
+    ]);
     const writeVisibleEvents = [
       "cron",
       "talk.mode",
@@ -481,17 +580,18 @@ describe("gateway broadcaster", () => {
       "shutdown",
       "update.available",
     ];
-    expectSentEvents(writeVisibleEvents, s.write, s.admin);
+    expectSentEvents(writeSocket, writeVisibleEvents);
+    expectSentEvents(adminSocket, writeVisibleEvents);
   });
 
   it("keeps event seq contiguous per receiving client when scoped events are filtered", () => {
     const pairingSocket = makeRecordingSocket();
     const readSocket = makeRecordingSocket();
 
-    const clients = makeOperatorWsClients([
+    const clients = makeReadPairClients(
       { connId: "c-pairing", socket: pairingSocket, scopes: ["operator.pairing"] },
-      { connId: "c-read", socket: readSocket, scopes: ["operator.read"] },
-    ]);
+      readSocket,
+    );
 
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
       clients,
@@ -541,138 +641,116 @@ describe("gateway broadcaster", () => {
     broadcast("chat", payload);
 
     expect(payloadKeys).toEqual(["payload"]);
-    const lastFrames = [firstSocket, secondSocket, thirdSocket].map((socket) => socket.sent.at(-1));
-    expect(lastFrames.map((frame) => frame?.payload)).toEqual([
-      { foo: "payload" },
-      { foo: "payload" },
-      { foo: "payload" },
-    ]);
-    expect(lastFrames.map((frame) => frame?.seq)).toEqual([1, 2, 2]);
+    expect(firstSocket.sent.at(-1)?.payload).toEqual({ foo: "payload" });
+    expect(secondSocket.sent.at(-1)?.payload).toEqual({ foo: "payload" });
+    expect(thirdSocket.sent.at(-1)?.payload).toEqual({ foo: "payload" });
+    expect([
+      firstSocket.sent.at(-1)?.seq,
+      secondSocket.sent.at(-1)?.seq,
+      thirdSocket.sent.at(-1)?.seq,
+    ]).toEqual([1, 2, 2]);
   });
 });
 
-test("chat run registry queues and removes runs per session", () => {
-  const registry = createChatRunState().registry;
+describe("chat run registry", () => {
+  test("queues and removes runs per session", () => {
+    const registry = createChatRunState().registry;
 
-  registry.add("s1", { sessionKey: "main", clientRunId: "c1" });
-  registry.add("s1", { sessionKey: "main", clientRunId: "c2" });
+    registry.add("s1", { sessionKey: "main", clientRunId: "c1" });
+    registry.add("s1", { sessionKey: "main", clientRunId: "c2" });
 
-  expect(registry.peek("s1")?.clientRunId).toBe("c1");
-  expect(registry.shift("s1")?.clientRunId).toBe("c1");
-  expect(registry.peek("s1")?.clientRunId).toBe("c2");
+    expect(registry.peek("s1")?.clientRunId).toBe("c1");
+    expect(registry.shift("s1")?.clientRunId).toBe("c1");
+    expect(registry.peek("s1")?.clientRunId).toBe("c2");
 
-  expect(registry.remove("s1", "c2")?.clientRunId).toBe("c2");
-  expect(registry.peek("s1")).toBeUndefined();
+    expect(registry.remove("s1", "c2")?.clientRunId).toBe("c2");
+    expect(registry.peek("s1")).toBeUndefined();
+  });
 });
 
-test("returns success for late unknown invoke ids for both success and error payloads", async () => {
-  const nodeId = "node-123";
-  const cases = [
-    {
-      id: "unknown-invoke-id-12345",
-      ok: true,
-      payloadJSON: JSON.stringify({ result: "late" }),
-    },
-    {
-      id: "another-unknown-invoke-id",
-      ok: false,
-      error: { code: "FAILED", message: "test error" },
-    },
-  ] as const;
+describe("late-arriving invoke results", () => {
+  test("returns success for unknown invoke ids for both success and error payloads", async () => {
+    const nodeId = "node-123";
+    const cases = [
+      {
+        id: "unknown-invoke-id-12345",
+        ok: true,
+        payloadJSON: JSON.stringify({ result: "late" }),
+      },
+      {
+        id: "another-unknown-invoke-id",
+        ok: false,
+        error: { code: "FAILED", message: "test error" },
+      },
+    ] as const;
 
-  for (const params of cases) {
-    const respond = vi.fn<GatewayMethodTypes.RespondFn>();
-    const context = {
-      nodeRegistry: { handleInvokeResult: () => false },
-      logGateway: { debug: vi.fn() },
-    } as unknown as GatewayMethodTypes.GatewayRequestContext;
-    const client = {
-      connect: { device: { id: nodeId } },
-    } as unknown as GatewayMethodTypes.GatewayClient;
+    for (const params of cases) {
+      const respond = vi.fn<GatewayMethodTypes.RespondFn>();
+      const context = {
+        nodeRegistry: { handleInvokeResult: () => false },
+        logGateway: { debug: vi.fn() },
+      } as unknown as GatewayMethodTypes.GatewayRequestContext;
+      const client = {
+        connect: { device: { id: nodeId } },
+      } as unknown as GatewayMethodTypes.GatewayClient;
 
-    await handleNodeInvokeResult({
-      req: { method: "node.invoke.result" } as unknown as RequestFrame,
-      params: { ...params, nodeId } as unknown as Record<string, unknown>,
-      client,
-      isWebchatConnect: () => false,
-      respond,
-      context,
-    });
+      await handleNodeInvokeResult({
+        req: { method: "node.invoke.result" } as unknown as RequestFrame,
+        params: { ...params, nodeId } as unknown as Record<string, unknown>,
+        client,
+        isWebchatConnect: () => false,
+        respond,
+        context,
+      });
 
-    expect(respond.mock.lastCall).toEqual([true, { ok: true, ignored: true }, undefined]);
-  }
+      const [ok, rawPayload, error] = respond.mock.lastCall ?? [];
+      const payload = rawPayload as { ok?: boolean; ignored?: boolean } | undefined;
+
+      // Late-arriving results return success instead of error to reduce log noise.
+      expect(ok).toBe(true);
+      expect(error).toBeUndefined();
+      expect(payload?.ok).toBe(true);
+      expect(payload?.ignored).toBe(true);
+    }
+  });
 });
 
 describe("resolveNodeCommandAllowlist", () => {
-  it.each<
-    [
-      name: string,
-      metadata: Parameters<typeof resolveNodeCommandAllowlist>[1],
-      allowed: string[],
-      denied: string[],
-      config?: Parameters<typeof resolveNodeCommandAllowlist>[0],
-    ]
-  >([
-    [
-      "includes Android notifications and diagnostics by default",
-      { platform: "Android 16", deviceFamily: "Android" },
-      [
-        "notifications.list",
-        "notifications.actions",
-        "device.permissions",
-        "device.health",
-        "device.apps",
-        "callLog.search",
-        "system.notify",
-      ],
-      ["sms.search"],
-    ],
-    [
-      "allows safe Windows commands but gates dangerous media",
+  function expectAllowed(allow: { has: (cmd: string) => boolean }, commands: string[]) {
+    for (const cmd of commands) {
+      expect(allow.has(cmd)).toBe(true);
+    }
+  }
+
+  function expectDenied(allow: { has: (cmd: string) => boolean }, commands: string[]) {
+    for (const cmd of commands) {
+      expect(allow.has(cmd)).toBe(false);
+    }
+  }
+
+  function expectDangerousCommandsDenied(allow: { has: (cmd: string) => boolean }) {
+    expectDenied(allow, DEFAULT_DANGEROUS_NODE_COMMANDS);
+  }
+
+  it("includes Android notifications and device diagnostics commands by default", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {},
       {
-        platform: "windows",
-        deviceFamily: "Windows",
-        approvedCommands: ["screen.snapshot", "system.run", "system.which"],
+        platform: "Android 16",
+        deviceFamily: "Android",
       },
-      [
-        "camera.list",
-        "location.get",
-        "device.info",
-        "device.status",
-        "screen.snapshot",
-        "system.run",
-        "system.which",
-        "system.notify",
-      ],
-      ["canvas.present", "canvas.a2ui.pushJSONL", ...DEFAULT_DANGEROUS_NODE_COMMANDS],
-    ],
-    [
-      "can explicitly allow dangerous commands",
-      { platform: "ios", deviceFamily: "iPhone" },
-      ["camera.snap", "screen.record"],
-      ["camera.clip"],
-      { gateway: { nodes: { commands: { allow: ["camera.snap", "screen.record"] } } } },
-    ],
-    [
-      "fails safe for unknown/confusable metadata",
-      { platform: "iPhοne", deviceFamily: "iPhοne" },
-      ["system.notify"],
-      ["system.run", "system.which"],
-    ],
-    [
-      "normalizes dotted-I platform values to iOS",
-      { platform: "İOS", deviceFamily: "iPhone" },
-      ["device.info"],
-      ["system.run", "system.which"],
-    ],
-  ])("%s", (_name, metadata, allowed, denied, config = {}) => {
-    const allow = resolveNodeCommandAllowlist(config, metadata);
-    for (const command of allowed) {
-      expect(allow.has(command), command).toBe(true);
-    }
-    for (const command of denied) {
-      expect(allow.has(command), command).toBe(false);
-    }
+    );
+
+    expectAllowed(allow, [
+      "notifications.list",
+      "notifications.actions",
+      "device.permissions",
+      "device.health",
+      "device.apps",
+      "callLog.search",
+      "system.notify",
+    ]);
+    expectDenied(allow, ["sms.search"]);
   });
 
   it("allows macOS screen.snapshot by default but keeps screen.record gated", () => {
@@ -684,11 +762,78 @@ describe("resolveNodeCommandAllowlist", () => {
         approvedCommands: ["screen.snapshot"],
       },
     );
+
     expect(DEFAULT_DANGEROUS_NODE_COMMANDS).not.toContain("screen.snapshot");
-    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toEqual(
-      expect.arrayContaining(["screen.record", "health.summary"]),
+    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("screen.record");
+    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("health.summary");
+    expect(allow.has("screen.snapshot")).toBe(true);
+    expect(allow.has("screen.record")).toBe(false);
+  });
+
+  it("allows safe Windows companion commands by default but keeps dangerous media gated", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {},
+      {
+        platform: "windows",
+        deviceFamily: "Windows",
+        approvedCommands: ["screen.snapshot", "system.run", "system.which"],
+      },
     );
-    expect([allow.has("screen.snapshot"), allow.has("screen.record")]).toEqual([true, false]);
+
+    expectDenied(allow, ["canvas.present", "canvas.a2ui.pushJSONL"]);
+    expectAllowed(allow, [
+      "camera.list",
+      "location.get",
+      "device.info",
+      "device.status",
+      "screen.snapshot",
+      "system.run",
+      "system.which",
+      "system.notify",
+    ]);
+    expectDangerousCommandsDenied(allow);
+  });
+
+  it("can explicitly allow dangerous commands via commands.allow", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {
+        gateway: {
+          nodes: {
+            commands: { allow: ["camera.snap", "screen.record"] },
+          },
+        },
+      },
+      { platform: "ios", deviceFamily: "iPhone" },
+    );
+    expect(allow.has("camera.snap")).toBe(true);
+    expect(allow.has("screen.record")).toBe(true);
+    expect(allow.has("camera.clip")).toBe(false);
+  });
+
+  it("treats unknown/confusable metadata as fail-safe for system.run defaults", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {},
+      {
+        platform: "iPhοne",
+        deviceFamily: "iPhοne",
+      },
+    );
+
+    expectDenied(allow, ["system.run", "system.which"]);
+    expectAllowed(allow, ["system.notify"]);
+  });
+
+  it("normalizes dotted-I platform values to iOS classification", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {},
+      {
+        platform: "İOS",
+        deviceFamily: "iPhone",
+      },
+    );
+
+    expectDenied(allow, ["system.run", "system.which"]);
+    expectAllowed(allow, ["device.info"]);
   });
 });
 

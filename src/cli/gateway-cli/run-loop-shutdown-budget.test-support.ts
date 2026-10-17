@@ -14,7 +14,7 @@ import {
   type UpdateRespawnFixtures,
 } from "./run-loop.test-support.js";
 
-const delay = (ms: number) =>
+const delay = (ms?: number) =>
   new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });

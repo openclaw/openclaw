@@ -122,7 +122,8 @@ export async function startPackageLifecycleStopFixture(params: {
       await expect(host.request("stop", () => {})).resolves.toMatchObject({ ok: false });
       expectCallCount(1, fixtures.hostedStopPrepare, fixtures.captureForegroundUpdateHandoffStop);
       expect(params.isServing()).toBe(true);
-      expectUncalled(close, hostedExecute, hostedDispose, runtime.exit);
+      expect(close).not.toHaveBeenCalled();
+      expectUncalled(hostedExecute, hostedDispose, runtime.exit);
     },
     expectHostedCompleted() {
       expectCallCount(1, hostedExecute, hostedDispose);

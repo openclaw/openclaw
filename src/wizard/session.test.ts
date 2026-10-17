@@ -36,8 +36,7 @@ describe("WizardSession", () => {
       const session = new WizardSession(async (prompter) => {
         confirmed = await prompter.confirm({ message: "Continue?", initialValue: false });
       });
-      const step = (await session.next()).step;
-      assertStep(step);
+      const step = await nextStep(session);
       await session.answer(step.id, answer);
       await session.whenSettled();
       expect(confirmed).toBe(answer === true);
@@ -73,21 +72,18 @@ describe("WizardSession", () => {
     const secondPeek = await session.next();
     expect(secondPeek.step?.id).toBe(first.step?.id);
 
-    assertStep(first.step);
-    await session.answer(first.step.id, null);
+    await session.answer(expectDefined(first.step, "wizard step").id, null);
 
     const second = await session.next();
     expect(second.done).toBe(false);
     expect(second.step?.type).toBe("text");
 
-    assertStep(second.step);
-    await session.answer(second.step.id, "Peter");
+    await session.answer(expectDefined(second.step, "wizard step").id, "Peter");
 
     const third = await session.next();
     expect(third.step?.type).toBe("note");
 
-    assertStep(third.step);
-    await session.answer(third.step.id, null);
+    await session.answer(expectDefined(third.step, "wizard step").id, null);
 
     const done = await session.next();
     expect(done.done).toBe(true);
@@ -388,7 +384,9 @@ describe("WizardSession", () => {
 
   test("expires an abandoned interactive session", async () => {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const session = new WizardSession(
       async (prompter) => {
         await prompter.text({ message: "Name" });

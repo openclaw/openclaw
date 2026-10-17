@@ -64,7 +64,7 @@ async function createDeletionFixture() {
   return {
     workspace,
     storePath,
-    async cleanup(worktreeId?: string) {
+    async cleanup(this: void, worktreeId?: string) {
       if (worktreeId && getRegistryWorktree(process.env, worktreeId)?.removedAt === undefined) {
         await managedWorktrees.remove({
           id: worktreeId,

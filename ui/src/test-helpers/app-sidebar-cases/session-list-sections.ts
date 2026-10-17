@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
-import { createGateway, TWO_AGENTS } from "../app-sidebar.ts";
+import {
+  createGateway,
+  createSessions,
+  createSessionsHarness,
+  mountSidebar,
+  TWO_AGENTS,
+} from "../app-sidebar.ts";
 import { settleLitElement } from "../lit-settle.ts";
-import { sessionFixture, sessionList, sessionQuery } from "./session-suite.test-support.ts";
 import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar session section visibility", () => {
@@ -45,19 +50,32 @@ describe("AppSidebar session section visibility", () => {
   });
 
   it("keeps global session actions when every unpinned thread has a custom group", async () => {
-    const harness = sessionFixture([
+    const harness = createSessionsHarness("main", [
       "agent:main:main",
       "agent:main:research",
       "agent:main:operations",
     ]);
-    harness.row("agent:main:research").category = "Research";
-    harness.row("agent:main:operations").category = "Operations";
+    const result = harness.sessions.state.result;
+    if (!result) {
+      throw new Error("expected categorized session fixtures");
+    }
+    for (const row of result.sessions) {
+      if (row.key === "agent:main:research") {
+        row.category = "Research";
+      }
+      if (row.key === "agent:main:operations") {
+        row.category = "Operations";
+      }
+    }
     harness.publish({ groups: ["Research", "Operations"] });
 
-    const { sidebar } = await harness.mount();
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    const threads = sidebar.querySelector('[data-session-section="ungrouped"]');
+
     expect(sidebar.querySelector('[data-session-section="category:Research"]')).not.toBeNull();
     expect(sidebar.querySelector('[data-session-section="category:Operations"]')).not.toBeNull();
-    expect(sidebar.querySelector('[data-session-section="ungrouped"]')).toBeNull();
+    expect(threads).toBeNull();
 
     const toolbar = sidebar.querySelector(".sidebar-session-toolbar");
     expect(toolbar?.querySelector(".sidebar-recent-sessions__label-text")?.textContent).toBe(
@@ -141,12 +159,14 @@ describe("AppSidebar session section visibility", () => {
   });
 
   it("persists hiding empty groups without hiding collapsed populated groups", async () => {
-    const harness = sessionFixture(["agent:main:main", "agent:main:alpha"]);
-    const alpha = harness.row("agent:main:alpha");
+    const harness = createSessionsHarness("main", ["agent:main:main", "agent:main:alpha"]);
+    const alpha = harness.sessions.state.result!.sessions.find(
+      (row) => row.key === "agent:main:alpha",
+    )!;
     alpha.category = "Alpha";
     harness.publish({ groups: ["Empty", "Alpha"] });
     const gateway = createGateway({} as GatewayBrowserClient);
-    const mounted = await harness.mount(gateway);
+    const mounted = await mountSidebar(gateway, harness.sessions);
     let sidebar = mounted.sidebar;
     sidebar.sessionOrganizer.saveCollapsedSessionSections(new Set(["category:Alpha"]));
     await sidebar.updateComplete;
@@ -155,27 +175,37 @@ describe("AppSidebar session section visibility", () => {
       [...sidebar.querySelectorAll("[data-session-section^='category:']")].map((group) =>
         group.getAttribute("data-session-section"),
       );
+    const chooseEmptyGroups = async (mode: "filtering" | "always" | "never") => {
+      await activateSessionMenuValue(sidebar, `empty-groups:${mode}`);
+    };
+
     expect(groupNames()).toEqual(["category:Empty", "category:Alpha"]);
-    await activateSessionMenuValue(sidebar, "empty-groups:always");
+    await chooseEmptyGroups("always");
     expect(groupNames()).toEqual(["category:Alpha"]);
 
     mounted.provider.remove();
-    ({ sidebar } = await harness.mount(gateway));
+    ({ sidebar } = await mountSidebar(gateway, harness.sessions));
     expect(groupNames()).toEqual(["category:Alpha"]);
-    expect(sessionQuery(sidebar, "agent:main:alpha")).toBeNull();
+    expect(sidebar.querySelector('[data-session-key="agent:main:alpha"]')).toBeNull();
 
     // Membership changes reveal and hide groups without changing the preference.
     alpha.category = "Empty";
     harness.publish({ groups: ["Empty", "Alpha"] });
     await settleLitElement(sidebar);
     expect(groupNames()).toEqual(["category:Empty"]);
-    await activateSessionMenuValue(sidebar, "empty-groups:never");
+    await chooseEmptyGroups("never");
     expect(groupNames()).toEqual(["category:Empty", "category:Alpha"]);
   });
 
   it("renders no chat rows when only the main session exists", async () => {
-    const { sidebar } = await sessionFixture(["agent:main:main"]).mount(undefined, TWO_AGENTS);
-    sidebar.activeRouteId = "chat";
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      TWO_AGENTS,
+    );
+    (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
     await sidebar.updateComplete;
 
     // The identity card is the main-session entry; the list stays empty.
@@ -185,25 +215,31 @@ describe("AppSidebar session section visibility", () => {
 
   it("keeps a selected child reachable when its parent is outside the loaded window", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
-    const harness = sessionFixture(["agent:main:child"]);
-    const { sidebar, query } = await harness.mount(gateway);
+    const harness = createSessionsHarness("main", ["agent:main:child"]);
+    const { sidebar } = await mountSidebar(gateway, harness.sessions);
     harness.publishList({
-      result: sessionList([
-        {
-          key: "agent:main:child",
-          spawnedBy: "agent:main:missing-parent",
-          kind: "direct",
-          label: "Reachable orphan",
-          updatedAt: 2,
-          status: "done",
-        },
-      ]),
+      result: {
+        ts: 2,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:child",
+            spawnedBy: "agent:main:missing-parent",
+            kind: "direct",
+            label: "Reachable orphan",
+            updatedAt: 2,
+            status: "done",
+          },
+        ],
+      },
     });
-    sidebar.activeRouteId = "chat";
+    (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
     sidebar.sessionKey = "agent:main:child";
     await sidebar.updateComplete;
 
-    const row = query("agent:main:child");
+    const row = sidebar.querySelector('[data-session-key="agent:main:child"]');
     expect(row?.textContent).toContain("Reachable orphan");
     expect(row?.classList.contains("sidebar-recent-session--child")).toBe(false);
   });

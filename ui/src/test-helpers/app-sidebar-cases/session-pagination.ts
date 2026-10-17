@@ -9,42 +9,25 @@ import {
   createSessionState,
   mountSidebar,
   TWO_AGENTS,
-  type SidebarLifecycleState,
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
-import { sessionFixture, sessionResult } from "./session-suite.test-support.ts";
 import "../../components/app-sidebar.tsx";
-
-const statusFilter = "archived";
-const pageKeys = Array.from({ length: 61 }, (_, index) => `agent:main:session-${index}`);
-
-function useArchived(sidebar: SidebarLifecycleState) {
-  sidebar.sessionsStatusFilter = statusFilter;
-  sidebar.sessionData.resetSessionList();
-}
-
-function page(offset: number, archived = false, cursor = true) {
-  const result = sessionResult(pageKeys.slice(offset, offset + 60));
-  return {
-    ...result,
-    sessions: archived ? result.sessions.map((row) => ({ ...row, archived })) : result.sessions,
-    totalCount: 61,
-    ...(offset === 0 || cursor ? { limitApplied: 60 } : {}),
-    ...(cursor || offset !== 0 ? { offset } : {}),
-    nextOffset: cursor || offset !== 0 ? (offset === 0 ? 60 : null) : undefined,
-    hasMore: offset === 0,
-  };
-}
 
 describe("AppSidebar gateway session pagination", () => {
   it("refreshes the archived sidebar once when another client changes sessions", async () => {
-    const harness = sessionFixture(["agent:main:canonical-active"]);
-    const firstResult = sessionResult(["agent:main:before-remote-change"]);
-    const changedResult = sessionResult(["agent:main:after-remote-change"]);
+    const statusFilter = "archived";
+    const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
+    const firstResult = createSessionState("main", ["agent:main:before-remote-change"]).result;
+    const changedResult = createSessionState("main", ["agent:main:after-remote-change"]).result;
+    if (!firstResult || !changedResult) {
+      throw new Error("expected filtered session results");
+    }
     harness.list.mockResolvedValue(firstResult);
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
-    const { sidebar } = await harness.mount(gateway.gateway);
-    useArchived(sidebar);
+    const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
+    (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
+      statusFilter;
+    sidebar.sessionData.resetSessionList();
     await sidebar.sessionData.refreshSidebarSessions("main");
     harness.list.mockClear();
     harness.list.mockResolvedValue(changedResult);
@@ -72,13 +55,17 @@ describe("AppSidebar gateway session pagination", () => {
   });
 
   it("keeps every loaded archived sidebar page after another client's session event", async () => {
+    const statusFilter = "archived";
     const pageSize = SIDEBAR_SESSION_ROSTER_LIMIT;
     const keys = Array.from({ length: pageSize * 2 }, (_, index) => `agent:main:session-${index}`);
-    const harness = sessionFixture(["agent:main:canonical-active"]);
+    const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
     harness.list.mockImplementation(async (options) => {
       const offset = options?.offset ?? 0;
       const limit = options?.limit ?? pageSize;
-      const sessions = sessionResult(keys.slice(offset, offset + limit));
+      const sessions = createSessionState("main", keys.slice(offset, offset + limit)).result;
+      if (!sessions) {
+        throw new Error("expected a paginated filtered session result");
+      }
       const nextOffset = offset + sessions.sessions.length;
       const hasMore = nextOffset < keys.length;
       return {
@@ -89,8 +76,10 @@ describe("AppSidebar gateway session pagination", () => {
       };
     });
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
-    const { sidebar } = await harness.mount(gateway.gateway);
-    useArchived(sidebar);
+    const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
+    (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
+      statusFilter;
+    sidebar.sessionData.resetSessionList();
     await sidebar.sessionData.refreshSidebarSessions("main");
     await sidebar.sessionData.loadMoreSidebarSessions();
     expect(sidebar.sessionData.sessionsResult?.sessions).toHaveLength(pageSize * 2);
@@ -116,13 +105,19 @@ describe("AppSidebar gateway session pagination", () => {
   });
 
   it("keeps a pending archived first page across a stable same-client Gateway notification", async () => {
-    const harness = sessionFixture(["agent:main:canonical-active"]);
-    const result = sessionResult(["agent:main:current-archive"]);
+    const statusFilter = "archived";
+    const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
+    const result = createSessionState("main", ["agent:main:current-archive"]).result;
+    if (!result) {
+      throw new Error("expected a scoped session result");
+    }
     const pendingPage = deferred<typeof result>();
     harness.list.mockImplementation(async () => await pendingPage.promise);
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
-    const { sidebar } = await harness.mount(gateway.gateway);
-    useArchived(sidebar);
+    const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
+    (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
+      statusFilter;
+    sidebar.sessionData.resetSessionList();
 
     const pendingRefresh = sidebar.sessionData.refreshSidebarSessions("main");
     const generation = sidebar.sessionData.sessionScopeGeneration;
@@ -144,15 +139,26 @@ describe("AppSidebar gateway session pagination", () => {
   });
 
   it("retires a pending archived first page when the selected agent changes", async () => {
-    const harness = sessionFixture(["agent:main:canonical-active"]);
-    const mainResult = sessionResult(["agent:main:stale-archive"]);
-    const researchResult = sessionResult(["agent:research:current"], "research");
+    const statusFilter = "archived";
+    const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
+    const mainResult = createSessionState("main", ["agent:main:stale-archive"]).result;
+    const researchResult = createSessionState("research", ["agent:research:current"]).result;
+    if (!mainResult || !researchResult) {
+      throw new Error("expected scoped session results");
+    }
     const pendingMain = deferred<typeof mainResult>();
     harness.list.mockImplementation(async (options) =>
       options?.agentId === "research" ? researchResult : await pendingMain.promise,
     );
-    const { sidebar, context } = await harness.mount(undefined, TWO_AGENTS);
-    useArchived(sidebar);
+    const { sidebar, context } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      harness.sessions,
+      "panel",
+      TWO_AGENTS,
+    );
+    (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
+      statusFilter;
+    sidebar.sessionData.resetSessionList();
 
     const staleRefresh = sidebar.sessionData.refreshSidebarSessions("main");
     context.agentSelection.state.selectedId = "research";
@@ -175,16 +181,22 @@ describe("AppSidebar gateway session pagination", () => {
   });
 
   it("retires a pending archived first page across a same-client reconnect", async () => {
-    const harness = sessionFixture(["agent:main:canonical-active"]);
-    const staleResult = sessionResult(["agent:main:before-reconnect"]);
-    const freshResult = sessionResult(["agent:main:after-reconnect"]);
+    const statusFilter = "archived";
+    const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
+    const staleResult = createSessionState("main", ["agent:main:before-reconnect"]).result;
+    const freshResult = createSessionState("main", ["agent:main:after-reconnect"]).result;
+    if (!staleResult || !freshResult) {
+      throw new Error("expected reconnect session results");
+    }
     const pendingPage = deferred<typeof staleResult>();
     harness.list
       .mockImplementationOnce(async () => await pendingPage.promise)
       .mockResolvedValue(freshResult);
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
-    const { sidebar } = await harness.mount(gateway.gateway);
-    useArchived(sidebar);
+    const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
+    (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
+      statusFilter;
+    sidebar.sessionData.resetSessionList();
 
     const staleRefresh = sidebar.sessionData.refreshSidebarSessions("main");
     gateway.publish({ phase: "reconnecting" });
@@ -205,12 +217,31 @@ describe("AppSidebar gateway session pagination", () => {
   });
 
   it("does not append a stale archived page during a full session refresh", async () => {
-    const harness = sessionFixture(["agent:main:canonical-active"]);
-    const firstPage = page(0);
-    const nextResult = sessionResult(pageKeys.slice(60));
+    const statusFilter = "archived";
+    const keys = Array.from({ length: 61 }, (_, index) => `agent:main:session-${index}`);
+    const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
+    const firstResult = createSessionState("main", keys.slice(0, 60)).result;
+    const nextResult = createSessionState("main", keys.slice(60)).result;
+    if (!firstResult || !nextResult) {
+      throw new Error("expected paginated session results");
+    }
+    const firstPage = {
+      ...firstResult,
+      count: 60,
+      totalCount: 61,
+      limitApplied: 60,
+      offset: 0,
+      nextOffset: 60,
+      hasMore: true,
+    };
     harness.list.mockResolvedValue(firstPage);
-    const { sidebar } = await harness.mount();
-    useArchived(sidebar);
+    const { sidebar } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      harness.sessions,
+    );
+    (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
+      statusFilter;
+    sidebar.sessionData.resetSessionList();
     await sidebar.sessionData.refreshSidebarSessions("main");
     harness.list.mockClear();
 
@@ -277,7 +308,7 @@ describe("AppSidebar gateway session pagination", () => {
       harness.sessions,
     );
 
-    for (let expansion = 0; expansion < 5; expansion += 1) {
+    for (let page = 0; page < 5; page += 1) {
       const button = sidebar.querySelector<HTMLButtonElement>('button[aria-label="Show more"]');
       if (!button) {
         break;
@@ -367,14 +398,43 @@ describe("AppSidebar gateway session pagination", () => {
   });
 
   it("derives the archived page offset when the Gateway omits its optional cursor", async () => {
-    const harness = sessionFixture(["agent:main:canonical-active"]);
-    const firstPage = page(0, true, false);
-    const nextPage = page(60, true, false);
+    const statusFilter = "archived";
+    const keys = Array.from({ length: 61 }, (_, index) => `agent:main:session-${index}`);
+    const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
+    const firstResult = createSessionState("main", keys.slice(0, 60)).result;
+    const nextResult = createSessionState("main", keys.slice(60)).result;
+    if (!firstResult || !nextResult) {
+      throw new Error("expected paginated archived session results");
+    }
+    const archived = statusFilter === "archived";
+    const firstPage = {
+      ...firstResult,
+      sessions: firstResult.sessions.map((row) => Object.assign({}, row, { archived })),
+      count: 60,
+      totalCount: 61,
+      limitApplied: 60,
+      nextOffset: undefined,
+      hasMore: true,
+    };
+    const nextPage = {
+      ...nextResult,
+      sessions: nextResult.sessions.map((row) => Object.assign({}, row, { archived })),
+      count: 1,
+      totalCount: 61,
+      offset: 60,
+      nextOffset: null,
+      hasMore: false,
+    };
     harness.list.mockImplementation(async (options) =>
       options?.offset === 60 ? nextPage : firstPage,
     );
-    const { sidebar } = await harness.mount();
-    useArchived(sidebar);
+    const { sidebar } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      harness.sessions,
+    );
+    (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
+      statusFilter;
+    sidebar.sessionData.resetSessionList();
     await sidebar.sessionData.refreshSidebarSessions("main");
     harness.list.mockClear();
 
@@ -388,20 +448,52 @@ describe("AppSidebar gateway session pagination", () => {
 
   it.each(["archived", "all"] as const)(
     "loads the 61st %s session without replacing the canonical active list",
-    async (filter) => {
-      const harness = sessionFixture(["agent:main:canonical-active"]);
-      const firstPage = page(0, filter === "archived");
-      const nextPage = page(60, filter === "archived");
+    async (statusFilter) => {
+      const keys = Array.from({ length: 61 }, (_, index) => `agent:main:session-${index}`);
+      const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
+      const firstResult = createSessionState("main", keys.slice(0, 60)).result;
+      const nextResult = createSessionState("main", keys.slice(60)).result;
+      if (!firstResult || !nextResult) {
+        throw new Error("expected paginated session results");
+      }
+      const archived = statusFilter === "archived";
+      const firstPage = {
+        ...firstResult,
+        sessions: firstResult.sessions.map((row) => Object.assign({}, row, { archived })),
+        count: 60,
+        totalCount: 61,
+        limitApplied: 60,
+        offset: 0,
+        nextOffset: 60,
+        hasMore: true,
+      };
+      const nextPage = {
+        ...nextResult,
+        sessions: nextResult.sessions.map((row) => Object.assign({}, row, { archived })),
+        count: 1,
+        totalCount: 61,
+        limitApplied: 60,
+        offset: 60,
+        nextOffset: null,
+        hasMore: false,
+      };
       harness.list.mockImplementation(async (options) =>
         options?.offset === 60 ? nextPage : firstPage,
       );
-      const { sidebar, query } = await harness.mount();
-      sidebar.sessionsStatusFilter = filter;
+      const { sidebar } = await mountSidebar(
+        createGateway({} as GatewayBrowserClient),
+        harness.sessions,
+      );
+      (
+        sidebar as unknown as {
+          sessionsStatusFilter: "archived" | "all";
+        }
+      ).sessionsStatusFilter = statusFilter;
       sidebar.sessionData.resetSessionList();
       await sidebar.sessionData.refreshSidebarSessions("main");
       await sidebar.updateComplete;
 
-      for (let expansion = 0; expansion < 6; expansion += 1) {
+      for (let page = 0; page < 6; page += 1) {
         const button = sidebar.querySelector<HTMLButtonElement>('button[aria-label="Show more"]');
         if (!button) {
           break;
@@ -417,12 +509,12 @@ describe("AppSidebar gateway session pagination", () => {
       await sidebar.updateComplete;
 
       await waitForFast(() => {
-        expect(query("agent:main:session-60")).not.toBeNull();
+        expect(sidebar.querySelector('[data-session-key="agent:main:session-60"]')).not.toBeNull();
       });
       expect(harness.list).toHaveBeenCalledWith(
         expect.objectContaining({
           agentId: "main",
-          archivedFilter: filter,
+          archivedFilter: statusFilter,
           offset: 60,
           limit: SIDEBAR_SESSION_ROSTER_LIMIT,
         }),

@@ -1,5 +1,4 @@
 import path from "node:path";
-import { assert } from "vitest";
 import {
   createFailureMessage,
   appendInterruptedTurnMessage,
@@ -11,10 +10,7 @@ import { persistInternalSourceReply } from "../../../gateway/internal-source-rep
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { ImageContent } from "../../../llm/types.js";
 import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
-import {
-  createUserTurnTranscriptRecorder,
-  type PersistedUserTurnMessage,
-} from "../../../sessions/user-turn-transcript.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -47,13 +43,6 @@ import {
 import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
-
-export function makeReplayUser(
-  content: string,
-  fields: Partial<PersistedUserTurnMessage> = {},
-): PersistedUserTurnMessage {
-  return { role: "user", content, timestamp: 1, ...fields };
-}
 
 export async function appendCompletedToolWork(
   manager: SessionManager,
@@ -104,7 +93,9 @@ export async function appendOversizedCacheSnapshot(manager: SessionManager) {
   state.replacements.set("prior-result", {
     content: [{ type: "text", text: "x".repeat(64_000) }],
   });
-  await persistToolResultProjections(state, manager.appendCustomEntryAsync.bind(manager));
+  await persistToolResultProjections(state, (type, data) =>
+    manager.appendCustomEntryAsync(type, data),
+  );
 }
 
 export async function withInterruptedTurn(
@@ -159,10 +150,15 @@ export async function withInterruptedTurn(
     if (options.settledPrefix) {
       // A completed earlier turn that fenced current-turn reads must still see.
       const seed = await SessionManager.openAsync(target, state.workspaceDir);
+      await seed.appendMessageAsync({
+        role: "user",
+        content: "Earlier settled question",
+        timestamp: 1,
+        idempotencyKey: `${runId}:earlier`,
+      } as never);
       await seed.appendMessageAsync(
-        makeReplayUser("Earlier settled question", { idempotencyKey: `${runId}:earlier` }),
+        createAssistant(testModel, [{ type: "text", text: "Earlier settled answer" }]),
       );
-      await seed.appendMessageAsync(createAssistant(testModel, "Earlier settled answer"));
     }
     const previous = makeRecorder();
     await previous.stageApproved!({ runId, assertCurrent: () => {} });
@@ -175,7 +171,11 @@ export async function withInterruptedTurn(
       },
     );
     await previous.withPendingInput!(() =>
-      original.appendMessageAsync(makeReplayUser("Finish this exact turn")),
+      original.appendMessageAsync({
+        role: "user",
+        content: "Finish this exact turn",
+        timestamp: 1,
+      }),
     );
     if (appendOnlyRuntimeContext) {
       const carrier = buildRuntimeContextCustomMessage("Original runtime context")!;
@@ -231,9 +231,15 @@ export async function withInterruptedTurn(
         if (event.type !== "message_end") {
           return;
         }
-        assert(event.message.role === "custom", "expected interruption context");
-        const { customType, content, display } = event.message;
-        await original.appendCustomMessageEntryAsync(customType, content, display);
+        const interrupted = event.message;
+        if (interrupted.role !== "custom") {
+          throw new Error("expected interruption context");
+        }
+        await original.appendCustomMessageEntryAsync(
+          interrupted.customType,
+          interrupted.content,
+          interrupted.display,
+        );
       });
     }
     previous.finishPendingInput!("interrupted");
@@ -246,7 +252,9 @@ export async function withInterruptedTurn(
       recorder.markRuntimePersisted(
         previous.getPersistedMessage?.(),
         previous.getAdmissionReceipt(),
-        { appended: false },
+        {
+          appended: false,
+        },
       );
       await recorder.waitForRuntimePersistence();
     }
@@ -266,13 +274,14 @@ export async function withInterruptedTurn(
       userTurnTranscriptRecorder: recorder,
     } as EmbeddedRunAttemptParams;
     const lifecycle = createEmbeddedAttemptTranscriptLifecycle(attempt);
-    const claim = options.selectedOwner
-      ? (await loadSessionEntryForAdmission(target)).databaseClaim
-      : undefined;
-    assert(
-      !claim || ("kind" in claim && claim.kind === "worker"),
-      "Replay fixture requires a selected worker reader",
-    );
+    const selected = options.selectedOwner ? await loadSessionEntryForAdmission(target) : undefined;
+    const sessionReader =
+      selected && "kind" in selected.databaseClaim && selected.databaseClaim.kind === "worker"
+        ? selected.databaseClaim.reader
+        : undefined;
+    if (selected && !sessionReader) {
+      throw new Error("Replay fixture requires a selected worker reader");
+    }
     let active = true;
     const withOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) =>
       withOwnedSessionTranscriptWrites(
@@ -282,13 +291,13 @@ export async function withInterruptedTurn(
             expectedLifecycleRevision: "current-generation",
             expectedWriterRunId: runId,
           },
-          sessionReader: claim?.reader,
+          sessionReader,
           assertCommitAllowed: () => {
             if (!active) {
               throw new Error("original writer closed");
             }
           },
-          withTranscriptWrite: lifecycle.withTranscriptWrite,
+          withTranscriptWrite: (write) => lifecycle.withTranscriptWrite(write),
         },
         async () => await lifecycle.withTranscriptWrite(operation),
       );
@@ -316,7 +325,7 @@ export async function withInterruptedTurn(
     } finally {
       recorder.finishPendingInput!("interrupted");
       await lifecycle.dispose();
-      await claim?.release();
+      await selected?.databaseClaim.release();
       clearEmbeddedSessionPromptStates([target.sessionId]);
     }
   });
@@ -383,6 +392,7 @@ export async function withReplaySession(
       setActiveSessionSystemPrompt: () => {},
     });
     using promptStateLease = retainEmbeddedSessionPromptState(target.sessionId);
+    const promptState = promptStateLease.state;
     const submit = () =>
       submitEmbeddedAttemptPrompt({
         attempt,
@@ -398,7 +408,7 @@ export async function withReplaySession(
         systemPrompt: "",
         toolResultAggregateMaxChars: 8000,
         toolResultMaxChars: 4000,
-        toolResultPromptProjectionState: promptStateLease.state.toolResults,
+        toolResultPromptProjectionState: promptState.toolResults,
         trajectoryRecorder: null,
         transcriptLeafId: prepared.sessionManager.getLeafId(),
         transcriptPrompt: attempt.prompt,

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsFilesListResult, AgentsListResult } from "../../api/types.ts";
@@ -17,354 +17,502 @@ import {
   gateway,
   pageContext,
   emitGatewaySnapshot,
+  settingsSelection,
   snapshot,
   createAgentsPage,
 } from "./agents-page.test-support.ts";
 
 const files = (agentId: string, workspace: string) => ({ agentId, workspace, files: [] });
-const emptyIdentityDraft = { name: null, emoji: null, avatar: null };
-const roster: AgentsListResult = {
-  ...agentsList,
-  agents: [...agentsList.agents, { id: "research", name: "Research" }],
-};
-const selections = new Set<ApplicationContext["settingsAgentSelection"]>();
-afterEach(() => {
-  selections.forEach((selection) => selection.dispose());
-  selections.clear();
-});
 
-function fixture({
-  client = null,
-  list = roster,
-  selectedId,
-  agents = agentsCapability(async () => files("main", "main")),
-}: {
-  client?: GatewayBrowserClient | null;
-  list?: AgentsListResult | null;
-  selectedId?: string;
-  agents?: ApplicationContext["agents"];
-} = {}) {
-  const currentGateway = gateway(snapshot(client, client !== null));
-  const listeners = new Set<() => void>();
-  agents.state.agentsList = list;
-  agents.subscribe = (listener) => {
-    const notify = () => listener(agents.state);
-    listeners.add(notify);
-    return () => listeners.delete(notify);
+describe("AgentsPage routing", () => {
+  const roster: AgentsListResult = {
+    ...agentsList,
+    agents: [...agentsList.agents, { id: "research", name: "Research" }],
   };
-  const selection = createAgentSelectionCapability(
-    {
-      connection: { gatewayUrl: "ws://settings.test" },
-      snapshot: { assistantAgentId: "main" },
-      subscribe: () => () => undefined,
+
+  it.each([
+    { requestedAgentId: "research", selectedId: "main", expectedAgentId: "research" },
+    { requestedAgentId: "missing", selectedId: "research", expectedAgentId: "main" },
+    { requestedAgentId: null, selectedId: "research", expectedAgentId: "research" },
+  ])(
+    "resolves $requestedAgentId with the shared Settings selection",
+    ({ requestedAgentId, selectedId, expectedAgentId }) => {
+      const currentGateway = gateway(snapshot(null, false));
+      const selection = settingsSelection(roster, selectedId);
+      const agents = agentsCapability(async () => files(selectedId, selectedId));
+      agents.state.agentsList = roster;
+      const context: ApplicationContext = {
+        ...pageContext(currentGateway, agents),
+        settingsAgentSelection: selection,
+      };
+      const page = createAgentsPage(context);
+      page.read().agentFiles.onFileDraftChange("AGENTS.md", "Previous agent's file");
+      page.setRouteData({
+        ...agentsRouteData(currentGateway, null, requestedAgentId, selection),
+        gatewaySnapshot: snapshot(null, false),
+        panel: "tools",
+      });
+
+      expect(page.read().activePanel).toBe("tools");
+      expect(page.read().selectedAgentId).toBe(expectedAgentId);
+      expect(selection.state.selectedId).toBe(expectedAgentId);
+      expect(agentFileValues(page.read().agentFiles, "draft")).toEqual(
+        selectedId === expectedAgentId ? { "AGENTS.md": "Previous agent's file" } : {},
+      );
     },
-    agents,
-    undefined,
-    undefined,
-    { requireConfiguredAgent: true },
   );
-  if (selectedId !== undefined) {
-    selection.set(selectedId);
-  }
-  selections.add(selection);
-  const context = { ...pageContext(currentGateway, agents), settingsAgentSelection: selection };
-  return {
-    currentGateway,
-    agents,
-    selection,
-    context,
-    route: (requested: string | null = "main", nextList = agents.state.agentsList) =>
-      agentsRouteData(currentGateway, nextList, requested, selection),
-    setRoster(nextList: AgentsListResult | null) {
-      agents.state.agentsList = nextList;
-      listeners.forEach((listener) => listener());
-    },
-  };
-}
 
-it.each([
-  { requestedAgentId: "research", selectedId: "main", expectedAgentId: "research" },
-  { requestedAgentId: "missing", selectedId: "research", expectedAgentId: "main" },
-  { requestedAgentId: null, selectedId: "research", expectedAgentId: "research" },
-])(
-  "resolves $requestedAgentId with the shared Settings selection",
-  ({ requestedAgentId, selectedId, expectedAgentId }) => {
-    const { context, selection, route } = fixture({ selectedId });
-    const page = createAgentsPage(context);
-    page.read().agentFiles.onFileDraftChange("AGENTS.md", "Previous agent's file");
-    page.setRouteData({
-      ...route(requestedAgentId, null),
-      gatewaySnapshot: snapshot(null, false),
-      panel: "tools",
-    });
-
-    expect(page.read()).toMatchObject({ activePanel: "tools", selectedAgentId: expectedAgentId });
-    expect(selection.state.selectedId).toBe(expectedAgentId);
-    expect(agentFileValues(page.read().agentFiles, "draft")).toEqual(
-      selectedId === expectedAgentId ? { "AGENTS.md": "Previous agent's file" } : {},
+  it("keeps Back at Settings when the roster defaults after Agents route data", async () => {
+    const previousUrl = window.location.href;
+    const previousState: unknown = window.history.state;
+    const history = createBrowserHistory();
+    const listeners = new Set<() => void>();
+    const rosterSource = {
+      state: { agentsList: null as AgentsListResult | null },
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+    const selection = createAgentSelectionCapability(
+      {
+        connection: { gatewayUrl: "ws://settings.test" },
+        snapshot: { assistantAgentId: "main" },
+        subscribe: () => () => undefined,
+      },
+      rosterSource,
+      undefined,
+      undefined,
+      { requireConfiguredAgent: true },
     );
-  },
-);
+    const currentGateway = gateway(snapshot(null, false));
+    const context: ApplicationContext = {
+      ...pageContext(
+        currentGateway,
+        agentsCapability(async () => files("main", "main")),
+      ),
+      basePath: "",
+      settingsAgentSelection: selection,
+      navigate: (_routeId, options) =>
+        history.push({
+          pathname: options?.pathname ?? "/settings/agents",
+          search: options?.search ?? "",
+          hash: options?.hash ?? "",
+        }),
+    };
+    const page = createAgentsPage(context);
+    try {
+      window.history.replaceState({}, "", "/settings");
+      history.push({ pathname: "/settings/agents", search: "", hash: "" });
+      page.setRouteData({
+        ...agentsRouteData(currentGateway, null, null, selection),
+        panel: "overview",
+      });
 
-it("keeps Back at Settings when the roster defaults after Agents route data", async () => {
-  const previousUrl = window.location.href;
-  const previousState: unknown = window.history.state;
-  const history = createBrowserHistory();
-  const { context, route, setRoster } = fixture({ list: null });
-  context.basePath = "";
-  context.navigate = (_routeId, options) =>
-    history.push({
-      pathname: options?.pathname ?? "/settings/agents",
-      search: options?.search ?? "",
-      hash: options?.hash ?? "",
-    });
-  const page = createAgentsPage(context);
-  try {
-    window.history.replaceState({}, "", "/settings");
-    history.push({ pathname: "/settings/agents", search: "", hash: "" });
-    page.setRouteData({
-      ...route(null),
-      panel: "overview",
-    });
+      rosterSource.state.agentsList = roster;
+      listeners.forEach((listener) => listener());
+      expect(page.read().selectedAgentId).toBe("main");
 
-    setRoster(roster);
-    expect(page.read().selectedAgentId).toBe("main");
-
-    const back = new Promise<void>((resolve) => {
-      window.addEventListener("popstate", () => resolve(), { once: true });
-    });
-    window.history.back();
-    await back;
-    expect(window.location.pathname).toBe("/settings");
-  } finally {
-    page.dispose();
-    window.history.replaceState(previousState, "", previousUrl);
-  }
-});
-
-it("navigates only for explicit selection intent after the roster changes its default", () => {
-  const { context, selection, route, setRoster } = fixture();
-  const page = createAgentsPage(context, route());
-  setRoster({ ...roster, agents: [{ id: "research" }] });
-
-  expect(page.read().selectedAgentId).toBe("research");
-  expect(context.navigate).not.toHaveBeenCalled();
-
-  setRoster(roster);
-  expect(page.read().selectedAgentId).toBe("main");
-  expect(context.navigate).not.toHaveBeenCalled();
-
-  selection.set("research");
-
-  expect(context.navigate).toHaveBeenCalledExactlyOnceWith("agents", {
-    pathname: "/settings/agents/research/files",
+      const back = new Promise<void>((resolve) => {
+        window.addEventListener("popstate", () => resolve(), { once: true });
+      });
+      window.history.back();
+      await back;
+      expect(window.location.pathname).toBe("/settings");
+    } finally {
+      page.dispose();
+      selection.dispose();
+      window.history.replaceState(previousState, "", previousUrl);
+    }
   });
-});
 
-it.each([false, true])(
-  "preserves Files while a reused page awaits route data (newer intent: %s)",
-  async (newerIntent) => {
-    const request = vi.fn(async () => ({ models: [] }));
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { agents, selection, context, route, setRoster } = fixture({ client });
-    agents.ensureFiles = vi.fn(async (agentId) => files(agentId, agentId));
-    Object.assign(context.runtimeConfig, { state: { configSnapshot: {}, configLoading: false } });
-    const page = createAgentsPage(context, route());
-    await waitForFast(() => expect(page.read().agentFiles.agentFilesList?.workspace).toBe("main"));
+  it("navigates only for explicit selection intent after the roster changes its default", () => {
+    const listeners = new Set<() => void>();
+    const rosterSource = {
+      state: { agentsList: roster as AgentsListResult | null },
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+    const selection = createAgentSelectionCapability(
+      {
+        connection: { gatewayUrl: "ws://settings.test" },
+        snapshot: { assistantAgentId: "main" },
+        subscribe: () => () => undefined,
+      },
+      rosterSource,
+      undefined,
+      undefined,
+      { requireConfiguredAgent: true },
+    );
+    const currentGateway = gateway(snapshot(null, false));
+    const context: ApplicationContext = {
+      ...pageContext(
+        currentGateway,
+        agentsCapability(async () => files("main", "main")),
+      ),
+      settingsAgentSelection: selection,
+    };
+    const page = createAgentsPage(
+      context,
+      agentsRouteData(currentGateway, roster, "main", selection),
+    );
+    try {
+      rosterSource.state.agentsList = { ...roster, agents: [{ id: "research" }] };
+      listeners.forEach((listener) => listener());
 
-    setRoster(null);
-    expect(selection.state.selectedId).toBeNull();
-    const nextData = route("research", roster);
-    // The transient outlet reuses this element while the next loader has no data.
-    page.setRouteData(undefined);
-    setRoster(roster);
+      expect(page.read().selectedAgentId).toBe("research");
+      expect(context.navigate).not.toHaveBeenCalled();
+
+      rosterSource.state.agentsList = roster;
+      listeners.forEach((listener) => listener());
+      expect(page.read().selectedAgentId).toBe("main");
+      expect(context.navigate).not.toHaveBeenCalled();
+
+      selection.set("research");
+
+      expect(context.navigate).toHaveBeenCalledExactlyOnceWith("agents", {
+        pathname: "/settings/agents/research/files",
+      });
+    } finally {
+      page.dispose();
+      selection.dispose();
+    }
+  });
+
+  it.each([false, true])(
+    "preserves Files while a reused page awaits route data (newer intent: %s)",
+    async (newerIntent) => {
+      const listeners = new Set<() => void>();
+      const request = vi.fn(async () => ({ models: [] }));
+      const client = { request } as unknown as GatewayBrowserClient;
+      const currentGateway = gateway(snapshot(client));
+      const agents = agentsCapability(async () => files("main", "main"));
+      agents.state.agentsList = roster;
+      agents.ensureFiles = vi.fn(async (agentId) => files(agentId, agentId));
+      agents.subscribe = (listener) => {
+        const notify = () => listener(agents.state);
+        listeners.add(notify);
+        return () => listeners.delete(notify);
+      };
+      const selection = createAgentSelectionCapability(
+        {
+          connection: { gatewayUrl: "ws://settings.test" },
+          snapshot: { assistantAgentId: "main" },
+          subscribe: () => () => undefined,
+        },
+        agents,
+        undefined,
+        undefined,
+        { requireConfiguredAgent: true },
+      );
+      const baseContext = pageContext(currentGateway, agents);
+      const context: ApplicationContext = {
+        ...baseContext,
+        settingsAgentSelection: selection,
+        runtimeConfig: {
+          ...baseContext.runtimeConfig,
+          state: { configSnapshot: {}, configLoading: false },
+        },
+      } as unknown as ApplicationContext;
+      const page = createAgentsPage(
+        context,
+        agentsRouteData(currentGateway, roster, "main", selection),
+      );
+      try {
+        await waitForFast(() =>
+          expect(page.read().agentFiles.agentFilesList?.workspace).toBe("main"),
+        );
+
+        agents.state.agentsList = null;
+        listeners.forEach((listener) => listener());
+        expect(selection.state.selectedId).toBeNull();
+        const nextData = agentsRouteData(currentGateway, roster, "research", selection);
+        // The transient outlet reuses this element while the next loader has no data.
+        page.setRouteData(undefined);
+        agents.state.agentsList = roster;
+        listeners.forEach((listener) => listener());
+
+        expect(selection.state.selectedId).toBe("main");
+        expect(context.navigate).not.toHaveBeenCalled();
+        expect(request).not.toHaveBeenCalled();
+        if (newerIntent) {
+          selection.set("main");
+        }
+        page.setRouteData(nextData);
+
+        const expectedAgentId = newerIntent ? "main" : "research";
+        expect(selection.state.selectedId).toBe(expectedAgentId);
+        expect(page.read().activePanel).toBe("files");
+        await waitForFast(() =>
+          expect(page.read().agentFiles.agentFilesList?.workspace).toBe(expectedAgentId),
+        );
+        expect(context.navigate).not.toHaveBeenCalled();
+        if (newerIntent) {
+          expect(context.replace).toHaveBeenCalledWith("agents", {
+            pathname: "/settings/agents/main/files",
+            search: "",
+            hash: "",
+          });
+        } else {
+          expect(context.replace).not.toHaveBeenCalled();
+        }
+      } finally {
+        page.dispose();
+        selection.dispose();
+      }
+    },
+  );
+
+  it("does not restore a preloaded agent after a newer sidebar choice, including an ABA change", () => {
+    const currentGateway = gateway(snapshot(null, false));
+    const selection = settingsSelection(roster, "main");
+    const replace = vi.fn();
+    const context: ApplicationContext = {
+      basePath: "",
+      gateway: currentGateway,
+      settingsAgentSelection: selection,
+      replace,
+    } as unknown as ApplicationContext;
+    const preloaded = agentsRouteData(currentGateway, roster, "research", selection);
+    const page = createAgentsPage({
+      ...pageContext(
+        currentGateway,
+        agentsCapability(async () => files("main", "main")),
+      ),
+      ...context,
+    });
+    selection.set("research");
+    selection.set("main");
+    page.setRouteData(preloaded);
 
     expect(selection.state.selectedId).toBe("main");
-    expect(context.navigate).not.toHaveBeenCalled();
-    expect(request).not.toHaveBeenCalled();
-    if (newerIntent) {
-      selection.set("main");
-    }
-    page.setRouteData(nextData);
-
-    const expectedAgentId = newerIntent ? "main" : "research";
-    expect(selection.state.selectedId).toBe(expectedAgentId);
-    expect(page.read().activePanel).toBe("files");
-    await waitForFast(() =>
-      expect(page.read().agentFiles.agentFilesList?.workspace).toBe(expectedAgentId),
-    );
-    expect(context.navigate).not.toHaveBeenCalled();
-    if (newerIntent) {
-      expect(context.replace).toHaveBeenCalledWith("agents", {
-        pathname: "/settings/agents/main/files",
-        search: "",
-        hash: "",
-      });
-    } else {
-      expect(context.replace).not.toHaveBeenCalled();
-    }
-  },
-);
-
-it("does not restore a preloaded agent after a newer sidebar choice, including an ABA change", () => {
-  const { context, selection, route } = fixture();
-  const preloaded = route("research");
-  const page = createAgentsPage(context);
-  selection.set("research");
-  selection.set("main");
-  page.setRouteData(preloaded);
-
-  expect(selection.state.selectedId).toBe("main");
-  expect(page.read().selectedAgentId).toBe("main");
-  expect(context.replace).toHaveBeenCalledWith("agents", {
-    pathname: "/settings/agents/main/files",
-    search: "",
-    hash: "",
-  });
-});
-
-it("retires the prior agent's pending file request when the sidebar selection changes", async () => {
-  const pending = deferred<AgentsFilesListResult>();
-  const client = {} as GatewayBrowserClient;
-  const agents = {
-    ...agentsCapability(() => pending.promise),
-    ensureFiles: vi.fn((agentId: string) =>
-      agentId === "main" ? pending.promise : Promise.resolve(files("research", "research")),
-    ),
-  };
-  const { context, selection, route } = fixture({ client, agents });
-  const page = createAgentsPage(context, route());
-
-  expect(page.read().agentFiles.agentFilesLoading).toBe(true);
-
-  selection.set("research");
-  pending.resolve(files("main", "retired-main-workspace"));
-  await pending.promise;
-
-  expect(page.read().selectedAgentId).toBe("research");
-  await waitForFast(() =>
-    expect(page.read().agentFiles.agentFilesList?.workspace).toBe("research"),
-  );
-  expect(context.navigate).toHaveBeenCalledWith("agents", {
-    pathname: "/settings/agents/research/files",
-  });
-});
-
-it.each([
-  ["same target", "main", "Lunar museum guide"],
-  ["different target", "main", "Lunar museum guide"],
-  ["excluded target", "research", null],
-  ["profile", "main", null],
-  ["source", "main", null],
-])(
-  "retains an identity draft for its original agent and profile through selection changes (%s)",
-  (change, selectedAgentId, name) => {
-    const client = {
-      request: vi.fn(async () => ({ models: [] })),
-    } as unknown as GatewayBrowserClient;
-    const { context, currentGateway, selection, setRoster } = fixture({ client });
-    currentGateway.snapshot.selfUser = { id: "operator" };
-    let page = createAgentsPage(context);
-    page.read().overview.onIdentityFieldChange("name", "Lunar museum guide");
-    setRoster(null);
-    expect(page.read()).toMatchObject({
-      selectedAgentId: null,
-      overview: { identityDraft: { name: null } },
+    expect(page.read().selectedAgentId).toBe("main");
+    expect(replace).toHaveBeenCalledWith("agents", {
+      pathname: "/settings/agents/main/files",
+      search: "",
+      hash: "",
     });
-    if (change === "different target") {
-      selection.set("research");
-      selection.set("main");
-    } else if (change === "profile") {
-      currentGateway.snapshot.selfUser = { id: "other-operator" };
-      emitGatewaySnapshot(currentGateway, currentGateway.snapshot);
-    } else if (change === "source") {
-      page.dispose();
-      page = createAgentsPage({ ...context, gateway: gateway(snapshot(client)) });
-    }
-    setRoster(
-      change === "excluded target"
-        ? { ...roster, agents: roster.agents.filter((agent) => agent.id !== "main") }
-        : roster,
-    );
-    expect(page.read()).toMatchObject({
-      selectedAgentId,
-      overview: { identityDraft: { name } },
-    });
-  },
-);
+  });
 
-it.each(["request", "roster refresh"])(
-  "retires an identity save during its %s without losing the draft or settling a newer save",
-  async (stage) => {
-    const oldRequest = deferred();
-    const oldRefresh = deferred<AgentsListResult>();
-    const newRequest = deferred();
-    const request = vi
-      .fn()
-      .mockImplementationOnce(() => oldRequest.promise)
-      .mockImplementationOnce(() => newRequest.promise);
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { context, currentGateway, agents } = fixture({ client, list: agentsList });
-    if (stage === "roster refresh") {
-      vi.mocked(agents.refreshList).mockImplementationOnce(() => oldRefresh.promise);
-    }
-    const mutations: Promise<unknown>[] = [];
-    context.runtimeConfig.runExternalMutation = (task) => {
-      const mutation = task(client).then((value) => ({
-        ok: true as const,
-        value,
-        refresh: { ok: true as const },
-      }));
-      mutations.push(mutation);
-      return mutation;
+  it("retires the prior agent's pending file request when the sidebar selection changes", async () => {
+    const pending = deferred<AgentsFilesListResult>();
+    const client = {} as GatewayBrowserClient;
+    const currentGateway = gateway(snapshot(client));
+    const selection = settingsSelection(roster, "main");
+    const agents = {
+      ...agentsCapability(() => pending.promise),
+      ensureFiles: vi.fn((agentId: string) =>
+        agentId === "main" ? pending.promise : Promise.resolve(files("research", "research")),
+      ),
     };
-    Object.assign(context.agentIdentity, { invalidate: vi.fn() });
-    const page = createAgentsPage(context);
-    page.read().overview.onIdentityFieldChange("name", "Lunar museum guide");
-    page.read().overview.onIdentitySave();
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-    if (stage === "roster refresh") {
-      oldRequest.resolve();
-      await waitForFast(() => expect(agents.refreshList).toHaveBeenCalledOnce());
-    }
-    emitGatewaySnapshot(currentGateway, snapshot(client, false));
-    emitGatewaySnapshot(currentGateway, snapshot(client));
-    expect(page.read().overview).toMatchObject({
-      identityDraft: { name: "Lunar museum guide" },
-      identitySaving: false,
+    const context: ApplicationContext = {
+      ...pageContext(currentGateway, agents),
+      settingsAgentSelection: selection,
+    };
+    const page = createAgentsPage(
+      context,
+      agentsRouteData(currentGateway, roster, "main", selection),
+    );
+
+    expect(page.read().agentFiles.agentFilesLoading).toBe(true);
+
+    selection.set("research");
+    pending.resolve(files("main", "retired-main-workspace"));
+    await pending.promise;
+
+    expect(page.read().selectedAgentId).toBe("research");
+    await waitForFast(() =>
+      expect(page.read().agentFiles.agentFilesList?.workspace).toBe("research"),
+    );
+    expect(context.navigate).toHaveBeenCalledWith("agents", {
+      pathname: "/settings/agents/research/files",
     });
+    page.dispose();
+  });
 
-    page.read().overview.onIdentityFieldChange("name", "Lunar museum curator");
-    page.read().overview.onIdentitySave();
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-    if (stage === "request") {
-      oldRequest.reject(new Error("Retired identity request"));
-      await mutations[0]?.catch(() => undefined);
-    } else {
-      oldRefresh.resolve(agentsList);
-      await waitForFast(() => expect(context.agentIdentity.ensure).toHaveBeenCalledOnce());
-    }
-    await Promise.resolve();
-    expect(page.read().overview).toMatchObject({
-      identitySaving: true,
-      identityDraft: { name: "Lunar museum curator" },
-      identityError: null,
-    });
+  it.each(["same target", "different target", "excluded target", "profile", "source"])(
+    "retains an identity draft for its original agent and profile through selection changes (%s)",
+    (change) => {
+      const listeners = new Set<() => void>();
+      const client = {
+        request: vi.fn(async () => ({ models: [] })),
+      } as unknown as GatewayBrowserClient;
+      const currentGateway = gateway({ ...snapshot(client), selfUser: { id: "operator" } });
+      const agents = agentsCapability(async () => files("main", "main"));
+      agents.state.agentsList = roster;
+      agents.subscribe = (listener) => {
+        const notify = () => listener(agents.state);
+        listeners.add(notify);
+        return () => listeners.delete(notify);
+      };
+      const selection = createAgentSelectionCapability(
+        {
+          connection: { gatewayUrl: "ws://settings.test" },
+          snapshot: { assistantAgentId: "main" },
+          subscribe: () => () => undefined,
+        },
+        agents,
+        undefined,
+        undefined,
+        { requireConfiguredAgent: true },
+      );
+      const context: ApplicationContext = {
+        ...pageContext(currentGateway, agents),
+        settingsAgentSelection: selection,
+      };
+      let page = createAgentsPage(context);
+      try {
+        page.read().overview.onIdentityFieldChange("name", "Lunar museum guide");
+        agents.state.agentsList = null;
+        listeners.forEach((listener) => listener());
+        expect(page.read().selectedAgentId).toBeNull();
+        expect(page.read().overview.identityDraft.name).toBeNull();
+        if (change === "different target") {
+          selection.set("research");
+          selection.set("main");
+        } else if (change === "profile") {
+          currentGateway.snapshot.selfUser = { id: "other-operator" };
+          emitGatewaySnapshot(currentGateway, currentGateway.snapshot);
+        } else if (change === "source") {
+          page.dispose();
+          page = createAgentsPage({ ...context, gateway: gateway(snapshot(client)) });
+        }
+        agents.state.agentsList =
+          change === "excluded target"
+            ? { ...roster, agents: roster.agents.filter((agent) => agent.id !== "main") }
+            : roster;
+        listeners.forEach((listener) => listener());
+        expect(page.read().selectedAgentId).toBe(
+          change === "excluded target" ? "research" : "main",
+        );
+        expect(page.read().overview.identityDraft.name).toBe(
+          change === "same target" || change === "different target" ? "Lunar museum guide" : null,
+        );
+      } finally {
+        page.dispose();
+        selection.dispose();
+      }
+    },
+  );
 
-    newRequest.resolve();
-    await waitForFast(() => expect(page.read().overview.identitySaving).toBe(false));
-    expect(page.read().overview.identityDraft).toEqual(emptyIdentityDraft);
-    expect(page.read().overview.identityError).toBeNull();
-  },
-);
+  it.each(["request", "roster refresh"])(
+    "retires an identity save during its %s without losing the draft or settling a newer save",
+    async (stage) => {
+      const oldRequest = deferred();
+      const oldRefresh = deferred<AgentsListResult>();
+      const newRequest = deferred();
+      const request = vi
+        .fn()
+        .mockImplementationOnce(() => oldRequest.promise)
+        .mockImplementationOnce(() => newRequest.promise);
+      const client = { request } as unknown as GatewayBrowserClient;
+      const currentGateway = gateway(snapshot(client));
+      const agents = agentsCapability(async () => files("main", "main"));
+      if (stage === "roster refresh") {
+        vi.mocked(agents.refreshList).mockImplementationOnce(() => oldRefresh.promise);
+      }
+      const context = pageContext(currentGateway, agents);
+      const mutations: Promise<unknown>[] = [];
+      const runExternalMutation: ApplicationContext["runtimeConfig"]["runExternalMutation"] = (
+        task,
+      ) => {
+        const mutation = task(client).then((value) => ({
+          ok: true as const,
+          value,
+          refresh: { ok: true as const },
+        }));
+        mutations.push(mutation);
+        return mutation;
+      };
+      const mountedContext = {
+        ...context,
+        agentIdentity: { ...context.agentIdentity, invalidate: vi.fn() },
+        runtimeConfig: {
+          ...context.runtimeConfig,
+          runExternalMutation,
+        },
+      };
+      const page = createAgentsPage(mountedContext);
+      page.read().overview.onIdentityFieldChange("name", "Lunar museum guide");
+      page.read().overview.onIdentitySave();
+      await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+      if (stage === "roster refresh") {
+        oldRequest.resolve();
+        await waitForFast(() => expect(agents.refreshList).toHaveBeenCalledOnce());
+      }
+      emitGatewaySnapshot(currentGateway, snapshot(client, false));
+      emitGatewaySnapshot(currentGateway, snapshot(client));
+      expect(page.read().overview.identityDraft.name).toBe("Lunar museum guide");
+      expect(page.read().overview.identitySaving).toBe(false);
 
-it.each(["Settings target changes", "operator access is revoked"])(
-  "does not dispatch a queued identity write after %s",
-  async (change) => {
+      page.read().overview.onIdentityFieldChange("name", "Lunar museum curator");
+      page.read().overview.onIdentitySave();
+      await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+      if (stage === "request") {
+        oldRequest.reject(new Error("Retired identity request"));
+        await mutations[0]?.catch(() => undefined);
+      } else {
+        oldRefresh.resolve(agentsList);
+        await waitForFast(() => expect(context.agentIdentity.ensure).toHaveBeenCalledOnce());
+      }
+      await Promise.resolve();
+      expect(page.read().overview.identitySaving).toBe(true);
+      expect(page.read().overview.identityDraft.name).toBe("Lunar museum curator");
+      expect(page.read().overview.identityError).toBeNull();
+
+      newRequest.resolve();
+      await waitForFast(() => expect(page.read().overview.identitySaving).toBe(false));
+      expect(page.read().overview.identityDraft).toEqual({ name: null, emoji: null, avatar: null });
+      expect(page.read().overview.identityError).toBeNull();
+    },
+  );
+
+  it("does not dispatch a queued identity write after the Settings target changes", async () => {
+    const admission = deferred();
     const request = vi.fn();
     const client = { request } as unknown as GatewayBrowserClient;
-    const { context, currentGateway, selection, route } = fixture({ client });
+    const currentGateway = gateway(snapshot(client));
+    const selection = settingsSelection(roster, "main");
+    const agents = agentsCapability(async () => files("main", "main"));
+    const runExternalMutation = vi.fn<ApplicationContext["runtimeConfig"]["runExternalMutation"]>(
+      async (task, options) => {
+        await admission.promise;
+        if (!options?.canDispatch?.()) {
+          return { ok: false, reason: "rejected", error: "Target changed." };
+        }
+        return { ok: true, value: await task(client), refresh: { ok: true } };
+      },
+    );
+    const context: ApplicationContext = {
+      ...pageContext(currentGateway, agents),
+      settingsAgentSelection: selection,
+      runtimeConfig: { subscribe: () => () => undefined, runExternalMutation },
+    } as unknown as ApplicationContext;
+    const page = createAgentsPage(context, {
+      ...agentsRouteData(currentGateway, roster, "main", selection),
+      panel: "memory",
+    });
+    page.read().overview.onIdentityFieldChange("name", "Main draft");
+
+    page.read().overview.onIdentitySave();
+    await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledOnce());
+    selection.set("research");
+    admission.resolve();
+    await runExternalMutation.mock.results[0]?.value;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(page.read().overview.identityDraft).toEqual({ name: null, emoji: null, avatar: null });
+    page.dispose();
+  });
+
+  it("does not dispatch a queued identity write after operator access is revoked", async () => {
     const admission = deferred();
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const currentGateway = gateway(snapshot(client));
+    const agents = agentsCapability(async () => files("main", "main"));
     const runExternalMutation = vi.fn<ApplicationContext["runtimeConfig"]["runExternalMutation"]>(
       async (task, options) => {
         await admission.promise;
@@ -374,25 +522,20 @@ it.each(["Settings target changes", "operator access is revoked"])(
         return { ok: true, value: await task(client), refresh: { ok: true } };
       },
     );
-    context.runtimeConfig.runExternalMutation = runExternalMutation;
-    const page = createAgentsPage(
-      context,
-      change === "Settings target changes" ? { ...route(), panel: "memory" } : undefined,
-    );
+    const context: ApplicationContext = {
+      ...pageContext(currentGateway, agents),
+      runtimeConfig: { subscribe: () => () => undefined, runExternalMutation },
+    } as unknown as ApplicationContext;
+    const page = createAgentsPage(context);
     page.read().overview.onIdentityFieldChange("name", "Private draft");
     page.read().overview.onIdentitySave();
     await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledOnce());
-    if (change === "Settings target changes") {
-      selection.set("research");
-    } else {
-      currentGateway.snapshot.hello = gatewayHelloForMethods(["agents.update"], ["operator.read"]);
-    }
+
+    currentGateway.snapshot.hello = gatewayHelloForMethods(["agents.update"], ["operator.read"]);
     admission.resolve();
     await runExternalMutation.mock.results[0]?.value;
 
     expect(request).not.toHaveBeenCalled();
-    if (change === "Settings target changes") {
-      expect(page.read().overview.identityDraft).toEqual(emptyIdentityDraft);
-    }
-  },
-);
+    page.dispose();
+  });
+});

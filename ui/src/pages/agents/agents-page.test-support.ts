@@ -22,10 +22,14 @@ const AGENTS_PAGE_GATEWAY_HELLO = gatewayHelloForMethods([
 
 const pages = new Set<() => void>();
 type GatewayListener = Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
-type GatewayEventListener = Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0];
 const gatewayListeners = new WeakMap<ApplicationContext["gateway"], Set<GatewayListener>>();
 
-afterEach(() => pages.forEach((dispose) => dispose()));
+afterEach(() => {
+  for (const dispose of pages) {
+    dispose();
+  }
+  pages.clear();
+});
 
 function fillMissing(target: object, defaults: object) {
   for (const [key, value] of Object.entries(defaults)) {
@@ -35,20 +39,85 @@ function fillMissing(target: object, defaults: object) {
   }
 }
 
-/** Mount the same owner used by the page; fixtures only supply its external capabilities. */
-export function createAgentsPage(context: ApplicationContext, routeData?: AgentsRouteData) {
-  // Capability builders own their stubs; fill only missing page projection fields here.
+function completeContext(context: ApplicationContext) {
   const subscribe = () => () => {};
+  const defaultAgents = agentsCapability(async () => ({
+    agentId: "main",
+    workspace: "",
+    files: [],
+  }));
   fillMissing(context, {
-    basePath: "",
-    config: { current: { assistantIdentity: {} }, subscribe },
-    navigation: { snapshot: { pinnedAgentIds: [] }, subscribe },
+    basePath: context.basePath ?? "",
+    agents: context.agents ?? defaultAgents,
+    agentIdentity: context.agentIdentity ?? {
+      get: (agentId: string) => ({ agentId }),
+      entries: () => [],
+      ensure: async () => {},
+      subscribe,
+    },
+    sessions: context.sessions ?? { state: { result: null, modelOverrides: {} }, subscribe },
+    runtimeConfig: context.runtimeConfig ?? { state: createInitialConfigState(), subscribe },
+    channels: context.channels ?? { state: {}, subscribe },
+    config: context.config ?? { current: { assistantIdentity: {} }, subscribe },
+    navigation: context.navigation ?? { snapshot: { pinnedAgentIds: [] }, subscribe },
+    router: context.router ?? {
+      getState: () => ({ matches: [{ routeId: "agents" }], pendingMatches: [] }),
+    },
+    navigate: context.navigate ?? vi.fn(),
+    replace: context.replace ?? vi.fn(),
+  });
+  for (const source of [
+    context.agents,
+    context.agentIdentity,
+    context.sessions,
+    context.runtimeConfig,
+    context.channels,
+    context.config,
+    context.navigation,
+  ]) {
+    source.subscribe ??= subscribe;
+  }
+  fillMissing(context.agents, {
+    state: context.agents.state ?? defaultAgents.state,
+    files: (agentId: string | null | undefined) => defaultAgents.files(agentId),
+    ensureList: context.agents.ensureList ?? (async () => context.agents.state.agentsList),
+    refreshList: context.agents.refreshList ?? (async () => context.agents.state.agentsList),
+    ensureFiles: context.agents.ensureFiles ?? defaultAgents.ensureFiles,
+    refreshFiles:
+      context.agents.refreshFiles ?? context.agents.ensureFiles ?? defaultAgents.ensureFiles,
+    recordFile: () => {},
+  });
+  fillMissing(context, {
+    settingsAgentSelection:
+      context.settingsAgentSelection ?? settingsSelection(context.agents.state.agentsList ?? null),
+  });
+  fillMissing(context.agentIdentity, {
+    entries: () => [],
+    ensure: context.agentIdentity.ensure ?? (async () => {}),
   });
   fillMissing(context.runtimeConfig, {
     state: context.runtimeConfig.state ?? createInitialConfigState(),
     ensureLoaded: context.runtimeConfig.ensureLoaded ?? (async () => {}),
   });
   fillMissing(context.channels, { state: context.channels.state ?? {} });
+  if (!gatewayListeners.has(context.gateway)) {
+    const listeners = new Set<GatewayListener>();
+    const subscribeGateway = context.gateway.subscribe.bind(context.gateway);
+    context.gateway.subscribe = (notify) => {
+      listeners.add(notify);
+      const stop = subscribeGateway(notify);
+      return () => {
+        listeners.delete(notify);
+        stop();
+      };
+    };
+    gatewayListeners.set(context.gateway, listeners);
+  }
+}
+
+/** Mount the same owner used by the page; fixtures only supply its external capabilities. */
+export function createAgentsPage(context: ApplicationContext, routeData?: AgentsRouteData) {
+  completeContext(context);
   let state!: ReturnType<typeof createAgentsPageState>;
   const mounted = mountSolid(() => {
     state = createAgentsPageState(context, routeData);
@@ -102,7 +171,10 @@ export function snapshot(
   };
 }
 
-const eventListeners = new WeakMap<ApplicationContext["gateway"], Set<GatewayEventListener>>();
+const eventListeners = new WeakMap<
+  ApplicationContext["gateway"],
+  Set<Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0]>
+>();
 
 export function emitCatalogChanged(currentGateway: ApplicationContext["gateway"]) {
   const client = currentGateway.snapshot.client;
@@ -115,11 +187,13 @@ export function emitCatalogChanged(currentGateway: ApplicationContext["gateway"]
 }
 
 export function gateway(current: ApplicationGatewaySnapshot): ApplicationContext["gateway"] {
-  const listeners = new Set<GatewayEventListener>();
+  const listeners = new Set<Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0]>();
   const snapshots = new Set<GatewayListener>();
   const result = {
     connection: { gatewayUrl: "ws://settings.test" },
-    subscribeEvents: (listener: GatewayEventListener) => {
+    subscribeEvents: (
+      listener: Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0],
+    ) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
@@ -193,7 +267,6 @@ export function agentsCapability(ensureFiles: () => Promise<AgentsFilesListResul
     refreshList: vi.fn(async () => agentsList),
     ensureFiles,
     refreshFiles: ensureFiles,
-    recordFile: () => {},
     subscribe: vi.fn(() => () => undefined),
   } as unknown as ApplicationContext["agents"];
 }
@@ -201,7 +274,10 @@ export function agentsCapability(ensureFiles: () => Promise<AgentsFilesListResul
 export function pageContext(
   currentGateway: ApplicationContext["gateway"],
   agents: ApplicationContext["agents"],
-  options?: Partial<Pick<ApplicationContext, "agentIdentity" | "sessions">>,
+  options?: {
+    agentIdentity?: ApplicationContext["agentIdentity"];
+    sessions?: ApplicationContext["sessions"];
+  },
 ): ApplicationContext {
   const subscribe = vi.fn(() => () => undefined);
   return {
@@ -211,16 +287,20 @@ export function pageContext(
     router: { getState: () => ({ matches: [{ routeId: "agents" }], pendingMatches: [] }) },
     navigate: vi.fn(),
     replace: vi.fn(),
-    agentIdentity: options?.agentIdentity ?? {
-      get: () => ({ agentId: "main" }),
-      entries: () => [],
-      ensure: vi.fn(async () => undefined),
-      subscribe,
-    },
-    sessions: options?.sessions ?? {
-      state: { result: null, modelOverrides: {} },
-      subscribe,
-    },
+    agentIdentity:
+      options?.agentIdentity ??
+      ({
+        get: () => ({ agentId: "main" }),
+        entries: () => [],
+        ensure: vi.fn(async () => undefined),
+        subscribe,
+      } as unknown as ApplicationContext["agentIdentity"]),
+    sessions:
+      options?.sessions ??
+      ({
+        state: { result: null, modelOverrides: {} },
+        subscribe,
+      } as unknown as ApplicationContext["sessions"]),
     channels: { subscribe },
     runtimeConfig: { subscribe },
   } as unknown as ApplicationContext;

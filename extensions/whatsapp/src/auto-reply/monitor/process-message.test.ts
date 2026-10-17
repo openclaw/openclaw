@@ -183,7 +183,7 @@ const baseRoute = {
 } as const;
 
 function callProcessMessage({
-  replyLoggerInfo = () => {},
+  replyLoggerInfo = vi.fn(),
   ...overrides
 }: Partial<Parameters<typeof processMessage>[0]> & {
   replyLoggerInfo?: ReturnType<typeof vi.fn>;
