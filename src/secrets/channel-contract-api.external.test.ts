@@ -1,7 +1,7 @@
 /** Tests external plugin channel secret contract API loading. */
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -63,27 +63,8 @@ function expectOfficialFallback() {
 function channelSecretContractModuleSource(channelId: string) {
   return `
 module.exports = {
-  secretTargetRegistryEntries: [
-    {
-      id: "channels.${channelId}.token",
-      targetType: "channels.${channelId}.token",
-      configFile: "openclaw.json",
-      pathPattern: "channels.${channelId}.token",
-      secretShape: "secret_input",
-      expectedResolvedValue: "string",
-      includeInPlan: true,
-      includeInConfigure: true,
-      includeInAudit: true
-    }
-  ],
-  collectRuntimeConfigAssignments(params) {
-    params.context.assignments.push({
-      path: "channels.${channelId}.token",
-      ref: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
-      expected: "string",
-      apply() {}
-    });
-  }
+  secretTargetRegistryEntries: [{ id: "channels.${channelId}.token" }],
+  collectRuntimeConfigAssignments() {}
 };
 `;
 }
@@ -114,13 +95,10 @@ describe("external channel secret contract api", () => {
   beforeEach(() => {
     loadPluginMetadataSnapshotMock.mockReset();
     loadBundledPublicArtifactMock.mockClear();
-    shouldRejectHardlinkedPluginFilesMock.mockReset();
-    shouldRejectHardlinkedPluginFilesMock.mockReturnValue(true);
+    shouldRejectHardlinkedPluginFilesMock.mockReset().mockReturnValue(true);
   });
 
-  afterEach(() => {
-    cleanupTrackedTempDirs(tempDirs);
-  });
+  afterEach(() => cleanupTrackedTempDirs(tempDirs));
 
   it("keeps a healthy external contract available when another artifact fails to load", () => {
     const broken = writeExternalChannelPlugin({ pluginId: "custom", channelId: "custom" });
@@ -142,11 +120,10 @@ describe("external channel secret contract api", () => {
     const record = writeExternalChannelPlugin({ directory: "dist" });
     loadPluginMetadataSnapshotMock.mockReturnValue({ plugins: [record] });
     const contractApi = loadContract();
-    assert.isDefined(contractApi);
-    expect(contractApi.secretTargetRegistryEntries?.map(({ id }) => id)).toContain(
+    expect(contractApi?.secretTargetRegistryEntries?.map(({ id }) => id)).toContain(
       "channels.discord.token",
     );
-    expect(contractApi.collectRuntimeConfigAssignments).toBeTypeOf("function");
+    expect(contractApi?.collectRuntimeConfigAssignments).toBeTypeOf("function");
   });
 
   it.runIf(process.platform !== "win32")(
@@ -171,8 +148,7 @@ describe("external channel secret contract api", () => {
         rootDir: record.rootDir,
         env,
       });
-      assert.isDefined(api);
-      expect(api.secretTargetRegistryEntries?.map(({ id }) => id)).toContain(
+      expect(api?.secretTargetRegistryEntries?.map(({ id }) => id)).toContain(
         "channels.discord.token",
       );
     },

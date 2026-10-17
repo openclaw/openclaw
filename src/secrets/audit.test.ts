@@ -64,20 +64,23 @@ async function writeExecResolverShellScript(params: {
   );
 }
 
-async function writeExecSecretsAuditConfig(params: {
-  fixture: AuditFixture;
-  execScriptPath: string;
-  headerRefId?: string;
-}) {
-  await writeJsonFile(params.fixture.configPath, {
+async function writeExecSecretsAuditConfig(
+  fixture: AuditFixture,
+  execScriptPath: string,
+  headerRefId?: string,
+  executionOptions: { timeoutMs?: number; noOutputTimeoutMs?: number; passEnv?: string[] } = {
+    timeoutMs: 20_000,
+    noOutputTimeoutMs: 10_000,
+  },
+) {
+  await writeJsonFile(fixture.configPath, {
     secrets: {
       providers: {
         execmain: {
           source: "exec",
-          command: params.execScriptPath,
+          command: execScriptPath,
           jsonOnly: true,
-          timeoutMs: 20_000,
-          noOutputTimeoutMs: 10_000,
+          ...executionOptions,
         },
       },
     },
@@ -85,7 +88,7 @@ async function writeExecSecretsAuditConfig(params: {
       providers: {
         openai: modelProvider(
           execRef("providers/openai/apiKey"),
-          params.headerRefId ? { headers: { Authorization: execRef(params.headerRefId) } } : {},
+          headerRefId ? { headers: { Authorization: execRef(headerRefId) } } : {},
         ),
       },
     },
@@ -101,10 +104,8 @@ const authProfile = (key: string, keyRef?: unknown) => ({
 });
 
 function resolveRuntimePathEnv(): string {
-  if (typeof process.env.PATH === "string" && process.env.PATH.trim().length > 0) {
-    return process.env.PATH;
-  }
-  return "/usr/bin:/bin";
+  const value = process.env.PATH;
+  return value?.trim() ? value : "/usr/bin:/bin";
 }
 
 function expectFinding(
@@ -118,9 +119,8 @@ function expectFinding(
   );
 }
 
-async function expectPathMissing(filePath: string): Promise<void> {
-  await expect(fs.stat(filePath)).rejects.toMatchObject({ code: "ENOENT" });
-}
+const expectPathMissing = (filePath: string) =>
+  expect(fs.stat(filePath)).rejects.toMatchObject({ code: "ENOENT" });
 
 async function createAuditFixture() {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-audit-"));
@@ -177,10 +177,7 @@ describe("secrets audit", () => {
   const writeConfig = (config: unknown) => writeJsonFile(fixture.configPath, config);
 
   async function writeModelsProvider(
-    overrides: Partial<{
-      apiKey: unknown;
-      headers: Record<string, unknown>;
-    }> = {},
+    overrides: { apiKey?: unknown; headers?: Record<string, unknown> } = {},
   ) {
     await writeJsonFile(fixture.modelsPath, {
       providers: {
@@ -191,9 +188,10 @@ describe("secrets audit", () => {
 
   function expectModelsFinding(
     report: Awaited<ReturnType<typeof runSecretsAudit>>,
-    params: { code: string; jsonPath?: string; present?: boolean },
+    code: string,
+    jsonPath?: string,
+    present = true,
   ) {
-    const { present = true, jsonPath, code } = params;
     expectFinding(
       report,
       { code, file: fixture.modelsPath, ...(jsonPath ? { jsonPath } : {}) },
@@ -224,11 +222,10 @@ describe("secrets audit", () => {
   });
 
   it("audits inactive Talk speech and realtime provider references independently", async () => {
-    const activeKey = ENV_REF;
     const providerSelection = (missingKey: string) => ({
       provider: "openai",
       providers: {
-        openai: { apiKey: activeKey },
+        openai: { apiKey: ENV_REF },
         inactive: { apiKey: { source: "env", provider: "default", id: missingKey } },
       },
     });
@@ -337,10 +334,7 @@ describe("secrets audit", () => {
         "providers/openai/apiKey": "value:providers/openai/apiKey",
       },
     });
-    await writeExecSecretsAuditConfig({
-      fixture,
-      execScriptPath,
-    });
+    await writeExecSecretsAuditConfig(fixture, execScriptPath);
 
     const report = await audit();
     expect(report.resolution.resolvabilityComplete).toBe(false);
@@ -363,11 +357,11 @@ describe("secrets audit", () => {
         "providers/openai/headers/Authorization": "value:providers/openai/headers/Authorization",
       },
     });
-    await writeExecSecretsAuditConfig({
+    await writeExecSecretsAuditConfig(
       fixture,
       execScriptPath,
-      headerRefId: "providers/openai/headers/Authorization",
-    });
+      "providers/openai/headers/Authorization",
+    );
 
     const report = await audit(true);
     expect(report.summary.unresolvedRefCount).toBe(0);
@@ -393,25 +387,12 @@ describe("secrets audit", () => {
       { encoding: "utf8", mode: 0o700 },
     );
 
-    await writeConfig({
-      secrets: {
-        providers: {
-          execmain: {
-            source: "exec",
-            command: execScriptPath,
-            jsonOnly: true,
-            passEnv: ["PATH"],
-          },
-        },
-      },
-      models: {
-        providers: {
-          openai: modelProvider(execRef("providers/openai/apiKey"), {
-            headers: { Authorization: execRef("providers/openai/headers/Authorization") },
-          }),
-        },
-      },
-    });
+    await writeExecSecretsAuditConfig(
+      fixture,
+      execScriptPath,
+      "providers/openai/headers/Authorization",
+      { passEnv: ["PATH"] },
+    );
 
     const report = await audit(true);
     expect(report.summary.unresolvedRefCount).toBeGreaterThanOrEqual(2);
@@ -424,11 +405,8 @@ describe("secrets audit", () => {
     await fs.link(fixture.modelsPath, path.join(fixture.rootDir, "models-alias.json"));
 
     const report = await audit();
-    expectModelsFinding(report, {
-      code: "PLAINTEXT_FOUND",
-      jsonPath: "providers.openai.apiKey",
-    });
-    expectModelsFinding(report, { code: "REF_UNRESOLVED", present: false });
+    expectModelsFinding(report, "PLAINTEXT_FOUND", "providers.openai.apiKey");
+    expectModelsFinding(report, "REF_UNRESOLVED", undefined, false);
     expect(report.filesScanned).toContain(fixture.modelsPath);
   });
 
@@ -440,43 +418,33 @@ describe("secrets audit", () => {
     });
 
     const report = await audit();
-    expectModelsFinding(report, {
-      code: "PLAINTEXT_FOUND",
-      jsonPath: "providers.openai.headers.Authorization",
-    });
+    expectModelsFinding(report, "PLAINTEXT_FOUND", "providers.openai.headers.Authorization");
   });
 
   it("reports unresolved models.json SecretRef objects in provider headers", async () => {
     await writeModelsProvider({
       headers: {
-        Authorization: {
-          source: "env",
-          provider: "default",
-          id: "OPENAI_HEADER_TOKEN", // pragma: allowlist secret
-        },
+        Authorization: { ...ENV_REF, id: "OPENAI_HEADER_TOKEN" }, // pragma: allowlist secret
       },
     });
 
     const report = await audit();
-    expectModelsFinding(report, {
-      code: "REF_UNRESOLVED",
-      jsonPath: "providers.openai.headers.Authorization",
-    });
+    expectModelsFinding(report, "REF_UNRESOLVED", "providers.openai.headers.Authorization");
   });
 
   it("reports malformed models.json as unresolved findings", async () => {
     const payloadMarker = "audit-raw";
     await fs.writeFile(fixture.modelsPath, payloadMarker, "utf8");
     const report = await audit();
-    expectModelsFinding(report, { code: "REF_UNRESOLVED" });
+    expectModelsFinding(report, "REF_UNRESOLVED");
     expect(JSON.stringify(report)).not.toContain(payloadMarker);
   });
 
   it("ignores models.json with a null root", async () => {
     await writeJsonFile(fixture.modelsPath, null);
     const report = await audit();
-    expectModelsFinding(report, { code: "REF_UNRESOLVED", present: false });
-    expectModelsFinding(report, { code: "PLAINTEXT_FOUND", present: false });
+    expectModelsFinding(report, "REF_UNRESOLVED", undefined, false);
+    expectModelsFinding(report, "PLAINTEXT_FOUND", undefined, false);
     expect(report.filesScanned).toContain(fixture.modelsPath);
   });
 
@@ -489,8 +457,8 @@ describe("secrets audit", () => {
       await fs.symlink(target, fixture.modelsPath);
 
       const report = await audit();
-      expectModelsFinding(report, { code: "REF_UNRESOLVED" });
-      expectModelsFinding(report, { code: "PLAINTEXT_FOUND", present: false });
+      expectModelsFinding(report, "REF_UNRESOLVED");
+      expectModelsFinding(report, "PLAINTEXT_FOUND", undefined, false);
       expect(report.filesScanned).toContain(fixture.modelsPath);
     },
   );

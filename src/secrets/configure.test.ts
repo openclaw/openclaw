@@ -15,27 +15,23 @@ const runSecretsApplyMock = vi.hoisted(() => vi.fn());
 const tempDirs: string[] = [];
 
 vi.mock("@clack/prompts", () => ({
-  confirm: (...args: unknown[]) => confirmMock(...args),
-  select: (...args: unknown[]) => selectMock(...args),
+  confirm: confirmMock,
+  select: selectMock,
   text: vi.fn(),
-  log: { warn: (...args: unknown[]) => logMock(...args) },
+  log: { warn: logMock },
 }));
 
-vi.mock("./config-io.js", () => ({
-  createSecretsConfigIO: (...args: unknown[]) => createSecretsConfigIOMock(...args),
-}));
+vi.mock("./config-io.js", () => ({ createSecretsConfigIO: createSecretsConfigIOMock }));
 
 vi.mock("../agents/auth-profiles/persisted.js", () => ({
-  loadPersistedAuthProfileStore: (...args: unknown[]) => loadPersistedAuthProfileStoreMock(...args),
+  loadPersistedAuthProfileStore: loadPersistedAuthProfileStoreMock,
 }));
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistryCore: (...args: unknown[]) => loadPluginManifestRegistryMock(...args),
+  loadPluginManifestRegistryCore: loadPluginManifestRegistryMock,
 }));
 
-vi.mock("./apply.js", () => ({
-  runSecretsApply: (...args: unknown[]) => runSecretsApplyMock(...args),
-}));
+vi.mock("./apply.js", () => ({ runSecretsApply: runSecretsApplyMock }));
 
 import { noteCommittedSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import {
@@ -151,22 +147,17 @@ describe("runSecretsConfigureInteractive", () => {
       ],
     });
 
-    const result = await runSecretsConfigureInteractive({
-      providersOnly: true,
-      env: {},
-    });
-
-    expect(result.plan.targets).toEqual([]);
-    expect(result.plan.providerUpserts?.vault).toEqual({
+    const vault = {
       source: "exec",
       pluginIntegration: { pluginId: "vault", integrationId: "vault" },
-    });
+    };
+    const result = await runSecretsConfigureInteractive({ providersOnly: true, env: {} });
+    expect(result.plan.targets).toEqual([]);
+    expect(result.plan.providerUpserts?.vault).toEqual(vault);
     expect(runSecretsApplyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         plan: expect.objectContaining({
-          providerUpserts: expect.objectContaining({
-            vault: expect.objectContaining({ source: "exec" }),
-          }),
+          providerUpserts: expect.objectContaining({ vault }),
         }),
         write: false,
         allowExec: false,

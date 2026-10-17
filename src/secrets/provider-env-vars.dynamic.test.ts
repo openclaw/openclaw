@@ -135,6 +135,12 @@ const workspaceEvidence: MockAuthEvidence[] = [
   },
 ];
 
+function mockExistingPaths(...paths: string[]) {
+  return vi
+    .spyOn(fs, "existsSync")
+    .mockImplementation((candidate) => paths.some((path) => path === candidate));
+}
+
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: pluginRegistryMocks.getCurrentPluginMetadataSnapshot,
@@ -243,9 +249,7 @@ describe("provider env vars dynamic manifest metadata", () => {
     });
     const evidence = resolveProviderAuthLookupMaps().authEvidenceMap["external-cloud"];
     const expectedPath = "/fixture/cloud-sdk/application_default_credentials.json";
-    const existsSync = vi
-      .spyOn(fs, "existsSync")
-      .mockImplementation((candidate) => candidate === expectedPath);
+    const existsSync = mockExistingPaths(expectedPath);
 
     expect(
       resolveLocalProviderAuthEvidence(evidence, {
@@ -265,9 +269,7 @@ describe("provider env vars dynamic manifest metadata", () => {
       authEvidence: cloudEvidence(),
     });
     const evidence = resolveProviderAuthLookupMaps().authEvidenceMap["external-cloud"];
-    const existsSync = vi
-      .spyOn(fs, "existsSync")
-      .mockImplementation((candidate) => candidate === "/fixture/home/credentials.json");
+    const existsSync = mockExistingPaths("/fixture/home/credentials.json");
 
     expect(
       resolveLocalProviderAuthEvidence(evidence, {
@@ -282,12 +284,7 @@ describe("provider env vars dynamic manifest metadata", () => {
 
   it("preserves home and appdata fallback when no provider directory is selected", () => {
     const evidence = cloudEvidence();
-    vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
-      return (
-        candidate === "/fixture/home/credentials.json" ||
-        candidate === "/fixture/appdata/credentials.json"
-      );
-    });
+    mockExistingPaths("/fixture/home/credentials.json", "/fixture/appdata/credentials.json");
 
     expect(resolveLocalProviderAuthEvidence(evidence, { HOME: "/fixture/home" })).toEqual(
       cloudCredential,
