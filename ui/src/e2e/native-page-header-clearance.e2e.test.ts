@@ -202,25 +202,63 @@ suite.define(() => {
     },
   );
 
-  it("shares a stacked title and aligned tabs across Sessions and Worktrees", async () => {
-    const { page, toolbar } = await openPage(
-      "sessions",
-      installNativeWebChrome,
-      ".hub-page-header__tabs",
-    );
-    const header = page.locator(".content .content-header.hub-page-header");
-    const title = header.locator(".page-title");
-    await expect.poll(() => title.textContent()).toBe("Sessions");
-    const tabs = header.locator(".hub-page-header__tabs");
-    const titleBox = (await title.boundingBox())!;
-    const tabsBox = (await tabs.boundingBox())!;
-    expect(titleBox.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
-    expect(titleBox.width).toBeGreaterThan(1);
-    expect(tabsBox.y).toBeGreaterThanOrEqual(titleBox.y + titleBox.height);
-    expect(Math.abs(tabsBox.x - titleBox.x)).toBeLessThanOrEqual(1);
-    await tabs.getByRole("tab", { name: "Worktrees" }).click();
-    await expect.poll(() => title.textContent()).toBe("Worktrees");
-  });
+  it.each([
+    { width: 1280, height: 900 },
+    { width: 390, height: 844 },
+  ])(
+    "shares a stacked title and aligned tabs across Sessions and Worktrees at $width px",
+    async ({ width, height }) => {
+      const { page, toolbar } = await openPage(
+        "sessions",
+        installNativeWebChrome,
+        ".hub-page-header__tabs",
+        { methodResponses: { "worktrees.list": { worktrees: [] } } },
+      );
+      await page.setViewportSize({ width, height });
+      if (width <= 560) {
+        await expect
+          .poll(() => page.locator(".shell").getAttribute("class"))
+          .toContain("shell--mobile-nav");
+      }
+      const header = page.locator(".content .content-header.hub-page-header");
+      const title = header.locator(".page-title");
+      await expect.poll(() => title.textContent()).toBe("Sessions");
+      const tabs = header.locator(".hub-page-header__tabs");
+      const alignment = () =>
+        header.evaluate((element) => {
+          const titleBox = element.querySelector(".page-title")!.getBoundingClientRect();
+          const tabsBox = element.querySelector(".hub-page-header__tabs")!.getBoundingClientRect();
+          return {
+            titleWidth: titleBox.width,
+            titleY: titleBox.y,
+            tabsBelowTitle: tabsBox.y >= titleBox.bottom,
+            xDelta: Math.abs(tabsBox.x - titleBox.x),
+          };
+        });
+      const expectAlignedHub = async () => {
+        await expect
+          .poll(async () => {
+            const { titleWidth, tabsBelowTitle, xDelta } = await alignment();
+            return titleWidth > 1 && tabsBelowTitle ? xDelta : Infinity;
+          })
+          .toBeLessThanOrEqual(1);
+      };
+      await expectAlignedHub();
+      if (width > 560) {
+        expect((await alignment()).titleY).toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
+      }
+      await capture(page, `sessions-stacked-header-${width}.png`);
+      await tabs.getByRole("tab", { name: "Worktrees" }).click();
+      await expect.poll(() => title.textContent()).toBe("Worktrees");
+      await expectAlignedHub();
+      if (width > 560) {
+        await expect
+          .poll(async () => (await title.boundingBox())?.y ?? -1)
+          .toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
+      }
+      await capture(page, `worktrees-stacked-header-${width}.png`);
+    },
+  );
 
   it.each(["ltr", "rtl"] as const)(
     "keeps the stacked hub title and tabs below collapsed Mac controls (%s)",
