@@ -107,7 +107,7 @@ async function includeDirectChildEntriesInWorker(
   target: GatewaySessionStoreTargetWithStore,
   params: GatewaySessionStoreLookupParams,
 ): Promise<GatewaySessionStoreTargetWithStore> {
-  if (!params.includeStoreChildEntries || isIncognitoSessionKey(target.canonicalKey)) {
+  if (!params.includeStoreChildEntries) {
     return target;
   }
   try {
@@ -123,13 +123,7 @@ async function includeDirectChildEntriesInWorker(
       [...parentKeys],
     );
     for (const { sessionKey, entry } of children) {
-      if (
-        !parentKeys.has(sessionKey) &&
-        ((entry.parentSessionKey && parentKeys.has(entry.parentSessionKey)) ||
-          (entry.spawnedBy && parentKeys.has(entry.spawnedBy)))
-      ) {
-        target.store[sessionKey] = entry;
-      }
+      target.store[sessionKey] = entry;
     }
     const hintedKeys = [
       ...new Set(

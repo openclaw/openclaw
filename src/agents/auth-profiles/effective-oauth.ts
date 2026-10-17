@@ -27,12 +27,6 @@ export function resolveEffectiveOAuthCredentialCore(params: {
     return params.credential;
   }
   if (hasUsableOAuthCredential(params.credential)) {
-    authProfilesLog.debug("resolved oauth credential from canonical local store", {
-      profileId: params.profileId,
-      provider: params.credential.provider,
-      localExpires: params.credential.expires,
-      externalExpires: imported.expires,
-    });
     return params.credential;
   }
   if (!isSafeToAdoptBootstrapOAuthIdentity(params.credential, imported)) {
@@ -46,12 +40,6 @@ export function resolveEffectiveOAuthCredentialCore(params: {
     return params.credential;
   }
   if (hasUsableOAuthCredential(imported)) {
-    authProfilesLog.debug("resolved oauth credential from external cli bootstrap", {
-      profileId: params.profileId,
-      provider: imported.provider,
-      localExpires: params.credential.expires,
-      externalExpires: imported.expires,
-    });
     return imported;
   }
   return params.credential;

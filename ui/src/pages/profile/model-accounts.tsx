@@ -12,10 +12,12 @@ export function ModelAccounts(props: ModelAccountsProps) {
   const context = useApplication();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const state = new ModelAccountsState(context, props, () => setRevision((value) => value + 1));
+  // Snapshot identity/profile at request admission; target changes retire account reads and auth polls.
   const sync = () => {
     untrack(() => state.applySnapshot(context.gateway.snapshot));
     state.publish();
   };
+  // Retire account reads and auth polls synchronously with connection authority.
   const stopGateway = context.gateway.subscribe(sync);
   const stopEvents = context.gateway.subscribeEvents((event) => {
     if (modelAuthEventInvalidates(event)) {

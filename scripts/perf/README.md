@@ -223,6 +223,52 @@ subscription is not covered. The `execute` class groups multiple unclassified
 commands; it does not identify an individual caller. Use the same driver options
 and fresh fixtures for both revisions.
 
+Add `--cheap-handlers --clients 30 --seconds 120` to measure the first two minutes
+of reconnect traffic for `push.web.vapidPublicKey`, `push.web.subscribe`,
+`workboard.cards.list`, `sessions.github.options`, and `github.preview`, alongside
+the existing list requests. This enables the real bundled Workboard and GitHub
+plugins. Before the crash it persists the VAPID key, registers one synthetic
+subscription per paired device, disables delivery to each subscription, and
+creates one Workboard card per client through the real RPCs. Each reconnect sends
+`sessions.subscribe` first without awaiting its response, matching
+`ui/src/lib/sessions/index.ts` and its subscription owner, then issues the measured
+batch on that same socket. This preserves subscription head-of-line waits without
+a preceding `users.self` warm read. It is a bounded RPC workload, not a browser
+rendering benchmark or an exact replay of every UI scheduler dependency.
+`firstTwoMinutes` reports p50/p99 and errors for requests begun
+within 120 seconds of restart spawn; slow requests drain after the window.
+
+GitHub uses its real plugin, host authorization, anonymous reader and cache, with
+an Undici mock transport serving one fixed synthetic issue. The preload binds
+that transport explicitly to GitHub fetches and allows only loopback fetches
+outside the fixture. The run requires an observed
+post-restart fixture fetch plus the expected preview payload. This excludes
+external GitHub latency, managed-account refresh, avatars and pull-request
+decoration. `rpcPhaseMetrics` and `writer-metrics.prom` retain the existing
+admission, handler, first-response and queue-wait histograms; these are cumulative
+since exporter startup and do not cover requests before its subscription. Each
+revision needs a fresh fixture and the same driver options.
+
+Add `--transcript-reads --clients 50 --seconds 120` to exercise a cold session
+memory index during the reconnect wave. Setup leaves memory search disabled;
+immediately before restart the driver enables sessions-only FTS memory with
+`provider: "none"`. The first reconnecting client invokes the real `memory_search`
+tool once to open its default manager while all clients poll `chat.history` for
+the same interrupted session and `workboard.cards.list` for their seeded cards.
+No embedding service is used. The history target is a small interrupted turn;
+the seeded corpus supplies the large session inventory and transcript volume.
+This is a cold-index restart, not a fully indexed steady-state comparison.
+
+The private preload counts main-isolate native task submissions across all
+workers, grouped by the bounded input kind and history request kind. It
+retains no transcript content, paths, session identifiers, or call stacks. The
+first 120-second deadline is checked at submission, so a delayed IPC snapshot
+does not count later work. `nativeTaskInputs`, `transcriptQueueMetrics`,
+`firstTwoMinutesMainElu`, and per-RPC p95 fields provide the comparison. Native
+submission counts include work before the diagnostics exporter starts; queue
+metrics do not. Record the kind breakdown and verify memory catch-up actually
+ran before attributing an improvement to it. Use a fresh fixture for each revision.
+
 ## Sandbox measurements
 
 Follow the current host policy. On Team, use only a task-owned

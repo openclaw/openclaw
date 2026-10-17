@@ -359,6 +359,9 @@ export function estimateAggregateUsageCost(
   if (usage?.usageReport?.state === "unavailable") {
     return undefined;
   }
+  if (usage?.costStatus) {
+    return usage.costStatus === "complete" ? usage.cost?.total : undefined;
+  }
   if (usage?.cost && hasRecordedUsageCost(usage.cost)) {
     return usage.cost.total;
   }

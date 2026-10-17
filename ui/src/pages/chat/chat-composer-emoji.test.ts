@@ -8,7 +8,7 @@ import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
 import {
   createNewSessionComposerTextarea,
   type NewSessionComposerTextarea,
-} from "../new-session/composer-controller.ts";
+} from "../new-session/composer-textarea.ts";
 import { mountNewSessionComposer } from "../new-session/composer.test-support.ts";
 import type { NewSessionComposerOptions } from "../new-session/composer.tsx";
 import { NewSessionModelControl } from "../new-session/model-control.ts";
@@ -92,7 +92,6 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
     onDraftChange: (next) => {
       draft = next;
     },
-    onRequestUpdate: () => redraw(),
   });
   function redraw() {
     if (retired) {

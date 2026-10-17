@@ -109,10 +109,24 @@ it.for(authorityCases)("enforces $contract", async ({ contract, modes }, { signa
       const base = await captureWorkspaceManifest({ root: source, baseCommit });
       const remotes = state.path("remotes");
       await fs.mkdir(remotes);
+      const gitBin = state.path("git-transport");
+      await fs.mkdir(gitBin);
+      // Model a signed-out native CLI without inheriting the host's GitHub accounts.
+      await fs.writeFile(
+        path.join(gitBin, "gh"),
+        `#!${process.execPath}
+if (process.argv[2] !== "auth") process.exit(2);
+if (process.argv[3] === "token") process.exit(1);
+if (process.argv[3] !== "status") process.exit(2);
+process.stdout.write('{"hosts":{}}');
+`,
+        { mode: 0o700 },
+      );
       // Git itself handles the fixture transport; production clone/ls-remote commands
       // and guards are unchanged, and never contact public GitHub or use credentials.
       await withEnvAsync(
         {
+          PATH: `${gitBin}${path.delimiter}${state.env.PATH}`,
           GIT_CONFIG_COUNT: "2",
           GIT_CONFIG_KEY_0: `url.file://${remotes}/.insteadOf`,
           GIT_CONFIG_VALUE_0: "https://github.com/openclaw/",
@@ -132,8 +146,6 @@ it.for(authorityCases)("enforces $contract", async ({ contract, modes }, { signa
               const store = await createWorkerEnvironmentStore({ database });
               const scheduler = createTestGatewayScheduler();
               const realGit = (await exec("which", ["git"])).stdout.trim();
-              const gitBin = state.path("git-transport");
-              await fs.mkdir(gitBin);
               // Node workers intentionally discard GIT_CONFIG_*; this executable adapter
               // changes only transport and delegates every operation to the real Git owner.
               await fs.writeFile(

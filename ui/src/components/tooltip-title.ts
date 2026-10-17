@@ -2,7 +2,10 @@ import "./tooltip.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
 import { showToast } from "../lib/toast.ts";
-import { ownsHoverPreview } from "./link-reader-hovercard-registration.ts";
+import {
+  HOVER_PREVIEW_UNAVAILABLE_EVENT,
+  ownsHoverPreview,
+} from "./link-reader-hovercard-registration.ts";
 import { collectTooltipNameText, isTooltipTriggerElement } from "./tooltip-content.ts";
 import { resolveTransientContainer } from "./transient-container.ts";
 
@@ -70,11 +73,13 @@ export function installTitleTooltips(ownerDocument: Document) {
   // Title suppression and accessible naming still use the normal restoration lifecycle.
   const ownsPreview = (link: HTMLAnchorElement | null | undefined) =>
     Boolean(link && ownsHoverPreview(link));
+  const dialogExpanded = () =>
+    active?.anchor.matches('[aria-haspopup="dialog"][aria-expanded="true"]') === true;
   const content = () => {
     if (ownsPreview(active?.link)) {
       return "";
     }
-    return active?.anchor.matches('[aria-haspopup="dialog"][aria-expanded="true"]')
+    return dialogExpanded()
       ? ""
       : (active?.anchor.getAttribute("data-tooltip") ?? active?.title ?? "");
   };
@@ -122,10 +127,14 @@ export function installTitleTooltips(ownerDocument: Document) {
       active.label = active.title;
       active.anchor.setAttribute("aria-label", active.label);
     }
-    if (tooltip && !active.filePath) {
-      // Updates refresh an open hint, never reopen a dismissed action. Reentry
-      // or keyboard focus supplies new intent after an empty title clears it.
-      tooltip.content = content();
+    if (tooltip) {
+      // Rich file-path content also yields to the trigger's expanded dialog.
+      tooltip.disabled = dialogExpanded();
+      if (!active.filePath) {
+        // Updates refresh an open hint, never reopen a dismissed action. Reentry
+        // or keyboard focus supplies new intent after an empty title clears it.
+        tooltip.content = content();
+      }
     }
   };
   const observer = new MutationObserver(update);
@@ -178,7 +187,13 @@ export function installTitleTooltips(ownerDocument: Document) {
         break;
       }
     }
-    const input = event.type === "focusin" ? "focus" : "pointer";
+    const input =
+      event.type === "focusin" ||
+      (event.type === HOVER_PREVIEW_UNAVAILABLE_EVENT &&
+        event instanceof CustomEvent &&
+        event.detail === "focus")
+        ? "focus"
+        : "pointer";
     const previewOwned = ownsPreview(link);
     if (anchor === active?.anchor && previewOwned === active?.previewOwned) {
       if (active) {
@@ -243,6 +258,7 @@ export function installTitleTooltips(ownerDocument: Document) {
     const tooltipContent = active.filePath ?? content();
     if (!explicit && tooltipContent) {
       tooltip ??= ownerDocument.createElement("openclaw-tooltip");
+      tooltip.disabled = dialogExpanded();
       if (active.filePath) {
         const current = active;
         const path = active.filePath;
@@ -279,9 +295,11 @@ export function installTitleTooltips(ownerDocument: Document) {
   };
   ownerDocument.addEventListener("pointerover", discover, true);
   ownerDocument.addEventListener("focusin", discover, true);
+  ownerDocument.addEventListener(HOVER_PREVIEW_UNAVAILABLE_EVENT, discover, true);
   return () => {
     ownerDocument.removeEventListener("pointerover", discover, true);
     ownerDocument.removeEventListener("focusin", discover, true);
+    ownerDocument.removeEventListener(HOVER_PREVIEW_UNAVAILABLE_EVENT, discover, true);
     restore();
   };
 }

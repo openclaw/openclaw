@@ -370,11 +370,13 @@ src/infra/database-engine/json-values.ts
 src/infra/database-engine/observation.ts
 src/infra/database-engine/open.ts
 src/infra/database-engine/physical-facts.ts
+src/infra/database-engine/physical-store.ts
 src/infra/database-engine/policy.ts
 src/infra/database-engine/postgres-catalog.ts
 src/infra/database-engine/postgres-schema.ts
 src/infra/database-engine/postgres-search-schema.ts
 src/infra/database-engine/postgres-search.ts
+src/infra/database-engine/postgres-store-metadata.ts
 src/infra/database-engine/postgres-vector.ts
 src/infra/database-engine/registry.ts
 src/infra/database-engine/search-admission.ts
@@ -589,7 +591,6 @@ src/config/io.recovery.ts
 src/config/io.runtime-env.ts
 src/config/io.runtime-write-finalization.ts
 src/config/io.runtime.ts
-src/config/io.snapshot-preparation-scope.ts
 src/config/io.snapshot-preparation.ts
 src/config/io.snapshot-preparation.types.ts
 src/config/io.snapshot-shared.ts
@@ -703,6 +704,7 @@ src/state/incognito-session-error.ts
 src/config/sessions/session-model-context-projection.ts
 src/config/sessions/session-model-context-navigation.ts
 src/config/sessions/session-model-context-pages.ts
+src/config/sessions/session-model-context-pairing.ts
 src/config/sessions/session-model-context-read.ts
 src/config/sessions/session-model-context-window.ts
 src/config/sessions/session-mutation-conflict-error.ts
@@ -1906,8 +1908,6 @@ src/state/openclaw-database-preflight-targets.ts
 src/state/openclaw-database-preflight.messages.ts
 src/state/openclaw-database-preflight.ts
 src/state/openclaw-database-seal-schema.ts
-src/state/openclaw-database-verify.impl.ts
-src/state/openclaw-database-verify.ts
 src/state/openclaw-quarantine-error.ts
 src/state/openclaw-quarantine-store.ts
 src/state/openclaw-state-db-additive-columns.ts
@@ -2003,6 +2003,8 @@ src/state/openclaw-state-lease-worker.ts
 src/state/openclaw-state-lease.ts
 src/state/openclaw-state-maintenance-context.ts
 src/state/openclaw-state-ownership.ts
+src/state/schema-migration-backup-scope.ts
+src/state/schema-migration-backup-tables.ts
 src/state/openclaw-state-ownership-preflight.ts
 src/state/openclaw-state-ownership-worker.ts
 src/state/openclaw-state-read-operation.ts
@@ -2326,6 +2328,7 @@ packages/tool-call-repair/src/index.ts
 packages/tool-call-repair/src/payload.ts
 packages/tool-call-repair/src/promote.ts
 packages/tool-call-repair/src/protection-fast-path.ts
+packages/tool-call-repair/src/stream-normalizer-snapshot.ts
 packages/tool-call-repair/src/stream-normalizer-suppression.ts
 packages/tool-call-repair/src/stream-normalizer.ts
 src/agents/auth-profiles/oauth-refresh-error-format.ts

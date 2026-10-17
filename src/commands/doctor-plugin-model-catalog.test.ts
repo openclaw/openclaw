@@ -142,7 +142,13 @@ describe("doctor generated plugin model catalog migration", () => {
     const malformedBefore = readCatalogCacheRow(agentDir, "zai");
     const params = migrationParams([agentDir], false);
     const result = await maybeMigrateLegacyPluginModelCatalogs(params);
-    expect(result).toMatchObject({ detected: 1, migrated: 0, repaired: 0, warnings: [] });
+    expect(result).toMatchObject({
+      detected: 1,
+      migrated: 0,
+      repaired: 0,
+      removedRootCopies: 0,
+      warnings: [],
+    });
     const after = loadPersistedPluginModelCatalogsReadOnly(agentDir);
     expect(readCatalogCacheRow(agentDir, "anthropic")).toEqual(siblingBefore);
     expect(after).toEqual(before);
@@ -196,7 +202,13 @@ describe("doctor generated plugin model catalog migration", () => {
     const sibling = readCatalogCacheRow(agentDir, "anthropic");
     await expect(
       maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir], false)),
-    ).resolves.toEqual({ detected: 1, migrated: 0, repaired: 0, warnings: [] });
+    ).resolves.toEqual({
+      detected: 1,
+      migrated: 0,
+      repaired: 0,
+      removedRootCopies: 0,
+      warnings: [],
+    });
     expect(readCatalogCacheRow(agentDir, "ollama")).toEqual(before);
     expect(readCatalogCacheRow(agentDir, "anthropic")).toEqual(sibling);
 
@@ -205,6 +217,7 @@ describe("doctor generated plugin model catalog migration", () => {
       detected: 1,
       migrated: 0,
       repaired: 1,
+      removedRootCopies: 0,
       warnings: [],
     });
     expect(params.note).toHaveBeenCalledWith(
@@ -233,7 +246,13 @@ describe("doctor generated plugin model catalog migration", () => {
 
     await expect(
       maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir])),
-    ).resolves.toEqual({ detected: 0, migrated: 0, repaired: 0, warnings: [] });
+    ).resolves.toEqual({
+      detected: 0,
+      migrated: 0,
+      repaired: 0,
+      removedRootCopies: 0,
+      warnings: [],
+    });
     expect(readCatalogCacheRow(agentDir, "ollama")).toEqual(repaired);
     expect(readCatalogCacheRow(agentDir, "anthropic")).toEqual(sibling);
   });
@@ -287,6 +306,7 @@ describe("doctor generated plugin model catalog migration", () => {
       detected: 1,
       migrated: 0,
       repaired: 0,
+      removedRootCopies: 0,
       warnings: [],
     });
     expect(params.note).not.toHaveBeenCalledWith(expect.anything(), "Doctor changes");
@@ -321,7 +341,7 @@ describe("doctor generated plugin model catalog migration", () => {
 
     await expect(
       maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir], false)),
-    ).resolves.toMatchObject({ detected: 0, migrated: 0, warnings: [] });
+    ).resolves.toMatchObject({ detected: 0, migrated: 0, removedRootCopies: 0, warnings: [] });
     expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
       { pluginId: "zai", contents },
     ]);
@@ -336,7 +356,7 @@ describe("doctor generated plugin model catalog migration", () => {
       ).toEqual([{ value_json: contents }]);
       await expect(
         maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir])),
-      ).resolves.toMatchObject({ detected: 0, migrated: 0, warnings: [] });
+      ).resolves.toMatchObject({ detected: 0, migrated: 0, removedRootCopies: 0, warnings: [] });
       expect(
         verified
           .prepare("SELECT value_json FROM cache_entries WHERE scope = ?")
@@ -355,7 +375,13 @@ describe("doctor generated plugin model catalog migration", () => {
 
     await expect(
       maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir])),
-    ).resolves.toEqual({ detected: 1, migrated: 1, repaired: 1, warnings: [] });
+    ).resolves.toEqual({
+      detected: 1,
+      migrated: 1,
+      repaired: 1,
+      removedRootCopies: 0,
+      warnings: [],
+    });
 
     const persisted = loadPersistedPluginModelCatalogsReadOnly(agentDir);
     expect(JSON.parse(persisted[0]!.contents).providers.zai).toEqual({
@@ -394,6 +420,7 @@ describe("doctor generated plugin model catalog migration", () => {
       detected: 2,
       migrated: 2,
       repaired: 0,
+      removedRootCopies: 0,
       warnings: [],
     });
     expect(loadPersistedPluginModelCatalogsReadOnly(mainDir)).toEqual([
@@ -423,6 +450,7 @@ describe("doctor generated plugin model catalog migration", () => {
       detected: 1,
       migrated: 0,
       repaired: 0,
+      removedRootCopies: 0,
       warnings: [],
     });
   });
@@ -443,6 +471,7 @@ describe("doctor generated plugin model catalog migration", () => {
         detected: 1,
         migrated: 1,
         repaired: 0,
+        removedRootCopies: 0,
         warnings: [expect.stringContaining("Could not read legacy provider catalog")],
       });
       expect(params.runtime.error).toHaveBeenCalledWith(
@@ -456,5 +485,104 @@ describe("doctor generated plugin model catalog migration", () => {
     } finally {
       fs.chmodSync(unreadablePath, 0o600);
     }
+  });
+});
+
+describe("doctor generated catalog copies in root models.json", () => {
+  // Shape an older writer left in root models.json: the anthropic discovery block copied under
+  // its claude-cli hook alias, with zero placeholders for models the catalog had not priced.
+  const anthropicBlock = {
+    baseUrl: "https://api.anthropic.com",
+    api: "anthropic-messages",
+    models: [
+      {
+        id: "claude-opus-5",
+        name: "Claude Opus 5",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+        contextWindow: 1000000,
+        maxTokens: 128000,
+      },
+      {
+        id: "claude-haiku-4-5",
+        name: "Claude Haiku 4.5",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 64000,
+      },
+    ],
+  };
+
+  async function seedAgent(rootProviders: Record<string, unknown>) {
+    const agentDir = createAgentDir();
+    await replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: {
+        [encodePluginModelCatalogRelativePath("anthropic")]: `${JSON.stringify(
+          {
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: { anthropic: anthropicBlock },
+          },
+          null,
+          2,
+        )}\n`,
+      },
+    });
+    const rootRaw = `${JSON.stringify({ providers: rootProviders }, null, 2)}\n`;
+    fs.writeFileSync(path.join(agentDir, "models.json"), rootRaw, "utf8");
+    return { agentDir, rootRaw };
+  }
+
+  it("removes an exact copy once, keeping a byte-exact backup", async () => {
+    const authored = { baseUrl: "https://proxy.example/v1", api: "openai-completions", models: [] };
+    const { agentDir, rootRaw } = await seedAgent({
+      "claude-cli": anthropicBlock,
+      "my-proxy": authored,
+    });
+
+    const first = await maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir]));
+
+    expect(first).toMatchObject({ detected: 1, removedRootCopies: 1, warnings: [] });
+    expect(JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"))).toEqual({
+      providers: { "my-proxy": authored },
+    });
+    const backups = fs.readdirSync(agentDir).filter((name) => name.startsWith("models.json.bak-"));
+    expect(backups).toHaveLength(1);
+    expect(fs.readFileSync(path.join(agentDir, backups[0]!), "utf8")).toBe(rootRaw);
+
+    const second = await maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir]));
+    expect(second).toMatchObject({ detected: 0, removedRootCopies: 0 });
+  });
+
+  it("keeps edited copies and ids that config declares", async () => {
+    const edited = {
+      ...anthropicBlock,
+      models: anthropicBlock.models.map((model) =>
+        model.id === "claude-haiku-4-5"
+          ? { ...model, cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 } }
+          : model,
+      ),
+    };
+    const { agentDir: editedDir, rootRaw: editedRaw } = await seedAgent({ "claude-cli": edited });
+    const { agentDir: configuredDir, rootRaw: configuredRaw } = await seedAgent({
+      "claude-cli": anthropicBlock,
+    });
+    const configured = migrationParams([configuredDir]);
+    configured.cfg = {
+      models: { providers: { "claude-cli": { baseUrl: anthropicBlock.baseUrl, models: [] } } },
+    } as OpenClawConfig;
+
+    await expect(
+      maybeMigrateLegacyPluginModelCatalogs(migrationParams([editedDir])),
+    ).resolves.toMatchObject({ detected: 0, removedRootCopies: 0 });
+    await expect(maybeMigrateLegacyPluginModelCatalogs(configured)).resolves.toMatchObject({
+      detected: 0,
+      removedRootCopies: 0,
+    });
+    expect(fs.readFileSync(path.join(editedDir, "models.json"), "utf8")).toBe(editedRaw);
+    expect(fs.readFileSync(path.join(configuredDir, "models.json"), "utf8")).toBe(configuredRaw);
   });
 });

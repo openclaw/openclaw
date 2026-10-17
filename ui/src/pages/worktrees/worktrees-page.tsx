@@ -38,6 +38,7 @@ export function WorktreesPage() {
 }
 
 export function WorktreesView(props: { model: WorktreesModel }) {
+  // One model owns this mounted view; its Gateway context remains live.
   const model = untrack(() => props.model);
   model.gateway = useGatewayPage({
     getGateway: () => model.context.gateway,

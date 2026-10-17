@@ -164,8 +164,8 @@ it("reduces embedded personal-account success and failover failure without calle
   );
 });
 
-it.each(["unchanged", "block", "credential"] as const)(
-  "binds the personal provider probe to its observed generation: %s",
+it.each(["unchanged", "credential"] as const)(
+  "binds the personal provider probe to its credential: %s",
   async (changed) => {
     await withOpenClawTestState(
       { label: "personal-usage-probe", scenario: "minimal" },
@@ -188,7 +188,7 @@ it.each(["unchanged", "block", "credential"] as const)(
           };
           return true;
         });
-        // The probe must read its generation from the owner, not this stale caller view.
+        // The worker reduces current usage rather than this caller's older view.
         store.usageStats = { [profileId]: { lastUsed: 99 } };
         const entered = createDeferredCore();
         const response = createDeferredCore<Response>();
@@ -208,14 +208,8 @@ it.each(["unchanged", "block", "credential"] as const)(
           sql.restore();
           if (changed !== "unchanged") {
             updateUserModelAuthProfile(profileId, (profile) => {
-              if (changed === "credential" && profile.credential.type === "oauth") {
+              if (profile.credential.type === "oauth") {
                 profile.credential.access = "synthetic-replacement-access";
-              } else {
-                profile.usageStats = {
-                  ...profile.usageStats,
-                  blockedUntil: now + 900_000,
-                  lastFailureAt: now + 1,
-                };
               }
               return true;
             });

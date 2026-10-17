@@ -2,7 +2,7 @@ import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { ChatTranscriptFeed } from "./chat-transcript-feed.ts";
+import { ChatTranscriptFeed } from "./chat-transcript-feed-view.tsx";
 
 afterEach(cleanupSolid);
 

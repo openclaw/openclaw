@@ -21,7 +21,7 @@ registerMcpAppEnglish();
 type McpAppPanelProps = { launch?: McpAppOpenDetail };
 export type McpAppPanelElement = SolidBridgeElement<McpAppPanelProps>;
 
-export function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement }) {
+function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement }) {
   const context = useApplication();
   const host = untrack(() => props.host);
   const gateway = projectGateway(context.gateway);

@@ -97,6 +97,19 @@ function catalogSkills(instructions: string): CatalogSkill[] {
   });
 }
 
+function catalogContext(text: string) {
+  const summary = {
+    characters: text.length,
+    catalogBlocks: [...text.matchAll(/<available_skills>/gu)].length,
+    limitNotices: text.split("\n").filter((line) => line.startsWith("⚠️ Skills ")),
+  };
+  try {
+    return { ...summary, skills: catalogSkills(text) };
+  } catch (error) {
+    return { ...summary, parseError: String(error) };
+  }
+}
+
 function sse(response: ServerResponse, event: unknown) {
   response.write(`data: ${JSON.stringify(event)}\n\n`);
 }
@@ -185,7 +198,7 @@ export async function startSkillLibraryWireProvider() {
   >();
   const errors: Array<{ message: string; stack?: string; request: unknown }> = [];
   const server = createServer((request, response) => {
-    let requestContext: unknown = { method: request.method, url: request.url };
+    let requestContext: () => unknown = () => ({ method: request.method, url: request.url });
     void (async () => {
       if (request.method === "GET" && request.url === "/v1/models") {
         response.writeHead(200, { "content-type": "application/json" });
@@ -212,15 +225,22 @@ export async function startSkillLibraryWireProvider() {
           .filter((item) => item.role === "user")
           .map((item) => contentText(item.content))
           .findLast((text) => /SKILL-LIBRARY-(?:PROBE|AUTHOR):[a-z0-9-]+/u.test(text)) ?? "";
-      requestContext = {
+      requestContext = () => ({
         method: request.method,
         url: request.url,
         scenario: user.match(
           /SKILL-LIBRARY-(?:PROBE|AUTHOR):[a-z0-9-]+(?: name=[a-z0-9_-]+)?/u,
         )?.[0],
         tools: body.tools?.map(({ name }) => name),
-        input: input.map(({ type, role, name, call_id }) => ({ type, role, name, call_id })),
-      };
+        instructions: catalogContext(body.instructions ?? ""),
+        input: input.map(({ type, role, name, call_id, content }) => ({
+          type,
+          role,
+          name,
+          call_id,
+          catalog: catalogContext(contentText(content)),
+        })),
+      });
       const match = user.match(/SKILL-LIBRARY-PROBE:([a-z0-9-]+)(?: name=([a-z0-9_-]+))?/u);
       response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
       const emitTool = (callId: string, name: string, args: unknown) => {
@@ -450,7 +470,7 @@ export async function startSkillLibraryWireProvider() {
       reply(response, `TOOL-RESULT:${marker}\n${execOutput}`);
     })().catch((error: unknown) => {
       const failure = error instanceof Error ? error : new Error(String(error));
-      errors.push({ message: failure.message, stack: failure.stack, request: requestContext });
+      errors.push({ message: failure.message, stack: failure.stack, request: requestContext() });
       console.error(`[skill-library-wire-provider] ${failure.message}`);
       if (!response.headersSent) {
         response.writeHead(500);

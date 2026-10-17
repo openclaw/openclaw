@@ -1,16 +1,6 @@
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  For,
-  Show,
-  createEffect,
-  createMemo,
-  createSignal,
-  getOwner,
-  isDisposed,
-  onCleanup,
-  untrack,
-} from "solid-js";
+import { For, Show, createMemo, createSignal, onCleanup, untrack } from "solid-js";
 import type {
   WebSearchStatusParams,
   WebSearchStatusResult,
@@ -83,8 +73,8 @@ function SettingsSelectRow(props: {
 
 export function SearchPage() {
   const context = useApplication();
-  const owner = getOwner();
-  const active = () => owner !== null && !isDisposed(owner);
+  let disposed = false;
+  const active = () => !disposed;
   const [result, setResult] = createSignal<WebSearchStatusResult | null>(null);
   const [error, setError] = createSignal("");
   const [loading, setLoading] = createSignal(false);
@@ -94,9 +84,11 @@ export function SearchPage() {
   const [models, setModels] = createSignal<ModelCatalogEntry[]>([]);
   const [model, setModel] = createSignal("");
   const [setupProvider, setSetupProvider] = createSignal("");
+  // The localized default seeds an editable draft; locale changes must not replace user input.
   const [query, setQuery] = createSignal(untrack(() => t("searchPage.queryDefault")));
   let selectedAgent = "";
-  let configRevision = "";
+  // Capture the initial receipt before the Gateway binding admits its first load.
+  let configRevision = untrack(() => searchConfigRevision(context.runtimeConfig.state));
   let loadingActive = false;
   let testingActive = false;
   let queryInput: HTMLInputElement | undefined;
@@ -104,11 +96,6 @@ export function SearchPage() {
   const runtimeView = projectRuntimeConfig(context.runtimeConfig);
   const agents = projectAgents(context.agents);
   const selectionProjection = projectAgentSelection(context.settingsAgentSelection);
-  // Record the initial config receipt before the Gateway effect starts loading.
-  createEffect(
-    () => undefined,
-    () => untrack(syncRuntime),
-  );
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
     onIdentityChange: () => {
@@ -139,9 +126,11 @@ export function SearchPage() {
       void load();
     }
   }
-  const stopRuntime = runtimeView.subscribe(() => untrack(syncRuntime));
-  const stopSelection = selectionProjection.subscribe(() => untrack(syncAgent));
+  // Invalidate admitted tests and reads before config or selection changes can settle them.
+  const stopRuntime = runtimeView.subscribe(syncRuntime);
+  const stopSelection = selectionProjection.subscribe(syncAgent);
   onCleanup(() => {
+    disposed = true;
     stopRuntime();
     stopSelection();
   });

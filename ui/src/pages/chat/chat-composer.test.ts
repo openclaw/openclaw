@@ -176,9 +176,7 @@ function mountComposer(overrides: Parameters<typeof props>[0]) {
   const container = createComposerContainer();
   document.body.append(container);
   const composerProps = props(overrides);
-  const draw = () => renderComposerInto(container, composerProps);
-  composerProps.onRequestUpdate = draw;
-  draw();
+  renderComposerInto(container, composerProps);
   return { container };
 }
 
@@ -236,9 +234,7 @@ describe("renderChatComposer controls", () => {
     composerProps.realtimeTalkDetail = "The selected microphone is unavailable";
     composerProps.onUseSystemDefaultMicrophone = vi.fn();
     composerProps.onDismissRealtimeTalkError = dismissRecovery;
-    const draw = () => renderComposerInto(container, composerProps);
-    composerProps.onRequestUpdate = draw;
-    draw();
+    renderComposerInto(container, composerProps);
     await vi.advanceTimersByTimeAsync(0);
     button(container, t("chat.composer.startVoiceInput")).dispatchEvent(
       dictationPointer("pointerdown", 15),

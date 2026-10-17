@@ -30,6 +30,7 @@ import {
   mergeSessionEntryPreserveActivity,
   type InternalSessionEntry as SessionEntry,
 } from "./types.js";
+import { createSessionWorkStartChangedError } from "./work-start-error.js";
 
 type ExpectedSession = Pick<SessionEntry, "sessionId"> &
   Partial<Pick<SessionEntry, "lifecycleRevision" | "activeWriterRunId">>;
@@ -62,6 +63,15 @@ export type SessionEntryBookkeepingReducer =
 /** Closed internal operations; arbitrary updater callbacks retain prepare/CAS. */
 type SessionEntryPatchStep = (
   | { kind: "fields"; patch: Partial<SessionEntry> }
+  | {
+      kind: "cron-run-continuation";
+      sessionKey: string;
+      source: SessionEntry;
+      continuation: NonNullable<SessionEntry["cronRunContinuation"]>;
+      create: boolean;
+      creation: ReturnType<typeof buildSessionCreationStamp>;
+      thinkingLevel?: string;
+    }
   | {
       kind: "inbound-metadata";
       metadata: PreparedSessionMetaPatch;
@@ -204,6 +214,43 @@ export function reduceSessionEntryPatch(
     return null;
   }
   switch (operation.kind) {
+    case "cron-run-continuation": {
+      const { source, continuation, sessionKey } = operation;
+      if (
+        existingEntry
+          ? existingEntry.cronRunContinuation?.lifecycleRevision !== continuation.lifecycleRevision
+          : !operation.create
+      ) {
+        throw createSessionWorkStartChangedError(sessionKey);
+      }
+      // Ready transfers this row to detached continuation turns; the cron owner stops writing.
+      if (existingEntry && existingEntry.cronRunContinuation?.phase !== "running") {
+        if (
+          continuation.phase === "ready" &&
+          existingEntry.cronRunContinuation?.phase === "ready"
+        ) {
+          return null;
+        }
+        throw createSessionWorkStartChangedError(sessionKey);
+      }
+      return {
+        ...existingEntry,
+        ...(existingEntry
+          ? preserveSqliteSameKeySessionRolloverLineage({
+              next: source,
+              previous: existingEntry,
+              sessionKey,
+            })
+          : source),
+        // Absence clears invalid native handles instead of resurrecting the prior binding.
+        cliSessionBindings: source.cliSessionBindings,
+        cliSessionIds: source.cliSessionIds,
+        claudeCliSessionId: source.claudeCliSessionId,
+        ...(!existingEntry ? operation.creation : {}),
+        ...(operation.thinkingLevel ? { thinkingLevel: operation.thinkingLevel } : {}),
+        cronRunContinuation: continuation,
+      };
+    }
     case "lifecycle": {
       const projection = projectSessionLifecyclePatch(entry, operation.lifecycle);
       onLifecycleProjection?.(projection.patch ? projection.effects : undefined);

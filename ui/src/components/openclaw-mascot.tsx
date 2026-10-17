@@ -6,6 +6,7 @@ import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { MascotAnimator } from "./mascot-animator.ts";
 import { drawMascot } from "./mascot-canvas.ts";
 import {
+  MASCOT_MOODS,
   mascotPalette,
   staticMascotPose,
   type MascotMood,
@@ -15,17 +16,7 @@ import { ThemeBrandIcon } from "./theme-brand-icon.tsx";
 import "./openclaw-mascot.css";
 
 type Props = { mood: MascotMood; size: number; tease: boolean };
-const moods = new Set<MascotMood>([
-  "idle",
-  "curious",
-  "thinking",
-  "working",
-  "happy",
-  "celebrating",
-  "sad",
-  "sleepy",
-  "attentive",
-]);
+const moods = new Set<MascotMood>(MASCOT_MOODS);
 
 defineSolidBridge<Props>(
   "openclaw-mascot",

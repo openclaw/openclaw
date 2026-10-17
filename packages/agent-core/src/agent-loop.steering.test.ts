@@ -18,7 +18,9 @@ import {
   attachInternalSyncSteeringGetter,
   attachInternalToolBatchLifecycle,
   attachInternalToolExecutionPreparer,
+  getInternalToolTurnInputScope,
   setInternalBeforeToolBatch,
+  setInternalToolTurnCompletion,
 } from "./internal-hooks.js";
 import { createAssistantMessageEventStream, type Message } from "./llm.js";
 import type {
@@ -30,6 +32,65 @@ import type {
 } from "./types.js";
 
 describe("agentLoop steering", () => {
+  it.each(["initial", "steered"] as const)(
+    "commits %s input identity before a message_end listener rejects",
+    async (mode) => {
+      const target = user("Input B needs its own answer.", 2);
+      const requestMessages: Message[][] = [];
+      const agent = new Agent({
+        initialState: { model },
+        streamFn: createTurnSequenceStream(
+          [
+            ...(mode === "steered" ? [[{ type: "text" as const, text: "Input A response" }]] : []),
+            [{ type: "text", text: "Input B response" }],
+          ],
+          requestMessages,
+        ),
+      });
+      const completion = () => false;
+      setInternalToolTurnCompletion(agent, completion);
+      let beforeCommit: object | undefined;
+      let publishedScope: object | undefined;
+      let publishedMessage = false;
+      let queued = false;
+      const publicationError = new Error("input publication failed");
+      agent.subscribe((event) => {
+        if (mode === "steered" && event.type === "turn_end" && !queued) {
+          queued = true;
+          agent.steer(target);
+        }
+        if (event.type === "message_start" && event.message === target) {
+          beforeCommit = getInternalToolTurnInputScope(completion);
+        }
+        if (event.type === "message_end" && event.message === target) {
+          publishedMessage = agent.state.messages.includes(target);
+          publishedScope = getInternalToolTurnInputScope(completion);
+          throw publicationError;
+        }
+      });
+
+      if (mode === "initial") {
+        await agent.prompt(target);
+      } else {
+        await agent.prompt("Input A");
+      }
+
+      expect(publishedMessage).toBe(true);
+      expect(beforeCommit).toBeDefined();
+      expect(publishedScope).toBeDefined();
+      expect(publishedScope).not.toBe(beforeCommit);
+      expect(agent.state.errorMessage).toBe(publicationError.message);
+      expect(agent.state.messages.filter((message) => message === target)).toHaveLength(1);
+      expect(agent.hasQueuedMessages()).toBe(false);
+
+      await agent.continue();
+
+      expect(requestMessages.at(-1)).toContain(target);
+      expect(getInternalToolTurnInputScope(completion)).toBe(publishedScope);
+      expect(agent.state.messages.filter((message) => message === target)).toHaveLength(1);
+    },
+  );
+
   it("restores drained steering in order when turn_end aborts before injection", async () => {
     const firstReleased = createDeferred();
     const firstStarted = createDeferred();

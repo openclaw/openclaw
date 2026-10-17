@@ -128,6 +128,58 @@ describe("context engine bootstrap", () => {
 });
 
 describe("interrupted canonical user replay", () => {
+  it.each([
+    { boundary: "same-run progress", sourceReply: { final: false }, resumes: true },
+    { boundary: "same-run final", sourceReply: { final: true }, resumes: false },
+    { boundary: "unmarked mirror", sourceReply: {}, resumes: false },
+    {
+      boundary: "other-run progress",
+      sourceReply: { final: false, runId: "unrelated-run" },
+      resumes: false,
+    },
+  ])(
+    "resumes only unfinished same-run source replies across $boundary",
+    async ({ sourceReply, resumes }) => {
+      await withInterruptedTurn(
+        false,
+        async (fixture) => {
+          const before = loadTranscriptEventsSync(fixture.target);
+          await withReplaySession(fixture, false, async (session, submit) => {
+            streamMocks.streamSimple.mockImplementation((model) =>
+              createAssistantResultStream(
+                createAssistant(model, [{ type: "text", text: "Continued after progress" }]),
+              ),
+            );
+            await submit();
+            if (!resumes) {
+              expect(streamMocks.streamSimple).not.toHaveBeenCalled();
+              expect(Reflect.get(session.messages.at(-1)!, "errorMessage")).toMatch(
+                /^Session transcript keyed user is outside the current turn: \S/,
+              );
+              return;
+            }
+            expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+            expect(session.getLastAssistantText()).toBe("Continued after progress");
+            const messages = streamMocks.streamSimple.mock.calls[0]![1].messages;
+            expect(messages).toContainEqual(
+              expect.objectContaining({ role: "toolResult", toolCallId: "completed-read" }),
+            );
+            expect(JSON.stringify(messages)).not.toContain("Still working after restart.");
+            const after = loadTranscriptEventsSync(fixture.target);
+            expectCapturedCurrentUserPrefix(before, after, fixture);
+            expect(
+              after.filter(
+                (entry) =>
+                  isRecord(entry) && isRecord(entry.message) && entry.message.role === "user",
+              ),
+            ).toHaveLength(1);
+          });
+        },
+        { sourceReply, toolProgress: true },
+      );
+    },
+  );
+
   it("refuses queued custody after a sessions_send replacement retires the original user", async () => {
     await withInterruptedTurn(
       false,

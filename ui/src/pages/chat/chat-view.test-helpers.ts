@@ -3,6 +3,7 @@ import { createComponent, createSignal } from "solid-js";
 import { expect, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
+import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalScopeConfigured,
@@ -18,7 +19,7 @@ import { ChatView, type ChatProps } from "./chat-view.tsx";
 import {
   prepareChatMessageRender,
   resolveMessageActionDetails,
-} from "./components/chat-message-markdown.ts";
+} from "./components/chat-message-markdown-view.tsx";
 import { ChatModelControls } from "./components/chat-model-controls.tsx";
 import type { ChatTranscript } from "./components/chat-transcript-controller.ts";
 import {
@@ -424,6 +425,16 @@ export function createReactiveDraftHarness({
   let currentOverrides = overrides;
   let active = true;
   const container = createComposerContainer();
+  const draftSource = createComposerDraftSource(() => ({
+    draft: currentOverrides.getDraft?.() ?? draft,
+    mentions: currentOverrides.getMentions?.() ?? currentOverrides.mentions ?? [],
+    attachments: currentOverrides.getAttachments?.() ?? currentOverrides.attachments ?? [],
+    pendingAttachmentReads:
+      currentOverrides.getPendingAttachmentReads?.() ??
+      currentOverrides.pendingAttachmentReads ??
+      0,
+    goalDraftMode: currentOverrides.goalDraftMode,
+  }));
   onTestFinished(() => {
     active = false;
     disposeChatView(container);
@@ -431,18 +442,26 @@ export function createReactiveDraftHarness({
   const onDraftChange = vi.fn((next: string) => {
     draft = next;
     observeDraftChange?.(next);
+    draftSource.publish();
   });
   const renderCurrent = (nextOverrides: Partial<ChatProps> = {}) => {
     if (!active) {
       return;
     }
     currentOverrides = { ...currentOverrides, ...nextOverrides };
+    draftSource.publish();
     renderChatInto(container, {
       draft,
       getDraft: () => draft,
       onDraftChange,
       onRequestUpdate: renderCurrent,
       ...currentOverrides,
+      draftSource: currentOverrides.draftSource ?? draftSource,
+      onGoalDraftModeChange: (mode) => {
+        currentOverrides.onGoalDraftModeChange?.(mode);
+        currentOverrides = { ...currentOverrides, goalDraftMode: mode };
+        draftSource.publish();
+      },
     });
   };
   renderCurrent();

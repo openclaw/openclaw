@@ -1,5 +1,6 @@
 import type { BackupProgressInfo, DatabaseSync } from "node:sqlite";
 import type { FileIdentityStat } from "@openclaw/fs-safe/advanced";
+import type { SqliteIntegrityCheckOptions } from "./sqlite-integrity.js";
 import type { SqliteFileContent } from "./sqlite-snapshot-file.js";
 
 export type SqliteSnapshotValidator = (database: DatabaseSync, databaseLabel: string) => void;
@@ -20,6 +21,8 @@ export type CreateVerifiedSqliteSnapshotOptions = {
   requireNonEmptySource?: boolean;
   /** Skip compaction/ID rewriting; transforms may still change IDs and free-page data remains. */
   preserveRowIds?: boolean;
+  /** Migration checkpoints may check only the declared rewrite scope; backups default to full. */
+  integrity?: SqliteIntegrityCheckOptions;
   transform?: (database: DatabaseSync) => void | Promise<void>;
   validate?: SqliteSnapshotValidator;
 };

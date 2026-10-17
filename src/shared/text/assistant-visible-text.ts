@@ -296,10 +296,20 @@ export function assistantVisibleTextFilters(
       transform: stripInvisibleAssistantText,
       create: () => {
         let visible = false;
+        let trailingHighSurrogate = "";
         return createConditionalTextProjector(
           () => "",
           (input) => {
-            visible ||= Boolean(stripInvisibleAssistantText(input.delta ?? input.text));
+            if (!visible) {
+              const appended = trailingHighSurrogate + (input.delta ?? input.text);
+              // A split supplementary character cannot permanently establish visibility yet.
+              trailingHighSurrogate = /[\uD800-\uDBFF]$/.test(appended) ? appended.slice(-1) : "";
+              visible = Boolean(
+                stripInvisibleAssistantText(
+                  trailingHighSurrogate ? appended.slice(0, -1) : appended,
+                ),
+              );
+            }
             return !visible;
           },
         );

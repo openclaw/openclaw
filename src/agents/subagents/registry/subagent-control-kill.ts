@@ -5,7 +5,6 @@ import { isCurrentChatAbortExecution } from "../../../gateway/chat-abort-lifecyc
 import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
-import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { captureSubagentCommands } from "./subagent-control-commands.js";
 import { mutateSubagentRunForKill } from "./subagent-control-kill-runtime.js";
@@ -35,7 +34,7 @@ import {
   captureSubagentExecution,
   getSubagentExecutionCleanup,
 } from "./subagent-registry-execution-cleanup.js";
-import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
@@ -93,37 +92,21 @@ async function killSubagentRun(
   if (!stopAcceptance.accepted) {
     params.cancellationControl.assertCurrent();
   }
-  if (captured) {
-    const entry = getCurrentSubagentRunOwner(subagentRuns, params.entry) ?? captured.entry;
-    const resolver = getGatewayContextResolver(entry);
+  const originalSettlement = captured?.execution.executionSettlement ?? retiredCleanup?.settlement;
+  if (!originalSettlement?.cleanupSettled && (captured || retiredCleanup)) {
     const cleanup =
-      resolver === undefined ? getSubagentExecutionCleanup(entry, params.session.entry) : undefined;
-    const releasedToSelfCleanup =
+      retiredCleanup ?? getSubagentExecutionCleanup(params.entry, params.session.entry);
+    const capturedStillCurrent =
+      captured !== undefined && captureSubagentExecution(params)?.execution === captured.execution;
+    const selfCleanup =
       cleanup !== undefined &&
-      cleanup.settlement === captured.execution.executionSettlement &&
       cleanup.isCurrent() &&
-      cleanup.isSelf();
-    if (releasedToSelfCleanup) {
+      cleanup.isSelf() &&
+      (!captured || cleanup.settlement === captured.execution.executionSettlement);
+    if (selfCleanup) {
       params.session.assertCurrent();
     }
-    const releasedBinding =
-      resolver === undefined &&
-      (captured.execution.executionSettlement?.cleanupSettled === true || releasedToSelfCleanup);
-    if (
-      entry.runId !== captured.runId ||
-      (resolver !== captured.resolver && !releasedBinding) ||
-      captured.resolver?.() !== captured.context ||
-      (captured.context.chatAbortControllers.has(captured.runId) &&
-        captured.context.chatAbortControllers.get(captured.runId) !== captured.execution)
-    ) {
-      throw new Error("Subagent execution owner changed during cancellation");
-    }
-  } else if (retiredCleanup) {
-    params.session.assertCurrent();
-    if (
-      !retiredCleanup.isCurrent() ||
-      (!retiredCleanup.isSelf() && !retiredCleanup.settlement.cleanupSettled)
-    ) {
+    if (!capturedStillCurrent && !selfCleanup) {
       throw new Error("Subagent execution owner changed during cancellation");
     }
   }

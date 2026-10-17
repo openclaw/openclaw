@@ -57,6 +57,7 @@ function googleLiveVideoMessage(frame: RealtimeTalkVideoFrame): unknown {
   };
 }
 
+// Owns the provider socket and media; stop closes them and callbacks reject retired sockets.
 export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private readonly gemini31LiveModel: boolean;
   private readonly completeInputTranscripts: boolean;

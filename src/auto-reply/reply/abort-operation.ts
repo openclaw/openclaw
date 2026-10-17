@@ -256,9 +256,6 @@ export async function stopSubagentsForRequester(params: {
   if (result.status === "error") {
     logVerbose(`abort: failed to stop subagents for ${requesterKey}: ${result.error}`);
   }
-  if (result.killed > 0) {
-    logVerbose(`abort: stopped ${result.killed} subagent run(s) for ${requesterKey}`);
-  }
   return {
     stopped: result.killed,
     failed: result.status === "error" ? result.failed : 0,
@@ -415,12 +412,7 @@ export async function executeFastAbortRequest(
                 target.key === resolvedTargetKey
                   ? (target.sessionId ?? selection.target?.sessionId)
                   : target.sessionId;
-              const cleared = target.clearQueues(selectedSessionId);
-              if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
-                logVerbose(
-                  `abort: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
-                );
-              }
+              target.clearQueues(selectedSessionId);
             }
             for (const target of targets) {
               const outcome = target.abort(

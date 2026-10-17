@@ -11,7 +11,8 @@ import { projectNativeDeviceSettings } from "../../lib/reactive/application-nati
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { VoiceWakeEditorState } from "./talk-device.tsx";
 import {
   isTalkGptLiveModel,
@@ -548,9 +549,9 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
   );
   syncCatalog(catalogConnection(context.gateway));
   refreshCatalogOnConfigChange(context.runtimeConfig.state);
-  window.addEventListener("focus", refreshOnFocus);
+  const stopFocus = listen(window, "focus", refreshOnFocus);
   onCleanup(() => {
-    window.removeEventListener("focus", refreshOnFocus);
+    stopFocus();
     stopGateway();
     stopConfig();
     connectionValue = null;
@@ -563,11 +564,7 @@ export function TalkSettingsPage(props: TalkSettingsPageProps) {
   const settings = createTalkSettings(context, props);
   const runtime = projectRuntimeConfig(context.runtimeConfig);
   const voiceWake = voiceWakeOwner(context.gateway);
-  const voiceWakeState = projectSource(voiceWake, {
-    read: (owner) => owner.state,
-    subscribe: (owner, notify) => owner.subscribe(notify),
-    equality: "revision",
-  });
+  const voiceWakeState = projectOwner(voiceWake, (owner) => owner.state);
   const device = context.nativeDeviceSettings
     ? projectNativeDeviceSettings(context.nativeDeviceSettings)
     : undefined;

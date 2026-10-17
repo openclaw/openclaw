@@ -278,7 +278,6 @@ function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
   provider: string,
-  model?: ProviderRuntimeModel,
 ): StreamFn | undefined {
   if (!extraParams || Object.keys(extraParams).length === 0) {
     return undefined;
@@ -362,14 +361,6 @@ function createStreamFnWithExtraParams(
       candidate?.baseUrl,
     );
 
-  if (log.isEnabled("debug")) {
-    const initialCacheRetention = resolveModelCacheRetention(model);
-    if (Object.keys(streamParams).length > 0 || initialCacheRetention) {
-      const debugParams = { ...streamParams, cacheRetention: initialCacheRetention };
-      log.debug(`creating streamFn wrapper with params: ${JSON.stringify(debugParams)}`);
-    }
-  }
-
   const underlying = requireBaseStreamFn(baseStreamFn);
   return (callModel, context, options) => {
     const cacheRetention = resolveModelCacheRetention(callModel);
@@ -435,9 +426,6 @@ function createParallelToolCallsWrapper(
     if (!GPT_PARALLEL_TOOL_CALLS_APIS.has(model.api)) {
       return underlying(model, context, options);
     }
-    log.debug(
-      `applying parallel_tool_calls=${enabled} for ${model.provider ?? "unknown"}/${model.id ?? "unknown"} api=${model.api}`,
-    );
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
       payloadObj.parallel_tool_calls = enabled;
     });
@@ -605,15 +593,9 @@ export function applyExtraParamsToAgent(
       ? stripRequestScopedExtraParams(effectiveExtraParams)
       : effectiveExtraParams;
   const streamParams = override ? { ...baseExtraParams, ...override } : baseExtraParams;
-  const wrappedStreamFn = createStreamFnWithExtraParams(
-    agent.streamFn,
-    streamParams,
-    provider,
-    model,
-  );
+  const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, streamParams, provider);
 
   if (wrappedStreamFn) {
-    log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);
     agent.streamFn = wrappedStreamFn;
   }
 
@@ -623,9 +605,6 @@ export function applyExtraParamsToAgent(
       thinkingLevel,
     })
   ) {
-    log.debug(
-      `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${provider}/${modelId})`,
-    );
     agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
   }
   const providerWrapperHandled =
@@ -696,9 +675,7 @@ export function applyExtraParamsToAgent(
   );
   if (typeof rawParallelToolCalls === "boolean") {
     agent.streamFn = createParallelToolCallsWrapper(agent.streamFn, rawParallelToolCalls);
-  } else if (rawParallelToolCalls === null) {
-    log.debug("parallel_tool_calls suppressed by null override, skipping injection");
-  } else if (rawParallelToolCalls !== undefined) {
+  } else if (rawParallelToolCalls != null) {
     const summary =
       typeof rawParallelToolCalls === "string" ? rawParallelToolCalls : typeof rawParallelToolCalls;
     log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);

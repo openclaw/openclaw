@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import {
   PRESENTATION_CHANGED_EVENT,
   type PresentationBinding,
@@ -32,25 +32,22 @@ export function linkReaderPrefetchRef(
   values: () => readonly [sessionKey: string, presented: PresentationValue, connected: boolean],
 ): (element: HTMLElement) => void {
   const [element, setElement] = createSignal<HTMLElement>();
-  let root: HTMLElement | undefined;
   let mounted = true;
-  let owner: LinkReaderPrefetchOwner | undefined;
-  const readPresentation = createPresentationReader(() => owner?.hide());
+  const owner = createMemo(() => {
+    const current = element() && new LinkReaderPrefetchOwner(() => mounted);
+    onCleanup(() => current?.disconnect());
+    return current;
+  });
+  const readPresentation = createPresentationReader(() => owner()?.hide());
   createEffect(
-    () => [element(), ...values()] as const,
-    ([nextRoot, sessionKey, presented, connected]) => {
-      if (root !== nextRoot) {
-        owner?.disconnect();
-        root = nextRoot;
-        owner = root ? new LinkReaderPrefetchOwner(() => mounted) : undefined;
-      }
+    () => [owner(), element(), ...values()] as const,
+    ([current, root, sessionKey, presented, connected]) => {
       const active = readPresentation(presented);
-      owner?.update(root, sessionKey, active, connected);
+      current?.update(root, sessionKey, active, connected);
     },
   );
   onCleanup(() => {
     mounted = false;
-    owner?.disconnect();
   });
   return setElement;
 }
@@ -59,23 +56,19 @@ export function markdownBlocksRef(
   presented: () => PresentationValue,
 ): (element: HTMLElement) => void {
   const [element, setElement] = createSignal<HTMLElement>();
-  let root: HTMLElement | undefined;
-  let owner: MarkdownBlocks | undefined;
-  const readPresentation = createPresentationReader(() => owner?.update(false));
+  const owner = createMemo(() => {
+    const root = element();
+    const current = root && new MarkdownBlocks(root);
+    onCleanup(() => current?.dispose());
+    return current;
+  });
+  const readPresentation = createPresentationReader(() => owner()?.update(false));
   createEffect(
-    () => [element(), presented()] as const,
-    ([nextRoot, value]) => {
-      if (root !== nextRoot) {
-        owner?.dispose();
-        root = nextRoot;
-        owner = root ? new MarkdownBlocks(root) : undefined;
-      }
+    () => [owner(), presented()] as const,
+    ([current, value]) => {
       const active = readPresentation(value);
-      owner?.update(active);
+      current?.update(active);
     },
   );
-  onCleanup(() => {
-    owner?.dispose();
-  });
   return setElement;
 }

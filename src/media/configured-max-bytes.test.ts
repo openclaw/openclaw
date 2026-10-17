@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGeneratedMediaMaxBytes } from "../plugin-sdk/media-generation-runtime.js";
+import {
+  resolveGeneratedImageDownloadMaxBytes,
+  resolveGeneratedMediaMaxBytes,
+} from "../plugin-sdk/media-generation-runtime.js";
 import { resolveOutboundMediaMaxBytes } from "./configured-max-bytes.js";
 
 const MB = 1024 * 1024;
@@ -66,5 +69,15 @@ describe("resolveGeneratedMediaMaxBytes", () => {
     expect(resolveGeneratedMediaMaxBytes(configWithMediaMaxMb(mediaMaxMb), "audio")).toBe(
       Math.floor(mediaMaxMb * MB),
     );
+  });
+});
+
+describe("resolveGeneratedImageDownloadMaxBytes", () => {
+  it("lets providers download images above the default media cap", () => {
+    expect(resolveGeneratedImageDownloadMaxBytes(undefined)).toBe(64 * MB);
+  });
+
+  it("never drops below a larger configured media cap", () => {
+    expect(resolveGeneratedImageDownloadMaxBytes(configWithMediaMaxMb(128))).toBe(128 * MB);
   });
 });

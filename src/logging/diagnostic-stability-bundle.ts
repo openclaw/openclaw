@@ -31,7 +31,7 @@ import {
 import { redactSensitiveText } from "./redact.js";
 import { formatDiagnosticFilenameTimestamp } from "./timestamps.js";
 
-export const DIAGNOSTIC_STABILITY_BUNDLE_VERSION = 1;
+const DIAGNOSTIC_STABILITY_BUNDLE_VERSION = 1;
 const DIAGNOSTIC_STABILITY_BUNDLE_RETENTION = 20;
 export const MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES = 5 * 1024 * 1024;
 

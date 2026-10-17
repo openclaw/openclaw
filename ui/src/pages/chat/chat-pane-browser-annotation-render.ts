@@ -2,7 +2,7 @@ import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { removeBrowserAnnotationWithUndo } from "./browser-annotation-removal.ts";
 import { ChatPaneHeader } from "./chat-pane-header.ts";
-import { CHAT_COMPOSER_TEXTAREA_SELECTOR } from "./chat-pane-shared.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
 
 export abstract class ChatPaneBrowserAnnotationRender extends ChatPaneHeader {
   protected readonly removeBrowserAnnotation = (attachment: ChatAttachment) => {
@@ -30,9 +30,8 @@ export abstract class ChatPaneBrowserAnnotationRender extends ChatPaneHeader {
         },
         requestUpdate: () => this.state?.requestUpdate?.(),
         focusComposer: () =>
-          focusAfterUpdate(() =>
-            this.element.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR),
-          ),
+          focusAfterUpdate(() => getChatComposerState(this.presentationId).composerTextarea),
+        // Restored attachment cards own their controls; resolve after the card commits.
         focusRestoredAnnotation: (attachmentId) =>
           focusAfterUpdate(() => {
             const card = [

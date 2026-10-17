@@ -4,6 +4,7 @@ import type { TranslationMap } from "../lib/types.ts";
 import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap & {
+  pluginsPage: TranslationMap & Record<"installed" | "official" | "install", string>;
   mcpApp: TranslationMap;
   linkReader: TranslationMap;
   agentTools: TranslationMap;
@@ -2147,7 +2148,11 @@ export const en: TranslationMap & {
   sessionsPage: {
     hubTablistLabel: "Session sections",
   },
-  pluginsPage: {},
+  pluginsPage: {
+    installed: "Installed",
+    official: "Official",
+    install: "Install",
+  },
   labsPage: {
     intro:
       "Labs contains experimental capabilities that may change, break, or disappear between releases.",
@@ -3406,8 +3411,6 @@ export const en: TranslationMap & {
       pluginSteering: {
         label: "{plugin} guidance",
       },
-      showContent: "Show content",
-      hideContent: "Hide content",
     },
     skillLearned: {
       label: "Learned",

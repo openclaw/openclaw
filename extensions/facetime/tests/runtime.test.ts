@@ -7,7 +7,6 @@ import {
   completeSharedAction,
   createRuntime,
   createTalkDriver,
-  FaceTimeHelperActionError,
   incomingCall,
   mocks,
   pendingDialCancellationResult,
@@ -699,7 +698,7 @@ describe("FaceTime runtime call sequencing", () => {
     { settlement: "reply", error: undefined, expected: "cancelled before helper acknowledgement" },
     {
       settlement: "helper rejection",
-      error: new FaceTimeHelperActionError("late helper rejection"),
+      error: new Error("late helper rejection"),
       expected: "late helper rejection",
     },
   ])(

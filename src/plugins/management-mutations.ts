@@ -139,18 +139,21 @@ export async function installManagedPlugin(
       const officialCatalog = useHostedCatalog ? await loadOfficialCatalog() : { entries: [] };
       const warnings: string[] = [];
       const request = resolveManagedPluginInstallRequest(params.request, officialCatalog.entries);
+      // Official installs retain catalog-owned recovery after resolving their package source.
       const planned = resolvePluginInstallRequestContext({
         source: request.source,
         rawSpec:
-          request.source === "local"
-            ? request.path
-            : request.source === "npm-pack"
-              ? `npm-pack:${request.archivePath}`
-              : request.source === "bundled"
-                ? request.bundledSource.localPath
-                : request.source === "marketplace"
-                  ? request.plugin
-                  : request.spec,
+          request.source === "official"
+            ? (request.expectedPluginId ?? request.spec)
+            : request.source === "local"
+              ? request.path
+              : request.source === "npm-pack"
+                ? `npm-pack:${request.archivePath}`
+                : request.source === "bundled"
+                  ? request.bundledSource.localPath
+                  : request.source === "marketplace"
+                    ? request.plugin
+                    : request.spec,
         ...(request.source === "marketplace" ? { marketplace: request.marketplace } : {}),
         installKind: "plugin",
       });

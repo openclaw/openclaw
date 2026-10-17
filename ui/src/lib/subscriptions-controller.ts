@@ -7,15 +7,10 @@ type SourceEntry<T> = {
   readonly invalidateOnConnect: boolean;
   source: T | undefined;
   cleanup: Cleanup | undefined;
-  generation: number;
   frame: number | undefined;
 };
 
-/**
- * Owns subscriptions whose sources can arrive or change after connection.
- * Source identity is checked before every render and all cleanup follows the
- * host lifecycle, so consumers do not need connected/updated retry loops.
- */
+/** Adapts dynamic subscriptions to the sidebar host until it adopts Solid lifetimes. */
 export class SubscriptionsController implements SolidController {
   private readonly entries: SourceEntry<unknown>[] = [];
   private connected = false;
@@ -46,13 +41,8 @@ export class SubscriptionsController implements SolidController {
     return this.addEntry(
       getSource,
       (source, entry) => {
-        const generation = entry.generation;
         const notify = () => {
-          if (
-            !this.connected ||
-            entry.generation !== generation ||
-            !Object.is(entry.source, source)
-          ) {
+          if (!this.connected || !Object.is(entry.source, source)) {
             return;
           }
           synchronize?.(source);
@@ -65,11 +55,7 @@ export class SubscriptionsController implements SolidController {
           } else if (entry.frame === undefined) {
             entry.frame = globalThis.requestAnimationFrame(() => {
               entry.frame = undefined;
-              if (
-                !this.connected ||
-                entry.generation !== generation ||
-                !Object.is(entry.getSource(), source)
-              ) {
+              if (!this.connected || !Object.is(entry.getSource(), source)) {
                 return;
               }
               this.host.requestUpdate();
@@ -129,7 +115,6 @@ export class SubscriptionsController implements SolidController {
       invalidateOnConnect,
       source: undefined,
       cleanup: undefined,
-      generation: 0,
       frame: undefined,
     };
     this.entries.push(entry as SourceEntry<unknown>);
@@ -155,7 +140,6 @@ export class SubscriptionsController implements SolidController {
       return;
     }
     entry.source = source;
-    entry.generation += 1;
     try {
       entry.cleanup = entry.connect(source);
     } catch (error) {
@@ -168,7 +152,6 @@ export class SubscriptionsController implements SolidController {
   }
 
   private disconnectEntry<T>(entry: SourceEntry<T>): void {
-    entry.generation += 1;
     if (entry.frame !== undefined) {
       globalThis.cancelAnimationFrame(entry.frame);
       entry.frame = undefined;
@@ -176,11 +159,8 @@ export class SubscriptionsController implements SolidController {
     entry.source = undefined;
     const cleanup = entry.cleanup;
     entry.cleanup = undefined;
-    if (!cleanup) {
-      return;
-    }
     try {
-      cleanup();
+      cleanup?.();
     } catch (error) {
       console.error("[openclaw] subscription cleanup failed", error);
     }

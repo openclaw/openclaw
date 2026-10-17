@@ -59,6 +59,7 @@ import type {
 } from "./session-state-events.worker-contract.js";
 import { acknowledgeSessionStateNoticesInWorker } from "./session-state-notice-acknowledgment.js";
 import { enqueueSessionStateNotice } from "./session-state-notices.js";
+import { withSessionUpstreamPublication } from "./session-upstream-links-publication.js";
 import type { SessionUpstreamLink } from "./session-upstream-links.kernel.js";
 
 export { sweepSessionStateWatchNotices } from "./session-state-events.sweep.js";
@@ -221,9 +222,12 @@ async function clearSessionState(
       context,
       (scope) => scope.execute({ type: "sessionState.cleanup", input }),
       {
-        createAdmission: createSqliteWorkerWriteAdmission(
-          () => context.admission.assertCurrent(),
-          [context.admission.databasePath],
+        createAdmission: withSessionUpstreamPublication(
+          createSqliteWorkerWriteAdmission(
+            () => context.admission.assertCurrent(),
+            [context.admission.databasePath],
+          ),
+          context,
         ),
       },
     );

@@ -1,6 +1,6 @@
-// Doctor auth hint tests cover OAuth refresh failure formatting and auth repair guidance.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createOAuthRefreshCredential } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import { writePersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -14,27 +14,38 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const mocks = vi.hoisted(() => ({
-  ensureAuthProfileStore: vi.fn(),
-  note: vi.fn(),
-}));
+const mocks = vi.hoisted(() => ({ ensureAuthProfileStore: vi.fn(), note: vi.fn() }));
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
-  note: mocks.note,
-}));
+// mock-isolation: capture Doctor notes without writing terminal output.
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 
-vi.mock("../agents/auth-profiles.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/auth-profiles.js")>(
-    "../agents/auth-profiles.js",
-  );
-  return {
-    ...actual,
-    ensureAuthProfileStore: mocks.ensureAuthProfileStore,
-  };
-});
+vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/auth-profiles.js")>()),
+  ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+}));
 
 function doctorFixtureConfig(config: unknown): OpenClawConfig {
   return config as OpenClawConfig;
+}
+
+function copilotEnv(token = "GH_TOKEN") {
+  return {
+    OPENCLAW_STATE_DIR: tempDirs.make("openclaw-doctor-copilot-"),
+    [token]: "github-test-token",
+  };
+}
+
+function codexOverrideConfig(override: unknown, configuredAuth = true): OpenClawConfig {
+  return doctorFixtureConfig({
+    ...(configuredAuth
+      ? { auth: { profiles: { "openai:default": { provider: "openai", mode: "oauth" } } } }
+      : {}),
+    models: { providers: { "openai-codex": override } },
+  });
+}
+
+function expectNote(text: string, title: string) {
+  expect(mocks.note).toHaveBeenCalledWith(expect.stringContaining(text), title);
 }
 
 describe("doctor auth hints", () => {
@@ -44,15 +55,8 @@ describe("doctor auth hints", () => {
   });
 
   it("reports ambient GITHUB_TOKEN activation only once", () => {
-    const { key, cfg } = {
-      key: "GITHUB_TOKEN",
-      cfg: { plugins: { entries: { "github-copilot": { enabled: true } } } },
-    } as const;
-
-    const env = {
-      OPENCLAW_STATE_DIR: tempDirs.make("openclaw-doctor-copilot-"),
-      [key]: "github-test-token",
-    };
+    const cfg = { plugins: { entries: { "github-copilot": { enabled: true } } } };
+    const env = copilotEnv("GITHUB_TOKEN");
     noteCopilotAmbientToken(cfg, env);
     noteCopilotAmbientToken(cfg, env);
     expect(mocks.note).toHaveBeenCalledExactlyOnceWith(
@@ -65,29 +69,16 @@ describe("doctor auth hints", () => {
     { models: { providers: { "github-copilot": {} } } },
     { auth: { profiles: { work: { provider: "github-copilot", mode: "token" } } } },
   ])("does not consume the notice for explicit Copilot auth", (config) => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-doctor-copilot-") };
-    noteCopilotAmbientToken(doctorFixtureConfig(config), {
-      ...env,
-      GH_TOKEN: "github-test-token",
-    });
-    noteCopilotAmbientToken(
-      {},
-      {
-        ...env,
-        GH_TOKEN: "github-test-token",
-        COPILOT_GITHUB_TOKEN: "copilot-test-token",
-      },
-    );
+    const env = copilotEnv();
+    noteCopilotAmbientToken(doctorFixtureConfig(config), env);
+    noteCopilotAmbientToken({}, { ...env, COPILOT_GITHUB_TOKEN: "copilot-test-token" });
     expect(mocks.note).not.toHaveBeenCalled();
-    noteCopilotAmbientToken({}, { ...env, GH_TOKEN: "github-test-token" });
+    noteCopilotAmbientToken({}, env);
     expect(mocks.note).toHaveBeenCalledOnce();
   });
 
   it("suppresses the notice for a stored shared Copilot profile", () => {
-    const env = {
-      OPENCLAW_STATE_DIR: tempDirs.make("openclaw-doctor-copilot-"),
-      GH_TOKEN: "github-test-token",
-    };
+    const env = copilotEnv();
     const cfg: OpenClawConfig = { agents: { entries: { worker: {} } } };
     const agentDir = resolveSharedMainAuthAgentDir(env);
     writePersistedAuthProfileStoreRaw(
@@ -105,30 +96,10 @@ describe("doctor auth hints", () => {
 
   it("warns when a legacy Codex override shadows canonical OpenAI OAuth config", () => {
     noteLegacyCodexProviderOverride(
-      doctorFixtureConfig({
-        auth: {
-          profiles: {
-            "openai:default": {
-              provider: "openai",
-              mode: "oauth",
-            },
-          },
-        },
-        models: {
-          providers: {
-            "openai-codex": {
-              api: "openai-responses",
-              baseUrl: "https://api.openai.com/v1",
-            },
-          },
-        },
-      }),
+      codexOverrideConfig({ api: "openai-responses", baseUrl: "https://api.openai.com/v1" }),
     );
 
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("models.providers.openai-codex"),
-      "Codex OAuth",
-    );
+    expectNote("models.providers.openai-codex", "Codex OAuth");
   });
 
   it("reports the legacy shared auth owner with stored credentials", () => {
@@ -139,18 +110,13 @@ describe("doctor auth hints", () => {
     writePersistedAuthProfileStoreRaw(
       {
         version: 1,
-        profiles: {
-          "openai:default": { type: "api_key", provider: "openai", key: "test-key" },
-        },
+        profiles: { "openai:default": { type: "api_key", provider: "openai", key: "test-key" } },
       },
       resolveSharedMainAuthAgentDir(env),
     );
     noteSharedAuthStoreStatus(env);
 
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("openclaw doctor --fix"),
-      "Shared auth store",
-    );
+    expectNote("openclaw doctor --fix", "Shared auth store");
 
     mocks.note.mockClear();
     const relocatedEnv = {
@@ -164,23 +130,7 @@ describe("doctor auth hints", () => {
 
   it("collects legacy Codex override structured findings", async () => {
     const findings = await collectAuthProfileHealthFindings({
-      cfg: doctorFixtureConfig({
-        auth: {
-          profiles: {
-            "openai:default": {
-              provider: "openai",
-              mode: "oauth",
-            },
-          },
-        },
-        models: {
-          providers: {
-            "openai-codex": {
-              api: "openai-responses",
-            },
-          },
-        },
-      }),
+      cfg: codexOverrideConfig({ api: "openai-responses" }),
     });
 
     expect(findings).toEqual([
@@ -199,31 +149,14 @@ describe("doctor auth hints", () => {
     mocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {
-        "openai-codex:default": {
-          type: "oauth",
-          provider: "openai-codex",
-          access: "access-token",
-          refresh: "refresh-token",
-          expires: Date.now() + 60_000,
-        },
+        "openai-codex:default": createOAuthRefreshCredential({ provider: "openai-codex" }),
       },
     });
 
     noteLegacyCodexProviderOverride(
-      doctorFixtureConfig({
-        models: {
-          providers: {
-            "openai-codex": {
-              models: [{ id: "gpt-5.5", api: "openai-responses" }],
-            },
-          },
-        },
-      }),
+      codexOverrideConfig({ models: [{ id: "gpt-5.5", api: "openai-responses" }] }, false),
     );
 
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("legacy transport override"),
-      "Codex OAuth",
-    );
+    expectNote("legacy transport override", "Codex OAuth");
   });
 });

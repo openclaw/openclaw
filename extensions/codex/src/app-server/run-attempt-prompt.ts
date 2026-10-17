@@ -14,10 +14,8 @@ import {
   resolveCodexDeliveryHintPreservedInputRange,
 } from "./attempt-context.js";
 import { isNonEmptyString } from "./attempt-workspace-context.js";
-import {
-  prepareCodexContextEngineHistory,
-  reserveCodexHistoryBudget,
-} from "./context-engine-history.js";
+import { reserveCodexHistoryBudget } from "./context-engine-history-items.js";
+import { prepareCodexContextEngineHistory } from "./context-engine-history.js";
 import {
   CODEX_TURN_START_TEXT_INPUT_MAX_CHARS,
   fitCodexProjectedContextForTurnStart,

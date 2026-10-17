@@ -231,6 +231,9 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/service-worker-update.e2e.test.ts",
   ]);
   expect(localSelected[3]).toEqual(uiE2ePrivateServerTestFiles);
+  // Keep packaged asset proof on the production bundle and source proof on its own server.
+  expect(localSelected[0]).toContain("ui/src/e2e/memory-overview-plugin.e2e.test.ts");
+  expect(localSelected[3]).toContain("ui/src/e2e/memory-overview-source.e2e.test.ts");
   expect(localSelected.flat().toSorted()).toEqual(trackedUiE2eFiles);
   expect(new Set(localSelected.flat()).size).toBe(trackedUiE2eFiles.length);
 

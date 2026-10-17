@@ -205,6 +205,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     if (!layout.columns[0]?.browserWidthPending || !isSidebarSlotVisible(layout, "browser")) {
       return layout;
     }
+    // The composer owns this shell even when its textarea is hidden or replaced.
     const composer = this.element.querySelector<HTMLElement>(".agent-chat__composer-shell");
     if (!composer) {
       return layout;
@@ -212,6 +213,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     const inset = Number.parseFloat(
       getComputedStyle(composer).getPropertyValue("--chat-composer-side-inset"),
     );
+    // The independently mounted sidebar region owns the width used for its initial layout.
     return initializeBrowserSidebarWidth(
       layout,
       this.element.querySelector(".sidebar-region")?.getBoundingClientRect().width ??

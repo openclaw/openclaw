@@ -4,6 +4,7 @@ import {
   assertSqliteIntegrity,
   isTerminalSqliteIntegrityError,
   sqliteIntegrityCheckSteps,
+  type SqliteIntegrityCheckOptions,
   type SqliteIntegrityDiagnostics,
   type SqliteIntegrityOperation,
 } from "./sqlite-integrity.js";
@@ -30,6 +31,7 @@ type RepairCanonicalSqliteIndexesOptions = {
   /** Keep index repair atomic with the caller's whole-schema validation. */
   validateAfterRepair?: () => void;
   verifyPhysicalIntegrity?: boolean;
+  integrity?: SqliteIntegrityCheckOptions;
 };
 
 /**
@@ -51,7 +53,7 @@ export function* verifyAndRepairCanonicalSqliteIndexSteps(
       diagnostics.integrityGateOutcome = "cached";
     }
   } else {
-    yield* sqliteIntegrityCheckSteps(db, databaseLabel, diagnostics);
+    yield* sqliteIntegrityCheckSteps(db, databaseLabel, diagnostics, options.integrity);
   }
 
   const indexesStartedAt = performance.now();
@@ -121,7 +123,7 @@ export function repairCanonicalSqliteIndexes(
     }
 
     if (options.verifyPhysicalIntegrity !== false) {
-      assertSqliteIntegrity(db, databaseLabel);
+      assertSqliteIntegrity(db, databaseLabel, options.integrity);
     }
   });
   if (repairIndexes.size === 0) {
@@ -157,7 +159,10 @@ export function repairCanonicalSqliteIndexes(
       db.exec(`RELEASE SAVEPOINT ${savepoint};`);
       return [];
     }
-    assertSqliteIntegrity(db, databaseLabel);
+    assertSqliteIntegrity(db, databaseLabel, {
+      check: options.integrity?.check ?? "quick",
+      tables: [...new Set([...repairIndexes].map((index) => index.tableName))],
+    });
     options.validateAfterRepair?.();
     db.exec(`RELEASE SAVEPOINT ${savepoint};`);
   } catch (error) {
