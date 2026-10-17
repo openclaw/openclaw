@@ -9,6 +9,9 @@ import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execu
 import type { AgentDatabaseExecutionScope } from "./openclaw-agent-execution-contract.js";
 import { openOpenClawAgentSqliteWorkerStore } from "./openclaw-agent-worker-store.js";
 
+const allow = () => {};
+const workerModule = { moduleUrl: new URL("file:///synthetic/worker.js"), input: undefined };
+
 const boundary = vi.hoisted(() => ({
   ready: Promise.resolve(),
   current: vi.fn(),
@@ -90,13 +93,23 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+async function withPublication(
+  run: (worker: Awaited<ReturnType<typeof openPublication>>) => Promise<void>,
+) {
+  const worker = await openPublication();
+  try {
+    await run(worker);
+  } finally {
+    await worker.close();
+  }
+}
 async function openPublication() {
   const db = new DatabaseSync(":memory:");
   boundary.current.mockReturnValue({ db });
   return openOpenClawAgentSqliteWorkerStore(
     { agentId: "main", env: { OPENCLAW_STATE_DIR: "/synthetic/captured" } },
     db,
-    { moduleUrl: new URL("file:///synthetic/worker.js"), input: undefined },
+    workerModule,
   );
 }
 
@@ -122,21 +135,15 @@ it.each(["domain close", "retired executor", "executor release", "both cleanup s
     if (failurePoint === "executor release" || failurePoint === "both cleanup steps") {
       boundary.release.mockRejectedValue(releaseError);
     }
-    const worker = await openPublication();
-    try {
+    await withPublication(async (worker) => {
       await expect(
-        worker.run(
-          async (scope) => {
-            await scope.execute({ type: "append", input: { value: "committed" } });
-            return committed;
-          },
-          () => undefined,
-        ),
+        worker.run(async (scope) => {
+          await scope.execute({ type: "append", input: { value: "committed" } });
+          return committed;
+        }, allow),
       ).resolves.toBe(committed);
       expect(boundary.release).toHaveBeenCalledOnce();
-    } finally {
-      await worker.close();
-    }
+    });
   },
 );
 
@@ -155,34 +162,23 @@ it.each(["callback", "command"] as const)(
       }
     });
     boundary.release.mockRejectedValue(releaseError);
-    const worker = await openPublication();
-    try {
-      const work = worker.run(
-        async (scope) => {
-          if (failurePoint === "callback") {
-            throw original;
-          }
-          // A caller can handle its command promise, but the adapter still owns its failure.
-          await scope.execute({ type: "append", input: { value: "failed" } }).catch(() => {});
-          return "must not report success";
-        },
-        () => undefined,
-      );
+    await withPublication(async (worker) => {
+      const work = worker.run(async (scope) => {
+        if (failurePoint === "callback") {
+          throw original;
+        }
+        // A caller can handle its command promise, but the adapter still owns its failure.
+        await scope.execute({ type: "append", input: { value: "failed" } }).catch(() => {});
+        return "must not report success";
+      }, allow);
       const errors = (error: unknown): unknown[] =>
         error instanceof AggregateError ? error.errors.flatMap(errors) : [error];
-      const outcome = await work.then(
-        (value) => ({ ok: true, value }),
-        (error: unknown) => ({ ok: false, error }),
-      );
-      expect(outcome.ok).toBe(false);
-      if (!("error" in outcome)) {
-        throw new Error("Failed publication unexpectedly succeeded");
-      }
-      expect(errors(outcome.error)).toEqual([original, cleanupError, releaseError]);
+      await expect(work).rejects.toSatisfy((error: unknown) => {
+        expect(errors(error)).toEqual([original, cleanupError, releaseError]);
+        return true;
+      });
       expect(boundary.release).toHaveBeenCalledOnce();
-    } finally {
-      await worker.close();
-    }
+    });
   },
 );
 
@@ -202,20 +198,14 @@ it.each([
       boundary.current.mockReturnValue({ db });
       const ready = createDeferredCore();
       boundary.ready = ready.promise;
-      const worker = await openOpenClawAgentSqliteWorkerStore(options, db, {
-        moduleUrl: new URL("file:///synthetic/worker.js"),
-        input: undefined,
-      });
+      const worker = await openOpenClawAgentSqliteWorkerStore(options, db, workerModule);
       let work: Promise<string> | undefined;
       try {
         expect(boundary.captureState).toHaveBeenCalledWith(`${root}/state.sqlite`);
-        work = worker.run(
-          async (scope) => {
-            await scope.execute({ type: "append", input: { value: "published" } });
-            return "published";
-          },
-          () => undefined,
-        );
+        work = worker.run(async (scope) => {
+          await scope.execute({ type: "append", input: { value: "published" } });
+          return "published";
+        }, allow);
         expect(boundary.capture.mock.calls[0]?.[0].env?.OPENCLAW_STATE_DIR).toBe(root);
         expect(boundary.execute).not.toHaveBeenCalled();
         env[fixture.key] = "/synthetic/changed";
@@ -235,7 +225,7 @@ it.each([
         await worker.close();
       } finally {
         ready.resolve();
-        await work?.catch(() => undefined);
+        await work?.catch(allow);
         await worker.close();
       }
     });

@@ -1,21 +1,23 @@
 import { copyFileSync } from "node:fs";
 import { constants, DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
-import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
-import { readSessionEntryCacheValidityToken } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
+import { readExactSessionEntryRow as readEntry } from "../config/sessions/session-accessor.sqlite-entry-read.js";
+import { readSessionEntryCacheValidityToken as readCacheToken } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
-import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
+import { ensureOpenClawAgentDatabaseSchema as ensureSchema } from "./openclaw-agent-db-schema.js";
 import {
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
+  openOpenClawAgentDatabase as openDatabase,
+  runOpenClawAgentWriteTransaction as writeTransaction,
 } from "./openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "./openclaw-agent-schema-v24.test-support.js";
 import { withoutSessionEntrySnapshotsSchema } from "./openclaw-agent-session-snapshots-schema.js";
+
+const fixtureKey = "agent:main:fixture-0";
 
 function largeEntry(index: number): SessionEntry {
   const sessionId = `session-${index}`;
@@ -86,6 +88,12 @@ function transcriptRows(database: DatabaseSync) {
     .all();
 }
 
+function nodeRows(database: DatabaseSync) {
+  return database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all();
+}
+function schemaRows(database: DatabaseSync) {
+  return database.prepare("SELECT name, sql FROM sqlite_schema ORDER BY name").all();
+}
 function snapshotRows(database: DatabaseSync) {
   return database
     .prepare("SELECT * FROM session_entry_snapshots ORDER BY session_key, field")
@@ -114,9 +122,7 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
     };
     try {
       entries = seedV23(source, 128);
-      expect(
-        Buffer.byteLength(JSON.stringify(entries.get("agent:main:fixture-0"))),
-      ).toBeGreaterThan(35_000);
+      expect(Buffer.byteLength(JSON.stringify(entries.get(fixtureKey)))).toBeGreaterThan(35_000);
       const insert = source.prepare(`INSERT INTO session_nodes
         (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 10)`);
       for (const [id, entryJson] of rejected) {
@@ -141,7 +147,7 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
     try {
       const beforeTranscript = transcriptRows(database);
       await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
-        ensureOpenClawAgentDatabaseSchema(database, {
+        ensureSchema(database, {
           agentId: "main",
           path: pathname,
           env: state.env,
@@ -156,14 +162,12 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
       expect(transcriptRows(database)).toEqual(beforeTranscript);
       const reader = { agentId: "main", db: database };
       for (const [key, entry] of entries) {
-        expect(readExactSessionEntryRow(reader, key)?.entry).toEqual(entry);
+        expect(readEntry(reader, key)?.entry).toEqual(entry);
       }
-      expect(readExactSessionEntryRow(reader, "agent:main:legacy-values")?.entry).toEqual(
-        legacyValues,
+      expect(readEntry(reader, "agent:main:legacy-values")?.entry).toEqual(legacyValues);
+      expect(JSON.stringify(readEntry(reader, "agent:main:deep")?.entry.skillsSnapshot)).toBe(
+        depthJson,
       );
-      expect(
-        JSON.stringify(readExactSessionEntryRow(reader, "agent:main:deep")?.entry.skillsSnapshot),
-      ).toBe(depthJson);
       expect(
         database.prepare("SELECT count(*) AS count FROM session_entry_snapshots").get(),
       ).toEqual({ count: 388 });
@@ -174,24 +178,20 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
             .get(`agent:main:${id}`),
         ).toEqual({ entry_json: entryJson });
       }
-      const migratedNodes = database
-        .prepare("SELECT * FROM session_nodes ORDER BY session_key")
-        .all();
+      const migratedNodes = nodeRows(database);
       const coldRows = snapshotRows(database);
       database.close();
       database = new DatabaseSync(pathname);
-      ensureOpenClawAgentDatabaseSchema(database, {
+      ensureSchema(database, {
         agentId: "main",
         path: pathname,
         env: state.env,
       });
-      expect(database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all()).toEqual(
-        migratedNodes,
-      );
+      expect(nodeRows(database)).toEqual(migratedNodes);
       expect(snapshotRows(database)).toEqual(coldRows);
       database.close();
       const options = { agentId: "main", path: pathname, env: state.env };
-      const opened = openOpenClawAgentDatabase(options);
+      const opened = openDatabase(options);
       const native = requireNativeSqliteDatabase(opened.db);
       const readRevision = () =>
         opened.db
@@ -200,36 +200,36 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
           )
           .get();
       const migratedRevision = readRevision();
-      runOpenClawAgentWriteTransaction((current) => {
-        const entry = readExactSessionEntryRow(current, "agent:main:fixture-0")!.entry;
+      writeTransaction((current) => {
+        const entry = readEntry(current, fixtureKey)!.entry;
         writeSessionEntry(
           current,
-          "agent:main:fixture-0",
+          fixtureKey,
           { ...entry, label: "Renamed" },
           { canonicalPreviousEntry: entry },
         );
       }, options);
-      expect(readExactSessionEntryRow(opened, "agent:main:fixture-0")?.entry.label).toBe("Renamed");
+      expect(readEntry(opened, fixtureKey)?.entry.label).toBe("Renamed");
       expect(snapshotRows(native)).toEqual(coldRows);
       expect(readRevision()).toEqual(migratedRevision);
       expect(transcriptRows(native)).toEqual(beforeTranscript);
-      const revision = readSessionEntryCacheValidityToken(opened.db);
+      const revision = readCacheToken(opened.db);
       opened.db.exec("BEGIN");
       try {
         opened.db
           .prepare(`UPDATE session_entry_snapshots SET value_json = ?
             WHERE session_key = 'agent:main:fixture-0' AND field = 'skillsSnapshot'`)
           .run(JSON.stringify({ prompt: "Changed outside the entry writer", skills: [] }));
-        expect(readSessionEntryCacheValidityToken(opened.db)).not.toEqual(revision);
-        expect(
-          readExactSessionEntryRow(opened, "agent:main:fixture-0")?.entry.skillsSnapshot?.prompt,
-        ).toBe("Changed outside the entry writer");
+        expect(readCacheToken(opened.db)).not.toEqual(revision);
+        expect(readEntry(opened, fixtureKey)?.entry.skillsSnapshot?.prompt).toBe(
+          "Changed outside the entry writer",
+        );
       } finally {
         opened.db.exec("ROLLBACK");
       }
-      const rolledBackRevision = readSessionEntryCacheValidityToken(opened.db);
+      const rolledBackRevision = readCacheToken(opened.db);
       expect(rolledBackRevision).not.toEqual(revision);
-      expect(readSessionEntryCacheValidityToken(opened.db)).toEqual(rolledBackRevision);
+      expect(readCacheToken(opened.db)).toEqual(rolledBackRevision);
       expect(readRevision()).toEqual(migratedRevision);
       expect(snapshotRows(native)).toEqual(coldRows);
     } finally {
@@ -243,50 +243,41 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
 it("rolls back extracted snapshots and version markers when schema publication is refused", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const pathname = state.path("refused-v23.sqlite");
-    const database = new DatabaseSync(pathname);
-    try {
-      seedV23(database, 2);
-      const before = {
-        schema: database.prepare("SELECT name, sql FROM sqlite_schema ORDER BY name").all(),
-        nodes: database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all(),
-        transcript: transcriptRows(database),
-        metadata: database.prepare("SELECT * FROM schema_meta").all(),
-      };
-      let reachedPublication = false;
-      database.setAuthorizer((action, name, value) => {
-        if (
-          action === constants.SQLITE_PRAGMA &&
-          name === "user_version" &&
-          value === String(OPENCLAW_AGENT_SCHEMA_VERSION)
-        ) {
-          reachedPublication = true;
-          return constants.SQLITE_DENY;
-        }
-        return constants.SQLITE_OK;
-      });
-      await expect(
-        withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
-          ensureOpenClawAgentDatabaseSchema(database, {
-            agentId: "main",
-            path: pathname,
-            env: state.env,
-          });
-        }),
-      ).rejects.toThrow(/authoriz/i);
-      database.setAuthorizer(null);
-      expect(reachedPublication).toBe(true);
-      expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 23 });
-      expect(database.prepare("SELECT name, sql FROM sqlite_schema ORDER BY name").all()).toEqual(
-        before.schema,
-      );
-      expect(database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all()).toEqual(
-        before.nodes,
-      );
-      expect(database.prepare("SELECT * FROM schema_meta").all()).toEqual(before.metadata);
-      expect(transcriptRows(database)).toEqual(before.transcript);
-    } finally {
-      database.setAuthorizer(null);
-      database.close();
-    }
+    using database = new DatabaseSync(pathname);
+    seedV23(database, 2);
+    const before = {
+      schema: schemaRows(database),
+      nodes: nodeRows(database),
+      transcript: transcriptRows(database),
+      metadata: database.prepare("SELECT * FROM schema_meta").all(),
+    };
+    let reachedPublication = false;
+    database.setAuthorizer((action, name, value) => {
+      if (
+        action === constants.SQLITE_PRAGMA &&
+        name === "user_version" &&
+        value === String(OPENCLAW_AGENT_SCHEMA_VERSION)
+      ) {
+        reachedPublication = true;
+        return constants.SQLITE_DENY;
+      }
+      return constants.SQLITE_OK;
+    });
+    await expect(
+      withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
+        ensureSchema(database, {
+          agentId: "main",
+          path: pathname,
+          env: state.env,
+        });
+      }),
+    ).rejects.toThrow(/authoriz/i);
+    database.setAuthorizer(null);
+    expect(reachedPublication).toBe(true);
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 23 });
+    expect(schemaRows(database)).toEqual(before.schema);
+    expect(nodeRows(database)).toEqual(before.nodes);
+    expect(database.prepare("SELECT * FROM schema_meta").all()).toEqual(before.metadata);
+    expect(transcriptRows(database)).toEqual(before.transcript);
   });
 });
