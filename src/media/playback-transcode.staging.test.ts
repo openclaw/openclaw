@@ -65,7 +65,10 @@ beforeEach(() => {
   runFfmpeg.mockReset();
 });
 
-async function createSource(fileName: string, contents: string | Buffer = "stable-source") {
+async function createSource(
+  fileName: string,
+  contents: Parameters<typeof fixture.createSource>[1] = "stable-source",
+) {
   return {
     ...(await fixture.createSource(fileName, contents)),
     mimeType: "audio/x-caf",
