@@ -1,6 +1,3 @@
-/**
- * Handles lifecycle and compaction events from subscribed embedded-agent sessions.
- */
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { projectChatErrorDetail } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
