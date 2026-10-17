@@ -229,123 +229,104 @@ describe("source-only worktree preparation", () => {
   );
 });
 
-describe("explicit preparation input closure", () => {
-  it("plans the actual checkout from canonical source and both asset inventories", async () => {
-    const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
-    const entries = collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot, env: {} });
-    const buildHooks = await readBundledPluginAssetHooks({ rootDir: repoRoot, phase: "build" });
-    const copyHooks = await readBundledPluginAssetHooks({ rootDir: repoRoot, phase: "copy" });
-    expect(entries.length).toBeGreaterThan(0);
-    expect(buildHooks.length).toBeGreaterThan(0);
-    expect(copyHooks.length).toBeGreaterThan(0);
-    const expected = new Set([pkg.name + "...", "./packages/*...", "./ui..."]);
-    for (const entry of entries) {
-      if (entry.hasPackageJson) {
-        expected.add("./extensions/" + entry.id + "...");
-      }
-    }
-    for (const hook of [...buildHooks, ...copyHooks]) {
-      expected.add(
-        "./" + path.relative(repoRoot, hook.pluginDir).split(path.sep).join("/") + "...",
-      );
-    }
-    const plan = await createWorktreeSetupPlan({ rootDir: repoRoot, workload: "gateway", env: {} });
-    expect(plan.install).toEqual({
-      command: "pnpm",
-      args: [...expected]
-        .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0))
-        .flatMap((filter) => ["--filter", filter])
-        .concat(["install", "--frozen-lockfile"]),
-    });
-    expect(plan.build).toEqual({
-      command: "node",
-      args: ["--import", "./scripts/tsx.mjs", "scripts/build-all.mts", "qaRuntime"],
-    });
+it("plans the actual checkout from canonical source and both asset inventories", async () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+  const entries = collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot, env: {} });
+  const buildHooks = await readBundledPluginAssetHooks({ rootDir: repoRoot, phase: "build" });
+  const copyHooks = await readBundledPluginAssetHooks({ rootDir: repoRoot, phase: "copy" });
+  expect(entries.length).toBeGreaterThan(0);
+  expect(buildHooks.length).toBeGreaterThan(0);
+  expect(copyHooks.length).toBeGreaterThan(0);
+  const expected = new Set([
+    pkg.name + "...",
+    "./packages/*...",
+    "./ui...",
+    ...entries
+      .filter((entry) => entry.hasPackageJson)
+      .map((entry) => `./extensions/${entry.id}...`),
+    ...[...buildHooks, ...copyHooks].map(
+      (hook) => "./" + path.relative(repoRoot, hook.pluginDir).split(path.sep).join("/") + "...",
+    ),
+  ]);
+  const plan = await createWorktreeSetupPlan({ rootDir: repoRoot, workload: "gateway", env: {} });
+  expect(plan.install).toEqual({
+    command: "pnpm",
+    args: [...expected]
+      .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0))
+      .flatMap((filter) => ["--filter", filter])
+      .concat(["install", "--frozen-lockfile"]),
   });
+  expect(plan.build).toEqual({
+    command: "node",
+    args: ["--import", "./scripts/tsx.mjs", "scripts/build-all.mts", "qaRuntime"],
+  });
+});
 
-  it("rejects a gateway selection changed during toolchain checks before install", () => {
+it.each([
+  ["selection", "Preparation inputs changed", true],
+  ["missing input", "Tracked preparation inputs are missing", true],
+  ["package link", "symbolic link", false],
+  ["output link", "symbolic link", true],
+] as const)(
+  "rejects %s before installation and preserves existing data",
+  (kind, message, afterStore) => {
     const fixture = makePreparationFixture();
-    const hook = path.join(fixture.controls, "change-owner.cjs");
-    fs.writeFileSync(
-      hook,
-      [
-        'const fs = require("node:fs");',
+    const target = path.join(fixture.controls, "retained");
+    const linkedPath = kind === "package link" ? "packages/support/node_modules" : "dist";
+    const isLink = kind === "package link" || kind === "output link";
+    const input = "extensions/isolated/index.ts";
+    let hook = "";
+    if (isLink) {
+      fs.mkdirSync(target);
+      fs.writeFileSync(path.join(target, "sentinel"), "unchanged");
+      fs.mkdirSync(path.dirname(path.join(fixture.rootDir, linkedPath)), { recursive: true });
+      if (!afterStore) {
+        fs.symlinkSync(
+          target,
+          path.join(fixture.rootDir, linkedPath),
+          process.platform === "win32" ? "junction" : "dir",
+        );
+      } else {
+        hook = `fs.symlinkSync(${JSON.stringify(target)}, "dist", ${JSON.stringify(process.platform === "win32" ? "junction" : "dir")});`;
+      }
+    } else if (kind === "missing input") {
+      hook = `fs.unlinkSync(${JSON.stringify(input)});`;
+    } else {
+      hook = [
         'const file = "extensions/asset-copy/package.json";',
         'const pkg = JSON.parse(fs.readFileSync(file, "utf8"));',
         "delete pkg.openclaw.assetScripts.copy;",
         "fs.writeFileSync(file, JSON.stringify(pkg));",
-      ].join("\n"),
+      ].join("\n");
+    }
+    const hookPath = path.join(fixture.controls, "store-hook.cjs");
+    fs.writeFileSync(hookPath, 'const fs = require("node:fs");\n' + hook);
+    const result = fixture.run(["gateway"], { SETUP_TEST_STORE_HOOK: hookPath });
+    expect(result, result.stderr).toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining(message),
+    });
+    expect(fixture.calls().map((call) => call.args)).toEqual(
+      afterStore ? [["--version"], ["store", "path"]] : [],
     );
-    const result = fixture.run(["gateway"], { SETUP_TEST_STORE_HOOK: hook });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Preparation inputs changed");
-    expect(fixture.calls().map((call) => call.args)).toEqual([["--version"], ["store", "path"]]);
-    const pkg = JSON.parse(
-      fs.readFileSync(path.join(fixture.rootDir, "extensions/asset-copy/package.json"), "utf8"),
-    );
-    expect(pkg.openclaw.assetScripts.copy).toBeUndefined();
-    fixture.assertNoOutputs();
-  });
-});
-
-// These are subprocess/ordering regressions. Recorders never install packages,
-// prove pnpm closure, build the Gateway, or establish graph/volume isolation.
-describe("shared preparation preflight", () => {
-  const workload = "gateway";
-  it("rejects linked package node_modules before invoking pnpm and preserves its target", () => {
-    const fixture = makePreparationFixture();
-    const target = path.join(fixture.controls, "retained");
-    fs.mkdirSync(target);
-    fs.writeFileSync(path.join(target, "sentinel"), "unchanged");
-    const link = path.join(fixture.rootDir, "packages/support/node_modules");
-    fs.mkdirSync(path.dirname(link), { recursive: true });
-    fs.symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
-    const result = fixture.run([workload]);
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("symbolic link");
-    expect(fixture.calls()).toEqual([]);
-    expect(fs.readFileSync(path.join(target, "sentinel"), "utf8")).toBe("unchanged");
-    expect(fs.readdirSync(target)).toEqual(["sentinel"]);
-    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
-  });
-
-  it("revalidates missing inputs after store resolution and before install", () => {
-    const fixture = makePreparationFixture();
-    const hook = path.join(fixture.controls, "remove-input.cjs");
-    fs.writeFileSync(hook, 'require("node:fs").unlinkSync("extensions/isolated/index.ts");\n');
-    const result = fixture.run([workload], { SETUP_TEST_STORE_HOOK: hook });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Tracked preparation inputs are missing");
-    expect(result.stderr).toContain("extensions/isolated/index.ts");
-    expect(fs.existsSync(path.join(fixture.rootDir, "extensions/isolated/index.ts"))).toBe(false);
-    expect(fixture.calls().map((call) => call.args)).toEqual([["--version"], ["store", "path"]]);
-    fixture.assertNoOutputs();
-  });
-
-  it("revalidates output roots after store resolution and before install", () => {
-    const fixture = makePreparationFixture();
-    const target = path.join(fixture.controls, "retained");
-    fs.mkdirSync(target);
-    fs.writeFileSync(path.join(target, "sentinel"), "unchanged");
-    const hook = path.join(fixture.controls, "link-output.cjs");
-    fs.writeFileSync(
-      hook,
-      [
-        'const fs = require("node:fs");',
-        "fs.symlinkSync(" +
-          JSON.stringify(target) +
-          ', "dist", ' +
-          JSON.stringify(process.platform === "win32" ? "junction" : "dir") +
-          ");",
-      ].join("\n"),
-    );
-    const result = fixture.run([workload], { SETUP_TEST_STORE_HOOK: hook });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("symbolic link");
-    expect(fixture.calls().map((call) => call.args)).toEqual([["--version"], ["store", "path"]]);
-    expect(fs.lstatSync(path.join(fixture.rootDir, "dist")).isSymbolicLink()).toBe(true);
-    expect(fs.readdirSync(target)).toEqual(["sentinel"]);
-    expect(fs.readFileSync(path.join(target, "sentinel"), "utf8")).toBe("unchanged");
-    expect(fs.existsSync(path.join(fixture.rootDir, "node_modules"))).toBe(false);
-  });
-});
+    if (isLink) {
+      expect(fs.lstatSync(path.join(fixture.rootDir, linkedPath)).isSymbolicLink()).toBe(true);
+      expect(fs.readdirSync(target)).toEqual(["sentinel"]);
+      expect(fs.readFileSync(path.join(target, "sentinel"), "utf8")).toBe("unchanged");
+      if (afterStore) {
+        expect(fs.existsSync(path.join(fixture.rootDir, "node_modules"))).toBe(false);
+      }
+    } else {
+      if (kind === "missing input") {
+        expect(result.stderr).toContain(input);
+        expect(fs.existsSync(path.join(fixture.rootDir, input))).toBe(false);
+      } else {
+        const pkg = JSON.parse(
+          fs.readFileSync(path.join(fixture.rootDir, "extensions/asset-copy/package.json"), "utf8"),
+        );
+        expect(pkg.openclaw.assetScripts.copy).toBeUndefined();
+      }
+      fixture.assertNoOutputs();
+    }
+  },
+);

@@ -94,33 +94,13 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
       expectStagingClean(root);
     }));
 
-  it.concurrent.for<{
-    name: string;
-    badPlugin: string;
-    before: NodeJS.ProcessEnv;
-    after: NodeJS.ProcessEnv;
-  }>([
-    {
-      name: "bounded plugins",
-      badPlugin: "broken",
-      before: { OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "plain" },
-      after: {},
-    },
-    {
-      name: "optional plugins",
-      badPlugin: "acpx",
-      before: { OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: "0" },
-      after: {},
-    },
-    {
-      name: "Docker plugins",
-      badPlugin: "external",
-      before: {},
-      after: { OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS: "external" },
-    },
+  it.concurrent.for<[string, string, NodeJS.ProcessEnv, NodeJS.ProcessEnv]>([
+    ["bounded plugins", "broken", { OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "plain" }, {}],
+    ["optional plugins", "acpx", { OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: "0" }, {}],
+    ["Docker plugins", "external", {}, { OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS: "external" }],
   ])(
-    "rejects newly selected $name instead of restoring their previous SDK cache",
-    ({ badPlugin, before, after }, { command }) =>
+    "rejects newly selected %s instead of restoring their previous SDK cache",
+    ([_name, badPlugin, before, after], { command }) =>
       command.lifetime.run(async () => {
         const { root, write } = createFixture(command);
         for (const id of ["plain", badPlugin]) {

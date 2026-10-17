@@ -16,6 +16,13 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
 const nodeExecPath = requireNodeTool("node");
+const ownerModule = (body = "", alias = "admit") =>
+  `function admit() { ${body} } export { admit${alias === "admit" ? "" : ` as ${alias}`} };`;
+const bundledModule = (name: string, contents: string, main?: string) => ({
+  [`${name}/package.json`]: JSON.stringify({ name, version: "1.0.0", main }),
+  [`${name}/${main ?? "index.js"}`]: contents,
+});
+const sha256 = (source: string) => createHash("sha256").update(source).digest("hex");
 
 async function writeFiles(root: string, files: Record<string, string>) {
   for (const [name, contents] of Object.entries(files)) {
@@ -119,7 +126,7 @@ it("verifies a package member without system tar and rejects changed installed b
   try {
     await expect(verifyPackageMember(packageRoot, tarball, file)).resolves.toEqual({
       file: "dist/member.mjs",
-      sha256: createHash("sha256").update(source).digest("hex"),
+      sha256: sha256(source),
     });
     await fs.writeFile(file, "export const fixture = false;\n");
     await expect(verifyPackageMember(packageRoot, tarball, file)).rejects.toThrow(
@@ -153,7 +160,7 @@ it("accepts a highly compressible member below the existing byte ceiling", async
     verifyPackageMember(packageRoot, tarball, path.join(packageRoot, "dist/member.node")),
   ).resolves.toEqual({
     file: "dist/member.node",
-    sha256: createHash("sha256").update(source).digest("hex"),
+    sha256: sha256(source),
   });
 });
 
@@ -163,7 +170,7 @@ it.each([
 ])(
   "loads named package owners through $alias with split chunks=$split",
   async ({ alias, split }) => {
-    const admit = `function admit() { return "owned"; } export { admit as ${alias} };`;
+    const admit = ownerModule('return "owned";', alias);
     const finish = 'function finish() { return "finished"; } export { finish as f };';
     const facade = 'import { f as finish } from "./finish-fixture.mjs"; export { finish };';
     const rootSource = split ? admit : `${admit}\n${finish}`;
@@ -179,19 +186,18 @@ it.each([
       "admit",
       "finish",
     ]);
-    expect(values.admit).toBe("owned");
-    expect(values.finish).toBe("finished");
+    expect(values).toMatchObject({ admit: "owned", finish: "finished" });
     const expected: PackagedOwnerEvidence[] = [
       {
         file: "dist/executor-fixture.mjs",
-        sha256: createHash("sha256").update(rootSource).digest("hex"),
+        sha256: sha256(rootSource),
         exports: split ? { admit: alias } : { admit: alias, finish: "f" },
       },
     ];
     if (split) {
       expected.push({
         file: "dist/executor-finish.mjs",
-        sha256: createHash("sha256").update(facade).digest("hex"),
+        sha256: sha256(facade),
         exports: { finish: "finish" },
       });
     }
@@ -219,13 +225,13 @@ it.each(["owner", "static", "computed", "lazy", "bundled"])(
   "rejects post-admission %s replacement before evaluation",
   async (kind) => {
     const sources: Record<string, string> = {
-      owner: 'function admit() { return "original"; } export { admit };',
-      static:
-        'import { value } from "./implementation.mjs"; function admit() { return value; } export { admit };',
+      owner: ownerModule('return "original";'),
+      static: 'import { value } from "./implementation.mjs"; ' + ownerModule("return value;"),
       computed:
-        'const module = "./implementation.mjs"; const { value } = await import(module); function admit() { return value; } export { admit };',
+        'const module = "./implementation.mjs"; const { value } = await import(module); ' +
+        ownerModule("return value;"),
       lazy: 'async function admit() { return (await import("./implementation.mjs")).value; } export { admit };',
-      bundled: 'import value from "bundled"; function admit() { return value; } export { admit };',
+      bundled: 'import value from "bundled"; ' + ownerModule("return value;"),
     };
     const { packageRoot, tarball } = await fixture(
       {
@@ -233,10 +239,7 @@ it.each(["owner", "static", "computed", "lazy", "bundled"])(
         "implementation.mjs": 'export const value = "original";',
       },
       kind === "bundled"
-        ? {
-            "bundled/package.json": '{"name":"bundled","version":"1.0.0","main":"index.cjs"}',
-            "bundled/index.cjs": 'module.exports = "original";',
-          }
+        ? bundledModule("bundled", 'module.exports = "original";', "index.cjs")
         : {},
     );
     const target = path.join(
@@ -248,7 +251,7 @@ it.each(["owner", "static", "computed", "lazy", "bundled"])(
     const changed =
       'console.log("UNVERIFIED_MODULE_EVALUATED"); ' +
       (kind === "owner"
-        ? 'function admit() { return "changed"; } export { admit };'
+        ? ownerModule('return "changed";')
         : kind === "bundled"
           ? 'module.exports = "changed";'
           : 'export const value = "changed";');
@@ -359,24 +362,22 @@ it.each([
   const bundled = kind === "missing bundled" || kind === "bundled nested shadow";
   const { packageRoot, tarball } = await fixture(
     {
-      "executor-fixture.mjs": "function admit() {} export { admit };",
+      "executor-fixture.mjs": ownerModule(),
       ...(!bundled && kind !== "linked directory"
         ? { "implementation.mjs": 'export const value = "original";' }
         : {}),
     },
     bundled
       ? {
-          "@fixture/bundled/package.json": '{"name":"@fixture/bundled","version":"1.0.0"}',
-          "@fixture/bundled/index.js": "module.exports = 1;",
-          "target/package.json": '{"name":"target","version":"1.0.0"}',
-          "target/index.js": "module.exports = 1;",
+          ...bundledModule("@fixture/bundled", "module.exports = 1;"),
+          ...bundledModule("target", "module.exports = 1;"),
         }
       : {},
   );
   if (bundled) {
-    const external = path.join(packageRoot, "node_modules/@fixture/external");
-    await fs.mkdir(external, { recursive: true });
-    await fs.writeFile(path.join(external, "index.js"), "module.exports = 2;");
+    await writeFiles(packageRoot, {
+      "node_modules/@fixture/external/index.js": "module.exports = 2;",
+    });
   }
   if (kind === "missing" || kind === "missing bundled") {
     await fs.rm(
@@ -395,15 +396,12 @@ it.each([
       "pending\n",
     );
   } else {
-    const injected = path.join(
-      packageRoot,
-      bundled ? "node_modules/@fixture/bundled/node_modules/target" : "dist/node_modules/injected",
-    );
-    await fs.mkdir(injected, { recursive: true });
-    await fs.writeFile(
-      path.join(injected, "index.js"),
-      bundled ? "module.exports = 3;" : "module.exports = 1;",
-    );
+    const injected = bundled
+      ? "node_modules/@fixture/bundled/node_modules/target"
+      : "dist/node_modules/injected";
+    await writeFiles(packageRoot, {
+      [`${injected}/index.js`]: bundled ? "module.exports = 3;" : "module.exports = 1;",
+    });
   }
   await expect(inspectPackagedOwner(packageRoot, tarball)).rejects.toThrow(error);
 });
@@ -420,7 +418,7 @@ it("authenticates a bundled package after npm pack and offline installation", as
       dependencies: { bundled: "1.0.0" },
       bundleDependencies: ["bundled"],
     }),
-    "dist/executor-fixture.mjs": "function admit() {} export { admit };",
+    "dist/executor-fixture.mjs": ownerModule(),
     "node_modules/bundled/package.json": '{"name":"bundled","version":"1.0.0"}',
     "node_modules/bundled/index.js": "module.exports = 1;",
   };
