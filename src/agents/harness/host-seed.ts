@@ -37,6 +37,7 @@ export function bindBoundedSeed(
   const { agentId, sessionId, sessionKey, storePath } = target ?? {};
   const maxBytes = resolveMaxActiveTranscriptBytes(config);
   if (
+    !target ||
     !agentId ||
     !sessionId ||
     !sessionKey ||
