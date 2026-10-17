@@ -123,6 +123,38 @@ const candidate = {
 
 let logsDir: string;
 
+function commandResult(stdout = "", exitCode = 0, stderr = "") {
+  return { exitCode, stdout, stderr };
+}
+
+function gatewayFixture(logPath = "/tmp/upgrade-gateway.log") {
+  return { child: {}, closeLog: vi.fn(), launchLogOffset: 0, logPath, waitForClose: vi.fn() };
+}
+
+function tempEnv(path: string) {
+  return { TEMP: path, TMP: path, TMPDIR: path, Temp: path };
+}
+
+const updateTimeout = () =>
+  new Error(
+    "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-candidate.tgz --yes --json --no-restart --timeout 600",
+  );
+
+function expectPhases(
+  result: Awaited<ReturnType<typeof runUpgradeLane>>,
+  phases: Record<string, string>,
+) {
+  for (const [name, status] of Object.entries(phases)) {
+    expect(result.phaseTimings).toContainEqual(expect.objectContaining({ name, status }));
+  }
+}
+
+function cliCalls(command: string) {
+  return mocks.runOpenClaw.mock.calls
+    .map(([call]) => call)
+    .filter((call) => call.args[0] === command);
+}
+
 function upgradeParams() {
   return {
     baselineSpec: "openclaw@2026.7.1",
@@ -155,23 +187,17 @@ function arrangeSuccessfulLane() {
     commit: candidate.sourceSha,
   });
   mocks.runBundledPluginPostinstall.mockResolvedValue(undefined);
-  mocks.runCommand.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" });
-  mocks.runOpenClaw.mockResolvedValue({ exitCode: 0, stdout: "{}", stderr: "" });
+  mocks.runCommand.mockResolvedValue(commandResult());
+  mocks.runOpenClaw.mockResolvedValue(commandResult("{}"));
   mocks.resolveInstallerTargetVersion.mockResolvedValue("2026.7.1");
   mocks.runInstallerSmoke.mockImplementation(async ({ lane }) => trackTempDir(lane.rootDir));
   mocks.verifyFreshShellCommand.mockResolvedValue({ cliPath: join(logsDir, "openclaw") });
   mocks.ensureDevUpdateGitInstall.mockResolvedValue({ cliPath: join(logsDir, "openclaw") });
   mocks.runModelsSet.mockResolvedValue(undefined);
-  mocks.startGateway.mockResolvedValue({
-    child: {},
-    closeLog: vi.fn(),
-    launchLogOffset: 0,
-    logPath: "/tmp/upgrade-gateway.log",
-    waitForClose: vi.fn(),
-  });
+  mocks.startGateway.mockResolvedValue(gatewayFixture());
   mocks.waitForGateway.mockResolvedValue(undefined);
   mocks.runDashboardSmoke.mockResolvedValue(undefined);
-  mocks.runAgentTurn.mockResolvedValue({ exitCode: 0, stdout: "OK", stderr: "" });
+  mocks.runAgentTurn.mockResolvedValue(commandResult("OK"));
 }
 
 describe("cross-OS manual gateway lane evidence", () => {
@@ -214,19 +240,14 @@ describe("cross-OS manual gateway lane evidence", () => {
       vi.mocked(tmpdir).mockReturnValue(logsDir);
       vi.spyOn(process, "platform", "get").mockReturnValue(platform);
       const realpath = vi.spyOn(realpathSync, "native").mockReturnValue(longTemp);
-      for (const key of ["TEMP", "TMP", "TMPDIR", "Temp"]) {
-        vi.stubEnv(key, shortTemp);
+      for (const [key, value] of Object.entries(tempEnv(shortTemp))) {
+        vi.stubEnv(key, value);
       }
 
       const result = await runUpgradeLane(upgradeParams());
 
       expect(result).toMatchObject({ status: "pass" });
-      const expectedEnv = {
-        TEMP: longTemp,
-        TMP: longTemp,
-        TMPDIR: longTemp,
-        Temp: longTemp,
-      };
+      const expectedEnv = tempEnv(longTemp);
       expect(mocks.installPackageSpec).toHaveBeenCalledWith(
         expect.objectContaining({ env: expect.objectContaining(expectedEnv) }),
       );
@@ -252,8 +273,8 @@ describe("cross-OS manual gateway lane evidence", () => {
       symlinkSync(physicalTemp, aliasedTemp, process.platform === "win32" ? "junction" : "dir");
       vi.mocked(tmpdir).mockReturnValue(aliasedTemp);
       vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-      for (const key of ["TEMP", "TMP", "TMPDIR", "Temp"]) {
-        vi.stubEnv(key, aliasedTemp);
+      for (const [key, value] of Object.entries(tempEnv(aliasedTemp))) {
+        vi.stubEnv(key, value);
       }
 
       const result = await runUpgradeLane(upgradeParams());
@@ -263,20 +284,12 @@ describe("cross-OS manual gateway lane evidence", () => {
       expect(baselineInstall?.lane.rootDir).toMatch(
         new RegExp(`^${physicalTemp.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
       );
-      expect(baselineInstall?.env).toMatchObject({
-        TEMP: physicalTemp,
-        TMP: physicalTemp,
-        TMPDIR: physicalTemp,
-        Temp: physicalTemp,
-      });
+      expect(baselineInstall?.env).toMatchObject(tempEnv(physicalTemp));
       expect(mocks.runOpenClaw).toHaveBeenCalledWith(
         expect.objectContaining({
           args: expect.arrayContaining(["update", "--json"]),
           env: expect.objectContaining({
-            TEMP: physicalTemp,
-            TMP: physicalTemp,
-            TMPDIR: physicalTemp,
-            Temp: physicalTemp,
+            ...tempEnv(physicalTemp),
             NPM_CONFIG_PREFIX: expect.stringMatching(
               new RegExp(`^${physicalTemp.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
             ),
@@ -355,7 +368,7 @@ describe("cross-OS manual gateway lane evidence", () => {
               throw new Error("injected onboard failure");
             }
           }
-          return { exitCode: 0, stdout: "", stderr: "" };
+          return commandResult();
         });
         mocks.runModelsSet.mockImplementation(async ({ lane }) => {
           expect(lane.gatewayPort).toBe(port);
@@ -372,13 +385,7 @@ describe("cross-OS manual gateway lane evidence", () => {
           expect(lane.gatewayPort).toBe(port);
           phases.push("start-gateway");
           expectReservationClosed(port);
-          return {
-            child: {},
-            closeLog: vi.fn(),
-            launchLogOffset: 0,
-            logPath: join(logsDir, "gateway.log"),
-            waitForClose: vi.fn(),
-          };
+          return gatewayFixture(join(logsDir, "gateway.log"));
         });
 
         const result = await runLane(upgradeParams()).catch((error: unknown) => ({
@@ -487,41 +494,32 @@ describe("cross-OS manual gateway lane evidence", () => {
         const schemaIndex = args.indexOf("schema");
         if (schemaIndex !== -1) {
           const contentVersion = Number(args[schemaIndex + 1]);
-          return {
-            exitCode: 0,
-            stdout: JSON.stringify({
+          return commandResult(
+            JSON.stringify({
               publishedVersion: contentVersion === 15 ? 15 : publishedVersion,
               contentVersion,
             }),
-            stderr: "",
-          };
+          );
         }
         if (args.includes("refusal") || args.includes("receipt")) {
           throw new Error("obsolete external transition assertion");
         }
-        return {
-          exitCode: 0,
-          stdout: args.includes("session-key") ? "agent:main:retained" : "{}",
-          stderr: "",
-        };
+        return commandResult(args.includes("session-key") ? "agent:main:retained" : "{}");
       });
       mocks.runOpenClaw.mockImplementation(async ({ args }: { args: string[] }) => {
         if (args[0] === "update") {
-          return {
-            exitCode: outcome === "update refused" ? 1 : 0,
-            stdout: JSON.stringify({
+          return commandResult(
+            JSON.stringify({
               status: outcome === "pass" ? "ok" : outcome === "skipped" ? "skipped" : "error",
             }),
-            stderr: "",
-          };
+            outcome === "update refused" ? 1 : 0,
+          );
         }
-        return {
-          exitCode: 0,
-          stdout: args.includes("system-presence")
+        return commandResult(
+          args.includes("system-presence")
             ? JSON.stringify([{ mode: "gateway", reason: "self", version: "2026.9.3" }])
             : "{}",
-          stderr: "",
-        };
+        );
       });
       const result = await runUpgradeLane({
         ...upgradeParams(),
@@ -538,19 +536,15 @@ describe("cross-OS manual gateway lane evidence", () => {
           schemaAfterServing: { publishedVersion, contentVersion: 16 },
         });
         expect(mocks.startGateway).toHaveBeenCalledTimes(2);
-        expect(
-          mocks.runOpenClaw.mock.calls.filter(([call]) => call.args[0] === "agent"),
-        ).toHaveLength(2);
+        expect(cliCalls("agent")).toHaveLength(2);
       } else {
         expect(result).toMatchObject({
           status: "fail",
           error: expect.stringContaining("packaged self-update"),
         });
       }
-      expect(
-        mocks.runOpenClaw.mock.calls.filter(([call]) => call.args[0] === "update"),
-      ).toHaveLength(1);
-      expect(mocks.runOpenClaw.mock.calls.some(([call]) => call.args[0] === "doctor")).toBe(false);
+      expect(cliCalls("update")).toHaveLength(1);
+      expect(cliCalls("doctor")).toEqual([]);
       expect(mocks.installTarballPackage).not.toHaveBeenCalled();
     },
   );
@@ -625,11 +619,7 @@ describe("cross-OS manual gateway lane evidence", () => {
       >("../../scripts/lib/cross-os-release-checks/install.ts");
       arrangeSuccessfulLane();
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      mocks.runOpenClaw.mockRejectedValueOnce(
-        new Error(
-          "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-candidate.tgz --yes --json --no-restart --timeout 600",
-        ),
-      );
+      mocks.runOpenClaw.mockRejectedValueOnce(updateTimeout());
       mocks.installPackageSpec
         .mockImplementationOnce(async () => {})
         .mockImplementationOnce(realInstall.installPackageSpec);
@@ -658,12 +648,7 @@ describe("cross-OS manual gateway lane evidence", () => {
       expect(log).toContain(
         persistent ? `attempt=${attempts} code=${code} failed` : "attempt=2 success",
       );
-      expect(result.phaseTimings).toContainEqual(
-        expect.objectContaining({
-          name: "update-fallback-install",
-          status: persistent ? "fail" : "pass",
-        }),
-      );
+      expectPhases(result, { "update-fallback-install": persistent ? "fail" : "pass" });
       const npmInstalls = mocks.runCommand.mock.calls.filter(([, args]) =>
         args.includes("install"),
       );
@@ -684,9 +669,7 @@ describe("cross-OS manual gateway lane evidence", () => {
       mkdirSync(npmLogsDir, { recursive: true });
       npmLogPath = join(npmLogsDir, "2026-08-29T00_00_00_000Z-debug-0.log");
       writeFileSync(npmLogPath, "0 error code ETIMEDOUT\n1 error token=updater-secret\n");
-      throw new Error(
-        "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-candidate.tgz --yes --json --no-restart --timeout 600",
-      );
+      throw updateTimeout();
     });
     mocks.installPackageSpec
       .mockImplementationOnce(async () => {})
@@ -707,12 +690,7 @@ describe("cross-OS manual gateway lane evidence", () => {
       },
       updateTimings: [],
     });
-    expect(result.phaseTimings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ name: "update", status: "pass" }),
-        expect.objectContaining({ name: "update-fallback-install", status: "pass" }),
-      ]),
-    );
+    expectPhases(result, { update: "pass", "update-fallback-install": "pass" });
     expect(capturedBeforeFallback).toBe(true);
     expect(readFileSync(join(logsDir, "upgrade-update.log"), "utf8")).not.toContain(
       "updater-secret",
@@ -722,21 +700,21 @@ describe("cross-OS manual gateway lane evidence", () => {
   it("retains sanitized updater timings when a later upgrade phase fails", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     arrangeSuccessfulLane();
-    mocks.runOpenClaw.mockResolvedValue({
-      exitCode: 0,
-      stdout: JSON.stringify({
-        durationMs: 622_000,
-        root: String.raw`C:\npm-updater-private-fixture\openclaw`,
-        steps: [
-          {
-            name: "global update",
-            command: "npm install --global secret-package",
-            durationMs: 461_000,
-          },
-        ],
-      }),
-      stderr: "",
-    });
+    mocks.runOpenClaw.mockResolvedValue(
+      commandResult(
+        JSON.stringify({
+          durationMs: 622_000,
+          root: String.raw`C:\npm-updater-private-fixture\openclaw`,
+          steps: [
+            {
+              name: "global update",
+              command: "npm install --global secret-package",
+              durationMs: 461_000,
+            },
+          ],
+        }),
+      ),
+    );
     mocks.runBundledPluginPostinstall
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error("post-update plugin failure"));
@@ -752,12 +730,7 @@ describe("cross-OS manual gateway lane evidence", () => {
     });
     expect(result.error).toContain("post-update plugin failure");
     expect(result).not.toHaveProperty("updateFallback");
-    expect(result.phaseTimings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ name: "update", status: "pass" }),
-        expect.objectContaining({ name: "run-bundled-plugin-postinstall", status: "fail" }),
-      ]),
-    );
+    expectPhases(result, { update: "pass", "run-bundled-plugin-postinstall": "fail" });
     expect(JSON.stringify(result)).not.toContain("npm-updater-private-fixture");
     expect(JSON.stringify(result)).not.toContain("npm install");
   });
@@ -791,23 +764,19 @@ describe("cross-OS manual gateway lane evidence", () => {
       });
       mocks.runOpenClaw.mockResolvedValueOnce(unsettledExit).mockImplementationOnce(async () => {
         if (retryOutcome === "timeout") {
-          throw new Error(
-            "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-candidate.tgz --yes --json --no-restart --timeout 600",
-          );
+          throw updateTimeout();
         }
         if (retryOutcome === "success") {
-          return { exitCode: 0, stdout: '{"status":"ok","durationMs":1234}', stderr: "" };
+          return commandResult('{"status":"ok","durationMs":1234}');
         }
         return retryOutcome === "other failure"
-          ? { exitCode: 13, stdout: "", stderr: "Different failure" }
+          ? commandResult("", 13, "Different failure")
           : unsettledExit;
       });
 
       const result = await runUpgradeLane(params);
 
-      const updates = mocks.runOpenClaw.mock.calls
-        .map(([call]) => call)
-        .filter((call) => call.args[0] === "update" && call.args[1] === "--tag");
+      const updates = cliCalls("update").filter((call) => call.args[1] === "--tag");
       expect(updates).toHaveLength(2);
       expect(updates[1]).toEqual(updates[0]);
       const recovered = retryOutcome === "success" || retryOutcome === "unsettled-exit";

@@ -12,6 +12,11 @@ import { createReleaseCheckSelection } from "../../scripts/plan-release-workflow
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.ts";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+function expectContains(text: string | undefined, fragments: string[]) {
+  for (const fragment of fragments) {
+    expect(text).toContain(fragment);
+  }
+}
 
 const WORKFLOW_PATH = ".github/workflows/openclaw-cross-os-release-checks-reusable.yml";
 const RELEASE_CHECKS_PATH = ".github/workflows/openclaw-release-checks.yml";
@@ -63,6 +68,24 @@ function step(workflowJob: WorkflowJob, name: string): WorkflowStep {
   const found = workflowJob.steps?.find((candidate) => candidate.name === name);
   expect(found, name).toBeDefined();
   return found!;
+}
+
+function matrixEntry(osId: "ubuntu" | "windows" | "macos", suite: string, node26 = false) {
+  const [artifact, display, runner] = {
+    ubuntu: ["linux", "Linux", "blacksmith-8vcpu-ubuntu-2404"],
+    windows: ["windows", "Windows", "blacksmith-32vcpu-windows-2025"],
+    macos: ["macos", "macOS", "blacksmith-6vcpu-macos-15"],
+  }[osId];
+  return {
+    artifact_name: artifact + (node26 ? "-node26.1.0" : ""),
+    display_name: display,
+    node_version: node26 ? "26.1.0" : "24.21.0",
+    lane: suite.endsWith("fresh") ? "fresh" : "upgrade",
+    os_id: osId,
+    runner,
+    suite,
+    suite_label: suite.replace("-", " ") + (node26 ? " (Node 26.1.0)" : ""),
+  };
 }
 
 describe("cross-OS release checks workflow", () => {
@@ -117,42 +140,15 @@ describe("cross-OS release checks workflow", () => {
         ]);
       }
     }
-    expect(
-      matrix.include.find((entry) => entry.os_id === "windows" && entry.suite === "dev-update"),
-    ).toEqual({
-      artifact_name: "windows",
-      display_name: "Windows",
-      node_version: "24.21.0",
-      lane: "upgrade",
-      os_id: "windows",
-      runner: "blacksmith-32vcpu-windows-2025",
-      suite: "dev-update",
-      suite_label: "dev update",
-    });
-    expect(
-      matrix.include.find((entry) => entry.os_id === "ubuntu" && entry.suite === "installer-fresh"),
-    ).toEqual({
-      artifact_name: "linux",
-      display_name: "Linux",
-      node_version: "24.21.0",
-      lane: "fresh",
-      os_id: "ubuntu",
-      runner: "blacksmith-8vcpu-ubuntu-2404",
-      suite: "installer-fresh",
-      suite_label: "installer fresh",
-    });
-    expect(
-      matrix.include.find((entry) => entry.os_id === "macos" && entry.suite === "packaged-fresh"),
-    ).toEqual({
-      artifact_name: "macos",
-      display_name: "macOS",
-      node_version: "24.21.0",
-      lane: "fresh",
-      os_id: "macos",
-      runner: "blacksmith-6vcpu-macos-15",
-      suite: "packaged-fresh",
-      suite_label: "packaged fresh",
-    });
+    for (const [osId, suite] of [
+      ["windows", "dev-update"],
+      ["ubuntu", "installer-fresh"],
+      ["macos", "packaged-fresh"],
+    ] as const) {
+      expect(matrix.include.find((entry) => entry.os_id === osId && entry.suite === suite)).toEqual(
+        matrixEntry(osId, suite),
+      );
+    }
   });
 
   it.each(["windows/packaged-upgrade", "packaged-fresh"])(
@@ -164,26 +160,8 @@ describe("cross-OS release checks workflow", () => {
       expect(workflow).toContain('--suite-filter "${INPUT_SUITE_FILTER}"');
       if (suiteFilter === "windows/packaged-upgrade") {
         expect(matrix.include).toEqual([
-          {
-            artifact_name: "windows",
-            display_name: "Windows",
-            node_version: "24.21.0",
-            lane: "upgrade",
-            os_id: "windows",
-            runner: "blacksmith-32vcpu-windows-2025",
-            suite: "packaged-upgrade",
-            suite_label: "packaged upgrade",
-          },
-          {
-            artifact_name: "windows-node26.1.0",
-            display_name: "Windows",
-            node_version: "26.1.0",
-            lane: "upgrade",
-            os_id: "windows",
-            runner: "blacksmith-32vcpu-windows-2025",
-            suite: "packaged-upgrade",
-            suite_label: "packaged upgrade (Node 26.1.0)",
-          },
+          matrixEntry("windows", "packaged-upgrade"),
+          matrixEntry("windows", "packaged-upgrade", true),
         ]);
       } else {
         expect(matrix.include).toHaveLength(6);
@@ -564,14 +542,12 @@ describe("cross-OS release checks workflow", () => {
     const producer = job(workflow, "prepare_release_package");
     expect(producer.if).toBe("needs.resolve_target.outputs.package_required == 'true'");
     const resolvePackage = step(producer, "Resolve release package artifact");
-    expect(resolvePackage.run).toContain('if [[ "$CROSS_OS_SCHEDULED" == "true" ]]');
-    expect(resolvePackage.run).toContain(
+    expectContains(resolvePackage.run, [
+      'if [[ "$CROSS_OS_SCHEDULED" == "true" ]]',
       'if [[ "$DOCKER_REQUIRED" == "true" && "$PACKAGE_MODE" == "source" ]]',
-    );
-    expect(resolvePackage.run).toContain("registry_args=()");
-    expect(resolvePackage.run).toContain(
+      "registry_args=()",
       'if [[ "$CANDIDATE_PUBLISHED" != "true" && "$required_packages" != \'[]\' ]]',
-    );
+    ]);
     expect(job(workflow, "cross_os_release_checks").if).toBe(
       "needs.resolve_target.outputs.cross_os_scheduled == 'true'",
     );
@@ -745,27 +721,16 @@ describe("cross-OS release checks workflow", () => {
       "Validate prepared candidate artifact binding",
     );
 
-    for (const name of ["Download candidate artifact", "Retry candidate artifact download"]) {
-      const download = step(consumer, name);
-      expect(download.with?.["artifact-ids"], name).toBe(
-        "${{ needs.prepare.outputs.candidate_artifact_id }}",
-      );
-      expect(download.with?.["github-token"], name).toBe("${{ github.token }}");
-      expect(download.with?.["run-id"], name).toBe(
-        "${{ needs.prepare.outputs.candidate_artifact_run_id }}",
-      );
-      expect(download.with?.name, name).toBeUndefined();
-    }
-    for (const name of ["Download baseline artifact", "Retry baseline artifact download"]) {
-      const download = step(consumer, name);
-      expect(download.with?.["artifact-ids"], name).toBe(
-        "${{ needs.prepare.outputs.baseline_artifact_id }}",
-      );
-      expect(download.with?.["github-token"], name).toBe("${{ github.token }}");
-      expect(download.with?.["run-id"], name).toBe(
-        "${{ needs.prepare.outputs.baseline_artifact_run_id }}",
-      );
-      expect(download.with?.name, name).toBeUndefined();
+    for (const artifact of ["candidate", "baseline"]) {
+      for (const name of [`Download ${artifact} artifact`, `Retry ${artifact} artifact download`]) {
+        const download = step(consumer, name);
+        expect(download.with).toMatchObject({
+          "artifact-ids": `\${{ needs.prepare.outputs.${artifact}_artifact_id }}`,
+          "github-token": "${{ github.token }}",
+          "run-id": `\${{ needs.prepare.outputs.${artifact}_artifact_run_id }}`,
+        });
+        expect(download.with?.name, name).toBeUndefined();
+      }
     }
     const verify = step(consumer, "Verify release-check inputs");
     expect(verify.env?.EXPECTED_CANDIDATE_SHA256).toBe(
@@ -816,17 +781,13 @@ describe("cross-OS release checks workflow", () => {
     expect(requirements.run).toContain('--provider "$PROVIDER"');
 
     const contract = step(prepare, "Normalize companion registry contract");
-    expect(contract.run).toContain("(keys | sort) == ([");
-    expect(contract.run).toContain('all(.[]; type == "string")');
-    expect(contract.run).toContain(
+    expectContains(contract.run, [
+      "(keys | sort) == ([",
+      'all(.[]; type == "string")',
       "Prerelease companion registry must be one closed immutable JSON tuple.",
-    );
-    expect(contract.run).toContain(
       "The selected provider requires a complete immutable companion registry tuple.",
-    );
-    expect(contract.run).toContain(
       "Source-built candidates produce their own companion registry and reject a second tuple.",
-    );
+    ]);
     expect(step(prepare, "Verify provided prerelease plugin registry upload").run).toContain(
       'verify-upload "Prerelease plugin registry"',
     );
@@ -916,25 +877,11 @@ describe("cross-OS release checks workflow", () => {
     expect(JSON.parse(result.stdout)).toEqual({
       include: [
         {
-          os_id: "windows",
-          display_name: "Windows",
+          ...matrixEntry("windows", "packaged-fresh"),
           runner: "windows-2025",
-          artifact_name: "windows",
           node_version: "24.16.0",
-          suite: "packaged-fresh",
-          suite_label: "packaged fresh",
-          lane: "fresh",
         },
-        {
-          os_id: "windows",
-          display_name: "Windows",
-          runner: "windows-2025",
-          artifact_name: "windows-node26.1.0",
-          node_version: "26.1.0",
-          suite: "packaged-fresh",
-          suite_label: "packaged fresh (Node 26.1.0)",
-          lane: "fresh",
-        },
+        { ...matrixEntry("windows", "packaged-fresh", true), runner: "windows-2025" },
       ],
     });
   });
