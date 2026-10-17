@@ -25,21 +25,16 @@ compaction settings cannot change in place. If a speed change requires a differe
 limit, OpenClaw preserves the conversation and asks you to restore the previous
 speed or start a new incognito conversation. No turn is sent with mismatched settings.
 
-`agents.defaults.compaction.maxActiveTranscriptBytes` bounds the mirror only
-when OpenClaw seeds a **fresh** native thread. Ordinary and heartbeat turns
-do not run host byte compaction or synchronize it back into Codex. Reusing a
-healthy thread does not discard native context because the mirror grew.
-
-A fresh seed keeps whole recent turns and tool/result pairs. If it would omit
-history not already covered by a host summary, OpenClaw makes one host
-compaction attempt. A fitting host summary is reserved before oversized retained turns.
-Older history may still be omitted, with a notice in the seed and a user-facing bounded-context
-event. System instructions and the current request, including refresh handoffs, stay intact.
-With compaction disabled, the configured byte cap still omits older history with a notice; no-cap defaults are unaffected.
-Stored transcript history is not deleted.
-
-Native rollout-size and token fuses remain unchanged. An owning context engine
-also keeps its engine-first compaction and eligible native follow-up.
+`agents.defaults.compaction.maxActiveTranscriptBytes` bounds older history when
+seeding a **fresh** native thread, not during ordinary or heartbeat turns.
+Before omitting history not covered by a summary, OpenClaw attempts one host
+compaction using the seed's retained-history allowance and reserves a fitting summary.
+Whole turns and tool/result pairs stay intact; required instructions and the
+active request or runtime-refresh exchange are outside the historical cap.
+With compaction disabled, older history is still omitted with a notice;
+no-cap defaults and the full saved transcript are unchanged.
+The notice appears in the seed and user-facing events. Native rollout/token
+fuses and owning-engine compaction with native follow-up remain unchanged.
 
 Explicit compaction requests, such as `/compact` or a plugin-requested manual
 compact operation, start native Codex compaction with `thread/compact/start`.
@@ -53,9 +48,7 @@ period, OpenClaw retires the connection before releasing the fence. Remote
 connections also detach the matching thread binding so later work cannot
 overlap an unconfirmed remote turn. Other turns on a retired connection fail
 and can retry on a fresh client. Client closure, request cancellation, or a
-failed compaction turn returns a failed operation. Automatic native
-token-pressure compaction remains Codex's job. Manual compaction stays native-only;
-the next ordinary turn does not follow it with host mirror compaction.
+failed compaction turn returns a failed operation.
 
 A standalone cold compact operation does not run prompt-build hooks or establish
 ordinary-turn configuration. It releases its subscription after the operation;

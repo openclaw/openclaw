@@ -15,6 +15,10 @@ import { requireCompactionWriterEntry } from "../embedded-agent-runner/compactio
 import { attachCompactionAccountingRecorder } from "../embedded-agent-runner/run/compaction-accounting-bridge.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { normalizeContextTokenBudget } from "../embedded-agent-runner/utils.js";
+import {
+  createCompactionRequestBudget,
+  estimateCompactionHistoryTokens,
+} from "../sessions/compaction/request-budget.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import type {
   AgentHarnessHostCapabilities,
@@ -100,6 +104,8 @@ export function bindBoundedSeed(
         : undefined;
     let activeCount = 0;
     let cut = 0;
+    let retainedInputTokens = 0;
+    let retainedHistoryTokens = 0;
     const read = async () => {
       const history = await SessionManager.readSessionContextAsync(
         sessionTarget,
@@ -107,8 +113,11 @@ export function bindBoundedSeed(
         { signal },
       );
       assert();
+      const current = history.findIndex(isAdmittedUser);
+      retainedInputTokens = estimateCompactionHistoryTokens(
+        current < 0 ? [] : history.slice(current),
+      );
       if (handoff) {
-        const current = history.findIndex(isAdmittedUser);
         const active = [
           ...(refresh && current >= 0 && !handoff.some(isAdmittedUser) ? [history[current]!] : []),
           ...handoff,
@@ -176,6 +185,7 @@ export function bindBoundedSeed(
         if (bytes < 2) {
           throw new Error("Native history allowance cannot fit its omission notice");
         }
+        retainedHistoryTokens = Math.floor(bytes / 4);
         // A retained oversized turn must not crowd out the summary that covers its older history.
         const summary = history.findLast((message) => message.role === "compactionSummary");
         const summaryBytes = summary ? Buffer.byteLength(JSON.stringify(summary)) + 1 : 0;
@@ -222,6 +232,11 @@ export function bindBoundedSeed(
       attachCompactionAccountingRecorder(runtimeContext, {
         pendingRequestState: "unresolved",
         pendingUserEntryId: admission?.entryId,
+        // Select the verbatim tail against the seed's allowance, not the model's larger window.
+        requestBudget: createCompactionRequestBudget({
+          contextWindow: retainedInputTokens + retainedHistoryTokens,
+          reserveTokens: 0,
+        }),
       });
       // The compactor imports harness preparation; loading it eagerly creates a runtime cycle.
       const { compactEmbeddedAgentSessionDirect } =

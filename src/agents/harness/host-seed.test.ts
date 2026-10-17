@@ -2,6 +2,11 @@ import { unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
+import {
+  DEFAULT_COMPACTION_SETTINGS,
+  prepareCompaction,
+} from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -13,6 +18,11 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { compactEmbeddedAgentSessionDirect } from "../embedded-agent-runner/compact.js";
+import { readCompactionAccountingRecorder } from "../embedded-agent-runner/run/compaction-accounting-bridge.js";
+import {
+  estimateCompactionHistoryTokens,
+  resolveCompactionRetentionBudget,
+} from "../sessions/compaction/request-budget.js";
 import { withSessionCompactionPersistenceAsync } from "../sessions/session-compaction-persistence.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
@@ -24,6 +34,7 @@ vi.mock("../embedded-agent-runner/compact.js", () => ({
   compactEmbeddedAgentSessionDirect: vi.fn(),
 }));
 
+const generatedSummary = "covered old discussion; recent request";
 it.each([
   { name: "small history", oldBytes: 20, summary: undefined, expected: 0 },
   { name: "unsummarized history", oversizedTail: true },
@@ -105,7 +116,7 @@ it.each([
         activeWriterRunId: "seed-writer",
         transcriptByteCompactionLatch: { activeBytes: 4096, maxBytes: 1024, sessionId: "seed" },
       });
-      const manager = await SessionManager.openAsync(target, state.workspaceDir);
+      let manager = await SessionManager.openAsync(target, state.workspaceDir);
       const old = expectDefined(
         await manager.appendMessageAsync(makeUserMessage("old".repeat(oldBytes), 1)),
         "old seed turn",
@@ -116,7 +127,9 @@ it.each([
       );
       if (oversizedTail) {
         await manager.appendMessageAsync(
-          makeAssistantMessageFixture({ content: [{ type: "text", text: "tail".repeat(1024) }] }),
+          makeAssistantMessageFixture({
+            content: [{ type: "text", text: `TAIL_EVIDENCE ${"tail".repeat(50_000)}` }],
+          }),
         );
       }
       if (summary) {
@@ -126,11 +139,17 @@ it.each([
           2048,
         );
       }
+      const recorder = createUserTurnTranscriptRecorder({
+        message: { ...makeUserMessage("pending", 3), idempotencyKey: "seed:pending" },
+        target: { ...target, sessionEntry: loadSessionEntry(target), cwd: state.workspaceDir },
+      });
+      await recorder.persistApproved();
+      manager = await SessionManager.openAsync(target, state.workspaceDir);
       const originalEvents = loadTranscriptEventsSync(target);
       const assertCurrent = vi.fn();
       const compact = vi.mocked(compactEmbeddedAgentSessionDirect);
       compact.mockReset();
-      compact.mockImplementationOnce(async (_params, persist) => {
+      compact.mockImplementationOnce(async (params, persist) => {
         if (decline) {
           return { ok: false, compacted: false, reason: "fixture declines compaction" };
         }
@@ -142,10 +161,36 @@ it.each([
         if (replaceWriter) {
           await upsertSessionEntryCore(target, { activeWriterRunId: "replacement-writer" });
         }
+        const constraints = readCompactionAccountingRecorder(params.contextEngineRuntimeContext);
+        const budget = constraints?.requestBudget;
+        const result = prepareCompaction(
+          manager.getBranch(),
+          DEFAULT_COMPACTION_SETTINGS,
+          "unresolved",
+          {
+            preserveFromEntryId: constraints?.pendingUserEntryId,
+            ...(budget
+              ? {
+                  budget: {
+                    ...resolveCompactionRetentionBudget(budget, []),
+                    estimateTokens: (message: AgentMessage) =>
+                      estimateCompactionHistoryTokens([message], budget),
+                  },
+                }
+              : {}),
+          },
+        );
+        const prepared = expectDefined(result.ok ? result.value : undefined, "prepared compaction");
+        expect(
+          JSON.stringify([
+            ...prepared.messagesToSummarize,
+            ...prepared.turnPrefixMessages,
+          ]).includes(oversizedTail ? "TAIL_EVIDENCE" : "recent request"),
+        ).toBe(true);
         await withSessionCompactionPersistenceAsync(manager, persist, () =>
           manager.appendCompactionAsync(
-            oversizedSummary ? "generated".repeat(1000) : "covered old discussion",
-            recent,
+            oversizedSummary ? "generated".repeat(1000) : generatedSummary,
+            prepared.firstKeptEntryId,
             2048,
           ),
         );
@@ -157,6 +202,7 @@ it.each([
           workspaceDir: state.workspaceDir,
           contextTokenBudget: contextTokens,
           config: { agents: { defaults: { compaction: { maxActiveTranscriptBytes: maxBytes } } } },
+          userTurnTranscriptRecorder: recorder,
         },
         () => {},
         async (run) => run(),
@@ -174,7 +220,7 @@ it.each([
       } else {
         const seed = await result;
         expect(Buffer.byteLength(JSON.stringify(seed))).toBeLessThanOrEqual(expectedBytes);
-        if (!oversizedTail) {
+        if (!expected && !oversizedTail) {
           expect(seed).toContainEqual(makeUserMessage("recent request", 2));
         }
         if (expected && !decline) {
@@ -184,7 +230,7 @@ it.each([
             expect(seed).toContainEqual(
               expect.objectContaining({
                 role: "compactionSummary",
-                summary: "covered old discussion",
+                summary: generatedSummary,
               }),
             );
           }

@@ -251,12 +251,7 @@ the session or limit changes, history shrinks below the limit, or it grows by
 another full threshold. Retained history remains available; this is not a
 storage-retention limit.
 
-For Codex app-server, the limit bounds history only when seeding a **fresh**
-native thread. Ordinary turns and native `/compact` do not summarize the host
-mirror. Before a fresh seed would omit unsummarized history, OpenClaw makes one
-host compaction attempt, then uses the bounded post-compaction view. Existing
-summaries do not trigger another summary merely because they exceed the limit.
-The native rollout-size and token fuses still decide when to restart a thread.
+For Codex app-server, see [fresh-thread seed compaction](/plugins/codex-harness-runtime/compaction#compaction-and-transcript-mirror); native compaction remains separate.
 
 <Warning>
 The byte guard applies to the active SQLite transcript history. Legacy JSONL

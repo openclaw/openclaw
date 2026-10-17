@@ -89,27 +89,19 @@ invoke this hook and continues to preserve native thread continuity.
 ### Fresh native thread seeds
 
 The optional `hostCapabilities.prepareBoundedSeed({ assertCurrent, signal, tokenBudget })`
-returns a readonly `AgentMessage[]` for a fresh native thread. Call it only
-after deciding not to reuse a native thread, before injecting history. The
-host fixes the session, byte budget, source authority, and atomic summary
-persistence. It attempts one host compaction only if bounding would omit
-unsummarized history, then returns the bounded view. Pass the final reserved
-history allowance as `tokenBudget`; valid smaller values narrow the captured
-host budget, while larger, invalid, or non-finite values cannot widen it.
-The bound includes restored text and image costs. Retain the returned message
-instances when calling `prepareContextMedia`: they share the prepared snapshots
-used for selection, without rereading files before injection. The host bounds
-the post-summary result again. The original task and completed-message handoff
-during a runtime refresh are active input, not discardable history: they reserve
-delivery tokens but are not trimmed by the historical byte cap. If they alone
-exceed the delivery allowance, preparation rejects instead of losing the task.
-Pass the native binding's current-authority assertion and cancellation signal. A retired capability
-rejects; it cannot target another session. Explicit context engines retain
-their own projections rather than receiving this host-history capability.
-
-This is additive to `AgentHarnessHostCapabilities` version 1. On older hosts
-without the capability, retain their bounded history selection without making
-a host summary request.
+returns a readonly `AgentMessage[]`. Call it after native reuse fails, before
+injecting history; older version-1 hosts keep their bounded selection.
+The host captures the target, configuration, source authority, and atomic
+summary persistence. It attempts one compaction for uncovered omitted history.
+Pass the final history allowance as `tokenBudget`: valid smaller values narrow
+the captured budget; larger, invalid, or non-finite values cannot widen it.
+Restored text and image costs count toward the bound. Reuse returned message
+instances with `prepareContextMedia` to avoid rereading their prepared snapshots.
+Active requests and refresh handoffs reserve delivery tokens but are not trimmed
+by the historical byte cap; preparation rejects if they alone exceed the allowance.
+Pass the native binding's current-authority assertion and cancellation signal.
+A retired capability rejects and cannot target another session. Explicit
+context engines retain their own projections.
 
 ## Shared native binding lifecycle
 
