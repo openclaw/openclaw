@@ -323,6 +323,11 @@ describe("automation mutation options", () => {
     expectPatch({ schedule });
   });
 
+  it("preserves leading and trailing cwd whitespace on command-cwd edit", async () => {
+    await edit(["--command-cwd", " /repo "]);
+    expectPatch({ payload: { kind: "command", cwd: " /repo " } });
+  });
+
   it("rejects system-event timeouts on creation before RPC", async () => {
     await reject(
       [...addArgs, "--every", "1h", "--system-event", "tick", "--timeout-seconds", "bogus"],
@@ -359,7 +364,7 @@ describe("automation mutation options", () => {
     await run([...addArgs, ...args, ...(value === undefined ? [] : [flag, value])]);
     const creation = callGatewayFromCli.mock.calls.find(([method]) => method === "cron.add");
     expect(creation?.[2]).toHaveProperty(target);
-    expect(creation?.[2]?.[target]?.cwd).toBe(value === undefined ? undefined : "/repo");
+    expect(creation?.[2]?.[target]?.cwd).toBe(value);
     expect(defaultRuntime.error).not.toHaveBeenCalled();
   });
 

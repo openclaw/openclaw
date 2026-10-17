@@ -319,6 +319,15 @@ describe("executable path helpers", () => {
     },
   );
 
+  it("preserves leading cwd whitespace when resolving relative executables", () => {
+    expect(resolveExecutablePathCandidate("./tool", { cwd: " job" })).toBe(
+      path.resolve(" job", "tool"),
+    );
+    expect(resolveExecutablePathCandidate("./tool", { cwd: "job " })).toBe(
+      path.resolve("job ", "tool"),
+    );
+  });
+
   it("does not treat drive-less rooted windows paths as cwd-relative executables", () => {
     withMockedPlatform("win32", () => {
       expect(

@@ -71,7 +71,7 @@ function resolveWindowsCommandFromCwdOrPath(params: {
       { includeExtensionless: false },
     );
   }
-  const cwd = params.cwd?.trim() || process.cwd();
+  const cwd = params.cwd || process.cwd();
   const pathValue =
     resolveEnvironmentValue(params.env, "PATH") ??
     resolveEnvironmentValue(process.env, "PATH") ??

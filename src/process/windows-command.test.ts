@@ -51,6 +51,19 @@ describe("Windows command helpers", () => {
     });
   });
 
+  it("preserves trailing cwd whitespace when resolving bare commands from relative PATH", async () => {
+    await withWindowsFiles(["job/bin/tool.exe", "job /bin/tool.exe"], (base) => {
+      const cwd = `${path.join(base, "job")} `;
+      expect(
+        resolveSafeChildProcessInvocation({
+          argv: ["tool.exe"],
+          cwd,
+          env: { PATH: "bin", PATHEXT: ".EXE" },
+        }).command,
+      ).toBe(path.join(base, "job ", "bin", "tool.exe"));
+    });
+  });
+
   it.each([".EXE;.CMD;"])(
     "reports an unresolved command for a bare file with PATHEXT %j",
     async (pathext) => {

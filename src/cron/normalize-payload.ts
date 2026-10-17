@@ -1,6 +1,7 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { isRecord } from "../utils.js";
@@ -78,9 +79,9 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
   if (typeof next.script === "string") {
     next.script = next.script.trim();
   }
-  for (const field of ["model", "thinking", "cwd"] as const) {
-    // Model/thinking nulls clear stored overrides; cwd has no explicit-clear form.
-    if (field in next && (field === "cwd" || next[field] !== null)) {
+  for (const field of ["model", "thinking"] as const) {
+    // Model/thinking nulls clear stored overrides.
+    if (field in next && next[field] !== null) {
       const value = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next[field]);
       if (value !== undefined) {
         next[field] = value;
@@ -122,6 +123,14 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
       next.argv = argv;
     } else {
       delete next.argv;
+    }
+  }
+  if ("cwd" in next) {
+    const cwd = readNonBlankString(next.cwd);
+    if (cwd !== undefined) {
+      next.cwd = cwd;
+    } else {
+      delete next.cwd;
     }
   }
   if ("env" in next) {

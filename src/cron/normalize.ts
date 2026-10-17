@@ -57,7 +57,7 @@ function coerceSchedule(schedule: UnknownRecord) {
   const timezone = normalizeOptionalString(next.tz);
   const commandRaw = readNonBlankString(next.command) ?? "";
   const streamCommand = normalizeCronCommandArgv(next.command);
-  const cwdRaw = normalizeOptionalString(next.cwd) ?? "";
+  const cwdRaw = readNonBlankString(next.cwd) ?? "";
   const streamMode = normalizeOptionalLowercaseString(next.mode);
   const streamMatch = typeof next.match === "string" ? next.match : undefined;
   const everyMs = coerceFiniteScheduleNumber(next.everyMs);

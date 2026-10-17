@@ -343,6 +343,11 @@ describe("normalizeCronJobCreate", () => {
       input: { kind: "on-exit", command: " printf %s hello\\ ", cwd: "/repo" },
       expected: { kind: "on-exit", command: " printf %s hello\\ ", cwd: "/repo" },
     },
+    {
+      label: "on-exit cwd preserves surrounding whitespace",
+      input: { kind: "on-exit", command: "make build", cwd: "/repo/job " },
+      expected: { kind: "on-exit", command: "make build", cwd: "/repo/job " },
+    },
   ])("canonicalizes $label schedules on create and patch", ({ input, expected }) => {
     const created = createMain({ schedule: input });
     const patch = normalizePatch({ schedule: input });
@@ -500,7 +505,7 @@ describe("normalizeCronJobCreate", () => {
     expect(normalized.payload).toEqual({
       kind: "command",
       argv: ["printf", "%s", "  padded value  "],
-      cwd: "/srv/example",
+      cwd: " /srv/example ",
       env: { FOO: "bar" },
       timeoutSeconds: 30,
       noOutputTimeoutSeconds: 5,

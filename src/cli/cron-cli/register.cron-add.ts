@@ -226,7 +226,7 @@ export function registerCronAddCommand(cron: Command) {
                 return {
                   kind: "command" as const,
                   argv: commandArgv ?? ["sh", "-lc", commandShell ?? ""],
-                  cwd: normalizeOptionalString(opts.commandCwd),
+                  cwd: readNonBlankString(opts.commandCwd),
                   env: parseCronCommandEnv(opts.commandEnv),
                   input: typeof opts.commandInput === "string" ? opts.commandInput : undefined,
                   timeoutSeconds,
