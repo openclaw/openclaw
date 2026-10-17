@@ -16,7 +16,9 @@ import {
   revokeDeviceTokenMock,
   rotateDeviceTokenMock,
   createClient,
+  createDeviceClient,
   createOptions,
+  expectDeviceSuccess,
   mockPairedOperatorDevice,
   mockRotateOperatorTokenSuccess,
   expectRespondedErrorMessage,
@@ -62,9 +64,7 @@ describe("device lifecycle", () => {
     const opts = createOptions(
       method,
       { deviceId, role },
-      {
-        client: createClient(["operator.pairing"], " device-1 ", { isDeviceTokenAuth: true }),
-      },
+      createDeviceClient(["operator.pairing"], " device-1 "),
     );
     const updateSurface = vi.spyOn(opts.context.nodeRegistry, "updateSurface");
     vi.mocked(opts.context.logGateway.warn).mockImplementation(() => {
@@ -183,7 +183,7 @@ describe("device lifecycle", () => {
       "device.token.revoke",
       { deviceId: nodeId, role: "node" },
       // Non-operator role management requires an admin-scoped caller.
-      { client: createClient(["operator.admin"], "admin-device", { isDeviceTokenAuth: true }) },
+      createDeviceClient(["operator.admin"], "admin-device"),
     );
     Object.assign(opts.context, { workerEnvironmentService });
 
@@ -221,7 +221,7 @@ describe("device lifecycle", () => {
       const opts = createOptions(
         method,
         { deviceId: " device-1 ", ...(revoking ? { role: "node" } : {}) },
-        { client: createClient(["operator.admin"], "admin-device", { isDeviceTokenAuth: true }) },
+        createDeviceClient(["operator.admin"], "admin-device"),
       );
       const client = Object.assign(expectDefined(opts.client, "removal caller"), {
         invalidated: false,
@@ -259,10 +259,9 @@ describe("device lifecycle", () => {
           expect(opts.respond).not.toHaveBeenCalled();
         } else {
           await removal;
-          expect(opts.respond).toHaveBeenCalledWith(
-            true,
+          expectDeviceSuccess(
+            opts,
             revoking ? { deviceId: "device-1", role: "node", revokedAtMs: 456 } : removed,
-            undefined,
           );
         }
         expect(reconcileActive).toHaveBeenCalledWith("environment-1");
@@ -290,7 +289,7 @@ describe("device lifecycle", () => {
       const opts = createOptions(
         method,
         { deviceId: "device-1", ...(method === "device.token.revoke" ? { role: "node" } : {}) },
-        { client: createClient(["operator.admin"], "admin-device") },
+        createClient(["operator.admin"], "admin-device"),
       );
       const updateSurface = vi.spyOn(opts.context.nodeRegistry, "updateSurface");
       const workerEnvironmentService = {};
@@ -342,7 +341,7 @@ describe("device lifecycle", () => {
     const opts = createOptions(
       "device.pair.remove",
       { deviceId: "device-2" },
-      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+      createDeviceClient(),
     );
 
     await invokeDevice(opts);
@@ -356,17 +355,13 @@ describe("device lifecycle", () => {
     const opts = createOptions(
       "device.pair.remove",
       { deviceId: " device-1 " },
-      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+      createDeviceClient(),
     );
 
     await invokeDevice(opts);
 
     expect(removePairedDeviceMock).toHaveBeenCalledWith(" device-1 ");
-    expect(opts.respond).toHaveBeenCalledWith(
-      true,
-      { deviceId: "device-1", removedAtMs: 123 },
-      undefined,
-    );
+    expectDeviceSuccess(opts, { deviceId: "device-1", removedAtMs: 123 });
   });
 
   it("rejects removing mixed-role devices without admin scope", async () => {
@@ -393,7 +388,7 @@ describe("device lifecycle", () => {
     const opts = createOptions(
       "device.pair.remove",
       { deviceId: "device-1" },
-      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+      createDeviceClient(),
     );
 
     await invokeDevice(opts);
@@ -412,14 +407,10 @@ describe("device lifecycle", () => {
       deviceId: " device-1 ",
       role: " operator ",
     });
-    const captured = captureSecurityEvents();
-
-    try {
+    const events = await captureSecurityEvents(async () => {
       await invokeDevice(opts);
       await Promise.resolve();
-    } finally {
-      captured.stop();
-    }
+    });
 
     expect(revokeDeviceTokenMock).toHaveBeenCalledWith({
       deviceId: " device-1 ",
@@ -429,13 +420,9 @@ describe("device lifecycle", () => {
     expect(opts.context.disconnectClientsForDevice).toHaveBeenCalledWith("device-1", {
       role: "operator",
     });
-    expect(opts.respond).toHaveBeenCalledWith(
-      true,
-      { deviceId: "device-1", role: "operator", revokedAtMs: 456 },
-      undefined,
-    );
-    expect(captured.events).toHaveLength(1);
-    expect(captured.events[0]).toMatchObject({
+    expectDeviceSuccess(opts, { deviceId: "device-1", role: "operator", revokedAtMs: 456 });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
       type: "security.event",
       category: "auth",
       action: "device.token.revoked",
@@ -446,7 +433,7 @@ describe("device lifecycle", () => {
       control: { id: "device.token.revoke", family: "auth" },
       attributes: { role: "operator" },
     });
-    const serialized = JSON.stringify(captured.events);
+    const serialized = JSON.stringify(events);
     expect(serialized).not.toContain("device-1");
     expect(serialized).not.toContain("raw-revoked-token");
   });
@@ -459,7 +446,7 @@ describe("device lifecycle", () => {
     const opts = createOptions(
       "device.token.revoke",
       { deviceId: " device-1 ", role: "operator" },
-      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+      createDeviceClient(),
     );
 
     await invokeDevice(opts);
@@ -469,11 +456,7 @@ describe("device lifecycle", () => {
       role: "operator",
       callerScopes: ["operator.pairing"],
     });
-    expect(opts.respond).toHaveBeenCalledWith(
-      true,
-      { deviceId: "device-1", role: "operator", revokedAtMs: 456 },
-      undefined,
-    );
+    expectDeviceSuccess(opts, { deviceId: "device-1", role: "operator", revokedAtMs: 456 });
   });
 
   it("disconnects active clients after rotating a device token", async () => {
@@ -486,13 +469,7 @@ describe("device lifecycle", () => {
         role: " operator ",
         scopes: ["operator.pairing"],
       },
-      {
-        client: {
-          connect: {
-            scopes: ["operator.pairing"],
-          },
-        } as never,
-      },
+      createClient(["operator.pairing"]),
     );
 
     await invokeDevice(opts);
@@ -507,17 +484,13 @@ describe("device lifecycle", () => {
     expect(opts.context.disconnectClientsForDevice).toHaveBeenCalledWith("device-1", {
       role: "operator",
     });
-    expect(opts.respond).toHaveBeenCalledWith(
-      true,
-      {
-        deviceId: " device-1 ",
-        role: "operator",
-        scopes: ["operator.pairing"],
-        rotatedAtMs: 789,
-        tokenDelivery: "withheld-cross-device",
-      },
-      undefined,
-    );
+    expectDeviceSuccess(opts, {
+      deviceId: " device-1 ",
+      role: "operator",
+      scopes: ["operator.pairing"],
+      rotatedAtMs: 789,
+      tokenDelivery: "withheld-cross-device",
+    });
   });
 
   it("invalidates an in-flight node wake after token rotation", async () => {
@@ -535,7 +508,7 @@ describe("device lifecycle", () => {
     const opts = createOptions(
       "device.token.rotate",
       { deviceId: "device-1", role: "node" },
-      { client: createClient(["operator.admin"], "admin-device", { isDeviceTokenAuth: true }) },
+      createDeviceClient(["operator.admin"], "admin-device"),
     );
 
     await invokeDevice(opts);
@@ -578,7 +551,7 @@ describe("device lifecycle", () => {
           role: "operator",
           ...(rotating ? { scopes: ["operator.pairing"] } : {}),
         },
-        { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+        createDeviceClient(),
       );
       const respond = vi.mocked(opts.respond);
       const invalidate = vi.mocked(opts.context.invalidateClientsForDevice!);
@@ -610,7 +583,7 @@ describe("device lifecycle", () => {
         role: "operator",
         scopes: ["operator.pairing"],
       },
-      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+      createDeviceClient(),
     );
 
     await invokeDevice(opts);
@@ -621,18 +594,14 @@ describe("device lifecycle", () => {
       scopes: ["operator.pairing"],
       callerScopes: ["operator.pairing"],
     });
-    expect(opts.respond).toHaveBeenCalledWith(
-      true,
-      {
-        deviceId: " device-1 ",
-        role: "operator",
-        token: "new-token",
-        scopes: ["operator.pairing"],
-        rotatedAtMs: 789,
-        tokenDelivery: "in-band",
-      },
-      undefined,
-    );
+    expectDeviceSuccess(opts, {
+      deviceId: " device-1 ",
+      role: "operator",
+      token: "new-token",
+      scopes: ["operator.pairing"],
+      rotatedAtMs: 789,
+      tokenDelivery: "in-band",
+    });
   });
 
   it("omits rotated tokens when an admin rotates another device token", async () => {
@@ -645,26 +614,18 @@ describe("device lifecycle", () => {
         role: "operator",
         scopes: ["operator.pairing"],
       },
-      {
-        client: createClient(["operator.admin", "operator.pairing"], "admin-device", {
-          isDeviceTokenAuth: true,
-        }),
-      },
+      createDeviceClient(["operator.admin", "operator.pairing"], "admin-device"),
     );
 
     await invokeDevice(opts);
 
-    expect(opts.respond).toHaveBeenCalledWith(
-      true,
-      {
-        deviceId: "device-1",
-        role: "operator",
-        scopes: ["operator.pairing"],
-        rotatedAtMs: 789,
-        tokenDelivery: "withheld-cross-device",
-      },
-      undefined,
-    );
+    expectDeviceSuccess(opts, {
+      deviceId: "device-1",
+      role: "operator",
+      scopes: ["operator.pairing"],
+      rotatedAtMs: 789,
+      tokenDelivery: "withheld-cross-device",
+    });
   });
 
   it("rejects rotating a token for a role that was never approved", async () => {
@@ -672,7 +633,7 @@ describe("device lifecycle", () => {
     const opts = createOptions(
       "device.token.rotate",
       { deviceId: "device-1", role: "node" },
-      { client: createClient(["operator.admin"], "admin-device", { isDeviceTokenAuth: true }) },
+      createDeviceClient(["operator.admin"], "admin-device"),
     );
 
     await invokeDevice(opts);

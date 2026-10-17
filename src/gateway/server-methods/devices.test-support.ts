@@ -94,12 +94,12 @@ export function createClient(
 export function createOptions(
   method: string,
   params: Record<string, unknown>,
-  overrides?: Partial<GatewayRequestHandlerOptions>,
+  client: GatewayRequestHandlerOptions["client"] = null,
 ): GatewayRequestHandlerOptions {
   return {
     req: { type: "req", id: "req-1", method, params },
     params,
-    client: null,
+    client,
     isWebchatConnect: () => false,
     respond: vi.fn(),
     context: {
@@ -116,8 +116,11 @@ export function createOptions(
         updateSurface: vi.fn(),
       },
     },
-    ...overrides,
   } as unknown as GatewayRequestHandlerOptions;
+}
+
+export function createDeviceClient(scopes = ["operator.pairing"], deviceId = "device-1") {
+  return createClient(scopes, deviceId, { isDeviceTokenAuth: true });
 }
 
 export function mockPairedOperatorDevice(): void {
@@ -137,6 +140,10 @@ export function mockPairedOperatorDevice(): void {
   });
 }
 
+export function expectDeviceSuccess(opts: GatewayRequestHandlerOptions, payload: unknown) {
+  expect(opts.respond).toHaveBeenCalledWith(true, payload, undefined);
+}
+
 export function mockRotateOperatorTokenSuccess(): void {
   rotateDeviceTokenMock.mockResolvedValue({
     ok: true,
@@ -154,25 +161,26 @@ export function expectRespondedErrorMessage(
   opts: GatewayRequestHandlerOptions,
   message: string,
 ): void {
-  const respond = opts.respond as ReturnType<typeof vi.fn>;
-  expect(respond).toHaveBeenCalledTimes(1);
-  const call = respond.mock.calls[0] as unknown as [boolean, unknown, { message?: string }];
-  expect(call[0]).toBe(false);
-  expect(call[1]).toBeUndefined();
-  expect(call[2]?.message).toBe(message);
+  expect(opts.respond).toHaveBeenCalledExactlyOnceWith(
+    false,
+    undefined,
+    expect.objectContaining({ message }),
+  );
 }
 
-export function captureSecurityEvents(): {
-  events: Extract<DiagnosticEventPayload, { type: "security.event" }>[];
-  stop: () => void;
-} {
+export async function captureSecurityEvents(run: () => Promise<unknown>) {
   const events: Extract<DiagnosticEventPayload, { type: "security.event" }>[] = [];
   const stop = onInternalDiagnosticEvent((event, metadata) => {
     if (metadata.trusted && event.type === "security.event") {
       events.push(event);
     }
   });
-  return { events, stop };
+  try {
+    await run();
+    return events;
+  } finally {
+    stop();
+  }
 }
 
 export async function seedNodeWakeState(nodeId: string): Promise<void> {

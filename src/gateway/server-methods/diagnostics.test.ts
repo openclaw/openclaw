@@ -1,7 +1,3 @@
-/**
- * Tests for gateway diagnostics methods and their request-handler responses.
- */
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -27,21 +23,26 @@ type LaneDiagnosticsPayload = {
   ts: number;
 } & ReturnType<typeof getCommandLaneDiagnostics>;
 
-async function requestLaneDiagnostics(): Promise<LaneDiagnosticsPayload> {
+async function requestDiagnostics(method: string, params: Record<string, unknown> = {}) {
   const respond = vi.fn();
   await expectDefined(
-    diagnosticsHandlers["diagnostics.lanes"],
-    'diagnosticsHandlers["diagnostics.lanes"] test invariant',
+    diagnosticsHandlers[method],
+    method,
   )({
-    req: { type: "req", id: "lanes", method: "diagnostics.lanes", params: {} },
-    params: {},
+    req: { type: "req", id: "diagnostics", method, params: {} },
+    params,
     client: null,
     isWebchatConnect: () => false,
     context: {} as never,
     respond,
   });
   expect(respond).toHaveBeenCalledTimes(1);
-  return respond.mock.calls[0]?.[1] as LaneDiagnosticsPayload;
+  return respond;
+}
+
+async function requestLaneDiagnostics(): Promise<LaneDiagnosticsPayload> {
+  return (await requestDiagnostics("diagnostics.lanes")).mock
+    .calls[0]?.[1] as LaneDiagnosticsPayload;
 }
 
 describe("diagnostics gateway methods", () => {
@@ -71,20 +72,10 @@ describe("diagnostics gateway methods", () => {
       limitBytes: 512,
     });
 
-    const respond = vi.fn();
-    await expectDefined(
-      diagnosticsHandlers["diagnostics.stability"],
-      'diagnosticsHandlers["diagnostics.stability"] test invariant',
-    )({
-      req: { type: "req", id: "1", method: "diagnostics.stability", params: {} },
-      params: { type: "payload.large", limit: 10 },
-      client: null,
-      isWebchatConnect: () => false,
-      context: {} as never,
-      respond,
+    const respond = await requestDiagnostics("diagnostics.stability", {
+      type: "payload.large",
+      limit: 10,
     });
-
-    expect(respond).toHaveBeenCalledTimes(1);
     const firstRespondCall = respond.mock.calls[0];
     expect(firstRespondCall).toEqual([
       true,
@@ -135,18 +126,7 @@ describe("diagnostics gateway methods", () => {
   });
 
   it("rejects invalid stability params", async () => {
-    const respond = vi.fn();
-    await expectDefined(
-      diagnosticsHandlers["diagnostics.stability"],
-      'diagnosticsHandlers["diagnostics.stability"] test invariant',
-    )({
-      req: { type: "req", id: "1", method: "diagnostics.stability", params: {} },
-      params: { limit: 0 },
-      client: null,
-      isWebchatConnect: () => false,
-      context: {} as never,
-      respond,
-    });
+    const respond = await requestDiagnostics("diagnostics.stability", { limit: 0 });
 
     expect(respond.mock.calls).toEqual([
       [

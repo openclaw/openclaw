@@ -36,6 +36,19 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function dreamingConfig(
+  agents?: OpenClawConfig["agents"],
+  dreaming: Record<string, unknown> = {},
+): OpenClawConfig {
+  return { agents, plugins: { entries: { "memory-core": { config: { dreaming } } } } };
+}
+
+function useAgentWorkspaces(main: string, alpha: string) {
+  resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) =>
+    agentId === "alpha" ? alpha : main,
+  );
+}
+
 describe("doctor.memory agent targeting", () => {
   beforeEach(() => {
     getRuntimeConfig.mockReset().mockReturnValue({});
@@ -221,9 +234,7 @@ describe("doctor.memory.status", () => {
 
     const dreaming = respondPayload(respond).dreaming as Record<string, unknown>;
     const entries = dreaming.shortTermEntries as Array<Record<string, unknown>>;
-    // A NaN-returning comparator would leave the order undefined; with the fix
-    // the malformed timestamp coerces to -Infinity so the valid recent entry
-    // sorts first even though the malformed entry has more signals.
+    // Malformed timestamps must sort behind valid ones, regardless of signal count.
     expect(entries[0]).toMatchObject({ path: "memory/recent.md" });
     expect(entries[1]).toMatchObject({ path: "memory/malformed.md" });
   });
@@ -312,46 +323,35 @@ describe("doctor.memory.status", () => {
     const mainWorkspaceDir = path.join(workspaceRoot, "main");
     const alphaWorkspaceDir = path.join(workspaceRoot, "alpha");
     getRuntimeConfig.mockReturnValue({
-      memory: {
-        search: {
-          enabled: true,
-        },
-      },
-
-      agents: {
-        defaults: {
-          systemAgent: { agentId: "main" },
-          userTimezone: "America/Los_Angeles",
-        },
-        entries: {
-          main: { workspace: mainWorkspaceDir },
-          alpha: { workspace: alphaWorkspaceDir },
-        },
-      },
-      plugins: {
-        entries: {
-          "memory-core": {
-            config: {
-              dreaming: {
-                enabled: true,
-                frequency: "0 */4 * * *",
-                phases: {
-                  deep: {
-                    recencyHalfLifeDays: 21,
-                    maxAgeDays: 30,
-                  },
-                },
-              },
-            },
+      memory: { search: { enabled: true } },
+      ...dreamingConfig(
+        {
+          defaults: {
+            systemAgent: { agentId: "main" },
+            userTimezone: "America/Los_Angeles",
+          },
+          entries: {
+            main: { workspace: mainWorkspaceDir },
+            alpha: { workspace: alphaWorkspaceDir },
           },
         },
-      },
-    } as OpenClawConfig);
-    resolveAgentWorkspaceDir.mockImplementation((cfg: OpenClawConfig, agentId: string) => {
-      if (agentId === "alpha") {
-        return alphaWorkspaceDir;
-      }
-      return mainWorkspaceDir;
+        {
+          enabled: true,
+          frequency: "0 */4 * * *",
+          phases: { deep: { recencyHalfLifeDays: 21, maxAgeDays: 30 } },
+        },
+      ),
+    });
+    useAgentWorkspaces(mainWorkspaceDir, alphaWorkspaceDir);
+    const recalledEntry = makeDreamingEntry("memory/2026-04-03-1503.md", {
+      snippet: "Emma prefers shorter, lower-pressure check-ins.",
+      recallCount: 2,
+      dailyCount: 1,
+      totalSignalCount: 3,
+      lightHits: 2,
+      remHits: 3,
+      phaseHitCount: 5,
+      lastRecalledAt: recentIso,
     });
     loadShortTermPromotionDreamingStats.mockImplementation(
       async ({ workspaceDir }: { workspaceDir: string }) =>
@@ -388,30 +388,8 @@ describe("doctor.memory.status", () => {
               remPhaseHitCount: 3,
               promotedTotal: 1,
               promotedToday: 1,
-              shortTermEntries: [
-                makeDreamingEntry("memory/2026-04-03-1503.md", {
-                  snippet: "Emma prefers shorter, lower-pressure check-ins.",
-                  recallCount: 2,
-                  dailyCount: 1,
-                  totalSignalCount: 3,
-                  lightHits: 2,
-                  remHits: 3,
-                  phaseHitCount: 5,
-                  lastRecalledAt: recentIso,
-                }),
-              ],
-              signalEntries: [
-                makeDreamingEntry("memory/2026-04-03-1503.md", {
-                  snippet: "Emma prefers shorter, lower-pressure check-ins.",
-                  recallCount: 2,
-                  dailyCount: 1,
-                  totalSignalCount: 3,
-                  lightHits: 2,
-                  remHits: 3,
-                  phaseHitCount: 5,
-                  lastRecalledAt: recentIso,
-                }),
-              ],
+              shortTermEntries: [{ ...recalledEntry }],
+              signalEntries: [{ ...recalledEntry }],
               promotedEntries: [
                 makeDreamingEntry("memory/daily/2026-04-02-1015.md", {
                   snippet: "Use the Happy Together calendar for flights.",
@@ -478,21 +456,15 @@ describe("doctor.memory.status", () => {
       });
       expectRecordFields(
         findRecordByField(dreaming.promotedEntries, "path", "memory/notes/2026-04-04-0800.md"),
-        {
-          promotedAt: recentIso,
-        },
+        { promotedAt: recentIso },
       );
       expectRecordFields(
         findRecordByField(dreaming.promotedEntries, "path", "memory/daily/2026-04-02-1015.md"),
-        {
-          promotedAt: recentIso,
-        },
+        { promotedAt: recentIso },
       );
       expectRecordFields(
         findRecordByField(dreaming.promotedEntries, "path", "memory/2026-04-01.md"),
-        {
-          promotedAt: olderIso,
-        },
+        { promotedAt: olderIso },
       );
       const phases = expectRecordFields(dreaming.phases, {});
       expectRecordFields(phases.deep, {
@@ -526,26 +498,10 @@ describe("doctor.memory.status", () => {
           lastPromotedAt: "2026-04-04T00:00:00.000Z",
         }),
     );
-    getRuntimeConfig.mockReturnValue({
-      agents: {
-        entries: { alpha: { workspace: alphaWorkspaceDir } },
-      },
-      plugins: {
-        entries: {
-          "memory-core": {
-            config: {
-              dreaming: {},
-            },
-          },
-        },
-      },
-    } as OpenClawConfig);
-    resolveAgentWorkspaceDir.mockImplementation((_cfg: OpenClawConfig, agentId: string) => {
-      if (agentId === "alpha") {
-        return alphaWorkspaceDir;
-      }
-      return mainWorkspaceDir;
-    });
+    getRuntimeConfig.mockReturnValue(
+      dreamingConfig({ entries: { alpha: { workspace: alphaWorkspaceDir } } }),
+    );
+    useAgentWorkspaces(mainWorkspaceDir, alphaWorkspaceDir);
 
     useMemoryManagerFixture({
       status: () => ({ provider: "gemini", workspaceDir: alphaWorkspaceDir }),
@@ -581,17 +537,7 @@ describe("doctor.memory.status", () => {
         lastPromotedAt: "2026-04-04T00:00:00.000Z",
       }),
     );
-    getRuntimeConfig.mockReturnValue({
-      plugins: {
-        entries: {
-          "memory-core": {
-            config: {
-              dreaming: {},
-            },
-          },
-        },
-      },
-    } as OpenClawConfig);
+    getRuntimeConfig.mockReturnValue(dreamingConfig());
 
     useMemoryManagerFixture({
       status: () => ({ provider: "gemini", workspaceDir }),
@@ -615,32 +561,16 @@ describe("doctor.memory.status", () => {
     const mainWorkspaceDir = path.join(workspaceRoot, "main");
     const alphaWorkspaceDir = path.join(workspaceRoot, "alpha");
     getRuntimeConfig.mockReturnValue({
-      memory: {
-        search: {
-          enabled: true,
-        },
-      },
-
-      agents: {
+      memory: { search: { enabled: true } },
+      ...dreamingConfig({
         defaults: { systemAgent: { agentId: "main" } },
         entries: {
           main: { workspace: mainWorkspaceDir },
           alpha: { workspace: alphaWorkspaceDir },
         },
-      },
-      plugins: {
-        entries: {
-          "memory-core": {
-            config: {
-              dreaming: {},
-            },
-          },
-        },
-      },
-    } as OpenClawConfig);
-    resolveAgentWorkspaceDir.mockImplementation((_cfg: OpenClawConfig, agentId: string) =>
-      agentId === "alpha" ? alphaWorkspaceDir : mainWorkspaceDir,
-    );
+      }),
+    });
+    useAgentWorkspaces(mainWorkspaceDir, alphaWorkspaceDir);
 
     loadShortTermPromotionDreamingStats.mockRejectedValue(new Error("denied"));
 
