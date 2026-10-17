@@ -348,7 +348,7 @@ async function prepareCliFailureHandler(argv: string[], commandStarted: () => bo
 
 export async function runMainOrRootHelp(
   argv: string[],
-  deps: RunMainOrRootHelpDeps = {},
+  options: { finalize?: () => Promise<void> } = {},
 ): Promise<void> {
   // Command-phase errors reach this handler too: runCommandWithRuntime rethrows in JSON
   // mode so the envelope is written here. Only failures before runCli are startup failures.
@@ -357,7 +357,7 @@ export async function runMainOrRootHelp(
   const { runCliWithExitFinalization, requestExitAfterOneShotOutput } =
     await import("./cli/one-shot-exit.js");
   await runCliWithExitFinalization({
-    finalize: deps.finalize,
+    finalize: options.finalize,
     run: async () => {
       if (isNativeHookRelayArgv(argv) && !argv.includes("--help") && !argv.includes("-h")) {
         const { runNativeHookRelayCliFromArgv } = await import("./cli/native-hook-relay-cli.js");
@@ -378,7 +378,7 @@ export async function runMainOrRootHelp(
       }
       const { runCli } = await gatewayEntryStartupTrace.measure(
         "run-main-import",
-        deps.loadRunCli ?? (() => import("./cli/run-main.js")),
+        () => import("./cli/run-main.js"),
       );
       // Commands can replace their own installation. Retain diagnostics before old chunks vanish.
       failureHandler = await prepareCliFailureHandler(argv, () => commandStarted);
@@ -394,8 +394,3 @@ export async function runMainOrRootHelp(
       (failureHandler ?? (await prepareCliFailureHandler(argv, () => commandStarted)))(error),
   });
 }
-
-type RunMainOrRootHelpDeps = {
-  loadRunCli?: () => Promise<Pick<typeof import("./cli/run-main.js"), "runCli">>;
-  finalize?: () => Promise<void>;
-};

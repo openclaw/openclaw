@@ -15,12 +15,15 @@ import { PluginInstance } from "./plugins/plugin-instance.js";
 import type { OpenClawPluginCliRegistrar } from "./plugins/plugin-registration.types.js";
 
 describe("entry run-main boundary", () => {
+  afterEach(() => {
+    vi.doUnmock("./cli/run-main.js");
+  });
+
   it("retains JSON console routing through process finalization", async () => {
     const runCli = vi.fn(async () => undefined);
 
-    await runMainOrRootHelp(["node", "openclaw", "status"], {
-      loadRunCli: async () => ({ runCli }),
-    });
+    vi.doMock("./cli/run-main.js", async () => ({ runCli }));
+    await runMainOrRootHelp(["node", "openclaw", "status"]);
 
     expect(runCli).toHaveBeenCalledWith(["node", "openclaw", "status"], {
       additionalStartupTrace: expect.any(Object),
@@ -34,15 +37,14 @@ describe("entry run-main boundary", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     process.exitCode = undefined;
     try {
-      await runMainOrRootHelp(["node", "openclaw", "onboard", "recommendations"], {
-        loadRunCli: async () => ({
-          runCli: vi.fn(async () => {
-            throw new Error(
-              "Multiple agents are configured, but this operation has no explicit owner.",
-            );
-          }),
+      vi.doMock("./cli/run-main.js", async () => ({
+        runCli: vi.fn(async () => {
+          throw new Error(
+            "Multiple agents are configured, but this operation has no explicit owner.",
+          );
         }),
-      });
+      }));
+      await runMainOrRootHelp(["node", "openclaw", "onboard", "recommendations"]);
       expect(process.exitCode).toBe(1);
       expect(errorSpy).toHaveBeenCalledWith("[openclaw] The CLI command failed.");
       expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("Could not start the CLI"));
@@ -90,13 +92,12 @@ describe("entry run-main boundary", () => {
       const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
       process.exitCode = undefined;
       try {
-        await runMainOrRootHelp(["node", "openclaw", "fail", ...(json ? ["--json"] : [])], {
-          loadRunCli: async () => ({
-            runCli: async (argv) => {
-              await host.parseAsync(argv);
-            },
-          }),
-        });
+        vi.doMock("./cli/run-main.js", async () => ({
+          runCli: async (argv: string[]) => {
+            await host.parseAsync(argv);
+          },
+        }));
+        await runMainOrRootHelp(["node", "openclaw", "fail", ...(json ? ["--json"] : [])]);
 
         expect(process.exitCode).toBe(1);
         expect(errorSpy.mock.calls).toEqual([[message]]);
@@ -118,11 +119,10 @@ describe("entry run-main boundary", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     process.exitCode = undefined;
     try {
-      await runMainOrRootHelp(["node", "openclaw", "status"], {
-        loadRunCli: async () => {
-          throw new Error("cannot load run-main");
-        },
+      vi.doMock("./cli/run-main.js", async () => {
+        throw new Error("cannot load run-main");
       });
+      await runMainOrRootHelp(["node", "openclaw", "status"]);
       expect(process.exitCode).toBe(1);
       expect(errorSpy).toHaveBeenCalledWith("[openclaw] Could not start the CLI.");
       expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("The CLI command failed"));
@@ -145,13 +145,12 @@ describe("entry run-main boundary", () => {
     process.exitCode = undefined;
 
     try {
-      await runMainOrRootHelp(["node", "openclaw", "workboard", "list"], {
-        loadRunCli: async () => ({
-          runCli: vi.fn(async () => {
-            throw error;
-          }),
+      vi.doMock("./cli/run-main.js", async () => ({
+        runCli: vi.fn(async () => {
+          throw error;
         }),
-      });
+      }));
+      await runMainOrRootHelp(["node", "openclaw", "workboard", "list"]);
 
       expect(process.exitCode).toBe(1);
       expect(errorSpy.mock.calls).toEqual([[message]]);
@@ -186,10 +185,15 @@ it.each([
       "src/logging/json-console-line.ts",
       "src/cli/startup-trace.ts",
     ];
+    const runMainPath = path.join(root, "run-main.mts");
     const relocated = new Map(
       sources.map((file, index) => [path.resolve(file), path.join(root, `owner-${index}.mts`)]),
     );
+    relocated.set(path.resolve("src/cli/run-main.ts"), runMainPath);
     for (const [source, destination] of relocated) {
+      if (destination === runMainPath) {
+        continue;
+      }
       const code = (await fs.readFile(source, "utf8")).replace(
         /(from\s+|import\(|import\s+)"([^"\n]+)"/g,
         (_match, prefix: string, specifier: string) => {
@@ -201,19 +205,24 @@ it.each([
       );
       await fs.writeFile(destination, code);
     }
+    await fs.writeFile(
+      runMainPath,
+      `
+import fs from 'node:fs/promises';
+export async function runCli() {
+  await Promise.all(${JSON.stringify([...relocated.values()])}.map(file => fs.rm(file)));
+  ${phase === "command" ? `throw new Error(${JSON.stringify(failureMessage)});` : ""}
+}
+`,
+    );
     const runner = path.join(root, "runner.mts");
     await fs.writeFile(
       runner,
       `
-import fs from 'node:fs/promises';
 ${trace ? "process.argv.push('gateway');" : ""}
 const { runMainOrRootHelp } = await import(${JSON.stringify(pathToFileURL(relocated.get(path.resolve("src/entry.ts"))!).href)});
 const fail = async () => { throw new Error(${JSON.stringify(failureMessage)}); };
 await runMainOrRootHelp(['node', 'openclaw', 'update', ${json ? "'--json'" : "'--yes'"}], {
-  loadRunCli: async () => ({ runCli: async () => {
-    await Promise.all(${JSON.stringify([...relocated.values()])}.map(file => fs.rm(file)));
-    ${phase === "command" ? "await fail();" : ""}
-  }}),
   ${phase === "finalize" ? "finalize: fail," : ""}
 });
 `,

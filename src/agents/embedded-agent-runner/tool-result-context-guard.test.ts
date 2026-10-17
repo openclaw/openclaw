@@ -16,7 +16,6 @@ import { normalizeMessagesForLlmBoundary } from "./run/attempt-llm-boundary.js";
 import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
 import { checkMidTurnPrecheck } from "./run/preemptive-compaction.js";
 import {
-  createMessageCharEstimateCache,
   estimateMessageCharsCached,
   getToolResultText as getAllToolResultText,
 } from "./tool-result-char-estimator.js";
@@ -193,7 +192,7 @@ describe("installToolResultContextGuard", () => {
     );
     expect(projected).not.toHaveProperty("details");
     expect(
-      estimateMessageCharsCached(projected, createMessageCharEstimateCache()),
+      estimateMessageCharsCached(projected, new WeakMap<AgentMessage, number>()),
     ).toBeLessThanOrEqual(contextWindowTokens);
     expect(getAllToolResultText(projected)).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
     expect(getAllToolResultText(projected)).toContain(diagnostic);
@@ -222,7 +221,7 @@ describe("installToolResultContextGuard", () => {
       throw new Error("expected a tool result");
     }
     expect(
-      estimateMessageCharsCached(projected, createMessageCharEstimateCache()),
+      estimateMessageCharsCached(projected, new WeakMap<AgentMessage, number>()),
     ).toBeLessThanOrEqual(8_192);
     expect(source).toEqual(original);
     expect(projected).not.toHaveProperty("details");
