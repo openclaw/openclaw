@@ -11,6 +11,11 @@ const { unexpectedIo } = vi.hoisted(() => ({
   },
 }));
 
+// mock-isolation: Registration and skipped turns must not load model recall execution.
+vi.mock("./recall.js", () => {
+  throw new Error("Unexpected model recall module load in status-only hook");
+});
+
 // mock-isolation: Status-only hooks must not discover models or boot an agent runtime.
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   DEFAULT_PROVIDER: "ollama",
