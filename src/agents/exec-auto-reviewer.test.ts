@@ -3,26 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ExecAutoReviewTranscript } from "../infra/exec-auto-review.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { input, preparedModel, response } from "./exec-auto-review.test-support.js";
 import { createModelExecAutoReviewer as createProductionReviewer } from "./exec-auto-reviewer.js";
 import * as completionRuntime from "./simple-completion-runtime.js";
 
 afterEach(() => vi.restoreAllMocks());
-
-function preparedModel(modelId = "reviewer", maxTokens?: number) {
-  return {
-    selection: { provider: "openrouter", modelId, agentDir: "/agent" },
-    model: { provider: "openrouter", id: modelId, api: "openai" as const, maxTokens },
-    auth: { apiKey: "redacted", mode: "env" as const },
-    [Symbol.asyncDispose]: async () => {},
-  };
-}
-
-function response(decision = "allow", risk = "low", rationale = "reviewer fixture") {
-  return {
-    stopReason: "stop" as const,
-    content: [{ type: "text" as const, text: JSON.stringify({ decision, risk, rationale }) }],
-  };
-}
 
 function withCompletion(
   prepare: (...args: never[]) => Promise<unknown>,
@@ -39,21 +24,6 @@ function withCompletion(
   }
   return createProductionReviewer(options);
 }
-
-const input = {
-  command: "git status",
-  argv: ["git", "status"],
-  resolvedPath: "/usr/bin/git",
-  cwd: "/repo",
-  envKeys: [],
-  host: "gateway" as const,
-  reason: "approval-required" as const,
-  analysis: {
-    parsed: true,
-    allowlistMatched: false,
-    inlineEval: false,
-  },
-};
 
 function createReviewerHarness(modelOverrides?: { maxTokens?: number }) {
   const prepare = vi.fn(async () => preparedModel("reviewer", modelOverrides?.maxTokens));

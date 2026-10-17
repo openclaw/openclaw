@@ -3,6 +3,11 @@ import { resolveDispatchWrapperTrustPlan } from "../infra/dispatch-wrapper-resol
 import type { ExecAutoReviewInput } from "../infra/exec-auto-review.js";
 import { isBlockedShellWrapperCommand } from "../infra/exec-wrapper-resolution.js";
 import { buildExecAutoReviewInputForShellCommand } from "../plugin-sdk/agent-harness-exec-review-runtime.js";
+import {
+  input as baselineInput,
+  preparedModel,
+  response,
+} from "./exec-auto-review.test-support.js";
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
 import * as completionRuntime from "./simple-completion-runtime.js";
 
@@ -30,21 +35,6 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-const baselineInput: ExecAutoReviewInput = {
-  command: "git status",
-  argv: ["git", "status"],
-  resolvedPath: "/usr/bin/git",
-  cwd: "/repo",
-  envKeys: [],
-  host: "gateway",
-  reason: "approval-required",
-  analysis: {
-    parsed: true,
-    allowlistMatched: false,
-    inlineEval: false,
-  },
-};
-
 type StressCompletionRequest = {
   context: { messages: Array<{ content: string }> };
   options: { signal?: AbortSignal };
@@ -54,15 +44,6 @@ type StressCompletionResult = {
   stopReason: "stop";
   content: Array<{ type: "text"; text: string }>;
 };
-
-function preparedModel() {
-  return {
-    selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
-    model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
-    auth: { apiKey: "redacted", mode: "env" as const },
-    [Symbol.asyncDispose]: async () => {},
-  };
-}
 
 function caseInput(index: number, kind = "case"): ExecAutoReviewInput {
   return {
@@ -95,15 +76,7 @@ function createStressReviewer(params: {
 }
 
 function modelResponse(decision: "allow" | "deny" | "ask", risk: "low" | "medium") {
-  return {
-    stopReason: "stop" as const,
-    content: [
-      {
-        type: "text" as const,
-        text: JSON.stringify({ decision, risk, rationale: "stress fixture" }),
-      },
-    ],
-  };
+  return response(decision, risk, "stress fixture");
 }
 
 function createSeededRandom(seed: number): () => number {

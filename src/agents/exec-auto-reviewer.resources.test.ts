@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
+import { promisify } from "node:util";
 import { getAiTransportHost } from "@openclaw/ai";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listenProvider } from "../gateway/gateway-provider-fixture.test-support.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
@@ -66,13 +68,8 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
       requests.push(response);
       arrived.resolve();
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Fixture server has no TCP port");
-    }
+    const baseUrl = await listenProvider(server);
+    const origin = new URL(baseUrl).origin;
     const cfg: OpenClawConfig = {
       agents: { defaults: { workspace: root, model: `${fixture.providerId}/reviewer` } },
       models: {
@@ -80,7 +77,7 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
           [fixture.providerId]: {
             api: "openai-completions",
             apiKey: "fixture-only",
-            baseUrl: `http://127.0.0.1:${address.port}/v1`,
+            baseUrl,
             models: [
               {
                 id: "reviewer",
@@ -154,7 +151,7 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
             const realFetch = globalThis.fetch;
             fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
               const response = await realFetch(...args);
-              if (!response.url.startsWith(`http://127.0.0.1:${address.port}/`)) {
+              if (!response.url.startsWith(`${origin}/`)) {
                 return response;
               }
               const reader = response.body?.getReader();
@@ -285,9 +282,7 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
       );
     } finally {
       server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await promisify(server.close).call(server);
       roots.cleanup();
     }
   },
