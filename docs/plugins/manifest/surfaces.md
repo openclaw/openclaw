@@ -481,6 +481,9 @@ captured as immutable revisions, and refresh only through the explicit UI reload
 flow. Bundled plugins and Nix-store plugins in Nix mode can load hardlinked
 assets and reload hardlinked manifests under the shared plugin-file policy.
 Mutable external plugin roots and CLI packing still reject hardlinks.
+The Control UI preloads the entry module and declared stylesheets. The browser
+resolves JavaScript dependencies from that entry; the Gateway does not parse
+browser modules to discover preload hints.
 
 User-installed native UI requires **Settings → Labs → Custom plugin UI**
 (`gateway.controlUi.experimental.customPlugins`, default `false`). Native UI

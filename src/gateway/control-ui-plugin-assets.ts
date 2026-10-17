@@ -97,60 +97,6 @@ function browserOwners(registry: PluginRegistry): PluginRecord[] {
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
-async function staticBrowserImports(
-  entryUrl: string,
-  assets: ReadonlyMap<string, PluginControlUiAsset>,
-  assetUrl: (name: string) => string,
-): Promise<string[]> {
-  const { parse } = await import("acorn");
-  const modules = new Map(
-    [...assets]
-      .filter(([name]) => /\.m?js$/u.test(name))
-      .map(([name, asset]) => [new URL(assetUrl(name), "http://localhost").href, asset]),
-  );
-  const entry = new URL(entryUrl, "http://localhost").href;
-  const visited = new Set([entry]);
-  const pending = [entry];
-  for (const url of pending) {
-    const asset = modules.get(url);
-    if (!asset) {
-      continue;
-    }
-    let statements;
-    try {
-      statements = parse(asset.body.toString("utf8"), {
-        ecmaVersion: "latest",
-        sourceType: "module",
-      }).body;
-    } catch {
-      // Preloading is optional; parser support must not change browser build admission.
-      continue;
-    }
-    for (const statement of statements) {
-      if (
-        statement.type !== "ImportDeclaration" &&
-        statement.type !== "ExportNamedDeclaration" &&
-        statement.type !== "ExportAllDeclaration"
-      ) {
-        continue;
-      }
-      const specifier = statement.source?.value;
-      if (
-        typeof specifier !== "string" ||
-        (!specifier.startsWith("./") && !specifier.startsWith("../"))
-      ) {
-        continue;
-      }
-      const target = new URL(specifier, url).href;
-      if (modules.has(target) && !visited.has(target)) {
-        visited.add(target);
-        pending.push(target);
-      }
-    }
-  }
-  return pending.slice(1).map((url) => new URL(url).pathname);
-}
-
 async function snapshotBrowserBuild(
   record: PluginRecord,
   declaration = record.controlUi,
@@ -174,7 +120,6 @@ async function snapshotBrowserBuild(
   const prefix = `${controlUiPluginAssetPrefix(record.id, basePath)}${revision}/`;
   const assetUrl = (name: string) =>
     `${prefix}${name.split("/").map(encodeURIComponent).join("/")}`;
-  const imports = await staticBrowserImports(assetUrl(entryName), assets, assetUrl);
   return {
     assets,
     bytes,
@@ -183,7 +128,6 @@ async function snapshotBrowserBuild(
       name: record.name,
       revision,
       entryUrl: assetUrl(entryName),
-      imports,
       styles: styles.map(assetUrl),
       ...(uiCapabilities !== undefined ? { uiCapabilities } : {}),
       ...(hasCanonicalPluginDistribution(record) && record.packageName && record.packageVersion
