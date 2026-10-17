@@ -241,25 +241,19 @@ describe("resolveRemoteEmbeddingBearerClient", () => {
     });
   });
 
-  it("treats loopback address families as distinct credential destinations", async () => {
+  it.each([
+    ["loopback address families", "http://localhost:12345/v1", "http://127.0.0.1:12345/v1"],
+    [
+      "query-distinct URLs",
+      "https://provider.example.test/v1?tenant=provider",
+      "https://provider.example.test/v1?tenant=remote",
+    ],
+  ])("treats %s as distinct credential destinations", async (_name, providerUrl, remoteUrl) => {
     await expect(
       resolveClient(
-        { ...configuredProvider, baseUrl: "http://localhost:12345/v1" },
-        { baseUrl: "http://127.0.0.1:12345/v1" },
-        "http://localhost:12345/v1",
-      ),
-    ).rejects.toThrow(/memory\.search\.remote\.apiKey|Authorization header/);
-  });
-
-  it("treats query-distinct URLs as different credential destinations", async () => {
-    await expect(
-      resolveClient(
-        {
-          ...configuredProvider,
-          baseUrl: "https://provider.example.test/v1?tenant=provider",
-        },
-        { baseUrl: "https://provider.example.test/v1?tenant=remote" },
-        "https://provider.example.test/v1?tenant=provider",
+        { ...configuredProvider, baseUrl: providerUrl },
+        { baseUrl: remoteUrl },
+        providerUrl,
       ),
     ).rejects.toThrow(/memory\.search\.remote\.apiKey|Authorization header/);
   });
