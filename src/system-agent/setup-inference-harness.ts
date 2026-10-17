@@ -192,7 +192,6 @@ export async function verifySetupHarness(params: {
       (deps.captureSystemAgentOwnerPluginArtifacts ?? captureSystemAgentOwnerPluginArtifacts)({
         config: route.runConfig,
         executionRoute: route,
-        deps,
       });
     const artifacts = capture();
     if (!artifacts.ownerPluginArtifacts.some((entry) => entry.pluginId === ownerPluginId)) {

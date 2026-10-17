@@ -96,7 +96,6 @@ function createVerifiedRunOptions(deps: SystemAgentCommandDeps = {}, revalidate 
   return {
     verifiedInference: revalidate ? { ...fixture.binding } : fixture.binding,
     deps: {
-      ...fixture.deps,
       readConfigFileSnapshot: vi.fn(async () => configSnapshot(verifiedConfig)) as never,
       ...deps,
     },

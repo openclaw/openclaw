@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
+import * as modelAuth from "../agents/model-auth.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -199,6 +200,7 @@ it.each([false, true])(
             pluginRegistry: runningRegistry,
           },
           async () => {
+            vi.spyOn(modelAuth, "resolveApiKeyForProviderCore").mockResolvedValue(resolvedAuth);
             const result = await activateSetupInference({
               kind: "provider-auth",
               authChoice: "fixture-provider-key",
@@ -219,7 +221,6 @@ it.each([false, true])(
                   appGuidedSecret: true,
                 }),
                 captureSystemAgentOwnerPluginArtifacts: capture,
-                resolveApiKeyForProvider: async () => resolvedAuth,
               },
             });
             expect(onPreparationComplete).toHaveBeenCalledOnce();

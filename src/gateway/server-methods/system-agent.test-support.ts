@@ -87,7 +87,6 @@ export const verifiedConfig: OpenClawConfig = {
 };
 export function useSystemAgentGatewayTestFixture() {
   let verifiedInference: SystemAgentVerifiedInferenceBinding | undefined;
-  let verifiedInferenceDeps: SystemAgentVerifiedInferenceDeps | undefined;
 
   const systemAgentTempDirs = useAutoCleanupTempDirTracker(afterEach);
   let previousAppliedHash: string | null = null;
@@ -98,10 +97,6 @@ export function useSystemAgentGatewayTestFixture() {
 
   function requireVerifiedInferenceDeps(): SystemAgentVerifiedInferenceDeps {
     return {
-      ...expectDefined(
-        verifiedInferenceDeps,
-        "verified inference dependencies were not initialized",
-      ),
       readConfigFileSnapshot: async () =>
         ({
           exists: true,
@@ -139,12 +134,10 @@ export function useSystemAgentGatewayTestFixture() {
       createSystemAgentVerifiedInferenceTestFixture(verifiedConfig),
     );
     verifiedInference = fixture.binding;
-    verifiedInferenceDeps = fixture.deps;
   });
 
   afterAll(() => {
     verifiedInference = undefined;
-    verifiedInferenceDeps = undefined;
   });
 
   beforeEach(() => {
