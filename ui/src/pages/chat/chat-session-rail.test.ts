@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
 
+import { createMemo, createRoot, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "../../app/theme-branding.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import {
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload,
@@ -27,6 +29,45 @@ function digest(health: SessionObserverDigest["health"] = "on-track"): SessionOb
 }
 
 describe("ChatSessionCompanionThreads", () => {
+  it("publishes in-place answer settlement through its owner projection", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    let readStatuses!: () => string[];
+    const dispose = createRoot((disposeRoot) => {
+      const projected = projectOwner(threads, (owner) => owner);
+      readStatuses = createMemo(() =>
+        projected
+          .read()
+          .view("one")
+          .turns.map((turn) => turn.status),
+      );
+      return disposeRoot;
+    });
+    let answer!: (value: { answer: string; ts: number }) => void;
+    try {
+      expect(readStatuses()).toEqual([]);
+      const pending = threads.submit(
+        "one",
+        "Question",
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      );
+      const turn = threads.view("one").turns[0];
+      expect(turn?.status).toBe("pending");
+      flush();
+      expect(readStatuses()).toEqual(["pending"]);
+      answer({ answer: "Answer", ts: 1 });
+      await pending;
+      flush();
+      expect(readStatuses()).toEqual(["answered"]);
+      expect(threads.view("one").turns[0]).toBe(turn);
+    } finally {
+      dispose();
+      threads.retire();
+    }
+  });
+
   it("sends companion questions with the bounded RPC timeout", async () => {
     const request = vi.fn(async () => ({ answer: "Answer", ts: 1 }));
     const client = { request: request as GatewayBrowserClient["request"] };
@@ -347,7 +388,8 @@ describe("ChatSessionRailElement", () => {
   );
 
   it("explains unsupported image input and retries the retained image only on user action", async () => {
-    const threads = new ChatSessionCompanionThreads(() => {
+    const threads = new ChatSessionCompanionThreads();
+    threads.subscribe(() => {
       element.companion = { ...threads.view("one") };
     });
     const image = registerChatAttachmentPayload({
@@ -403,7 +445,8 @@ describe("ChatSessionRailElement", () => {
   it.each(["answered"] as const)(
     "keeps a follow-up editable while answering and retains it when %s",
     async (outcome) => {
-      const threads = new ChatSessionCompanionThreads(() => {
+      const threads = new ChatSessionCompanionThreads();
+      threads.subscribe(() => {
         element.companion = { ...threads.view("one") };
       });
       const ask = vi.fn<() => Promise<{ answer: string; ts: number }>>();
