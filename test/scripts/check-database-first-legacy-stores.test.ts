@@ -768,28 +768,6 @@ describe("check-database-first-legacy-stores", () => {
         options.paths = { nested: loadNested() };
         await persist(options);
       `("wrapper-option-path-parent-rewrite-unknown-nested.ts", []),
-    }),
-  )("$name", ({ source, filename, expected }) => {
-    expect(violations(source, filename)).toEqual(expected);
-  });
-
-  it("keeps legacy PortGuardian filenames inside the native migration owner", () => {
-    const runtimeViolations = collectDatabaseFirstNativeLegacyStoreViolations(
-      'let path = root.appendingPathComponent("port-guard.json")\n',
-      "apps/macos/Sources/OpenClaw/PortGuardian.swift",
-    );
-    const migrationViolations = collectDatabaseFirstNativeLegacyStoreViolations(
-      'let path = root.appendingPathComponent("port-guard.json")\n',
-      "apps/macos/Sources/OpenClaw/PortGuardianRecordStore.swift",
-    );
-
-    expect(runtimeViolations).toEqual([{ kind: "legacy PortGuardian file reference", line: 1 }]);
-    expect(migrationViolations).toEqual([]);
-  });
-
-  // Doctor, plugin, QA, and transcript owner boundaries.
-  it.each(
-    namedCases({
       "flags legacy transcript bridge markers in runtime source": sourceCase`
         export const transcriptLocator = "sqlite-transcript://session";
         export const dynamicLocator = \`sqlite-transcript://\${sessionId}\`;
@@ -800,5 +778,18 @@ describe("check-database-first-legacy-stores", () => {
     }),
   )("$name", ({ source, filename, expected }) => {
     expect(violations(source, filename)).toEqual(expected);
+  });
+
+  it("keeps legacy PortGuardian filenames inside the native migration owner", () => {
+    const source = 'let path = root.appendingPathComponent("port-guard.json")\n';
+    const check = (file: string) =>
+      collectDatabaseFirstNativeLegacyStoreViolations(
+        source,
+        `apps/macos/Sources/OpenClaw/${file}.swift`,
+      );
+    expect(check("PortGuardian")).toEqual([
+      { kind: "legacy PortGuardian file reference", line: 1 },
+    ]);
+    expect(check("PortGuardianRecordStore")).toEqual([]);
   });
 });
