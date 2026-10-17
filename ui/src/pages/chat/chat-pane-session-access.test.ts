@@ -146,7 +146,7 @@ describe("chat pane session access", () => {
   it("refuses archived-session restore without exact sessions.patch access", async () => {
     const patch = vi.fn(async () => ({}));
     const sessions = { patch } as unknown as SessionCapability;
-    const { pane, state, requestUpdate } = createTestChatPane({
+    const { pane, state } = createTestChatPane({
       client: {} as GatewayBrowserClient,
       sessions,
     });
@@ -159,7 +159,6 @@ describe("chat pane session access", () => {
 
     expect(state.chatError).toBeTruthy();
     expect(state.lastError).toBe(state.chatError);
-    expect(requestUpdate).toHaveBeenCalledOnce();
     expect(patch).not.toHaveBeenCalled();
   });
 

@@ -252,7 +252,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.sessionsLoading = stateValue.loading;
     state.sessionsError = stateValue.error;
     if (state.connected && state.pendingAbort) {
-      void replayPendingChatAbort(state).finally(() => state.requestUpdate?.());
+      void replayPendingChatAbort(state);
     }
     this.refreshSwarmRoster();
     const selectedSession = selectedChatSessionRow(state);
@@ -587,7 +587,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       state.sidebarFocusVersion += 1;
     }
     if (state.connected && state.pendingAbort) {
-      void replayPendingChatAbort(state).finally(() => state.requestUpdate?.());
+      void replayPendingChatAbort(state);
     }
     const canonicalRouteSessionKey =
       routeSessionKey && !catalogRouteKey
@@ -600,7 +600,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.presented
     ) {
       this.onPaneSessionChange?.(this.paneId, canonicalRouteSessionKey, { replace: true });
-      state.requestUpdate?.();
       // Persisted state may already own the canonical key; continue startup
       // because no later route update would load its history.
       if (state.sessionKey !== canonicalRouteSessionKey) {
@@ -627,7 +626,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       setQuestionPromptClient(this.questionPromptState, null);
       stopChatRealtimeTalk(state);
       maybeResetToolStream(state, { preserveStreamSegments: state.chatRunId !== null });
-      state.requestUpdate?.();
       return;
     }
     this.refreshSwarmRoster();
@@ -671,7 +669,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       if (catalogRouteKey) {
         void this.loadHeaderPlatform(startupClient, startupGeneration);
         void this.loadCatalogSession(catalogRouteKey, false);
-        state.requestUpdate?.();
         return;
       }
       const historyRefresh = refreshPageChat(state, {
@@ -687,7 +684,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       void historyRefresh.finally(() => {
         void finishStartup();
       });
-      void refreshChatModelAuthStatus(state).finally(() => state.requestUpdate?.());
+      void refreshChatModelAuthStatus(state);
       void state.loadAssistantIdentity();
       this.syncSessionSuggestionTarget(
         resolveChatAgentId(state) ?? "main",
