@@ -26,6 +26,8 @@ import {
   mcpTool,
   createCodeModeHarness,
   resultDetails,
+  expectCompleted,
+  expectToolCalls,
 } from "./code-mode.test-support.js";
 import { projectMcpCallToolResult } from "./mcp-content.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
@@ -48,21 +50,18 @@ function harness(targets: AnyAgentTool[]) {
   };
 }
 
+function textContent(text: string) {
+  return [{ type: "text" as const, text }];
+}
+
 function materializedMcpTool(params: Parameters<typeof mcpTool>[0]) {
   return mcpTool({
     ...params,
     execute: vi.fn(async (_id, input) =>
       projectMcpCallToolResult({
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              serverName: params.serverName,
-              toolName: params.toolName,
-              input,
-            }),
-          },
-        ],
+        content: textContent(
+          JSON.stringify({ serverName: params.serverName, toolName: params.toolName, input }),
+        ),
       }),
     ),
   });
@@ -93,7 +92,7 @@ describe("Code Mode MCP namespace", () => {
       _meta: { privateAppState: "must-not-reach-guest" },
     };
     const failure: CallToolResult = {
-      content: [{ type: "text", text: "recoverable failure" }],
+      content: textContent("recoverable failure"),
       structuredContent: { retryable: true },
       isError: true,
       _meta: { privateAppState: "failure-private-state" },
@@ -227,7 +226,7 @@ describe("Code Mode MCP namespace", () => {
   });
   it("rejects an unowned blocked lookalike instead of accepting its denial marker", async () => {
     const executor = vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "SPOOFED_POLICY_DENIED" }],
+      content: textContent("SPOOFED_POLICY_DENIED"),
       details: { status: "blocked", reason: "SPOOFED_POLICY_DENIED" },
     }));
     const h = harness([
@@ -238,11 +237,8 @@ describe("Code Mode MCP namespace", () => {
       try { return await MCP.docs.spoof(); } catch (error) { return { error: error.message }; }
     `),
     );
-    expect(details).toMatchObject({
-      status: "completed",
-      value: {
-        error: "MCP namespace tool result is missing its owned guest projection.",
-      },
+    expectCompleted(details, {
+      error: "MCP namespace tool result is missing its owned guest projection.",
     });
     expect(executor).toHaveBeenCalledOnce();
   });
@@ -296,7 +292,7 @@ describe("Code Mode MCP namespace", () => {
           status: "completed",
           value:
             surface === "tool"
-              ? { content: [{ type: "text", text: reason }], isError: true }
+              ? { content: textContent(reason), isError: true }
               : { error: expect.stringContaining(reason) },
         });
         expect(JSON.stringify(details.value)).not.toContain("missing its owned guest projection");
@@ -321,20 +317,12 @@ describe("Code Mode MCP namespace", () => {
         file: await API.read("mcp/${serverIdentifier}.d.ts") };
     `),
       );
-      expect(result).toMatchObject({
-        status: "completed",
+      expectCompleted(result, {
         value: {
-          value: {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({ serverName, toolName, input: { value: "safe" } }),
-              },
-            ],
-          },
-          api: { header: expect.stringContaining(`function ${toolIdentifier}(`) },
-          file: { content: expect.stringContaining(`function ${toolIdentifier}(`) },
+          content: textContent(JSON.stringify({ serverName, toolName, input: { value: "safe" } })),
         },
+        api: { header: expect.stringContaining(`function ${toolIdentifier}(`) },
+        file: { content: expect.stringContaining(`function ${toolIdentifier}(`) },
       });
       expect(target.execute).toHaveBeenCalledOnce();
     },
@@ -344,6 +332,11 @@ describe("Code Mode MCP namespace", () => {
 function requiredObject(properties: Record<string, JsonSchemaType>, extra: JsonSchemaType = {}) {
   return { type: "object", properties, required: Object.keys(properties), ...extra };
 }
+
+const dictionarySchema: JsonSchemaType = {
+  type: "object",
+  additionalProperties: { type: "string" },
+};
 
 describe("MCP declaration consumers", () => {
   it("advertises dictionary and nullable inputs accepted through the MCP namespace", async () => {
@@ -373,11 +366,7 @@ describe("MCP declaration consumers", () => {
       ],
       ["defaulted", defaultedSchema, {}, { limit: 0, enabled: false, value: null }],
       ["defaultedOmitted", defaultedSchema, undefined, { limit: 0, enabled: false, value: null }],
-      [
-        "dictionary",
-        { type: "object", additionalProperties: { type: "string" } },
-        { topic: "synthetic" },
-      ],
+      ["dictionary", dictionarySchema, { topic: "synthetic" }],
       ["open", { type: "object" }, { topic: null }],
       ["closed", { type: "object", patternProperties: {}, additionalProperties: false }, {}],
       [
@@ -401,11 +390,7 @@ describe("MCP declaration consumers", () => {
           properties: {
             scalar: { type: "string", nullable: true },
             union: { type: ["number", "boolean"], nullable: true },
-            dictionary: {
-              type: "object",
-              additionalProperties: { type: "string" },
-              nullable: true,
-            },
+            dictionary: { ...dictionarySchema, nullable: true },
             restricted: { type: "string", nullable: true, enum: ["keep"] },
             constrained: { type: "string", enum: ["keep", null] },
             integer: { type: "integer", enum: [1, 1.5, { nested: true }] },
@@ -466,7 +451,7 @@ describe("MCP declaration consumers", () => {
         execute: vi.fn(async (_toolCallId, input) => {
           expect(validate(input).valid).toBe(true);
           return projectMcpCallToolResult({
-            content: [{ type: "text", text: JSON.stringify(input) }],
+            content: textContent(JSON.stringify(input)),
           });
         }),
       });
@@ -480,12 +465,9 @@ describe("MCP declaration consumers", () => {
         `return { root: await MCP.$api(), file: await API.read("mcp/fixture.d.ts"), api: await MCP.fixture.$api(), results: await Promise.all([${calls.join(",")}]) };`,
       ),
     );
-    expect(details).toMatchObject({
-      status: "completed",
-      value: {
-        root: {
-          servers: [{ identifier: "fixture", serverName: "fixture", toolCount: fixtures.length }],
-        },
+    expectCompleted(details, {
+      root: {
+        servers: [{ identifier: "fixture", serverName: "fixture", toolCount: fixtures.length }],
       },
     });
     const value = details.value as {
@@ -496,7 +478,7 @@ describe("MCP declaration consumers", () => {
     expect(
       value.results.map((result) => JSON.parse((result.content[0] as { text: string }).text)),
     ).toEqual(fixtures.map(([_name, _schema, input, expected]) => expected ?? input));
-    expect(targets.every((target) => vi.mocked(target.execute).mock.calls.length === 1)).toBe(true);
+    expectToolCalls(1, ...targets);
     expect(value.file.content).toBe(value.api.header);
     expect(value.file.bytes).toBe(Buffer.byteLength(value.file.content));
     // Compile real accepted calls against the advertised header, not a parallel expected renderer.
@@ -634,10 +616,8 @@ describe.each(["interactive", "headless"])("Code Mode %s MCP discovery", (mode) 
       },
     });
     expect(JSON.stringify(result)).not.toContain("mcp:accounting:");
-    for (const target of [native, ...targets]) {
-      expect(target.execute).toHaveBeenCalledOnce();
-    }
-    expect(denied.execute).not.toHaveBeenCalled();
+    expectToolCalls(1, native, ...targets);
+    expectToolCalls(0, denied);
   });
 });
 
@@ -663,9 +643,7 @@ it("bounds MCP discovery and wraps remote metadata before any tool executes", as
     text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
   });
   expect(tools[0]?.description).not.toContain("Remote description.");
-  for (const target of targets) {
-    expect(target.execute).not.toHaveBeenCalled();
-  }
+  expectToolCalls(0, ...targets);
 });
 
 it("supports root MCP API and multiple server declarations", async () => {
@@ -675,9 +653,7 @@ it("supports root MCP API and multiple server declarations", async () => {
       name: serverName + "_ping",
       serverName,
       toolName: "ping",
-      execute: vi.fn(async () =>
-        projectMcpCallToolResult({ content: [{ type: "text", text: "pong" }] }),
-      ),
+      execute: vi.fn(async () => projectMcpCallToolResult({ content: textContent("pong") })),
     }),
   );
   applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...targets] });
@@ -702,17 +678,12 @@ it("supports root MCP API and multiple server declarations", async () => {
         `,
     }),
   );
-  expect(result, JSON.stringify(result)).toMatchObject({
-    status: "completed",
-    value: {
-      headers: ["string", "string", "string"],
-      rootDeclaration: true,
-      indexDeclaration: true,
-    },
+  expectCompleted(result, {
+    headers: ["string", "string", "string"],
+    rootDeclaration: true,
+    indexDeclaration: true,
   });
-  for (const target of targets) {
-    expect(target.execute).toHaveBeenCalledOnce();
-  }
+  expectToolCalls(1, ...targets);
   const { files } = result.value as { files: Array<{ path: string; content: string }> };
   expect(
     typeCheckSources({

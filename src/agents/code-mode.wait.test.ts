@@ -26,6 +26,8 @@ import {
   testing,
   runUntilCompleted,
   waitUntilCompleted,
+  codeModeRunner,
+  expectCompleted,
 } from "./code-mode.test-support.js";
 import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
@@ -41,7 +43,20 @@ function harness(
 ) {
   const fixture = createCodeModeHarness(options);
   applyCodeModeCatalog({ ...fixture.ctx, tools: [...fixture.tools, ...targets] });
-  return { ...fixture, exec: fixture.tools[0]!, wait: fixture.tools[1]! };
+  return {
+    ...fixture,
+    ...codeModeRunner(fixture.tools),
+    exec: fixture.tools[0]!,
+    wait: fixture.tools[1]!,
+  };
+}
+
+function observeSettlement(onWait: () => void) {
+  const settle = codeModeState.waitForPendingBridgeSettlement;
+  return vi.spyOn(codeModeState, "waitForPendingBridgeSettlement").mockImplementation((...args) => {
+    onWait();
+    return settle(...args);
+  });
 }
 
 afterEach(async () => {
@@ -101,17 +116,10 @@ describe("Code Mode wait, scope, and suspended runs", () => {
 
   it("rejects a completed run without replaying its action", async () => {
     const target = pluginTool("one_action", "One action");
-    const { exec, wait } = harness([target]);
-    const first = resultDetails(
-      await exec.execute("once", {
-        code: 'await one_action({}); await yield_control(); return "done";',
-      }),
-    );
+    const { run, resume, wait } = harness([target]);
+    const first = await run('await one_action({}); await yield_control(); return "done";', "once");
     expect(first.status).toBe("waiting");
-    expect(resultDetails(await wait.execute("resume", { runId: first.runId }))).toMatchObject({
-      status: "completed",
-      value: "done",
-    });
+    expectCompleted(await resume(first), "done");
     await expect(wait.execute("stale", { runId: first.runId })).rejects.toThrow(
       "This ID is unknown or no longer resumable",
     );
@@ -139,14 +147,8 @@ describe("Code Mode wait, scope, and suspended runs", () => {
         vi.advanceTimersByTime(100);
         return result;
       });
-    const waitForSettlement = codeModeState.waitForPendingBridgeSettlement;
     let waits = 0;
-    const waitSpy = vi
-      .spyOn(codeModeState, "waitForPendingBridgeSettlement")
-      .mockImplementation((...args) => {
-        parked[waits++]?.resolve();
-        return waitForSettlement(...args);
-      });
+    const waitSpy = observeSettlement(() => parked[waits++]?.resolve());
     let settled = false;
     const execution = fixture.exec
       .execute("required-budget", {
@@ -166,10 +168,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
         expect(testing.activeRuns.size).toBe(0);
         releases[index]!.resolve();
       }
-      expect(resultDetails(await execution)).toMatchObject({
-        status: "completed",
-        value: [{ index: 0 }, { index: 1 }],
-      });
+      expectCompleted(resultDetails(await execution), [{ index: 0 }, { index: 1 }]);
       expect(grants).toEqual([1_000, 900, 800]);
       expect(waits).toBe(2);
       expect(target.execute).toHaveBeenCalledTimes(2);
@@ -196,13 +195,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       const effect = pluginTool("after_required", "Effect after collection");
       const fixture = harness([target, effect]);
       const abort = new AbortController();
-      const waitForSettlement = codeModeState.waitForPendingBridgeSettlement;
-      const waitSpy = vi
-        .spyOn(codeModeState, "waitForPendingBridgeSettlement")
-        .mockImplementation((...args) => {
-          parked.resolve();
-          return waitForSettlement(...args);
-        });
+      const waitSpy = observeSettlement(parked.resolve);
       const result = fixture.exec.execute(
         "required-lifetime",
         {
@@ -228,9 +221,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
         });
         released.resolve();
         const successor = harness([]);
-        expect(
-          resultDetails(await successor.exec.execute("new-owner", { code: "return 42;" })),
-        ).toMatchObject({ status: "completed", value: 42 });
+        expectCompleted(await successor.run("return 42;", "new-owner"), 42);
         expect(effect.execute).not.toHaveBeenCalled();
         expect(testing.activeRuns.size).toBe(0);
       } finally {
@@ -244,13 +235,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
   it("does not turn guest timers into unlimited required-work waits", async () => {
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const parked = createDeferred();
-    const waitForSettlement = codeModeState.waitForPendingBridgeSettlement;
-    const waitSpy = vi
-      .spyOn(codeModeState, "waitForPendingBridgeSettlement")
-      .mockImplementation((...args) => {
-        parked.resolve();
-        return waitForSettlement(...args);
-      });
+    const waitSpy = observeSettlement(parked.resolve);
     const fixture = harness([], { codeMode: { timeoutMs: 1_000 } });
     const result = fixture.exec.execute("required-timer", {
       awaitResults: true,
@@ -270,12 +255,9 @@ describe("Code Mode wait, scope, and suspended runs", () => {
   it("refuses an unfinished explicit yield for required work", async () => {
     const fixture = harness([]);
     expect(
-      resultDetails(
-        await fixture.exec.execute("required-yield", {
-          awaitResults: true,
-          code: "await yield_control(); return 1;",
-        }),
-      ),
+      await fixture.run("await yield_control(); return 1;", "required-yield", {
+        awaitResults: true,
+      }),
     ).toMatchObject({
       status: "failed",
       error: expect.stringContaining("cannot yield an unfinished program"),
@@ -482,8 +464,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
         exec.execute("reused-call-id", input),
       ),
     );
-    expect(first.status).toBe("waiting");
-    expect(second.status).toBe("waiting");
+    expect([first.status, second.status]).toEqual(["waiting", "waiting"]);
     expect(second.runId).not.toBe(first.runId);
     expect(testing.activeRuns.size).toBe(2);
     expect(new Set([...testing.activeRuns.values()].map((state) => state.replayId)).size).toBe(2);
@@ -568,12 +549,8 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     const rejections = new Map<(typeof identities)[number], string>();
     let rightfulResult: Record<string, unknown>;
     beforeAll(async () => {
-      const { ctx, exec, wait } = harness([pluginTool("fake_noop", "Noop")], { agentId: "owner" });
-      const first = resultDetails(
-        await exec.execute("scoped", {
-          code: 'await yield_control("pause"); return "owner-secret";',
-        }),
-      );
+      const { ctx, run, resume } = harness([pluginTool("fake_noop", "Noop")], { agentId: "owner" });
+      const first = await run('await yield_control("pause"); return "owner-secret";', "scoped");
       expect(first.status).toBe("waiting");
       for (const missing of identities) {
         const foreign = createCodeModeTools({ ...ctx, [missing]: undefined })[1]!;
@@ -585,37 +562,30 @@ describe("Code Mode wait, scope, and suspended runs", () => {
         }
         expect(testing.activeRuns.has(first.runId as string)).toBe(true);
       }
-      rightfulResult = resultDetails(await wait.execute("rightful-owner", { runId: first.runId }));
+      rightfulResult = await resume(first, "rightful-owner");
     });
     it.each(identities)("rejects suspended-run callers missing the owner %s", (missing) => {
       expect(rejections.get(missing)).toContain(
         missing === "runId" ? "different agent run" : "different session",
       );
-      expect(rightfulResult).toMatchObject({ status: "completed", value: "owner-secret" });
+      expectCompleted(rightfulResult, "owner-secret");
     });
   });
 
   it("rejects concurrent waits for the same suspended run", async () => {
-    const { exec, wait } = harness([]);
-    const first = resultDetails(
-      await exec.execute("concurrent", { code: "await yield_control(); return 'done';" }),
-    );
+    const { run, resume, wait } = harness([]);
+    const first = await run("await yield_control(); return 'done';", "concurrent");
     expect(first.status).toBe("waiting");
-    const pending = wait.execute("wait-a", { runId: first.runId });
+    const pending = resume(first, "wait-a");
     await expect(wait.execute("wait-b", { runId: first.runId })).rejects.toThrow(
       "Use that wait’s result before deciding the next step",
     );
-    expect(resultDetails(await pending)).toMatchObject({ status: "completed", value: "done" });
+    expectCompleted(await pending, "done");
   });
 });
 
 async function runCode(code: string, targets: AnyAgentTool[]) {
-  const { ctx, tools } = createCodeModeHarness();
-  applyCodeModeCatalog({
-    tools: [...tools, ...targets],
-    ...ctx,
-  });
-  return resultDetails(await tools[0]!.execute("preflight", { code }));
+  return harness(targets).run(code, "preflight");
 }
 
 describe("Code Mode preflight repair", () => {
@@ -722,11 +692,7 @@ describe("Code Mode preflight repair", () => {
 
 describe("Code Mode program data", () => {
   async function run(tools: AnyAgentTool[], code: string) {
-    const h = createCodeModeHarness({ codeMode: { maxOutputBytes: 1024 } });
-    applyCodeModeCatalog({
-      ...h.ctx,
-      tools: [...h.tools, ...tools],
-    });
+    const h = harness(tools, { codeMode: { maxOutputBytes: 1024 } });
     return runUntilCompleted({ execTool: h.tools[0]!, waitTool: h.tools[1]!, code });
   }
 
@@ -764,19 +730,17 @@ it("clears host and worker-input aliases after bridge settlement", async () => {
     }
     return await original(input, ...args);
   });
-  const h = createCodeModeHarness();
   const success = pluginToolWithExecute("reply_success", "Read data", async () =>
     jsonResult("x".repeat(200000)),
   );
   const failure = pluginToolWithExecute("reply_failure", "Fail", async () => {
     throw new Error("failure:" + "x".repeat(200000));
   });
-  applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, success, failure] });
+  const h = harness([success, failure]);
   try {
-    const first = resultDetails(
-      await h.tools[0]!.execute("aliases", {
-        code: "const replies = Promise.allSettled([reply_success({}), reply_failure({})]); await yield_control(); return (await replies).map(reply => reply.status);",
-      }),
+    const first = await h.run(
+      "const replies = Promise.allSettled([reply_success({}), reply_failure({})]); await yield_control(); return (await replies).map(reply => reply.status);",
+      "aliases",
     );
     expect(first.status).toBe("waiting");
     const retainedState = testing.activeRuns.get(String(first.runId))!;
@@ -785,7 +749,7 @@ it("clears host and worker-input aliases after bridge settlement", async () => {
       requiredRequestIds: retainedState.pending.map((entry) => entry.id),
     });
     const final = await waitUntilCompleted({ details: first, waitTool: h.tools[1]! });
-    expect(final).toMatchObject({ status: "completed", value: ["fulfilled", "rejected"] });
+    expectCompleted(final, ["fulfilled", "rejected"]);
     expect(aliases.some((reply) => reply.ok)).toBe(true);
     expect(aliases.some((reply) => !reply.ok)).toBe(true);
     expect(arrays.every((array) => array.length === 0)).toBe(true);
@@ -806,19 +770,17 @@ it.each(["cancel", "expiry"])(
     const started = createDeferred();
     const release = createDeferred();
     const finished = createDeferred();
-    const h = createCodeModeHarness();
     const tool = pluginToolWithExecute("late_page", "Signal-ignoring data source", async () => {
       started.resolve();
       await release.promise;
       finished.resolve();
       return jsonResult("late".repeat(300000));
     });
-    applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
+    const h = harness([tool]);
     try {
-      const first = resultDetails(
-        await h.tools[0]!.execute("late", {
-          code: "const page = late_page({}); await yield_control(); return (await page).length;",
-        }),
+      const first = await h.run(
+        "const page = late_page({}); await yield_control(); return (await page).length;",
+        "late",
       );
       expect(first.status).toBe("waiting");
       await started.promise;
@@ -849,19 +811,17 @@ it.each(["cancel", "expiry"])(
 );
 
 it("releases each guest-discarded timer lease before the cell closes", async () => {
-  const h = createCodeModeHarness();
-  applyCodeModeCatalog({ ...h.ctx, tools: h.tools });
+  const h = harness([]);
   try {
-    let result = resultDetails(
-      await h.tools[0]!.execute("discarded-timers", {
-        code: `for (let i = 0; i < 6; i++) {
+    let result = await h.run(
+      `for (let i = 0; i < 6; i++) {
         const timer = setTimeout(() => { throw new Error("discarded timer fired"); }, 60_000);
         await yield_control("armed");
         clearTimeout(timer);
         await yield_control("cleared");
       }
       return "done";`,
-      }),
+      "discarded-timers",
     );
     for (let round = 0; round < 6; round++) {
       expect(result.status).toBe("waiting");
@@ -870,7 +830,7 @@ it("releases each guest-discarded timer lease before the cell closes", async () 
       expect(timer).toBeDefined();
       expect(timer.settled).toBeUndefined();
       const release = vi.spyOn(timer.reply, "release");
-      result = resultDetails(await h.tools[1]!.execute("discard-timer", { runId: result.runId }));
+      result = await h.resume(result, "discard-timer");
       expect(result.status).toBe("waiting");
       expect(parked.owner.signal.aborted).toBe(false);
       expect(release).toHaveBeenCalledOnce();
@@ -881,9 +841,9 @@ it("releases each guest-discarded timer lease before the cell closes", async () 
           .pending.some((entry) => entry.id === timer.id),
       ).toBe(false);
       release.mockRestore();
-      result = resultDetails(await h.tools[1]!.execute("next-timer", { runId: result.runId }));
+      result = await h.resume(result, "next-timer");
     }
-    expect(result).toMatchObject({ status: "completed", value: "done" });
+    expectCompleted(result, "done");
   } finally {
     clearToolSearchCatalog(h.ctx);
     vi.restoreAllMocks();

@@ -40,6 +40,10 @@ import {
   waitUntilCompleted,
   createHeadlessCodeModeHarness,
   pluginToolWithExecute,
+  codeModeRunner,
+  expectCompleted,
+  expectToolCalls,
+  createCatalogCodeModeHarness,
 } from "./code-mode.test-support.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "./harness/tool-surface-bridge.js";
 import { prepareInstalledSkillCatalog } from "./installed-skill-runtime.js";
@@ -105,9 +109,7 @@ describe("Code Mode catalog and model-visible surface", () => {
       ...ctx,
       tools: [
         {
-          name: "exec",
-          label: "Client request",
-          description: "Handle a client request",
+          ...fakeTool("exec", "Handle a client request"),
           parameters: Type.Object({ request: Type.String() }),
           execute: async () => jsonResult({ accepted: true }),
         },
@@ -242,28 +244,27 @@ describe("Code Mode search", () => {
     `;
     const result = await runCodeModeScriptHeadless({ ctx, code });
 
-    expect(result).toMatchObject({
-      status: "completed",
-      value: expect.arrayContaining([
+    expectCompleted(
+      result,
+      expect.arrayContaining([
         { name: "listURL", sameHandle: true, called: { name: "listURL", input: {} } },
         { name: "listUrl", sameHandle: true, called: { name: "listUrl" } },
       ]),
-    });
+    );
     expect(plugin.execute).toHaveBeenCalledOnce();
     expect(clientExecute).toHaveBeenCalledOnce();
   });
 
   function setup(maxSearchLimit = 50) {
-    const { ctx, tools } = createCodeModeHarness({
-      codeMode: { maxOutputBytes: 1024, maxSearchLimit },
-    });
     const targets = Array.from({ length: 50 }, (_, index) =>
       pluginTool(
         `shipment_${String(index).padStart(2, "0")}_${"long_name_".repeat(5)}`,
         "Find shipment",
       ),
     );
-    applyCodeModeCatalog({ ...ctx, tools: [...tools, ...targets] });
+    const { ctx } = createCatalogCodeModeHarness(targets, {
+      codeMode: { maxOutputBytes: 1024, maxSearchLimit },
+    });
     const run = (code: string) => runCodeModeScriptHeadless({ ctx, code });
     return { run, targets };
   }
@@ -273,27 +274,17 @@ describe("Code Mode search", () => {
     const overflow = await run(
       'const matches = await catalog.search("shipment", { limit: 50 }); return { count: matches.length, callable: matches.every(tool => typeof tool === "function") };',
     );
-    expect(overflow, JSON.stringify(overflow)).toMatchObject({
-      status: "completed",
-      value: { count: 50, callable: true },
-    });
-    for (const target of targets) {
-      expect(target.execute).not.toHaveBeenCalled();
-    }
+    expectCompleted(overflow, { count: 50, callable: true });
+    expectToolCalls(0, ...targets);
 
     const narrowed = await run(`
       const matches = await catalog.search("shipment", { limit: 1 });
       if (!Object.isFrozen(matches) || matches.length !== 1) throw new Error("invalid handles");
       return await matches[0]({ value: "ship" });
     `);
-    expect(narrowed).toMatchObject({
-      status: "completed",
-      value: { name: targets[0]?.name, input: { value: "ship" } },
-    });
+    expectCompleted(narrowed, { name: targets[0]?.name, input: { value: "ship" } });
     expect(targets[0]?.execute).toHaveBeenCalledOnce();
-    for (const target of targets.slice(1)) {
-      expect(target.execute).not.toHaveBeenCalled();
-    }
+    expectToolCalls(0, ...targets.slice(1));
     expect(testing.activeRuns.size).toBe(0);
     expect(testing.resumingRunIds.size).toBe(0);
   });
@@ -304,13 +295,8 @@ describe("Code Mode search", () => {
       const matches = await catalog.search("zzzz_missing_tool", { limit: 50 });
       return { count: matches.length, frozen: Object.isFrozen(matches), callable: matches.every(tool => typeof tool === "function") };
     `);
-    expect(result).toMatchObject({
-      status: "completed",
-      value: { count: 0, frozen: true, callable: true },
-    });
-    for (const target of targets) {
-      expect(target.execute).not.toHaveBeenCalled();
-    }
+    expectCompleted(result, { count: 0, frozen: true, callable: true });
+    expectToolCalls(0, ...targets);
   });
 });
 
@@ -355,13 +341,12 @@ it("records Code Mode skills.read of a workshop skill as run usage and skill.use
       waitTool: h.tools[1]!,
       code: 'return await skills.read("learned");',
     });
-    expect(result).toMatchObject({
-      status: "completed",
-      value:
-        "Skill location: /skills/learned/SKILL.md\n" +
+    expectCompleted(
+      result,
+      "Skill location: /skills/learned/SKILL.md\n" +
         "Resolve relative resource paths from the directory containing this SKILL.md.\n\n" +
         "# Learned instructions\n",
-    });
+    );
     expect(consumeRunSkillUsage("run-code-mode")).toEqual([
       {
         name: "learned",
@@ -505,31 +490,28 @@ it.for(["transported", "skills_read", "skills_search", "shadowed", "revoked"] as
         }
         const result = await pending;
         const unavailable = `${denied} is not available in this run.`;
-        expect(result).toMatchObject({
-          status: "completed",
-          value: {
-            listed:
-              denied === "skills_search"
-                ? unavailable
-                : [{ name: "guide", description: "Guide", location: filePath }],
-            found: denied === "skills_search" ? unavailable : { skills: [{ name: "guide" }] },
-            bodyMatch:
-              denied === "skills_search"
-                ? unavailable
-                : denied === "revoked"
-                  ? expect.stringContaining("permission changed")
-                  : { skills: denied === undefined ? [{ name: "guide" }] : [] },
-            body:
-              denied === "skills_read"
-                ? unavailable
-                : denied === "revoked"
-                  ? expect.stringContaining("Unknown tool id: skills_read.")
-                  : denied === "shadowed"
-                    ? expect.stringContaining("Shadowed reader")
-                    : `Skill location: ${filePath}\n` +
-                      "Resolve relative resource paths from the directory containing this SKILL.md.\n\n" +
-                      "Private instructions",
-          },
+        expectCompleted(result, {
+          listed:
+            denied === "skills_search"
+              ? unavailable
+              : [{ name: "guide", description: "Guide", location: filePath }],
+          found: denied === "skills_search" ? unavailable : { skills: [{ name: "guide" }] },
+          bodyMatch:
+            denied === "skills_search"
+              ? unavailable
+              : denied === "revoked"
+                ? expect.stringContaining("permission changed")
+                : { skills: denied === undefined ? [{ name: "guide" }] : [] },
+          body:
+            denied === "skills_read"
+              ? unavailable
+              : denied === "revoked"
+                ? expect.stringContaining("Unknown tool id: skills_read.")
+                : denied === "shadowed"
+                  ? expect.stringContaining("Shadowed reader")
+                  : `Skill location: ${filePath}\n` +
+                    "Resolve relative resource paths from the directory containing this SKILL.md.\n\n" +
+                    "Private instructions",
         });
         expect(reads).toBe(denied === undefined || denied === "revoked" ? 1 : 0);
         if (denied === undefined) {
@@ -597,16 +579,13 @@ it.each([undefined, "read", "skills_read"])(
         return { body, hidden };
       `,
     });
-    expect(result).toMatchObject({
-      status: "completed",
-      value: {
-        body: denied
-          ? "skills_read is not available in this run."
-          : { length: context.length + body.length, tail: "complete tail" },
-        hidden: denied
-          ? "skills_read is not available in this run."
-          : 'Skill "hidden" exceeds the 262144-byte instruction limit.',
-      },
+    expectCompleted(result, {
+      body: denied
+        ? "skills_read is not available in this run."
+        : { length: context.length + body.length, tail: "complete tail" },
+      hidden: denied
+        ? "skills_read is not available in this run."
+        : 'Skill "hidden" exceeds the 262144-byte instruction limit.',
     });
   },
 );
@@ -629,20 +608,16 @@ it("returns missing implicitly optional daily memory through Code Mode", async (
     waitTool: h.tools[1]!,
     code: 'return await read({ path: "memory/2026-05-15.md" });',
   });
-  expect(result).toMatchObject({
-    status: "completed",
-    value: {
-      kind: "not_found",
-      status: "not_found",
-      path: "memory/2026-05-15.md",
-      optional: true,
-    },
+  expectCompleted(result, {
+    kind: "not_found",
+    status: "not_found",
+    path: "memory/2026-05-15.md",
+    optional: true,
   });
 });
 
 function replay(targets: AnyAgentTool[], options?: Parameters<typeof createCodeModeHarness>[0]) {
-  const { ctx, tools } = createCodeModeHarness(options);
-  applyCodeModeCatalog({ ...ctx, tools: [...tools, ...targets] });
+  const { tools } = createCatalogCodeModeHarness(targets, options);
   const execTool = tools[0]!;
   const waitTool = tools[1]!;
   return {
@@ -767,17 +742,17 @@ function sessionStoreHarness(
   return {
     ...h,
     manager,
-    exec: async (code: string, restartSafe = false) =>
-      h.tools[0]!.execute("store-cell", { code, restartSafe }),
-    wait: async (runId: unknown) => h.tools[1]!.execute("store-wait", { runId }),
+    exec: (code: string, restartSafe = false) =>
+      codeModeRunner(h.tools).run(code, "store-cell", { restartSafe }),
+    wait: (runId: unknown) => codeModeRunner(h.tools).resume({ runId }, "store-wait"),
+    execute: codeModeRunner(h.tools).execute,
   };
 }
 
 describe.each(["node", "quickjs"] as const)("%s session store bridge", (executor) => {
   it("keeps detached JSON across cells, deletes keys, and rejects invalid keys", async () => {
     const h = sessionStoreHarness(executor);
-    const saved = resultDetails(
-      await h.exec(`
+    const saved = await h.exec(`
       const original = { nested: [1], ["__proto__"]: "data" };
       const saved = await store("key", original);
       original.nested.push(2);
@@ -790,37 +765,26 @@ describe.each(["node", "quickjs"] as const)("%s session store bridge", (executor
       }
       return { saved: saved === undefined, missing: (await load("missing")) === undefined,
         value: await load("key"), nullable: await load("nullable"), errors };
-    `),
-    );
-    expect(saved, JSON.stringify(saved)).toMatchObject({
-      status: "completed",
-      value: {
-        saved: true,
-        missing: true,
-        value: JSON.parse('{"nested":[1],"__proto__":"data"}'),
-        nullable: null,
-        errors: Array(10).fill(true),
-      },
+    `);
+    expectCompleted(saved, {
+      saved: true,
+      missing: true,
+      value: JSON.parse('{"nested":[1],"__proto__":"data"}'),
+      nullable: null,
+      errors: Array(10).fill(true),
     });
-    expect(
-      resultDetails(
-        await h.exec(`
+    expectCompleted(
+      await h.exec(`
       const value = await load("key");
       await store("key", undefined);
       return { value, deleted: (await load("key")) === undefined };
     `),
-      ),
-    ).toMatchObject({
-      status: "completed",
-      value: {
+      {
         value: JSON.parse('{"nested":[1],"__proto__":"data"}'),
         deleted: true,
       },
-    });
-    expect(resultDetails(await h.exec('return (await load("key")) === undefined;'))).toMatchObject({
-      status: "completed",
-      value: true,
-    });
+    );
+    expectCompleted(await h.exec('return (await load("key")) === undefined;'), true);
   });
 });
 
@@ -829,8 +793,7 @@ describe("session store bridge", () => {
 
   it("enforces encoded value and total limits atomically with guest RangeErrors", async () => {
     const h = sessionStoreHarness(executor);
-    const result = resultDetails(
-      await h.exec(`
+    const result = await h.exec(`
       const max = "x".repeat(256 * 1024 - 2);
       for (const key of ["a", "b", "c", "d"]) await store(key, max);
       const errors = [];
@@ -841,16 +804,12 @@ describe("session store bridge", () => {
       await store("b", undefined);
       await store("e", 1);
       return { errors, unchanged, deleted: (await load("b")) === undefined, added: await load("e") };
-    `),
-    );
-    expect(result).toMatchObject({
-      status: "completed",
-      value: {
-        errors: [true, true, true],
-        unchanged: 256 * 1024 - 2,
-        deleted: true,
-        added: 1,
-      },
+    `);
+    expectCompleted(result, {
+      errors: [true, true, true],
+      unchanged: 256 * 1024 - 2,
+      deleted: true,
+      added: 1,
     });
   });
 
@@ -872,7 +831,7 @@ describe("session store bridge", () => {
       delete: [],
       networkContent: Object.fromEntries(Object.keys(set).map((key) => [key, false])),
     });
-    const result = resultDetails(await h.exec('return await load("key");'));
+    const result = await h.exec('return await load("key");');
     expect(result).toMatchObject({
       status: "failed",
       code: "internal_error",
@@ -889,7 +848,7 @@ describe("session store bridge", () => {
   it("keeps bridge provenance for uncaught typed store errors", async () => {
     const log = vi.spyOn(diagnostics, "logCodeModeFailure").mockImplementation(() => {});
     const h = sessionStoreHarness(executor);
-    const result = resultDetails(await h.exec('await store("a", "x".repeat(256 * 1024));'));
+    const result = await h.exec('await store("a", "x".repeat(256 * 1024));');
     expect(result).toMatchObject({
       status: "failed",
       code: "internal_error",
@@ -906,27 +865,16 @@ describe("session store bridge", () => {
 
   it("retains writes across wait, hides them from sibling cells, and commits once", async () => {
     const h = sessionStoreHarness(executor);
-    const first = resultDetails(
-      await h.exec(`
+    const first = await h.exec(`
       await store("key", 7); await yield_control();
       const before = await load("key"); await store("key", before + 1); return before;
-    `),
-    );
+    `);
     expect(first.status).toBe("waiting");
     expect(h.manager.getBranch()).toEqual([]);
-    expect(resultDetails(await h.exec('return (await load("key")) === undefined;'))).toMatchObject({
-      status: "completed",
-      value: true,
-    });
-    expect(resultDetails(await h.wait(first.runId))).toMatchObject({
-      status: "completed",
-      value: 7,
-    });
+    expectCompleted(await h.exec('return (await load("key")) === undefined;'), true);
+    expectCompleted(await h.wait(first.runId), 7);
     expect(h.manager.getBranch().filter((entry) => entry.type === "custom")).toHaveLength(1);
-    expect(resultDetails(await h.exec('return await load("key");'))).toMatchObject({
-      status: "completed",
-      value: 8,
-    });
+    expectCompleted(await h.exec('return await load("key");'), 8);
   });
 
   it("carries network provenance through a persisted key into a later reply", async () => {
@@ -935,18 +883,16 @@ describe("session store bridge", () => {
     );
     network.resultContentSource = "network";
     const h = sessionStoreHarness(executor, undefined, [network]);
-    expect(
-      resultDetails(
-        await h.exec('await store("network", await network_fixture({})); return true;'),
-      ),
-    ).toMatchObject({ status: "completed", value: true });
+    expectCompleted(
+      await h.exec('await store("network", await network_fixture({})); return true;'),
+      true,
+    );
     clearToolSearchCatalog(h.ctx);
     const next = sessionStoreHarness(executor, h.manager);
-    const loaded = await next.exec('return (await load("network")).text;');
-    expect(resultDetails(loaded)).toMatchObject({
-      status: "completed",
-      value: "untrusted fixture",
+    const loaded = await next.execute('return (await load("network")).text;', "store-cell", {
+      restartSafe: false,
     });
+    expectCompleted(resultDetails(loaded), "untrusted fixture");
     expect(loaded.content[0]).toMatchObject({
       text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
     });
@@ -957,23 +903,18 @@ describe("session store bridge", () => {
     vi.spyOn(h.manager, "appendCustomEntryAsync").mockRejectedValueOnce(
       new Error("fixture disk failure"),
     );
-    expect(
-      resultDetails(await h.exec('await store("key", 1); return { done: true };')),
-    ).toMatchObject({
+    expect(await h.exec('await store("key", 1); return { done: true };')).toMatchObject({
       status: "completed",
       value: { done: true },
       warnings: [expect.stringContaining("persistence could not be confirmed")],
     });
     expect(h.manager.getBranch()).toEqual([]);
-    expect(resultDetails(await h.exec('return (await load("key")) === undefined;'))).toMatchObject({
-      status: "completed",
-      value: true,
-    });
+    expectCompleted(await h.exec('return (await load("key")) === undefined;'), true);
   });
 
   it("rejects unbound, restartSafe, and headless session-store access", async () => {
     const h = sessionStoreHarness(executor);
-    const safe = resultDetails(await h.exec('return await load("key");', true));
+    const safe = await h.exec('return await load("key");', true);
     expect(safe).toMatchObject({
       status: "failed",
       error: expect.stringContaining("restart-safe"),
@@ -998,9 +939,7 @@ it.each(["aborted", "timeout"] as const)(
   "discards a parked cell's writes when %s",
   async (outcome) => {
     const h = sessionStoreHarness("node");
-    const parked = resultDetails(
-      await h.exec('await store("key", 1); await yield_control(); return true;'),
-    );
+    const parked = await h.exec('await store("key", 1); await yield_control(); return true;');
     expect(parked.status).toBe("waiting");
     const state = testing.activeRuns.get(String(parked.runId))!;
     if (outcome === "timeout") {
@@ -1012,7 +951,7 @@ it.each(["aborted", "timeout"] as const)(
         bridgeDispatchStarted: false,
         output: EMPTY_CODE_MODE_OUTPUT,
       });
-      expect(resultDetails(await h.wait(parked.runId))).toMatchObject({
+      expect(await h.wait(parked.runId)).toMatchObject({
         status: "failed",
         code: "timeout",
       });
@@ -1028,8 +967,6 @@ it.each(["aborted", "timeout"] as const)(
     await resetCodeModeTestState();
     expect(h.manager.getBranch()).toEqual([]);
     const next = sessionStoreHarness("node", h.manager);
-    expect(
-      resultDetails(await next.exec('return (await load("key")) === undefined;')),
-    ).toMatchObject({ status: "completed", value: true });
+    expectCompleted(await next.exec('return (await load("key")) === undefined;'), true);
   },
 );
