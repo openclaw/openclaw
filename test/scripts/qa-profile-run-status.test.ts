@@ -25,19 +25,6 @@ const aggregateScript = aggregateStep("Aggregate validated shard evidence");
 function shell(script: string, cwd: string, env: NodeJS.ProcessEnv) {
   return spawnSync(workflowBash(), ["-c", script], { cwd, env, encoding: "utf8" });
 }
-function preserve(...files: string[]) {
-  const before = files.map((file) => fs.readFileSync(file));
-  return () => expect(files.map((file) => fs.readFileSync(file))).toEqual(before);
-}
-function put(file: string, text: string) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, text);
-  return file;
-}
-function expectRedacted(text: string, root: string, sentinel: string) {
-  expect(text).not.toContain(sentinel);
-  expect(text).not.toContain(root);
-}
 const targetSha = "a".repeat(40);
 const protocolSha = "b".repeat(40);
 const plan = {
@@ -47,12 +34,25 @@ const plan = {
   ],
 };
 
+const completion = {
+  exitCode: 0,
+  timedOut: false,
+  timeoutOutcome: "none",
+  completedAt: "2026-09-10T00:00:00.000Z",
+};
+const killed = { ...completion, exitCode: 137, timedOut: true, timeoutOutcome: "kill" };
+const unknownOutcome = { exitCode: null, timedOut: null, timeoutOutcome: null };
+
 function fixture(layout: "named" | "direct" = "named") {
   const root = tempDirs.make("openclaw-qa-profile-status-");
-  const selected = path.join(root, "selected");
-  fs.mkdirSync(selected);
-  const input = path.join(selected, ".artifacts/qa-profile-shards");
-  const output = path.join(selected, ".artifacts/qa-e2e/profile-all-42-1");
+  const originals = new Map<string, Buffer>();
+  const put = (file: string, text: string) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, text);
+    originals.set(file, Buffer.from(text));
+  };
+  const input = path.join(root, ".artifacts/qa-profile-shards");
+  const output = path.join(root, ".artifacts/qa-e2e/profile-all-42-1");
   const env = {
     PATH: process.env.PATH ?? "",
     INPUT_DIR: input,
@@ -76,26 +76,20 @@ function fixture(layout: "named" | "direct" = "named") {
     profile: "all",
     shard: plan.include[index],
     run: { id: "42", attempt: 1 },
-    exitCode: 0,
-    timedOut: false,
-    timeoutOutcome: "none",
-    completedAt: "2026-09-10T00:00:00.000Z",
+    ...completion,
   });
   const writeShard = (index = 0, payload: unknown = status(index), artifactSha = targetSha) => {
     const directory =
       layout === "direct"
         ? input
         : path.join(input, `qa-profile-evidence-shard-${plan.include[index]!.id}-${artifactSha}`);
-    fs.mkdirSync(directory, { recursive: true });
-    fs.writeFileSync(path.join(directory, "qa-evidence.json"), '{"fixture":"unchanged"}\n');
-    const statusPath = path.join(directory, statusFile);
-    fs.writeFileSync(
-      statusPath,
+    put(path.join(directory, "qa-evidence.json"), '{"fixture":"unchanged"}\n');
+    return put(
+      path.join(directory, statusFile),
       typeof payload === "string" ? payload : `${JSON.stringify(payload)}\n`,
     );
-    return statusPath;
   };
-  const collect = (overrides: Partial<typeof env> = {}) => {
+  const collect = (overrides: Partial<typeof env> = {}, sentinel = "") => {
     const run = spawnSync(process.execPath, [collectorPath], {
       cwd: root,
       env: { ...env, ...overrides },
@@ -103,37 +97,28 @@ function fixture(layout: "named" | "direct" = "named") {
     });
     expect(run.status, run.stderr).toBe(0);
     const text = fs.readFileSync(path.join(output, statusFile), "utf8");
+    expect(fs.readdirSync(output)).toEqual([statusFile]);
+    expect([...originals].map(([file]) => fs.readFileSync(file))).toEqual([...originals.values()]);
+    for (const privateText of [root, sentinel].filter(Boolean)) {
+      expect(text).not.toContain(privateText);
+    }
     return { text, result: JSON.parse(text) };
   };
-  return { root, selected, input, output, env, status, writeShard, collect };
+  return { root, input, output, env, status, put, writeShard, collect };
 }
 
 it("retains a direct survivor and leaves downloaded evidence untouched", () => {
   const f = fixture("direct");
-  const statusPath = f.writeShard(1, {
-    ...f.status(1),
-    exitCode: 137,
-    timedOut: true,
-    timeoutOutcome: "kill",
-  });
-  const unchanged = preserve(
-    statusPath,
-    path.join(f.input, "qa-evidence.json"),
-    ...["qa-suite-report.md", "qa-suite-summary.json", "script/qa-evidence.json"].map((relative) =>
-      put(path.join(f.input, relative), `fixture: ${relative}\n`),
-    ),
-  );
+  f.writeShard(1, { ...f.status(1), ...killed });
+  for (const relative of [
+    "qa-suite-report.md",
+    "qa-suite-summary.json",
+    "script/qa-evidence.json",
+  ]) {
+    f.put(path.join(f.input, relative), `fixture: ${relative}\n`);
+  }
   const { result } = f.collect();
-  expect(result.shards).toEqual([
-    {
-      id: "shard-02",
-      source: "artifact-001",
-      exitCode: 137,
-      timedOut: true,
-      timeoutOutcome: "kill",
-      completedAt: "2026-09-10T00:00:00.000Z",
-    },
-  ]);
+  expect(result.shards).toEqual([{ ...killed, id: "shard-02", source: "artifact-001" }]);
   expect(result).toMatchObject({ exitCode: null, timedOut: true, timeoutOutcome: "kill" });
   expect(result.diagnostics).toMatchObject({
     stages: { AGGREGATE_OUTCOME: "failure", FINALIZE_OUTCOME: "skipped" },
@@ -143,18 +128,15 @@ it("retains a direct survivor and leaves downloaded evidence untouched", () => {
     missingEvidence: ["shard-01"],
     issues: [],
   });
-  unchanged();
-  expect(fs.readdirSync(f.output)).toEqual([statusFile]);
 });
 
 it.skipIf(windows)("rejects a direct status symlink", () => {
   const f = fixture("direct");
   fs.mkdirSync(f.input, { recursive: true });
   const target = path.join(f.root, "private-status.json");
-  const original = JSON.stringify({ ...f.status(), stderr: "private-status-sentinel" });
-  fs.writeFileSync(target, original);
+  f.put(target, JSON.stringify({ ...f.status(), stderr: "private-status-sentinel" }));
   fs.symlinkSync(target, path.join(f.input, statusFile));
-  const { text, result } = f.collect();
+  const { result } = f.collect({}, "private-status-sentinel");
   expect(result.shards).toEqual([]);
   expect(result.diagnostics).toMatchObject({
     statusFiles: 0,
@@ -164,15 +146,12 @@ it.skipIf(windows)("rejects a direct status symlink", () => {
     source: "artifact-001",
     reason: "missing-or-malformed-status",
   });
-  expectRedacted(text, f.root, "private-status-sentinel");
-  expect(fs.readFileSync(target, "utf8")).toBe(original);
 });
 
 it.skipIf(windows)("retains diagnostics after aggregate rejection", () => {
   const f = fixture();
-  const first = f.writeShard();
-  const unchanged = preserve(first);
-  const aggregate = shell(aggregateScript, f.selected, f.env);
+  f.writeShard();
+  const aggregate = shell(aggregateScript, f.root, f.env);
   expect(aggregate.status, aggregate.stderr).toBe(1);
   expect(aggregate.stderr).toContain("Expected 2 completed status and evidence files");
   const { result } = f.collect();
@@ -181,8 +160,6 @@ it.skipIf(windows)("retains diagnostics after aggregate rejection", () => {
     timedOut: null,
     diagnostics: { stages: { AGGREGATE_OUTCOME: "failure" }, missingStatuses: ["shard-02"] },
   });
-  unchanged();
-  expect(fs.readdirSync(f.output)).toEqual([statusFile]);
 });
 
 it("leaves missing downloads unknown", () => {
@@ -191,9 +168,7 @@ it("leaves missing downloads unknown", () => {
     AGGREGATE_OUTCOME: "skipped",
   });
   expect(result).toMatchObject({
-    exitCode: null,
-    timedOut: null,
-    timeoutOutcome: null,
+    ...unknownOutcome,
     shards: [],
     diagnostics: {
       missingStatuses: ["shard-01", "shard-02"],
@@ -206,8 +181,7 @@ it("leaves missing downloads unknown", () => {
 it.skipIf(windows)("requires the frozen harness SHA", () => {
   const f = fixture();
   const script = aggregateStep("Collect QA profile diagnostics");
-  const head = spawnSync("git", ["rev-parse", "HEAD"], {
-    cwd: repoRoot,
+  const head = spawnSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], {
     encoding: "utf8",
   }).stdout.trim();
   for (const expected of ["", "not-a-sha", "f".repeat(40), head]) {
@@ -217,23 +191,20 @@ it.skipIf(windows)("requires the frozen harness SHA", () => {
   }
 });
 
-it.each([
-  { payload: '{"untrusted-status-sentinel":' },
-  { payload: "x".repeat(65 * 1024) },
-] as const)("bounds malformed status input %#", ({ payload }) => {
-  const f = fixture();
-  const source = f.writeShard(0, payload);
-  const unchanged = preserve(source);
-  const { text, result } = f.collect();
-  expect(result.shards).toEqual([]);
-  expect(result.diagnostics.issues[0].reason).toBe(
-    payload.length > 64 * 1024 ? "status-size-limit" : "missing-or-malformed-status",
-  );
-  unchanged();
-  expect(result.diagnostics.missingStatuses).toEqual(["shard-01", "shard-02"]);
-  expectRedacted(text, f.root, "untrusted-status-sentinel");
-  expect(Buffer.byteLength(text)).toBeLessThan(2048);
-});
+it.each(['{"untrusted-status-sentinel":', "x".repeat(65 * 1024)])(
+  "bounds malformed status input %#",
+  (payload) => {
+    const f = fixture();
+    f.writeShard(0, payload);
+    const { text, result } = f.collect({}, "untrusted-status-sentinel");
+    expect(result.shards).toEqual([]);
+    expect(result.diagnostics.issues[0].reason).toBe(
+      payload.length > 64 * 1024 ? "status-size-limit" : "missing-or-malformed-status",
+    );
+    expect(result.diagnostics.missingStatuses).toEqual(["shard-01", "shard-02"]);
+    expect(Buffer.byteLength(text)).toBeLessThan(2048);
+  },
+);
 
 it("redacts invalid identity, membership and outcome payloads", () => {
   const f = fixture();
@@ -252,8 +223,7 @@ it("redacts invalid identity, membership and outcome payloads", () => {
     timeoutOutcome: privateText,
     completedAt: privateText,
   });
-  const { text, result } = f.collect();
-  expectRedacted(text, f.root, privateText);
+  const { result } = f.collect({}, privateText);
   expect(result.target).toEqual({ sha: targetSha, protocolBaseSha: protocolSha });
   expect(result.diagnostics).toMatchObject({
     duplicateStatuses: ["shard-01"],
