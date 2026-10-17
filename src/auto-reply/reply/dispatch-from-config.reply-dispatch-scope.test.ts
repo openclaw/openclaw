@@ -16,6 +16,7 @@ import {
   setNoAbort,
 } from "./dispatch-from-config.test-support.js";
 import type { InternalGetReplyFromConfig } from "./get-reply.types.js";
+import { expectCalls } from "./reply-contract.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 beforeAll(globalBeforeAll0);
@@ -53,18 +54,14 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
   ] as const)("scopes reply hooks to the prepared %s", async (_name, bound, prepared) => {
     const sourceKey = bound ? "agent:test:discord:channel:C1" : "agent:test:acp:source";
     const targetKey = bound ? "agent:test:acp:bound" : "agent:test:target";
-    const expectedKind = bound ? "acp" : "agent";
+    const runId = "dispatched-run";
     const onAgentRunStart = vi.fn(() => "reply-dispatch");
     const onPreparedAgentRunStart = vi.fn(() => "reply-dispatch");
     const dispatchRun: ReplyDispatchRun = {
       completionSource: "reply-dispatch",
       getResult: () => ({}),
     };
-    const preparedStart = {
-      runId: "dispatched-run",
-      options: dispatchRun,
-      transcriptStart: null,
-    };
+    const preparedStart = { runId, options: dispatchRun, transcriptStart: null };
     const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
       input: { text: "source user turn" },
       target: () => undefined,
@@ -95,7 +92,7 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
         expect(
           prepared
             ? context.onPreparedAgentRunStart?.(preparedStart)
-            : context.onAgentRunStart?.("dispatched-run", undefined, dispatchRun),
+            : context.onAgentRunStart?.(runId, undefined, dispatchRun),
         ).toBe("reply-dispatch");
         context.userTurnTranscriptRecorder?.replaceTextBeforePersistence?.("accepted user turn");
       }
@@ -106,9 +103,7 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
         ctx.AcpDispatchTailAfterReset = true;
         return undefined;
       }
-      expect(options?.onAgentRunStart?.("dispatched-run", undefined, dispatchRun)).toBe(
-        "reply-dispatch",
-      );
+      expect(options?.onAgentRunStart?.(runId, undefined, dispatchRun)).toBe("reply-dispatch");
       return { text: "local reply" };
     });
     const ctx = discordCtx(
@@ -127,19 +122,14 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
     });
     expect(result.queuedFinal).toBe(true);
     expect(hookMocks.runner.hasHooks).toHaveBeenCalledWith("reply_dispatch", {
-      dispatchKind: expectedKind,
+      dispatchKind: bound ? "acp" : "agent",
     });
     expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledTimes(bound ? 2 : 0);
     expect(replyResolver).toHaveBeenCalledTimes(1);
     if (prepared) {
-      expect(onPreparedAgentRunStart).toHaveBeenCalledExactlyOnceWith(preparedStart);
-      expect(onAgentRunStart).not.toHaveBeenCalled();
+      expectCalls([onPreparedAgentRunStart, [[preparedStart]]], [onAgentRunStart, []]);
     } else {
-      expect(onAgentRunStart).toHaveBeenCalledExactlyOnceWith(
-        "dispatched-run",
-        undefined,
-        dispatchRun,
-      );
+      expectCalls([onAgentRunStart, [[runId, undefined, dispatchRun]]]);
     }
     expect(userTurnTranscriptRecorder.message?.content).toBe(
       bound ? "accepted user turn" : "source user turn",
@@ -160,18 +150,14 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
     hookMocks.runner.runReplyDispatch.mockResolvedValue(handledReply);
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn<InternalGetReplyFromConfig>();
+    const guarded = { permissionMode: "guarded" as const, toolOverrides: { webSearch: false } };
 
     const result = await dispatchReplyFromConfig({
       ctx: discordCtx(sessionKey),
       cfg: emptyConfig,
       dispatcher,
       replyResolver,
-      replyOptions: {
-        admittedSessionSettings: {
-          permissionMode: "guarded",
-          toolOverrides: { webSearch: false },
-        },
-      },
+      replyOptions: { admittedSessionSettings: guarded },
     });
 
     expect(hookMocks.runner.runReplyDispatch).not.toHaveBeenCalled();

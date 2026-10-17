@@ -103,32 +103,32 @@ it.for(["before drain", "enqueue during drain", "deferred restart"] as const)(
         throw new FollowupRunDeferredError("reply lane busy");
       });
     }
-    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+    state.execute.mockImplementation(async ({ opts, followupRun }: AgentTurnParams) => {
       if (++attempts === 1 && scenario !== "deferred restart") {
         firstStarted.resolve();
         await releaseFirst.promise;
       }
-      const item = params.followupRun.prompt;
-      const runId = params.opts?.runId;
+      const item = followupRun.prompt;
+      const runId = opts?.runId;
       if (!runId) {
         throw new Error("Followup execution did not bind its run ID");
       }
       executed.push(item);
       for (const [actual, expected] of [
-        [params.opts?.userTurnTranscriptRecorder, params.followupRun.userTurnTranscriptRecorder],
-        [params.opts?.internalEventExecution, params.followupRun.run.internalEventExecution],
-        [params.opts?.sourceReplyDeliveryMode, params.followupRun.run.sourceReplyDeliveryMode],
+        [opts?.userTurnTranscriptRecorder, followupRun.userTurnTranscriptRecorder],
+        [opts?.internalEventExecution, followupRun.run.internalEventExecution],
+        [opts?.sourceReplyDeliveryMode, followupRun.run.sourceReplyDeliveryMode],
       ]) {
         expect(actual).toBe(expected);
       }
-      params.opts?.internalEventExecution?.onStarted(runId);
-      await params.opts?.internalEventExecution?.onTerminal(runId, "completed");
-      params.opts?.onDeliberateSilentTerminalReply?.();
-      params.opts?.onPreparedAgentRunStart?.({ runId, transcriptStart: null });
-      params.opts?.onModelSelected?.({ provider: "test", model: item, thinkLevel: undefined });
-      params.opts?.prepareAssistantTranscriptMessage?.(message, item);
-      await params.opts?.resolveReplyDelivery?.(1);
-      params.opts?.onAgentRunTerminalOutcome?.("completed");
+      opts?.internalEventExecution?.onStarted(runId);
+      await opts?.internalEventExecution?.onTerminal(runId, "completed");
+      opts?.onDeliberateSilentTerminalReply?.();
+      opts?.onPreparedAgentRunStart?.({ runId, transcriptStart: null });
+      opts?.onModelSelected?.({ provider: "test", model: item, thinkLevel: undefined });
+      opts?.prepareAssistantTranscriptMessage?.(message, item);
+      await opts?.resolveReplyDelivery?.(1);
+      opts?.onAgentRunTerminalOutcome?.("completed");
       return { runId, outcome: { kind: "aborted", reason: "user" } };
     });
     const createEventExecution = () => ({

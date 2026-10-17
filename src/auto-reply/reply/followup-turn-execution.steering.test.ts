@@ -79,24 +79,26 @@ describe("queued turn steering", () => {
     "accepts successive Gateway steers into a %s followup after an older source completed",
     async (source) => {
       const root = tempDirs.make("openclaw-followup-steering-");
-      const storePath = path.join(root, "sessions.json");
-      const sessionKey = "agent:main:queued-steering";
-      const entry: SessionEntry = {
+      const target = {
+        agentId: "main",
+        sessionKey: "agent:main:queued-steering",
         sessionId: "session",
+        storePath: path.join(root, "sessions.json"),
+      };
+      const { storePath, sessionKey } = target;
+      const entry: SessionEntry = {
+        sessionId: target.sessionId,
         updatedAt: 1,
         restartRecoveryTerminalRunIds: ["previous-input"],
       };
-      await replaceSessionEntry({ storePath, sessionKey }, entry);
+      await replaceSessionEntry(target, entry);
       const operation = createReplyOperation({
-        sessionKey,
-        sessionId: entry.sessionId,
+        ...target,
         turnKind: "queued_followup",
         resetTriggered: false,
       });
       await using actor = createReplyRecoveryActorFixture({
-        agentId: "main",
-        sessionKey,
-        storePath,
+        ...target,
         operation,
         getSessionId: () => operation.sessionId,
       });
@@ -126,13 +128,7 @@ describe("queued turn steering", () => {
       const sourceTurnId = source === "gateway" ? "queued-human-input" : "original-queued-input";
       turn.queued.userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
         input: { text: turn.queued.prompt, idempotencyKey: sourceTurnId },
-        target: {
-          agentId: "main",
-          sessionId: entry.sessionId,
-          sessionKey,
-          storePath,
-          sessionEntry: entry,
-        },
+        target: { ...target, sessionEntry: entry },
       });
       if (source !== "gateway") {
         turn.queued.sourceTurnId = sourceTurnId;
@@ -153,13 +149,14 @@ describe("queued turn steering", () => {
         "Keep the new scope",
         "Finish this first",
       ];
+      const runId = "followup-execution";
       const queueMessage = vi.fn(async (_text: string) => {});
       state.execute.mockImplementation(async (params: AgentTurnParams) => {
         expect(readChannelSourceTurnId(params.sessionCtx)).toBe(sourceTurnId);
         operation.bindToolAuthorityRoute({ provider: "anthropic", model: "claude" });
         operation.attachBackend({
           kind: "embedded",
-          runId: "followup-execution",
+          runId,
           cancel: vi.fn(),
           messageInjectionV2: {
             version: 2,
@@ -185,11 +182,9 @@ describe("queued turn steering", () => {
               supportsTaskSuggestions: false,
             },
             session: {
-              agentId: "main",
+              ...target,
               cfg: {},
               entry: turn.session.current(),
-              sessionKey,
-              storePath,
               clientRunId,
             },
             turn: {
@@ -220,10 +215,7 @@ describe("queued turn steering", () => {
           ).toBeDefined();
           await expect(attempt!.outcome).resolves.toMatchObject({ status: "accepted" });
         }
-        return {
-          runId: "followup-execution",
-          outcome: { kind: "rejected", payload: { text: "done" } },
-        };
+        return { runId, outcome: { kind: "rejected", payload: { text: "done" } } };
       });
       try {
         await executeTurn(turn);
@@ -415,12 +407,11 @@ describe("queued ingress acceptance", () => {
         await expect(failed).resolves.toBe(true);
         const failures = await queue.listFailed?.();
         if (grouped) {
-          expect(failures).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({ id: "first-input", reason: "retry-limit-exceeded" }),
-              expect.objectContaining({ id: "second-input", reason: "retry-limit-exceeded" }),
-            ]),
-          );
+          for (const id of ["first-input", "second-input"]) {
+            expect(failures).toContainEqual(
+              expect.objectContaining({ id, reason: "retry-limit-exceeded" }),
+            );
+          }
         } else {
           expect(failures).toMatchObject([{ id: "failed-input", reason: "retry-limit-exceeded" }]);
         }
@@ -500,17 +491,15 @@ describe("queued ingress acceptance", () => {
             restartRecoveryDeliveryRunId: "message-1",
             restartRecoveryDeliverySourceRunId: sourceId,
           });
-          expect(await loadSessionTranscriptEvents(target)).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                type: "message",
-                message: expect.objectContaining({
-                  role: "user",
-                  content: "queued user message",
-                  idempotencyKey: sourceId,
-                }),
+          expect(await loadSessionTranscriptEvents(target)).toContainEqual(
+            expect.objectContaining({
+              type: "message",
+              message: expect.objectContaining({
+                role: "user",
+                content: "queued user message",
+                idempotencyKey: sourceId,
               }),
-            ]),
+            }),
           );
           expect(await queue.listClaims()).toHaveLength(1);
         });
