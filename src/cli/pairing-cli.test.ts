@@ -127,6 +127,23 @@ it("lists account-scoped requests with the channel's sender label", async () => 
   );
 });
 
+it("strips terminal controls from pairing ids and metadata", async () => {
+  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  listChannelPairingRequests.mockResolvedValueOnce([
+    { ...pairingRequest, code: "ABC123", meta: { senderId: "snd\u001b]0;pwned\u0007PAIR_MARKER" } },
+    { ...pairingRequest, code: "DEF456", meta: { senderId: "plain-sender" } },
+  ]);
+
+  await runPairing("list", "--channel", "telegram");
+  const output = log.mock.calls.map((call) => call.join(" ")).join("\n");
+
+  // The OSC sequence must not survive into the terminal, but the visible text does.
+  expect(output).not.toContain("\u001b]0;pwned\u0007");
+  expect(output).not.toContain("\u0007");
+  expect(output).toContain("PAIR_MARKER");
+  expect(output).toContain("plain-sender");
+});
+
 it("rejects conflicting positional and option channels for list", async () => {
   await expect(runPairing("list", "discord", "--channel", "telegram")).rejects.toThrow(
     'Conflicting pairing channels: "telegram" and "discord". Pass the channel either positionally or with --channel.',
