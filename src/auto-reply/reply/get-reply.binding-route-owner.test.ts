@@ -3,19 +3,34 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../../agents/admitted-run-context.js";
+import {
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.js";
+import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
+import { withPreparedEmbeddedRunToolAuthority } from "../../agents/harness/tool-authority.runtime.js";
+import { withoutGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntryReadOnly,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import {
   unregisterSessionBindingAdapter,
   type ConversationRef,
   type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "../../infra/outbound/session-binding-service.js";
+import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import {
   buildChannelInboundEventContext,
   type BuildChannelInboundEventContextParams,
@@ -41,6 +56,14 @@ import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { getReplyFromConfig } from "./get-reply.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { claimInboundDedupe, resetInboundDedupe } from "./inbound-dedupe.js";
+import { getFollowupQueueDepth } from "./queue.js";
+import * as queueDrain from "./queue/drain.js";
+import { clearFollowupQueue } from "./queue/state.js";
+import {
+  REPLY_OPERATION_RUN_STATE,
+  type ReplyOperationRunState,
+} from "./reply-operation-run-state.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 
 const observed = vi.hoisted(() => ({ events: [] as string[] }));
 vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
@@ -64,6 +87,7 @@ const baseRoute = {
   channel: "webchat",
   accountId: "default",
   sessionKey: "global",
+  routeSessionKey: "global",
   mainSessionKey: "agent:main:main",
   lastRoutePolicy: "session" as const,
   matchedBy: "default" as const,
@@ -129,11 +153,12 @@ function makeContext(
   route: BuildChannelInboundEventContextParams["route"],
   native?: boolean,
   target?: string,
+  messageId = String(native ?? "binding"),
 ) {
   return buildChannelInboundEventContext({
     channel: "webchat",
     accountId: "default",
-    messageId: String(native ?? "binding"),
+    messageId,
     from: "synthetic-user",
     sender: { id: "synthetic-user" },
     conversation: { kind: "direct", id: "room" },
@@ -169,6 +194,168 @@ async function invoke(
   } finally {
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
+  }
+}
+
+type DirectAttemptFixtureOptions = {
+  execution?: Partial<
+    Pick<
+      Parameters<typeof withPreparedEmbeddedRunToolAuthority>[1],
+      | "modelId"
+      | "authProfileId"
+      | "authProfileIdSource"
+      | "bashElevated"
+      | "execOverrides"
+      | "forceRestartSafeTools"
+      | "forceCodeModeTools"
+    >
+  >;
+  toolsAllow?: string[];
+  sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+  terminalReplyExpectation?: "required" | "optional";
+  inputProvenance?: {
+    kind: "inter_session";
+    sourceTool: "subagent_settle";
+    sourceRole: "subagent";
+    sourceSessionKey: string;
+    originSessionId: string;
+  };
+};
+
+type DirectInjectionRecord = {
+  text: string;
+  authorityKind: "run" | "source-bound";
+  isInboundUserMessage: boolean;
+  waitForTranscriptCommit: boolean;
+  sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+  queueIdentity?: string;
+};
+
+async function seedSessionEntry(messageId: string) {
+  await invoke("dispatch", makeContext(baseRoute, false, undefined, messageId));
+  const entry = loadSessionEntryReadOnly({ agentId: "main", sessionKey: baseRoute.sessionKey });
+  expect(entry?.sessionId).toBeTruthy();
+  expect(replyRunRegistry.get(baseRoute.sessionKey)).toBeUndefined();
+  return expectDefined(entry, "direct-run seed session");
+}
+
+async function withActiveDirectAttempt<T>(
+  params: {
+    sessionId: string;
+    sessionFile: string;
+    bashElevated: Parameters<typeof runEmbeddedAgent>[0]["bashElevated"];
+    options?: DirectAttemptFixtureOptions;
+  },
+  run: (owner: {
+    sessionKey: string;
+    sessionId: string;
+    sessionFile: string;
+    runId: string;
+    target: ReturnType<typeof replyRunRegistry.resolveCurrentMessageInjectionTarget>;
+    handle: ReturnType<typeof createEmbeddedRunHandle>;
+    injections: DirectInjectionRecord[];
+    transcriptConfirmations: string[];
+  }) => Promise<T>,
+): Promise<T> {
+  const options = params.options ?? {};
+  const sessionKey = baseRoute.sessionKey;
+  const sessionFile = params.sessionFile;
+  const runId = "direct-attempt-" + params.sessionId;
+  const admission = prepareAgentRunAdmission({
+    cfg,
+    operationalRunInstance: createOperationalRunInstanceRef(runId),
+    facts: {
+      agentId: "main",
+      runId,
+      ingress: { kind: "system", state: "present", boundary: "reply-owner-direct-attempt-test" },
+    },
+  });
+  try {
+    const admittedRunContext = await admission.admit("embedded", "reply-owner-direct-attempt-test");
+    const attempt = {
+      sessionId: params.sessionId,
+      sessionKey,
+      sessionFile,
+      runId,
+      agentId: "main",
+      config: cfg,
+      agentDir: state.agentDir(),
+      workspaceDir: state.path("main-workspace"),
+      provider: "mock-openai",
+      modelId: "gpt-5.6-luna",
+      sandboxSessionKey: sessionKey,
+      messageChannel: "webchat",
+      senderIsOwner: false,
+      senderId: "synthetic-user",
+      messageProvider: "webchat",
+      chatType: "direct" as const,
+      agentAccountId: "default",
+      traceAuthorized: false,
+      bashElevated: params.bashElevated,
+      ...(options.toolsAllow !== undefined ? { toolsAllow: options.toolsAllow } : {}),
+      ...(options.inputProvenance ? { inputProvenance: options.inputProvenance } : {}),
+      ...options.execution,
+    };
+    return await withPreparedEmbeddedRunToolAuthority(
+      { admittedRunContext },
+      attempt,
+      undefined,
+      async (prepared) => {
+        expect(prepared.toolAuthorityFingerprint).toBeTruthy();
+        const injections: DirectInjectionRecord[] = [];
+        const transcriptConfirmations: string[] = [];
+        const handle = createEmbeddedRunHandle({
+          runId,
+          toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
+          isStreaming: true,
+          supportsTranscriptCommitWait: true,
+        });
+        handle.sourceReplyDeliveryMode = options.sourceReplyDeliveryMode ?? "automatic";
+        handle.terminalReplyExpectation = options.terminalReplyExpectation ?? "required";
+        handle.messageInjectionV2 = {
+          version: 2,
+          isAvailable: () => true,
+          queueMessage: async (text, queueOptions, assertCurrent, authorityKind) => {
+            assertCurrent();
+            const recorder = queueOptions?.userTurnTranscriptRecorder;
+            const confirmTranscript = recorder?.confirmSteerTargetRunIdForPersistence;
+            if (recorder && confirmTranscript) {
+              recorder.confirmSteerTargetRunIdForPersistence = async (targetRunId) => {
+                transcriptConfirmations.push(targetRunId);
+                await confirmTranscript(targetRunId);
+              };
+            }
+            injections.push({
+              text,
+              authorityKind,
+              isInboundUserMessage: queueOptions?.isInboundUserMessage === true,
+              waitForTranscriptCommit: queueOptions?.waitForTranscriptCommit === true,
+              sourceReplyDeliveryMode: queueOptions?.sourceReplyDeliveryMode,
+              queueIdentity: queueOptions?.queueIdentity,
+            });
+            queueOptions?.onQueueAccepted?.(true);
+          },
+        };
+        setActiveEmbeddedRun(params.sessionId, handle, sessionKey, sessionFile, "main");
+        try {
+          const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey);
+          return await run({
+            sessionKey,
+            sessionId: params.sessionId,
+            sessionFile,
+            runId,
+            target,
+            handle,
+            injections,
+            transcriptConfirmations,
+          });
+        } finally {
+          clearActiveEmbeddedRun(params.sessionId, handle, sessionKey);
+        }
+      },
+    );
+  } finally {
+    admission.close();
   }
 }
 
@@ -419,3 +606,231 @@ it.each([
     bytes,
   );
 });
+
+it("records terminal-receipt follow-up admission and schedules its drain", async () => {
+  const sessionKey = baseRoute.sessionKey;
+  const seeded = await seedSessionEntry("terminal-followup-seed");
+  const seedCall = expectDefined(vi.mocked(runEmbeddedAgent).mock.calls.at(-1), "seed execution");
+  const sessionFile = expectDefined(seedCall[0].sessionFile, "seed session file");
+  const bashElevated = seedCall[0].bashElevated;
+  cfg = withFullRuntimeReplyConfig({
+    ...cfg,
+    messages: { ...cfg.messages, queue: { mode: "steer" } },
+  });
+  await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
+  await upsertSessionEntryCore(
+    { agentId: "main", sessionKey },
+    { ...seeded, restartRecoveryDeliveryReceiptState: "terminal-pending" },
+  );
+  vi.mocked(runEmbeddedAgent).mockClear();
+  const admission: ReplyOperationRunState = {};
+  const replyOptions = {
+    runId: "terminal-followup-inbound",
+    [REPLY_OPERATION_RUN_STATE]: admission,
+  };
+  const drain = vi.spyOn(queueDrain, "scheduleFollowupDrain");
+  const warning = vi.spyOn(diagnosticLogger, "warn");
+  try {
+    await withActiveDirectAttempt(
+      { sessionId: seeded.sessionId, sessionFile, bashElevated },
+      async (owner) => {
+        expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+        await expect(
+          invoke(
+            "getReply",
+            makeContext(baseRoute, false, undefined, "terminal-followup-inbound"),
+            replyOptions,
+          ),
+        ).resolves.toEqual([]);
+        expect(owner.injections).toEqual([]);
+        expect(admission.admission).toEqual({ status: "accepted", mode: "followup" });
+        expect(getFollowupQueueDepth(sessionKey)).toBe(1);
+        expect(drain).toHaveBeenCalledWith(sessionKey, expect.any(Function));
+        expect(warning).toHaveBeenCalledWith(
+          "steering rejected; applying follow-up policy",
+          expect.objectContaining({ reason: "terminal-pending", disposition: "followup-queued" }),
+        );
+        expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      },
+    );
+  } finally {
+    clearFollowupQueue(sessionKey);
+    queueDrain.clearFollowupDrainCallback(sessionKey);
+  }
+});
+
+it("adopts a visible ordinary inbound turn into its admitted direct attempt", async () => {
+  const sessionKey = baseRoute.sessionKey;
+  const seeded = await seedSessionEntry("direct-visible-seed");
+  const sessionFile = expectDefined(
+    vi.mocked(runEmbeddedAgent).mock.calls.at(-1)?.[0].sessionFile,
+    "real channel session file",
+  );
+  const bashElevated = vi.mocked(runEmbeddedAgent).mock.calls.at(-1)?.[0].bashElevated;
+  expect(bashElevated).toBeDefined();
+  vi.mocked(runEmbeddedAgent).mockClear();
+  observed.events.length = 0;
+  const ctx = makeContext(baseRoute, false, undefined, "direct-visible-inbound");
+  const adopted: string[] = [];
+  const deferred: string[] = [];
+  try {
+    await withActiveDirectAttempt(
+      { sessionId: seeded.sessionId, sessionFile, bashElevated },
+      async (owner) => {
+        expect(owner.sessionId).not.toBe(owner.sessionKey);
+        expect(owner.target).toMatchObject({ runId: owner.runId, sourceTurnId: owner.runId });
+        expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+        await withoutGatewayToolCallerIdentity(() =>
+          invoke("inbound", ctx, {
+            turnAdoptionLifecycle: {
+              onAdopted: () => {
+                adopted.push(owner.runId);
+              },
+              onDeferred: () => {
+                deferred.push(owner.runId);
+                return true;
+              },
+            },
+          }),
+        );
+        expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+        expect(getFollowupQueueDepth(sessionKey)).toBe(0);
+        expect(owner.injections).toHaveLength(1);
+        const injection = expectDefined(owner.injections[0], "accepted direct input");
+        expect(injection).toMatchObject({
+          text: expect.stringContaining("hello"),
+          authorityKind: "run",
+          isInboundUserMessage: true,
+          waitForTranscriptCommit: true,
+        });
+        expect(injection.queueIdentity).toBeTruthy();
+        expect(owner.transcriptConfirmations).toEqual([owner.runId]);
+        expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      },
+    );
+  } finally {
+    clearFollowupQueue(sessionKey);
+  }
+  expect(adopted).toEqual(["direct-attempt-" + seeded.sessionId]);
+  // Accepted steering first parks custody, then adopts it without a followup run.
+  expect(deferred).toEqual(["direct-attempt-" + seeded.sessionId]);
+  expect(runEmbeddedAgent).not.toHaveBeenCalled();
+});
+
+it.for([
+  {
+    name: "optional inter-session requester-settle continuation",
+    messageId: "direct-hidden-optional",
+    options: {
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+      terminalReplyExpectation: "optional" as const,
+      inputProvenance: {
+        kind: "inter_session" as const,
+        sourceTool: "subagent_settle" as const,
+        sourceRole: "subagent" as const,
+        sourceSessionKey: "agent:work:child",
+        originSessionId: "child-session",
+      },
+    },
+  },
+  {
+    name: "optional direct reply contract",
+    messageId: "direct-optional-reply",
+    options: { terminalReplyExpectation: "optional" as const },
+  },
+  {
+    name: "mismatched tool authority",
+    messageId: "direct-mismatched-authority",
+    options: { toolsAllow: ["exec"] },
+  },
+  {
+    name: "different direct restart-safe restriction",
+    messageId: "direct-restart-safe-mismatch",
+    options: { execution: { forceRestartSafeTools: true } },
+  },
+  {
+    name: "different direct code-mode restriction",
+    messageId: "direct-code-mode-mismatch",
+    options: { execution: { forceCodeModeTools: true } },
+  },
+  {
+    name: "different direct execution model",
+    messageId: "direct-model-mismatch",
+    options: { execution: { modelId: "different-model" } },
+  },
+  {
+    name: "different explicit direct credential profile",
+    messageId: "direct-profile-mismatch",
+    options: {
+      execution: { authProfileId: "different-account", authProfileIdSource: "user" as const },
+    },
+  },
+  {
+    name: "different direct elevated settings",
+    messageId: "direct-elevated-mismatch",
+    options: {
+      execution: { bashElevated: { enabled: true, allowed: true, defaultLevel: "full" as const } },
+    },
+  },
+  {
+    name: "different direct exec settings",
+    messageId: "direct-exec-mismatch",
+    options: { execution: { execOverrides: { security: "full" as const } } },
+  },
+])(
+  "keeps $name input on the protected followup path",
+  async ({ messageId, options }, { signal }) => {
+    const sessionKey = baseRoute.sessionKey;
+    const seeded = await seedSessionEntry("seed-" + messageId);
+    const sessionFile = expectDefined(
+      vi.mocked(runEmbeddedAgent).mock.calls.at(-1)?.[0].sessionFile,
+      "real channel session file",
+    );
+    const bashElevated = vi.mocked(runEmbeddedAgent).mock.calls.at(-1)?.[0].bashElevated;
+    expect(bashElevated).toBeDefined();
+    vi.mocked(runEmbeddedAgent).mockClear();
+    observed.events.length = 0;
+    const ctx = makeContext(baseRoute, false, undefined, messageId);
+    const adopted = vi.fn();
+    const followupCompleted = createDeferred();
+    const backend = vi.mocked(runEmbeddedAgent);
+    const implementation = expectDefined(backend.getMockImplementation(), "mocked runtime");
+    backend.mockImplementation(async (...args) => {
+      try {
+        const result = await implementation(...args);
+        followupCompleted.resolve();
+        return result;
+      } catch (error) {
+        followupCompleted.reject(error);
+        throw error;
+      }
+    });
+    try {
+      await withActiveDirectAttempt(
+        { sessionId: seeded.sessionId, sessionFile, bashElevated, options },
+        async (owner) => {
+          expect(owner.target).toMatchObject({ runId: owner.runId, sourceTurnId: owner.runId });
+          await withoutGatewayToolCallerIdentity(() =>
+            invoke("inbound", ctx, {
+              turnAdoptionLifecycle: { onAdopted: adopted },
+            }),
+          );
+          expect(owner.injections).toEqual([]);
+          expect(owner.transcriptConfirmations).toEqual([]);
+          expect(getFollowupQueueDepth(sessionKey)).toBe(1);
+          expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+          expect(adopted).not.toHaveBeenCalled();
+          expect(runEmbeddedAgent).not.toHaveBeenCalled();
+        },
+      );
+      await withinTest(followupCompleted.promise, signal);
+      expect(backend).toHaveBeenCalledTimes(1);
+      expect(getFollowupQueueDepth(sessionKey)).toBe(0);
+    } finally {
+      backend.mockImplementation(implementation);
+      clearFollowupQueue(sessionKey);
+    }
+    expect(adopted).toHaveBeenCalledTimes(1);
+  },
+);

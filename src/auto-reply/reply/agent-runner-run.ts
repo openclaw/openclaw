@@ -7,7 +7,6 @@ import {
 } from "../../agents/reply-completion.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
-import { resolveRestartRecoverySteeringBlockReason } from "../../config/sessions/restart-recovery-receipt.js";
 import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-recovery-state.js";
 import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
@@ -49,7 +48,7 @@ import { runReplyQuestionInput } from "./agent-runner-question-input.js";
 import { createReplyAgentRestartRecoveryController } from "./agent-runner-restart-recovery.js";
 import { buildReplyMediaContextParams } from "./agent-runner-run-params.js";
 import { commitQueuedReplySessionActivity } from "./agent-runner-session-activity.js";
-import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
+import * as replySteering from "./agent-runner-steer-adoption.js";
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
@@ -262,23 +261,18 @@ export async function runReplyAgent(
     mode: typingMode,
     isHeartbeat,
   });
-  // New steering must not reuse a terminal source claim. Compare the active
-  // source identity so unrelated retained tombstones still permit steering.
-  // The parked admission owner rechecks after any predecessor wait.
-  const activeSourceTurnId =
-    replyRunRegistry.getSourceTurnId(sessionKey ?? "") ??
-    normalizeOptionalString(restartRecoveryEntry?.restartRecoveryDeliverySourceRunId) ??
-    "";
-  const terminalDeliveryBlockReason = resolveRestartRecoverySteeringBlockReason(
-    restartRecoveryEntry,
-    activeReplyOperation?.sessionId ?? followupRun.run.sessionId,
-    activeSourceTurnId,
-  );
-  const shouldQueueTerminalReceiptSteer =
-    effectiveShouldSteer &&
-    isActive &&
-    messageInjectionDisposition === "none" &&
-    terminalDeliveryBlockReason !== undefined;
+  const { directTarget, queueTerminal, terminalDeliveryBlockReason } =
+    replySteering.resolveActiveReplySteeringAdmission({
+      shouldSteer: effectiveShouldSteer,
+      isActive,
+      activeReplyOperation,
+      shouldQueueProvidedSteer,
+      messageInjectionDisposition,
+      queueKey,
+      sessionKey,
+      restartRecoveryEntry,
+      sessionId: followupRun.run.sessionId,
+    });
 
   const questionInput = await runReplyQuestionInput(params);
   if (questionInput.handled) {
@@ -354,14 +348,15 @@ export async function runReplyAgent(
     effectiveShouldSteer &&
     isActive &&
     !shouldQueueProvidedSteer &&
-    !shouldQueueTerminalReceiptSteer &&
+    !queueTerminal &&
     messageInjectionDisposition === "none"
   ) {
     bindReplyOperationQueueDisposition(followupRun, replyOperationRunState);
-    const result = await runActiveReplySteer({
+    const result = await replySteering.runActiveReplySteer({
       followupRun,
       opts,
       providedReplyOperation: activeReplyOperation,
+      providedDirectInjectionTarget: directTarget,
       queueKey,
       releaseAdmissionTicket,
       replyOperationRunState,
@@ -404,11 +399,9 @@ export async function runReplyAgent(
       queuedRunFollowupTurn,
       false,
     );
-    if (shouldQueueTerminalReceiptSteer || shouldQueueProvidedSteer) {
+    if (queueTerminal || shouldQueueProvidedSteer) {
       diagnosticLogger.warn("steering rejected; applying follow-up policy", {
-        reason: shouldQueueTerminalReceiptSteer
-          ? terminalDeliveryBlockReason
-          : "source-operation-pending",
+        reason: queueTerminal ? terminalDeliveryBlockReason : "source-operation-pending",
         disposition: enqueued
           ? "followup-queued"
           : replyOperationRunState?.admission?.status === "skipped" &&

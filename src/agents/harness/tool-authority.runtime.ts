@@ -36,6 +36,8 @@ type ToolAuthorityAttempt = Pick<
   | "messageChannel"
   | "toolsAllow"
   | "disableTools"
+  | "forceRestartSafeTools"
+  | "forceCodeModeTools"
   | "runId"
   | "abortSignal"
   | "toolAuthorityFingerprint"
@@ -63,10 +65,14 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
     originatingChannel: attempt.messageChannel,
     toolsAllow: attempt.toolsAllow,
     disableTools: attempt.disableTools,
+    forceRestartSafeTools: attempt.forceRestartSafeTools,
+    forceCodeModeTools: attempt.forceCodeModeTools,
     operatorAuthority: readAdmittedRunOperatorAuthority(admitted),
     run: {
       ...attempt,
       model: attempt.modelId,
+      // Match reply-dispatch authority using the execution settings the attempt owns.
+      elevatedLevel: attempt.bashElevated?.defaultLevel,
       runtimePolicySessionKey: attempt.sandboxSessionKey,
       traceAuthorized: false,
       spawnedBy: attempt.spawnedBy ?? undefined,

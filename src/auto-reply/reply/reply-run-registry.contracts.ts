@@ -5,7 +5,7 @@ import type { ScheduledToolPolicyContext } from "../../agents/scheduled-tool-pol
 import type { TrustedSubagentCompletionHandoff } from "../../agents/subagents/announce/subagent-announce-handoff.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
+import type { ExecToolConfig, GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
@@ -18,6 +18,7 @@ import type {
   TaskSuggestionDeliveryMode,
 } from "../get-reply-options.types.js";
 import type { OriginatingChannelType } from "../templating.js";
+import type { ElevatedLevel } from "../thinking.shared.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatcher.types.js";
 import type { ReplyOperationStaleReason } from "./reply-run-finalization-lease.js";
 
@@ -84,6 +85,26 @@ export type ReplyToolAuthorityRoute = Readonly<{
 /** Per-message authority facts projected against an active run's frozen owner state. */
 export type ReplyToolAuthorityOverlay = Readonly<{
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Incoming execution facts for comparison only; never retarget the active backend. */
+  executionCompatibility?: Readonly<{
+    provider: string;
+    model: string;
+    sessionFile: string;
+    agentDir: string;
+    workspaceDir: string;
+    cwd?: string;
+    authProfileId?: string;
+    authProfileIdSource?: "auto" | "user";
+    execOverrides?: Pick<ExecToolConfig, "host" | "security" | "ask" | "node"> & {
+      nodeCwd?: string;
+    };
+    elevatedLevel?: ElevatedLevel;
+    bashElevated?: {
+      enabled: boolean;
+      allowed: boolean;
+      defaultLevel: ElevatedLevel;
+    };
+  }>;
   permissionMode?: SessionEntry["permissionMode"];
   toolOverrides?: SessionEntry["toolOverrides"];
   originatingChannel?: OriginatingChannelType;

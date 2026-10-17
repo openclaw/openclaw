@@ -52,14 +52,20 @@ import {
   withReplyToolAuthorityCohort,
   type CapturedReplyToolAuthoritySession,
 } from "./reply-tool-authority-cohort.js";
-import { applyReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
+import {
+  applyReplyToolAuthorityOverlay,
+  ReplyToolExecutionMismatchError,
+} from "./reply-tool-authority-inbound.js";
 import {
   captureMemoryReplyToolAuthoritySession,
   prepareMemoryReplyToolAuthorityCaller,
 } from "./reply-tool-authority-memory.js";
 import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
 
-export { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
+export {
+  ReplyToolExecutionMismatchError,
+  resolveInboundReplyToolAuthorityOverlay,
+} from "./reply-tool-authority-inbound.js";
 
 function resolveReplyToolSandboxParams(execution: ReplyToolAuthorityInput["run"]) {
   return {
@@ -342,6 +348,11 @@ export function prepareReplyToolAuthority(
     const incoming = overlay ? applyReplyToolAuthorityOverlay(snapshot, overlay) : snapshot;
     return incoming;
   };
+  // A captured target route must not overwrite an incoming explicit selection.
+  const projectionRoute = (
+    overlay: ReplyToolAuthorityOverlay | undefined,
+    route: ReplyToolAuthorityRoute | undefined,
+  ) => (overlay?.executionCompatibility ? undefined : route);
   const env = { ...process.env };
   const sessionKey = snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey;
   const memory = captureMemoryReplyToolAuthoritySession(sessionKey, () =>
@@ -516,7 +527,7 @@ export function prepareReplyToolAuthority(
       return prepared.read();
     },
     projectAsync: async (overlay: ReplyToolAuthorityOverlay, route: ReplyToolAuthorityRoute) => {
-      const prepared = await prepare(projectInput(overlay), route);
+      const prepared = await prepare(projectInput(overlay), projectionRoute(overlay, route));
       projectionRead = prepared;
       return prepared.read();
     },
@@ -530,7 +541,7 @@ export function prepareReplyToolAuthority(
       if (!prepared) {
         throw new Error("Reply tool authority requires asynchronous preparation");
       }
-      return prepared.evaluate(projectInput(overlay), route);
+      return prepared.evaluate(projectInput(overlay), projectionRoute(overlay, route));
     },
   };
   bindReplyToolAuthorityCallerRead(
@@ -538,18 +549,39 @@ export function prepareReplyToolAuthority(
     async (caller, expected, route, assertActive) => {
       if (readMemoryEntry) {
         const projected = projectInput(caller);
-        const policy = await prepareSessionCapabilityRead(() =>
-          [snapshot, projected].every(
-            (input) =>
-              resolvePreparedReplyToolAuthorityFingerprint(
-                input,
-                route,
-                readMemoryEntry(),
-                undefined,
-                memoryCapabilities,
-              ) === expected,
-          ),
-        );
+        const callerOnly = caller?.executionCompatibility
+          ? projectInput({ ...caller, executionCompatibility: undefined })
+          : projected;
+        const policy = await prepareSessionCapabilityRead(() => {
+          const entry = readMemoryEntry();
+          if (
+            ![snapshot, callerOnly].every(
+              (input) =>
+                resolvePreparedReplyToolAuthorityFingerprint(
+                  input,
+                  route,
+                  entry,
+                  undefined,
+                  memoryCapabilities,
+                ) === expected,
+            )
+          ) {
+            return false;
+          }
+          if (
+            caller?.executionCompatibility &&
+            resolvePreparedReplyToolAuthorityFingerprint(
+              projected,
+              undefined,
+              entry,
+              undefined,
+              memoryCapabilities,
+            ) !== expected
+          ) {
+            throw new ReplyToolExecutionMismatchError();
+          }
+          return true;
+        });
         releases.add(policy.release);
         const prepared = prepareMemoryReplyToolAuthorityCaller(readMemoryEntry, assertActive, () =>
           policy.read(),
@@ -567,6 +599,9 @@ export function prepareReplyToolAuthority(
       assertActive();
       const original = captured;
       const projected = projectInput(caller);
+      const callerOnly = caller?.executionCompatibility
+        ? projectInput({ ...caller, executionCompatibility: undefined })
+        : projected;
       const plan = capturedReadPlan;
       if (original && !plan) {
         throw new Error("Tool authority classification source is unavailable");
@@ -586,12 +621,19 @@ export function prepareReplyToolAuthority(
             "Tool authority classification session changed (caller session identity)",
           );
         }
-        for (const input of [snapshot, projected]) {
+        for (const input of [snapshot, callerOnly]) {
           if (
             resolvePreparedReplyToolAuthorityFingerprint(input, route, entry, narrow) !== expected
           ) {
             throw new Error("question answer caller policy does not match its creator");
           }
+        }
+        if (
+          caller?.executionCompatibility &&
+          resolvePreparedReplyToolAuthorityFingerprint(projected, undefined, entry, narrow) !==
+            expected
+        ) {
+          throw new ReplyToolExecutionMismatchError();
         }
         assertSources();
       };

@@ -13,6 +13,7 @@ export function applyReplyToolAuthorityOverlay(
   snapshot: ReplyToolAuthorityInput,
   overlay: ReplyToolAuthorityOverlay,
 ): ReplyToolAuthorityInput {
+  const execution = overlay.executionCompatibility;
   return {
     ...snapshot,
     originatingChannel: overlay.originatingChannel,
@@ -23,6 +24,21 @@ export function applyReplyToolAuthorityOverlay(
     forceCodeModeTools: overlay.forceCodeModeTools,
     run: {
       ...snapshot.run,
+      ...(execution
+        ? {
+            provider: execution.provider,
+            model: execution.model,
+            sessionFile: execution.sessionFile,
+            agentDir: execution.agentDir,
+            workspaceDir: execution.workspaceDir,
+            cwd: execution.cwd,
+            authProfileId: execution.authProfileId,
+            authProfileIdSource: execution.authProfileIdSource,
+            execOverrides: execution.execOverrides,
+            elevatedLevel: execution.elevatedLevel,
+            bashElevated: execution.bashElevated,
+          }
+        : {}),
       permissionMode: overlay.permissionMode,
       toolOverrides: overlay.toolOverrides,
       messageProvider: overlay.messageProvider,
@@ -102,4 +118,12 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
     gatewayUiCommandTarget: ctx.GatewayUiCommandTarget,
     toolBindings: ctx.GatewayRunToolBindings,
   };
+}
+
+/** A compatible live caller requested different execution, not lost authority. */
+export class ReplyToolExecutionMismatchError extends Error {
+  constructor() {
+    super("Incoming execution settings do not match the captured direct run");
+    this.name = "ReplyToolExecutionMismatchError";
+  }
 }

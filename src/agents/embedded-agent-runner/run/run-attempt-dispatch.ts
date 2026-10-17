@@ -224,6 +224,11 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     Boolean(fallbackReason);
   const attemptContextEngine =
     nativeModelOwned && contextEngine?.info.id === "legacy" ? undefined : contextEngine;
+  const authProfileIdSource = runtime.lastProfileId
+    ? runtime.lastProfileId === lockedProfileId
+      ? "user"
+      : "auto"
+    : undefined;
   const attemptAbortController = new AbortController();
   input.setPostCompactionAbortController(attemptAbortController);
   const preparedExecApprovalContinuation = prepareExecApprovalContinuationForAttempt({
@@ -550,9 +555,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     authProfileId: runtime.lastProfileId,
     authProfileIdSource: params.authProfileBinding
       ? params.authProfileIdSource
-      : explicitAuthProfile
-        ? "user"
-        : "auto",
+      : authProfileIdSource,
     authProfileBinding: params.authProfileBinding,
     initialReplayState: input.replayState,
     authStorage,
