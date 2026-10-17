@@ -200,8 +200,8 @@ it("does not advertise a retained terminal after it is detached", async () => {
   shell.element.append(workspace);
   root.append(shell.element);
   document.body.append(root);
-  const { owner, dispose } = createRoot((dispose) => ({
-    dispose,
+  const { owner, dispose } = createRoot((disposeRoot) => ({
+    dispose: disposeRoot,
     owner: createSolidControlUiReadiness(
       root,
       runtime,

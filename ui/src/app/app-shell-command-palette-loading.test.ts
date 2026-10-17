@@ -93,14 +93,14 @@ describe("cold command palette input custody", () => {
         navigate: () => {},
       };
       const request = vi.fn<ConstructorParameters<typeof ShellCommandPaletteOwner>[1]["request"]>();
-      const { owner, dispose } = createRoot((dispose) => ({
+      const { owner, dispose } = createRoot((disposeRoot) => ({
         owner: new ShellCommandPaletteOwner(host, {
           request,
           clear: () => {},
           cancel: () => {},
           pending: () => false,
         }),
-        dispose,
+        dispose: disposeRoot,
       }));
       onTestFinished(dispose);
       mountSolid(
