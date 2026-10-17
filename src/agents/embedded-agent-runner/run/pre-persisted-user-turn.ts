@@ -5,6 +5,7 @@ import type { SessionTranscriptWriteScope } from "../../../config/sessions/sessi
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.types.js";
 import { runWithSessionActorStorage } from "../../../config/sessions/session-actor-storage-binding.js";
 import { readSessionTranscriptAnchorsAsync } from "../../../config/sessions/session-transcript-anchor-read.js";
+import { SessionTranscriptReadFenceError } from "../../../config/sessions/session-transcript-read-fence-error.js";
 import { resolveSessionTranscriptReadFence } from "../../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "../../../config/sessions/session-transcript-read-source.js";
 import type { TranscriptEntryAnchor } from "../../../config/sessions/transcript-entry-anchor.js";
@@ -26,6 +27,7 @@ import {
   AGENT_RUN_RESTART_ABORT_ERROR,
   AGENT_RUN_RESTART_ABORT_ERROR_CODE,
 } from "../../run-termination.js";
+import { isOutOfTurnHistoryEntry } from "../../sessions/session-manager-codec.js";
 import { sessionManagerReloadTranscriptCohort } from "../../sessions/session-manager-core.js";
 import {
   sessionManagerPrepareCurrentTurnReplay,
@@ -105,7 +107,7 @@ function selectCurrentUserTurnFromCohort(params: {
     throw new SessionTranscriptWriterClaimReboundError();
   }
   const entryId = sessionManager.resolveCurrentTurnEntryId((entry) =>
-    isInterruptedTurnEntry(entry, params.runId),
+    isReplayTurnTailEntry(entry, params.runId),
   );
   const entry = entryId ? sessionManager.getEntry(entryId) : undefined;
   // The hint selects an anchor, never the current turn. Omitted ancestry keeps its fresh fallback.
@@ -193,6 +195,23 @@ export function prepareInitialPersistedUserTurnCohort(params: {
     },
     readInitial: () => initial,
   };
+}
+
+/** Bounded retries for transcript reads racing finalized Talk speech appends. */
+const CONCURRENT_APPEND_READ_ATTEMPTS = 3;
+
+/** Finalized Talk speech records history without closing the consult's keyed input. */
+function isReplayTurnTailEntry(entry: SessionEntry, runId: string): boolean {
+  return isInterruptedTurnEntry(entry, runId) || isOutOfTurnHistoryEntry(entry);
+}
+
+/** Only an appended transcript change rejects; ownership fences stay fatal. */
+function isConcurrentTranscriptAppendRejection(error: unknown): boolean {
+  return (
+    error instanceof SessionTranscriptReadFenceError &&
+    (error.message === "Persisted user turn changed before replay admission" ||
+      error.message === "Session transcript changed during context read")
+  );
 }
 
 /** Re-adopt the current turn without reopening arbitrary historical keyed users. */
@@ -311,60 +330,80 @@ export async function preparePersistedCurrentUserTurn(params: {
         isDeepStrictEqual(entry.message, message);
       const select = () =>
         sessionManager[sessionManagerPrepareCurrentTurnReplay](
-          (entry) => isInterruptedTurnEntry(entry, runId),
+          (entry) => isReplayTurnTailEntry(entry, runId),
           matchesUser,
           signal,
         );
-      let witness: CurrentTurnReplayWitness | undefined;
-      const accept = (current: CurrentTurnReplayWitness | undefined) => {
-        witness = current;
-        consume(current);
-      };
-      if (getOwnedSessionTranscriptReader(target)) {
-        const allowInitial = Boolean(initialWriter) && !initialWriter?.committedFence;
-        const hint = sessionManager.resolveCurrentTurnEntryId((entry) =>
-          isInterruptedTurnEntry(entry, runId),
-        );
+      // Finalized realtime speech (for example the forced-consult checking
+      // acknowledgment) can append to the shared transcript between the manager
+      // reload and the awaited current-turn read. Re-prepare against the appended
+      // state instead of rejecting the consult; a concurrent write that closes the
+      // consult (a newer admitted task or completed answer) still fails the
+      // retried walk, and every fence is revalidated on each attempt.
+      for (let attempt = 1; ; attempt++) {
         let consumed = false;
-        await sessionManager[sessionManagerReloadTranscriptCohort](
-          {
-            sessionKey: scope.sessionKey,
-            entryIds: hint ? [hint] : [],
-            replayValidation: {
-              expectedLifecycleRevision: scope.expectedLifecycleRevision,
-              expectedWriterRunId: scope.expectedWriterRunId,
-              allowInitial,
-              admission: resolveSessionTranscriptReadFence(target),
-            },
-          },
-          (prepared, assertView) => {
-            assertSource();
-            assertCurrent();
-            const selected = selectCurrentUserTurnFromCohort({
-              sessionManager,
-              message,
-              runId,
-              prepared,
-              assertView,
-              allowInitial,
-              initialWriter,
-            });
-            if (selected) {
-              consumed = true;
-              accept(selected.current);
+        let witness: CurrentTurnReplayWitness | undefined;
+        const accept = (current: CurrentTurnReplayWitness | undefined) => {
+          consumed = true;
+          witness = current;
+          consume(current);
+        };
+        try {
+          if (getOwnedSessionTranscriptReader(target)) {
+            const allowInitial = Boolean(initialWriter) && !initialWriter?.committedFence;
+            const hint = sessionManager.resolveCurrentTurnEntryId((entry) =>
+              isReplayTurnTailEntry(entry, runId),
+            );
+            let cohortConsumed = false;
+            await sessionManager[sessionManagerReloadTranscriptCohort](
+              {
+                sessionKey: scope.sessionKey,
+                entryIds: hint ? [hint] : [],
+                replayValidation: {
+                  expectedLifecycleRevision: scope.expectedLifecycleRevision,
+                  expectedWriterRunId: scope.expectedWriterRunId,
+                  allowInitial,
+                  admission: resolveSessionTranscriptReadFence(target),
+                },
+              },
+              (prepared, assertView) => {
+                assertSource();
+                assertCurrent();
+                const selected = selectCurrentUserTurnFromCohort({
+                  sessionManager,
+                  message,
+                  runId,
+                  prepared,
+                  assertView,
+                  allowInitial,
+                  initialWriter,
+                });
+                if (selected) {
+                  cohortConsumed = true;
+                  accept(selected.current);
+                }
+              },
+              signal,
+            );
+            if (cohortConsumed) {
+              return witness;
             }
-          },
-          signal,
-        );
-        if (consumed) {
+          }
+          await sessionManager.reloadPersistedTranscriptAsync(signal);
+          assertSource();
+          assertCurrent();
+          await validate(target, assertSource, await select(), signal, accept);
           return witness;
+        } catch (error) {
+          if (
+            attempt >= CONCURRENT_APPEND_READ_ATTEMPTS ||
+            consumed ||
+            !isConcurrentTranscriptAppendRejection(error)
+          ) {
+            throw error;
+          }
         }
       }
-      await sessionManager.reloadPersistedTranscriptAsync(signal);
-      assertSource();
-      assertCurrent();
-      await validate(target, assertSource, await select(), signal, accept);
-      return witness;
     });
   const initial = params.initial
     ? params.initial.anchor

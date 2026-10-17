@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createFailureMessage } from "../../../../packages/agent-core/src/turn-interruption.js";
 import {
+  appendTranscriptMessage,
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
@@ -71,6 +72,40 @@ function expectCapturedCurrentUserPrefix(
       },
     }),
   );
+}
+
+/** Matches the Talk relay voice writer's finalized speech records. */
+function checkingAcknowledgmentSpeech() {
+  return {
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text: "Ich prüfe das kurz mit OpenClaw." }],
+    provenance: { kind: "realtime_voice" as const, sourceChannel: "talk" as const },
+    timestamp: 5,
+  };
+}
+
+/** Finalize Talk speech between the manager's reload and the awaited current-turn read. */
+function appendTalkTranscriptDuringReplayPreparation(
+  manager: SessionManager,
+  target: NonNullable<ReturnType<SessionManager["getSessionTarget"]>>,
+  onReloadCall: number,
+  message: { role: "user" | "assistant"; content: unknown; timestamp: number } & Record<
+    string,
+    unknown
+  > = checkingAcknowledgmentSpeech(),
+): void {
+  const reload = manager.reloadPersistedTranscriptAsync.bind(manager);
+  let reloadCalls = 0;
+  vi.spyOn(manager, "reloadPersistedTranscriptAsync").mockImplementation(async (signal) => {
+    await reload(signal);
+    if (++reloadCalls === onReloadCall) {
+      await appendTranscriptMessage(target, {
+        eventId: "concurrent-talk-speech",
+        message: message as never,
+        now: 5,
+      });
+    }
+  });
 }
 
 describe("context engine bootstrap", () => {
@@ -390,6 +425,44 @@ describe("interrupted canonical user replay", () => {
       expect(nativeReadFailures).toEqual([]);
     },
   );
+
+  it.each([
+    { phase: "initial preparation", onReloadCall: 1 },
+    { phase: "replay closure", onReloadCall: 2 },
+  ] as const)(
+    "adopts the consult when Talk speech finalizes during $phase",
+    async ({ onReloadCall }) => {
+      await withInterruptedTurn(false, async (fixture) => {
+        const prepared = await fixture.prepare((manager) => {
+          appendTalkTranscriptDuringReplayPreparation(manager, fixture.target, onReloadCall);
+        });
+        expect(prepared.prepareInitialUserTurnReplay).toBeTypeOf("function");
+        const admit = await prepared.prepareInitialUserTurnReplay!();
+        expect(admit).toBeTypeOf("function");
+        const admitted: string[] = [];
+        await admit!(() => admitted.push("admitted"));
+        await expect(admit!(() => admitted.push("again"))).rejects.toThrow(/already consumed/);
+        expect(admitted).toEqual(["admitted"]);
+        // Finalized speech remains in history next to the adopted consult.
+        expect(JSON.stringify(loadTranscriptEventsSync(fixture.target))).toContain(
+          "Ich prüfe das kurz mit OpenClaw.",
+        );
+      });
+    },
+  );
+
+  it("does not adopt the consult when a newer user turn is admitted concurrently", async () => {
+    await withInterruptedTurn(false, async (fixture) => {
+      const prepared = await fixture.prepare((manager) => {
+        appendTalkTranscriptDuringReplayPreparation(manager, fixture.target, 1, {
+          role: "user",
+          content: "A newer admitted task",
+          timestamp: 5,
+        });
+      });
+      expect(await prepared.prepareInitialUserTurnReplay?.()).toBeUndefined();
+    });
+  });
 
   it("reports a replayed durable user as persisted when its append is suppressed", async () => {
     await withInterruptedTurn(
