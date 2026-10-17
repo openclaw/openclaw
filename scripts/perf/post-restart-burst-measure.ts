@@ -904,7 +904,14 @@ async function settleWorktreeOperations<T>(operations: Promise<T>[]): Promise<T[
 async function settleArchivedWorktreeCleanup(client: ReturnType<typeof createGatewayWsClient>) {
   const deadline = performance.now() + 60_000;
   let jobId: string | undefined;
-  while (performance.now() < deadline) {
+  for (let firstPoll = true; performance.now() < deadline; firstPoll = false) {
+    // Receipt polls consume the same 30-per-minute control-plane budget as GC requests.
+    if (!firstPoll) {
+      await delay(2_100);
+    }
+    if (performance.now() >= deadline) {
+      break;
+    }
     let receipt: unknown;
     try {
       receipt = await rpc(
@@ -934,7 +941,6 @@ async function settleArchivedWorktreeCleanup(client: ReturnType<typeof createGat
       return receipt;
     }
     jobId = receipt.jobId;
-    await delay(100);
   }
   throw new Error("Archive cleanup did not settle within 60 seconds");
 }
