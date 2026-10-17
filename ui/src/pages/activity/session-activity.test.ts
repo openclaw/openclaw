@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { activityPersonFromPath } from "../../app-route-paths.ts";
 import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import { useSessionActivityControllerFixture } from "./session-activity-controller.test-support.ts";
@@ -65,12 +65,18 @@ function result(sessions: GatewaySessionRow[]): SessionsListResult {
 
 describe("session activity projection", () => {
   it.each(["main", "codex"])("does not invent an avatar for ownerless %s sessions", (agentId) => {
-    expect(sessionActivityOwner({ key: `agent:${agentId}:main`, kind: "direct", agentId })).toEqual(
-      { id: agentId, name: agentId, avatarUrl: undefined, watchedSessions: [] },
-    );
+    expect(
+      sessionActivityOwner({ key: `agent:${agentId}:main`, kind: "direct", agentId }, null),
+    ).toEqual({ id: agentId, name: agentId, avatarUrl: undefined, watchedSessions: [] });
   });
 
   it("uses the advertised owner's avatar instead of the creator's avatar", () => {
+    const agents: AgentsListResult = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main", identity: { avatarUrl: "/avatar/main?roster=1" } }],
+    };
     const row: GatewaySessionRow = {
       key: "agent:main:work",
       kind: "direct",
@@ -78,11 +84,11 @@ describe("session activity projection", () => {
       createdActor: { type: "agent", id: "main", avatarUrl: "/avatar/main?v=1" },
       owner: { actor: { type: "agent", id: "codex", label: "Codex" } },
     };
-    expect(sessionActivityOwner(row).avatarUrl).toBeUndefined();
+    expect(sessionActivityOwner(row, agents).avatarUrl).toBeUndefined();
     row.owner!.actor.avatarUrl = "/avatar/codex?v=2";
-    expect(sessionActivityOwner(row).avatarUrl).toBe("/avatar/codex?v=2");
+    expect(sessionActivityOwner(row, agents).avatarUrl).toBe("/avatar/codex?v=2");
     delete row.owner;
-    expect(sessionActivityOwner(row).avatarUrl).toBe("/avatar/main?v=1");
+    expect(sessionActivityOwner(row, agents).avatarUrl).toBe("/avatar/main?v=1");
   });
 
   it("refreshes decorative names while retaining exact references, longer prefixes, filters and anchors", () => {
