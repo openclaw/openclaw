@@ -32,6 +32,32 @@ function benchRun(
   return { run, cpu: cpuReport(rows), rpcs };
 }
 
+function runReport(directory: string) {
+  return spawnSync(
+    process.execPath,
+    [
+      path.resolve("scripts/control-ui-bench-fidelity.ts"),
+      "--board",
+      path.join(directory, "board"),
+      "--board-live",
+      path.join(directory, "live.txt"),
+      "--board-rpcs",
+      path.join(directory, "rpcs.json"),
+      "--chat",
+      path.join(directory, "chat"),
+      "--chat-live",
+      path.join(directory, "live.txt"),
+      "--chat-rpcs",
+      path.join(directory, "rpcs.json"),
+      "--analyzer",
+      path.join(directory, "analyzer.cjs"),
+      "--python",
+      process.execPath,
+    ],
+    { encoding: "utf8" },
+  );
+}
+
 describe("Control UI bench fidelity report", () => {
   it("reads only app-function data, deduplicates aliases and ignores multiline bodies", () => {
     const report = cpuReport([
@@ -123,35 +149,85 @@ describe("Control UI bench fidelity report", () => {
 
   it.each([undefined, "chat"])("rejects a board directory whose recorded route is %s", (route) => {
     const directory = tempDirs.make("openclaw-fidelity-route-");
-    mkdirSync(path.join(directory, "assets"));
+    mkdirSync(path.join(directory, "board"));
     writeFileSync(
-      path.join(directory, "summary.json"),
+      path.join(directory, "board", "summary.json"),
       JSON.stringify({ route, bundleDir: directory }),
     );
-    const result = spawnSync(
-      process.execPath,
-      [
-        path.resolve("scripts/control-ui-bench-fidelity.ts"),
-        "--board",
-        directory,
-        "--board-live",
-        "unused",
-        "--board-rpcs",
-        "unused",
-        "--chat",
-        directory,
-        "--chat-live",
-        "unused",
-        "--chat-rpcs",
-        "unused",
-        "--analyzer",
-        "unused",
-      ],
-      { encoding: "utf8" },
-    );
+    const result = runReport(directory);
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("board: summary.json route must be board");
+  });
+
+  it.each([false, true])("rejects incomplete reload inventories (completed=%s)", (completed) => {
+    const directory = tempDirs.make("openclaw-fidelity-incomplete-");
+    const cpu = `profile (1) busy 1000 ms idle 0 ms\n--- inclusive by function (app sources, top 70)\n${twentyFunctions.join("\n")}`;
+    writeFileSync(path.join(directory, "live.txt"), cpu);
+    writeFileSync(path.join(directory, "rpcs.json"), JSON.stringify({ "sessions.list": 5 }));
+    writeFileSync(
+      path.join(directory, "analyzer.cjs"),
+      `process.stdout.write(${JSON.stringify(cpu)});`,
+    );
+    for (const route of ["board", "chat"]) {
+      const capture = path.join(directory, route);
+      mkdirSync(path.join(capture, "assets"), { recursive: true });
+      writeFileSync(path.join(capture, "assets", "app.js.map"), "{}");
+      writeFileSync(
+        path.join(capture, "summary.json"),
+        JSON.stringify({
+          route,
+          bundleDir: capture,
+          requestedRuns: route === "board" && completed ? 2 : 1,
+          completed: route === "chat" || completed,
+        }),
+      );
+      writeFileSync(
+        path.join(capture, "run-1.metrics.json"),
+        JSON.stringify({
+          pending: 0,
+          queued: 0,
+          rpcs: Array.from({ length: 5 }, () => ({ method: "sessions.list" })),
+        }),
+      );
+      writeFileSync(
+        path.join(capture, "run-1.cpuprofile"),
+        JSON.stringify({
+          nodes: [
+            {
+              id: 1,
+              callFrame: {
+                functionName: "Panel0",
+                scriptId: "1",
+                url: "app.js",
+                lineNumber: 0,
+                columnNumber: 0,
+              },
+            },
+          ],
+          samples: [1],
+          timeDeltas: [1000],
+          startTime: 0,
+          endTime: 1000,
+        }),
+      );
+    }
+    const result = runReport(directory);
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("board: benchmark capture is incomplete");
+  });
+
+  it("does not reuse a moved named frame for another live source location", () => {
+    const live = cpuReport([
+      "100 components/panel.tsx:20 renderBeta",
+      "90 components/panel.tsx:10 renderAlpha",
+    ]);
+    const result = compareFidelity("board", live, {}, [
+      benchRun(1, ["90 components/panel.tsx:20 renderAlpha"], {}),
+    ]);
+    expect(result.functions.map((fn) => fn.matches)).toEqual([["not observed"], ["name"]]);
+    expect(result.matchedFunctions).toBe(1);
   });
 
   it("requires fifteen distinct locations, not aliases, and rejects fewer than twenty references", () => {

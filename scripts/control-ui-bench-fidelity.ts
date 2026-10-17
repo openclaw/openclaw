@@ -165,10 +165,25 @@ export function compareFidelity(
   if (!runs.length) {
     throw new Error(`${name}: no measured reloads`);
   }
-  const functions = live.functions.slice(0, TOP_FUNCTIONS).map((fn) => {
+  const referenceFunctions = live.functions.slice(0, TOP_FUNCTIONS);
+  const runMatches = runs.map((run) => {
+    const candidates = live.functions.map((fn) => matchingFunction(fn, run.cpu, live));
+    return candidates.map((candidate) => {
+      if (!candidate) {
+        return undefined;
+      }
+      const claims = candidates.filter((other) => other?.fn === candidate.fn);
+      const named = claims.filter((claim) => claim?.match === "name");
+      // A moved named function owns its frame over a stale source-line match.
+      return claims.length === 1 || (named.length === 1 && named[0] === candidate)
+        ? candidate
+        : undefined;
+    });
+  });
+  const functions = referenceFunctions.map((fn, index) => {
     const liveShare = (fn.milliseconds / live.busyMs) * 100;
-    const samples = runs.map((run) => {
-      const match = matchingFunction(fn, run.cpu, live);
+    const samples = runs.map((run, runIndex) => {
+      const match = runMatches[runIndex]?.[index];
       return { match, share: match ? (match.fn.milliseconds / run.cpu.busyMs) * 100 : null };
     });
     const observed = samples.flatMap((sample) => (sample.share === null ? [] : [sample.share]));
@@ -283,16 +298,31 @@ async function readScenario(
   if (summary.route !== scenario.name) {
     throw new Error(`${scenario.name}: summary.json route must be ${scenario.name}`);
   }
+  const requestedRuns = summary.requestedRuns;
+  if (
+    summary.completed !== true ||
+    typeof requestedRuns !== "number" ||
+    !Number.isSafeInteger(requestedRuns) ||
+    requestedRuns < 1
+  ) {
+    throw new Error(`${scenario.name}: benchmark capture is incomplete`);
+  }
+  const runNumber = (filename: string) => Number(filename.slice(4, filename.indexOf(".")));
+  const runFiles = (await readdir(directory))
+    .filter((filename) => /^run-\d+\.metrics\.json$/u.test(filename))
+    .toSorted((a, b) => runNumber(a) - runNumber(b));
+  if (
+    runFiles.length !== requestedRuns ||
+    runFiles.some((filename, index) => runNumber(filename) !== index + 1)
+  ) {
+    throw new Error(`${scenario.name}: benchmark capture is incomplete`);
+  }
   const assets = scenario.assets ?? path.join(summary.bundleDir, "assets");
   if (!(await readdir(assets)).some((filename) => filename.endsWith(".js.map"))) {
     throw new Error(`${scenario.name}: no JavaScript source maps in the bundle assets`);
   }
   const live = parseFidelityCpuReport(await readFile(scenario.liveCpu, "utf8"));
   const liveRpcs = parseFidelityRpcCounts(await readJson(scenario.liveRpcs));
-  const runNumber = (filename: string) => Number(filename.slice(4, filename.indexOf(".")));
-  const runFiles = (await readdir(directory))
-    .filter((filename) => /^run-\d+\.metrics\.json$/u.test(filename))
-    .toSorted((a, b) => runNumber(a) - runNumber(b));
   const scratch = await mkdtemp(path.join(tmpdir(), "control-ui-fidelity-"));
   try {
     const runs: BenchRun[] = [];
