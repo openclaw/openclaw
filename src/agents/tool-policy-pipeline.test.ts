@@ -25,20 +25,22 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 function expectAudit(
-  message: string,
   rule: string,
   ruleKind: "allow" | "deny",
   tool: string,
   matchedRules?: string[],
 ) {
-  expect(toolPolicyAuditDebug).toHaveBeenCalledWith(message, {
-    rule,
-    ruleKind,
-    removedToolCount: 1,
-    removedTools: [tool],
-    removedToolsTruncated: false,
-    ...(matchedRules ? { matchedRules } : {}),
-  });
+  expect(toolPolicyAuditDebug).toHaveBeenCalledWith(
+    `tool policy removed 1 tool(s) via ${rule}: ${tool}${matchedRules ? `; matched ${matchedRules.join(", ")}` : ""}`,
+    {
+      rule,
+      ruleKind,
+      removedToolCount: 1,
+      removedTools: [tool],
+      removedToolsTruncated: false,
+      ...(matchedRules ? { matchedRules } : {}),
+    },
+  );
 }
 type DummyTool = { name: string };
 type PipelineParams = Parameters<typeof applyToolPolicyPipeline<DummyTool>>[0];
@@ -50,17 +52,26 @@ function runPipeline(params: Pick<PipelineParams, "steps"> & Partial<PipelinePar
     ...params,
   });
 }
+function runPolicy(
+  names: string[],
+  policy: PipelineParams["steps"][number]["policy"],
+  label = "tools",
+  toolMeta: PipelineParams["toolMeta"] = () => undefined,
+  stripPluginOnlyAllowlist = false,
+) {
+  return runPipeline({
+    tools: names.map((name) => ({ name })),
+    toolMeta,
+    steps: [{ policy, label, stripPluginOnlyAllowlist }],
+  });
+}
 function filterNames(
   names: string[],
   policy: PipelineParams["steps"][number]["policy"],
   toolMeta: PipelineParams["toolMeta"] = () => undefined,
   label = "tools",
 ) {
-  return runPipeline({
-    tools: names.map((name) => ({ name })),
-    toolMeta,
-    steps: [{ policy, label, stripPluginOnlyAllowlist: true }],
-  })
+  return runPolicy(names, policy, label, toolMeta, true)
     .map((tool) => tool.name)
     .toSorted();
 }
@@ -129,12 +140,13 @@ describe("tool-policy-pipeline", () => {
     "applies the Canvas family uniformly even when stale metadata claims show_widget ($policy)",
     ({ expected, policy }) => {
       expect(
-        filterNames(["exec", "show_widget", "canvas"], policy, (tool) => {
-          if (tool.name === "show_widget") {
-            return { pluginId: "discord" };
-          }
-          return tool.name === "canvas" ? { pluginId: "canvas" } : undefined;
-        }),
+        filterNames(["exec", "show_widget", "canvas"], policy, (tool) =>
+          tool.name === "show_widget"
+            ? { pluginId: "discord" }
+            : tool.name === "canvas"
+              ? { pluginId: "canvas" }
+              : undefined,
+        ),
       ).toEqual(expected);
     },
   );
@@ -199,20 +211,14 @@ describe("tool-policy-pipeline", () => {
   ])("declared context excludes a $name and keeps eligible tools", ({ plugins, toolDenylist }) => {
     const config = { plugins };
     const workspaceDir = process.cwd();
-    const manifestRegistry = makeRegistry([
-      {
-        id: "Allowed-Owner",
-        origin: "bundled",
+    const manifestRegistry = makeRegistry(
+      ["Allowed", "Blocked"].map((owner) => ({
+        id: `${owner}-Owner`,
+        origin: "bundled" as const,
         channels: [],
-        contracts: { tools: ["allowed_tool"] },
-      },
-      {
-        id: "Blocked-Owner",
-        origin: "bundled",
-        channels: [],
-        contracts: { tools: ["blocked_tool"] },
-      },
-    ]);
+        contracts: { tools: [`${owner.toLowerCase()}_tool`] },
+      })),
+    );
     setCurrentPluginMetadataSnapshot(
       createPluginMetadataSnapshot({ config, manifestRegistry, workspaceDir }),
       { config, workspaceDir },
@@ -366,71 +372,29 @@ describe("tool-policy-pipeline", () => {
   });
 
   test("splits mixed allow and deny policy audit entries by cause", () => {
-    const tools = [{ name: "exec" }, { name: "browser" }, { name: "write" }];
-
-    runPipeline({
-      tools,
-      steps: [
-        {
-          policy: { allow: ["exec"], deny: ["browser"] },
-          label: "agents.worker.tools.allow",
-        },
-      ],
-    });
-
-    expectAudit(
-      "tool policy removed 1 tool(s) via agents.worker.tools.deny: browser; matched browser",
-      "agents.worker.tools.deny",
-      "deny",
-      "browser",
-      ["browser"],
-    );
-    expectAudit(
-      "tool policy removed 1 tool(s) via agents.worker.tools.allow: write",
+    runPolicy(
+      ["exec", "browser", "write"],
+      { allow: ["exec"], deny: ["browser"] },
       "agents.worker.tools.allow",
-      "allow",
-      "write",
     );
+
+    expectAudit("agents.worker.tools.deny", "deny", "browser", ["browser"]);
+    expectAudit("agents.worker.tools.allow", "allow", "write");
     expect(toolPolicyAuditInfo).not.toHaveBeenCalled();
   });
 
   test("sanitizes audit labels and tool names before logging", () => {
-    const tools = [{ name: "exec\nbad" }];
+    runPolicy(["exec\nbad"], { allow: ["read"] }, "agents.worker\nbad.tools.allow");
 
-    runPipeline({
-      tools,
-      steps: [
-        {
-          policy: { allow: ["read"] },
-          label: "agents.worker\nbad.tools.allow",
-        },
-      ],
-    });
-
-    expectAudit(
-      "tool policy removed 1 tool(s) via agents.worker\\nbad.tools.allow: exec\\nbad",
-      "agents.worker\\nbad.tools.allow",
-      "allow",
-      "exec\\nbad",
-    );
+    expectAudit("agents.worker\\nbad.tools.allow", "allow", "exec\\nbad");
     expect(toolPolicyAuditInfo).not.toHaveBeenCalled();
   });
 
   test("truncates audit fields without splitting surrogate pairs", () => {
-    const tools = [{ name: "exec" }];
     const labelPrefix = "a".repeat(159);
-
-    runPipeline({
-      tools,
-      steps: [
-        {
-          policy: { allow: ["read"] },
-          label: `${labelPrefix}😀suffix`,
-        },
-      ],
-    });
+    runPolicy(["exec"], { allow: ["read"] }, `${labelPrefix}😀suffix`);
 
     const rule = `${labelPrefix}...`;
-    expectAudit(`tool policy removed 1 tool(s) via ${rule}: exec`, rule, "allow", "exec");
+    expectAudit(rule, "allow", "exec");
   });
 });

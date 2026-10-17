@@ -88,17 +88,13 @@ describe("bounded tool detail previews", () => {
   });
 
   it.each([
-    { value: [null, "", false, 0], expected: undefined, includeFalsy: false },
-    { value: [null, "", false, 0], expected: "false, 0", includeFalsy: true },
-    { value: ["a", "b", "c", "", null], expected: "a, b, c", includeFalsy: false },
-    { value: ["a", "b", "c", "", "d"], expected: "a, b, c…", includeFalsy: false },
-    { value: [["a", "b", "c", "d"], [], "e"], expected: "a, b, c…, e", includeFalsy: false },
-    {
-      value: "\n  First line\r\nSecond line\nThird line",
-      expected: "First line",
-      includeFalsy: false,
-    },
-  ])("preserves compact detail semantics: $value", ({ value, expected, includeFalsy }) => {
+    [[null, "", false, 0], undefined, false],
+    [[null, "", false, 0], "false, 0", true],
+    [["a", "b", "c", "", null], "a, b, c", false],
+    [["a", "b", "c", "", "d"], "a, b, c…", false],
+    [[["a", "b", "c", "d"], [], "e"], "a, b, c…, e", false],
+    ["\n  First line\r\nSecond line\nThird line", "First line", false],
+  ] as const)("preserves compact detail semantics: %j", (value, expected, includeFalsy) => {
     expect(preview(value, includeFalsy)).toBe(expected);
   });
 });

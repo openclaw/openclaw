@@ -14,6 +14,7 @@ function fields(count: number, name: (index: number) => string, value: TSchema =
     Object.fromEntries(Array.from({ length: count }, (_, i) => [name(i), value])),
   );
 }
+const closedIdSchema = closedObject({ id: Type.String() });
 
 describe("tool schema hints", () => {
   it("keeps unknown leaves and dictionaries honest in full declarations", () => {
@@ -77,11 +78,7 @@ describe("tool schema hints", () => {
       conversations: Type.Array(
         closedObject({
           conversationRef: Type.String(),
-          kind: Type.Union([
-            Type.Literal("direct"),
-            Type.Literal("group"),
-            Type.Literal("channel"),
-          ]),
+          kind: Type.Union(["direct", "group", "channel"].map((kind) => Type.Literal(kind))),
         }),
       ),
     });
@@ -92,16 +89,7 @@ describe("tool schema hints", () => {
   });
 
   it("renders up to eight literal union values", () => {
-    const values = [
-      "env",
-      "agent",
-      "defaults",
-      "model",
-      "provider",
-      "implicit",
-      "session",
-      "session-key",
-    ];
+    const values = "env agent defaults model provider implicit session session-key".split(" ");
     const eight = Type.Union(values.map((value) => Type.Literal(value)));
     const nine = Type.Union([...values, "extra"].map((value) => Type.Literal(value)));
 
@@ -166,15 +154,7 @@ describe("tool schema hints", () => {
 
   it("includes null in AJV-style nullable output hints", () => {
     expect(outputHint({ type: "string", nullable: true })).toBe("string | null");
-    expect(
-      outputHint({
-        type: "object",
-        nullable: true,
-        properties: { id: { type: "string" } },
-        required: ["id"],
-        additionalProperties: false,
-      }),
-    ).toBe("{ id: string } | null");
+    expect(outputHint({ ...closedIdSchema, nullable: true })).toBe("{ id: string } | null");
     expect(outputHint({ type: "string", nullable: true, enum: ["ready"] })).toBe('"ready"');
     expect(outputHint({ type: "string", nullable: "yes" })).toBeUndefined();
   });
@@ -186,22 +166,16 @@ describe("tool schema hints", () => {
     expect(outputHint(cyclic)).toBeUndefined();
     expect(outputHint({ $ref: "#/$defs/result" })).toBeUndefined();
     expect(outputHint({ anyOf: [] })).toBeUndefined();
-    const closedBaseShape = {
-      type: "object",
-      properties: { id: { type: "string" } },
-      required: ["id"],
-      additionalProperties: false,
-    };
-    expect(outputHint({ ...closedBaseShape, oneOf: [] })).toBeUndefined();
+    expect(outputHint({ ...closedIdSchema, oneOf: [] })).toBeUndefined();
     expect(
       outputHint({
-        ...closedBaseShape,
+        ...closedIdSchema,
         anyOf: Array.from({ length: 5 }, (_unused, index) => ({ const: index })),
       }),
     ).toBeUndefined();
     expect(
       outputHint({
-        ...closedBaseShape,
+        ...closedIdSchema,
         anyOf: [{ const: "a" }],
         oneOf: [{ const: "b" }],
       }),
