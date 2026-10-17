@@ -1,8 +1,3 @@
-/**
- * Tests apply_patch execution and path safety.
- * Covers host/sandbox file operations, workspace guards, symlink races, and
- * update hunk behavior.
- */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -40,11 +35,17 @@ async function withWorkspaceTempDir<T>(fn: (dir: string) => Promise<T>) {
   }
 }
 
-function buildAddFilePatch(targetPath: string): string {
-  return `*** Begin Patch
-*** Add File: ${targetPath}
-+escaped
-*** End Patch`;
+function buildAddFilePatch(targetPath: string, content = "escaped"): string {
+  return `*** Begin Patch\n*** Add File: ${targetPath}\n+${content}\n*** End Patch`;
+}
+
+function buildDeletePatch(target: string): string {
+  return `*** Begin Patch\n*** Delete File: ${target}\n*** End Patch`;
+}
+
+function buildUpdatePatch(target: string, hunk: string, moveTo?: string): string {
+  const move = moveTo === undefined ? "" : `*** Move to: ${moveTo}\n`;
+  return `*** Begin Patch\n*** Update File: ${target}\n${move}@@\n${hunk}\n*** End Patch`;
 }
 
 it("fences apply_patch after a file read when permissions change", async () => {
@@ -92,13 +93,7 @@ async function expectOutsideWriteRejected(params: {
 }
 
 async function expectMissingPath(operation: Promise<unknown>) {
-  let error: NodeJS.ErrnoException | undefined;
-  try {
-    await operation;
-  } catch (caught) {
-    error = caught as NodeJS.ErrnoException;
-  }
-  expect(error?.code).toBe("ENOENT");
+  await expect(operation).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 describe("applyPatch", () => {
@@ -130,12 +125,7 @@ describe("applyPatch", () => {
     });
   });
 
-  const priceUpdatePatch = `*** Begin Patch
-*** Update File: source.txt
-@@
--price: 5
-+price: 7
-*** End Patch`;
+  const priceUpdatePatch = buildUpdatePatch("source.txt", "-price: 5\n+price: 7");
 
   it.each([
     { name: "workspace-confined host", workspaceOnly: true },
@@ -176,10 +166,7 @@ describe("applyPatch", () => {
         const target = path.join(dir, "notes.txt");
         await fs.writeFile(target, "IMPORTANT USER DATA\nsecond line\n", "utf8");
         const tool = createApplyPatchTool({ cwd: dir, workspaceOnly });
-        const patch = `*** Begin Patch
-*** Add File: notes.txt
-+replacement
-*** End Patch`;
+        const patch = buildAddFilePatch("notes.txt", "replacement");
 
         await expect(
           tool.execute("call-add-existing", { input: patch }, undefined),
@@ -198,10 +185,7 @@ describe("applyPatch", () => {
           const link = path.join(dir, "notes.txt");
           await fs.writeFile(target, "keep me\n", "utf8");
           await fs.symlink("target.txt", link);
-          const patch = `*** Begin Patch
-*** Add File: notes.txt
-+replacement
-*** End Patch`;
+          const patch = buildAddFilePatch("notes.txt", "replacement");
 
           await expect(applyPatch(patch, { cwd: dir, workspaceOnly })).rejects.toThrow(
             workspaceOnly ? /symlink/i : /Cannot create notes\.txt: the file already exists/,
@@ -218,10 +202,7 @@ describe("applyPatch", () => {
     memory.mkdirp.mockImplementation(async () => {
       memory.files.set("/sandbox/notes.txt", "written by another writer\n");
     });
-    const patch = `*** Begin Patch
-*** Add File: notes.txt
-+replacement
-*** End Patch`;
+    const patch = buildAddFilePatch("notes.txt", "replacement");
 
     await expect(applyPatch(patch, memory.options)).rejects.toThrow(
       /Cannot create notes\.txt: the file already exists/,
@@ -235,14 +216,7 @@ describe("applyPatch", () => {
     memory.mkdirp.mockImplementation(async () => {
       memory.files.set("/sandbox/dest.txt", "written by another writer\n");
     });
-    const patch = `*** Begin Patch
-*** Update File: source.txt
-*** Move to: dest.txt
-@@
- foo
--bar
-+baz
-*** End Patch`;
+    const patch = buildUpdatePatch("source.txt", " foo\n-bar\n+baz", "dest.txt");
 
     await expect(applyPatch(patch, memory.options)).rejects.toThrow(
       /Cannot create dest\.txt: the file already exists/,
@@ -267,10 +241,7 @@ describe("applyPatch", () => {
 
   it("fails closed on sandbox adds when atomic create is unavailable", async () => {
     const memory = createMemoryPatchSandbox({}, { supportsExclusiveCreate: false });
-    const patch = `*** Begin Patch
-*** Add File: notes.txt
-+new
-*** End Patch`;
+    const patch = buildAddFilePatch("notes.txt", "new");
 
     await expect(applyPatch(patch, memory.options)).rejects.toThrow(
       /does not support atomic file creation/,
@@ -282,14 +253,7 @@ describe("applyPatch", () => {
     const memory = createMemoryPatchSandbox({
       "source.txt": "foo\nbar\n",
     });
-    const patch = `*** Begin Patch
-*** Update File: source.txt
-*** Move to: dest.txt
-@@
- foo
--bar
-+baz
-*** End Patch`;
+    const patch = buildUpdatePatch("source.txt", " foo\n-bar\n+baz", "dest.txt");
 
     const result = await applyPatch(patch, memory.options);
 
@@ -310,14 +274,7 @@ describe("applyPatch", () => {
         relativePath: filePath,
         containerPath: path.posix.isAbsolute(filePath) ? filePath : `/sandbox/${filePath}`,
       });
-      const patch = `*** Begin Patch
-*** Update File: source.txt
-*** Move to: ${movePath}
-@@
- foo
--bar
-+baz
-*** End Patch`;
+      const patch = buildUpdatePatch("source.txt", " foo\n-bar\n+baz", movePath);
 
       const result = await applyPatch(patch, memory.options);
 
@@ -398,12 +355,7 @@ describe("applyPatch", () => {
       const memory = createMemoryPatchSandbox({
         "source.txt": `${sourceLine}\n`,
       });
-      const patch = `*** Begin Patch
-*** Update File: source.txt
-@@
--${patchLine}
-+updated
-*** End Patch`;
+      const patch = buildUpdatePatch("source.txt", `-${patchLine}\n+updated`);
 
       await applyPatch(patch, memory.options);
 
@@ -442,10 +394,7 @@ describe("applyPatch", () => {
       await fs.mkdir(outsideDir, { recursive: true });
       await fs.symlink(outsideFile, linkPath);
 
-      const patch = `*** Begin Patch
-*** Add File: jump
-+pwned
-*** End Patch`;
+      const patch = buildAddFilePatch("jump", "pwned");
 
       try {
         await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
@@ -469,12 +418,7 @@ describe("applyPatch", () => {
       await fs.writeFile(target, "initial\n", "utf8");
       await fs.symlink(target, linkPath);
 
-      const patch = `*** Begin Patch
-*** Update File: link.txt
-@@
--initial
-+updated
-*** End Patch`;
+      const patch = buildUpdatePatch("link.txt", "-initial\n+updated");
 
       await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
         // fs-safe 0.5.2 reports the symlink rejection through the boundary-read
@@ -498,9 +442,7 @@ describe("applyPatch", () => {
       // requiring SeCreateSymbolicLinkPrivilege.
       await fs.symlink(outsideDir, linkDir, process.platform === "win32" ? "junction" : undefined);
 
-      const patch = `*** Begin Patch
-*** Delete File: linkdir/victim.txt
-*** End Patch`;
+      const patch = buildDeletePatch("linkdir/victim.txt");
 
       try {
         await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
@@ -523,10 +465,7 @@ describe("applyPatch", () => {
       );
       const relativeEscape = path.relative(dir, escapedPath);
 
-      const patch = `*** Begin Patch
-*** Add File: ${relativeEscape}
-+escaped
-*** End Patch`;
+      const patch = buildAddFilePatch(relativeEscape);
 
       try {
         const result = await applyPatch(patch, { cwd: dir, workspaceOnly: false });
@@ -555,9 +494,7 @@ describe("applyPatch", () => {
           process.platform === "win32" ? "junction" : undefined,
         );
 
-        const patch = `*** Begin Patch
-*** Delete File: link
-*** End Patch`;
+        const patch = buildDeletePatch("link");
 
         const result = await applyPatch(patch, { cwd: dir });
         expect(result.summary.deleted).toEqual(["link"]);
@@ -583,13 +520,7 @@ describe("applyPatch", () => {
         await fs.writeFile(sourcePath, "before\n", "utf8");
         await fs.symlink(outsideDir, linkDir);
 
-        const patch = `*** Begin Patch
-*** Update File: source.txt
-*** Move to: link/moved.txt
-@@
--before
-+after
-*** End Patch`;
+        const patch = buildUpdatePatch("source.txt", "-before\n+after", "link/moved.txt");
 
         await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
           /symlink escapes sandbox root/i,
@@ -618,9 +549,7 @@ describe("applyPatch", () => {
           targetPath: inside,
         });
 
-        const patch = `*** Begin Patch
-*** Delete File: slot/target.txt
-*** End Patch`;
+        const patch = buildDeletePatch("slot/target.txt");
 
         try {
           await withRealpathSymlinkRebindRace({
@@ -656,10 +585,7 @@ describe("applyPatch", () => {
           targetPath: inside,
         });
 
-        const patch = `*** Begin Patch
-*** Add File: slot/nested/deep/file.txt
-+safe
-*** End Patch`;
+        const patch = buildAddFilePatch("slot/nested/deep/file.txt", "safe");
 
         try {
           await withRealpathSymlinkRebindRace({
@@ -745,12 +671,11 @@ describe("applyPatch through directory aliases", () => {
         }
         const target = aliasedRoot ? path.join(dir, "alias", "note.txt") : "alias/note.txt";
 
-        const patch = `*** Begin Patch
-*** Update File: ${selfMove ? "real/note.txt\n*** Move to: alias/note.txt" : target}
-@@
--initial
-+updated
-*** End Patch`;
+        const patch = buildUpdatePatch(
+          selfMove ? "real/note.txt" : target,
+          "-initial\n+updated",
+          selfMove ? "alias/note.txt" : undefined,
+        );
 
         await applyPatch(patch, { cwd });
         await expect(fs.readFile(path.join(realDir, "note.txt"), "utf8")).resolves.toBe(
@@ -820,7 +745,7 @@ describe("apply_patch unrestricted host writes", () => {
     return filePath;
   }
 
-  function failPrefixWrites(filePath: string, originalByteLength: number) {
+  function failWrites(filePath: string, originalByteLength: number, phase: "prefix" | "extension") {
     const realOpen = fs.open.bind(fs);
     vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
       const handle = await realOpen(target, flags as never, mode as never);
@@ -833,32 +758,13 @@ describe("apply_patch unrestricted host writes", () => {
           length: number,
           position: number,
         ) => {
-          if (!failed && position < originalByteLength) {
+          if (phase === "prefix" && !failed && position < originalByteLength) {
             failed = true;
             await realWrite(buffer, offset, Math.max(1, Math.floor(length / 2)), position);
             throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
           }
-          return realWrite(buffer, offset, length, position);
-        }) as typeof handle.write;
-      }
-      return handle;
-    });
-  }
-
-  function failExtensionWrites(filePath: string, originalByteLength: number) {
-    const realOpen = fs.open.bind(fs);
-    vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
-      const handle = await realOpen(target, flags as never, mode as never);
-      if (String(target) === filePath && flags === "r+") {
-        const realWrite = handle.write.bind(handle);
-        handle.write = (async (
-          buffer: Buffer,
-          offset: number,
-          length: number,
-          position: number,
-        ) => {
           const result = await realWrite(buffer, offset, length, position);
-          if (position >= originalByteLength) {
+          if (phase === "extension" && position >= originalByteLength) {
             throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
           }
           return result;
@@ -868,23 +774,19 @@ describe("apply_patch unrestricted host writes", () => {
     });
   }
 
-  function buildUpdatePatch(filePath: string): string {
-    return `*** Begin Patch
-*** Update File: ${filePath}
-@@
--original
-+replacement
-*** End Patch`;
+  function hostUpdate(filePath: string) {
+    return applyPatch(buildUpdatePatch(filePath, "-original\n+replacement"), {
+      cwd: path.dirname(filePath),
+      workspaceOnly: false,
+    });
   }
 
   it("keeps the original host file when an update hunk fails partway through the write", async () => {
     const originalContent = `original\n${"important content\n".repeat(64)}`;
     const filePath = await createHostFile(originalContent);
-    failPrefixWrites(filePath, Buffer.byteLength(originalContent));
+    failWrites(filePath, Buffer.byteLength(originalContent), "prefix");
 
-    await expect(
-      applyPatch(buildUpdatePatch(filePath), { cwd: path.dirname(filePath), workspaceOnly: false }),
-    ).rejects.toThrow("disk full");
+    await expect(hostUpdate(filePath)).rejects.toThrow("disk full");
 
     await expect(fs.readFile(filePath, "utf8")).resolves.toBe(originalContent);
     await expect(fs.readdir(path.dirname(filePath))).resolves.toEqual(["important.txt"]);
@@ -893,11 +795,9 @@ describe("apply_patch unrestricted host writes", () => {
   it("keeps the original host file when an update hunk cannot extend the file", async () => {
     const originalContent = "original\n";
     const filePath = await createHostFile(originalContent);
-    failExtensionWrites(filePath, Buffer.byteLength(originalContent));
+    failWrites(filePath, Buffer.byteLength(originalContent), "extension");
 
-    await expect(
-      applyPatch(buildUpdatePatch(filePath), { cwd: path.dirname(filePath), workspaceOnly: false }),
-    ).rejects.toThrow("disk full");
+    await expect(hostUpdate(filePath)).rejects.toThrow("disk full");
 
     await expect(fs.readFile(filePath, "utf8")).resolves.toBe(originalContent);
     await expect(fs.readdir(path.dirname(filePath))).resolves.toEqual(["important.txt"]);
@@ -908,10 +808,7 @@ describe("apply_patch unrestricted host writes", () => {
     await fs.chmod(filePath, 0o640);
     const before = await fs.stat(filePath);
 
-    const result = await applyPatch(buildUpdatePatch(filePath), {
-      cwd: path.dirname(filePath),
-      workspaceOnly: false,
-    });
+    const result = await hostUpdate(filePath);
 
     expect(result.summary.modified).toEqual(["important.txt"]);
     await expect(fs.readFile(filePath, "utf8")).resolves.toBe("replacement\n");
