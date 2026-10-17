@@ -126,6 +126,82 @@ describe("createChannelApiRetryRunner", () => {
     expect(retryAfterMs).toHaveBeenCalledWith(error);
   });
 
+  it.each([
+    {
+      name: "skips empty root parameters",
+      error: { parameters: {}, response: { parameters: { retry_after: 1 } } },
+      delayMs: 1_000,
+    },
+    {
+      name: "skips a nonnumeric root hint",
+      error: { parameters: { retry_after: "1" }, response: { parameters: { retry_after: 1 } } },
+      delayMs: 1_000,
+    },
+    {
+      name: "skips a nonfinite root hint",
+      error: {
+        parameters: { retry_after: Number.NaN },
+        response: { parameters: { retry_after: 1 } },
+      },
+      delayMs: 1_000,
+    },
+    {
+      name: "skips empty response parameters",
+      error: { response: { parameters: {} }, error: { parameters: { retry_after: 1 } } },
+      delayMs: 1_000,
+    },
+    {
+      name: "skips a nonfinite response hint",
+      error: {
+        response: { parameters: { retry_after: Infinity } },
+        error: { parameters: { retry_after: 1 } },
+      },
+      delayMs: 1_000,
+    },
+    {
+      name: "skips empty root and response parameters",
+      error: {
+        parameters: {},
+        response: { parameters: {} },
+        error: { parameters: { retry_after: 1 } },
+      },
+      delayMs: 1_000,
+    },
+    {
+      name: "keeps a zero root hint ahead of nested hints",
+      error: { parameters: { retry_after: 0 }, response: { parameters: { retry_after: 1 } } },
+      delayMs: 400,
+    },
+    {
+      name: "keeps a finite root hint ahead of nested hints",
+      error: { parameters: { retry_after: 0.5 }, response: { parameters: { retry_after: 1 } } },
+      delayMs: 500,
+    },
+    {
+      name: "keeps a finite response hint ahead of nested error hints",
+      error: {
+        response: { parameters: { retry_after: 0.5 } },
+        error: { parameters: { retry_after: 1 } },
+      },
+      delayMs: 500,
+    },
+    {
+      name: "uses default backoff when every hint is invalid",
+      error: {
+        parameters: { retry_after: "1" },
+        response: { parameters: { retry_after: Number.NaN } },
+        error: { parameters: { retry_after: Infinity } },
+      },
+      delayMs: 400,
+    },
+  ])("$name", async ({ error, delayMs }) => {
+    await expectRetryDelay(
+      { retry: { attempts: 2, minDelayMs: 400, maxDelayMs: 1_000, jitter: 0 } },
+      { message: "429 Too Many Requests", ...error },
+      delayMs,
+    );
+  });
+
   it("keeps retry_after hints capped by maxDelayMs by default", async () => {
     await expectRetryDelay(
       { retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 30_000, jitter: 0 } },
