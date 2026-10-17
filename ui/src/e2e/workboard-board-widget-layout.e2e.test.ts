@@ -66,7 +66,7 @@ async function showDashboard(page: Page): Promise<void> {
 suite.define(() => {
   it("keeps paged cards visible in the compact grid at desktop and mobile widths", async () => {
     await suite.withPage({ viewport: { height: 900, width: 1280 } }, async ({ page }) => {
-      const cursor = { id: cards[1]!.id, position: cards[1]!.position, createdAt: 1 };
+      const cursor = { position: cards[1]!.position, createdAt: 1, id: cards[1]!.id };
       await installMockGateway(page, {
         ...workboardUi,
         sessionKey,
