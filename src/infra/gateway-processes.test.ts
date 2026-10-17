@@ -58,6 +58,15 @@ vi.mock("../channels/chat-meta.js", () => ({
 const { findVerifiedGatewayListenerPidsOnPortSync, signalVerifiedGatewayPidSync } =
   await import("./gateway-processes.js");
 
+const output = (stdout: string) => ({ error: null, status: 0, stdout });
+const spyOnKill = () => vi.spyOn(process, "kill").mockImplementation(() => true);
+function expectRefused(killSpy: ReturnType<typeof spyOnKill>) {
+  expect(() => signalVerifiedGatewayPidSync(500, "SIGTERM", { port: 18789 })).toThrow(
+    "refusing to signal non-gateway process pid 500",
+  );
+  expect(killSpy).not.toHaveBeenCalled();
+}
+
 function mockRelativeWindowsGateway(listeners = [500]) {
   mockProcessPlatform("win32");
   spawnSyncMock.mockImplementation((_command: string, args: string[]) => ({
@@ -135,16 +144,8 @@ describe("gateway-processes", () => {
     expect(findVerifiedGatewayListenerPidsOnPortSync(18789)).toEqual([200]);
     mockProcessPlatform("win32");
     spawnSyncMock
-      .mockReturnValueOnce({
-        error: null,
-        status: 0,
-        stdout: "200\r\n200\r\n0\r\n",
-      })
-      .mockReturnValueOnce({
-        error: null,
-        status: 0,
-        stdout: "openclaw-gateway",
-      });
+      .mockReturnValueOnce(output("200\r\n200\r\n0\r\n"))
+      .mockReturnValueOnce(output("openclaw-gateway"));
 
     expect(findVerifiedGatewayListenerPidsOnPortSync(18789)).toEqual([200]);
   });
@@ -157,22 +158,18 @@ describe("gateway-processes", () => {
         status: null,
         stdout: "",
       })
-      .mockReturnValueOnce({
-        error: null,
-        status: 0,
-        stdout: [
-          "Proto  Local Address          Foreign Address        State           PID",
-          "TCP    127.0.0.1:18789       127.0.0.1:0            ABHOEREN       998",
-          "TCP    127.0.0.1:18789       127.0.0.1:54321        HERGESTELLT    999",
-          "TCP    0.0.0.0:18789         0.0.0.0:0              ABHOEREN       200",
-          "TCP    [::]:18789            [::]:0                 ABHOEREN       200",
-        ].join("\r\n"),
-      })
-      .mockReturnValueOnce({
-        error: null,
-        status: 0,
-        stdout: "openclaw-gateway",
-      });
+      .mockReturnValueOnce(
+        output(
+          [
+            "Proto  Local Address          Foreign Address        State           PID",
+            "TCP    127.0.0.1:18789       127.0.0.1:0            ABHOEREN       998",
+            "TCP    127.0.0.1:18789       127.0.0.1:54321        HERGESTELLT    999",
+            "TCP    0.0.0.0:18789         0.0.0.0:0              ABHOEREN       200",
+            "TCP    [::]:18789            [::]:0                 ABHOEREN       200",
+          ].join("\r\n"),
+        ),
+      )
+      .mockReturnValueOnce(output("openclaw-gateway"));
 
     expect(findVerifiedGatewayListenerPidsOnPortSync(18789)).toEqual([200]);
     expect(spawnSyncMock.mock.calls[0]?.[0]).toBe(getWindowsPowerShellExePath());
@@ -185,7 +182,7 @@ describe("gateway-processes", () => {
     mockRelativeWindowsGateway([500, 600, 500]);
     readGatewayOwnerLeaseMock.mockReturnValue(gatewayOwner());
     const env = { OPENCLAW_STATE_DIR: "C:\\fixture\\state" };
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const killSpy = spyOnKill();
 
     expect(findVerifiedGatewayListenerPidsOnPortSync(18789, { env })).toEqual([500]);
     signalVerifiedGatewayPidSync(500, "SIGTERM", { env, port: 18789 });
@@ -213,24 +210,18 @@ describe("gateway-processes", () => {
     } else {
       readGatewayOwnerLeaseMock.mockReturnValue(owner);
     }
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const killSpy = spyOnKill();
 
     expect(findVerifiedGatewayListenerPidsOnPortSync(18789)).toEqual([]);
-    expect(() => signalVerifiedGatewayPidSync(500, "SIGTERM", { port: 18789 })).toThrow(
-      "refusing to signal non-gateway process pid 500",
-    );
-    expect(killSpy).not.toHaveBeenCalled();
+    expectRefused(killSpy);
   });
 
   it("refuses a Windows owner lost between listener discovery and signaling", () => {
     mockRelativeWindowsGateway();
     readGatewayOwnerLeaseMock.mockReturnValueOnce(gatewayOwner()).mockReturnValueOnce(undefined);
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const killSpy = spyOnKill();
 
     expect(findVerifiedGatewayListenerPidsOnPortSync(18789)).toEqual([500]);
-    expect(() => signalVerifiedGatewayPidSync(500, "SIGTERM", { port: 18789 })).toThrow(
-      "refusing to signal non-gateway process pid 500",
-    );
-    expect(killSpy).not.toHaveBeenCalled();
+    expectRefused(killSpy);
   });
 });

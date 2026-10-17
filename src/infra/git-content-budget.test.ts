@@ -77,14 +77,18 @@ it("bounds content, snapshot, and checkout removal through cancellation while me
     return { ok: true, value: undefined };
   });
   const gitCommands = { text: run, buffered: run };
+  const operation = (
+    command: Parameters<typeof runGitWorkerOperation>[0],
+    taskSignal?: AbortSignal,
+  ) => runGitWorkerOperation(command, { git: gitCommands, signal: taskSignal });
   const abortRunning = new AbortController();
   const abortQueued = new AbortController();
   const abortRemoval = new AbortController();
   let firstSettled = false;
   const first = settle(
-    runGitWorkerOperation(
+    operation(
       { type: "checkout.diff", input: { cwd: "diff", scope: "uncommitted" } },
-      { git: gitCommands, signal: abortRunning.signal },
+      abortRunning.signal,
     ),
   ).then((value) => {
     firstSettled = true;
@@ -93,14 +97,9 @@ it("bounds content, snapshot, and checkout removal through cancellation while me
   const pending: Promise<unknown>[] = [first];
   try {
     await withinTest(firstStarted.promise, signal);
-    const second = settle(
-      runGitWorkerOperation(
-        { type: "checkout.baseline", input: { cwd: "baseline" } },
-        { git: gitCommands },
-      ),
-    );
+    const second = settle(operation({ type: "checkout.baseline", input: { cwd: "baseline" } }));
     const queued = settle(
-      runGitWorkerOperation(
+      operation(
         {
           type: "pull-request.branch-facts",
           input: {
@@ -115,23 +114,20 @@ it("bounds content, snapshot, and checkout removal through cancellation while me
             },
           },
         },
-        { git: gitCommands, signal: abortQueued.signal },
+        abortQueued.signal,
       ),
     );
     const snapshot = settle(
-      runGitWorkerOperation(
-        {
-          type: "worktree.snapshot",
-          input: {
-            worktreeId: "snapshot",
-            repoRoot: "snapshot",
-            checkoutPath: "snapshot",
-            reason: "fixture",
-            provisionedPaths: [],
-          },
+      operation({
+        type: "worktree.snapshot",
+        input: {
+          worktreeId: "snapshot",
+          repoRoot: "snapshot",
+          checkoutPath: "snapshot",
+          reason: "fixture",
+          provisionedPaths: [],
         },
-        { git: gitCommands },
-      ),
+      }),
     );
     const remove = (name: string, queueSignal?: AbortSignal) =>
       withWorktreeGitConfig(name, false, {}, (git) =>
@@ -167,10 +163,7 @@ it("bounds content, snapshot, and checkout removal through cancellation while me
     const canceledRemoval = settle(remove("canceled-removal", abortRemoval.signal));
     pending.push(second, queued, snapshot, removal, canceledRemoval);
     await withinTest(
-      runGitWorkerOperation(
-        { type: "repository.branches", input: { repoRoot: "metadata" } },
-        { git: gitCommands },
-      ),
+      operation({ type: "repository.branches", input: { repoRoot: "metadata" } }),
       signal,
     );
     expect(started).toEqual(["diff", "diff"]);

@@ -12,6 +12,7 @@ import { requireGitBuffer } from "../agents/worktrees/git.js";
 import * as processExec from "../process/exec.js";
 import type { SpawnResult } from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import * as diagnosticEvents from "./diagnostic-events.js";
 import {
   getActiveDiagnosticTraceContext,
@@ -48,6 +49,13 @@ describe("Git ref mutation timing", () => {
   let clockEpoch = 0;
   const traces: Array<DiagnosticTraceContext | undefined> = [];
   const processMetadata = { pid: process.pid, threadId, isMainThread };
+  const expectTiming = (fields: Record<string, unknown>) =>
+    expect(refLogs.info).toHaveBeenCalledExactlyOnceWith("slow Git ref mutation", {
+      ...processMetadata,
+      durationMs: 1_000,
+      omittedObservations: 0,
+      ...fields,
+    });
 
   beforeEach(() => {
     // Advance past the previous owner's window without resetting its live singleton.
@@ -124,15 +132,13 @@ describe("Git ref mutation timing", () => {
       clock += 175;
       releaseCallback.resolve();
       await expect(queued).resolves.toBe(result);
-      expect(refLogs.info).toHaveBeenCalledExactlyOnceWith("slow Git ref mutation", {
-        ...processMetadata,
+      expectTiming({
         durationMs: 1_400,
         resolveMs: 25,
         queueWaitMs: 1_200,
         queuedOperationMs: 175,
         callbackEntered: true,
         outcome: "returned",
-        omittedObservations: 0,
       });
       expect(traces).toEqual([trace]);
     } finally {
@@ -156,13 +162,10 @@ describe("Git ref mutation timing", () => {
       ),
     ).rejects.toBe(error);
     expect(callback).not.toHaveBeenCalled();
-    expect(refLogs.info).toHaveBeenCalledExactlyOnceWith("slow Git ref mutation", {
-      ...processMetadata,
-      durationMs: 1_000,
+    expectTiming({
       resolveMs: 1_000,
       callbackEntered: false,
       outcome: "threw",
-      omittedObservations: 0,
     });
     expect(traces).toEqual([undefined]);
   });
@@ -181,15 +184,12 @@ describe("Git ref mutation timing", () => {
       await expect(enqueueGitRefMutation("/private/repository", ".git", callback)).rejects.toBe(
         error,
       );
-      expect(refLogs.info).toHaveBeenCalledExactlyOnceWith("slow Git ref mutation", {
-        ...processMetadata,
-        durationMs: 1_000,
+      expectTiming({
         resolveMs: 0,
         queueWaitMs: 0,
         queuedOperationMs: 1_000,
         callbackEntered: true,
         outcome: "threw",
-        omittedObservations: 0,
       });
       const next = { next: true };
       await expect(
@@ -277,55 +277,50 @@ const failure = {
   termination: "exit",
 } satisfies SpawnResult;
 
-it.each(["maintenance.autoDetach"])(
-  "overrides %s only for an explicitly owned Git command",
-  async (key) => {
-    await withTestDir({ prefix: "openclaw-git-exec-maintenance-" }, async (root) => {
-      const env = {
-        GIT_CONFIG_COUNT: "0",
-        GIT_CONFIG_PARAMETERS: undefined,
-      };
-      await requireGitCommand(root, ["init"], { env });
-      await requireGitCommand(root, ["config", key, "true"], { env });
-      const owned = await executeGitCommand(root, ["config", "--get", key], {
-        env,
-        killProcessTree: true,
-      });
-      expect(owned.code).toBe(0);
-      expect(owned.stdout.trim()).toBe("false");
-      await expect(requireGitCommand(root, ["config", "--get", key], { env })).resolves.toBe(
-        "true",
-      );
+it("overrides maintenance.autoDetach only for an explicitly owned Git command", async () => {
+  const key = "maintenance.autoDetach";
+  await withTestDir({ prefix: "openclaw-git-exec-maintenance-" }, async (root) => {
+    const env = {
+      GIT_CONFIG_COUNT: "0",
+      GIT_CONFIG_PARAMETERS: undefined,
+    };
+    await requireGitCommand(root, ["init"], { env });
+    await requireGitCommand(root, ["config", key, "true"], { env });
+    const owned = await executeGitCommand(root, ["config", "--get", key], {
+      env,
+      killProcessTree: true,
     });
-  },
-);
+    expect(owned.code).toBe(0);
+    expect(owned.stdout.trim()).toBe("false");
+    await expect(requireGitCommand(root, ["config", "--get", key], { env })).resolves.toBe("true");
+  });
+});
 
-it.each([{ timeoutMs: undefined, seconds: 120 }])(
-  "reports the applied $seconds-second Git timeout",
-  async ({ timeoutMs, seconds }) => {
-    const commandSpy = vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue({
-      ...failure,
-      termination: "timeout",
-      code: 124,
-    });
-    const args = ["worktree", "add"];
-    const result = await executeGitCommand("/repo", args, { timeoutMs });
-    const label = `timed out after ${seconds} seconds`;
-    const error = createGitCommandError("git worktree add", result);
-    expect(error).toBeInstanceOf(GitCommandTimeoutError);
-    const message = error.message;
-    expect(message).toContain(label);
-    expect(message).toContain(
-      `Git did not finish within its ${seconds}s budget; check remote reachability, repository locks, and clone shape (partial clones fetch missing objects lazily).`,
-    );
-    await expect(requireGitCommand("/repo", args, { timeoutMs })).rejects.toThrow(label);
-    expect(
-      commandSpy.mock.calls.map(([, options]) =>
-        typeof options === "number" ? options : options.timeoutMs,
-      ),
-    ).toEqual([seconds * 1000, seconds * 1000]);
-  },
-);
+it("reports the applied 120-second Git timeout", async () => {
+  const timeoutMs = undefined;
+  const seconds = 120;
+  const commandSpy = vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue({
+    ...failure,
+    termination: "timeout",
+    code: 124,
+  });
+  const args = ["worktree", "add"];
+  const result = await executeGitCommand("/repo", args, { timeoutMs });
+  const label = `timed out after ${seconds} seconds`;
+  const error = createGitCommandError("git worktree add", result);
+  expect(error).toBeInstanceOf(GitCommandTimeoutError);
+  const message = error.message;
+  expect(message).toContain(label);
+  expect(message).toContain(
+    `Git did not finish within its ${seconds}s budget; check remote reachability, repository locks, and clone shape (partial clones fetch missing objects lazily).`,
+  );
+  await expect(requireGitCommand("/repo", args, { timeoutMs })).rejects.toThrow(label);
+  expect(
+    commandSpy.mock.calls.map(([, options]) =>
+      typeof options === "number" ? options : options.timeoutMs,
+    ),
+  ).toEqual([seconds * 1000, seconds * 1000]);
+});
 
 describe("required Git output", () => {
   async function withGitBlob(
@@ -353,42 +348,19 @@ describe("required Git output", () => {
     ["text", requireGitCommand],
     ["buffered", requireGitBuffer],
   ] as const)("rejects incomplete %s output from a real Git blob", async (_kind, requireGit) => {
-    const sentinel = "complete-git-output-leading-sentinel\0";
     const blob = Buffer.alloc(17 * 1024 * 1024, "x");
-    blob.write(sentinel);
     await withGitBlob(blob, async (root, args) => {
-      const outcome = await requireGit(root, args).then(
-        (stdout) => ({
-          kind: "returned",
-          bytes: Buffer.byteLength(stdout),
-          hasSentinel: stdout.includes(sentinel),
-        }),
-        (error: unknown) => ({
-          kind: "error",
-          message: error instanceof Error ? error.message : String(error),
-        }),
-      );
-      expect(outcome).toEqual({
-        kind: "error",
-        message: expect.stringContaining("output limit exceeded"),
-      });
+      await expect(requireGit(root, args)).rejects.toThrow("output limit exceeded");
     });
   });
 });
 
 describe("gitNullConfigPath", () => {
   it("returns the Git-openable null path for the execution host", () => {
-    const originalPlatform = process.platform;
-    try {
-      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-      // Git for Windows cannot open the device-namespace path that
-      // os.devNull returns; "NUL" is the path it understands.
-      expect(gitNullConfigPath()).toBe("NUL");
-      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-      expect(gitNullConfigPath()).toBe("/dev/null");
-    } finally {
-      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
-    }
+    mockProcessPlatform("win32");
+    expect(gitNullConfigPath()).toBe("NUL");
+    mockProcessPlatform("linux");
+    expect(gitNullConfigPath()).toBe("/dev/null");
   });
 
   it.skipIf(process.platform !== "win32")(
