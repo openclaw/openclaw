@@ -50,7 +50,7 @@ function mockFs(overrides: object) {
   vi.doMock("../../scripts/lib/vitest-build-prerequisites.mts", () => ({}));
 }
 
-async function captureFixture(owner: (typeof fixtures)[number]["owner"]) {
+async function runFixture(owner: (typeof fixtures)[number]["owner"]) {
   vi.resetModules();
   const bodies = new Map<string, (context: FixtureContext) => Promise<void>>();
   const hooks: Record<"beforeAll" | "beforeEach" | "afterEach" | "afterAll", Hook[]> = {
@@ -77,24 +77,22 @@ async function captureFixture(owner: (typeof fixtures)[number]["owner"]) {
   const fixture = fixtures.find((entry) => entry.owner === owner)!;
   const body = bodies.get(fixture.name);
   expect(body, fixture.name).toBeTypeOf("function");
-  return async () => {
-    const finished: Hook[] = [];
-    await runQaGatewayFixture(
-      async () => {
-        for (const hook of [...hooks.beforeAll, ...hooks.beforeEach]) {
-          await hook();
-        }
-        await body!({
-          signal: new AbortController().signal,
-          onTestFinished: (hook) => finished.push(hook),
-        });
-      },
-      ...hooks.afterEach.toReversed(),
-      // The body registers these hooks, so enumerate them only after it settles.
-      () => runQaGatewayFixture(async () => {}, ...finished.toReversed()),
-      ...hooks.afterAll.toReversed(),
-    );
-  };
+  const finished: Hook[] = [];
+  await runQaGatewayFixture(
+    async () => {
+      for (const hook of [...hooks.beforeAll, ...hooks.beforeEach]) {
+        await hook();
+      }
+      await body!({
+        signal: new AbortController().signal,
+        onTestFinished: (hook) => finished.push(hook),
+      });
+    },
+    ...hooks.afterEach.toReversed(),
+    // The body registers these hooks, so enumerate them only after it settles.
+    () => runQaGatewayFixture(async () => {}, ...finished.toReversed()),
+    ...hooks.afterAll.toReversed(),
+  );
 }
 
 describe.skipIf(process.platform === "win32")("process fixture cleanup faults", () => {
@@ -211,9 +209,7 @@ describe.skipIf(process.platform === "win32")("process fixture cleanup faults", 
         return true;
       });
 
-      const failure: unknown = await (
-        await captureFixture(owner)
-      )().catch((error: unknown) => error);
+      const failure: unknown = await runFixture(owner).catch((error: unknown) => error);
       const errors = errorTree(failure);
       const expectedErrors = [primary];
       if (code === "EPERM") {
@@ -253,7 +249,7 @@ describe.skipIf(process.platform === "win32")("process fixture cleanup faults", 
       existsSync: () => false,
       rmSync,
     });
-    await expect((await captureFixture("setup"))()).rejects.toBe(primary);
+    await expect(runFixture("setup")).rejects.toBe(primary);
     expect(rmSync).toHaveBeenCalledWith("/fixture", { force: true, recursive: true });
   });
 });
