@@ -21,6 +21,13 @@ function originCase(
   };
 }
 
+function browserRequest(origin: string, host = "127.0.0.1:18789") {
+  return {
+    headers: { host, origin },
+    socket: { remoteAddress: "203.0.113.10" },
+  } as IncomingMessage;
+}
+
 describe("checkBrowserOrigin", () => {
   it.each([
     originCase(
@@ -79,10 +86,7 @@ describe("checkBrowserOrigin", () => {
   it.each(["chrome-extension://abcdefghijklmnop", "tauri://localhost"])(
     "accepts an exactly allowlisted hosted app origin: %s",
     (origin) => {
-      expect(checkBrowserOrigin({ origin, allowedOrigins: [origin] })).toEqual({
-        ok: true,
-        matchedBy: "allowlist",
-      });
+      expect(checkBrowserOrigin({ origin, allowedOrigins: [origin] })).toEqual(allowlisted);
     },
   );
 
@@ -97,16 +101,12 @@ describe("checkBrowserOrigin", () => {
     "file:///tmp/openclaw.html",
     "data:text/plain,hello",
   ])("rejects a non-origin URL value: %s", (origin) => {
-    expect(checkBrowserOrigin({ origin, allowedOrigins: [origin] })).toEqual({
-      ok: false,
-      reason: "origin missing or invalid",
-    });
+    expect(checkBrowserOrigin({ origin, allowedOrigins: [origin] })).toEqual(invalid);
   });
 
   it("recognizes only canonical Chrome extension origins", () => {
-    expect(
-      normalizeChromeExtensionOrigin("chrome-extension://abcdefghijklmnopabcdefghijklmnop"),
-    ).toBe("chrome-extension://abcdefghijklmnopabcdefghijklmnop");
+    const extension = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
+    expect(normalizeChromeExtensionOrigin(extension)).toBe(extension);
     expect(normalizeChromeExtensionOrigin("chrome-extension://abc")).toBeUndefined();
     expect(
       normalizeChromeExtensionOrigin("https://abcdefghijklmnopabcdefghijklmnop"),
@@ -115,28 +115,18 @@ describe("checkBrowserOrigin", () => {
 });
 
 describe("resolveAcceptedBrowserOrigin", () => {
+  const gateway = "https://gateway.example.com";
+  const other = "https://other.example.com";
   it.each([
-    { allowedOrigins: undefined, origin: "https://gateway.example.com", accepted: true },
-    { allowedOrigins: undefined, origin: "https://other.example.com", accepted: false },
-    { allowedOrigins: [], origin: "https://gateway.example.com", accepted: false },
-    {
-      allowedOrigins: ["https://other.example.com"],
-      origin: "https://gateway.example.com",
-      accepted: false,
-    },
-    {
-      allowedOrigins: ["https://other.example.com"],
-      origin: "https://other.example.com",
-      accepted: true,
-    },
+    { allowedOrigins: undefined, origin: gateway, accepted: true },
+    { allowedOrigins: undefined, origin: other, accepted: false },
+    { allowedOrigins: [], origin: gateway, accepted: false },
+    { allowedOrigins: [other], origin: gateway, accepted: false },
+    { allowedOrigins: [other], origin: other, accepted: true },
   ])("uses the effective configured origin policy: %j", ({ allowedOrigins, origin, accepted }) => {
-    const req = {
-      headers: { host: "127.0.0.1:18789", origin },
-      socket: { remoteAddress: "203.0.113.10" },
-    } as IncomingMessage;
     expect(
       resolveAcceptedBrowserOrigin({
-        req,
+        req: browserRequest(origin),
         cfg: {
           gateway: {
             publicOrigin: "https://GATEWAY.example.com:443/",
@@ -149,10 +139,7 @@ describe("resolveAcceptedBrowserOrigin", () => {
 
   it("applies the configured Host-header fallback through the canonical request resolver", () => {
     const origin = "https://gateway.example.com:18789";
-    const req = {
-      headers: { host: "gateway.example.com:18789", origin },
-      socket: { remoteAddress: "203.0.113.10" },
-    } as IncomingMessage;
+    const req = browserRequest(origin, "gateway.example.com:18789");
 
     expect(
       resolveAcceptedBrowserOrigin({

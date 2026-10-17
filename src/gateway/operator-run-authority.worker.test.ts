@@ -38,80 +38,133 @@ import {
 function modelRef(model: string) {
   return { provider: "fixture", model };
 }
+function expectModels(
+  authority: Awaited<ReturnType<typeof capture>>["authority"],
+  expected: boolean[],
+) {
+  expect(["a", "b", "c"].map((model) => authority.modelPolicy?.allows(modelRef(model)))).toEqual(
+    expected,
+  );
+}
+async function capture(options: Parameters<typeof captureGatewayOperatorRunAuthority>[0]) {
+  return expectDefined(await captureGatewayOperatorRunAuthority(options), "operator authority");
+}
+function abortAuthority(controller: AbortController) {
+  return { signal: controller.signal, assertCurrent: () => controller.signal.throwIfAborted() };
+}
+
+type OperatorFixture = ReturnType<typeof operatorFixture>;
+function operatorFixture(scopes: GatewayOperatorRoleDefinition["scopes"] = ["operator.read"]) {
+  const profile = ensureProfileForEmail("operator@example.test");
+  return {
+    profile,
+    client: createOperatorClient({ profileId: profile.id, scopes }),
+    context: createContext(),
+  };
+}
+function withOperator(
+  run: (fixture: OperatorFixture) => Promise<void>,
+  scopes?: GatewayOperatorRoleDefinition["scopes"],
+) {
+  return withOpenClawTestState({ scenario: "minimal" }, () => run(operatorFixture(scopes)));
+}
+function readerConfig(scopes: GatewayOperatorRoleDefinition["scopes"]): OpenClawConfig {
+  return {
+    agents: { defaults: { model: "fixture/a" } },
+    gateway: {
+      roles: {
+        definitions: {
+          reader: {
+            sessions: { others: "none" },
+            agents: [],
+            scopes,
+            modelPolicy: { allow: ["fixture/a", "fixture/b"] },
+          },
+          denied: { agents: [], scopes: [], sessions: { others: "none" } },
+        },
+      },
+    },
+  };
+}
+function registerProof(
+  context: OperatorFixture["context"],
+  name: string,
+  scope: "operator.read" | "operator.write",
+  handler: (options: GatewayRequestHandlerOptions) => void,
+) {
+  context.getGatewayMethodRegistry = () =>
+    createGatewayMethodRegistry([
+      {
+        name,
+        scope,
+        profileAccess: "independent",
+        owner: { kind: "core", area: "proof" },
+        handler,
+      },
+    ]);
+}
+function scoped<T>({ client, context }: OperatorFixture, run: () => T) {
+  return withPluginRuntimeGatewayRequestScope(
+    { client, context, isWebchatConnect: () => false },
+    run,
+  );
+}
+function dispatch(name: string) {
+  return dispatchGatewayMethodInProcess(
+    name,
+    {},
+    { disableSyntheticClient: true, requireScopedClient: true },
+  );
+}
+function toolAuthority() {
+  return expectDefined(
+    getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority,
+    "operator tool authority",
+  );
+}
 
 it("prepares a warm skill library without DDL after the tool caller's initiating request closes", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const profile = ensureProfileForEmail("warm-library@example.test");
-    const database = openOpenClawStateDatabase();
-    database.db.exec(getOpenClawStateFeatureSchemaSql("skill_library_entries"));
-    const client = createOperatorClient({ profileId: profile.id, scopes: ["operator.write"] });
-    const context = createContext();
-    const request = expectDefined(
-      await captureGatewayOperatorRunAuthority({ client, context }),
-      "request authority",
-    );
-    const releaseTool = expectDefined(request.authority.retain, "tool retention")();
-    client.internal = { operatorRunAuthority: request.authority };
-    context.getGatewayMethodRegistry = () =>
-      createGatewayMethodRegistry([
-        {
-          name: "libraryProof.prepare",
-          scope: "operator.write",
-          profileAccess: "independent",
-          owner: { kind: "core", area: "skills" },
-          handler: ({ respond }: GatewayRequestHandlerOptions) => {
-            ensureSkillLibrarySchema({ database }, () => request.authority.assertCurrent());
-            respond(true, { profileId: request.authority.profileId });
-          },
-        },
-      ]);
-    const schemaMutations: string[] = [];
-    const observation = observeHostDataSql((sql, db) => {
-      if (db === database.db && classifySqliteMutation(sql, "batch").mainSchemaChange) {
-        schemaMutations.push(sql);
+  withOperator(
+    async ({ profile, client, context }) => {
+      const database = openOpenClawStateDatabase();
+      database.db.exec(getOpenClawStateFeatureSchemaSql("skill_library_entries"));
+      const request = await capture({ client, context });
+      const releaseTool = expectDefined(request.authority.retain, "tool retention")();
+      client.internal = { operatorRunAuthority: request.authority };
+      registerProof(context, "libraryProof.prepare", "operator.write", ({ respond }) => {
+        ensureSkillLibrarySchema({ database }, () => request.authority.assertCurrent());
+        respond(true, { profileId: request.authority.profileId });
+      });
+      const schemaMutations: string[] = [];
+      const observation = observeHostDataSql((sql, db) => {
+        if (db === database.db && classifySqliteMutation(sql, "batch").mainSchemaChange) {
+          schemaMutations.push(sql);
+        }
+      });
+      try {
+        request.release();
+        await expect(
+          scoped({ profile, client, context }, () => dispatch("libraryProof.prepare")),
+        ).resolves.toEqual({ profileId: profile.id });
+        request.authority.assertCurrent();
+        expect(schemaMutations).toEqual([]);
+      } finally {
+        observation.restore();
+        releaseTool();
+        request.release();
       }
-    });
-    try {
-      request.release();
-      await withPluginRuntimeGatewayRequestScope(
-        { client, context, isWebchatConnect: () => false },
-        () =>
-          dispatchGatewayMethodInProcess(
-            "libraryProof.prepare",
-            {},
-            { disableSyntheticClient: true, requireScopedClient: true },
-          ),
-      ).then((result) => expect(result).toEqual({ profileId: profile.id }));
-      request.authority.assertCurrent();
-      expect(schemaMutations).toEqual([]);
-    } finally {
-      observation.restore();
-      releaseTool();
-      request.release();
-    }
-  }));
+    },
+    ["operator.write"],
+  ));
 
 it("preserves the live operator source through principal capture without trusting copied labels", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const profile = ensureProfileForEmail("principal-source@example.test");
-    const client = createOperatorClient({ profileId: profile.id, scopes: ["operator.read"] });
+  withOperator(async ({ client, context }) => {
     const principal = expectDefined(captureAgentTurnPrincipal(client), "captured principal");
-    const context = createContext();
     const source = new AbortController();
-    const sourceAuthority = {
-      signal: source.signal,
-      assertCurrent: () => source.signal.throwIfAborted(),
-    };
+    const sourceAuthority = abortAuthority(source);
     const captures = await Promise.all(
-      [principal, client, { ...client }].map(async (input) =>
-        expectDefined(
-          await captureGatewayOperatorRunAuthority({
-            client: input,
-            context,
-            sourceAuthority,
-          }),
-          "operator source",
-        ),
+      [principal, client, { ...client }].map((input) =>
+        capture({ client: input, context, sourceAuthority }),
       ),
     );
     try {
@@ -121,16 +174,16 @@ it("preserves the live operator source through principal capture without trustin
       expect(originalSource).toBeDefined();
       expect(principalSource).toBe(originalSource);
       expect(copiedSource).not.toBe(originalSource);
-      for (const capture of captures) {
-        expect(capture.authority.assertCurrent).not.toThrow();
+      for (const retained of captures) {
+        expect(retained.authority.assertCurrent).not.toThrow();
       }
       source.abort(new Error("source revoked"));
-      for (const capture of captures) {
-        expect(capture.authority.assertCurrent).toThrow();
+      for (const retained of captures) {
+        expect(retained.authority.assertCurrent).toThrow();
       }
     } finally {
-      for (const capture of captures) {
-        capture.release();
+      for (const retained of captures) {
+        retained.release();
       }
     }
   }));
@@ -138,46 +191,26 @@ it("preserves the live operator source through principal capture without trustin
 it.each(["capture", "operator tool"])(
   "prepares %s profile authority without parent data SQL",
   (entry) =>
-    withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const profile = ensureProfileForEmail("operator-sql@example.test");
+    withOperator(async ({ profile, context }) => {
       setUserProfileRole(profile.id, "reader");
       const sourceScopes: GatewayOperatorRoleDefinition["scopes"] =
         entry === "operator tool" ? ["operator.read", "operator.write"] : ["operator.read"];
       const client = createOperatorClient({ profileId: profile.id, scopes: sourceScopes });
-      const context = createContext();
-      let cfg: OpenClawConfig = {
-        agents: { defaults: { model: "fixture/a" } },
-        gateway: {
-          roles: {
-            definitions: {
-              reader: {
-                sessions: { others: "none" as const },
-                agents: [],
-                scopes: sourceScopes,
-                modelPolicy: { allow: ["fixture/a", "fixture/b"] },
-              },
-            },
-          },
-        },
-      };
+      let cfg = readerConfig(sourceScopes);
       context.getRuntimeConfig = () => cfg;
-      context.getGatewayMethodRegistry = () =>
-        createGatewayMethodRegistry([
-          {
-            name: "profileProof.current",
-            scope: "operator.read",
-            profileAccess: "independent",
-            owner: { kind: "core", area: "profile-proof" },
-            handler: ({ client: dispatchedClient, respond }: GatewayRequestHandlerOptions) => {
-              const authority = expectDefined(
-                dispatchedClient?.internal?.operatorRunAuthority,
-                "dispatched operator authority",
-              );
-              authority.assertCurrent();
-              respond(true, { profileId: authority.profileId });
-            },
-          },
-        ]);
+      registerProof(
+        context,
+        "profileProof.current",
+        "operator.read",
+        ({ client: dispatchedClient, respond }) => {
+          const authority = expectDefined(
+            dispatchedClient?.internal?.operatorRunAuthority,
+            "dispatched operator authority",
+          );
+          authority.assertCurrent();
+          respond(true, { profileId: authority.profileId });
+        },
+      );
       const sql = observeHostDataSql();
       try {
         const calibration = new DatabaseSync(":memory:");
@@ -197,10 +230,7 @@ it.each(["capture", "operator tool"])(
         }
 
         if (entry === "capture") {
-          const retained = expectDefined(
-            await captureGatewayOperatorRunAuthority({ client, context }),
-            "operator authority",
-          );
+          const retained = await capture({ client, context });
           const { authority } = retained;
           using _ = { [Symbol.dispose]: retained.release };
 
@@ -218,43 +248,29 @@ it.each(["capture", "operator tool"])(
           };
           publishOperatorRoleConfigChange(context);
           expect(authority.signal?.aborted).toBe(false);
-          expect(authority.modelPolicy?.allows(modelRef("a"))).toBe(false);
-          expect(authority.modelPolicy?.allows(modelRef("b"))).toBe(true);
-          expect(authority.modelPolicy?.allows(modelRef("c"))).toBe(false);
+          expectModels(authority, [false, true, false]);
           const release = expectDefined(authority.retain, "operator retention")();
           retained.release();
           authority.assertCurrent();
           release();
           expect(authority.assertCurrent).toThrow("no longer active");
         } else {
-          await withPluginRuntimeGatewayRequestScope(
-            { client, context, isWebchatConnect: () => false },
-            () =>
-              withOperatorToolGatewayAuthority({ scopes: ["operator.read"] }, async () => {
-                const authority = expectDefined(
-                  getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority,
-                  "operator tool authority",
-                );
-                authority.assertCurrent();
-                expect(authority.profileId).toBe(profile.id);
-                await withOperatorToolGatewayAuthority(
-                  { scopes: ["operator.read"], operatorRunAuthority: authority },
-                  async () => {
-                    const narrowed = expectDefined(
-                      getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority,
-                      "narrowed operator authority",
-                    );
-                    expect(narrowed.scopes).toEqual(["operator.read"]);
-                    await expect(
-                      dispatchGatewayMethodInProcess(
-                        "profileProof.current",
-                        {},
-                        { disableSyntheticClient: true, requireScopedClient: true },
-                      ),
-                    ).resolves.toEqual({ profileId: profile.id });
-                  },
-                );
-              }),
+          await scoped({ profile, client, context }, () =>
+            withOperatorToolGatewayAuthority({ scopes: ["operator.read"] }, async () => {
+              const authority = toolAuthority();
+              authority.assertCurrent();
+              expect(authority.profileId).toBe(profile.id);
+              await withOperatorToolGatewayAuthority(
+                { scopes: ["operator.read"], operatorRunAuthority: authority },
+                async () => {
+                  const narrowed = toolAuthority();
+                  expect(narrowed.scopes).toEqual(["operator.read"]);
+                  await expect(dispatch("profileProof.current")).resolves.toEqual({
+                    profileId: profile.id,
+                  });
+                },
+              );
+            }),
           );
         }
         for (const call of sql.calls) {
@@ -284,28 +300,10 @@ it.each([
 ] as const)(
   "keeps current authority through %s while operator source preparation is pending",
   (revocation) =>
-    withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const profile = ensureProfileForEmail("preparing-operator@example.test");
+    withOperator(async ({ profile, client, context }) => {
       const target = ensureProfileForEmail("preparing-target@example.test");
       setUserProfileRole(profile.id, "reader");
-      const client = createOperatorClient({ profileId: profile.id, scopes: ["operator.read"] });
-      const context = createContext();
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { model: "fixture/a" } },
-        gateway: {
-          roles: {
-            definitions: {
-              reader: {
-                agents: [],
-                scopes: ["operator.read"],
-                sessions: { others: "none" },
-                modelPolicy: { allow: ["fixture/a", "fixture/b"] },
-              },
-              denied: { agents: [], scopes: [], sessions: { others: "none" } },
-            },
-          },
-        },
-      };
+      const cfg = readerConfig(["operator.read"]);
       let currentConfig = cfg;
       context.getRuntimeConfig = () => currentConfig;
       let currentGateway = context;
@@ -329,14 +327,8 @@ it.each([
         client,
         context,
         hasCurrentClientAuthority: () => connected,
-        sourceAuthority: {
-          signal: source.signal,
-          assertCurrent: () => source.signal.throwIfAborted(),
-        },
-        invocationAuthority: {
-          signal: invocation.signal,
-          assertCurrent: () => invocation.signal.throwIfAborted(),
-        },
+        sourceAuthority: abortAuthority(source),
+        invocationAuthority: abortAuthority(invocation),
       }).then((captured) => {
         using _ = captured ? { [Symbol.dispose]: captured.release } : undefined;
 
@@ -344,13 +336,11 @@ it.each([
           const authority = expectDefined(captured, "prepared model authority").authority;
           expect(authority.signal?.aborted).toBe(false);
           authority.assertCurrent();
-          expect(authority.modelPolicy?.allows(modelRef("a"))).toBe(
+          expectModels(authority, [
             revocation !== "model policy narrowed",
-          );
-          expect(authority.modelPolicy?.allows(modelRef("b"))).toBe(true);
-          expect(authority.modelPolicy?.allows(modelRef("c"))).toBe(
+            true,
             revocation !== "model policy restored",
-          );
+          ]);
         }
         sideEffect();
       });
@@ -373,7 +363,7 @@ it.each([
         } else if (revocation === "invocation") {
           invocation.abort(new Error("invocation ended"));
         } else if (revocation === "profile") {
-          linkEmail("preparing-operator@example.test", target.id);
+          linkEmail("operator@example.test", target.id);
         } else if (revocation === "role") {
           setUserProfileRole(profile.id, "denied");
         } else if (revocation === "role restored") {
@@ -456,27 +446,21 @@ it("keeps target and unrelated sources live across alias additions, but rejects 
   }));
 
 it("rechecks current role and latched revocation after a source callback mutates and restores it", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const profile = ensureProfileForEmail("callback-operator@example.test");
-    const context = createContext();
-    const client = createOperatorClient({ profileId: profile.id, scopes: ["operator.read"] });
+  withOperator(async ({ profile, client, context }) => {
     let change = false;
-    const captured = expectDefined(
-      await captureGatewayOperatorRunAuthority({
-        client,
-        context,
-        sourceAuthority: {
-          assertCurrent: () => {
-            if (change) {
-              change = false;
-              setUserProfileRole(profile.id, "temporary");
-              setUserProfileRole(profile.id, null);
-            }
-          },
+    const captured = await capture({
+      client,
+      context,
+      sourceAuthority: {
+        assertCurrent: () => {
+          if (change) {
+            change = false;
+            setUserProfileRole(profile.id, "temporary");
+            setUserProfileRole(profile.id, null);
+          }
         },
-      }),
-      "callback authority",
-    );
+      },
+    });
     using _ = { [Symbol.dispose]: captured.release };
 
     change = true;
