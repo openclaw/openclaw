@@ -68,14 +68,14 @@ it("reads recovery health from the admitted snapshot without overwriting a forei
 
 it("reads committed worker health writes and rejects a stale patch basis", async () => {
   const { deps, configPath } = fixture();
-  using observation = captureConfigHealthStateStore(deps, configPath);
+  const observation = captureConfigHealthStateStore(deps, configPath);
   const before = await observation.read();
   if (!before) {
     throw new Error("Expected a current health observation");
   }
   await observation.update({ lastObservedSuspiciousSignature: "after" }, before);
 
-  using current = captureConfigHealthStateStore(deps, configPath);
+  const current = captureConfigHealthStateStore(deps, configPath);
   expect((await current.read())?.state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe(
     "after",
   );
