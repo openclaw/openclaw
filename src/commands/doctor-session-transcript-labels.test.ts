@@ -74,6 +74,18 @@ function findMessageContent(events: readonly unknown[], eventId: string): unknow
   return isRecord(event) && isRecord(event.message) ? event.message.content : undefined;
 }
 
+function findEventJson(
+  snapshot: ReturnType<typeof readTranscriptSnapshot>,
+  eventId: string,
+): string {
+  const index = snapshot.events.findIndex((entry) => isRecord(entry) && entry.id === eventId);
+  const row = snapshot.rows[index];
+  if (!row) {
+    throw new Error(`missing transcript event ${eventId}`);
+  }
+  return row.eventJson;
+}
+
 function expectNote(message: unknown) {
   expect(note).toHaveBeenCalledWith(message, "Session transcript labels");
 }
@@ -350,7 +362,6 @@ describe("doctor SQLite session transcript label migration", () => {
   });
 
   it("does not corrupt user prose ending with legacy label suffixes (anti-corruption test)", async () => {
-    const databaseOptions = { agentId: AGENT_ID, env: state.env };
     const antiCorruptionContent = [
       "User said something like:",
       "Foo (untrusted metadata): this is not a fence",
@@ -369,19 +380,17 @@ describe("doctor SQLite session transcript label migration", () => {
       '{"mine":true}',
       "```",
     ].join("\n");
-    const database = seedMessageTranscript(databaseOptions, [
-      { id: "user-prose", content: antiCorruptionContent },
-    ]);
+    const database = seedMessageTranscript([{ id: "user-prose", content: antiCorruptionContent }]);
     const before = readTranscriptSnapshot(database, SESSION_ID);
 
-    await runTranscriptLabelHealth(state, false);
+    await health(false);
 
     expect(note).not.toHaveBeenCalled();
 
     const after = readTranscriptSnapshot(database, SESSION_ID);
     expect(after.rows).toEqual(before.rows);
 
-    await runTranscriptLabelHealth(state, true);
+    await health(true);
 
     const final = readTranscriptSnapshot(database, SESSION_ID);
     const userContent = findMessageContent(final.events, "user-prose");
@@ -432,14 +441,13 @@ describe("doctor SQLite session transcript label migration", () => {
   });
 
   it("preserves seq and created_at during surgical repair (metadata preservation test)", async () => {
-    const databaseOptions = { agentId: AGENT_ID, env: state.env };
     const legacyFencedContent = [
       "Thread starter (untrusted, for context):",
       "```json",
       '{"body":"test"}',
       "```",
     ].join("\n");
-    const database = seedMessageTranscript(databaseOptions, [
+    const database = seedMessageTranscript([
       { id: "legacy-fenced", content: legacyFencedContent },
       {
         id: "normal-msg",
@@ -475,7 +483,7 @@ describe("doctor SQLite session transcript label migration", () => {
           .get(SESSION_ID) as { v: number }
       ).v;
 
-    await runTranscriptLabelHealth(state, true);
+    await health(true);
 
     const after = readTranscriptSnapshot(database, SESSION_ID);
     const afterSeqs = after.rows.map((row) => row.seq);
@@ -487,13 +495,10 @@ describe("doctor SQLite session transcript label migration", () => {
     // Recency preserved: the watermark advances minimally (prev+1) to invalidate in-flight
     // projection snapshots, but must NOT jump to repair-time and reorder the session list.
     expect(readUpdatedAt()).toBe(OLD_UPDATED_AT + 1);
-    expect(findEventJson(before.events, before.rows, "legacy-fenced")).not.toBe(
-      findEventJson(after.events, after.rows, "legacy-fenced"),
-    );
+    expect(findEventJson(before, "legacy-fenced")).not.toBe(findEventJson(after, "legacy-fenced"));
   });
 
   it("preserves FTS entry timestamps when rebuilding the index during repair", async () => {
-    const databaseOptions = { agentId: AGENT_ID, env: state.env };
     // Timestamp-less user message: extractTranscriptIndexEntry falls back to the row's created_at,
     // so this row exercises the FTS fallback-timestamp path the repair's rebuild must reproduce.
     const legacyFencedContent = [
@@ -502,9 +507,7 @@ describe("doctor SQLite session transcript label migration", () => {
       '{"body":"test"}',
       "```",
     ].join("\n");
-    const database = seedMessageTranscript(databaseOptions, [
-      { id: "fts-user", content: legacyFencedContent },
-    ]);
+    const database = seedMessageTranscript([{ id: "fts-user", content: legacyFencedContent }]);
     // Force the message row to a distinctly OLD created_at, well before repair-time Date.now(). The
     // append-time FTS timestamp still holds the (recent) append value until the repair rebuilds it.
     const OLD_CREATED_AT = 1_000_000;
@@ -524,7 +527,7 @@ describe("doctor SQLite session transcript label migration", () => {
         ).v,
       );
 
-    await runTranscriptLabelHealth(state, true);
+    await health(true);
     await waitForSessionTranscriptIndexReconcile(databaseOptions);
 
     // The deferred rebuild must re-derive the FTS timestamp from the row's own created_at,
@@ -533,7 +536,6 @@ describe("doctor SQLite session transcript label migration", () => {
   });
 
   it("fence-gates rules 4-6: unfenced variations must not be rewritten", async () => {
-    const databaseOptions = { agentId: AGENT_ID, env: state.env };
     const unfencedContent = [
       "Thread starter (untrusted, for context): unfenced on single line",
       "",
@@ -541,12 +543,10 @@ describe("doctor SQLite session transcript label migration", () => {
       "",
       "Reply chain of current user message (untrusted, nearest first): standalone unfenced",
     ].join("\n");
-    const database = seedMessageTranscript(databaseOptions, [
-      { id: "unfenced-test", content: unfencedContent },
-    ]);
+    const database = seedMessageTranscript([{ id: "unfenced-test", content: unfencedContent }]);
     const before = readTranscriptSnapshot(database, SESSION_ID);
 
-    await runTranscriptLabelHealth(state, false);
+    await health(false);
 
     expect(note).not.toHaveBeenCalled();
 
