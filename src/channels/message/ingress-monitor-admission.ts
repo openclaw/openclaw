@@ -62,8 +62,7 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
         const body = options.payload.serialize(raw, { facts, receivedAt });
         const payload =
           options.payload.storage === "raw-event"
-            ? // SAFETY: raw-event codecs use the documented { version, rawEvent } queue envelope.
-              ({ version: options.payload.version, rawEvent: body } as TStoredPayload)
+            ? ({ version: options.payload.version, rawEvent: body } as TStoredPayload) // SAFETY: raw-event codecs use this envelope.
             : options.payload.encode({ version: options.payload.version, body });
         prepared.push({ raw, facts, payload, index: results.length });
         results.push({ kind: "ignored" });
