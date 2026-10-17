@@ -57,6 +57,7 @@ import type {
   CliBackendPlugin,
 } from "../../plugins/cli-backend.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
 import { createHookRunner } from "../../plugins/hooks.js";
 import {
   clearMemoryPluginState,
@@ -1770,10 +1771,39 @@ describe("prepareCliRunContext", () => {
     });
   });
 
+  it.each([true, false, undefined])(
+    "passes the causal source and admitted ownership %s into CLI prompt-build hooks",
+    async (senderIsOwner) => {
+      const hookRunner = {
+        hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+        runBeforePromptBuild: vi.fn(
+          async (_event: unknown, _context: PluginHookAgentContext) => undefined,
+        ),
+      };
+      mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+      const context = await fixture.prepare({
+        trigger: "user",
+        senderId: "sender-1",
+        senderIsOwner,
+        causalMessageId: "spaces/test/messages/inbound",
+        currentMessageId: "spaces/test/threads/reply",
+      });
+      expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
+      const hookContext = expectDefined(
+        hookRunner.runBeforePromptBuild.mock.calls[0]?.[1],
+        "CLI prompt-build hook context",
+      );
+      expect(hookContext.messageId).toBe("spaces/test/messages/inbound");
+      expect(hookContext.senderIsOwner).toBe(senderIsOwner);
+      expect(Object.hasOwn(hookContext, "senderIsOwner")).toBe(senderIsOwner !== undefined);
+      expect(context.params.currentMessageId).toBe("spaces/test/threads/reply");
+    },
+  );
+
   it("marks inter-session prompts after CLI prompt-build hook context is applied", async () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
-      runBeforePromptBuild: vi.fn(async () => ({
+      runBeforePromptBuild: vi.fn(async (_event: unknown, _context: PluginHookAgentContext) => ({
         prependContext: "trusted hook context",
       })),
     };
@@ -1784,6 +1814,9 @@ describe("prepareCliRunContext", () => {
       agentId: "main",
       trigger: "user",
       prompt: "foreign reply text",
+      senderId: "foreign-sender",
+      senderIsOwner: true,
+      causalMessageId: "technical-message-id",
       inputProvenance: {
         kind: "inter_session",
         sourceSessionKey: "agent:main:slack:dm:U123",
@@ -1810,6 +1843,8 @@ describe("prepareCliRunContext", () => {
         },
       }),
     );
+    expect(hookRunner.runBeforePromptBuild.mock.calls[0]?.[1]).not.toHaveProperty("messageId");
+    expect(hookRunner.runBeforePromptBuild.mock.calls[0]?.[1]).not.toHaveProperty("senderIsOwner");
   });
 
   it("applies turn-authorized prompt enrichment after CLI tool preparation", async () => {

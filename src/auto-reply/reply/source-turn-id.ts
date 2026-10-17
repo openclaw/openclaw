@@ -3,9 +3,12 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { isSyntheticSourceReplyTurn } from "../../agents/reply-completion.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import type { MsgContext } from "../templating.js";
 
 const CHANNEL_SOURCE_TURN_ID_PREFIX = "channel-user:v1:";
 // Host and SDK bundles exchange these non-JSON context facts within one process.
@@ -18,6 +21,33 @@ type ChannelSourceTurnContext = object & {
   [CHANNEL_SOURCE_TURN_ID]?: string;
   [CHANNEL_SOURCE_TURN_SAME_THREAD_REQUIRED]?: true;
 };
+
+/** A routing representative cannot identify one message in an admitted multi-message batch. */
+export function resolveCausalInboundMessageId(
+  context: Pick<
+    MsgContext,
+    "MessageSid" | "MessageSidFull" | "MessageSids" | "MessageSidFirst" | "MessageSidLast"
+  >,
+  source: { inputProvenance?: InputProvenance; isHeartbeat?: boolean },
+): string | undefined {
+  if (isSyntheticSourceReplyTurn(source)) {
+    return undefined;
+  }
+  const batchIds = new Set(
+    [...(context.MessageSids ?? []), context.MessageSidFirst, context.MessageSidLast].flatMap(
+      (id) => {
+        const normalized = normalizeOptionalString(id);
+        return normalized ? [normalized] : [];
+      },
+    ),
+  );
+  if (batchIds.size > 1) {
+    return undefined;
+  }
+  return (
+    normalizeOptionalString(context.MessageSidFull) ?? normalizeOptionalString(context.MessageSid)
+  );
+}
 
 /**
  * Internal-origin turns (gateway chat.send stamps the internal channel as the

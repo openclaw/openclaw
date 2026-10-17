@@ -83,4 +83,53 @@ describe("buildAgentHookContextIdentityFields", () => {
       }),
     ).toEqual({});
   });
+
+  it.each([true, false, undefined])(
+    "preserves resolved ownership %s without inventing it",
+    (owner) => {
+      const context = buildAgentHookContextIdentityFields({
+        trigger: "user",
+        senderId: "sender-1",
+        causalMessageId: " message-1 ",
+        senderIsOwner: owner,
+      });
+      expect(context.messageId).toBe("message-1");
+      expect(context.senderIsOwner).toBe(owner);
+      expect(Object.hasOwn(context, "senderIsOwner")).toBe(owner !== undefined);
+    },
+  );
+
+  it("does not advertise ownership without a resolved sender", () => {
+    const context = buildAgentHookContextIdentityFields({
+      trigger: "user",
+      causalMessageId: "message-1",
+      senderIsOwner: true,
+    });
+    expect(context.messageId).toBe("message-1");
+    expect(context).not.toHaveProperty("senderIsOwner");
+  });
+
+  it.each([
+    { trigger: "cron" },
+    { trigger: "heartbeat" },
+    { trigger: "overflow" },
+    { trigger: undefined },
+    { trigger: "user", inputProvenance: { kind: "internal_system" as const } },
+    { trigger: "user", inputProvenance: { kind: "inter_session" as const } },
+  ])("withholds causal/owner metadata on non-external turns (%j)", (origin) => {
+    const context = buildAgentHookContextIdentityFields({
+      ...origin,
+      senderId: "sender-1",
+      causalMessageId: "technical-id",
+      senderIsOwner: true,
+    });
+    expect(context).not.toHaveProperty("messageId");
+    expect(context).not.toHaveProperty("senderIsOwner");
+  });
+
+  it("omits a blank causal id", () => {
+    expect(
+      buildAgentHookContextIdentityFields({ trigger: "user", causalMessageId: " " }),
+    ).not.toHaveProperty("messageId");
+  });
 });
