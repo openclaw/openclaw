@@ -286,13 +286,17 @@ describe("managed worktree registry worker reads", () => {
       });
       expect(selected?.record).toEqual(record);
       expect(await service.list()).toEqual([record]);
+      expect(registryQueries()).toEqual([]);
       await updateRegistryWorktree(env, record.id, { lastActiveAt: Date.now() - 60_000 });
+      sql.queries.length = 0;
       const activityStarted = Date.now();
       const acquired = await service.acquire(record.id);
       expect(acquired.id).toBe(record.id);
       expect(acquired.lastActiveAt).toBeGreaterThanOrEqual(activityStarted);
       expect(acquired.lastActiveAt).toBeLessThanOrEqual(Date.now());
-      expect(getRegistryWorktree(env, record.id)).toEqual(acquired);
+      expect(
+        await readRegistryWorktree(captureOpenClawStateWorkerContext({ env }), record.id),
+      ).toEqual(acquired);
       await service.release(record.id);
       expect(registryQueries()).toEqual([]);
     } finally {
@@ -347,12 +351,12 @@ describe("managed worktree registry worker reads", () => {
     "preserves registry and checkout on refused publication (%s)",
     async (kind) => {
       const { env, service, params } = await serviceFixture();
-      const existing =
+      let existing =
         kind === "replacement" || kind === "retained lock"
           ? await service.create(params)
           : undefined;
       if (existing && kind === "retained lock") {
-        await service.acquire(existing.id);
+        existing = await service.acquire(existing.id);
       }
       let current = true;
       const publication = holdPublication(existing ? "worktrees.update" : "worktrees.insert");

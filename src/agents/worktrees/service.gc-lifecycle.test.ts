@@ -121,6 +121,7 @@ it("releases session mutation admission during Git while the registry claim fenc
     checkoutRemoved.resolve();
     await publishRemoval.promise;
   });
+  const cleanupStarted = Date.now();
   const cleanup = service.gc({
     ...createManagedWorktreeOwnerPolicy(cfg),
     signal,
@@ -189,7 +190,8 @@ it("releases session mutation admission during Git while the registry claim fenc
   expect((await cleanup).removed).toEqual([record.id]);
   expect(isSessionLifecycleMutationActive(storePath, identities)).toBe(false);
   const removed = getRegistryWorktree(env, record.id)!;
-  expect(removed.removedAt).toBe(2);
+  expect(removed.removedAt).toBeGreaterThanOrEqual(cleanupStarted);
+  expect(removed.removedAt).toBeLessThanOrEqual(Date.now());
   expect(await requireGit(repoRoot, ["show", `${removed.snapshotRef}:draft.txt`])).toBe(
     "preserved draft",
   );

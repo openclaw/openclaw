@@ -138,9 +138,8 @@ it("reads known merged heads without network access only for the same live sessi
   if (!target || !otherTarget) {
     throw new Error("Missing fixture target");
   }
-  const network = vi
-    .spyOn(globalThis, "fetch")
-    .mockRejectedValue(new Error("Unexpected cache fetch"));
+  const network = vi.fn<typeof fetch>().mockRejectedValue(new Error("Unexpected cache fetch"));
+  vi.stubGlobal("fetch", network);
   const expected = [{ sha: head, baseRef: "main", mergeCommitSha }];
   let releasedRead: ControlUiSessionPrReadContext | undefined;
   await withControlUiSessionPrSource(target.readSource, async (assertCurrent, sourceIdentity) => {
