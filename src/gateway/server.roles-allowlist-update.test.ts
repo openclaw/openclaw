@@ -305,9 +305,7 @@ async function expectConnectedNodeCount(count: number) {
 }
 
 async function expectPendingPairingCommands(nodeId: string, commands: string[]) {
-  const pending = await getPendingNodePairing(nodeId);
-  expect(pending?.nodeId).toBe(nodeId);
-  expect(pending?.commands).toEqual(commands);
+  expect(await getPendingNodePairing(nodeId)).toMatchObject({ nodeId, commands });
 }
 
 async function getPendingNodePairing(nodeId: string) {
@@ -327,7 +325,7 @@ async function approvePendingNodePairing(nodeId: string, commands: string[]) {
 }
 
 async function invokeCanvasSnapshot(nodeId: string, idempotencyKey: string) {
-  return rpcReq(ws, "node.invoke", {
+  return rpcReq<{ payload?: unknown; payloadJSON?: string | null }>(ws, "node.invoke", {
     nodeId,
     command: "canvas.snapshot",
     params: { format: "png" },
@@ -336,9 +334,10 @@ async function invokeCanvasSnapshot(nodeId: string, idempotencyKey: string) {
 }
 
 async function expectCanvasSnapshotDenied(nodeId: string, idempotencyKey: string) {
-  const res = await invokeCanvasSnapshot(nodeId, idempotencyKey);
-  expect(res.ok).toBe(false);
-  expect(res.error?.message ?? "").toContain("node command not allowed");
+  expect(await invokeCanvasSnapshot(nodeId, idempotencyKey)).toMatchObject({
+    ok: false,
+    error: { message: expect.stringContaining("node command not allowed") },
+  });
 }
 
 function createInvokeCapture() {
@@ -569,6 +568,12 @@ describe("gateway update.run", () => {
   });
 });
 
+async function connectPendingNode(fixture: Parameters<typeof connectNodeClient>[0]) {
+  await writeConfigFile({ gateway: { nodes: { pairing: { autoApproveLocal: false } } } });
+  const client = await connectNodeClientWithPairing(fixture);
+  return { client, nodeId: await findConnectedNodeIdByDisplayName(fixture.displayName) };
+}
+
 function nodeFixture(
   displayName: string,
   options: Partial<Omit<Parameters<typeof connectNodeClient>[0], "displayName">> = {},
@@ -598,8 +603,10 @@ describe("gateway node command allowlist", () => {
       params: {},
       idempotencyKey: "allowlist-2",
     });
-    expect(missingRes.ok).toBe(false);
-    expect(missingRes.error?.message).toContain("node command not allowed");
+    expect(missingRes).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("node command not allowed") },
+    });
     await emptyClient.stopAndWait();
     await expectConnectedNodeCount(0);
 
@@ -643,16 +650,7 @@ describe("gateway node command allowlist", () => {
         { source: "payload" },
       ],
     ] as const) {
-      const invokeResult = rpcReq<{ payload?: unknown; payloadJSON?: string | null }>(
-        ws,
-        "node.invoke",
-        {
-          nodeId: allowedNodeId,
-          command: "canvas.snapshot",
-          params: { format: "png" },
-          idempotencyKey: `allowlist-${id}-payloadjson`,
-        },
-      );
+      const invokeResult = invokeCanvasSnapshot(allowedNodeId, `allowlist-${id}-payloadjson`);
       const captured = await invokeCapture.waitForInvoke();
       await allowedClient.request("node.invoke.result", {
         id: captured.id,
@@ -668,15 +666,13 @@ describe("gateway node command allowlist", () => {
   });
 
   test("exposes and invokes live commands only after pending node pairing is approved", async () => {
-    await writeConfigFile({ gateway: { nodes: { pairing: { autoApproveLocal: false } } } });
     const invokeCapture = createInvokeCapture();
     const fixture = nodeFixture("node-approve-live-commands", {
       commands: ["canvas.snapshot", "system.run"],
       onEvent: invokeCapture.onEvent,
     });
-    const nodeClient = await connectNodeClientWithPairing(fixture);
+    const { client: nodeClient, nodeId } = await connectPendingNode(fixture);
     await expectConnectedCommands(fixture.displayName, []);
-    const nodeId = await findConnectedNodeIdByDisplayName(fixture.displayName);
     await expectPendingPairingCommands(nodeId, fixture.commands);
     const denied = await invokeCanvasSnapshot(nodeId, "pending-node-canvas");
     expect(denied.ok).toBe(false);
@@ -693,17 +689,15 @@ describe("gateway node command allowlist", () => {
   });
 
   test("rechecks current allowlist before exposing approved live commands", async () => {
-    await writeConfigFile({ gateway: { nodes: { pairing: { autoApproveLocal: false } } } });
     let originalConfig: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
     const reconcileRuntimePolicy = reloadFixture.reconcileRuntimePolicy;
     if (!reconcileRuntimePolicy) {
       throw new Error("gateway runtime policy reconciliation is required");
     }
     const fixture = nodeFixture("node-approve-live-commands-current-allowlist");
-    const nodeClient = await connectNodeClientWithPairing(fixture);
+    const { client: nodeClient, nodeId } = await connectPendingNode(fixture);
     try {
       await expectConnectedCommands(fixture.displayName, []);
-      const nodeId = await findConnectedNodeIdByDisplayName(fixture.displayName);
       originalConfig = await readConfigFileSnapshot();
       await fs.writeFile(
         originalConfig.path,
@@ -724,14 +718,12 @@ describe("gateway node command allowlist", () => {
   });
 
   test("records only allowlisted commands in pending node pairing requests", async () => {
-    await writeConfigFile({ gateway: { nodes: { pairing: { autoApproveLocal: false } } } });
     const fixture = nodeFixture("node-pending-allowlisted-only", {
       commands: ["system.run", "canvas.snapshot"],
       platform: "İOS",
       deviceFamily: "iPhone",
     });
-    await connectNodeClientWithPairing(fixture);
-    const nodeId = await findConnectedNodeIdByDisplayName(fixture.displayName);
+    const { nodeId } = await connectPendingNode(fixture);
     await expectPendingPairingCommands(nodeId, ["canvas.snapshot"]);
   });
 

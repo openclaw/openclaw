@@ -39,12 +39,34 @@ const CANVAS_CAPABILITY_PATH_PREFIX = PLUGIN_NODE_CAPABILITY_PATH_PREFIX;
 
 afterEach(() => clearRuntimeConfigSnapshot());
 
+const tokenResolvedAuth: ResolvedGatewayAuth = {
+  mode: "token",
+  token: "test-token",
+  password: undefined,
+  allowTailscale: false,
+};
+
+function authRateLimiter(options: { exemptLoopback?: boolean; pruneIntervalMs?: number } = {}) {
+  return createGatewayAuthRateLimiter(
+    { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, ...options },
+    { scheduler: createTestGatewayScheduler() },
+  );
+}
+
+async function expectCanvasStatus(
+  listener: CanvasGatewayListener,
+  path: string,
+  status: number,
+  headers?: Record<string, string>,
+) {
+  const response = await fetchCanvas(canvasUrl(listener, path), { headers });
+  expect(response.status).toBe(status);
+  return response;
+}
+
 type CanvasHostHandler = {
-  rootDir: string;
-  basePath: string;
   handleHttpRequest: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   handleUpgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => boolean;
-  close: () => Promise<void>;
 };
 
 async function fetchCanvas(input: string, init?: RequestInit): Promise<Response> {
@@ -59,14 +81,7 @@ async function fetchCanvas(input: string, init?: RequestInit): Promise<Response>
   }
 }
 
-async function listen(
-  server: ReturnType<typeof createGatewayHttpServer>,
-  host = "127.0.0.1",
-): Promise<{
-  host: string;
-  port: number;
-  close: () => Promise<void>;
-}> {
+async function listen(server: ReturnType<typeof createGatewayHttpServer>, host = "127.0.0.1") {
   const sockets = new Set<Socket>();
   server.on("connection", (socket) => {
     sockets.add(socket);
@@ -80,7 +95,6 @@ async function listen(
   const addr = server.address();
   const port = typeof addr === "object" && addr ? addr.port : 0;
   return {
-    host,
     port,
     close: async () => {
       for (const socket of sockets) {
@@ -214,13 +228,6 @@ function canvasUrl(listener: CanvasGatewayListener, path = CANVAS_HOST_PATH): st
   return `http://127.0.0.1:${listener.port}${path}`;
 }
 
-async function fetchCanvasHost(
-  listener: CanvasGatewayListener,
-  init?: RequestInit,
-): Promise<Response> {
-  return await fetchCanvas(canvasUrl(listener), init);
-}
-
 async function expectMalformedRequestTargetsRejected(params: {
   listener: CanvasGatewayListener;
   headers?: readonly string[];
@@ -235,7 +242,7 @@ async function expectMalformedRequestTargetsRejected(params: {
     expect(response).toMatch(/^HTTP\/1\.1 401 /);
   }
 
-  const res = await fetchCanvasHost(params.listener);
+  const res = await fetchCanvas(canvasUrl(params.listener));
   expect(res.status).toBe(401);
 }
 
@@ -243,10 +250,10 @@ async function expectRepeatedCanvasAuthAttemptsRateLimited(
   listener: CanvasGatewayListener,
   headers: Record<string, string>,
 ): Promise<Response> {
-  const first = await fetchCanvasHost(listener, { headers });
+  const first = await fetchCanvas(canvasUrl(listener), { headers });
   expect(first.status).toBe(401);
 
-  const second = await fetchCanvasHost(listener, { headers });
+  const second = await fetchCanvas(canvasUrl(listener), { headers });
   expect(second.status).toBe(429);
   return second;
 }
@@ -285,11 +292,11 @@ const allowCanvasHostHttp: CanvasHostHandler["handleHttpRequest"] = async (req, 
   return true;
 };
 async function withCanvasGatewayHarness(params: {
-  resolvedAuth: ResolvedGatewayAuth;
+  resolvedAuth?: ResolvedGatewayAuth;
   getResolvedAuth?: () => ResolvedGatewayAuth;
   listenHost?: string;
   rateLimiter?: ReturnType<typeof createGatewayAuthRateLimiter>;
-  handleHttpRequest: CanvasHostHandler["handleHttpRequest"];
+  handleHttpRequest?: CanvasHostHandler["handleHttpRequest"];
   resolvePluginNodeCapabilityRoute?: Parameters<
     typeof attachGatewayUpgradeHandler
   >[0]["resolvePluginNodeCapabilityRoute"];
@@ -307,9 +314,6 @@ async function withCanvasGatewayHarness(params: {
     maxPayload: MAX_PREAUTH_PAYLOAD_BYTES,
   });
   const canvasHandler: CanvasHostHandler = {
-    rootDir: "test",
-    basePath: "/canvas",
-    close: async () => {},
     handleUpgrade: (req, socket, head) => {
       const url = new URL(req.url ?? "/", "http://localhost");
       if (url.pathname !== CANVAS_WS_PATH) {
@@ -321,7 +325,7 @@ async function withCanvasGatewayHarness(params: {
       });
       return true;
     },
-    handleHttpRequest: params.handleHttpRequest,
+    handleHttpRequest: params.handleHttpRequest ?? allowCanvasHostHttp,
   };
 
   const httpServer = createGatewayHttpServer({
@@ -343,7 +347,7 @@ async function withCanvasGatewayHarness(params: {
     },
     resolvePluginNodeCapabilityRoute:
       params.resolvePluginNodeCapabilityRoute ?? (() => ({ surface: "canvas" })),
-    resolvedAuth: params.resolvedAuth,
+    resolvedAuth: params.resolvedAuth ?? tokenResolvedAuth,
     getResolvedAuth: params.getResolvedAuth,
     rateLimiter: params.rateLimiter,
   });
@@ -361,7 +365,7 @@ async function withCanvasGatewayHarness(params: {
       params.resolvePluginNodeCapabilityRoute ?? (() => ({ surface: "canvas" })),
     clients,
     preauthConnectionBudget: createPreauthConnectionBudget(8),
-    resolvedAuth: params.resolvedAuth,
+    resolvedAuth: params.resolvedAuth ?? tokenResolvedAuth,
     getResolvedAuth: params.getResolvedAuth,
     rateLimiter: params.rateLimiter,
     desktopSessionRegistry: params.desktopSessionRegistry,
@@ -371,39 +375,30 @@ async function withCanvasGatewayHarness(params: {
   try {
     await params.run({ listener, clients });
   } finally {
-    for (const ws of canvasWss.clients) {
-      ws.terminate();
+    const servers = [
+      ["canvas", canvasWss],
+      ["gateway", wss],
+    ] as const;
+    for (const [, server] of servers) {
+      for (const ws of server.clients) {
+        ws.terminate();
+      }
     }
-    for (const ws of wss.clients) {
-      ws.terminate();
+    for (const [name, server] of servers) {
+      await withTimeout(
+        new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        }),
+        SERVER_CLOSE_TIMEOUT_MS,
+        { message: `${name} websocket server close timed out` },
+      );
     }
-    await withTimeout(
-      new Promise<void>((resolve) => {
-        canvasWss.close(() => resolve());
-      }),
-      SERVER_CLOSE_TIMEOUT_MS,
-      { message: "canvas websocket server close timed out" },
-    );
-    await withTimeout(
-      new Promise<void>((resolve) => {
-        wss.close(() => resolve());
-      }),
-      SERVER_CLOSE_TIMEOUT_MS,
-      { message: "gateway websocket server close timed out" },
-    );
     await listener.close();
     params.rateLimiter?.dispose();
   }
 }
 
 describe("gateway plugin node capability auth", () => {
-  const tokenResolvedAuth: ResolvedGatewayAuth = {
-    mode: "token",
-    token: "test-token",
-    password: undefined,
-    allowTailscale: false,
-  };
-
   const withLoopbackTrustedProxy = async (run: () => Promise<void>, prefix?: string) => {
     await withTempConfig({
       cfg: {
@@ -419,63 +414,49 @@ describe("gateway plugin node capability auth", () => {
   test("authorizes canvas HTTP/WS via node-scoped capability and rejects misuse", async () => {
     await withLoopbackTrustedProxy(async () => {
       await withCanvasGatewayHarness({
-        resolvedAuth: tokenResolvedAuth,
-        handleHttpRequest: allowCanvasHostHttp,
         run: async ({ listener, clients }) => {
-          const host = "127.0.0.1";
           const webchatCapability = "webchat-cap";
           const expiredNodeCapability = "expired-node";
           const activeNodeCapability = "active-node";
           const activeCanvasPath = scopedCanvasPath(activeNodeCapability, `${CANVAS_HOST_PATH}/`);
           const activeWsPath = scopedCanvasPath(activeNodeCapability, CANVAS_WS_PATH);
 
-          const unauthCanvas = await fetchCanvas(
-            `http://${host}:${listener.port}${CANVAS_HOST_PATH}/`,
-          );
-          expect(unauthCanvas.status).toBe(401);
-
-          const malformedScoped = await fetchCanvas(
-            `http://${host}:${listener.port}${CANVAS_CAPABILITY_PATH_PREFIX}/broken`,
-          );
-          expect(malformedScoped.status).toBe(401);
+          await expectCanvasStatus(listener, `${CANVAS_HOST_PATH}/`, 401);
+          await expectCanvasStatus(listener, `${CANVAS_CAPABILITY_PATH_PREFIX}/broken`, 401);
 
           clients.add(makeWsClient(webchatCapability, { role: "operator", mode: "webchat" }));
 
-          const webchatCapabilityAllowed = await fetchCanvas(
-            `http://${host}:${listener.port}${scopedCanvasPath(webchatCapability, `${CANVAS_HOST_PATH}/`)}`,
+          await expectCanvasStatus(
+            listener,
+            scopedCanvasPath(webchatCapability, `${CANVAS_HOST_PATH}/`),
+            200,
           );
-          expect(webchatCapabilityAllowed.status).toBe(200);
 
           clients.add(makeWsClient(expiredNodeCapability, { expiresAtMs: Date.now() - 1 }));
 
-          const expiredCapabilityBlocked = await fetchCanvas(
-            `http://${host}:${listener.port}${scopedCanvasPath(expiredNodeCapability, `${CANVAS_HOST_PATH}/`)}`,
+          await expectCanvasStatus(
+            listener,
+            scopedCanvasPath(expiredNodeCapability, `${CANVAS_HOST_PATH}/`),
+            401,
           );
-          expect(expiredCapabilityBlocked.status).toBe(401);
 
           const activeNodeClient = makeWsClient(activeNodeCapability);
           clients.add(activeNodeClient);
 
-          const scopedCanvas = await fetchCanvas(
-            `http://${host}:${listener.port}${activeCanvasPath}`,
-          );
-          expect(scopedCanvas.status).toBe(200);
+          const scopedCanvas = await expectCanvasStatus(listener, activeCanvasPath, 200);
           expect(await scopedCanvas.text()).toBe("ok");
 
           const scopedA2ui = await fetchCanvas(
-            `http://${host}:${listener.port}${scopedCanvasPath(activeNodeCapability, `${A2UI_PATH}/`)}`,
+            `http://127.0.0.1:${listener.port}${scopedCanvasPath(activeNodeCapability, `${A2UI_PATH}/`)}`,
           );
           expect([200, 404, 503]).toContain(scopedA2ui.status);
 
-          await expectWsConnected(`ws://${host}:${listener.port}${activeWsPath}`);
+          await expectWsConnected(`ws://127.0.0.1:${listener.port}${activeWsPath}`);
 
           clients.delete(activeNodeClient);
 
-          const disconnectedNodeBlocked = await fetchCanvas(
-            `http://${host}:${listener.port}${activeCanvasPath}`,
-          );
-          expect(disconnectedNodeBlocked.status).toBe(401);
-          await expectWsRejected(`ws://${host}:${listener.port}${activeWsPath}`, {});
+          await expectCanvasStatus(listener, activeCanvasPath, 401);
+          await expectWsRejected(`ws://127.0.0.1:${listener.port}${activeWsPath}`, {});
         },
       });
     }, "openclaw-canvas-auth-test-");
@@ -483,19 +464,9 @@ describe("gateway plugin node capability auth", () => {
 
   test("does not charge a stale bearer when a valid node capability succeeds", async () => {
     await withLoopbackTrustedProxy(async () => {
-      const rateLimiter = createGatewayAuthRateLimiter(
-        {
-          maxAttempts: 1,
-          windowMs: 60_000,
-          lockoutMs: 60_000,
-          pruneIntervalMs: 0,
-        },
-        { scheduler: createTestGatewayScheduler() },
-      );
+      const rateLimiter = authRateLimiter({ pruneIntervalMs: 0 });
       await withCanvasGatewayHarness({
-        resolvedAuth: tokenResolvedAuth,
         rateLimiter,
-        handleHttpRequest: allowCanvasHostHttp,
         run: async ({ listener, clients }) => {
           const capability = "active-node";
           clients.add(makeWsClient(capability));
@@ -504,26 +475,21 @@ describe("gateway plugin node capability auth", () => {
             "x-forwarded-for": "203.0.113.99",
           };
 
-          const scopedCanvas = await fetchCanvas(
-            `http://127.0.0.1:${listener.port}${scopedCanvasPath(capability, `${CANVAS_HOST_PATH}/`)}`,
-            { headers: proxyHeaders },
+          await expectCanvasStatus(
+            listener,
+            scopedCanvasPath(capability, `${CANVAS_HOST_PATH}/`),
+            200,
+            proxyHeaders,
           );
-          expect(scopedCanvas.status).toBe(200);
           await expectWsConnected(
             `ws://127.0.0.1:${listener.port}${scopedCanvasPath(capability, CANVAS_WS_PATH)}`,
             proxyHeaders,
           );
 
-          const sharedSecretControl = await fetchCanvas(
-            `http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`,
-            {
-              headers: {
-                authorization: "Bearer test-token",
-                "x-forwarded-for": "203.0.113.99",
-              },
-            },
-          );
-          expect(sharedSecretControl.status).toBe(200);
+          await expectCanvasStatus(listener, `${CANVAS_HOST_PATH}/`, 200, {
+            authorization: "Bearer test-token",
+            "x-forwarded-for": "203.0.113.99",
+          });
         },
       });
     });
@@ -532,16 +498,7 @@ describe("gateway plugin node capability auth", () => {
   test("revalidates a node capability after awaited bearer auth", async () => {
     setRuntimeConfigSnapshot({});
     const capability = "active-node";
-    const rateLimiter = createGatewayAuthRateLimiter(
-      {
-        maxAttempts: 1,
-        windowMs: 60_000,
-        lockoutMs: 60_000,
-        exemptLoopback: false,
-        pruneIntervalMs: 0,
-      },
-      { scheduler: createTestGatewayScheduler() },
-    );
+    const rateLimiter = authRateLimiter({ exemptLoopback: false, pruneIntervalMs: 0 });
     const client = makeWsClient(capability);
     const result = authorizePluginNodeCapabilityRequest({
       req: {
@@ -569,23 +526,19 @@ describe("gateway plugin node capability auth", () => {
   test("does not let node capability fallback bypass missing proxy attribution", async () => {
     setRuntimeConfigSnapshot({});
     await withCanvasGatewayHarness({
-      resolvedAuth: tokenResolvedAuth,
-      handleHttpRequest: allowCanvasHostHttp,
       run: async ({ listener, clients }) => {
         const capability = "active-node";
         clients.add(makeWsClient(capability));
 
-        const response = await fetchCanvas(
-          `http://127.0.0.1:${listener.port}${scopedCanvasPath(capability, `${CANVAS_HOST_PATH}/`)}`,
+        const response = await expectCanvasStatus(
+          listener,
+          scopedCanvasPath(capability, `${CANVAS_HOST_PATH}/`),
+          403,
           {
-            headers: {
-              authorization: "Bearer stale-token",
-              "x-forwarded-for": "203.0.113.99",
-            },
+            authorization: "Bearer stale-token",
+            "x-forwarded-for": "203.0.113.99",
           },
         );
-
-        expect(response.status).toBe(403);
         await expect(response.json()).resolves.toMatchObject({
           error: { type: "proxy_attribution_required" },
         });
@@ -596,8 +549,6 @@ describe("gateway plugin node capability auth", () => {
   test("rejects malformed raw HTTP request targets without disrupting gateway", async () => {
     setRuntimeConfigSnapshot({});
     await withCanvasGatewayHarness({
-      resolvedAuth: tokenResolvedAuth,
-      handleHttpRequest: allowCanvasHostHttp,
       run: async ({ listener }) => {
         await expectMalformedRequestTargetsRejected({ listener });
       },
@@ -607,8 +558,6 @@ describe("gateway plugin node capability auth", () => {
   test("rejects malformed raw WebSocket upgrade targets without disrupting gateway", async () => {
     setRuntimeConfigSnapshot({});
     await withCanvasGatewayHarness({
-      resolvedAuth: tokenResolvedAuth,
-      handleHttpRequest: allowCanvasHostHttp,
       run: async ({ listener }) => {
         await expectMalformedRequestTargetsRejected({
           listener,
@@ -629,9 +578,7 @@ describe("gateway plugin node capability auth", () => {
     let currentAuth = tokenResolvedAuth;
 
     await withCanvasGatewayHarness({
-      resolvedAuth: tokenResolvedAuth,
       getResolvedAuth: () => currentAuth,
-      handleHttpRequest: allowCanvasHostHttp,
       run: async ({ listener }) => {
         const url = `ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`;
 
@@ -656,17 +603,8 @@ describe("gateway plugin node capability auth", () => {
 
   test("returns 429 for repeated failed canvas auth attempts (HTTP + WS upgrade)", async () => {
     await withLoopbackTrustedProxy(async () => {
-      const rateLimiter = createGatewayAuthRateLimiter(
-        {
-          maxAttempts: 1,
-          windowMs: 60_000,
-          lockoutMs: 60_000,
-          exemptLoopback: false,
-        },
-        { scheduler: createTestGatewayScheduler() },
-      );
+      const rateLimiter = authRateLimiter({ exemptLoopback: false });
       await withCanvasGatewayHarness({
-        resolvedAuth: tokenResolvedAuth,
         rateLimiter,
         handleHttpRequest: async () => false,
         run: async ({ listener }) => {
@@ -702,17 +640,8 @@ describe("gateway plugin node capability auth", () => {
 
   test("rejects spoofed loopback forwarding headers from trusted proxies", async () => {
     await withLoopbackTrustedProxy(async () => {
-      const rateLimiter = createGatewayAuthRateLimiter(
-        {
-          maxAttempts: 1,
-          windowMs: 60_000,
-          lockoutMs: 60_000,
-          exemptLoopback: true,
-        },
-        { scheduler: createTestGatewayScheduler() },
-      );
+      const rateLimiter = authRateLimiter({ exemptLoopback: true });
       await withCanvasGatewayHarness({
-        resolvedAuth: tokenResolvedAuth,
         listenHost: "0.0.0.0",
         rateLimiter,
         handleHttpRequest: async () => false,
@@ -757,17 +686,18 @@ describe("gateway plugin node capability auth", () => {
     >;
     try {
       await withCanvasGatewayHarness({
-        resolvedAuth: tokenResolvedAuth,
         handleHttpRequest: async () => false,
         resolvePluginNodeCapabilityRoute: () => undefined,
         desktopSessionRegistry,
         run: async ({ listener }) => {
-          const minted = mintDesktopObserverToken({
-            sourceKey: "worker:boundary",
-            ownerEpoch: 4,
-            control: false,
-            attachment: { kind: "unix-socket", socketPath: localSocketPath },
-          });
+          const mintToken = () =>
+            mintDesktopObserverToken({
+              sourceKey: "worker:boundary",
+              ownerEpoch: 4,
+              control: false,
+              attachment: { kind: "unix-socket", socketPath: localSocketPath },
+            });
+          const minted = mintToken();
           const url = `ws://127.0.0.1:${listener.port}${DESKTOP_OBSERVE_PATH}?token=${minted.token}`;
           const ws = new WebSocket(url);
           const received = new Promise<Buffer>((resolve, reject) => {
@@ -783,12 +713,7 @@ describe("gateway plugin node capability auth", () => {
 
           // A draining Gateway must refuse new desktop observers like every other
           // core upgrade; otherwise restart/suspension leaks long-lived sockets.
-          const draining = mintDesktopObserverToken({
-            sourceKey: "worker:boundary",
-            ownerEpoch: 4,
-            control: false,
-            attachment: { kind: "unix-socket", socketPath: localSocketPath },
-          });
+          const draining = mintToken();
           markGatewayRestartDraining();
           try {
             await expectWsRejected(

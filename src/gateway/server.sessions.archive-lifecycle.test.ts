@@ -49,6 +49,39 @@ const {
 
 const archiveFixture = createFixtureLifetime();
 
+async function createArchiveSession(
+  name: string,
+  entry: Parameters<typeof sessionStoreEntry>[1] = {},
+) {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = `agent:main:${name}`;
+  const sessionId = `session-${name}`;
+  const runId = `run-${name}`;
+  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId, entry) } });
+  return { storePath, sessionKey, sessionId, runId };
+}
+
+function archiveSession(
+  sessionKey: string,
+  sessionId: string,
+  options: Parameters<typeof directSessionReq>[2] = {},
+) {
+  return directSessionReq(
+    "sessions.patch",
+    { key: sessionKey, archived: true, expectedSessionId: sessionId },
+    options,
+  );
+}
+
+function expectArchiveUnavailable(
+  result: Awaited<ReturnType<typeof archiveSession>>,
+  storePath: string,
+  sessionKey: string,
+) {
+  expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE", retryable: true } });
+  expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+}
+
 function withArchiveCleanup(
   signal: AbortSignal,
   run: (fixture: {
@@ -98,13 +131,8 @@ test("sessions.patch cancels active work and commits only after admission and te
   signal,
 }) =>
   withArchiveCleanup(signal, async ({ track, releaseOnAbort, dispose }) => {
-    const { storePath } = await createSessionStoreDir();
-    const sessionKey = "agent:main:archive-active";
-    const sessionId = "session-archive-active";
-    const runId = "run-archive-active";
-    await writeSessionStore({
-      entries: { [sessionKey]: sessionStoreEntry(sessionId) },
-    });
+    const { storePath, sessionKey, sessionId, runId } =
+      await createArchiveSession("archive-active");
     const interrupted = createDeferredCore();
     const admission = await beginSessionWorkAdmission({
       signal,
@@ -127,14 +155,10 @@ test("sessions.patch cancels active work and commits only after admission and te
     });
     dispose(active.unsubscribe);
     const archive = track(
-      directSessionReq(
-        "sessions.patch",
-        { key: sessionKey, archived: true, expectedSessionId: sessionId },
-        {
-          context: active.context,
-          client: { connId: "archive-writer", connect: { scopes: ["operator.write"] } } as never,
-        },
-      ),
+      archiveSession(sessionKey, sessionId, {
+        context: active.context,
+        client: { connId: "archive-writer", connect: { scopes: ["operator.write"] } } as never,
+      }),
     );
     await racePromiseWithAbortSignal(interrupted.promise, signal);
     expect(active.controller.signal.aborted).toBe(true);
@@ -179,21 +203,16 @@ test("identity changes fence archive before cancellation and force fresh authori
   signal,
 }) =>
   withArchiveCleanup(signal, async ({ track, releaseOnAbort, dispose }) => {
-    const { storePath } = await createSessionStoreDir();
-    const sessionKey = "agent:main:archive-sharing-revocation";
-    const sessionId = "session-archive-sharing-revocation";
-    const runId = "run-archive-sharing-revocation";
+    const { storePath, sessionKey, sessionId, runId } = await createArchiveSession(
+      "archive-sharing-revocation",
+      {
+        createdVia: "operator",
+        createdActor: { type: "human", source: "profile", id: "archive-owner" },
+        visibility: "shared",
+      },
+    );
     const owner = identifiedClient("archive-owner");
     const archiver = identifiedClient("archive-owner");
-    await writeSessionStore({
-      entries: {
-        [sessionKey]: sessionStoreEntry(sessionId, {
-          createdVia: "operator",
-          createdActor: { type: "human", source: "profile", id: "archive-owner" },
-          visibility: "shared",
-        }),
-      },
-    });
     let interrupted = false;
     const admission = await beginSessionWorkAdmission({
       signal,
@@ -310,21 +329,16 @@ test.for(["creator", "changed identity"] as const)(
   "archive permits sharing during drain and revalidates the %s before commit",
   (archiveRole, { signal }) =>
     withArchiveCleanup(signal, async ({ track, releaseOnAbort, dispose }) => {
-      const { storePath } = await createSessionStoreDir();
-      const sessionKey = "agent:main:archive-before-sharing";
-      const sessionId = "session-archive-before-sharing";
-      const runId = "run-archive-before-sharing";
+      const { storePath, sessionKey, sessionId, runId } = await createArchiveSession(
+        "archive-before-sharing",
+        {
+          createdVia: "operator",
+          createdActor: { type: "human", source: "profile", id: "archive-owner" },
+          visibility: "shared",
+        },
+      );
       const owner = identifiedClient("archive-owner");
       const archiver = identifiedClient("archive-owner");
-      await writeSessionStore({
-        entries: {
-          [sessionKey]: sessionStoreEntry(sessionId, {
-            createdVia: "operator",
-            createdActor: { type: "human", source: "profile", id: "archive-owner" },
-            visibility: "shared",
-          }),
-        },
-      });
       const admission = await beginSessionWorkAdmission({
         signal,
         scope: storePath,
@@ -478,14 +492,11 @@ test("alias archive lets an earlier alias mutation finish before canonical recla
   }));
 
 test("sessions.patch rechecks authoritative worker work before projection and releases the drain", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:archive-worker-recheck";
-  const sessionId = "session-archive-worker-recheck";
-  const retained = {
-    abortedLastRun: true,
-    lifecycleRunId: "retained-worker-run",
-  };
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId, retained) } });
+  const retained = { abortedLastRun: true, lifecycleRunId: "retained-worker-run" };
+  const { storePath, sessionKey, sessionId } = await createArchiveSession(
+    "archive-worker-recheck",
+    retained,
+  );
   const release = vi.fn();
   const workerEnvironmentService = createWorkerInferenceDrainService(() => ({
     drained: Promise.resolve(),
@@ -493,28 +504,21 @@ test("sessions.patch rechecks authoritative worker work before projection and re
     release,
   }));
 
-  const archived = await directSessionReq(
-    "sessions.patch",
-    { key: sessionKey, archived: true, expectedSessionId: sessionId },
-    {
-      context: {
-        workerEnvironmentService,
-      },
+  const archived = await archiveSession(sessionKey, sessionId, {
+    context: {
+      workerEnvironmentService,
     },
-  );
+  });
 
-  expect(archived.ok).toBe(false);
-  expect(archived.error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
-  expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+  expectArchiveUnavailable(archived, storePath, sessionKey);
   expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject(retained);
   expect(release).toHaveBeenCalledOnce();
 });
 
 test("sessions.patch fails closed when active worker inference refuses its archive drain", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:archive-worker-drain-unavailable";
-  const sessionId = "session-archive-worker-drain-unavailable";
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+  const { storePath, sessionKey, sessionId } = await createArchiveSession(
+    "archive-worker-drain-unavailable",
+  );
 
   const workerEnvironmentService = {};
   registerWorkerInferenceSessionControl(workerEnvironmentService, {
@@ -526,28 +530,20 @@ test("sessions.patch fails closed when active worker inference refuses its archi
     resolveSessionTargetForRunId: () => undefined,
   });
 
-  const archived = await directSessionReq(
-    "sessions.patch",
-    { key: sessionKey, archived: true, expectedSessionId: sessionId },
-    {
-      context: {
-        workerEnvironmentService,
-      },
+  const archived = await archiveSession(sessionKey, sessionId, {
+    context: {
+      workerEnvironmentService,
     },
-  );
+  });
 
-  expect(archived.ok).toBe(false);
-  expect(archived.error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
-  expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+  expectArchiveUnavailable(archived, storePath, sessionKey);
 });
 
 test("sessions.patch returns UNAVAILABLE when terminal persistence fails", ({ signal }) =>
   withArchiveCleanup(signal, async ({ track, releaseOnAbort, dispose }) => {
-    const { storePath } = await createSessionStoreDir();
-    const sessionKey = "agent:main:archive-persistence-failure";
-    const sessionId = "session-archive-persistence-failure";
-    const runId = "run-archive-persistence-failure";
-    await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+    const { storePath, sessionKey, sessionId, runId } = await createArchiveSession(
+      "archive-persistence-failure",
+    );
     const persistence = createDeferredCore();
     releaseOnAbort(() => persistence.resolve());
     const active = activeRunContext({
@@ -559,19 +555,13 @@ test("sessions.patch returns UNAVAILABLE when terminal persistence fails", ({ si
     });
     dispose(active.unsubscribe);
     const archive = track(
-      directSessionReq(
-        "sessions.patch",
-        { key: sessionKey, archived: true, expectedSessionId: sessionId },
-        {
-          context: active.context,
-        },
-      ),
+      archiveSession(sessionKey, sessionId, {
+        context: active.context,
+      }),
     );
     const archived = await racePromiseWithAbortSignal(archive, signal);
     expect(active.controller.signal.aborted).toBe(true);
-    expect(archived.ok).toBe(false);
-    expect(archived.error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
-    expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+    expectArchiveUnavailable(archived, storePath, sessionKey);
   }));
 
 test("sessions.patch rejects main and global archives before cancellation side effects", async () => {
@@ -776,11 +766,8 @@ test("sessions.patch rejects a generation replaced after the exact preparation r
   signal,
 }) =>
   withArchiveCleanup(signal, async ({ track, releaseOnAbort, dispose }) => {
-    const { storePath } = await createSessionStoreDir();
-    const sessionKey = "agent:main:archive-generation-race";
-    const sessionId = "session-archive-generation-race";
-    const runId = "run-archive-generation-race";
-    await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+    const { storePath, sessionKey, sessionId, runId } =
+      await createArchiveSession("archive-generation-race");
     const persistence = createDeferredCore();
     const active = activeRunContext({ runId, sessionId, sessionKey, persistence });
     dispose(active.unsubscribe);
@@ -792,17 +779,13 @@ test("sessions.patch rejects a generation replaced after the exact preparation r
     });
     releaseOnAbort(() => persistence.resolve());
     const archive = track(
-      directSessionReq(
-        "sessions.patch",
-        { key: sessionKey, archived: true, expectedSessionId: sessionId },
-        {
-          context: {
-            ...active.context,
-            workerSessionPlacementService: placementReader(() => placement),
-            workerPlacementDispatchService: { dispatch, reclaim },
-          },
+      archiveSession(sessionKey, sessionId, {
+        context: {
+          ...active.context,
+          workerSessionPlacementService: placementReader(() => placement),
+          workerPlacementDispatchService: { dispatch, reclaim },
         },
-      ),
+      }),
     );
     await waitForArchivePhase(active.terminalStarted, archive, signal);
     expect(active.controller.signal.aborted).toBe(true);
