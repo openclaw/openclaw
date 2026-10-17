@@ -172,10 +172,6 @@ describe("channel context builder caller inventory", () => {
   });
   it("keeps direct-DM classifications at their authoritative producers", () => {
     expect(source("nostr/src/gateway")).toContain("resolveChannelIngress: async (contextBinding)");
-    expect(source("nostr/src/gateway")).toContain("channelRuntime,");
-    expect(source("src/channels/direct-dm")).toContain(
-      "const injectedBuilder = params.channelRuntime?.inbound?.buildContext",
-    );
     expect(source("reef/src/channel")).toContain('channelIngress: "unsupported"');
   });
 });

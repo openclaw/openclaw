@@ -63,6 +63,7 @@ it.each([
         throw new Error("Expected the configured native-command ACP binding");
       }
       const effectsPath = state.path("acp-effects.log");
+      const effects = () => readFile(effectsPath, "utf8");
       const acceptedOptions = new Map<string, string>();
       const readinessAwaited = createDeferredCore();
       const releaseReadiness = createDeferredCore();
@@ -118,22 +119,33 @@ it.each([
       const manager = getAcpSessionManager();
       try {
         if (preparation !== "initialize") {
-          expect(
-            await ensureConfiguredAcpBindingSession({
-              cfg,
-              spec: {
-                ...spec,
-                ...(preparation === "replace"
-                  ? { cwd: state.root }
-                  : { model: "fixture/previous" }),
-                ...(preparation === "settle" ? { thinking: "off" } : {}),
-              },
-            }),
-          ).toMatchObject({ ok: true });
+          const existing = { ...spec };
+          if (preparation === "replace") {
+            existing.cwd = state.root;
+          } else {
+            existing.model = "fixture/previous";
+          }
+          if (preparation === "settle") {
+            existing.thinking = "off";
+          }
+          expect(await ensureConfiguredAcpBindingSession({ cfg, spec: existing })).toMatchObject({
+            ok: true,
+          });
         }
         await writeFile(effectsPath, "");
         const target = { cfg, agentId: "main", sessionKey: binding.statefulTarget.sessionKey };
         const before = manager.resolveSession(target);
+        const expectUnchanged = async () => {
+          expect([await effects(), manager.resolveSession(target)]).toEqual(["", before]);
+        };
+        const expectDenied = (interaction: Awaited<ReturnType<typeof run>>) => {
+          expect(interaction.followUp).toHaveBeenCalledWith({
+            content: "You are not authorized to use this command.",
+            ephemeral: true,
+          });
+          expect(dispatch).not.toHaveBeenCalled();
+        };
+        const command = { commandName, argument: commandName === "think" ? "high" : undefined };
         if (
           commandName === "think" &&
           ["initialize", "configure", "replace"].includes(preparation)
@@ -142,23 +154,21 @@ it.each([
           expect(completed.respond).toHaveBeenCalledWith(
             expect.arrayContaining([expect.objectContaining({ value: "high" })]),
           );
-          expect(await readFile(effectsPath, "utf8")).toBe("");
-          expect(manager.resolveSession(target)).toEqual(before);
+          await expectUnchanged();
           setUserProfileRole(profile.id, "member");
           const revoked = await autocomplete();
           expect(revoked.respond).toHaveBeenCalledWith([]);
-          expect(await readFile(effectsPath, "utf8")).toBe("");
-          expect(manager.resolveSession(target)).toEqual(before);
+          await expectUnchanged();
           setUserProfileRole(profile.id, "admin");
         }
-        const denied = await run({
-          senderId: "100000000000000009",
-          commandName,
-          argument: commandName === "think" ? "high" : undefined,
-        });
+        const denied = await run({ ...command, senderId: "100000000000000009" });
         if (commandName === "status") {
           let lastUpdatedAt: number | undefined;
-          const expectUnchangedAcpOwner = () => {
+          const expectStatus = async (interaction: Awaited<ReturnType<typeof run>>) => {
+            expect(interaction.followUp).toHaveBeenCalledWith(
+              expect.objectContaining({ content: expect.stringContaining("Session:") }),
+            );
+            expect(await effects()).toBe("");
             const after = manager.resolveSession(target);
             if (
               before.kind !== "ready" ||
@@ -170,73 +180,44 @@ it.each([
               return;
             }
             // Delivered /status replies are transcript activity, not ACP ownership changes.
-            const { updatedAt: beforeUpdatedAt, ...beforeEntry } = before.entry;
-            const { updatedAt: afterUpdatedAt, ...afterEntry } = after.entry;
-            expect({ ...after, entry: afterEntry }).toEqual({ ...before, entry: beforeEntry });
-            expect(afterUpdatedAt).toBeGreaterThanOrEqual(lastUpdatedAt ?? beforeUpdatedAt);
-            lastUpdatedAt = afterUpdatedAt;
+            expect({
+              ...after,
+              entry: { ...after.entry, updatedAt: before.entry.updatedAt },
+            }).toEqual(before);
+            expect(after.entry.updatedAt).toBeGreaterThanOrEqual(
+              lastUpdatedAt ?? before.entry.updatedAt,
+            );
+            lastUpdatedAt = after.entry.updatedAt;
           };
-          expect(denied.followUp).toHaveBeenCalledWith(
-            expect.objectContaining({
-              content: expect.stringContaining("Session:"),
-            }),
-          );
-          expect(await readFile(effectsPath, "utf8")).toBe("");
-          expectUnchangedAcpOwner();
-          const ownerStatus = await run({ commandName });
-          expect(ownerStatus.followUp).toHaveBeenCalledWith(
-            expect.objectContaining({
-              content: expect.stringContaining("Session:"),
-            }),
-          );
-          expect(await readFile(effectsPath, "utf8")).toBe("");
-          expectUnchangedAcpOwner();
+          await expectStatus(denied);
+          await expectStatus(await run(command));
           expect(dispatch).not.toHaveBeenCalled();
           return;
         }
-        expect(denied.followUp).toHaveBeenCalledWith({
-          content: "You are not authorized to use this command.",
-          ephemeral: true,
-        });
-        expect(await readFile(effectsPath, "utf8")).toBe("");
-        expect(manager.resolveSession(target)).toEqual(before);
-        expect(dispatch).not.toHaveBeenCalled();
-
+        expectDenied(denied);
+        await expectUnchanged();
         pauseReadiness = true;
-        const allowedRun = run({
-          commandName,
-          argument: commandName === "think" ? "high" : undefined,
-        });
+        const allowedRun = run(command);
         if (preparation === "revoke" || preparation === "settle") {
           await readinessAwaited.promise;
           setUserProfileRole(profile.id, "member");
           releaseReadiness.resolve();
-          const rejected = await allowedRun;
-          expect(rejected.followUp).toHaveBeenCalledWith({
-            content: "You are not authorized to use this command.",
-            ephemeral: true,
-          });
-          expect(dispatch).not.toHaveBeenCalled();
+          expectDenied(await allowedRun);
           const after = manager.resolveSession(target);
           if (preparation === "revoke") {
-            expect(await readFile(effectsPath, "utf8")).toBe("");
-            expect(after).toEqual(before);
+            await expectUnchanged();
           } else {
-            expect(await readFile(effectsPath, "utf8")).toBe("configure:model\n");
-            expect(after.kind).toBe("ready");
-            if (after.kind === "ready") {
-              expect(after.meta.runtimeOptions).toMatchObject({
-                model: spec.model,
-                thinking: "off",
-              });
-            }
+            expect(await effects()).toBe("configure:model\n");
+            expect(after).toMatchObject({
+              kind: "ready",
+              meta: { runtimeOptions: { model: spec.model, thinking: "off" } },
+            });
           }
           return;
         }
         await allowedRun;
         expect(dispatch).toHaveBeenCalledOnce();
-        const effects = (await readFile(effectsPath, "utf8")).trim().split("\n");
-        expect(effects).toEqual(
+        expect((await effects()).trim().split("\n")).toEqual(
           preparation === "configure"
             ? ["configure:model"]
             : preparation === "replace"
@@ -244,13 +225,10 @@ it.each([
               : ["initialize"],
         );
         const after = manager.resolveSession(target);
-        expect(after.kind).toBe("ready");
-        if (after.kind === "ready") {
-          expect(after.meta.runtimeOptions).toMatchObject({
-            model: spec.model,
-            cwd: state.workspaceDir,
-          });
-        }
+        expect(after).toMatchObject({
+          kind: "ready",
+          meta: { runtimeOptions: { model: spec.model, cwd: state.workspaceDir } },
+        });
       } finally {
         releaseReadiness.resolve();
         await disposeAcpSessionManagerInstance(manager, "test complete");
