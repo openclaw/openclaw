@@ -1,6 +1,7 @@
-import type { DecisionBatch } from "openclaw/plugin-sdk/decisions";
+import { decisionBatchV1ToV2 } from "openclaw/plugin-sdk/decisions";
+import type { DecisionBatch, DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
 import { describe, expect, it, vi } from "vitest";
-import { createOnnxProvider } from "./decisions.js";
+import { createOnnxProvider, createPreparedOnnxProvider } from "./decisions.js";
 import { OnnxWorkerError } from "./protocol.js";
 import type { InferenceWorkerClient } from "./worker-client.js";
 
@@ -9,6 +10,119 @@ const context = () => ({
   model,
   signal: new AbortController().signal,
   deadlineMonotonicMs: performance.now() + 1000,
+});
+
+describe("ONNX prepared decision contract", () => {
+  const preparedContext = (): DecisionProviderContextV2 => ({
+    ...context(),
+    model: { id: model, provider: "onnx", name: "GLiClass Edge" },
+    config: {},
+    auth: { apiKey: "onnx-local", mode: "api-key" },
+    isAdmissible: () => true,
+  });
+
+  it("preserves classifier estimates and the physical worker admission callback", async () => {
+    const classify = vi.fn<InferenceWorkerClient["classify"]>().mockResolvedValue([
+      { logits: [Math.log(3), 0], inputTokens: 12 },
+      { logits: [0, Math.log(2), Math.log(7)], inputTokens: 15 },
+      { logits: [Math.log(4), 0], inputTokens: 14 },
+    ]);
+    const input = decisionBatchV1ToV2(batch)!;
+    const ctx = preparedContext();
+    const result = await createPreparedOnnxProvider({ classify }, vi.fn()).evaluate(input, ctx);
+    expect(result).toMatchObject({
+      status: "ok",
+      result: {
+        model,
+        answers: {
+          topic: { type: "choice", choice: "holiday" },
+          rating: { type: "score", score: expect.closeTo(1.6) },
+          mentioned: { type: "boolean", probabilityTrue: 0.8 },
+        },
+        usage: { inputTokens: 41 },
+      },
+    });
+    expect(classify).toHaveBeenCalledWith(model, expect.any(Array), ctx.signal, ctx.isAdmissible);
+  });
+
+  it("rejects unsupported V2 content and reasoning before worker dispatch", async () => {
+    const classify = vi.fn<InferenceWorkerClient["classify"]>();
+    const provider = createPreparedOnnxProvider({ classify }, vi.fn());
+    const input = decisionBatchV1ToV2(batch)!;
+    await expect(
+      provider.evaluate(
+        { ...input, state: { type: "list", items: [{ id: "one", content: "first" }] } },
+        preparedContext(),
+      ),
+    ).resolves.toEqual({ status: "unavailable", reason: "unsupported-input" });
+    await expect(
+      provider.evaluate(input, { ...preparedContext(), reasoning: "on" }),
+    ).resolves.toEqual({ status: "unavailable", reason: "unsupported-input" });
+    expect(classify).not.toHaveBeenCalled();
+  });
+
+  it("keeps per-model limits and canonical billing facts during V1 catalog enrichment", async () => {
+    const native = {
+      provider: "onnx",
+      id: "pinned",
+      name: "Pinned",
+      inference: {
+        chat: false as const,
+        decision: {
+          protocol: "pinned",
+          input: ["text" as const],
+          billing: {
+            unit: "tokens" as const,
+            source: "provider-docs" as const,
+            usdPerMillion: { input: 0.01 },
+          },
+        },
+      },
+    };
+    const legacy = {
+      provider: "onnx",
+      id: "deberta-v3-base-zeroshot-v2.0",
+      name: "DeBERTa",
+      inference: {
+        chat: false as const,
+        decision: {
+          protocol: "decision-v1",
+          input: ["text" as const],
+          questions: {
+            choice: {
+              probabilities: "provider-defined" as const,
+              abstention: false,
+              maxOptions: 64,
+            },
+            score: {
+              probabilities: "provider-defined" as const,
+              abstention: false,
+              maxOptions: 64,
+            },
+          },
+          limits: {
+            maxQuestions: 32,
+            maxInputTokens: 512,
+            inputTokenScope: "state-plus-each-criterion" as const,
+          },
+        },
+      },
+    };
+    const provider = createPreparedOnnxProvider({ classify: vi.fn() }, vi.fn());
+    const rows = await provider.provider?.augmentModelCatalog?.({
+      env: {},
+      entries: [native, legacy],
+    });
+    expect(rows?.find((row) => row.id === "pinned")).toEqual(native);
+    expect(rows?.find((row) => row.id === legacy.id)?.inference?.decision).toMatchObject({
+      protocol: "onnx-classifier",
+      questions: {
+        choice: { probabilities: "categorical", minOptions: 2, maxOptions: 64 },
+        score: { probabilities: "categorical", minOptions: 2, maxOptions: 64 },
+      },
+      limits: legacy.inference.decision.limits,
+    });
+  });
 });
 const batch: DecisionBatch = {
   state: { message: "A pleasant holiday" },

@@ -186,7 +186,10 @@ const prefixCorrectionCases = [
     leadChunks.join("") +
     replacementChunks[0].replace("one", value) +
     replacementChunks.slice(1).join(""),
-  correctedStatement: `The current value is ${value} for this item.`,
+  correctedText:
+    `The current value is ${value} for this item. Continue. ` +
+    "Keep this sentence unchanged. Retain each result. " +
+    "The final summary also remains unchanged.",
 }));
 
 it.each([...cases, ...prefixCorrectionCases])(
@@ -348,10 +351,9 @@ it.each([...cases, ...prefixCorrectionCases])(
       if ("prefixCorrection" in scenario) {
         const recipientText = delivered.map((payload) => payload.text ?? "");
         const additional = recipientText.slice(beforeTerminalCount);
-        if (scenario.correctedStatement) {
-          expect(additional.join(" ")).toContain(scenario.correctedStatement);
-        }
-        expect(recipientText.join(" ").split(scenario.marker)).toHaveLength(2);
+        // A rewritten native item is delivered again without reconstructing its
+        // historical chunk breaks. The unchanged earlier prefix stays delivered once.
+        expect(additional.join(" ")).toBe(scenario.correctedText);
         for (const sentence of scenario.unchangedLeadSentences) {
           expect.soft(recipientText.join(" ").split(sentence)).toHaveLength(2);
         }

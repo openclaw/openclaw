@@ -173,7 +173,7 @@ When a single-session Delete or Archive is blocked by unsynced work on an offlin
 
 ### Reclaim through the API
 
-For a broken or runaway cloud environment, an administrator can call the admin-only `environments.destroy` method with `{ "force": true }` as a last resort. Forced teardown durably marks the placement failed and abandons any unreconciled remote result before destroying the environment. For an unreachable paired device, forced destroy succeeds without waiting for reconnection and discards unsynced device changes.
+For a broken or runaway cloud environment, an administrator can call the admin-only `environments.destroy` method with `{ "force": true }` as a last resort. Forced teardown durably marks the placement failed and abandons any unreconciled remote result before destroying the environment. Delayed cleanup remains bound to the placement and turn claim captured for abandonment; it preserves a replacement owner and its pending workspace result. For an unreachable paired device, forced destroy succeeds without waiting for reconnection and discards unsynced device changes.
 
 The equivalent write-scoped session RPC is:
 

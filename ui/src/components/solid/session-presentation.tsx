@@ -32,7 +32,7 @@ import { Icon } from "./icon.tsx";
 import { SessionOwnerAvatar, SessionOwnerChip } from "./session-owner-chip.tsx";
 import "../tooltip.ts";
 
-export type SessionRunVisibility = typeof sessionRunVisibility;
+type SessionRunVisibility = typeof sessionRunVisibility;
 export { sessionRunVisibility };
 
 function SessionAttentionIcon(props: { attention: SidebarSessionAttention }) {

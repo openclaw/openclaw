@@ -2,10 +2,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, Show } from "solid-js";
 import { vi } from "vitest";
-import type {
-  SolidController,
-  SolidControllerHost,
-} from "../../../lib/reactive/solid-controller-host.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
@@ -16,7 +12,6 @@ import {
 } from "../components/chat-thread-interactions.ts";
 import { ChatThread } from "../components/chat-thread-view.tsx";
 import type { ChatTranscript } from "../components/chat-transcript-controller.ts";
-import { withTranscriptTestLifecycle } from "../components/chat-transcript-owner.test-support.ts";
 import { TranscriptSearch } from "../components/chat-transcript-search.tsx";
 import type { ChatTranscriptSession } from "../components/chat-transcript-session.ts";
 import {
@@ -115,35 +110,25 @@ export function render(value: NativeContent, container: HTMLElement): void {
   flush();
 }
 
-export class TranscriptTestHost extends HTMLElement implements SolidControllerHost {
+export class TranscriptTestHost extends HTMLElement {
+  transcript?: ChatTranscript;
   readonly transcriptRoot = document.createElement("div");
   renderTranscript: () => NativeContent = () => null;
   committedRenders = 0;
-  private readonly controllers = new Set<SolidController>();
   private pending: Promise<boolean> | undefined;
 
-  addController(controller: SolidController) {
-    this.controllers.add(controller);
-  }
-  removeController(controller: SolidController) {
-    this.controllers.delete(controller);
-  }
   get updateComplete() {
     return this.pending ?? Promise.resolve(true);
   }
 
   connectedCallback() {
     this.append(this.transcriptRoot);
-    for (const controller of this.controllers) {
-      controller.hostConnected?.();
-    }
-    this.requestUpdate();
+    this.transcript?.start();
+    this.requestRender();
   }
 
   disconnectedCallback() {
-    for (const controller of this.controllers) {
-      controller.hostDisconnected?.();
-    }
+    this.transcript?.dispose();
     queueMicrotask(() => {
       if (!this.isConnected) {
         render(null, this.transcriptRoot);
@@ -151,21 +136,16 @@ export class TranscriptTestHost extends HTMLElement implements SolidControllerHo
     });
   }
 
-  requestUpdate() {
+  requestRender() {
     this.pending ??= Promise.resolve().then(() => {
       if (!this.isConnected) {
         this.pending = undefined;
         return true;
       }
-      for (const controller of this.controllers) {
-        controller.hostUpdate?.();
-      }
       this.pending = undefined;
       render(this.renderTranscript(), this.transcriptRoot);
       this.committedRenders += 1;
-      for (const controller of this.controllers) {
-        controller.hostUpdated?.();
-      }
+      this.transcript?.update();
       return true;
     });
   }
@@ -209,7 +189,7 @@ export async function mountTestTranscript(
   return {
     container,
     renderRows,
-    transcript: withTranscriptTestLifecycle(transcript),
+    transcript,
     get session() {
       return currentSession;
     },

@@ -241,13 +241,10 @@ export type StandingIntentOperations = {
 export type StandingIntentWorkerOperations = {
   [Key in keyof StandingIntentOperations]: {
     input: StandingIntentOperations[Key]["input"];
-    output:
-      | { kind: "schema-prepared" }
-      | {
-          kind: "result";
-          value: StandingIntentOperations[Key]["output"];
-          nextDueAt: number | null;
-        };
+    output: {
+      value: StandingIntentOperations[Key]["output"];
+      nextDueAt: number | null;
+    };
   };
 };
 

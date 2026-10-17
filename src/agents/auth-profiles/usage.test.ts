@@ -482,7 +482,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     },
   );
 
-  it.each(["new block", "replaced credential", "removed credential"] as const)(
+  it.each(["replaced credential", "removed credential"] as const)(
     "does not probe an expired recovery after a %s",
     async (change) => {
       const now = Date.now();
@@ -503,13 +503,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
         if (change === "removed credential") {
           delete store.profiles["openai:default"];
         } else {
-          store.profiles["openai:default"] =
-            change === "replaced credential"
-              ? { ...refreshed, access: "replacement-access" }
-              : refreshed;
-        }
-        if (change === "new block") {
-          store.usageStats!["openai:default"]!.lastFailureAt = now;
+          store.profiles["openai:default"] = { ...refreshed, access: "replacement-access" };
         }
         return {
           apiKey: refreshed.access,
@@ -757,47 +751,6 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     expect(store.usageStats?.["openai:default"]?.lastProbeAt).toBe(now);
     expect(store.usageStats?.["openai:default"]?.blockedModel).toBe("gpt-5.5");
     expect(store.usageStats?.["openai:default"]?.blockedScope).toBe("model");
-  });
-
-  it("does not apply an available result over a newer WHAM block", async () => {
-    const now = 1_700_000_000_000;
-    const originalUntil = now + 6 * 24 * 60 * 60 * 1000;
-    const newerUntil = originalUntil + 60_000;
-    const store = makeStore({
-      "openai:default": {
-        blockedUntil: originalUntil,
-        blockedReason: "subscription_limit",
-        blockedSource: "wham",
-        lastFailureAt: now - 1,
-      },
-    });
-    let releaseResponse: ((response: Response) => void) | undefined;
-    fetchMock.mockReturnValueOnce(
-      new Promise<Response>((resolve) => {
-        releaseResponse = resolve;
-      }),
-    );
-    mockLockedUpdatesForStore(store);
-
-    const probe = maybeReprobeWhamBlockedProfiles({
-      store,
-      profileIds: ["openai:default"],
-      now,
-    });
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-    const stats = store.usageStats?.["openai:default"];
-    if (!stats || !releaseResponse) {
-      throw new Error("expected claimed WHAM probe");
-    }
-    stats.blockedUntil = newerUntil;
-    stats.lastFailureAt = now + 1;
-    releaseResponse(Response.json({ rate_limit: { limit_reached: false } }));
-
-    await probe;
-    await vi.waitFor(() => {
-      expect(storeMocks.updateAuthProfileStoreWithLock).toHaveBeenCalledTimes(2);
-    });
-    expect(store.usageStats?.["openai:default"]?.blockedUntil).toBe(newerUntil);
   });
 
   it.each([

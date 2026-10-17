@@ -18,7 +18,7 @@ vi.mock("../../app/native-gateways.runtime.ts", () => ({
 
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
+import { UI_COMMAND_EVENT, type UiCommandDetail } from "../../components/panel-toggle-contract.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -50,6 +50,10 @@ type RenderedPane = HTMLElement & {
   onOpenSplitView?: () => void;
 };
 
+const panesIn = (page: ChatPage) => [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
+function command(detail: UiCommandDetail) {
+  window.dispatchEvent(new CustomEvent(UI_COMMAND_EVENT, { cancelable: true, detail }));
+}
 async function showSession(page: ChatPage, sessionKey: string): Promise<void> {
   page.data = { sessionKey };
   await settleChatPage(page);
@@ -95,15 +99,13 @@ describe("chat page close navigation", () => {
     flush();
     const page = expectDefined(
       view.container.querySelector<ChatPage>("openclaw-chat-page"),
-      "mounted route page",
+      "openclaw-chat-page",
     );
     await settleChatPage(page);
-    expect(
-      [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].map((pane) => pane.sessionKey),
-    ).toEqual([firstKey]);
+    expect(panesIn(page).map((pane) => pane.sessionKey)).toEqual([firstKey]);
     const firstPane = expectDefined(
       page.querySelector<RenderedPane>("openclaw-chat-pane"),
-      "first route pane",
+      "openclaw-chat-pane",
     );
 
     for (const presented of [false, true]) {
@@ -118,9 +120,7 @@ describe("chat page close navigation", () => {
       expect(page.contains(firstPane)).toBe(true);
     }
     const nextPane = expectDefined(
-      [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].find(
-        (pane) => pane.sessionKey === nextKey,
-      ),
+      panesIn(page).find((pane) => pane.sessionKey === nextKey),
       "replacement route pane",
     );
     expect(nextPane).toMatchObject({ presented: true, routeFace: "dashboard" });
@@ -141,14 +141,12 @@ describe("chat page close navigation", () => {
     await settleChatPage(page);
     const pane = expectDefined(
       page.querySelector<RenderedPane>("openclaw-chat-pane"),
-      "bound Home pane",
+      "openclaw-chat-pane",
     );
     pane.onOpenSplitView?.();
     await settleChatPage(page);
     const added = expectDefined(
-      [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].find(
-        (candidate) => candidate !== pane,
-      ),
+      panesIn(page).find((candidate) => candidate !== pane),
       "second split pane",
     );
     added.onClosePane?.(added.paneId);
@@ -238,7 +236,7 @@ describe("chat page close navigation", () => {
           page.data = match.data;
         }
       });
-      const panes = () => [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
+      const panes = () => panesIn(page);
       try {
         await router.start(
           {
@@ -255,15 +253,10 @@ describe("chat page close navigation", () => {
         document.body.append(page);
         await settleChatPage(page);
         const survivor = expectDefined(panes()[0], "original survivor");
-        window.dispatchEvent(
-          new CustomEvent(UI_COMMAND_EVENT, {
-            cancelable: true,
-            detail: {
-              command: { kind: "split", direction: "right", sessionKey: keys[1] },
-              sessionKey: keys[0],
-            },
-          }),
-        );
+        command({
+          command: { kind: "split", direction: "right", sessionKey: keys[1] },
+          sessionKey: keys[0],
+        });
         await expectDefined(navigations.at(-1), "split navigation");
         await settleChatPage(page);
         const closing = expectDefined(
@@ -287,12 +280,7 @@ describe("chat page close navigation", () => {
         await settleChatPage(page);
         page.presented = true;
         await settleChatPage(page);
-        window.dispatchEvent(
-          new CustomEvent(UI_COMMAND_EVENT, {
-            cancelable: true,
-            detail: { command: { kind: "close-pane", sessionKey: keys[0] } },
-          }),
-        );
+        command({ command: { kind: "close-pane", sessionKey: keys[0] } });
         await settleChatPage(page);
         expect(panes()).toEqual([survivor]);
 
@@ -351,16 +339,11 @@ describe("chat page close navigation", () => {
     await settleChatPage(page);
     expect(page.querySelector('[data-unbound-pane-id="saved-pane"]')).not.toBeNull();
     const sessionKey = "agent:research:chosen";
-    window.dispatchEvent(
-      new CustomEvent(UI_COMMAND_EVENT, {
-        cancelable: true,
-        detail: { command: { kind: "navigate", sessionKey }, agentId: "research" },
-      }),
-    );
+    command({ command: { kind: "navigate", sessionKey }, agentId: "research" });
     await settleChatPage(page);
     const admitted = expectDefined(
       page.querySelector<RenderedPane>("openclaw-chat-pane"),
-      "admitted pane",
+      "openclaw-chat-pane",
     );
     expect(admitted.paneId).toBe("saved-pane");
     await showSession(page, sessionKey);

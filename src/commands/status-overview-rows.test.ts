@@ -36,6 +36,42 @@ function backup(createdAt: number, kind: "git" | "archive", status: "ok" | "fail
   return { id: "fixture", archivePath: "", createdAt, kind, status };
 }
 
+it("keeps default status concise and reports configured family choices without secrets", () => {
+  expect(
+    findRowValue(buildStatusCommandOverviewRows(params), "Database engines (configured)"),
+  ).toBeUndefined();
+  const all = buildStatusAllOverviewRows({
+    surface: params.surface,
+    summary: params.summary,
+    osLabel: params.osLabel,
+    configPath: "/fixture/openclaw.json",
+    secretDiagnosticsCount: 0,
+    agentStatus: params.agentStatus,
+  });
+  expect(findRowValue(all, "Database engines (configured)")).toContain(
+    "state: default=sqlite, override=inherit, effective=sqlite",
+  );
+  params.surface = {
+    ...params.surface,
+    cfg: {
+      ...params.surface.cfg,
+      database: {
+        families: { workboard: { engine: "postgres" } },
+        postgres: { connection: "postgres://fixture:secret@host/database" },
+      },
+    },
+  };
+  const value = findRowValue(
+    buildStatusCommandOverviewRows(params),
+    "Database engines (configured)",
+  );
+  expect(value).toContain("state: default=sqlite, override=inherit, effective=sqlite");
+  expect(value).toContain("workboard: default=sqlite, override=postgres, effective=postgres");
+  expect(value).toContain("quarantine: default=sqlite, override=fixed local, effective=sqlite");
+  expect(value).not.toContain("secret");
+  expect(value).toContain("PostgreSQL is experimental");
+});
+
 it("shows the latest offsite attempt beside a newer local backup", () => {
   vi.spyOn(Date, "now").mockReturnValue(3_600_000);
   params.backupFreshness = {

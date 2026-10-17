@@ -99,6 +99,10 @@ export function SessionPicker(props: {
           const stops = [
             listen(surface, "overlay-after-hide", (event) => {
               if (event.target === surface) {
+                const active = surface.ownerDocument.activeElement;
+                if (!active || active === surface.ownerDocument.body || surface.contains(active)) {
+                  trigger.focus();
+                }
                 props.state.onPopoverAfterHide();
                 props.onAfterHide?.();
               }

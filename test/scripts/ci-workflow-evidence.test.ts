@@ -906,7 +906,7 @@ describe("ci workflow guards", () => {
       ).toHaveLength(1);
       expect(job.steps[ownerIndex]).toEqual({
         name: "Prepare Git owner",
-        uses: "openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475",
+        uses: "openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef",
       });
       expect(job.steps[ownerIndex - 1]?.name).toBe(
         job === qa.jobs.validate_selected_ref

@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
+import { createBuildSmokeEnv } from "../../../lib/build-smoke-env.mts";
 import { resolveNpmJsonEntries } from "../../../lib/npm-json-output.mts";
 import {
   readJson as readRecoveryJson,
@@ -372,16 +373,8 @@ async function customRestore() {
   const customState = path.join(home, ".openclaw");
   const store = path.join(customState, "custom-sessions", "sessions.json");
   const transcript = path.join(path.dirname(store), "restore-original.jsonl");
-  const customConfig = path.join(customState, "openclaw.json");
   const agentDir = path.join(customState, "custom-agents", "main");
-  const env = {
-    ...process.env,
-    HOME: home,
-    USERPROFILE: home,
-    OPENCLAW_HOME: home,
-    OPENCLAW_STATE_DIR: customState,
-    OPENCLAW_CONFIG_PATH: customConfig,
-  };
+  const env = createBuildSmokeEnv(home, process.env);
   fs.mkdirSync(home, { recursive: true });
   await command(
     "restore-config",

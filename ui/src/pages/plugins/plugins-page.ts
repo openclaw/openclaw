@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
+import { createEffect, createSignal, onSettled } from "solid-js";
 import {
   pathForRoute,
   pluginCatalogIdFromPath,
@@ -182,6 +182,7 @@ export function createPluginsPage(options: {
   onSettled(() => {
     const runtimeConfig = context.runtimeConfig;
     let configAutoSaveStatus = runtimeConfig.state.configAutoSaveStatus;
+    // Preserve saving-to-saved receipts so plugin edits refresh the catalog even within one render turn.
     return runtimeConfig.subscribe(() => {
       const nextStatus = runtimeConfig.state.configAutoSaveStatus;
       const completedSave = configAutoSaveStatus === "saving" && nextStatus === "saved";
@@ -194,6 +195,7 @@ export function createPluginsPage(options: {
     });
   });
 
+  // Route changes synchronize the Gateway binding and retire page requests.
   createEffect(
     () => [options.routeData(), options.surface()] as const,
     ([nextRouteData, nextSurface]) => {
@@ -227,11 +229,14 @@ export function createPluginsPage(options: {
         state.detail?.catalog ?? state.catalogDetail?.result,
       ),
   );
-  onSettled(() => listen(document, "keydown", handleDocumentKeydown, true));
-  onCleanup(() => {
-    active = false;
-    icons.reset();
-    gateway.dispose();
+  onSettled(() => {
+    const stopKeydown = listen(document, "keydown", handleDocumentKeydown, true);
+    return () => {
+      stopKeydown();
+      active = false;
+      icons.reset();
+      gateway.dispose();
+    };
   });
 
   const handleDocumentKeydown = (event: Event) => {

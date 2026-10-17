@@ -241,12 +241,7 @@ describe("openclaw plugins install ClawHub E2E", () => {
     try {
       const env = buildEnv(stateDir, testServer.registry);
       const first = await spawnOpenClaw(
-        [
-          "plugins",
-          "install",
-          `clawhub:${PACKAGE_NAME}@${PACKAGE_VERSION}`,
-          "--accept-capabilities",
-        ],
+        ["plugins", "install", `${PACKAGE_NAME}@${PACKAGE_VERSION}`, "--accept-capabilities"],
         { cwd: process.cwd(), env },
       );
       expect(first.status, first.stderr || first.stdout).toBe(0);

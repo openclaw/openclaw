@@ -408,18 +408,29 @@ it("joins managed media promotion before publishing an internal restart delivery
         }
       });
       let settled = false;
-      const delivery = deliverQueuedSessionDelivery({
-        deps: {},
-        queueContext: captureOpenClawStateWorkerContext(),
-        entry: createGeneratedMediaDeliveryEntry({
-          id: "media-completion",
-          sessionKey,
-          messageId: "image:media-completion:agent-loop",
-          route: { channel: "webchat", to: sessionKey, chatType: "direct" },
-          expectedMediaUrls: [mediaUrl],
-          preparedMediaBlocks: { [mediaUrl]: blocks },
-        }),
+      const queueContext = captureOpenClawStateWorkerContext();
+      const {
+        id: _id,
+        enqueuedAt: _enqueuedAt,
+        retryCount: _retryCount,
+        ...payload
+      } = createGeneratedMediaDeliveryEntry({
+        id: "unused",
+        sessionKey,
+        messageId: "image:media-completion:agent-loop",
+        idempotencyKey: "image:media-completion:agent-loop",
+        route: { channel: "webchat", to: sessionKey, chatType: "direct" },
+        expectedMediaUrls: [mediaUrl],
+        preparedMediaBlocks: { [mediaUrl]: blocks },
       });
+      const queued = await queueStorage.loadPendingSessionDelivery(
+        await queueStorage.enqueueSessionDelivery(payload, queueContext),
+        queueContext,
+      );
+      if (!queued) {
+        throw new Error("expected queued media completion");
+      }
+      const delivery = deliverQueuedSessionDelivery({ deps: {}, queueContext, entry: queued });
       const outcome = delivery.then(
         () => {
           settled = true;
@@ -446,7 +457,9 @@ it("joins managed media promotion before publishing an internal restart delivery
           { record: { messageId: null, retentionClass: "transient" } },
         ]);
         release.resolve();
-        await outcome;
+        // The host message is published before the completion turn is scheduled.
+        await expect(outcome).rejects.toThrow("its completion turn follows");
+        expect(dispatch).not.toHaveBeenCalled();
         expect(updates).toHaveLength(1);
         expect(updates[0]).toMatchObject({ messageId: expect.any(String) });
         expect(await listManagedImageRecordEntries({ stateDir: state.stateDir })).toMatchObject([

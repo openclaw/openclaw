@@ -310,14 +310,12 @@ select {
   color: var(--warning-text);
 }
 
-.badge-pass,
-.badge-completed {
+.badge-pass {
   background: var(--success-soft);
   color: var(--success-text);
 }
 
-.badge-fail,
-.badge-failed {
+.badge-fail {
   background: var(--danger-soft);
   color: var(--danger-text);
 }
@@ -3489,10 +3487,6 @@ button.evidence-matrix-cell {
 }
 
 /* --- Utility --- */
-.text-muted {
-  color: var(--text-secondary);
-}
-
 .text-dimmed {
   color: var(--text-tertiary);
 }

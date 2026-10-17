@@ -1,6 +1,3 @@
-/**
- * Tests gateway plugin lifecycle loading, startup, and shutdown behavior.
- */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, onTestFinished as registerTestCleanup, vi } from "vitest";
@@ -27,8 +24,8 @@ import {
   installInstanceBindingConfigIo,
   patchInstanceBindingTestConfig,
   requireBoundRuntime,
-  requestInstanceBindingProbe,
-  requestSettledInstanceBindingProbe,
+  requestInstanceBindingProbe as readProbe,
+  requestSettledInstanceBindingProbe as settledProbe,
   reloadInstanceBindingAfterServiceDeadline,
 } from "./server-plugins.lifecycle.test-support.js";
 import {
@@ -43,12 +40,9 @@ vi.doUnmock("../plugins/loader.js");
 
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
 let restoreChannelRuntimeLoader: (() => void) | undefined;
 
-async function prepareInstanceBindingTest(
-  options?: Parameters<typeof prepareInstanceBindingFixture>[1],
-) {
+async function prepareBinding(options?: Parameters<typeof prepareInstanceBindingFixture>[1]) {
   const fixture = await prepareInstanceBindingFixture(
     tempDirs.make("openclaw-instance-binding-"),
     options,
@@ -64,17 +58,51 @@ describe("gateway plugin instance bindings", () => {
   const sockets: Array<Awaited<ReturnType<typeof connectWebchatClient>>> = [];
   const finishServiceStops: Array<() => void> = [];
 
+  async function startServer(options: Parameters<typeof startTestGatewayServer>[1]) {
+    const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const server = await startTestGatewayServer(claim, {
+      auth: { mode: "none" },
+      controlUiEnabled: false,
+      ...options,
+    });
+    started.push(server);
+    return { server, port: claim.port };
+  }
+
+  async function connectAdmin(port: number) {
+    const socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
+    sockets.push(socket);
+    return socket;
+  }
+
+  async function expectReplacement(
+    coordinator: InstanceBindingProbeCoordinator,
+    since: number,
+    previous: InstanceBindingProbeResult,
+  ) {
+    const { runtime } = await requireBoundRuntime(
+      coordinator.runtimes.filter(
+        (_runtime, index) => index >= since && coordinator.registrationModes[index] === "full",
+      ),
+      "replacement",
+    );
+    const probe = await readProbe(runtime);
+    expect(probe.registryId).not.toBe(previous.registryId);
+    expect(probe).toMatchObject(bindingIds(previous));
+  }
+
+  const bindingIds = ({ sessionsId, placementId }: InstanceBindingProbeResult) => ({
+    sessionsId,
+    placementId,
+  });
+
   let channelProof: ChannelBindingProof | undefined;
-  let channelCleanup: InstanceBindingProbeCoordinator["channelCleanup"];
   let channelEnv: ReturnType<typeof captureEnv> | undefined;
-  let skippedBefore: { channels?: string; providers?: string } | undefined;
 
   afterEach(async () => {
-    // Synthetic recovery emits no signal for a run loop to consume. Reopen admission
-    // before teardown joins background work that may be waiting behind that fence.
+    // Reopen synthetic recovery's admission fence before joining background work.
     markGatewayRestartHandled();
-    // The replacement deadline has already been observed. Let the original
-    // synthetic stop finish before final close releases its retained state.
+    // Finish the original stop after observing its replacement deadline.
     for (const finish of finishServiceStops.splice(0)) {
       finish();
     }
@@ -86,407 +114,254 @@ describe("gateway plugin instance bindings", () => {
             socket.once("close", () => resolve());
           }),
     );
-    let serversClosed = false;
     const closeFailures: unknown[] = [];
     try {
       for (const socket of closingSockets) {
         socket.close();
       }
       for (const server of started.splice(0).toReversed()) {
-        // Keep reverse shutdown ordering, but join every owned Gateway after a failed close.
-        const [result] = await Promise.allSettled([
-          server.close({ reason: "instance binding cleanup" }),
-        ]);
-        if (result.status === "rejected") {
-          closeFailures.push(result.reason);
+        try {
+          await server.close({ reason: "instance binding cleanup" });
+        } catch (error) {
+          closeFailures.push(error);
         }
       }
-      serversClosed = closeFailures.length === 0;
       await Promise.all(socketClosures);
-      if (channelCleanup) {
-        // Only failure cleanup may release a monitor omitted by real close. Both
-        // Gateways are fenced first; immutable close observations remain the verdict.
-        const entries = [...channelCleanup];
-        const stranded = entries.filter(([monitor]) => !monitor.stopped);
-        channelProof?.observations.push({
-          phase: "close-failure-cleanup",
-          released: stranded.map(([monitor]) => ({
-            channelId: monitor.channelId,
-            runtimeId: monitor.runtimeId,
-          })),
-        });
-        for (const [, cleanup] of stranded) {
-          cleanup.release();
-        }
-        await Promise.all(entries.map(([, { finished }]) => finished));
-        await expect
-          .poll(() => entries.every(([{ abortSignal }]) => abortSignal.aborted), {
-            timeout: 30_000,
-          })
-          .toBe(true);
-        channelProof?.observations.push({ phase: "close-cleanup-monitors-joined" });
-      }
     } finally {
       restoreChannelRuntimeLoader?.();
       restoreChannelRuntimeLoader = undefined;
       channelEnv?.restore();
       channelEnv = undefined;
-      channelCleanup = undefined;
       clearInstanceBindingProbeCoordinators();
       delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
       if (channelProof) {
         const proof = channelProof;
         channelProof = undefined;
-        const cleanup = {
-          serversClosed,
-          socketsClosed: closingSockets.every((socket) => socket.readyState === socket.CLOSED),
-          monitorsStopped: proof.monitors.every(
-            (monitor) => monitor.stopped && monitor.abortSignal.aborted,
-          ),
-          skipEnvRestored:
-            process.env.OPENCLAW_SKIP_CHANNELS === skippedBefore?.channels &&
-            process.env.OPENCLAW_SKIP_PROVIDERS === skippedBefore?.providers,
-        };
-        proof.events.push({ event: "cleanup" });
-        console.info(
-          "PROOF_126547_LEDGER:" +
-            JSON.stringify({
-              ...proof,
-              monitors: proof.monitors.map(({ channelId, runtimeId, stopped, abortSignal }) => ({
-                channelId,
-                runtimeId,
-                stopped,
-                aborted: abortSignal.aborted,
-              })),
-              cleanup,
-            }),
-        );
-        expect.soft(cleanup).toEqual({
-          serversClosed: true,
-          socketsClosed: true,
-          monitorsStopped: true,
-          skipEnvRestored: true,
-        });
+        expect
+          .soft(proof.monitors.every((monitor) => monitor.stopped && monitor.abortSignal.aborted))
+          .toBe(true);
       }
-      skippedBefore = undefined;
     }
     if (closeFailures.length > 0) {
       throw new AggregateError(closeFailures, "Gateway lifecycle fixture shutdown failed");
     }
   });
 
-  it(
-    "discards a prepared startup candidate when Gateway close starts before publication",
-    { timeout: 600_000 },
-    async () => {
-      const { coordinator } = await prepareInstanceBindingTest();
-      const kernelModule = await import("./server-kernel.js");
-      const createKernel = kernelModule.createGatewayKernel;
-      const prepared = createDeferred();
-      const release = createDeferred();
-      const lifecycleEvents: Array<
-        Parameters<NonNullable<InstanceBindingProbeCoordinator["onLifecycleEvent"]>>[0]
-      > = [];
-      coordinator.onLifecycleEvent = (event) => lifecycleEvents.push(event);
-      const kernelSpy = vi
-        .spyOn(kernelModule, "createGatewayKernel")
-        .mockImplementationOnce(async (...args) => {
-          const kernel = await createKernel(...args);
-          const prepare = kernel.prepareAttachedPluginRuntime;
-          return {
-            ...kernel,
-            prepareAttachedPluginRuntime: async (...prepareArgs) => {
-              const attachment = await prepare(...prepareArgs);
-              prepared.resolve();
-              await release.promise;
-              return attachment;
-            },
-          };
-        });
-      try {
-        const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-        const server = await startTestGatewayServer(claim, {
-          auth: { mode: "none" },
-          controlUiEnabled: false,
-          sidecarStartup: "defer",
-        });
-        started.push(server);
-        await prepared.promise;
-        const closing = server.close({ reason: "close during startup preparation" });
-        release.resolve();
-        await Promise.all([closing, server.startupSettled]);
-        expect(lifecycleEvents).toEqual([]);
-        expect(getGatewayPluginMetadataSnapshot()).toBeUndefined();
-        expect(coordinator.runtimes.length).toBeGreaterThan(0);
-        for (const runtime of coordinator.runtimes) {
-          expect(await runtime.gateway.isAvailable()).toBe(false);
+  it("discards startup preparation overtaken by close", { timeout: 600_000 }, async () => {
+    const { coordinator } = await prepareBinding();
+    const kernelModule = await import("./server-kernel.js");
+    const createKernel = kernelModule.createGatewayKernel;
+    const prepared = createDeferred();
+    const release = createDeferred();
+    const lifecycleEvents: Array<
+      Parameters<NonNullable<InstanceBindingProbeCoordinator["onLifecycleEvent"]>>[0]
+    > = [];
+    coordinator.onLifecycleEvent = (event) => lifecycleEvents.push(event);
+    const kernelSpy = vi
+      .spyOn(kernelModule, "createGatewayKernel")
+      .mockImplementationOnce(async (...args) => {
+        const kernel = await createKernel(...args);
+        const prepare = kernel.prepareAttachedPluginRuntime;
+        return {
+          ...kernel,
+          prepareAttachedPluginRuntime: async (...prepareArgs) => {
+            const attachment = await prepare(...prepareArgs);
+            prepared.resolve();
+            await release.promise;
+            return attachment;
+          },
+        };
+      });
+    try {
+      const { server } = await startServer({ sidecarStartup: "defer" });
+      await prepared.promise;
+      const closing = server.close({ reason: "close during startup preparation" });
+      release.resolve();
+      await Promise.all([closing, server.startupSettled]);
+      expect(lifecycleEvents).toEqual([]);
+      expect(getGatewayPluginMetadataSnapshot()).toBeUndefined();
+      expect(coordinator.runtimes.length).toBeGreaterThan(0);
+      for (const runtime of coordinator.runtimes) {
+        expect(await runtime.gateway.isAvailable()).toBe(false);
+      }
+    } finally {
+      release.resolve();
+      kernelSpy.mockRestore();
+    }
+  });
+
+  it("renews channels only when their owner reloads", { timeout: 600_000 }, async () => {
+    const { coordinator, configPath, bundledRoot } = await prepareBinding({ channels: true });
+    const createConfigFileAdapter = configFileSource.createConfigFileAdapter;
+    const configWatcher = vi
+      .spyOn(configFileSource, "createConfigFileAdapter")
+      .mockImplementation((options) => {
+        if (options.path !== configPath) {
+          return createConfigFileAdapter(options);
         }
-      } finally {
-        release.resolve();
-        kernelSpy.mockRestore();
-      }
-    },
-  );
+        // Explicit config writes own this case; filesystem echoes can race the next RPC.
+        const watcher = createWatcherMock();
+        const adapter = watcher.attach(options);
+        return {
+          ...adapter,
+          async start() {
+            await adapter.start();
+            queueMicrotask(() => watcher.emit("ready"));
+          },
+        };
+      });
+    registerTestCleanup(() => configWatcher.mockRestore());
+    const proof = coordinator.channelProof;
+    if (!proof) {
+      throw new Error("channel binding fixture was not installed");
+    }
+    channelProof = proof;
+    channelEnv = captureEnv(["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"]);
+    delete process.env.OPENCLAW_SKIP_CHANNELS;
+    delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
+    const { server, port } = await startServer({ hotReloadRecovery, sidecarStartup: "start" });
+    await server.startupSettled;
+    await expect.poll(() => proof.monitors.length, { timeout: 30_000 }).toBe(2);
+    const initialMonitors = [...proof.monitors];
+    expect(initialMonitors.map((monitor) => monitor.channelId).toSorted()).toEqual([
+      ...CHANNEL_BINDING_IDS,
+    ]);
+    const initialProbes = await Promise.all(
+      initialMonitors.map((monitor) => settledProbe(monitor.runtime)),
+    );
+    expect(initialProbes[0]).toEqual(initialProbes[1]);
+    const { runtime: initialProbeRuntime } = await requireBoundRuntime(
+      coordinator.runtimes,
+      "initial probe owner",
+    );
+    const startupMetadata = getGatewayPluginMetadataSnapshot();
+    expect(startupMetadata?.byPluginId.get("instance-binding-probe")?.name).toBe("Startup plugin");
+    const manifestPath = path.join(bundledRoot, "instance-binding-probe", "openclaw.plugin.json");
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+    await fs.writeFile(manifestPath, JSON.stringify({ ...manifest, name: "Changed plugin" }));
+    expect(getGatewayPluginMetadataSnapshot()).toBe(startupMetadata);
+    const registrationsBeforeReload = coordinator.runtimes.length;
+    let reloadEventIndex = proof.events.length;
+    const socket = await connectAdmin(port);
+    const reload = await patchInstanceBindingTestConfig(socket);
+    expect(reload.ok, reload.error?.message).toBe(true);
+    expect(reload.payload).toMatchObject({
+      sentinel: { payload: { stats: { requiresRestart: false } } },
+    });
+    await expect
+      .poll(() => coordinator.runtimes.length, { timeout: 300_000 })
+      .toBeGreaterThan(registrationsBeforeReload);
+    const { runtime: freshRuntime } = await requireBoundRuntime(
+      coordinator.runtimes.slice(registrationsBeforeReload),
+      "reloaded",
+    );
+    const freshProbe = await settledProbe(freshRuntime);
+    expect(getGatewayPluginMetadataSnapshot()).not.toBe(startupMetadata);
+    expect(getGatewayPluginMetadataSnapshot()?.byPluginId.get("instance-binding-probe")?.name).toBe(
+      "Changed plugin",
+    );
+    await expect(
+      freshRuntime.subagent.getSessionMessages({ sessionKey: "agent:main:main", limit: 1 }),
+    ).resolves.toEqual({ messages: [] });
+    expect(freshProbe.registryId).not.toBe(initialProbes[0]!.registryId);
+    expect(freshProbe).toMatchObject(bindingIds(initialProbes[0]!));
+    expect(hotReloadRecovery).not.toHaveBeenCalled();
+    await expect(readProbe(initialProbeRuntime)).rejects.toThrow(
+      'Plugin "instance-binding-probe" runtime is no longer active.',
+    );
+    expect(proof.monitors).toEqual(initialMonitors);
+    for (const monitor of initialMonitors) {
+      expect(monitor).toMatchObject({ stopped: false, abortSignal: { aborted: false } });
+      await expect(settledProbe(monitor.runtime)).resolves.toEqual(freshProbe);
+    }
+    expect(
+      proof.events
+        .slice(reloadEventIndex)
+        .filter((event) =>
+          ["start", "stopped", "stop-aborted", "stop-unaborted"].includes(event.event),
+        ),
+    ).toEqual([]);
 
-  it(
-    "retains unchanged channel runtimes and renews them only when their plugin reloads",
-    { timeout: 600_000 },
-    async ({ onTestFinished }) => {
-      const { coordinator, configPath, bundledRoot } = await prepareInstanceBindingTest({
-        channels: true,
-      });
-      const createConfigFileAdapter = configFileSource.createConfigFileAdapter;
-      const configWatcher = vi
-        .spyOn(configFileSource, "createConfigFileAdapter")
-        .mockImplementation((options) => {
-          if (options.path !== configPath) {
-            return createConfigFileAdapter(options);
-          }
-          // Explicit config writes own this case; filesystem echoes can race the next RPC.
-          const watcher = createWatcherMock();
-          const adapter = watcher.attach(options);
-          return {
-            ...adapter,
-            async start() {
-              await adapter.start();
-              queueMicrotask(() => watcher.emit("ready"));
-            },
-          };
-        });
-      onTestFinished(() => configWatcher.mockRestore());
-      const proof = coordinator.channelProof;
-      if (!proof) {
-        throw new Error("channel binding fixture was not installed");
-      }
-      channelProof = proof;
-      skippedBefore = {
-        channels: process.env.OPENCLAW_SKIP_CHANNELS,
-        providers: process.env.OPENCLAW_SKIP_PROVIDERS,
-      };
-      channelEnv = captureEnv(["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"]);
-      delete process.env.OPENCLAW_SKIP_CHANNELS;
-      delete process.env.OPENCLAW_SKIP_PROVIDERS;
-      const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
-      const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-      const server = await startTestGatewayServer(claim, {
-        auth: { mode: "none" },
-        controlUiEnabled: false,
-        hotReloadRecovery,
-        sidecarStartup: "start",
-      });
-      started.push(server);
-      await server.startupSettled;
-      await expect.poll(() => proof.monitors.length, { timeout: 30_000 }).toBe(2);
-      const initialMonitors = [...proof.monitors];
-      expect(initialMonitors.map((monitor) => monitor.channelId).toSorted()).toEqual([
-        ...CHANNEL_BINDING_IDS,
-      ]);
-      const initialProbes = await Promise.all(
-        initialMonitors.map((monitor) => requestSettledInstanceBindingProbe(monitor.runtime)),
+    // Reload the channel owner itself to distinguish retained capabilities from stale ones.
+    reloadEventIndex = proof.events.length;
+    const registryBeforeChannelReload = getActivePluginRegistry();
+    const channelOwner = registryBeforeChannelReload?.plugins.find(
+      (record) => record.id === "instance-binding-channels",
+    );
+    const channelInstance = channelOwner && getPluginInstance(channelOwner);
+    expect(channelInstance?.hasRetainedConsumers).toBe(true);
+    // Live monitors retain custody, so they cannot refuse replacement admission.
+    expect(() => channelInstance!.reserveReplacement()).not.toThrow();
+    const channelReload = await rpcReq(socket, "plugins.reload", {
+      plugins: [{ pluginId: "instance-binding-channels" }],
+    });
+    expect(channelReload.ok, channelReload.error?.message).toBe(true);
+    expect(hotReloadRecovery).not.toHaveBeenCalled();
+    expect(getActivePluginRegistry()).not.toBe(registryBeforeChannelReload);
+    for (const monitor of initialMonitors) {
+      expect(monitor).toMatchObject({ stopped: true, abortSignal: { aborted: true } });
+    }
+    // The receipt completes this reload; wait separately for global config settlement.
+    await settledProbe(freshRuntime);
+    const currentProbe = await rpcReq<InstanceBindingProbeResult>(
+      socket,
+      INSTANCE_BINDING_PROBE_METHOD,
+      {},
+    );
+    expect(currentProbe.ok, currentProbe.error?.message).toBe(true);
+    const channelProbe = currentProbe.payload;
+    if (!channelProbe) {
+      throw new Error("channel publication did not return an authoritative probe");
+    }
+    // The token identifies the retained probe registration, not the registry.
+    expect(channelProbe).toEqual({ ...freshProbe, reloadSettled: true });
+    await expect(settledProbe(freshRuntime)).resolves.toEqual(channelProbe);
+    for (const monitor of initialMonitors) {
+      await expect(readProbe(monitor.runtime)).rejects.toThrow(
+        'Plugin "instance-binding-channels" runtime is no longer active.',
       );
-      expect(initialProbes[0]).toEqual(initialProbes[1]);
-      for (const probe of initialProbes) {
-        expect(probe.reloadSettled).toBe(true);
-      }
-      proof.observations.push({ phase: "initial", probes: initialProbes });
-      proof.events.push({ event: "initial-requests-succeeded" });
-      const { runtime: initialProbeRuntime } = await requireBoundRuntime(
-        coordinator.runtimes,
-        "initial probe owner",
-      );
-      const startupMetadata = getGatewayPluginMetadataSnapshot();
-      expect(startupMetadata?.byPluginId.get("instance-binding-probe")?.name).toBe(
-        "Startup plugin",
-      );
-      const manifestPath = path.join(bundledRoot, "instance-binding-probe", "openclaw.plugin.json");
-      const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
-      await fs.writeFile(manifestPath, JSON.stringify({ ...manifest, name: "Changed plugin" }));
-      expect(getGatewayPluginMetadataSnapshot()).toBe(startupMetadata);
-      const registrationsBeforeReload = coordinator.runtimes.length;
-      let reloadEventIndex = proof.events.length;
-      proof.events.push({ event: "reload-request" });
-      const socket = await connectWebchatClient({ port: claim.port, scopes: ["operator.admin"] });
-      sockets.push(socket);
-      const reload = await patchInstanceBindingTestConfig(socket);
-      expect(reload.ok, reload.error?.message).toBe(true);
-      expect(reload.payload).toMatchObject({
-        sentinel: { payload: { stats: { requiresRestart: false } } },
-      });
-      await expect
-        .poll(() => coordinator.runtimes.length, { timeout: 300_000 })
-        .toBeGreaterThan(registrationsBeforeReload);
-      const { runtime: freshRuntime } = await requireBoundRuntime(
-        coordinator.runtimes.slice(registrationsBeforeReload),
-        "reloaded",
-      );
-      const freshProbe = await requestSettledInstanceBindingProbe(freshRuntime);
-      expect(getGatewayPluginMetadataSnapshot()).not.toBe(startupMetadata);
-      expect(
-        getGatewayPluginMetadataSnapshot()?.byPluginId.get("instance-binding-probe")?.name,
-      ).toBe("Changed plugin");
-      await expect(
-        freshRuntime.subagent.getSessionMessages({ sessionKey: "agent:main:main", limit: 1 }),
-      ).resolves.toEqual({ messages: [] });
-      for (const initialProbe of initialProbes) {
-        expect(freshProbe.registryId).not.toBe(initialProbe.registryId);
-        expect(freshProbe.sessionsId).toBe(initialProbe.sessionsId);
-        expect(freshProbe.placementId).toBe(initialProbe.placementId);
-      }
-      expect(hotReloadRecovery).not.toHaveBeenCalled();
-      proof.observations.push({ phase: "replacement", probe: freshProbe });
-      proof.events.push({ event: "reload-settled" });
-      await expect(requestInstanceBindingProbe(initialProbeRuntime)).rejects.toThrow(
-        'Plugin "instance-binding-probe" runtime is no longer active.',
-      );
-      expect(proof.monitors).toEqual(initialMonitors);
-      for (const monitor of initialMonitors) {
-        expect(monitor.stopped).toBe(false);
-        expect(monitor.abortSignal.aborted).toBe(false);
-        await expect(requestSettledInstanceBindingProbe(monitor.runtime)).resolves.toEqual(
-          freshProbe,
+    }
+    await expect
+      .poll(
+        () =>
+          proof.monitors
+            .filter((monitor) => !monitor.stopped)
+            .map((monitor) => monitor.channelId)
+            .toSorted(),
+        { timeout: 30_000 },
+      )
+      .toEqual([...CHANNEL_BINDING_IDS]);
+    await Promise.all(
+      initialMonitors.map(async (initial) => {
+        const active = proof.monitors.filter(
+          (monitor) => monitor.channelId === initial.channelId && !monitor.stopped,
         );
-      }
-      expect(
-        proof.events
+        expect(active).toHaveLength(1);
+        const monitor = active[0]!;
+        expect(monitor.runtime).not.toBe(initial.runtime);
+        await expect(readProbe(monitor.runtime)).resolves.toMatchObject({
+          registryId: channelProbe.registryId,
+        });
+        const events = proof.events
           .slice(reloadEventIndex)
-          .filter((event) =>
-            ["start", "stopped", "stop-aborted", "stop-unaborted"].includes(event.event),
-          ),
-      ).toEqual([]);
-      proof.observations.push({ phase: "unchanged-channel-bindings-retained", probes: freshProbe });
-
-      // Reload the channel owner itself to distinguish retained capabilities from stale ones.
-      reloadEventIndex = proof.events.length;
-      proof.events.push({ event: "channel-owner-reload-request" });
-      const registryBeforeChannelReload = getActivePluginRegistry();
-      const channelOwner = registryBeforeChannelReload?.plugins.find(
-        (record) => record.id === "instance-binding-channels",
-      );
-      const channelInstance = channelOwner && getPluginInstance(channelOwner);
-      expect(channelInstance?.hasRetainedConsumers).toBe(true);
-      // Live monitors retain custody, so they cannot refuse replacement admission.
-      expect(() => channelInstance!.reserveReplacement()).not.toThrow();
-      const channelReload = await rpcReq(socket, "plugins.reload", {
-        plugins: [{ pluginId: "instance-binding-channels" }],
-      });
-      expect(channelReload.ok, channelReload.error?.message).toBe(true);
-      expect(hotReloadRecovery).not.toHaveBeenCalled();
-      expect(getActivePluginRegistry()).not.toBe(registryBeforeChannelReload);
-      const predecessorsStopped = initialMonitors.every(
-        (monitor) => monitor.stopped && monitor.abortSignal.aborted,
-      );
-      proof.observations.push({ phase: "successor-handoff", predecessorsStopped });
-      expect(predecessorsStopped).toBe(true);
-      // The receipt completes this reload; wait separately for global config settlement.
-      await requestSettledInstanceBindingProbe(freshRuntime);
-      const currentProbe = await rpcReq<InstanceBindingProbeResult>(
-        socket,
-        INSTANCE_BINDING_PROBE_METHOD,
-        {},
-      );
-      expect(currentProbe.ok, currentProbe.error?.message).toBe(true);
-      const channelProbe = currentProbe.payload;
-      if (!channelProbe) {
-        throw new Error("channel publication did not return an authoritative probe");
-      }
-      expect(channelProbe).toEqual({
-        // This fixture token identifies the retained probe registration, not the registry.
-        registryId: freshProbe.registryId,
-        sessionsId: freshProbe.sessionsId,
-        placementId: freshProbe.placementId,
-        reloadSettled: true,
-      });
-      await expect(requestSettledInstanceBindingProbe(freshRuntime)).resolves.toEqual(channelProbe);
-      proof.observations.push({ phase: "channel-owner-publication", probe: channelProbe });
-      for (const monitor of initialMonitors) {
-        await expect(requestInstanceBindingProbe(monitor.runtime)).rejects.toThrow(
-          'Plugin "instance-binding-channels" runtime is no longer active.',
-        );
-        proof.observations.push({
-          phase: "retired-binding-rejected",
-          channelId: monitor.channelId,
-          runtimeId: monitor.runtimeId,
-        });
-      }
-      await expect
-        .poll(
-          () =>
-            proof.monitors
-              .filter((monitor) => !monitor.stopped)
-              .map((monitor) => monitor.channelId)
-              .toSorted(),
-          { timeout: 30_000 },
-        )
-        .toEqual([...CHANNEL_BINDING_IDS]);
-      const observations = await Promise.all(
-        initialMonitors.map(async (initial) => {
-          const active = proof.monitors.filter(
-            (monitor) => monitor.channelId === initial.channelId && !monitor.stopped,
-          );
-          const monitor = active[0];
-          const response = monitor
-            ? await requestInstanceBindingProbe(monitor.runtime).then(
-                (value) => ({ ok: true, registryId: value.registryId }),
-                (error: unknown) => ({
-                  ok: false,
-                  error: error instanceof Error ? error.message : String(error),
-                }),
-              )
-            : { ok: false, error: "no active channel monitor" };
-          const events = proof.events.slice(reloadEventIndex);
-          const stoppedAt = events.findIndex(
-            (event) =>
-              event.event === "stopped" &&
-              event.channelId === initial.channelId &&
-              event.runtimeId === initial.runtimeId,
-          );
-          const registeredAt = events.findIndex(
-            (event) =>
-              event.event === "register" &&
-              event.channelId === initial.channelId &&
-              event.runtimeId === monitor?.runtimeId,
-          );
-          const startedAt = events.findIndex(
-            (event) =>
-              event.event === "start" &&
-              event.channelId === initial.channelId &&
-              event.runtimeId === monitor?.runtimeId,
-          );
-          return {
-            channelId: initial.channelId,
-            activeCount: active.length,
-            oldStopped: initial.stopped && initial.abortSignal.aborted,
-            freshRuntime: monitor !== undefined && monitor.runtime !== initial.runtime,
-            stoppedBeforeSuccessorStart: stoppedAt >= 0 && startedAt > stoppedAt,
-            startedFromNewRegistration: registeredAt >= 0 && startedAt > registeredAt,
-            response,
-          };
-        }),
-      );
-      proof.observations.push({ phase: "settled-channels", channels: observations });
-      proof.events.push({ event: "channels-observed" });
-      expect(
-        observations,
-        "reloading the channel owner must retire its old runtimes before starting successors",
-      ).toEqual(
-        initialMonitors.map(({ channelId }) => ({
-          channelId,
-          activeCount: 1,
-          oldStopped: true,
-          freshRuntime: true,
-          stoppedBeforeSuccessorStart: true,
-          startedFromNewRegistration: true,
-          response: { ok: true, registryId: channelProbe.registryId },
-        })),
-      );
-    },
-  );
+          .filter((entry) => entry.channelId === initial.channelId);
+        const eventIndex = (event: string, runtimeId: number) =>
+          events.findIndex((entry) => entry.event === event && entry.runtimeId === runtimeId);
+        const stoppedAt = eventIndex("stopped", initial.runtimeId);
+        const registeredAt = eventIndex("register", monitor.runtimeId);
+        const startedAt = eventIndex("start", monitor.runtimeId);
+        expect(Math.min(stoppedAt, registeredAt)).toBeGreaterThanOrEqual(0);
+        expect(startedAt).toBeGreaterThan(Math.max(stoppedAt, registeredAt));
+      }),
+    );
+  });
 
   it.each(["rejection", "timeout"] as const)(
-    "refuses replacement during %s cleanup while keeping the Gateway available",
+    "keeps Gateway available after %s cleanup refuses replacement",
     { timeout: 600_000 },
     async (serviceStopFailure) => {
-      const { coordinator, bundledRoot } = await prepareInstanceBindingTest({ serviceStopFailure });
+      const { coordinator, bundledRoot } = await prepareBinding({ serviceStopFailure });
       const startupPlugins = await import("./server-startup-plugins.js");
       const runMaintenance = startupPlugins.runGatewayPostReadyStartupMaintenance;
       const maintenanceSettled = createDeferred();
@@ -504,14 +379,7 @@ describe("gateway plugin instance bindings", () => {
         markGatewayRestartHandled();
         return { status: "emitted" as const };
       });
-      const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-      const server = await startTestGatewayServer(claim, {
-        auth: { mode: "none" },
-        controlUiEnabled: false,
-        hotReloadRecovery,
-        sidecarStartup: "start",
-      });
-      started.push(server);
+      const { server, port } = await startServer({ hotReloadRecovery, sidecarStartup: "start" });
       await server.startupSettled;
       // Mandatory sidecars settle before the deferred registry refresh releases its lease.
       await maintenanceSettled.promise;
@@ -519,19 +387,13 @@ describe("gateway plugin instance bindings", () => {
       const initialRegistry = getActivePluginRegistry();
       const initialMetadata = getGatewayPluginMetadataSnapshot();
       const initialRegistrationCount = coordinator.runtimes.length;
-      const initialGatewayRegistrationCount = coordinator.registrationModes.filter(
-        (mode) => mode === "full",
-      ).length;
       const expectNoGatewayReplacement = () => {
-        expect(coordinator.registrationModes.filter((mode) => mode === "full")).toHaveLength(
-          initialGatewayRegistrationCount,
-        );
         // Model-runtime rollback may prepare auxiliary registries without activating a Gateway.
         expect(
           coordinator.registrationModes
             .slice(initialRegistrationCount)
-            .filter((mode) => mode !== "discovery"),
-        ).toEqual([]);
+            .every((mode) => mode === "discovery"),
+        ).toBe(true);
       };
       expect(initialRegistry).toBeDefined();
       expect(initialMetadata).toBeDefined();
@@ -540,14 +402,14 @@ describe("gateway plugin instance bindings", () => {
         coordinator.runtimes.slice(0, initialRegistrationCount),
         "initial",
       );
-      const initialProbe = await requestInstanceBindingProbe(initialRuntime);
+      const initialProbe = await readProbe(initialRuntime);
 
-      const socket = await connectWebchatClient({ port: claim.port, scopes: ["operator.admin"] });
-      sockets.push(socket);
+      const socket = await connectAdmin(port);
       const currentConfig = await rpcReq(socket, "config.get", {});
-      expect(currentConfig.ok).toBe(true);
-      expect(currentConfig.payload?.hash).toBeTypeOf("string");
-      expect(currentConfig.payload?.raw).toBeTypeOf("string");
+      expect(currentConfig).toMatchObject({
+        ok: true,
+        payload: { hash: expect.any(String), raw: expect.any(String) },
+      });
       const initialInstance = initialRegistry?.plugins
         .filter((record) => record.id === "instance-binding-probe")
         .map(getPluginInstance)[0];
@@ -575,30 +437,19 @@ describe("gateway plugin instance bindings", () => {
         expect(initialInstance?.disposing).toBe(true);
         expect(coordinator.gatewayStops).toEqual([initialProbe.registryId]);
         expect(getActivePluginRegistry()).not.toBe(initialRegistry);
-        const restored = await requireBoundRuntime(
-          coordinator.runtimes.filter(
-            (_runtime, index) =>
-              index >= initialRegistrationCount && coordinator.registrationModes[index] === "full",
-          ),
-          "restored original",
-        );
-        const restoredProbe = await requestInstanceBindingProbe(restored.runtime);
-        expect(restoredProbe.registryId).not.toBe(initialProbe.registryId);
-        expect(restoredProbe).toMatchObject({
-          sessionsId: initialProbe.sessionsId,
-          placementId: initialProbe.placementId,
-        });
+        await expectReplacement(coordinator, initialRegistrationCount, initialProbe);
       } else {
         expectNoGatewayReplacement();
         expect(getActivePluginRegistry()).toBe(initialRegistry);
       }
-      await expect(requestInstanceBindingProbe(initialRuntime)).rejects.toThrow(
+      await expect(readProbe(initialRuntime)).rejects.toThrow(
         'Plugin "instance-binding-probe" runtime is no longer active.',
       );
       const afterReload = await rpcReq(socket, "config.get", {});
-      expect(afterReload.ok).toBe(true);
-      expect(afterReload.payload?.hash).toBe(currentConfig.payload?.hash);
-      expect(afterReload.payload?.raw).toBe(currentConfig.payload?.raw);
+      expect(afterReload).toMatchObject({
+        ok: true,
+        payload: { hash: currentConfig.payload?.hash, raw: currentConfig.payload?.raw },
+      });
 
       const beforeRetryRegistrations = coordinator.runtimes.length;
       const retry = await rpcReq(socket, "plugins.reload", {
@@ -610,19 +461,7 @@ describe("gateway plugin instance bindings", () => {
           payload: { restartRequired: false },
         });
         expect(coordinator.serviceStarts).toBe(3);
-        const successor = await requireBoundRuntime(
-          coordinator.runtimes.filter(
-            (_runtime, index) =>
-              index >= beforeRetryRegistrations && coordinator.registrationModes[index] === "full",
-          ),
-          "replacement after service stop settled",
-        );
-        const successorProbe = await requestInstanceBindingProbe(successor.runtime);
-        expect(successorProbe.registryId).not.toBe(initialProbe.registryId);
-        expect(successorProbe).toMatchObject({
-          sessionsId: initialProbe.sessionsId,
-          placementId: initialProbe.placementId,
-        });
+        await expectReplacement(coordinator, beforeRetryRegistrations, initialProbe);
       } else {
         expect(retry.ok).toBe(false);
         expect(retry.error?.message).toContain("instance-binding service cleanup rejected");

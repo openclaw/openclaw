@@ -1,13 +1,12 @@
 import { createHash } from "node:crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { BeforeAgentFinalizeResultWithRetryCandidates } from "../../plugins/hook-runner-types.js";
 import type {
   PluginHookAgentEndEvent,
   PluginHookBeforeAgentFinalizeEvent,
-  PluginHookBeforeAgentFinalizeResult,
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
 } from "../../plugins/hook-types.js";
@@ -133,7 +132,7 @@ export async function runAgentHarnessBeforeAgentFinalizeHook(
 }
 
 function normalizeBeforeAgentFinalizeResult(
-  result: PluginHookBeforeAgentFinalizeResult | undefined,
+  result: BeforeAgentFinalizeResultWithRetryCandidates | undefined,
   event?: PluginHookBeforeAgentFinalizeEvent,
 ): AgentHarnessBeforeAgentFinalizeOutcome {
   if (result?.action === "finalize") {
@@ -143,16 +142,17 @@ function normalizeBeforeAgentFinalizeResult(
   if (result?.action !== "revise") {
     return { action: "continue" };
   }
-  const retryCandidates = readBeforeAgentFinalizeRetryCandidates(result);
+  const retryCandidates = result.retryCandidates?.length
+    ? result.retryCandidates
+    : result.retry
+      ? [result.retry]
+      : [];
   const reason = normalizeTrimmedString(result.reason);
   if (retryCandidates.length === 0) {
     return reason ? { action: "revise", reason } : { action: "continue" };
   }
   for (const retry of retryCandidates) {
-    const retryInstruction = normalizeTrimmedString(retry.instruction);
-    if (!retryInstruction) {
-      continue;
-    }
+    const retryInstruction = retry.instruction;
     const maxAttempts =
       typeof retry.maxAttempts === "number" && Number.isFinite(retry.maxAttempts)
         ? Math.max(1, Math.floor(retry.maxAttempts))
@@ -179,24 +179,4 @@ function normalizeBeforeAgentFinalizeResult(
     return { action: "revise", reason: revisedReason };
   }
   return { action: "continue" };
-}
-
-function readBeforeAgentFinalizeRetryCandidates(
-  result: PluginHookBeforeAgentFinalizeResult,
-): NonNullable<PluginHookBeforeAgentFinalizeResult["retry"]>[] {
-  const candidateList = (
-    result as {
-      retryCandidates?: unknown;
-    }
-  ).retryCandidates;
-  if (Array.isArray(candidateList) && candidateList.length > 0) {
-    return candidateList.filter(isBeforeAgentFinalizeRetry);
-  }
-  return isBeforeAgentFinalizeRetry(result.retry) ? [result.retry] : [];
-}
-
-function isBeforeAgentFinalizeRetry(
-  value: unknown,
-): value is NonNullable<PluginHookBeforeAgentFinalizeResult["retry"]> {
-  return isRecord(value);
 }

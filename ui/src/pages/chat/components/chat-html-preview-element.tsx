@@ -8,6 +8,7 @@ import {
   createMemo,
   createSignal,
   onCleanup,
+  onSettled,
   runWithOwner,
   untrack,
 } from "solid-js";
@@ -20,6 +21,7 @@ import { formatUiError } from "../../../lib/format-error.ts";
 import { projectGateway } from "../../../lib/reactive/application.ts";
 import { useApplication } from "../../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { WidgetSandboxHost, WIDGET_LOAD_TIMEOUT_MS } from "../../../lib/widget-sandbox-host.ts";
 import { prepareHtmlPreviewAssets } from "./chat-html-preview-assets.ts";
@@ -101,6 +103,7 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
       setError(formatUiError(reason));
     };
 
+    // Bind the external preview RPC to the live Gateway and document identity.
     createEffect(
       () => [
         props.html,
@@ -121,7 +124,7 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
           setView(undefined);
           const client = context?.gateway.snapshot.client;
           if (!context || !client || context.gateway.snapshot.phase !== "connected") {
-            setError(untrack(() => t("chat.attachments.previewUnavailable")));
+            setError(t("chat.attachments.previewUnavailable"));
             return;
           }
           const current: PreviewBinding = {
@@ -160,8 +163,10 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
         }),
     );
 
+    // Reconfigure the sandbox transport on mode changes without rereading its document.
     createEffect(frameMode, () =>
       runWithOwner(null, () => {
+        // The mode owns this reset; loading a new document must not retrigger it.
         if (untrack(view)) {
           clearSandbox();
           setError("");
@@ -187,15 +192,21 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
       }
       transport.handleMessage(event);
     };
-    window.addEventListener("message", handleMessage);
+    const stopMessages = listen(window, "message", (event) => {
+      if (event instanceof MessageEvent) {
+        handleMessage(event);
+      }
+    });
     onCleanup(() => {
       disposed = true;
       binding = undefined;
-      window.removeEventListener("message", handleMessage);
-      clearSandbox();
+      stopMessages();
+      sandboxHost?.dispose();
+      sandboxHost = undefined;
     });
 
     const Frame = (frameProps: { preview: PreviewView; mode: EmbedSandboxMode }) => {
+      // Keyed preview/mode branches retire this transport before either identity changes.
       const preview = untrack(() => frameProps.preview);
       const mode = untrack(() => frameProps.mode);
       const generation = ++frameGeneration;
@@ -208,62 +219,57 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
           fail(reason);
         }
       };
-      createEffect(
-        () => frame,
-        () => {
-          clearSandbox();
-          const allowScripts = mode !== "strict";
-          transport = new WidgetSandboxHost({
-            frame,
-            sandboxUrl: preview.url,
-            sandboxOrigin: preview.origin,
-            documentKey: String(generation),
-            allowScripts,
-            loadDocument: async () => {
-              let content = prepareHtmlPreviewLinks(preview.document.html, allowScripts);
-              const source = preview.binding.sessionFileSource;
-              if (source) {
-                const prepared = await prepareHtmlPreviewAssets(content, allowScripts, (refs) => {
-                  if (!currentFrame()) {
-                    throw new DOMException("Preview changed", "AbortError");
-                  }
-                  return preview.binding.client.request<SessionsFilesAssetsResult>(
-                    "sessions.files.assets",
-                    { ...source, refs },
-                  );
-                });
-                if (currentFrame()) {
-                  setOmittedAssets(prepared.omitted);
+      onSettled(() => {
+        clearSandbox();
+        const allowScripts = mode !== "strict";
+        transport = new WidgetSandboxHost({
+          frame,
+          sandboxUrl: preview.url,
+          sandboxOrigin: preview.origin,
+          documentKey: String(generation),
+          allowScripts,
+          loadDocument: async () => {
+            let content = prepareHtmlPreviewLinks(preview.document.html, allowScripts);
+            const source = preview.binding.sessionFileSource;
+            if (source) {
+              const prepared = await prepareHtmlPreviewAssets(content, allowScripts, (refs) => {
+                if (!currentFrame()) {
+                  throw new DOMException("Preview changed", "AbortError");
                 }
-                content = prepared.html;
-              }
-              return content;
-            },
-            onLoaded: () => {},
-            onRendered: () => {
+                return preview.binding.client.request<SessionsFilesAssetsResult>(
+                  "sessions.files.assets",
+                  { ...source, refs },
+                );
+              });
               if (currentFrame()) {
-                setRendered(true);
+                setOmittedAssets(prepared.omitted);
               }
-            },
-            onError: frameError,
-            // Only Retry creates another transport after an unavailable proxy or render timeout.
-            onReadyTimeout: () => frameError(new Error(t("board.widget.sandboxUnavailable"))),
-          });
-          sandboxHost = transport;
-          transportMode = mode;
-          return () => {
-            transport?.dispose();
-            if (sandboxHost === transport) {
-              sandboxHost = undefined;
+              content = prepared.html;
             }
-          };
-        },
-      );
+            return content;
+          },
+          onLoaded: () => {},
+          onRendered: () => {
+            if (currentFrame()) {
+              setRendered(true);
+            }
+          },
+          onError: frameError,
+          // Only Retry creates another transport after an unavailable proxy or render timeout.
+          onReadyTimeout: () => frameError(new Error(t("board.widget.sandboxUnavailable"))),
+        });
+        sandboxHost = transport;
+        transportMode = mode;
+        return () => {
+          transport?.dispose();
+          if (sandboxHost === transport) {
+            sandboxHost = undefined;
+          }
+        };
+      });
       return (
         <iframe
-          ref={(element) => {
-            frame = element;
-          }}
+          ref={(element) => (frame = element)}
           class="chat-html-preview__frame"
           title={props.title}
           src={preview.url}

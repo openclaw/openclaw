@@ -605,8 +605,8 @@ async function publishSqliteFile(
 /**
  * Compact one SQLite database into a fresh private file and verify the result.
  *
- * The source and output both receive full structural, index, and foreign-key
- * checks. Only a fully verified, synced snapshot is published to the target.
+ * The final private image receives integrity and foreign-key checks before
+ * publication. Source checks also precede rewrites, backups, and caller validators.
  * SQLite copies and checks vec0 shadow tables without loading sqlite-vec;
  * native extension loading here can crash backups on unsupported CPUs.
  */
@@ -670,7 +670,19 @@ async function verifyAndPublishSqliteSnapshot(
           try {
             // Pin validation and backup together; Node restarts stepped backups on concurrent writes.
             source.prepare("PRAGMA schema_version;").get();
-            assertSqliteIntegrity(source, options.sourcePath);
+            const autoVacuum =
+              privateSourcePath &&
+              options.preserveRowIds === true &&
+              !options.transform &&
+              !options.validate
+                ? source.prepare("PRAGMA auto_vacuum;").get()?.auto_vacuum
+                : undefined;
+            // FULL auto-vacuum can rewrite pages when journal normalization commits.
+            // Only normalization without rewrites or callbacks can defer admission
+            // to the final private image; all publication byte checks still apply.
+            if (autoVacuum !== 0 && autoVacuum !== 2) {
+              assertSqliteIntegrity(source, options.sourcePath, options.integrity);
+            }
             options.validate?.(source, options.sourcePath);
             if (!privateSourcePath) {
               await backupNodeSqliteDatabase(source, stagedPath, options.onProgress);
@@ -721,7 +733,7 @@ async function verifyAndPublishSqliteSnapshot(
             });
             try {
               published.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
-              assertSqliteIntegrity(published, options.targetPath);
+              assertSqliteIntegrity(published, options.targetPath, options.integrity);
               options.validate?.(published, options.targetPath);
               const publishedUserVersion = readSqliteUserVersion(published);
               if (publishedUserVersion !== userVersion) {

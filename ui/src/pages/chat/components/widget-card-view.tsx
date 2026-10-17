@@ -188,6 +188,7 @@ function installWidgetPromptOfferListener() {
     return;
   }
   widgetPromptOfferListenerWindows.add(window);
+  // Window-lifetime transport: offers can arrive before any preview frame mounts.
   window.addEventListener("message", (event: MessageEvent) => {
     const data: unknown = event.data;
     if (!isRecord(data) || data.type !== WIDGET_PROMPT_OFFER_MESSAGE_TYPE) {
@@ -225,6 +226,7 @@ function installWidgetSizeListener() {
     return;
   }
   widgetSizeListenerWindows.add(window);
+  // Window-lifetime transport shared by the registered iframe islands.
   window.addEventListener("message", (event: MessageEvent) => {
     const data: unknown = event.data;
     if (
@@ -448,15 +450,16 @@ function handleWidgetExportAction(
   dropdown: HTMLElement,
   title: string | undefined,
 ): WidgetRawDetailsLabel | void {
+  // Raw details belong to the enclosing tool card; canvas islands own their iframe DOM.
   if (value === "raw-details") {
     const host = dropdown.closest(".chat-tool-card__widget-host");
     const toggle = host?.querySelector<HTMLButtonElement>(
       ".chat-tool-card__widget-raw .chat-tool-card__raw-toggle",
     );
+    // Solid commits the toggle after this handler; derive its next label before clicking.
+    const willExpand = toggle?.getAttribute("aria-expanded") !== "true";
     toggle?.click();
-    return toggle && toggle.getAttribute("aria-expanded") === "true"
-      ? "chat.toolCards.hideRawDetails"
-      : "chat.toolCards.showRawDetails";
+    return toggle && willExpand ? "chat.toolCards.hideRawDetails" : "chat.toolCards.showRawDetails";
   }
   const frame = dropdown
     .closest(".chat-tool-card__preview")
@@ -488,6 +491,7 @@ function widgetActionsPlacementRef(
   const presented = useContext(ContentPresentation);
   const active = createMemo(() => presented() && enabled());
   let element: HTMLElement | undefined;
+  // Synchronize action placement with the transcript's DOM clipping geometry.
   createEffect(
     () => [active(), options()] as const,
     ([isActive]) => {

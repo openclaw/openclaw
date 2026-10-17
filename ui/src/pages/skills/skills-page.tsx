@@ -132,6 +132,7 @@ export function SkillsPage(props: SkillsPageProps) {
     },
   });
   const agents = projectAgents(context.agents);
+  // Agent and route receipts retarget the skills owner and its Gateway reads.
   createEffect(
     () => agents.revision(),
     () => {
@@ -151,6 +152,7 @@ export function SkillsPage(props: SkillsPageProps) {
           ensureInitialData();
         }
       };
+      // Each agent transition retires prior skill requests, preserving A-to-B-to-A changes before rendering.
       const cleanup = selection.subscribe(sync);
       sync();
       return cleanup;
@@ -163,6 +165,7 @@ export function SkillsPage(props: SkillsPageProps) {
       ensureInitialData();
     },
   );
+  // Keep the catalog image cache aligned with the currently loaded ClawHub entries.
   createEffect(
     () => [skills.read().clawhubSearchResults, skills.read().clawhubDetail] as const,
     () => {
@@ -183,7 +186,7 @@ export function SkillsPage(props: SkillsPageProps) {
     { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
   );
   createEffect(searchContext, ([, connected]) => {
-    // Gateway binding may connect before the initial disconnected effect runs.
+    // Gateway binding can connect first; restart the cancellable ClawHub request on connection.
     if (connected) {
       void runSearch();
     }

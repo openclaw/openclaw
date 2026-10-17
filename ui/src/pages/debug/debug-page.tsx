@@ -8,13 +8,10 @@ import {
   loadCommandLaneDiagnostics,
   loadGatewayDiagnostics,
 } from "../../lib/gateway-diagnostics.ts";
-import {
-  projectAgentSelection,
-  projectGateway,
-  projectGatewayEventLog,
-} from "../../lib/reactive/application.ts";
+import { projectGateway, projectGatewayEventLog } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import "../../styles/debug-data.css";
 import { requestDebugOverlayToggle } from "./debug-overlay-contract.ts";
 import { DebugPageView } from "./view.tsx";
@@ -37,7 +34,6 @@ export function DebugPage() {
   const context: ApplicationContext = useApplication();
   const gateway = projectGateway(context.gateway);
   const events = projectGatewayEventLog(context.gateway);
-  const selection = projectAgentSelection(context.settingsAgentSelection);
   const lifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const publish = () => setRevision((value) => value + 1);
@@ -139,6 +135,7 @@ export function DebugPage() {
     }
   }
 
+  // Every connection transition aborts diagnostics and retires RPC results before reconnect.
   const stopGateway = gateway.subscribe(() => {
     const snapshot = gateway.read().snapshot;
     if (lifecycle.transition(snapshot)) {
@@ -155,8 +152,8 @@ export function DebugPage() {
     syncPolling();
     publish();
   });
-  const stopSelection = selection.subscribe(() => {
-    const next = selection.read().state.selectedId;
+  // Each agent transition aborts prior diagnostics, including A-to-B-to-A changes before rendering.
+  const stopSelection = context.settingsAgentSelection.subscribe(({ selectedId: next }) => {
     if (agent === next) {
       return;
     }
@@ -181,14 +178,14 @@ export function DebugPage() {
       void loadLiveDiagnostics();
     }
   };
-  document.addEventListener("visibilitychange", visibilityChanged);
+  const stopVisibility = listen(document, "visibilitychange", visibilityChanged);
   syncPolling();
   void loadDiagnostics();
   onCleanup(() => {
     disposed = true;
     invalidate();
     clearInterval(timer);
-    document.removeEventListener("visibilitychange", visibilityChanged);
+    stopVisibility();
     stopSelection();
     stopGateway();
     lifecycle.dispose();

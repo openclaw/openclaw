@@ -176,7 +176,6 @@ function PanelView(
       get: () => hostedActions,
     },
   });
-  owner.connect();
   let previous: LinkReaderPanelProps | undefined;
   createRenderEffect(
     () => {
@@ -200,7 +199,10 @@ function PanelView(
     },
   );
   onSettled(() => {
+    owner.connect();
     owner.sync(previous);
+    setRevision((value) => value + 1);
+    return () => owner.dispose();
   });
   createEffect(
     () => revision(),
@@ -208,7 +210,6 @@ function PanelView(
   );
   onCleanup(() => {
     hostedActions.remove();
-    owner.dispose();
     owners.delete(host);
   });
   const view = () => {
@@ -320,14 +321,14 @@ function PanelView(
               onInput={(event) => {
                 owner.urlDraft = event.currentTarget.value;
                 owner.invalidUrl = false;
-                owner.requestUpdate();
+                owner.invalidate();
               }}
               onKeyDown={(event) => {
                 if (event.key === "Escape") {
                   event.preventDefault();
                   owner.urlDraft = target()?.href ?? "";
                   owner.invalidUrl = false;
-                  owner.requestUpdate();
+                  owner.invalidate();
                 }
               }}
             />

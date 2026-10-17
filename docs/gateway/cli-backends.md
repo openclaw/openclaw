@@ -126,6 +126,11 @@ plugin code registered with `api.registerCliBackend(...)`.
 
 Claude CLI startup hook events are consumed in order while initialization completes, so a burst of `SessionStart` hooks does not stall the first turn. Restricted runs continue to disable native hooks.
 
+With `tools.fs.workspaceOnly: true`, agent turns use OpenClaw tools through the
+MCP bridge so file access follows the workspace policy. The backend must support
+bundled MCP and exact tool selection; otherwise OpenClaw refuses to start the
+turn. An agent's `tools.fs.workspaceOnly` setting overrides the global setting.
+
 Claude stream-json backends also emit live line-count progress while `write`,
 `edit`, and `apply_patch` arguments stream. Progress contains only the tool id,
 name, and added/removed line counts, with at most four updates per second per
@@ -274,7 +279,8 @@ restrictions still override broader global policy. OpenClaw-owned MCP tools
 remain authorized by the Gateway rather than receiving duplicate native
 approval. Other MCP tools stay host-permission controlled.
 
-Claude's native `AskUserQuestion` uses OpenClaw's structured question flow. When
+Claude's native `AskUserQuestion` uses OpenClaw's structured question flow and
+the canonical `ask_user` tool capability. When
 OpenClaw rejects malformed questions, it reports the failed field and
 constraint without repeating the submitted text, and asks Claude to correct
 the field and retry. Invalid questions do not prompt the user. If the user

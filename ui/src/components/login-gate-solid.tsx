@@ -12,6 +12,7 @@ import "../lib/toast-host.ts";
 import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { useVisiblePoll } from "../lib/reactive/visible-poll.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
@@ -426,11 +427,8 @@ function LoginGateContent(props: {
       }
     },
   );
-  host.addEventListener("login-gate-disconnect", cancelRefresh);
-  onCleanup(() => {
-    cancelRefresh();
-    host.removeEventListener("login-gate-disconnect", cancelRefresh);
-  });
+  onCleanup(cancelRefresh);
+  onCleanup(listen(host, "login-gate-disconnect", cancelRefresh));
   const refreshPage = async () => {
     const current = host.props;
     if (

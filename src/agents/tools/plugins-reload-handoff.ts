@@ -95,66 +95,62 @@ export async function handoffPluginReload(params: {
               const signal =
                 execRequestAbortSignal(params.requestOwners, operation.abortSignal) ??
                 operation.abortSignal;
+              await operation.ownerSettlement;
+              if (signal.aborted) {
+                return;
+              }
+              let result: Record<string, unknown>;
               try {
-                await operation.ownerSettlement;
-                if (signal.aborted) {
-                  return;
-                }
-                let result: Record<string, unknown>;
+                const destination = await prepareSessionEventTargetForHost(target);
                 try {
-                  const destination = await prepareSessionEventTargetForHost(target);
-                  try {
-                    result = await retained.run(() =>
-                      callAgentToolGatewayRequest({
-                        method: "plugins.reload",
-                        params: params.request,
-                        sessionMutationCommitGuard: destination.assertCurrent,
-                        signal: AbortSignal.any([retained.signal, signal]),
-                        timeoutMs: null,
-                      }),
-                    );
-                  } finally {
-                    destination.release();
-                  }
-                } catch (error) {
-                  result = {
-                    ok: false,
-                    error: formatErrorMessage(error),
-                    ...(error instanceof GatewayClientRequestError
-                      ? { code: error.gatewayCode, details: error.details }
-                      : {}),
-                  };
+                  result = await retained.run(() =>
+                    callAgentToolGatewayRequest({
+                      method: "plugins.reload",
+                      params: params.request,
+                      sessionMutationCommitGuard: destination.assertCurrent,
+                      signal: AbortSignal.any([retained.signal, signal]),
+                      timeoutMs: null,
+                    }),
+                  );
+                } finally {
+                  destination.release();
                 }
-                if (signal.aborted) {
-                  return;
-                }
-                const receipt = enqueueSessionEventForHost(
-                  "Plugin reload result: " +
-                    params.formatResult(result) +
-                    "\nContinue the original task in this conversation. Do not repeat a completed reload.",
-                  withExecRequestOwners(
-                    {
-                      agentId: caller.agentId,
-                      sessionKey: caller.sessionKey,
-                      source: "plugin",
-                      contextKey: "plugin-reload:" + randomUUID(),
-                      expectedTarget: target,
-                      assertCurrent: retained.assertCurrent,
-                      abortSignal: signal,
-                    },
-                    params.requestOwners,
-                  ),
-                );
-                const accepted = await receipt.accepted;
-                if (!accepted.ok) {
-                  throw new Error(accepted.error);
-                }
-                const outcome = await receipt.settled;
-                if (outcome.status === "failed") {
-                  throw new Error(outcome.error ?? "Plugin reload resume failed");
-                }
-              } finally {
-                retained.release();
+              } catch (error) {
+                result = {
+                  ok: false,
+                  error: formatErrorMessage(error),
+                  ...(error instanceof GatewayClientRequestError
+                    ? { code: error.gatewayCode, details: error.details }
+                    : {}),
+                };
+              }
+              if (signal.aborted) {
+                return;
+              }
+              const receipt = enqueueSessionEventForHost(
+                "Plugin reload result: " +
+                  params.formatResult(result) +
+                  "\nContinue the original task in this conversation. Do not repeat a completed reload.",
+                withExecRequestOwners(
+                  {
+                    agentId: caller.agentId,
+                    sessionKey: caller.sessionKey,
+                    source: "plugin",
+                    contextKey: "plugin-reload:" + randomUUID(),
+                    expectedTarget: target,
+                    assertCurrent: retained.assertCurrent,
+                    abortSignal: signal,
+                  },
+                  params.requestOwners,
+                ),
+              );
+              const accepted = await receipt.accepted;
+              if (!accepted.ok) {
+                throw new Error(accepted.error);
+              }
+              const outcome = await receipt.settled;
+              if (outcome.status === "failed") {
+                throw new Error(outcome.error ?? "Plugin reload resume failed");
               }
             },
           ),

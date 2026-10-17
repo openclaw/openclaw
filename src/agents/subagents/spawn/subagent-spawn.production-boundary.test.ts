@@ -435,13 +435,13 @@ describe("recursive spawn production boundary", () => {
     assertNoModelExecution: () => expect(runEmbeddedAgent).not.toHaveBeenCalled(),
   });
 
-  it("admits an isolated descendant with current policy and the active parent turn model", async () => {
+  it("admits an isolated descendant with current policy, saved thinking, and the active parent turn model", async () => {
     const customProvider = expectDefined(
       runtimeConfig.models?.providers?.custom,
       "custom provider fixture",
     );
     const primaryModel = expectDefined(customProvider.models[0], "primary model fixture");
-    const childModel = { ...primaryModel, id: "child-model", name: "Child model" };
+    const childModel = { ...primaryModel, id: "child-model", name: "Child model", reasoning: true };
     runtimeConfig = {
       ...runtimeConfig,
       agents: {
@@ -504,6 +504,7 @@ describe("recursive spawn production boundary", () => {
       // Model-facing owner fields cannot clear the trusted host identity.
       const request = {
         context: "isolated" as const,
+        thinking: "low",
         senderIsOwner: false,
         spawnedBySenderIsOwner: false,
       };

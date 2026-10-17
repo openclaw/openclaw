@@ -105,11 +105,23 @@ describe("bounded contracts", () => {
       state: "private state",
       questions: { "private ID": { type: "noul", instructions: 42 } },
     },
+    {
+      ...input,
+      state: "private state",
+      questions: { "private ID": { type: "noul", criteria: { true: false } } },
+    },
+    {
+      ...input,
+      state: "private state",
+      questions: {
+        "private ID": { type: "choice", criteria: { a: { nested: undefined }, b: "B" } },
+      },
+    },
   ])("rejects invalid input before dispatch without leaking content", async (value) => {
     const fetch = mockFetch(vi.fn());
     expect(() => parseInput(value)).toThrow();
     const error = await evaluate(value, config).catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ name: "EvaluationError", reason: "unsupported-input" });
     expect(String(error)).not.toMatch(/private state|private ID/);
     expect(fetch).not.toHaveBeenCalled();
   });

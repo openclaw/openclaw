@@ -7,6 +7,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DecisionProviderContextV2 } from "../decisions/provider-context.js";
 import type { DecisionBatchResultV2, DecisionRuntimeV2 } from "../decisions/types-v2.js";
 import {
+  createContext,
+  createOperatorClient,
+} from "../gateway/server-plugin-in-process-dispatch.test-support.js";
+import {
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
@@ -19,11 +23,14 @@ import {
   assertProviderAuthAuthority,
   getProviderAuthAuthority,
 } from "../plugins/provider-auth-authority.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
 import {
   createColdPluginFixture,
   createColdPluginHermeticEnv,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import * as profileReader from "../state/user-profile-list.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   createOpenClawTestState,
@@ -37,7 +44,9 @@ const traceKey = Symbol.for("openclaw.test.decision-prepared-path");
 let profileState: OpenClawTestState | undefined;
 type Trace = {
   calls: number;
+  context?: DecisionProviderContextV2;
   onDispatch?: () => void;
+  prepare?: () => Promise<void>;
   beforeRequest?: (context: DecisionProviderContextV2) => void;
   fetch?: typeof fetch;
   work?: Promise<void>;
@@ -48,6 +57,7 @@ type Trace = {
   agentId?: string;
   modelContextWindow?: number;
   resultReads?: number;
+  resultOverride?: { value: unknown };
   modelBilling?: unknown;
   modelBaseUrl?: string;
   modelHeaders?: Record<string, string>;
@@ -76,10 +86,18 @@ it.each([
   "plugin-revoked-context",
   "plugin-revoked-model",
   "plugin-revoked-disabled",
+  "plugin-preparation-deadline",
+  "plugin-physical-deadline",
 ] as const)(
-  "runs the retained decision SDK through real preparation without primary fallback or fabricated chat fields (%s auth)",
+  "runs the retained decision SDK through real preparation without primary fallback or fabricated chat fields (%s)",
   async (authScope) => {
     const pluginAuth = authScope.startsWith("plugin");
+    const deadlinePhase =
+      authScope === "plugin-preparation-deadline"
+        ? "preparation"
+        : authScope === "plugin-physical-deadline"
+          ? "provider"
+          : undefined;
     const root = roots.make("decision-prepared-integration-");
     const pluginRoot = path.join(root, "plugin");
     const emptyBundled = path.join(root, "bundled");
@@ -143,6 +161,7 @@ it.each([
         'provider: { label: "Synthetic", auth: [], authScope: ' +
           JSON.stringify(pluginAuth ? "plugin" : "agent") +
           ", " +
+          "async augmentModelCatalog({ entries }) { await trace.prepare?.(); return entries; }," +
           (authScope === "profile" || authScope === "missing"
             ? ""
             : 'resolveSyntheticAuth() { return {apiKey: "synthetic-prepared-token", mode: "api-key", source: "synthetic fixture"}; },') +
@@ -153,7 +172,7 @@ it.each([
             ? 'normalizeResolvedModel(context) { return { ...context.model, api: "openai-responses" }; }, prepareRuntimeAuth(context) { trace.preparedApi=context.model.api; return { apiKey: context.apiKey, baseUrl: "https://entitlement.fixture.invalid/v1", request: { headers: { "x-fixture-entitlement": "synthetic-entitlement" }, auth: { mode: "header", headerName: "x-fixture-auth", value: "synthetic-exchanged-header" } } }; },'
             : "") +
           "} ,",
-        'async evaluate(batch, context) { trace.calls++; trace.profileId=context.auth.profileId; trace.agentId=context.agentId; trace.onDispatch?.(); await trace.work; trace.beforeRequest?.(context); if (!context.isAdmissible()) return { status: "unavailable", reason: "unsupported-input" }; await trace.fetch?.("https://dispatch.fixture.invalid/v1/decisions", { method: "POST" }); trace.authenticated = context.auth.apiKey === "synthetic-prepared-token"; trace.modelKeys = Object.keys(context.model); trace.modelContextWindow = context.model.contextWindow; trace.modelBilling=context.model.inference?.decision?.billing; trace.modelBaseUrl=context.model.baseUrl; trace.modelHeaders=context.model.headers; trace.modelRequest=context.model[Symbol.for("openclaw.modelProviderRequestTransport")]; trace.modelApi=context.model.api; let reads = 0; return { status: "ok", get result() { trace.resultReads = ++reads; return { model: context.model.id, answers: { q: reads === 1 ? { type: "boolean", answer: null } : { type: "boolean", probabilityTrue: 0.75 } }, usage: trace.usage }; } }; }',
+        'async evaluate(batch, context) { trace.calls++; trace.context=context; trace.profileId=context.auth.profileId; trace.agentId=context.agentId; trace.onDispatch?.(); await trace.work; trace.beforeRequest?.(context); if (!context.isAdmissible()) return { status: "unavailable", reason: "unsupported-input" }; await trace.fetch?.("https://dispatch.fixture.invalid/v1/decisions", { method: "POST" }); trace.authenticated = context.auth.apiKey === "synthetic-prepared-token"; trace.modelKeys = Object.keys(context.model); trace.modelContextWindow = context.model.contextWindow; trace.modelBilling=context.model.inference?.decision?.billing; trace.modelBaseUrl=context.model.baseUrl; trace.modelHeaders=context.model.headers; trace.modelRequest=context.model[Symbol.for("openclaw.modelProviderRequestTransport")]; trace.modelApi=context.model.api; let reads = 0; return { status: "ok", get result() { trace.resultReads = ++reads; if (trace.resultOverride) return trace.resultOverride.value; return { model: context.model.id, answers: { q: reads === 1 ? { type: "boolean", answer: null } : { type: "boolean", probabilityTrue: 0.75 } }, usage: trace.usage }; } }; }',
         "}); trace.evaluate = api.runtime.decisions.evaluateV2; } };",
       ].join("\n"),
     );
@@ -163,13 +182,15 @@ it.each([
       usage: { inputTokens: 100, costUsd: 0 },
     };
     Reflect.set(globalThis, traceKey, trace);
-    if (authScope === "profile") {
+    if (authScope === "profile" || deadlinePhase) {
       profileState = await createOpenClawTestState({
         label: "decision-agent-profile",
         applyEnv: false,
       });
+    }
+    if (authScope === "profile") {
       // A synthetic key exists only in the operation agent store: no config/env credential.
-      await profileState.writeAuthProfiles({
+      await profileState!.writeAuthProfiles({
         version: 1,
         profiles: {
           [id + ":agent"]: { type: "api_key", provider: id, key: "synthetic-prepared-token" },
@@ -251,6 +272,101 @@ it.each([
           }),
         ),
       );
+      if (deadlinePhase) {
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        if (deadlinePhase === "preparation") {
+          trace.prepare = async () => {
+            entered.resolve();
+            await release.promise;
+          };
+        } else {
+          trace.onDispatch = () => entered.resolve();
+          trace.work = release.promise;
+        }
+        const context = createContext();
+        context.getRuntimeConfig = () => cfg;
+        const client = createOperatorClient({
+          profileName: "decision-native-deadline",
+          scopes: ["operator.write"],
+        });
+        let now = 1_000;
+        const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+        const originalPrepare = profileReader.prepareUserProfileIdentity;
+        const preparation = vi
+          .spyOn(profileReader, "prepareUserProfileIdentity")
+          .mockImplementationOnce(async (...args) => {
+            const prepared = await originalPrepare(...args);
+            now += 200;
+            // Real authority I/O completes before the host's remaining-budget timer starts.
+            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+            return prepared;
+          });
+        const controller = new AbortController();
+        const pending = withPluginRuntimeGatewayRequestScope(
+          { client, context, hasCurrentClientAuthority: () => true, isWebchatConnect: () => false },
+          () =>
+            evaluate(
+              {
+                state: { type: "text", text: "synthetic deadline" },
+                questions: { q: { type: "boolean" } },
+              },
+              {
+                purpose: "fixture",
+                rubricVersion: "v2",
+                timeoutMs: 500,
+                signal: controller.signal,
+              },
+            ),
+        );
+        let settled = false;
+        const settlement = pending.then(
+          (outcome) => {
+            settled = true;
+            return { outcome };
+          },
+          (error: unknown) => {
+            settled = true;
+            return { error };
+          },
+        );
+        const providerHost = registry.decisionProviders[0]!.host;
+        try {
+          await Promise.race([entered.promise, settlement]);
+          expect(preparation).toHaveBeenCalledOnce();
+          expect(settled).toBe(false);
+          expect(trace.calls).toBe(deadlinePhase === "provider" ? 1 : 0);
+          now += 299;
+          await vi.advanceTimersByTimeAsync(299);
+          if (deadlinePhase === "provider") {
+            expect(trace.context?.deadlineMonotonicMs).toBe(1_500);
+            expect(trace.context?.signal.aborted).toBe(false);
+          }
+          now += 1;
+          await vi.advanceTimersByTimeAsync(1);
+          if (deadlinePhase === "provider") {
+            expect(trace.context?.signal.aborted).toBe(true);
+          }
+          // Deadline cancellation retains the slot until catalog/provider work really settles.
+          expect(settled).toBe(false);
+          expect(providerHost.inspect(cfg).activeRequests).toBe(1);
+          release.resolve();
+          expect(await settlement).toEqual({
+            outcome: { status: "unavailable", reason: "deadline" },
+          });
+          expect(trace.calls).toBe(deadlinePhase === "provider" ? 1 : 0);
+          expect(providerHost.inspect(cfg).activeRequests).toBe(0);
+          expect(usageEvents).toEqual([]);
+        } finally {
+          release.resolve();
+          controller.abort();
+          await settlement;
+          vi.useRealTimers();
+          preparation.mockRestore();
+          clock.mockRestore();
+        }
+        return;
+      }
       const http = vi.fn<typeof fetch>(async () => new Response("{}"));
       let admitted = true;
       if (authScope.startsWith("plugin-revoked")) {
@@ -427,6 +543,22 @@ it.each([
         ).resolves.toMatchObject({ status: "unavailable", reason: "credentials-unavailable" });
         expect(trace.calls).toBe(2);
         setRuntimeConfigSnapshot(cfg);
+      }
+
+      if (authScope === "plugin") {
+        for (const invalid of [
+          { model: "native", answers: { q: { type: "boolean", probabilityTrue: 0.75 } } },
+          { model: "native", answers: {} },
+        ]) {
+          trace.resultOverride = { value: invalid };
+          expect(await evaluateFixture()).toEqual({
+            status: "unavailable",
+            reason: "invalid-response",
+          });
+          expect(trace.resultReads).toBe(1);
+          expect(usageEvents).toHaveLength(2);
+        }
+        delete trace.resultOverride;
       }
 
       let started!: () => void;

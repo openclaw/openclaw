@@ -247,6 +247,14 @@ Perplexity, Tavily, and xAI HTTP errors retain the status code and bounded
 diagnostics, with reflected request credentials redacted. Review diagnostics
 before sharing them; redaction does not remove every kind of sensitive content.
 
+When a provider signs in through a model auth profile (for example Grok through
+xAI OAuth) and that sign-in cannot refresh, the error `message` names the
+provider sign-in and how to sign in again: send `/login <id>` from a private
+chat or Control UI session, or run `openclaw models auth login --provider <id>`.
+It omits the profile id and account. The Search page in Control UI
+(`webSearch.status`) also reports an expired or missing sign-in for the selected
+provider.
+
 ## Auto-detection
 
 Provider lists in docs and setup flows are alphabetical. Auto-detection uses a

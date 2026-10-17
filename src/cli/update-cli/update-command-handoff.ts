@@ -219,6 +219,7 @@ export async function handoffUpdateFromGateway(params: {
     tag: params.tag,
     devTarget: params.devTarget,
     acceptCapabilities: params.opts.acceptCapabilities,
+    fullIntegrityCheck: params.opts.fullIntegrityCheck,
     admission: params.opts.admission,
     reapplyLocalOverrides: params.opts.reapplyLocalOverrides,
     meta: { runId: params.opts.run?.runId },

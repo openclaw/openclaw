@@ -2913,7 +2913,7 @@ final class TalkModeManager {
         let requestedVoice = voice?.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedVoice = TalkVoiceAliases.resolve(requestedVoice, aliases: self.voiceAliases)
         if let requestedVoice, !requestedVoice.isEmpty, resolvedVoice == nil {
-            self.logger.warning("unknown voice alias \(requestedVoice, privacy: .public)")
+            self.logger.warning("unknown voice alias")
         }
         return resolvedVoice
     }
@@ -2922,9 +2922,9 @@ final class TalkModeManager {
         let requestedOutputFormat = (directiveFormat ?? self.defaultOutputFormat)?.trimmedNonEmpty
         let outputFormat = ElevenLabsTTSClient.validatedOutputFormat(
             requestedOutputFormat ?? self.effectiveDefaultOutputFormat)
-        if outputFormat == nil, let requestedOutputFormat {
+        if outputFormat == nil, requestedOutputFormat != nil {
             self.logger.warning(
-                "talk output_format unsupported for local playback: \(requestedOutputFormat, privacy: .public)")
+                "talk output_format unsupported for local playback")
         }
         return outputFormat
     }
@@ -3546,7 +3546,7 @@ extension TalkModeManager {
             if let resolved = TalkVoiceAliases.resolve(trimmed, aliases: self.voiceAliases) {
                 return resolved
             }
-            self.logger.warning("unknown voice alias \(trimmed, privacy: .public)")
+            self.logger.warning("unknown voice alias")
         }
         if let fallbackVoiceId {
             return fallbackVoiceId

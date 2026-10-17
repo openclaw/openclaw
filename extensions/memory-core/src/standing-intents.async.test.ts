@@ -400,19 +400,44 @@ describe("standing-intent admitted operations", () => {
     },
   );
 
-  it("waits for the writer before restoring the first-use standing-intent schema", async () => {
+  it("restores first-use schema and creates once under the queued writer", async () => {
     const held = await holdWriter();
     const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
     db.exec("DROP TABLE standing_intents; DROP TABLE standing_intents_fts");
     const schemaExists = () =>
       db.prepare("SELECT name FROM sqlite_schema WHERE name = 'standing_intents'").get();
-    const work = keep(seed());
-    await expectWaiting(work, held.entered);
-    expect(schemaExists()).toBeUndefined();
-    held.release();
-    const created = await work;
-    expect(schemaExists()).toBeDefined();
-    expect(readStored(created.id)).toMatchObject({ status: "armed", fire_count: 0 });
+    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
+    const publications: Array<() => number> = [];
+    const admissions: string[] = [];
+    const observed = vi
+      .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2")
+      .mockImplementation(async (options, source, worker) => {
+        const store = await open(options, source, {
+          ...worker,
+          onAdmitted(request) {
+            admissions.push(request.stage);
+            worker.onAdmitted?.(request);
+          },
+        });
+        const execute = vi.spyOn(store, "execute");
+        publications.push(() => execute.mock.calls.length);
+        return store;
+      });
+    try {
+      const work = keep(seed());
+      await expectWaiting(work, held.entered);
+      expect(schemaExists()).toBeUndefined();
+      held.release();
+      const created = await work;
+      expect(schemaExists()).toBeDefined();
+      expect(readStored(created.id)).toMatchObject({ status: "armed", fire_count: 0 });
+      expect(publications.reduce((count, calls) => count + calls(), 0)).toBe(1);
+      expect(admissions.filter((stage) => stage === "transaction")).toHaveLength(0);
+      // Schema recovery and the intent stay independently durable, each with live commit authority.
+      expect(admissions.filter((stage) => stage === "commit")).toHaveLength(2);
+    } finally {
+      observed.mockRestore();
+    }
   });
 
   it.each(["create", "cancel"] as const)(
