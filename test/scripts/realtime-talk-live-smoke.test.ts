@@ -2,6 +2,7 @@ import path from "node:path";
 import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { RealtimeVoiceBridgeCreateRequest } from "../../src/talk/provider-types.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../helpers/promise.js";
 
 const backend = vi.hoisted(() => ({ onFirstAudio: () => {} }));
 const browser = vi.hoisted(() => ({
@@ -90,12 +91,7 @@ beforeEach(() => {
 
 async function runSmoke(started: Promise<void>, boundary: string) {
   const command = import("../../scripts/dev/realtime-talk-live-smoke.ts");
-  await Promise.race([
-    started,
-    command.then(() => {
-      throw new Error(`Smoke command completed before ${boundary}`);
-    }),
-  ]);
+  await awaitGateBeforeSettlement(started, command, `Smoke completed before ${boundary}`);
   await vi.runAllTimersAsync();
   await command;
   expect(vi.getTimerCount()).toBe(0);
@@ -118,10 +114,7 @@ it("reports malformed Google Live frames from the serialized browser callback", 
   vi.stubEnv("OPENAI_API_KEY", "");
   vi.stubEnv("GEMINI_API_KEY", "synthetic-google-key");
   const output = vi.spyOn(console, "log").mockImplementation(() => {});
-  let started!: () => void;
-  const callbackStarted = new Promise<void>((resolve) => {
-    started = resolve;
-  });
+  const { promise: callbackStarted, resolve: started } = createDeferred();
   browser.googleEvaluate.mockImplementation((callback, payload) => {
     if (typeof callback === "string") {
       return undefined;
@@ -183,11 +176,10 @@ it.each<[string, string, number, number, boolean, boolean]>([
     const output = vi.spyOn(console, "log").mockImplementation(() => {});
     process.argv.push("--openai-only");
 
-    const firstAudio = new Promise<void>((resolve) => {
-      backend.onFirstAudio = resolve;
-    });
+    const firstAudio = createDeferred();
+    backend.onFirstAudio = () => firstAudio.resolve();
     // Let imports reach streaming before advancing the pacing and close-observation timers.
-    await runSmoke(firstAudio, "sending backend audio");
+    await runSmoke(firstAudio.promise, "sending backend audio");
     expect(output).toHaveBeenCalledWith("openai-backend-bridge: ok", expect.any(Object));
     expect(output).toHaveBeenCalledWith("openai-backend-audio-roundtrip: ok", expect.any(Object));
     expect(output).toHaveBeenCalledWith(

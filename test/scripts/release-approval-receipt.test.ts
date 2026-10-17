@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import JSZip from "jszip";
@@ -37,8 +37,21 @@ const env = {
   RELEASE_NPM_DIST_TAG: "beta",
 };
 
-function approved(login = "octocat") {
-  return { state: "approved", environments: [{ name: "npm-release" }], user: { login } };
+function approved(login = "octocat", state = "approved", environment = "npm-release") {
+  return { state, environments: [{ name: environment }], user: { login } };
+}
+
+function artifactListing(...artifacts: unknown[]) {
+  return { total_count: artifacts.length, artifacts };
+}
+
+function writeGh(directory: string, source: string) {
+  writeFileSync(join(directory, "gh"), `#!${process.execPath}\n${source}`, { mode: 0o755 });
+}
+
+function runCli(command: string, cliEnv: NodeJS.ProcessEnv, args: string[] = []) {
+  const argv = [resolve("scripts/release-approval-receipt.mjs"), command, ...args];
+  return spawnSync(process.execPath, argv, { encoding: "utf8", env: cliEnv });
 }
 
 function fixture() {
@@ -62,6 +75,14 @@ function fixture() {
     approvalJob,
     approver: "octocat",
   };
+  const job = {
+    name: approvalJob,
+    head_sha: sha,
+    run_id: 10,
+    run_attempt: 2,
+    status: "in_progress",
+    steps: [{ name: receiptStep, status: "completed", conclusion: "success" }],
+  };
   return {
     receipt,
     expected: { repository, ...identity },
@@ -76,89 +97,61 @@ function fixture() {
       run_attempt: 2,
       event: "workflow_dispatch",
       repository: { full_name: repository },
-      head_repository: { full_name: repository },
       head_branch: "main",
       head_sha: sha,
       path: workflow,
       status: "in_progress",
       conclusion: null as string | null,
     },
-    parentJobs: {
-      total_count: 1,
-      jobs: [
-        {
-          name: approvalJob,
-          head_sha: sha,
-          run_id: 10,
-          run_attempt: 2,
-          status: "in_progress",
-          steps: [{ name: receiptStep, status: "completed", conclusion: "success" }],
-        },
-      ],
-    },
+    parentJobs: { total_count: 1, jobs: [job] },
     approvals: [approved()],
   };
 }
 
 describe("release approval receipt", () => {
-  it.each<[string, Partial<typeof env>, ReturnType<typeof approved>[], RegExp | undefined]>([
+  it.each<[Partial<typeof env>, RegExp?, ReturnType<typeof approved>[]?]>([
     [
-      "last approved npm-release reviewer",
       {},
+      undefined,
       [
         approved("earlier-reviewer"),
         approved(),
-        { ...approved("rejected-reviewer"), state: "rejected" },
-        { ...approved("other-reviewer"), environments: [{ name: "other-environment" }] },
+        approved("rejected-reviewer", "rejected"),
+        approved("other-reviewer", "approved", "other-environment"),
       ],
-      undefined,
     ],
-    ["bot reviewer", {}, [approved(), approved("reviewer[BoT]")], /human login/u],
-    ["blank reviewer", {}, [approved(), approved(" ")], /human login/u],
+    [{}, /human login/u, [approved(), approved("reviewer[BoT]")]],
+    [{}, /human login/u, [approved(), approved(" ")]],
     [
-      "no approved npm-release entry",
       {},
-      [
-        { ...approved(), state: "rejected" },
-        { ...approved(), environments: [{ name: "clawhub-plugin-release" }] },
-      ],
       /approved npm-release environment/u,
+      [approved(undefined, "rejected"), approved(undefined, "approved", "clawhub-plugin-release")],
     ],
-    ["wrong event", { GITHUB_EVENT_NAME: "push" }, [approved()], /workflow_dispatch/u],
-    [
-      "wrong workflow",
-      { GITHUB_WORKFLOW_REF: `${repository}/${workflow}@refs/heads/other` },
-      [approved()],
-      /workflow ref/u,
-    ],
-    [
-      "wrong repository",
-      { GITHUB_REPOSITORY: "other/repository" },
-      [approved()],
-      /repository mismatch/u,
-    ],
-  ])("creates receipts only with valid authority: %s", (_label, override, approvals, message) => {
-    const create = () =>
-      createReleaseApprovalReceipt({ ...env, ...override }, (path: string) => {
-        expect(path).toBe("actions/runs/10/approvals");
-        return approvals;
-      });
-    if (message) {
-      expect(create).toThrow(message);
-    } else {
-      expect(create()).toEqual(fixture().receipt);
-    }
-  });
+    [{ GITHUB_EVENT_NAME: "push" }, /workflow_dispatch/u],
+    [{ GITHUB_WORKFLOW_REF: `${repository}/${workflow}@refs/heads/other` }, /workflow ref/u],
+    [{ GITHUB_REPOSITORY: "other/repository" }, /repository mismatch/u],
+  ])(
+    "creates receipts only with valid authority: %j",
+    (override, error, approvals = [approved()]) => {
+      const create = () => createReleaseApprovalReceipt({ ...env, ...override }, () => approvals);
+      if (error) {
+        expect(create).toThrow(error);
+      } else {
+        expect(create()).toEqual(fixture().receipt);
+      }
+    },
+  );
 
   const ref = "release-publish/aaaaaaaaaaaa-42";
   const protectedTooling = { toolingRef: ref, toolingFullRef: `refs/tags/${ref}` };
+  const alphaRef = "tideclaw/alpha/2026-09-24-1200Z";
   it.each<[Record<string, unknown>, RegExp | string | undefined]>([
     [{ releaseTag: "v2026.9.24-alpha.1" }, "Alpha releases are retired;"],
     [{ npmDistTag: "alpha" }, "Alpha releases are retired;"],
     [
       {
-        toolingRef: "tideclaw/alpha/2026-09-24-1200Z",
-        toolingFullRef: "refs/heads/tideclaw/alpha/2026-09-24-1200Z",
+        toolingRef: alphaRef,
+        toolingFullRef: `refs/heads/${alphaRef}`,
       },
       "Alpha releases are retired;",
     ],
@@ -182,6 +175,7 @@ describe("release approval receipt", () => {
 
   const valid = fixture();
   const job = expectDefined(valid.parentJobs.jobs[0], "job");
+  const failedStep = { ...expectDefined(job.steps[0], "step"), conclusion: "failure" };
   function receiptWith(overrides: Record<string, unknown>) {
     return { ...valid.receipt, ...overrides };
   }
@@ -192,16 +186,14 @@ describe("release approval receipt", () => {
     return { ...valid.artifact, workflow_run: { ...valid.artifact.workflow_run, ...overrides } };
   }
   it.each<[Partial<ReturnType<typeof fixture>>, RegExp]>([
-    ...(
-      [
-        ["parentRunId", "11"],
-        ["parentRunAttempt", "3"],
-        ["toolingSha", "c".repeat(40)],
-        ["releaseTag", "v2026.9.25-beta.1"],
-        ["targetSha", "d".repeat(40)],
-        ["npmDistTag", "latest"],
-      ] as const
-    ).map(([key, value]): [Partial<ReturnType<typeof fixture>>, RegExp] => [
+    ...Object.entries({
+      parentRunId: "11",
+      parentRunAttempt: "3",
+      toolingSha: "c".repeat(40),
+      releaseTag: "v2026.9.25-beta.1",
+      targetSha: "d".repeat(40),
+      npmDistTag: "latest",
+    }).map(([key, value]): [Partial<ReturnType<typeof fixture>>, RegExp] => [
       { expected: { ...valid.expected, [key]: value } },
       new RegExp(`${key} does not match`, "u"),
     ]),
@@ -210,14 +202,7 @@ describe("release approval receipt", () => {
     [{ artifact: artifact({ id: 11 }) }, /artifact parent run/u],
     [{ artifact: { ...valid.artifact, expired: true } }, /expired/u],
     [{ artifact: artifact({ head_repository_id: 100 }) }, /artifact repository/u],
-    [
-      {
-        parentJobs: jobs({
-          steps: [{ ...expectDefined(job.steps[0], "step"), conclusion: "failure" }],
-        }),
-      },
-      /receipt step/u,
-    ],
+    [{ parentJobs: jobs({ steps: [failedStep] }) }, /receipt step/u],
     [{ parentJobs: { total_count: 0, jobs: [] } }, /parent job must be unique/u],
     [{ parentJobs: { total_count: 2, jobs: [job, job] } }, /parent job must be unique/u],
     [{ parentJobs: jobs({ run_attempt: 1 }) }, /job identity/u],
@@ -244,29 +229,26 @@ describe("release approval receipt", () => {
 
   it("creates the receipt and artifact output through the CLI without overwriting files", () => {
     const directory = tempDirs.make("release-approval-cli-");
-    const bin = join(directory, "bin");
-    mkdirSync(bin);
-    writeFileSync(
-      join(bin, "gh"),
-      `#!${process.execPath}
-if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(["api", "repos/openclaw/openclaw/actions/runs/10/approvals", "--method", "GET"])) process.exit(1);
+    writeGh(
+      directory,
+      `if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(["api", "repos/openclaw/openclaw/actions/runs/10/approvals", "--method", "GET"])) process.exit(1);
 console.log(${JSON.stringify(JSON.stringify([approved()]))});
 `,
-      { mode: 0o755 },
     );
     const output = join(directory, "receipt", "approval.json");
     const githubOutput = join(directory, "output");
     const expectedOutput = `artifact_name=${artifactName}\n`;
-    const args = [resolve("scripts/release-approval-receipt.mjs"), "create", "--output", output];
-    const options = {
-      encoding: "utf8",
-      env: { ...env, PATH: `${bin}:${process.env.PATH}`, GITHUB_OUTPUT: githubOutput },
-    } as const;
-    const result = spawnSync(process.execPath, args, options);
+    const create = () =>
+      runCli(
+        "create",
+        { ...env, PATH: `${directory}:${process.env.PATH}`, GITHUB_OUTPUT: githubOutput },
+        ["--output", output],
+      );
+    const result = create();
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(output, "utf8")).toBe(`${JSON.stringify(fixture().receipt)}\n`);
     expect(readFileSync(githubOutput, "utf8")).toBe(expectedOutput);
-    const second = spawnSync(process.execPath, args, options);
+    const second = create();
     expect(second.status).toBe(1);
     expect(second.stderr).toContain("EEXIST");
     expect(readFileSync(githubOutput, "utf8")).toBe(expectedOutput);
@@ -274,64 +256,61 @@ console.log(${JSON.stringify(JSON.stringify([approved()]))});
 });
 
 describe("release approval artifact download", () => {
-  it("downloads the digest-bound archive and verifies fresh parent metadata", async () => {
+  async function downloadFixture(count = 1) {
     const input = fixture();
     const archive = await new JSZip()
-      .file("approval.json", `${JSON.stringify(input.receipt, null, 2)}\n`)
+      .file("approval.json", JSON.stringify(input.receipt, null, 2) + "\n")
       .generateAsync({ type: "nodebuffer" });
     const artifact = {
       ...input.artifact,
       size_in_bytes: archive.length,
-      digest: `sha256:${createHash("sha256").update(archive).digest("hex")}`,
+      digest: "sha256:" + createHash("sha256").update(archive).digest("hex"),
       expires_at: "2026-10-24T00:00:00Z",
     };
-    const apiResponses: Record<string, unknown> = {
-      [`actions/runs/10/artifacts?name=${artifactName}&per_page=100`]: {
-        total_count: 1,
-        artifacts: [artifact],
-      },
-      "actions/runs/10/attempts/2": input.parentRun,
+    const responses: Record<string, unknown> = {
+      ["actions/runs/10/artifacts?name=" + artifactName + "&per_page=100"]: artifactListing(
+        ...Array.from({ length: count }, () => artifact),
+      ),
+      "actions/runs/10/attempts/2":
+        count === 1
+          ? input.parentRun
+          : { ...input.parentRun, status: "completed", conclusion: "failure" },
       "actions/runs/10/attempts/2/jobs?per_page=100": input.parentJobs,
       "actions/runs/10/approvals": input.approvals,
     };
-    const result = await downloadReleaseApprovalReceipt({
-      expected: input.expected,
-      token: "synthetic-token",
-      runGhJson: (path: string) => {
-        expect(apiResponses).toHaveProperty(path);
-        return apiResponses[path];
-      },
-      fetchImpl: async (url: string) => {
-        if (url === "https://api.github.com/repos/openclaw/openclaw/actions/artifacts/50") {
-          return Response.json(artifact);
-        }
-        expect(url).toBe("https://api.github.com/repos/openclaw/openclaw/actions/artifacts/50/zip");
-        return new Response(new Uint8Array(archive));
-      },
-    });
-    expect(result).toEqual({ receipt: input.receipt, artifact });
+    const download = () =>
+      downloadReleaseApprovalReceipt({
+        expected: input.expected,
+        token: "synthetic-token",
+        runGhJson: (path: string) => {
+          expect(responses).toHaveProperty(path);
+          return responses[path];
+        },
+        fetchImpl: async (url: string) => {
+          if (count !== 1) {
+            throw new Error("unexpected download");
+          }
+          const base = "https://api.github.com/repos/openclaw/openclaw/actions/artifacts/50";
+          if (url === base) {
+            return Response.json(artifact);
+          }
+          expect(url).toBe(base + "/zip");
+          return new Response(new Uint8Array(archive));
+        },
+      });
+    return { download, receipt: input.receipt, artifact };
+  }
+
+  it("downloads the digest-bound archive and verifies fresh parent metadata", async () => {
+    const { download, receipt, artifact } = await downloadFixture();
+    expect(await download()).toEqual({ receipt, artifact });
   });
 
   it.each([0, 2])(
     "rejects %i matching artifacts when the parent cannot supply a receipt",
     async (count) => {
-      const input = fixture();
-      await expect(
-        downloadReleaseApprovalReceipt({
-          expected: input.expected,
-          token: "synthetic-token",
-          runGhJson: (path: string) =>
-            path.endsWith("/attempts/2")
-              ? { ...input.parentRun, status: "completed", conclusion: "failure" }
-              : {
-                  total_count: count,
-                  artifacts: Array.from({ length: count }, () => input.artifact),
-                },
-          fetchImpl: async () => {
-            throw new Error("unexpected download");
-          },
-        }),
-      ).rejects.toThrow(
+      const { download } = await downloadFixture(count);
+      await expect(download()).rejects.toThrow(
         /artifact is missing or ambiguous|artifact is missing; parent is inactive/u,
       );
     },
@@ -365,7 +344,7 @@ describe("parent authorization wait", () => {
     return (path: string) => {
       if (path === listing) {
         const page = artifacts[Math.min(polls++, artifacts.length - 1)] ?? [];
-        return { total_count: page.length, artifacts: page };
+        return artifactListing(...page);
       }
       expect(path).toBe("actions/runs/10/attempts/2");
       return parent;
@@ -379,28 +358,17 @@ describe("parent authorization wait", () => {
     ...authorization,
     workflow_run: { id, head_sha },
   });
-  it.each<[string, unknown[][], RegExp?, typeof completed?, WaitOptions?]>([
-    ["waits for authorization", [[], [], [authorization]]],
-    [
-      "allows detached authorization",
-      [[authorization]],
-      undefined,
-      completed,
-      { requireInProgress: false },
-    ],
-    ["requires a live parent", [[authorization]], /completed\//u, completed],
-    [
-      "parent exits without authorization",
-      [[]],
-      /completed\/failure without authorizing/u,
-      completed,
-    ],
-    ["deadline expires", [[]], /did not appear before the deadline/u, undefined, { deadlineMs: 0 }],
-    ["wrong parent", [[binding(11)]], wrongBinding],
-    ["wrong tooling", [[binding(10, targetSha)]], wrongBinding],
-    ["expired", [[{ ...authorization, expired: true }]], wrongBinding],
-    ["ambiguous", [[authorization, authorization]], /ambiguous/u],
-  ])("%s", async (_name, pages, error, parent, options) => {
+  it.each<[unknown[][], RegExp?, typeof completed?, WaitOptions?]>([
+    [[[], [], [authorization]]],
+    [[[authorization]], undefined, completed, { requireInProgress: false }],
+    [[[authorization]], /completed\//u, completed],
+    [[[]], /completed\/failure without authorizing/u, completed],
+    [[[]], /did not appear before the deadline/u, undefined, { deadlineMs: 0 }],
+    [[[binding(11)]], wrongBinding],
+    [[[binding(10, targetSha)]], wrongBinding],
+    [[[{ ...authorization, expired: true }]], wrongBinding],
+    [[[authorization, authorization]], /ambiguous/u],
+  ])("validates parent authorization (%#): %j", async (pages, error, parent, options) => {
     const result = awaitParentAuthorization({
       ...params,
       ...options,
@@ -414,60 +382,47 @@ describe("parent authorization wait", () => {
   });
 });
 
-describe("parent authorization CLI", () => {
-  it.each([
-    ["wait-npm-authorization", "in_progress", null, 0, artifactName],
-    ["wait-npm-authorization", "completed", "success", 1, artifactName],
-    [
-      "wait-clawhub-authorization",
-      "completed",
-      "success",
-      0,
-      "openclaw-clawhub-parent-authorization-v2-10-2-30-1",
-    ],
-  ] as const)(
-    "%s checks its exact artifact with parent %s/%s",
-    (command, status, conclusion, exitCode, name) => {
-      const directory = tempDirs.make("parent-authorization-cli-");
-      const artifact = { ...fixture().artifact, name };
-      const responses = {
-        [`repos/openclaw/openclaw/actions/runs/10/artifacts?name=${name}&per_page=100`]: {
-          total_count: 1,
-          artifacts: [artifact],
-        },
-        "repos/openclaw/openclaw/actions/runs/10/attempts/2": { status, conclusion },
-      };
-      writeFileSync(
-        join(directory, "gh"),
-        `#!${process.execPath}
-const responses = ${JSON.stringify(responses)};
+it.each([
+  ["wait-npm-authorization", "in_progress", null, 0, artifactName],
+  ["wait-npm-authorization", "completed", "success", 1, artifactName],
+  [
+    "wait-clawhub-authorization",
+    "completed",
+    "success",
+    0,
+    "openclaw-clawhub-parent-authorization-v2-10-2-30-1",
+  ],
+] as const)(
+  "%s checks its exact artifact with parent %s/%s",
+  (command, status, conclusion, exitCode, name) => {
+    const directory = tempDirs.make("parent-authorization-cli-");
+    const artifact = { ...fixture().artifact, name };
+    const responses = {
+      [`repos/openclaw/openclaw/actions/runs/10/artifacts?name=${name}&per_page=100`]:
+        artifactListing(artifact),
+      "repos/openclaw/openclaw/actions/runs/10/attempts/2": { status, conclusion },
+    };
+    writeGh(
+      directory,
+      `const responses = ${JSON.stringify(responses)};
 const response = responses[process.argv[3]];
 if (!response) process.exit(2);
 console.log(JSON.stringify(response));
 `,
-        { mode: 0o755 },
-      );
-      const result = spawnSync(
-        process.execPath,
-        [resolve("scripts/release-approval-receipt.mjs"), command],
-        {
-          encoding: "utf8",
-          env: {
-            PATH: `${directory}:${process.env.PATH}`,
-            RELEASE_PUBLISH_RUN_ID: "10",
-            RELEASE_PUBLISH_RUN_ATTEMPT: "2",
-            EXPECTED_WORKFLOW_SHA: sha,
-            GITHUB_RUN_ID: "30",
-            GITHUB_RUN_ATTEMPT: "1",
-          },
-        },
-      );
-      expect(result.status, result.stderr).toBe(exitCode);
-      if (exitCode === 0) {
-        expect(result.stdout).toContain(name);
-      } else {
-        expect(result.stderr).toContain(`completed/${conclusion} without authorizing`);
-      }
-    },
-  );
-});
+    );
+    const result = runCli(command, {
+      PATH: `${directory}:${process.env.PATH}`,
+      RELEASE_PUBLISH_RUN_ID: "10",
+      RELEASE_PUBLISH_RUN_ATTEMPT: "2",
+      EXPECTED_WORKFLOW_SHA: sha,
+      GITHUB_RUN_ID: "30",
+      GITHUB_RUN_ATTEMPT: "1",
+    });
+    expect(result.status, result.stderr).toBe(exitCode);
+    if (exitCode === 0) {
+      expect(result.stdout).toContain(name);
+    } else {
+      expect(result.stderr).toContain(`completed/${conclusion} without authorizing`);
+    }
+  },
+);
