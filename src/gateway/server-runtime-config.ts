@@ -67,6 +67,31 @@ export function isGatewayEffectiveConfigConflictError(error: unknown): boolean {
   );
 }
 
+/**
+ * Compose maps `OPENCLAW_PUID` into the service's `user:`, so an operator who sets it
+ * to a root identity gets a root gateway without ever typing `user: root`. Refuse that.
+ *
+ * The rule is "an identity was explicitly requested and we still ended up as uid 0",
+ * not the spelling of the request: Compose also accepts user names, so `0`, `00` and
+ * `root` all have to be caught. `scripts/docker/setup.sh` additionally rejects these
+ * up front, but a hand-written `.env` or compose file never passes through it.
+ *
+ * Keying off the request rather than "am I root" matters because some deployments run
+ * `--user 0:0` deliberately: fleet cells do so on a rootless daemon
+ * (src/fleet/service-support.runtime.ts), where uid 0 inside the container is an
+ * unprivileged host uid. Those paths never set OPENCLAW_PUID.
+ */
+function assertContainerRuntimeIdentity(): void {
+  const requested = process.env.OPENCLAW_PUID?.trim();
+  // `getuid` is absent on Windows, where this whole notion does not apply.
+  if (!requested || process.getuid?.() !== 0) {
+    return;
+  }
+  throw new GatewayEffectiveConfigConflictError(
+    `refusing to run the gateway as root: OPENCLAW_PUID=${requested} resolved to uid 0 (set OPENCLAW_PUID and OPENCLAW_PGID to the uid/gid that owns the mounted data directories, or leave them unset for the image default 1000)`,
+  );
+}
+
 /** Startup and reload validate the same security policy against the serving listener. */
 export function assertGatewayRuntimeSecurityConfig(
   params: Pick<
@@ -77,6 +102,7 @@ export function assertGatewayRuntimeSecurityConfig(
     port: number;
   },
 ): void {
+  assertContainerRuntimeIdentity();
   const { cfg, bindHost, controlUiEnabled, resolvedAuth, tailscaleMode } = params;
   const authMode = resolvedAuth.mode;
   const hasSharedSecret =

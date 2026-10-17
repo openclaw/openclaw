@@ -204,6 +204,7 @@ This also deletes unrelated workloads and the PVC.
 - The gateway binds to loopback inside the pod by default, so the included setup is for `kubectl port-forward`.
 - No cluster-scoped resources; everything lives in a single namespace.
 - Security hardening: `readOnlyRootFilesystem`, `drop: ALL` capabilities, non-root user (UID 1000).
+- The pod's uid/gid is pinned via `runAsUser`/`runAsGroup` in `deployment.yaml`; the Docker Compose-only `OPENCLAW_PUID`/`OPENCLAW_PGID` environment variables are inert here — edit the manifest directly to change it.
 - Writable cache: the Gateway stages private SQLite snapshots under `XDG_CACHE_HOME` (default `~/.cache`). The manifest points it at `/home/node/.openclaw/.cache` on the PVC because the root filesystem is read-only. Keep an equivalent writable cache location if you customize the mounts.
 - The default config keeps the Control UI on the safer local-access path: loopback bind plus `kubectl port-forward` to `http://127.0.0.1:18789`.
 - If you move beyond localhost access, use the supported remote model: HTTPS/Tailscale plus the appropriate gateway bind and Control UI origin settings.

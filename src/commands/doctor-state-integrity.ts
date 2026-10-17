@@ -252,10 +252,10 @@ function dirPermissionHint(dir: string): string | null {
   try {
     const stat = fs.statSync(dir);
     if (uid !== null && stat.uid !== uid) {
-      return `Owner mismatch (uid ${stat.uid}). Run: sudo chown -R $USER "${dir}"`;
+      return `Owner mismatch (uid ${stat.uid}). Run: sudo chown -R ${uid} "${dir}"`;
     }
     if (gid !== null && stat.gid !== gid) {
-      return `Group mismatch (gid ${stat.gid}). If access fails, run: sudo chown -R $USER "${dir}"`;
+      return `Group mismatch (gid ${stat.gid}). If access fails, run: sudo chown -R :${gid} "${dir}"`;
     }
   } catch {
     return null;

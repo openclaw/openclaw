@@ -165,10 +165,9 @@ The plugin files are owned by a different Unix user than the process loading
 them. Do not remove the plugin config; fix the file ownership, or run
 OpenClaw as the user that owns the state directory.
 
-Docker installs run as `node` (uid `1000`). Repair the host bind mounts:
+For Docker installs, see [Permissions and EACCES](/install/docker/compose-operations#permissions-and-eacces) to repair the host bind mounts — chown them to uid `1000` (the default), or set `OPENCLAW_PUID`/`OPENCLAW_PGID` if you can't chown the share — then run:
 
 ```bash
-sudo chown -R 1000:1000 /path/to/openclaw-config /path/to/openclaw-workspace
 openclaw doctor --fix
 ```
 

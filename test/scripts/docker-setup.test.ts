@@ -13,6 +13,7 @@ import {
   findGatewayStartLineIndex,
   isGatewayStartLine,
   noFollowOwnershipRepair,
+  ownershipRepairOwnerArg,
   prestartContainerEnvFlags,
   prestartSafePath,
   readDockerLog,
@@ -552,8 +553,10 @@ describe("scripts/docker/setup.sh", () => {
     expect(stateRepairIdx).toBeGreaterThan(safePathIdx);
     expect(onboardIdx).toBeGreaterThan(chownIdx);
     expect(log).toContain("run --rm --no-deps --user root --entrypoint sh openclaw-gateway -c");
-    expect(log).toContain("/usr/bin/chown -h node:node /home/node/.config");
-    expect(stateRepair).toContain("-execdir /usr/bin/chown -h node:node {} +");
+    expect(log).toContain('/usr/bin/chown -h "$1" /home/node/.config');
+    expect(stateRepair).toContain('-execdir /usr/bin/chown -h "$1" {} +');
+    // Unset OPENCLAW_PUID/OPENCLAW_PGID must reproduce the image's `node` user.
+    expect(log).toContain(ownershipRepairOwnerArg("1000:1000"));
     expect(log).toContain(noFollowOwnershipRepair("/home/node/.config/openclaw"));
     expect(log).toContain("[ ! -L /home/node/.openclaw/workspace/.openclaw ]");
     expect(log).toContain(noFollowOwnershipRepair("/home/node/.openclaw/workspace/.openclaw"));
@@ -567,7 +570,7 @@ describe("scripts/docker/setup.sh", () => {
     // Same-device workspace mounts are not excluded by find's -xdev option.
     const selection = stateRepair
       .replaceAll("/home/node/.openclaw", '"$repair_root"')
-      .replace(/-execdir \/usr\/bin\/chown -h node:node \{\} \+$/u, "-print");
+      .replace(/-execdir \/usr\/bin\/chown -h "\$1" \{\} \+$/u, "-print");
     expect(selection).not.toContain("chown");
     const traversal = spawnSync(
       "bash",
@@ -583,6 +586,72 @@ describe("scripts/docker/setup.sh", () => {
     }
     expect(selected).toContain(`${selectedRoot}/workspace`);
     expect(selected).not.toContain(`${selectedRoot}/${workspaceFile}`);
+  });
+
+  it("repairs ownership for the configured OPENCLAW_PUID/OPENCLAW_PGID", async () => {
+    const configDir = join(sandbox.rootDir, "config-puid");
+    const workspaceDir = join(configDir, "workspace");
+    // Earlier cases in this file log the default owner; assert against this run only.
+    await resetDockerLog(sandbox);
+
+    const result = runDockerSetup(sandbox, {
+      OPENCLAW_CONFIG_DIR: configDir,
+      OPENCLAW_WORKSPACE_DIR: workspaceDir,
+      OPENCLAW_PUID: "1026",
+      OPENCLAW_PGID: "100",
+    });
+
+    expect(result.status).toBe(0);
+    const log = await readDockerLog(sandbox);
+    // Only the appended value changes; the repair command itself stays parameterized.
+    expect(log).toContain('/usr/bin/chown -h "$1" /home/node/.config');
+    expect(log).toContain(ownershipRepairOwnerArg("1026:100"));
+    expect(log).not.toContain(ownershipRepairOwnerArg("1000:1000"));
+    // Compose interpolates `user:` from .env, so the values must be persisted there.
+    const envFile = await readFile(join(sandbox.rootDir, ".env"), "utf8");
+    expect(envFile).toContain("OPENCLAW_PUID=1026");
+    expect(envFile).toContain("OPENCLAW_PGID=100");
+  });
+
+  it("keeps the saved OPENCLAW_PUID/OPENCLAW_PGID when a rerun does not export them", async () => {
+    const configDir = join(sandbox.rootDir, "config-puid-rerun");
+    await writeFile(join(sandbox.rootDir, ".env"), "OPENCLAW_PUID=1026\nOPENCLAW_PGID=100\n");
+    await resetDockerLog(sandbox);
+
+    const result = runDockerSetup(sandbox, {
+      OPENCLAW_CONFIG_DIR: configDir,
+      OPENCLAW_WORKSPACE_DIR: join(configDir, "workspace"),
+    });
+
+    expect(result.status).toBe(0);
+    const log = await readDockerLog(sandbox);
+    expect(log).toContain(ownershipRepairOwnerArg("1026:100"));
+    expect(log).not.toContain(ownershipRepairOwnerArg("1000:1000"));
+    const envFile = await readFile(join(sandbox.rootDir, ".env"), "utf8");
+    expect(envFile).toContain("OPENCLAW_PUID=1026");
+    expect(envFile).toContain("OPENCLAW_PGID=100");
+  });
+
+  it("rejects OPENCLAW_PUID=0 so the container cannot be pinned to root", async () => {
+    const result = runDockerSetup(sandbox, {
+      OPENCLAW_CONFIG_DIR: join(sandbox.rootDir, "config-puid-root"),
+      OPENCLAW_WORKSPACE_DIR: join(sandbox.rootDir, "workspace-puid-root"),
+      OPENCLAW_PUID: "0",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("OPENCLAW_PUID must not be 0");
+  });
+
+  it("rejects a non-numeric OPENCLAW_PGID", async () => {
+    const result = runDockerSetup(sandbox, {
+      OPENCLAW_CONFIG_DIR: join(sandbox.rootDir, "config-pgid-invalid"),
+      OPENCLAW_WORKSPACE_DIR: join(sandbox.rootDir, "workspace-pgid-invalid"),
+      OPENCLAW_PGID: "users",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("OPENCLAW_PGID must be a decimal integer");
   });
 
   it.each(["config", "dotenv"])(

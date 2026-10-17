@@ -6,12 +6,13 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUNDLED_PLUGIN_ROOT_DIR } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
-import { isMap, parseAllDocuments } from "yaml";
+import { isMap, parse, parseAllDocuments } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
 import { resolveTestNodeExecPath } from "./test-utils/node-process.js";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
+const dockerComposePath = join(repoRoot, "docker-compose.yml");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function collapseDockerContinuations(dockerfile: string): string {
@@ -291,5 +292,34 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(
       "stat -c '%U:%G %a' /home/node/.config/openclaw | grep -qx 'node:node 700'",
     );
+  });
+
+  it("lets Compose override the runtime identity without changing the image", async () => {
+    const compose = parse(await readFile(dockerComposePath, "utf8")) as {
+      services: Record<string, { user?: string; environment?: Record<string, string> }>;
+    };
+
+    for (const name of ["openclaw-gateway", "openclaw-cli"]) {
+      const service = compose.services[name];
+      expect(service, `missing service ${name}`).toBeDefined();
+      // Unset OPENCLAW_PUID/OPENCLAW_PGID must resolve to the image's `node` user so
+      // existing deployments keep the identity they already run under.
+      expect(service?.user).toBe("${OPENCLAW_PUID:-1000}:${OPENCLAW_PGID:-1000}");
+      // /home/node stays uid-1000-owned, so HOME-derived caches must be redirected
+      // into the writable state mount before any other runtime uid can use them.
+      // They are defaults only, so a value an operator already set in .env still wins.
+      expect(service?.environment?.XDG_CACHE_HOME).toBe(
+        "${XDG_CACHE_HOME:-/home/node/.openclaw/cache}",
+      );
+      expect(service?.environment?.NPM_CONFIG_CACHE).toBe(
+        "${NPM_CONFIG_CACHE:-/home/node/.openclaw/.npm}",
+      );
+      // Surfaced in-container so the gateway can reject an explicit root request.
+      expect(service?.environment?.OPENCLAW_PUID).toBe("${OPENCLAW_PUID:-}");
+    }
+
+    // A split identity between the services would re-create the ownership mismatch
+    // on the shared state mount that this setting exists to remove.
+    expect(compose.services["openclaw-gateway"]?.user).toBe(compose.services["openclaw-cli"]?.user);
   });
 });

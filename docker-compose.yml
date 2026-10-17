@@ -2,6 +2,13 @@ services:
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
     build: .
+    # Container runtime identity. Bind mounts carry host uid/gid numerically, so
+    # the process must run as the uid that owns them. The default 1000:1000 is
+    # exactly the image's `node` user, so leaving OPENCLAW_PUID/OPENCLAW_PGID
+    # unset reproduces the previous behavior byte for byte. Set them whenever the
+    # bind-mount sources are owned by a different uid than 1000.
+    # Do not set 0: the gateway refuses to start as root when OPENCLAW_PUID=0.
+    user: "${OPENCLAW_PUID:-1000}:${OPENCLAW_PGID:-1000}"
     env_file:
       - path: .env
         required: false
@@ -9,6 +16,14 @@ services:
       HOME: /home/node
       OPENCLAW_HOME: /home/node
       TERM: xterm-256color
+      # HOME-derived caches must live inside the writable state mount so any
+      # runtime uid can create them; /home/node itself stays uid-1000-owned.
+      # Same redirection fleet cells and the Podman quadlet already rely on.
+      XDG_CACHE_HOME: ${XDG_CACHE_HOME:-/home/node/.openclaw/cache}
+      NPM_CONFIG_CACHE: ${NPM_CONFIG_CACHE:-/home/node/.openclaw/.npm}
+      # Surfaced in-container so the gateway can reject an explicit root request
+      # without also rejecting fleet cells, which run --user 0:0 deliberately.
+      OPENCLAW_PUID: ${OPENCLAW_PUID:-}
       # Pin container-side state, workspace, and config paths so host values written to
       # `.env` (used by Compose for the bind-mount source below) cannot leak
       # into runtime code that resolves these env vars inside the container.
@@ -95,6 +110,9 @@ services:
 
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    # Must match the gateway service: a split identity would re-create the
+    # ownership mismatch on the shared state mount that this setting removes.
+    user: "${OPENCLAW_PUID:-1000}:${OPENCLAW_PGID:-1000}"
     network_mode: "service:openclaw-gateway"
     env_file:
       - path: .env
@@ -108,6 +126,10 @@ services:
       HOME: /home/node
       OPENCLAW_HOME: /home/node
       TERM: xterm-256color
+      # Keep cache redirection identical to the gateway service.
+      XDG_CACHE_HOME: ${XDG_CACHE_HOME:-/home/node/.openclaw/cache}
+      NPM_CONFIG_CACHE: ${NPM_CONFIG_CACHE:-/home/node/.openclaw/.npm}
+      OPENCLAW_PUID: ${OPENCLAW_PUID:-}
       # Pin container-side state, workspace, and config paths so host values written to
       # `.env` cannot leak into runtime code via the env_file import (#77436).
       OPENCLAW_STATE_DIR: /home/node/.openclaw
