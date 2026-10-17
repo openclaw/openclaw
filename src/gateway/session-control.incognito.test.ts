@@ -46,6 +46,7 @@ const dirs = useAutoCleanupTempDirTracker(afterAll);
 const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
 const cfg = { agents: { entries: { main: {} } } };
+const contains = expect.objectContaining;
 let client: GatewayClient;
 let location: { agentId: string; path: string };
 let env: NodeJS.ProcessEnv;
@@ -84,19 +85,19 @@ afterAll(async () => {
   vi.unstubAllEnvs();
 });
 
-async function seed(params: {
-  sessionKey: string;
-  entry: SessionEntry;
-  transcriptEvents?: readonly unknown[];
-}) {
+async function seed(
+  sessionKey: string,
+  entry: Omit<SessionEntry, "updatedAt">,
+  transcriptEvents?: readonly unknown[],
+) {
   const created = await withSessionActorStorage(
-    { agentId: "main", sessionKey: params.sessionKey, storePath: location.path, env },
+    { agentId: "main", sessionKey, storePath: location.path, env },
     { create: true, authority, lifetime },
     ({ actor }) =>
       actor.storage.mutate(
         {
           type: "session.entry.create",
-          input: { entry: params.entry, transcriptEvents: params.transcriptEvents },
+          input: { entry: { updatedAt: 1, incognito: true, ...entry }, transcriptEvents },
         },
         authority,
       ),
@@ -126,26 +127,21 @@ async function invoke(
 it("returns the unbound memory Goal receipt on retry and serves suggestion mutations without host SQL", async () => {
   const sessionKey = "agent:main:dashboard:incognito-controls";
   const sessionId = "controls";
-  await seed({
-    sessionKey,
-    entry: {
-      sessionId,
+  await seed(sessionKey, {
+    sessionId,
+    lifecycleRevision: "first",
+    visibility: "suggest",
+    label: "Keep this label",
+    goal: {
+      schemaVersion: 1,
+      id: "goal",
+      objective: "Before",
+      status: "paused",
+      createdAt: 1,
       updatedAt: 1,
-      incognito: true,
-      lifecycleRevision: "first",
-      visibility: "suggest",
-      label: "Keep this label",
-      goal: {
-        schemaVersion: 1,
-        id: "goal",
-        objective: "Before",
-        status: "paused",
-        createdAt: 1,
-        updatedAt: 1,
-        tokenStart: 0,
-        tokensUsed: 0,
-        continuationTurns: 0,
-      },
+      tokenStart: 0,
+      tokensUsed: 0,
+      continuationTurns: 0,
     },
   });
   await initializeSessionReadContext(context);
@@ -164,7 +160,7 @@ it("returns the unbound memory Goal receipt on retry and serves suggestion mutat
     const first = await invoke(sessionGoalHandlers, "sessions.goal.update", request);
     expect(first).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ goal: expect.objectContaining({ objective: "After" }) }),
+      contains({ goal: contains({ objective: "After" }) }),
       undefined,
     );
     const replay = await invoke(sessionGoalHandlers, "sessions.goal.update", request);
@@ -213,7 +209,7 @@ it("returns the unbound memory Goal receipt on retry and serves suggestion mutat
     ).toBeUndefined();
     expect(added).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ suggestion: expect.objectContaining({ text: "Check this" }) }),
+      contains({ suggestion: contains({ text: "Check this" }) }),
     );
     const suggestion = (added.mock.calls[0]![1] as { suggestion: { id: string } }).suggestion;
     const listed = await invoke(sessionSuggestionHandlers, "session.suggestions.list", {
@@ -221,7 +217,7 @@ it("returns the unbound memory Goal receipt on retry and serves suggestion mutat
     });
     expect(listed).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ suggestions: [expect.objectContaining({ id: suggestion.id })] }),
+      contains({ suggestions: [contains({ id: suggestion.id })] }),
     );
     const dismissed = await invoke(sessionSuggestionHandlers, "session.suggestions.resolve", {
       sessionKey,
@@ -230,7 +226,7 @@ it("returns the unbound memory Goal receipt on retry and serves suggestion mutat
     });
     expect(dismissed).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ suggestion: expect.objectContaining({ state: "dismissed" }) }),
+      contains({ suggestion: contains({ state: "dismissed" }) }),
     );
     expect(host.queries).toEqual([]);
   } finally {
@@ -241,20 +237,15 @@ it("returns the unbound memory Goal receipt on retry and serves suggestion mutat
 it("retains an unbound memory Side chat source for durable writes and refuses a closed transport", async () => {
   const sessionKey = "agent:main:dashboard:incognito-side-chat";
   const sessionId = "side-chat-source";
-  const entry = { sessionId, updatedAt: 1, lifecycleRevision: "first", incognito: true as const };
-  await seed({
-    sessionKey,
-    entry,
-    transcriptEvents: [
-      { type: "session", id: sessionId, version: 3, cwd: "/synthetic" },
-      {
-        type: "message",
-        id: "private-context",
-        parentId: null,
-        message: { role: "user", content: "Original private context", timestamp: 1 },
-      },
-    ],
-  });
+  await seed(sessionKey, { sessionId, lifecycleRevision: "first" }, [
+    { type: "session", id: sessionId, version: 3, cwd: "/synthetic" },
+    {
+      type: "message",
+      id: "private-context",
+      parentId: null,
+      message: { role: "user", content: "Original private context", timestamp: 1 },
+    },
+  ]);
   const destination = { agentId: "main", sessionKey: "agent:main:companion-destination" };
   await upsertSessionEntryCore(destination, {
     sessionId: "durable-destination",
@@ -277,9 +268,7 @@ it("retains an unbound memory Side chat source for durable writes and refuses a 
       await patchSessionEntryCore(
         destination,
         () => ({ label: pause ? "Unexpected write" : "After" }),
-        {
-          workerGuard: { source: request.assertSourceCurrent },
-        },
+        { workerGuard: { source: request.assertSourceCurrent } },
       );
       return "Answer";
     },
@@ -317,11 +306,7 @@ it("retains an unbound memory Side chat source for durable writes and refuses a 
       resume.resolve();
     }
     const rejected = await pending;
-    expect(rejected).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
+    expect(rejected).toHaveBeenCalledWith(false, undefined, contains({ code: "UNAVAILABLE" }));
     expect(loadSessionEntry(destination)?.label).toBe("After");
   } finally {
     resume.resolve();
@@ -333,21 +318,14 @@ it("retains an unbound memory Side chat source for durable writes and refuses a 
 
 it("attaches unbound memory skill pins for the next turn and refuses a detached revision", async () => {
   const sessionKey = "agent:main:dashboard:incognito-skills";
-  await seed({
-    sessionKey,
-    entry: { sessionId: "skills", updatedAt: 1, incognito: true },
-  });
+  await seed(sessionKey, { sessionId: "skills" });
   const saved = await invoke(skillsLibraryHandlers, "skills.library.save", {
     slug: "actor-skill",
     content: "---\nname: actor-skill\ndescription: Synthetic skill\n---\n# Actor skill\n",
     expectedRevision: null,
   });
   expect(saved.mock.calls).toEqual([
-    [
-      true,
-      expect.objectContaining({ entry: expect.objectContaining({ skillId: expect.any(String) }) }),
-      undefined,
-    ],
+    [true, contains({ entry: contains({ skillId: expect.any(String) }) }), undefined],
   ]);
   const entry = (saved.mock.calls[0]![1] as { entry: { skillId: string; revision: string } }).entry;
   const attached = await invoke(skillsLibraryHandlers, "skills.library.activate", {
@@ -357,20 +335,16 @@ it("attaches unbound memory skill pins for the next turn and refuses a detached 
   });
   expect(attached).toHaveBeenCalledWith(
     true,
-    expect.objectContaining({
+    contains({
       sessionActivation: "next-turn",
-      selections: [expect.objectContaining({ skillId: entry.skillId, revision: entry.revision })],
+      selections: [contains({ skillId: entry.skillId, revision: entry.revision })],
     }),
     undefined,
   );
   const listed = await invoke(skillsLibraryHandlers, "skills.library.list", { sessionKey });
   expect(listed).toHaveBeenCalledWith(
     true,
-    expect.objectContaining({
-      session: expect.objectContaining({
-        selections: [expect.objectContaining({ skillId: entry.skillId })],
-      }),
-    }),
+    contains({ session: contains({ selections: [contains({ skillId: entry.skillId })] }) }),
     undefined,
   );
   const detached = await invoke(skillsLibraryHandlers, "skills.library.activate", {
@@ -378,9 +352,7 @@ it("attaches unbound memory skill pins for the next turn and refuses a detached 
     skillId: entry.skillId,
     action: "detach",
   });
-  expect(detached.mock.calls).toEqual([
-    [true, expect.objectContaining({ selections: [] }), undefined],
-  ]);
+  expect(detached.mock.calls).toEqual([[true, contains({ selections: [] }), undefined]]);
   const denied = await invoke(skillsLibraryHandlers, "skills.library.read", {
     sessionKey,
     skillId: entry.skillId,
@@ -389,19 +361,14 @@ it("attaches unbound memory skill pins for the next turn and refuses a detached 
   expect(denied).toHaveBeenCalledWith(
     false,
     undefined,
-    expect.objectContaining({ details: { code: "SKILL_LIBRARY_FORBIDDEN" } }),
+    contains({ details: { code: "SKILL_LIBRARY_FORBIDDEN" } }),
   );
 });
 
 it("restores a refused unbound memory task suggestion and retains accepted chat authority after its ACK", async () => {
   const sessionKey = "agent:main:dashboard:incognito-task-rollback";
-  const entry = {
-    sessionId: "task-rollback",
-    updatedAt: 1,
-    lifecycleRevision: "first",
-    incognito: true as const,
-  };
-  await seed({ sessionKey, entry });
+  const sessionId = "task-rollback";
+  await seed(sessionKey, { sessionId, lifecycleRevision: "first" });
   let refuse = true;
   let acceptedAuthority: SessionMutationAuthorization | undefined;
   const delivery = vi.spyOn(chatSend, "handleChatSend").mockImplementation(async (options) => {
@@ -448,7 +415,7 @@ it("restores a refused unbound memory task suggestion and retains accepted chat 
       agentId: "main",
     });
     expect(created.mock.calls).toEqual([
-      [true, expect.objectContaining({ taskId: expect.any(String) }), undefined],
+      [true, contains({ taskId: expect.any(String) }), undefined],
     ]);
     const taskId = (created.mock.calls[0]![1] as { taskId: string }).taskId;
     const rejected = await invoke(taskSuggestionsHandlers, "taskSuggestions.accept", {
@@ -456,17 +423,17 @@ it("restores a refused unbound memory task suggestion and retains accepted chat 
       mode: "session",
     });
     expect(rejected.mock.calls).toEqual([
-      [false, undefined, expect.objectContaining({ message: "delivery refused before admission" })],
+      [false, undefined, contains({ message: "delivery refused before admission" })],
     ]);
     const restored = await invoke(taskSuggestionsHandlers, "taskSuggestions.list", {
       sessionKey,
     });
     expect(restored.mock.calls).toEqual([
-      [true, { suggestions: [expect.objectContaining({ id: taskId })] }, undefined],
+      [true, { suggestions: [contains({ id: taskId })] }, undefined],
     ]);
     expect(
       memorySessionActorOwners.read(location)?.readSession(sessionKey, authority)?.entry?.sessionId,
-    ).toBe(entry.sessionId);
+    ).toBe(sessionId);
     expect(deletion).not.toHaveBeenCalled();
     refuse = false;
     const accepted = await invoke(taskSuggestionsHandlers, "taskSuggestions.accept", {

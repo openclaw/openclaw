@@ -1,7 +1,6 @@
 import http from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { onAgentEventForRun } from "../infra/agent-events.js";
 import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.test-support.js";
 import { scheduleSessionDelivery } from "../infra/session-delivery-queue-runtime.js";
 import {
@@ -28,23 +27,8 @@ vi.mock("./server-idle-task.js", () => ({
   scheduleGatewayIdleTask: () => ({ stop: vi.fn() }),
 }));
 
-type DeliveryProofStage =
-  | "rescheduled"
-  | "provider-request"
-  | "provider-response"
-  | "agent-start"
-  | "agent-finishing"
-  | "agent-end"
-  | "agent-error"
-  | "client-marker";
-
-async function startProofProvider(
-  requests: string[],
-  observe: (stage: DeliveryProofStage) => void,
-): Promise<http.Server> {
+async function startProofProvider(requests: string[]): Promise<http.Server> {
   const server = http.createServer((request, response) => {
-    observe("provider-request");
-    response.once("finish", () => observe("provider-response"));
     let body = "";
     request.setEncoding("utf8");
     request.on("data", (chunk: string) => {
@@ -55,23 +39,16 @@ async function startProofProvider(
       const outputText = body.includes("clock-jump readiness marker")
         ? "CLOCK_JUMP READY"
         : "CLOCK_JUMP DELIVERED";
+      const message = { type: "message", id: "clock-jump-message", role: "assistant" };
       const events = [
         {
           type: "response.output_item.added",
-          item: {
-            type: "message",
-            id: "clock-jump-message",
-            role: "assistant",
-            content: [],
-            status: "in_progress",
-          },
+          item: { ...message, content: [], status: "in_progress" },
         },
         {
           type: "response.output_item.done",
           item: {
-            type: "message",
-            id: "clock-jump-message",
-            role: "assistant",
+            ...message,
             status: "completed",
             content: [{ type: "output_text", text: outputText, annotations: [] }],
           },
@@ -114,20 +91,6 @@ describe("session delivery clock-jump integration", () => {
     { timeout: 90_000 },
     async ({ signal }) => {
       const startedAt = performance.now();
-      const stages: Partial<
-        Record<DeliveryProofStage, { count: number; firstAtMs: number; lastAtMs: number }>
-      > = {};
-      const observe = (stage: DeliveryProofStage) => {
-        const elapsedMs = Math.round(performance.now() - startedAt);
-        const previous = stages[stage];
-        if (previous) {
-          previous.count += 1;
-          previous.lastAtMs = elapsedMs;
-        } else {
-          stages[stage] = { count: 1, firstAtMs: elapsedMs, lastAtMs: elapsedMs };
-        }
-      };
-      let stopObserving: (() => void) | undefined;
       const initialTime = Date.now();
       const wallClock = vi.spyOn(Date, "now").mockReturnValue(initialTime);
       const { envSnapshot, tempHome, workspaceDir } = await setupGatewayTempHome({
@@ -141,7 +104,7 @@ describe("session delivery clock-jump integration", () => {
       const chatEvents: string[] = [];
 
       try {
-        providerServer = await startProofProvider(providerRequests, observe);
+        providerServer = await startProofProvider(providerRequests);
         const providerAddress = providerServer.address();
         if (!providerAddress || typeof providerAddress === "string") {
           throw new Error("proof provider did not bind a loopback port");
@@ -190,21 +153,9 @@ describe("session delivery clock-jump integration", () => {
             }
             const payload = JSON.stringify(event.payload ?? {});
             chatEvents.push(payload);
-            if (payload.includes("CLOCK_JUMP DELIVERED")) {
-              observe("client-marker");
-            }
           },
         });
         await gateway.server.startupSettled;
-        stopObserving = onAgentEventForRun("image:clock-jump:agent-loop", (event) => {
-          const phase = event.data.phase;
-          if (
-            event.stream === "lifecycle" &&
-            (phase === "start" || phase === "finishing" || phase === "end" || phase === "error")
-          ) {
-            observe(`agent-${phase}`);
-          }
-        });
         // Gateway startup leaves first-turn preparation cold. Finish it before timing claim release.
         await expect(
           gateway.client.request(
@@ -248,7 +199,6 @@ describe("session delivery clock-jump integration", () => {
         wallClock.mockReturnValue(initialTime + 24 * 60 * 60 * 1_000);
         await releaseSessionDeliveryClaim(id, queueContext);
         await scheduleSessionDelivery(id, queueContext);
-        observe("rescheduled");
 
         await vi.waitFor(
           async () => {
@@ -267,7 +217,6 @@ describe("session delivery clock-jump integration", () => {
           "session-delivery-clock-jump-diagnostics",
           JSON.stringify({
             elapsedMs: Math.round(performance.now() - startedAt),
-            stages,
             providerRequests: providerRequests.length,
             chatEvents: chatEvents.length,
             activeRootWork: getActiveGatewayRootWorkCount(),
@@ -275,7 +224,6 @@ describe("session delivery clock-jump integration", () => {
         );
         throw error;
       } finally {
-        stopObserving?.();
         wallClock.mockRestore();
         try {
           if (gateway) {
