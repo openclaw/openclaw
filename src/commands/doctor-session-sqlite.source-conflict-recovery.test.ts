@@ -21,6 +21,7 @@ import {
   jsonl,
   expectIssue,
   withRetainedSource,
+  writeJson,
 } from "./doctor-session-sqlite.fixtures.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
@@ -51,7 +52,7 @@ it("preserves a transcript when its index changes during archive publication", (
             sessionFile: path.basename(transcript),
             updatedAt: 30,
           };
-          fs.writeFileSync(storePath, JSON.stringify(entries));
+          writeJson(storePath, entries);
           changedIndex = true;
         }
         return result;
@@ -161,8 +162,7 @@ it("reconciles a smaller retained index and reports only its differing session m
     const failedTarget = expectDefined(failed.targets[0], "failed target");
     failedTarget.issues = [];
     failedTarget.validationBeforeArchive = "not_run";
-    fs.writeFileSync(manifestPath, JSON.stringify(failed));
-
+    writeJson(manifestPath, failed);
     entries["agent:main:kept"].skillsSnapshot.prompt = "runtime snapshot";
     entries["agent:main:kept"].updatedAt = 21;
     entries["agent:main:deleted"].inputTokens = 200;
@@ -170,7 +170,6 @@ it("reconciles a smaller retained index and reports only its differing session m
     fs.writeFileSync(storePath, changed);
     const recovered = await run("recover");
     const report = expectDefined(recovered.targets[0], "recovered target");
-
     expect(report).toMatchObject({ sqliteEntries: 12, importedEntries: 0 });
     expect(countBlockingSessionSqliteIssues(report)).toBe(0);
     expect(readCanonical()).toEqual(canonical);
@@ -178,31 +177,28 @@ it("reconciles a smaller retained index and reports only its differing session m
     expectFiles(changed, archive);
     expectMissing(storePath);
     expect(assertReady).not.toThrow();
-    expect(report.issues.filter((issue) => issue.sessionKey)).toEqual([
-      expect.objectContaining({
+    expect(report.issues.filter((issue) => issue.sessionKey)).toMatchObject([
+      {
         code: "retained_plugin_source_conflict",
         sessionKey: "agent:main:kept",
         message: expect.stringContaining("skillsSnapshot, updatedAt"),
-      }),
-      expect.objectContaining({
+      },
+      {
         code: "retained_plugin_source_conflict",
         sessionKey: "agent:main:deleted",
         message: expect.stringContaining("inputTokens"),
-      }),
+      },
     ]);
-    const failureJson = JSON.parse(
+    const readFailure = (format: "Json" | "Markdown") =>
       fs.readFileSync(
-        expectDefined(recovered.migrationRun?.failureReportJsonPath, "failure JSON"),
+        expectDefined(recovered.migrationRun?.[`failureReport${format}Path`], format),
         "utf8",
-      ),
-    );
+      );
+    const failureJson = JSON.parse(readFailure("Json"));
     expect(failureJson.targets[0].recoveryIssues.map(({ code }: { code: string }) => code)).toEqual(
       report.issues.map(({ code }) => code),
     );
-    const markdown = fs.readFileSync(
-      expectDefined(recovered.migrationRun?.failureReportMarkdownPath, "failure Markdown"),
-      "utf8",
-    );
+    const markdown = readFailure("Markdown");
     expect(markdown).toContain(`Current recovery issues: ${report.issues.length}`);
     expect(markdown).toContain("skillsSnapshot, updatedAt");
     expect(markdown).toContain("inputTokens");
@@ -220,11 +216,9 @@ it.each([
       const foreignPath = state.path("foreign-root/agents/main/sessions/legacy-deleted.jsonl");
       entries["agent:main:kept"].sessionFile = foreign ? foreignPath : "legacy-deleted.jsonl";
       fs.unlinkSync(file("legacy-kept.jsonl"));
-      fs.writeFileSync(
+      writeJson(
         storePath,
-        JSON.stringify(
-          reversed ? Object.fromEntries(Object.entries(entries).toReversed()) : entries,
-        ),
+        reversed ? Object.fromEntries(Object.entries(entries).toReversed()) : entries,
       );
       await run();
       const kept = readEvents("legacy-kept");
@@ -251,10 +245,7 @@ it.each([
       const result = await run();
       expect(result.totals.importedEntries).toBe(0);
       expectMissing(transcript);
-      const archived = expectDefined(
-        result.targets[0]?.archivedTranscriptFiles[0],
-        "protected shared transcript",
-      );
+      const archived = archivedSource(result, transcript).archivePath;
       expectFiles(bytes, archived);
       expect(readEvents("legacy-kept")).toEqual(kept);
       expect(readEvents("legacy-deleted")).toEqual(current);
@@ -273,15 +264,13 @@ it("keeps a truncated shared index until every owner is selected", () =>
     };
     const entries = JSON.parse(fs.readFileSync(storePath, "utf8"));
     entries["agent:ops:waiting"] = { sessionId: "legacy-ops", updatedAt: 20 };
-    fs.writeFileSync(storePath, JSON.stringify(entries));
+    writeJson(storePath, entries);
     const options = { cfg, env: state.env, mode: "import" as const };
     const importMain = () =>
       runDoctorSessionSqlite({ ...options, store: storePath, agent: "main" });
     await importMain();
     entries["agent:main:kept"].sessionId = "unimported-new-main";
-
     delete entries["agent:ops:waiting"];
-
     const changed = JSON.stringify(entries);
     fs.writeFileSync(storePath, changed);
     const partial = await importMain();
@@ -291,10 +280,7 @@ it("keeps a truncated shared index until every owner is selected", () =>
     expectMissing(resolveSqliteTargetFromSessionStorePath(storePath, ops).path);
     const unrelated = path.join(state.sessionsDir("retired"), "sessions.json");
     fs.mkdirSync(path.dirname(unrelated), { recursive: true });
-    fs.writeFileSync(
-      unrelated,
-      JSON.stringify({ "agent:retired:old": { sessionId: "old", updatedAt: 10 } }),
-    );
+    writeJson(unrelated, { "agent:retired:old": { sessionId: "old", updatedAt: 10 } });
     const completed = await runDoctorSessionSqlite({ ...options, allAgents: true });
     expect(completed.totals.importedEntries).toBe(1);
     expectMissing(storePath);
@@ -321,10 +307,7 @@ it("protects an unindexed source replaced with a later canonical transcript", ()
     fs.writeFileSync(source, replacement);
     const result = await run();
     expect(result.totals.importedEntries).toBe(0);
-    const archive = expectDefined(
-      result.targets[0]?.archivedTranscriptFiles[0],
-      "protected unindexed source",
-    );
+    const archive = archivedSource(result, source).archivePath;
     expectFiles(replacement, archive);
     expectMissing(source);
     expect(loadTranscriptEventsSync(later)).toEqual(events);

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
@@ -23,14 +22,15 @@ import { sessionDeliveryRoute } from "../utils/delivery-context.read.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import {
-  writePrivateFile,
   writeJson,
   sessionScope,
   runStoreDoctor,
+  archivedSource,
 } from "./doctor-session-sqlite.fixtures.test-support.js";
 import {
   expectMissing,
   expectFiles,
+  snapshotFiles,
 } from "./doctor-session-sqlite.publication-spies.test-support.js";
 import { sessionSqlFixture } from "./doctor-session-sqlite.sql.test-support.js";
 import {
@@ -86,11 +86,7 @@ it.each([" session-1 ", "agent:main:main"])(
     });
     expect(imported).not.toHaveProperty("pendingFinalDeliveryText");
     expect(imported).not.toHaveProperty("pendingFinalDeliveryAttemptCount");
-    const archivedStore = expectDefined(
-      report.targets[0]?.archivedLegacyStoreFiles?.[0],
-      "archived legacy store",
-    );
-    expectFiles(originalStore, archivedStore);
+    expectFiles(originalStore, archivedSource(report, store.storePath).archivePath);
   },
 );
 
@@ -104,13 +100,8 @@ it.each([
       lastTo: "123",
       lastAccountId: "work",
     },
-    expected: {
-      delivery: {
-        kind: "external",
-        context: { channel: "telegram", to: "123", accountId: "work" },
-      },
-    },
-    transcriptLines: undefined,
+    context: { channel: "telegram", to: "123", accountId: "work" },
+    expected: {},
   },
   {
     name: "July channel precedence and mutation watermark",
@@ -123,10 +114,8 @@ it.each([
       lastProvider: "stale-last-provider",
       room: "stale-room",
     },
-    expected: {
-      groupChannel: "July group",
-      delivery: { kind: "external", context: { channel: "telegram", to: "123" } },
-    },
+    context: { channel: "telegram", to: "123" },
+    expected: { groupChannel: "July group" },
     transcriptLines: [
       '{"type":"session","version":3,"id":"session-1","timestamp":"2026-07-01T23:00:00.000Z","cwd":"/fixture"}',
       '{"type":"message","id":"july-message","parentId":null,"message":{"role":"user","content":"July history"}}',
@@ -134,37 +123,24 @@ it.each([
   },
 ])(
   "imports $name and archives original source bytes",
-  async ({ entryOverrides, expected, transcriptLines }) => {
+  async ({ entryOverrides, expected, context, transcriptLines }) => {
     const store = createLegacyStore({ entryOverrides, transcriptLines });
     const mtime = new Date(1_700_000_000_000);
-    if (transcriptLines) {
-      fs.utimesSync(store.transcriptPath, mtime, mtime);
-    }
-    const originalStore = fs.readFileSync(store.storePath, "utf8");
-    const originalTranscript = fs.readFileSync(store.transcriptPath, "utf8");
+    fs.utimesSync(store.transcriptPath, mtime, mtime);
+    const originals = snapshotFiles([store.storePath, store.transcriptPath]);
     const { report, scope, entry: imported } = await importSession(store);
-    expect(imported).toMatchObject(expected);
+    expect(imported).toMatchObject({ ...expected, delivery: { kind: "external", context } });
     if (!transcriptLines) {
       expect(imported).not.toHaveProperty("provider");
-    }
-    if (transcriptLines) {
+    } else {
       expect(readTranscriptStatsSync(scope).lastMutationAtMs).toBe(mtime.getTime());
       expect(readEvents(scope)[1]).toMatchObject({
         id: "july-message",
         message: { content: "July history" },
       });
     }
-    const manifest = readManifest(report.migrationRun?.manifestPath);
-    const target = expectDefined(manifest.targets[0], "imported target");
-    for (const [kind, original] of [
-      ["legacy-store", originalStore],
-      ["transcript", originalTranscript],
-    ] as const) {
-      const archived = expectDefined(
-        target.completedMoves.find((move) => move.kind === kind),
-        `archived ${kind}`,
-      );
-      expectFiles(original, archived.archivePath);
+    for (const { file, bytes } of originals) {
+      expectFiles(bytes, archivedSource(report, file).archivePath);
     }
   },
 );
@@ -196,29 +172,18 @@ it("repairs legacy transcript and route shapes at the import boundary", async ()
     { firstKeptEntryId: message.id, parentId: message.id },
   ]);
   expect(events[0]).not.toHaveProperty("sessionId");
-  expect(events[1]).toEqual({
-    id: "opaque-1",
-    payload: { keep: "exact" },
-    type: "plugin_state",
-  });
+  expect(events[1]).toEqual({ id: "opaque-1", payload: { keep: "exact" }, type: "plugin_state" });
   const manager = SessionManager.open(scope, store.tempDir);
-  expect(
-    manager.appendMessage({
-      content: "post-import message",
-      role: "user",
-      timestamp: Date.now(),
-    }),
-  ).toEqual(expect.any(String));
-  closeDatabases();
-  const migrated = openNodeSqliteDatabase(
-    resolveOpenClawAgentSqlitePath({ agentId: "main", env: store.env }),
-    { readOnly: true },
+  expect(manager.appendMessage({ content: "post-import", role: "user", timestamp: 1000 })).toEqual(
+    expect.any(String),
   );
+  closeDatabases();
+  const migrated = openNodeSqliteDatabase(resolveOpenClawAgentSqlitePath(scope), {
+    readOnly: true,
+  });
   try {
     const sql = sessionSqlFixture(migrated);
-    expect(sql`PRAGMA user_version`.get()).toEqual({
-      user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-    });
+    expect(sql`PRAGMA user_version`.get()).toEqual({ user_version: OPENCLAW_AGENT_SCHEMA_VERSION });
     expect(
       sql`SELECT session_id, length(generation) AS generation_length FROM transcript_rewrite_watermarks`.all(),
     ).toEqual([{ generation_length: 32, session_id: "session-1" }]);
@@ -287,13 +252,12 @@ it.each([
 
 it("archives legacy stores with valid sessions and invalid cron stubs without failing", async () => {
   const store = createLegacyStore();
-  const legacyStore = JSON.parse(fs.readFileSync(store.storePath, "utf-8")) as Record<
-    string,
-    unknown
-  >;
+  const legacyStore: Record<string, unknown> = JSON.parse(
+    fs.readFileSync(store.storePath, "utf-8"),
+  );
   const cronStubKey = "agent:main:cron:legacy-stub";
   legacyStore[cronStubKey] = { updatedAt: 1500 };
-  writePrivateFile(store.storePath, `${JSON.stringify(legacyStore, null, 2)}\n`);
+  writeJson(store.storePath, legacyStore, 2);
 
   const report = await importLegacyStore(store);
 
@@ -313,18 +277,14 @@ it("archives legacy stores with valid sessions and invalid cron stubs without fa
       sessionKey: cronStubKey,
     },
   ]);
-  const archivedStorePath = expectDefined(
-    report.targets[0]?.archivedLegacyStoreFiles?.[0],
-    "archived legacy store path",
-  );
+  const archivedStorePath = archivedSource(report, store.storePath).archivePath;
   expectMissing(store.storePath);
   expect(JSON.parse(fs.readFileSync(archivedStorePath, "utf-8"))).toMatchObject({
     [cronStubKey]: { updatedAt: 1500 },
   });
 
   const manifest = readManifest(report.migrationRun?.manifestPath);
-  expect(manifest.failedAt).toBeUndefined();
-  expect(manifest.failureReports).toBeUndefined();
+  expect([manifest.failedAt, manifest.failureReports]).toEqual([undefined, undefined]);
   expect(manifest.targets[0]).toMatchObject({
     issues: [expect.objectContaining({ code: "entry_invalid", sessionKey: cronStubKey })],
     validationBeforeArchive: "passed",

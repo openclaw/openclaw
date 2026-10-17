@@ -23,6 +23,8 @@ import {
   writePrivateFile,
   runStoreDoctor,
   sessionScope,
+  expectPresent,
+  jsonl,
 } from "./doctor-session-sqlite.fixtures.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
@@ -44,12 +46,8 @@ function databasePath(store: TestStore, agentId = "main") {
   return resolveTargetSqlitePath({ agentId, storePath: store.storePath }, store.env);
 }
 
-function seedDeletedAgent(
-  store: TestStore,
-  agentId: string,
-  operationId: string,
-  malformed = false,
-) {
+function seedDeletedAgent(store: TestStore, agentId: string, malformed = false) {
+  const operationId = `retained-${agentId}`;
   beginAgentDeletionJournal(
     {
       agentId,
@@ -141,8 +139,8 @@ describe("runDoctorSessionSqlite", () => {
     const sqlitePath = databasePath(store, "retired");
     const originals = sourceSnapshot(store);
 
-    seedDeletedAgent(store, "retired", "retained-legacy-only");
-    seedDeletedAgent(store, "malformed-sibling", "retained-malformed-sibling", true);
+    seedDeletedAgent(store, "retired");
+    seedDeletedAgent(store, "malformed-sibling", true);
 
     const options = importOptions(store);
     expectMissing(sqlitePath);
@@ -157,7 +155,7 @@ describe("runDoctorSessionSqlite", () => {
   it("imports explicit entries despite unreadable sibling deletion history", async () => {
     const store = createLegacyStore({ agentDirName: "codex-proof" });
 
-    seedDeletedAgent(store, "malformed-sibling", "retained-malformed-sibling", true);
+    seedDeletedAgent(store, "malformed-sibling", true);
 
     const report = await importLegacyStore(store);
     expect(report.targets[0]?.agentId).toBe("codex-proof");
@@ -181,25 +179,20 @@ describe("runDoctorSessionSqlite", () => {
       const stateDir = path.join(tempDir, "state");
       const sessionDir = path.join(internal ? stateDir : tempDir, "shared-session-store");
       const storePath = path.join(sessionDir, "sessions.json");
-      const mainTranscriptPath = path.join(sessionDir, "main-session.jsonl");
-      const workTranscriptPath = path.join(sessionDir, "work-session.jsonl");
-      const orphanTranscriptPath = path.join(sessionDir, "orphan.jsonl");
+      const file = (name: string) => path.join(sessionDir, `${name}.jsonl`);
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       fs.mkdirSync(sessionDir, { recursive: true });
       const entries = Object.fromEntries(
         ["main", "work"].map((agentId, index) => {
           const sessionId = `${agentId}-session`;
           const sessionFile = `${sessionId}.jsonl`;
-          writePrivateFile(
-            path.join(sessionDir, sessionFile),
-            `${JSON.stringify({ type: "session", sessionId })}\n`,
-          );
+          writePrivateFile(file(sessionId), jsonl({ type: "session", sessionId }));
           return [`agent:${agentId}:main`, { sessionFile, sessionId, updatedAt: 20 + index * 10 }];
         }),
       );
       writeJson(storePath, entries, 2);
       if (allAgents) {
-        writePrivateFile(orphanTranscriptPath, '{"type":"event","id":"orphan"}\n');
+        writePrivateFile(file("orphan"), '{"type":"event","id":"orphan"}\n');
       }
 
       const cfg: OpenClawConfig = {
@@ -231,9 +224,7 @@ describe("runDoctorSessionSqlite", () => {
           { code: "transcript_archive_deferred", sessionKey: "agent:main:main" },
           { code: "active_sqlite_transcript_jsonl", sessionKey: "agent:main:main" },
         ]);
-        for (const file of [storePath, mainTranscriptPath, workTranscriptPath]) {
-          expect(fs.existsSync(file)).toBe(true);
-        }
+        expectPresent(storePath, file("main-session"), file("work-session"));
         expect(entry("work")).toBeUndefined();
         return;
       }
@@ -252,7 +243,7 @@ describe("runDoctorSessionSqlite", () => {
         expect(target.completedMoves.some((move) => move.kind === "legacy-store")).toBe(true);
       }
       expect(entry("work")?.entry.sessionId).toBe("work-session");
-      expectMissing(mainTranscriptPath, workTranscriptPath, orphanTranscriptPath);
+      expectMissing(file("main-session"), file("work-session"), file("orphan"));
       closeDatabases();
       const preview = inspectSessionSqliteRecovery({ cfg, env });
       const cleanup = await retireSessionSqliteRecovery({

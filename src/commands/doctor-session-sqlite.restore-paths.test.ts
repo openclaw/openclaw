@@ -50,6 +50,18 @@ async function createRestoreFixture(store = createLegacyStore()) {
     moveFor,
     indexArchive: moveFor("legacy-store").archivePath,
     save: () => writeManifest(manifestPath, manifest),
+    legacy: (rewrite = (file: string) => file) => {
+      manifest.manifestVersion = 1;
+      for (const manifestTarget of manifest.targets) {
+        manifestTarget.sqlitePath = rewrite(manifestTarget.sqlitePath);
+        manifestTarget.storePath = rewrite(manifestTarget.storePath);
+        for (const move of [...manifestTarget.plannedMoves, ...manifestTarget.completedMoves]) {
+          delete move.artifact;
+          move.archivePath = rewrite(move.archivePath);
+          move.sourcePath = rewrite(move.sourcePath);
+        }
+      }
+    },
     restore: () =>
       restoreRun({
         manifestPath,
@@ -58,8 +70,8 @@ async function createRestoreFixture(store = createLegacyStore()) {
   };
 }
 
-function restoreAll(store: TestStore) {
-  return runDoctorSessionSqlite({ allAgents: true, cfg: {}, env: store.env, mode: "restore" });
+function restoreAll(store: TestStore, allAgents = true) {
+  return runDoctorSessionSqlite({ allAgents, cfg: {}, env: store.env, mode: "restore" });
 }
 
 it.each(["missing-database", "missing-database-all-agents", "planned-only"] as const)(
@@ -77,12 +89,7 @@ it.each(["missing-database", "missing-database-all-agents", "planned-only"] as c
         fs.rmSync(file, { force: true });
       }
     }
-    const restore = await runDoctorSessionSqlite({
-      ...(state !== "missing-database" ? { allAgents: true } : {}),
-      cfg: {},
-      env: store.env,
-      mode: "restore",
-    });
+    const restore = await restoreAll(store, state !== "missing-database");
     expect(restore.totals.issues).toBe(0);
     expect(restore.totals).not.toHaveProperty("archivedLegacyStoreFiles");
     expect(restore.totals).not.toHaveProperty("reclaimedBytes");
@@ -105,20 +112,15 @@ it.skipIf(process.platform === "win32").each([
   { version: 3, location: "entry" },
   { version: 3, location: "traversal" },
 ] as const)("refuses unsafe v$version restore paths ($location)", async ({ version, location }) => {
-  const { store, manifestPath, manifest, target, moveFor, save, restore } =
+  const { store, manifestPath, manifest, target, moveFor, save, restore, legacy } =
     await createRestoreFixture();
   const move = moveFor("transcript");
+  const originalArchivePath = move.archivePath;
   if (version === 1) {
-    manifest.manifestVersion = 1;
-    for (const manifestTarget of manifest.targets) {
-      for (const candidate of [...manifestTarget.plannedMoves, ...manifestTarget.completedMoves]) {
-        delete candidate.artifact;
-      }
-    }
+    legacy();
     manifest.startedAt = "2999-01-01T00:00:00.000Z";
   }
-  target.plannedMoves = [move];
-  target.completedMoves = [move];
+  target.plannedMoves = target.completedMoves = [move];
   let outsidePath: string | undefined;
   let sourcePath = move.sourcePath;
   let archivePath = move.archivePath;
@@ -132,13 +134,9 @@ it.skipIf(process.platform === "win32").each([
     writePrivateFile(outsidePath, '{"type":"outside"}\n');
     sourcePath = path.join(canonicalTestPath(store.sessionDir), "payload.jsonl");
     archivePath = path.join(archiveDir, "payload.jsonl");
-    const traversal = {
-      kind: "transcript" as const,
-      sourcePath,
-      archivePath: path.join(archiveDir, "escape", "..", "payload.jsonl"),
-    };
-    target.plannedMoves = [traversal];
-    target.completedMoves = [traversal];
+    move.sourcePath = sourcePath;
+    move.archivePath = path.join(archiveDir, "escape", "..", "payload.jsonl");
+    delete move.artifact;
     reason = "source and archive are both missing";
   } else if (location === "entry") {
     outsidePath = path.join(store.tempDir, "outside-payload.jsonl");
@@ -171,7 +169,7 @@ it.skipIf(process.platform === "win32").each([
   ]);
   expect(restored.restoredFiles).toEqual([]);
   expectMissing(sourcePath);
-  expectPresent(move.archivePath);
+  expectPresent(originalArchivePath);
   if (outsidePath) {
     expectPresent(outsidePath);
   }
@@ -180,7 +178,7 @@ it.skipIf(process.platform === "win32").each([
 it.skipIf(!hasPlatformRootTempAlias).each([1, 3] as const)(
   "imports, previews, and restores v%s manifests through a platform root alias",
   async (version) => {
-    const { store, imported, manifest, save, restore } = await createRestoreFixture(
+    const { store, imported, manifest, save, restore, legacy } = await createRestoreFixture(
       createLegacyStore({ tempRoot: lexicalRootTempDir }),
     );
     expect(imported.totals).toMatchObject({ importedEntries: 1, issues: 0 });
@@ -195,18 +193,7 @@ it.skipIf(!hasPlatformRootTempAlias).each([1, 3] as const)(
     const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
     expect(preview.artifacts.some((artifact) => artifact.runs.length > 0)).toBe(true);
     if (version === 1) {
-      const aliasPath = (file: string) =>
-        path.join(lexicalRootTempDir, path.relative(realRootTempDir, file));
-      manifest.manifestVersion = 1;
-      for (const target of manifest.targets) {
-        target.sqlitePath = aliasPath(target.sqlitePath);
-        target.storePath = aliasPath(target.storePath);
-        for (const move of [...target.plannedMoves, ...target.completedMoves]) {
-          delete move.artifact;
-          move.archivePath = aliasPath(move.archivePath);
-          move.sourcePath = aliasPath(move.sourcePath);
-        }
-      }
+      legacy((file) => path.join(lexicalRootTempDir, path.relative(realRootTempDir, file)));
       save();
     }
     const restored =
