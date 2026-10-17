@@ -35,6 +35,9 @@ const CONTEXT_MARKER_ACTIONS = new Set<ChannelMessageActionName>([
 
 const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
   ...CONTEXT_MARKER_ACTIONS,
+  // A roll is recipient-visible and addressed by `to`, so it clears the cross-context check.
+  // It stays out of the marker set above: a roll carries no text for a marker to attach to.
+  "dice",
   "poll-vote",
   "edit",
   "delete",

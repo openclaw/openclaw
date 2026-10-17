@@ -250,8 +250,8 @@ export function registerReplyPlugin() {
     },
     messaging: { targetResolver: { looksLikeId: () => true } },
     actions: {
-      describeMessageTool: () => ({ actions: ["reply", "poll"] }),
-      supportsAction: ({ action }) => action === "reply" || action === "poll",
+      describeMessageTool: () => ({ actions: ["reply", "poll", "dice"] }),
+      supportsAction: ({ action }) => action === "reply" || action === "poll" || action === "dice",
       handleAction,
     },
   });
@@ -277,8 +277,12 @@ export async function runCurrentConversationPollAction(params: { to: string }) {
   );
 }
 
+export async function runCurrentConversationDiceAction(params: { to: string }) {
+  return runCurrentConversationAction("dice", { to: params.to, diceEmoji: "\u{1F3B2}" }, "1783");
+}
+
 function runCurrentConversationAction(
-  action: "reply" | "poll",
+  action: "dice" | "poll" | "reply",
   params: Record<string, unknown>,
   currentMessageId?: string | number,
 ) {

@@ -86,6 +86,8 @@ describe("Telegram registered action authority and input contracts", () => {
       method: "sendPoll",
       revoke: true,
     },
+    { action: "dice", params: {}, method: "sendDice", revoke: false },
+    { action: "dice", params: {}, revoke: true },
     { action: "sticker", params: { fileId: "fixture-sticker" }, revoke: true },
     { action: "topic-create", params: { name: "Guarded topic" }, revoke: true },
     { action: "topic-edit", params: { threadId: 77, name: "Guarded topic" }, revoke: true },
@@ -546,6 +548,36 @@ describe("Telegram registered action authority and input contracts", () => {
       expect(requests).toEqual([]);
     },
   );
+
+  it("forwards the silent option to a dice roll and withdraws dice with the send gate", async () => {
+    // Bot API supports silent rolls, and dice rides the sendMessage gate rather than one of its own.
+    await invoke("dice", { to: "-1001", diceEmoji: "\u{1F3B2}", silent: true });
+
+    expect(endpoints).toEqual(["/bot123456:telegram-send-http-fixture/sendDice"]);
+    expect(requests[0]!.fields).toMatchObject({
+      chat_id: "-1001",
+      emoji: "\u{1F3B2}",
+      disable_notification: true,
+    });
+
+    cfg = {
+      ...cfg,
+      channels: {
+        telegram: { ...cfg.channels!.telegram!, actions: { sendMessage: false } },
+      },
+    };
+    await expect(invoke("dice", { to: "-1001" })).rejects.toThrow(
+      "Telegram sendMessage is disabled.",
+    );
+    expect(requests).toHaveLength(1);
+  });
+
+  it("reports a dice roll's topic receipt so a roll into a forum topic completes its reply", async () => {
+    // Only receipt.threadId can match a topic-addressed roll back to its source conversation.
+    await expect(invoke("dice", { to: "-1001", messageThreadId: 77 })).resolves.toMatchObject({
+      details: { ok: true, receipt: { threadId: "77" } },
+    });
+  });
 
   it("rejects sending without a configured credential", async () => {
     cfg = {};

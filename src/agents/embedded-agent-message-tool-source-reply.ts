@@ -149,9 +149,10 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
   ) {
     return false;
   }
+  // A recorded current-source route is the producer's own delivery fact, not a name to re-derive.
   const sourceRouteReplyAction =
-    (params.allowExplicitSourceRoute === true || confirmedCurrentSourceRoute) &&
-    isMessageToolSourceReplyActionName(args.action);
+    confirmedCurrentSourceRoute ||
+    (params.allowExplicitSourceRoute === true && isMessageToolSourceReplyActionName(args.action));
   if (
     deliveryFact?.sourceReplyDelivered !== true &&
     !isMessageToolSendActionName(args.action) &&

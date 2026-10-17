@@ -158,7 +158,11 @@ export async function beginTerminalSourceReplyDelivery(
   if (!toolCallId) {
     throw new Error("terminal source reply requires tool-call correlation");
   }
-  if (!params.sessionId || !isCurrentSourceConversation(params)) {
+  if (
+    !params.sessionId ||
+    !RESTART_RECEIPT_ACTION_NAMES.has(params.action.trim().toLowerCase()) ||
+    !isCurrentSourceConversation(params)
+  ) {
     return undefined;
   }
   const sourceTurnId = normalizeOptionalString(params.toolContext?.currentSourceTurnId);
@@ -366,13 +370,40 @@ function matchesDeliveredSourceTargets(
   );
 }
 
+/** Actions addressed by target, where an exact target match proves the delivery's conversation. */
+const TARGET_ADDRESSED_ACTION_NAMES: ReadonlySet<string> = new Set<ChannelMessageActionName>([
+  "dice",
+  "poll",
+  "send",
+]);
+
+/**
+ * Actions that own a durable restart receipt. AGENTS.md keeps this scope separate from completion
+ * eligibility, so an action counted as a delivered source reply does not thereby persist a
+ * pre-send intent that can answer already_delivered before the transport runs.
+ */
+const RESTART_RECEIPT_ACTION_NAMES: ReadonlySet<string> = new Set<ChannelMessageActionName>([
+  "poll",
+  "send",
+]);
+
+/**
+ * Actions whose `actionParams` text and media are what the channel delivers. The tool's argument
+ * object is flat, so others can carry text it ignores, and mirroring that invents a transcript.
+ */
+const MIRRORABLE_SOURCE_ACTION_NAMES: ReadonlySet<string> = new Set<ChannelMessageActionName>([
+  "send",
+]);
+
 function isCurrentSourceConversation(
   params: SourceReplyTranscriptMirrorParams,
   requireExactThread = false,
 ): params is MirrorableSourceReplyTranscriptParams {
-  // Polls share the send target contract. Transcript mirroring stays send-only
-  // because poll params carry no message text to mirror.
-  if ((params.action !== "send" && params.action !== "poll") || !hasCurrentSourceContext(params)) {
+  // Transcript mirroring shares this predicate and screens its own payload separately.
+  if (
+    !TARGET_ADDRESSED_ACTION_NAMES.has(params.action.trim().toLowerCase()) ||
+    !hasCurrentSourceContext(params)
+  ) {
     return false;
   }
   const threadPlacement = resolveSourceReplyThreadPlacement(
@@ -475,8 +506,11 @@ function resolveDeliveredCurrentSourceReply(
       return resolveDeliveredThreadPlacementSourceReply(params, allowAsync);
     default:
       // Send variants share destination proof, not transcript or restart-receipt ownership.
+      // Dice joins poll: addressed by target, visibly delivered, carrying no transcript text.
       return (
-        (isMessageToolSendActionName(params.action) || params.action === "poll") &&
+        (isMessageToolSendActionName(params.action) ||
+          params.action === "poll" ||
+          params.action === "dice") &&
         isCurrentSourceConversation({ ...params, action: "send" }, true)
       );
   }
@@ -540,6 +574,9 @@ export async function mirrorDeliveredSourceReplyToTranscript(
     !matchesDeliveredSourceTargets(params, deliveryFact) ||
     !isCurrentSourceConversation(params, params.sourceReplyFinal === true)
   ) {
+    return false;
+  }
+  if (!MIRRORABLE_SOURCE_ACTION_NAMES.has(params.action.trim().toLowerCase())) {
     return false;
   }
 
