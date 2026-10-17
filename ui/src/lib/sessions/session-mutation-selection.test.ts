@@ -3,18 +3,13 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { sessionsResult } from "./session-capability.test-support.ts";
 import {
-  createGatewayHarness,
-  createTestSessionCapability,
-  sessionsResult,
-} from "./session-capability.test-support.ts";
-
-function row(id: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
-  return { key: `agent:main:${id}`, sessionId: id, kind: "direct", ...fields };
-}
-function ack(target: GatewaySessionRow, fields: Partial<GatewaySessionRow> = {}) {
-  return { ok: true, key: target.key, entry: { ...target, ...fields } };
-}
+  sessionRow as row,
+  patchReply as ack,
+  sessionRpcHarness,
+  liveSessionEvent,
+} from "./session-rpc.test-support.ts";
 function targetOptions(target: GatewaySessionRow) {
   return { agentId: "main", expectedSessionId: target.sessionId };
 }
@@ -36,38 +31,36 @@ it.each(["rename", "archive", "delete", "category"] as const)(
       const blocked = createDeferred<SessionsListResult>();
       let holdMain = false;
       let committed = false;
-      const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
-      const client = createTestGatewayClient(async (method, raw) => {
-        const params = (raw ?? {}) as Record<string, unknown>;
-        calls.push({ method, params });
-        if (method === "sessions.patch" || method === "sessions.delete") {
-          return reply.promise;
-        }
-        if (method === "sessions.subscribe") {
-          return { subscribed: true };
-        }
-        if (method !== "sessions.list") {
-          throw new Error(`Unexpected request: ${method}`);
-        }
-        if (holdMain && params.agentId === "main" && !params.search) {
-          holdMain = false;
-          return blocked.promise;
-        }
-        const mainRows =
-          committed && operation === "delete"
-            ? []
-            : [
-                {
-                  ...original,
-                  archived: false,
-                  category: undefined,
-                  ...(committed ? changes : {}),
-                },
-              ];
-        return sessionsResult(params.agentId === "writer" ? [writer] : mainRows, committed ? 2 : 1);
-      });
-      const { gateway } = createGatewayHarness(client);
-      const sessions = createTestSessionCapability(gateway);
+      const { sessions, request } = sessionRpcHarness(
+        {
+          "sessions.patch": () => reply.promise,
+          "sessions.delete": () => reply.promise,
+          "sessions.subscribe": () => ({ subscribed: true }),
+          "sessions.list": (raw) => {
+            const params = (raw ?? {}) as Record<string, unknown>;
+            if (holdMain && params.agentId === "main" && !params.search) {
+              holdMain = false;
+              return blocked.promise;
+            }
+            const mainRows =
+              committed && operation === "delete"
+                ? []
+                : [
+                    {
+                      ...original,
+                      archived: false,
+                      category: undefined,
+                      ...(committed ? changes : {}),
+                    },
+                  ];
+            return sessionsResult(
+              params.agentId === "writer" ? [writer] : mainRows,
+              committed ? 2 : 1,
+            );
+          },
+        },
+        createTestGatewayClient,
+      );
       const managed = { agentId: "main", search: "original" };
       const stop = sessions.subscribeList(managed, () => {});
       let mutation: Promise<unknown> | undefined;
@@ -124,10 +117,10 @@ it.each(["rename", "archive", "delete", "category"] as const)(
           expect(affected[0]).toMatchObject(changes);
         }
         expect(
-          calls.find(
-            ({ method }) =>
+          request.mock.calls.find(
+            ([method]) =>
               method === (operation === "delete" ? "sessions.delete" : "sessions.patch"),
-          )?.params,
+          )?.[1],
         ).toMatchObject({ key: original.key, ...options });
         expect(sessions.state.loading).toBe(false);
       } finally {
@@ -145,23 +138,19 @@ it.each(["rename", "archive", "delete", "category"] as const)(
 it("does not attribute another agent's roster error to a completed previous-connection mutation", async () => {
   const reply = createDeferred<unknown>();
   const original = row("previous");
-  const client = createTestGatewayClient(async (method, raw) => {
-    if (method === "sessions.subscribe") {
-      return { subscribed: true };
-    }
-    if (method === "sessions.patch") {
-      return reply.promise;
-    }
-    if (method === "sessions.list") {
-      if ((raw as { agentId?: string })?.agentId === "writer") {
-        throw new Error("Writer roster unavailable");
-      }
-      return sessionsResult([original], 1);
-    }
-    throw new Error(`Unexpected request: ${method}`);
-  });
-  const { gateway, publish } = createGatewayHarness(client);
-  const sessions = createTestSessionCapability(gateway);
+  const { sessions, publish } = sessionRpcHarness(
+    {
+      "sessions.subscribe": () => ({ subscribed: true }),
+      "sessions.patch": () => reply.promise,
+      "sessions.list": (raw) => {
+        if ((raw as { agentId?: string })?.agentId === "writer") {
+          throw new Error("Writer roster unavailable");
+        }
+        return sessionsResult([original], 1);
+      },
+    },
+    createTestGatewayClient,
+  );
   let mutation: Promise<unknown> | undefined;
   try {
     await sessions.refresh({ agentId: "main", force: true });
@@ -191,32 +180,30 @@ it.each(["success", "failure", "retired"] as const)(
     const original = row("permission-tie", { updatedAt: 1, permissionMode: "guarded" });
     const writer = { key: "agent:writer:main", sessionId: "writer-main", kind: "direct" as const };
     let acknowledged = false;
-    const client = createTestGatewayClient(async (method, raw) => {
-      if (method === "sessions.patch") {
-        return reply.promise;
-      }
-      if (method === "sessions.list") {
-        if (acknowledged && (raw as { agentId?: string })?.agentId !== "writer") {
-          canonicalRequested = true;
-          return canonical.promise;
-        }
-        return sessionsResult(
-          (raw as { agentId?: string })?.agentId === "writer"
-            ? [writer]
-            : [
-                {
-                  ...original,
-                  updatedAt: acknowledged ? 2 : 1,
-                  permissionMode: acknowledged ? "workspace" : "guarded",
-                },
-              ],
-          acknowledged ? 2 : 1,
-        );
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const { gateway, emitEvent, publish } = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(gateway);
+    const { sessions, emitEvent, publish } = sessionRpcHarness(
+      {
+        "sessions.patch": () => reply.promise,
+        "sessions.list": (raw) => {
+          if (acknowledged && (raw as { agentId?: string })?.agentId !== "writer") {
+            canonicalRequested = true;
+            return canonical.promise;
+          }
+          return sessionsResult(
+            (raw as { agentId?: string })?.agentId === "writer"
+              ? [writer]
+              : [
+                  {
+                    ...original,
+                    updatedAt: acknowledged ? 2 : 1,
+                    permissionMode: acknowledged ? "workspace" : "guarded",
+                  },
+                ],
+            acknowledged ? 2 : 1,
+          );
+        },
+      },
+      createTestGatewayClient,
+    );
     let mutation: ReturnType<typeof sessions.patch> | undefined;
     let stop: (() => void) | undefined;
     try {
@@ -228,19 +215,7 @@ it.each(["success", "failure", "retired"] as const)(
         { permissionMode: "workspace" },
         targetOptions(original),
       );
-      emitEvent({
-        type: "event",
-        event: "session.message",
-        payload: {
-          ...original,
-          sessionKey: original.key,
-          updatedAt: 2,
-          permissionMode: "full",
-          archived: false,
-          hasActiveRun: true,
-          status: "running",
-        },
-      });
+      emitEvent(liveSessionEvent(original, { updatedAt: 2, permissionMode: "full" }));
       await sessions.refresh({ agentId: "writer", force: true });
       expect(observed.row?.permissionMode).toBe("full");
       acknowledged = true;
@@ -300,34 +275,32 @@ it.each(["global", "queued-global", "queued-append", "queued-append-rename"] as 
     };
     let acknowledged = false;
     let hold = false;
-    const client = createTestGatewayClient(async (method, raw) => {
-      if (method === "sessions.patch") {
-        return reply.promise;
-      }
-      if (method !== "sessions.list") {
-        throw new Error(`Unexpected request: ${method}`);
-      }
-      if (!(raw as { agentId?: string })?.agentId || (raw as { offset?: number }).offset) {
-        return { ...sessionsResult([other], 2), hasMore: true, nextOffset: 1 };
-      }
-      if (hold) {
-        hold = false;
-        return blocker.promise;
-      }
-      return sessionsResult(
-        [
-          {
-            ...target,
-            updatedAt: acknowledged ? 2 : 1,
-            label: acknowledged && rename ? "Renamed target" : target.label,
-            permissionMode: acknowledged ? (rename ? "guarded" : "workspace") : "guarded",
-          },
-        ],
-        2,
-      );
-    });
-    const { gateway, emitEvent } = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(gateway);
+    const { sessions, emitEvent } = sessionRpcHarness(
+      {
+        "sessions.patch": () => reply.promise,
+        "sessions.list": (raw) => {
+          if (!(raw as { agentId?: string })?.agentId || (raw as { offset?: number }).offset) {
+            return { ...sessionsResult([other], 2), hasMore: true, nextOffset: 1 };
+          }
+          if (hold) {
+            hold = false;
+            return blocker.promise;
+          }
+          return sessionsResult(
+            [
+              {
+                ...target,
+                updatedAt: acknowledged ? 2 : 1,
+                label: acknowledged && rename ? "Renamed target" : target.label,
+                permissionMode: acknowledged ? (rename ? "guarded" : "workspace") : "guarded",
+              },
+            ],
+            2,
+          );
+        },
+      },
+      createTestGatewayClient,
+    );
     let mutation: ReturnType<typeof sessions.patch> | undefined;
     let reading: Promise<void> | undefined;
     let selecting: Promise<void> | undefined;
@@ -346,19 +319,7 @@ it.each(["global", "queued-global", "queued-append", "queued-append-rename"] as 
         reading = sessions.refresh({ agentId: "main", force: true });
       }
       if (!rename) {
-        emitEvent({
-          type: "event",
-          event: "session.message",
-          payload: {
-            ...target,
-            sessionKey: target.key,
-            updatedAt: 2,
-            permissionMode: "full",
-            archived: false,
-            hasActiveRun: true,
-            status: "running",
-          },
-        });
+        emitEvent(liveSessionEvent(target, { updatedAt: 2, permissionMode: "full" }));
       }
       selecting = sessions.refresh(
         append ? { agentId: "main", append: true, offset: 1, force: true } : { force: true },

@@ -1,29 +1,17 @@
 // @vitest-environment node
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
   SessionsListResult,
   SessionsPatchResult,
 } from "../../api/types.ts";
+import { sessionsResult } from "./session-capability.test-support.ts";
 import {
-  createGatewayHarness,
-  createTestSessionCapability,
-  sessionsResult,
-} from "./session-capability.test-support.ts";
-
-function permissionHarness(handlers: Record<string, (params?: unknown) => unknown>) {
-  const request = vi.fn(async (method: string, params?: unknown) => {
-    const handler = handlers[method];
-    if (!handler) {
-      throw new Error(`Unexpected request: ${method}`);
-    }
-    return handler(params);
-  });
-  const harness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-  return { ...harness, request, sessions: createTestSessionCapability(harness.gateway) };
-}
+  sessionRpcHarness as permissionHarness,
+  liveSessionEvent,
+  patchReceipt,
+} from "./session-rpc.test-support.ts";
 
 function permissionRow(
   key: string,
@@ -42,12 +30,12 @@ it.each(["  generation-b  ", "  "])(
     const successor = { ...original, sessionId: "generation-b", updatedAt: 3 };
     let listCalls = 0;
     const { sessions } = permissionHarness({
-      "sessions.patch": () => ({
-        ok: true,
-        path: "(sessions)",
-        key,
-        entry: { sessionId: successor.sessionId, updatedAt: 4, permissionMode: "full" },
-      }),
+      "sessions.patch": () =>
+        patchReceipt(key, {
+          sessionId: successor.sessionId,
+          updatedAt: 4,
+          permissionMode: "full",
+        }),
       "sessions.list": () => {
         listCalls += 1;
         return sessionsResult(
@@ -62,21 +50,17 @@ it.each(["  generation-b  ", "  "])(
         );
       },
     });
-    try {
-      await sessions.refresh({ force: true });
-      await sessions.refreshList({ agentId: "main", includeDerivedTitles: false });
-      expect(sessions.state.result?.sessions[0]?.sessionId).toBe(original.sessionId);
-      await sessions.patch(key, { permissionMode: "full" }, { expectedSessionId });
+    await sessions.refresh({ force: true });
+    await sessions.refreshList({ agentId: "main", includeDerivedTitles: false });
+    expect(sessions.state.result?.sessions[0]?.sessionId).toBe(original.sessionId);
+    await sessions.patch(key, { permissionMode: "full" }, { expectedSessionId });
 
-      expect(sessions.state.result?.sessions[0]).toMatchObject({
-        sessionId: successor.sessionId,
-        permissionMode: "full",
-      });
-      expect(listCalls).toBe(3);
-      expect(sessions.state.loading).toBe(false);
-    } finally {
-      sessions.dispose();
-    }
+    expect(sessions.state.result?.sessions[0]).toMatchObject({
+      sessionId: successor.sessionId,
+      permissionMode: "full",
+    });
+    expect(listCalls).toBe(3);
+    expect(sessions.state.loading).toBe(false);
   },
 );
 
@@ -84,7 +68,7 @@ it.each([
   { eventAt: 2, ackAt: 3, eventMode: "guarded", expected: "workspace", expectedLists: 2 },
   { eventAt: 2, ackAt: 3, eventMode: "full", expected: "workspace", expectedLists: 2 },
   { eventAt: 3, ackAt: 2, eventMode: "guarded", expected: "guarded", expectedLists: 1 },
-])(
+] as const)(
   "keeps the newer permission when a $eventMode snapshot at $eventAt crosses an acknowledgment at $ackAt",
   async ({ eventAt, ackAt, eventMode, expected, expectedLists }) => {
     const key = "agent:main:permission-pending";
@@ -111,37 +95,14 @@ it.each([
         );
       },
     });
-    try {
-      await sessions.refresh({ force: true });
-      const pending = sessions.patch(key, { permissionMode: "workspace" });
-      emitEvent({
-        type: "event",
-        event: "session.message",
-        payload: {
-          key,
-          sessionKey: key,
-          kind: "direct",
-          sessionId,
-          updatedAt: eventAt,
-          permissionMode: eventMode,
-          archived: false,
-          hasActiveRun: true,
-          status: "running",
-        },
-      });
-      patch.resolve({
-        ok: true,
-        path: "(sessions)",
-        key,
-        entry: { sessionId, updatedAt: ackAt, permissionMode: "workspace" },
-      });
-      await pending;
-      expect(sessions.state.result?.sessions[0]?.permissionMode).toBe(expected);
-      expect(sessions.state.loading).toBe(false);
-      expect(listCalls).toBe(expectedLists);
-    } finally {
-      sessions.dispose();
-    }
+    await sessions.refresh({ force: true });
+    const pending = sessions.patch(key, { permissionMode: "workspace" });
+    emitEvent(liveSessionEvent(permissionRow(key, sessionId, eventAt, eventMode), {}));
+    patch.resolve(patchReceipt(key, { sessionId, updatedAt: ackAt, permissionMode: "workspace" }));
+    await pending;
+    expect(sessions.state.result?.sessions[0]?.permissionMode).toBe(expected);
+    expect(sessions.state.loading).toBe(false);
+    expect(listCalls).toBe(expectedLists);
   },
 );
 
@@ -169,12 +130,7 @@ it.each([
     const patchRequested = createDeferred();
     const refresh = createDeferred<SessionsListResult>();
     const refreshRequested = createDeferred();
-    const patchResult: SessionsPatchResult = {
-      ok: true,
-      path: "(sessions)",
-      key,
-      entry: confirmed,
-    };
+    const patchResult = patchReceipt(key, confirmed);
     let listCalls = 0;
     const { gateway, sessions } = permissionHarness({
       "sessions.subscribe": () => ({ subscribed: true }),
@@ -275,19 +231,21 @@ it("discards patch A and its refresh after patch B applies first", async () => {
       expect.objectContaining({ permissionMode: "full" }),
     ),
   );
-  patchB.resolve({
-    ok: true,
-    path: "/sessions/permission-ordering.jsonl",
-    key,
-    entry: { permissionMode: "full", sessionId, updatedAt: 2 },
-  });
+  patchB.resolve(
+    patchReceipt(
+      key,
+      { permissionMode: "full", sessionId, updatedAt: 2 },
+      "/sessions/permission-ordering.jsonl",
+    ),
+  );
   await newer;
-  patchA.resolve({
-    ok: true,
-    path: "/sessions/permission-ordering.jsonl",
-    key,
-    entry: { permissionMode: "workspace", sessionId, updatedAt: 3 },
-  });
+  patchA.resolve(
+    patchReceipt(
+      key,
+      { permissionMode: "workspace", sessionId, updatedAt: 3 },
+      "/sessions/permission-ordering.jsonl",
+    ),
+  );
   await older;
 
   expect(sessions.state.result?.sessions).toEqual([
@@ -311,12 +269,12 @@ it.each(["success", "failure"])(
           ? sessionsResult([permissionRow(key, sessionId, 1, "guarded")], 1)
           : refreshA.promise;
       },
-      "sessions.patch": () => ({
-        ok: true,
-        path: "/sessions/permission-refresh-ordering.jsonl",
-        key,
-        entry: { permissionMode: "workspace", sessionId, updatedAt: 2 },
-      }),
+      "sessions.patch": () =>
+        patchReceipt(
+          key,
+          { permissionMode: "workspace", sessionId, updatedAt: 2 },
+          "/sessions/permission-refresh-ordering.jsonl",
+        ),
     });
     await sessions.refresh({ force: true });
 

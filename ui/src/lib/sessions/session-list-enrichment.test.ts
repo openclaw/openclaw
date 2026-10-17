@@ -13,13 +13,26 @@ import {
   sessionsResult,
 } from "./session-capability.test-support.ts";
 import { requestSessionListParams } from "./session-requests.ts";
+import { sessionRow as makeRow } from "./session-rpc.test-support.ts";
 
 const sidebar = { rowMode: "sidebar" as const };
-function makeRow(id: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
-  return { key: `agent:main:${id}`, sessionId: id, kind: "direct", ...fields };
-}
 function revised(rows: GatewaySessionRow[], rowsRevision: string, ts = 1) {
   return { ...sessionsResult(rows, ts), rowsRevision };
+}
+function sidebarReader(
+  request: Parameters<typeof createTestGatewayClient>[0],
+  query: Parameters<typeof requestSessionListParams>[1] = sidebar,
+) {
+  const client = createTestGatewayClient(request);
+  return () => requestSessionListParams(client, query, () => true);
+}
+function expectRevision(request: ReturnType<typeof vi.fn>, revision: string) {
+  expect(request).toHaveBeenLastCalledWith(
+    "sessions.list",
+    expect.objectContaining({
+      ifRowsRevision: `delta:${revision}`,
+    }),
+  );
 }
 
 it.each([undefined, 1])(
@@ -35,11 +48,7 @@ it.each([undefined, 1])(
         nextOffset: offset + 1,
       };
     });
-    const result = await requestSessionListParams(
-      createTestGatewayClient(request),
-      { rowMode: "sidebar", limit: 2, pageSize },
-      () => true,
-    );
+    const result = await sidebarReader(request, { ...sidebar, limit: 2, pageSize })();
     expect(result?.sessions).toHaveLength(pageSize ? 2 : 1);
     for (const [index, row] of result!.sessions.entries()) {
       expect(row.createdActor).toEqual({
@@ -139,10 +148,7 @@ it("reconstructs sidebar delta membership, order and facts before capability pub
     owners: [{ actor: { type: "human", id: "new-owner" }, label: "Fresh facet" }],
   });
   await sessions.refresh({ ...query, force: true });
-  expect(request).toHaveBeenLastCalledWith(
-    "sessions.list",
-    expect.objectContaining({ ifRowsRevision: "delta:first" }),
-  );
+  expectRevision(request, "first");
   expect(sessions.state.result).toMatchObject({
     count: 3,
     totalCount: 19,
@@ -159,10 +165,7 @@ it("reconstructs sidebar delta membership, order and facts before capability pub
   request.mockResolvedValue(revised([b], "restarted", 3));
   await sessions.refresh({ ...query, force: true });
   expect(sessions.state.result?.sessions.map(({ key }) => key)).toEqual([b.key]);
-  expect(request).toHaveBeenLastCalledWith(
-    "sessions.list",
-    expect.objectContaining({ ifRowsRevision: "delta:next" }),
-  );
+  expectRevision(request, "next");
 });
 
 it.each([
@@ -188,10 +191,7 @@ it.each([
       rowsUnchanged: true,
     });
     expect((await sessions.list(query))?.sessions).toEqual([initial]);
-    expect(request).toHaveBeenLastCalledWith(
-      "sessions.list",
-      expect.objectContaining({ ifRowsRevision: "delta:first" }),
-    );
+    expectRevision(request, "first");
   },
 );
 
@@ -207,10 +207,9 @@ it("applies an empty-row reorder/removal delta without collapsing cross-agent ra
       count: 2,
       rowsDelta: { baseRevision: "first", order: [1, 0] },
     });
-  const client = createTestGatewayClient(request);
-  const query = { rowMode: "sidebar" as const };
-  const initial = await requestSessionListParams(client, query, () => true);
-  const next = await requestSessionListParams(client, query, () => true);
+  const read = sidebarReader(request);
+  const initial = await read();
+  const next = await read();
   expect(next?.sessions).toEqual([b, a]);
   expect(next?.sessions[0]).toBe(initial?.sessions[1]);
   expect(next?.sessions[1]).toBe(initial?.sessions[0]);
@@ -223,9 +222,7 @@ it("keeps filtered pages independent and accepts full rows from a server that on
       throw new Error("Invalid closed sessions.list params");
     }
     const id = `${raw.ownerId ?? (raw.involvingMe ? "personal" : "all")}-${raw.offset ?? 0}`;
-    return {
-      ...revised([makeRow(id)], id),
-    };
+    return revised([makeRow(id)], id);
   });
   const { gateway } = createGatewayHarness(createTestGatewayClient(request));
   const sessions = createTestSessionCapability(gateway);
@@ -257,13 +254,10 @@ it("reconstructs parallel deltas against each request's captured raw rows", asyn
       ...revised([{ ...a, label: "Newer" }], "newer", 3),
       rowsDelta: { baseRevision: "first", order: [1] },
     });
-  const client = createTestGatewayClient(request);
-  const query = { rowMode: "sidebar" as const };
-  const initial = await requestSessionListParams(client, query, () => true);
-  const pending = requestSessionListParams(client, query, () => true);
-  expect((await requestSessionListParams(client, query, () => true))?.sessions[0]?.label).toBe(
-    "Newer",
-  );
+  const read = sidebarReader(request);
+  const initial = await read();
+  const pending = read();
+  expect((await read())?.sessions[0]?.label).toBe("Newer");
   older.resolve({
     ...revised([b], "older", 2),
     rowsDelta: { baseRevision: "first", order: [0, 1] },
