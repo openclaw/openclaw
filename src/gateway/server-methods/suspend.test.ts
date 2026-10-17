@@ -1,5 +1,3 @@
-// Covers suspension RPC validation and coordinator response mapping.
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { suspendHandlers } from "./suspend.js";
@@ -24,7 +22,6 @@ async function invoke(method: keyof typeof suspendHandlers, params: unknown) {
   const respond = vi.fn();
   const pauseScheduling = vi.fn();
   const resumeScheduling = vi.fn();
-  const warn = vi.fn();
   const info = vi.fn();
   const handler = expectDefined(suspendHandlers[method], "suspendHandlers[method] test invariant");
   await handler({
@@ -32,7 +29,7 @@ async function invoke(method: keyof typeof suspendHandlers, params: unknown) {
     respond,
     context: {
       cron: { pauseScheduling, resumeScheduling },
-      logGateway: { warn, info },
+      logGateway: { warn: vi.fn(), info },
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map(),
     },
@@ -63,12 +60,8 @@ describe("gateway suspend handlers", () => {
   });
 
   it("wires prepare to scheduler pause/resume and returns busy or ready", async () => {
-    coordinator.prepare.mockReturnValueOnce({
-      status: "busy",
-      reason: "active-work",
-      activeCount: 1,
-      blockers: [{ kind: "queue", count: 1, message: "busy" }],
-    });
+    const result = { status: "busy", reason: "active-work" };
+    coordinator.prepare.mockReturnValueOnce(result);
     const { respond, pauseScheduling, resumeScheduling } = await invoke("gateway.suspend.prepare", {
       requestId: "request-1",
     });
@@ -86,83 +79,67 @@ describe("gateway suspend handlers", () => {
     options.resumeScheduling();
     expect(pauseScheduling).toHaveBeenCalledOnce();
     expect(resumeScheduling).toHaveBeenCalledOnce();
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ status: "busy", reason: "active-work" }),
-    );
+    expect(respond).toHaveBeenCalledWith(true, result);
   });
 
   it("maps a competing prepared lease to retryable unavailable", async () => {
     coordinator.prepare.mockReturnValueOnce({ status: "conflict", expiresAtMs: Date.now() + 5000 });
     const { respond } = await invoke("gateway.suspend.prepare", { requestId: "request-2" });
 
-    expect(respond).toHaveBeenCalledWith(
+    expect(respond.mock.calls[0]).toMatchObject([
       false,
       undefined,
-      expect.objectContaining({
+      {
         code: "UNAVAILABLE",
         details: expect.objectContaining({ reason: "gateway-suspension-conflict" }),
         retryable: true,
-      }),
-    );
+      },
+    ]);
   });
 
-  it("passes an explicit preserve-only drain through without changing its wire result", async () => {
+  it.each([
+    ["gateway.suspend.prepare", false],
+    ["gateway.suspend.status", true],
+  ] as const)("passes through %s draining results (custody=%s)", async (method, held) => {
+    if (held) {
+      vi.useFakeTimers();
+    }
+    const params = held
+      ? { suspensionId: "suspension-draining" }
+      : { requestId: "request-draining", drain: true };
+    const blockers = held
+      ? [
+          { kind: "root-request", count: 1, message: "1 active gateway request(s): http:openai" },
+          {
+            kind: "terminal-persistence",
+            count: 1,
+            message: "1 pending terminal session write(s): run=run-1 session=agent:main:chat-1",
+          },
+        ]
+      : [{ kind: "terminal-session", count: 1, message: "one preserved terminal" }];
     const result = {
       status: "draining",
-      suspensionId: "suspension-draining",
+      ...(method === "gateway.suspend.prepare" ? { suspensionId: "suspension-draining" } : {}),
       expiresAtMs: 123_000,
       retryAfterMs: 20_000,
-      activeCount: 1,
-      blockers: [{ kind: "terminal-session", count: 1, message: "one preserved terminal" }],
+      activeCount: blockers.length,
+      blockers,
+      ...(held ? { writeCustody: [{ phase: "terminal-persistence", count: 1 }] } : {}),
     };
-    coordinator.prepare.mockReturnValueOnce(result);
-
-    const { respond, info } = await invoke("gateway.suspend.prepare", {
-      requestId: "request-draining",
-      drain: true,
-    });
-
-    expect(coordinator.prepare).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requestId: "request-draining",
-        terminalPolicy: "preserve",
-        drain: true,
-      }),
-    );
+    coordinator[held ? "status" : "prepare"].mockReturnValue(result);
+    const { respond, info } = await invoke(method, params);
+    if (method === "gateway.suspend.prepare") {
+      expect(coordinator.prepare).toHaveBeenCalledWith(
+        expect.objectContaining({ ...params, terminalPolicy: "preserve" }),
+      );
+    } else {
+      expect(coordinator.status).toHaveBeenCalledWith("suspension-draining", false);
+    }
     expect(respond).toHaveBeenCalledWith(true, result);
     expect(info).toHaveBeenCalledWith(
-      'DRAINING activeCount=1 blockers=terminal-session:1 holders=["one preserved terminal"] custody=clear',
-    );
-  });
-
-  it("immediately reports pending write custody without exposing its owner's suspension id", async () => {
-    vi.useFakeTimers();
-    const result = {
-      status: "draining",
-      expiresAtMs: 123_000,
-      retryAfterMs: 20_000,
-      activeCount: 2,
-      blockers: [
-        { kind: "root-request", count: 1, message: "1 active gateway request(s): http:openai" },
-        {
-          kind: "terminal-persistence",
-          count: 1,
-          message: "1 pending terminal session write(s): run=run-1 session=agent:main:chat-1",
-        },
-      ],
-      writeCustody: [{ phase: "terminal-persistence", count: 1 }],
-    };
-    coordinator.status.mockReturnValue(result);
-
-    const { respond, info } = await invoke("gateway.suspend.status", {
-      suspensionId: "suspension-draining",
-    });
-
-    expect(coordinator.status).toHaveBeenCalledWith("suspension-draining", false);
-    expect(respond).toHaveBeenCalledWith(true, result);
-    expect(info).toHaveBeenCalledWith(
-      'DRAINING activeCount=2 blockers=root-request:1,terminal-persistence:1 holders=["1 active gateway request(s): http:openai","1 pending terminal session write(s): run=run-1 session=agent:main:chat-1"] custody=held',
+      held
+        ? 'DRAINING activeCount=2 blockers=root-request:1,terminal-persistence:1 holders=["1 active gateway request(s): http:openai","1 pending terminal session write(s): run=run-1 session=agent:main:chat-1"] custody=held'
+        : 'DRAINING activeCount=1 blockers=terminal-session:1 holders=["one preserved terminal"] custody=clear',
     );
   });
 
@@ -176,16 +153,9 @@ describe("gateway suspend handlers", () => {
       message: "gateway suspension id does not match",
     });
 
-    coordinator.resume.mockReturnValueOnce({
-      ok: true,
-      status: "running",
-      resumed: false,
-    });
+    const result = { ok: true, status: "running", resumed: false };
+    coordinator.resume.mockReturnValueOnce(result);
     const resumed = await invoke("gateway.suspend.resume", { suspensionId: "suspension-1" });
-    expect(resumed.respond).toHaveBeenCalledWith(true, {
-      ok: true,
-      status: "running",
-      resumed: false,
-    });
+    expect(resumed.respond).toHaveBeenCalledWith(true, result);
   });
 });
