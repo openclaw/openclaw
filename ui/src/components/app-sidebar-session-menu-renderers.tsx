@@ -254,6 +254,7 @@ export function renderSidebarSessionSortMenuForMenus(
   host: SidebarMenusOwner,
   position: NonNullable<SidebarMenus["sessionSortMenuPosition"]>,
 ): JSX.Element {
+  let defaultStatus: HTMLInputElement | undefined;
   const sessionSources = SETTINGS_ROUTE_TARGETS.sessionSources;
   const rosterMode = () => host.sidebarAgentsMode === "roster";
   const grouping = () => host.effectiveSessionsGrouping();
@@ -277,6 +278,7 @@ export function renderSidebarSessionSortMenuForMenus(
     value: () => T,
     options: () => ReadonlyArray<{ value: T; label: string }>,
     onChange: (value: T) => void,
+    inputRef?: (value: T, element: HTMLInputElement) => void,
   ) => (
     <div id={id} class="sidebar-session-menu-row">
       <span aria-hidden="true" title={label()}>
@@ -284,6 +286,7 @@ export function renderSidebarSessionSortMenuForMenus(
       </span>
       <SettingsSegmented
         value={value()}
+        inputRef={inputRef}
         options={options().map((option) => ({
           value: option.value,
           label: option.label,
@@ -334,13 +337,8 @@ export function renderSidebarSessionSortMenuForMenus(
                   type="button"
                   id="sidebar-sessions-reset"
                   class="sidebar-session-menu-reset"
-                  onClick={(event) => {
-                    event.currentTarget
-                      .closest(".sidebar-session-filter-panel")
-                      ?.querySelector<HTMLElement>(
-                        '#sidebar-sessions-status input[type="radio"][value="active"]',
-                      )
-                      ?.focus();
+                  onClick={() => {
+                    defaultStatus?.focus();
                     host.sessionOrganizer.setSessionsStatusFilter("active");
                     host.sessionOrganizer.setSessionsShowCron(false);
                     host.sessionOrganizer.setSessionsShowSystem(false);
@@ -369,6 +367,11 @@ export function renderSidebarSessionSortMenuForMenus(
                   label: value === "active" ? t("common.active") : t(`sessionsView.${value}`),
                 })),
               (statusFilter) => host.sessionOrganizer.setSessionsStatusFilter(statusFilter),
+              (value, element) => {
+                if (value === "active") {
+                  defaultStatus = element;
+                }
+              },
             )}
             {switchItem(
               "sidebar-sessions-cron",
