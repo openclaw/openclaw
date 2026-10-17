@@ -168,9 +168,11 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
         return {
           Status: status,
           Skill: emoji ? `${emoji} ${name}` : name,
-          Description: theme.muted(skill.description),
-          Source: skill.source,
-          Missing: opts.verbose ? theme.warn(formatSkillMissingSummary(skill)) : "",
+          // The single-skill report already sanitizes these fields; the list table must not hand
+          // workspace-owned SKILL.md text to the terminal uncleaned.
+          Description: theme.muted(sanitizeForLog(skill.description)),
+          Source: sanitizeForLog(skill.source),
+          Missing: opts.verbose ? theme.warn(sanitizeForLog(formatSkillMissingSummary(skill))) : "",
         };
       }),
     }),

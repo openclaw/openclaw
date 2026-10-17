@@ -16,7 +16,7 @@ describe("skills descriptor formatting", () => {
   });
   afterAll(() => envSnapshot.restore());
 
-  it("keeps C1 tab-separated descriptions in their table cell", async () => {
+  it("strips C1 terminal escapes from table descriptions", async () => {
     const description = "left\x9b31\tmright\x9b0m";
     const workspaceDir = tempDirs.make("tab-spacing-");
     await writeWorkspaceSkills(workspaceDir, [
@@ -33,10 +33,34 @@ describe("skills descriptor formatting", () => {
       description,
     );
 
-    const row = stripAnsi(formatSkillsList(report, {}))
+    const output = formatSkillsList(report, {});
+    const row = stripAnsi(output)
       .split("\n")
       .find((line) => line.includes("tab-spacing"));
-    expect(row?.split(/[|│]/u)[3]?.trim()).toBe("left right");
+    // The display boundary removes the C1 sequence before layout, so only its text reaches the cell.
+    expect(row?.split(/[|│]/u)[3]?.trim()).toBe("leftright");
+    expect(output).not.toContain("\x9b");
+  });
+
+  it("strips terminal control sequences from table descriptions and sources", async () => {
+    const description = "Evil \u001b[31mRED\u001b[0m\u0007 tail";
+    const workspaceDir = tempDirs.make("esc-description-");
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "escape-demo", description: JSON.stringify(description) },
+    ]);
+    const report = buildWorkspaceSkillStatus(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, "managed"),
+      config: { plugins: { enabled: false } },
+    });
+    expect(report.skills.find((skill) => skill.name === "escape-demo")?.description).toBe(
+      description,
+    );
+
+    const output = formatSkillsList(report, {});
+    const row = output.split("\n").find((line) => line.includes("escape-demo"));
+    expect(row?.split(/[|│]/u)[3]?.trim()).toBe("Evil RED tail");
+    expect(output).not.toContain("\u001b");
+    expect(output).not.toContain("\u0007");
   });
 
   it("preserves description and path whitespace in skills JSON output", async () => {
