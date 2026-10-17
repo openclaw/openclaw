@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dispatchWidgetPrompt } from "../../components/mcp-app-security.ts";
-import { BoardWidgetBridgeController } from "./widget-bridge.ts";
+import { BoardWidgetBridgeOwner } from "./widget-bridge.ts";
 
 vi.mock("../../components/mcp-app-security.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../components/mcp-app-security.ts")>()),
@@ -17,7 +17,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-type BoardWidgetBridgeRequest = Parameters<BoardWidgetBridgeController["handle"]>[0];
+type BoardWidgetBridgeRequest = Parameters<BoardWidgetBridgeOwner["handle"]>[0];
 
 function request(method: string, params: Record<string, unknown>): BoardWidgetBridgeRequest {
   return {
@@ -47,7 +47,7 @@ function setup(
   };
   const confirmPrompt = vi.fn(() => true);
   const dispatchPrompt = vi.mocked(dispatchWidgetPrompt);
-  const controller = new BoardWidgetBridgeController({
+  const controller = new BoardWidgetBridgeOwner({
     frame: document.createElement("iframe"),
     ticket: "ticket",
     client,

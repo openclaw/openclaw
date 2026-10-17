@@ -18,7 +18,7 @@ export function canReportUpdateFailure(snapshot: ApplicationGatewaySnapshot): bo
   );
 }
 
-export function createUpdateFailureReportController(params: {
+export function createUpdateFailureReportOwner(params: {
   getClient: () => GatewayBrowserClient | null;
   isCurrent: (attemptId: string, client: GatewayBrowserClient) => boolean;
   setBusy: (busy: boolean) => void;
