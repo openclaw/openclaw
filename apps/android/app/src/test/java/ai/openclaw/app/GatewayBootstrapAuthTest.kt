@@ -89,21 +89,36 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowNetwork
 import org.robolectric.shadows.ShadowNetworkCapabilities
+import java.io.File
+import java.io.FileInputStream
 import java.io.IOException
 import java.lang.reflect.Field
 import java.net.InetAddress
 import java.net.Proxy
 import java.net.ProxySelector
+import java.net.Socket
 import java.net.SocketAddress
 import java.net.URI
+import java.nio.file.Files
+import java.security.KeyStore
+import java.security.MessageDigest
+import java.security.Principal
+import java.security.PrivateKey
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
 import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
+import javax.net.ssl.KeyManagerFactory
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLEngine
+import javax.net.ssl.X509ExtendedKeyManager
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -114,6 +129,8 @@ class GatewayBootstrapAuthTest {
   )
 
   private val runtimes = mutableListOf<RuntimeFixture>()
+  private val testOwnedServers = mutableListOf<MockWebServer>()
+  private val testTempDirs = mutableListOf<File>()
   private val previousProxySelector = ProxySelector.getDefault()
   private val gatewayServerDelegate =
     lazy {
@@ -151,6 +168,16 @@ class GatewayBootstrapAuthTest {
       if (gatewayServerDelegate.isInitialized()) {
         runCatching { gatewayServer.shutdown() }.exceptionOrNull()?.let(failures::add)
       }
+      testOwnedServers.forEach { server ->
+        runCatching { server.shutdown() }.exceptionOrNull()?.let(failures::add)
+      }
+      testOwnedServers.clear()
+      testTempDirs.forEach { directory ->
+        if (directory.exists() && !directory.deleteRecursively()) {
+          failures += IOException("Could not remove temporary TLS fixture directory")
+        }
+      }
+      testTempDirs.clear()
     } finally {
       ProxySelector.setDefault(previousProxySelector)
     }
@@ -814,6 +841,224 @@ class GatewayBootstrapAuthTest {
     }
 
   @Test
+  fun refreshGatewayConnection_promptsBeforeReplacingRetainedTlsFingerprint() =
+    runBlocking {
+      val probeCalls = AtomicInteger()
+      val oldFingerprint = "aa".repeat(32)
+      val newFingerprint = "bb".repeat(32)
+      val initialToken = "initial-explicit-token"
+      val savedRefreshToken = "saved-refresh-token"
+      // A deterministic probe sequence models a rotated peer certificate at the trust boundary.
+      val (_, prefs, runtime) =
+        gatewayFixture { _, _ ->
+          GatewayTlsProbeResult(
+            fingerprintSha256 =
+              if (probeCalls.getAndIncrement() == 0) oldFingerprint else newFingerprint,
+          )
+        }
+      neutralizeColdStartAutoConnect(runtime)
+      val endpoint = tlsGatewayEndpoint()
+      prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
+      prefs.saveGatewayCredentials(endpoint.stableId, token = savedRefreshToken)
+
+      val nodeSession = readField<GatewaySession>(runtime, "nodeSession")
+      val operatorSession = readField<GatewaySession>(runtime, "operatorSession")
+      val nodeTransport = installStalledTransport(nodeSession, completeOnCancel = true)
+      val operatorTransport = installStalledTransport(operatorSession, completeOnCancel = true)
+
+      runtime.connect(endpoint, auth(token = initialToken))
+      val firstPrompt =
+        withTimeout(5_000) {
+          runtime.pendingGatewayTrust.first { it?.fingerprintSha256 == oldFingerprint }
+        }!!
+      assertEquals(initialToken, firstPrompt.auth.token)
+      assertNull(prefs.loadGatewayTlsFingerprint(endpoint.stableId))
+
+      runtime.acceptGatewayTrustPrompt(firstPrompt)
+      withTimeout(5_000) { runtime.pendingGatewayTrust.first { it == null } }
+      // GatewaySession.connect stores desired before launching the loop; each existing test
+      // transport's CompletableDeferred is the deterministic readiness signal, not polling.
+      withTimeout(5_000) { nodeTransport.created.await() }
+      withTimeout(5_000) { operatorTransport.created.await() }
+
+      val existingNodeDesired = checkNotNull(desiredConnection(runtime, "nodeSession"))
+      val existingOperatorDesired = checkNotNull(desiredConnection(runtime, "operatorSession"))
+      assertEquals(endpoint.stableId, readField<GatewayEndpoint>(existingNodeDesired, "endpoint").stableId)
+      assertEquals(endpoint.stableId, readField<GatewayEndpoint>(existingOperatorDesired, "endpoint").stableId)
+      assertEquals(initialToken, readField<String?>(existingNodeDesired, "token"))
+      assertEquals(initialToken, readField<String?>(existingOperatorDesired, "token"))
+      assertEquals(oldFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
+      assertEquals(endpoint.stableId, readField<GatewayEndpoint?>(runtime, "connectedEndpoint")?.stableId)
+
+      runtime.refreshGatewayConnection()
+
+      val changedPrompt =
+        withTimeout(5_000) {
+          runtime.pendingGatewayTrust.first { it?.fingerprintSha256 == newFingerprint }
+        }!!
+      assertEquals(endpoint, changedPrompt.endpoint)
+      assertEquals(savedRefreshToken, changedPrompt.auth.token)
+      assertNull(changedPrompt.auth.bootstrapToken)
+      assertNull(changedPrompt.auth.password)
+      assertEquals(oldFingerprint, changedPrompt.previousFingerprintSha256)
+      assertEquals(oldFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
+      assertEquals(2, probeCalls.get())
+      assertTrue(
+        "Node desired config must not be replaced before trust consent",
+        existingNodeDesired === desiredConnection(runtime, "nodeSession"),
+      )
+      assertTrue(
+        "Operator desired config must not be replaced before trust consent",
+        existingOperatorDesired === desiredConnection(runtime, "operatorSession"),
+      )
+
+      runtime.declineGatewayTrustPrompt(changedPrompt)
+      withTimeout(5_000) { runtime.pendingGatewayTrust.first { it == null } }
+
+      assertEquals(oldFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
+      assertTrue(
+        "Node desired config must remain after trust decline",
+        existingNodeDesired === desiredConnection(runtime, "nodeSession"),
+      )
+      assertTrue(
+        "Operator desired config must remain after trust decline",
+        existingOperatorDesired === desiredConnection(runtime, "operatorSession"),
+      )
+    }
+
+  @Test
+  fun refreshGatewayConnection_reprobesRealTlsAndReconnectsAuthenticatedWebSockets() =
+    runBlocking {
+      val tempDirectory = Files.createTempDirectory("openclaw-real-tls-reconnect-").toFile()
+      testTempDirs += tempDirectory
+      val tlsIdentity = createRotatingTlsTestIdentity(tempDirectory)
+      val server =
+        MockWebServer().apply {
+          useHttps(tlsIdentity.sslContext.socketFactory, false)
+        }
+      testOwnedServers += server
+      server.start(InetAddress.getByName("127.0.0.1"), 0)
+
+      val connectFrames = ConcurrentLinkedQueue<Pair<String, String?>>()
+      val connectCount = AtomicInteger()
+      val initialConnects = CompletableDeferred<Unit>()
+      val replacementConnects = CompletableDeferred<Unit>()
+      installControlPageGateway(
+        authMethod = null,
+        server = server,
+        onConnect = { role, params ->
+          val token =
+            params["auth"]
+              ?.jsonObject
+              ?.get("token")
+              ?.jsonPrimitive
+              ?.content
+          connectFrames += role to token
+          when (connectCount.incrementAndGet()) {
+            2 -> initialConnects.complete(Unit)
+            4 -> replacementConnects.complete(Unit)
+          }
+        },
+      )
+
+      val (_, prefs, runtime) = gatewayFixture()
+      neutralizeColdStartAutoConnect(runtime)
+      val endpoint = GatewayEndpoint.manual("127.0.0.1", server.port, tlsEnabled = true)
+      val oldFingerprint = tlsIdentity.oldFingerprint
+      val rotatedFingerprint = tlsIdentity.rotatedFingerprint
+      val initialToken = "initial-real-tls-token"
+      val savedRefreshToken = "saved-real-tls-refresh-token"
+      prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
+      prefs.saveGatewayCredentials(endpoint.stableId, token = savedRefreshToken)
+
+      val nodeSession = readField<GatewaySession>(runtime, "nodeSession")
+      val operatorSession = readField<GatewaySession>(runtime, "operatorSession")
+      runtime.connect(endpoint, auth(token = initialToken))
+      val firstPrompt =
+        withTimeout(10_000) {
+          runtime.pendingGatewayTrust.first { it?.fingerprintSha256 == oldFingerprint }
+        }!!
+      assertEquals(oldFingerprint, firstPrompt.fingerprintSha256)
+      assertNull(prefs.loadGatewayTlsFingerprint(endpoint.stableId))
+      runtime.acceptGatewayTrustPrompt(firstPrompt)
+      withTimeout(10_000) { initialConnects.await() }
+      withTimeout(10_000) {
+        runtime.gatewayConnectionDisplay.first { it.isConnected && it.statusText == "Connected" }
+      }
+      assertTrue(nodeSession.isReady())
+      assertTrue(operatorSession.isReady())
+      assertEquals(2, server.requestCount)
+      val initialFrames = connectFrames.toList().take(2)
+      assertEquals(setOf("node", "operator"), initialFrames.map { it.first }.toSet())
+      assertTrue(initialFrames.all { it.second == initialToken })
+      assertEquals(oldFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
+      val oldNodeDesired = checkNotNull(desiredConnection(runtime, "nodeSession"))
+      val oldOperatorDesired = checkNotNull(desiredConnection(runtime, "operatorSession"))
+
+      // A new certificate is selected for new TLS handshakes on the same loopback port;
+      // the existing TLS WebSockets remain open while the trust prompt is pending.
+      tlsIdentity.selectedAlias.set("rotated")
+      runtime.refreshGatewayConnection()
+      val declinedPrompt =
+        withTimeout(10_000) {
+          runtime.pendingGatewayTrust.first { it?.fingerprintSha256 == rotatedFingerprint }
+        }!!
+      assertEquals(oldFingerprint, declinedPrompt.previousFingerprintSha256)
+      assertEquals(savedRefreshToken, declinedPrompt.auth.token)
+      assertNull(declinedPrompt.auth.bootstrapToken)
+      assertNull(declinedPrompt.auth.password)
+      assertEquals(oldFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
+      assertEquals(2, server.requestCount)
+      assertTrue(runtime.gatewayConnectionDisplay.value.isConnected)
+      assertTrue(nodeSession.isReady())
+      assertTrue(operatorSession.isReady())
+      assertSame(oldNodeDesired, desiredConnection(runtime, "nodeSession"))
+      assertSame(oldOperatorDesired, desiredConnection(runtime, "operatorSession"))
+
+      runtime.declineGatewayTrustPrompt(declinedPrompt)
+      withTimeout(5_000) { runtime.pendingGatewayTrust.first { it == null } }
+      assertTrue(runtime.gatewayConnectionDisplay.value.isConnected)
+      assertEquals("Offline", runtime.gatewayConnectionDisplay.value.statusText)
+      assertEquals(oldFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
+      assertEquals(2, server.requestCount)
+      assertTrue(nodeSession.isReady())
+      assertTrue(operatorSession.isReady())
+      assertSame(oldNodeDesired, desiredConnection(runtime, "nodeSession"))
+      assertSame(oldOperatorDesired, desiredConnection(runtime, "operatorSession"))
+
+      runtime.refreshGatewayConnection()
+      val acceptedPrompt =
+        withTimeout(10_000) {
+          runtime.pendingGatewayTrust.first { it?.fingerprintSha256 == rotatedFingerprint }
+        }!!
+      assertEquals(oldFingerprint, acceptedPrompt.previousFingerprintSha256)
+      assertEquals(savedRefreshToken, acceptedPrompt.auth.token)
+      assertEquals(oldFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
+      val certificateSelectionsBeforeAcceptance = tlsIdentity.serverHandshakes.get()
+      runtime.acceptGatewayTrustPrompt(acceptedPrompt)
+      withTimeout(10_000) { replacementConnects.await() }
+      withTimeout(10_000) {
+        runtime.gatewayConnectionDisplay.first { it.isConnected && it.statusText == "Connected" }
+      }
+
+      assertEquals(rotatedFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
+      assertEquals(4, server.requestCount)
+      assertTrue(nodeSession.isReady())
+      assertTrue(operatorSession.isReady())
+      val replacementFrames = connectFrames.toList().drop(2)
+      assertEquals(setOf("node", "operator"), replacementFrames.map { it.first }.toSet())
+      assertTrue(replacementFrames.all { it.second == savedRefreshToken })
+      val newNodeTls = readField<GatewayTlsParams>(checkNotNull(desiredConnection(runtime, "nodeSession")), "tls")
+      val newOperatorTls = readField<GatewayTlsParams>(checkNotNull(desiredConnection(runtime, "operatorSession")), "tls")
+      assertEquals(rotatedFingerprint, newNodeTls.expectedFingerprint)
+      assertEquals(rotatedFingerprint, newOperatorTls.expectedFingerprint)
+      assertTrue(
+        "Both authenticated replacement WebSockets must select the rotated TLS identity",
+        tlsIdentity.serverHandshakes.get() >= certificateSelectionsBeforeAcceptance + 2,
+      )
+    }
+
+  @Test
   fun connect_systemTrustedCandidateWithoutStoredPinUsesPlatformTrust() {
     val (_, prefs, runtime) =
       gatewayFixture { _, _ -> GatewayTlsProbeResult(fingerprintSha256 = "bb".repeat(32), systemTrusted = true) }
@@ -1176,11 +1421,16 @@ class GatewayBootstrapAuthTest {
       val (runtime, prefs) = createNeutralizedRuntime()
       armSavedActiveManualGateway(prefs)
       val endpoint = gatewayEndpoint()
+      val nodeSession = readField<GatewaySession>(runtime, "nodeSession")
+      val initialTransport = installStalledTransport(nodeSession, completeOnCancel = true)
       assertTrue(runtime.connectSwitchingGateway(endpoint))
       val oldSelection = runtime.switchToGateway(endpoint.stableId) as GatewayTargetSelection.Selected
-      val original = waitForDesiredConnection(runtime, "nodeSession")
+      withTimeout(5_000) { initialTransport.created.await() }
+      val original = checkNotNull(desiredConnection(runtime, "nodeSession"))
+      val replacementTransport = installStalledTransport(nodeSession, completeOnCancel = true)
       runtime.refreshGatewayConnection()
-      val refreshed = waitForDesiredConnection(runtime, "nodeSession")
+      withTimeout(5_000) { replacementTransport.created.await() }
+      val refreshed = checkNotNull(desiredConnection(runtime, "nodeSession"))
       assertFalse("Explicit refresh must replace the desired connection", original === refreshed)
       val freshSelection = runtime.switchToGateway(endpoint.stableId) as GatewayTargetSelection.Selected
       assertSame("Selecting the refreshed target must reuse its connection", refreshed, desiredConnection(runtime, "nodeSession"))
@@ -2742,12 +2992,17 @@ class GatewayBootstrapAuthTest {
     val cancelled: CompletableDeferred<Unit> = CompletableDeferred(),
   )
 
-  private fun installStalledTransport(session: GatewaySession): StalledGatewayTransport {
+  private fun installStalledTransport(
+    session: GatewaySession,
+    completeOnCancel: Boolean = false,
+  ): StalledGatewayTransport {
     val stalled = StalledGatewayTransport()
     val factory: (OkHttpClient, Request, WebSocketListener) -> WebSocket =
       { _, request, listener ->
         val socket =
           object : WebSocket {
+            private val cancellationDelivered = AtomicBoolean(false)
+
             override fun request(): Request = request
 
             override fun queueSize(): Long = 0
@@ -2763,6 +3018,10 @@ class GatewayBootstrapAuthTest {
 
             override fun cancel() {
               stalled.cancelled.complete(Unit)
+              if (completeOnCancel && cancellationDelivered.compareAndSet(false, true)) {
+                // Match OkHttp cancellation so each replaced transport can settle its owned work.
+                listener.onFailure(this, IOException("test transport cancelled"), null)
+              }
             }
           }
         stalled.created.complete(socket to listener)
@@ -2775,9 +3034,11 @@ class GatewayBootstrapAuthTest {
   private fun installControlPageGateway(
     authMethod: String?,
     rejectSharedToken: Boolean = false,
+    server: MockWebServer = gatewayServer,
+    onConnect: (role: String, params: JsonObject) -> Unit = { _, _ -> },
     onOperatorConnect: (JsonObject) -> Unit = {},
   ) {
-    gatewayServer.dispatcher =
+    server.dispatcher =
       object : Dispatcher() {
         override fun dispatch(request: RecordedRequest): MockResponse =
           MockResponse().withWebSocketUpgrade(
@@ -2804,6 +3065,7 @@ class GatewayBootstrapAuthTest {
                         .getValue("role")
                         .jsonPrimitive.content
                     val params = frame.getValue("params").jsonObject
+                    onConnect(role, params)
                     if (role == "operator" && rejectSharedToken && params["auth"]?.jsonObject?.containsKey("deviceToken") != true) {
                       webSocket.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"UNAUTHORIZED","message":"Shared token rejected","details":{"code":"AUTH_TOKEN_MISMATCH","canRetryWithDeviceToken":true}}}""")
                       return
@@ -2831,6 +3093,141 @@ class GatewayBootstrapAuthTest {
       tlsFingerprintProbe?.let { NodeRuntime(app, prefs, tlsFingerprintProbe = it) }
         ?: NodeRuntime(app, prefs)
     return GatewayFixture(app, prefs, trackRuntime(runtime))
+  }
+
+  private data class RotatingTlsTestIdentity(
+    val sslContext: SSLContext,
+    val selectedAlias: AtomicReference<String>,
+    val oldFingerprint: String,
+    val rotatedFingerprint: String,
+    val serverHandshakes: AtomicInteger,
+  )
+
+  private fun createRotatingTlsTestIdentity(directory: File): RotatingTlsTestIdentity {
+    val keyStoreFile = File(directory, "gateway-test-certificates.p12")
+    val password = UUID.randomUUID().toString().replace("-", "")
+    val keytoolName = if (checkNotNull(System.getProperty("os.name")).startsWith("Windows")) "keytool.exe" else "keytool"
+    val keytool = File(checkNotNull(System.getProperty("java.home")), "bin/$keytoolName")
+    check(keytool.isFile) { "The test JDK must provide keytool to create ephemeral TLS certificates" }
+
+    fun generateCertificate(alias: String) {
+      val command =
+        listOf(
+          keytool.absolutePath,
+          "-genkeypair",
+          "-noprompt",
+          "-alias",
+          alias,
+          "-keyalg",
+          "RSA",
+          "-keysize",
+          "2048",
+          "-validity",
+          "3650",
+          "-dname",
+          "CN=localhost",
+          "-ext",
+          "SAN=IP:127.0.0.1,DNS:localhost",
+          "-storetype",
+          "PKCS12",
+          "-keystore",
+          keyStoreFile.absolutePath,
+          "-storepass",
+          password,
+          "-keypass",
+          password,
+        )
+      val process =
+        ProcessBuilder(command)
+          .redirectErrorStream(true)
+          .redirectOutput(File(directory, "keytool-$alias.log"))
+          .start()
+      if (!process.waitFor(30, TimeUnit.SECONDS)) {
+        process.destroyForcibly()
+        process.waitFor()
+        error("keytool timed out while creating an ephemeral TLS test certificate")
+      }
+      check(process.exitValue() == 0) { "keytool failed to create an ephemeral TLS test certificate" }
+    }
+
+    // These test-only keys live only in the OS temporary directory and are never embedded in source.
+    generateCertificate("original")
+    generateCertificate("rotated")
+    val keyStore = KeyStore.getInstance("PKCS12")
+    FileInputStream(keyStoreFile).use { keyStore.load(it, password.toCharArray()) }
+    val oldCertificate = keyStore.getCertificate("original") as X509Certificate
+    val rotatedCertificate = keyStore.getCertificate("rotated") as X509Certificate
+    val keyManagerFactory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
+    keyManagerFactory.init(keyStore, password.toCharArray())
+    val delegate = checkNotNull(keyManagerFactory.keyManagers.filterIsInstance<X509ExtendedKeyManager>().singleOrNull())
+    val selectedAlias = AtomicReference("original")
+    val serverHandshakes = AtomicInteger()
+    val keyManager = RotatingTestTlsKeyManager(delegate, selectedAlias, serverHandshakes)
+    val sslContext = SSLContext.getInstance("TLS")
+    sslContext.init(arrayOf(keyManager), null, SecureRandom())
+    return RotatingTlsTestIdentity(
+      sslContext = sslContext,
+      selectedAlias = selectedAlias,
+      oldFingerprint = testCertificateFingerprint(oldCertificate),
+      rotatedFingerprint = testCertificateFingerprint(rotatedCertificate),
+      serverHandshakes = serverHandshakes,
+    )
+  }
+
+  private fun testCertificateFingerprint(certificate: X509Certificate): String =
+    MessageDigest
+      .getInstance("SHA-256")
+      .digest(certificate.encoded)
+      .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+
+  private class RotatingTestTlsKeyManager(
+    private val delegate: X509ExtendedKeyManager,
+    private val selectedAlias: AtomicReference<String>,
+    private val serverHandshakes: AtomicInteger,
+  ) : X509ExtendedKeyManager() {
+    override fun getClientAliases(
+      keyType: String?,
+      issuers: Array<Principal>?,
+    ): Array<String>? = delegate.getClientAliases(keyType, issuers)
+
+    override fun chooseClientAlias(
+      keyType: Array<String>?,
+      issuers: Array<Principal>?,
+      socket: Socket?,
+    ): String? = delegate.chooseClientAlias(keyType, issuers, socket)
+
+    override fun getServerAliases(
+      keyType: String?,
+      issuers: Array<Principal>?,
+    ): Array<String>? = delegate.getServerAliases(keyType, issuers)
+
+    override fun chooseServerAlias(
+      keyType: String?,
+      issuers: Array<Principal>?,
+      socket: Socket?,
+    ): String? = chooseServerAlias(keyType)
+
+    override fun getCertificateChain(alias: String?): Array<X509Certificate>? = delegate.getCertificateChain(alias)
+
+    override fun getPrivateKey(alias: String?): PrivateKey? = delegate.getPrivateKey(alias)
+
+    override fun chooseEngineClientAlias(
+      keyType: Array<String>?,
+      issuers: Array<Principal>?,
+      engine: SSLEngine?,
+    ): String? = delegate.chooseEngineClientAlias(keyType, issuers, engine)
+
+    override fun chooseEngineServerAlias(
+      keyType: String?,
+      issuers: Array<Principal>?,
+      engine: SSLEngine?,
+    ): String? = chooseServerAlias(keyType)
+
+    private fun chooseServerAlias(keyType: String?): String? {
+      if (keyType?.contains("RSA", ignoreCase = true) != true) return null
+      serverHandshakes.incrementAndGet()
+      return selectedAlias.get()
+    }
   }
 
   private fun auth(
