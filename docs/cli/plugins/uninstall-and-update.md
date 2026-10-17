@@ -187,8 +187,9 @@ the wait; disconnecting its Gateway request also cancels it. Before publication,
 cancellation restores the previous generation when recovery succeeds, without
 cancelling admitted runs. Once publication commits, cancellation does not undo it.
 Service shutdown, resource cleanup, and recovery keep their existing deadlines.
-Detailed readiness exposes the pending reload; an explicit wait has no drain
-deadline. Incoming messages retain their channel's existing queue and replay
+Detailed readiness, `openclaw status`, and `status --json` (`pluginReload`)
+expose the pending reload and whether new runs are waiting; an explicit wait has
+no drain deadline. Incoming messages retain their channel's existing queue and replay
 contract; this option does not add durable ingress to channels that lack it.
 Run this maintenance command outside a turn that itself holds the target plugin:
 waiting for that turn while it waits for reload cannot make progress. Agents can

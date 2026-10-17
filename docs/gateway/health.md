@@ -180,8 +180,9 @@ that is running but cannot admit work must monitor `/readyz`.
 
 During plugin replacement or recovery, `/readyz` returns `503`. Detailed responses
 include `failing: ["plugin-reload"]` and a `pluginReload` object with the affected
-`pluginIds`, the current `phase` (`reloading`, `recovering`, or `failed`), and any
-recovery `deadlineAtMs` and actionable `reason`. These owner-reported facts bypass
+`pluginIds`, the current `phase` (`reloading`, `recovering`, or `failed`), when the
+pending replacement started (`startedAtMs`), and any recovery `deadlineAtMs` and
+actionable `reason`. These owner-reported facts bypass
 the channel readiness cache, so a failed replacement cannot appear as only a
 generic channel outage or stale healthy result.
 

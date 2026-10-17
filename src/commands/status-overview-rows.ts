@@ -43,6 +43,7 @@ type StatusDegradationSummary = Pick<
   | "installationReplacementWarning"
   | "childRuntime"
   | "secretEgressProxy"
+  | "pluginReload"
 >;
 
 function buildStatusDegradationRows(
@@ -84,6 +85,28 @@ function buildStatusDegradationRows(
     addWarning(
       "Degraded plugins",
       `${plugins.length} configured-unavailable · ${plugins.map((plugin) => plugin.pluginId).join(", ")}`,
+    );
+  }
+  const reload = summary.pluginReload;
+  if (reload) {
+    const age =
+      reload.startedAtMs === undefined
+        ? ""
+        : ` for ${formatTimeAgo(Date.now() - reload.startedAtMs, { suffix: false })}`;
+    // Only an explicit --wait drain reports a reason without a deadline; it ends with its requester.
+    const cancel =
+      reload.phase === "reloading" && reload.reason && reload.deadlineAtMs === undefined
+        ? `Stop the waiting ${formatCliCommand("openclaw plugins reload --wait")} (Ctrl+C or end its process) to cancel.`
+        : undefined;
+    addWarning(
+      "Plugin reload",
+      [
+        `${reload.phase} ${reload.pluginIds.join(", ")}${age}`,
+        reload.newRunsBlocked ? "new agent runs wait" : undefined,
+        [reload.reason, cancel].filter(Boolean).join(" "),
+      ]
+        .filter(Boolean)
+        .join(" · "),
     );
   }
   return rows;

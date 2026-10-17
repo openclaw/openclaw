@@ -3,7 +3,7 @@ import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public
 import { readChildRuntimeViability } from "../../infra/child-runtime-viability.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import { readGatewayMaintenanceWork } from "../../infra/gateway-active-work.js";
-import { getStatusSummary } from "../../status/summary.js";
+import { getStatusSummary, type StatusSummary } from "../../status/summary.js";
 import { buildContextEngineHealthSummary } from "../health/context-engine.js";
 import { buildDeliveryQueueHealthSummary } from "../health/delivery-queue.js";
 import type { ChannelHealthSummary, HealthSummary } from "../health/types.js";
@@ -149,6 +149,13 @@ export const healthHandlers: GatewayRequestHandlers = {
             writeCustody: activeWork.writeCustody,
           }
         : undefined;
+    const reload = context.getPluginReloadStatus?.();
+    // Reloading and recovering run inside the reload transaction, which keeps new agent
+    // runs behind the prepared-runtime admission fence until it settles.
+    const pluginReload: StatusSummary["pluginReload"] = reload && {
+      ...reload,
+      newRunsBlocked: reload.phase !== "failed",
+    };
     respond(
       true,
       {
@@ -159,6 +166,7 @@ export const healthHandlers: GatewayRequestHandlers = {
         pid: process.pid,
         shutdownBudget: shutdownStatus,
         childRuntime: readChildRuntimeViability(),
+        pluginReload,
       },
       undefined,
     );

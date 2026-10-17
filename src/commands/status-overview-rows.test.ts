@@ -185,6 +185,14 @@ it("builds status-all overview rows from the shared surface", () => {
           },
         },
       ],
+      pluginReload: {
+        phase: "reloading",
+        pluginIds: ["composio", "lobster"],
+        startedAtMs: Date.now() - 28 * 60_000,
+        reason:
+          "Plugin replacement queued behind 2 retained work item(s) for plugin composio, lobster; waiting until they finish or the request is cancelled.",
+        newRunsBlocked: true,
+      },
     },
     osLabel: "macOS",
     configPath: "/tmp/openclaw.json",
@@ -204,8 +212,34 @@ it("builds status-all overview rows from the shared surface", () => {
     "Secret egress proxy": "Check OpenSSL, then retry the request.",
     "Degraded secrets": "1 degraded · capability:tts",
     "Degraded plugins": "1 configured-unavailable · discord",
+    "Plugin reload":
+      "reloading composio, lobster for 28m · new agent runs wait · Plugin replacement queued behind 2 retained work item(s) for plugin composio, lobster; waiting until they finish or the request is cancelled. Stop the waiting openclaw plugins reload --wait (Ctrl+C or end its process) to cancel.",
     Secrets: "2 diagnostics",
   });
+});
+
+it("omits the --wait cancel step for a reload bounded by the drain deadline", () => {
+  const rows = buildStatusAllOverviewRows({
+    ...params,
+    summary: {
+      ...params.summary,
+      pluginReload: {
+        phase: "reloading",
+        pluginIds: ["composio"],
+        startedAtMs: Date.now() - 15_000,
+        deadlineAtMs: Date.now() + 45_000,
+        reason:
+          "Plugin replacement queued behind 1 admitted work item(s) for plugin composio; applies when they finish within the 60s drain budget.",
+        newRunsBlocked: true,
+      },
+    },
+    configPath: "/tmp/openclaw.json",
+    secretDiagnosticsCount: 0,
+  });
+
+  expect(findRowValue(rows, "Plugin reload")).toBe(
+    "reloading composio for 15s · new agent runs wait · Plugin replacement queued behind 1 admitted work item(s) for plugin composio; applies when they finish within the 60s drain budget.",
+  );
 });
 
 it("uses unknown only when Gateway self metadata is absent", () => {

@@ -262,6 +262,19 @@ If local session state requires Doctor, status prints any installation drift to 
   trusted per-signal exporter state and transport. Endpoint values, headers,
   certificates, payloads, and raw errors are not shown.
 
+## Plugin reload
+
+While the Gateway replaces plugins, status shows a **Plugin reload** overview
+row and JSON includes `pluginReload`: `phase` (`reloading`, `recovering`, or
+`failed`), `pluginIds`, `startedAtMs` (omitted for `failed`), optional
+`deadlineAtMs` and `reason`, and `newRunsBlocked`. While `newRunsBlocked` is
+true, new agent runs, including isolated automation runs, wait for the
+replacement. A reload started with
+[`openclaw plugins reload <id> --wait`](/cli/plugins/uninstall-and-update) has
+no drain deadline; stop the waiting `openclaw plugins reload --wait` (Ctrl+C or
+end its process) to cancel it. A `failed` entry stays until a later reload of
+that plugin succeeds or the Gateway restarts.
+
 ## Secrets
 
 - When the running Gateway has any isolated SecretRef owner from startup, reload, or a config write, status includes `degradedSecretOwners` in JSON and a **Degraded secrets** overview row in human output. Each entry names the owner, degradation state (`cold` or `stale`), config paths, and redacted reason. Cold owners are unavailable; stale owners continue with last-known-good values.
