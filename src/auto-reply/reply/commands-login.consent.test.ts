@@ -5,6 +5,7 @@ import type { ModelsAuthLoginFlowOptions } from "../../commands/models/auth.js";
 import type { RuntimeConfigWriteApplicationClaim } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { ReplyPayload } from "../types.js";
 import {
   blockReplyOpts,
@@ -31,11 +32,33 @@ const { getRuntimeConfigWriteApplication } =
   await import("../../config/runtime-write-application.js");
 const { withOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
 
+const currentModel = "other/current";
+
+function successfulLogin(profileId = "openai:owner", authRefresh = "refreshed") {
+  const provider = profileId.split(":")[0];
+  return {
+    providerId: provider,
+    methodId: provider === "openrouter" ? "oauth" : "device-code",
+    authRefresh,
+    profiles: [{ profileId, provider, mode: provider === "openrouter" ? "api_key" : "oauth" }],
+  };
+}
+
+async function readConfig(path: string): Promise<OpenClawConfig> {
+  return JSON.parse(await fs.readFile(path, "utf8"));
+}
+
+async function expectPolicy(path: string, allow = [currentModel, "openai/*"]) {
+  const saved = await readConfig(path);
+  expect(saved.agents?.defaults).toMatchObject({ model: currentModel, modelPolicy: { allow } });
+  return saved;
+}
+
 function restrictedLoginConfig(workspace: string): OpenClawConfig {
   return {
     ...buildLoginParams("/login").cfg,
     agents: {
-      defaults: { model: "other/current", modelPolicy: { allow: ["other/current"] } },
+      defaults: { model: currentModel, modelPolicy: { allow: [currentModel] } },
       entries: { main: { workspace } },
     },
   };
@@ -78,12 +101,19 @@ function mockSuccessfulLoginWithRestrictions(config: OpenClawConfig): void {
       throw new Error("Expected a restricted-provider login.");
     }
     opts.onModelAccessRequested(prepared);
-    return {
-      providerId: "openai",
-      methodId: "device-code",
-      authRefresh: "refreshed",
-      profiles: [{ profileId: "openai:owner", provider: "openai", mode: "oauth" }],
-    };
+    return successfulLogin();
+  });
+}
+
+async function withRestrictedLogin(
+  label: string,
+  run: (state: OpenClawTestState, config: OpenClawConfig) => Promise<void>,
+) {
+  await withOpenClawTestState({ label }, async (state) => {
+    const config = restrictedLoginConfig(state.workspaceDir);
+    await state.writeConfig(config);
+    mockSuccessfulLoginWithRestrictions(config);
+    await run(state, config);
   });
 }
 
@@ -143,12 +173,7 @@ describe("handleLoginCommand model consent", () => {
         runModelsAuthLoginFlowMock.mockImplementationOnce(
           async (opts: ModelsAuthLoginFlowOptions) => {
             await opts.prompter.note(`Continue with the ${provider} provider.`);
-            return {
-              providerId: provider,
-              methodId: "device-code",
-              authRefresh: "refreshed",
-              profiles: [{ profileId: `${provider}:owner`, provider, mode: "oauth" }],
-            };
+            return successfulLogin(`${provider}:owner`);
           },
         );
         const completed = await command(methodCommand);
@@ -178,10 +203,7 @@ describe("handleLoginCommand model consent", () => {
   it.each(["applied", "restart-pending"] as const)(
     "waits for registered model-access application and reports %s",
     async (status) => {
-      await withOpenClawTestState({ label: "login-access-application" }, async (state) => {
-        const config = restrictedLoginConfig(state.workspaceDir);
-        await state.writeConfig(config);
-        mockSuccessfulLoginWithRestrictions(config);
+      await withRestrictedLogin("login-access-application", async (state, config) => {
         const command = (body: string) => dispatchLoginCommand(buildConsentParams(body, config));
         const initial = await command("/login openai");
         const claimReady = createDeferredCore<RuntimeConfigWriteApplicationClaim>();
@@ -206,9 +228,7 @@ describe("handleLoginCommand model consent", () => {
           ).toBe("pending");
           claim.settle(status);
           const result = await response;
-          const saved: OpenClawConfig = JSON.parse(await fs.readFile(state.configPath, "utf8"));
-          expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(["other/current", "openai/*"]);
-          expect(saved.agents?.defaults?.model).toBe("other/current");
+          await expectPolicy(state.configPath);
           expect(result.reply?.text).toContain(
             status === "applied"
               ? "All OpenAI models are now visible."
@@ -228,10 +248,8 @@ describe("handleLoginCommand model consent", () => {
   it.each(["expired", "changed", "cancelled"] as const)(
     "renews a %s model-access choice without another sign-in or an unconfirmed write",
     async (cause) => {
-      await withOpenClawTestState({ label: "login-access-recovery" }, async (state) => {
-        let config = restrictedLoginConfig(state.workspaceDir);
-        await state.writeConfig(config);
-        mockSuccessfulLoginWithRestrictions(config);
+      await withRestrictedLogin("login-access-recovery", async (state, initialConfig) => {
+        let config = initialConfig;
         let authorized = true;
         const command = async (body: string) => {
           const params = buildConsentParams(body, config, {
@@ -283,11 +301,10 @@ describe("handleLoginCommand model consent", () => {
           expect(completed?.reply?.text).toBe(
             "All OpenAI models are now visible.\n\nSend /models to choose a model. To update saved sign-in status, send /login refresh.",
           );
-          const saved: OpenClawConfig = JSON.parse(await fs.readFile(state.configPath, "utf8"));
-          expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(
-            cause === "changed" ? ["other/replacement", "openai/*"] : ["other/current", "openai/*"],
-          );
-          expect(saved.agents?.defaults?.model).toBe("other/current");
+          await expectPolicy(state.configPath, [
+            cause === "changed" ? "other/replacement" : currentModel,
+            "openai/*",
+          ]);
           expect(runModelsAuthLoginFlowMock).toHaveBeenCalledOnce();
         } finally {
           stop();
@@ -300,63 +317,32 @@ describe("handleLoginCommand model consent", () => {
   );
 
   it("keeps model access answerable after releasing the login reservation", async () => {
-    await withOpenClawTestState({ label: "login-access-lifetime" }, async (state) => {
-      const config = restrictedLoginConfig(state.workspaceDir);
-      await state.writeConfig(config);
-      mockSuccessfulLoginWithRestrictions(config);
+    await withRestrictedLogin("login-access-lifetime", async (state, config) => {
       const command = (body: string) => handleLoginCommand(buildConsentParams(body, config), true);
       const initial = await command("/login codex");
       const choice = loginChoiceCommand(initial?.reply);
-      runModelsAuthLoginFlowMock.mockResolvedValueOnce({
-        providerId: "openrouter",
-        methodId: "oauth",
-        authRefresh: "refreshed",
-        profiles: [{ profileId: "openrouter:default", provider: "openrouter", mode: "api_key" }],
-      });
+      runModelsAuthLoginFlowMock.mockResolvedValueOnce(successfulLogin("openrouter:default"));
       const another = await command("/login openrouter/openrouter-oauth");
       expect(another?.reply?.text).toContain("OpenRouter login complete");
       expect(runModelsAuthLoginFlowMock).toHaveBeenCalledTimes(2);
       await command(choice);
-      const saved: OpenClawConfig = JSON.parse(await fs.readFile(state.configPath, "utf8"));
-      expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(["other/current", "openai/*"]);
-      expect(saved.agents?.defaults?.model).toBe("other/current");
+      await expectPolicy(state.configPath);
     });
   });
 
-  it.each([
-    [
-      "Show all OpenAI models",
-      ["other/current", "openai/*"],
-      "Application by the running Gateway is not confirmed.",
-      "authorized",
-    ],
-    [
-      "Keep current restrictions",
-      ["other/current"],
-      "Current model restrictions kept.",
-      "authorized",
-    ],
-    [
-      "Show all OpenAI models",
-      ["other/current"],
-      "Your model-access choice could not be applied.",
-      "before-read",
-    ],
-    [
-      "Show all OpenAI models",
-      ["other/current"],
-      "Provider login authority is no longer active.",
-      "preflight",
-    ],
-    [
-      "Show all OpenAI models",
-      ["other/current"],
-      "Provider login authority is no longer active.",
-      "runtime-preflight",
-    ],
-  ])(
-    "finishes login before applying %s with %s policy (%s; %s)",
-    async (label, allow, outcome, revocation) => {
+  it.each(["show", "keep", "before-read", "preflight", "runtime-preflight"] as const)(
+    "finishes login before applying model access (%s)",
+    async (scenario) => {
+      const label = scenario === "keep" ? "Keep current restrictions" : "Show all OpenAI models";
+      const allow = scenario === "show" ? [currentModel, "openai/*"] : [currentModel];
+      const revocation = scenario === "show" || scenario === "keep" ? "authorized" : scenario;
+      const outcome = {
+        show: "Application by the running Gateway is not confirmed.",
+        keep: "Current model restrictions kept.",
+        "before-read": "Your model-access choice could not be applied.",
+        preflight: "Provider login authority is no longer active.",
+        "runtime-preflight": "Provider login authority is no longer active.",
+      }[scenario];
       await withOpenClawTestState({ label: "login-command-consent" }, async (state) => {
         const params = buildLoginParams("/login codex", { opts: blockReplyOpts() });
         params.cfg = restrictedLoginConfig(state.workspaceDir);
@@ -375,12 +361,7 @@ describe("handleLoginCommand model consent", () => {
         runModelsAuthLoginFlowMock.mockImplementationOnce(
           async (opts: ModelsAuthLoginFlowOptions) => {
             opts.onModelAccessRequested?.(prepared);
-            return {
-              providerId: "openai",
-              methodId: "device-code",
-              authRefresh: "gateway-rejected",
-              profiles: [{ profileId: "openai:new", provider: "openai", mode: "oauth" }],
-            };
+            return successfulLogin("openai:new", "gateway-rejected");
           },
         );
         const login = await dispatchLoginCommand(params);
@@ -406,7 +387,7 @@ describe("handleLoginCommand model consent", () => {
         );
         expect(await fs.readFile(state.configPath, "utf8")).toBe(beforeDenied);
         setRuntimeConfigSnapshot(params.cfg);
-        const unchanged: OpenClawConfig = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+        const unchanged = await readConfig(state.configPath);
         expect(unchanged.agents?.defaults?.modelPolicy?.allow).toEqual(["other/current"]);
         if (revocation === "before-read") {
           await fs.writeFile(state.configPath, JSON.stringify(revokedConfig));
@@ -439,9 +420,7 @@ describe("handleLoginCommand model consent", () => {
             expect(cancelled.reply?.text).toBe("No provider login is active in this chat.");
           }
         }
-        const saved: OpenClawConfig = JSON.parse(await fs.readFile(state.configPath, "utf8"));
-        expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(allow);
-        expect(saved.agents?.defaults?.model).toBe("other/current");
+        const saved = await expectPolicy(state.configPath, allow);
         expect(saved.commands?.ownerAllowFrom).toEqual(["owner"]);
         expect(saved.commands?.allowFrom).toEqual({
           slack: [
@@ -451,13 +430,10 @@ describe("handleLoginCommand model consent", () => {
           ],
         });
         if (revocation === "runtime-preflight") {
-          expect(getRuntimeConfigSnapshot()?.commands).toMatchObject({
-            ownerAllowFrom: ["owner"],
-            allowFrom: { slack: ["replacement"] },
+          expect(getRuntimeConfigSnapshot()).toMatchObject({
+            commands: { ownerAllowFrom: ["owner"], allowFrom: { slack: ["replacement"] } },
+            agents: { defaults: { modelPolicy: { allow: [currentModel] } } },
           });
-          expect(getRuntimeConfigSnapshot()?.agents?.defaults?.modelPolicy?.allow).toEqual([
-            "other/current",
-          ]);
         }
         const beforeReplay = await fs.readFile(state.configPath, "utf8");
         if (revocation === "preflight" || revocation === "runtime-preflight") {

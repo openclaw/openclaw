@@ -10,6 +10,7 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { handleMcpCommand } from "./commands-mcp.js";
+import type { HandleCommandsParams } from "./commands-types.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
 const mcpServers = vi.hoisted(() => new Map<string, Record<string, unknown>>());
@@ -79,12 +80,40 @@ function expectMcpResult<T>(result: T | null): T {
 }
 
 function buildCfg(): OpenClawConfig {
-  return {
-    commands: {
-      text: true,
-      mcp: true,
-    },
-  };
+  return { commands: { text: true, mcp: true } };
+}
+
+async function runMcp(
+  command: string,
+  options: {
+    owner?: boolean;
+    group?: boolean;
+    ctx?: Partial<HandleCommandsParams["ctx"]>;
+  } = {},
+) {
+  const params = buildCommandTestParams(command, buildCfg(), options.ctx);
+  params.command.senderIsOwner = options.owner ?? true;
+  params.isGroup = options.group ?? false;
+  return expectMcpResult(await handleMcpCommand(params, true));
+}
+
+function expectText(text: string | undefined, present: string[], absent: string[] = []) {
+  for (const part of present) {
+    expect(text).toContain(part);
+  }
+  for (const part of absent) {
+    expect(text).not.toContain(part);
+  }
+}
+
+function expectPrivateReply(
+  result: Awaited<ReturnType<typeof runMcp>>,
+  targets: string[],
+  acknowledgement: string,
+  absent = ["billing-server"],
+) {
+  expect(deliverOutboundPayloads.mock.calls.map(([request]) => request.to)).toEqual(targets);
+  expectText(result.reply?.text, [acknowledgement], absent);
 }
 
 async function showGroupMcpConfig() {
@@ -93,10 +122,7 @@ async function showGroupMcpConfig() {
     { channel: "signal", to: "owner-2" },
   ]);
   mcpServers.set("billing-server", { command: "uvx", args: ["private-billing-mcp"] });
-  const params = buildCommandTestParams("/mcp show", buildCfg());
-  params.command.senderIsOwner = true;
-  params.isGroup = true;
-  return expectMcpResult(await handleMcpCommand(params, true));
+  return runMcp("/mcp show", { group: true });
 }
 
 describe("handleCommands /mcp", () => {
@@ -109,18 +135,10 @@ describe("handleCommands /mcp", () => {
 
   it("writes MCP config and shows it back", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
-      const setParams = buildCommandTestParams(
-        '/mcp set context7={"command":"uvx","args":["context7-mcp"]}',
-        buildCfg(),
-      );
-      setParams.command.senderIsOwner = true;
-
-      const setResult = expectMcpResult(await handleMcpCommand(setParams, true));
+      const setResult = await runMcp('/mcp set context7={"command":"uvx","args":["context7-mcp"]}');
       expect(setResult.reply?.text).toContain('MCP server "context7" saved');
 
-      const showParams = buildCommandTestParams("/mcp show context7", buildCfg());
-      showParams.command.senderIsOwner = true;
-      const showResult = expectMcpResult(await handleMcpCommand(showParams, true));
+      const showResult = await runMcp("/mcp show context7");
       expect(showResult.reply?.text).toContain('"command": "uvx"');
       expect(showResult.reply?.text).toContain('"args": [');
     });
@@ -129,22 +147,17 @@ describe("handleCommands /mcp", () => {
   it("blocks authorized non-owner senders from writing MCP config", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
       mcpServers.set("existing", { command: "uvx", args: ["existing-mcp"] });
-      const setParams = buildCommandTestParams(
+      const setResult = await runMcp(
         '/mcp set evil={"command":"/bin/sh","args":["-c","id > /tmp/pwned"]}',
-        buildCfg(),
+        { owner: false },
       );
-      setParams.command.senderIsOwner = false;
-
-      const setResult = expectMcpResult(await handleMcpCommand(setParams, true));
       expect(setResult).toEqual({
         shouldContinue: false,
         reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
       });
       expect(mcpServers.has("evil")).toBe(false);
 
-      const unsetParams = buildCommandTestParams("/mcp unset existing", buildCfg());
-      unsetParams.command.senderIsOwner = false;
-      const unsetResult = expectMcpResult(await handleMcpCommand(unsetParams, true));
+      const unsetResult = await runMcp("/mcp unset existing", { owner: false });
       expect(unsetResult).toEqual({
         shouldContinue: false,
         reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
@@ -156,10 +169,7 @@ describe("handleCommands /mcp", () => {
   it("blocks authorized non-owner senders from reading MCP config", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
       mcpServers.set("context7", { command: "uvx", args: ["context7-mcp"] });
-      const showParams = buildCommandTestParams("/mcp show context7", buildCfg());
-      showParams.command.senderIsOwner = false;
-
-      const showResult = expectMcpResult(await handleMcpCommand(showParams, true));
+      const showResult = await runMcp("/mcp show context7", { owner: false });
       expect(showResult).toEqual({
         shouldContinue: false,
         reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
@@ -172,18 +182,13 @@ describe("handleCommands /mcp", () => {
 
   it("rejects internal writes without operator.admin", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
-      const params = buildCommandTestParams(
-        '/mcp set context7={"command":"uvx","args":["context7-mcp"]}',
-        buildCfg(),
-        {
+      const result = await runMcp('/mcp set context7={"command":"uvx","args":["context7-mcp"]}', {
+        ctx: {
           Provider: "webchat",
           Surface: "webchat",
           GatewayClientScopes: ["operator.write"],
         },
-      );
-      params.command.senderIsOwner = true;
-
-      const result = expectMcpResult(await handleMcpCommand(params, true));
+      });
       expect(result.reply?.text).toContain("requires operator.admin");
     });
   });
@@ -207,6 +212,17 @@ describe("handleCommands /mcp", () => {
       const awsSecretAccessKeyArg = "opaque-aws-secret-access-key-value";
       const underscoreApiKeyArg = "opaque-underscore-api-key-value";
       const pluralCredentialsArg = "opaque-plural-credentials-value";
+      const secretValues = [
+        headerSecret,
+        envSecret,
+        separateArgSecret,
+        inlineArgSecret,
+        positionalArgSecret,
+        secretKeyArg,
+        awsSecretAccessKeyArg,
+        underscoreApiKeyArg,
+        pluralCredentialsArg,
+      ];
       mcpServers.set("billing-server", {
         command: "uvx",
         args: [
@@ -242,10 +258,7 @@ describe("handleCommands /mcp", () => {
         },
       });
 
-      const namedParams = buildCommandTestParams("/mcp show billing-server", buildCfg());
-      namedParams.command.senderIsOwner = true;
-      namedParams.isGroup = true;
-      const namedResult = expectMcpResult(await handleMcpCommand(namedParams, true));
+      const namedResult = await runMcp("/mcp show billing-server", { group: true });
       const namedGroupText = namedResult.reply?.text ?? "";
       expect(namedGroupText).toContain("sent the details to the owner privately");
       expect(namedGroupText).not.toContain("billing-server");
@@ -264,21 +277,9 @@ describe("handleCommands /mcp", () => {
       expect(namedText).toContain('"--region"');
       expect(namedText).toContain('"us-east-1"');
       expect(namedText).toContain(REDACTED_SENTINEL);
-      expect(namedText).not.toContain(headerSecret);
-      expect(namedText).not.toContain(envSecret);
-      expect(namedText).not.toContain(separateArgSecret);
-      expect(namedText).not.toContain(inlineArgSecret);
-      expect(namedText).not.toContain(positionalArgSecret);
-      expect(namedText).not.toContain(secretKeyArg);
-      expect(namedText).not.toContain(awsSecretAccessKeyArg);
-      expect(namedText).not.toContain(underscoreApiKeyArg);
-      expect(namedText).not.toContain(pluralCredentialsArg);
-      expect(namedText).not.toContain("sk-test-secret-value");
+      expectText(namedText, [], [...secretValues, "sk-test-secret-value"]);
 
-      const allParams = buildCommandTestParams("/mcp show", buildCfg());
-      allParams.command.senderIsOwner = true;
-      allParams.isGroup = true;
-      const allResult = expectMcpResult(await handleMcpCommand(allParams, true));
+      const allResult = await runMcp("/mcp show", { group: true });
       const allGroupText = allResult.reply?.text ?? "";
       expect(allGroupText).toContain("sent the details to the owner privately");
       expect(allGroupText).not.toContain("billing-server");
@@ -288,16 +289,7 @@ describe("handleCommands /mcp", () => {
       expect(allText).toContain('"billing-server"');
       expect(allText).toContain('"local-tools"');
       expect(allText).toContain(REDACTED_SENTINEL);
-      expect(allText).not.toContain(headerSecret);
-      expect(allText).not.toContain(envSecret);
-      expect(allText).not.toContain(separateArgSecret);
-      expect(allText).not.toContain(inlineArgSecret);
-      expect(allText).not.toContain(positionalArgSecret);
-      expect(allText).not.toContain(secretKeyArg);
-      expect(allText).not.toContain(awsSecretAccessKeyArg);
-      expect(allText).not.toContain(underscoreApiKeyArg);
-      expect(allText).not.toContain(pluralCredentialsArg);
-      expect(allText).not.toContain("local-env-secret-value");
+      expectText(allText, [], [...secretValues, "local-env-secret-value"]);
     });
   });
 
@@ -321,11 +313,7 @@ describe("handleCommands /mcp", () => {
         route.resolvePrivateMcpTargets,
       );
       deliverOutboundPayloads.mockRejectedValue(new Error("private route unavailable"));
-      const params = buildCommandTestParams("/mcp show billing-server", buildCfg());
-      params.command.senderIsOwner = true;
-      params.isGroup = true;
-
-      const result = expectMcpResult(await handleMcpCommand(params, true));
+      const result = await runMcp("/mcp show billing-server", { group: true });
       const groupText = result.reply?.text ?? "";
       expect(groupText).toContain("Run /mcp show from an owner DM");
       expect(groupText).not.toContain("billing-server");
@@ -334,25 +322,19 @@ describe("handleCommands /mcp", () => {
     });
   });
 
-  it.each([{ name: "released", custody: "released" }] as const)(
-    "tries later private routes after a $name failure",
-    async ({ custody }) => {
-      const error = new OutboundDeliveryError("private route unavailable", { cause: undefined });
-      error.queueCustody = custody;
-      deliverOutboundPayloads
-        .mockRejectedValueOnce(error)
-        .mockResolvedValueOnce([{ channel: "signal", messageId: "fallback-send" }]);
-      const result = await showGroupMcpConfig();
+  it("tries later private routes after a released failure", async () => {
+    const error = new OutboundDeliveryError("private route unavailable", { cause: undefined });
+    error.queueCustody = "released";
+    deliverOutboundPayloads
+      .mockRejectedValueOnce(error)
+      .mockResolvedValueOnce([{ channel: "signal", messageId: "fallback-send" }]);
+    const result = await showGroupMcpConfig();
 
-      expect(deliverOutboundPayloads.mock.calls.map(([request]) => request.to)).toEqual([
-        "owner-1",
-        "owner-2",
-      ]);
-      expect(result.reply?.text).toContain("sent the details to the owner privately");
-      expect(result.reply?.text).not.toContain("billing-server");
-      expect(result.reply?.text).not.toContain("private-billing-mcp");
-    },
-  );
+    expectPrivateReply(result, ["owner-1", "owner-2"], "sent the details to the owner privately", [
+      "billing-server",
+      "private-billing-mcp",
+    ]);
+  });
 
   it("keeps identityless first acceptance pending without sending to another private target", async () => {
     deliverOutboundPayloads
@@ -367,11 +349,11 @@ describe("handleCommands /mcp", () => {
       .mockResolvedValueOnce([{ channel: "signal", messageId: "second-send" }]);
     const result = await showGroupMcpConfig();
 
-    expect(deliverOutboundPayloads.mock.calls.map(([request]) => request.to)).toEqual(["owner-1"]);
-    expect(result.reply?.text).toContain("pending");
-    expect(result.reply?.text).not.toContain("sent the details");
-    expect(result.reply?.text).not.toContain("billing-server");
-    expect(result.reply?.text).not.toContain("/tmp/openclaw.json");
+    expectPrivateReply(result, ["owner-1"], "pending", [
+      "sent the details",
+      "billing-server",
+      "/tmp/openclaw.json",
+    ]);
   });
 
   it("tries another private route when channel preparation throws before dispatch", async () => {
@@ -402,9 +384,7 @@ describe("handleCommands /mcp", () => {
     const result = await showGroupMcpConfig();
 
     expect(transformReplyPayload).toHaveBeenCalledTimes(1);
-    expect(deliverOutboundPayloads.mock.calls.map(([request]) => request.to)).toEqual(["owner-2"]);
-    expect(result.reply?.text).toContain("sent the details to the owner privately");
-    expect(result.reply?.text).not.toContain("billing-server");
+    expectPrivateReply(result, ["owner-2"], "sent the details to the owner privately");
   });
 
   it.each([
@@ -430,42 +410,25 @@ describe("handleCommands /mcp", () => {
       deliverOutboundPayloads.mockRejectedValueOnce(error);
       const result = await showGroupMcpConfig();
 
-      expect(deliverOutboundPayloads.mock.calls.map(([request]) => request.to)).toEqual([
-        "owner-1",
-      ]);
-      expect(result.reply?.text).toContain("pending");
-      expect(result.reply?.text).not.toContain("sent the details");
-      expect(result.reply?.text).not.toContain("billing-server");
+      expectPrivateReply(result, ["owner-1"], "pending", ["sent the details", "billing-server"]);
     },
   );
 
-  it.each([
-    {
-      name: "intentional suppression",
-      suppressed: true,
-      acknowledgement: "Private delivery was suppressed; no details were sent",
-    },
-  ])(
-    "stops after $name with an honest acknowledgement",
-    async ({ suppressed, acknowledgement }) => {
-      deliverOutboundPayloads.mockImplementationOnce(async ({ onPayloadDeliveryOutcome }) => {
-        if (suppressed) {
-          onPayloadDeliveryOutcome?.({
-            index: 0,
-            status: "suppressed",
-            reason: "cancelled_by_reply_payload_sending_hook",
-          });
-          return [];
-        }
-        return [{ channel: "telegram", messageId: "confirmed-send" }];
+  it("stops after intentional suppression with an honest acknowledgement", async () => {
+    deliverOutboundPayloads.mockImplementationOnce(async ({ onPayloadDeliveryOutcome }) => {
+      onPayloadDeliveryOutcome?.({
+        index: 0,
+        status: "suppressed",
+        reason: "cancelled_by_reply_payload_sending_hook",
       });
-      const result = await showGroupMcpConfig();
+      return [];
+    });
+    const result = await showGroupMcpConfig();
 
-      expect(deliverOutboundPayloads.mock.calls.map(([request]) => request.to)).toEqual([
-        "owner-1",
-      ]);
-      expect(result.reply?.text).toContain(acknowledgement);
-      expect(result.reply?.text).not.toContain("billing-server");
-    },
-  );
+    expectPrivateReply(
+      result,
+      ["owner-1"],
+      "Private delivery was suppressed; no details were sent",
+    );
+  });
 });

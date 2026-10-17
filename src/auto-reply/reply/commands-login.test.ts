@@ -15,6 +15,7 @@ import type { ReplyPayload } from "../types.js";
 import {
   blockReplyOpts,
   buildLoginParams,
+  dispatchLoginCommand,
   patchSessionEntryMock,
   runModelsAuthLoginFlowMock,
   setupLoginCommandTests,
@@ -26,9 +27,49 @@ vi.mock("../../gateway/model-auth-refresh.js", () => ({
 }));
 
 const { handleLoginCommand } = await import("./commands-login.js");
-const { handleCommands } = await import("./commands-core.js");
 // Cold handler imports are setup work, not part of the login authorization deadline.
+await import("./commands-core.js");
 await import("./commands-handlers.runtime.js");
+
+function loginResult(profileId = "openai:owner", authRefresh = "refreshed") {
+  const provider = profileId.split(":")[0];
+  return {
+    providerId: provider,
+    methodId: provider === "openrouter" ? "oauth" : "device-code",
+    authRefresh,
+    profiles: [{ profileId, provider, mode: provider === "openrouter" ? "api_key" : "oauth" }],
+  };
+}
+
+function loginParams(overrides: Parameters<typeof buildLoginParams>[1] = {}) {
+  return buildLoginParams("/login codex", { opts: blockReplyOpts(), ...overrides });
+}
+
+function runLogin(overrides: Parameters<typeof buildLoginParams>[1] = {}) {
+  return handleLoginCommand(loginParams(overrides), true);
+}
+
+function pinnedSession(overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return {
+    sessionId: "sess-owner",
+    updatedAt: 1,
+    authProfileOverride: "openai:prior",
+    authProfileOverrideSource: "user",
+    ...overrides,
+  };
+}
+
+function persistedLoginParams(sessionEntry: SessionEntry) {
+  return loginParams({ sessionEntry, storePath: "/tmp/openclaw-login-sessions.json" });
+}
+
+function mockSessionPatch(entry: SessionEntry) {
+  patchSessionEntryMock.mockImplementationOnce(async (params) => {
+    const patch = await params.update({ ...entry }, { existingEntry: { ...entry } });
+    params.assertCommitAllowed?.();
+    return patch ? { ...entry, ...patch } : entry;
+  });
+}
 
 function mockSuccessfulLoginFlow(profileId = "openai:owner", authRefresh = "refreshed"): void {
   runModelsAuthLoginFlowMock.mockImplementation(async (opts: ModelsAuthLoginFlowOptions) => {
@@ -36,12 +77,7 @@ function mockSuccessfulLoginFlow(profileId = "openai:owner", authRefresh = "refr
       "Open https://auth.openai.com/device and enter code ABCD-EFGH. Never share this code.",
       "Codex login",
     );
-    return {
-      providerId: "openai",
-      methodId: "device-code",
-      authRefresh,
-      profiles: [{ profileId, provider: "openai", mode: "oauth" }],
-    };
+    return loginResult(profileId, authRefresh);
   });
 }
 
@@ -49,46 +85,41 @@ describe("handleLoginCommand", () => {
   setupLoginCommandTests();
 
   it.each([
-    {
-      name: "denied owner",
-      senderIsOwner: false,
-      chatType: "direct",
-      message:
-        "Only an OpenClaw owner can sign in here. Ask the owner to connect this provider or grant you owner access.",
-      refreshCount: 0,
-    },
-    {
-      name: "public chat",
-      senderIsOwner: true,
-      chatType: "group",
-      message:
-        "Provider login requires a private chat or Control UI session. Open a private chat with OpenClaw and send `/login` there.",
-      refreshCount: 0,
-    },
-    {
-      name: "authorized private chat",
-      senderIsOwner: true,
-      chatType: "direct",
-      message: "Sign-in status refreshed. Send /models to see available models.",
-      refreshCount: 1,
-    },
-  ])("handles registered /login refresh for $name without signing in again", async (scenario) => {
-    const params = buildLoginParams("/login refresh", {
-      command: { senderIsOwner: scenario.senderIsOwner },
-      ctx: { ChatType: scenario.chatType },
-    });
-    const result = await handleCommands({
-      ...params,
-      resolveModelLevels: async () => ({
-        resolvedThinkLevel: params.resolvedThinkLevel,
-        resolvedReasoningLevel: params.resolvedReasoningLevel,
-      }),
-    });
+    [
+      "denied owner",
+      false,
+      "direct",
+      "Only an OpenClaw owner can sign in here. Ask the owner to connect this provider or grant you owner access.",
+      0,
+    ],
+    [
+      "public chat",
+      true,
+      "group",
+      "Provider login requires a private chat or Control UI session. Open a private chat with OpenClaw and send `/login` there.",
+      0,
+    ],
+    [
+      "authorized private chat",
+      true,
+      "direct",
+      "Sign-in status refreshed. Send /models to see available models.",
+      1,
+    ],
+  ] as const)(
+    "handles registered /login refresh for %s without signing in again",
+    async (_name, senderIsOwner, chatType, message, refreshCount) => {
+      const params = buildLoginParams("/login refresh", {
+        command: { senderIsOwner },
+        ctx: { ChatType: chatType },
+      });
+      const result = await dispatchLoginCommand(params);
 
-    expect(result).toMatchObject({ shouldContinue: false, reply: { text: scenario.message } });
-    expect(refreshAuthRuntime).toHaveBeenCalledTimes(scenario.refreshCount);
-    expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
-  });
+      expect(result).toMatchObject({ shouldContinue: false, reply: { text: message } });
+      expect(refreshAuthRuntime).toHaveBeenCalledTimes(refreshCount);
+      expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps registered login pending until saved credentials finish refreshing", async () => {
     const refreshing = createDeferredCore();
@@ -99,21 +130,10 @@ describe("handleLoginCommand", () => {
     });
     runModelsAuthLoginFlowMock.mockImplementationOnce(async (opts: ModelsAuthLoginFlowOptions) => {
       await expectDefined(opts.refreshAfterLogin, "registered login refresh callback")("main");
-      return {
-        providerId: "openai",
-        methodId: "device-code",
-        authRefresh: "refreshed",
-        profiles: [{ profileId: "openai:owner", provider: "openai", mode: "oauth" }],
-      };
+      return loginResult();
     });
     const params = buildLoginParams("/login openai", { opts: blockReplyOpts() });
-    const login = handleCommands({
-      ...params,
-      resolveModelLevels: async () => ({
-        resolvedThinkLevel: params.resolvedThinkLevel,
-        resolvedReasoningLevel: params.resolvedReasoningLevel,
-      }),
-    });
+    const login = dispatchLoginCommand(params);
     try {
       expect(
         await Promise.race([
@@ -136,25 +156,19 @@ describe("handleLoginCommand", () => {
     expect(runModelsAuthLoginFlowMock).toHaveBeenCalledOnce();
   });
 
-  it.each(["host"])(
-    "rejects an owner revoked before flow entry using the %s config reader",
-    async (source) => {
-      mockSuccessfulLoginFlow();
-      const currentConfig: OpenClawConfig = { commands: { ownerAllowFrom: ["replacement"] } };
-      const params = buildLoginParams("/login codex", {
-        opts: {
-          ...blockReplyOpts(),
-          ...(source === "host" ? { getProviderLoginConfig: () => currentConfig } : {}),
-        },
-      });
-      setRuntimeConfigSnapshot(source === "host" ? params.cfg : currentConfig);
+  it("rejects an owner revoked before flow entry using the host config reader", async () => {
+    mockSuccessfulLoginFlow();
+    const currentConfig: OpenClawConfig = { commands: { ownerAllowFrom: ["replacement"] } };
+    const params = loginParams({
+      opts: { ...blockReplyOpts(), getProviderLoginConfig: () => currentConfig },
+    });
+    setRuntimeConfigSnapshot(params.cfg);
 
-      const result = await handleLoginCommand(params, true);
+    const result = await handleLoginCommand(params, true);
 
-      expect(result?.reply?.text).toContain("login did not complete");
-      expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
-    },
-  );
+    expect(result?.reply?.text).toContain("login did not complete");
+    expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
+  });
 
   it("reports saved credentials when a later sign-in step fails", async () => {
     runModelsAuthLoginFlowMock.mockRejectedValueOnce(
@@ -165,10 +179,7 @@ describe("handleLoginCommand", () => {
         },
       ),
     );
-    const result = await handleLoginCommand(
-      buildLoginParams("/login codex", { opts: blockReplyOpts() }),
-      true,
-    );
+    const result = await runLogin();
     expect(result?.reply?.text).toBe(
       "Some OpenAI sign-in details were saved, but setup is incomplete. Open Models to review the saved connection and finish setup.",
     );
@@ -176,10 +187,7 @@ describe("handleLoginCommand", () => {
   });
 
   it("rejects a removed owner despite the command's retained owner context", async () => {
-    const params = buildLoginParams("/login codex", {
-      opts: blockReplyOpts(),
-      ctx: { OwnerAllowFrom: ["owner"] },
-    });
+    const params = loginParams({ ctx: { OwnerAllowFrom: ["owner"] } });
     setRuntimeConfigSnapshot(params.cfg);
     const persist = vi.fn();
     runModelsAuthLoginFlowMock.mockImplementationOnce(async (opts: ModelsAuthLoginFlowOptions) => {
@@ -187,12 +195,7 @@ describe("handleLoginCommand", () => {
       setRuntimeConfigSnapshot({ ...params.cfg, commands: { ownerAllowFrom: ["replacement"] } });
       opts.assertCurrent?.();
       persist();
-      return {
-        providerId: "openai",
-        methodId: "device-code",
-        authRefresh: "refreshed",
-        profiles: [],
-      };
+      return { ...loginResult(), profiles: [] };
     });
     const result = await handleLoginCommand(params, true);
     expect(runModelsAuthLoginFlowMock).toHaveBeenCalledOnce();
@@ -209,26 +212,18 @@ describe("handleLoginCommand", () => {
       revoked = true;
       opts.assertCurrent?.();
       persist();
-      return {
-        providerId: "openai",
-        methodId: "device-code",
-        authRefresh: "refreshed",
-        profiles: [],
-      };
+      return { ...loginResult(), profiles: [] };
     });
-    const result = await handleLoginCommand(
-      buildLoginParams("/login codex", {
-        opts: {
-          ...blockReplyOpts(),
-          assertProviderLoginAuthority: () => {
-            if (revoked) {
-              throw new Error("Gateway authority was revoked.");
-            }
-          },
+    const result = await runLogin({
+      opts: {
+        ...blockReplyOpts(),
+        assertProviderLoginAuthority: () => {
+          if (revoked) {
+            throw new Error("Gateway authority was revoked.");
+          }
         },
-      }),
-      true,
-    );
+      },
+    });
     expect(runModelsAuthLoginFlowMock).toHaveBeenCalledOnce();
     expect(result?.reply?.text).toContain("login did not complete");
     expect(persist).not.toHaveBeenCalled();
@@ -236,17 +231,8 @@ describe("handleLoginCommand", () => {
 
   it("keeps the prior session pin when the owner is revoked after patch preparation", async () => {
     mockSuccessfulLoginFlow("openai:saved");
-    const previous: SessionEntry = {
-      sessionId: "revoked-owner-session",
-      updatedAt: 1,
-      authProfileOverride: "openai:prior",
-      authProfileOverrideSource: "user",
-    };
-    const params = buildLoginParams("/login codex", {
-      opts: blockReplyOpts(),
-      sessionEntry: previous,
-      storePath: "/tmp/openclaw-login-sessions.json",
-    });
+    const previous = pinnedSession({ sessionId: "revoked-owner-session" });
+    const params = persistedLoginParams(previous);
     setRuntimeConfigSnapshot(params.cfg);
     let persisted = previous;
     patchSessionEntryMock.mockImplementationOnce(async (write) => {
@@ -267,17 +253,8 @@ describe("handleLoginCommand", () => {
 
   it("keeps the committed pin result when ownership changes after commit", async () => {
     mockSuccessfulLoginFlow("openai:saved");
-    const previous: SessionEntry = {
-      sessionId: "committed-owner-session",
-      updatedAt: 1,
-      authProfileOverride: "openai:prior",
-      authProfileOverrideSource: "user",
-    };
-    const params = buildLoginParams("/login codex", {
-      opts: blockReplyOpts(),
-      sessionEntry: previous,
-      storePath: "/tmp/openclaw-login-sessions.json",
-    });
+    const previous = pinnedSession({ sessionId: "committed-owner-session" });
+    const params = persistedLoginParams(previous);
     setRuntimeConfigSnapshot(params.cfg);
     patchSessionEntryMock.mockImplementationOnce(async (write) => {
       const patch = await write.update({ ...previous }, { existingEntry: { ...previous } });
@@ -296,9 +273,8 @@ describe("handleLoginCommand", () => {
 
   it("keeps the current session profile when connecting another provider", async () => {
     mockSuccessfulLoginFlow();
-    const params = buildLoginParams("/login codex", {
+    const params = loginParams({
       provider: "anthropic",
-      opts: blockReplyOpts(),
       sessionEntry: {
         sessionId: "other-provider",
         updatedAt: 1,
@@ -312,8 +288,7 @@ describe("handleLoginCommand", () => {
   });
 
   it("preserves a provider selected while login is pending", async () => {
-    const params = buildLoginParams("/login codex", {
-      opts: blockReplyOpts(),
+    const params = loginParams({
       sessionEntry: { sessionId: "pending-login", updatedAt: 1, authProfileOverride: "openai:old" },
     });
     runModelsAuthLoginFlowMock.mockImplementationOnce(async () => {
@@ -322,12 +297,7 @@ describe("handleLoginCommand", () => {
         providerOverride: "anthropic",
         authProfileOverride: "anthropic:selected",
       };
-      return {
-        providerId: "openai",
-        methodId: "device-code",
-        authRefresh: "refreshed",
-        profiles: [{ profileId: "openai:new", provider: "openai", mode: "oauth" }],
-      };
+      return loginResult("openai:new");
     });
     await handleLoginCommand(params, true);
     expect(params.sessionStore?.[params.sessionKey]?.authProfileOverride).toBe(
@@ -347,33 +317,22 @@ describe("handleLoginCommand", () => {
 
   it("delivers the OpenRouter sign-in button before login completes", async () => {
     const url = "https://openrouter.ai/auth?code_challenge=test-challenge";
-    let finishLogin!: () => void;
-    const approval = new Promise<void>((resolve) => {
-      finishLogin = resolve;
-    });
-    let receiveReply!: (reply: ReplyPayload) => void;
-    const preview = new Promise<ReplyPayload>((resolve) => {
-      receiveReply = resolve;
-    });
+    const approval = createDeferredCore();
+    const preview = createDeferredCore<ReplyPayload>();
     runModelsAuthLoginFlowMock.mockImplementationOnce(async (opts: ModelsAuthLoginFlowOptions) => {
       await opts.openUrl?.(url);
-      await approval;
-      return {
-        providerId: "openrouter",
-        methodId: "oauth",
-        authRefresh: "refreshed",
-        profiles: [{ profileId: "openrouter:default", provider: "openrouter", mode: "api_key" }],
-      };
+      await approval.promise;
+      return loginResult("openrouter:default");
     });
     const login = handleLoginCommand(
       buildLoginParams("/login openrouter/openrouter-oauth", {
-        opts: { onBlockReply: async (reply) => receiveReply(reply) },
+        opts: { onBlockReply: async (reply) => preview.resolve(reply) },
       }),
       true,
     );
     try {
       const first = await Promise.race([
-        preview.then((reply) => ({ state: "preview", reply })),
+        preview.promise.then((reply) => ({ state: "preview", reply })),
         login.then((result) => ({ state: "completed", reply: result?.reply })),
       ]);
       expect(first).toMatchObject({
@@ -392,7 +351,7 @@ describe("handleLoginCommand", () => {
         },
       });
     } finally {
-      finishLogin();
+      approval.resolve();
       await login;
     }
   });
@@ -407,33 +366,23 @@ describe("handleLoginCommand", () => {
       await flow.prompter.note("Do not deliver this stale sign-in link.");
       return { profiles: [], providerId: "openai", methodId: "device-code" };
     });
-    await handleLoginCommand(buildLoginParams("/login codex", { opts: options }), true);
+    await runLogin({ opts: options });
     expect(providerSignal?.aborted).toBe(true);
     expect(options.onBlockReply).not.toHaveBeenCalled();
   });
 
-  it.each([
-    [
-      "gateway-unreachable",
+  it("reports saved credentials when auth refresh is gateway-unreachable", async () => {
+    mockSuccessfulLoginFlow("openai:owner", "gateway-unreachable");
+    expect((await runLogin())?.reply?.text).toBe(
       "OpenAI credentials are saved. Sign-in status could not be confirmed. Send /login refresh to update it; you do not need to sign in again.",
-    ],
-  ])("reports saved credentials when auth refresh is %s", async (outcome, message) => {
-    mockSuccessfulLoginFlow("openai:owner", outcome);
-    const result = await handleLoginCommand(
-      buildLoginParams("/login codex", { opts: blockReplyOpts() }),
-      true,
     );
-    expect(result?.reply?.text).toBe(message);
   });
 
   it("distinguishes saved credentials from failed provider settings", async () => {
     runModelsAuthLoginFlowMock.mockRejectedValue(
       new ProviderAuthConfigApplyError(new Error("config write failed")),
     );
-    const result = await handleLoginCommand(
-      buildLoginParams("/login codex", { opts: blockReplyOpts() }),
-      true,
-    );
+    const result = await runLogin();
     expect(result?.reply?.text).toBe(
       "OpenAI credentials are saved, but the connection settings could not be applied. Open Models to review the connection settings and try again.",
     );
@@ -450,60 +399,45 @@ describe("handleLoginCommand", () => {
     expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
   });
 
-  it.each(["/login codex"])(
-    "rejects public %s before showing choices or codes",
-    async (command) => {
-      const onBlockReply = vi.fn(async () => {});
-      mockSuccessfulLoginFlow();
-      const params = buildLoginParams(command, {
-        ctx: {
-          Provider: "slack",
-          Surface: "slack",
-          OriginatingChannel: "slack",
-          OriginatingTo: "channel:C123",
-          ChatType: "channel",
-        },
-        command: {
-          channel: "slack",
-          to: "channel:C123",
-        },
-        opts: { onBlockReply },
-      });
-      params.isGroup = true;
+  it("rejects public /login codex before showing choices or codes", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    mockSuccessfulLoginFlow();
+    const params = loginParams({
+      ctx: {
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "slack",
+        OriginatingTo: "channel:C123",
+        ChatType: "channel",
+      },
+      command: {
+        channel: "slack",
+        to: "channel:C123",
+      },
+      opts: { onBlockReply },
+    });
+    params.isGroup = true;
 
-      const result = await handleLoginCommand(params, true);
+    const result = await handleLoginCommand(params, true);
 
-      expect(result).toEqual({
-        shouldContinue: false,
-        reply: {
-          text: "Provider login requires a private chat or Control UI session. Open a private chat with OpenClaw and send `/login` there.",
-        },
-      });
-      expect(onBlockReply).not.toHaveBeenCalled();
-      expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
-    },
-  );
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "Provider login requires a private chat or Control UI session. Open a private chat with OpenClaw and send `/login` there.",
+      },
+    });
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
+  });
 
   it("moves a pinned session to the canonical profile returned by login", async () => {
     mockSuccessfulLoginFlow("openai:new-owner@example.com");
-    const previousEntry = {
+    const previousEntry = pinnedSession({
       authProfileOverride: "openai:owner@example.com",
-      sessionId: "sess-owner",
-      updatedAt: 1,
-    };
-    patchSessionEntryMock.mockImplementationOnce(async (params) => {
-      const patch = await params.update(
-        { ...previousEntry },
-        { existingEntry: { ...previousEntry } },
-      );
-      params.assertCommitAllowed?.();
-      return patch ? { ...previousEntry, ...patch } : previousEntry;
+      authProfileOverrideSource: undefined,
     });
-    const params = buildLoginParams("/login codex", {
-      opts: blockReplyOpts(),
-      sessionEntry: previousEntry,
-      storePath: "/tmp/openclaw-login-sessions.json",
-    });
+    mockSessionPatch(previousEntry);
+    const params = persistedLoginParams(previousEntry);
 
     await handleLoginCommand(params, true);
 
@@ -528,15 +462,12 @@ describe("handleLoginCommand", () => {
 
   it("marks a same-profile explicit login as user-selected", async () => {
     mockSuccessfulLoginFlow("openai:owner@example.com");
-    const params = buildLoginParams("/login codex", {
-      opts: blockReplyOpts(),
-      sessionEntry: {
+    const params = loginParams({
+      sessionEntry: pinnedSession({
         authProfileOverride: "openai:owner@example.com",
         authProfileOverrideSource: "auto",
         authProfileOverrideCompactionCount: 3,
-        sessionId: "sess-owner",
-        updatedAt: 1,
-      },
+      }),
     });
 
     await handleLoginCommand(params, true);
@@ -550,30 +481,16 @@ describe("handleLoginCommand", () => {
 
   it("revalidates an unchanged profile after device login", async () => {
     mockSuccessfulLoginFlow("openai:owner@example.com");
-    const previousEntry = {
+    const previousEntry = pinnedSession({
       authProfileOverride: "openai:owner@example.com",
-      authProfileOverrideSource: "user" as const,
-      sessionId: "sess-owner",
-      updatedAt: 1,
-    };
+    });
     const concurrentlySelectedEntry = {
       ...previousEntry,
       authProfileOverride: "openai:concurrent-owner@example.com",
       updatedAt: 2,
     };
-    patchSessionEntryMock.mockImplementationOnce(async (params) => {
-      const patch = await params.update(
-        { ...concurrentlySelectedEntry },
-        { existingEntry: { ...concurrentlySelectedEntry } },
-      );
-      params.assertCommitAllowed?.();
-      return patch ? { ...concurrentlySelectedEntry, ...patch } : concurrentlySelectedEntry;
-    });
-    const params = buildLoginParams("/login codex", {
-      opts: blockReplyOpts(),
-      sessionEntry: previousEntry,
-      storePath: "/tmp/openclaw-login-sessions.json",
-    });
+    mockSessionPatch(concurrentlySelectedEntry);
+    const params = persistedLoginParams(previousEntry);
 
     const result = await handleLoginCommand(params, true);
 
@@ -590,12 +507,7 @@ describe("handleLoginCommand", () => {
       started.resolve();
       await finish.promise;
       opts.signal?.throwIfAborted();
-      return {
-        providerId: "openai",
-        methodId: "device-code",
-        authRefresh: "refreshed",
-        profiles: [{ profileId: "openai:owner", provider: "openai", mode: "oauth" }],
-      };
+      return loginResult();
     });
     const command = (body: string) =>
       handleLoginCommand(buildLoginParams(body, { opts: blockReplyOpts() }), true);
@@ -613,34 +525,21 @@ describe("handleLoginCommand", () => {
       finish.resolve();
       await first;
     }
-    runModelsAuthLoginFlowMock.mockResolvedValueOnce({
-      providerId: "openrouter",
-      methodId: "oauth",
-      authRefresh: "refreshed",
-      profiles: [{ profileId: "openrouter:default", provider: "openrouter", mode: "api_key" }],
-    });
+    runModelsAuthLoginFlowMock.mockResolvedValueOnce(loginResult("openrouter:default"));
     const restarted = await command("/login openrouter/openrouter-oauth");
     expect(restarted?.reply?.text).toContain("OpenRouter login complete");
   });
 
   it("cancels only the initiating Control UI session when chats have no delivery target", async () => {
-    let finishLogin!: () => void;
-    const pending = new Promise<void>((resolve) => {
-      finishLogin = resolve;
-    });
+    const pending = createDeferredCore();
     const signals: AbortSignal[] = [];
     runModelsAuthLoginFlowMock.mockImplementation(async (opts: ModelsAuthLoginFlowOptions) => {
       if (!opts.signal) {
         throw new Error("expected login signal");
       }
       signals.push(opts.signal);
-      await pending;
-      return {
-        providerId: "openai",
-        methodId: "device-code",
-        authRefresh: "refreshed",
-        profiles: [],
-      };
+      await pending.promise;
+      return { ...loginResult(), profiles: [] };
     });
     const params = (sessionKey: string, command = "/login codex") =>
       buildLoginParams(command, {
@@ -674,7 +573,7 @@ describe("handleLoginCommand", () => {
       expect(signals[0]?.aborted).toBe(true);
       expect(signals[1]?.aborted).toBe(false);
     } finally {
-      finishLogin();
+      pending.resolve();
       await Promise.all([first, other]);
     }
   });
@@ -701,24 +600,13 @@ describe("handleLoginCommand", () => {
         });
         throw new Error("unreachable");
       })
-      .mockResolvedValueOnce({
-        providerId: "openai",
-        methodId: "device-code",
-        authRefresh: "refreshed",
-        profiles: [],
-      });
+      .mockResolvedValueOnce({ ...loginResult(), profiles: [] });
 
-    const first = handleLoginCommand(
-      buildLoginParams("/login codex", { opts: blockReplyOpts() }),
-      true,
-    );
+    const first = runLogin();
     await vi.waitFor(() => expect(firstSignal).toBeDefined());
     now.mockReturnValue(15 * 60_000 + 1_001);
 
-    const second = await handleLoginCommand(
-      buildLoginParams("/login codex", { opts: blockReplyOpts() }),
-      true,
-    );
+    const second = await runLogin();
 
     expect(firstSignal?.aborted).toBe(true);
     await expect(first).resolves.toEqual({
