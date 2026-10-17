@@ -6,6 +6,7 @@ import type { ExtraGatewayService } from "../../daemon/inspect.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
+import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { formatCliCommand } from "../command-format.js";
 import type { DaemonStatus } from "./status.gather.js";
 import { registerServiceInspectionHintTests } from "./status.print.inspection.test-support.js";
@@ -49,18 +50,13 @@ const isWSLEnvMock = vi.hoisted(() =>
   vi.fn((env?: Record<string, string | undefined>) => Boolean(env?.WSL_DISTRO_NAME)),
 );
 
-vi.mock("../../runtime.js", () => ({
-  defaultRuntime: runtime,
-}));
+vi.mock("../../runtime.js", () => ({ defaultRuntime: runtime }));
 
 vi.mock("../../../packages/terminal-core/src/theme.js", async () => {
   const actual = await vi.importActual<
     typeof import("../../../packages/terminal-core/src/theme.js")
   >("../../../packages/terminal-core/src/theme.js");
-  return {
-    ...actual,
-    colorize: (_rich: boolean, _theme: unknown, text: string) => text,
-  };
+  return { ...actual, colorize: (_rich: boolean, _theme: unknown, text: string) => text };
 });
 
 vi.mock("../../gateway/control-ui-links.js", () => ({
@@ -90,9 +86,7 @@ vi.mock("../../daemon/systemd-hints.js", () => ({
   renderSystemdUnavailableHints: renderSystemdUnavailableHintsMock,
 }));
 
-vi.mock("../../infra/wsl.js", () => ({
-  isWSLEnv: isWSLEnvMock,
-}));
+vi.mock("../../infra/wsl.js", () => ({ isWSLEnv: isWSLEnvMock }));
 
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),
@@ -211,9 +205,7 @@ describe("printDaemonStatus", () => {
   ] as const)(
     "prints %s-manager pending reload guidance after the service file",
     (scope, command) => {
-      const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
-      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
-      try {
+      withMockedPlatform("linux", () => {
         printDaemonStatus({
           service: {
             label: "systemd",
@@ -226,9 +218,7 @@ describe("printDaemonStatus", () => {
           },
           port: emptyPort("free"),
         });
-      } finally {
-        Object.defineProperty(process, "platform", originalPlatform);
-      }
+      });
 
       const lines = runtime.log.mock.calls.map(([line]) => line);
       const serviceFileIndex = lines.findIndex((line) => line.startsWith("Service file:"));
@@ -271,11 +261,9 @@ describe("printDaemonStatus", () => {
   );
 
   it("uses service command env for WSL systemd unavailable hints", () => {
-    const originalPlatform = process.platform;
-    Object.defineProperty(process, "platform", { value: "linux" });
     isSystemdUnavailableDetailMock.mockReturnValue(true);
     renderSystemdUnavailableHintsMock.mockReturnValue(["wsl hint"]);
-    try {
+    withMockedPlatform("linux", () => {
       printDaemonStatus({
         service: {
           label: "systemd",
@@ -289,10 +277,7 @@ describe("printDaemonStatus", () => {
             status: "unknown",
             detail: "System has not been booted with systemd as init system",
           },
-          command: {
-            programArguments: [],
-            environment: { WSL_DISTRO_NAME: "Ubuntu" },
-          },
+          command: { programArguments: [], environment: { WSL_DISTRO_NAME: "Ubuntu" } },
         },
         rpc: {
           ok: false,
@@ -300,9 +285,7 @@ describe("printDaemonStatus", () => {
           url: "ws://127.0.0.1:18789",
         },
       });
-    } finally {
-      Object.defineProperty(process, "platform", { value: originalPlatform });
-    }
+    });
 
     expect(isWSLEnvMock).toHaveBeenCalledWith({ WSL_DISTRO_NAME: "Ubuntu" });
     expect(renderSystemdUnavailableHintsMock).toHaveBeenCalledWith({
@@ -315,56 +298,38 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, "wsl hint");
   });
 
-  it.each([{ name: "report-only", keepAlive: false, gatewayActions: [], warning: false }])(
-    "uses the appropriate status severity for $name jobs",
-    (testCase) => {
-      const job = {
-        label: "ai.openclaw.test.w15.other",
-        program: "/tmp/openclaw-test/other.sh",
-        keepAlive: testCase.keepAlive,
-        gatewayActions: testCase.gatewayActions,
-        safeToRemove: false,
-      };
-      printDaemonStatus({
-        service: {
-          runtime: { status: "running", pid: 8000 },
-          foreignLaunchdJobs: [job],
-          forcedRestartSummary: { count: 3, windowMs: 600_000 },
-        },
-      });
+  it("reports non-lifecycle launchd jobs without warnings", () => {
+    const job = {
+      label: "ai.openclaw.test.w15.other",
+      program: "/tmp/openclaw-test/other.sh",
+      keepAlive: false,
+      gatewayActions: [],
+      safeToRemove: false,
+    };
+    printDaemonStatus({
+      service: {
+        runtime: { status: "running", pid: 8000 },
+        foreignLaunchdJobs: [job],
+        forcedRestartSummary: { count: 3, windowMs: 600_000 },
+      },
+    });
 
-      const report = testCase.warning ? runtime.error : runtime.log;
-      const otherOutput = testCase.warning ? runtime.log : runtime.error;
-      expectMockLineContains(
-        report,
-        testCase.warning
-          ? "Foreign launchd jobs detected (macOS)."
-          : "Other OpenClaw launchd jobs (macOS)",
-      );
-      expectMockLineContains(report, job.label);
-      expectMockLineContains(report, job.program);
-      expectMockLineContains(report, "Report only; left unchanged.");
-      expect(output(otherOutput)).not.toContain(job.label);
-      if (!testCase.warning) {
-        expect(runtime.error).not.toHaveBeenCalled();
-        expect(output()).not.toContain("Listed lifecycle jobs may be responsible");
-      }
-    },
-  );
+    expectMockLineContains(runtime.log, "Other OpenClaw launchd jobs (macOS)");
+    expectMockLineContains(runtime.log, job.label);
+    expectMockLineContains(runtime.log, job.program);
+    expectMockLineContains(runtime.log, "Report only; left unchanged.");
+    expect(output(runtime.error)).not.toContain(job.label);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(output()).not.toContain("Listed lifecycle jobs may be responsible");
+  });
 
   it("prints stale updater launchd job guidance", () => {
     printDaemonStatus({
       service: {
         runtime: { status: "running", pid: 8000 },
         staleUpdateLaunchdJobs: [
-          {
-            label: "ai.openclaw.update.2026.5.12",
-            lastExitStatus: 127,
-          },
-          {
-            label: "ai.openclaw.manual-update.1717168800",
-            lastExitStatus: 0,
-          },
+          { label: "ai.openclaw.update.2026.5.12", lastExitStatus: 127 },
+          { label: "ai.openclaw.manual-update.1717168800", lastExitStatus: 0 },
         ],
       },
       gateway,
@@ -378,9 +343,7 @@ describe("printDaemonStatus", () => {
   });
 
   it("points macOS launchd stdout and stderr at one log when gateway is not listening", () => {
-    const originalPlatform = process.platform;
-    Object.defineProperty(process, "platform", { value: "darwin" });
-    try {
+    withMockedPlatform("darwin", () => {
       printDaemonStatus({
         service: {
           runtime: { status: "running", pid: 8000 },
@@ -397,9 +360,7 @@ describe("printDaemonStatus", () => {
         },
         lastError: "failed to bind gateway socket EADDRINUSE",
       });
-    } finally {
-      Object.defineProperty(process, "platform", { value: originalPlatform });
-    }
+    });
 
     expectMockLineContains(runtime.error, "Gateway port 18789 is not listening");
     expectMockLineContains(runtime.error, "/Users/test/Library/Logs/openclaw/gateway.log");
@@ -413,8 +374,7 @@ describe("printDaemonStatus", () => {
   });
 
   it("names a disabled custom Scheduled Task and explains how to re-enable it", () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    try {
+    withMockedPlatform("win32", () => {
       printDaemonStatus({
         service: {
           label: "Scheduled Task",
@@ -427,9 +387,7 @@ describe("printDaemonStatus", () => {
           },
         },
       });
-    } finally {
-      platform.mockRestore();
-    }
+    });
 
     const errors = output(runtime.error);
     expect(errors).toContain("Scheduled Task 'OpenClaw Custom Gateway' is registered but DISABLED");
@@ -479,11 +437,7 @@ describe("printDaemonStatus", () => {
     printDaemonStatus({
       service: runningService,
       config: {
-        cli: {
-          path: "/tmp/openclaw-cli/openclaw.json",
-          exists: true,
-          valid: true,
-        },
+        cli: { path: "/tmp/openclaw-cli/openclaw.json", exists: true, valid: true },
         daemon: {
           path: "/tmp/openclaw-daemon/openclaw.json",
           exists: true,
@@ -529,10 +483,7 @@ describe("printDaemonStatus", () => {
       "rm /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
     ]);
 
-    printDaemonStatus({
-      service: runningService,
-      extraServices: [extraService],
-    });
+    printDaemonStatus({ service: runningService, extraServices: [extraService] });
 
     expect(runtime.error).not.toHaveBeenCalled();
     expectMockLineContains(runtime.log, "Other gateway-like services detected");
@@ -544,10 +495,7 @@ describe("printDaemonStatus", () => {
     expect(output()).not.toContain("ai.openclaw.gateway");
   });
 
-  registerServiceInspectionHintTests({
-    renderHints: renderGatewayServiceCleanupHintsMock,
-    output,
-  });
+  registerServiceInspectionHintTests({ renderHints: renderGatewayServiceCleanupHintsMock, output });
 
   it.each([
     { lastExitStatus: undefined, exhausted: true },
@@ -555,8 +503,7 @@ describe("printDaemonStatus", () => {
   ])(
     "distinguishes systemd crash exhaustion from config exit $lastExitStatus",
     ({ lastExitStatus, exhausted }) => {
-      const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      try {
+      withMockedPlatform("linux", () => {
         printDaemonStatus({
           service: {
             label: "systemd",
@@ -568,9 +515,7 @@ describe("printDaemonStatus", () => {
             },
           },
         });
-      } finally {
-        platform.mockRestore();
-      }
+      });
       const errors = output(runtime.error);
       expect(errors.includes("systemd stopped restarting the gateway after repeated crashes")).toBe(
         exhausted,
