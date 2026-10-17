@@ -214,6 +214,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/node-exec-server.test.ts",
   "extensions/codex/src/node-exec-server.readiness.test.ts",
   "extensions/codex/src/app-server/dynamic-tool-build.test.ts",
+  "extensions/codex/src/app-server/dynamic-tool-build.gateway-policy.test.ts",
   "extensions/codex/src/app-server/native-subagent-monitor.completion-delivery.test.ts",
   "extensions/codex/src/app-server/native-subagent-monitor.direct-authority.test.ts",
   "extensions/codex/src/app-server/native-subagent-monitor.test.ts",

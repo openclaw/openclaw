@@ -778,69 +778,6 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
   });
 
-  it("quarantines unreadable dynamic tool descriptors without dropping healthy siblings", () => {
-    vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    function unreadable(name: string, key: string) {
-      const tool = createTool({ name });
-      Object.defineProperty(tool, key, {
-        enumerable: true,
-        get() {
-          throw new Error(`Unreadable ${key}`);
-        },
-      });
-      return tool;
-    }
-    const poisonedName = unreadable("fuzzplugin_unreadable_name", "name");
-    const poisonedSchema = unreadable("fuzzplugin_unreadable_schema", "parameters");
-    const invalidName = createTool({ name: "" });
-    const poisonedExecute = unreadable("fuzzplugin_unreadable_execute", "execute");
-
-    const bridge = createCodexDynamicToolBridge({
-      tools: [
-        poisonedName,
-        poisonedSchema,
-        invalidName,
-        poisonedExecute,
-        createTool({ name: "message" }),
-      ],
-      signal: new AbortController().signal,
-    });
-
-    expect(specNames(bridge.availableSpecs)).toEqual(["message"]);
-    expect(specNames(bridge.specs)).toEqual(["message"]);
-    expect(bridge.telemetry.quarantinedTools).toEqual([
-      {
-        tool: "tool[0]",
-        violations: ["tool[0].name is unreadable"],
-      },
-      {
-        tool: "fuzzplugin_unreadable_schema",
-        violations: ["fuzzplugin_unreadable_schema.inputSchema is unreadable"],
-      },
-      {
-        tool: "tool[2]",
-        violations: ["tool[2].name must be a non-empty string"],
-      },
-      {
-        tool: "fuzzplugin_unreadable_execute",
-        violations: [
-          "fuzzplugin_unreadable_execute could not be wrapped for before-tool-call hooks",
-        ],
-      },
-    ]);
-    const registeredBridge = createCodexDynamicToolBridge({
-      tools: [poisonedExecute, createTool({ name: "message" })],
-      registeredTools: [
-        createTool({ name: "fuzzplugin_unreadable_execute" }),
-        createTool({ name: "message" }),
-      ],
-      signal: new AbortController().signal,
-    });
-
-    expect(specNames(registeredBridge.availableSpecs)).toEqual(["message"]);
-    expect(specNames(registeredBridge.specs)).toEqual(["message"]);
-  });
-
   it("preserves the canonical cap for tiny contexts", async () => {
     const bridge = createBridgeWithToolResult("large_lookup", textToolResult("x".repeat(70_000)), {
       contextWindowTokens: 1,

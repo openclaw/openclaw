@@ -12,10 +12,15 @@ import {
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
-import type { CodexDynamicToolCallParams } from "./protocol.js";
+import {
+  flattenCodexDynamicToolFunctions,
+  type CodexDynamicToolCallParams,
+  type CodexThreadStartParams,
+} from "./protocol.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
   createTestParams,
@@ -50,6 +55,77 @@ function callTool(
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
+  it("enforces Gateway policy on an owner turn and its retained callbacks", async () => {
+    const task = createRuntimeDynamicTool("managed_task");
+    task.parameters = {
+      type: "object",
+      properties: { action: { type: "string", enum: ["read", "write"] } },
+      required: ["action"],
+    };
+    const admin = createRuntimeDynamicTool("gateway");
+    const params = createTestParams();
+    params.senderIsOwner = true;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.config = {
+      ...params.config,
+      tools: {
+        ...params.config?.tools,
+        gatewayPolicy: { allow: ["managed_task"], actions: { managed_task: ["read"] } },
+      },
+    };
+    setRuntimeConfigSnapshot(params.config);
+    setCodexTestModelSupportsTools(params, true);
+    setCodexTestToolFactory(params, () => [task, admin]);
+    const harness = createStartedThreadHarness();
+    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    // Policy decisions, not cold fixture I/O, own this test's execution lifetime.
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const run = runCodexAppServerAttempt(params);
+    try {
+      await harness.waitForMethod("turn/start");
+      const start = harness.requests.find(({ method }) => method === "thread/start")
+        ?.params as CodexThreadStartParams;
+      expect(flattenCodexDynamicToolFunctions(start.dynamicTools ?? [])).toMatchObject([
+        { name: "managed_task", inputSchema: { properties: { action: { enum: ["read"] } } } },
+      ]);
+      await expect(callTool(harness, "gateway", "denied-admin")).resolves.toMatchObject({
+        success: false,
+      });
+      for (const [callId, args] of [
+        ["denied-action", { action: "write" }],
+        ["missing-action", {}],
+      ] as const) {
+        await expect(callTool(harness, "managed_task", callId, args)).resolves.toMatchObject({
+          success: false,
+          contentItems: [
+            { type: "inputText", text: expect.stringContaining("Gateway tool policy") },
+          ],
+        });
+      }
+      expect(admin.execute).not.toHaveBeenCalled();
+      expect(task.execute).not.toHaveBeenCalled();
+      await expect(
+        callTool(harness, "managed_task", "allowed-task", { action: "read" }),
+      ).resolves.toMatchObject({ success: true });
+      setRuntimeConfigSnapshot({ tools: { gatewayPolicy: { allow: [] } } });
+      await expect(
+        callTool(harness, "managed_task", "tightened-policy", { action: "read" }),
+      ).resolves.toMatchObject({
+        success: false,
+        contentItems: [{ type: "inputText", text: expect.stringContaining("Gateway tool policy") }],
+      });
+      expect(task.execute).toHaveBeenCalledOnce();
+    } finally {
+      try {
+        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+        expect(readAttemptTerminal(await run).promptError).toBeNull();
+      } finally {
+        vi.useRealTimers();
+        closeHost();
+      }
+    }
+  });
+
   it("retains a required command as one native pending call until terminal collection", async () => {
     const command = createRequiredExecRuntimeContract();
     const harness = createStartedThreadHarness();
