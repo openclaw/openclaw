@@ -15,7 +15,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { getOrCreateAccountThrottler, runAuthorizedTelegramRequest } from "./account-throttler.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
-import { withTelegramApiErrorLogging } from "./api-logging.js";
+import { formatTelegramTransportDiagnostics, withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
 import { resolveTelegramTransport, type TelegramTransport } from "./fetch.js";
@@ -50,34 +50,6 @@ export function resolveTelegramMessageIdOrThrow(
     return Math.trunc(result.message_id);
   }
   throw new Error(`Telegram ${context} returned no message_id`);
-}
-
-type TelegramOutboundSuccessLogParams = {
-  accountId: string;
-  chatId: string;
-  messageId: string;
-  operation: string;
-  deliveryKind?: string;
-  messageThreadId?: number;
-  replyToMessageId?: number;
-  silent?: boolean;
-  chunkCount?: number;
-};
-
-export function logTelegramOutboundSendOk(params: TelegramOutboundSuccessLogParams): void {
-  const parts = [
-    "telegram outbound send ok",
-    `accountId=${params.accountId}`,
-    `chatId=${params.chatId}`,
-    `messageId=${params.messageId}`,
-    `operation=${params.operation}`,
-    params.deliveryKind && `deliveryKind=${params.deliveryKind}`,
-    typeof params.messageThreadId === "number" && `threadId=${params.messageThreadId}`,
-    typeof params.replyToMessageId === "number" && `replyToMessageId=${params.replyToMessageId}`,
-    params.silent === true && "silent=true",
-    typeof params.chunkCount === "number" && `chunkCount=${params.chunkCount}`,
-  ];
-  sendLogger.info(parts.filter(Boolean).join(" "));
 }
 
 export function resolveAcceptedReplyToMessageId(
@@ -129,14 +101,15 @@ export function resetTelegramClientOptionsCacheForTests(): void {
 
 function createTelegramHttpLogger(cfg: OpenClawConfig) {
   if (!isDiagnosticFlagEnabled("telegram.http", cfg)) {
-    return () => {};
+    return undefined;
   }
   return (label: string, err: unknown) => {
     if (!(err instanceof HttpError)) {
       return;
     }
-    const detail = redactSensitiveText(formatUncaughtError(err.error ?? err));
-    diagLogger.warn(`telegram http error (${label}): ${detail}`);
+    diagLogger.warn(
+      `telegram http error (${label}): network request failed${formatTelegramTransportDiagnostics(err)}`,
+    );
   };
 }
 
@@ -386,10 +359,12 @@ export function createTelegramRequestWithDiag(params: {
         : withTelegramApiErrorLogging({
             operation: label,
             fn: runRequest,
-            ...(options?.shouldLog ? { shouldLog: options.shouldLog } : {}),
+            shouldLog: (err) =>
+              (!options?.shouldLog || options.shouldLog(err)) &&
+              !(logHttpError && err instanceof HttpError),
           });
     return call.catch((err: unknown) => {
-      logHttpError(label, err);
+      logHttpError?.(label, err);
       throw err;
     });
   };

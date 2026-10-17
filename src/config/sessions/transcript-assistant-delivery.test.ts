@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { isSilentAssistantTranscriptMessage } from "../../shared/chat-message-content.js";
 import { applyAssistantDeliveryDirectives } from "./transcript-assistant-delivery.js";
 
 describe("assistant delivery normalization across native parts", () => {
@@ -29,6 +30,12 @@ describe("assistant delivery normalization across native parts", () => {
       expected: ["Use `", "  [[reply_to:literal]]  `\nDone."],
       facts: { audioAsVoice: true },
     },
+    {
+      name: "literal silence text after speech extraction",
+      parts: ["[[tts:text]]Spoken only.[[/tts:text]]NO_REPLY"],
+      expected: ["NO_REPLY"],
+      facts: { tts: { tagged: true, text: "Spoken only." } },
+    },
   ])("preserves $name and remains idempotent", ({ parts, expected, facts }) => {
     const content = parts.map((text, index) => ({
       type: "text",
@@ -50,6 +57,41 @@ describe("assistant delivery normalization across native parts", () => {
     expect(message).toEqual(prepared);
   });
 
+  it.each([
+    { parts: ["[[audio_as_voice]]", "NO_REPLY"], display: true, hidden: false },
+    { parts: ["NO_", "REPLY\n[[audio_as_voice]]NO_REPLY"], display: undefined, hidden: false },
+    { parts: ["NO_REPLY"], display: undefined, hidden: true },
+  ])(
+    "records visibility without reclassifying the prepared suffix: $parts",
+    ({ parts, display, hidden }) => {
+      const message = {
+        role: "assistant",
+        content: parts.map((text) => ({
+          type: "text",
+          text,
+          textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
+        })),
+      };
+      const prepared = applyAssistantDeliveryDirectives(message);
+      expect("display" in prepared ? prepared.display : undefined).toBe(display);
+      expect(isSilentAssistantTranscriptMessage(prepared)).toBe(hidden);
+      const snapshot = structuredClone(prepared);
+      applyAssistantDeliveryDirectives(prepared);
+      expect(prepared).toEqual(snapshot);
+    },
+  );
+
+  it("preserves explicit hidden display ownership while extracting directives", () => {
+    const message = {
+      role: "assistant",
+      display: false,
+      content: [{ type: "text", text: "[[audio_as_voice]]NO_REPLY" }],
+    };
+    applyAssistantDeliveryDirectives(message);
+    expect(message.display).toBe(false);
+    expect(isSilentAssistantTranscriptMessage(message)).toBe(true);
+  });
+
   it("keeps commentary code context separate from final intent", () => {
     const message = {
       role: "assistant",
@@ -68,6 +110,7 @@ describe("assistant delivery normalization across native parts", () => {
     };
     applyAssistantDeliveryDirectives(message);
     expect(message).toMatchObject({
+      display: true,
       content: [{ text: "```text\n[[reply_to:commentary]]" }, { text: "Final reply." }],
       openclawDelivery: { replyToCurrent: true },
     });

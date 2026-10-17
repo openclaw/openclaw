@@ -12,7 +12,6 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../agent-bundle-mcp-tools.js";
 import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.js";
-import { createSkillInstructionDeliveryCache } from "../agent-tools.read.js";
 import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../auth-profiles/store-runtime.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../bash-process-scope.js";
@@ -88,6 +87,7 @@ export async function buildPreparedCompactionRuntime(
     thinkLevel,
     runtimeModel,
     apiKeyInfo,
+    runtimeApiKey,
     resolvedRuntimeAuthPlan,
     hasRuntimeAuthExchange,
     resolvedWorkspace,
@@ -181,8 +181,7 @@ export async function buildPreparedCompactionRuntime(
     const bootstrapTruncationNotice = buildBootstrapPromptWarningNotice(
       bootstrapBudget.bootstrapPromptWarning.lines,
     );
-    // Apply contextTokens cap to model so session runtime's auto-compaction
-    // threshold uses the effective limit, not the native context window.
+    // Keep session sizing separate from the summarizer's native request window.
     const contextTokenBudget = resolveCompactionContextTokenBudget({
       config: params.config,
       provider: contextConfigProvider,
@@ -192,12 +191,7 @@ export async function buildPreparedCompactionRuntime(
       fallbackTokenBudget: params.tokenBudget,
     });
     const modelWithAuth = applyAuthHeaderOverride(
-      applyLocalNoAuthHeaderOverride(
-        contextTokenBudget < (runtimeModel.contextWindow ?? Infinity)
-          ? { ...runtimeModel, contextWindow: contextTokenBudget }
-          : runtimeModel,
-        apiKeyInfo,
-      ),
+      applyLocalNoAuthHeaderOverride(runtimeModel, { apiKey: runtimeApiKey }),
       // Skip header injection when runtime auth exchange produced a
       // different credential — the SDK reads the exchanged token from
       // authStorage automatically.
@@ -293,7 +287,7 @@ export async function buildPreparedCompactionRuntime(
         (await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir)))
       : undefined;
     params.abortSignal?.throwIfAborted();
-    const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
+    const skillInstructionDeliveryCache = new Map<string, Promise<boolean>>();
     const toolsRaw = toolsEnabled
       ? await createOpenClawCodingToolsInternalAsync(
           {
@@ -416,6 +410,7 @@ export async function buildPreparedCompactionRuntime(
       cfg: params.config,
       channel: params.messageChannel ?? params.messageProvider,
       accountId: params.agentAccountId,
+      requester: params,
     });
 
     const runtimeInfo = {
@@ -478,6 +473,7 @@ export async function buildPreparedCompactionRuntime(
       surface: promptSurface,
     });
     const openClawReferences = await resolveOpenClawReferencePaths({
+      sandbox,
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
       cwd: effectiveCwd,

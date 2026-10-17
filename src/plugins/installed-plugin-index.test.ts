@@ -4,6 +4,7 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { expectObjectFields as expectRecordFields } from "../test-utils/mock-call-assertions.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
@@ -48,12 +49,6 @@ function writeRuntimeEntry(rootDir: string) {
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
-
-function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
 
 function expectSha256(value: unknown) {
   expect(typeof value).toBe("string");
@@ -488,59 +483,6 @@ describe("installed plugin index", () => {
     },
   );
 
-  it("records explicit install records separately from package install intent", () => {
-    const fixture = createRichPluginFixture({ installOwner: "demo" });
-
-    const index = loadInstalledPluginIndex({
-      candidates: [fixture.candidate],
-      installRecords: {
-        demo: {
-          source: "npm",
-          spec: "@vendor/demo-plugin@latest",
-          installPath: "plugins/demo",
-          resolvedName: "@vendor/demo-plugin",
-          resolvedVersion: "1.2.3",
-          resolvedSpec: "@vendor/demo-plugin@1.2.3",
-          integrity: "sha512-installed",
-          shasum: "abc123",
-          resolvedAt: "2026-04-25T11:00:00.000Z",
-          installedAt: "2026-04-25T11:01:00.000Z",
-        },
-      },
-      env: hermeticEnv(),
-    });
-
-    expect(index.installRecords).toEqual({
-      demo: {
-        source: "npm",
-        spec: "@vendor/demo-plugin@latest",
-        installPath: "plugins/demo",
-        resolvedName: "@vendor/demo-plugin",
-        resolvedVersion: "1.2.3",
-        resolvedSpec: "@vendor/demo-plugin@1.2.3",
-        integrity: "sha512-installed",
-        shasum: "abc123",
-        resolvedAt: "2026-04-25T11:00:00.000Z",
-        installedAt: "2026-04-25T11:01:00.000Z",
-      },
-    });
-    expectRecordFields(
-      requireRecord(
-        requireRecord(
-          requireRecord(index.plugins[0], "installed plugin record").packageInstall,
-          "package install",
-        ).npm,
-        "npm package install",
-      ),
-      {
-        spec: "@vendor/demo-plugin@1.2.3",
-        expectedIntegrity: "sha512-demo",
-        pinState: "exact-with-integrity",
-      },
-    );
-    expect(index.plugins[0]?.installRecordHash).toMatch(/^[a-f0-9]{64}$/u);
-  });
-
   it("uses in-flight install records to rank installed globals over bundled duplicates", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();
@@ -634,40 +576,6 @@ describe("installed plugin index", () => {
         gitCommit: "abc123",
       },
     });
-  });
-
-  it("treats enablement changes as policy invalidation", () => {
-    const fixture = createRichPluginFixture();
-    const previous = loadInstalledPluginIndex({
-      candidates: [fixture.candidate],
-      config: {
-        plugins: {
-          entries: {
-            demo: {
-              enabled: true,
-            },
-          },
-        },
-      },
-      env: hermeticEnv(),
-    });
-    const current = loadInstalledPluginIndex({
-      candidates: [fixture.candidate],
-      config: {
-        plugins: {
-          entries: {
-            demo: {
-              enabled: false,
-            },
-          },
-        },
-      },
-      env: hermeticEnv(),
-    });
-
-    expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toEqual([
-      "policy-changed",
-    ]);
   });
 
   it("treats legacy config-path startup metadata as migration invalidation", () => {

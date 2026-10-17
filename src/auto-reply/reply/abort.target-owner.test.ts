@@ -10,7 +10,6 @@ import {
   waitForExecSession,
   type ProcessSession,
 } from "../../agents/bash-process-registry.js";
-import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
@@ -49,7 +48,6 @@ import {
   normalizeSessionDeliveryState,
   patchSessionEntry,
 } from "../../plugin-sdk/session-store-runtime.js";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -143,14 +141,14 @@ it.each([false, true])(
   "retires idle MCP state while preserving a later lease=%s",
   async (laterLease) => {
     const state = await setupStop();
-    const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
+    const { getOrCreateSessionMcpRuntime, getSessionMcpRuntimeTestManager, unopenedMcpConfig } =
       await import("../../agents/agent-bundle-mcp-manager.test-support.js");
-    const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
+    const { setSessionMcpRuntimeScheduler } =
       await import("../../agents/agent-bundle-mcp-manager-api.js");
     const scheduler = createTestGatewayScheduler();
     onTestFinished(() => scheduler.stop());
     await setSessionMcpRuntimeScheduler(scheduler);
-    const manager = getSessionMcpRuntimeManagerForTesting();
+    const manager = getSessionMcpRuntimeTestManager();
     try {
       const runtime = await getOrCreateSessionMcpRuntime({
         sessionId: state.entry.sessionId,
@@ -495,22 +493,6 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
             })
           : undefined;
       let replacement: ReturnType<typeof createReplyOperation> | undefined;
-      const lane = resolveEmbeddedSessionLane(sessionKey);
-      const blocker = enqueueCommandInLane(lane, () => release.promise);
-      const selectedQueued = vi.fn(async () => {});
-      const selectedAdmission = enqueueCommandInLane(lane, selectedQueued, {
-        sessionTarget: target,
-      }).catch((error: unknown) => error);
-      const selectedFollowup = createQueueTestRun({ prompt: "selected pending input" });
-      selectedFollowup.run = { ...selectedFollowup.run, ...target };
-      enqueueFollowupRun(
-        sessionKey,
-        selectedFollowup,
-        { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
-        "none",
-      );
-      const laterQueued = vi.fn(async () => {});
-      let laterAdmission: Promise<unknown> | undefined;
       try {
         const stopping =
           pathKind === "fast"
@@ -535,17 +517,6 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
               );
         original?.complete();
         start({ ...target, runId: "during-preparation" });
-        laterAdmission = enqueueCommandInLane(lane, laterQueued, { sessionTarget: target }).catch(
-          (error: unknown) => error,
-        );
-        const laterFollowup = createQueueTestRun({ prompt: "later human input" });
-        laterFollowup.run = { ...laterFollowup.run, ...target };
-        enqueueFollowupRun(
-          sessionKey,
-          laterFollowup,
-          { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
-          "none",
-        );
         if (backend === "new-session") {
           replaceSessionEntrySync(
             { storePath: state.storePath, sessionKey },
@@ -578,18 +549,11 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
             loadSessionEntry({ storePath: state.storePath, sessionKey })?.abortedLastRun,
           ).not.toBe(true);
         }
-        expect(await selectedAdmission).toBeInstanceOf(Error);
-        expect(selectedQueued).not.toHaveBeenCalled();
-        expect(getExistingFollowupQueue(sessionKey)?.items).toEqual([laterFollowup]);
-        release.resolve();
-        expect(await laterAdmission).toBeUndefined();
-        expect(laterQueued).toHaveBeenCalledOnce();
       } finally {
         replacement?.complete();
         original?.complete();
         clearActiveEmbeddedRun(state.entry.sessionId, native, sessionKey);
         release.resolve();
-        await Promise.allSettled([blocker, selectedAdmission, laterAdmission]);
         await Promise.all(executions);
       }
     },

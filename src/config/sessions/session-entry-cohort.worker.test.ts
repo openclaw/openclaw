@@ -10,6 +10,7 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { loadAgentEntryReadOperations } from "../../state/openclaw-agent-execution-operations.js";
 import * as executionOwner from "../../state/openclaw-agent-execution.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
 import * as entryCache from "./session-accessor.sqlite-entry-cache.js";
@@ -175,7 +176,11 @@ it.each([false, true])("reads complete cold entry facts with lifecycle=%s", asyn
         },
         context,
       );
-    const statements = trackSqliteStatementExecutions(database.db, ["all"], () => "all");
+    const statements = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["all"],
+      () => "all",
+    );
     const transactions = vi.spyOn(database.db, "exec");
     try {
       const first = read();
@@ -358,7 +363,7 @@ it("prepares bounded facts on one admitted source and refreshes after sibling an
       },
     };
     const repeated = trackSqliteStatementExecutions(
-      database.db,
+      requireNativeSqliteDatabase(database.db),
       ["entry", "participants"],
       (sql) =>
         sql.includes('from "session_nodes"') && !sql.includes('"actor_')
@@ -451,12 +456,15 @@ it("prepares bounded facts on one admitted source and refreshes after sibling an
       }
       return exec(statement);
     });
-    const sql = trackSqliteStatementExecutions(database.db, ["fresh", "authSchema"], (statement) =>
-      /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(statement.trim())
-        ? "fresh"
-        : /^SELECT type FROM sqlite_master WHERE name = \?$/iu.test(statement.trim())
-          ? "authSchema"
-          : null,
+    const sql = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["fresh", "authSchema"],
+      (statement) =>
+        /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(statement.trim())
+          ? "fresh"
+          : /^SELECT type FROM sqlite_master WHERE name = \?$/iu.test(statement.trim())
+            ? "authSchema"
+            : null,
     );
     try {
       const standalone = operations["session.entry.read"]({ sessionKey }, context);

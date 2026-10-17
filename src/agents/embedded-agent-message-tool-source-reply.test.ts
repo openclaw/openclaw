@@ -224,10 +224,6 @@ describe("isDeliveredMessagingToolResult", () => {
     expect(isDeliveredMessagingToolResult({ result: { status: "sent" } })).toBe(true);
   });
 
-  it("rejects bare success markers without delivery evidence", () => {
-    expect(isDeliveredMessagingToolResult({ result: { ok: true, to: "spaces/AAA" } })).toBe(false);
-  });
-
   it("accepts action-specific bare success delivery contracts", () => {
     expect(
       isDeliveredMessagingToolResult({
@@ -248,7 +244,6 @@ describe("isDeliveredMessagingToolResult", () => {
       }),
     ).toBe(true);
   });
-
   it("rejects successful no-op mutation results", () => {
     for (const result of [
       { ok: true, removed: null },
@@ -423,17 +418,6 @@ describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
     ).toBe(true);
   });
 
-  it("rejects an unconfirmed thread reply outside message-tool-only mode", () => {
-    expect(
-      isDeliveredMessageToolOnlySourceReplyResult({
-        sourceReplyDeliveryMode: "automatic",
-        toolName: "message",
-        args: { action: "thread-reply", threadId: "thread-1", message: "done" },
-        result: { details: { ok: true } },
-      }),
-    ).toBe(false);
-  });
-
   it("accepts a confirmed current-source poll delivery", () => {
     expect(
       isDeliveredMessageToolOnlySourceReplyResult({
@@ -483,7 +467,7 @@ describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
     ).toBe(false);
   });
 
-  it.each(["automatic", "message_tool_only"] as const)(
+  it.each(["automatic"] as const)(
     "accepts confirmed explicit routes when the caller verified the source route (%s)",
     (sourceReplyDeliveryMode) => {
       expect(

@@ -9,10 +9,10 @@ import * as catalog from "./catalog-target.ts";
 import type { CheckoutChipOptions } from "./checkout-chip.ts";
 import { resolveCheckoutChip } from "./checkout-chip.ts";
 import { CheckoutChip } from "./checkout-chip.tsx";
+import { findBrowsableDeviceFolderHost } from "./device-placement.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import {
   environmentPlacementRuntime,
-  environmentDeviceDisabledReason,
   environmentCloudDisabledReason,
 } from "./hosted-environments.ts";
 import "../../components/agent-select-registration.ts";
@@ -21,14 +21,17 @@ import { resolveProjectChip } from "./project-chip.ts";
 import { ProjectChip } from "./project-chip.tsx";
 import type { AgentSelectOptions, NewSessionPlaceControlsOptions } from "./target-controls.ts";
 import { NewSessionTerminalHost } from "./terminal-start-view.tsx";
-import { resolveWhereChip, type WhereChipOptions } from "./where-chip.ts";
+import { draftWhereChipParams, resolveWhereChip, type WhereChipOptions } from "./where-chip.ts";
 import { WhereChip } from "./where-chip.tsx";
 
 registerNewSessionSetupEnglish();
 
-export function AgentSelect(props: { params: AgentSelectOptions }) {
+export function AgentSelect(props: {
+  params: AgentSelectOptions;
+  ref?: (node: HTMLSpanElement) => void;
+}) {
   return (
-    <span class="new-session-page__select new-session-page__select--agent">
+    <span class="new-session-page__select new-session-page__select--agent" ref={props.ref}>
       <openclaw-agent-select
         prop:variant={props.params.variant ?? "compact"}
         prop:options={props.params.agents.map((agent) => ({
@@ -86,8 +89,7 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
   const folderValue = liveValue(() => props.params.place.folder);
   const deviceFolderValue = liveValue(() => props.params.place.deviceFolder?.path ?? "");
   const view = createMemo(() => {
-    const { context, data, gateway, place, submitting, pendingPlacement, requestUpdate } =
-      props.params;
+    const { context, data, gateway, place, submitting, pendingPlacement, onChange } = props.params;
     const browser = place.browser;
     const { machineClass, os } = place.cloudSelection;
     const nativeTerminal = catalog.isTarget(data);
@@ -102,21 +104,7 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
           workspaceRoots: place.knownWorkspaceRoots(),
           isAdmin: place.isAdmin(),
         });
-    const whereState = resolveWhereChip({
-      hostedEnvironment: place.hostedEnvironment
-        ? { ...place.hostedEnvironment, id: place.modelControl.resolveAgentRuntime()!.id }
-        : undefined,
-      environments: place.canWrite() ? gateway.environments : [],
-      cloudProfiles,
-      cloudProfileId: place.cloudProfileId,
-      machineClass,
-      os,
-      deviceId: place.deviceId,
-      autoDevice: place.autoDevice,
-      devicePlacement: environmentPlacementRuntime(place.modelControl)?.devicePlacement,
-      deviceDisabledReason:
-        environmentDeviceDisabledReason(place.modelControl) ?? gateway.deviceCatalogDisabledReason,
-    });
+    const whereState = resolveWhereChip(draftWhereChipParams(place, gateway, cloudProfiles));
     const projectState = resolveProjectChip({
       folder: place.deviceFolder?.path ?? place.folder,
       workspace: place.workspacePath(),
@@ -138,13 +126,21 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
     const gatewayLabel = gateway.gatewayName
       ? t("newSession.gatewayNamed", { name: gateway.gatewayName })
       : t("newSession.gateway");
+    // Node directory listing is admin-only at the Gateway; writers type the device path.
+    const deviceBrowse =
+      place.deviceFolderAvailable && place.isAdmin()
+        ? findBrowsableDeviceFolderHost(place.deviceId, place.devices())
+        : undefined;
+    const browserNodeId = browser.browserNodeId;
+    // Changing the device closes the browser, so an open device listing is this device's.
+    const browserLabel = browserNodeId ? (deviceBrowse?.label ?? browserNodeId) : gatewayLabel;
     const selectCloudOption = (kind: "os" | "machine", id: string) =>
       place.cloudMachines[kind === "os" ? "selectOs" : "select"](
         place.cloudProfileId,
         id,
         cloudProfiles,
         submitting || pendingPlacement,
-        requestUpdate,
+        onChange,
       );
 
     return {
@@ -157,7 +153,9 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
       checkoutState,
       projects,
       branches,
-      gatewayLabel,
+      browserLabel,
+      browserNodeId,
+      deviceBrowse,
       gatewayName: gateway.gatewayName,
       selectCloudOption,
     };
@@ -246,7 +244,15 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
     onDeviceFolder: props.params.place.deviceFolderOffered
       ? () => props.params.place.selectDeviceFolder()
       : undefined,
-    gatewayLabel: view().gatewayLabel,
+    deviceBrowseLabel: view().deviceBrowse?.label,
+    onBrowseDevice: view().deviceBrowse
+      ? () =>
+          view().browser.selectDeviceBrowser(
+            props.params.place.deviceId,
+            props.params.place.deviceFolder?.path.trim() || undefined,
+          )
+      : undefined,
+    browserLabel: view().browserLabel,
     submitting: props.params.submitting,
     pendingPlacement: props.params.pendingPlacement,
     ...view().browser.popoverCallbacks("project"),
@@ -257,7 +263,17 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
     onSelectProject: (projectId) => props.params.place.selectProjectId(projectId),
     onProjectQueryInput: (query) => view().browser.changeProjectQuery(query),
     onSelectRemoteProject: (project) => props.params.place.selectRemoteProject(project),
-    onApplyFolder: (folder) => props.params.place.applyFolder(folder),
+    onApplyFolder: (folder) => {
+      if (!view().browserNodeId) {
+        props.params.place.applyFolder(folder);
+        return;
+      }
+      // An emptied draft names no device folder; keep the current device path.
+      if (folder) {
+        props.params.place.selectDeviceFolder();
+        props.params.place.setDeviceFolderPath(folder);
+      }
+    },
     onBrowse: () =>
       view().browser.selectGatewayBrowser(
         props.params.place.folder.trim() || props.params.place.workspacePath(),
@@ -273,6 +289,7 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
     folderLabel: view().projectState.label,
     worktree: props.params.place.worktree,
     worktreeAvailable: props.params.place.worktreeAvailable(),
+    currentCheckoutUnavailableReason: props.params.place.currentCheckoutUnavailableReason,
     repositoryUnavailable: props.params.place.repository.kind === "unavailable",
     branches: view().branches,
     branchesLoading: props.params.place.repository.kind === "checking",
@@ -322,7 +339,7 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
               />
             </label>
           ) : (
-            <ProjectChip params={projectParams()} />
+            <ProjectChip params={projectParams()} focus={view().browser.projectFocus} />
           )}
           {props.params.place.deviceFolder ? (
             <label class="new-session-page__select new-session-page__menu-field new-session-page__device-folder">

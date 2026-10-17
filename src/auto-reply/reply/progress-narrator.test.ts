@@ -1,4 +1,5 @@
 // Progress narrator tests cover trigger policy, gating, and reply-option wiring.
+import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { PROGRESS_STATUS_PREAMBLE_FRESH_MS } from "../../channels/progress-draft-compositor.js";
@@ -240,6 +241,121 @@ describe("progress narration through reply options", () => {
     },
   );
 
+  it.each([
+    { preparationMs: 4_000, timeoutMs: 6_000 },
+    { preparationMs: 4_000.25, timeoutMs: 6_000 },
+    { preparationMs: 9_999.75, timeoutMs: 1 },
+    { preparationMs: 10_000, timeoutMs: 0 },
+  ])(
+    "includes $preparationMs ms of model preparation in the narration budget",
+    async ({ preparationMs, timeoutMs }) => {
+      vi.useFakeTimers();
+      try {
+        let nowMs = 0;
+        vi.spyOn(performance, "now").mockImplementation(() => nowMs);
+        const preparation = createDeferred<typeof narrationModelMocks.prepared>();
+        narrationModelMocks.prepare.mockReturnValueOnce(preparation.promise);
+        const { narrator, generate, onUpdate } = createNarratorHarness();
+
+        narrator.noteToolStart({ name: "exec", phase: "start" });
+        nowMs = preparationMs;
+        await vi.advanceTimersByTimeAsync(preparationMs);
+        preparation.resolve(narrationModelMocks.prepared);
+        await flushNarrations();
+
+        if (timeoutMs > 0) {
+          expect(generateNarrationWithUtilityModel).toHaveBeenCalledWith(
+            expect.objectContaining({ timeoutMs }),
+          );
+          expect(onUpdate).toHaveBeenCalledWith({ text: "Working on the request." });
+        } else {
+          expect(generate).not.toHaveBeenCalled();
+          expect(onUpdate).not.toHaveBeenCalled();
+        }
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "discards late narration after the total deadline with timer fired=%s",
+    async (fireTimer) => {
+      vi.useFakeTimers();
+      try {
+        let nowMs = 0;
+        vi.spyOn(performance, "now").mockImplementation(() => nowMs);
+        const preparation = createDeferred<typeof narrationModelMocks.prepared>();
+        narrationModelMocks.prepare.mockReturnValueOnce(preparation.promise);
+        const generation = createDeferred<string>();
+        const { narrator, generate, onUpdate } = createNarratorHarness({
+          generate: () => generation.promise,
+        });
+
+        narrator.noteToolStart({ name: "exec", phase: "start" });
+        nowMs = 4_000;
+        await vi.advanceTimersByTimeAsync(4_000);
+        preparation.resolve(narrationModelMocks.prepared);
+        await flushNarrations();
+        expect(generate).toHaveBeenCalledOnce();
+        const signal = generate.mock.calls[0]?.[1];
+        expect(signal?.aborted).toBe(false);
+
+        nowMs = 10_000;
+        if (fireTimer) {
+          await vi.advanceTimersByTimeAsync(6_000);
+        }
+        expect(signal?.aborted).toBe(fireTimer);
+        generation.resolve("This status arrived too late.");
+        await flushNarrations();
+
+        expect(onUpdate).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("retains expired pending preparation for a replacement turn", async () => {
+    vi.useFakeTimers();
+    try {
+      let nowMs = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => nowMs);
+      const preparation = createDeferred<typeof narrationModelMocks.prepared>();
+      narrationModelMocks.prepare.mockReturnValueOnce(preparation.promise);
+      const { narrator, generate, onUpdate, inputs } = createNarratorHarness();
+
+      narrator.noteToolStart({ name: "exec", phase: "start" });
+      nowMs = 10_000;
+      await vi.advanceTimersByTimeAsync(10_000);
+      narrator.noteToolStart({ name: "read", phase: "start" });
+      expect(narrationModelMocks.prepare).toHaveBeenCalledOnce();
+      expect(generate).not.toHaveBeenCalled();
+
+      narrator.stopTurn();
+      narrator.beginTurn();
+      narrator.noteToolStart({ name: "read", phase: "start" });
+      nowMs = 11_000;
+      await vi.advanceTimersByTimeAsync(1_000);
+      preparation.resolve(narrationModelMocks.prepared);
+      await flushNarrations();
+
+      expect(narrationModelMocks.prepare).toHaveBeenCalledOnce();
+      expect(generate).toHaveBeenCalledOnce();
+      expect(generateNarrationWithUtilityModel).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutMs: 9_000 }),
+      );
+      expect(inputs[0]?.userMessage).toBe("");
+      expect(inputs[0]?.activityNotes).toEqual(["Tool read"]);
+      expect(onUpdate).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("re-prepares a failed route for queued narration and then reuses the native route", async () => {
     narrationModelMocks.prepare.mockResolvedValueOnce(null);
     const { narrator, onUpdate } = createNarratorHarness();
@@ -353,82 +469,131 @@ describe("progress narration through reply options", () => {
     }
   });
 
-  it("does not let silent or directive-only preambles suppress narration", async () => {
+  it.each(["NO_REPLY", "[[audio_as_voice]] _NO_REPLY_"])(
+    "treats prepared literal preambles as visible progress: %s",
+    async (text) => {
+      vi.useFakeTimers();
+      try {
+        const { narrator, generate } = createNarratorHarness();
+
+        narrator.noteItemEvent({ kind: "preamble", progressText: "[[reply_to_current]]" });
+        narrator.noteItemEvent({
+          kind: "preamble",
+          progressText: text,
+        });
+        narrator.noteToolStart({ name: "exec", phase: "start", args: { command: "ls" } });
+        await flushNarrations();
+
+        expect(generate).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([1, 4])(
+    "coalesces %s buffered tool notes into the latest status at the cadence boundary",
+    async (noteCount) => {
+      vi.useFakeTimers();
+      try {
+        const started = createDeferred();
+        const firstGeneration = createDeferred<string>();
+        let generationCount = 0;
+        const { narrator, generate, onUpdate, inputs } = createNarratorHarness({
+          generate: async () => {
+            if (++generationCount === 1) {
+              started.resolve();
+              return await firstGeneration.promise;
+            }
+            return "Checking the latest file.";
+          },
+        });
+
+        narrator.noteToolStart({ name: "read", phase: "start", args: { path: "first.txt" } });
+        await started.promise;
+        for (let index = 0; index < noteCount; index += 1) {
+          narrator.noteToolStart({
+            name: "read",
+            phase: "start",
+            args: { path: `later-${index}.txt` },
+          });
+        }
+        firstGeneration.resolve("Inspecting the first file.");
+        await flushNarrations();
+
+        expect(generate).toHaveBeenCalledOnce();
+        expect(onUpdate).toHaveBeenLastCalledWith({ text: "Inspecting the first file." });
+        await vi.advanceTimersByTimeAsync(6_000);
+        narrator.noteToolStart({ name: "read", phase: "start", args: { path: "latest.txt" } });
+        await vi.advanceTimersByTimeAsync(5_999);
+        expect(generate).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(1);
+
+        expect(generate).toHaveBeenCalledTimes(2);
+        expect(inputs[1]?.activityNotes.at(-1)).toBe('Tool read: {"path":"latest.txt"}');
+        expect(onUpdate).toHaveBeenLastCalledWith({ text: "Checking the latest file." });
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["stop", "abort"] as const)("cancels pending cadence work on turn %s", async (action) => {
     vi.useFakeTimers();
     try {
-      const { narrator, generate, inputs } = createNarratorHarness();
-
-      narrator.noteItemEvent({ kind: "preamble", progressText: "[[reply_to_current]]" });
-      narrator.noteItemEvent({
-        kind: "preamble",
-        progressText: "[[audio_as_voice]] _NO_REPLY_",
+      const controller = new AbortController();
+      const { narrator, generate, onUpdate } = createNarratorHarness({
+        abortSignal: controller.signal,
       });
-      narrator.noteToolStart({ name: "exec", phase: "start", args: { command: "ls" } });
+      narrator.noteToolStart({ name: "read", phase: "start", args: { path: "first.txt" } });
       await flushNarrations();
+      narrator.noteToolStart({ name: "read", phase: "start", args: { path: "pending.txt" } });
+      expect(vi.getTimerCount()).toBe(1);
 
-      expect(generate).toHaveBeenCalledTimes(1);
-      expect(inputs[0]?.activityNotes.some((note) => note.startsWith("model:"))).toBe(false);
+      if (action === "stop") {
+        narrator.stopTurn();
+      } else {
+        controller.abort();
+      }
+      await vi.advanceTimersByTimeAsync(12_000);
+
+      expect(generate).toHaveBeenCalledOnce();
+      expect(onUpdate).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("narrates a tool burst buffered during an active generation without another event", async () => {
-    const started = createDeferred();
-    const firstGeneration = createDeferred<string>();
-    let generationCount = 0;
-    const { narrator, generate, onUpdate, inputs } = createNarratorHarness({
-      generate: async () => {
-        if (++generationCount === 1) {
-          started.resolve();
-          return await firstGeneration.promise;
-        }
-        return "Checking the later files.";
-      },
-    });
-
-    narrator.noteToolStart({ name: "read", phase: "start", args: { path: "first.txt" } });
-    await started.promise;
-    for (let index = 0; index < 4; index += 1) {
-      narrator.noteToolStart({
-        name: "read",
-        phase: "start",
-        args: { path: `later-${index}.txt` },
+  it("narrates metadata-only command failures without waiting for pending ordinary notes", async () => {
+    vi.useFakeTimers();
+    try {
+      const { narrator, generate, onUpdate, inputs } = createNarratorHarness({
+        texts: ["Running a command.", "The command failed, retrying."],
       });
+
+      narrator.noteToolStart({ name: "exec", phase: "start" });
+      await flushNarrations();
+      narrator.noteToolStart({ name: "read", phase: "start", args: { path: "pending.txt" } });
+      narrator.noteCommandOutput({
+        name: "exec",
+        title: "pnpm test",
+        phase: "end",
+        exitCode: 1,
+        output: "private command output must not reach narration",
+      });
+      await flushNarrations();
+
+      expect(generate).toHaveBeenCalledTimes(2);
+      const notes = inputs[1]?.activityNotes.join("\n") ?? "";
+      expect(notes).toContain("pnpm test: failed (exit 1)");
+      expect(notes).not.toContain("private command output");
+      expect(onUpdate).toHaveBeenLastCalledWith({ text: "The command failed, retrying." });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
     }
-    expect(generate).toHaveBeenCalledOnce();
-
-    firstGeneration.resolve("Inspecting the first file.");
-    await flushNarrations();
-
-    expect(generate).toHaveBeenCalledTimes(2);
-    expect(inputs[1]?.activityNotes).toContain('Tool read: {"path":"later-3.txt"}');
-    await vi.waitFor(() =>
-      expect(onUpdate).toHaveBeenLastCalledWith({ text: "Checking the later files." }),
-    );
-  });
-
-  it("narrates metadata-only command failures immediately", async () => {
-    const { narrator, generate, onUpdate, inputs } = createNarratorHarness({
-      texts: ["Running a command.", "The command failed, retrying."],
-    });
-
-    narrator.noteToolStart({ name: "exec", phase: "start" });
-    await flushNarrations();
-    narrator.noteCommandOutput({
-      name: "exec",
-      title: "pnpm test",
-      phase: "end",
-      exitCode: 1,
-      output: "private command output must not reach narration",
-    });
-    await flushNarrations();
-
-    expect(generate).toHaveBeenCalledTimes(2);
-    const notes = inputs[1]?.activityNotes.join("\n") ?? "";
-    expect(notes).toContain("pnpm test: failed (exit 1)");
-    expect(notes).not.toContain("private command output");
-    expect(onUpdate).toHaveBeenLastCalledWith({ text: "The command failed, retrying." });
   });
 
   it("disables after consecutive failed generations and warns once", async () => {

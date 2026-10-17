@@ -12,7 +12,7 @@ describe("model catalog normalization", () => {
       api: "openai-completions",
       baseUrl: "https://proxy.example/v1",
       headers: { "x-model": "gpt-5.4" },
-      input: ["text", "image", "document"],
+      input: ["text", "image", "video", "document"],
       reasoning: true,
       contextWindow: 256000,
       contextWindows: [
@@ -21,6 +21,7 @@ describe("model catalog normalization", () => {
       ],
       contextWindowDefault: "1m",
       contextTokens: 200000,
+      parameterCount: 70_000_000_000,
       maxTokens: 128000,
       thinkingLevelMap: { off: null, minimal: "low", max: "max" },
       cost: {
@@ -392,4 +393,23 @@ describe("model catalog normalization", () => {
       expect(row?.contextWindowDefault).toBeUndefined();
     },
   );
+});
+
+describe("provider credential scope metadata", () => {
+  it("retains ownership for providers without static model rows", () => {
+    expect(
+      normalizeModelCatalog(
+        { providers: { fixture: { authScope: "plugin", models: [] } } },
+        { ownedProviders: new Set(["fixture"]) },
+      )?.providers?.fixture,
+    ).toEqual({ authScope: "plugin", models: [] });
+  });
+  it("rejects invalid ownership rather than downgrading to default agent scope", () => {
+    expect(() =>
+      normalizeModelCatalog(
+        { providers: { fixture: { authScope: "global", models: [{ id: "model" }] } } },
+        { ownedProviders: new Set(["fixture"]) },
+      ),
+    ).toThrow("credential ownership");
+  });
 });

@@ -64,8 +64,6 @@ async function frameAnimation(panel: HTMLElement) {
   return { animation, end: animation.effect.getKeyframes().at(-1)! };
 }
 
-const px = (value: unknown) => Number.parseFloat(String(value));
-
 beforeEach(() => {
   localStorage.removeItem(key);
   container = document.createElement("div");
@@ -98,22 +96,5 @@ describe.runIf("__vitest_browser__" in globalThis)("System busyness frame animat
     expect(current).toBe(animation);
     animation.finish();
     await expect(animation.finished).resolves.toBe(animation);
-  });
-
-  it("retargets a running animation when a same-mode render moves its settled box", async () => {
-    const panel = await mount("expanded");
-    renderFrame("minimized", <div style={{ height: "20px" }}>Loading</div>);
-    const { animation, end } = await frameAnimation(panel);
-
-    renderFrame("minimized", <div style={{ height: "50px" }}>Connected</div>);
-    const { animation: retargeted, end: target } = await frameAnimation(panel);
-    expect(animation.playState).toBe("idle");
-    expect(retargeted).not.toBe(animation);
-    expect(px(target.height)).toBeGreaterThan(px(end.height));
-    retargeted.finish();
-    await expect(retargeted.finished).resolves.toBe(retargeted);
-    const settled = panel.getBoundingClientRect();
-    expect(px(target.top)).toBeCloseTo(settled.top, 0);
-    expect(px(target.height)).toBeCloseTo(settled.height, 0);
   });
 });

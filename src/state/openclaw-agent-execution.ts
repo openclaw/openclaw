@@ -40,12 +40,20 @@ const executionState = resolveGlobalSingleton<AgentDatabaseExecutionState>(
 );
 const executions = executionState.owners;
 
+/** Observe initial schema and registry publication through an already-captured physical path. */
+export function getPendingOpenClawAgentDatabasePreparation(
+  physicalPath: string,
+): Promise<void> | undefined {
+  return executions.get(physicalPath)?.getPendingPreparation();
+}
+
 /** Explicit preparation joins the file owner's already-captured creation target. */
 export function captureOpenClawAgentDatabasePreparationExecution(
   options: OpenClawAgentDatabaseOptions,
   expectedIdentity?: AgentDatabaseExecutionCaptureConstraints["expectedIdentity"],
+  requestedPath?: string,
 ): OpenClawAgentDatabaseExecution {
-  return captureOpenClawAgentDatabaseExecution(options, { expectedIdentity }, true);
+  return captureOpenClawAgentDatabaseExecution(options, { expectedIdentity, requestedPath }, true);
 }
 
 /** Only the deleted agent's store needs a fresh, exclusive cleanup owner. */

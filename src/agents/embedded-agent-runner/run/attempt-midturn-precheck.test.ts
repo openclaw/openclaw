@@ -65,6 +65,37 @@ describe("provider request admission", () => {
       assistantChars: 24_000,
     },
     {
+      name: "counts visible completion once after a small system change",
+      usage: 15_000,
+      chars: 2_000,
+      cap: 16_000,
+      fits: true,
+      completionTokens: 5_000,
+      assistantChars: 20_000,
+      tweakSystem: true,
+    },
+    {
+      name: "counts visible completion once after tool definitions change",
+      usage: 15_000,
+      chars: 2_000,
+      cap: 16_000,
+      fits: true,
+      completionTokens: 5_000,
+      assistantChars: 20_000,
+      tweakTools: true,
+    },
+    {
+      name: "counts split visible completion once after a small system change",
+      usage: 15_000,
+      chars: 2_000,
+      cap: 16_000,
+      fits: true,
+      completionTokens: 5_000,
+      assistantChars: 20_000,
+      asyncFragments: true,
+      tweakSystem: true,
+    },
+    {
       name: "counts async completion fragments once when the provider identity arrives late",
       usage: 15_000,
       chars: 2_000,
@@ -147,6 +178,7 @@ describe("provider request admission", () => {
       fits,
       growSystem,
       tweakSystem,
+      tweakTools,
       opaque,
       completionTokens,
       assistantChars,
@@ -184,6 +216,11 @@ describe("provider request admission", () => {
                 session.setBaseSystemPrompt("Additional instructions. ".repeat(6_000));
               } else if (tweakSystem) {
                 session.setBaseSystemPrompt(`${systemPrompt}Prefer concise answers.`);
+              } else if (tweakTools) {
+                session.agent.state.tools = session.agent.state.tools.map((tool) => ({
+                  ...tool,
+                  description: `${tool.description}. Return the report.`,
+                }));
               }
               return { content: [{ type: "text", text: "r".repeat(chars) }], details: {} };
             },
@@ -359,17 +396,13 @@ describe("provider request admission", () => {
           toolResultAggregateMaxChars: cap * 4,
           toolResultPromptProjectionState: projectionState,
           onModelRequest: streamGuards.onModelRequest,
-          preparePrimaryModelRequest: () =>
-            Promise.resolve(() => ({
-              systemPrompt: session.agent.state.systemPrompt,
-              tools: session.agent.state.tools,
-            })),
           promptActiveSession: (prompt, options) => session.prompt(prompt, options),
         });
-        expect(requests, session.agent.state.errorMessage).toHaveLength(
+        const pendingPrecheck = guards.takePendingMidTurnPrecheckRequest();
+        expect(requests, JSON.stringify(pendingPrecheck)).toHaveLength(
           oversizedAssembly ? 0 : fits ? 2 : 1,
         );
-        expect(guards.takePendingMidTurnPrecheckRequest() !== null).toBe(!fits);
+        expect(pendingPrecheck !== null).toBe(!fits);
         if (fits) {
           const sent = requests[1]?.messages.find((message) => message.role === "toolResult");
           expect(sent?.content).toEqual([{ type: "text", text: expect.any(String) }]);

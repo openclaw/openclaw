@@ -14,8 +14,7 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import type { loadWebMedia as loadWebMediaType } from "openclaw/plugin-sdk/web-media";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveSynologyHostedMediaRoute } from "./hosted-media-route.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   prepareSynologyHostedMedia,
   tryHandleSynologyHostedMediaRequest,
@@ -158,32 +157,40 @@ describe("Synology Chat hosted outbound media", () => {
       contentType: "image/png",
       fileName: "floor-plan.png",
     });
+  });
+
+  afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("requires an exact public HTTPS callback without credentials or fragments", () => {
+  afterEach(() => {
+    // Native worker drains use setImmediate after exit, including during afterAll cleanup.
+    vi.useRealTimers();
+  });
+
+  it("requires an exact public HTTPS callback before preparing media", async () => {
     const credentialedUrl = new URL("https://gateway.example.com/webhook");
     credentialedUrl.username = "fixture-user";
     credentialedUrl.password = "fixture-password";
-    expect(() => resolveSynologyHostedMediaRoute(createAccount({ webhookUrl: "" }))).toThrow(
-      "attachments require webhookUrl",
-    );
-    expect(() =>
-      resolveSynologyHostedMediaRoute(
-        createAccount({ webhookUrl: "http://gateway.example.com/webhook" }),
-      ),
-    ).toThrow("must be an absolute HTTPS URL");
-    expect(() =>
-      resolveSynologyHostedMediaRoute(createAccount({ webhookUrl: credentialedUrl.toString() })),
-    ).toThrow("must be an absolute HTTPS URL");
-    expect(() =>
-      resolveSynologyHostedMediaRoute(
-        createAccount({
-          webhookUrl:
-            "https://gateway.example.com/webhook?__openclaw_synology_media_token_existing=value",
+    for (const [webhookUrl, message] of [
+      ["", "attachments require webhookUrl"],
+      ["not-a-url", "must be an absolute HTTPS URL"],
+      ["http://gateway.example.com/webhook", "must be an absolute HTTPS URL"],
+      [credentialedUrl.toString(), "must be an absolute HTTPS URL"],
+      ["https://gateway.example.com/webhook#fragment", "must be an absolute HTTPS URL"],
+      [
+        "https://gateway.example.com/webhook?__openclaw_synology_media_token_existing=value",
+        "must not contain query parameters starting with",
+      ],
+    ] as const) {
+      await expect(
+        prepareSynologyHostedMedia({
+          account: createAccount({ webhookUrl }),
+          mediaUrl: "https://files.example.com/report.pdf",
         }),
-      ),
-    ).toThrow("must not contain query parameters starting with");
+      ).rejects.toThrow(message);
+    }
+    expect(loadWebMediaMock).not.toHaveBeenCalled();
   });
 
   it("reconstructs persisted bytes before response backpressure", async () => {

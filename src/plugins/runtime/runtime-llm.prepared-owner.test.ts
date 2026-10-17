@@ -339,6 +339,11 @@ it.each([
                   async pull(controller) {
                     if (++reads === 2) {
                       bodyReadStarted.resolve();
+                      if (anthropicReadCancel) {
+                        // Exercise cancellation ownership without racing fetch's abort error.
+                        await finishWork.promise;
+                        return;
+                      }
                     }
                     const { value, done } = await reader.read();
                     if (done) {

@@ -258,12 +258,12 @@ export function createSessionRosterObservations(
         observeReadRow(row, issuedRevision, agentId);
       }
     }
-    const offered = indexRows(rows, agentId);
+    const offered = [...indexRows(rows, agentId).values()];
     return stageManagedResults(
       scope,
       (entry) => merge(entry.snapshot.result, managed ? rows : [], entry.snapshot.agentId, agentId),
       (entry) => {
-        const matching = [...offered.values()].find((row) => matchesTarget(row, entry.target));
+        const matching = offered.find((row) => matchesTarget(row, entry.target));
         return {
           row: matching
             ? entry.row && entry.row.sessionId === matching.sessionId
@@ -431,8 +431,15 @@ export function createSessionRosterObservations(
       previous: SessionsListResult | null,
       agentId?: string | null,
     ) {
-      const previousRows = indexRows(previous?.sessions ?? [], agentId);
-      for (const row of result?.sessions ?? []) {
+      if (!result || result.sessions === previous?.sessions) {
+        return;
+      }
+      let previousRows: ReturnType<typeof indexRows> | undefined;
+      for (const row of result.sessions) {
+        if (rowRevision(row) > 0) {
+          continue;
+        }
+        previousRows ??= indexRows(previous?.sessions ?? [], agentId);
         inheritRow(row, previousRows.get(identity(row, agentId) ?? ""));
       }
     },

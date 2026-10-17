@@ -145,16 +145,7 @@ function shippedReplayFixture(version: string, mainVersion: string, complete: bo
 
 const shippedJulyReplayFixture = shippedReplayFixture("2026.7.1", "2026.7.2", true);
 const shippedSeptemberReplayFixture = shippedReplayFixture("2026.9.2", "2026.9.2", false);
-const shippedReplayFixtures: Array<
-  ReturnType<typeof shippedReplayFixture> & { assetNames?: string[] }
-> = [
-  shippedJulyReplayFixture,
-  shippedSeptemberReplayFixture,
-  {
-    ...shippedReplayFixture("2026.9.5", "2026.9.6", false),
-    assetNames: ["OpenClaw-2026.9.5.zip", "OpenClaw-2026.9.5.dmg", "OpenClaw-2026.9.5.dSYM.zip"],
-  },
-];
+const shippedReplayFixtures = [shippedJulyReplayFixture, shippedSeptemberReplayFixture];
 
 describe("stable release closeout", () => {
   it("parses stable and correction tags", () => {
@@ -170,38 +161,7 @@ describe("stable release closeout", () => {
     name: string;
     params: CloseoutOverrides;
     manifest: Record<string, unknown>;
-    absent?: string;
   }>([
-    {
-      name: "an exact stable closeout with a current rollback drill",
-      params: {},
-      manifest: {
-        version: 2,
-        releaseTag: "v2026.6.8",
-        releaseVersion: "2026.6.8",
-        fullReleaseValidationRunAttempt: "2",
-        rollbackDrill: { id: "rollback-drill-2026-q2", date: "2026-06-01" },
-      },
-      absent: "verifiedAt",
-    },
-    {
-      name: "main advancing to a later stable CalVer",
-      params: { mainPackageJson: { version: "2026.7.1" } },
-      manifest: {
-        releaseVersion: "2026.6.8",
-        mainPackageVersion: "2026.7.1",
-        releaseTagPackageVersion: "2026.6.8",
-      },
-    },
-    {
-      name: "pending apps and appcast before app publication",
-      params: {
-        release: { ...release, assets: [] },
-        mainAppcast: "https://example.test/old.zip\n",
-      },
-      manifest: { apps: "pending", appcast: "pending" },
-      absent: "appcastSha256",
-    },
     {
       name: "exact correction versions for release state and assets",
       params: {
@@ -242,18 +202,10 @@ describe("stable release closeout", () => {
         releaseTagPackageVersion: "2026.6.8",
       },
     },
-    {
-      name: "attached apps when every app family has published",
-      params: { release: { ...release, assets: completeAppAssets } },
-      manifest: { apps: "attached", appcast: "verified" },
-    },
-  ])("records $name", ({ params, manifest, absent }) => {
+  ])("records $name", ({ params, manifest }) => {
     const result = verifyStableMainCloseout({ ...validCloseoutParams, ...params });
     expect(result.errors).toEqual([]);
     expect(result.manifest).toMatchObject(manifest);
-    if (absent) {
-      expect(result.manifest).not.toHaveProperty(absent);
-    }
   });
 
   it.each<{ name: string; params: CloseoutOverrides; errors: string[] }>([
@@ -370,23 +322,15 @@ describe("stable release closeout", () => {
     expect(replay.manifest).toEqual(first.manifest);
   });
 
-  it.each(shippedReplayFixtures)(
-    "replays $label byte-for-byte",
-    ({ manifest, params, assetNames }) => {
-      const serializedReceipt = JSON.stringify(manifest);
-      const result = verifyStableMainCloseout({
-        ...params,
-        mainAppcast: "<rss>current feed without the historical release</rss>",
-      });
-      expect(result.errors).toEqual([]);
-      expect(JSON.stringify(result.manifest)).toBe(serializedReceipt);
-      if (assetNames) {
-        expect(
-          result.manifest?.githubReleaseAssets.map((asset: { name: string }) => asset.name),
-        ).toEqual(assetNames);
-      }
-    },
-  );
+  it.each(shippedReplayFixtures)("replays $label byte-for-byte", ({ manifest, params }) => {
+    const serializedReceipt = JSON.stringify(manifest);
+    const result = verifyStableMainCloseout({
+      ...params,
+      mainAppcast: "<rss>current feed without the historical release</rss>",
+    });
+    expect(result.errors).toEqual([]);
+    expect(JSON.stringify(result.manifest)).toBe(serializedReceipt);
+  });
 
   it("rejects replay with a noncanonical recorded appcast hash", () => {
     const { manifest, params } = shippedSeptemberReplayFixture;
@@ -435,27 +379,6 @@ describe("stable release closeout", () => {
       ).toEqual({ commit: withdrawal.commit, reason: marker.commit.message.split("\n")[0] });
     });
 
-    it("records the withdrawal instead of the feed link contracts", () => {
-      const lookups: string[] = [];
-      const result = verifyStableMainCloseout({
-        ...params,
-        findAppcastWithdrawal: (requested: string) => {
-          lookups.push(requested);
-          return withdrawal;
-        },
-      });
-
-      expect(result.errors).toEqual([]);
-      expect(lookups).toEqual([version]);
-      expect(result.manifest).toMatchObject({
-        apps: "pending",
-        appPlatforms: { macos: "withdrawn", android: "pending", windows: "pending" },
-        appcast: "withdrawn",
-        appcastWithdrawal: withdrawal,
-      });
-      expect(result.manifest).not.toHaveProperty("appcastSha256");
-    });
-
     it.each([
       ["without a marker commit", olderFeed, undefined],
       ["when the newest entry is not older", olderFeed.replace("2026.9.5", version), withdrawal],
@@ -473,10 +396,23 @@ describe("stable release closeout", () => {
     });
 
     it("replays a withdrawn receipt byte-for-byte without another lookup", () => {
+      const lookups: string[] = [];
       const first = verifyStableMainCloseout({
         ...params,
-        findAppcastWithdrawal: () => withdrawal,
+        findAppcastWithdrawal: (requested: string) => {
+          lookups.push(requested);
+          return withdrawal;
+        },
       });
+      expect(first.errors).toEqual([]);
+      expect(lookups).toEqual([version]);
+      expect(first.manifest).toMatchObject({
+        apps: "pending",
+        appPlatforms: { macos: "withdrawn", android: "pending", windows: "pending" },
+        appcast: "withdrawn",
+        appcastWithdrawal: withdrawal,
+      });
+      expect(first.manifest).not.toHaveProperty("appcastSha256");
       const replayParams = {
         ...params,
         existingManifest: first.manifest,

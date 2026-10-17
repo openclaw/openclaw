@@ -1,4 +1,3 @@
-// Discord tests cover mentions plugin behavior.
 import { beforeEach, describe, expect, it } from "vitest";
 import { rememberDiscordDirectoryUser } from "./directory-cache.js";
 import { clearDiscordDirectoryCacheForTest } from "./directory-cache.test-support.js";
@@ -51,23 +50,77 @@ describe("rewriteDiscordKnownMentions", () => {
     expect(rewritten).toBe("ping <@333333333> and <@222222222>");
   });
 
+  it.each([".", "...", ",", "!", "?", ":", ";", ")"])(
+    "preserves %s after known mentions",
+    (suffix) => {
+      expect(
+        rewriteDiscordKnownMentions(`@alice${suffix} @alice.dev${suffix} @alice#1234${suffix}`, {
+          mentionAliases: { alice: "111111111", "alice.dev": "222222222" },
+        }),
+      ).toBe(`<@111111111>${suffix} <@222222222>${suffix} <@111111111>${suffix}`);
+    },
+  );
+
+  it("prefers the longest known handle before treating trailing dots as punctuation", () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "333333333",
+      handles: ["alice.."],
+    });
+    expect(
+      rewriteDiscordKnownMentions("@alice. @alice.. @alice...", {
+        accountId: "default",
+        mentionAliases: { alice: "111111111", "alice.": "222222222" },
+      }),
+    ).toBe("<@222222222> <@333333333> <@333333333>.");
+  });
+
   it("preserves unknown mentions and reserved mentions", () => {
     rememberDiscordDirectoryUser({
       accountId: "default",
       userId: "123456789",
       handles: ["alice"],
     });
-    const rewritten = rewriteDiscordKnownMentions("hello @unknown @everyone @here", {
+    const text = "hello @unknown. @everyone. @here... @alice.dev. @a.";
+    const rewritten = rewriteDiscordKnownMentions(text, {
       accountId: "default",
+      mentionAliases: { everyone: "111111111", here: "222222222", a: "333333333" },
     });
-    expect(rewritten).toBe("hello @unknown @everyone @here");
+    expect(rewritten).toBe(text);
+  });
+
+  it.each([
+    ["user@host.com mail@alice. \\@alice.", "user@host.com mail@alice. \\@alice."],
+    [
+      "https://example.com/@alice. https://example.com/?@alice https://example.com/!@alice...",
+      "https://example.com/@alice. https://example.com/?@alice https://example.com/!@alice...",
+    ],
+    [
+      "www.example.com/?@alice. //example.com/?@alice. [link](//example.com/?@alice.)",
+      "www.example.com/?@alice. //example.com/?@alice. [link](//example.com/?@alice.)",
+    ],
+    ["mailto:user@host.com?subject=@alice.", "mailto:user@host.com?subject=@alice."],
+    ["See [docs](https://example.com),@alice", "See [docs](https://example.com),<@123456789>"],
+    ["(https://example.com/a_(b)) @alice.", "(https://example.com/a_(b)) <@123456789>."],
+    [
+      "See [docs](https://example.com/a_(@alice)),@alice.",
+      "See [docs](https://example.com/a_(@alice)),<@123456789>.",
+    ],
+    ["https://example.com/@alice", "https://example.com/@alice"],
+    ["user@alice.com", "user@alice.com"],
+  ])("resolves prose mentions while preserving URLs and emails: %s", (text, expected) => {
+    expect(
+      rewriteDiscordKnownMentions(`${text} @alice.`, {
+        mentionAliases: { alice: "123456789", "alice.com": "987654321", "host.com": "111111111" },
+      }),
+    ).toBe(`${expected} <@123456789>.`);
   });
 
   it.each([
     {
       name: "balanced inline and fenced code",
-      input: "inline `@alice` fence ```\n@alice\n``` text @alice",
-      expected: "inline `@alice` fence ```\n@alice\n``` text <@123456789>",
+      input: "inline `@alice.` fence ```\n@alice.\n``` text @alice.",
+      expected: "inline `@alice.` fence ```\n@alice.\n``` text <@123456789>.",
     },
     {
       name: "closed multiline code containing a longer backtick run",

@@ -65,6 +65,7 @@ it.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
       const browserOrigin = "https://control.example.test";
       const cfg: OpenClawConfig = {
         agents: { entries: { main: {} } },
+        tools: { allow: ["group:plugins"] },
         gateway: {
           trustedProxies: ["127.0.0.1"],
           controlUi: { allowedOrigins: [browserOrigin] },
@@ -123,6 +124,7 @@ it.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
         id: "browser",
         name: "Browser",
         origin: "bundled",
+        contracts: { tools: ["browser"] },
         source: fileURLToPath(new URL("../../extensions/browser/index.ts", import.meta.url)),
       });
       registerTestPlugin({

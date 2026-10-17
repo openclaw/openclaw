@@ -176,6 +176,7 @@ export async function prepareEmbeddedAttemptHistory(
     availableTools: new Set(capabilityToolNames),
     citationsMode: attempt.config?.memory?.citations,
     sandboxed,
+    memoryProjectKey: attempt.preparedModelRuntime?.projectKey ?? undefined,
     promptBudget: {
       contextTokens:
         attempt.contextTokenBudget ?? attempt.model.contextWindow ?? attempt.model.maxTokens,

@@ -5,6 +5,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
@@ -22,17 +23,23 @@ export const MAX_CACHED_CHAT_WEIGHT = 24 * 1024 * 1024;
 const cachedMessageWeights = new WeakMap<object, number>();
 const appendedEventClaims = new WeakMap<ChatMessageCache, WeakSet<object>>();
 
+export const CHAT_TRANSCRIPT_METADATA_KEYS = [
+  "key",
+  "kind",
+  "label",
+  "displayName",
+  "derivedTitle",
+  "classification",
+  "participants",
+  "expandedParticipants",
+  "owner",
+  "lastRunId",
+  "status",
+  "runtimeMs",
+] as const;
 export type ChatTranscriptMetadata = Pick<
   GatewaySessionRow,
-  | "key"
-  | "kind"
-  | "classification"
-  | "participants"
-  | "expandedParticipants"
-  | "owner"
-  | "lastRunId"
-  | "status"
-  | "runtimeMs"
+  (typeof CHAT_TRANSCRIPT_METADATA_KEYS)[number]
 >;
 
 const transcriptMetadata = new WeakMap<GatewaySessionRow, ChatTranscriptMetadata>();
@@ -45,6 +52,9 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
   const {
     key,
     kind,
+    label,
+    displayName,
+    derivedTitle,
     classification,
     participants,
     expandedParticipants,
@@ -56,6 +66,9 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
   const metadata = {
     key,
     kind,
+    label,
+    displayName,
+    derivedTitle,
     classification,
     participants,
     expandedParticipants,
@@ -129,6 +142,15 @@ type CachedChatSessionSnapshot = {
 };
 
 export type ChatMessageCache = Map<string, CachedChatSessionSnapshot>;
+
+/** Disk snapshots omit pairing secrets; discard only their connection-owned memory copies. */
+export function retireCachedPairingQr(cache: ChatMessageCache | undefined): void {
+  for (const [key, cached] of cache ?? []) {
+    if (cached.snapshot.messages.some((message) => readPairingQrContent(message).length > 0)) {
+      cache?.delete(key);
+    }
+  }
+}
 
 export type ChatCacheObserver = {
   delete: (sessionKey: string, reason?: SessionSnapshotInvalidationReason) => void | Promise<void>;

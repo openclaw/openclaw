@@ -490,7 +490,18 @@ suite.define(() => {
           ]),
         );
       }
-      await rows.getByRole("button", { name: "Dismiss pull request #44" }).click();
+      await rows
+        .getByRole("button", {
+          name: "Actions for pull request synthetic/publication-demo#44",
+          exact: true,
+        })
+        .click();
+      await page
+        .getByRole("menuitem", {
+          name: "Dismiss pull request synthetic/publication-demo#44",
+          exact: true,
+        })
+        .click();
       await expect.poll(() => rows.count()).toBe(0);
       await showBranch();
       await page.getByRole("button", { name: "Publish PR", exact: true }).waitFor();

@@ -6,6 +6,7 @@ import {
   normalizeStringEntries,
   normalizeUniqueStringEntries,
 } from "@openclaw/normalization-core/string-normalization";
+import { isOsRequirementSatisfied } from "../../shared/requirements.js";
 import type { SkillEntry } from "../types.js";
 
 export function extractErrorMessage(err: unknown): string | undefined {
@@ -44,7 +45,7 @@ export function isMacPlatform(platform?: string, deviceFamily?: string): boolean
 }
 
 export function supportsSystemRun(commands?: string[]): boolean {
-  return Array.isArray(commands) && commands.includes("system.run");
+  return commands?.includes("system.run") ?? false;
 }
 
 export function isRemoteSkillEligibilityNode(
@@ -67,7 +68,7 @@ export function isRemoteSkillEligibilityNode(
 export function collectRequiredBins(entries: SkillEntry[], targetPlatform: string): string[] {
   return normalizeUniqueStringEntries(
     entries.flatMap(({ metadata }) =>
-      metadata?.os?.length && !metadata.os.includes(targetPlatform)
+      !isOsRequirementSatisfied(metadata?.os ?? [], [targetPlatform])
         ? []
         : [...(metadata?.requires?.bins ?? []), ...(metadata?.requires?.anyBins ?? [])],
     ),

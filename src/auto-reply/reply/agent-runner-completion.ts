@@ -11,6 +11,7 @@ import {
 } from "../../config/sessions/session-actor-scope.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import type { SessionActivitySummaryCompletion } from "../../gateway/session-activity-summary-completion.js";
 import { logVerbose } from "../../globals.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type {
@@ -29,6 +30,7 @@ export async function withAgentTurnCompletion<T>(
     entry?: SessionEntry;
     writer?: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "activeWriterRunId">;
     operation: ReplyOperation;
+    activitySummaryCompletion?: SessionActivitySummaryCompletion;
     prepareRestartClaimCleanup?: (entry: SessionEntry) => AgentTurnRestartClaimCleanup | undefined;
     publish(entry: SessionEntry): void;
   },
@@ -74,7 +76,7 @@ export async function withAgentTurnCompletion<T>(
       const prepared: Parameters<AgentTurnCompletion["patch"]>[0][] = [];
       let finished = false;
       const project = () => {
-        let next = structuredClone(snapshot.entry!);
+        let next = snapshot.entry!;
         const reducers: SessionActorReducer[] = [];
         for (const preparation of prepared) {
           const reducer = typeof preparation === "function" ? preparation(next) : preparation;
@@ -114,7 +116,13 @@ export async function withAgentTurnCompletion<T>(
           await refresh();
           let restartClaimCleanup = params.prepareRestartClaimCleanup?.(snapshot.entry!);
           let { reducers } = project();
-          if (reducers.length === 0 && !pendingFinalDelivery && !restartClaimCleanup) {
+          const activitySummary = params.activitySummaryCompletion?.take();
+          if (
+            reducers.length === 0 &&
+            !pendingFinalDelivery &&
+            !restartClaimCleanup &&
+            !activitySummary
+          ) {
             return snapshot.entry!;
           }
           const committed: { receipt?: SessionActorReceipt } = {};
@@ -128,12 +136,12 @@ export async function withAgentTurnCompletion<T>(
                 phaseId: `complete:${operationKey}`,
                 expected: actor.target.database.kind === "memory" ? undefined : snapshot.version,
                 reducers,
+                activitySummary,
                 bookkeeping: {
                   sessionId: expected.sessionId,
                   lifecycleRevision: expected.lifecycleRevision ?? null,
                   writerRunId: expected.writerRunId,
                   expectedState: buildRestartRecoveryExpectedState(snapshot.entry!),
-                  ...(pendingFinalDelivery ? { lifecycle: { updatedAt: Date.now() } } : {}),
                 },
                 pendingFinalDelivery,
                 restartClaimCleanup: restartClaimCleanup?.operation,
@@ -142,6 +150,9 @@ export async function withAgentTurnCompletion<T>(
               {
                 committed: (receipt) => {
                   committed.receipt = receipt.receipt;
+                  if (activitySummary && receipt.receipt.postimage.entry) {
+                    params.activitySummaryCompletion?.committed(receipt.receipt.postimage.entry);
+                  }
                   restartClaimCleanup?.committed();
                 },
               },

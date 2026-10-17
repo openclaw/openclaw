@@ -1,6 +1,6 @@
 import { ConnectErrorDetailCodes } from "@openclaw/gateway-client/browser";
 import type { UsersMentionableParams, UsersMentionableResult } from "@openclaw/gateway-protocol";
-import { Show } from "solid-js";
+import { createMemo, createStore, For, Repeat, Show } from "solid-js";
 import {
   GatewayRequestError,
   resolveGatewayErrorDetailCode,
@@ -9,15 +9,13 @@ import {
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { MAX_HUMAN_MENTIONS, updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
-import { solidTemplate } from "./chat-composer-controls.ts";
+import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import "../../../styles/chat/mention-menu.css";
-import { LitContent } from "./chat-composer-interop.tsx";
 import {
   handleComposerMenuKeydown,
   ComposerMenu,
-  renderComposerMenuOption,
+  renderComposerMenuOption as ComposerMenuOption,
 } from "./chat-composer-menu.tsx";
 
 export type HumanMentionDirectory = {
@@ -81,163 +79,167 @@ function findMentionTarget(value: string, caret: number): MentionTarget | null {
   return { start, end, query, value };
 }
 
+type MentionPerson = UsersMentionableResult["users"][number];
+type MentionInput = Pick<HTMLTextAreaElement, "value" | "selectionStart" | "selectionEnd">;
+type MentionIntent = "input" | "trigger" | "selection";
+type MentionMenuState = {
+  target: MentionTarget | null;
+  search: MentionSearch | null;
+  index: number;
+  selectedProfileId: string | undefined;
+};
+
 /** One bounded suggestion lifecycle shared by existing- and new-session composers. */
-export class HumanMentionMenu {
-  private directory?: HumanMentionDirectory;
-  private generation = 0;
-  private timer: ReturnType<typeof setTimeout> | undefined;
-  private target: MentionTarget | null = null;
-  private search: MentionSearch | null = null;
-  private index = 0;
-  private selectedProfileId: string | undefined;
-  private readonly selectedAvatars = new Map<string, string>();
-  private readonly results = new Map<string, MentionResultSnapshot>();
-  private readonly requests = new Map<string, Promise<UsersMentionableResult>>();
+export function createHumanMentionMenu() {
+  let directory: HumanMentionDirectory | undefined;
+  let generation = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const [state, setState] = createStore<MentionMenuState>({
+    target: null,
+    search: null,
+    index: 0,
+    selectedProfileId: undefined,
+  });
+  const selectedAvatars = new Map<string, string>();
+  const selectedAvatarUrls: ReadonlyMap<string, string> = selectedAvatars;
+  const results = new Map<string, MentionResultSnapshot>();
+  const requests = new Map<string, Promise<UsersMentionableResult>>();
 
-  get open(): boolean {
-    return this.target !== null;
-  }
-
-  syncDirectory(directory: HumanMentionDirectory | undefined) {
+  function syncDirectory(next: HumanMentionDirectory | undefined) {
     // Results are query snapshots: unrelated session/presence traffic must not cancel typing.
     // Owner changes fence them here; admission rechecks current recipient visibility.
     if (
-      this.directory?.client === directory?.client &&
-      this.directory?.ownerKey === directory?.ownerKey &&
-      JSON.stringify(this.directory?.params) === JSON.stringify(directory?.params)
+      directory?.client === next?.client &&
+      directory?.ownerKey === next?.ownerKey &&
+      JSON.stringify(directory?.params) === JSON.stringify(next?.params)
     ) {
       return;
     }
-    this.close();
-    this.results.clear();
-    this.requests.clear();
-    this.selectedAvatars.clear();
+    setState(close);
+    results.clear();
+    requests.clear();
+    selectedAvatars.clear();
     // Each lifetime owns a fresh descriptor, even if a caller reuses A after A → B → A.
     // Old requests must never become current again or retire a replacement query.
-    this.directory = directory ? { ...directory } : undefined;
+    directory = next ? { ...next } : undefined;
   }
 
-  private cancelSearch() {
-    this.generation += 1;
-    clearTimeout(this.timer);
-    this.timer = undefined;
+  function cancelSearch() {
+    generation += 1;
+    clearTimeout(timer);
+    timer = undefined;
   }
 
-  close() {
-    this.cancelSearch();
-    this.target = null;
-    this.search = null;
-    this.index = 0;
-    this.selectedProfileId = undefined;
+  function close(draft: MentionMenuState) {
+    cancelSearch();
+    Object.assign(draft, { target: null, search: null, index: 0, selectedProfileId: undefined });
   }
 
-  dispose() {
-    this.syncDirectory(undefined);
+  function dispose() {
+    cancelSearch();
+    directory = undefined;
+    results.clear();
+    requests.clear();
+    selectedAvatars.clear();
   }
 
-  update(
-    input: Pick<HTMLTextAreaElement, "value" | "selectionStart" | "selectionEnd">,
-    requestUpdate: () => void,
-    intent: "input" | "trigger" | "selection" = "selection",
+  function update(
+    draft: MentionMenuState,
+    input: MentionInput,
+    intent: MentionIntent = "selection",
   ) {
     const { value, selectionStart: caret, selectionEnd } = input;
-    const target = this.directory ? findMentionTarget(value, caret) : null;
+    const target = directory ? findMentionTarget(value, caret) : null;
     // Only typing may extend a full-name query. Moving into untouched prose or
     // another @ must retire the current invocation, not start a different search.
+    const previous = draft.target;
     const leftTarget =
       intent === "selection" &&
-      this.target !== null &&
-      (value !== this.target.value ||
-        target?.start !== this.target.start ||
-        selectionEnd > this.target.end);
-    if (!target || leftTarget || (!this.open && intent !== "trigger")) {
-      if (this.open) {
-        this.close();
-        requestUpdate();
+      previous !== null &&
+      (value !== previous.value || target?.start !== previous.start || selectionEnd > previous.end);
+    if (!target || leftTarget || (!previous && intent !== "trigger")) {
+      if (previous) {
+        close(draft);
       }
       return;
     }
-    const previous = this.target;
     if (previous?.start === target.start && intent !== "trigger") {
       // Keep later name parts in the replacement range when navigating or editing
       // an earlier part. Input shifts that range; selection never changes its extent.
       target.end = Math.max(target.end, previous.end + value.length - previous.value.length);
     }
     if (previous?.start !== target.start) {
-      this.selectedProfileId = undefined;
+      draft.selectedProfileId = undefined;
     }
-    this.target = target;
-    if (previous?.start === target.start && previous.query === target.query) {
-      return;
+    draft.target = target;
+    if (previous?.start !== target.start || previous.query !== target.query) {
+      searchPeople(draft);
     }
-    this.searchPeople(requestUpdate);
   }
 
-  private showResults(result: UsersMentionableResult) {
-    this.index = Math.max(
+  function showResults(draft: MentionMenuState, result: UsersMentionableResult) {
+    draft.index = Math.max(
       0,
-      result.users.findIndex((user) => user.profileId === this.selectedProfileId),
+      result.users.findIndex((user) => user.profileId === draft.selectedProfileId),
     );
-    this.selectedProfileId = result.users[this.index]?.profileId;
-    this.search = { kind: "ready", result };
+    draft.selectedProfileId = result.users[draft.index]?.profileId;
+    draft.search = { kind: "ready", result };
   }
 
-  private searchPeople(requestUpdate: () => void) {
-    const target = this.target;
-    const directory = this.directory;
-    if (!target || !directory) {
+  function searchPeople(draft: MentionMenuState) {
+    const target = draft.target;
+    const source = directory;
+    if (!target || !source) {
       return;
     }
-    this.cancelSearch();
+    cancelSearch();
     const query = target.query;
     // Only the Gateway knows every searchable identity field and its matching rules.
     // Reuse exact snapshots; display-name filtering would lose verified-login matches.
-    let cached = this.results.get(query);
+    let cached = results.get(query);
     if (cached && Date.now() - cached.fetchedAt >= MENTION_RESULTS_MAX_AGE_MS) {
-      this.results.delete(query);
+      results.delete(query);
       cached = undefined;
     }
     if (cached) {
-      this.showResults(cached.result);
-      if (Date.now() < cached.refreshAfter && !this.requests.has(query)) {
-        requestUpdate();
+      showResults(draft, cached.result);
+      if (Date.now() < cached.refreshAfter && !requests.has(query)) {
         return;
       }
     } else {
-      this.search = { kind: "loading" };
+      draft.search = { kind: "loading" };
     }
-    const generation = this.generation;
-    this.timer = setTimeout(() => {
-      this.timer = undefined;
-      const refreshed = this.results.get(query);
+    const requestGeneration = generation;
+    timer = setTimeout(() => {
+      timer = undefined;
+      const refreshed = results.get(query);
       if (refreshed && refreshed !== cached && Date.now() < refreshed.refreshAfter) {
-        this.showResults(refreshed.result);
-        requestUpdate();
+        setState((next) => showResults(next, refreshed.result));
         return;
       }
-      let request = this.requests.get(query);
+      let request = requests.get(query);
       if (!request) {
         // Failed refreshes do not extend data lifetime or retry on every reopen.
         if (cached) {
           cached.refreshAfter = Date.now() + MENTION_REFRESH_RETRY_MS;
         }
-        request = directory.client
+        request = source.client
           .request<UsersMentionableResult>(
             "users.mentionable",
-            { ...directory.params, query },
+            { ...source.params, query },
             // A hung read must release the shared slot so reopening can retry.
             { timeoutMs: MENTION_REQUEST_TIMEOUT_MS },
           )
           .then((result) => {
             // Closing or typing ahead retires presentation, not useful query snapshots.
             // A replaced directory must never inherit the previous owner's response.
-            if (this.directory === directory) {
-              this.results.delete(query);
-              if (this.results.size === MAX_CACHED_MENTION_QUERIES) {
-                this.results.delete(this.results.keys().next().value!);
+            if (directory === source) {
+              results.delete(query);
+              if (results.size === MAX_CACHED_MENTION_QUERIES) {
+                results.delete(results.keys().next().value!);
               }
               const fetchedAt = Date.now();
-              this.results.set(query, {
+              results.set(query, {
                 result,
                 fetchedAt,
                 refreshAfter: fetchedAt + MENTION_RESULTS_FRESH_MS,
@@ -246,17 +248,16 @@ export class HumanMentionMenu {
             return result;
           })
           .finally(() => {
-            if (this.directory === directory) {
-              this.requests.delete(query);
+            if (directory === source) {
+              requests.delete(query);
             }
           });
-        this.requests.set(query, request);
+        requests.set(query, request);
       }
       void request.then(
         (result) => {
-          if (generation === this.generation) {
-            this.showResults(result);
-            requestUpdate();
+          if (requestGeneration === generation) {
+            setState((next) => showResults(next, result));
           }
         },
         (error: unknown) => {
@@ -267,75 +268,62 @@ export class HumanMentionMenu {
             (error.gatewayCode !== "UNAVAILABLE" ||
               resolveGatewayErrorDetailCode(error) ===
                 ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE);
-          if (this.directory === directory && rejected) {
-            this.results.clear();
-            this.requests.clear();
-            this.directory = { ...directory };
-            this.cancelSearch();
-            if (this.open) {
-              this.search = { kind: "error" };
-              requestUpdate();
-            }
-          } else if (generation === this.generation && !cached) {
-            this.search = { kind: "error" };
-            requestUpdate();
+          if (directory === source && rejected) {
+            results.clear();
+            requests.clear();
+            directory = { ...source };
+            cancelSearch();
+            setState((next) => {
+              if (next.target) {
+                next.search = { kind: "error" };
+              }
+            });
+          } else if (requestGeneration === generation && !cached) {
+            setState((next) => {
+              next.search = { kind: "error" };
+            });
           }
         },
       );
     }, 150);
-    requestUpdate();
   }
 
-  activeId(paneId: string): string | null {
-    return this.search?.kind === "ready" && this.search.result.users[this.index]
-      ? paneDomId(paneId, `mention-option-${this.index}`)
-      : null;
-  }
-
-  activeLabel(): string {
-    return this.search?.kind === "ready"
-      ? (this.search.result.users[this.index]?.displayName ?? "")
-      : "";
-  }
-
-  handleKeydown(event: KeyboardEvent, host: HumanMentionMenuHost, requestUpdate: () => void) {
-    if (!this.open || event.defaultPrevented || event.isComposing || event.keyCode === 229) {
-      return false;
-    }
-    if (this.search?.kind === "error" && event.key === "Tab") {
-      return false;
-    }
-    const users = this.search?.kind === "ready" ? this.search.result.users : [];
-    return handleComposerMenuKeydown(event, {
-      count: users.length,
-      index: this.index,
-      consumeEmpty: true,
-      close: () => {
-        this.close();
-        requestUpdate();
-      },
-      move: (index) => {
-        this.index = index;
-        this.selectedProfileId = users[index]?.profileId;
-        requestUpdate();
-        return this.activeId(host.paneId);
-      },
-      select: () => this.select(users[this.index]!, host, requestUpdate),
+  function handleKeydown(event: KeyboardEvent, host: HumanMentionMenuHost) {
+    let handled = false;
+    setState((draft) => {
+      if (!draft.target || event.defaultPrevented || event.isComposing || event.keyCode === 229) {
+        return;
+      }
+      if (draft.search?.kind === "error" && event.key === "Tab") {
+        return;
+      }
+      const users = draft.search?.kind === "ready" ? draft.search.result.users : [];
+      handled = handleComposerMenuKeydown(event, {
+        count: users.length,
+        index: draft.index,
+        consumeEmpty: true,
+        close: () => close(draft),
+        move: (index) => {
+          draft.index = index;
+          draft.selectedProfileId = users[index]?.profileId;
+          return users[index] ? paneDomId(host.paneId, `mention-option-${index}`) : null;
+        },
+        select: () => select(draft, users[draft.index]!, host),
+      });
     });
+    return handled;
   }
 
-  private select(
-    person: UsersMentionableResult["users"][number],
-    host: HumanMentionMenuHost,
-    requestUpdate: () => void,
-  ) {
+  function select(draft: MentionMenuState, person: MentionPerson, host: HumanMentionMenuHost) {
     const textarea = host.getTextarea();
     const current = textarea?.value ?? host.getDraft();
-    this.update(
+    // Revalidate and consume the target within one draft: Solid publishes writes
+    // after the event, but selection must use the current textarea immediately.
+    update(
+      draft,
       textarea ?? { value: current, selectionStart: current.length, selectionEnd: current.length },
-      requestUpdate,
     );
-    const target = this.target;
+    const target = draft.target;
     if (!target || host.getMentions().length >= MAX_HUMAN_MENTIONS) {
       return;
     }
@@ -353,133 +341,140 @@ export class HumanMentionMenu {
     ].toSorted((a, b) => a.start - b.start);
     // Preserve only selected presentation URLs, so the shared loader reuses the
     // exact image already requested by the picker. Recipient metadata stays unchanged.
-    for (const profileId of this.selectedAvatars.keys()) {
+    for (const profileId of selectedAvatars.keys()) {
       if (!mentions.some((mention) => mention.profileId === profileId)) {
-        this.selectedAvatars.delete(profileId);
+        selectedAvatars.delete(profileId);
       }
     }
     if (person.avatarUrl) {
-      this.selectedAvatars.set(person.profileId, person.avatarUrl);
+      selectedAvatars.set(person.profileId, person.avatarUrl);
     } else {
-      this.selectedAvatars.delete(person.profileId);
+      selectedAvatars.delete(person.profileId);
     }
     host.commitDraft(next, mentions);
-    this.close();
-    requestUpdate();
+    const caret = target.start + replacement.length;
+    close(draft);
     queueMicrotask(() => {
       const currentTextarea = host.getTextarea();
       currentTextarea?.focus({ preventScroll: true });
-      currentTextarea?.setSelectionRange(
-        target.start + replacement.length,
-        target.start + replacement.length,
-      );
+      currentTextarea?.setSelectionRange(caret, caret);
     });
   }
 
-  get selectedAvatarUrls(): ReadonlyMap<string, string> {
-    return this.selectedAvatars;
-  }
+  return {
+    get open() {
+      return state.target !== null;
+    },
+    state,
+    selectedAvatarUrls,
+    syncDirectory,
+    update: (input: MentionInput, intent: MentionIntent = "selection") =>
+      setState((draft) => update(draft, input, intent)),
+    close: () => setState(close),
+    dispose,
+    handleKeydown,
+    activeId: (paneId: string) =>
+      state.search?.kind === "ready" && state.search.result.users[state.index]
+        ? paneDomId(paneId, `mention-option-${state.index}`)
+        : null,
+    activeLabel: () =>
+      state.search?.kind === "ready"
+        ? (state.search.result.users[state.index]?.displayName ?? "")
+        : "",
+    select: (person: MentionPerson, host: HumanMentionMenuHost) =>
+      setState((draft) => select(draft, person, host)),
+    hover: (index: number, profileId: string) =>
+      setState((draft) => Object.assign(draft, { index, selectedProfileId: profileId })),
+    retry: () => setState(searchPeople),
+  };
+}
 
-  render(host: HumanMentionMenuHost, requestUpdate: () => void) {
-    return solidTemplate(HumanMentionMenuView, { args: [this, host, requestUpdate] });
-  }
+export type HumanMentionMenu = ReturnType<typeof createHumanMentionMenu>;
 
-  renderSolid(host: HumanMentionMenuHost, requestUpdate: () => void) {
-    return <HumanMentionMenuView args={[this, host, requestUpdate]} />;
-  }
-
-  renderContents(host: HumanMentionMenuHost, requestUpdate: () => void) {
-    if (!this.open) {
-      return null;
-    }
-    const result = this.search?.kind === "ready" ? this.search.result : undefined;
-    const limited = host.getMentions().length >= MAX_HUMAN_MENTIONS;
-    const loading = this.search?.kind === "loading";
-    const message = limited
+export function HumanMentionMenuView(props: { args: [HumanMentionMenu, HumanMentionMenuHost] }) {
+  const menu = () => props.args[0];
+  const host = () => props.args[1];
+  const result = createMemo(() => {
+    const search = menu().state.search;
+    return search?.kind === "ready" ? search.result : undefined;
+  });
+  const limited = () => host().getMentions().length >= MAX_HUMAN_MENTIONS;
+  const loading = () => menu().state.search?.kind === "loading";
+  const message = () =>
+    limited()
       ? t("chat.mentions.limit")
-      : this.search?.kind === "error"
+      : menu().state.search?.kind === "error"
         ? t("chat.mentions.unavailable")
-        : !loading && !result?.users.length
+        : !loading() && !result()?.users.length
           ? t("chat.mentions.empty")
           : null;
-    return (
-      <>
-        {" "}
-        <div class="slash-menu-group" aria-busy={loading ? "true" : "false"}>
+  return (
+    <Show when={menu().open}>
+      <ComposerMenu
+        id={paneDomId(host().paneId, "mention-menu-listbox")}
+        class="mention-menu"
+        label={t("chat.mentions.menu")}
+        trackScroll={false}
+        activeId={menu().activeId(host().paneId)}
+        revision={menu().state.search}
+      >
+        <div class="slash-menu-group" aria-busy={loading() ? "true" : "false"}>
           <div class="slash-menu-group__label" role="status">
-            {message ?? t("chat.mentions.menu")}
+            {message() ?? t("chat.mentions.menu")}
           </div>
-          {this.search?.kind === "error" && !limited ? (
+          <Show when={menu().state.search?.kind === "error" && !limited()}>
             <button
               type="button"
               class="btn btn--sm mention-menu__retry"
               onClick={() => {
-                this.searchPeople(requestUpdate);
-                host.getTextarea()?.focus({ preventScroll: true });
+                menu().retry();
+                host().getTextarea()?.focus({ preventScroll: true });
               }}
             >
               {t("common.retry")}
             </button>
-          ) : null}
-          {message
-            ? null
-            : loading
-              ? [0, 1, 2].map(() => (
-                  <div class="slash-menu-item mention-menu__loading" aria-hidden="true">
-                    <span class="slash-menu-icon">
-                      <span class="skeleton mention-menu__avatar"></span>
-                    </span>
-                    <span class="skeleton skeleton-line skeleton-line--medium"></span>
-                  </div>
-                ))
-              : result?.users.map((person, index) =>
-                  renderComposerMenuOption({
-                    id: paneDomId(host.paneId, `mention-option-${index}`),
-                    active: index === this.index,
-                    select: () => this.select(person, host, requestUpdate),
-                    hover: () => {
-                      this.index = index;
-                      this.selectedProfileId = person.profileId;
-                      requestUpdate();
-                    },
-                    icon: (
-                      <LitContent
-                        value={renderChatAuthorAvatar({
-                          id: person.profileId,
-                          name: person.displayName,
-                          identity: { type: "profile", id: person.profileId },
-                          profileAvatarUrl: person.avatarUrl,
-                        })}
-                      />
-                    ),
-                    iconHidden: true,
-                    name: person.displayName,
-                    description: person.online ? t("chat.mentions.online") : null,
-                  }),
-                )}
-          {result?.truncated ? (
+          </Show>
+          <Show when={!message() && !loading()}>
+            <For each={result()?.users}>
+              {(person, index) => (
+                <ComposerMenuOption
+                  id={paneDomId(host().paneId, `mention-option-${index()}`)}
+                  active={index() === menu().state.index}
+                  select={() => menu().select(person, host())}
+                  hover={() => menu().hover(index(), person.profileId)}
+                  icon={
+                    <ChatAuthorAvatar
+                      sender={{
+                        id: person.profileId,
+                        name: person.displayName,
+                        identity: { type: "profile", id: person.profileId },
+                        profileAvatarUrl: person.avatarUrl,
+                      }}
+                    />
+                  }
+                  iconHidden={true}
+                  name={person.displayName}
+                  description={person.online ? t("chat.mentions.online") : null}
+                />
+              )}
+            </For>
+          </Show>
+          <Show when={!message() && loading()}>
+            <Repeat count={3}>
+              {() => (
+                <div class="slash-menu-item mention-menu__loading" aria-hidden="true">
+                  <span class="slash-menu-icon">
+                    <span class="skeleton mention-menu__avatar" />
+                  </span>
+                  <span class="skeleton skeleton-line skeleton-line--medium" />
+                </div>
+              )}
+            </Repeat>
+          </Show>
+          <Show when={result()?.truncated}>
             <div class="slash-menu-group__label">{t("chat.mentions.truncated")}</div>
-          ) : null}
+          </Show>
         </div>
-      </>
-    );
-  }
-}
-
-export function HumanMentionMenuView(props: {
-  args: [HumanMentionMenu, HumanMentionMenuHost, () => void];
-}) {
-  return (
-    <Show when={props.args[0].open}>
-      <ComposerMenu
-        id={paneDomId(props.args[1].paneId, "mention-menu-listbox")}
-        class="mention-menu"
-        label={t("chat.mentions.menu")}
-        trackScroll={false}
-        activeId={props.args[0].activeId(props.args[1].paneId)}
-        revision={props.args}
-      >
-        {props.args[0].renderContents(props.args[1], props.args[2])}
       </ComposerMenu>
     </Show>
   );

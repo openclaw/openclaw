@@ -180,7 +180,7 @@ describe("persistent chat session snapshots", () => {
     await writer.flush();
     // A foreign/older writer must not make private records readable by this UI.
     await putRawRecord({
-      projectionVersion: 2,
+      projectionVersion: 3,
       sessionKey: privateKey,
       savedAt: 1,
       sessionId: "session-1",
@@ -191,6 +191,27 @@ describe("persistent chat session snapshots", () => {
     prewarmChatSnapshot(privateKey);
     expect(await new SessionSnapshotStore().read(privateKey)).toBeNull();
   });
+
+  it.each(["direct", "prewarmed"])(
+    "discards a superseded unbounded projection (%s)",
+    async (mode) => {
+      const sessionKey = key("agent:main:old-projection");
+      const writer = new SessionSnapshotStore();
+      writer.write(sessionKey, snapshot("current"));
+      await writer.flush();
+      await putRawRecord({
+        projectionVersion: 2,
+        sessionKey,
+        savedAt: 1,
+        sessionId: "session-1",
+        snapshot: snapshot("old"),
+      });
+      if (mode === "prewarmed") {
+        prewarmChatSnapshot(sessionKey);
+      }
+      expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
+    },
+  );
 
   it("purges all legacy unscoped history rather than adopting an unknown account", async () => {
     const privateKey = "agent:main:dashboard:incognito-old";
@@ -387,7 +408,7 @@ describe("persistent chat session snapshots", () => {
       await writer.flush();
       await putRawRecord(
         {
-          projectionVersion: 2,
+          projectionVersion: 3,
           sessionKey: corrupt,
           sessionId: "session-1",
           savedAt: Date.now(),
@@ -452,7 +473,7 @@ describe("persistent chat session snapshots", () => {
 
     const request = indexedDB.open(CHAT_SNAPSHOT_DB_NAME);
     const database = await requestResult(request);
-    expect(database.version).toBe(7);
+    expect(database.version).toBe(8);
     expect(Array.from(database.objectStoreNames)).toEqual([
       SIDEBAR_SNAPSHOT_STORE_NAME,
       CHAT_SNAPSHOT_METADATA_STORE_NAME,
@@ -471,6 +492,34 @@ describe("persistent chat session snapshots", () => {
     expect(snapshotRequest.result).toBeUndefined();
     expect(metadataRequest.result).toBeUndefined();
     database.close();
+  });
+
+  it("upgrades unbounded transcripts without discarding the current sidebar", async () => {
+    const request = indexedDB.open(CHAT_SNAPSHOT_DB_NAME, 7);
+    request.addEventListener("upgradeneeded", () => {
+      for (const name of [
+        CHAT_SNAPSHOT_STORE_NAME,
+        CHAT_SNAPSHOT_METADATA_STORE_NAME,
+        SIDEBAR_SNAPSHOT_STORE_NAME,
+      ]) {
+        request.result.createObjectStore(name, { keyPath: "sessionKey" });
+      }
+    });
+    const oldDatabase = await requestResult(request);
+    const transaction = oldDatabase.transaction([...oldDatabase.objectStoreNames], "readwrite");
+    for (const name of oldDatabase.objectStoreNames) {
+      transaction.objectStore(name).put({ sessionKey: "old", payload: "retained" });
+    }
+    await transactionDone(transaction);
+    oldDatabase.close();
+    const reader = new SessionSnapshotStore();
+    await reader.loadSavedAtIndex();
+    expect(await readRawRecord("old")).toBeUndefined();
+    expect(await readRawRecord("old", CHAT_SNAPSHOT_METADATA_STORE_NAME)).toBeUndefined();
+    expect(await readRawRecord("old", SIDEBAR_SNAPSHOT_STORE_NAME)).toEqual({
+      sessionKey: "old",
+      payload: "retained",
+    });
   });
 
   it.each(["all", "session"] as const)(

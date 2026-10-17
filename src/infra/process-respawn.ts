@@ -1,5 +1,6 @@
 // Respawns the gateway process when no supervisor handles restart.
 import { spawn, type ChildProcess } from "node:child_process";
+import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { scheduleDetachedLaunchdRestartHandoff } from "../daemon/launchd-restart-handoff.js";
 import {
   isWindowsTaskSupervisorChildArgument,
@@ -119,12 +120,11 @@ export function respawnGatewayProcessForUpdate(
   }
   try {
     const [entryArg, ...entryArgs] = process.argv.slice(1);
-    const args = [
-      ...process.execArgv,
-      ...(entryArg ? [rewritePnpmVersionedOpenClawEntryPath(entryArg)] : []),
-      ...entryArgs,
-    ];
-    const child = spawn(process.execPath, args, {
+    const invocation = resolveOpenClawCliInvocation({
+      entryPath: entryArg ? rewritePnpmVersionedOpenClawEntryPath(entryArg) : undefined,
+      args: entryArgs,
+    });
+    const child = spawn(invocation.command, invocation.args, {
       env: opts.env ? { ...process.env, ...opts.env } : process.env,
       detached: true,
       stdio: "inherit",

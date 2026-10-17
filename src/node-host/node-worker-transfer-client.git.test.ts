@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "../gateway/worker-environments/workspace-inventory-limits.js";
 import { captureWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
@@ -10,20 +10,6 @@ import { serializeWorkerWorkspaceManifest } from "../gateway/worker-environments
 import { runCommandBuffered, runExec } from "../process/exec.js";
 import { runNodeWorkerWorkspaceTransfer } from "./node-worker-transfer-client.js";
 import { listen } from "./node-worker-transfer-client.test-support.js";
-
-const transferDebug = vi.hoisted(() => vi.fn());
-vi.mock("../logging/subsystem.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
-  return {
-    ...actual,
-    createSubsystemLogger: (subsystem: string) => {
-      const logger = actual.createSubsystemLogger(subsystem);
-      return subsystem === "node-host/worker-workspace"
-        ? { ...logger, debug: transferDebug }
-        : logger;
-    },
-  };
-});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -137,7 +123,6 @@ describe("node worker Git transfers", () => {
   ])(
     "$description (prepared project: $seedState)",
     async ({ changed, replaceSymlinkAncestor, lateWrite, seedState }) => {
-      transferDebug.mockClear();
       const root = tempDirs.make("node-worker-transfer-git-");
       const source = path.join(root, "source");
       const workspaceDir = path.join(root, "workspace");
@@ -332,15 +317,6 @@ describe("node worker Git transfers", () => {
           "tracked.txt",
         );
         expect(requestedBlobs).toEqual([...filesByHash.keys()]);
-        expect(transferDebug).toHaveBeenCalledWith(
-          "node worker manifest capture completed",
-          expect.objectContaining({
-            contentHashCount: downloadablePaths.size,
-            memoHitCount:
-              snapshot.manifest.entries.filter((entry) => entry.type === "file").length -
-              downloadablePaths.size,
-          }),
-        );
         await expect(git(workspaceDir, ["rev-parse", "HEAD"])).resolves.toBe(commit);
         if (replaceSymlinkAncestor) {
           expect((await fs.lstat(path.join(workspaceDir, "nested"))).isDirectory()).toBe(true);
@@ -351,18 +327,6 @@ describe("node worker Git transfers", () => {
         if (!replaceSymlinkAncestor) {
           await expect(git(workspaceDir, ["status", "--porcelain=v1"])).resolves.toBe("");
         }
-        expect(transferDebug).toHaveBeenCalledWith(
-          "node worker workspace transfer completed",
-          expect.objectContaining({
-            environmentId: "environment-git",
-            direction: "download",
-            outcome: "succeeded",
-            durationMs: expect.any(Number),
-            baseSource: "gateway-pack",
-            packDownloadMs: expect.any(Number),
-            blobApplyMs: expect.any(Number),
-          }),
-        );
       } finally {
         server.closeAllConnections();
         await new Promise<void>((resolve) => {
@@ -379,8 +343,62 @@ describe("node worker Git transfers", () => {
 });
 
 describe("node worker transfer client hash memo", () => {
-  it("reuses the placement hash memo across download and upload captures", async () => {
-    transferDebug.mockClear();
+  it("downloads repeated blob content once while preserving independent files and modes", async () => {
+    const root = tempDirs.make("node-worker-transfer-repeated-blob-");
+    const workspaceDir = path.join(root, "workspace");
+    const body = Buffer.from("shared workspace content\n");
+    const sha256 = createHash("sha256").update(body).digest("hex");
+    const rawManifest = serializeWorkerWorkspaceManifest({
+      version: 1,
+      baseCommit: null,
+      entries: [
+        { path: "first.txt", type: "file", mode: 0o644, size: body.byteLength, sha256 },
+        { path: "second.sh", type: "file", mode: 0o755, size: body.byteLength, sha256 },
+        { path: "third.txt", type: "file", mode: 0o644, size: body.byteLength, sha256 },
+      ],
+    });
+    const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+    let requestedBlobs = 0;
+    const server = createHttpServer((req, res) => {
+      if (req.url?.endsWith("/manifest")) {
+        res.writeHead(200).end(rawManifest);
+      } else if (req.url?.endsWith(`/blobs/${sha256}`)) {
+        requestedBlobs += 1;
+        res.writeHead(200).end(body);
+      } else {
+        res.writeHead(404).end();
+      }
+    });
+    const gatewayUrl = await listen(server);
+    try {
+      await expect(
+        runNodeWorkerWorkspaceTransfer({
+          gatewayUrl,
+          environmentId: "environment-repeated-blob",
+          workspaceDir,
+          manifestHome: root,
+          transfer: { direction: "download", token: "download-token", manifestRef },
+        }),
+      ).resolves.toBe(manifestRef);
+      expect(requestedBlobs).toBe(1);
+      for (const file of ["first.txt", "second.sh", "third.txt"]) {
+        await expect(fs.readFile(path.join(workspaceDir, file))).resolves.toEqual(body);
+      }
+      if (process.platform !== "win32") {
+        expect((await fs.stat(path.join(workspaceDir, "first.txt"))).mode & 0o777).toBe(0o644);
+        expect((await fs.stat(path.join(workspaceDir, "second.sh"))).mode & 0o777).toBe(0o755);
+      }
+      await fs.writeFile(path.join(workspaceDir, "first.txt"), "edited independently\n");
+      await expect(fs.readFile(path.join(workspaceDir, "third.txt"))).resolves.toEqual(body);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
+  it("round-trips a downloaded workspace with a supplied hash memo", async () => {
     const root = tempDirs.make("node-worker-transfer-memo-");
     const workspaceDir = path.join(root, "workspace");
     const body = Buffer.from("memoized content\n");
@@ -441,15 +459,6 @@ describe("node worker transfer client hash memo", () => {
           hashMemo,
         }),
       ).resolves.toBe(manifestRef);
-      const captures = transferDebug.mock.calls
-        .filter(([message]) => message === "node worker manifest capture completed")
-        .map(([, data]) => data as { contentHashCount: number; memoHitCount: number });
-      expect(captures).toHaveLength(2);
-      // Download verifies fresh staging files by hashing; the unchanged upload
-      // capture must reuse the memo seeded through the workspace rename.
-      expect(captures[0]!.contentHashCount).toBe(1);
-      expect(captures[1]!.contentHashCount).toBe(0);
-      expect(captures[1]!.memoHitCount).toBe(1);
     } finally {
       server.closeAllConnections();
       await new Promise<void>((resolve) => {

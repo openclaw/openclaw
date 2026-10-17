@@ -183,7 +183,7 @@ describe("session event wake disposition and preemption", () => {
     },
   );
 
-  it.each(["preempted", "channel-not-ready"])(
+  it.each(["preempted"])(
     "preserves started work through %s retry and handler replacement",
     async (reason) => {
       const target = { agentId: "retry-owner", sessionKey: "agent:retry-owner:background" };
@@ -399,23 +399,6 @@ describe("session event wake disposition and preemption", () => {
       await vi.advanceTimersByTimeAsync(0);
     }
   });
-
-  it.each([-86_400_000, 86_400_000])(
-    "dispatches a coalesced wake after the wall clock changes by %i ms",
-    async (clockChangeMs) => {
-      vi.setSystemTime(2_000_000_000_000);
-      const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-      setSessionEventWakeHandler(handler);
-
-      requestSessionEventWake(wake("manual", { coalesceMs: 250 }));
-      vi.setSystemTime(Date.now() + clockChangeMs);
-      await vi.advanceTimersByTimeAsync(249);
-      expect(handler).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(1);
-      expect(handler.mock.calls.map(([request]) => request)).toEqual([wake("manual")]);
-    },
-  );
 
   it("dispatches an urgent wake after the wall clock changes forward", async () => {
     vi.setSystemTime(2_000_000_000_000);

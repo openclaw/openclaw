@@ -14,7 +14,9 @@ import {
 afterEach(() => vi.unstubAllGlobals());
 
 function fixture() {
-  const sessions = createSessionCapabilityFixture();
+  const sessions = createSessionCapabilityFixture({
+    presentation: { result: null, agentId: "main" },
+  });
   const pane = createTestChatPane({ client: createGatewayBrowserClientFixture(), sessions });
   pane.state.chatMessages = [nativeHistoryMessage(1)];
   const selected: GatewaySessionRow = {
@@ -114,6 +116,19 @@ describe("chat pane session presentation", () => {
     }
     f.publish(next);
     expect(f.requestUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("redraws accepted roster title changes while the selected descriptor stays unchanged", () => {
+    const f = fixture();
+    f.sessions.presentation.result = sessionsResult(
+      [{ ...f.selected, label: "Accepted roster title" }],
+      2,
+    );
+    f.publish(f.publication);
+    expect(f.requestUpdate).toHaveBeenCalledOnce();
+    f.requestUpdate.mockClear();
+    f.publish(f.publication);
+    expect(f.requestUpdate).not.toHaveBeenCalled();
   });
 
   it.each(["transcript", "welcome", "approval"] as const)(

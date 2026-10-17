@@ -20,6 +20,7 @@ import {
   type AttachmentContextBlock,
   renderMediaAttachmentDisposition,
 } from "./media-attachment-outcomes.js";
+import type { MediaExecutionContext } from "./provider-execution.js";
 import { resolveConcurrency } from "./resolve.js";
 import {
   buildProviderRegistry,
@@ -49,9 +50,9 @@ const AUDIO_ONLY_CAPABILITY_ORDER: MediaUnderstandingCapability[] = ["audio"];
 const EMPTY_VOICE_NOTE_PLACEHOLDER =
   "[Voice note could not be transcribed because the audio attachment was too small]";
 
-function appendFileBlocks(body: string | undefined, suffix: string | undefined): string {
+function appendFileBlocks(body: string, suffix: string | undefined): string {
   if (suffix === undefined) {
-    return body ?? "";
+    return body;
   }
   const base = typeof body === "string" ? body.trim() : "";
   if (!base) {
@@ -136,6 +137,7 @@ type ApplyMediaUnderstandingParams = {
   workspaceDir?: string;
   providers?: Record<string, MediaUnderstandingProvider>;
   activeModel?: ActiveMediaModel;
+  execution?: MediaExecutionContext;
   /** Limit utility processing while preserving native image and video inputs. */
   processingMode?: "audio-only" | "files-only" | "audio-and-files";
   /** Render local paths immediately only when the caller owns the final tool surface. */
@@ -147,12 +149,17 @@ type ApplyMediaUnderstandingParams = {
 export async function applyMediaUnderstanding(
   params: ApplyMediaUnderstandingParams,
 ): Promise<ApplyMediaUnderstandingResult> {
+  const signal =
+    params.execution && params.signal
+      ? AbortSignal.any([params.execution.signal, params.signal])
+      : (params.signal ?? params.execution?.signal);
+  const execution = signal ? { ...params.execution, signal } : undefined;
   // Let Stop settle the caller even if a provider ignores cancellation. The work
   // keeps ownership of its cache until every active consumer has settled.
   return await racePromiseWithAbortSignal(
-    () => applyMediaUnderstandingWork(params),
-    params.signal,
-    (signal) => signal.reason,
+    () => applyMediaUnderstandingWork({ ...params, signal, execution }),
+    signal,
+    (abortedSignal) => abortedSignal.reason,
   );
 }
 
@@ -218,7 +225,7 @@ async function applyMediaUnderstandingWork(
           providerRegistry,
           config: cfg.tools?.media?.[capability],
           activeModel: params.activeModel,
-          execution: params.signal ? { signal: params.signal } : undefined,
+          execution: params.execution,
         };
         try {
           return await runCapability(request);

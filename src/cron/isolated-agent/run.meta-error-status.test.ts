@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
+import { dispatchCronDelivery } from "./delivery-dispatch.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
-  callGatewayMock,
   dispatchCronDeliveryMock,
+  listDescendantRunsForRequesterMock,
   loadRunCronIsolatedAgentTurn,
   resolveCronDeliveryPlanMock,
   resolveCronPayloadOutcomeMock,
@@ -14,6 +15,11 @@ import {
   resolveDeliveryTargetMock,
   runEmbeddedAgentMock,
 } from "./run.test-harness.js";
+
+// mock-isolation: Keep the database-backed descendant registry outside the fixed child-run fixture.
+vi.mock("./delivery-subagent-registry.runtime.js", () => ({
+  hasUnsettledCronDescendants: async () => false,
+}));
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 const runTurn = (overrides = {}) =>
@@ -160,18 +166,15 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
 
   it("marks an aborted embedded agent run without a run-level error as a cron error", async () => {
     mockAgentRun({ ...failedRun, meta: { aborted: true } });
-    const result = await runTurn({
-      job: makeIsolatedAgentJobFixture({ deleteAfterRun: true }),
-    });
+    const result = await runTurn();
     expectObjectFields(result, { status: "error", error: "cron isolated agent run aborted" });
-    expect(callGatewayMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps explicit silent replies as successful cron completions", async () => {
     await useRealOutcome();
     mockAgentRun({
       usage: { input: 10, output: 1 },
-      meta: { finalAssistantRawText: "NO_REPLY", finalAssistantVisibleText: "NO_REPLY" },
+      meta: { terminalReply: { disposition: "silent" } },
     });
     const result = await runTurn();
     expect(dispatchCronDeliveryMock).toHaveBeenCalled();
@@ -182,29 +185,11 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     await useRealOutcome();
     mockAgentRun({
       payloads: [{ text: "⚠️ 🛠️ Bash failed: mount unavailable", isError: true }],
-      meta: { finalAssistantVisibleText: "NO_REPLY" },
+      meta: { terminalReply: { disposition: "silent" } },
     });
     const result = await runTurn();
     expect(result.status).toBe("error");
     expect(result.error).toContain("Bash failed");
-  });
-
-  it.each([
-    "AUTOMATION_FAILED\nNetwork timeout: no shell tool is available in this run.",
-    "Task blocked: no shell tool is available in this run.",
-  ])("keeps task-failure prose as ordinary successful output: %s", async (reply) => {
-    await useRealOutcome();
-    mockAgentRun({
-      payloads: [{ text: reply }],
-      meta: { finalAssistantVisibleText: reply },
-    });
-    expectObjectFields(await runTurn(), {
-      status: "ok",
-      error: undefined,
-      errorClassification: undefined,
-      summary: reply,
-      outputText: reply,
-    });
   });
 
   it("preserves a heartbeat-only accepted child handoff failure as a cron error", async () => {
@@ -227,6 +212,34 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expectObjectFields(result, { status: "error", error, delivered: false });
     expect(result.summary).not.toBe(heartbeatPayload.text);
     expect(result.outputText).not.toBe(heartbeatPayload.text);
+  });
+
+  it("records the child result after a no-delivery parent returns only a heartbeat", async () => {
+    await useRealOutcome();
+    const reply = "Finished the delegated report";
+    mockChildRun([{ text: "HEARTBEAT_OK" }]);
+    resolveCronDeliveryPlanMock.mockReturnValue({ mode: "none", requested: false });
+    listDescendantRunsForRequesterMock.mockResolvedValue([
+      {
+        runId: "run-child",
+        childSessionKey: "agent:default:child",
+        requesterSessionKey: "agent:default:cron:test",
+        requesterDisplayKey: "agent:default:cron:test",
+        createdAt: Date.now(),
+        task: "delegated report",
+        cleanup: "keep",
+        execution: { status: "terminal", endedAt: Date.now() + 1_000, outcome: { status: "ok" } },
+        completion: { required: true, terminalReply: { disposition: "visible", text: reply } },
+      },
+    ]);
+    dispatchCronDeliveryMock.mockImplementation(dispatchCronDelivery);
+
+    const result = await runTurn({
+      job: makeIsolatedAgentJobFixture({ delivery: { mode: "none" } }),
+    });
+
+    expectObjectFields(result, { status: "ok", outputText: reply });
+    expect(result.deliveryState?.status).toBe("not-requested");
   });
 
   it("preserves structured-parent delivery failures after accepting a child", async () => {
@@ -308,8 +321,7 @@ describe("delivered report outcome", () => {
       messagingToolSentTargets,
       meta: {
         agentMeta: { usage: { input: 10, output: 20 } },
-        finalAssistantVisibleText: "NO_REPLY",
-        finalAssistantRawText: "NO_REPLY",
+        terminalReply: { disposition: "silent" },
       },
     });
 

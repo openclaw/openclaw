@@ -9,6 +9,15 @@ import type {
   SummaryDocument,
 } from "./types.js";
 
+export const TEAM_REPORTS_WRITES = new Set<string>([
+  "resetActivity",
+  "appendActivity",
+  "upsertPeriod",
+  "startRun",
+  "finishRun",
+  "prune",
+]);
+
 export type ReportPerson = Pick<
   PersonReport,
   "login" | "aliases" | "display" | "affiliation" | "roleGroup" | "roleLabel" | "access" | "areas"

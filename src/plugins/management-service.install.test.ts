@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { pluginLifecycleError } from "../gateway/server-methods/plugins-lifecycle-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as bundledSources from "./bundled-sources.js";
 import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { PluginInstallConfigError } from "./install-config.js";
 import {
@@ -266,6 +267,82 @@ describe("managed plugin installation", () => {
       expect(mocks.npmInstall).not.toHaveBeenCalled();
       expect(mocks.clawhubInstall).not.toHaveBeenCalled();
       expect(mocks.persistInstall).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["npm", "clawhub"] as const)(
+    "retains canonical official recovery with a hosted %s primary and no bundled copy",
+    async (source) => {
+      vi.spyOn(bundledSources, "findBundledPluginSource").mockReturnValue(undefined);
+      const packageName = "@openclaw/brave-plugin";
+      const config = { tools: { web: { search: { provider: "brave" } } } };
+      const prepared = configSnapshot(config);
+      mocks.readConfig.mockResolvedValue({
+        ...prepared,
+        snapshot: {
+          ...prepared.snapshot,
+          valid: false,
+          exists: true,
+          parsed: config,
+          config,
+          issues: [
+            {
+              path: "tools.web.search.provider",
+              message:
+                'web_search provider is not available: brave (install or enable plugin "brave")',
+            },
+          ],
+          legacyIssues: [],
+        },
+      });
+      // The hosted feed supplies artifacts; Brave's local descriptor owns recovery permission.
+      mockHostedOfficialCatalog([
+        {
+          id: packageName,
+          state: "available",
+          publisher: { id: "openclaw", trust: "official" },
+          install: {
+            candidates: [{ sourceRef: `public-${source}`, package: packageName }],
+          },
+        },
+      ]);
+      if (source === "clawhub") {
+        mockClawHubInstall("brave", packageName);
+      } else {
+        mocks.npmInstall.mockResolvedValue({
+          ok: true,
+          pluginId: "brave",
+          targetDir: "/tmp/extensions/brave",
+          extensions: ["index.js"],
+          packageName,
+        });
+      }
+      mocks.persistInstall.mockResolvedValue(config);
+      mocks.metadata.mockReturnValue(
+        metadataSnapshot({ enabled: true, id: "brave", origin: "global" }),
+      );
+
+      const result = await installManagedPlugin({
+        request: {
+          source: "official",
+          pluginId: "brave",
+          acknowledgeCapabilities: emptyArtifactAcknowledgment,
+        },
+        env: {},
+      });
+
+      expect(source === "npm" ? mocks.npmInstall : mocks.clawhubInstall).toHaveBeenCalledWith(
+        expect.objectContaining({ expectedPluginId: "brave" }),
+      );
+      expect(source === "npm" ? mocks.clawhubInstall : mocks.npmInstall).not.toHaveBeenCalled();
+      expect(mocks.persistInstall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pluginId: "brave",
+          snapshot: expect.objectContaining({ config }),
+          install: expect.objectContaining({ source }),
+        }),
+      );
+      expect(result.plugin.id).toBe("brave");
     },
   );
 

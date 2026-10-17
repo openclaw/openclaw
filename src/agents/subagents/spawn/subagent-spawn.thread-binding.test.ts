@@ -245,4 +245,55 @@ describe("spawnSubagentDirect thread binding", () => {
       }),
     );
   });
+
+  it.each([undefined, "t-123"])(
+    "binds a run-bound CLI spawn from the current channel (thread=%s)",
+    async (currentThreadTs) => {
+      const bind = vi.fn<NonNullable<BindingService["bind"]>>(bindingService.bind);
+      bindingService = makeBindingService(bind);
+      const result = await spawnSubagentDirect(
+        { task: "CLI turn", thread: true, mode: "session", context: "isolated" },
+        {
+          agentSessionKey: "agent:main:main",
+          agentChannel: "matrix",
+          agentAccountId: "bot-beta",
+          currentChannelId: "!room:example.org",
+          currentThreadTs,
+          currentConversationOrigin: "run-bound-grant",
+        },
+      );
+      expect(result.status).toBe("accepted");
+      expect(bind).toHaveBeenCalledOnce();
+      expect(bind.mock.calls[0]?.[0].conversation).toMatchObject({
+        channel: "matrix",
+        accountId: "bot-beta",
+        conversationId: currentThreadTs ?? "!room:example.org",
+        ...(currentThreadTs ? { parentConversationId: "!room:example.org" } : {}),
+      });
+      expect(registered()).toMatchObject({
+        requesterOrigin: { to: "!room:example.org" },
+      });
+    },
+  );
+
+  it("rejects caller-token conversation headers before binding or registering a run", async () => {
+    const bind = vi.fn<NonNullable<BindingService["bind"]>>(bindingService.bind);
+    bindingService = makeBindingService(bind);
+    const result = await spawnSubagentDirect(
+      { task: "loopback turn", thread: true, mode: "session", context: "isolated" },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "matrix",
+        currentChannelId: "!caller-selected-room",
+        currentThreadTs: "caller-thread",
+        currentConversationOrigin: "caller-token",
+      },
+    );
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("Could not resolve a matrix conversation"),
+    });
+    expect(bind).not.toHaveBeenCalled();
+    expect(registerSubagentRunMock).not.toHaveBeenCalled();
+  });
 });

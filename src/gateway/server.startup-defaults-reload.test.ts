@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import { expect, it } from "vitest";
 import { resolveEffectiveCompactionMode } from "../agents/agent-settings.js";
+import { writeConfigFile } from "../config/config.js";
 import { getRuntimeConfig } from "../config/io.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { startGatewayServerCore } from "./server-start.js";
@@ -20,12 +22,20 @@ it("preserves computed defaults from cold startup through a live config reload",
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
     },
   });
-  const sourceConfig = {
+  const sourceConfig: OpenClawConfig = {
     agents: {
       entries: { main: {} },
       defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
     },
-    models: { providers: { anthropic: { apiKey: "synthetic-api-key" } } },
+    models: {
+      providers: {
+        anthropic: {
+          baseUrl: "https://api.anthropic.com",
+          models: [],
+          apiKey: "synthetic-api-key",
+        },
+      },
+    },
     plugins: { allow: ["anthropic"] },
     gateway: { auth: { mode: "token", token } },
   };
@@ -54,7 +64,7 @@ it("preserves computed defaults from cold startup through a live config reload",
     expect(initialConfig.models?.providers?.anthropic?.models).toEqual([]);
     expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toEqual(sourceConfig);
 
-    const nextSourceConfig = { ...sourceConfig, logging: { level: "warn" } };
+    const nextSourceConfig: OpenClawConfig = { ...sourceConfig, logging: { level: "warn" } };
     await state.writeConfig(nextSourceConfig);
     await expect.poll(() => getRuntimeConfig().logging?.level, { timeout: 30_000 }).toBe("warn");
     const reloadedConfig = getRuntimeConfig();
@@ -62,7 +72,24 @@ it("preserves computed defaults from cold startup through a live config reload",
     expect(reloadedConfig.plugins?.entries?.anthropic?.enabled).toBe(true);
     expect(resolveEffectiveCompactionMode(reloadedConfig)).toBe("safeguard");
     expect(reloadedConfig.models?.providers?.anthropic?.models).toEqual([]);
+    const accessConfig = {
+      ...nextSourceConfig,
+      plugins: {
+        allow: ["anthropic", "muse"],
+        entries: { muse: { enabled: true } },
+      },
+    };
+    await expect(
+      writeConfigFile(accessConfig, {
+        runtimeRefresh: { requireImmediateApplication: true },
+      }),
+    ).rejects.toThrow("Update or enable the selected provider plugin");
     expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toEqual(nextSourceConfig);
+    await writeConfigFile(accessConfig);
+    expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toMatchObject(accessConfig);
+    expect(getRuntimeConfig().agents?.defaults?.model).toEqual(
+      initialConfig.agents?.defaults?.model,
+    );
   } finally {
     await server?.close({ reason: "runtime defaults reload test complete" });
     await state.cleanup();

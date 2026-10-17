@@ -7,12 +7,12 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import {
   copyProviderCatalogOutcomes,
-  copyProviderCatalogResultProjection,
+  readProviderCatalogResultEntries,
 } from "./provider-catalog-result.js";
 import type { ProviderCatalogContext, ProviderCatalogOutcome } from "./provider-catalog.types.js";
+import { PROVIDER_CATALOG_ORDERS as DISCOVERY_ORDER } from "./provider-catalog.types.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
-const DISCOVERY_ORDER: readonly ProviderCatalogOrder[] = ["simple", "profile", "paired", "late"];
 const providerRuntimeLoader = createLazyImportLoader(
   () => import("./provider-discovery.runtime.js"),
 );
@@ -104,18 +104,12 @@ export function normalizePluginDiscoveryResult(params: {
     return {};
   }
 
-  const projection = copyProviderCatalogResultProjection(result);
   const normalized = Object.create(null) as Record<string, ModelProviderConfig>;
-  const entries =
-    projection.kind === "provider"
-      ? [
-          params.provider.id,
-          ...(params.provider.aliases ?? []),
-          ...(params.provider.hookAliases ?? []),
-        ].map((id) => [id, projection.provider] as const)
-      : projection.kind === "providers"
-        ? projection.providers
-        : [];
+  const entries = readProviderCatalogResultEntries({
+    providerId: params.provider.id,
+    aliases: [...(params.provider.aliases ?? []), ...(params.provider.hookAliases ?? [])],
+    result,
+  });
   for (const [key, value] of entries) {
     const normalizedKey = normalizeProviderId(key);
     if (!normalizedKey || isBlockedObjectKey(normalizedKey)) {

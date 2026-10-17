@@ -1,5 +1,4 @@
 /* @vitest-environment jsdom */
-import { html } from "lit";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
@@ -26,10 +25,10 @@ function withPositionIndex(
   try {
     transcript.renderSession(props.sessionKey, (session) => {
       check(() => projectChatTranscript(props, session).positionIndex);
-      return html``;
+      return null;
     });
   } finally {
-    transcript.hostDisconnected();
+    transcript.dispose();
   }
 }
 

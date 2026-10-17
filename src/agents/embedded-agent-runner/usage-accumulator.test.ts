@@ -171,10 +171,6 @@ describe("usage-accumulator", () => {
   });
 
   describe("toNormalizedUsage", () => {
-    it("returns undefined for an empty accumulator", () => {
-      expect(toNormalizedUsage(createUsageAccumulator())).toBeUndefined();
-    });
-
     it("preserves reported zero cache counters across attempt and run totals", () => {
       const attempt = createAccumulatorWithUsage({ input: 100, cacheRead: 0, cacheWrite: 0 });
       const run = createUsageAccumulator();

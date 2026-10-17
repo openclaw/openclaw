@@ -80,13 +80,11 @@ describe("exec approval card", () => {
     const view = mountSolid(
       () =>
         createComponent(SidebarApprovalRow, {
-          props: {
-            approval: approval({ expiresAtMs: 2_000 }),
-            busy: false,
-            canGrant: true,
-            error: null,
-            onDecision,
-          },
+          approval: approval({ expiresAtMs: 2_000 }),
+          busy: false,
+          canGrant: true,
+          error: null,
+          onDecision,
         }),
       { container },
     );
@@ -108,8 +106,6 @@ describe("exec approval card", () => {
     }
     expect(onDecision).not.toHaveBeenCalled();
     view.unmount();
-    // The nested expiry bridge retires its timer at the microtask checkpoint.
-    await Promise.resolve();
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -180,10 +176,8 @@ describe("exec approval card", () => {
         () =>
           variant === "sidebar"
             ? createComponent(SidebarApprovalRow, {
-                props: {
-                  ...props,
-                  onDecision: (_event, id, decision) => void onDecision(id, decision),
-                },
+                ...props,
+                onDecision: (_event, id, decision) => void onDecision(id, decision),
               })
             : createComponent(ExecApprovalCard, { props: { ...props, variant, onDecision } }),
         { container },

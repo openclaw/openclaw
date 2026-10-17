@@ -305,6 +305,57 @@ describe("memory wiki source sync state", () => {
     });
   });
 
+  it.each([
+    { group: "bridge" as const, generatedBytes: 0 },
+    { group: "unsafe-local" as const, generatedBytes: 17 * 1024 * 1024 },
+  ])(
+    "keeps $group Notes byte-for-byte when pruning cannot decode the page",
+    async ({ group, generatedBytes }) => {
+      const vaultRoot = await tempDirs.createTempDir("memory-wiki-source-sync-");
+      const pagePath = `sources/${group}-invalid-encoding.md`;
+      const pageAbsPath = path.join(vaultRoot, pagePath);
+      await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
+      const notes = "durable annotation: Café 🤖 � original";
+      let validPage = Buffer.from(renderSourcePage(notes, "x".repeat(generatedBytes)));
+      if (generatedBytes > 0) {
+        // A valid code point crosses the bounded recovery header/stream boundary.
+        const splitAt = 64 * 1024 - 1;
+        validPage = Buffer.concat([
+          validPage.subarray(0, splitAt),
+          Buffer.from("🤖"),
+          validPage.subarray(splitAt),
+        ]);
+      }
+      const invalidPage = Buffer.from(validPage);
+      const notesOffset = invalidPage.indexOf(Buffer.from("Café"));
+      expect(notesOffset).toBeGreaterThan(0);
+      invalidPage[notesOffset] = 0xff;
+      await fs.writeFile(pageAbsPath, invalidPage);
+      const state = createImportedSourceState(pagePath, group);
+      const entry = state.entries["sync-key"];
+      const prune = () =>
+        pruneImportedSourceEntries({ vaultRoot, group, activeKeys: new Set<string>(), state });
+
+      await expect(prune()).resolves.toBe(0);
+      await expect(fs.readFile(pageAbsPath)).resolves.toEqual(invalidPage);
+      expect(state.entries["sync-key"]).toBe(entry);
+      await expect(fs.access(path.join(vaultRoot, ".salvage"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+
+      await fs.writeFile(pageAbsPath, validPage);
+      await expect(prune()).resolves.toBe(1);
+      expect(state.entries["sync-key"]).toBeUndefined();
+      await expect(fs.access(pageAbsPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(
+        fs.readFile(
+          path.join(vaultRoot, ".salvage", `sources_${group}-invalid-encoding.md.notes.md`),
+          "utf8",
+        ),
+      ).resolves.toContain(notes);
+    },
+  );
+
   it("salvages Notes and prunes oversized source pages with bounded reads", async () => {
     const vaultRoot = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const pagePath = "sources/oversized-recovery.md";

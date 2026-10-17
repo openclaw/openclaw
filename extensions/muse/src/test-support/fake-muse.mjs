@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
+import { createConnection } from "node:net";
 import { createInterface } from "node:readline";
 import { EXPECTED_SCHEMA_FINGERPRINT } from "@muse-code/sdk";
 
@@ -103,13 +104,20 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     return;
   }
   if (method === "initialize") {
-    reply(id, {
+    const result = {
       serverInfo: { name: "fake_muse", version: "1" },
       schema: { fingerprint: EXPECTED_SCHEMA_FINGERPRINT, version: 1 },
       grantedCapabilities: [],
       experimentalApi: false,
       platformOs: "linux",
-    });
+    };
+    if (process.env.MUSE_FIXTURE_INITIALIZE_GATE) {
+      const gate = createConnection(process.env.MUSE_FIXTURE_INITIALIZE_GATE);
+      gate.on("connect", () => gate.write(String(process.pid)));
+      gate.once("data", () => reply(id, result));
+      return;
+    }
+    reply(id, result);
   } else if (method === "model/list") {
     reply(id, {
       providerId: "meta",

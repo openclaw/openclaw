@@ -12,7 +12,7 @@ import type { SessionDiscussionProvider } from "../../plugins/session-discussion
 import { sessionDiscussionHandlers } from "./session-discussion.js";
 
 const mocks = vi.hoisted(() => ({
-  emitSessionsChanged: vi.fn(),
+  emitSessionTitleChanged: vi.fn(),
   generateConversationLabelWithFallback: vi.fn(),
   getProvider: vi.fn(),
   loadSessionTarget: vi.fn(),
@@ -39,10 +39,6 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
 vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
   readSessionEntryReadOnlyInWorker: async () => mocks.loadSessionTarget()?.entry,
 }));
-// mock-isolation: The title owner reads the same synthetic session through its worker API.
-vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
-  readSessionEntryReadOnlyInWorker: async () => mocks.loadSessionTarget()?.entry,
-}));
 vi.mock("../dashboard-session-title.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../dashboard-session-title.js")>();
   mocks.maybeGenerateSessionTitle.mockImplementation(actual.maybeGenerateSessionTitle);
@@ -52,8 +48,9 @@ vi.mock("../dashboard-session-title.js", async (importOriginal) => {
 vi.mock("../session-transcript-title-reader.js", () => ({
   readSessionTitleFieldsFromTranscriptAsync: mocks.readSessionTitleFields,
 }));
+// mock-isolation: Capture title lifecycle notifications without starting Gateway broadcast workers.
 vi.mock("./session-change-event.js", () => ({
-  emitSessionsChanged: mocks.emitSessionsChanged,
+  emitSessionTitleChanged: mocks.emitSessionTitleChanged,
 }));
 // mock-isolation: Discussion fixtures own selected targets and rows without admitting physical stores.
 vi.mock("../session-utils-store-lookup.js", () => ({
@@ -122,7 +119,7 @@ function provider() {
 
 describe("session discussion gateway methods", () => {
   beforeEach(() => {
-    mocks.emitSessionsChanged.mockReset();
+    mocks.emitSessionTitleChanged.mockReset();
     mocks.generateConversationLabelWithFallback.mockReset();
     mocks.getProvider.mockReset();
     mocks.loadSessionTarget.mockReset();
@@ -228,9 +225,14 @@ describe("session discussion gateway methods", () => {
     expect(
       mocks.updateSessionEntry.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     ).toBeLessThan(registered.open.mock.invocationCallOrder[0] ?? Number.NEGATIVE_INFINITY);
-    expect(mocks.emitSessionsChanged).toHaveBeenCalledExactlyOnceWith(
+    expect(mocks.emitSessionTitleChanged).toHaveBeenCalledTimes(2);
+    expect(mocks.emitSessionTitleChanged).toHaveBeenLastCalledWith(
       expect.anything(),
-      expect.objectContaining({ sessionKey, agentId: "main", reason: "chat.title" }),
+      expect.objectContaining({
+        sessionKey,
+        sessionId: "session-1",
+        agentId: "main",
+      }),
     );
   });
 
@@ -255,16 +257,24 @@ describe("session discussion gateway methods", () => {
     });
     // Resolvable deferred: settling it after the assertions evicts the shared
     // single-flight map entry so module state stays clean across suites.
-    let releaseGeneration: ((value: string | null) => void) | undefined;
-    mocks.generateConversationLabelWithFallback.mockReturnValue(
-      new Promise<string | null>((resolve) => {
+    let releaseGeneration!: (value: string | null) => void;
+    let markGenerationStarted!: () => void;
+    const generationStarted = new Promise<void>((resolve) => {
+      markGenerationStarted = resolve;
+    });
+    mocks.generateConversationLabelWithFallback.mockImplementation(() => {
+      markGenerationStarted();
+      return new Promise<string | null>((resolve) => {
         releaseGeneration = resolve;
-      }),
-    );
+      });
+    });
     const registered = provider();
     mocks.getProvider.mockReturnValue(registered.value);
 
     const responsePromise = invoke("session.discussion.open", { sessionKey });
+    // Skill discovery precedes inference and may yield to real filesystem work.
+    // Start the fake timeout only after the deferred provider call is active.
+    await generationStarted;
     await vi.advanceTimersByTimeAsync(10_000);
 
     await expect(responsePromise).resolves.toMatchObject({
@@ -272,12 +282,13 @@ describe("session discussion gateway methods", () => {
       payload: { state: "available" },
     });
     expect(registered.open).toHaveBeenCalledOnce();
-    expect(mocks.emitSessionsChanged).not.toHaveBeenCalled();
-    releaseGeneration?.(null);
+    expect(mocks.emitSessionTitleChanged).toHaveBeenCalledOnce();
+    releaseGeneration(null);
     // Bounded flush: eviction settles via microtasks, so advancing 0ms is
     // enough. runAllTimersAsync livelocks (10000-timer abort) when any other
     // suite in a shared shard worker schedules an interval into this fake clock.
     await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.emitSessionTitleChanged).toHaveBeenCalledTimes(2);
   });
 
   it.each(["session.discussion.open"] as const)(

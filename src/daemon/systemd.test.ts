@@ -1464,6 +1464,28 @@ describe("stageSystemdService", () => {
     });
   });
 
+  it("leaves an unsafe legacy unit intact for full installer regeneration", async () => {
+    const { env, unitPath } = await createSystemdFixture("gateway");
+    const previous = [
+      "[Unit]",
+      "Description=OpenClaw Gateway (v2026.6.35)",
+      "[Service]",
+      "ExecStart=/usr/bin/openclaw gateway",
+      "Environment=OPENCLAW_SERVICE_MARKER=openclaw",
+      "Environment=OPENCLAW_SERVICE_KIND=gateway",
+      "Environment=OPENCLAW_SERVICE_VERSION=2026.6.35",
+      "",
+    ].join("\n");
+    await writeUnitFixture(unitPath, previous);
+    await fs.chmod(unitPath, 0o664);
+
+    await expect(refreshLegacySystemdServiceMetadata(env, 5_000)).resolves.toBe(false);
+
+    expect(await fs.readFile(unitPath, "utf8")).toBe(previous);
+    expect((await fs.stat(unitPath)).mode & 0o777).toBe(0o664);
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     { name: "reset managed markers", version: "2026.7.1-2", reset: true, admitted: undefined },
     {
@@ -2237,6 +2259,38 @@ describe("isSystemUnitActiveAndEnabled", () => {
 });
 
 describe("uninstallLegacySystemdUnits", () => {
+  it.each([
+    ["", "EACCES"],
+    ["", "EIO"],
+    [".bak", "EACCES"],
+    [".bak", "EIO"],
+  ])("reports legacy %s inspection failure %s before cleanup", async (suffix, code) => {
+    const env = { HOME: tempDirs.make("openclaw-legacy-inspection-") };
+    const unitPath = path.join(env.HOME, ".config/systemd/user/clawdbot-gateway.service");
+    const inspectedPath = `${unitPath}${suffix}`;
+    const definition = "[Unit]\nDescription=Legacy inspection fixture\n";
+    await writeUnitFixture(inspectedPath, definition);
+    const inspectionError = Object.assign(new Error("legacy inspection failed"), { code });
+    vi.spyOn(fs, "access").mockImplementation(async (pathname, mode) => {
+      if (pathLikeToString(pathname) === inspectedPath) {
+        throw inspectionError;
+      }
+      return access(pathname, mode);
+    });
+    execFileMock.mockImplementation((_command, args, _options, callback) => {
+      if (args[0] === "--version") {
+        callback(null, "systemd 252", "");
+      } else {
+        callback(createExecFileError("disabled"), "disabled", "");
+      }
+    });
+    const { write, stdout } = createWritableStreamMock();
+
+    await expect(uninstallLegacySystemdUnits({ env, stdout })).rejects.toBe(inspectionError);
+    await expect(fs.readFile(inspectedPath, "utf8")).resolves.toBe(definition);
+    expect(write).not.toHaveBeenCalled();
+  });
+
   it("preserves legacy files after interrupted discovery and refused disable", async () => {
     const tempHomeRoot = tempDirs.make("openclaw-legacy-unit-");
     const env = { HOME: path.join(tempHomeRoot, "home") };
@@ -2386,6 +2440,9 @@ describe("systemd service control", () => {
     execFileMock.mockReset();
     assertNoSystemSystemdOwnershipMock.mockReset();
     assertNoSystemSystemdOwnershipMock.mockResolvedValue();
+    vi.spyOn(fs, "access").mockRejectedValue(
+      Object.assign(new Error("missing fixture unit"), { code: "ENOENT" }),
+    );
   });
 
   it("checks system ownership for the selected legacy user unit", async () => {
@@ -2431,7 +2488,7 @@ describe("systemd service control", () => {
     });
     const operation = startSystemdService({
       stdout: createWritableStreamMock(write).stdout,
-      env: {},
+      env: { HOME: TEST_MANAGED_HOME },
       onMutation,
     });
     await expect(operation).resolves.toBeUndefined();
@@ -2456,7 +2513,7 @@ describe("systemd service control", () => {
     );
     const operation = stopSystemdService({
       stdout: createWritableStreamMock().stdout,
-      env: { USER: "", LOGNAME: "" },
+      env: { HOME: TEST_MANAGED_HOME, USER: "", LOGNAME: "" },
     });
     await expect(operation).rejects.toMatchObject({ reason: "systemd-user-bus-unavailable" });
   });
@@ -2474,7 +2531,12 @@ describe("systemd service control", () => {
             XDG_RUNTIME_DIR: "/run/user/0",
             DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/0/bus",
           }
-        : { SUDO_USER: "debian", USER: "root-env-stale", LOGNAME: "root-env-stale" };
+        : {
+            HOME: TEST_MANAGED_HOME,
+            SUDO_USER: "debian",
+            USER: "root-env-stale",
+            LOGNAME: "root-env-stale",
+          };
       if (rootManager) {
         vi.spyOn(os, "userInfo").mockReturnValue({
           username: "root",

@@ -62,6 +62,35 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
     vi.clearAllMocks();
   });
 
+  it("paces cumulative preview reads and settles the exact last append", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const partials: Array<{ text?: string; delta?: string }> = [];
+    const delivery = createDelivery({
+      runId: "run-paced-partials",
+      onPartialReply: (payload) => {
+        partials.push({ text: payload.text, delta: payload.delta });
+      },
+    });
+    try {
+      delivery.emitAssistantStreamData({ text: "A", delta: "A" }, { emitPartialReply: true });
+      clock.mockReturnValue(1_010);
+      delivery.emitAssistantStreamData({ text: "AB", delta: "B" }, { emitPartialReply: true });
+      expect(partials).toEqual([{ text: "A", delta: "A" }]);
+      clock.mockReturnValue(1_080);
+      delivery.emitAssistantStreamData({ text: "ABC", delta: "C" }, { emitPartialReply: true });
+      expect(partials).toEqual([
+        { text: "A", delta: "A" },
+        { text: "ABC", delta: "BC" },
+      ]);
+      delivery.emitAssistantStreamData({ text: "ABCD", delta: "D" }, { emitPartialReply: true });
+      await delivery.waitForPendingEvents();
+      expect(partials.at(-1)).toEqual({ text: "ABCD", delta: "D" });
+    } finally {
+      clock.mockRestore();
+      delivery.clearAssistantStream();
+    }
+  });
+
   it("joins a partial reply task created while terminal events settle", async () => {
     const partial = createDeferred();
     const onPartialReply = vi.fn(() => partial.promise);

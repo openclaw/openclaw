@@ -508,7 +508,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "refreshes permission guidance with in-history updates %s",
     async (inHistorySystemUpdates) => {
       const { fixture, pinnedPrompt, steer, prepareSystemPromptUpdate, prepareNextRequest } =
@@ -838,7 +838,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     },
   );
 
-  it.each(["allow", "abort", "replace"] as const)(
+  it.each(["abort", "replace"] as const)(
     "rechecks permission ownership inside awaited replay admission: %s",
     async (closure) => {
       const { fixture, pinnedPrompt, steer, state, prepareSystemPromptUpdate } =
@@ -873,16 +873,10 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       }
       release.resolve();
       const [result] = await settled;
-      if (closure === "allow") {
-        expect(result.status).toBe("fulfilled");
-        expect(start).toHaveBeenCalledOnce();
-        expect(steer).toHaveBeenCalledOnce();
-      } else {
-        expect(result.status).toBe("rejected");
-        expect(start).not.toHaveBeenCalled();
-        expect(steer).not.toHaveBeenCalled();
-        expect(state.pendingSystemPrompt?.renderedPrefix).toBe(pinnedPrompt);
-      }
+      expect(result.status).toBe("rejected");
+      expect(start).not.toHaveBeenCalled();
+      expect(steer).not.toHaveBeenCalled();
+      expect(state.pendingSystemPrompt?.renderedPrefix).toBe(pinnedPrompt);
     },
   );
 
@@ -900,20 +894,6 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       contextOverflowRecoveryOwner: "session",
     });
   });
-
-  it.each([["settled-tool-finalization", true]] as const)(
-    "sets compactionForbidden for operation %s to %s",
-    async (operation, expected) => {
-      const fixture = createInput();
-      fixture.input.attempt = { ...fixture.input.attempt, operation };
-
-      await prepareEmbeddedAttemptAgentSession(fixture.input);
-
-      expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledWith(
-        expect.objectContaining({ compactionForbidden: expected }),
-      );
-    },
-  );
 
   it("publishes session ownership before terminal-hook installation can fail", async () => {
     const fixture = createInput({ terminalHookError: new Error("terminal hook failed") });

@@ -1,5 +1,7 @@
 import {
+  copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  isHostNoticePayload,
   isReplyPayloadStatusNotice,
 } from "../../auto-reply/reply-payload.js";
 import type { QueuedFollowupReplyBatch } from "../../auto-reply/reply/queue/types.js";
@@ -33,6 +35,7 @@ import { withPreparedWebchatReplyMedia } from "./chat-reply-media.js";
 import {
   buildTranscriptReplyTextFromInputs,
   readChatSendReplyPayload,
+  replaceChatSendReplyPayload,
   type DeliveredChatSendReply,
 } from "./chat-send-command-replies.js";
 import {
@@ -223,7 +226,26 @@ async function finalizeChatSendAgentReplyPayloads(
 ): Promise<ChatSendAgentReplyFinalization> {
   const { context, emitFirstAssistantServerTiming, session } = params;
   const { agentId, backingSessionId, clientRunId, sessionKey, sessionLoadOptions } = session;
-  const agentRunReplyPayloads = params.inputs.map(readChatSendReplyPayload);
+  let hasRuntimeOwnedReply = false;
+  const inputs = params.inputs.flatMap((input) => {
+    const payload = readChatSendReplyPayload(input);
+    const metadata = getReplyPayloadMetadata(payload);
+    if (
+      (metadata?.assistantMessageIndex === undefined && !metadata?.assistantTranscriptOwned) ||
+      metadata?.sessionWriterDeliveryAuthority ||
+      isSourceReplyTranscriptMirrorPayload(payload) ||
+      isHostNoticePayload(payload)
+    ) {
+      return [input];
+    }
+    // Session-message delivery owns model text. Late payloads may still carry media supplements.
+    hasRuntimeOwnedReply = true;
+    return replaceChatSendReplyPayload(
+      input,
+      copyReplyPayloadMetadata(payload, { ...payload, text: metadata?.responseUsageLine }),
+    );
+  });
+  const agentRunReplyPayloads = inputs.map(readChatSendReplyPayload);
   if (agentRunReplyPayloads.length === 0) {
     return { kind: "dropped", reason: "no-visible-content" };
   }
@@ -285,7 +307,7 @@ async function finalizeChatSendAgentReplyPayloads(
         {
           scope: mediaScope,
           storePath: latestStorePath,
-          inputs: params.inputs.filter((_, index) => !committedSourceContent[index]),
+          inputs: inputs.filter((_, index) => !committedSourceContent[index]),
           abortSignal: params.abortSignal,
           includeSensitiveMedia: false,
           logGateway: context.logGateway,
@@ -336,7 +358,12 @@ async function finalizeChatSendAgentReplyPayloads(
     const displayReply =
       extractAssistantDisplayText(sourceReplyBroadcastContent) ??
       buildTranscriptReplyTextFromInputs(finalInputsByIndex.flat());
-    if (!sourceReplyBroadcastContent.length && !displayReply && !hasCommittedSourceReply) {
+    if (
+      !sourceReplyBroadcastContent.length &&
+      !displayReply &&
+      !hasCommittedSourceReply &&
+      !hasRuntimeOwnedReply
+    ) {
       return { kind: "dropped", reason: "no-visible-content" };
     }
 
@@ -435,7 +462,7 @@ async function finalizeChatSendAgentReplyPayloads(
       }
       if (params.publishMessage) {
         authorityTransferred = params.publishMessage(message, deliveryAuthorized, release);
-      } else {
+      } else if (message) {
         broadcastChatFinal({
           terminalEntry: params.terminalEntry,
           context,

@@ -103,6 +103,11 @@ describe("openclaw-file-preview-modal", () => {
 
   it("emits controlled query, select, and close events", async () => {
     const modal = await renderPreview();
+    const actions = modal.querySelector(".foot > openclaw-modal-actions");
+    expect(actions?.querySelector("button")).not.toBeNull();
+    expect(actions?.parentElement?.lastElementChild).toBe(actions);
+    expect(actions?.querySelector(".foot-group")).toBeNull();
+    expect(modal.querySelector(".foot > .foot-group")).not.toBeNull();
     const onQuery = vi.fn();
     const onSelect = vi.fn();
     const onClose = vi.fn();

@@ -7,8 +7,8 @@ import {
   type SessionCreatedActor,
   type SessionOwnerOption,
 } from "../../lib/session-owner.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
-import { AgentViewerAvatar, ViewerAvatar } from "./viewer-facepile.tsx";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
+import { ParticipantAvatar } from "./viewer-facepile.tsx";
 
 export type SessionOwnerChipProps = {
   owner?: SessionCreatedActor | null;
@@ -30,36 +30,19 @@ function ownerHue(id: string): number {
 export function SessionOwnerAvatar(props: {
   owner: Pick<SessionOwnerOption, "id" | "label" | "avatarUrl" | "identity">;
 }) {
-  const identity = () => {
-    const value = props.owner.identity;
-    return value?.type === "agent" ? value : undefined;
-  };
   return (
-    <Show
-      when={identity()}
-      fallback={
-        <ViewerAvatar
-          identity={props.owner.identity}
-          user={{
-            id: props.owner.id,
-            name: props.owner.label,
-            avatarUrl: props.owner.avatarUrl,
-            watchedSessions: [],
-          }}
-          markAsViewer={false}
-          variant="session"
-          aria-hidden="true"
-        />
-      }
-    >
-      {(agent) => (
-        <AgentViewerAvatar
-          user={{ id: props.owner.id, name: props.owner.label, avatarUrl: props.owner.avatarUrl }}
-          identity={agent()}
-          label={props.owner.label || props.owner.id}
-        />
-      )}
-    </Show>
+    <ParticipantAvatar
+      user={{
+        id: props.owner.id,
+        name: props.owner.label,
+        avatarUrl: props.owner.avatarUrl,
+        identity: props.owner.identity,
+        watchedSessions: [],
+      }}
+      markAsViewer={false}
+      label={props.owner.label || props.owner.id}
+      aria-hidden="true"
+    />
   );
 }
 
@@ -150,7 +133,7 @@ export function SessionOwnerChipContent(props: SessionOwnerChipProps) {
   );
 }
 
-export type SessionOwnerChipElement = SolidBridgeElement<SessionOwnerChipProps>;
+type SessionOwnerChipElement = SolidBridgeElement<SessionOwnerChipProps>;
 export const SessionOwnerChip = defineSolidBridge<SessionOwnerChipProps>(
   "openclaw-session-owner-chip",
   (props) => <SessionOwnerChipContent {...props} />,

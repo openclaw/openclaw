@@ -1,6 +1,5 @@
 import Foundation
 import OpenClawProtocol
-import Speech
 import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
@@ -382,16 +381,6 @@ struct TalkModeRuntimeSpeechTests {
         await TestIsolation.withUserDefaultsValues([talkRealtimeRelayEnabledKey: true]) {
             #expect(AppState(preview: true).talkRealtimeRelayEnabled)
         }
-    }
-
-    @Test func `speech request uses dictation defaults`() {
-        let request = SFSpeechAudioBufferRecognitionRequest()
-
-        SpeechRecognitionRequestPolicy.configureInteractiveTranscription(request)
-
-        #expect(request.shouldReportPartialResults)
-        #expect(request.taskHint == .dictation)
-        #expect(!request.requiresOnDeviceRecognition)
     }
 
     @Test func `playback plan routes unsupported local providers through gateway speak`() {

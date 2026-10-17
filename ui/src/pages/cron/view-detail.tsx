@@ -1,16 +1,14 @@
 import { createMemo } from "solid-js";
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
 import type { CronJob } from "../../api/types.ts";
-import { renderHubTabs } from "../../components/hub-tabs.ts";
+import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { formatCronSchedule } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { AdminRequired, ErrorBanner, EnabledSwitch, JobMenu } from "./view-controls.tsx";
 import { Editor } from "./view-editor.tsx";
-import { TriggerIndicator } from "./view-job-status.tsx";
+import { describeJobSchedule, TriggerIndicator } from "./view-job-status.tsx";
 import { RunsSection } from "./view-runs.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
 export function DetailView(
@@ -90,12 +88,12 @@ function DetailHeader(
   // summary describes unsaved edits, so the two never contradict each other.
   const nextRunAtMs = () => props.selectedJob?.state?.nextRunAtMs;
   const nextRunSuffix = () =>
-    typeof nextRunAtMs() === "number" && Number.isFinite(nextRunAtMs())
+    nextRunAtMs() !== undefined
       ? ` · ${t("cron.jobState.next")} ${formatRelativeTimestamp(nextRunAtMs())}`
       : "";
   const subtitle = () =>
     props.mode === "job" && props.selectedJob
-      ? `${formatCronSchedule(props.selectedJob)}${nextRunSuffix()}`
+      ? `${describeJobSchedule(props.selectedJob)}${nextRunSuffix()}`
       : t("cron.detail.newSubtitle");
   return (
     <div class="cron-detail-header">
@@ -141,30 +139,28 @@ function DetailHeader(
 }
 function DetailTabs(props: CronProps) {
   return (
-    <LitContent
-      render={() =>
-        renderHubTabs({
-          id: "cron-detail",
-          panelId: "cron-detail-panel",
-          className: "cron-tabs",
-          variant: "sub",
-          active: props.detailTab,
-          tabs: [
-            {
-              value: "settings",
-              label: t("cron.detail.settingsTab"),
-              testId: "cron-detail-tab-settings",
-            },
-            {
-              value: "history",
-              label: t("cron.detail.historyTitle"),
-              testId: "cron-detail-tab-history",
-            },
-          ],
-          ariaLabel: t("cron.detail.tabsLabel"),
-          onSelect: props.onDetailTabChange,
-        })
-      }
+    <HubTabs
+      {...{
+        id: "cron-detail",
+        panelId: "cron-detail-panel",
+        class: "cron-tabs",
+        variant: "sub",
+        active: props.detailTab,
+        tabs: [
+          {
+            value: "settings",
+            label: t("cron.detail.settingsTab"),
+            testId: "cron-detail-tab-settings",
+          },
+          {
+            value: "history",
+            label: t("cron.detail.historyTitle"),
+            testId: "cron-detail-tab-history",
+          },
+        ],
+        ariaLabel: t("cron.detail.tabsLabel"),
+        onSelect: props.onDetailTabChange,
+      }}
     />
   );
 }

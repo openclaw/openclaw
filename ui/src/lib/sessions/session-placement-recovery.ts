@@ -269,7 +269,7 @@ function validateSessionPlacementRecovery(
 function removeSessionPlacementRecoveryRow(storage: Storage, key: string): boolean {
   try {
     storage.removeItem(key);
-    return storage.getItem(key) === null;
+    return true;
   } catch {
     // Recovery state is best-effort to remove after completion or validation failure.
     return false;
@@ -340,20 +340,8 @@ function relocateSessionPlacementRecoveryRow(
     }
     // Relocate instead of copying so a full store needs no duplicate capacity.
     storage.removeItem(sourceKey);
-    if (storage.getItem(sourceKey) !== null) {
-      return null;
-    }
     storage.setItem(key, serialized);
-    const relocated = readOwnedSessionPlacementRecovery(
-      storage,
-      key,
-      recovery.gatewayUrl,
-      recovery.recoveryScope,
-      recovery.sessionKey,
-    );
-    if (relocated) {
-      return relocated;
-    }
+    return recovery;
   } catch {
     // The original bytes are restored below so a later attempt can retry.
   }
@@ -497,9 +485,7 @@ export function writeSessionPlacementRecovery(recovery: SessionPlacementRecovery
       );
     }
     storage.setItem(key, JSON.stringify(normalized));
-    return Boolean(
-      readOwnedSessionPlacementRecovery(storage, key, gatewayUrl, recoveryScope, sessionKey),
-    );
+    return true;
   });
 }
 

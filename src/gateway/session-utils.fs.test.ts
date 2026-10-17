@@ -714,18 +714,17 @@ describe("buildSessionPreviewItems bounded projection", () => {
     { role: "system", content: "system metadata" },
   ];
   test.each([
-    ...(
-      [
-        ["display", { role: "user", text: "question" }],
-        ["model-context", { role: "assistant", text: "model only" }],
-      ] as const
-    ).map(([view, preceding]) => ({
+    ...(["display", "model-context"] as const).map((view) => ({
       name: `${view} visibility, order and UTF-16 bounds`,
       messages: visibilityMessages,
       view,
-      limit: 2,
+      limit: 3,
       maxChars: 20,
-      expected: [preceding, { role: "assistant", text: `${"x".repeat(16)}...` }],
+      expected: [
+        { role: "user", text: "question" },
+        { role: "assistant", text: `${"x".repeat(16)}...` },
+        { role: "assistant", text: "REPLY_SKIP" },
+      ],
     })),
     {
       name: "fewer visible items than the limit",
@@ -754,6 +753,7 @@ describe("buildSessionPreviewItems bounded projection", () => {
       maxChars: 120,
       expected: [
         { role: "user", text: "first" },
+        { role: "assistant", text: "ANNOUNCE_SKIP" },
         { role: "assistant", text: "last" },
       ],
     },

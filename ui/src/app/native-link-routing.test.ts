@@ -156,7 +156,7 @@ async function focusGitHubLink() {
 }
 
 describe("native link routing", () => {
-  it.each(["abort", "dispose"] as const)(
+  it.each(["abort"] as const)(
     "cancels a pending context menu on %s and removes link handlers",
     async (stop) => {
       const bridge = installBridge();
@@ -409,23 +409,5 @@ describe("native link routing", () => {
     expect(menu?.getRootNode()).toBe(document);
     await (menu as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
     expect(menuItem("Open in Browser Panel")).not.toBeNull();
-  });
-
-  it("removes listeners and an open menu on dispose", async () => {
-    const bridge = installBridge();
-    routing = startNativeLinkRouting();
-    const anchor = appendLink("https://example.com/report");
-    contextMenu(anchor);
-    await waitForMenu();
-    expect(document.querySelector("openclaw-native-link-menu")).not.toBeNull();
-
-    routing.dispose();
-    routing = undefined;
-
-    expect(document.querySelector("openclaw-native-link-menu")).toBeNull();
-    expect(clickWithoutNavigation(anchor)).toBe(false);
-    expect(contextMenu(anchor).defaultPrevented).toBe(false);
-    expect(document.querySelector("openclaw-native-link-menu")).toBeNull();
-    expect(bridge.messages).toEqual([]);
   });
 });

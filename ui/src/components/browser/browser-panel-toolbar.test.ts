@@ -5,7 +5,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createBrowserClient, createView } from "./browser-panel-controller-test-support.ts";
-import type { BrowserPanelController } from "./browser-panel-controller.ts";
+import type { BrowserPanel } from "./browser-panel-owner.ts";
 import "./browser-panel.ts";
 
 describe("Browser toolbar", () => {
@@ -27,9 +27,9 @@ describe("Browser toolbar", () => {
       presented: boolean;
       refreshOnPresentation: boolean;
       client: GatewayBrowserClient;
-      browserPanelController: BrowserPanelController;
+      browserPanelController: BrowserPanel;
       renderRoot: HTMLElement;
-      requestUpdate: () => void;
+      invalidate: () => void;
       updateComplete: Promise<unknown>;
     };
     panel.available = true;
@@ -44,7 +44,7 @@ describe("Browser toolbar", () => {
     const controller = panel.browserPanelController;
     controller.activeTargetId = "asset";
     controller.view = createView("asset", "https://assets.example.test/preview.png");
-    panel.requestUpdate();
+    panel.invalidate();
     await panel.updateComplete;
     return panel;
   }

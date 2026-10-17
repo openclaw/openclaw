@@ -40,7 +40,6 @@ const CURSOR_CASES: readonly CursorCase[] = [
   { expected: "default", selector: ".sidebar-recent-session__link" },
   { expected: "default", selector: ".sidebar-recent-session__name" },
   { expected: "default", selector: ".sidebar-online__person" },
-  { expected: "default", selector: ".sidebar-brand__new-thread" },
   { expected: "default", selector: ".sidebar-new-session" },
   { expected: "default", selector: ".sidebar-session-catalog-new" },
   { expected: "default", selector: ".settings-sidebar__item" },
@@ -84,6 +83,7 @@ function readUiCss(): string {
     "ui/src/styles/sessions.css",
     "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",
+    "ui/src/styles/agents.css",
     "ui/src/styles/skill-workshop.css",
     "ui/src/styles/rail-header.css",
     "ui/src/styles/chat/startup-layout.css",
@@ -141,7 +141,6 @@ function fixtureDocument(): string {
         <a class="sidebar-recent-session__link" href="/chat/test"><span class="sidebar-recent-session__name">Session</span></a>
         <a class="sidebar-online__person" href="/activity"><span class="sidebar-online__person-name">Person</span></a>
         <button class="sidebar-online__person" type="button"><span class="sidebar-online__person-name">Viewer</span></button>
-        <a class="sidebar-brand__new-thread" href="/new">New session</a>
         <a class="sidebar-new-session" href="/new">New group session</a>
         <a class="sidebar-session-catalog-new" href="/new">New catalog session</a>
         <a class="sidebar-issues-panel__navigation-link" href="/settings/channels">Channel issue</a>

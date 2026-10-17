@@ -7,24 +7,21 @@ export function createSessionObserverModelSlots(params: {
   demote: (state: SessionObserverState) => void;
 }) {
   const demoted = new WeakSet<SessionObserverState>();
-  const requestGenerations = new WeakMap<SessionObserverState, number>();
+  const running = new Set<SessionObserverState>();
 
   return {
-    beginRequest(state: SessionObserverState): number {
-      const generation = (requestGenerations.get(state) ?? 0) + 1;
-      requestGenerations.set(state, generation);
-      return generation;
+    reserve(state: SessionObserverState): boolean {
+      if (running.has(state) || running.size >= params.maxSessions) {
+        return false;
+      }
+      // Logical eviction can remove a state before its aborted work settles.
+      // Only the completion owner releases this physical reservation.
+      running.add(state);
+      return true;
     },
-
-    invalidateRequest(state: SessionObserverState): void {
-      requestGenerations.set(state, (requestGenerations.get(state) ?? 0) + 1);
-      state.activeController?.abort();
+    release(state: SessionObserverState): void {
+      running.delete(state);
     },
-
-    requestIsCurrent(state: SessionObserverState, generation: number): boolean {
-      return requestGenerations.get(state) === generation;
-    },
-
     claim(agentId: string, current?: SessionObserverState): string | undefined {
       const resolved = params.resolve(agentId);
       if (!resolved || current?.utilityModelRef === resolved) {

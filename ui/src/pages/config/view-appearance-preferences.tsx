@@ -1,4 +1,4 @@
-import { createEffect, createMemo, Show, For } from "solid-js";
+import { createMemo, Show, For } from "solid-js";
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import {
   normalizeCatalogOpenTarget,
@@ -100,18 +100,13 @@ function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "ca
         : []),
     ];
   });
-  let accessRequested = false;
-  createEffect(
-    () => state(),
-    () => {
-      accessRequested = false;
-    },
-  );
+  let requestedState: ReturnType<typeof state>;
   const requestAccess = () => {
-    if (accessRequested || !state()?.permissionRequired) {
+    const current = state();
+    if (requestedState === current || !current?.permissionRequired) {
       return;
     }
-    accessRequested = true;
+    requestedState = current;
     (props.kind === "microphone"
       ? props.config.onMicrophoneRefresh
       : props.config.onCameraRefresh)?.();
@@ -234,9 +229,8 @@ export function ChatPreferencesSection(props: ConfigProps) {
               spellcheck="false"
               placeholder="48rem"
               value={messageWidth()}
-              onChange={(event: Event) => {
-                // SAFETY: The listener is bound directly to this input.
-                const input = event.currentTarget as HTMLInputElement;
+              onChange={(event) => {
+                const input = event.currentTarget;
                 const normalized = normalizeChatMessageMaxWidth(input.value);
                 if (input.value.trim() && !normalized) {
                   input.setCustomValidity(t("configView.chatPrefs.messageWidthInvalid"));
@@ -304,9 +298,8 @@ export function ChatPreferencesSection(props: ConfigProps) {
                 data-settings-follow-up-mode
                 aria-label={t("chat.followUpMode")}
                 value={followUpSelection()}
-                onChange={(event: Event) => {
-                  // SAFETY: This change handler is bound directly to the native select.
-                  const value = (event.currentTarget as HTMLSelectElement).value;
+                onChange={(event) => {
+                  const value = event.currentTarget.value;
                   props.onAppearanceChange({
                     chatFollowUpMode:
                       value === "server" ? undefined : normalizeChatFollowUpMode(value),

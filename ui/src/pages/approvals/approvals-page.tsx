@@ -30,8 +30,6 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { formatDateTimeMs } from "../../lib/reactive/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import { PageLayout } from "../page-layout.tsx";
 
 const APPROVAL_HISTORY_PAGE_SIZE = 50;
 
@@ -117,13 +115,13 @@ function EmptyRow(props: { columns: number; label: string }) {
 }
 function Cell(props: { labelKey: string; value: JSX.Element; mono?: boolean }) {
   return (
-    <td class={props.mono ? "mono" : undefined} data-label={t(props.labelKey)}>
+    <td class={{ mono: props.mono }} data-label={t(props.labelKey)}>
       {props.value}
     </td>
   );
 }
 
-function ApprovalsPageContent() {
+export function ApprovalsPage() {
   const context = useApplication();
   let disposed = false;
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
@@ -166,13 +164,13 @@ function ApprovalsPageContent() {
     revision();
     return state;
   };
-
   createEffect(
     () => context.gateway,
     (gateway) => {
       resetHistory(true);
       state.gatewaySource = gateway;
       applyGatewaySnapshot(gateway.snapshot);
+      // Gateway receipts retire history and grant reads before reconnect or access changes settle them.
       const stopSnapshots = gateway.subscribe((snapshot) => {
         if (state.gatewaySource === gateway && context.gateway === gateway) {
           applyGatewaySnapshot(snapshot);
@@ -318,7 +316,7 @@ function ApprovalsPageContent() {
       if (!canPublish()) {
         return;
       }
-      state.grants = Array.isArray(result.grants) ? result.grants : [];
+      state.grants = result.grants;
       state.grantsError = null;
       publish();
     } catch (error) {
@@ -458,7 +456,7 @@ function ApprovalsPageContent() {
     );
   }
   return (
-    <>
+    <openclaw-approvals-page>
       <SettingsPageHeader
         title={t("tabs.approvals")}
         subtitle={
@@ -606,16 +604,6 @@ function ApprovalsPageContent() {
           ) : null}
         </SettingsPage>
       </SettingsWorkspace>
-    </>
+    </openclaw-approvals-page>
   );
 }
-
-export const ApprovalsPage = defineSolidBridge(
-  "openclaw-approvals-page",
-  (_props, host) => (
-    <PageLayout host={host}>
-      <ApprovalsPageContent />
-    </PageLayout>
-  ),
-  { properties: {} },
-);

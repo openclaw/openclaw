@@ -37,10 +37,10 @@ import {
   terminalizeRestartSafeChatAdmission,
   type RestartSafeChatTerminalState,
 } from "./chat-restart-recovery.js";
+import { respondChatSendAdmissionError } from "./chat-send-admission-errors.js";
 import {
   prepareChatSendRetryComparison,
   resolveChatSendRequestConflict,
-  respondChatSendAdmissionError,
   respondChatSendRetry,
 } from "./chat-send-pre-admission.js";
 import type { ChatSendPreAdmissionParams } from "./chat-send-pre-admission.types.js";
@@ -53,6 +53,25 @@ import type {
   GatewayRequestHandlerOptions,
   SessionMutationAuthorization,
 } from "./types.js";
+
+export function assertChatSendWorkAdmissionCurrent(params: {
+  retainedWork: Pick<ReturnType<typeof createChatSendWorkAdmission>, "isActive">;
+  admission: Pick<SessionWorkAdmissionLease, "isActive">;
+  lifecycleGeneration: string;
+  controller: AbortController;
+  queued: { controller: AbortController; abortable?: boolean } | undefined;
+}) {
+  // Collect retains admission after retiring source cancellation until aggregate settlement.
+  if (
+    !params.retainedWork.isActive() ||
+    !params.admission.isActive() ||
+    params.lifecycleGeneration !== getAgentEventLifecycleGeneration() ||
+    (params.controller.signal.aborted &&
+      !(params.queued?.controller === params.controller && params.queued.abortable === false))
+  ) {
+    throw new Error("Chat admission ended or was cancelled; submit a new turn.");
+  }
+}
 
 /** Preparation returns facts; the caller consumes current retry ownership before reserving. */
 export function prepareChatSendAdmissionRetry(params: ChatSendPreAdmissionParams) {

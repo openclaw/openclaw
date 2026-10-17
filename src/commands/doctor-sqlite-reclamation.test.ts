@@ -14,6 +14,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -39,7 +40,7 @@ async function seed(state: OpenClawTestState, withAgent = false) {
       INSERT INTO session_transcript_fts_rows(id,session_id,message_id) VALUES (-17,'hot','kept');
     `);
     const eventJson = '{"type":"message","id":"kept"}';
-    agent.db
+    requireNativeSqliteDatabase(agent.db)
       .prepare(`INSERT INTO transcript_events
       (rowid,session_id,seq,event_json,created_at,navigation_type,navigation_custom_type,
        navigation_display,message_role,navigation_last_type,navigation_last_custom_type,navigation_valid)

@@ -619,11 +619,11 @@ suite.define(() => {
       const viewMenu = page.locator(
         "openclaw-chat-header-session-menu > .chat-header-session-menu",
       );
+      const viewItem = viewMenu.getByRole("menuitem", { name: "View", exact: true });
+      await viewItem.hover();
       await expect
         .poll(() => viewMenu.locator('[role="note"]').textContent())
         .toContain("Stored in this browser only");
-      const viewItem = viewMenu.getByRole("menuitem", { name: "View", exact: true });
-      await viewItem.hover();
       const reasoning = viewMenu.getByRole("menuitemcheckbox", { name: "Reasoning" });
       await expect.poll(() => reasoning.isVisible()).toBe(true);
       await reasoning.click();
@@ -655,10 +655,10 @@ suite.define(() => {
 
       await page.reload();
       await viewMenuTrigger.click();
+      await viewItem.hover();
       await expect
         .poll(() => viewMenu.locator('[role="note"]').textContent())
         .toContain("Stored in this browser only");
-      await viewItem.hover();
       await expect
         .poll(() =>
           viewMenu

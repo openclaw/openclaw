@@ -76,10 +76,6 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   );
   const codexModelContentCapture = resolveDiagnosticModelContentCapturePolicy(params.config);
   const codexModelCallId = `${params.runId}:codex-model:1`;
-  const fastModeAutoStartedAtMs =
-    typeof params.fastModeStartedAtMs === "number" && Number.isFinite(params.fastModeStartedAtMs)
-      ? params.fastModeStartedAtMs
-      : undefined;
   const fastModeAutoProgressState: FastModeAutoProgressState = params.fastModeAutoProgressState ?? {
     offAnnounced: false,
     resetAnnounced: false,
@@ -157,7 +153,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const preparedShellEnvironment = preparedEnvironment
     ? {
         ...preparedEnvironment.credentialScrubEnv,
-        ...(sandbox?.enabled || remoteExec ? undefined : preparedEnvironment.localIdentityEnv),
+        ...(sandbox?.enabled || remoteExec || preparedEnvironment.hostExecutionRequired
+          ? undefined
+          : preparedEnvironment.localIdentityEnv),
         ...preparedEnvironment.localProcessEnv,
       }
     : undefined;
@@ -546,6 +544,17 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       params.sessionRoot = sessionPermissionPolicy.root;
       (params.execOverrides ??= {}).mode = sessionPermissionPolicy.execMode;
     }
+    // Only local execution roots address Gateway settings; remote paths belong
+    // to their executor. Prepare after permission admission and before tools/startup.
+    if (
+      !sandbox?.enabled &&
+      !remoteExec &&
+      appServer.start.transport === "stdio" &&
+      !isCodexAppServerProxyLaunch(appServer.start.args) &&
+      !appServer.remoteWorkspaceRoot
+    ) {
+      params.hostCapabilities.prepareContinuationRetryCount?.({ cwd: effectiveCwd });
+    }
     const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
       configuredEvents: options.nativeHookRelay?.events,
       appServer,
@@ -635,7 +644,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       codexModelCallTrace,
       codexModelContentCapture,
       codexModelCallId,
-      fastModeAutoStartedAtMs,
+      fastModeAutoStartedAtMs: params.fastModeStartedAtMs,
       fastModeAutoProgressState,
       preDynamicStartupStages,
       attemptClientFactory,

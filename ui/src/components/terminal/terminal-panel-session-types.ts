@@ -5,8 +5,8 @@ import type {
 } from "@openclaw/libterminal/browser";
 import { parseCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
-import type { TerminalPanelTab } from "./terminal-panel-tabs.ts";
-import type { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
+import type { TerminalPanelTab } from "./terminal-panel-tabs.tsx";
+import type { TerminalPanelUpload } from "./terminal-panel-upload.ts";
 import type { StartupInputBuffer } from "./terminal-startup-input.ts";
 import type { TerminalTabReadinessState } from "./terminal-tab-readiness.ts";
 
@@ -31,6 +31,14 @@ export type TerminalOperation = {
   generation: number;
   client: TerminalGatewayClient;
   signal: AbortSignal;
+  cancelIntent?: () => void;
+};
+
+export type TerminalRestoreBatch = {
+  operation: TerminalOperation;
+  pending: Map<string, TerminalPanelSessionTab | undefined>;
+  userClosedTab: boolean;
+  input: { interacted: boolean; stop: () => void };
   cancelIntent?: () => void;
 };
 
@@ -62,7 +70,8 @@ export type TerminalPanelSessionControllerState = {
 
 export interface TerminalPanelSessionControllerHost {
   readonly updateComplete: Promise<unknown>;
-  requestUpdate(): void;
+  readonly ownerDocument: Document;
+  invalidate(): void;
   readonly isConnected: boolean;
   readonly client: TerminalGatewayClient | null;
   readonly agentId: string | null;
@@ -75,9 +84,10 @@ export interface TerminalPanelSessionControllerHost {
   readonly routeTarget: TerminalRouteTarget;
   readonly terminalPanelOpen: boolean;
   readonly catalogReadyTimeoutMs: number;
-  readonly terminalPanelUploadController: TerminalPanelUploadController;
+  readonly terminalPanelUploadController: TerminalPanelUpload;
   createTerminalController(
     options: CreateGhosttyTerminalOptions,
+    shouldFocusOnOpen?: () => boolean,
   ): Promise<GhosttyTerminalController>;
   closeTerminalPanel(): void;
   findTerminalPanelViewport(): Element | null;

@@ -37,8 +37,10 @@ import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model
 import {
   acquireAgentRunPreparedModelRuntime,
   acquirePublishedPreparedModelRuntime,
+  advancePreparedModelRuntimeConfig,
   applyRemoteModelCatalogUpdate,
   getPreparedModelRuntimeSnapshot,
+  loadPublishedGatewayReplyDispatchRuntime,
   prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
@@ -143,6 +145,89 @@ async function listModels(refresh: boolean) {
   return respond.mock.calls[0]?.[1];
 }
 afterEach(() => setRemoteModelCatalogOverlaySourcesForTest());
+
+it("shares catalog adoption without sharing observer cancellation and accepts the next update", async ({
+  signal,
+}) => {
+  await setup();
+  const preparing = createDeferred();
+  const commit = createDeferred();
+  const preparePricing = pricing.prepareModelPricingContext;
+  const pricingSpy = vi
+    .spyOn(pricing, "prepareModelPricingContext")
+    .mockImplementationOnce(async (...args) => {
+      preparing.resolve();
+      await commit.promise;
+      return await preparePricing(...args);
+    });
+  const observer = new AbortController();
+  const cancelled = applyRemoteModelCatalogUpdate(() => config, observer.signal);
+  const reason = new Error("catalog observer closed");
+  const cancelledResult = expect(cancelled).rejects.toMatchObject({
+    name: "AbortError",
+    cause: reason,
+  });
+  let adoption: ReturnType<typeof applyRemoteModelCatalogUpdate> | undefined;
+  try {
+    await withinTest(preparing.promise, signal);
+    adoption = applyRemoteModelCatalogUpdate(() => config);
+    observer.abort(reason);
+    await withinTest(cancelledResult, signal);
+    expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(200);
+    commit.resolve();
+    expect(await withinTest(adoption, signal)).toBe("published");
+    expect(pricingSpy).toHaveBeenCalledTimes(1);
+    expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(300);
+    stored.mockReturnValue(bundle(400));
+    expect(await applyRemoteModelCatalogUpdate(() => config)).toBe("published");
+    expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(400);
+  } finally {
+    observer.abort(reason);
+    commit.resolve();
+    await Promise.allSettled([cancelledResult, adoption]);
+    pricingSpy.mockRestore();
+  }
+});
+
+it("preserves prospective tool and sandbox policy across catalog adoption", async () => {
+  await setup();
+  const preparing = createDeferred();
+  const commit = createDeferred();
+  const preparePricing = pricing.prepareModelPricingContext;
+  const pricingSpy = vi
+    .spyOn(pricing, "prepareModelPricingContext")
+    .mockImplementationOnce(async (...args) => {
+      preparing.resolve();
+      await commit.promise;
+      return await preparePricing(...args);
+    });
+  const adoption = applyRemoteModelCatalogUpdate(() => config);
+  try {
+    await preparing.promise;
+    advancePreparedModelRuntimeConfig({
+      ...config,
+      tools: { deny: ["exec"] },
+      agents: {
+        ...config.agents,
+        defaults: { ...config.agents?.defaults, sandbox: { mode: "all" } },
+      },
+    });
+    commit.resolve();
+    expect(await adoption).toBe("published");
+    await expect(
+      loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
+    ).resolves.toMatchObject({
+      config: {
+        tools: { deny: ["exec"] },
+        agents: { defaults: { sandbox: { mode: "all" } } },
+      },
+    });
+  } finally {
+    commit.resolve();
+    await Promise.allSettled([adoption]);
+    pricingSpy.mockRestore();
+  }
+});
 
 it("delivers the first reply when catalog adoption retires its captured dispatch publication", async () => {
   await setup({ allowGatewaySubagentBinding: true });

@@ -13,7 +13,7 @@
 .chat-run-failure__icon {
   display: inline-flex;
   flex: 0 0 18px;
-  margin-top: 3px;
+  margin-top: 7px;
   color: var(--warn);
 }
 
@@ -39,15 +39,68 @@
   overflow-wrap: anywhere;
 }
 
-.chat-run-failure__actions {
+.chat-run-failure__header {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  margin-top: 14px;
+  min-height: 32px;
 }
 
-.chat-run-failure__actions:empty {
-  display: none;
+.chat-run-failure__heading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.chat-run-failure__retry {
+  flex-shrink: 0;
+}
+
+.chat-run-failure__copy {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.chat-run-failure__copy .chat-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.chat-run-failure__copy svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chat-run-failure:hover .chat-copy-btn,
+.chat-run-failure:focus-within .chat-copy-btn,
+.chat-run-failure__copy .chat-copy-btn:is([data-copy-state="copied"], [data-copy-state="error"]) {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .chat-run-failure__copy .chat-copy-btn {
+    width: 32px;
+    height: 32px;
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+.chat-run-failure__copy .chat-copy-btn[data-copy-state="copying"] {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .chat-run-failure__details {

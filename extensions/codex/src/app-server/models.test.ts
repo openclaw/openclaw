@@ -21,11 +21,16 @@ const mocks = vi.hoisted(() => {
   return { authBridge, managedBinary, providerAuth };
 });
 
-vi.mock("./auth-bridge.js", () => ({
+vi.mock("./auth-bridge.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-bridge.js")>()),
   applyCodexAppServerAuthProfile: mocks.authBridge.applyAuthProfile,
   bridgeCodexAppServerStartOptions: mocks.authBridge.startOptions,
-  reconcileCodexComputerUseStartArtifacts: mocks.authBridge.reconcileComputerUseArtifacts,
   resolveCodexAppServerHomeDir: (agentDir: string) => `${agentDir}/codex-home`,
+}));
+
+vi.mock("./computer-use-artifacts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./computer-use-artifacts.js")>()),
+  reconcileCodexComputerUseStartArtifacts: mocks.authBridge.reconcileComputerUseArtifacts,
 }));
 
 vi.mock("./auth-profile.js", () => ({
@@ -33,7 +38,8 @@ vi.mock("./auth-profile.js", () => ({
   resolveCodexAppServerAuthProfileStore: () => ({ version: 1, profiles: {} }),
 }));
 
-vi.mock("./auth-cache-key.js", () => ({
+vi.mock("./auth-cache-key.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-cache-key.js")>()),
   resolveCodexAppServerFallbackApiKeyCacheKey: mocks.authBridge.fallbackApiKeyCacheKey,
 }));
 
@@ -50,6 +56,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-registration", async (importOriginal)
 
 let listCodexAppServerModels: typeof import("./models.js").listCodexAppServerModels;
 let listAllCodexAppServerModels: typeof import("./models.js").listAllCodexAppServerModels;
+let readModelListResult: typeof import("./models.js").readModelListResult;
 let resetSharedCodexAppServerClientForTests: typeof import("./shared-client.test-support.js").resetSharedCodexAppServerClientForTests;
 
 const validModelListEntry = {
@@ -85,7 +92,8 @@ function paginatedModel(id: string, inputModalities: string[]) {
 
 describe("listCodexAppServerModels", () => {
   beforeAll(async () => {
-    ({ listCodexAppServerModels, listAllCodexAppServerModels } = await import("./models.js"));
+    ({ listCodexAppServerModels, listAllCodexAppServerModels, readModelListResult } =
+      await import("./models.js"));
     ({ resetSharedCodexAppServerClientForTests } = await import("./shared-client.test-support.js"));
   });
 
@@ -132,6 +140,13 @@ describe("listCodexAppServerModels", () => {
     await expect(listPromise).rejects.toThrow(/Invalid Codex app-server model\/list response/);
     harness.client.close();
     startSpy.mockRestore();
+  });
+
+  it("defaults omitted model modalities at model admission", () => {
+    const result = readModelListResult({ data: [validModelListEntry] });
+
+    expect(result.models[0]?.inputModalities).toEqual(["text", "image"]);
+    expect(validModelListEntry).not.toHaveProperty("inputModalities");
   });
 
   it("lists app-server models through the typed helper", async () => {

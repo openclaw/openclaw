@@ -1,9 +1,15 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { preparePostgresBackupDiscovery } from "../infra/backup-database-discovery.js";
 import { discoverBackupDatabasePaths } from "../infra/backup-sqlite-snapshot.js";
+import {
+  listDatabaseEngineStores,
+  selectDatabaseEngine,
+} from "../infra/database-engine/registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { canonicalPathFromExistingAncestor, isPathInside } from "../infra/fs-safe.js";
 import {
@@ -18,12 +24,12 @@ import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { formatCommandOutput, formatCommandResult } from "../process/command-error.js";
 import { spawnCommand } from "../process/exec-spawn.js";
 import { BACKUP_RUN_ERROR_MAX_LENGTH } from "../state/backup-run-records.contract.js";
-import { readBackupEngine } from "./database-backup.js";
+import { readBackupEngine, readPostgresBackupFamily } from "./database-backup.js";
 import {
   applyScopeUpdate,
   gitBackupArtifactFiles,
   prepareScopeUpdate,
-  prepareStaleAgentUpdates,
+  prepareStaleScopeUpdates,
   readGitBackupRepositoryState,
   type GitBackupScopeUpdate,
 } from "./git-backup-artifacts.js";
@@ -37,7 +43,10 @@ import {
   type GitBackupManifest,
   type GitBackupRestoreResult,
 } from "./git-backup-codec.js";
-import { ensurePrivateSnapshotRepositoryRoot } from "./local-repository.js";
+import {
+  createLocalSnapshotProvider,
+  ensurePrivateSnapshotRepositoryRoot,
+} from "./local-repository.js";
 import { createOpenClawSnapshotCopy } from "./openclaw-snapshot-copy.js";
 import type { SnapshotDatabaseRef } from "./snapshot-provider.js";
 
@@ -274,23 +283,53 @@ export async function createGitBackup(params: {
 }): Promise<GitBackupCreateResult> {
   const databases = [...params.databases];
   if (params.all) {
-    const { createConfigIO } = await import("../config/io.js");
-    const { config } = await createConfigIO({
-      observe: false,
-      pluginValidation: "core-only",
-      shellEnvFallback: "defer",
-    }).readConfigFileSnapshot();
-    for (const file of await discoverBackupDatabasePaths({ stateDir: params.stateDir, config })) {
+    const { captureRuntimeConfigAsyncReader } = await import("../config/io.js");
+    const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
+    const postgres = listDatabaseEngineStores().some(
+      (store) => selectDatabaseEngine(store, config) === "postgres",
+    );
+    const discovery = postgres
+      ? await preparePostgresBackupDiscovery({ stateDir: params.stateDir, config })
+      : {
+          paths: await discoverBackupDatabasePaths({ stateDir: params.stateDir, config }),
+          resources: [],
+        };
+    for (const file of discovery.paths) {
       if (
         !databases.some((database) => database.path === file) &&
         readBackupEngine(file).engine === "postgres"
       ) {
-        databases.push({ path: file, identity: { role: "generic", id: "workboard" } });
+        const family = await readPostgresBackupFamily(file, config);
+        const resource = discovery.resources
+          .filter((entry) => entry.family === family && isPathInside(entry.path, file))
+          .toSorted((left, right) => right.path.length - left.path.length)[0];
+        const primary =
+          resource?.path === file &&
+          resource.pluginId === family &&
+          discovery.resources.filter(
+            (entry) => entry.family === family && entry.path.endsWith(".sqlite"),
+          ).length === 1;
+        // Resource-relative identity survives moving the state directory, including
+        // multiple Matrix account/token roots backed by the shared-state family.
+        const resourcePath = path.relative(params.stateDir, file).split(path.sep).join("/");
+        const resourceId = resource?.pluginId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
+        const id = primary
+          ? family
+          : `${family}${resourceId ? `__${resourceId}` : ""}__${createHash("sha256")
+              .update(resourcePath)
+              .digest("hex")}`;
+        databases.push({ path: file, identity: { role: "generic", id } });
       }
     }
   }
+  const scopes = new Set<string>();
   for (const database of databases) {
     assertNotUpdateCapturePath(database.path, params.stateDir);
+    const scope = gitBackupScopePath(database.identity);
+    if (scopes.has(scope)) {
+      throw new Error(`Multiple backup databases use the same Git scope: ${scope}`);
+    }
+    scopes.add(scope);
   }
   const repositoryPath = path.resolve(params.repositoryPath);
   await initializeGitBackupRepository({
@@ -311,15 +350,23 @@ export async function createGitBackup(params: {
       const outputPath = path.join(staging.dir, gitBackupScopePath(database.identity));
       await fs.mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
       const copyPath = staging.path(`${database.identity.role}-${index}.sqlite`);
-      let postgres: boolean;
       try {
-        postgres = readBackupEngine(database.path).engine === "postgres";
+        const postgres = readBackupEngine(database.path).engine === "postgres";
         if (!postgres) {
           await createOpenClawSnapshotCopy({
             database: { ...database, path: await fs.realpath(database.path) },
             targetPath: copyPath,
           });
         }
+        manifests.push(
+          await dumpGitBackupDatabase({
+            snapshotPath: postgres ? database.path : copyPath,
+            outputPath,
+            identity: database.identity,
+            physicalEngine: postgres ? "postgres" : "sqlite",
+            excludeSecrets: params.excludeSecrets,
+          }),
+        );
       } catch (error) {
         if (!params.all || database.identity.role !== "agent") {
           throw error;
@@ -329,15 +376,6 @@ export async function createGitBackup(params: {
         );
         continue;
       }
-      manifests.push(
-        await dumpGitBackupDatabase({
-          snapshotPath: postgres ? database.path : copyPath,
-          outputPath,
-          identity: database.identity,
-          physicalEngine: postgres ? "postgres" : "sqlite",
-          excludeSecrets: params.excludeSecrets,
-        }),
-      );
       await fs.rm(copyPath, { force: true });
     }
     if (manifests.length === 0) {
@@ -356,14 +394,9 @@ export async function createGitBackup(params: {
       }
     }
     if (params.all) {
-      // Selection is the configured roster, including agents whose snapshot failed.
+      // Retain every selected store, including configured agents whose snapshot failed.
       updates.push(
-        ...(await prepareStaleAgentUpdates(
-          repositoryPath,
-          new Set(params.databases.map(({ identity }) => gitBackupScopePath(identity))),
-          repositoryState,
-          params.gitEnv,
-        )),
+        ...(await prepareStaleScopeUpdates(repositoryPath, scopes, repositoryState, params.gitEnv)),
       );
     }
     for (const update of updates) {
@@ -426,7 +459,7 @@ async function materializeGitBackupRef(params: {
   repositoryPath: string;
   identity: GitBackupIdentity;
   ref?: string;
-}): Promise<{ commit: string; path: string } & AsyncDisposable> {
+}): Promise<{ commit: string; path: string; manifest: GitBackupManifest } & AsyncDisposable> {
   const repositoryPath = path.resolve(params.repositoryPath);
   await assertGitRepository(repositoryPath);
   const commit = await requireGit(repositoryPath, [
@@ -486,6 +519,7 @@ async function materializeGitBackupRef(params: {
     return {
       commit,
       path: outputPath,
+      manifest,
       [Symbol.asyncDispose]: workspace[Symbol.asyncDispose],
     };
   } catch (error) {
@@ -512,7 +546,7 @@ export async function restoreGitBackupRef(params: {
   };
 }
 
-/** Verify a Git snapshot by restoring it privately and comparing every table digest. */
+/** Verify PostgreSQL's matched artifacts or SQLite's private round-trip table digests. */
 export async function verifyGitBackupRef(params: {
   repositoryPath: string;
   identity: GitBackupIdentity;
@@ -523,10 +557,34 @@ export async function verifyGitBackupRef(params: {
     prefix: "openclaw-git-verify-",
   });
   try {
-    return await restoreGitBackupRef({
-      ...params,
-      targetPath: scratch.path("database.sqlite"),
-    });
+    await using materialized = await materializeGitBackupRef(params);
+    const { manifest } = materialized;
+    if (gitBackupScopePath(manifest.identity) !== gitBackupScopePath(params.identity)) {
+      throw new Error("Git backup manifest database identity does not match the requested scope.");
+    }
+    const targetPath = scratch.path("database.sqlite");
+    if (manifest.schemaVersion === 2) {
+      await createLocalSnapshotProvider({
+        repositoryPath: materialized.path,
+        expectedPostgresSource: manifest.postgresSource,
+      }).verify({ path: path.join(materialized.path, "postgres") });
+      return {
+        manifest,
+        targetPath,
+        tables: [],
+        excludedTables: manifest.excludedTables,
+        excludedConfigStateKeyPrefixes: manifest.excludedConfigStateKeyPrefixes,
+        commit: materialized.commit,
+      };
+    }
+    return {
+      ...(await restoreGitBackupDirectory({
+        sourcePath: materialized.path,
+        targetPath,
+        expectedIdentity: params.identity,
+      })),
+      commit: materialized.commit,
+    };
   } finally {
     await scratch.cleanup().catch(() => undefined);
   }

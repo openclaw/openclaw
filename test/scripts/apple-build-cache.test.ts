@@ -206,11 +206,36 @@ echo built >> "$FIXTURE_BUILDS"
     const saves = job.steps.filter((step: { uses?: string }) =>
       step.uses?.startsWith("actions/cache/save@"),
     );
-    expect(saves).toHaveLength(3);
+    expect(saves).toHaveLength(4);
+    const watchRestore = job.steps.find(
+      (step: { name?: string }) => step.name === "Restore Watch RTC build inputs",
+    );
+    for (const [file, jobName, buildName] of [
+      ["ios-periphery.yml", "scan", "Run Periphery"],
+      ["shared-openclawkit-periphery.yml", "scan-ios", "Build iOS consumer index"],
+    ] as const) {
+      const steps = parse(readFileSync(`.github/workflows/${file}`, "utf8")).jobs[jobName].steps;
+      const identify = steps.findIndex(
+        (step: { name?: string }) => step.name === "Identify Watch RTC cache inputs",
+      );
+      const restore = steps.findIndex(
+        (step: { name?: string }) => step.name === "Restore Watch RTC build inputs",
+      );
+      const build = steps.findIndex((step: { name?: string }) => step.name === buildName);
+      expect(identify, file).toBeGreaterThan(-1);
+      expect(restore, file).toBeGreaterThan(identify);
+      expect(build, file).toBeGreaterThan(restore);
+      expect(steps[restore].uses, file).toBe(watchRestore.uses);
+      expect(steps[restore].with, file).toEqual(watchRestore.with);
+      expect(
+        steps.some((step: { uses?: string }) => step.uses?.startsWith("actions/cache/save@")),
+        file,
+      ).toBe(false);
+    }
     for (const event of ["push", "schedule", "pull_request", "workflow_dispatch"] as const) {
       for (const ref of ["refs/heads/main", "refs/heads/topic"]) {
         for (const allowed of ["true", "false"]) {
-          const context = {
+          const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
             eventName: event,
             ref,
             repository: "openclaw/openclaw",
@@ -222,13 +247,15 @@ echo built >> "$FIXTURE_BUILDS"
               "ios-cache-inputs": { outputs: { xcode: "xcode" } },
               "ios-packages-cache": { outputs: { "cache-hit": "false" } },
               "watch-rtc-cache": { outputs: { "cache-hit": "false" } },
+              "record-ios-build-cache-metadata": { outputs: {}, outcome: "success" as const },
             },
           };
           for (const step of saves) {
+            // Native test products are written only by the scheduled run that recorded their inputs.
+            const writers =
+              step.name === "Save iOS test build products" ? ["schedule"] : ["push", "schedule"];
             expect(evaluateWorkflowExpression("${{ " + step.if + " }}", context), step.name).toBe(
-              ["push", "schedule"].includes(event) &&
-                ref === "refs/heads/main" &&
-                allowed === "true",
+              writers.includes(event) && ref === "refs/heads/main" && allowed === "true",
             );
             expect(step.uses).toBe("actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9");
           }

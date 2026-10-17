@@ -144,6 +144,22 @@ describe("OpenAI Codex OAuth compatibility provider", () => {
     ).rejects.toThrow("Login cancelled");
   });
 
+  it("does not return completed credentials after login cancellation", async () => {
+    const controller = new AbortController();
+    mocks.loginOpenAICodexOAuth.mockImplementationOnce(() => {
+      queueMicrotask(() => controller.abort());
+      return Promise.resolve(createCredential());
+    });
+
+    await expect(
+      loginThroughOpenAIProvider({
+        onAuth: vi.fn(),
+        onPrompt: vi.fn(async () => "manual-code"),
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("Login cancelled");
+  });
+
   it("honors legacy login cancellation before invoking the auth callback", async () => {
     const controller = new AbortController();
     const onAuth = vi.fn();

@@ -642,6 +642,39 @@ describe("cleanup path removals", () => {
     await expect(fs.readFile(configPath, "utf8")).resolves.toBe("{}");
   });
 
+  it("retains state when a workspace preservation inspection fails", async () => {
+    const runtime = createRuntimeMock();
+    const stateDir = tempDirs.make("openclaw-cleanup-preserve-io-");
+    const workspaceDir = path.join(stateDir, "workspace");
+    const workspaceFile = path.join(workspaceDir, "project.txt");
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.mkdir(workspaceDir);
+    await fs.writeFile(workspaceFile, "keep me");
+    await fs.writeFile(configPath, "{}");
+    const error = Object.assign(new Error("workspace inspection denied"), { code: "EACCES" });
+    const inspect = vi.spyOn(fs, "lstat").mockRejectedValueOnce(error);
+    const remove = vi.spyOn(fs, "rm");
+
+    await expect(
+      removeStateAndLinkedPaths(
+        {
+          stateDir,
+          configPath,
+          oauthDir: path.join(stateDir, "credentials"),
+          configInsideState: true,
+          oauthInsideState: true,
+        },
+        runtime,
+        { preservePaths: [workspaceDir] },
+      ),
+    ).rejects.toBe(error);
+
+    expect(inspect).toHaveBeenNthCalledWith(1, workspaceDir);
+    expect(remove).not.toHaveBeenCalled();
+    expect(await fs.readFile(workspaceFile, "utf8")).toBe("keep me");
+    expect(await fs.readFile(configPath, "utf8")).toBe("{}");
+  });
+
   it("preserves nested workspace paths during state-only removal", async () => {
     const runtime = createRuntimeMock();
     const tmpRoot = await fs.realpath(

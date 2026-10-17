@@ -15,7 +15,6 @@ import {
 
 const mocks = vi.hoisted(() => ({
   applyUninstall: vi.fn(),
-  clawReferenceWarnings: vi.fn(),
   commitRecords: vi.fn(),
   installRecords: vi.fn(),
   metadata: vi.fn(),
@@ -89,10 +88,6 @@ vi.mock("./install-record-commit.js", () => ({
   commitPluginInstallRecordsWithConfig: (...args: unknown[]) => mocks.commitRecords(...args),
 }));
 
-vi.mock("./uninstall-claw-references.js", () => ({
-  collectClawPluginUninstallWarnings: (...args: unknown[]) => mocks.clawReferenceWarnings(...args),
-}));
-
 vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./official-external-plugin-catalog.js")>()),
   loadConfiguredHostedOfficialExternalPluginCatalogEntries: (...args: unknown[]) =>
@@ -136,7 +131,6 @@ describe("plugin management service", () => {
     mocks.installRecords.mockResolvedValue({});
     mocks.applyUninstall.mockResolvedValue({ directoryRemoved: true, warnings: [] });
     mocks.pluginVersionCategories.mockResolvedValue([]);
-    mocks.clawReferenceWarnings.mockReturnValue([]);
     mockHostedOfficialCatalog([]);
   });
 

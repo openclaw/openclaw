@@ -11,7 +11,10 @@ import { describe, expect, it, vi } from "vitest";
 import * as sqliteQueries from "../infra/kysely-sync.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
-import { createRequesterPublicationFixture } from "./github-publication-requester.test-support.js";
+import {
+  createRequesterPublicationFixture,
+  holdWorkerTurn,
+} from "./github-publication-requester.test-support.js";
 import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
 
 const mocks = githubPublicationTestMocks();
@@ -68,6 +71,46 @@ describe("shared GitHub publication reconciliation", () => {
     sandbox: "required",
     realWorktree: true,
   });
+
+  it.each(["local", "repository"] as const)(
+    "settles the accepted %s publication before stopping recovery between requests",
+    async (backend) => {
+      const f = await fixture(backend);
+      const claim = await holdWorkerTurn(f);
+      const requests = [
+        await f.coordinator.requestForSessionV2(f.request("shutdown-first", f.guest)),
+        await f.coordinator.requestForSessionV2(f.request("shutdown-second", f.guest)),
+      ];
+      expect(requests.map((request) => request.status)).toEqual(["requested", "requested"]);
+      await f.placements.releaseTurn(claim);
+
+      const dispatched = Promise.withResolvers<void>();
+      const response = Promise.withResolvers<void>();
+      const transport = mocks.runCommand.getMockImplementation()!;
+      let stopping = false;
+      mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+        const result = await transport(argv, options);
+        if (argv.includes("POST") && argv.some((arg) => arg.endsWith("/pulls"))) {
+          dispatched.resolve();
+          await response.promise;
+        }
+        return result;
+      });
+
+      const recovery = f.coordinator.resumeSessionRequests(() => stopping);
+      await dispatched.promise;
+      stopping = true;
+      response.resolve();
+      await recovery;
+
+      expect(f.publishedTitles).toHaveLength(1);
+      expect(
+        requests
+          .map((request) => f.readReceipt(request.requestId)?.status)
+          .toSorted((left, right) => String(left).localeCompare(String(right))),
+      ).toEqual(["published", "requested"]);
+    },
+  );
 
   it.each(["local", "repository"] as const)(
     "finds an older open PR beyond the first page after an accepted %s push loses authority",

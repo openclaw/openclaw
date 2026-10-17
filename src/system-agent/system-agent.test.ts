@@ -1,5 +1,6 @@
 // OpenClaw tests cover main rescue and audit command behavior.
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { runDaemonRestart } from "../cli/daemon-cli/lifecycle.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentCommandDeps } from "./operations.js";
@@ -12,6 +13,8 @@ import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.j
 const inferenceMocks = vi.hoisted(() => ({
   sharedVerifiedInference: undefined as SystemAgentVerifiedInferenceBinding | undefined,
 }));
+// mock-isolation: A rejected runner request must never reach the host daemon lifecycle.
+vi.mock("../cli/daemon-cli/lifecycle.js", () => ({ runDaemonRestart: vi.fn() }));
 
 vi.mock("../plugins/providers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/providers.js")>()),
@@ -121,14 +124,16 @@ function createVerifiedRunOptions(
 }
 
 describe("runSystemAgent", () => {
+  beforeEach(() => {
+    vi.mocked(runDaemonRestart).mockReset().mockResolvedValue(true);
+  });
   it("rejects a missing inference binding before any runner side effect", async () => {
     const { runtime } = createSystemAgentTestRuntime();
     const loadOverview = vi.fn(async () => overview);
     const planWithAssistant = vi.fn(async () => ({ command: "restart gateway" }));
-    const runGatewayRestart = vi.fn(async () => {});
     const runInteractiveTui = vi.fn(async () => {});
     const common = {
-      deps: { loadOverview, runGatewayRestart },
+      deps: { loadOverview },
       planWithAssistant,
       runInteractiveTui,
       input: { isTTY: true } as unknown as NodeJS.ReadableStream,
@@ -152,19 +157,14 @@ describe("runSystemAgent", () => {
 
     expect(loadOverview).not.toHaveBeenCalled();
     expect(planWithAssistant).not.toHaveBeenCalled();
-    expect(runGatewayRestart).not.toHaveBeenCalled();
+    expect(runDaemonRestart).not.toHaveBeenCalled();
     expect(runInteractiveTui).not.toHaveBeenCalled();
   });
 
   it("uses the assistant planner only to choose typed operations", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
-    let runGatewayRestartCalls = 0;
     let onReadyCalls = 0;
-    const verified = createVerifiedRunOptions({
-      runGatewayRestart: async () => {
-        runGatewayRestartCalls += 1;
-      },
-    });
+    const verified = createVerifiedRunOptions();
 
     await runSystemAgent(
       {
@@ -183,7 +183,7 @@ describe("runSystemAgent", () => {
       runtime,
     );
 
-    expect(runGatewayRestartCalls).toBe(0);
+    expect(runDaemonRestart).not.toHaveBeenCalled();
     expect(onReadyCalls).toBe(0);
     expect(lines.join("\n")).toContain("[openclaw] planner: openai/gpt-5.5");
     expect(lines.join("\n")).toContain("[openclaw] interpreted: restart gateway");
@@ -232,11 +232,9 @@ describe("runSystemAgent", () => {
       .mockResolvedValueOnce(configSnapshot(verifiedConfig))
       .mockResolvedValueOnce(configSnapshot(verifiedConfig))
       .mockResolvedValue(configSnapshot(changedConfig));
-    const runGatewayRestart = vi.fn(async () => {});
     const verified = createVerifiedRunOptions(
       {
         readConfigFileSnapshot: readConfigFileSnapshot as never,
-        runGatewayRestart,
       },
       { revalidate: true },
     );
@@ -257,7 +255,7 @@ describe("runSystemAgent", () => {
     });
 
     expect(readConfigFileSnapshot).toHaveBeenCalledTimes(4);
-    expect(runGatewayRestart).not.toHaveBeenCalled();
+    expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 
   it("keeps exact one-shot parsing ahead of the assistant planner", async () => {

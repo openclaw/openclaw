@@ -68,8 +68,13 @@ export async function probeTcpListener(
   port: number,
   host: string,
   signal?: AbortSignal,
+  deadlineMs?: number,
 ): Promise<PortUsageStatus> {
   signal?.throwIfAborted();
+  const timeoutMs = deadlineMs === undefined ? 250 : deadlineMs - Date.now();
+  if (timeoutMs <= 0) {
+    return "unknown";
+  }
   return await new Promise<PortUsageStatus>((resolve) => {
     const socket = net.connect({ host, port });
     let result: PortUsageStatus = "unknown";
@@ -83,7 +88,7 @@ export async function probeTcpListener(
       result = isErrno(error) && error.code === "ECONNREFUSED" ? "free" : "unknown";
       destroy();
     });
-    socket.setTimeout(250, destroy);
+    socket.setTimeout(timeoutMs, destroy);
     // Closing, not just requesting destruction, releases the probe's I/O and timer.
     socket.once("close", () => {
       signal?.removeEventListener("abort", destroy);
@@ -105,12 +110,13 @@ async function probePortOnHost(
   port: number,
   host: string,
   signal?: AbortSignal,
+  deadlineMs?: number,
 ): Promise<PortUsageStatus | "skip"> {
   try {
     await tryListenOnPort({ port, host, exclusive: true, ...(signal ? { signal } : {}) });
     // A successful scoped bind can coexist with a wildcard listener on macOS.
     // Confirm the endpoint before declaring it free, even without lsof or ss.
-    const confirmed = await probeTcpListener(port, host, signal);
+    const confirmed = await probeTcpListener(port, host, signal, deadlineMs);
     // With IPv6 disabled on Linux, `::` still binds but its confirming connect targets the
     // missing `::1` and cannot be answered. The successful wildcard bind is then conclusive.
     if (confirmed === "unknown" && host === "::" && (await isIpv6LoopbackUnavailable(signal))) {
@@ -134,11 +140,12 @@ export async function probePortUsage(
   port: number,
   probeHosts: readonly string[] = PORT_PROBE_HOSTS,
   signal?: AbortSignal,
+  deadlineMs?: number,
 ): Promise<PortUsageStatus> {
   signal?.throwIfAborted();
   let sawUnknown = false;
   for (const host of probeHosts) {
-    const result = await probePortOnHost(port, host, signal);
+    const result = await probePortOnHost(port, host, signal, deadlineMs);
     signal?.throwIfAborted();
     if (result === "busy") {
       return "busy";

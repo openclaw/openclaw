@@ -11,7 +11,7 @@ read_when:
 ## Quick start
 
 ```bash
-openclaw plugins install clawhub:@openclaw/diagnostics-otel
+openclaw plugins install @openclaw/diagnostics-otel
 ```
 
 ```json5

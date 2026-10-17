@@ -1,4 +1,3 @@
-// Durable approval handler fixtures shared by the unified approval handler suites.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -19,9 +18,8 @@ import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
-import type { ExecApprovalManagerOptions } from "../exec-approval-manager.types.js";
 import { getOperatorApprovalDetailed } from "../operator-approval-store.js";
-import type { createApprovalHandlers } from "./approval.js";
+import { createApprovalHandlers } from "./approval.js";
 import { createContext } from "./approval.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -32,7 +30,6 @@ export async function getOperatorApproval(
   return result.outcome === "found" ? result.record : null;
 }
 
-/** Temp state dirs removed by cleanupApprovalHandlerFixtures. */
 export const tempDirs: string[] = [];
 const managersForCleanup: Array<{
   listPendingRecords(): Promise<Array<{ id: string }>>;
@@ -48,34 +45,64 @@ export function createDatabaseOptions(): OpenClawStateDatabaseOptions {
 }
 
 export function createManagers(databaseOptions: OpenClawStateDatabaseOptions) {
-  const scheduler = createTestGatewayScheduler();
-  const persistence = { runtimeEpoch: "approval-handler-test", databaseOptions };
-  const execOptions: ExecApprovalManagerOptions<ExecApprovalRequestPayload> = {
-    scheduler,
-    approvalKind: "exec",
-    persistence,
-    resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
-    resolveAudienceSessionKeys: (source) => [source, "agent:main:parent"],
+  const common = {
+    scheduler: createTestGatewayScheduler(),
+    persistence: { runtimeEpoch: "approval-handler-test", databaseOptions },
+    resolveAudienceSessionKeys: (source: string) => [source, "agent:main:parent"],
   };
   const managers = {
-    exec: new ExecApprovalManager(execOptions),
+    exec: new ExecApprovalManager<ExecApprovalRequestPayload>({
+      ...common,
+      approvalKind: "exec",
+      resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
+    }),
     plugin: new ExecApprovalManager<PluginApprovalRequestPayload>({
-      scheduler,
+      ...common,
       approvalKind: "plugin",
-      persistence,
       resolveAllowedDecisions: resolvePluginApprovalRequestAllowedDecisions,
-      resolveAudienceSessionKeys: (source) => [source, "agent:main:parent"],
     }),
     systemAgent: new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
-      scheduler,
+      ...common,
       approvalKind: "system-agent",
-      persistence,
       resolveAllowedDecisions: (request) => request.allowedDecisions,
-      resolveAudienceSessionKeys: (source) => [source, "agent:main:parent"],
     }),
   };
   managersForCleanup.push(managers.exec, managers.plugin, managers.systemAgent);
   return managers;
+}
+
+export function createHandlers(
+  managers: ReturnType<typeof createManagers>,
+  databaseOptions: OpenClawStateDatabaseOptions,
+  options: Omit<
+    Parameters<typeof createApprovalHandlers>[0],
+    "execApprovalManager" | "pluginApprovalManager" | "databaseOptions"
+  > = {},
+) {
+  return createApprovalHandlers({
+    execApprovalManager: managers.exec,
+    pluginApprovalManager: managers.plugin,
+    databaseOptions,
+    ...options,
+  });
+}
+
+export function createFixture(includeSystemAgent = false) {
+  const databaseOptions = createDatabaseOptions();
+  const managers = createManagers(databaseOptions);
+  const handlers = createHandlers(managers, databaseOptions, {
+    systemAgentApprovalManager: includeSystemAgent ? managers.systemAgent : undefined,
+  });
+  return { databaseOptions, managers, handlers, request: bindApprovalHandlers(handlers) };
+}
+
+export function bindApprovalHandlers(handlers: ReturnType<typeof createApprovalHandlers>) {
+  return (
+    method: Parameters<typeof invoke>[0]["method"],
+    body: Record<string, unknown>,
+    client = createClient({ deviceId: "reviewer" }),
+    context?: GatewayRequestHandlerOptions["context"],
+  ) => invoke({ handlers, method, body, client, context });
 }
 
 export async function registerExec(
@@ -103,15 +130,14 @@ export async function registerExec(
     600_000,
     params.id,
   );
-  record.requestedByConnId = params.requester?.connId ?? null;
-  record.requestedByDeviceId =
-    params.requester && "deviceId" in params.requester
-      ? params.requester.deviceId
-      : "requester-device";
-  record.requestedByClientId =
-    params.requester && "clientId" in params.requester
-      ? params.requester.clientId
-      : "requester-client";
+  const requester = {
+    deviceId: "requester-device",
+    clientId: "requester-client",
+    ...params.requester,
+  };
+  record.requestedByConnId = requester.connId ?? null;
+  record.requestedByDeviceId = requester.deviceId;
+  record.requestedByClientId = requester.clientId;
   record.requestedByDeviceTokenAuth = true;
   record.approvalReviewerDeviceIds = params.reviewerDeviceIds ?? ["reviewer"];
   if (params.expiresAtMs !== undefined) {
@@ -139,6 +165,36 @@ export async function registerSystemAgent(
     600_000,
     id,
   );
+  const decision = (await manager.register(record, 600_000)).decision;
+  return { record, decision };
+}
+
+export async function registerPlugin(
+  manager: ExecApprovalManager<PluginApprovalRequestPayload>,
+  params: {
+    id: string;
+    request?: Partial<PluginApprovalRequestPayload>;
+    reviewerDeviceIds?: string[];
+  },
+) {
+  const record = manager.create(
+    {
+      title: "Plugin permission",
+      description: "Allow one guarded plugin operation",
+      severity: "warning",
+      pluginId: "example-plugin",
+      toolName: "example-tool",
+      agentId: "main",
+      sessionKey: "agent:main:child",
+      ...params.request,
+    },
+    600_000,
+    params.id,
+  );
+  record.requestedByDeviceId = "requester-device";
+  record.requestedByClientId = "requester-client";
+  record.requestedByDeviceTokenAuth = true;
+  record.approvalReviewerDeviceIds = params.reviewerDeviceIds ?? ["reviewer"];
   const decision = (await manager.register(record, 600_000)).decision;
   return { record, decision };
 }
@@ -171,7 +227,7 @@ export async function invoke(params: {
   const context = params.context ?? createContext();
   await expectDefined(
     params.handlers[params.method],
-    "params.handlers[params.method] test invariant",
+    "approval handler",
   )({
     req: { id: "req-1", type: "req", method: params.method, params: params.body },
     params: params.body,
@@ -180,11 +236,11 @@ export async function invoke(params: {
     isWebchatConnect: () => false,
     respond,
   });
-  const response = respond.mock.calls[0];
-  if (!response) {
-    throw new Error("approval handler did not respond");
-  }
-  return { ok: response[0], result: response[1], error: response[2], context };
+  const [ok, result, error] = expectDefined(
+    respond.mock.calls[0],
+    "approval handler did not respond",
+  );
+  return { ok, result, error, context };
 }
 
 export async function cleanupApprovalHandlerFixtures(): Promise<void> {

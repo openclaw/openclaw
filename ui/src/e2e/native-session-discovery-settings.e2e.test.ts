@@ -1,42 +1,31 @@
 import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
-import {
-  createControlUiE2eSuite,
-  expandCodingSection,
-  tooltipTitleText,
-} from "./control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Native session discovery settings",
   startServerBeforeBrowser: true,
 });
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let uiProofArtifactDir: string;
-beforeEach(() => {
-  if (captureUiProofEnabled) {
-    uiProofArtifactDir = createControlUiE2eArtifactDir("native-session-discovery");
-  }
-});
+const objectSchema = (properties: Record<string, unknown>) => ({ type: "object", properties });
+const plugins = [
+  { id: "codex", name: "Codex", enabled: true },
+  { id: "anthropic", name: "Claude Code", enabled: false },
+];
 
 suite.define(() => {
-  it("explains node-list failures beside available sessions and exposes independent discovery settings", async () => {
+  it("exposes independent native session discovery settings", async () => {
     const page = await suite.browser.newPage({ viewport: { height: 1100, width: 1440 } });
-    const discoveryPluginSchema = {
-      type: "object",
-      properties: {
-        config: {
-          type: "object",
-          properties: {
-            sessionCatalog: {
-              type: "object",
-              properties: { enabled: { type: "boolean", default: true } },
-            },
-          },
-        },
-      },
-    };
+    const discoveryPluginSchema = objectSchema({
+      config: objectSchema({
+        sessionCatalog: objectSchema({ enabled: { type: "boolean", default: true } }),
+      }),
+    });
+    const entries = Object.fromEntries(
+      plugins.map(({ id, enabled }) => [id, { config: { sessionCatalog: { enabled } } }]),
+    );
     await installMockGateway(page, {
       featureMethods: [
         "chat.metadata",
@@ -44,132 +33,45 @@ suite.define(() => {
         "config.get",
         "config.schema",
         "plugins.list",
-        "sessions.catalog.list",
       ],
       methodResponses: {
         "config.get": {
-          config: {
-            plugins: {
-              entries: {
-                anthropic: { config: { sessionCatalog: { enabled: false } } },
-                codex: { config: { sessionCatalog: { enabled: true } } },
-              },
-            },
-          },
+          config: { plugins: { entries } },
           hash: "native-session-discovery-e2e",
         },
         "config.schema": {
-          schema: {
-            type: "object",
-            properties: {
-              plugins: {
-                type: "object",
-                properties: {
-                  entries: {
-                    type: "object",
-                    properties: {
-                      anthropic: discoveryPluginSchema,
-                      codex: discoveryPluginSchema,
-                    },
-                  },
-                },
+          schema: objectSchema({
+            plugins: objectSchema({
+              entries: objectSchema(
+                Object.fromEntries(plugins.map(({ id }) => [id, discoveryPluginSchema])),
+              ),
+            }),
+          }),
+          uiHints: Object.fromEntries(
+            plugins.map(({ id, name }) => [
+              `plugins.entries.${id}.config.sessionCatalog.enabled`,
+              {
+                label: `Discover ${name} Sessions`,
+                help: `List native ${name} sessions in the sidebar from this Gateway and eligible paired nodes.`,
               },
-            },
-          },
-          uiHints: {
-            "plugins.entries.anthropic.config.sessionCatalog.enabled": {
-              label: "Discover Claude Code Sessions",
-              help: "List native Claude Code sessions in the sidebar from this Gateway and eligible paired nodes.",
-            },
-            "plugins.entries.codex.config.sessionCatalog.enabled": {
-              label: "Discover Codex Sessions",
-              help: "List native Codex sessions in the sidebar from this Gateway and eligible paired nodes.",
-            },
-          },
+            ]),
+          ),
           version: "e2e",
           generatedAt: "2026-07-14T00:00:00.000Z",
         },
         "plugins.list": {
-          plugins: [
-            {
-              id: "codex",
-              name: "Codex",
-              origin: "bundled",
-              installed: true,
-            },
-            {
-              id: "anthropic",
-              name: "Anthropic",
-              origin: "bundled",
-              installed: true,
-            },
-          ],
+          plugins: plugins.map(({ id }) => ({
+            id,
+            name: id === "codex" ? "Codex" : "Anthropic",
+            origin: "bundled",
+            installed: true,
+          })),
           diagnostics: [],
           mutationAllowed: true,
         },
-        "sessions.catalog.list": {
-          catalogs: [
-            {
-              id: "codex",
-              label: "Codex",
-              capabilities: { continueSession: true, archive: true },
-              hosts: [
-                {
-                  hostId: "gateway:local",
-                  label: "Local Codex",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [
-                    {
-                      threadId: "available-native-session",
-                      name: "Available native session",
-                      status: "idle",
-                      source: "cli",
-                      archived: false,
-                    },
-                  ],
-                },
-                {
-                  hostId: "node:registry",
-                  label: "Paired nodes",
-                  kind: "node",
-                  connected: false,
-                  sessions: [],
-                  error: {
-                    code: "NODE_LIST_FAILED",
-                    message: "Paired nodes could not be listed: pairing database is locked",
-                  },
-                },
-              ],
-            },
-          ],
-        },
       },
     });
-
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await expandCodingSection(page);
-      const warning = page.locator(
-        '[data-session-section="catalog:codex"] .sidebar-session-group-toggle',
-      );
-      await warning.waitFor({ state: "visible" });
-      await expect.poll(() => tooltipTitleText(warning)).toContain("[NODE_LIST_FAILED]");
-      await expect.poll(() => tooltipTitleText(warning)).toContain("pairing database is locked");
-      await expect
-        .poll(() => tooltipTitleText(warning))
-        .toContain("Settings > Appearance > Session sources");
-      expect(await page.getByText("Available native session", { exact: true }).count()).toBe(1);
-      expect(await page.locator('[data-session-catalog-host="node:registry"]').count()).toBe(0);
-
-      if (captureUiProofEnabled) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(uiProofArtifactDir, "01-actionable-sidebar-error.png"),
-        });
-      }
-
       const readDiscoverySetting = async (
         pluginId: string,
         settingLabel: string,
@@ -192,8 +94,12 @@ suite.define(() => {
 
       if (captureUiProofEnabled) {
         await page.screenshot({
+          animations: "disabled",
           fullPage: true,
-          path: path.join(uiProofArtifactDir, "02-independent-settings-toggles.png"),
+          path: path.join(
+            createControlUiE2eArtifactDir("native-session-discovery"),
+            "02-independent-settings-toggles.png",
+          ),
         });
       }
     } finally {

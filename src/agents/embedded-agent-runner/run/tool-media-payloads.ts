@@ -171,12 +171,8 @@ export function createPendingToolMediaCarry() {
       }
       batches.push(
         copyCoreTtsAttemptResultProvenance(attempt, {
-          toolMediaUrls: attempt.toolMediaUrls
-            ? Object.freeze([...attempt.toolMediaUrls])
-            : undefined,
-          hostOwnedToolMediaUrls: attempt.hostOwnedToolMediaUrls
-            ? Object.freeze([...attempt.hostOwnedToolMediaUrls])
-            : undefined,
+          toolMediaUrls: attempt.toolMediaUrls,
+          hostOwnedToolMediaUrls: attempt.hostOwnedToolMediaUrls,
           toolAudioAsVoice: attempt.toolAudioAsVoice,
           toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
         }),

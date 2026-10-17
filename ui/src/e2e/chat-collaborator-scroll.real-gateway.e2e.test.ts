@@ -676,6 +676,29 @@ suite.define(() => {
                 expect(observed.sockets()).toBe(2);
               }
             } finally {
+              // Ordinary PR CI retains logs but does not upload the full protocol proof.
+              console.info(
+                "REAL_GATEWAY_TERMINALS",
+                JSON.stringify(
+                  observers.map((observed) => ({
+                    sends: observed
+                      .requests("chat.send")
+                      .map((frame) =>
+                        frame.type === "req" ? record(frame.params)?.idempotencyKey : null,
+                      ),
+                    terminals: observed.received.flatMap((frame) => {
+                      if (frame.type !== "event" || frame.event !== "chat") {
+                        return [];
+                      }
+                      const payload = record(frame.payload);
+                      return payload &&
+                        ["final", "aborted", "error"].includes(String(payload.state))
+                        ? [{ runId: payload.runId, state: payload.state, seq: payload.seq }]
+                        : [];
+                    }),
+                  })),
+                ),
+              );
               await finishPaints?.();
               for (const finish of finishVisuals) {
                 await finish();

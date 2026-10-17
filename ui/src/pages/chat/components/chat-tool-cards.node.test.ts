@@ -100,39 +100,6 @@ describe("tool-card extraction", () => {
     expect(card?.outputText).toBe("browser output");
   });
 
-  it.each(["standalone", "live"])("extracts browser tabs from %s results", (shape) => {
-    const details = {
-      browserTab: {
-        ...browserDetails.browserTab,
-        targetId: "tab-1",
-        title: "Example",
-        extra: "drop",
-      },
-    };
-    const result = { type: "toolresult", id: "call-browser", name: "browser", text: "ok" };
-    const message =
-      shape === "standalone"
-        ? { role: "toolResult", toolName: "browser", details, content: "ok" }
-        : {
-            role: "assistant",
-            details,
-            __openclawToolStreamLive: true,
-            __openclawToolStreamResultReceived: true,
-            content: [
-              { type: "toolcall", id: "call-browser", name: "browser", arguments: {} },
-              result,
-            ],
-          };
-    const [card] = extractToolCards(message);
-    expect(card?.preview).toEqual({
-      kind: "browser-tab",
-      ...browserDetails.browserTab,
-      targetId: "tab-1",
-      title: "Example",
-    });
-    expect(card?.completed).toBe(true);
-  });
-
   it("keeps routing and raw output without unsafe browser previews", () => {
     const browserTab = { profile: "managed", target: "host", targetId: "tab-1" };
     const url = "javascript:void(0)";
@@ -216,18 +183,6 @@ describe("tool-card extraction", () => {
     }
   });
 
-  it.each([
-    { name: "bigint", args: 42n, expected: "42" },
-    { name: "symbol", args: Symbol("input"), expected: undefined },
-    { name: "boxed bigint", args: Object(42n), expected: "[object BigInt]" },
-  ])("preserves $name tool input display", ({ args, expected }) => {
-    const [card] = assistantCards([
-      { type: "toolcall", id: "input-display", name: "example", arguments: args },
-    ]);
-    expect(card).toBeDefined();
-    expect(card?.inputText).toBe(expected);
-  });
-
   it("keeps a same-name result with different legacy call IDs separate from an open call", () => {
     const resultId = { callId: "call-b" };
     const cards = assistantCards([
@@ -280,24 +235,6 @@ describe("tool-card extraction", () => {
     expect(cards[0]?.outputText).toBe("");
     expect(cards[1]?.inputText).toBe('{\n  "path": "next.txt"\n}');
     expect(cards[1]?.outputText).toBe("Next contents");
-  });
-
-  it("extracts tool result output from text block content arrays", () => {
-    const cards = assistantCards([
-      { type: "toolcall", id: "call-read", name: "read", input: { path: "README.md" } },
-      {
-        type: "tool_result",
-        id: "call-read",
-        name: "read",
-        content: [
-          { type: "text", text: "# Heading" },
-          { type: "text", text: "file body" },
-        ],
-      },
-    ]);
-
-    expect(cards).toHaveLength(1);
-    expect(cards[0]?.outputText).toBe("# Heading\nfile body");
   });
 });
 

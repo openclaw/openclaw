@@ -21,7 +21,7 @@ export function createInspectionFixture(options?: {
   pauseDisposal?: boolean;
   disposalFailure?: boolean;
   contextEngine?: boolean;
-  capturedDisposal?: "async-context" | "work-tracker" | "sibling-tracker";
+  capturedDisposal?: "async-context" | "work-tracker";
   queuedAbortCleanup?: boolean;
   capturedInstanceDisposal?: boolean;
 }) {
@@ -36,7 +36,6 @@ export function createInspectionFixture(options?: {
   const sibling: {
     read?: () => unknown;
     result?: unknown;
-    track?: (run: () => Promise<void>) => Promise<void>;
   } = {};
   const captured: {
     registrationSignal?: AbortSignal;
@@ -98,7 +97,6 @@ module.exports = {
         if (captureMode) state.captured.disposalSignal = state.getAsyncWorkSignal();
         state.disposalStarted.resolve();
         if (${options?.pauseDisposal === true}) await state.finishDisposal.promise;
-        if (captureMode === "sibling-tracker") state.sibling.result = state.sibling.read();
         if (captureMode) state.captured.read = this.#database.prepare("SELECT 42 AS value").get();
         this.#database.close();
         state.disposed.resolve();
@@ -127,7 +125,7 @@ module.exports = {
       const track = state.captured.tracker = state.captureAsyncWorkTracker();
       lifecycle.dispose = captureMode === "async-context"
         ? require("node:async_hooks").AsyncLocalStorage.bind(() => state.trackAsyncWork(dispose))
-        : captureMode === "sibling-tracker" ? () => state.sibling.track(dispose) : () => track(dispose);
+        : () => track(dispose);
     }
     api.registerRuntimeLifecycle(lifecycle);
     if (${options?.contextEngine === true}) {

@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildReplyPayloads } from "../../auto-reply/reply/agent-runner-payloads.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
 import type { BlockReplyPayload } from "../embedded-agent-payloads.js";
 import type { AgentHarness } from "../harness/types.js";
 import { captureAgentPluginRuntimeRefresh } from "../plugin-runtime-refresh.js";
@@ -189,6 +190,92 @@ describe("plugin runtime refresh admission", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
   });
 
+  it.each([true, false])(
+    "preserves separate refresh totals (CLI price known: %s)",
+    async (priced) => {
+      const cliDispatch = await import("./cli-backend-dispatch.js");
+      const terminalUsage = {
+        input: 30,
+        output: 3,
+        total: 33,
+        cost: priced ? { total: 0.2 } : undefined,
+      };
+      const dispatch = vi
+        .spyOn(cliDispatch, "runEmbeddedAgentViaCliBackendIfEligible")
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce({
+          payloads: [{ text: "Receipt verified." }],
+          meta: {
+            durationMs: 1,
+            stopReason: "completed",
+            agentMeta: {
+              sessionId: "test-session",
+              provider: "cli-provider",
+              model: "cli-model",
+              contextTokens: 64_000,
+              promptTokens: 30,
+              usage: terminalUsage,
+              diagnosticUsage: {
+                input: 300,
+                output: 30,
+                total: 330,
+                cost: priced ? { total: 0.4 } : undefined,
+              },
+              lastCallUsage: terminalUsage,
+            },
+          },
+        });
+      mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+        params.registerPluginRuntimeRefreshConsumer?.(() => true);
+        expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
+        return makeAttemptResult({
+          assistantTexts: [],
+          toolMetas: [{ toolName: "plugins", isError: false }],
+          attemptUsage: { input: 100, output: 10, total: 110, cost: { total: 0.1 } },
+        });
+      });
+
+      try {
+        const result = await runEmbeddedAgent({
+          ...createOverflowRunParams(state),
+          agentHarnessId: "openclaw",
+          provider: "fixture-provider",
+          model: "fixture-model",
+          sessionKey: undefined,
+        });
+
+        expect(result.payloads).toEqual([{ text: "Receipt verified." }]);
+        expect(result.meta.agentMeta).toMatchObject({
+          provider: "cli-provider",
+          model: "cli-model",
+          contextTokens: 64_000,
+          promptTokens: 30,
+          usage: { input: 130, output: 13, total: 143 },
+          diagnosticUsage: { input: 400, output: 40, total: 440 },
+          lastCallUsage: terminalUsage,
+        });
+        for (const [usage, expected] of [
+          [result.meta.agentMeta?.usage, 0.3],
+          [result.meta.agentMeta?.diagnosticUsage, 0.5],
+        ] as const) {
+          const cost = estimateAggregateUsageCost({
+            usage,
+            cost: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 },
+          });
+          if (priced) {
+            expect(cost).toBeCloseTo(expected, 9);
+          } else {
+            expect(cost).toBeUndefined();
+          }
+        }
+        expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+        expect(dispatch).toHaveBeenCalledTimes(2);
+      } finally {
+        dispatch.mockRestore();
+      }
+    },
+  );
+
   it("preserves same-route text delivery dedupe across refresh", async () => {
     const text = "The requested result was delivered by the original plugin generation.";
     const sentTarget = {
@@ -237,7 +324,6 @@ describe("plugin runtime refresh admission", () => {
       messageProvider: "telegram",
       originatingTo: "telegram:123",
       isHeartbeat: false,
-      didLogHeartbeatStrip: false,
       blockStreamingEnabled: false,
       blockReplyPipeline: null,
       replyToMode: "off",
@@ -636,7 +722,7 @@ describe("plugin runtime refresh admission", () => {
       } else {
         expect(finalizer).not.toHaveBeenCalled();
         expect(result.meta.error?.message).toContain(handoffError.message);
-        expect(result.payloads).not.toContainEqual({ text: "Recovered summary" });
+        expect(result.payloads).toBeUndefined();
       }
     },
   );

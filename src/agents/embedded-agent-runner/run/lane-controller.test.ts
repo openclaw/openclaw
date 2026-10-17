@@ -1,5 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -73,8 +73,12 @@ describe("embedded run session lane", () => {
     clearRuntimeConfigSnapshot();
   });
 
-  it("passes available run identity through session admission", async () => {
-    const enqueueMethod = "enqueueSession";
+  it.each([
+    ["enqueueSession", "synchronous"],
+    ["enqueueSession", "asynchronous"],
+    ["enqueueGlobal", "synchronous"],
+    ["enqueueGlobal", "asynchronous"],
+  ] as const)("passes run identity through %s with %s refusal", async (enqueueMethod, refusal) => {
     for (const trigger of ["user", "cron"] as const) {
       let observedOptions: Parameters<CommandQueueEnqueueFn>[1];
       const refused = new Error("queue admission refused");
@@ -86,8 +90,11 @@ describe("embedded run session lane", () => {
           sessionKey: "agent:example:subagent:child",
           spawnedBy: "agent:example:main",
         },
-        enqueue: async (_task, options) => {
+        enqueue: (_task, options) => {
           observedOptions = options;
+          if (refusal === "asynchronous") {
+            return Promise.reject(refused);
+          }
           throw refused;
         },
       });
@@ -191,34 +198,34 @@ describe("embedded run session lane", () => {
       });
       // Load placement facts before the queue-heartbeat budget starts.
       await controller.enqueueGlobal(async () => ({ meta: { durationMs: 0 } }));
-      const run = controller.enqueueSession(
-        async () => {
-          const firstGlobalAdmission = controller.enqueueGlobal(async () => ({
-            meta: { durationMs: 1 },
-          }));
-          const interveningGlobalTask = enqueueCommandInLane(
-            globalLane,
-            async () => {
-              interveningGlobalTaskStarted.resolve();
-              await interveningGlobalGate.promise;
-            },
-            { priority: "foreground" },
-          );
-          const secondGlobalAdmission = controller.enqueueGlobal(async () => ({
-            meta: { durationMs: 2 },
-          }));
-          return await Promise.all([
-            firstGlobalAdmission,
-            interveningGlobalTask,
-            secondGlobalAdmission,
-          ]);
-        },
-        { taskTimeoutMs: 25 },
-      );
-
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       try {
+        const run = controller.enqueueSession(
+          async () => {
+            const firstGlobalAdmission = controller.enqueueGlobal(async () => ({
+              meta: { durationMs: 1 },
+            }));
+            const interveningGlobalTask = enqueueCommandInLane(
+              globalLane,
+              async () => {
+                interveningGlobalTaskStarted.resolve();
+                await interveningGlobalGate.promise;
+              },
+              { priority: "foreground" },
+            );
+            const secondGlobalAdmission = controller.enqueueGlobal(async () => ({
+              meta: { durationMs: 2 },
+            }));
+            return await Promise.all([
+              firstGlobalAdmission,
+              interveningGlobalTask,
+              secondGlobalAdmission,
+            ]);
+          },
+          { taskTimeoutMs: 25 },
+        );
         await interveningGlobalTaskStarted.promise;
-        await delay(75);
+        await vi.advanceTimersByTimeAsync(75);
         await expectLaneCounts(sessionLane, 1, 0);
         await expectLaneCounts(globalLane, 1, 1);
 
@@ -231,6 +238,7 @@ describe("embedded run session lane", () => {
         await expectLaneCounts(sessionLane, 0, 0);
       } finally {
         interveningGlobalGate.resolve();
+        vi.useRealTimers();
       }
     });
   });

@@ -629,9 +629,14 @@ openclaw-board-widget-cell {
   padding-left: 16px;
 }
 
-/* A lone full-width widget becomes the focused dashboard's page. Keep the
-   regular grid sizing, subtracting only the shell removed from auto heights. */
-:is(.sidebar-region--expanded, .sidebar-region:not(.sidebar-region--open), .board-document__content)
+/* A lone full-width widget stays a page when its main region shares space with
+   Chat. Side dashboards keep their regular grid sizing and widget chrome. */
+:is(
+    .sidebar-region--expanded,
+    .sidebar-region:not(.sidebar-region--open),
+    .sidebar-region [data-region="main"],
+    .board-document__content
+  )
   openclaw-board-view:has(> .board-view--single-full-width) {
   padding: 0;
 

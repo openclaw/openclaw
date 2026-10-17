@@ -45,10 +45,6 @@ export async function transcribeFirstAudio(params: {
     return undefined;
   }
 
-  if (shouldLogVerbose()) {
-    logVerbose(`audio-preflight: transcribing attachment ${firstAudio.index} for mention check`);
-  }
-
   try {
     const media = [firstAudio];
     const { agentDir, providers, activeModel } = params;
@@ -103,12 +99,6 @@ export async function transcribeFirstAudio(params: {
     if (transcribedFact) {
       facts[firstAudio.index] = { ...transcribedFact, transcribed: true };
       ctx.media = facts;
-    }
-
-    if (shouldLogVerbose()) {
-      logVerbose(
-        `audio-preflight: transcribed ${transcript.length} chars from attachment ${firstAudio.index}`,
-      );
     }
 
     return transcript;

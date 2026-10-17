@@ -1,18 +1,15 @@
-import { nothing, render } from "lit";
-import { createComponent, onCleanup } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createComponent, createSignal, merge } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { ControllerHost } from "../../lit/subscriptions-controller.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   getChatAttachmentPreviewUrl,
   registerChatAttachmentPayload,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
-import { renderChatQueue } from "./chat-composer-queue.test-support.ts";
 import { renderChatQueueSolid } from "./components/chat-composer-queue.tsx";
 import { createSolidRenderLifecycle } from "./solid-render-lifecycle.ts";
 import baseStyles from "../../styles/base.css?inline";
@@ -25,6 +22,8 @@ describe("composer queue", () => {
   let container: HTMLDivElement;
   let styles: HTMLStyleElement;
   let attachments: ChatAttachment[];
+  let view: ReturnType<typeof mountSolid> | undefined;
+  let updateQueue: ((props: Parameters<typeof renderChatQueueSolid>[0]) => void) | undefined;
 
   beforeEach(() => {
     styles = document.createElement("style");
@@ -42,7 +41,9 @@ describe("composer queue", () => {
   });
 
   afterEach(() => {
-    render(nothing, container);
+    view?.unmount();
+    view = undefined;
+    updateQueue = undefined;
     container.remove();
     styles.remove();
     releaseChatAttachmentPayloads(attachments);
@@ -51,21 +52,27 @@ describe("composer queue", () => {
   });
 
   function draw(queue: ChatQueueItem[], editingId?: string) {
-    render(
-      renderChatQueue({
-        queue,
-        queuedEdit: { editingId: editingId ?? null, onCancel: vi.fn(), onEdit: vi.fn() },
-        onQueueRemove: vi.fn(),
-      }),
-      container,
-    );
+    const props: Parameters<typeof renderChatQueueSolid>[0] = {
+      queue,
+      queuedEdit: { editingId: editingId ?? null, onCancel: vi.fn(), onEdit: vi.fn() },
+      onQueueRemove: vi.fn(),
+    };
+    if (updateQueue) {
+      updateQueue(props);
+    } else {
+      const [current, setCurrent] = createSignal(props);
+      updateQueue = setCurrent;
+      view = mountSolid(() => createComponent(renderChatQueueSolid, merge(current)), { container });
+    }
+    flush();
   }
 
   it.each([
     { key: "ArrowUp", expected: ["c", "b"] },
     { key: "ArrowDown", expected: ["c", "d"] },
   ])("moves the focused row on $key", async ({ key, expected }) => {
-    const host = new ControllerHost();
+    const host = {};
+    let invalidate = () => {};
     const waiting = (id: string, createdAt: number): ChatQueueItem => ({
       id,
       text: id,
@@ -76,17 +83,17 @@ describe("composer queue", () => {
     const ids = key === "ArrowUp" ? ["a", "c", "b", "d"] : ["a", "b", "d", "c"];
     const onQueueMove = vi.fn<(id: string, targetId: string) => void>(() => {
       queue = ids.map((id, index) => waiting(id, index));
-      host.requestUpdate();
+      invalidate();
     });
     const onQueueRemove = vi.fn();
-    mountSolid(
+    view = mountSolid(
       () => {
         const lifecycle = createSolidRenderLifecycle({
           host,
           presented: () => true,
           read: () => queue,
         });
-        onCleanup(host.subscribe(() => lifecycle.invalidate()));
+        invalidate = () => lifecycle.invalidate();
         return createComponent(renderChatQueueSolid, {
           get queue() {
             return lifecycle.snapshot();
@@ -97,8 +104,6 @@ describe("composer queue", () => {
       },
       { container },
     );
-    host.connect();
-    onTestFinished(() => host.disconnect());
     await waitForSolid(() =>
       expect(container.querySelectorAll(".chat-queue__grip")).toHaveLength(4),
     );

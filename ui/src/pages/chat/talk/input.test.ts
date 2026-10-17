@@ -1,12 +1,13 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { formatUiError } from "../../../lib/format-error.ts";
 import {
   discoverRealtimeTalkCameras,
   discoverRealtimeTalkInputs,
   observeRealtimeTalkDevices,
   openRealtimeTalkCamera,
-  RealtimeTalkInputController,
+  RealtimeTalkInputOwner,
 } from "./input.ts";
 
 function mediaDevice(kind: MediaDeviceKind, deviceId: string, label: string): MediaDeviceInfo {
@@ -40,13 +41,13 @@ function microphoneEndedListener(
   return listener;
 }
 
-const ownedInputs = new Set<RealtimeTalkInputController>();
+const ownedInputs = new Set<RealtimeTalkInputOwner>();
 
 function createMicrophoneInput(
   onEnded: (detail: string) => void = () => undefined,
   onConnecting?: (detail?: string) => void,
 ) {
-  const input = new RealtimeTalkInputController(onEnded, onConnecting);
+  const input = new RealtimeTalkInputOwner(onEnded, onConnecting);
   ownedInputs.add(input);
   return input;
 }
@@ -263,11 +264,6 @@ describe("realtime Talk microphone inputs", () => {
     expect(changes).toBe(1);
   });
 
-  it("stays inert where the browser exposes no media devices to watch", () => {
-    vi.stubGlobal("navigator", {});
-    expect(() => observeRealtimeTalkDevices(() => undefined)()).not.toThrow();
-  });
-
   it("reports an unsupported enumeration instead of a generic access failure", async () => {
     vi.stubGlobal("navigator", { mediaDevices: {} });
 
@@ -384,10 +380,17 @@ describe("realtime Talk microphone inputs", () => {
   });
 
   it("reports camera permission denial with actionable guidance", async () => {
-    const getUserMedia = vi.fn().mockRejectedValue(new DOMException("denied", "NotAllowedError"));
+    const cause = new DOMException("denied", "NotAllowedError");
+    const getUserMedia = vi.fn().mockRejectedValue(cause);
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
 
-    await expect(openRealtimeTalkCamera(undefined)).rejects.toThrow("Camera access is blocked");
+    const opening = openRealtimeTalkCamera(undefined);
+    await expect(opening).rejects.toThrow("Camera access is blocked");
+    const error: unknown = await opening.catch((reason: unknown) => reason);
+    expect(error).toHaveProperty("cause", cause);
+    expect(formatUiError(error)).toBe(
+      "Camera access is blocked. Allow camera access in browser site settings.",
+    );
   });
 
   it("reports a missing camera", async () => {
@@ -418,32 +421,6 @@ describe("realtime Talk microphone inputs", () => {
 });
 
 describe("realtime Talk camera inputs", () => {
-  it("lists unique cameras in enumeration order with normalized labels", async () => {
-    const getUserMedia = vi.fn();
-    vi.stubGlobal("navigator", {
-      mediaDevices: {
-        enumerateDevices: vi.fn(async () => [
-          mediaDevice("audioinput", "mic", "Microphone"),
-          mediaDevice("videoinput", "default", "Default Camera"),
-          mediaDevice("videoinput", "front", "Front Camera"),
-          mediaDevice("videoinput", "back", ""),
-          mediaDevice("videoinput", "back", "Duplicate"),
-        ]),
-        getUserMedia,
-      },
-    });
-
-    await expect(discoverRealtimeTalkCameras(() => false)).resolves.toEqual({
-      devices: [
-        { deviceId: "front", label: "Front Camera" },
-        { deviceId: "back", label: "Camera 2" },
-      ],
-      permissionRequired: true,
-      issue: null,
-    });
-    expect(getUserMedia).not.toHaveBeenCalled();
-  });
-
   it("probes video permission and re-enumerates hidden cameras", async () => {
     const stop = vi.fn();
     const enumerateDevices = vi

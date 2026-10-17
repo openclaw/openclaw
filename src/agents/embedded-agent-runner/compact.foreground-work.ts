@@ -34,10 +34,8 @@ export async function runForegroundCompactionWork(
   void trackOwner(async () => {
     const work = new AsyncWorkScope();
     const factoryWork = new AsyncWorkScope();
-    const cleanupWork = new AsyncWorkScope();
     let runInContext = work.run(() => AsyncLocalStorage.snapshot());
     let factoryContext = factoryWork.run(() => AsyncLocalStorage.snapshot());
-    let cleanupContext = cleanupWork.run(() => AsyncLocalStorage.snapshot());
     let foregroundClosed: Promise<void> | undefined;
     const closeForegroundWork = () =>
       (foregroundClosed ??= AsyncWorkScope.runWhenAllIdle(
@@ -54,7 +52,6 @@ export async function runForegroundCompactionWork(
       if (!engineTransferred) {
         factoryContext(() => factoryWork.beginClose(cancellationSignal?.reason));
       }
-      cleanupContext(() => cleanupWork.beginClose(cancellationSignal?.reason));
     };
     cancellationSignal?.addEventListener("abort", closeFromParent, { once: true });
     if (cancellationSignal?.aborted) {
@@ -97,12 +94,9 @@ export async function runForegroundCompactionWork(
       try {
         await closeForegroundWork();
         if (!engineTransferred) {
-          cleanupContext = factoryContext(() =>
-            cleanupWork.run(() => AsyncLocalStorage.snapshot()),
-          );
           // Factory services can need their disposer to start before their signal closes.
-          const disposal = cleanupContext(() =>
-            cleanupWork.track(async () => {
+          const disposal = factoryContext(() =>
+            factoryWork.track(async () => {
               try {
                 await engine?.dispose?.();
               } catch (error) {
@@ -113,10 +107,6 @@ export async function runForegroundCompactionWork(
             }),
           );
           await Promise.all([disposal, closeFactoryWork()]);
-          await AsyncWorkScope.runWhenAllIdle(
-            () => [cleanupWork],
-            () => cleanupContext(() => cleanupWork.drain()),
-          );
         }
       } finally {
         cancellationSignal?.removeEventListener("abort", closeFromParent);

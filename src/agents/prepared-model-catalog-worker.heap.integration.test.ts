@@ -176,6 +176,7 @@ type NativeCatalogSample = {
   rejected?: boolean;
   neighborRejected?: boolean;
   effects?: number;
+  controlCollected?: boolean;
 };
 
 async function createNativeCatalogFixture(options: {
@@ -194,6 +195,7 @@ async function createNativeCatalogFixture(options: {
     path.join(pluginDir, "openclaw.plugin.json"),
     JSON.stringify({
       id: PLUGIN_ID,
+      providers: [PROVIDER_ID],
       configSchema: {
         type: "object",
         properties: { revision: { type: "number" } },
@@ -331,9 +333,14 @@ export function register(api) {
 
 it("reuses one installed native ESM evaluation across 20 catalog context changes", async () => {
   const fixture = await createNativeCatalogFixture({
-    setup: `const retained = new Uint8Array(${NATIVE_ESM_BUFFER_BYTES});
+    setup: `import { queryObjects } from "node:v8";
+const control = new WeakRef({});
+const retained = new Uint8Array(${NATIVE_ESM_BUFFER_BYTES});
 retained[0] = 7;`,
-    catalog: 'if (retained[0] !== 7) throw new Error("lost retained module state");',
+    catalog: `if (retained[0] !== 7) throw new Error("lost retained module state");
+// Measure retained buffers after collection, independent of the runtime's GC schedule.
+queryObjects(WeakRef);
+extra = { controlCollected: control.deref() === undefined };`,
   });
   const samples: NativeCatalogSample[] = [];
   try {
@@ -353,6 +360,7 @@ retained[0] = 7;`,
   expect(samples.at(-1)?.registrations).toBe(21);
   expect(samples.map((sample) => sample.evaluations)).toEqual(Array(21).fill(1));
   expect(new Set(samples.map((sample) => sample.url)).size).toBe(1);
+  expect(samples.at(-1)?.controlCollected).toBe(true);
   expect(samples.at(-1)!.arrayBuffers - samples[0]!.arrayBuffers).toBeLessThan(
     NATIVE_ESM_BUFFER_BYTES,
   );

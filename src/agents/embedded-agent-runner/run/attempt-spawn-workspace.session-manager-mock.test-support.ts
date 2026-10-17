@@ -12,6 +12,7 @@ export type SessionManagerMocks = {
   getHeader: UnknownMock;
   getLeafId: Mock<() => string | null>;
   getLeafEntry: UnknownMock;
+  hasLoadedTranscriptTail: () => boolean;
   getEntry: UnknownMock;
   getEntries: UnknownMock;
   getBranch: UnknownMock;

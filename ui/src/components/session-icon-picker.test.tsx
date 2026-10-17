@@ -11,12 +11,11 @@ it("keeps custom icon entry focused and ignores Enter while an IME composition i
   const mounted = mountSolid(
     () => {
       const appearance = useSessionMenuAppearance(
-        host,
         () => ({ session: { icon: null, color: null }, actionDisabledReasons: {} }),
         () => false,
         runAction,
       );
-      return appearance.render(true);
+      return appearance.render();
     },
     { container: host },
   );
@@ -41,6 +40,12 @@ it("keeps custom icon entry focused and ignores Enter while an IME composition i
   mounted.container.querySelector<HTMLButtonElement>(".session-menu__icon-back")!.click();
   flush();
   expect(document.activeElement).toBe(custom);
+  expect(custom.tabIndex).toBe(0);
+  expect(
+    [...host.querySelectorAll(".session-menu__icon-choice")].filter(
+      (choice) => choice.getAttribute("tabindex") === "0",
+    ),
+  ).toEqual([custom]);
   expect(input.value).toBe("");
   mounted.unmount();
   host.remove();
@@ -53,11 +58,10 @@ it("moves the icon grid tab stop and sends appearance actions through the menu o
   const mounted = mountSolid(
     () =>
       useSessionMenuAppearance(
-        host,
         () => ({ session: { icon: "🦞", color: null }, actionDisabledReasons: {} }),
         () => false,
         runAction,
-      ).render(true),
+      ).render(),
     { container: host },
   );
   const choices = mounted.container.querySelectorAll<HTMLButtonElement>(

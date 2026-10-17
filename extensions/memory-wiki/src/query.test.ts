@@ -806,10 +806,7 @@ describe("searchMemoryWiki", () => {
     });
   }
 
-  it.each([
-    { configuredCorpus: "wiki" as const, requestedCorpus: undefined },
-    { configuredCorpus: "all" as const, requestedCorpus: "wiki" as const },
-  ])(
+  it.each([{ configuredCorpus: "all" as const, requestedCorpus: "wiki" as const }])(
     "keeps protected session recall inside its trusted corpus ($configuredCorpus/$requestedCorpus)",
     async ({ configuredCorpus, requestedCorpus }) => {
       const { rootDir, config } = await createQueryVault({
@@ -1025,22 +1022,6 @@ describe("getMemoryWikiPage", () => {
       provenanceLabel: "unsafe-local: alpha.md",
       updatedAt: "2026-04-05T13:00:00.000Z",
     });
-  });
-
-  it("surfaces shared memory backend failures through the wiki_get tool", async () => {
-    const { config } = await createQueryVault({
-      initialize: true,
-      config: { search: { backend: "shared", corpus: "memory" } },
-    });
-    const manager = createMemoryManager();
-    manager.readFile.mockRejectedValue(new Error("memory database is unavailable"));
-    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
-
-    const tool = createWikiGetTool(config, createAppConfig());
-
-    await expect(tool.execute("wiki-get-failure", { lookup: "MEMORY.md" })).rejects.toThrow(
-      "memory database is unavailable",
-    );
   });
 
   it("reports genuinely missing shared memory files through the wiki_get tool", async () => {

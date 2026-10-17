@@ -9,7 +9,11 @@ import {
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import * as replyRuntime from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  getSessionEntry,
+  resolveStorePath,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   createRequireRecord,
@@ -91,7 +95,9 @@ describe("createTelegramBot typed command pipeline", () => {
       expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
         SessionKey: `agent:main:main:thread:${chat.id}:99`,
         CommandAuthorized: true,
+        CommandTurn: { kind: "native", body: "/status", authorized: true },
       });
+      expect(harness.replySpy.mock.calls[0]?.[0]).not.toHaveProperty("OwnerAllowFrom");
       expect(apiCalls).not.toHaveBeenCalledWith(
         "sendMessage",
         expect.objectContaining({ text: "You are not authorized to use this command." }),
@@ -491,7 +497,7 @@ describe("createTelegramBot typed command pipeline", () => {
   ])(
     "resets a registered $provider default callback and reports compatibility without credentials",
     async ({ provider, model, runtime, receipt }) => {
-      const storePath = harness.telegramBotDepsForTest.resolveStorePath(undefined, {
+      const storePath = resolveStorePath(undefined, {
         agentId: "main",
       });
       const config: OpenClawConfig = {
@@ -513,7 +519,7 @@ describe("createTelegramBot typed command pipeline", () => {
           agentRuntimeOverride: "codex",
         },
       });
-      vi.mocked(harness.telegramBotDepsForTest.buildModelsProviderData).mockResolvedValue({
+      harness.buildModelsProviderData.mockResolvedValue({
         byProvider: new Map([[provider, new Set([model])]]),
         providers: [provider],
         resolvedDefault: { provider, model },
@@ -598,7 +604,7 @@ describe("createTelegramBot typed command pipeline", () => {
       }
       // The controlled model substitutes for the engine that persists first-turn completion.
       await upsertSessionEntry({
-        storePath: harness.telegramBotDepsForTest.resolveStorePath(undefined, {
+        storePath: resolveStorePath(undefined, {
           agentId: "main",
         }),
         sessionKey,

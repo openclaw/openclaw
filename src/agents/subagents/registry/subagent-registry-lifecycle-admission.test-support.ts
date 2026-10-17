@@ -35,7 +35,6 @@ export function registerRequesterDatabaseAdmissionTests({
         status: "dispatching",
         attemptCount: 1,
         replayCount: 1,
-        deferralCount: 0,
         batchRunIds: ["run-1"],
         requesterYieldBatch: true,
         rearmGeneration: 1,

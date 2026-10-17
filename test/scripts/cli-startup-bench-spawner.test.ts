@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,14 +15,17 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllEnvs());
 
-const measuredCase = (id: string, name: string) => ({
+const stats = (value: number) => ({ avg: value, p50: value, p95: value, min: value, max: value });
+const writeReport = (file: string, cases: unknown[]) =>
+  fs.writeFileSync(file, JSON.stringify({ primary: { cases } }));
+const measuredCase = (id: string, name: string, maxRssMb: number | null = 10) => ({
   id,
   name,
-  samples: [{ ms: 10, firstOutputMs: 5, maxRssMb: 10, exitCode: 0, signal: null }],
+  samples: [{ ms: 10, firstOutputMs: 5, maxRssMb, exitCode: 0, signal: null }],
   summary: {
-    durationMs: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
-    firstOutputMs: { avg: 5, p50: 5, p95: 5, min: 5, max: 5 },
-    maxRssMb: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
+    durationMs: stats(10),
+    firstOutputMs: stats(5),
+    maxRssMb: maxRssMb === null ? null : stats(maxRssMb),
   },
 });
 
@@ -34,11 +37,25 @@ function runBudget(args: string[], env = process.env, nodeArgs: string[] = []) {
   );
 }
 
+function runBenchmark(entry: string, args: string[], env = process.env) {
+  return spawnSync(
+    process.execPath,
+    ["--import", "tsx", "scripts/bench-cli-startup.ts", "--entry", entry, ...args],
+    { cwd: process.cwd(), encoding: "utf8", env },
+  );
+}
+
+function expectInputError(result: ReturnType<typeof runBudget>, message: string) {
+  expect(result).toMatchObject({ status: 1, stdout: "" });
+  expect(result.stderr).toContain(message);
+  expect(result.stderr).not.toContain("at ");
+}
+
 describe("CLI startup benchmark script spawners", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  function budgetFixture(prefix: string) {
-    const tmpDir = tempDirs.make(prefix);
+  function budgetFixture() {
+    const tmpDir = tempDirs.make("openclaw-bench-budget-");
     const baselinePath = path.join(tmpDir, "baseline.json");
     const reportPath = path.join(tmpDir, "current.json");
     return {
@@ -51,9 +68,7 @@ describe("CLI startup benchmark script spawners", () => {
   }
 
   it("generates legacy reports by default that pass and fail enforced legacy RSS budgets", () => {
-    const { tmpDir, baselinePath, reportPath, checkBudget } = budgetFixture(
-      "openclaw-bench-default-rss-",
-    );
+    const { tmpDir, baselinePath, reportPath, checkBudget } = budgetFixture();
     const entryPath = path.join(tmpDir, "entry.mjs");
 
     fs.writeFileSync(
@@ -65,44 +80,19 @@ describe("CLI startup benchmark script spawners", () => {
         'console.log("ready");',
       ].join("\n"),
     );
-    fs.writeFileSync(
-      baselinePath,
-      JSON.stringify({
-        primary: {
-          cases: [
-            {
-              id: "health",
-              name: "health",
-              samples: [{ exitCode: 0, signal: null, maxRssMb: 10 }],
-              summary: { durationMs: { avg: 60_000 }, maxRssMb: { avg: 10 } },
-            },
-          ],
-        },
-      }),
-    );
+    writeReport(baselinePath, [
+      {
+        id: "health",
+        name: "health",
+        samples: [{ exitCode: 0, signal: null, maxRssMb: 10 }],
+        summary: { durationMs: { avg: 60_000 }, maxRssMb: { avg: 10 } },
+      },
+    ]);
     for (const rss of [10, 13]) {
-      const generated = spawnSync(
-        process.execPath,
-        [
-          "--import",
-          "tsx",
-          "scripts/bench-cli-startup.ts",
-          "--entry",
-          entryPath,
-          "--case",
-          "health",
-          "--runs",
-          "1",
-          "--warmup",
-          "0",
-          "--output",
-          reportPath,
-        ],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: { ...process.env, FIXTURE_RSS_MB: String(rss) },
-        },
+      const generated = runBenchmark(
+        entryPath,
+        ["--case", "health", "--runs", "1", "--warmup", "0", "--output", reportPath],
+        { ...process.env, FIXTURE_RSS_MB: String(rss) },
       );
       expect(generated.status, generated.stderr).toBe(0);
       const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
@@ -122,7 +112,7 @@ describe("CLI startup benchmark script spawners", () => {
   });
 
   it("rejects incompatible reused RSS metrics and still enforces compatible RSS budgets", () => {
-    const { baselinePath, reportPath, checkBudget } = budgetFixture("openclaw-bench-rss-contract-");
+    const { baselinePath, reportPath, checkBudget } = budgetFixture();
 
     const makeReport = (rss: number, memoryMetric?: string, executionMode?: unknown) => ({
       primary: {
@@ -237,14 +227,9 @@ describe("CLI startup benchmark script spawners", () => {
       "gatewayHealthJsonFreshState",
     ];
     const reportPath = path.join(tmpDir, "state-scopes.json");
-    execFileSync(
-      process.execPath,
+    const generated = runBenchmark(
+      fixturePath,
       [
-        "--import",
-        "tsx",
-        "scripts/bench-cli-startup.ts",
-        "--entry",
-        fixturePath,
         ...caseIds.flatMap((caseId) => ["--case", caseId]),
         "--runs",
         "2",
@@ -253,15 +238,9 @@ describe("CLI startup benchmark script spawners", () => {
         "--output",
         reportPath,
       ],
-      {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          OPENCLAW_BENCH_HOME_LOG: homeLogPath,
-        },
-        stdio: "pipe",
-      },
+      { ...process.env, OPENCLAW_BENCH_HOME_LOG: homeLogPath },
     );
+    expect(generated.status, generated.stderr).toBe(0);
     const homes = fs.readFileSync(homeLogPath, "utf8").trim().split("\n");
     const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
     expect(report.primary.cases.map((commandCase: { id: string }) => commandCase.id)).toEqual(
@@ -299,23 +278,7 @@ describe("CLI startup benchmark script spawners", () => {
       ].join("\n"),
     );
     const runCase = (caseId: string) =>
-      spawnSync(
-        process.execPath,
-        [
-          "--import",
-          "tsx",
-          "scripts/bench-cli-startup.ts",
-          "--entry",
-          fixturePath,
-          "--case",
-          caseId,
-          "--runs",
-          "1",
-          "--warmup",
-          "0",
-        ],
-        { cwd: process.cwd(), encoding: "utf8" },
-      );
+      runBenchmark(fixturePath, ["--case", caseId, "--runs", "1", "--warmup", "0"]);
     expect(runCase("gatewayHealthJson").status).toBe(0);
     for (const caseId of ["gatewayHealthJsonWarmState", "gatewayHealthJsonFreshState"]) {
       const result = runCase(caseId);
@@ -325,97 +288,36 @@ describe("CLI startup benchmark script spawners", () => {
   });
 
   it("does not require unrelated fixture cases for a narrowed preset", () => {
-    const { baselinePath, reportPath } = budgetFixture("openclaw-bench-budget-test-");
+    const { baselinePath, reportPath, checkBudget } = budgetFixture();
 
     const makeCase = (id: string, name: string) => ({
+      ...measuredCase(id, name),
       contract: null,
-      id,
-      name,
-      samples: [{ ms: 10, firstOutputMs: 5, maxRssMb: 10, exitCode: 0, signal: null }],
       summary: {
-        durationMs: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
+        durationMs: stats(10),
         firstOutputMs: null,
         maxRssMb: null,
       },
     });
-    fs.writeFileSync(
-      baselinePath,
-      JSON.stringify({
-        primary: { cases: [makeCase("version", "--version"), makeCase("realOnly", "real only")] },
-      }),
-    );
-    fs.writeFileSync(
-      reportPath,
-      JSON.stringify({ primary: { cases: [makeCase("version", "--version")] } }),
-    );
-    expect(() =>
-      execFileSync(
-        process.execPath,
-        [
-          "--import",
-          "tsx",
-          "scripts/test-cli-startup-bench-budget.mts",
-          "--baseline",
-          baselinePath,
-          "--report",
-          reportPath,
-          "--preset",
-          "startup",
-        ],
-        { cwd: process.cwd(), stdio: "pipe" },
-      ),
-    ).not.toThrow();
-    expect(() =>
-      execFileSync(
-        process.execPath,
-        [
-          "--import",
-          "tsx",
-          "scripts/test-cli-startup-bench-budget.mts",
-          "--baseline",
-          baselinePath,
-          "--report",
-          reportPath,
-          "--preset",
-          "all",
-        ],
-        {
-          cwd: process.cwd(),
-          env: {
-            ...process.env,
-            OPENCLAW_STARTUP_BENCH_ENFORCE_NONCANONICAL_ARCH: "1",
-          },
-          stdio: "pipe",
-        },
-      ),
-    ).toThrow();
+    writeReport(baselinePath, [
+      makeCase("version", "--version"),
+      makeCase("realOnly", "real only"),
+    ]);
+    writeReport(reportPath, [makeCase("version", "--version")]);
+    expect(checkBudget(["--preset", "startup"]).status).toBe(0);
+    expect(
+      checkBudget(["--preset", "all"], {
+        ...process.env,
+        OPENCLAW_STARTUP_BENCH_ENFORCE_NONCANONICAL_ARCH: "1",
+      }).status,
+    ).not.toBe(0);
   });
 
   it("rejects narrowed preset reports with no matching current cases", () => {
-    const { baselinePath, reportPath, checkBudget } = budgetFixture(
-      "openclaw-bench-budget-empty-test-",
-    );
+    const { baselinePath, reportPath, checkBudget } = budgetFixture();
 
-    fs.writeFileSync(
-      baselinePath,
-      JSON.stringify({
-        primary: {
-          cases: [
-            {
-              id: "gatewayStatusJson",
-              name: "gateway status --json",
-              samples: [{ ms: 10, firstOutputMs: 5, maxRssMb: 10, exitCode: 0, signal: null }],
-              summary: {
-                durationMs: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
-                firstOutputMs: { avg: 5, p50: 5, p95: 5, min: 5, max: 5 },
-                maxRssMb: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
-              },
-            },
-          ],
-        },
-      }),
-    );
-    fs.writeFileSync(reportPath, JSON.stringify({ primary: { cases: [] } }));
+    writeReport(baselinePath, [measuredCase("gatewayStatusJson", "gateway status --json")]);
+    writeReport(reportPath, []);
     const result = checkBudget(["--preset", "real"]);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
@@ -424,18 +326,10 @@ describe("CLI startup benchmark script spawners", () => {
   });
 
   it("rejects narrowed preset reports with unrelated current cases when baseline checks run", () => {
-    const { baselinePath, reportPath, checkBudget } = budgetFixture(
-      "openclaw-bench-budget-overlap-test-",
-    );
+    const { baselinePath, reportPath, checkBudget } = budgetFixture();
 
-    fs.writeFileSync(
-      baselinePath,
-      JSON.stringify({ primary: { cases: [measuredCase("fixtureOnly", "fixture only")] } }),
-    );
-    fs.writeFileSync(
-      reportPath,
-      JSON.stringify({ primary: { cases: [measuredCase("targetOnly", "target only")] } }),
-    );
+    writeReport(baselinePath, [measuredCase("fixtureOnly", "fixture only")]);
+    writeReport(reportPath, [measuredCase("targetOnly", "target only")]);
     const result = checkBudget(["--preset", "real"], {
       ...process.env,
       OPENCLAW_STARTUP_BENCH_ENFORCE_NONCANONICAL_ARCH: "1",
@@ -447,43 +341,27 @@ describe("CLI startup benchmark script spawners", () => {
   });
 
   it("skips x64 startup budgets on noncanonical architectures", () => {
-    const { tmpDir, baselinePath, reportPath, checkBudget } = budgetFixture(
-      "openclaw-bench-budget-arch-test-",
-    );
+    const { tmpDir, baselinePath, reportPath, checkBudget } = budgetFixture();
     const archShimPath = path.join(tmpDir, "arch-shim.mjs");
 
     const slowCase = {
-      id: "slow",
-      name: "slow",
+      ...measuredCase("slow", "slow"),
       contract: {
         firstOutputBudgetMs: 20,
         exitBudgetMs: 20,
       },
       samples: [{ ms: 10, firstOutputMs: 10, maxRssMb: 100, exitCode: 0, signal: null }],
       summary: {
-        durationMs: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
-        firstOutputMs: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
-        maxRssMb: { avg: 100, p50: 100, p95: 100, min: 100, max: 100 },
+        durationMs: stats(10),
+        firstOutputMs: stats(10),
+        maxRssMb: stats(100),
       },
     };
     fs.writeFileSync(archShimPath, 'Object.defineProperty(process, "arch", { value: "arm64" });\n');
-    fs.writeFileSync(
-      baselinePath,
-      JSON.stringify({
-        primary: {
-          cases: [
-            {
-              ...slowCase,
-              summary: {
-                ...slowCase.summary,
-                durationMs: { avg: 1, p50: 1, p95: 1, min: 1, max: 1 },
-              },
-            },
-          ],
-        },
-      }),
-    );
-    fs.writeFileSync(reportPath, JSON.stringify({ primary: { cases: [slowCase] } }));
+    writeReport(baselinePath, [
+      { ...slowCase, summary: { ...slowCase.summary, durationMs: stats(1) } },
+    ]);
+    writeReport(reportPath, [slowCase]);
     const result = checkBudget(["--preset", "all"], undefined, ["--import", archShimPath]);
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("skipping x64 startup fixture budgets on arm64");
@@ -495,15 +373,15 @@ describe("CLI startup benchmark script spawners", () => {
         exitBudgetMs: 1,
       },
     };
-    fs.writeFileSync(baselinePath, JSON.stringify({ primary: { cases: [slowResponseCase] } }));
-    fs.writeFileSync(reportPath, JSON.stringify({ primary: { cases: [slowResponseCase] } }));
+    writeReport(baselinePath, [slowResponseCase]);
+    writeReport(reportPath, [slowResponseCase]);
     const responseBudgetResult = checkBudget(["--preset", "all"], undefined, [
       "--import",
       archShimPath,
     ]);
     expect(responseBudgetResult.status).toBe(1);
     expect(responseBudgetResult.stderr).toContain("first output 10.0ms exceeded contract 1.0ms");
-    fs.writeFileSync(reportPath, JSON.stringify({ primary: { cases: [] } }));
+    writeReport(reportPath, []);
     const missingCaseResult = checkBudget(["--preset", "all"], undefined, [
       "--import",
       archShimPath,
@@ -513,35 +391,24 @@ describe("CLI startup benchmark script spawners", () => {
   });
 
   it("fails reused reports with timed-out samples", () => {
-    const { baselinePath, reportPath, checkBudget } = budgetFixture(
-      "openclaw-bench-budget-timeout-test-",
-    );
+    const { baselinePath, reportPath, checkBudget } = budgetFixture();
 
     const timedOutCase = {
+      ...measuredCase("version", "--version"),
       contract: {
         firstOutputBudgetMs: 1000,
         exitBudgetMs: 2000,
       },
-      id: "version",
-      name: "--version",
       samples: [
         {
-          ms: 10,
-          firstOutputMs: 5,
-          maxRssMb: 10,
+          ...measuredCase("version", "--version").samples[0],
           exitCode: null,
-          signal: null,
           timedOut: true,
         },
       ],
-      summary: {
-        durationMs: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
-        firstOutputMs: { avg: 5, p50: 5, p95: 5, min: 5, max: 5 },
-        maxRssMb: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
-      },
     };
-    fs.writeFileSync(baselinePath, JSON.stringify({ primary: { cases: [timedOutCase] } }));
-    fs.writeFileSync(reportPath, JSON.stringify({ primary: { cases: [timedOutCase] } }));
+    writeReport(baselinePath, [timedOutCase]);
+    writeReport(reportPath, [timedOutCase]);
     const result = checkBudget(["--skip-baseline"]);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("[test-cli-startup-bench-budget] --version timed out.");
@@ -551,23 +418,14 @@ describe("CLI startup benchmark script spawners", () => {
   });
 
   it("fails reused reports with missing RSS samples", () => {
-    const { baselinePath, reportPath, checkBudget } = budgetFixture(
-      "openclaw-bench-budget-rss-test-",
-    );
+    const { baselinePath, reportPath, checkBudget } = budgetFixture();
 
     const missingRssCase = {
       contract: null,
-      id: "version",
-      name: "--version",
-      samples: [{ ms: 10, firstOutputMs: 5, maxRssMb: null, exitCode: 0, signal: null }],
-      summary: {
-        durationMs: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
-        firstOutputMs: { avg: 5, p50: 5, p95: 5, min: 5, max: 5 },
-        maxRssMb: null,
-      },
+      ...measuredCase("version", "--version", null),
     };
-    fs.writeFileSync(baselinePath, JSON.stringify({ primary: { cases: [missingRssCase] } }));
-    fs.writeFileSync(reportPath, JSON.stringify({ primary: { cases: [missingRssCase] } }));
+    writeReport(baselinePath, [missingRssCase]);
+    writeReport(reportPath, [missingRssCase]);
     const result = checkBudget(["--skip-baseline"]);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
@@ -582,27 +440,17 @@ describe("CLI startup benchmark script spawners", () => {
       OPENCLAW_STARTUP_BENCH_MAX_RSS_REGRESSION_PCT: "20pct",
     });
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain(
+    expectInputError(
+      result,
       "OPENCLAW_STARTUP_BENCH_MAX_RSS_REGRESSION_PCT must be a non-negative number",
     );
-    expect(result.stderr).not.toContain("at ");
   });
 
   it("rejects malformed startup budget CLI values before reading reports", () => {
     const malformed = runBudget(["--max-duration-regression-pct", "1e2ms"]);
-    expect(malformed.status).toBe(1);
-    expect(malformed.stdout).toBe("");
-    expect(malformed.stderr).toContain(
-      "--max-duration-regression-pct must be a non-negative number",
-    );
-    expect(malformed.stderr).not.toContain("at ");
+    expectInputError(malformed, "--max-duration-regression-pct must be a non-negative number");
 
     const missing = runBudget(["--max-first-output-regression-pct"]);
-    expect(missing.status).toBe(1);
-    expect(missing.stdout).toBe("");
-    expect(missing.stderr).toContain("--max-first-output-regression-pct requires a value");
-    expect(missing.stderr).not.toContain("at ");
+    expectInputError(missing, "--max-first-output-regression-pct requires a value");
   });
 });

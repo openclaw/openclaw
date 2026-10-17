@@ -140,8 +140,8 @@ const EXTENSION_TEST_CORE_IMPORT_PATH_RE =
   /^(?:extensions\/|test\/helpers\/|scripts\/(?:check-no-extension-test-core-imports|check-file-utils)\.ts$|scripts\/check-changed\.m[jt]s$)/u;
 const CONTROL_UI_I18N_VERIFY_PATH_RE =
   /^(?:package\.json$|ui\/(?:src\/|config\/control-ui-locales\.ts$)|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/(?:control-ui-i18n-[^/]+\.ts|control-ui-i18n-config\.json))$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
-const CONTROL_UI_LIT_RATCHET_PATH_RE =
-  /^(?:package\.json$|ui\/src\/|scripts\/(?:check-control-ui-lit-ratchet|control-ui-solid-inventory)\.mts$|scripts\/lib\/shrink-ratchet\.mts$|test\/scripts\/check-control-ui-lit-ratchet\.test\.ts$)/u;
+const CONTROL_UI_CONTROLLERS_PATH_RE =
+  /^(?:package\.json$|ui\/src\/|scripts\/(?:check-control-ui-controllers|control-ui-solid-inventory)\.mts$|scripts\/lib\/shrink-ratchet\.mts$|test\/scripts\/check-control-ui-controllers\.test\.ts$)/u;
 const SHRINK_RATCHET_OWNER_PATH = "scripts/lib/shrink-ratchet.mts";
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const EXTENSIONS_OXLINT_TS_CONFIG = "extensions/tsconfig.json";
@@ -152,7 +152,7 @@ const CORE_LINT_ARGV_BYTES = 24 * 1024;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_EXTENSION_PATH_RE = /^extensions\/[^/]+\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_SCRIPT_PATH_RE = /^scripts\/.+\.[cm]?[jt]sx?$/u;
-const LINTABLE_UI_STYLE_PATH_RE = /^ui\/(?:src\/.+\.(?:css|tsx?)|public\/themes\/[^/]+\.css)$/u;
+const LINTABLE_UI_STYLE_PATH_RE = /^ui\/(?:src\/.+\.css|public\/themes\/[^/]+\.css)$/u;
 // These baselines are checked by their ratchets, not consumed by Oxlint.
 const LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:docs\/|README\.md$|.*\.mdx?$|config\/(?:assertion-safety-baseline|env-var-count-budget|max-lines-baseline|test-timeout-race-baseline|test-mock-exports-baseline)\.txt$)/u;
@@ -492,11 +492,16 @@ export function createChangedCheckPlan(
   const typechecks = new Set<ChangedCheckCommand>();
   const lintChecks = new Set<ChangedCheckCommand>();
   const baseEnv = { ...resolveLocalCheckEnv(options.env ?? process.env) };
-  const litRatchetArgs = [
-    "check:control-ui-lit-ratchet",
+  const controllerGuardArgs = [
+    "check:control-ui-controllers",
     ...(options.staged ? ["--staged"] : []),
     "--base",
     options.base ?? (options.staged ? "HEAD" : baseEnv.CHECKOUT_BASE_SHA || "origin/main"),
+    // CI materializes this exact comparison commit without its ancestry.
+    // Explicit and staged bases retain their normal Git scope.
+    ...(options.base === undefined && !options.staged && baseEnv.CHECKOUT_BASE_SHA
+      ? ["--no-merge-base"]
+      : []),
   ];
   delete baseEnv.OPENCLAW_OXLINT_CHANGED_PATHS;
   const cwd = process.cwd();
@@ -598,7 +603,7 @@ export function createChangedCheckPlan(
             }
             if (command.args[0] === "lint") {
               return [
-                { ...command, name: "Control UI Lit ratchet", args: litRatchetArgs },
+                { ...command, name: "Control UI controller guard", args: controllerGuardArgs },
                 { ...command, name: "Control UI i18n catalog", args: ["lint:ui:i18n"] },
                 {
                   ...command,
@@ -609,7 +614,6 @@ export function createChangedCheckPlan(
                     "tsx",
                     "scripts/run-stylelint.mts",
                     "ui/src/**/*.css",
-                    "ui/src/**/*.{ts,tsx}",
                     "ui/public/themes/*.css",
                   ],
                 },
@@ -1013,8 +1017,8 @@ export function createChangedCheckPlan(
   } else if (shouldRunControlUiI18nVerify(result.paths)) {
     addLint("Control UI i18n catalog", ["lint:ui:i18n"]);
   }
-  if (!runAll && result.paths.some((file) => CONTROL_UI_LIT_RATCHET_PATH_RE.test(file))) {
-    addLint("Control UI Lit ratchet", litRatchetArgs);
+  if (!runAll && result.paths.some((file) => CONTROL_UI_CONTROLLERS_PATH_RE.test(file))) {
+    addLint("Control UI controller guard", controllerGuardArgs);
   }
 
   if (typeLanes.all) {

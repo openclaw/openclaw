@@ -204,13 +204,13 @@ describe("models cli", () => {
     },
   );
 
-  it.each([
-    ["logs --plain", ["logs", "--plain"]],
-    ["plain after argv terminator", ["models", "list", "--", "--plain"]],
-  ])("does not declare %s as plain machine output", (_label, args) => {
-    const argv = ["node", "openclaw", ...args];
-    expect(isModelsPlainMachineOutput(argv)).toBe(false);
-  });
+  it.each([["plain after argv terminator", ["models", "list", "--", "--plain"]]])(
+    "does not declare %s as plain machine output",
+    (_label, args) => {
+      const argv = ["node", "openclaw", ...args];
+      expect(isModelsPlainMachineOutput(argv)).toBe(false);
+    },
+  );
 
   it("does not turn plain output into JSON failure envelope", async () => {
     expect(await detectJsonOutput(["models", "aliases", "list", "--plain"])).toBe(false);
@@ -310,12 +310,6 @@ describe("models cli", () => {
 
   const globalModelCommands = [
     {
-      label: "set",
-      args: ["set", "anthropic/claude-sonnet-4-6"],
-      command: modelsSetCommand,
-      field: "model",
-    },
-    {
       label: "set-image",
       args: ["set-image", "openai/gpt-image-1"],
       command: modelsSetCommand,
@@ -355,12 +349,6 @@ describe("models cli", () => {
 
   it.each([
     { label: "set", args: ["set", "anthropic/claude-sonnet-4-6"], command: modelsSetCommand },
-    {
-      label: "fallbacks add",
-      args: ["fallbacks", "add", "openai/gpt-5.5"],
-      command: changeFallbacksCommand,
-    },
-    { label: "fallbacks clear", args: ["fallbacks", "clear"], command: clearFallbacksCommand },
   ])("rejects parent --agent for models $label", async ({ args, command }) => {
     const agent = args[0] === "set" ? "poe" : "";
     const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});

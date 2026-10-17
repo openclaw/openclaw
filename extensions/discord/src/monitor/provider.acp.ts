@@ -3,7 +3,10 @@ import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
-type DiscordProviderSessionRuntimeModule = typeof import("./provider-session.runtime.js");
+type DiscordProviderSessionRuntimeModule = Pick<
+  typeof import("./provider-session.runtime.js"),
+  "getAcpSessionManager" | "isAcpRuntimeError" | "rethrowIncognitoSessionError"
+>;
 
 const DISCORD_ACP_STATUS_PROBE_TIMEOUT_MS = 8_000;
 const DISCORD_ACP_STALE_RUNNING_ACTIVITY_MS = 2 * 60 * 1000;
@@ -48,14 +51,10 @@ function resolveRunningActivityAgeMs(params: {
   if (params.storedState !== "running") {
     return 0;
   }
-  const nowMs = asDateTimestampMs(Date.now());
-  if (nowMs === undefined) {
-    return 0;
-  }
   const activityAtMs = asDateTimestampMs(params.lastActivityAt);
   const boundedActivityAtMs =
     activityAtMs === undefined ? 0 : Math.max(0, Math.floor(activityAtMs));
-  return Math.max(0, nowMs - boundedActivityAtMs);
+  return Math.max(0, Date.now() - boundedActivityAtMs);
 }
 
 export async function probeDiscordAcpBindingHealth(params: {

@@ -17,8 +17,6 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
-import { readTranscriptStatsAsync } from "../../config/sessions/session-transcript-stats.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
@@ -157,7 +155,6 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
       let admissionError: ReturnType<typeof errorShape> | undefined;
       let compactionNoopReason: string | undefined;
       let preparedEntry: InternalSessionEntry | undefined;
-      let noTranscript = false;
       const terminalSettled = await waitForTerminalSessionRunSettlement({
         context,
         storePath,
@@ -179,12 +176,6 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             preparedEntry = await readCurrentEntry();
             if (!preparedEntry) {
               admissionError = sessionChangedError();
-              return;
-            }
-            const transcriptStats = await readTranscriptStatsAsync(transcriptScope);
-            assertRequestCurrent();
-            noTranscript = transcriptStats.eventCount === 0;
-            if (noTranscript) {
               return;
             }
             compactionNoopReason = (
@@ -238,7 +229,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             respond(false, undefined, admissionError);
             return;
           }
-          if (noTranscript) {
+          if (compactionNoopReason === "no transcript") {
             respondNotCompacted({ reason: "no transcript" });
             return;
           }
@@ -258,10 +249,10 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             const trimResult = await trimSessionTranscriptForManualCompact(transcriptScope, {
               maxLines,
               authority: {
-                source: composeSessionSourceAssertion([
+                // Router authorization already includes the request's live authority.
+                source:
+                  options.sessionMutationAuthorization?.assertCurrent ??
                   requestAuthority.assertCurrent,
-                  options.sessionMutationAuthorization?.assertCurrent,
-                ]),
                 assertHostCurrent: () => {
                   signal?.throwIfAborted();
                   if (!hasPreparedGatewayDeviceAuthority(client, hasCurrentClientAuthority)) {

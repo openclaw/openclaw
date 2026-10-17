@@ -46,7 +46,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
       },
     ));
 
-  const recover = async (params: { key: string; agentId?: string }) => {
+  const recover: SessionCapability["recover"] = async (params) => {
     const scope = host.connection.capture();
     if (!scope) {
       return null;
@@ -56,7 +56,9 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
       if (!host.connection.isCurrent(scope)) {
         return null;
       }
-      host.notifyCreated(result.key);
+      if (!areUiSessionKeysEquivalent(result.key, params.key)) {
+        host.notifyCreated(result.key);
+      }
       await host.reconcileMutation(params.agentId);
       return host.connection.isCurrent(scope) ? result : null;
     } catch (error) {

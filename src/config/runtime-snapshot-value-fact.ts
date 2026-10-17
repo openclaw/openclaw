@@ -30,6 +30,12 @@ export function hashRuntimeConfigValue(value: OpenClawConfig): string {
   return fingerprint;
 }
 
+export function hashRuntimeConfigPreparation(config: OpenClawConfig): string {
+  return sha256Base64Url(
+    stableConfigStringify({ config, facts: serializeConfigResolutionFacts(config) }),
+  );
+}
+
 // A detached publication value proves reuse across mutable clones without trusting their identity.
 export function prepareRuntimeConfigValueFact(
   config: OpenClawConfig,
@@ -64,4 +70,40 @@ export function matchesRuntimeConfigValueFact(
   return fact.value
     ? isDeepStrictEqual(config, fact.value)
     : hashRuntimeConfigValue(config) === fact.fingerprint;
+}
+
+export function matchesRuntimeConfigPublicationFact(
+  config: OpenClawConfig,
+  fact: RuntimeConfigValueFact,
+): boolean {
+  return (
+    matchesRuntimeConfigValueFact(config, fact) &&
+    isDeepStrictEqual(serializeConfigResolutionFacts(config), fact.facts)
+  );
+}
+
+export function matchesRuntimeSourceConfigValueFact(
+  config: OpenClawConfig,
+  fact: RuntimeConfigValueFact,
+): boolean {
+  const project = ({ meta, ...values }: OpenClawConfig) => {
+    const { lastTouchedVersion: _lastTouchedVersion, ...sourceMeta } = meta ?? {};
+    return { ...values, meta: sourceMeta };
+  };
+  return (
+    (matchesRuntimeConfigValueFact(config, fact) ||
+      (fact.value !== null && isDeepStrictEqual(project(config), project(fact.value)))) &&
+    isDeepStrictEqual(serializeConfigResolutionFacts(config), fact.facts)
+  );
+}
+
+export function hashModelConfig(config: OpenClawConfig, sourceConfig: OpenClawConfig): string {
+  const project = (value: OpenClawConfig) => {
+    const { ui: _ui, meta, ...rest } = value;
+    const { lastTouchedVersion: _lastTouchedVersion, ...modelMeta } = meta ?? {};
+    return { config: { ...rest, meta: modelMeta }, facts: serializeConfigResolutionFacts(value) };
+  };
+  return sha256Base64Url(
+    stableConfigStringify({ runtime: project(config), source: project(sourceConfig) }),
+  );
 }

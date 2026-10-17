@@ -3,9 +3,8 @@ import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runti
 import {
   Button,
   StringSelectMenu,
-  type ButtonInteraction,
+  type BaseComponentInteraction,
   type ComponentData,
-  type StringSelectMenuInteraction,
 } from "../internal/discord.js";
 import {
   ackComponentInteraction,
@@ -79,7 +78,9 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
   });
 
   const eventText = params.formatEventText({ componentId, username, userId });
-  logDebug(`${label}: enqueuing event for channel ${channelId}: ${eventText}`);
+  logDebug(
+    `${label}: enqueuing event for channel ${channelId} interaction=${params.interaction.id}`,
+  );
 
   enqueueRoutedSystemEvent(eventText, route, {
     // The immutable interaction ID identifies one occurrence, preserving repeat clicks while
@@ -98,7 +99,7 @@ export function createAgentComponentButton(ctx: AgentComponentContext): Button {
     override label = AGENT_BUTTON_KEY;
     customId = `${AGENT_BUTTON_KEY}:seed=1`;
 
-    override async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
+    override async run(interaction: BaseComponentInteraction, data: ComponentData): Promise<void> {
       await runAgentSystemControlInteraction({
         ctx,
         interaction,
@@ -116,10 +117,7 @@ export function createAgentSelectMenu(ctx: AgentComponentContext): StringSelectM
     customId = `${AGENT_SELECT_KEY}:seed=1`;
     options = [];
 
-    override async run(
-      interaction: StringSelectMenuInteraction,
-      data: ComponentData,
-    ): Promise<void> {
+    override async run(interaction: BaseComponentInteraction, data: ComponentData): Promise<void> {
       const values = interaction.values ?? [];
       const valuesText = values.length > 0 ? ` (selected: ${values.join(", ")})` : "";
       await runAgentSystemControlInteraction({

@@ -3,6 +3,7 @@ import { en } from "./en.ts";
 
 const enLinkReader = {
   linkReader: {
+    sessionRequired: "Open this link from its session to view the repository.",
     cachedPreview: "Cached details",
     previewAriaLabel: "Preview: {title}",
     newTab: "New reader tab",
@@ -20,6 +21,14 @@ const enLinkReader = {
     back: "Back",
     forward: "Forward",
     refresh: "Refresh item",
+    refreshingSaved: "Showing previous details · refreshing…",
+    revisionChanged: "This item changed. Refresh to load matching details.",
+    sectionRefreshFailed: "Could not refresh {section}. Showing previous details.",
+    sectionRefreshing: "Showing previous {section} · refreshing…",
+    sectionLoading: "Loading {section}…",
+    sectionFailed: "Could not load {section}.",
+    loadFiles: "Load changed files",
+    filesOnDemand: "File diffs load when you reach this section.",
     close: "Close link reader",
     resize: "Resize link reader",
     openExternal: "Open on {provider}",
@@ -61,8 +70,8 @@ const enLinkReader = {
       "No text diff available in this view. Open the original to inspect this file.",
     unavailableTitle: "Could not load item",
     previewUnavailable: "Could not load preview",
-    previewPullRequest: "PR #{number}",
-    previewIssue: "Issue #{number}",
+    previewPullRequest: "PR {reference}",
+    previewIssue: "Issue {reference}",
     unavailable: "Try again or open the original.",
     disconnected: "This reader is unavailable on this connection. Reconnect or open the original.",
     retry: "Retry",

@@ -276,7 +276,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     if (normalized.length > 0) {
       record.toolNames.push(...normalized);
     }
-    getPluginInstance(record)?.admitFactory(factory);
+    getPluginInstance(record)?.admitFactory(factory, "tool");
     registry.tools.push({
       ...createRegistration(record, {
         factory,

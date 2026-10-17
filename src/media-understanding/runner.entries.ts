@@ -22,9 +22,9 @@ import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
-import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { hasErrnoCode } from "../infra/errors.js";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
+import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { ImageOptimizationLimitError } from "../media/image-optimization-error.js";
@@ -116,10 +116,6 @@ function extractSherpaOnnxText(raw: string): string | undefined {
   return undefined;
 }
 
-function commandBase(command: string): string {
-  return path.parse(command).name;
-}
-
 function findArgValue(args: string[], keys: string[]): string | undefined {
   for (const [index, arg] of args.entries()) {
     if (keys.includes(arg)) {
@@ -198,7 +194,7 @@ async function resolveCliOutput(params: {
   stdout: string;
   mediaPath: string;
 }): Promise<string> {
-  const commandId = commandBase(params.command);
+  const commandId = path.parse(params.command).name;
   const fileOutput =
     commandId === "whisper-cli"
       ? resolveWhisperCppOutputPath(params.args)
@@ -238,7 +234,7 @@ async function resolveCliMediaPath(params: {
   execution?: MediaExecutionContext;
 }): Promise<string> {
   assertMediaExecutionCurrent(params.execution);
-  const commandId = commandBase(params.command);
+  const commandId = path.parse(params.command).name;
   if (params.capability !== "audio" || commandId !== "whisper-cli") {
     return params.mediaPath;
   }
@@ -249,7 +245,6 @@ async function resolveCliMediaPath(params: {
   }
 
   const wavPath = path.join(params.outputDir, `${path.parse(params.mediaPath).name}.wav`);
-  await fs.mkdir(params.outputDir, { recursive: true });
   assertMediaExecutionCurrent(params.execution);
   await writeExternalFileWithinRoot({
     rootDir: params.outputDir,
@@ -352,12 +347,12 @@ export type MediaRequestOverrides = Pick<AudioTranscriptionRequest, "prompt" | "
 
 /** Formats a compact operator-facing summary of a media-understanding decision. */
 export function formatDecisionSummary(decision: MediaUnderstandingDecision): string {
-  const attachments = Array.isArray(decision.attachments) ? decision.attachments : [];
+  const { attachments } = decision;
   const total = attachments.length;
-  const success = attachments.filter((entry) => entry?.chosen?.outcome === "success").length;
-  const chosen = attachments.find((entry) => entry?.chosen)?.chosen;
-  const provider = typeof chosen?.provider === "string" ? chosen.provider.trim() : undefined;
-  const model = typeof chosen?.model === "string" ? chosen.model.trim() : undefined;
+  const success = attachments.filter((entry) => entry.chosen?.outcome === "success").length;
+  const chosen = attachments.find((entry) => entry.chosen)?.chosen;
+  const provider = chosen?.provider?.trim();
+  const model = chosen?.model?.trim();
   const modelLabel = provider
     ? model && model !== provider
       ? `${provider}/${model}`
@@ -381,14 +376,12 @@ export function findDecisionReason(
   decision: MediaUnderstandingDecision,
   outcome?: MediaUnderstandingModelDecision["outcome"],
 ): string | undefined {
-  const attachments = Array.isArray(decision.attachments) ? decision.attachments : [];
-  for (const attachment of attachments) {
-    const attempts = Array.isArray(attachment?.attempts) ? attachment.attempts : [];
-    for (const attempt of attempts) {
+  for (const attachment of decision.attachments) {
+    for (const attempt of attachment.attempts) {
       if (outcome && attempt.outcome !== outcome) {
         continue;
       }
-      if (typeof attempt.reason !== "string" || attempt.reason.trim().length === 0) {
+      if (!attempt.reason?.trim()) {
         continue;
       }
       return attempt.reason;
@@ -399,7 +392,7 @@ export function findDecisionReason(
 
 /** Trims provider/runtime error prefixes into a stable human-readable reason. */
 export function normalizeDecisionReason(reason?: string): string | undefined {
-  const trimmed = typeof reason === "string" ? reason.trim() : "";
+  const trimmed = reason?.trim();
   if (!trimmed) {
     return undefined;
   }
@@ -530,6 +523,7 @@ export async function runProviderEntry(params: {
       provider: requestProviderId,
       prompt: params.request?.prompt ?? prompt,
       timeoutMs,
+      signal: params.execution?.signal,
       profile: entry.profile,
       preferredProfile: entry.preferredProfile,
       agentId: params.agentId,
@@ -540,7 +534,10 @@ export async function runProviderEntry(params: {
     };
     const describeImage = provider?.describeImage ?? describeImageWithModel;
     assertMediaExecutionCurrent(params.execution);
-    const result = await describeImage(imageInput);
+    const result = await withGuardedFetchRequestAuthority(
+      params.execution ? () => assertMediaExecutionCurrent(params.execution) : undefined,
+      () => describeImage(imageInput),
+    );
     assertMediaExecutionCurrent(params.execution);
     return ok({
       kind: "image.description",
@@ -793,15 +790,12 @@ export async function runCliEntry(
       delete templCtx[key];
     }
     const argv = args.map((part) => applyTemplate(part, templCtx));
-    if (shouldLogVerbose()) {
-      logVerbose(`Media understanding via CLI: ${[command, ...argv].join(" ")}`);
-    }
     assertMediaExecutionCurrent(params.execution);
     const { stdout, stderr } = await runExec(command, argv, {
       timeoutMs,
       maxBuffer: CLI_OUTPUT_MAX_BUFFER,
-      ...(params.execution?.signal ? { signal: params.execution?.signal } : {}),
-      cwd: ["agy", "antigravity"].includes(commandBase(command))
+      signal: params.execution?.signal,
+      cwd: ["agy", "antigravity"].includes(path.parse(command).name)
         ? path.dirname(mediaPath)
         : undefined,
     });
@@ -836,7 +830,7 @@ export async function runCliEntry(
       kind: capability === "audio" ? "audio.transcription" : `${capability}.description`,
       attachmentIndex,
       text,
-      provider: capability === "audio" ? commandBase(command) : "cli",
+      provider: capability === "audio" ? path.parse(command).name : "cli",
       model: command,
       ...(requestedBackend ? { requestedBackend } : {}),
       ...(observedBackend ? { observedBackend } : {}),

@@ -45,6 +45,34 @@ it("asks Claude CLI for its active account and returns only safe display fields"
   );
 });
 
+it.each([
+  ['["CLAUDE_CODE_OAUTH_TOKEN"]', "JSON"],
+  ["CLAUDE_CODE_OAUTH_TOKEN, OTHER", "list"],
+])("probes the login the runtime child keeps from a %s preserve list (%s)", async (preserve) => {
+  // Runtime execution keeps OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV keys for the Claude child;
+  // readiness must observe that same environment or spawn admission refuses a working login.
+  runUtf8CommandWithTimeout.mockResolvedValue({
+    code: 0,
+    termination: "exit",
+    stdout: JSON.stringify({ loggedIn: true, authMethod: "oauth_token" }),
+  });
+
+  expect(
+    await probeClaudeCliAuthStatus({
+      command: "/test/claude",
+      env: {
+        OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV: preserve,
+        CLAUDE_CODE_OAUTH_TOKEN: "synthetic-preserved-token",
+        ANTHROPIC_API_KEY: "synthetic-cleared-api-key",
+      },
+    }),
+  ).toEqual({ status: "available", authMethod: "oauth_token" });
+
+  const baseEnv = runUtf8CommandWithTimeout.mock.calls[0]?.[1]?.baseEnv;
+  expect(baseEnv?.CLAUDE_CODE_OAUTH_TOKEN).toBe("synthetic-preserved-token");
+  expect(baseEnv).not.toHaveProperty("ANTHROPIC_API_KEY");
+});
+
 it.each(["PATH"])("runs a Windows Claude npm shim selected by %s", async (source) => {
   await withTempDir("anthropic-cli-auth-", async (dir) => {
     const home = await fs.realpath(dir);
@@ -134,6 +162,16 @@ it.each([0, 1])("does not inspect Claude token storage on logout (exit %s)", asy
   });
 
   expect(await probeClaudeCliAuthStatus()).toEqual({ status: "missing" });
+});
+
+it.each([
+  { code: 1, stdout: "keychain unavailable" },
+  { code: 0, stdout: "{}" },
+  { code: 0, stdout: '{"loggedIn":"false"}' },
+  { code: 1, stdout: '{"loggedIn":true}' },
+])("keeps an inconclusive status unknown: $code/$stdout", async ({ code, stdout }) => {
+  runUtf8CommandWithTimeout.mockResolvedValue({ code, termination: "exit", stdout });
+  expect(await probeClaudeCliAuthStatus()).toEqual({ status: "unreadable" });
 });
 
 it("distinguishes a timed-out probe even when it already printed authenticated JSON", async () => {

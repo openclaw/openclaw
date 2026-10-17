@@ -1,9 +1,9 @@
 import { createEffect, createMemo, useContext } from "solid-js";
-import { SolidContentPresentation } from "../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../lib/solid/presentation.ts";
 import { observeScrollState } from "../scroll-state-observer.ts";
 
 export function useScrollState(horizontal = false, trackScroll = true) {
-  const presented = useContext(SolidContentPresentation);
+  const presented = useContext(ContentPresentation);
   let element: HTMLElement;
   createEffect(createMemo(presented), (active) => {
     if (!active) {

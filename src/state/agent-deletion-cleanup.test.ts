@@ -31,6 +31,7 @@ import {
 } from "../infra/sqlite-database-admission.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
+import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
@@ -402,7 +403,7 @@ describe("agent deletion database cleanup authority", () => {
 
   it("closes pooled auth readers before releasing the deleted agent's files", async () => {
     const f = fixture();
-    const reader = acquireAuthProfileReadDatabase(f.target.path);
+    const reader = acquireAuthProfileReadDatabase(f.target.path, openSqliteReadOnlyDatabase);
     expect(reader.status).toBe("readable");
     const retainedAdmission = captureSqliteDatabaseAdmissions().find(
       (record) => record.location === f.target.path,

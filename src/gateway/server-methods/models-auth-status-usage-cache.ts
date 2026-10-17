@@ -40,12 +40,21 @@ type ProviderUsageRefresh = ProviderUsageCacheIdentity & {
   promise: Promise<UsageSummary>;
 };
 
-const usageCacheByAgentId = new Map<string, ProviderUsageCacheEntry>();
-const usageRefreshByAgentId = new Map<string, ProviderUsageRefresh>();
-let cacheGeneration = 0;
+// models.authStatus polls refreshable credentials; usage.status polls every usage provider.
+// Both read on one page load, so each agent keeps one entry per provider set.
+const usageCacheByAgentId = new Map<string, Map<string, ProviderUsageCacheEntry>>();
+const usageRefreshByAgentId = new Map<string, Map<string, ProviderUsageRefresh>>();
+
+function agentEntries<T>(byAgentId: Map<string, Map<string, T>>, agentId: string) {
+  let entries = byAgentId.get(agentId);
+  if (!entries) {
+    entries = new Map();
+    byAgentId.set(agentId, entries);
+  }
+  return entries;
+}
 
 export function clearModelAuthStatusUsageCache(): void {
-  cacheGeneration += 1;
   usageCacheByAgentId.clear();
   usageRefreshByAgentId.clear();
   clearProviderUsageRuntimeSnapshot();
@@ -119,7 +128,9 @@ function scheduleProviderUsageRefresh(
     lastGood?: UsageSummary;
   },
 ): Promise<UsageSummary> {
-  const active = usageRefreshByAgentId.get(params.agentId);
+  const isCurrent = () =>
+    usageRefreshByAgentId.get(params.agentId)?.get(params.providerKey) === refresh;
+  const active = usageRefreshByAgentId.get(params.agentId)?.get(params.providerKey);
   if (
     active?.agentDir === params.agentDir &&
     active.configRef === params.configRef &&
@@ -128,7 +139,6 @@ function scheduleProviderUsageRefresh(
   ) {
     return active.promise;
   }
-  const publishGeneration = cacheGeneration;
   // SWR replies and invalidation must retain publication and finalization ownership.
   const promise = trackAsyncWork(() =>
     loadProviderUsageSummary({
@@ -140,11 +150,8 @@ function scheduleProviderUsageRefresh(
     })
       .then((freshUsage) => {
         const usage = retainLastGoodOnTimeout(freshUsage, params.lastGood);
-        if (
-          publishGeneration === cacheGeneration &&
-          usageRefreshByAgentId.get(params.agentId) === refresh
-        ) {
-          usageCacheByAgentId.set(params.agentId, {
+        if (isCurrent()) {
+          agentEntries(usageCacheByAgentId, params.agentId).set(params.providerKey, {
             agentDir: params.agentDir,
             configRef: params.configRef,
             credentialKey: params.credentialKey,
@@ -166,8 +173,8 @@ function scheduleProviderUsageRefresh(
         throw err;
       })
       .finally(() => {
-        if (usageRefreshByAgentId.get(params.agentId) === refresh) {
-          usageRefreshByAgentId.delete(params.agentId);
+        if (isCurrent()) {
+          usageRefreshByAgentId.get(params.agentId)?.delete(params.providerKey);
         }
       }),
   );
@@ -178,7 +185,7 @@ function scheduleProviderUsageRefresh(
     providerKey: params.providerKey,
     promise,
   };
-  usageRefreshByAgentId.set(params.agentId, refresh);
+  agentEntries(usageRefreshByAgentId, params.agentId).set(params.providerKey, refresh);
   return promise;
 }
 
@@ -198,12 +205,11 @@ function resolveProviderUsageCacheRead(params: ProviderUsageCacheParams) {
   const providerIds = params.providerIds.toSorted();
   const providerKey = providerIds.join("\0");
   const credentialKey = scopeProviderUsageCredentialKey(params.credentialKey, providerIds);
-  const cached = usageCacheByAgentId.get(params.agentId);
+  const cached = usageCacheByAgentId.get(params.agentId)?.get(providerKey);
   const matching =
     cached?.agentDir === params.agentDir &&
     cached.configRef === params.configRef &&
-    cached.credentialKey === credentialKey &&
-    cached.providerKey === providerKey
+    cached.credentialKey === credentialKey
       ? cached
       : undefined;
   const needsRefresh =

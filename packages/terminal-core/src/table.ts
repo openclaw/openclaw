@@ -517,24 +517,21 @@ export function renderTable(opts: RenderTableOptions): string {
   const hLine = ([left, mid, right]: string) =>
     `${left}${widths.map((w) => repeat(box.h, w)).join(mid)}${right}`;
 
-  const contentWidthFor = (i: number) => {
-    const width = widths.at(i);
-    if (width === undefined) {
-      throw new Error(`expected table column width ${i} to be defined`);
-    }
-    return Math.max(1, width - padding * 2);
-  };
+  const contentWidths = widths.map((width) => Math.max(1, width - padding * 2));
   const padStr = repeat(" ", padding);
 
   const lines: string[] = [];
   const renderRow = (record: Record<string, string>, isHeader = false) => {
     const cells = columns.map((c) => (isHeader ? c.header : (record[c.key] ?? "")));
-    const wrapped = cells.map((cell, i) => wrapLine(cell, contentWidthFor(i)));
-    const height = Math.max(...wrapped.map((w) => w.length));
+    const wrapped = contentWidths.map((width, i) => ({
+      width,
+      lines: wrapLine(cells[i] ?? "", width),
+    }));
+    const height = Math.max(...wrapped.map((cell) => cell.lines.length));
     for (let li = 0; li < height; li += 1) {
-      const parts = wrapped.map((cellLines, i) => {
+      const parts = wrapped.map(({ lines: cellLines, width }, i) => {
         const raw = cellLines[li] ?? "";
-        const aligned = padCell(raw, contentWidthFor(i), columns[i]?.align ?? "left");
+        const aligned = padCell(raw, width, columns[i]?.align ?? "left");
         return `${padStr}${aligned}${padStr}`;
       });
       lines.push(`${box.v}${parts.join(box.v)}${box.v}`);

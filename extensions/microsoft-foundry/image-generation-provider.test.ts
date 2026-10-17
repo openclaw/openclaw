@@ -254,7 +254,8 @@ describe("microsoft foundry image generation provider", () => {
   });
 
   it("rejects oversized MAI image JSON responses", async () => {
-    postJsonRequestMock.mockResolvedValue(imageResponse("x".repeat(10 * 1024 * 1024)));
+    // One image result: the bound is the 64 MiB download ceiling as base64.
+    postJsonRequestMock.mockResolvedValue(imageResponse("x".repeat(90 * 1024 * 1024)));
 
     await expect(generateImage()).rejects.toThrow(
       "microsoft-foundry.image-generation: JSON response exceeds",

@@ -1,3 +1,4 @@
+import { onCleanup } from "solid-js";
 import type { ControlUiLinkReaderDescriptor } from "../../../../src/shared/control-ui-link-reader.js";
 import { resolveLinkReaderTarget } from "../../components/link-reader-target.ts";
 import {
@@ -20,6 +21,7 @@ import {
   terminalIntentQueue,
   terminalToggleIntent,
 } from "../../components/terminal/terminal-pending-actions.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
@@ -39,7 +41,7 @@ export type PendingSessionPanelToggle = {
   sessionKey: string;
 };
 
-interface SessionPanelToggleControllerOptions {
+interface SessionPanelToggleOptions {
   current: () => ActivePanelOwner | null;
   pending: Map<SessionPanelToggleSlot, PendingSessionPanelToggle>;
   requestUpdate: () => void;
@@ -66,36 +68,9 @@ function canOpenLinkReader(owner: ActivePanelOwner | null, url: string | undefin
 }
 
 /** Owns shell-to-pane panel intent handoff for the active chat presentation. */
-export class ChatPaneSessionPanelToggleController {
-  constructor(private readonly options: SessionPanelToggleControllerOptions) {}
-
-  subscribe(): () => void {
-    const cleanups = panelToggleEvents.map(([eventName, slot, tagName]) => {
-      const listener = (event: Event) => {
-        this.handle(slot, tagName, event);
-      };
-      window.addEventListener(eventName, listener);
-      return () => window.removeEventListener(eventName, listener);
-    });
-    const handlePluginPanel = (event: Event) => this.handlePluginPanel(event);
-    window.addEventListener(PLUGIN_PANEL_TOGGLE_EVENT, handlePluginPanel);
-    cleanups.push(() => window.removeEventListener(PLUGIN_PANEL_TOGGLE_EVENT, handlePluginPanel));
-    const handleTerminalDockBottom = () => {
-      const owner = this.options.current();
-      if (owner) {
-        owner.state.updateSidebarLayout(closeSlot(owner.state.sidebarLayout, "terminal"));
-      }
-    };
-    window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, handleTerminalDockBottom);
-    return () => {
-      cleanups.forEach((cleanup) => cleanup());
-      window.removeEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, handleTerminalDockBottom);
-      this.options.pending.clear();
-    };
-  }
-
-  private handlePluginPanel(event: Event): void {
-    const owner = this.options.current();
+export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOptions): () => void {
+  function handlePluginPanel(event: Event): void {
+    const owner = options.current();
     if (!owner || !(event instanceof CustomEvent)) {
       return;
     }
@@ -117,21 +92,21 @@ export class ChatPaneSessionPanelToggleController {
     if (detail.dock) {
       layout = setSidebarDock(layout, detail.dock);
     }
-    this.options.updateSidebarLayout(layout);
+    options.updateSidebarLayout(layout);
   }
 
-  handle(
+  function handle(
     slot: (typeof panelToggleEvents)[number][1],
     tagName: PanelTagName,
     event: Event,
-  ): boolean {
-    const owner = this.options.current();
+  ): void {
+    const owner = options.current();
     if (!owner) {
-      return false;
+      return;
     }
     const requestedSession = panelToggleSessionKey(event);
     if (requestedSession && !areUiSessionKeysEquivalent(requestedSession, owner.state.sessionKey)) {
-      return false;
+      return;
     }
     const detail = event instanceof CustomEvent ? event.detail : null;
     if (
@@ -140,16 +115,16 @@ export class ChatPaneSessionPanelToggleController {
       !canOpenLinkReader(owner, detail?.url)
     ) {
       clearSessionPanelToggle(slot, event);
-      return false;
+      return;
     }
     clearSessionPanelToggle(slot, event);
     if (slot === "link-reader") {
       event.preventDefault();
     }
     if (detail?.open === false) {
-      this.options.pending.delete(slot);
-      this.options.updateSidebarLayout(closeSlot(owner.state.sidebarLayout, slot));
-      return true;
+      options.pending.delete(slot);
+      options.updateSidebarLayout(closeSlot(owner.state.sidebarLayout, slot));
+      return;
     }
     let layout = openSlot(owner.state.sidebarLayout, slot);
     if (detail?.dock === "right" || detail?.dock === "bottom") {
@@ -191,18 +166,18 @@ export class ChatPaneSessionPanelToggleController {
           deferUntilHostChange: !embeddedTerminalMounted,
         });
       }
-      this.options.updateSidebarLayout(layout);
-      return true;
+      options.updateSidebarLayout(layout);
+      return;
     }
-    const existing = this.options.pending.get(slot);
+    const existing = options.pending.get(slot);
     if (
       slot === "link-reader" &&
       existing?.owner === owner.state &&
       existing.sessionKey === owner.state.sessionKey
     ) {
       existing.events.push(event);
-      this.options.updateSidebarLayout(layout);
-      return true;
+      options.updateSidebarLayout(layout);
+      return;
     }
     const queue: PendingSessionPanelToggle = {
       events: [event],
@@ -211,19 +186,19 @@ export class ChatPaneSessionPanelToggleController {
     };
     const sessionKey = owner.state.sessionKey;
     const isCurrent = () =>
-      this.options.pending.get(slot) === queue &&
-      this.options.current()?.state === owner.state &&
+      options.pending.get(slot) === queue &&
+      options.current()?.state === owner.state &&
       owner.state.sessionKey === sessionKey;
-    this.options.pending.set(slot, queue);
-    this.options.updateSidebarLayout(layout);
+    options.pending.set(slot, queue);
+    options.updateSidebarLayout(layout);
     void Promise.all([
       customElements.whenDefined("openclaw-chat-sidebar-region"),
       customElements.whenDefined(tagName),
     ])
       .then(async () => {
-        this.options.requestUpdate();
+        options.requestUpdate();
         // requestUpdate schedules a new commit; the captured owner holds the previous promise.
-        await this.options.current()?.updateComplete;
+        await options.current()?.updateComplete;
         if (!isCurrent()) {
           return;
         }
@@ -245,7 +220,7 @@ export class ChatPaneSessionPanelToggleController {
           if (!isCurrent()) {
             return;
           }
-          const current = this.options.current();
+          const current = options.current();
           const pendingDetail = pendingEvent instanceof CustomEvent ? pendingEvent.detail : null;
           if (slot === "link-reader" && !canOpenLinkReader(current, pendingDetail?.url)) {
             continue;
@@ -254,16 +229,16 @@ export class ChatPaneSessionPanelToggleController {
         }
       })
       .finally(() => {
-        if (this.options.pending.get(slot) === queue) {
-          this.options.pending.delete(slot);
-          this.options.requestUpdate();
+        if (options.pending.get(slot) === queue) {
+          options.pending.delete(slot);
+          options.requestUpdate();
         }
       });
-    return true;
   }
 
-  flush(): void {
-    const owner = this.options.current();
+  // Deliver buffered shell intents in order after the lazy panel commits.
+  function flush(): void {
+    const owner = options.current();
     if (!owner) {
       return;
     }
@@ -276,14 +251,32 @@ export class ChatPaneSessionPanelToggleController {
           resolveChatAgentId(owner.state),
         ))
       ) {
-        this.handlePluginPanel(event);
+        handlePluginPanel(event);
       }
     }
     for (const [, slot, tagName] of panelToggleEvents) {
       let event: Event | null;
       while ((event = takeSessionPanelToggle(slot, owner.state.sessionKey))) {
-        this.handle(slot, tagName, event);
+        handle(slot, tagName, event);
       }
     }
   }
+
+  const stop = panelToggleEvents.map(([eventName, slot, tagName]) =>
+    listen(window, eventName, (event) => handle(slot, tagName, event)),
+  );
+  stop.push(
+    listen(window, PLUGIN_PANEL_TOGGLE_EVENT, handlePluginPanel),
+    listen(window, TERMINAL_PANEL_DOCK_BOTTOM_EVENT, () => {
+      const owner = options.current();
+      if (owner) {
+        owner.state.updateSidebarLayout(closeSlot(owner.state.sidebarLayout, "terminal"));
+      }
+    }),
+  );
+  onCleanup(() => {
+    stop.forEach((release) => release());
+    options.pending.clear();
+  });
+  return flush;
 }

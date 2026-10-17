@@ -48,6 +48,7 @@ function fixture() {
   write("notes/unrelated.ts", 'export const unrelated = "first";\n');
   write(compilerInputs[0]!, 'export const compilerRevision = "first";\n');
   write("node-host-launcher.mjs", 'export const launcher = "fixture";\n');
+  write("cli-invocation.mjs", 'export const invocation = "fixture";\n');
 
   const reserve = () => {
     fs.mkdirSync(directory, { recursive: true });
@@ -69,6 +70,7 @@ function fixture() {
         path.join(root, "node-host-launcher.mjs"),
         "utf8",
       ),
+      "../cli-invocation.mjs": fs.readFileSync(path.join(root, "cli-invocation.mjs"), "utf8"),
       "build-info.json": `${JSON.stringify({
         version: "0.0.0-fixture",
         commit: "a".repeat(40),
@@ -91,6 +93,7 @@ function fixture() {
         "src/entry.ts",
         "src/value.js",
         "node-host-launcher.mjs",
+        "cli-invocation.mjs",
       ]
         .map((name) => path.join(root, name))
         .toSorted()

@@ -94,17 +94,7 @@ async function openDashboard(page: Page, source: BoardSnapshot, readOnly = false
 
 async function showHeaderMenu(page: Page, input: "pointer" | "keyboard" = "pointer") {
   const menu = page.locator(menuSelector);
-  const dropdown = menu.locator("wa-dropdown");
-  // The heading is visible before the menu finishes scaling. Observe this opening,
-  // not a previous one, before Playwright chooses an action's click coordinates.
-  await dropdown.evaluate((element) => {
-    element.removeAttribute("data-e2e-after-show");
-    element.addEventListener(
-      "wa-after-show",
-      () => element.setAttribute("data-e2e-after-show", ""),
-      { once: true },
-    );
-  });
+  const surface = menu.locator(".chat-header-session-menu__panel");
   const trigger = page.locator(".chat-header-session-menu__trigger");
   if (input === "keyboard") {
     await trigger.focus();
@@ -112,8 +102,8 @@ async function showHeaderMenu(page: Page, input: "pointer" | "keyboard" = "point
   } else {
     await trigger.click();
   }
-  await expect.poll(() => dropdown.getAttribute("data-e2e-after-show")).not.toBeNull();
-  await menu.locator(".board-widget__page-menu-heading").waitFor();
+  await surface.waitFor({ state: "visible" });
+  await expect.poll(() => surface.getAttribute("data-phase")).toBe("open");
   return menu;
 }
 
@@ -145,7 +135,7 @@ suite.define(() => {
         await menu.locator('[value="board-widget:resize:xl"]').waitFor();
         const itemFonts = await menu.evaluate((element) =>
           Array.from(
-            element.querySelectorAll("wa-dropdown-item"),
+            element.querySelectorAll('[role^="menuitem"]'),
             (item) => getComputedStyle(item).font,
           ),
         );
@@ -199,7 +189,9 @@ suite.define(() => {
         await updateBoard(gateway, multiple);
         await expect.poll(() => page.locator(".board-widget").count()).toBe(2);
         await widget.locator(".board-widget__menu-trigger").waitFor({ state: "attached" });
+        await showHeaderMenu(page);
         expect(await page.locator(menuSelector + ' [value^="board-widget:"]').count()).toBe(0);
+        await page.keyboard.press("Escape");
         expect(await frame.evaluate((element, previous) => element === previous, original)).toBe(
           true,
         );
@@ -232,7 +224,9 @@ suite.define(() => {
           ops: [{ kind: "widget_remove", name: "research-widget" }],
         });
         await page.locator('[data-test-id="board-empty"]').waitFor();
+        await showHeaderMenu(page);
         expect(await page.locator(menuSelector + ' [value^="board-widget:"]').count()).toBe(0);
+        await page.keyboard.press("Escape");
         await page.getByRole("tab", { name: "Overview", exact: true }).click();
         await frame.waitFor();
         expect(await frame.evaluate((element, previous) => element === previous, original)).toBe(

@@ -10,6 +10,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { prepareConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { projectConversationToolNames } from "../../agents/conversation-tool-policy-pipeline.js";
+import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
@@ -34,7 +35,7 @@ import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
-import { hasStagedMediaFacts, normalizeMediaFacts } from "../../media/media-facts.js";
+import { hasStagedMediaFacts } from "../../media/media-facts.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isModelSelectionLocked,
@@ -55,7 +56,6 @@ import {
 } from "../reply-payload.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel } from "../thinking.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { finishCommandTurn } from "./command-turn-completion.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
 import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.js";
@@ -70,13 +70,18 @@ import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slas
 import {
   applyLinkUnderstandingIfNeeded,
   applyMediaUnderstandingIfNeeded,
+  hasExplicitAudioUnderstandingConfig,
   hasLinkCandidate,
   resolveReplyAgentScope,
 } from "./get-reply-preprocessing.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { prepareInternalGetReplyOptions, withExtractedFileImages } from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
-import { hasInboundMedia, hasInboundMediaForUnderstanding } from "./inbound-media.js";
+import {
+  hasInboundAudio,
+  hasInboundMedia,
+  hasInboundMediaForUnderstanding,
+} from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
@@ -288,14 +293,12 @@ async function resolveReplyFromConfig(
     });
   const typing = resolverTiming.measureSync("reply.create_typing_controller", () => {
     const configuredTypingSeconds = agentCfg?.typingIntervalSeconds;
-    const typingIntervalSeconds =
-      typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
+    const typingIntervalSeconds = configuredTypingSeconds ?? 6;
     const controller = createTypingController({
       onReplyStart: opts?.onReplyStart,
       onCleanup: opts?.onTypingCleanup,
       typingIntervalSeconds,
       keepalive: opts?.typingKeepalive ?? true,
-      silentToken: SILENT_REPLY_TOKEN,
       log: defaultRuntime.log,
     });
     opts?.onTypingController?.(controller);
@@ -461,18 +464,27 @@ async function resolveReplyFromConfig(
       applyMediaUnderstandingIfNeeded({
         ctx: finalized,
         ...workspaceContext,
-        activeModel: { provider, model },
+        activeModel: {
+          provider,
+          model,
+          api: findModelInCatalog(preparedModelCatalog?.entries ?? [], provider, model)?.api,
+        },
         // Cache and classify now; the final provider and owner policy are
         // resolved later, immediately before the embedded turn starts.
         selfServeLocalPaths: false,
         signal: optsWithSkillFilter?.abortSignal,
-        modelSelectionLocked: utilityModelSelectionLocked,
+        ...(utilityModelSelectionLocked
+          ? {
+              processingMode:
+                hasInboundAudio(finalized) && hasExplicitAudioUnderstandingConfig(cfg)
+                  ? ("audio-and-files" as const)
+                  : ("files-only" as const),
+            }
+          : {}),
       }),
     );
     assertReplyPreprocessingActive(optsWithSkillFilter?.abortSignal);
-    if (mediaResult?.extractedFileImages.length) {
-      extractedFileImages = mediaResult.extractedFileImages;
-    }
+    extractedFileImages = mediaResult?.extractedFileImages;
     enableLocalPathSelfServe = mediaResult?.enableLocalPathSelfServe;
   }
   if (linkUnderstandingRequested && !utilityModelSelectionLocked) {
@@ -631,9 +643,7 @@ async function resolveReplyFromConfig(
         channel:
           groupResolution?.channel ??
           sessionDeliveryChannel(sessionEntry) ??
-          (typeof finalized.OriginatingChannel === "string"
-            ? finalized.OriginatingChannel
-            : undefined) ??
+          finalized.OriginatingChannel ??
           finalized.Provider,
         groupId: groupResolution?.id ?? sessionEntry.groupId,
         groupChatType: sessionEntry.chatType ?? sessionCtx.ChatType ?? finalized.ChatType,
@@ -768,25 +778,15 @@ async function resolveReplyFromConfig(
   }
   const {
     command,
-    allowTextCommands,
-    skillCommands,
-    elevatedEnabled,
-    elevatedAllowed,
-    elevatedFailures,
     defaultActivation,
-    resolvedVerboseLevel,
-    resolvedElevatedLevel,
-    blockReplyChunking,
-    resolvedBlockStreamingBreak,
     provider: resolvedProvider,
     model: resolvedModel,
     requestedRouteResolution,
     modelState,
     resolveModelLevels,
     inlineStatusRequested,
-    directiveAck,
   } = directiveResult.result;
-  let { directives, cleanedBody } = directiveResult.result;
+  let { directives } = directiveResult.result;
   provider = resolvedProvider;
   model = resolvedModel;
 
@@ -838,6 +838,7 @@ async function resolveReplyFromConfig(
 
   const inlineActionResult = await traceGetReplyPhase("reply.handle_inline_actions", () =>
     handleInlineActions({
+      ...directiveResult.result,
       ctx,
       sessionCtx,
       ...replyContext,
@@ -850,29 +851,13 @@ async function resolveReplyFromConfig(
       isGroup,
       opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
       typing,
-      allowTextCommands,
-      inlineStatusRequested,
-      inlineCommand: directiveResult.result.inlineCommand,
-      command,
-      skillCommands,
-      directives,
-      cleanedBody,
-      elevatedEnabled,
-      elevatedAllowed,
-      elevatedFailures,
       defaultActivation: () => defaultActivation,
       thinkingCatalog: statusThinkingCatalog,
-      resolveModelLevels,
-      resolvedVerboseLevel,
-      resolvedElevatedLevel,
-      blockReplyChunking,
-      resolvedBlockStreamingBreak,
       resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
       provider,
       model,
-      contextTokens: directiveResult.result.contextTokens,
-      contextTokenProjection: directiveResult.result.contextTokenProjection,
-      directiveAck,
+      // Inline commands do not inherit the full turn's exec overrides.
+      execOverrides: undefined,
       abortedLastRun,
       skillFilter: mergedSkillFilter,
     }),
@@ -883,7 +868,6 @@ async function resolveReplyFromConfig(
     return finishCommandTurn({ opts, ctx: finalized, cfg, reply: inlineActionResult.reply });
   }
   directives = inlineActionResult.directives;
-  cleanedBody = inlineActionResult.cleanedBody;
   const explicitSkillSelections = inlineActionResult.explicitSkillSelections;
   const queueModeOverride = inlineActionResult.queueModeOverride;
   const preparedReplyOpts = withExtractedFileImages(resolvedOpts, extractedFileImages);
@@ -949,7 +933,7 @@ async function resolveReplyFromConfig(
 
   let stagedAttachmentPaths: ReadonlyMap<number, string> = hasStagedMediaFacts(finalized.media)
     ? new Map(
-        normalizeMediaFacts(finalized.media).flatMap((fact, index) =>
+        (finalized.media ?? []).flatMap((fact, index) =>
           fact.path ? [[index, fact.path] as const] : [],
         ),
       )

@@ -8,12 +8,13 @@ import {
   type HeartbeatOutcomeRow,
 } from "./heartbeat-outcome-store.kernel.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { assertTransactionUsable, runSqliteSingleStatementSync } from "./sqlite-transaction.js";
+import { runSqliteSingleStatementSync } from "./sqlite-transaction.js";
+import { bindSqliteWorkerDatabase } from "./sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "./sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "./sqlite-worker-database-context.js";
 
 export type HeartbeatOutcomeWorkerOperations = {
-  persist: { input: HeartbeatOutcomeInput; output: undefined };
+  persist: { input: HeartbeatOutcomeInput; output: HeartbeatOutcomeRow | undefined };
   claim: { input: { sessionKey: string; runId: string }; output: HeartbeatOutcomeRow | undefined };
 };
 
@@ -26,7 +27,7 @@ export function bindSqliteWorkerBackend(
   // The in-memory lifecycle owner requires a commit receipt for every mutation command.
   const requiresMutationReceipt =
     path.basename(context.databasePath) === INCOGNITO_AGENT_SQLITE_BASENAME;
-  return {
+  return bindSqliteWorkerDatabase<HeartbeatOutcomeWorkerOperations>(db, {
     execute(command) {
       context.admit("transaction");
       if (command.type === "claim" && !requiresMutationReceipt) {
@@ -35,19 +36,10 @@ export function bindSqliteWorkerBackend(
           getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "heartbeat_outcomes">>(db)
             .selectFrom("heartbeat_outcomes")
             .selectAll()
-            .where("session_key", "=", command.input.sessionKey)
-            .where((eb) =>
-              eb.or([
-                eb("context_run_id", "is", null),
-                eb("context_run_id", "=", command.input.runId),
-              ]),
-            ),
+            .where("session_key", "=", command.input.sessionKey),
         ).rows[0];
         // The FIFO is still held; absent outcomes and durable retries need no new write.
-        if (
-          !row ||
-          (row.context_run_id === command.input.runId && row.context_claimed_at !== null)
-        ) {
+        if (!row || (row.context_run_id !== null && row.context_claimed_at !== null)) {
           return row;
         }
       }
@@ -58,12 +50,5 @@ export function bindSqliteWorkerBackend(
           : claimHeartbeatOutcomeRowInDatabase(db, command.input),
       );
     },
-    assertSettled() {
-      assertTransactionUsable(db);
-      if (db.isTransaction) {
-        throw new Error("Heartbeat outcome transaction did not settle");
-      }
-    },
-    close() {},
-  };
+  });
 }

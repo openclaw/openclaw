@@ -393,18 +393,6 @@ export function registerLogsCli(program: Command) {
       }
       return undefined;
     };
-    const clearConsumedGatewayRecovery = (
-      promise: Promise<GatewayRecoveryResult>,
-      result: GatewayRecoveryResult,
-    ) => {
-      const isMatchingProbe =
-        gatewayRecovery.kind === "probing" && gatewayRecovery.promise === promise;
-      const isMatchingResult =
-        gatewayRecovery.kind === "settled" && gatewayRecovery.result === result;
-      if (isMatchingProbe || isMatchingResult) {
-        gatewayRecovery = { kind: "idle" };
-      }
-    };
     const { logLine, errorLine, emitJsonLine } = createLogWriters(() => {
       void abortGatewayRecoveryProbe();
     });
@@ -454,9 +442,7 @@ export function registerLogsCli(program: Command) {
       );
       gatewayRecovery = { kind: "probing", promise, abortController };
       void promise.then((result) => {
-        if (gatewayRecovery.kind === "probing" && gatewayRecovery.promise === promise) {
-          gatewayRecovery = { kind: "settled", result };
-        }
+        gatewayRecovery = { kind: "settled", result };
       });
     };
 
@@ -487,7 +473,7 @@ export function registerLogsCli(program: Command) {
       }
       if (activeProbe) {
         const result = await activeProbe;
-        clearConsumedGatewayRecovery(activeProbe, result);
+        gatewayRecovery = { kind: "idle" };
         if (result.ok) {
           return { payload: result.payload, gatewayPollStartedAt: result.startedAt };
         }

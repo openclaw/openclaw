@@ -17,7 +17,7 @@ import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { openOpenClawAgentSqliteWorkerStoreV2 } from "openclaw/plugin-sdk/sqlite-runtime";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
-import { getMemoryManagerLifecycle } from "./lifecycle.js";
+import { getMemoryManagerLifecycle, markMemoryIndexingLive } from "./lifecycle.js";
 import { runMemoryStatus } from "./manager-cpu-worker-runtime.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
@@ -54,9 +54,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   private readonly managerRegistry: MemoryManagerRegistry<MemoryIndexManager>;
   protected readonly createProvider: MemoryManagerProviderFactory = (adapter, create) =>
     this.managerRegistry.createProvider(this, adapter, create);
-  protected canPublishEmbeddingProbe(): boolean {
-    return this.managerRegistry.canPublishProbe(this);
-  }
   protected getEmbeddingProbeOwners() {
     return this.managerRegistry.getProbeOwners(this);
   }
@@ -255,6 +252,18 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     };
     this.providerRequirement = params.providerRequirement;
     this.providerLifecycle = { mode: "pending", requestedProvider: this.settings.provider };
+    const source = params.maintenanceSource;
+    const cachedProbe = source?.embeddingProbeCache.get(source.cacheKey);
+    if (
+      source?.embeddingBootstrapFailure &&
+      cachedProbe?.result.ok === false &&
+      cachedProbe.expireAtMs > Date.now()
+    ) {
+      // Detached maintenance inherits the remaining cooldown, never a fresh deadline.
+      this.embeddingBootstrapFailure = source.embeddingBootstrapFailure;
+      this.providerUnavailableReason = source.embeddingBootstrapFailure.reason;
+      this.embeddingProbeCache.set(this.cacheKey, cachedProbe);
+    }
     for (const memorySource of effectiveSettings.sources) {
       this.sources.add(memorySource);
     }
@@ -293,6 +302,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     }
     this.batch = this.resolveBatchConfig();
     if (!transient) {
+      markMemoryIndexingLive();
       this.runInBackgroundContext(() => {
         this.ensureWatcher();
         this.ensureSessionListener();
@@ -341,6 +351,14 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
             acquireLocalService: this.acquireLocalService,
             maintenanceSource: this,
           }),
+      }).catch((error: unknown) => {
+        if (
+          this.providerRequirement.mode === "optional" &&
+          isMemoryEmbeddingOperationError(error)
+        ) {
+          this.markEmbeddingBootstrapFailure(error, { retainProvider: this.provider !== null });
+        }
+        throw error;
       }),
     );
   }
@@ -400,18 +418,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     const run = async () => {
       let outcome: MemorySyncOutcome;
       await this.publishedDatabase.withPublicationGeneration(async () => {
-        try {
-          await this.publishedDatabase.refreshFacts();
-        } catch (error) {
-          if (params?.force && !hasTargetedSessionSyncParams(params)) {
-            this.markFailedFullReindexRetry({
-              memory: this.sources.has("memory"),
-              sessions: this.sources.has("sessions"),
-            });
-            this.recordFullReindexFailure(this.provider !== null);
-          }
-          throw error;
-        }
         const hadBootstrapFailure = this.embeddingBootstrapFailure !== undefined;
         let forceFtsOnly =
           this.embeddingBootstrapFailure !== undefined &&
@@ -439,6 +445,19 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
           const dbPath = resolveUserPath(this.settings.store.databasePath);
           const lock = await waitForMemoryReindexLock(dbPath, { waitForActive: true });
           try {
+            // A preceding generation may have replaced the index while this sync waited.
+            try {
+              await this.publishedDatabase.refreshFacts();
+            } catch (error) {
+              if (params?.force && !hasTargetedSessionSyncParams(params)) {
+                this.markFailedFullReindexRetry({
+                  memory: this.sources.has("memory"),
+                  sessions: this.sources.has("sessions"),
+                });
+                this.recordFullReindexFailure(this.provider !== null);
+              }
+              throw error;
+            }
             await this.publishedDatabase.closePublicationWorker();
             this.beginSyncProviderGeneration({ forceFtsOnly: keywordOnly });
             try {
@@ -500,7 +519,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       });
       return outcome;
     };
-    this.syncing = this.syncOutcomes.track(run, true).finally(() => {
+    this.syncing = this.syncOutcomes.track(run).finally(() => {
       this.syncing = null;
     });
     return this.syncing;
@@ -510,6 +529,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   status(): MemoryProviderStatus {
     if (this.closing || this.closed) {
       throw new Error("Memory index manager is closed");
+    }
+    if (this.database.admission?.engine === "postgres") {
+      return this.publishedStatus();
     }
     return this.withPublishedDatabase(() =>
       this.publishedStatus(

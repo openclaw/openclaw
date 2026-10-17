@@ -78,10 +78,6 @@ const projection = {
     return consume(projection);
   }) satisfies SessionRowProjection["withPreparedExactRows"],
   isCurrent: () => true,
-  observeGeneration: (() => ({
-    isCurrent: (row) => projection.isCurrent(row),
-    dispose() {},
-  })) satisfies SessionRowProjection["observeGeneration"],
   selectEntries(query: { key?: string; agentId?: string; storePath?: string }) {
     if (!query.key) {
       return (

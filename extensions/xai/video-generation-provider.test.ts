@@ -76,6 +76,19 @@ function mockXaiVideoTask(params: {
 }
 
 describe("xai video generation provider", () => {
+  it("rejects a duration that rounds to zero before submission", async () => {
+    await expect(
+      buildXaiVideoGenerationProvider().generateVideo({
+        provider: "xai",
+        model: "grok-imagine-video",
+        prompt: "a lobster",
+        cfg: {},
+        durationSeconds: 0.4,
+      }),
+    ).rejects.toThrow("durationSeconds must be a positive duration");
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
+  });
+
   it("advertises canonical 1.5 and resolves capabilities for all API aliases", async () => {
     const provider = buildXaiVideoGenerationProvider();
 

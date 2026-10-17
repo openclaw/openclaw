@@ -38,7 +38,7 @@ const SESSION_TABLE_HEADERS = ["", "Key", "Kind", "Status", "Updated", "Tokens",
 afterEach(disposeSessionViews);
 
 describe("sessions view", () => {
-  it("identifies agents on plain chat sessions in a mixed-agent list", async () => {
+  it("identifies agents on plain chat sessions in a mixed-agent list", () => {
     const container = document.createElement("div");
     renderView(
       buildMultiResult([
@@ -51,11 +51,6 @@ describe("sessions view", () => {
     );
     document.body.append(container);
     try {
-      await Promise.all(
-        [...container.querySelectorAll("openclaw-agent-row-chip")].map(
-          (chip) => chip.updateComplete,
-        ),
-      );
       expect(
         [...container.querySelectorAll(".session-data-row .agent-row-chip")].map((chip) =>
           chip.getAttribute("data-agent-id"),
@@ -358,7 +353,7 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     const keys = Array.from(container.querySelectorAll("tbody .session-data-row")).map((row) =>
-      row.querySelector(".session-key-cell")?.textContent?.trim(),
+      row.querySelector(".session-key-cell__primary")?.textContent?.trim(),
     );
     expect(keys).toEqual(["pinned", "newer"]);
   });
@@ -535,7 +530,9 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     const keyCell = container.querySelector(".session-key-cell");
-    expect(keyCell?.textContent?.trim()).toBe("📊 Data Expert (dingtalk)");
+    expect(keyCell?.querySelector(".session-key-cell__primary")?.textContent?.trim()).toBe(
+      "📊 Data Expert (dingtalk)",
+    );
     expect((keyCell?.parentElement as (HTMLElement & { content: string }) | null)?.content).toBe(
       "📊 Data Expert (dingtalk)",
     );

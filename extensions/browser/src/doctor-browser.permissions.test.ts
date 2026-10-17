@@ -9,6 +9,7 @@ import {
 } from "../browser-doctor.js";
 import {
   chromeProductRoots,
+  discoverChromeExtensionIds,
   installStableChromeExtension,
 } from "./browser/extension-install-fixture.test-support.js";
 import {
@@ -69,6 +70,13 @@ async function protectedProfiles(platform: NodeJS.Platform, installed: boolean) 
     return await read(...args);
   });
   const roots = new Set(chromeProductRoots(value.deps).map((root) => root.userDataDir));
+  const lstat = fsp.lstat;
+  vi.spyOn(fsp, "lstat").mockImplementation(async (...args) => {
+    if (roots.has(String(args[0]))) {
+      accesses.push(String(args[0]));
+    }
+    return await lstat(...args);
+  });
   const readdir = fsp.readdir;
   vi.spyOn(fsp, "readdir").mockImplementation(async (...args) => {
     if (roots.has(String(args[0]))) {
@@ -94,6 +102,8 @@ describe("general Doctor browser profile permission boundary", () => {
         vi.stubEnv(key, entry);
       }
       vi.stubEnv("OPENCLAW_STATE_DIR", value.stateDir);
+      vi.stubEnv("CHROME_CONFIG_HOME", path.join(value.homeDir, ".config"));
+      vi.stubEnv("XDG_CONFIG_HOME", path.join(value.homeDir, ".config"));
       for (const allowSystemProfileImport of [false, undefined, true]) {
         const noteFn = vi.fn();
         await noteChromeMcpBrowserReadiness(
@@ -115,6 +125,9 @@ describe("general Doctor browser profile permission boundary", () => {
           expect(notes).not.toContain("not fully registered");
         }
       }
+      // Explicit discovery must reach the same observer Doctor must leave untouched.
+      await discoverChromeExtensionIds({ approvedDirs: [], deps: value.deps });
+      expect(value.accesses).toContain(chromeProductRoots(value.deps)[0]!.userDataDir);
     },
   );
 

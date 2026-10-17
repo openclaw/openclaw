@@ -7,7 +7,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { readUserProfileVersion } from "./user-profile-events.js";
-import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
+import { readUserProfileSnapshotSync } from "./user-profile-list-item.test-support.js";
 import {
   linkEmail,
   setDisplayName,

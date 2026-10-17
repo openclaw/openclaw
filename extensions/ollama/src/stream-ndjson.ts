@@ -25,15 +25,20 @@ export interface OllamaChatResponse extends Record<string, unknown> {
   eval_duration?: number;
 }
 
-export async function* parseNdjsonStream(
+export async function* readOllamaNdjsonLines(
   reader: ReadableStreamDefaultReader<Uint8Array>,
-): AsyncGenerator<OllamaChatResponse> {
-  const decoder = new TextDecoder("utf-8", { fatal: true });
+  options: {
+    decoder?: TextDecoder;
+    read?: () => Promise<ReadableStreamReadResult<Uint8Array>>;
+  } = {},
+): AsyncGenerator<string> {
+  const decoder = options.decoder ?? new TextDecoder("utf-8", { fatal: true });
+  const read = options.read ?? (() => reader.read());
   let buffer = "";
   let pendingRecordBytes = 0;
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await read();
       if (done) {
         break;
       }
@@ -47,19 +52,30 @@ export async function* parseNdjsonStream(
         if (!trimmed) {
           continue;
         }
-        yield parseOllamaNdjsonRecord(trimmed);
+        yield trimmed;
       }
     }
 
-    buffer += decoder.decode();
+    // Chat rejects incomplete UTF-8; pull keeps its tolerant trailing-byte behavior.
+    if (decoder.fatal) {
+      buffer += decoder.decode();
+    }
     if (buffer.trim()) {
-      yield parseOllamaNdjsonRecord(buffer.trim());
+      yield buffer.trim();
     }
   } finally {
     // Start cancellation best-effort; do not await it — a pending cancel
     // must not stall releaseLock() and keep the reader locked.
     void reader.cancel().catch(() => undefined);
     reader.releaseLock();
+  }
+}
+
+export async function* parseNdjsonStream(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): AsyncGenerator<OllamaChatResponse> {
+  for await (const line of readOllamaNdjsonLines(reader)) {
+    yield parseOllamaNdjsonRecord(line);
   }
 }
 

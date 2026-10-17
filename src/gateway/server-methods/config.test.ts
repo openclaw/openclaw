@@ -5,17 +5,19 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
+import { invalidateGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { invalidateConfigGetResponseCache } from "../config-get-response.js";
 import {
   invokeConfigOpenFile,
   invokeConfigPatch,
   startConfigWrite,
 } from "./config-invocations.test-support.js";
-import { clearConfigSchemaResponseCacheForTests, configHandlers } from "./config.js";
+import { configHandlers } from "./config.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
 
 const configWriteMocks = vi.hoisted(() => ({
@@ -164,7 +166,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
-  clearConfigSchemaResponseCacheForTests();
+  invalidateGatewayRuntimeConfigSchema();
+  invalidateConfigGetResponseCache();
   resetPluginRuntimeStateForTest();
   vi.clearAllMocks();
 });

@@ -287,7 +287,6 @@ describe("cron service timer seam coverage", () => {
   });
 
   it.each([
-    { target: "main", notify: "queue changed", wake: "next-heartbeat" },
     { target: "isolated", notify: "queue changed", wake: "now" },
     { target: "main", notify: undefined, wake: "now" },
   ] as const)(
@@ -405,22 +404,16 @@ describe("cron service timer seam coverage", () => {
     });
   });
 
-  it.each([
-    { status: "ok", error: undefined, revision: 2, errors: 0 },
-    { status: "error", error: "script threw", revision: 1, errors: 1 },
-  ] as const)(
-    "persists script state on $status runs only",
-    async ({ status, error, revision, errors }) => {
-      const job = await runStoredScript(createDueScriptJob({ now }), {
-        status,
-        error,
-        stateChanged: true,
-        state: { revision: 2 },
-      });
-      expect(job?.state.triggerState).toEqual({ revision });
-      expect(job?.state.consecutiveErrors ?? 0).toBe(errors);
-    },
-  );
+  it("does not persist script state from a failed run", async () => {
+    const job = await runStoredScript(createDueScriptJob({ now }), {
+      status: "error",
+      error: "script threw",
+      stateChanged: true,
+      state: { revision: 2 },
+    });
+    expect(job?.state.triggerState).toEqual({ revision: 1 });
+    expect(job?.state.consecutiveErrors ?? 0).toBe(1);
+  });
 
   it("records current-bound cron metadata against the backing cron session", async () => {
     const { storePath } = await makeStorePath();

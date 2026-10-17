@@ -481,7 +481,7 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
         snapshot.nextSortOrder++;
       jobPlans.push({
         declarationKey,
-        ...(existing ? { previous: structuredClone(existing) } : {}),
+        ...(existing ? { previous: existing } : {}),
         job,
         sortOrder,
       });

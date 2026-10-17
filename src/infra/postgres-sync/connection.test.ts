@@ -2,8 +2,16 @@ import { channel } from "node:diagnostics_channel";
 import { DatabaseSync } from "node:sqlite";
 import { MessageChannel, receiveMessageOnPort, threadId } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withEngineStoreAdmission } from "../database-engine/admission-scope.js";
 import { readSqliteDatabaseScopedWriteToken } from "../sqlite-database-admission.js";
+import { readSqliteNativeMutationRevision } from "../sqlite-schema-facts.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../sqlite-worker-contract.js";
+import {
+  createSqliteWorkerOperationAdmission,
+  deferSqliteWorkerCommitReceipt,
+  observeSqliteWorkerCommittedFacts,
+  withSqliteWorkerOperationAdmission,
+} from "../sqlite-worker-operation-admission.js";
 import { PostgresSyncConnection } from "./connection.js";
 import type { BridgeReply, BridgeRequest, PostgresErrorData } from "./protocol.js";
 
@@ -32,10 +40,11 @@ function transportFixture(
   Object.assign(db, {
     port: port1,
     control,
-    worker: { terminate },
+    worker: { terminate, off: vi.fn() },
     requestId: 1,
     anchor,
     isOpen: true,
+    mutationRevision: 0,
   });
   const sent = vi.spyOn(port1, "postMessage");
   const waits: Array<{ observed: number | bigint; timeout: number | undefined }> = [];
@@ -112,6 +121,28 @@ function transportFixture(
 }
 
 describe("PostgreSQL bridge request correlation", () => {
+  it("reports an invalid DSN promptly with connection repair guidance", () => {
+    const anchor = new DatabaseSync(":memory:");
+    const started = performance.now();
+    try {
+      expect(() =>
+        withEngineStoreAdmission(
+          () => new PostgresSyncConnection("postgresql://[invalid", "unused", anchor, "unused"),
+        ),
+      ).toThrowError(
+        expect.objectContaining({
+          name: "PostgresConnectionError",
+          message: expect.stringContaining(
+            "Check database.postgres.connection, network, and credentials",
+          ),
+        }),
+      );
+      expect(performance.now() - started).toBeLessThan(10_000);
+    } finally {
+      anchor.close();
+    }
+  });
+
   it.each(["COMMIT", "ROLLBACK"])(
     "changes the anchor token for COMMIT, retaining it for ROLLBACK (%s)",
     (command) => {
@@ -132,6 +163,72 @@ describe("PostgreSQL bridge request correlation", () => {
     const before = readSqliteDatabaseScopedWriteToken(fixture.db.anchor, "entry");
     expect(() => fixture.db.exec("COMMIT")).toThrow("rolled back instead of committing");
     expect(readSqliteDatabaseScopedWriteToken(fixture.db.anchor, "entry")).toBe(before);
+  });
+
+  it.each(["read", "write", "rollback", "inner-rollback"] as const)(
+    "publishes worker receipts only for committed mutations (%s)",
+    (mode) => {
+      const fixture = transportFixture("normal");
+      const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
+      const receipts: unknown[] = [];
+      observeSqliteWorkerCommittedFacts(admission, ({ facts }) => receipts.push(facts));
+      const run = () =>
+        withSqliteWorkerOperationAdmission({ port: admission.port, sourceReservations: true }, () =>
+          fixture.db.runTransaction(
+            () => {
+              fixture.command(mode === "read" ? "SELECT" : "INSERT");
+              fixture.db.exec(mode === "read" ? "SELECT 1" : "INSERT INTO proof VALUES (7)");
+              if (mode === "inner-rollback") {
+                fixture.command("SAVEPOINT");
+                expect(() =>
+                  fixture.db.runTransaction(() => {
+                    deferSqliteWorkerCommitReceipt(fixture.db, { value: 7 });
+                    fixture.command("ROLLBACK");
+                    throw new Error("cancel inner receipt");
+                  }),
+                ).toThrow("cancel inner receipt");
+              }
+              if (mode === "rollback") {
+                fixture.command("ROLLBACK");
+                throw new Error("cancel write");
+              }
+            },
+            {
+              withCommit(commit) {
+                fixture.command("COMMIT");
+                commit();
+              },
+            },
+          ),
+        );
+      try {
+        if (mode === "rollback") {
+          expect(run).toThrow("cancel write");
+        } else {
+          run();
+        }
+        admission.service();
+        expect(receipts).toEqual(mode === "write" || mode === "inner-rollback" ? [{}] : []);
+      } finally {
+        admission.finish();
+      }
+    },
+  );
+
+  it("invalidates local mutation witnesses inside a transaction and across rollback", () => {
+    const fixture = transportFixture("normal");
+    fixture.db.isTransaction = true;
+    const before = readSqliteNativeMutationRevision(fixture.db);
+    fixture.command("UPDATE");
+    fixture.db.exec("UPDATE records SET value = 1");
+    const written = readSqliteNativeMutationRevision(fixture.db);
+    expect(written).not.toBe(before);
+    fixture.command("SELECT");
+    fixture.db.exec("SELECT 1");
+    expect(readSqliteNativeMutationRevision(fixture.db)).toBe(written);
+    fixture.command("ROLLBACK");
+    fixture.db.exec("ROLLBACK");
+    expect(readSqliteNativeMutationRevision(fixture.db)).toBe(written);
   });
 
   it.skipIf(threadId !== 0)(

@@ -1,11 +1,11 @@
-import type { JSX } from "@solidjs/web";
-import { renderChannelPicker } from "../../components/channel-picker.ts";
-import { renderPicker, type PickerOption } from "../../components/select-picker.ts";
+import { dynamic, type JSX } from "@solidjs/web";
+import type { PickerOption } from "../../components/select-picker-types.ts";
+import { ChannelPicker } from "../../components/solid/channel-picker.tsx";
+import { Picker } from "../../components/solid/select-picker.tsx";
 import { SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
 import type { CronFieldKey, CronFormState, CronFieldErrors } from "../../lib/cron/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import type { CronProps } from "./view-types.ts";
 type BlockingField = {
   label: string;
@@ -14,6 +14,9 @@ type BlockingField = {
 };
 const CRON_FIELD_LABEL_KEYS: Record<CronFieldKey, string> = {
   name: "cron.form.fieldName",
+  eventServer: "cron.events.server",
+  eventName: "cron.events.name",
+  eventArguments: "cron.events.arguments",
   scheduleAt: "cron.form.runAt",
   everyAmount: "cron.form.every",
   cronExpr: "cron.form.expression",
@@ -146,7 +149,7 @@ export function CronInput(props: FormProps & CronInputOptions) {
   const control = (
     <input
       id={inputIdForField(props.field)}
-      class={props.mono ? "settings-input mono" : "settings-input"}
+      class={["settings-input", { mono: props.mono }]}
       type={props.type}
       aria-required={props.required ? "true" : undefined}
       value={props.form[props.field]}
@@ -176,6 +179,7 @@ export function CronInput(props: FormProps & CronInputOptions) {
   );
 }
 type CronSelectOptions = {
+  required?: boolean;
   field: CronStringFormField;
   label: string;
   options: readonly PickerOption[];
@@ -189,20 +193,17 @@ type CronSelectOptions = {
 export function CronSelect(props: FormProps & CronSelectOptions) {
   const selected = () => props.value ?? props.form[props.field];
   const error = () => (props.errorKey ? props.fieldErrors[props.errorKey] : undefined);
+  const Control = dynamic(() => (props.channel ? ChannelPicker : Picker));
   const control = (
-    <LitContent
-      render={() =>
-        (props.channel ? renderChannelPicker : renderPicker)({
-          id: props.inline ? undefined : inputIdForField(props.field),
-          label: props.label,
-          value: props.channel ? selected() || "last" : selected(),
-          options: props.options,
-          disabled: props.disabled,
-          invalid: props.errorKey ? Boolean(error()) : undefined,
-          describedBy: error() && props.errorKey ? errorIdForField(props.errorKey) : undefined,
-          onChange: (value) => props.onFormChange({ [props.field]: value }),
-        })
-      }
+    <Control
+      id={props.inline ? undefined : inputIdForField(props.field)}
+      label={props.label}
+      value={props.channel ? selected() || "last" : selected()}
+      options={props.options}
+      disabled={props.disabled}
+      invalid={props.errorKey ? Boolean(error()) : undefined}
+      describedBy={error() && props.errorKey ? errorIdForField(props.errorKey) : undefined}
+      onChange={(value) => props.onFormChange({ [props.field]: value })}
     />
   );
   return (
@@ -211,6 +212,7 @@ export function CronSelect(props: FormProps & CronSelectOptions) {
       label={props.label}
       controlId={inputIdForField(props.field)}
       help={props.help}
+      required={props.required}
       error={error()}
       errorId={props.errorKey ? errorIdForField(props.errorKey) : undefined}
       control={control}

@@ -22,6 +22,7 @@ import {
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { chatOutboxDeliveryKey, type ChatComposerScope } from "../../lib/chat/outbox-store.ts";
+import { removePairingQrContent, retainPairingQrEntries } from "../../lib/chat/pairing-qr.ts";
 import {
   resolveUiSelectedSessionAgentId,
   resolveUiConversationIdentity,
@@ -272,11 +273,6 @@ export function getChatRunOwner(owner: object): string | undefined {
   return chatSessionProjections.get(owner)?.runId;
 }
 
-export function getChatRunOwnerSessionKey(owner: object): string | undefined {
-  const current = chatSessionProjections.get(owner);
-  return current?.runId ? current.projection?.scope.sessionKey : undefined;
-}
-
 export function setChatRunOwner(
   owner: object & ChatReasoningHost,
   runId: string | undefined,
@@ -294,9 +290,29 @@ export function setChatRunOwner(
 /** The only mutation boundary for the reducer and its rendered message array. */
 export function publishChatSessionProjection(
   owner: ChatSessionProjectionOwner,
-  projection: SessionProjectionState,
+  incomingProjection: SessionProjectionState,
+  retainPairingQr = true,
 ): void {
+  let projection = incomingProjection;
   const current = chatSessionProjections.get(owner);
+  const previous = current?.projection;
+  if (
+    retainPairingQr &&
+    previous &&
+    previous.messages !== projection.messages &&
+    !chatProjectionScopeChanged(previous.scope, projection.scope, [
+      "sessionKey",
+      "sessionId",
+      "agentId",
+      "lifecycleRevision",
+    ])
+  ) {
+    // A leaf advance can still contain the same reply; never retain media across sessions.
+    const entries = retainPairingQrEntries(previous.entries, projection.entries);
+    if (entries !== projection.entries) {
+      projection = { ...projection, entries, messages: entries.map((entry) => entry.message) };
+    }
+  }
   const runId = current?.runId;
   const previousScope = current?.projection?.scope;
   const scopeChanged = previousScope && chatProjectionScopeChanged(previousScope, projection.scope);
@@ -339,6 +355,38 @@ export function publishChatSessionProjection(
   ) {
     owner.chatMessages = [...projection.messages];
   }
+}
+
+/** A retired connection cannot lend pairing credentials to its replacement's history. */
+export function retireChatPairingQr(owner: ChatSessionProjectionOwner): void {
+  const projection = getChatSessionProjection(owner);
+  const retireEntry = (entry: SessionProjectionEntry): SessionProjectionEntry => {
+    const message = removePairingQrContent(entry.message);
+    return message === entry.message ? entry : { ...entry, message };
+  };
+  const entries = projection.entries.map(retireEntry);
+  const runs = Object.fromEntries(
+    Object.entries(projection.runs).map(([runId, run]) => {
+      const message = removePairingQrContent(run.message);
+      const terminal = run.inferredSnapshotTerminal;
+      const entry = terminal ? retireEntry(terminal.entry) : undefined;
+      return [
+        runId,
+        message === run.message && entry === terminal?.entry
+          ? run
+          : {
+              ...run,
+              message,
+              ...(terminal && entry ? { inferredSnapshotTerminal: { ...terminal, entry } } : {}),
+            },
+      ];
+    }),
+  );
+  publishChatSessionProjection(
+    owner,
+    { ...projection, entries, messages: entries.map((entry) => entry.message), runs },
+    false,
+  );
 }
 
 /** Publish one exact live transcript order without dropping reducer-owned entry identity. */

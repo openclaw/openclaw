@@ -119,11 +119,13 @@ export function prepareSessionStoreTargetInventoryRead(
         assertCurrent: () => void,
       ) => Promise<T>,
       assertCallerCurrent?: () => void,
+      signal?: AbortSignal,
     ) {
       return withSessionHistoryWorkerReadCandidates(
         candidates,
         async (discovery) => {
           const assertCurrent = () => {
+            signal?.throwIfAborted();
             assertCallerCurrent?.();
             discovery.assertCurrent();
             assertRegistryCurrent();
@@ -152,7 +154,7 @@ export function prepareSessionStoreTargetInventoryRead(
               registeredDatabases: registeredDatabases ?? { status: "deferred" },
             }));
           if (inventory.kind === "session-target-registry-required") {
-            const { result } = await registry.read();
+            const { result } = await registry.read(signal);
             inventory = await discovery.readTargetInventory({
               ...prepared,
               registeredDatabases:
@@ -169,6 +171,7 @@ export function prepareSessionStoreTargetInventoryRead(
           return operation(inventory, assertCurrent);
         },
         targetDiscoveryLane,
+        signal,
       );
     },
   };

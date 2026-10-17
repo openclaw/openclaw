@@ -3,6 +3,7 @@ import {
   applyChatFontSmoothing,
   applyTypefaceOverrides,
   loadTypefaceSpecimens,
+  loadTypefaceStylesheet,
   normalizeTypefaceOverride,
   resolveTypefaces,
   syncTypefaceStylesheets,
@@ -15,6 +16,14 @@ const fontLinks = () => [
 const hrefs = () => fontLinks().map((link) => link.getAttribute("href"));
 
 describe("typeface presentation", () => {
+  it("removes a failed stylesheet so a later selection can retry", () => {
+    const failed = loadTypefaceStylesheet("geist");
+    failed?.dispatchEvent(new Event("error"));
+    expect(failed?.isConnected).toBe(false);
+    const retried = loadTypefaceStylesheet("geist");
+    expect(retried?.isConnected).toBe(true);
+    expect(retried).not.toBe(failed);
+  });
   function resetTypefacePresentation() {
     for (const link of fontLinks()) {
       link.remove();

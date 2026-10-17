@@ -37,6 +37,14 @@ The built-in SQLite store reads only the selected workspace's state for lookups
 and cleanup. Corrupt JSON in another workspace does not block these operations;
 corrupt JSON in a live record in the selected workspace still reports a storage error.
 
+Dreaming artifact repair prunes recall entries for archived source paths immediately
+after a successful move, removing their phase signals in the same SQLite worker
+transaction. Failed moves leave recall intact, and sources that still exist remain
+eligible. The file move and database cleanup are separate operations: a crash or
+cleanup failure between them leaves dangling entries for the next nightly repair
+to remove. The repair result reports cleanup failures without hiding a completed
+archive.
+
 Long-term promotion still writes only to `MEMORY.md`.
 Deep reports summarize why ranked candidates were not promoted, using counts by
 rejection category without copying rejected snippets or source identifiers.
@@ -188,6 +196,10 @@ Light and REM phase hits recorded in SQLite-backed plugin state add a small rece
 ## Scheduling
 
 When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep, deduped across the primary runtime workspace and any configured agent workspaces so subagent workspace fan-out does not exclude the main agent's `DREAMS.md` and memory state.
+
+Startup reconciles that job in the background so Gateway connections do not wait
+for the cron store. Failures are logged and retried by runtime reconciliation.
+Stopping or replacing the plugin waits for pending reconciliation to settle.
 
 Plugin reloads preserve the managed schedule. The previous instance stops its
 background callbacks and settles pending diary publication before its replacement

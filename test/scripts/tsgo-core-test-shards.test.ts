@@ -54,12 +54,21 @@ describe("tsgo core test shards", () => {
       name: shard.name,
       roots: roots(shard.config),
     }));
+    const canonicalRoots = roots("test/tsconfig/tsconfig.core.test.json");
     expect(
       findTsgoCoreTestShardViolations({
-        canonicalRoots: roots("test/tsconfig/tsconfig.core.test.json"),
+        canonicalRoots,
         shards,
       }),
     ).toEqual([]);
+    const clawRoots = canonicalRoots.filter((file) => file.startsWith("src/claws/"));
+    expect(clawRoots.length).toBeGreaterThan(0);
+    for (const file of clawRoots) {
+      expect(
+        shards.filter((shard) => shard.roots.includes(file)).map((shard) => shard.name),
+        file,
+      ).toEqual(["claws"]);
+    }
     // Shard size is advisory: warn so a rebalance gets scheduled, never block a PR on it.
     for (const warning of findOversizedTsgoCoreTestShards({ shards })) {
       console.warn(`[tsgo-core-test-shards] warning: ${warning}`);
@@ -74,7 +83,7 @@ describe("tsgo core test shards", () => {
       ["src/agents/models-config.merge.test.ts", "agents-root"],
       ["ui/src/pages/chat/chat-send-submit.test.ts", "ui-chat"],
       ["ui/src/pages/config/config-page.test.ts", "ui-pages"],
-      ["ui/src/components/agent-avatar-face.test.ts", "ui-components"],
+      ["ui/src/components/agent-avatar-face.test.tsx", "ui-components"],
       ["ui/src/e2e/chat-send-ack-ownership.e2e.test.ts", "ui-e2e-chat"],
       ["ui/src/e2e/about.e2e.test.ts", "ui-e2e"],
       ["ui/src/test-helpers/control-ui-e2e.test.ts", "ui-e2e"],
@@ -287,6 +296,7 @@ afterEach(() => lifetime.cleanup());
 
 it.runIf(process.platform !== "win32").each([
   ["mixed CI", ["--ci-graphs-json", '["scripts", "test-root"]'], [0, 1, 2, 3]],
+  ["selected CI", ["--ci-graphs-json", '["test-root-tooling", "test-root-e2e"]'], [0, 2]],
   ["even stripe", ["--root-stripe", "2/2"], [1, 3]],
 ] as const)(
   "executes assigned root partitions serially through %s",
@@ -528,7 +538,7 @@ exec ${JSON.stringify(native)} "$@"
         noncoreConsumer,
         "export type { ExtensionValue } from '../extensions/example/value.js';\n",
       );
-      for (const graph of TSGO_CI_ADDITIONAL_GRAPHS) {
+      for (const graph of expandTsgoExecutionGraphs(TSGO_CI_ADDITIONAL_GRAPHS)) {
         write(
           graph.config,
           JSON.stringify({
@@ -643,10 +653,15 @@ if (process.argv[2] === "boundary") {
         expect(extensionPlan.status, extensionPlan.stderr).toBe(0);
         expect(JSON.parse(extensionPlan.stdout.trim())).toEqual({
           mode: "changed",
-          names: ["extensions", "extensions-test", "scripts", "test-root"],
+          names: [
+            "extensions",
+            "extensions-test",
+            "scripts",
+            ...TSGO_ROOT_TEST_SHARDS.map(({ name }) => name),
+          ],
         });
         const discovery = compilerEvents();
-        expect(discovery).toHaveLength(serial ? 4 : 1);
+        expect(discovery).toHaveLength(serial ? 7 : 1);
         expect(discovery.every((args) => args.includes(serial ? "--listFilesOnly" : "--api"))).toBe(
           true,
         );

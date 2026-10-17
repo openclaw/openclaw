@@ -198,15 +198,16 @@ export type SessionEntryMaintenanceInput = {
   activeSessionKeys?: readonly string[];
   archiveDirectory: string;
   forceMaintenance?: boolean;
+  /** Automatic cap work yields between operations; inline cleanup remains exhaustive. */
+  maxCapEntries?: number;
   maintenance: ResolvedSessionMaintenanceConfig;
-  preparedAgeFactCurrent?: boolean;
   preservation: SessionMaintenancePreservationSnapshot;
   storePath: string;
 };
 
 export type SessionMaintenanceLiveProtection = Pick<
   SessionEntryMaintenanceInput,
-  "activeSessionKeys" | "preparedAgeFactCurrent" | "preservation"
+  "activeSessionKeys" | "preservation"
 >;
 
 type SessionReclamationPlanBase = {

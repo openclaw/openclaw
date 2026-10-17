@@ -11,9 +11,9 @@ import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
-  GitHubPublicationController,
+  GitHubPublicationOwner,
   type GitHubPublicationOptions,
-} from "./github-publication-controller.ts";
+} from "./github-publication-owner.ts";
 import { createTestSessionCapability } from "./session-capability.test-support.ts";
 import type { GitHubPublicationBinding, SessionGateway } from "./session-capability.ts";
 import { sessionRetryDelayMs } from "./session-retry.ts";
@@ -186,7 +186,7 @@ function publicationHarness() {
         changed = createDeferred();
         previous.resolve();
       },
-      GitHubPublicationController,
+      GitHubPublicationOwner,
     )!;
     publicationChanges.set(binding, () => changed.promise);
     binding.sync({

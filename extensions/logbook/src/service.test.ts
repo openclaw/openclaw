@@ -2,10 +2,11 @@ import { realpathSync } from "node:fs";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveLogbookConfig } from "./config.js";
 import { LogbookService } from "./service.js";
 import { logbookSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
+import { LogbookStore } from "./store.js";
 
 const workerModuleUrl = resolveRuntimeWorkerUrl(logbookSqliteBackendEntrypoint);
 const services: LogbookService[] = [];
@@ -33,6 +34,7 @@ async function makeService(params: {
   invoke: (args: { nodeId: string; command: string }) => Promise<unknown>;
   config?: Record<string, unknown>;
   fullConfig?: Record<string, unknown>;
+  logger?: typeof quietLogger;
 }) {
   const dataDir = realpathSync(tempDirs.make("logbook-service-test-"));
   const invoked: Array<{ nodeId: string; command: string }> = [];
@@ -50,7 +52,7 @@ async function makeService(params: {
     {
       runtime: runtime as never,
       fullConfig: (params.fullConfig ?? {}) as never,
-      logger: quietLogger as never,
+      logger: (params.logger ?? quietLogger) as never,
       dataDir,
       workerModuleUrl,
       scheduler: createTestPluginServiceScheduler(),
@@ -107,6 +109,59 @@ describe("LogbookService capture node selection", () => {
 });
 
 describe("LogbookService vision model selection", () => {
+  it("warns about a missing model only when analysis work is pending", async () => {
+    const warn = vi.fn();
+    const { service, tick } = await makeService({
+      nodes: [{ nodeId: "capture-node", commands: ["logbook.snapshot"] }],
+      invoke: async () => framePayload,
+      logger: { ...quietLogger, warn },
+    });
+    const analyze = () =>
+      (service as unknown as { analysisTick(): Promise<void> }).analysisTick.call(service);
+
+    await analyze();
+    expect(warn).not.toHaveBeenCalled();
+
+    await tick();
+    await analyze();
+    await analyze();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("logbook: analysis paused; no vision model"),
+    );
+  });
+
+  it("warns when a pending batch has no unbatched frames", async () => {
+    const warn = vi.fn();
+    const { service } = await makeService({
+      nodes: [],
+      invoke: async () => framePayload,
+      config: { captureEnabled: false },
+      logger: { ...quietLogger, warn },
+    });
+    const store = (service as unknown as { store: LogbookStore }).store;
+    const capturedAtMs = Date.now();
+    const day = new Date(capturedAtMs).toISOString().slice(0, 10);
+    const frameId = await store.captureFrame({
+      capturedAtMs,
+      day,
+      screenIndex: 0,
+      buffer: Buffer.from("fake-jpeg"),
+    });
+    await store.createBatch({
+      day,
+      startMs: capturedAtMs,
+      endMs: capturedAtMs + 1000,
+      frameIds: [frameId],
+    });
+
+    expect(await store.countUnbatchedActiveFrames()).toBe(0);
+    expect(await store.nextPendingBatch()).not.toBeNull();
+    await (service as unknown as { analysisTick(): Promise<void> }).analysisTick();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("logbook: analysis paused; no vision model"),
+    );
+  });
+
   it("borrows only a media provider with structured extraction", async () => {
     const { service } = await makeService({
       nodes: [],

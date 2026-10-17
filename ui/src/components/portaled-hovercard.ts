@@ -1,5 +1,6 @@
 import { onSettled } from "solid-js";
 import { composedParent } from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
 import { resolveTransientContainer } from "./transient-container.ts";
 
@@ -85,10 +86,43 @@ export class PortaledHovercardController {
   };
 
   readonly handleCardKeyDown = (event: KeyboardEvent) => {
-    if (event.key !== "Escape" && event.key !== "Tab") {
+    if (
+      event.defaultPrevented ||
+      event.isComposing ||
+      event.keyCode === 229 ||
+      (event.key !== "Escape" && event.key !== "Tab") ||
+      (event.key === "Tab" && (event.altKey || event.ctrlKey || event.metaKey))
+    ) {
       return;
     }
     const focusables = this.focusables();
+    const focused = event.composedPath()[0];
+    if (event.key === "Tab" && focused instanceof HTMLElement) {
+      const tooltip = focused.closest("openclaw-tooltip[open]");
+      const content = tooltip?.querySelector(":scope > [slot=content]");
+      if (tooltip && content) {
+        const owned = focusables.filter(
+          (element) => element.closest("openclaw-tooltip") === tooltip,
+        );
+        const trigger = owned.findLast((element) => !content.contains(element));
+        const first = owned.find((element) => content.contains(element));
+        // WebKit does not reliably cross from a slotted trigger into the
+        // nested top-layer surface. Bridge only that boundary; native Tab
+        // still owns traversal within the inspection and the card.
+        const destination = event.shiftKey
+          ? focused === first
+            ? trigger
+            : undefined
+          : focused === trigger
+            ? first
+            : undefined;
+        if (destination) {
+          event.preventDefault();
+          destination.focus();
+          return;
+        }
+      }
+    }
     const edge = event.shiftKey ? focusables[0] : focusables.at(-1);
     if (event.key === "Tab" && document.activeElement !== edge) {
       return;
@@ -153,7 +187,15 @@ export class PortaledHovercardController {
 
   focusables(): HTMLElement[] {
     // Decorative avatar twins opt out; cards share the same keyboard traversal contract.
-    return [...(this.card?.querySelectorAll<HTMLElement>('a[href]:not([tabindex="-1"])') ?? [])];
+    return [
+      ...(this.card?.querySelectorAll<HTMLElement>(
+        'a[href]:not([tabindex="-1"]), button:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
+      ) ?? []),
+    ].filter((element) => {
+      // Slotted inspection controls join native Tab traversal only while their tooltip is open.
+      const content = element.closest('[slot="content"]');
+      return !content?.parentElement?.matches("openclaw-tooltip:not([open])");
+    });
   }
 
   scheduleOpen(delay: number, open: () => void, trigger = this.trigger): void {
@@ -271,10 +313,6 @@ export class PortaledHovercardController {
     this.clearCard();
     this.anchor = anchor;
     this.card = card;
-    card.addEventListener("keydown", this.handleCardKeyDown);
-    card.addEventListener("pointerenter", this.handleCardPointerEnter);
-    card.addEventListener("focusin", this.handleCardFocusIn);
-    card.addEventListener("focusout", this.handleCardFocusOut);
     this.placement = placement;
     this.unmountContents = unmountContents ?? null;
     const trigger = this.trigger ?? anchor;
@@ -287,10 +325,6 @@ export class PortaledHovercardController {
       this.reset();
       return;
     }
-    owner.append(card);
-    promoteToPopoverTopLayer(card);
-    trigger.setAttribute("aria-controls", card.id);
-    trigger.setAttribute("aria-expanded", "true");
     const position = () => positionPortaledHovercard(anchor, card, placement);
     let frame: number | null = null;
     const schedulePosition = () => {
@@ -316,21 +350,27 @@ export class PortaledHovercardController {
         }
       }
     };
-    window.addEventListener("resize", schedulePosition);
-    window.addEventListener("scroll", handleScroll, true);
-    if (observeVisualViewport) {
-      window.visualViewport?.addEventListener("resize", schedulePosition);
-      window.visualViewport?.addEventListener("scroll", schedulePosition);
-    }
+    const viewport = observeVisualViewport ? window.visualViewport : null;
+    const stopListeners = [
+      listen(card, "keydown", { handleEvent: this.handleCardKeyDown }),
+      listen(card, "pointerenter", { handleEvent: this.handleCardPointerEnter }),
+      listen(card, "focusin", { handleEvent: this.handleCardFocusIn }),
+      listen(card, "focusout", { handleEvent: this.handleCardFocusOut }),
+      listen(window, "resize", schedulePosition),
+      listen(window, "scroll", handleScroll, true),
+      viewport && listen(viewport, "resize", schedulePosition),
+      viewport && listen(viewport, "scroll", schedulePosition),
+    ];
+    owner.append(card);
+    promoteToPopoverTopLayer(card);
+    trigger.setAttribute("aria-controls", card.id);
+    trigger.setAttribute("aria-expanded", "true");
     position();
     this.stopPositioning = () => {
       if (frame !== null) {
         cancelAnimationFrame(frame);
       }
-      window.removeEventListener("resize", schedulePosition);
-      window.removeEventListener("scroll", handleScroll, true);
-      window.visualViewport?.removeEventListener("resize", schedulePosition);
-      window.visualViewport?.removeEventListener("scroll", schedulePosition);
+      stopListeners.forEach((stop) => stop?.());
     };
   }
 
@@ -357,13 +397,9 @@ export class PortaledHovercardController {
     }
     card.dataset.open = "false";
     card.style.pointerEvents = "none";
-    let exitTimer: number | null = null;
     const finish = () => {
-      if (exitTimer !== null) {
-        window.clearTimeout(exitTimer);
-        exitTimer = null;
-      }
-      card.removeEventListener("transitionend", handleTransitionEnd);
+      window.clearTimeout(exitTimer);
+      stopTransition();
       unmountContents?.();
       card.remove();
       if (this.exitCleanup === finish) {
@@ -375,8 +411,8 @@ export class PortaledHovercardController {
         finish();
       }
     };
-    card.addEventListener("transitionend", handleTransitionEnd);
-    exitTimer = window.setTimeout(finish, exitDurationMs + 50);
+    const stopTransition = listen(card, "transitionend", { handleEvent: handleTransitionEnd });
+    const exitTimer = window.setTimeout(finish, exitDurationMs + 50);
     this.exitCleanup = finish;
   }
 

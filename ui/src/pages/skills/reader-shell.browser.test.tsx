@@ -100,7 +100,7 @@ describe.runIf(browserMode)("skill reader shell", () => {
     const headerTop = close.getBoundingClientRect().top;
     body.scrollTop = body.scrollHeight;
     expect(body.scrollTop).toBeGreaterThan(0);
-    expect(close.getBoundingClientRect().top).toBe(headerTop);
+    expect(close.getBoundingClientRect().top).toBeCloseTo(headerTop, 2);
 
     showContent(shortContent);
     await expect
@@ -110,4 +110,65 @@ describe.runIf(browserMode)("skill reader shell", () => {
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => dialog.open).toBe(false);
   });
+  it.each([320, 1440])(
+    "keeps installed-skill completion actions below the scroller at %ipx",
+    async (width) => {
+      const { page } = await import("vitest/browser");
+      await page.viewport(width, 844);
+      container = document.createElement("openclaw-skills-page");
+      document.body.append(container);
+      renderSkills(
+        createProps({
+          detailKey: "repo-skill",
+          report: {
+            workspaceDir: "/fixture/workspace",
+            managedSkillsDir: "/fixture/skills",
+            skills: [
+              createSkill({
+                description: "Read the workspace guide and preserve current permissions. ".repeat(
+                  200,
+                ),
+                missing: { bins: [], anyBins: ["guide-cli"], env: [], config: [], os: [] },
+                install: [
+                  {
+                    id: "guide-cli",
+                    kind: "node",
+                    bins: ["guide-cli"],
+                    label: "Install the missing workspace guide command-line dependency",
+                  },
+                ],
+              }),
+            ],
+          },
+          messages: {
+            "repo-skill": { kind: "error", message: "A previous install needs attention." },
+          },
+        }),
+        container,
+      );
+      const { dialog } = await getRenderedModalDialog(container);
+      await Promise.all(dialog.getAnimations().map((animation) => animation.finished));
+      const panel = container.querySelector<HTMLElement>(".skill-reader-dialog")!;
+      const body = panel.querySelector<HTMLElement>(".skill-reader-dialog__body")!;
+      const footer = panel.querySelector<HTMLElement>("openclaw-modal-actions")!;
+      expect(panel.lastElementChild).toBe(footer);
+      expect(body.querySelector("input[type=password]")).not.toBeNull();
+      expect(body.querySelector("[role=alert]")?.textContent).toContain("needs attention");
+      expect(body.textContent).toContain("/tmp/skill");
+      expect(footer.querySelectorAll("button")).toHaveLength(2);
+      expect(getComputedStyle(footer).justifyContent).toBe("flex-end");
+      expect(getComputedStyle(footer).flexWrap).toBe("wrap");
+      expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
+      const bounds = footer.getBoundingClientRect();
+      expect(bounds.top).toBeGreaterThanOrEqual(body.getBoundingClientRect().bottom - 1);
+      expect(bounds.bottom).toBeLessThanOrEqual(dialog.getBoundingClientRect().bottom + 1);
+      for (const button of footer.querySelectorAll("button")) {
+        expect(button.getBoundingClientRect().right).toBeLessThanOrEqual(bounds.right + 1);
+        expect(button.scrollWidth).toBeLessThanOrEqual(button.clientWidth);
+      }
+      body.scrollTop = body.scrollHeight;
+      expect(body.scrollTop).toBeGreaterThan(0);
+      expect(footer.getBoundingClientRect().top).toBeCloseTo(bounds.top, 2);
+    },
+  );
 });

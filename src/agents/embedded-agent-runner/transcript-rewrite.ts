@@ -1,4 +1,5 @@
 /** Rewrites transcript entries by branching and re-appending the active suffix. */
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { stripCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { withSessionPendingInputRelocation } from "../../config/sessions/session-accessor.js";
 import type {
@@ -197,6 +198,7 @@ export async function rewriteTranscriptEntriesInSessionManager(params: {
     return entryId;
   };
   const rewrittenEntryIds = new Map<string, string>();
+  let turnStartedAt = performance.now();
   // Every re-appended message follows the rewritten prefix, so its prefix-bound checkpoint is stale.
   for (const entry of branch.slice(firstMatchedIndex)) {
     const newEntryId = await appendBranchEntry({
@@ -207,6 +209,11 @@ export async function rewriteTranscriptEntriesInSessionManager(params: {
       replacement: entry.type === "message" ? replacementsById.get(entry.id) : undefined,
     });
     rewrittenEntryIds.set(entry.id, newEntryId);
+    // Detached appends settle in microtasks; long rewrites must also admit socket I/O.
+    if (performance.now() - turnStartedAt >= 4) {
+      await nextTurn();
+      turnStartedAt = performance.now();
+    }
   }
 
   await rewrite.commit(rewrittenEntryIds);

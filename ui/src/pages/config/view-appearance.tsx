@@ -1,4 +1,4 @@
-import { createEffect, createMemo, For } from "solid-js";
+import { createEffect, createMemo, For, onSettled } from "solid-js";
 import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { controlUiAccentInk } from "../../app/accent-contrast.ts";
 import {
@@ -43,52 +43,42 @@ const ACCENT_PRESETS = [
   {
     id: "default",
     hex: undefined,
-    labelKey: "configView.appearance.accents.default",
   },
   {
     id: "claw",
     hex: "#ff5c5c",
-    labelKey: "configView.appearance.accents.claw",
   },
   {
     id: "coral",
     hex: "#ff8066",
-    labelKey: "configView.appearance.accents.coral",
   },
   {
     id: "amber",
     hex: "#f5b942",
-    labelKey: "configView.appearance.accents.amber",
   },
   {
     id: "mint",
     hex: "#52c99a",
-    labelKey: "configView.appearance.accents.mint",
   },
   {
     id: "teal",
     hex: "#35b9b0",
-    labelKey: "configView.appearance.accents.teal",
   },
   {
     id: "blue",
     hex: "#5b9cf6",
-    labelKey: "configView.appearance.accents.blue",
   },
   {
     id: "violet",
     hex: "#a78bfa",
-    labelKey: "configView.appearance.accents.violet",
   },
   {
     id: "pink",
     hex: "#f472b6",
-    labelKey: "configView.appearance.accents.pink",
   },
   {
     id: "slate",
     hex: "#8795a8",
-    labelKey: "configView.appearance.accents.slate",
   },
 ] as const;
 
@@ -112,24 +102,14 @@ function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
     </span>
   );
 }
-function focusCustomThemeImportInput() {
-  requestAnimationFrame(() => {
-    const input = document.querySelector<HTMLInputElement>("[data-custom-theme-import-input]");
-    if (!input) {
-      return;
-    }
-    input.scrollIntoView({
-      block: "center",
-      behavior: resolveScrollBehavior(),
-    });
-    input.focus();
-    input.select();
-  });
-}
 export function AppearanceSection(props: ConfigProps) {
+  let customThemeImportInput: HTMLInputElement | undefined;
+  let focusFrame = 0;
+  onSettled(() => () => cancelAnimationFrame(focusFrame));
   const showCustomThemeImport = createMemo(
     () => props.hasCustomTheme || props.customThemeImportExpanded === true,
   );
+  // Focus and scrolling synchronize the revealed import input with the DOM.
   createEffect(
     () => ({
       shown: showCustomThemeImport(),
@@ -139,7 +119,16 @@ export function AppearanceSection(props: ConfigProps) {
     ({ shown, token, viewState }) => {
       if (shown && token != null && token !== viewState.lastCustomThemeImportFocusToken) {
         viewState.lastCustomThemeImportFocusToken = token;
-        focusCustomThemeImportInput();
+        const input = customThemeImportInput;
+        cancelAnimationFrame(focusFrame);
+        focusFrame = requestAnimationFrame(() => {
+          if (!input?.isConnected) {
+            return;
+          }
+          input.scrollIntoView({ block: "center", behavior: resolveScrollBehavior() });
+          input.focus();
+          input.select();
+        });
       }
     },
   );
@@ -223,26 +212,28 @@ export function AppearanceSection(props: ConfigProps) {
       ? props.accentResetValue
       : "var(--theme-chip-accent)",
   );
-  const customAccentSelected = createMemo(() =>
-    Boolean(
-      !defaultAccentSelected() &&
-      !themeAccentSelected() &&
-      props.accent &&
-      !ACCENT_PRESETS.some((preset) => preset.hex === props.accent),
-    ),
-  );
   const selectedAccentPreset = createMemo(() =>
     ACCENT_PRESETS.find((preset) => preset.hex !== undefined && preset.hex === props.accent),
   );
-  const accentSelectionStatus = createMemo(() =>
-    themeAccentSelected()
+  const customAccentSelected = createMemo(() =>
+    Boolean(
+      !defaultAccentSelected() && !themeAccentSelected() && props.accent && !selectedAccentPreset(),
+    ),
+  );
+  const accentSelectionStatus = createMemo(() => {
+    const preset = selectedAccentPreset();
+    return themeAccentSelected()
       ? t("configView.appearance.usingThemeAccent")
       : defaultAccentSelected()
         ? null
         : t("configView.appearance.usingAccent", {
-            value: t(selectedAccentPreset()?.labelKey ?? "configView.appearance.customAccent"),
-          }),
-  );
+            value: t(
+              preset
+                ? `configView.appearance.accents.${preset.id}`
+                : "configView.appearance.customAccent",
+            ),
+          });
+  });
   return (
     <SettingsPage>
       <LanguageSection {...props} />
@@ -371,6 +362,7 @@ export function AppearanceSection(props: ConfigProps) {
                     {t("configView.appearance.themeLink")}
                   </span>
                   <input
+                    ref={(input) => (customThemeImportInput = input)}
                     class="settings-theme-import__input"
                     data-custom-theme-import-input
                     type="text"
@@ -456,7 +448,7 @@ export function AppearanceSection(props: ConfigProps) {
                       ? defaultAccentSelected()
                       : !defaultAccentSelected() && preset.hex === props.accent,
                   );
-                  const label = createMemo(() => t(preset.labelKey));
+                  const label = createMemo(() => t(`configView.appearance.accents.${preset.id}`));
                   const themeChipScope = createMemo(() =>
                     isDefault
                       ? `settings-accent-theme--${presentedTheme().id.includes("/") ? "custom" : presentedTheme().id}`

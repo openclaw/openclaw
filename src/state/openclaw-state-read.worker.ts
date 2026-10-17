@@ -1,5 +1,9 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
+import {
+  getDatabaseEngineSelection,
+  withDatabaseEngineSelection,
+} from "../infra/database-engine/context.js";
 import { bunSqliteNativeCleanupPending } from "../infra/node-sqlite.js";
 import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
@@ -153,10 +157,12 @@ serveOwnedWorkerTasks(
         );
         return { ok: true, sourceAdmitted: true, ...result };
       };
-      const reply = await withSqliteReaderOwner(
-        { operation: input.command.type, ownerKind: "worker" },
-        () => runWithSqliteWorkerStateContext(input.context, executeRead),
-      );
+      const selection = input.context.databaseEngineSelection ?? getDatabaseEngineSelection();
+      const run = () =>
+        withSqliteReaderOwner({ operation: input.command.type, ownerKind: "worker" }, () =>
+          runWithSqliteWorkerStateContext(input.context, executeRead),
+        );
+      const reply = await (selection ? withDatabaseEngineSelection(selection, run) : run());
       if (
         !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources &&
         bunSqliteNativeCleanupPending

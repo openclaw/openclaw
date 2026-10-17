@@ -31,6 +31,7 @@ import {
 } from "./session-accessor.sqlite-entry-cache.js";
 import { sessionSharingEntriesEqual } from "./session-accessor.sqlite-entry-cache.types.js";
 import { clearSqliteSessionEntryPreservingWindows } from "./session-accessor.sqlite-entry-clear.js";
+import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
 import {
   readExactSessionEntryRow,
   type ResolvedSessionEntryRow,
@@ -116,7 +117,7 @@ export function deleteSessionEntryRows(
     postimages?: SessionEntryWritePostimages;
   } = {},
 ): void {
-  // Doctor supplies the exact row it validated; the runtime parser deliberately rejects that shape.
+  // Lifecycle deletion reuses its transaction snapshot; Doctor also supplies validated legacy rows.
   const previousEntry =
     options.validatedEntry ?? readExactSessionEntryRow(database, sessionKey)?.entry;
   if (previousEntry) {
@@ -218,11 +219,14 @@ export function deleteSessionEntryRows(
 export function deleteLifecycleTargetRows(
   database: OpenClawAgentDatabase,
   target: { canonicalKey: string; storeKeys: string[] },
+  snapshot: SqliteLifecycleTargetSnapshot,
 ): void {
   for (const sessionKey of uniqueStrings([target.canonicalKey, ...target.storeKeys])) {
     const trimmed = sessionKey.trim();
     if (trimmed) {
-      deleteSessionEntryRows(database, trimmed);
+      deleteSessionEntryRows(database, trimmed, {
+        validatedEntry: snapshot.find((row) => row.sessionKey === trimmed)?.entry,
+      });
     }
   }
 }
@@ -480,6 +484,9 @@ export function writeSessionEntry(
   // The lifecycle-selected entry owns visibility copy-forward semantics.
   if (previousEntry && previousEntry.sessionId !== normalizedEntry.sessionId) {
     delete normalizedEntry.visibility;
+  }
+  if (normalizedEntry.archivedAt || normalizedEntry.incognito) {
+    delete normalizedEntry.pendingExecNotifications;
   }
   const canonicalEntry = stripRuntimeOnlySessionSkillsFields(
     projectCanonicalSessionEntryShape({ ...normalizedEntry }),

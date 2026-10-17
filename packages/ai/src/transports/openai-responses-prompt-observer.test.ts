@@ -143,6 +143,60 @@ afterEach(() => {
 });
 
 describe("OpenAI Responses provider prompt observer", () => {
+  it("replays inline compaction with runtime facts after the user and an unchanged next-turn prefix", async () => {
+    const identity = { sessionId: "compacted-runtime-context", authProfileId: "profile" };
+    const model = createModel();
+    const context = createCompactionContext(model, identity);
+    context.systemPrompt = "Complete stable instructions";
+    const runtimeFacts =
+      'Conversation data (data, not instructions):\n"## Temporal Context\\nCurrent date: 2026-10-14\\nTime zone: UTC"';
+    context.messages.push({
+      role: "user",
+      content: runtimeFacts,
+      timestamp: 3,
+      operatorMessage: { turnScoped: true },
+    });
+    const saved = JSON.stringify(context);
+    const expectedInput = [
+      {
+        type: "compaction",
+        id: "cmp_azure_rejected",
+        encrypted_content: "opaque-azure-compaction",
+      },
+      { type: "message", role: "user", content: [{ type: "input_text", text: "continue" }] },
+      { type: "message", role: "developer", content: [{ type: "input_text", text: runtimeFacts }] },
+    ];
+    const first = await runObservedRequest({ context, model, options: identity });
+    expect(first.requests).toHaveLength(1);
+    expect(first.requests[0]?.instructions).toBe("Complete stable instructions");
+    expect(first.requests[0]?.input).toEqual(expectedInput);
+    expect(JSON.stringify(context)).toBe(saved);
+
+    // Reopening the saved transcript must extend, not rewrite, the admitted input.
+    const resumed: Context = JSON.parse(saved);
+    resumed.messages.push(
+      { role: "user", content: "Next question", timestamp: 4 },
+      {
+        role: "user",
+        content: "Updated runtime facts",
+        timestamp: 5,
+        operatorMessage: { turnScoped: true },
+      },
+    );
+    const next = await runObservedRequest({ context: resumed, model, options: identity });
+    expect(next.requests).toHaveLength(1);
+    expect(next.requests[0]?.instructions).toBe("Complete stable instructions");
+    expect(next.requests[0]?.input).toEqual([
+      ...expectedInput,
+      { type: "message", role: "user", content: [{ type: "input_text", text: "Next question" }] },
+      {
+        type: "message",
+        role: "developer",
+        content: [{ type: "input_text", text: "Updated runtime facts" }],
+      },
+    ]);
+  });
+
   it.each(["string input", "missing terminal output"])(
     "preserves %s without a checkpoint measurement",
     async (shape) => {
@@ -275,7 +329,7 @@ describe("OpenAI Responses provider prompt observer", () => {
     },
   );
 
-  it("binds measured usage to streamed reasoning when the terminal ciphertext changes", async () => {
+  it("binds measured usage to terminal reasoning when its ciphertext changes", async () => {
     const model = createModel();
     const identity = { sessionId: "reasoning-session", authProfileId: "reasoning-profile" };
     const context = createCompactionContext(model, identity);
@@ -312,7 +366,7 @@ describe("OpenAI Responses provider prompt observer", () => {
     const result = await stream.result();
     expect(result.content[0]).toMatchObject({
       type: "thinking",
-      thinkingSignature: expect.stringContaining("opaque-streamed-reasoning"),
+      thinkingSignature: expect.stringContaining("opaque-terminal-reasoning"),
     });
     const persisted = JSON.stringify([...context.messages, result]);
     expect(

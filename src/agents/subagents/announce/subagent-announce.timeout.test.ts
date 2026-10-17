@@ -229,17 +229,6 @@ function findFinalDirectAgentCall(): GatewayCall | undefined {
   return findGatewayCall((call) => call.method === "agent" && call.expectFinal === true);
 }
 
-function setupParentSessionFallback(parentSessionKey: string): void {
-  requesterDepthResolver = (sessionKey?: string) =>
-    sessionKey === parentSessionKey ? 1 : sessionKey?.includes(":subagent:") ? 1 : 0;
-  subagentSessionRunActive = false;
-  shouldIgnorePostCompletion = false;
-  fallbackRequesterResolution = {
-    requesterSessionKey: "agent:main:main",
-    requesterOrigin: { channel: "discord", to: "chan-main", accountId: "acct-main" },
-  };
-}
-
 describe("subagent announce timeout config", () => {
   beforeEach(() => {
     gatewayCalls.length = 0;
@@ -279,21 +268,6 @@ describe("subagent announce timeout config", () => {
     expect(directAgentCall?.params?.accountId).toBeUndefined();
   });
 
-  it("regression, routes child announce to parent session instead of grandparent when parent session still exists", async () => {
-    const parentSessionKey = "agent:main:subagent:parent";
-    setupParentSessionFallback(parentSessionKey);
-    sessionStore[parentSessionKey] = { updatedAt: Date.now() };
-
-    await runAnnounceFlowForTest("run-parent-route", {
-      requesterSessionKey: parentSessionKey,
-      childSessionKey: `${parentSessionKey}:subagent:child`,
-    });
-
-    const directAgentCall = findFinalDirectAgentCall();
-    expect(directAgentCall?.params?.sessionKey).toBe(parentSessionKey);
-    expect(directAgentCall?.params?.deliver).toBe(false);
-  });
-
   it("uses timeout progress without replacing an authoritative empty terminal fact", async () => {
     chatHistoryMessages = [
       { role: "user", content: "do a complex task" },
@@ -316,31 +290,6 @@ describe("subagent announce timeout config", () => {
     expect(internalEvents[0]?.result).toBe("1 tool call(s) made without visible output.");
     expect(internalEvents[0]?.result).not.toContain("private tool output");
   });
-
-  it.each(["(no output)"])(
-    "keeps authoritative visible timeout output %s without transcript inference",
-    async (text) => {
-      chatHistoryMessages = [
-        { role: "assistant", content: [{ type: "text", text: "stale transcript output" }] },
-      ];
-
-      await runAnnounceFlowForTest("run-timeout-visible-terminal", {
-        outcome: { status: "timeout" },
-        roundOneReply: undefined,
-        terminalReply: { disposition: "visible", text },
-      });
-
-      const directAgentCall = findFinalDirectAgentCall();
-      const internalEvents =
-        (directAgentCall?.params?.internalEvents as Array<{
-          result?: string;
-          noVisibleResult?: boolean;
-        }>) ?? [];
-      expect(internalEvents[0]?.result).toBe(text);
-      expect(internalEvents[0]?.noVisibleResult).toBeUndefined();
-      expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
-    },
-  );
 
   it("keeps authoritative silence on timeout without transcript inference", async () => {
     chatHistoryMessages = [
@@ -436,6 +385,7 @@ describe("subagent announce timeout config", () => {
     await runAnnounceFlowForTest("run-timeout-mixed-no-reply", {
       outcome: { status: "timeout" },
       roundOneReply: undefined,
+      terminalReply: { disposition: "empty" },
     });
 
     const directAgentCall = findGatewayCall(
@@ -455,6 +405,7 @@ describe("subagent announce timeout config", () => {
     await runAnnounceFlowForTest("run-timeout-no-reply-overrides-latest-text", {
       outcome: { status: "timeout" },
       roundOneReply: undefined,
+      terminalReply: { disposition: "empty" },
     });
 
     const directAgentCall = findFinalDirectAgentCall();

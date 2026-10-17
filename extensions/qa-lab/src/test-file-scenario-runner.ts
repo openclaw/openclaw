@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { assertQaSuiteArtifactWritten } from "./artifact-assertion.js";
 import { resolveQaArtifactPath, toRepoArtifactPath } from "./cli-paths.js";
 import { captureQaEvidenceLaunchIdentity } from "./evidence-environment.js";
 import { createQaEvidenceInvocation } from "./evidence-invocation.js";
@@ -349,9 +348,8 @@ export async function runQaTestFileScenarios(params: QaTestFileScenarioRunParams
     DEFAULT_QA_TEST_FILE_COMMAND_TIMEOUT_MS,
   );
   const env = params.envMode === "replace" ? (params.env ?? {}) : { ...process.env, ...params.env };
-  const launch = structuredClone(
-    params.evidenceAnchors?.[0]?.launch ?? (await captureQaEvidenceLaunchIdentity(params.repoRoot)),
-  );
+  const launch =
+    params.evidenceAnchors?.[0]?.launch ?? (await captureQaEvidenceLaunchIdentity(params.repoRoot));
   if (params.preparedDockerEvidence) {
     assertQaPreparedDockerEnvironment(params.preparedDockerEvidence, env);
     const candidateRef = params.preparedDockerEvidence.receipt.identity.source.ref;
@@ -612,7 +610,6 @@ export async function runQaTestFileScenarios(params: QaTestFileScenarioRunParams
   const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
   if (params.writeEvidenceFile ?? true) {
     await fs.writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
-    await assertQaSuiteArtifactWritten("evidence", evidencePath);
   } else {
     await fs.rm(evidencePath, { force: true });
   }

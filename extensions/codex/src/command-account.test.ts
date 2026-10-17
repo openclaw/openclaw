@@ -5,17 +5,18 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
-import type { CodexCommandDepsOverride } from "./command-handlers.js";
 import { createCodexCommand } from "./commands.js";
 import {
   createContext,
   createDeps,
+  installCodexCommandMocks,
+  type SafeCodexControlRequestFn,
   supervisedTestBinding,
   useCodexCommandTestState,
   writeTestBinding,
 } from "./commands.test-support.js";
 
-type AccountRequest = NonNullable<CodexCommandDepsOverride["safeCodexControlRequest"]>;
+type AccountRequest = SafeCodexControlRequestFn;
 
 describe("Codex account workspace identity", () => {
   let tempDir: string;
@@ -95,7 +96,7 @@ describe("Codex account workspace identity", () => {
     const safeCodexControlRequest = accountRequests("operator@example.test");
 
     const result = await createCodexCommand({
-      deps: createDeps({ safeCodexControlRequest }),
+      deps: installCodexCommandMocks(createDeps({ safeCodexControlRequest })),
     }).handler(createContext("account"));
 
     expect(result.text).toContain("Subscription  Work");
@@ -127,7 +128,7 @@ describe("Codex account workspace identity", () => {
 
     const result = await createCodexCommand({
       pluginConfig,
-      deps: createDeps({ safeCodexControlRequest }),
+      deps: installCodexCommandMocks(createDeps({ safeCodexControlRequest })),
     }).handler(createContext("account"));
 
     expect(result.text).toContain(`Account: ${email}`);
@@ -161,7 +162,7 @@ describe("Codex account workspace identity", () => {
     );
 
     const result = await createCodexCommand({
-      deps: createDeps({ safeCodexControlRequest }),
+      deps: installCodexCommandMocks(createDeps({ safeCodexControlRequest })),
     }).handler(createContext("account"));
 
     expect(result.text).toBe(`Account: ${selectedError}\n\nRate limits: ${selectedError}`);
@@ -204,7 +205,7 @@ describe("Codex account workspace identity", () => {
       });
 
     const result = await createCodexCommand({
-      deps: createDeps({ safeCodexControlRequest }),
+      deps: installCodexCommandMocks(createDeps({ safeCodexControlRequest })),
     }).handler(createContext("account"));
 
     expect(result.text).toContain("Rate limits: rate limits unavailable");

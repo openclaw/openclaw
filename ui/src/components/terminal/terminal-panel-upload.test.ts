@@ -1,17 +1,18 @@
 /* @vitest-environment jsdom */
 
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import { defineTerminalPanelElement } from "./terminal-panel-registration.ts";
-import { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
+import { createTerminalPanelUpload, type TerminalPanelUpload } from "./terminal-panel-upload.ts";
 import { terminalOpenResult } from "./terminal-panel.test-support.ts";
 import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
@@ -93,6 +94,10 @@ function dropFiles(panel: OpenClawTerminalPanel, files: File[]) {
 }
 
 describe("OpenClawTerminalPanel upload lifecycle", () => {
+  beforeAll(async () => {
+    await import("@openclaw/libterminal/browser");
+  });
+
   it("does not request an upload after a pending file read is disabled", async () => {
     const base = createApplicationConfigCapability({ resourceBasePath: "" });
     const config = { ...base, current: { ...base.current, uploadsEnabled: true } };
@@ -104,14 +109,17 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
       status: "live",
       controller: terminal as unknown as GhosttyTerminalController,
     };
-    const upload = new TerminalPanelUploadController({
-      config: () => config,
-      activeTab: () => tab,
-      client: () => ({ request, forceReconnect: () => {}, addEventListener: () => () => {} }),
-      isCurrent: () => true,
-      fileInput: () => null,
-      setError: vi.fn(),
-      requestUpdate: vi.fn(),
+    let upload!: TerminalPanelUpload;
+    mountSolid(() => {
+      upload = createTerminalPanelUpload({
+        config: () => config,
+        activeTab: () => tab,
+        client: () => ({ request, forceReconnect: () => {}, addEventListener: () => () => {} }),
+        isCurrent: () => true,
+        fileInput: () => null,
+        setError: vi.fn(),
+      });
+      return null;
     });
     const read = createDeferred<ArrayBuffer>();
     const file = new File(["file"], "file.txt");

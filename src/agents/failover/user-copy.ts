@@ -17,7 +17,11 @@ import {
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import { ERROR_DETAILS_HINT, ERROR_PREFIX_RE } from "./assistant-request-failure-copy.js";
 import { classifyFailoverReasonCore } from "./classify-core.js";
-import type { CliTimeoutContext, FallbackAttemptRecord } from "./error.js";
+import {
+  AUTH_PROFILE_COOLDOWN_ERROR_CODE,
+  type CliTimeoutContext,
+  type FallbackAttemptRecord,
+} from "./error.js";
 import {
   isPeriodicUsageLimitErrorMessage,
   isProviderCompletedErrorFinishReasonMessage,
@@ -38,14 +42,16 @@ const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
 export const renderFailoverCodeUserCopy = (code: unknown): string | undefined =>
   code === "selected_auth_profile_unavailable"
     ? SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT
-    : undefined;
+    : code === AUTH_PROFILE_COOLDOWN_ERROR_CODE
+      ? RATE_LIMIT_ERROR_USER_MESSAGE
+      : undefined;
 const MODEL_CAPACITY_ERROR_USER_MESSAGE =
   "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 const MODEL_CAPACITY_ERROR_RE = /\b(?:selected\s+)?model\s+(?:is\s+)?at capacity\b/i;
 const RATE_LIMIT_SPECIFIC_HINT_RE =
-  /\bmin(ute)?s?\b|\bhours?\b|\bseconds?\b|\btry again in\b|\bresets?\b|\bplan\b|\bquota\b/i;
+  /\bmin(ute)?s?\b|\bhours?\b|\bseconds?\b|\btry again in\b|\bresets?\b|\bplan\b|\bquota\b|重置|分钟|小时|秒后|额度|配额/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
   /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context (?:length|window) exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
 const PROVIDER_PROMPT_SIZE_LIMIT_RE =
@@ -396,7 +402,10 @@ function extractCodexUsageLimitErrorMessage(
 ): string | undefined {
   const attempt = attempts.find(
     (candidate) =>
-      candidate.provider === "openai" && candidate.reason === "rate_limit" && candidate.error,
+      candidate.provider === "openai" &&
+      candidate.reason === "rate_limit" &&
+      candidate.code !== AUTH_PROFILE_COOLDOWN_ERROR_CODE &&
+      candidate.error,
   );
   const text =
     attempt?.error ??
@@ -424,6 +433,7 @@ export function renderRateLimitReplyCopy(params: {
   message: string;
   reason?: FailoverReason;
   provider?: string;
+  code?: string;
   attempts?: readonly ReplyFallbackAttempt[];
   rateLimitRetriesExhausted?: number;
   cooldownExpiry?: number | null;
@@ -431,6 +441,8 @@ export function renderRateLimitReplyCopy(params: {
   sanitizeText?: (text: string) => string;
 }): string {
   const attempts = params.attempts ?? [];
+  // Local cooldown diagnostics name the operator's saved login; only provider text becomes copy.
+  const providerMessage = params.code === AUTH_PROFILE_COOLDOWN_ERROR_CODE ? "" : params.message;
   if (params.reason === "rate_limit") {
     const promptSizeCopy = renderProviderPromptSizeLimitCopy(params.message);
     if (promptSizeCopy) {
@@ -451,7 +463,7 @@ export function renderRateLimitReplyCopy(params: {
   }
   const usageLimit = extractCodexUsageLimitErrorMessage(
     attempts,
-    params.message,
+    providerMessage,
     params.reason,
     params.provider,
     params.sanitizeText,
@@ -463,22 +475,26 @@ export function renderRateLimitReplyCopy(params: {
     return BILLING_ERROR_USER_MESSAGE;
   }
   if (attempts.length === 0) {
-    if (params.reason === "rate_limit" && isPeriodicUsageLimitErrorMessage(params.message)) {
-      const providerMessage = renderSanitizedUserFacingText(
-        params.sanitizeText?.(params.message) ?? params.message,
+    if (params.reason === "rate_limit" && isPeriodicUsageLimitErrorMessage(providerMessage)) {
+      const copy = renderSanitizedUserFacingText(
+        params.sanitizeText?.(providerMessage) ?? providerMessage,
         { errorContext: true },
       );
-      return providerMessage.startsWith("⚠️") ? providerMessage : `⚠️ ${providerMessage}`;
+      return copy.startsWith("⚠️") ? copy : `⚠️ ${copy}`;
     }
     return RATE_LIMIT_ERROR_USER_MESSAGE;
   }
   for (const attempt of attempts) {
-    if (attempt.reason !== "rate_limit" || !attempt.error) {
+    if (
+      attempt.reason !== "rate_limit" ||
+      attempt.code === AUTH_PROFILE_COOLDOWN_ERROR_CODE ||
+      !attempt.error
+    ) {
       continue;
     }
     const hint = extractProviderRateLimitMessage(attempt.error);
     if (hint) {
-      return params.sanitizeText?.(attempt.error) ?? hint;
+      return params.sanitizeText?.(hint) ?? hint;
     }
   }
   const expiry = params.cooldownExpiry;

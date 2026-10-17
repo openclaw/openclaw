@@ -3,6 +3,15 @@ import {
   asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  OPENAI_GPT_56_SOL_MODEL_ID,
+  OPENAI_GPT_56_TERRA_MODEL_ID,
+  OPENAI_GPT_56_LUNA_MODEL_ID,
+  resolveOpenAICodexReasoningEfforts,
+} from "./model-route-contract.js";
+import { OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS } from "./shared.js";
+
+const OPENAI_CODEX_GPT_56_CONTEXT_WINDOW = 372_000;
 
 export type OpenAILiveModelReaders = Pick<
   typeof import("openclaw/plugin-sdk/provider-catalog-live-runtime"),
@@ -67,4 +76,35 @@ export function resolveCodexModelInput(
     (modality) => modalities.has(modality) || (modality === "image" && modalities.has("vision")),
   );
   return input.length > 0 ? input : (fallback?.input ?? ["text", "image"]);
+}
+
+export function normalizeOpenAICodexCatalogModel(
+  model: ModelDefinitionConfig,
+): ModelDefinitionConfig {
+  const modelId = normalizeLowercaseStringOrEmpty(model.id);
+  if (
+    modelId === OPENAI_GPT_56_SOL_MODEL_ID ||
+    modelId === OPENAI_GPT_56_TERRA_MODEL_ID ||
+    modelId === OPENAI_GPT_56_LUNA_MODEL_ID
+  ) {
+    const supportedReasoningEfforts = resolveOpenAICodexReasoningEfforts(
+      modelId,
+      model.compat?.supportedReasoningEfforts?.filter((effort) => effort !== "none"),
+    );
+    return {
+      ...model,
+      contextWindow: OPENAI_CODEX_GPT_56_CONTEXT_WINDOW,
+      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
+      thinkingLevelMap: { ...model.thinkingLevelMap, off: null },
+      ...(model.compat
+        ? {
+            compat: {
+              ...model.compat,
+              ...(supportedReasoningEfforts ? { supportedReasoningEfforts } : {}),
+            },
+          }
+        : {}),
+    };
+  }
+  return model;
 }

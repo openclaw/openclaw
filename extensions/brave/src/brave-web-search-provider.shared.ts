@@ -127,7 +127,6 @@ function normalizeBraveSearchLang(value: string | undefined): string | undefined
   return BRAVE_SEARCH_LANG_CODES.has(canonical) ? canonical : undefined;
 }
 
-/** Normalize Brave country filter values. */
 export function normalizeBraveCountry(value: string | undefined): string | undefined {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {

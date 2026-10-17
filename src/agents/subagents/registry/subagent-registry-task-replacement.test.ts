@@ -589,9 +589,11 @@ it("rearms native execution for an interrupted run's successor", async () => {
     await finalizeInterruptedSubagentRun({ runId: previous.runId, expectedEntry: previous, error }),
   ).toBe(1);
   await fixture.settle();
-  expect(loadSubagentRegistryFromSqlite().get(previous.runId)).toEqual(
-    subagentRuns.get(previous.runId),
-  );
+  expect(loadSubagentRegistryFromSqlite().get(previous.runId)).toMatchObject({
+    task: "Resume interrupted work",
+    execution: { status: "terminal", outcome: { status: "error", error } },
+    completion: { resultText: null },
+  });
 
   const observerSnapshots: Array<{ run?: string }> = [];
   const unsubscribe = subscribeSubagentRunChanges("persistence", () => {

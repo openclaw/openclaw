@@ -73,6 +73,24 @@ describe("cron protocol validators", () => {
     expect(validateCronUpdateParams(update({ state: job.state }))).toBe(false);
   });
 
+  it.each(["streamSourceIdentity", "sourceIdentity"])(
+    "reports %s without accepting it in writable patches",
+    (field) => {
+      const state = { [field]: "owner-generation" };
+      expect(
+        Value.Check(CronJobSchema, {
+          ...minimalAddParams,
+          id: "job-1",
+          enabled: true,
+          createdAtMs: 1,
+          updatedAtMs: 2,
+          state,
+        }),
+      ).toBe(true);
+      expect(validateCronUpdateParams(update({ state }))).toBe(false);
+    },
+  );
+
   it("rejects client-authored scheduled authority provenance", () => {
     const scheduledToolPolicy = { version: 1, mode: "trusted" } as const;
     expectCases(validateCronAddParams, false, [add({ scheduledToolPolicy })]);
@@ -256,7 +274,14 @@ describe("cron protocol validators", () => {
   });
 
   it("accepts remove params for id and jobId selectors", () => {
-    expectCases(validateCronRemoveParams, true, [{ id: "job-1" }, { jobId: "job-2" }]);
+    expectCases(validateCronRemoveParams, true, [
+      { id: "job-1" },
+      { jobId: "job-2", expectedConfigRevision: "sha256:current" },
+    ]);
+    expectCases(validateCronRemoveParams, false, [
+      { id: "job-1", expectedConfigRevision: "" },
+      { id: "job-1", expectedConfigRevision: 1 },
+    ]);
   });
 
   it("accepts run params mode for id and jobId selectors", () => {

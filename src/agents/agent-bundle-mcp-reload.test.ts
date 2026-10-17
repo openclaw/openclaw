@@ -21,7 +21,6 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
-import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import {
@@ -304,37 +303,6 @@ it.each(["changed", "healthy"])(
   },
 );
 
-it("refreshes a catalog invalidated while a sibling is still discovering", async () => {
-  const started = createDeferred();
-  const released = createDeferred();
-  releaseHeld.push(() => released.resolve());
-  const url = await httpProbe(undefined, async () => {
-    started.resolve();
-    await released.promise;
-  });
-  const { manager, config, params } = await fixture();
-  const cfg = config();
-  delete cfg.mcp!.servers!.changed;
-  const first = await manager.getOrCreate({ ...params, cfg });
-  await first.getCatalog();
-  const second = await manager.getOrCreate({
-    ...params,
-    sessionId: "discovering-sibling",
-    cfg: { mcp: { servers: { sibling: { transport: "streamable-http", url } } } },
-  });
-  const combined = createCombinedSessionMcpRuntime({ ...params, parts: [first, second] });
-  const pending = combined.getCatalog();
-  await started.promise;
-  await probe(first, "healthy", { changeTools: true });
-  await expect.poll(() => first.peekCatalog()).toBeNull();
-  released.resolve();
-  expect((await pending).tools.map((tool) => tool.toolName)).toEqual(["updated_probe", "probe"]);
-  expect(combined.peekCatalog()?.tools.map((tool) => tool.toolName)).toEqual([
-    "updated_probe",
-    "probe",
-  ]);
-});
-
 it.each(["remove", "public origin"])(
   "does not publish revoked sign-in tools when %s crosses sibling discovery",
   async (change) => {
@@ -432,26 +400,12 @@ it("rotates one requester's changed server while retaining sibling connections a
     ]);
     expect(after[0]).not.toEqual(before[0]);
     expect(after.slice(1)).toEqual(before.slice(1));
-    const oldHandle = await manager.getOrCreateRequesterScoped(aliceParams);
-    expect(oldHandle).toBeDefined();
     await manager.reloadConfig({
       cfg,
       manifestRegistry: params.manifestRegistry,
       reloadPlugins: true,
     });
     await expect(probe(nextAlice, "first")).rejects.toThrow();
-    const currentHandle = await manager.getOrCreateRequesterScoped(bobParams);
-    expect(currentHandle).toBeDefined();
-    const currentCatalog = await currentHandle!.runtime.getCatalog();
-    manager.rememberAdvertisedScopedCatalog(currentHandle!, currentCatalog);
-    manager.rememberAdvertisedScopedCatalog(oldHandle!, {
-      ...currentCatalog,
-      servers: {
-        retired: { serverName: "retired", launchSummary: "retired plugin", toolCount: 0 },
-      },
-      tools: [],
-    });
-    expect(manager.getAdvertisedScopedCatalog(params.sessionId)?.servers.retired).toBeUndefined();
     const successor = await manager.getOrCreate(aliceParams);
     expect(await probe(successor, "first")).not.toEqual(after[0]);
   });

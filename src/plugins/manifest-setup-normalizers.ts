@@ -1,4 +1,3 @@
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   normalizeOptionalTrimmedStringList,
@@ -27,7 +26,6 @@ import type {
   PluginManifestChannelCommandDefaults,
   PluginManifestChannelConfig,
   PluginManifestCliCommand,
-  PluginManifestControlUi,
   PluginManifestDashboard,
   PluginManifestDashboardActionVerb,
   PluginManifestOnboardingScope,
@@ -39,6 +37,8 @@ import type {
   PluginConfigUiHint,
 } from "./manifest-types.js";
 import { normalizeSetupPresentationHttpsUrl } from "./setup-presentation-url.js";
+
+export { normalizeManifestControlUi } from "./manifest-control-ui.js";
 
 export function normalizeManifestActivation(value: unknown): PluginManifestActivation | undefined {
   if (!isRecord(value)) {
@@ -273,42 +273,6 @@ export function normalizeManifestDashboard(value: unknown): DashboardManifestRes
     }
   }
   return Object.keys(dashboard).length > 0 ? { ok: true, dashboard } : { ok: true };
-}
-
-export function normalizeManifestControlUi(
-  value: unknown,
-): Result<PluginManifestControlUi | undefined, string> {
-  if (value === undefined) {
-    return ok(undefined);
-  }
-  if (!isRecord(value) || Object.keys(value).some((key) => key !== "entry" && key !== "styles")) {
-    return err("controlUi must contain only entry and optional styles");
-  }
-  const entry = typeof value.entry === "string" ? value.entry.replace(/^\.\//u, "") : "";
-  // A dedicated built directory prevents a declaration from publishing package sources.
-  const builtEntry = /^dist\/(?:[\w-][\w.-]*\/)+[\w-][\w.-]*\.m?js$/u;
-  if (entry.length > 512 || !builtEntry.test(entry)) {
-    return err("controlUi.entry must be a JavaScript file in a dedicated dist subdirectory");
-  }
-  if (value.styles !== undefined && (!Array.isArray(value.styles) || value.styles.length > 16)) {
-    return err("controlUi.styles must be an array of at most 16 stylesheets");
-  }
-  const assetPrefix = entry.slice(0, entry.lastIndexOf("/") + 1);
-  const styles: string[] = [];
-  for (const rawStyle of value.styles ?? []) {
-    const style = typeof rawStyle === "string" ? rawStyle.replace(/^\.\//u, "") : "";
-    if (
-      style.length > 512 ||
-      !style.startsWith(assetPrefix) ||
-      !/^(?:[\w-][\w.-]*\/)+[\w-][\w.-]*\.css$/u.test(style)
-    ) {
-      return err("controlUi.styles must contain CSS files under the entry's asset directory");
-    }
-    if (!styles.includes(style)) {
-      styles.push(style);
-    }
-  }
-  return ok({ entry, ...(styles.length > 0 ? { styles } : {}) });
 }
 
 function normalizeProviderChannelLogin(

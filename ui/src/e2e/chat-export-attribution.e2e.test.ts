@@ -128,7 +128,7 @@ suite.define(() => {
             });
             if (captureUiProofEnabled) {
               await waitForControlUiProofSurface(
-                page.locator('openclaw-session-menu > wa-dropdown [part="menu"]'),
+                page.locator("openclaw-session-menu .session-menu__panel"),
                 [page.getByRole("menuitem", { name: "Copy details", exact: true })],
               );
             }
@@ -136,9 +136,7 @@ suite.define(() => {
               suite,
               page,
               "copy-menu.png",
-              page
-                .getByRole("menuitem", { name: "Copy details", exact: true })
-                .locator('[part="submenu"]'),
+              page.getByRole("menu", { name: "Copy details", exact: true }),
               [copy],
             );
             await copy.click({ trial: true });

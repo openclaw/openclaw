@@ -17,7 +17,6 @@ import type {
 } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
-import type { Model } from "../../../llm/types.js";
 // Shared harness and mocks for embedded attempt spawn-workspace tests.
 import { makeEmptyPluginMetadataOwners } from "../../../plugins/current-plugin-metadata.test-support.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -38,6 +37,7 @@ import {
   initializeModelRegistryRuntime,
 } from "../../sessions/model-registry-runtime.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
 import {
   createTestPromptContextQueue,
@@ -187,6 +187,7 @@ const hoisted = vi.hoisted((): AttemptBaseMocks => {
     getHeader: vi.fn(() => ({ version: 3 })),
     getLeafId: vi.fn<() => string | null>(() => null),
     getLeafEntry: vi.fn(() => null),
+    hasLoadedTranscriptTail: () => true,
     getEntry: vi.fn(() => undefined),
     getEntries: vi.fn(() => []),
     getBranch,
@@ -1038,13 +1039,13 @@ export function createContextEngineBootstrapAndAssemble() {
   };
 }
 
-const testModel = {
+const testModel = makeProviderModelFixture({
+  id: "gpt-test",
   api: "openai-completions",
   provider: "openai",
-  compat: {},
+  baseUrl: "https://api.openai.com/v1",
   contextWindow: 8192,
-  input: ["text"],
-} as unknown as Model;
+});
 
 const testAuthStorage = {
   getApiKey: async () => undefined,

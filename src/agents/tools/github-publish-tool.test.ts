@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
+import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
@@ -9,6 +10,32 @@ import { createGitHubPublishTool } from "./github-publish-tool.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 
 describe("github_publish tool", () => {
+  it("offers current-PR metadata editing to publication callers without privileged actions", () => {
+    const tool = createGitHubPublishTool();
+    expect(Value.Check(tool.parameters, { action: "edit" })).toBe(true);
+    expect(
+      Value.Check(tool.parameters, {
+        action: "edit",
+        title: "New title",
+        expectedTitle: "Old title",
+      }),
+    ).toBe(true);
+    for (const action of ["inspect", "ready", "merge", "close"]) {
+      expect(Value.Check(tool.parameters, { action })).toBe(false);
+    }
+    expect(Value.Check(tool.parameters, { action: "edit", publishingSessionKey: "another" })).toBe(
+      false,
+    );
+    expect(tool.description).toContain("used only when creating a PR");
+    expect(tool.description).toContain("Edit never synchronizes, stages, commits or pushes");
+    expect(
+      Value.Check(
+        createGitHubPublishTool({ publicationAvailable: false, actionsAvailable: true }).parameters,
+        { action: "edit" },
+      ),
+    ).toBe(false);
+  });
+
   it.each(["available", "absent", "self-scoped", "denied"] as const)(
     "offers a scheduled continuation only with %s automation creation",
     (availability) => {

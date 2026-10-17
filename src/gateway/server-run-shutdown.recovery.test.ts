@@ -21,6 +21,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import * as sessionEntries from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
   emitAgentEvent,
   getAgentEventLifecycleGeneration,
@@ -135,7 +136,6 @@ it.each([
   try {
     await prepareGatewayRunShutdown({
       resolveGatewayContext,
-      restart: true,
       timeoutMs: 0,
       warnings: [],
       getPendingReplyCount: () => 0,
@@ -265,7 +265,6 @@ it.each(["admission", "queue", "delegated"] as const)(
       const harness = createAgentEventTestHarness();
       await prepareGatewayRunShutdown({
         resolveGatewayContext,
-        restart: true,
         timeoutMs: 0,
         warnings: [],
         getPendingReplyCount: () => 0,
@@ -316,7 +315,7 @@ it.each(["admission", "queue", "delegated"] as const)(
         });
         const transcript = JSON.stringify(await loadTranscriptEvents({ ...target, sessionId }));
         expect(transcript).toContain("delegated recovery sender authority is unavailable");
-        expect(transcript.match(/Resume in new session/g)).toHaveLength(1);
+        expect(transcript.match(/use Resume to continue in this session/g)).toHaveLength(1);
         expect(recoveryLog).toHaveBeenCalledWith(
           expect.stringContaining('"reason":"delegated_authority_unavailable"'),
         );
@@ -332,15 +331,11 @@ it.each(["admission", "queue", "delegated"] as const)(
   },
 );
 
-it.each(
-  [true, false].flatMap((restart) =>
-    ["none", "active", "pending"].map((callbackFailure) => ({ restart, callbackFailure })),
-  ),
-)(
-  "interrupts non-chat Gateway admission owners while preserving final writes (restart=$restart, callbackFailure=$callbackFailure)",
-  async ({ restart, callbackFailure }) => {
-    const sessionKey = `agent:main:dashboard:owned-shutdown-${restart}`;
-    const sessionId = `owned-shutdown-${restart}`;
+it.each(["none", "active", "pending"] as const)(
+  "interrupts non-chat Gateway admission owners while preserving final writes (callback failure: %s)",
+  async (callbackFailure) => {
+    const sessionKey = `agent:main:dashboard:owned-shutdown-${callbackFailure}`;
+    const sessionId = `owned-shutdown-${callbackFailure}`;
     const target = { storePath, sessionKey };
     const resolveGatewayContext = () => undefined;
     const owner = Symbol(sessionKey);
@@ -464,7 +459,6 @@ it.each(
       expect(pendingValidation).not.toHaveBeenCalled();
       const shutdown = await prepareGatewayRunShutdown({
         resolveGatewayContext,
-        restart,
         timeoutMs: 0,
         warnings: [],
         getPendingReplyCount: () => 0,
@@ -481,13 +475,11 @@ it.each(
       });
       expect(controller.signal.aborted).toBe(true);
       expect(pendingController.signal.aborted).toBe(true);
-      expect(recoveryMarkedBeforeInterruption).toBe(restart);
+      expect(recoveryMarkedBeforeInterruption).toBe(true);
       const [activeError, queuedError, pendingError] = await Promise.all([active, queued, pending]);
       for (const error of [activeError, queuedError, pendingError]) {
         expect(error).toBeInstanceOf(Error);
-        if (restart) {
-          expect(error).toMatchObject({ code: "OPENCLAW_RESTART_ABORT" });
-        }
+        expect(error).toMatchObject({ code: "OPENCLAW_RESTART_ABORT" });
       }
       expect(pendingPromoted).toBe(false);
       expect(pendingValidation).not.toHaveBeenCalled();
@@ -584,10 +576,10 @@ it.each(
     const replacementRunId = `${runId}-replacement`;
     const writeEntered = createDeferred();
     const releaseWrite = createDeferred();
-    const patch = sessionAccessor.patchSessionEntryTarget;
+    const patch = sessionEntries.applySessionEntryTargetOperation;
     const heldWrite = retireWhilePersisting
       ? vi
-          .spyOn(sessionAccessor, "patchSessionEntryTarget")
+          .spyOn(sessionEntries, "applySessionEntryTargetOperation")
           .mockImplementationOnce(async (...args) => {
             writeEntered.resolve();
             await releaseWrite.promise;
@@ -641,7 +633,6 @@ it.each(
       await prepareGatewayRunShutdown({
         ...params,
         resolveGatewayContext: () => undefined,
-        restart: true,
         timeoutMs: 0,
         warnings: [],
         getPendingReplyCount: () => 0,
@@ -786,7 +777,6 @@ it("persists recovery when restart cancellation precedes shutdown marking", asyn
     const warnings: string[] = [];
     await prepareGatewayRunShutdown({
       resolveGatewayContext: () => undefined,
-      restart: true,
       timeoutMs: 0,
       warnings,
       getPendingReplyCount: () => 0,

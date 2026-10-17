@@ -425,8 +425,17 @@ suite.define(() => {
       await gateway.waitForRequest("agents.list");
       await selectAgentOnAgentsPage(page, "Reviewer");
       await page.locator("#agents-tab-overview").click();
-      const setDefault = page.locator(".agents-toolbar-actions button").nth(1);
+      const setDefault = page.getByRole("button", { name: "Set Default", exact: true });
       await expect.poll(() => setDefault.isDisabled()).toBe(true);
+      const createAgent = page.getByRole("button", { name: "New agent", exact: true });
+      await expect.poll(() => createAgent.isDisabled()).toBe(true);
+      expect(await createAgent.getAttribute("title")).toContain("openclaw.chat");
+      expect(await createAgent.getAttribute("title")).toContain("operator.admin");
+      const agentSettingsUrl = page.url();
+      await createAgent.click({ force: true });
+      expect(page.url()).toBe(agentSettingsUrl);
+      expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
+
       const identitySave = page
         .locator(".agent-identity-editor__actions")
         .getByRole("button", { name: "Save", exact: true });
@@ -553,8 +562,17 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}settings/agents`);
       await gateway.waitForRequest("agents.list");
       await selectAgentOnAgentsPage(page, "Reviewer");
-      const setDefault = page.locator(".agents-toolbar-actions button").nth(1);
+      const setDefault = page.getByRole("button", { name: "Set Default", exact: true });
       await expect.poll(() => setDefault.isDisabled()).toBe(true);
+      const createAgent = page.getByRole("button", { name: "New agent", exact: true });
+      await expect.poll(() => createAgent.isDisabled()).toBe(true);
+      expect(await createAgent.getAttribute("title")).toContain("openclaw.chat");
+      expect(await createAgent.getAttribute("title")).toContain("operator.admin");
+      const agentSettingsUrl = page.url();
+      await createAgent.click({ force: true });
+      expect(page.url()).toBe(agentSettingsUrl);
+      expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
+
       await setDefault.click({ force: true });
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 

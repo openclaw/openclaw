@@ -1,7 +1,7 @@
 import { createEffect, createMemo, createSignal } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { useVisiblePoll } from "../../../lib/reactive/visible-poll.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 
 type ChatRetryStatusProps = { retryAt: number | null };
 
@@ -42,5 +42,16 @@ defineSolidBridge<ChatRetryStatusProps>(
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-chat-retry-status": SolidBridgeElement<ChatRetryStatusProps>;
+  }
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-chat-retry-status": HTMLAttributes<
+        HTMLElementTagNameMap["openclaw-chat-retry-status"]
+      > &
+        Properties<HTMLElementTagNameMap["openclaw-chat-retry-status"]>;
+    }
   }
 }

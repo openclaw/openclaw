@@ -84,9 +84,15 @@ function observeCleanup() {
   return { cleanup, finished: finished.promise };
 }
 
-it.each(["success", "failure"] as const)(
-  "does not publish or fall back after a cancelled provider's late %s",
-  async (outcome) => {
+it.each([
+  { outcome: "success", owner: "caller" },
+  { outcome: "failure", owner: "caller" },
+  { outcome: "success", owner: "execution" },
+  { outcome: "success", owner: "combined caller" },
+  { outcome: "success", owner: "combined execution" },
+] as const)(
+  "does not publish or fall back after $owner cancellation and a provider's late $outcome",
+  async ({ outcome, owner }) => {
     const params = await audioContext();
     const before = structuredClone(params.ctx);
     const started = createDeferred();
@@ -95,9 +101,22 @@ it.each(["success", "failure"] as const)(
     const controller = new AbortController();
     const reason = new DOMException("Turn stopped", "AbortError");
     const { cleanup, finished } = observeCleanup();
+    const otherController = new AbortController();
+    const executionSignal =
+      owner === "execution" || owner === "combined execution"
+        ? controller.signal
+        : owner === "combined caller"
+          ? otherController.signal
+          : undefined;
     const running = applyMediaUnderstanding({
       ...params,
-      signal: controller.signal,
+      signal:
+        owner === "caller" || owner === "combined caller"
+          ? controller.signal
+          : owner === "combined execution"
+            ? otherController.signal
+            : undefined,
+      execution: executionSignal ? { signal: executionSignal } : undefined,
       providers: {
         "first-media": audioProvider("first-media", async () => {
           started.resolve();

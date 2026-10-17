@@ -29,8 +29,15 @@ describe("restart recovery claim successors", () => {
   ] as const)(
     "handles an aborted $outcome Control UI claim (ownership lost: $losesOwnership)",
     async ({ status, transfers, losesOwnership }) => {
+      // The canonical main-session path queues the replacement before adoption, without discovery.
       const scope = {
-        storePath: path.join(tempDirs.make("openclaw-reply-claim-successor-"), "sessions.json"),
+        storePath: path.join(
+          tempDirs.make("openclaw-reply-claim-successor-"),
+          "agents",
+          "main",
+          "sessions",
+          "sessions.json",
+        ),
         sessionKey: "agent:main:main",
       };
       let entry: InternalSessionEntry = {

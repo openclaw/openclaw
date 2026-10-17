@@ -53,7 +53,7 @@ button.chat-subagent-activity__row:is(:hover, :focus-visible) {
 }
 
 .chat-subagent-activity__icon > svg,
-.chat-subagent-activity__icon > openclaw-theme-brand-icon {
+.chat-subagent-activity__icon openclaw-theme-brand-icon {
   width: 16px;
   height: 16px;
 }

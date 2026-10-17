@@ -109,6 +109,7 @@ it.each(["sessions.list", "sessions.subscribe"])(
       try {
         publish("activity-summary");
         expect(payloadFor(peers[0]!).ancestorSessions?.map((row) => row.key)).toEqual([root]);
+        expect(payloadFor(peers[1]!)).toEqual(payloadFor(peers[0]!));
         publish();
         expect.soft(payloadFor(peers[0]!).ancestorSessions?.map((row) => row.key)).toEqual([root]);
         publish();

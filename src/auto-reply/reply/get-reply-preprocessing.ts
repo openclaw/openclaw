@@ -1,4 +1,5 @@
 // Optional utility preprocessing keeps its runtime loaders lazy and cancellation explicit.
+import type { ActiveMediaModel } from "../../../packages/media-understanding-common/src/active-model.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -9,7 +10,7 @@ import type { ApplyMediaUnderstandingResult } from "../../media-understanding/ap
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
-import { hasInboundAudio, hasInboundMediaForUnderstanding } from "./inbound-media.js";
+import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
 import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import { assertPreparedConversationBindingRouteCurrent } from "./session-conversation-binding.js";
 
@@ -31,8 +32,8 @@ export async function applyMediaUnderstandingIfNeeded(params: {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
-  activeModel: { provider: string; model: string };
-  modelSelectionLocked?: boolean;
+  activeModel: ActiveMediaModel;
+  processingMode?: "audio-only" | "files-only" | "audio-and-files";
   selfServeLocalPaths?: boolean;
   signal?: AbortSignal;
 }): Promise<ApplyMediaUnderstandingResult | undefined> {
@@ -42,27 +43,19 @@ export async function applyMediaUnderstandingIfNeeded(params: {
   try {
     const { applyMediaUnderstanding } = await mediaUnderstandingApplyRuntimeLoader.load();
     assertReplyPreprocessingActive(params.signal);
-    const { modelSelectionLocked, ...mediaParams } = params;
-    const audio = params.cfg.tools?.media?.audio;
-    return await applyMediaUnderstanding({
-      ...mediaParams,
-      ...(modelSelectionLocked
-        ? {
-            processingMode:
-              hasInboundAudio(params.ctx) && audio !== undefined && audio.enabled !== false
-                ? "audio-and-files"
-                : "files-only",
-          }
-        : {}),
-    });
+    return await applyMediaUnderstanding(params);
   } catch (err) {
     assertReplyPreprocessingActive(params.signal);
-    mediaUnderstandingApplyRuntimeLoader.clear();
     logVerbose(
       `media understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
     );
     return undefined;
   }
+}
+
+export function hasExplicitAudioUnderstandingConfig(cfg: OpenClawConfig): boolean {
+  const audio = cfg.tools?.media?.audio;
+  return audio !== undefined && audio.enabled !== false;
 }
 
 export async function applyLinkUnderstandingIfNeeded(params: {
@@ -81,7 +74,6 @@ export async function applyLinkUnderstandingIfNeeded(params: {
     if (isAbortError(err)) {
       throw err;
     }
-    linkUnderstandingApplyRuntimeLoader.clear();
     logVerbose(
       `link understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
     );

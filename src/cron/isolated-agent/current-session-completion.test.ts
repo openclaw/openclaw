@@ -41,14 +41,14 @@ import { dispatchCronDelivery } from "./delivery-dispatch.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
 
 describe("current-session completion delivery", () => {
-  it.each(["leading-token", "silent-media-caption"] as const)(
-    "normalizes %s output before committing the conversation",
+  it.each(["literal-text", "prepared-media"] as const)(
+    "preserves %s output when committing the conversation",
     async (mode) => {
       await withOpenClawTestState({ layout: "state-only" }, async (state) => {
         const fixture = await createCompletionFixture(state);
         try {
-          const hasMedia = mode === "silent-media-caption";
-          const text = hasMedia ? "Report complete.\nNO_REPLY" : "NO_REPLY\nReport complete.";
+          const hasMedia = mode === "prepared-media";
+          const text = hasMedia ? undefined : "NO_REPLY";
           fixture.params.deliveryPayloads = [
             { text, ...(hasMedia ? { mediaUrl: fixture.payload.mediaUrl } : {}) },
           ];
@@ -62,7 +62,7 @@ describe("current-session completion delivery", () => {
           expect(messages).toHaveLength(1);
           const message = readTranscriptEventMessage(messages[0]);
           expect(message?.content).toEqual([
-            { type: "text", text: hasMedia ? "report.png" : "Report complete." },
+            { type: "text", text: hasMedia ? "report.png" : "NO_REPLY" },
           ]);
           if (hasMedia) {
             expect(readAssistantDisplayContent(message)).toEqual([

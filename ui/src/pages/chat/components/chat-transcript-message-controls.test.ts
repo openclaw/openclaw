@@ -1,11 +1,14 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
-import { renderTranscriptSearch, toggleTranscriptSearch } from "./chat-thread-interactions.ts";
-import { renderChatThread } from "./chat-thread.test-support.ts";
+import {
+  render,
+  renderChatThread,
+  renderTranscriptSearch,
+} from "../test-helpers/chat-transcript-native.tsx";
+import { getTranscriptState, toggleTranscriptSearch } from "./chat-thread-interactions.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -25,6 +28,33 @@ function touchPointerUp(element: Element): void {
 }
 
 describe("chat transcript message controls", () => {
+  it("refreshes native search from the mutable pane state without replacing its input", () => {
+    const paneId = "native-search-revision";
+    const state = getTranscriptState(paneId);
+    const container = document.body.appendChild(document.createElement("div"));
+    const update = () => render(renderTranscriptSearch(paneId, update), container);
+    try {
+      update();
+      expect(container.querySelector("input")).toBeNull();
+      state.searchOpen = true;
+      update();
+      const input = expectDefined(
+        container.querySelector<HTMLInputElement>("input"),
+        "native search input",
+      );
+      input.focus();
+      state.searchQuery = "updated query";
+      update();
+      expect(container.querySelector("input")).toBe(input);
+      expect(input.value).toBe("updated query");
+      expect(document.activeElement).toBe(input);
+      state.searchOpen = false;
+      update();
+      expect(container.querySelector("input")).toBeNull();
+    } finally {
+      render(null, container);
+    }
+  });
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
@@ -46,10 +76,10 @@ describe("chat transcript message controls", () => {
     ]);
     render(renderChatThread(firstProps, firstTranscript), firstContainer);
     render(renderChatThread(secondProps, secondTranscript), secondContainer);
-    firstTranscript.hostConnected();
-    secondTranscript.hostConnected();
-    firstTranscript.hostUpdated();
-    secondTranscript.hostUpdated();
+    firstTranscript.start();
+    secondTranscript.start();
+    firstTranscript.update();
+    secondTranscript.update();
     await flushDeferredRowPrune();
 
     const storedGroup = requireElement(firstContainer, ".chat-group.user");
@@ -86,8 +116,8 @@ describe("chat transcript message controls", () => {
 
     touchPointerUp(requireElement(secondGroup, ".chat-bubble"));
     expect(secondGroup.classList.contains("chat-group--meta-revealed")).toBe(false);
-    firstTranscript.hostDisconnected();
-    secondTranscript.hostDisconnected();
+    firstTranscript.dispose();
+    secondTranscript.dispose();
   });
 
   it("keeps the completed answer timestamp and actions when full run history is restored", async () => {
@@ -152,8 +182,8 @@ describe("chat transcript message controls", () => {
         const container = document.body.appendChild(document.createElement("div"));
         try {
           render(renderChatThread(props, transcript), container);
-          transcript.hostConnected();
-          transcript.hostUpdated();
+          transcript.start();
+          transcript.update();
           await vi.advanceTimersByTimeAsync(0);
           const group = requireElement(container, ".chat-group.assistant");
           expect(group.querySelectorAll(".chat-group-footer")).toHaveLength(1);
@@ -173,7 +203,7 @@ describe("chat transcript message controls", () => {
           }
           await vi.advanceTimersByTimeAsync(1_500);
         } finally {
-          transcript.hostDisconnected();
+          transcript.dispose();
           container.remove();
         }
       }
@@ -230,11 +260,11 @@ describe("chat transcript message controls", () => {
       const rerender = () => {
         render(renderTranscriptSearch(paneId, rerender), searchContainer);
         render(renderChatThread({ ...props, onRequestUpdate: rerender }, transcript), container);
-        transcript.hostUpdated();
+        transcript.update();
       };
       try {
         toggleTranscriptSearch(paneId, rerender);
-        transcript.hostConnected();
+        transcript.start();
         const input = searchContainer.querySelector<HTMLInputElement>("input");
         expect(input).not.toBeNull();
         input!.value = text;
@@ -263,7 +293,7 @@ describe("chat transcript message controls", () => {
           senderLabel: "Molty",
         });
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );
@@ -289,13 +319,13 @@ describe("chat transcript message controls", () => {
       const rerender = () => {
         render(renderTranscriptSearch(paneId, rerender), searchContainer);
         render(renderChatThread({ ...props, onRequestUpdate: rerender }, transcript), container);
-        transcript.hostUpdated();
+        transcript.update();
       };
       try {
         if (search) {
           toggleTranscriptSearch(paneId, rerender);
         }
-        transcript.hostConnected();
+        transcript.start();
         rerender();
         if (search) {
           const input = requireElement(searchContainer, "input") as HTMLInputElement;
@@ -319,7 +349,7 @@ describe("chat transcript message controls", () => {
           search,
         );
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );

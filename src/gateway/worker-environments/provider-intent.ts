@@ -241,7 +241,6 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
                 isDeepStrictEqual(cached, admittedProject)
               ) {
                 return {
-                  project: cached,
                   setupRecipe: preparation.setupRecipe,
                   recipe: preparation.recipe,
                 };

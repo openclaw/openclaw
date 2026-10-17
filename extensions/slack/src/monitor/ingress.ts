@@ -473,19 +473,14 @@ export function createSlackDurableIngress(
   };
 
   return {
-    wrapReceiver: (receiver) => {
-      const client = Reflect.get(receiver as object, "client");
-      const wrapped: Receiver & { client?: unknown } = {
-        init: (nextApp) => {
-          app = nextApp;
-          receiver.init({ processEvent: acceptReceiverEvent } as App);
-        },
-        start: (...args) => receiver.start(...args),
-        stop: (...args) => receiver.stop(...args),
-        ...(client === undefined ? {} : { client }),
-      };
-      return wrapped;
-    },
+    wrapReceiver: (receiver) => ({
+      init: (nextApp) => {
+        app = nextApp;
+        receiver.init({ processEvent: acceptReceiverEvent } as App);
+      },
+      start: (...args) => receiver.start(...args),
+      stop: (...args) => receiver.stop(...args),
+    }),
     acceptRelayEvent,
     attachRelayDispatch: (dispatch) => {
       relayDispatch = dispatch;

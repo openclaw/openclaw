@@ -629,6 +629,32 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     expect(seenAuthHeaders).toEqual(["Bearer resolved-token"]);
   });
 
+  it.each([
+    {
+      phase: "connection resolution",
+      url: async () => {
+        throw new Error("connection unavailable");
+      },
+      message: "connection unavailable",
+    },
+    {
+      phase: "socket construction",
+      url: "not a valid websocket URL",
+      message: "not a valid websocket URL",
+    },
+  ])("reports $phase failures through connect and the observer", async ({ url, message }) => {
+    const onError = vi.fn();
+    const session = createSession({ url, callbacks: { onError } });
+
+    await expect(session.connect()).rejects.toThrow(message);
+
+    expect(session.isConnected()).toBe(false);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(requireFirstMockArg(onError, "connection error")).toMatchObject({
+      message: expect.stringContaining(message),
+    });
+  });
+
   it("preserves connect failures when the error callback throws", async () => {
     vi.useFakeTimers();
     const previousDebugProxyEnabled = process.env.OPENCLAW_DEBUG_PROXY_ENABLED;

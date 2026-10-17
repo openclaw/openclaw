@@ -7,8 +7,26 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   applyLocalSetupWorkspaceConfig,
+  applySkipBootstrapConfig,
   resolveOnboardingWorkspaceConflict,
 } from "./onboard-config.js";
+
+it("sets skipBootstrap without mutating the existing agent defaults or other config", () => {
+  const config: OpenClawConfig = {
+    agents: {
+      defaults: { workspace: "/tmp/workspace" },
+      entries: { ops: { name: "Operations" } },
+    },
+    gateway: { mode: "remote" },
+  };
+  const result = applySkipBootstrapConfig(config);
+
+  expect(result).toEqual({
+    ...config,
+    agents: { ...config.agents, defaults: { workspace: "/tmp/workspace", skipBootstrap: true } },
+  });
+  expect(config.agents?.defaults).toEqual({ workspace: "/tmp/workspace" });
+});
 
 describe("applyLocalSetupWorkspaceConfig", () => {
   it.each([{ profile: undefined, expectedProfile: "full" }] as const)(

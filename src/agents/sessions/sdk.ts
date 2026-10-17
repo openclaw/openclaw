@@ -11,6 +11,7 @@ import {
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
+import { applyLocalNoAuthHeaders } from "../model-auth-markers.js";
 import { resolveProviderRequestPolicy } from "../provider-attribution.js";
 import {
   Agent,
@@ -150,6 +151,47 @@ function getAttributionHeaders(
   return undefined;
 }
 
+// Fork replay retains this transport after disposal; never capture the session's options or scope.
+function createSessionStreamFn(
+  modelRegistry: CreateAgentSessionOptions["modelRegistry"],
+  settingsManager: SettingsManager,
+  thinkingExplicit: boolean | undefined,
+): NonNullable<AgentOptions["streamFn"]> {
+  const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
+  const streamFn: NonNullable<AgentOptions["streamFn"]> = async (
+    modelResult,
+    context,
+    optionsLocal,
+  ) => {
+    const auth = await modelRegistry.getApiKeyAndHeaders(modelResult);
+    if (!auth.ok) {
+      throw new Error(auth.error);
+    }
+    // Isolated session streams bypass the process-default stream facade.
+    await import("../ai-transport-runtime-host.js");
+    optionsLocal?.signal?.throwIfAborted();
+    const providerRetrySettings = settingsManager.getProviderRetrySettings();
+    const attributionHeaders = getAttributionHeaders(modelResult, settingsManager);
+    const providerOptions = {
+      ...optionsLocal,
+      openclawThinkingExplicit: thinkingExplicit,
+      apiKey: auth.apiKey,
+      timeoutMs: optionsLocal?.timeoutMs ?? providerRetrySettings.timeoutMs,
+      maxRetryDelayMs: optionsLocal?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
+      headers: applyLocalNoAuthHeaders(
+        modelResult.api,
+        auth.apiKey,
+        attributionHeaders || auth.headers || optionsLocal?.headers
+          ? { ...attributionHeaders, ...auth.headers, ...optionsLocal?.headers }
+          : undefined,
+      ),
+    };
+    return modelRegistryRuntime.llmRuntime.streamSimple(modelResult, context, providerOptions);
+  };
+  bindStreamLlmRuntime(streamFn, modelRegistryRuntime.llmRuntime);
+  return streamFn;
+}
+
 export async function createAgentSession(
   options: CreateAgentSessionOptions,
 ): Promise<{ session: AgentSession }> {
@@ -216,7 +258,6 @@ export async function createAgentSession(
       ? await options.withSessionWriteSettlement(run)
       : await run();
 
-  const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
   const agent: Agent = new Agent({
     initialState: {
       systemPrompt: options.systemPrompt,
@@ -225,29 +266,7 @@ export async function createAgentSession(
       tools: [],
     },
     convertToLlm: convertToLlmWithBlockImages,
-    streamFn: async (modelResult, context, optionsLocal) => {
-      const auth = await modelRegistry.getApiKeyAndHeaders(modelResult);
-      if (!auth.ok) {
-        throw new Error(auth.error);
-      }
-      // Isolated session streams bypass the process-default stream facade.
-      await import("../ai-transport-runtime-host.js");
-      optionsLocal?.signal?.throwIfAborted();
-      const providerRetrySettings = settingsManager.getProviderRetrySettings();
-      const attributionHeaders = getAttributionHeaders(modelResult, settingsManager);
-      const providerOptions = {
-        ...optionsLocal,
-        openclawThinkingExplicit: options.thinkingExplicit,
-        apiKey: auth.apiKey,
-        timeoutMs: optionsLocal?.timeoutMs ?? providerRetrySettings.timeoutMs,
-        maxRetryDelayMs: optionsLocal?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
-        headers:
-          attributionHeaders || auth.headers || optionsLocal?.headers
-            ? { ...attributionHeaders, ...auth.headers, ...optionsLocal?.headers }
-            : undefined,
-      };
-      return modelRegistryRuntime.llmRuntime.streamSimple(modelResult, context, providerOptions);
-    },
+    streamFn: createSessionStreamFn(modelRegistry, settingsManager, options.thinkingExplicit),
     onPayload: async (payload) => {
       const runner = extensionRunnerRef.current;
       if (!runner?.hasHandlers("before_provider_request")) {
@@ -288,9 +307,6 @@ export async function createAgentSession(
     maxRetryDelayMs: settingsManager.getProviderRetrySettings().maxRetryDelayMs,
   });
   setInternalBeforeToolBatch(agent, options.beforeToolBatch);
-  if (agent.streamFn) {
-    bindStreamLlmRuntime(agent.streamFn, modelRegistryRuntime.llmRuntime);
-  }
 
   let metadataCommit: SessionMetadataCommit | undefined;
   const appendInitialMetadata = (change: SessionMetadataChange, append: () => Promise<string>) =>
