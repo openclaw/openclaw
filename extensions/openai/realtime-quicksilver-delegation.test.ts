@@ -306,9 +306,12 @@ it("does not start a late control after the active consultation settles", async 
   delegate(controller, "late-cancel", "cancel");
   expect(runAgentConsult).toHaveBeenCalledOnce();
   expect(socket.sent).toHaveLength(2);
-  expect(parseSent(socket)[0]).toMatchObject(
-    contextAppend(expect.stringContaining('Status: "I’ll check that request."')),
-  );
+  const receipt = parseSent(socket)[0];
+  expect(receipt).toMatchObject(contextAppend(expect.stringContaining("in your own words")));
+  const receiptText = JSON.stringify(receipt);
+  expect(receiptText).not.toContain("Status:");
+  expect(receiptText).toContain("may not be accepted yet");
+  expect(receiptText).toContain("avoid repeating recent acknowledgments");
 });
 
 it("consumes bounded transcript context once and in event order", async () => {
