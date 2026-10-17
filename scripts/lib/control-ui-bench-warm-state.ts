@@ -1,13 +1,23 @@
-import type { SidebarSnapshotModel } from "../../ui/src/components/sidebar-snapshot-model.ts";
-import type { ChatSessionSnapshot } from "../../ui/src/pages/chat/session-message-cache.ts";
-import type { SessionSnapshotStore } from "../../ui/src/pages/chat/session-snapshot-store.ts";
+// The serialized browser probe needs only these ports, not the UI module graph.
+type ChatSnapshot = { messages: unknown[] };
+type SnapshotStore = {
+  write(sessionKey: string, snapshot: ChatSnapshot): void;
+  flush(): Promise<void>;
+};
 
 type StoredTranscript = {
   sessionKey: string;
   projectionVersion: number;
-  snapshot: ChatSessionSnapshot;
+  snapshot: ChatSnapshot;
 };
-type StoredSidebar = { sessionKey: string; model: SidebarSnapshotModel };
+type StoredSidebar = {
+  sessionKey: string;
+  model: {
+    navigationView: "sessions" | "online";
+    sessions: unknown[];
+    onlineUsers: unknown[];
+  };
+};
 
 /** Runs in the page before measurement; the application owns both cache projections. */
 export async function persistColdLoadWarmState(input: {
@@ -15,10 +25,10 @@ export async function persistColdLoadWarmState(input: {
   sidebarView: "sessions" | "online";
 }) {
   const pane = document.querySelector(".chat-pane-cache__pane--active");
-  const store: SessionSnapshotStore | undefined = pane
+  const store: SnapshotStore | undefined = pane
     ? Reflect.get(pane, "sessionSnapshotStore")
     : undefined;
-  const cache: Map<string, { snapshot: ChatSessionSnapshot }> | undefined = pane
+  const cache: Map<string, { snapshot: ChatSnapshot }> | undefined = pane
     ? Reflect.get(pane, "chatMessagesBySession")
     : undefined;
   const entry =
@@ -34,16 +44,24 @@ export async function persistColdLoadWarmState(input: {
   const writeMs = performance.now() - started;
   const request = indexedDB.open("openclaw-chat-snapshots");
   const database = await new Promise<IDBDatabase>((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    request.addEventListener("success", () => resolve(request.result), { once: true });
+    request.addEventListener(
+      "error",
+      () => reject(request.error ?? new Error("Snapshot database open failed")),
+      { once: true },
+    );
   });
   try {
     const transaction = database.transaction(["snapshots", "sidebarSnapshots"]);
     const readAll = <T>(name: string) =>
       new Promise<T[]>((resolve, reject) => {
         const read = transaction.objectStore(name).getAll();
-        read.onsuccess = () => resolve(read.result);
-        read.onerror = () => reject(read.error);
+        read.addEventListener("success", () => resolve(read.result), { once: true });
+        read.addEventListener(
+          "error",
+          () => reject(read.error ?? new Error("Snapshot read failed")),
+          { once: true },
+        );
       });
     const [snapshots, sidebars] = await Promise.all([
       readAll<StoredTranscript>("snapshots"),

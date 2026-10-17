@@ -97,7 +97,7 @@ describe("Control UI bench fidelity report", () => {
     const result = compareFidelity("chat", live, { "sessions.list": 5 }, [run]);
     expect(result.pass).toBe(true);
     expect(result.functions[0]).toMatchObject({ liveShare: 10, ratio: 0.5, matches: ["name"] });
-    expect(result.functions[0].benchShare).toEqual({ median: 5, q1: 5, q3: 5, samples: [5] });
+    expect(result.functions[0]?.benchShare).toEqual({ median: 5, q1: 5, q3: 5, samples: [5] });
     run.cpu.busyMs = 2001;
     expect(compareFidelity("chat", live, { "sessions.list": 5 }, [run]).cpuPass).toBe(false);
   });
@@ -111,7 +111,7 @@ describe("Control UI bench fidelity report", () => {
     ]);
     expect(result).toMatchObject({ pass: false, cpuPass: true, rpcPass: false });
     expect(result.rpcs[0]).toMatchObject({ delta: 0, pass: false });
-    expect(result.rpcs[0].bench.samples).toEqual([5, 5, 7]);
+    expect(result.rpcs[0]?.bench.samples).toEqual([5, 5, 7]);
     const unexpected = benchRun(1, twentyFunctions);
     unexpected.rpcs = { ...unexpected.rpcs, "chat.history": 2 };
     expect(compareFidelity("board", live, { "sessions.list": 5 }, [unexpected]).rpcPass).toBe(
