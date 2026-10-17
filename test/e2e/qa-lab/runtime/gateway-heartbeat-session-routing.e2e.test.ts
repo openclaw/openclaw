@@ -29,6 +29,10 @@ import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const PROOF_CHANNEL_ID = "heartbeat-route-proof";
+const MEDIA_GROUP_TOOL_POLICIES = {
+  "group-media-allowed": { allow: ["read"] },
+  "group-media-denied": { deny: ["read"] },
+} as const;
 const ISOLATED_GATEWAY_ENV_KEYS = [
   "HOME",
   "OPENCLAW_STATE_DIR",
@@ -49,9 +53,18 @@ const ISOLATED_GATEWAY_ENV_KEYS = [
 
 type DeliveryTrace = {
   accountId: string | null;
+  kind: "media" | "text";
+  mediaBytes?: string;
+  mediaError?: string;
+  mediaUrl?: string;
   text: string;
   threadId: string | number | null;
   to: string;
+};
+
+type PolicyTrace = {
+  groupId: string | null;
+  tools?: { allow?: string[]; deny?: string[] };
 };
 
 let sequence = 0;
@@ -100,7 +113,11 @@ function writeAssistantResponse(response: ServerResponse, text: string): void {
 async function writeRouteCapturePlugin(params: {
   pluginDir: string;
   tracePath: string;
+  policyTracePath: string;
   cronReadyEvent: string;
+  groupToolPolicies: Readonly<
+    Record<string, { allow?: readonly string[]; deny?: readonly string[] }>
+  >;
 }): Promise<void> {
   await fs.mkdir(params.pluginDir, { recursive: true });
   await fs.writeFile(
@@ -122,6 +139,11 @@ async function writeRouteCapturePlugin(params: {
     [
       'const fs = require("node:fs");',
       "let sequence = 0;",
+      `const tracePath = ${JSON.stringify(params.tracePath)};`,
+      `const policyTracePath = ${JSON.stringify(params.policyTracePath)};`,
+      `const groupToolPolicies = ${JSON.stringify(params.groupToolPolicies)};`,
+      'const record = (entry) => fs.appendFileSync(tracePath, JSON.stringify(entry) + "\\n", "utf8");',
+      'const recordPolicy = (entry) => fs.appendFileSync(policyTracePath, JSON.stringify(entry) + "\\n", "utf8");',
       "module.exports = {",
       `  id: ${JSON.stringify(PROOF_CHANNEL_ID)},`,
       "  register(api) {",
@@ -138,22 +160,57 @@ async function writeRouteCapturePlugin(params: {
       '          docsPath: "/channels/heartbeat-route-proof",',
       '          blurb: "Captures heartbeat routes for Gateway boundary tests.",',
       "        },",
-      '        capabilities: { chatTypes: ["direct"] },',
+      '        capabilities: { chatTypes: ["direct", "group"] },',
+      "        messaging: {",
+      "          normalizeTarget: (raw) => raw.trim(),",
+      '          inferTargetChatType: ({ to }) => to.startsWith("group-") ? "group" : "direct",',
+      "        },",
       "        config: {",
       '          listAccountIds: () => ["default"],',
       '          resolveAccount: (_cfg, accountId) => ({ accountId: accountId ?? "default" }),',
       "          isEnabled: () => true,",
       "          isConfigured: () => true,",
       "        },",
+      "        groups: {",
+      "          resolveToolPolicy: ({ groupId }) => {",
+      '            const tools = groupToolPolicies[groupId ?? ""];',
+      "            recordPolicy({ groupId: groupId ?? null, tools });",
+      "            return tools;",
+      "          },",
+      "        },",
       "        outbound: {",
       '          deliveryMode: "direct",',
       "          sendText: async ({ to, text, accountId, threadId }) => {",
-      `            fs.appendFileSync(${JSON.stringify(params.tracePath)}, JSON.stringify({`,
+      "            record({",
+      '              kind: "text",',
       "              to,",
       "              text,",
       "              accountId: accountId ?? null,",
       "              threadId: threadId ?? null,",
-      '            }) + "\\n", "utf8");',
+      "            });",
+      "            sequence += 1;",
+      `            return { channel: ${JSON.stringify(PROOF_CHANNEL_ID)}, messageId: \`proof-\${sequence}\` };`,
+      "          },",
+      "          sendMedia: async ({ to, text, mediaUrl, mediaReadFile, accountId, threadId }) => {",
+      "            let mediaBytes;",
+      "            let mediaError;",
+      "            try {",
+      '              if (typeof mediaReadFile !== "function") throw new Error("media reader unavailable");',
+      '              mediaBytes = (await mediaReadFile(mediaUrl)).toString("utf8");',
+      "            } catch (error) {",
+      "              mediaError = error instanceof Error ? error.message : String(error);",
+      "            }",
+      "            record({",
+      '              kind: "media",',
+      "              to,",
+      "              text,",
+      "              mediaUrl,",
+      "              mediaBytes,",
+      "              mediaError,",
+      "              accountId: accountId ?? null,",
+      "              threadId: threadId ?? null,",
+      "            });",
+      "            if (mediaError) throw new Error(mediaError);",
       "            sequence += 1;",
       `            return { channel: ${JSON.stringify(PROOF_CHANNEL_ID)}, messageId: \`proof-\${sequence}\` };`,
       "          },",
@@ -184,6 +241,22 @@ async function readDeliveryTrace(filePath: string): Promise<DeliveryTrace[]> {
     .map((line) => JSON.parse(line) as DeliveryTrace);
 }
 
+async function readPolicyTrace(filePath: string): Promise<PolicyTrace[]> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(filePath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+  return raw
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as PolicyTrace);
+}
+
 async function readSessionTranscript(sessionKey: string): Promise<unknown[]> {
   const entry = loadSessionEntry({ agentId: "main", sessionKey, readConsistency: "latest" });
   if (!entry?.sessionId) {
@@ -200,7 +273,7 @@ async function readSessionTranscript(sessionKey: string): Promise<unknown[]> {
   );
 }
 
-describe("Gateway heartbeat session routing", () => {
+describe("Gateway heartbeat and cron session routing", () => {
   let fixtureSettlement: Promise<void> | undefined;
   beforeEach(resetGatewayState);
   afterEach(async () => {
@@ -212,18 +285,31 @@ describe("Gateway heartbeat session routing", () => {
   });
 
   it(
-    "routes monitor wakes through heartbeat.session while preserving explicit wake sessions",
+    "routes monitor wakes and current cron delivery through their bound sessions",
     { timeout: 90_000 },
     async ({ signal }) => {
       const envSnapshot = captureEnv([...ISOLATED_GATEWAY_ENV_KEYS]);
       const tempHome = tempDirs.make("openclaw-gateway-heartbeat-routing-");
       const stateDir = path.join(tempHome, ".openclaw");
       const workspaceDir = path.join(tempHome, "workspace");
+      const policyMediaPath = path.join(workspaceDir, "destination-policy-proof.txt");
+      const policyMediaContents = nextId("destination-policy-media");
       const pluginDir = path.join(workspaceDir, "plugins", PROOF_CHANNEL_ID);
       const deliveryTracePath = path.join(tempHome, "heartbeat-deliveries.jsonl");
+      const policyTracePath = path.join(tempHome, "heartbeat-policies.jsonl");
       const cronReadyEvent = nextId("cron-reconciled");
       const cronReconciled = createDeferred<unknown>();
       const onCronReconciled = (event: unknown) => cronReconciled.resolve(event);
+      const cronFinished = new Map<string, ReturnType<typeof createDeferred<void>>>();
+      const cronCompletion = (jobId: string, runId: string) => {
+        const key = JSON.stringify([jobId, runId]);
+        let completion = cronFinished.get(key);
+        if (!completion) {
+          completion = createDeferred();
+          cronFinished.set(key, completion);
+        }
+        return completion;
+      };
       const bundledPluginsDir = path.join(tempHome, "empty-bundled-plugins");
       const configPath = path.join(stateDir, "openclaw.json");
       await Promise.all([
@@ -236,7 +322,14 @@ describe("Gateway heartbeat session routing", () => {
           path.join(workspaceDir, "HEARTBEAT.md"),
           "Process all pending system events and report what was handled.\n",
         ),
-        writeRouteCapturePlugin({ pluginDir, tracePath: deliveryTracePath, cronReadyEvent }),
+        fs.writeFile(policyMediaPath, policyMediaContents, "utf8"),
+        writeRouteCapturePlugin({
+          pluginDir,
+          tracePath: deliveryTracePath,
+          policyTracePath,
+          cronReadyEvent,
+          groupToolPolicies: MEDIA_GROUP_TOOL_POLICIES,
+        }),
       ]);
 
       const token = nextId("heartbeat-routing-token");
@@ -262,6 +355,18 @@ describe("Gateway heartbeat session routing", () => {
       const configuredSessionId = nextId("configured-heartbeat-session");
       const configuredEvent = nextId("configured-heartbeat-event");
       const configuredReply = nextId("configured-heartbeat-reply");
+      const cronSourceKey = "agent:main:dashboard:cron-delivery-source";
+      const cronSourceSessionId = nextId("cron-source-session");
+      const cronPrompt = nextId("cron-source-prompt");
+      const cronReply = nextId("cron-source-reply");
+      const allowedMediaSourceKey = "agent:main:dashboard:cron-media-allowed";
+      const allowedMediaSourceSessionId = nextId("cron-media-allowed-session");
+      const allowedMediaPrompt = nextId("cron-media-allowed-prompt");
+      const allowedMediaReply = nextId("cron-media-allowed-reply");
+      const deniedMediaSourceKey = "agent:main:dashboard:cron-media-denied";
+      const deniedMediaSourceSessionId = nextId("cron-media-denied-session");
+      const deniedMediaPrompt = nextId("cron-media-denied-prompt");
+      const deniedMediaReply = nextId("cron-media-denied-reply");
       const explicitSessionKey = "agent:main:user-session";
       const explicitSessionId = nextId("explicit-heartbeat-session");
       const explicitQueuedEvent = nextId("explicit-queued-event");
@@ -288,11 +393,18 @@ describe("Gateway heartbeat session routing", () => {
           const serialized = JSON.stringify(body);
           writeAssistantResponse(
             response,
-            serialized.includes(configuredEvent)
-              ? configuredReply
-              : serialized.includes(explicitQueuedEvent) || serialized.includes(explicitWakeText)
-                ? explicitReply
-                : nextId("unexpected-heartbeat-reply"),
+            serialized.includes(allowedMediaPrompt)
+              ? `${allowedMediaReply}\nMEDIA:${policyMediaPath}`
+              : serialized.includes(deniedMediaPrompt)
+                ? `${deniedMediaReply}\nMEDIA:${policyMediaPath}`
+                : serialized.includes(cronPrompt)
+                  ? cronReply
+                  : serialized.includes(configuredEvent)
+                    ? configuredReply
+                    : serialized.includes(explicitQueuedEvent) ||
+                        serialized.includes(explicitWakeText)
+                      ? explicitReply
+                      : nextId("unexpected-heartbeat-reply"),
           );
         })().catch((error: unknown) => {
           response.writeHead(500).end(error instanceof Error ? error.message : String(error));
@@ -343,6 +455,7 @@ describe("Gateway heartbeat session routing", () => {
               },
             },
           },
+          tools: { allow: ["read"] },
           // Full configs may contain nested nulls; heartbeat admission must not reinterpret them as patches.
           tts: { providers: { fixture: { disabledVoice: null } } },
           gateway: { auth: { mode: "token", token } },
@@ -369,6 +482,22 @@ describe("Gateway heartbeat session routing", () => {
           configPath,
           token,
           clientDisplayName: "vitest-gateway-heartbeat-session-routing-restarted",
+          onEvent: ({ event, payload }) => {
+            if (event !== "cron" || !payload || typeof payload !== "object") {
+              return;
+            }
+            if (
+              "action" in payload &&
+              payload.action === "finished" &&
+              "jobId" in payload &&
+              typeof payload.jobId === "string" &&
+              "runId" in payload &&
+              typeof payload.runId === "string"
+            ) {
+              // Keep completions that arrive before cron.run returns its run ID.
+              cronCompletion(payload.jobId, payload.runId).resolve();
+            }
+          },
         });
         await gateway.server.startupSettled;
         const runtimeConfig = getRuntimeConfigSnapshot();
@@ -376,6 +505,25 @@ describe("Gateway heartbeat session routing", () => {
           throw new Error("gateway runtime config snapshot was not initialized");
         }
         const client = gateway.client;
+        const waitForCronRun = async (jobId: string, runId: string) => {
+          await withinTest(cronCompletion(jobId, runId).promise, signal);
+          const history = await client.request<{
+            entries: Array<{ runId?: string; status?: string; deliveryStatus?: string }>;
+          }>("cron.runs", { id: jobId, runId, limit: 1 });
+          return history.entries.find((entry) => entry.runId === runId);
+        };
+        const expectCronExecutionTranscript = async (
+          jobId: string,
+          runId: string,
+          reply: string,
+        ) => {
+          const history = await client.request<{ messages: unknown[] }>("cron.history", {
+            id: jobId,
+            runId,
+            limit: 100,
+          });
+          expect(JSON.stringify(history.messages)).toContain(reply);
+        };
 
         const seedSession = async (params: {
           sessionId: string;
@@ -401,6 +549,21 @@ describe("Gateway heartbeat session routing", () => {
           sessionId: configuredSessionId,
           sessionKey: configuredSessionKey,
           to: "configured-destination",
+        });
+        await seedSession({
+          sessionId: cronSourceSessionId,
+          sessionKey: cronSourceKey,
+          to: "cron-source-destination",
+        });
+        await seedSession({
+          sessionId: allowedMediaSourceSessionId,
+          sessionKey: allowedMediaSourceKey,
+          to: "group-media-allowed",
+        });
+        await seedSession({
+          sessionId: deniedMediaSourceSessionId,
+          sessionKey: deniedMediaSourceKey,
+          to: "group-media-denied",
         });
         await seedSession({
           sessionId: explicitSessionId,
@@ -463,49 +626,24 @@ describe("Gateway heartbeat session routing", () => {
           enqueued: true,
           runId: expect.any(String),
         });
-        await expect
-          .poll(
-            async () => {
-              const history = await client.request<{
-                entries: Array<{ error?: string; runId?: string; status?: string }>;
-              }>("cron.runs", {
-                id: monitor.id,
-                runId: configuredRun.runId,
-                limit: 1,
-              });
-              return history.entries.find((entry) => entry.runId === configuredRun.runId);
-            },
-            { timeout: 15_000, interval: 50 },
-          )
-          .toMatchObject({ runId: configuredRun.runId, status: "ok" });
-        await expect
-          .poll(() => providerRequests.length, { timeout: 15_000, interval: 50 })
-          .toBeGreaterThan(configuredRequestBaseline);
+        expect(await waitForCronRun(monitor.id, configuredRun.runId)).toMatchObject({
+          runId: configuredRun.runId,
+          status: "ok",
+        });
+        expect(providerRequests.length).toBeGreaterThan(configuredRequestBaseline);
         const configuredRequest = JSON.stringify(providerRequests[configuredRequestBaseline]);
         expect(configuredRequest).toContain(configuredEvent);
-        await expect
-          .poll(() => peekSystemEvents(configuredSessionKey).includes(configuredEvent), {
-            timeout: 15_000,
-            interval: 50,
-          })
-          .toBe(false);
-        await expect
-          .poll(() => readDeliveryTrace(deliveryTracePath), { timeout: 15_000, interval: 50 })
-          .toHaveLength(1);
+        expect(peekSystemEvents(configuredSessionKey)).not.toContain(configuredEvent);
+        expect(await readDeliveryTrace(deliveryTracePath)).toHaveLength(1);
         expect(await readDeliveryTrace(deliveryTracePath)).toEqual([
           {
             accountId: "default",
+            kind: "text",
             text: configuredReply,
             threadId: null,
             to: "configured-destination",
           },
         ]);
-        await expect
-          .poll(() => readSessionTranscript(configuredSessionKey).then(JSON.stringify), {
-            timeout: 15_000,
-            interval: 50,
-          })
-          .toContain(configuredReply);
         expect(
           loadSessionEntry({
             agentId: "main",
@@ -519,6 +657,182 @@ describe("Gateway heartbeat session routing", () => {
         expect(configuredTranscript).toContain(configuredReply);
         expect(JSON.stringify(await readSessionTranscript(mainSessionKey))).not.toContain(
           configuredReply,
+        );
+
+        const cronJob = await client.request<{
+          id: string;
+          sessionKey?: string;
+          sessionTarget: string;
+        }>("cron.add", {
+          agentId: "main",
+          name: "Dashboard current-session delivery proof",
+          enabled: false,
+          schedule: { kind: "every", everyMs: 86_400_000 },
+          sessionTarget: "current",
+          sessionKey: cronSourceKey,
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: cronPrompt, toolsAllow: [] },
+          delivery: { mode: "announce", channel: "last" },
+        });
+        expect(cronJob).toMatchObject({
+          sessionKey: cronSourceKey,
+          sessionTarget: "current",
+        });
+        const cronRun = await client.request<{
+          enqueued: boolean;
+          ok: boolean;
+          runId: string;
+        }>("cron.run", { id: cronJob.id, mode: "force" });
+        expect(cronRun).toMatchObject({ ok: true, enqueued: true, runId: expect.any(String) });
+        expect(await waitForCronRun(cronJob.id, cronRun.runId)).toMatchObject({
+          runId: cronRun.runId,
+          status: "ok",
+          deliveryStatus: "delivered",
+        });
+        expect(await readDeliveryTrace(deliveryTracePath)).toHaveLength(2);
+        expect((await readDeliveryTrace(deliveryTracePath))[1]).toEqual({
+          accountId: "default",
+          kind: "text",
+          text: cronReply,
+          threadId: null,
+          to: "cron-source-destination",
+        });
+        await expectCronExecutionTranscript(cronJob.id, cronRun.runId, cronReply);
+        expect(
+          loadSessionEntry({
+            agentId: "main",
+            sessionKey: cronSourceKey,
+            readConsistency: "latest",
+          })?.sessionId,
+        ).toBe(cronSourceSessionId);
+        // Execution keeps its own transcript; confirmed delivery belongs to the destination.
+        expect(JSON.stringify(await readSessionTranscript(cronSourceKey))).not.toContain(cronReply);
+        expect(peekSystemEvents(cronSourceKey)).toEqual([]);
+        const cronDestinationResults = (await readSessionTranscript(mainSessionKey)).filter(
+          (message) => JSON.stringify(message).includes(cronReply),
+        );
+        expect(cronDestinationResults).toHaveLength(1);
+        expect(cronDestinationResults[0]).toMatchObject({
+          role: "assistant",
+          openclawAutomation: { kind: "cron", jobId: cronJob.id, runId: expect.any(String) },
+        });
+
+        const allowedMediaJob = await client.request<{
+          id: string;
+          sessionKey?: string;
+          sessionTarget: string;
+        }>("cron.add", {
+          agentId: "main",
+          name: "Dashboard destination-policy media allow proof",
+          enabled: false,
+          schedule: { kind: "every", everyMs: 86_400_000 },
+          sessionTarget: "current",
+          sessionKey: allowedMediaSourceKey,
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: allowedMediaPrompt, toolsAllow: [] },
+          delivery: { mode: "announce", channel: "last" },
+        });
+        expect(allowedMediaJob).toMatchObject({
+          sessionKey: allowedMediaSourceKey,
+          sessionTarget: "current",
+        });
+        const allowedMediaRun = await client.request<{
+          enqueued: boolean;
+          ok: boolean;
+          runId: string;
+        }>("cron.run", { id: allowedMediaJob.id, mode: "force" });
+        expect(allowedMediaRun).toMatchObject({
+          ok: true,
+          enqueued: true,
+          runId: expect.any(String),
+        });
+        expect(await waitForCronRun(allowedMediaJob.id, allowedMediaRun.runId)).toMatchObject({
+          runId: allowedMediaRun.runId,
+          status: "ok",
+          deliveryStatus: "delivered",
+        });
+        expect(await readDeliveryTrace(deliveryTracePath)).toHaveLength(3);
+        expect((await readDeliveryTrace(deliveryTracePath))[2]).toEqual({
+          accountId: "default",
+          kind: "media",
+          mediaBytes: policyMediaContents,
+          mediaUrl: policyMediaPath,
+          text: allowedMediaReply,
+          threadId: null,
+          to: "group-media-allowed",
+        });
+        await expectCronExecutionTranscript(
+          allowedMediaJob.id,
+          allowedMediaRun.runId,
+          allowedMediaReply,
+        );
+        expect(JSON.stringify(await readSessionTranscript(allowedMediaSourceKey))).not.toContain(
+          allowedMediaReply,
+        );
+        expect(peekSystemEvents(allowedMediaSourceKey)).toEqual([]);
+        const allowedMediaDestinationResults = (
+          await readSessionTranscript(`agent:main:${PROOF_CHANNEL_ID}:group:group-media-allowed`)
+        ).filter((message) => JSON.stringify(message).includes(allowedMediaReply));
+        expect(allowedMediaDestinationResults).toHaveLength(1);
+        expect(allowedMediaDestinationResults[0]).toMatchObject({
+          role: "assistant",
+          openclawAutomation: {
+            kind: "cron",
+            jobId: allowedMediaJob.id,
+            runId: expect.any(String),
+          },
+        });
+
+        const deniedMediaJob = await client.request<{
+          id: string;
+          sessionKey?: string;
+          sessionTarget: string;
+        }>("cron.add", {
+          agentId: "main",
+          name: "Dashboard destination-policy media denial proof",
+          enabled: false,
+          schedule: { kind: "every", everyMs: 86_400_000 },
+          sessionTarget: "current",
+          sessionKey: deniedMediaSourceKey,
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: deniedMediaPrompt, toolsAllow: [] },
+          delivery: { mode: "announce", channel: "last" },
+        });
+        expect(deniedMediaJob).toMatchObject({
+          sessionKey: deniedMediaSourceKey,
+          sessionTarget: "current",
+        });
+        const deniedMediaRun = await client.request<{
+          enqueued: boolean;
+          ok: boolean;
+          runId: string;
+        }>("cron.run", { id: deniedMediaJob.id, mode: "force" });
+        expect(deniedMediaRun).toMatchObject({
+          ok: true,
+          enqueued: true,
+          runId: expect.any(String),
+        });
+        expect(await waitForCronRun(deniedMediaJob.id, deniedMediaRun.runId)).toMatchObject({
+          runId: deniedMediaRun.runId,
+          status: "ok",
+          deliveryStatus: "not-delivered",
+        });
+        expect(await readPolicyTrace(policyTracePath)).toContainEqual({
+          groupId: "group-media-denied",
+          tools: { deny: ["read"] },
+        });
+        await expectCronExecutionTranscript(
+          deniedMediaJob.id,
+          deniedMediaRun.runId,
+          deniedMediaReply,
+        );
+        expect(JSON.stringify(await readSessionTranscript(deniedMediaSourceKey))).not.toContain(
+          deniedMediaReply,
+        );
+        expect(peekSystemEvents(deniedMediaSourceKey)).toEqual([]);
+        expect(await readDeliveryTrace(deliveryTracePath)).toHaveLength(3);
+        expect((await readDeliveryTrace(deliveryTracePath)).map((entry) => entry.to)).not.toContain(
+          "group-media-denied",
         );
 
         await expect(
@@ -555,16 +869,34 @@ describe("Gateway heartbeat session routing", () => {
           .toBe(false);
         await expect
           .poll(() => readDeliveryTrace(deliveryTracePath), { timeout: 15_000, interval: 50 })
-          .toHaveLength(2);
+          .toHaveLength(4);
         expect(await readDeliveryTrace(deliveryTracePath)).toEqual([
           {
             accountId: "default",
+            kind: "text",
             text: configuredReply,
             threadId: null,
             to: "configured-destination",
           },
           {
             accountId: "default",
+            kind: "text",
+            text: cronReply,
+            threadId: null,
+            to: "cron-source-destination",
+          },
+          {
+            accountId: "default",
+            kind: "media",
+            mediaBytes: policyMediaContents,
+            mediaUrl: policyMediaPath,
+            text: allowedMediaReply,
+            threadId: null,
+            to: "group-media-allowed",
+          },
+          {
+            accountId: "default",
+            kind: "text",
             text: explicitReply,
             threadId: null,
             to: "explicit-destination",
@@ -589,8 +921,12 @@ describe("Gateway heartbeat session routing", () => {
         expect(JSON.stringify(await readSessionTranscript(configuredSessionKey))).not.toContain(
           explicitReply,
         );
-        const mainTranscript = JSON.stringify(await readSessionTranscript(mainSessionKey));
+        const mainMessages = await readSessionTranscript(mainSessionKey);
+        const mainTranscript = JSON.stringify(mainMessages);
         expect(mainTranscript).not.toContain(configuredReply);
+        expect(
+          mainMessages.filter((message) => JSON.stringify(message).includes(cronReply)),
+        ).toEqual(cronDestinationResults);
         expect(mainTranscript).not.toContain(explicitReply);
         expect((await readDeliveryTrace(deliveryTracePath)).map((entry) => entry.to)).not.toContain(
           "main-destination",
