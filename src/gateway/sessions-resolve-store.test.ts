@@ -19,31 +19,20 @@ import {
 type ResolveParams = Parameters<typeof resolveSessionKeyFromResolveParamsWithClient>[0];
 
 const projections = new Map<OpenClawConfig, Promise<SessionRowProjection>>();
-const resolveSessionKeyFromResolveParams = async (
-  params: Omit<ResolveParams, "client" | "projection"> & {
-    cfg: OpenClawConfig;
-    client?: ResolveParams["client"];
-  },
-) => {
-  let pending = projections.get(params.cfg);
+const resolve = async (cfg: OpenClawConfig, p: ResolveParams["p"]) => {
+  let pending = projections.get(cfg);
   if (!pending) {
-    pending = createSessionRowProjection({ cfg: params.cfg });
-    projections.set(params.cfg, pending);
+    pending = createSessionRowProjection({ cfg });
+    projections.set(cfg, pending);
   }
   return withPreparedSessionResolve(
-    {
-      client: params.client ?? null,
-      p: params.p,
-      projection: await pending,
-    },
+    { client: null, p, projection: await pending },
     (result) => result,
   );
 };
 
 describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
   const deletedMainError = 'Agent "main" no longer exists in configuration';
-  const resolve = (cfg: OpenClawConfig, p: ResolveParams["p"]) =>
-    resolveSessionKeyFromResolveParams({ cfg, p });
   const expectInvalid = (cfg: OpenClawConfig, p: ResolveParams["p"], message: string) =>
     expect(resolve(cfg, p)).resolves.toEqual({
       ok: false,
@@ -257,8 +246,7 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
             .db.prepare("SELECT * FROM acp_sessions ORDER BY session_key")
             .all();
         const before = readRows();
-        expect(before).toHaveLength(1);
-        expect(before[0]?.session_key).toBe(legacyAcpKey);
+        expect(before).toMatchObject([{ session_key: legacyAcpKey }]);
 
         if (repair) {
           await expect(fs.access(claudeStorePath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -277,11 +265,12 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
               expect(readRows()).toEqual(before);
               await noteSessionTranscriptHealth({ cfg, env: process.env, shouldRepair: true });
               const repaired = readRows();
-              expect(repaired).toHaveLength(1);
-              expect(repaired[0]).toEqual({
-                ...before[0],
-                session_key: buildAcpDatabaseSessionKey(acpKey, "claude"),
-              });
+              expect(repaired).toEqual([
+                {
+                  ...before[0],
+                  session_key: buildAcpDatabaseSessionKey(acpKey, "claude"),
+                },
+              ]);
               await noteSessionTranscriptHealth({ cfg, env: process.env, shouldRepair: true });
               expect(readRows()).toEqual(repaired);
             },

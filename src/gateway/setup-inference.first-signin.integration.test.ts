@@ -60,78 +60,71 @@ it(
     const requests: string[] = [];
     // Inventory refresh runs in another thread; the setup probe owns this test's transport.
     vi.spyOn(catalogRefresh, "refreshCommittedProviderCatalogs").mockImplementation(() => {});
+    const responses: Record<string, unknown> = {
+      "https://github.com/login/device/code": {
+        device_code: "synthetic-device-code",
+        user_code: "TEST-CODE",
+        verification_uri: "https://github.com/login/device",
+        expires_in: 600,
+        interval: 1,
+      },
+      "https://github.com/login/oauth/access_token": {
+        access_token: "synthetic-device-token",
+      },
+      "https://api.github.com/copilot_internal/user": {
+        endpoints: { api: "https://api.individual.githubcopilot.com" },
+      },
+      "https://api.individual.githubcopilot.com/models": {
+        data: [
+          {
+            id: "claude-sonnet-5",
+            name: "Synthetic chat model",
+            vendor: "Anthropic",
+            model_picker_enabled: true,
+            capabilities: {
+              type: "chat",
+              limits: { max_context_window_tokens: 128_000, max_output_tokens: 4096 },
+              supports: { tool_calls: true },
+            },
+          },
+        ],
+      },
+    };
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = new URL(input instanceof Request ? input.url : input);
-      requests.push(`${url.origin}${url.pathname}`);
-      switch (`${url.origin}${url.pathname}`) {
-        case "https://github.com/login/device/code":
-          return Response.json({
-            device_code: "synthetic-device-code",
-            user_code: "TEST-CODE",
-            verification_uri: "https://github.com/login/device",
-            expires_in: 600,
-            interval: 1,
-          });
-        case "https://github.com/login/oauth/access_token":
-          return Response.json({
-            access_token: "synthetic-device-token",
-            token_type: "bearer",
-            scope: "read:user",
-          });
-        case "https://api.github.com/copilot_internal/user":
-          return Response.json({ endpoints: { api: "https://api.individual.githubcopilot.com" } });
-        case "https://api.individual.githubcopilot.com/models":
-          return Response.json({
-            data: [
-              {
-                id: "claude-sonnet-5",
-                name: "Synthetic chat model",
-                object: "model",
-                vendor: "Anthropic",
-                model_picker_enabled: true,
-                capabilities: {
-                  type: "chat",
-                  limits: { max_context_window_tokens: 128_000, max_output_tokens: 4096 },
-                  supports: { tool_calls: true },
-                },
-              },
-            ],
-          });
-        case "https://api.individual.githubcopilot.com/v1/messages": {
-          const events = [
-            {
-              type: "message_start",
-              message: {
-                id: "synthetic-message",
-                type: "message",
-                role: "assistant",
-                model: "claude-sonnet-5",
-                content: [],
-                stop_reason: null,
-                stop_sequence: null,
-                usage: { input_tokens: 5, output_tokens: 0 },
-              },
-            },
-            { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-            { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "OK" } },
-            { type: "content_block_stop", index: 0 },
-            {
-              type: "message_delta",
-              delta: { stop_reason: "end_turn", stop_sequence: null },
-              usage: { output_tokens: 1 },
-            },
-            { type: "message_stop" },
-          ];
-          return new Response(
-            events
-              .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-              .join(""),
-            { headers: { "content-type": "text/event-stream" } },
-          );
-        }
-        default:
-          throw new Error(`Unexpected setup request: ${url.origin}${url.pathname}`);
+      const endpoint = `${url.origin}${url.pathname}`;
+      requests.push(endpoint);
+      if (Object.hasOwn(responses, endpoint)) {
+        return Response.json(responses[endpoint]);
       }
+      if (endpoint === "https://api.individual.githubcopilot.com/v1/messages") {
+        const events = [
+          {
+            type: "message_start",
+            message: {
+              id: "synthetic-message",
+              model: "claude-sonnet-5",
+              usage: { input_tokens: 5, output_tokens: 0 },
+            },
+          },
+          { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+          { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "OK" } },
+          { type: "content_block_stop", index: 0 },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn" },
+            usage: { output_tokens: 1 },
+          },
+          { type: "message_stop" },
+        ];
+        return new Response(
+          events
+            .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+            .join(""),
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      throw new Error(`Unexpected setup request: ${endpoint}`);
     });
     await withOpenClawTestState(
       {
@@ -147,13 +140,14 @@ it(
         },
       },
       async (state) => {
+        const scopes = ["operator.admin"];
         const recoveryRestart = vi.fn(() => {
           throw new Error("Setup must complete without a recovery restart");
         });
         const { client, server, port } = await startGatewayWithClient({
           configPath: state.configPath,
           token: "synthetic-gateway-token",
-          scopes: ["operator.admin"],
+          scopes,
           hotReloadRecovery: recoveryRestart,
           cfg: {
             gateway: {
@@ -180,15 +174,13 @@ it(
             clientId: "test",
             clientMode: "backend",
             role: "operator",
-            scopes: ["operator.admin"],
+            scopes,
           });
-          await approveDevicePairing(pending.request.requestId, {
-            callerScopes: ["operator.admin"],
-          });
+          await approveDevicePairing(pending.request.requestId, { callerScopes: scopes });
           const rotated = await rotateDeviceToken({
             deviceId: identity.deviceId,
             role: "operator",
-            scopes: ["operator.admin"],
+            scopes,
           });
           if (!rotated.ok) {
             throw new Error("Expected setup owner device token");
@@ -199,7 +191,7 @@ it(
             url: `ws://127.0.0.1:${port}`,
             deviceIdentity: identity,
             deviceToken: rotated.entry.token,
-            scopes: ["operator.admin"],
+            scopes,
           });
           const auth = {
             agentId: "main",
@@ -208,14 +200,15 @@ it(
           };
           const readProfiles = () =>
             loadAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles;
-          await owner.request("openclaw.setup.auth.start", {
-            ...auth,
-            sessionId: "abandoned-signin",
-          });
-          const abandoned = await owner.request<WizardNextResult>("wizard.next", {
-            sessionId: "abandoned-signin",
-          });
-          expect(abandoned).toMatchObject({ done: false, step: { id: expect.any(String) } });
+          const setupOwner = owner;
+          const startSignIn = async (sessionId: string) => {
+            await setupOwner.request("openclaw.setup.auth.start", { ...auth, sessionId });
+            return await setupOwner.request<WizardNextResult>("wizard.next", { sessionId });
+          };
+          const expectPending = (result: WizardNextResult) =>
+            expect(result).toMatchObject({ done: false, step: { id: expect.any(String) } });
+          const abandoned = await startSignIn("abandoned-signin");
+          expectPending(abandoned);
           await expect(
             client.request("openclaw.setup.auth.start", { ...auth, sessionId: "different-owner" }),
           ).rejects.toThrow("OpenClaw setup is already in progress");
@@ -225,8 +218,7 @@ it(
           expect(readProfiles()).toEqual({});
 
           const sessionId = "replacement-signin";
-          await owner.request("openclaw.setup.auth.start", { ...auth, sessionId });
-          let result = await owner.request<WizardNextResult>("wizard.next", { sessionId });
+          let result = await startSignIn(sessionId);
           while (!result.done) {
             const step = result.step;
             if (!step) {
@@ -241,14 +233,12 @@ it(
             status: "done",
             modelActivation: { modelRef: "github-copilot/claude-sonnet-5" },
           });
-          expect(
-            requests.filter((url) => url === "https://github.com/login/oauth/access_token"),
-          ).toHaveLength(1);
-          expect(
-            requests.filter(
-              (url) => url === "https://api.individual.githubcopilot.com/v1/messages",
-            ),
-          ).toHaveLength(1);
+          for (const endpoint of [
+            "https://github.com/login/oauth/access_token",
+            "https://api.individual.githubcopilot.com/v1/messages",
+          ]) {
+            expect(requests.filter((url) => url === endpoint)).toHaveLength(1);
+          }
           const savedProfiles = readProfiles();
           const profiles = Object.entries(savedProfiles);
           expect(profiles).toHaveLength(1);
@@ -259,20 +249,15 @@ it(
             tokenRef: { source: "store" },
           });
           expect(credential).not.toHaveProperty("setup");
-          expect(recoveryRestart).not.toHaveBeenCalled();
-          expect(resolveAgentEffectiveModelPrimary(getRuntimeConfig(), "main")).toBe(
-            `github-copilot/claude-sonnet-5@${profileId}`,
-          );
-
-          await owner.request("openclaw.setup.auth.start", {
-            ...auth,
-            sessionId: "before-revocation",
-          });
-          const waiting = await owner.request<WizardNextResult>("wizard.next", {
-            sessionId: "before-revocation",
-          });
+          const expectActivation = () => {
+            expect(recoveryRestart).not.toHaveBeenCalled();
+            expect(resolveAgentEffectiveModelPrimary(getRuntimeConfig(), "main")).toBe(
+              `github-copilot/claude-sonnet-5@${profileId}`,
+            );
+          };
+          expectActivation();
           // Cancellation requires a pending prompt, not a provider-specific prompt sequence.
-          expect(waiting).toMatchObject({ done: false, step: { id: expect.any(String) } });
+          expectPending(await startSignIn("before-revocation"));
           const beforeRevocation = [...requests];
           const reached = createDeferredCore();
           const release = createDeferredCore();
@@ -316,10 +301,7 @@ it(
             expect(sessions).not.toContain("revoked-retry");
             expect(requests).toEqual(beforeRevocation);
             expect(readProfiles()).toEqual(savedProfiles);
-            expect(resolveAgentEffectiveModelPrimary(getRuntimeConfig(), "main")).toBe(
-              `github-copilot/claude-sonnet-5@${profileId}`,
-            );
-            expect(recoveryRestart).not.toHaveBeenCalled();
+            expectActivation();
           } finally {
             release.resolve();
             await withinTest(Promise.all([finished.promise, reply]), signal);
